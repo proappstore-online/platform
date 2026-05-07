@@ -9,3 +9,5 @@ dist/
 *.tsbuildinfo
 coverage/
 .dev.vars
+docs/.vitepress/cache/
+docs/.vitepress/dist/
