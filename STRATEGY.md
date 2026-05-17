@@ -60,6 +60,27 @@ Out of scope on purpose: full Class A products (Uber, Slack, Figma, Notion).
 Hosting those well requires becoming a generic SaaS platform, which isn't
 the bet.
 
+## Revenue model: one flat subscription, split by usage
+
+ProAppStore is **one subscription tier**. Users pay a single monthly fee to
+the platform and get full access to every app. No per-app purchases, no
+upgrade prompts, no freemium gates inside apps.
+
+Apps never ask users to pay. Signed in = full access.
+
+Revenue flows to app developers via **usage-based splits**: the platform
+tracks which apps each subscriber actually uses (time spent, sessions, API
+calls) and distributes the subscription pool proportionally. A subscriber
+who spends 80% of their time in one app sends 80% of their subscription
+fee to that app's developer (minus the platform's 10% commission).
+
+This means:
+- **Apps must not gate features behind payments.** All features are included.
+- **Apps must not show upgrade prompts.** There is nothing to upgrade to.
+- **The `@proappstore/sdk` subscription API exists for the platform to verify
+  the user has an active platform subscription**, not for per-app billing.
+- **No per-app Stripe checkout.** The platform handles all billing centrally.
+
 ## Why one storefront, not two platforms
 
 The categories share storefront, identity, billing, registry, and SDK
