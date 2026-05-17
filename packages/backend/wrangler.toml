@@ -3,19 +3,22 @@ main = "src/index.ts"
 compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Custom domain attached to api.proappstore.online once the zone is wired.
+[vars]
+FAS_API_BASE = "https://api.freeappstore.online"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pas"
+database_id = "585bbda3-0016-42ad-a53d-c089f1864fcb"
+migrations_dir = "../../migrations"
+
+# Custom domain (enable after DNS is wired)
 # [[routes]]
 # pattern = "api.proappstore.online"
 # zone_name = "proappstore.online"
 # custom_domain = true
 
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "pas"
-# database_id = "<set-via-wrangler-d1-create>"
-# migrations_dir = "migrations"
-
 # Secrets (set via `wrangler secret put`):
 #   STRIPE_SECRET_KEY
 #   STRIPE_WEBHOOK_SECRET
-#   SESSION_SIGNING_KEY     # must match the fas Worker's key — same identity
+#   SESSION_SIGNING_KEY
