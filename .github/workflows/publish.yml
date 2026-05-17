@@ -2,14 +2,10 @@ name: Publish to npm
 
 # Triggers on any push to main that touches the publishable packages.
 # Each package self-checks: if its package.json version is unchanged
-# vs what's already on npm, the publish is a no-op. So the practical
-# release flow becomes:
+# vs what's already on npm, the publish is a no-op.
 #
-#   1. cd packages/cli (or sdk)
-#   2. npm version patch    # bumps + commits + tags
-#   3. git push --follow-tags
-#
-# CI sees the version differs from what's on npm and publishes.
+# Auth: OIDC trusted publishing — no stored NPM_TOKEN needed.
+# Each @proappstore/* package is linked to this repo on npmjs.com.
 
 on:
   push:
@@ -22,7 +18,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # for npm provenance attestation
+  id-token: write # OIDC token for npm trusted publishing + provenance
 
 jobs:
   publish:
@@ -38,32 +34,19 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      # Build all packages first. cli is currently dep-free of sdk, but
-      # mirroring the fas/sdk pattern means future cross-package type
-      # imports (likely once cli starts using sdk types) Just Work
-      # without changing CI.
       - name: Build all packages
         run: pnpm -r --filter './packages/*' build
 
       - name: Decide whether to publish
         id: decide
         working-directory: packages/${{ matrix.package }}
-        # Read the actual npm name from package.json so dir name ≠ npm
-        # name doesn't bite us later (mirrors freeappstore-online/sdk).
-        #
-        # When a package isn't on npm yet (`npm view` 404s and we fall
-        # back to "0.0.0"), we still attempt to publish — first-publish
-        # is automated by design. If the publish 404s on PUT it almost
-        # always means the npm scope (@proappstore) isn't an org on
-        # npmjs.com or NPM_TOKEN's account isn't a member of it. Fix
-        # once on npmjs.com → next push auto-publishes.
         run: |
           PKG_NAME=$(node -p "require('./package.json').name")
           LOCAL_VER=$(node -p "require('./package.json').version")
@@ -74,23 +57,10 @@ jobs:
             echo "Version unchanged — skipping publish."
           else
             echo "publish=true" >> "$GITHUB_OUTPUT"
-            if [ "$NPM_VER" = "0.0.0" ]; then
-              echo "First publish — package not yet on npm. If this fails with 404 PUT, the @proappstore npm org likely needs to be created on npmjs.com (npmjs.com/org/create) and NPM_TOKEN's account added as a member."
-            else
-              echo "Version bumped ($NPM_VER → $LOCAL_VER) — will publish."
-            fi
+            echo "Version bumped ($NPM_VER → $LOCAL_VER) — will publish."
           fi
 
-      - name: Publish to npm
+      - name: Publish via OIDC trusted publishing
         if: steps.decide.outputs.publish == 'true'
         working-directory: packages/${{ matrix.package }}
-        # `pnpm publish` (vs `npm publish`) rewrites workspace:* deps to
-        # the actual published version of the linked workspace package.
-        # --no-git-checks skips the working-tree-clean check that pnpm
-        # runs by default (a no-op in fresh CI).
-        # --provenance attaches a signed attestation linking this tarball
-        # to this GitHub Actions run.
-        run: pnpm publish --access public --provenance --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance

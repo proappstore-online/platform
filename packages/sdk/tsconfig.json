@@ -6,5 +6,6 @@
     "lib": ["ES2022", "DOM"],
     "types": []
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.test.ts"]
 }

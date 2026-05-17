@@ -1,28 +1,44 @@
 import { Hono } from 'hono';
-
-interface Env {
-  STRIPE_SECRET_KEY?: string;
-  STRIPE_WEBHOOK_SECRET?: string;
-  SESSION_SIGNING_KEY?: string;
-}
+import { cors } from 'hono/cors';
+import type { Env } from './types.js';
+import { subscriptionRoutes } from './routes/subscription.js';
+import { licenseRoutes } from './routes/license.js';
+import { webhookRoutes } from './routes/webhook.js';
 
 export const app = new Hono<{ Bindings: Env }>();
 
-app.get('/', (c) => c.text('ProAppStore API'));
+// CORS — allow proappstore.online + freeappstore.online (shared identity)
+app.use(
+  '*',
+  cors({
+    origin: (origin) => {
+      if (!origin) return null;
+      try {
+        const host = new URL(origin).hostname.toLowerCase();
+        if (host === 'localhost' || host === '127.0.0.1') return origin;
+        if (host.endsWith('.proappstore.online') || host === 'proappstore.online') return origin;
+        if (host.endsWith('.freeappstore.online') || host === 'freeappstore.online') return origin;
+        if (host.endsWith('.pages.dev')) return origin;
+        return null;
+      } catch {
+        return null;
+      }
+    },
+    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Authorization', 'Content-Type'],
+    maxAge: 600,
+  }),
+);
+
+app.get('/', (c) => c.json({ ok: true, service: 'proappstore-api' }));
 app.get('/health', (c) => c.json({ ok: true }));
 
 const v1 = new Hono<{ Bindings: Env }>();
-
-v1.get('/subscription', (c) => c.text('not implemented (skeleton)', 501));
-v1.post('/checkout', (c) => c.text('not implemented (skeleton)', 501));
-v1.post('/portal', (c) => c.text('not implemented (skeleton)', 501));
-v1.get('/apps/:appId/license', (c) => c.text('not implemented (skeleton)', 501));
-v1.post('/license/validate', (c) => c.text('not implemented (skeleton)', 501));
-
+v1.route('/', subscriptionRoutes);
+v1.route('/', licenseRoutes);
 app.route('/v1', v1);
 
-// Stripe webhook endpoint. Will verify signature with STRIPE_WEBHOOK_SECRET,
-// then update D1 entitlements based on the event type. Stub for now.
-app.post('/webhooks/stripe', (c) => c.text('not implemented (skeleton)', 501));
+// Stripe webhook is outside /v1 — it's not user-facing API
+app.route('/', webhookRoutes);
 
 export default app;
