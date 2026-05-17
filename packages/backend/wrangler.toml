@@ -2,6 +2,7 @@ name = "proappstore-api"
 main = "src/index.ts"
 compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
 
 [vars]
 FAS_API_BASE = "https://api.freeappstore.online"
@@ -12,10 +13,10 @@ database_name = "pas"
 database_id = "585bbda3-0016-42ad-a53d-c089f1864fcb"
 migrations_dir = "../../migrations"
 
-# Custom domain (enable after DNS is wired)
-[[routes]]
-pattern = "api.proappstore.online/*"
-zone_name = "proappstore.online"
+# Custom domain — uncomment after CF_API_TOKEN has proappstore.online zone access
+# [[routes]]
+# pattern = "api.proappstore.online/*"
+# zone_name = "proappstore.online"
 
 # Secrets (set via `wrangler secret put`):
 #   STRIPE_SECRET_KEY
