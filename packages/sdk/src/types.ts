@@ -4,6 +4,8 @@ export interface ProInitOptions {
   fasApiBase?: string;
   /** Defaults to https://api.proappstore.online (pro-tier backend). */
   proApiBase?: string;
+  /** Defaults to https://data-{appId}.proappstore.online (per-app data worker). */
+  dataApiBase?: string;
 }
 
 export type SubscriptionStatus = 'active' | 'past_due' | 'canceled' | 'incomplete';

@@ -1,0 +1,14 @@
+name = "pas-data-__APP_ID__"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[vars]
+APP_ID = "__APP_ID__"
+FAS_API_BASE = "https://api.freeappstore.online"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pas-data-__APP_ID__"
+database_id = "__DB_ID__"

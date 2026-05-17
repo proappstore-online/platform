@@ -1,4 +1,5 @@
 import { FreeAppStore } from '@freeappstore/sdk';
+import { Database } from './db.js';
 import { SubscriptionApi } from './subscription.js';
 import { LicenseApi } from './license.js';
 import type { ProInitOptions } from './types.js';
@@ -22,6 +23,8 @@ export type {
   LicenseInfo,
 } from './types.js';
 
+export type { QueryResult, ExecuteResult } from './db.js';
+
 /**
  * Pro SDK instance — includes everything from @freeappstore/sdk (auth, kv,
  * counters, rooms, proxy) plus subscription management and license keys.
@@ -31,12 +34,14 @@ export type {
 export class ProAppStore extends FreeAppStore {
   readonly subscription: SubscriptionApi;
   readonly license: LicenseApi;
+  readonly db: Database;
 
   constructor(opts: ProInitOptions) {
     super({ appId: opts.appId, ...(opts.fasApiBase && { apiBase: opts.fasApiBase }) });
     const proApiBase = opts.proApiBase ?? 'https://api.proappstore.online';
     this.subscription = new SubscriptionApi(opts.appId, proApiBase, this.auth);
     this.license = new LicenseApi(opts.appId, proApiBase, this.auth);
+    this.db = new Database(opts.appId, opts.dataApiBase ?? `https://data-${opts.appId}.proappstore.online`, this.auth);
   }
 }
 
