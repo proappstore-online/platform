@@ -56,9 +56,15 @@ importers:
   packages/sdk:
     dependencies:
       '@freeappstore/sdk':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.5.0
+        version: 0.5.1
     devDependencies:
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.14
+      react:
+        specifier: ^19.0.0
+        version: 19.2.6
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -552,8 +558,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@freeappstore/sdk@0.6.0':
-    resolution: {integrity: sha512-Etdx1fTEejExSe7wW/btvZ7j2cke6F7QW50zOM32rSsSAz5FYTIrzDRv1YWk0pgl7DKejjyGowWemR9KUa9Saw==}
+  '@freeappstore/sdk@0.5.1':
+    resolution: {integrity: sha512-zsQ8gQ+HkjCOXXrvjQQjgZP3OH1v0L37768HVlITkNuEZoswRyXcuowSE06HN1w6EgcJk6vPvfa20Qoc+XDz3g==}
 
   '@iconify-json/simple-icons@1.2.81':
     resolution: {integrity: sha512-Utjw4sPtoVdbpAQAkC4O0cYpt4ehQZYr6aFHhmvdeW8mQwkINyAe0ogTPqNptSSKogZ2lfgXM8zpuhO961Wnng==}
@@ -1027,6 +1033,9 @@ packages:
 
   '@types/node@22.19.17':
     resolution: {integrity: sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q==}
+
+  '@types/react@19.2.14':
+    resolution: {integrity: sha512-ilcTH/UniCkMdtexkoCN0bI7pMcJDvmQFPvuPvmEaYA/NSfFTAgdUSLAoVjaRJm7+6PvcM+q1zYOwS4wTYMF9w==}
 
   '@types/trusted-types@2.0.7':
     resolution: {integrity: sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==}
@@ -1634,6 +1643,10 @@ packages:
 
   property-information@7.1.0:
     resolution: {integrity: sha512-TwEZ+X+yCJmYfL7TPUOcvBZ4QfoT5YenQiJuX//0th53DE6w0xxLEtfK3iyryQFddXuvkIk51EEgrJQ0WJkOmQ==}
+
+  react@19.2.6:
+    resolution: {integrity: sha512-sfWGGfavi0xr8Pg0sVsyHMAOziVYKgPLNrS7ig+ivMNb3wbCBw3KxtflsGBAwD3gYQlE/AEZsTLgToRrSCjb0Q==}
+    engines: {node: '>=0.10.0'}
 
   regex-recursion@6.0.2:
     resolution: {integrity: sha512-0YCaSCq2VRIebiaUviZNs0cBz1kg5kVS2UKUfNIx8YVs1cN3AV7NTctO5FOKBA+UT2BPJIWZauYHPqJODG50cg==}
@@ -2293,7 +2306,7 @@ snapshots:
   '@esbuild/win32-x64@0.27.3':
     optional: true
 
-  '@freeappstore/sdk@0.6.0': {}
+  '@freeappstore/sdk@0.5.1': {}
 
   '@iconify-json/simple-icons@1.2.81':
     dependencies:
@@ -2699,6 +2712,10 @@ snapshots:
   '@types/node@22.19.17':
     dependencies:
       undici-types: 6.21.0
+
+  '@types/react@19.2.14':
+    dependencies:
+      csstype: 3.2.3
 
   '@types/trusted-types@2.0.7':
     optional: true
@@ -3407,6 +3424,8 @@ snapshots:
   preact@10.29.1: {}
 
   property-information@7.1.0: {}
+
+  react@19.2.6: {}
 
   regex-recursion@6.0.2:
     dependencies:
