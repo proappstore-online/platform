@@ -39,7 +39,8 @@ Each Tailored fork gets **its own D1 database**, provisioned by
 - Each fork's data is fully isolated. No cross-fork queries. No shared
   tenancy.
 
-Ready apps get **no platform-provided database**. The publisher BYO.
+Ready apps use the platform's shared primitives — per-user KV, shared
+counters, and real-time rooms — backed by the `fas` Worker's D1.
 
 ## Alternatives Considered
 

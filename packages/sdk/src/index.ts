@@ -5,6 +5,7 @@ import type { ProInitOptions } from './types.js';
 
 // Re-export everything from FAS SDK so pro apps only need one import
 export type {
+  AuthProvider,
   User,
   Unsubscribe,
   FasInitOptions,

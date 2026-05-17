@@ -28,7 +28,7 @@ are Ready.
 | SDK emphasis | `@freeappstore/sdk` (identity, KV) + `@proappstore/sdk` (Stripe per fork) | `@proappstore/sdk` (Stripe Checkout for end users, multi-tenant entitlements) |
 | Publisher revenue | License fee, hosting, customization, support | Subscription, usage, seat-based |
 | Platform cut | % on PAS-mediated Stripe transactions | Same |
-| Data tenancy | Per fork (each customer has their own DB) | Per tenant in publisher's BYO DB |
+| Data tenancy | Per fork (each customer has their own DB) | Platform-provided (per-user KV, shared counters, rooms) |
 | Scales by | More customers forking | More tenants on one deployment |
 
 ## Tailored: domains that fit
@@ -107,7 +107,6 @@ Walk these tests in order; stop at the first yes:
 
 ## What's *not* promised
 
-- A multi-tenant data layer for Ready apps. Bring your own DB.
 - A workflow / rules engine for Tailored apps. Code your own.
 - A configuration UI for structural changes. Fork + edit + AI is the path.
 

@@ -118,9 +118,6 @@ bindings or HTTP.
 
 ## What this doesn't include
 
-- A multi-tenant data layer for Ready apps. Ready publishers BYO storage.
-  The platform offers identity + Stripe + registry; it doesn't dictate
-  how a Ready app stores its own data.
 - A workflow / rules engine. Per-app business logic is per-app code.
 - An admin UI for structural config. Source-code customization with AI
   is the customization story (see [tailored vs ready](/tailored-vs-ready)).
