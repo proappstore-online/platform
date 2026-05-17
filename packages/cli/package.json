@@ -7,6 +7,7 @@
   "bin": {
     "pas": "./dist/index.js"
   },
+  "repository": { "type": "git", "url": "git+https://github.com/proappstore-online/platform.git", "directory": "packages/cli" },
   "files": ["dist", "README.md"],
   "engines": {
     "node": ">=22"

@@ -1,6 +1,6 @@
 {
   "name": "@proappstore/sdk",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Browser SDK for paid apps on proappstore.online — subscriptions, license keys, premium modules.",
   "license": "MIT",
   "type": "module",
@@ -12,6 +12,7 @@
       "import": "./dist/index.js"
     }
   },
+  "repository": { "type": "git", "url": "git+https://github.com/proappstore-online/platform.git", "directory": "packages/sdk" },
   "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsc",
