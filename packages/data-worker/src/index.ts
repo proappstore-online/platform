@@ -169,6 +169,45 @@ app.post('/batch', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// Migrations
+// ---------------------------------------------------------------------------
+
+app.post('/migrate', async (c) => {
+  await requireUser(c);
+  const body = await c.req.json<{ migrations: { name: string; sql: string }[] }>();
+  if (!Array.isArray(body.migrations) || body.migrations.length === 0) {
+    throw new HTTPException(400, { message: 'migrations must be a non-empty array of {name, sql}' });
+  }
+
+  // Ensure migrations tracking table exists
+  await c.env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS _migrations (
+      name TEXT PRIMARY KEY,
+      applied_at INTEGER NOT NULL
+    )`,
+  ).run();
+
+  // Get already-applied migrations
+  const applied = await c.env.DB.prepare('SELECT name FROM _migrations').all<{ name: string }>();
+  const appliedSet = new Set(applied.results.map((r) => r.name));
+
+  // Run pending migrations in order
+  const ran: string[] = [];
+  for (const m of body.migrations) {
+    if (appliedSet.has(m.name)) continue;
+    // Split on semicolons to handle multi-statement migrations
+    const statements = m.sql.split(';').map((s) => s.trim()).filter((s) => s.length > 0);
+    for (const stmt of statements) {
+      await c.env.DB.prepare(stmt).run();
+    }
+    await c.env.DB.prepare('INSERT INTO _migrations (name, applied_at) VALUES (?, ?)').bind(m.name, Date.now()).run();
+    ran.push(m.name);
+  }
+
+  return c.json({ applied: ran, already: [...appliedSet] });
+});
+
+// ---------------------------------------------------------------------------
 // Error handler
 // ---------------------------------------------------------------------------
 

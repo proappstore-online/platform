@@ -24,7 +24,7 @@ export type {
   LicenseInfo,
 } from './types.js';
 
-export type { QueryResult, ExecuteResult } from './db.js';
+export type { QueryResult, ExecuteResult, Migration, MigrateResult } from './db.js';
 
 /**
  * Pro SDK instance — includes everything from @freeappstore/sdk (auth, kv,

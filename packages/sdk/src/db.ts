@@ -12,6 +12,20 @@ export interface ExecuteResult {
   meta: { changes: number; duration: number; last_row_id: number };
 }
 
+export interface Migration {
+  /** Unique name, e.g. "0001_init" or "0002_add_photos". Run in array order. */
+  name: string;
+  /** SQL statements separated by semicolons. */
+  sql: string;
+}
+
+export interface MigrateResult {
+  /** Migrations that were applied this call. */
+  applied: string[];
+  /** Migrations that were already applied previously. */
+  already: string[];
+}
+
 export class Database {
   constructor(
     private readonly appId: string,
@@ -33,6 +47,21 @@ export class Database {
   async batch(statements: { sql: string; params?: unknown[] }[]): Promise<{ rows: unknown[]; meta: { changes: number; last_row_id: number } }[]> {
     const result = await this.req<{ results: { rows: unknown[]; meta: { changes: number; last_row_id: number } }[] }>('/batch', { statements });
     return result.results;
+  }
+
+  /**
+   * Run named migrations. Each migration runs once — the data-worker tracks
+   * which have been applied in a `_migrations` table. Idempotent: safe to
+   * call on every app load.
+   *
+   * @example
+   * await app.db.migrate([
+   *   { name: '0001_init', sql: 'CREATE TABLE events (id TEXT PRIMARY KEY, ...)' },
+   *   { name: '0002_photos', sql: 'ALTER TABLE events ADD COLUMN photo_url TEXT' },
+   * ])
+   */
+  async migrate(migrations: Migration[]): Promise<MigrateResult> {
+    return this.req<MigrateResult>('/migrate', { migrations });
   }
 
   /** List all user-created tables in the database. */
