@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
+import { deployDataWorker } from '../lib/deploy-worker.js';
 
 /**
  * App provisioning — creates D1 database + CF Pages project for a new pro app.
@@ -58,25 +59,18 @@ provisionRoutes.post('/provision', async (c) => {
     }
 
     // 2. Deploy Data Worker
-    // The Data Worker template is deployed as a new Worker script with the D1 binding
     let dataWorkerUrl = '';
-    try {
-      // Read the template worker source from the SDK package
-      // For now, deploy using the wrangler-compatible API
-      const workerName = `pas-data-${appId}`;
-
-      // Create worker script with D1 binding via CF API
-      // We use a minimal dispatcher that imports from the template
-      const workerScript = `
-import app from './index.js';
-export default app;
-`;
-      // Note: full Worker deployment via API requires multipart form upload
-      // For MVP, we'll record the D1 ID and the developer runs wrangler deploy locally
-      steps.push({ name: 'deploy_worker', status: 'pending', detail: `D1 ID: ${dbId}. Run: npx wrangler deploy from data-worker dir with DB_ID=${dbId}` });
-      dataWorkerUrl = `https://${workerName}.serge-the-dev.workers.dev`;
-    } catch (e) {
-      steps.push({ name: 'deploy_worker', status: 'fail', detail: String(e) });
+    if (dbId) {
+      try {
+        const result = await deployDataWorker(appId, dbId, cfToken, cfAccount);
+        dataWorkerUrl = result.url;
+        steps.push({ name: 'deploy_worker', status: result.ok ? 'ok' : 'fail', detail: result.detail });
+      } catch (e) {
+        dataWorkerUrl = `https://pas-data-${appId}.serge-the-dev.workers.dev`;
+        steps.push({ name: 'deploy_worker', status: 'fail', detail: String(e) });
+      }
+    } else {
+      steps.push({ name: 'deploy_worker', status: 'skip', detail: 'No D1 database created' });
     }
 
     // 3. Create CF Pages project (if repoUrl provided)

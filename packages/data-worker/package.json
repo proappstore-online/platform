@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit",
+    "build": "tsc --noEmit && esbuild src/index.ts --bundle --format=esm --target=es2022 --outfile=dist/worker.js --minify",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -12,6 +12,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",
+    "esbuild": "^0.28.0",
     "typescript": "^5.7.0"
   }
 }
