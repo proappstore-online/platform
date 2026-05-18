@@ -41,22 +41,47 @@ app.use(
 );
 
 // ---------------------------------------------------------------------------
-// Auth
+// Auth (with 60s in-memory cache to avoid FAS API round-trip on every query)
 // ---------------------------------------------------------------------------
+
+const authCache = new Map<string, { user: FasUser; expires: number }>();
+const AUTH_CACHE_TTL_MS = 60_000;
 
 async function requireUser(c: { req: { header(name: string): string | undefined }; env: Env }): Promise<FasUser> {
   const header = c.req.header('Authorization');
   if (!header?.startsWith('Bearer ')) {
     throw new HTTPException(401, { message: 'missing bearer token' });
   }
+  const token = header.slice(7);
+
+  // Check cache
+  const cached = authCache.get(token);
+  if (cached && cached.expires > Date.now()) {
+    return cached.user;
+  }
+
   const fasBase = c.env.FAS_API_BASE || 'https://api.freeappstore.online';
   const response = await fetch(`${fasBase}/v1/auth/me`, {
     headers: { Authorization: header },
   });
   if (!response.ok) {
+    authCache.delete(token);
     throw new HTTPException(401, { message: 'invalid session' });
   }
-  return (await response.json()) as FasUser;
+  const user = (await response.json()) as FasUser;
+
+  // Cache for 60s
+  authCache.set(token, { user, expires: Date.now() + AUTH_CACHE_TTL_MS });
+
+  // Evict stale entries (prevent unbounded growth)
+  if (authCache.size > 100) {
+    const now = Date.now();
+    for (const [key, entry] of authCache) {
+      if (entry.expires <= now) authCache.delete(key);
+    }
+  }
+
+  return user;
 }
 
 // ---------------------------------------------------------------------------
