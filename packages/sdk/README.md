@@ -133,6 +133,43 @@ const license = await app.license.current()
 const valid = await app.license.validate('LIC-ABC-123')
 ```
 
+### Maps (Geocoding + Embeds)
+
+Address-to-coordinates and map embeds. Powered by OpenStreetMap/Nominatim. No Google API keys needed.
+
+```ts
+// Geocode an address
+const results = await app.maps.geocode('Times Square, New York')
+// [{lat: 40.758, lng: -73.985, displayName: "Times Square...", address: {...}}]
+
+// Reverse geocode
+const place = await app.maps.reverseGeocode(40.758, -73.985)
+
+// Embed map in iframe
+<iframe src={app.maps.embedUrl(40.758, -73.985)} />
+
+// Static tile image
+<img src={app.maps.staticUrl(40.758, -73.985)} />
+```
+
+### Storage (File Upload)
+
+Upload images, videos, documents. Public files get URLs usable in `<img src>` without auth.
+
+```ts
+// Private upload (owner-only access)
+await app.storage.upload('docs/resume.pdf', file, 'application/pdf')
+
+// Public upload (anyone can view)
+await app.storage.uploadPublic('avatar.jpg', file, 'image/jpeg')
+const url = app.storage.publicUrl('avatar.jpg')  // works in <img src>
+
+// List, download, delete
+const files = await app.storage.list()
+const response = await app.storage.download('docs/resume.pdf')
+await app.storage.delete('docs/resume.pdf')
+```
+
 ## ProShell Component
 
 A React component that handles auth gates, subscription checks, and renders a platform-level shell with topbar and user menu.
