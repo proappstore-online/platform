@@ -1,5 +1,6 @@
 import { FreeAppStore } from '@freeappstore/sdk';
 import { Database } from './db.js';
+import { Maps } from './maps.js';
 import { Storage } from './storage.js';
 import { SubscriptionApi } from './subscription.js';
 import { LicenseApi } from './license.js';
@@ -37,6 +38,7 @@ export class ProAppStore extends FreeAppStore {
   readonly license: LicenseApi;
   readonly db: Database;
   readonly storage: Storage;
+  readonly maps: Maps;
 
   constructor(opts: ProInitOptions) {
     super({ appId: opts.appId, ...(opts.fasApiBase && { apiBase: opts.fasApiBase }) });
@@ -45,6 +47,7 @@ export class ProAppStore extends FreeAppStore {
     this.license = new LicenseApi(opts.appId, proApiBase, this.auth);
     this.db = new Database(opts.appId, opts.dataApiBase ?? `https://data-${opts.appId}.proappstore.online`, this.auth);
     this.storage = new Storage(opts.appId, proApiBase, this.auth);
+    this.maps = new Maps(proApiBase);
   }
 }
 
