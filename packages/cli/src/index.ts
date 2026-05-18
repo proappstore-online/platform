@@ -11,10 +11,12 @@ program
 
 program
   .command('create <app-id>')
-  .description('Scaffold a new pro app with SDK, hooks, and Tailwind.')
+  .description('Scaffold + provision a new pro app. Creates D1 database and configures platform resources.')
   .option('--skip-install', 'Skip pnpm install')
   .option('--skip-git', 'Skip git init')
-  .action(async (appId: string, opts: { skipInstall?: boolean; skipGit?: boolean }) => {
+  .option('--skip-provision', 'Skip D1 + platform provisioning')
+  .option('--token <token>', 'FAS session token (or set FAS_SESSION_TOKEN env var)')
+  .action(async (appId: string, opts: { skipInstall?: boolean; skipGit?: boolean; skipProvision?: boolean; token?: string }) => {
     await createApp(appId, opts);
   });
 

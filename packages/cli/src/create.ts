@@ -5,7 +5,11 @@ import { join, resolve } from 'node:path';
 interface CreateOptions {
   skipInstall?: boolean;
   skipGit?: boolean;
+  skipProvision?: boolean;
+  token?: string;
 }
+
+const PAS_API = 'https://api.proappstore.online';
 
 const TEMPLATE_FILES: Record<string, string> = {
   'package.json': `{
@@ -154,6 +158,44 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
     }
   } else {
     process.stdout.write(`  [3/3] Skipping git init (--skip-git)\n`);
+  }
+
+  // Step 4: Provision platform resources (D1 + Data Worker)
+  if (!opts.skipProvision) {
+    const token = opts.token || process.env.FAS_SESSION_TOKEN;
+    if (token) {
+      process.stdout.write(`  [4/4] Provisioning platform resources...\n`);
+      try {
+        const res = await fetch(`${PAS_API}/v1/provision`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ appId }),
+        });
+        const data = (await res.json()) as { appId: string; steps: { name: string; status: string; detail: string }[] };
+        for (const step of data.steps) {
+          const icon = step.status === 'ok' ? '+' : step.status === 'skip' ? '-' : '!';
+          process.stdout.write(`    [${icon}] ${step.name}: ${step.detail}\n`);
+        }
+
+        // Write the Data Worker URL into the app's config
+        const dbStep = data.steps.find(s => s.name === 'create_d1' && s.status === 'ok');
+        if (dbStep) {
+          const configPath = join(targetDir, '.pas.json');
+          writeFileSync(configPath, JSON.stringify({
+            appId,
+            dataApiBase: `https://pas-data-${appId}.serge-the-dev.workers.dev`,
+            d1DatabaseId: dbStep.detail.match(/\(([^)]+)\)/)?.[1] || '',
+          }, null, 2));
+          process.stdout.write(`    Config written to .pas.json\n`);
+        }
+      } catch (e) {
+        process.stdout.write(`    Provisioning failed: ${e}. You can provision later.\n`);
+      }
+    } else {
+      process.stdout.write(`  [4/4] Skipping provision (no auth token). Set FAS_SESSION_TOKEN or use --token.\n`);
+    }
+  } else {
+    process.stdout.write(`  [4/4] Skipping provision (--skip-provision)\n`);
   }
 
   process.stdout.write(`

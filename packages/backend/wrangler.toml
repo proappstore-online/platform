@@ -21,7 +21,11 @@ bucket_name = "pas-storage"
 pattern = "api.proappstore.online/*"
 zone_name = "proappstore.online"
 
+[vars]
+CF_ACCOUNT_ID = "c1089bfcc43c1c6c2aa89e584e86f0bc"
+
 # Secrets (set via `wrangler secret put`):
+#   CF_API_TOKEN          (for provisioning D1/Pages/Workers)
 #   STRIPE_SECRET_KEY
 #   STRIPE_WEBHOOK_SECRET
 #   SESSION_SIGNING_KEY

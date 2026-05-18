@@ -7,6 +7,9 @@ export interface Env {
   SESSION_SIGNING_KEY: string;
   /** FAS API for verifying auth tokens (user identity lives on free side). */
   FAS_API_BASE: string;
+  /** CF credentials for provisioning (D1, Pages, Workers). */
+  CF_API_TOKEN: string;
+  CF_ACCOUNT_ID: string;
 }
 
 export interface SubscriptionRow {
