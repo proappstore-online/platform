@@ -37,7 +37,11 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
     }
 
     const contentType = c.req.header('Content-Type') || 'application/octet-stream';
-    const key = `${appId}/${user.id}/${filePath}`;
+    // Public files go under {appId}/_public/ directly (no user prefix)
+    // so the public download route can find them without auth.
+    const key = filePath.startsWith('_public/')
+      ? `${appId}/${filePath}`
+      : `${appId}/${user.id}/${filePath}`;
 
     await c.env.STORAGE.put(key, body, {
       httpMetadata: { contentType },
