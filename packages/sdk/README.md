@@ -170,6 +170,67 @@ const response = await app.storage.download('docs/resume.pdf')
 await app.storage.delete('docs/resume.pdf')
 ```
 
+## React Hooks (recommended)
+
+Hooks give you full control over your UI while the platform handles auth, subscriptions, and gating. Import from `@proappstore/sdk/hooks`.
+
+### useProAuth
+
+Auth state + actions. The primary way apps interact with platform identity.
+
+```tsx
+import { initPro } from '@proappstore/sdk'
+import { useProAuth } from '@proappstore/sdk/hooks'
+
+const app = initPro({ appId: 'my-app' })
+
+function App() {
+  const { user, loading, signIn, signOut, deleteAccount } = useProAuth(app)
+  if (loading) return <p>Loading...</p>
+  if (!user) return <button onClick={signIn}>Sign in with GitHub</button>
+  return <p>Welcome, {user.login}! <button onClick={signOut}>Sign out</button></p>
+}
+```
+
+### useProSubscription
+
+Subscription state + actions. Check if user is subscribed, upgrade, manage billing.
+
+```tsx
+import { useProSubscription } from '@proappstore/sdk/hooks'
+
+function Billing() {
+  const { subscription, isPro, loading, upgrade, manageBilling } = useProSubscription(app)
+  if (loading) return <p>Loading...</p>
+  if (!isPro) return <button onClick={() => upgrade()}>Upgrade to Pro</button>
+  return <button onClick={manageBilling}>Manage billing</button>
+}
+```
+
+### useProGate
+
+Combined auth + subscription gate. Returns a single `gate` state for easy conditional rendering.
+
+```tsx
+import { initPro } from '@proappstore/sdk'
+import { useProGate } from '@proappstore/sdk/hooks'
+
+const app = initPro({ appId: 'my-app' })
+
+function App() {
+  const { gate, user, signIn, upgrade } = useProGate(app, { allowFree: true })
+
+  if (gate === 'loading') return <p>Loading...</p>
+  if (gate === 'signed-out') return <button onClick={signIn}>Sign in</button>
+  if (gate === 'no-subscription') return <button onClick={() => upgrade()}>Upgrade</button>
+  return <p>Welcome, {user?.login}!</p>
+}
+```
+
+Gate states: `'loading'` | `'signed-out'` | `'no-subscription'` | `'ready'`
+
+Pass `{ allowFree: true }` to skip the subscription check (lets free users through).
+
 ## ProShell Component
 
 A React component that handles auth gates, subscription checks, and renders a platform-level shell with topbar and user menu.
