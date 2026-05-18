@@ -13,6 +13,10 @@ database_name = "pas"
 database_id = "585bbda3-0016-42ad-a53d-c089f1864fcb"
 migrations_dir = "../../migrations"
 
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "pas-storage"
+
 [[routes]]
 pattern = "api.proappstore.online/*"
 zone_name = "proappstore.online"
