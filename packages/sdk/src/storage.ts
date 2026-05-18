@@ -74,7 +74,20 @@ export class Storage {
     return response;
   }
 
-  /** Get a URL for a file (for use in <img src> etc). Requires auth header. */
+  /**
+   * Upload a public file. Anyone can view it without auth (for profile pics, event photos, etc.).
+   * Stored under the _public/ prefix. Returns a public URL usable in <img src>.
+   */
+  async uploadPublic(path: string, data: Blob | ArrayBuffer | Uint8Array, contentType?: string): Promise<UploadResult> {
+    return this.upload(`_public/${path}`, data, contentType);
+  }
+
+  /** Get a public URL for a file (no auth needed, usable in <img src>). File must have been uploaded with uploadPublic(). */
+  publicUrl(path: string): string {
+    return `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/public/${path}`;
+  }
+
+  /** Get a private URL for a file (requires auth header). */
   url(path: string): string {
     return `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/storage/${path}`;
   }

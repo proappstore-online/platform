@@ -56,7 +56,24 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
   }
 });
 
-/** Download a file. Auth required (reads own files). */
+/** Download a public file. No auth required. Key: {appId}/_public/{path} */
+storageRoutes.get('/apps/:appId/public/*', async (c) => {
+  const appId = c.req.param('appId');
+  const filePath = c.req.path.replace(`/v1/apps/${appId}/public/`, '');
+  if (!filePath) return c.text('file path required', 400);
+
+  const key = `${appId}/_public/${filePath}`;
+  const object = await c.env.STORAGE.get(key);
+  if (!object) return c.text('not found', 404);
+
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set('etag', object.httpEtag);
+  headers.set('cache-control', 'public, max-age=31536000, immutable');
+  return new Response(object.body, { headers });
+});
+
+/** Download a private file. Auth required (reads own files). */
 storageRoutes.get('/apps/:appId/storage/*', async (c) => {
   try {
     const user = await requireUser(c);
