@@ -48,9 +48,21 @@ importers:
 
   packages/cli:
     dependencies:
+      '@proappstore/compliance':
+        specifier: workspace:*
+        version: link:../compliance
       commander:
         specifier: ^12.1.0
         version: 12.1.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/compliance:
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
