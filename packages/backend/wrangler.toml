@@ -28,6 +28,15 @@ binding = "AI"
 pattern = "api.proappstore.online/*"
 zone_name = "proappstore.online"
 
+# Service binding to FAS admin Worker — handles the cross-store provisioning
+# steps (GitHub repo, CF Pages, DNS, custom domain, storefront registry) so
+# PAS reuses the working FAS provisioner instead of duplicating it. PAS's
+# /v1/provision still does the PAS-specific D1 + data Worker steps locally.
+# Calls go Worker→Worker on the same CF account and bypass CF Access.
+[[services]]
+binding = "ADMIN"
+service = "freeappstore-admin"
+
 # Secrets (set via `wrangler secret put`):
 #   CF_API_TOKEN          (for provisioning D1/Pages/Workers)
 #   STRIPE_SECRET_KEY

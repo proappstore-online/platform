@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { createApp } from './create.js';
+import { publishApp } from './publish.js';
 
 const program = new Command();
 
@@ -33,10 +34,16 @@ program
 
 program
   .command('publish')
-  .description('Open the ProAppStore publisher portal for the current repo.')
-  .action(() => {
-    process.stdout.write('pas publish: coming soon.\n');
-    process.exit(2);
+  .description('Publish the current repo to ProAppStore: GitHub repo, CF Pages, DNS, D1 database, registry entry.')
+  .option('--name <name>', 'Display name (defaults to Title Case of package.json name)')
+  .option('--category <category>', 'Storefront category (e.g. social, productivity)')
+  .option('--description <description>', 'Short description for the storefront listing')
+  .option('--icon <icon>', 'Icon HTML entity, e.g. "&#128197;"')
+  .option('--icon-bg <color>', 'Icon background hex color')
+  .option('--pro-features <list>', 'Comma-separated list of features the pro subscription unlocks')
+  .option('--token <token>', 'FAS session token (or set FAS_SESSION_TOKEN env var)')
+  .action(async (opts: { name?: string; category?: string; description?: string; icon?: string; iconBg?: string; proFeatures?: string; token?: string }) => {
+    await publishApp(opts);
   });
 
 program.parseAsync().catch((err: unknown) => {

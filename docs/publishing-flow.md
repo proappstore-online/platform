@@ -1,30 +1,51 @@
 # Publishing flow
 
-`pas publish` is the publisher-facing command. Under the hood it calls
-the `fas` Worker, which calls `fas/admin` via service binding, which
-provisions everything atomically.
+`pas publish` is the publisher-facing command. It calls the PAS backend
+`POST /v1/provision`, which delegates the cross-store steps (repo, Pages,
+DNS, custom domain, registry) to the FAS admin Worker via service binding
+and runs the PAS-specific steps (D1, Data Worker, apps row) locally.
 
 ## End-to-end sequence
 
 ```text
-publisher                             pas Worker / fas Worker          fas/admin Worker
-  │                                          │                              │
-  ├─ pas publish ─────────────────────────→  │                              │
-  │  (project metadata, category)            │                              │
-  │                                          ├─ POST /api/provision ─────→  │
-  │                                          │  via service binding         │
-  │                                          │                              ├─ 1. create GitHub repo
-  │                                          │                              ├─ 2. create CF Pages project
-  │                                          │                              ├─ 3. add custom domain
-  │                                          │                              ├─ 4. create DNS CNAME
-  │                                          │                              ├─ 5. (Tailored) create D1 db
-  │                                          │                              ├─ 6. append registry entry
-  │                                          │ ←──────── 200 OK ────────────┤
-  │  ←──────── result + URL ──────────────── │                              │
-  │                                          │                              │
-  └─ git push upstream main                  │                              │
-     auto-deploys via CI in ~30s
+publisher                  PAS backend (api.proappstore.online)        FAS admin Worker (service binding)
+  │                                       │                                       │
+  ├─ pas publish ───────────────────────→ │                                       │
+  │  (metadata)                           │                                       │
+  │                                       ├─ env.ADMIN.fetch('/api/provision') ─→ │
+  │                                       │   store: 'apps_pro'                   │
+  │                                       │                                       ├─ 1. GitHub repo (proappstore-online)
+  │                                       │                                       ├─ 2. CF Pages project (proappstore-<id>)
+  │                                       │                                       ├─ 3. Custom domain (<id>.proappstore.online)
+  │                                       │                                       ├─ 4. DNS CNAME
+  │                                       │                                       ├─ 5. Storefront registry entry
+  │                                       │ ←──── steps[] + success ───────────── │
+  │                                       │                                       │
+  │                                       ├─ 6. Create D1 database (pas-data-<id>)
+  │                                       ├─ 7. Deploy Data Worker bound to that D1
+  │                                       ├─ 8. INSERT INTO apps (id, creator_id, …)
+  │                                       │
+  │ ←──── result + URL ─────────────────  │
+  │
+  └─ git push origin main
+     auto-deploys via CF Pages in ~30s
 ```
+
+Service-binding fetches go Worker→Worker on the same CF account and bypass
+CF Access entirely, so PAS doesn't need a JWT or service token to call
+FAS admin — the binding itself is the auth.
+
+## Why this shape
+
+- **Single control plane for repo/CF/DNS/registry.** Same Worker
+  provisions FAS, FGS, and now PAS, so secrets (GitHub admin:org token,
+  CF API token with Pages + DNS scope) only live in `fas/admin`.
+- **PAS-specific steps stay in PAS.** D1 and the per-app Data Worker
+  are concepts only the pro side has; no reason to leak them into
+  `fas/admin`'s surface area.
+- **Idempotent.** Re-running `pas publish` on a partially-provisioned
+  app fills in only the missing pieces — every step checks existence
+  before creating.
 
 ## What `POST /api/provision` does, by category
 

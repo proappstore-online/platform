@@ -169,7 +169,11 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
         const res = await fetch(`${PAS_API}/v1/provision`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ appId }),
+          body: JSON.stringify({
+            appId,
+            name: appName,
+            description: `${appName} — pro app on ProAppStore.`,
+          }),
         });
         const data = (await res.json()) as { appId: string; steps: { name: string; status: string; detail: string }[] };
         for (const step of data.steps) {
