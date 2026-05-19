@@ -14,6 +14,14 @@ export interface Env {
   VAPID_PUBLIC_KEY: string;
   VAPID_PRIVATE_KEY: string;
   /**
+   * Workers AI binding — backs the app.ai SDK primitive. Set via the
+   * [ai] block in wrangler.toml. Type is loose because @cloudflare/workers-types
+   * exposes it as `Ai` only when ai_binding feature is enabled.
+   */
+  AI: {
+    run(model: string, inputs: Record<string, unknown>): Promise<unknown>;
+  };
+  /**
    * Twilio credentials for SMS. Optional so the Worker boots without them;
    * /sms/send returns 503 if unset. Provision via:
    *   wrangler secret put TWILIO_ACCOUNT_SID

@@ -19,6 +19,11 @@ migrations_dir = "../../migrations"
 binding = "STORAGE"
 bucket_name = "pas-storage"
 
+# Workers AI binding — backs the app.ai SDK primitive.
+# Free quota included with Workers Paid; pay-as-you-go beyond.
+[ai]
+binding = "AI"
+
 [[routes]]
 pattern = "api.proappstore.online/*"
 zone_name = "proappstore.online"

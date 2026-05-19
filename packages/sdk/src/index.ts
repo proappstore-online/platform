@@ -1,4 +1,5 @@
 import { FreeAppStore } from '@freeappstore/sdk';
+import { AI } from './ai.js';
 import { Database } from './db.js';
 import { Maps } from './maps.js';
 import { Notifications } from './notifications.js';
@@ -30,6 +31,15 @@ export type {
 export type { QueryResult, ExecuteResult, Migration, MigrateResult } from './db.js';
 export type { NotificationPayload, SendResult } from './notifications.js';
 export type { SmsSendResult } from './sms.js';
+export type {
+  TextModelAlias,
+  EmbedModelAlias,
+  ChatMessage,
+  GenerateOptions,
+  GenerateResult,
+  EmbedOptions,
+  EmbedResult,
+} from './ai.js';
 export { TenantScope } from './tenant.js';
 
 /**
@@ -46,6 +56,7 @@ export class ProAppStore extends FreeAppStore {
   readonly maps: Maps;
   readonly notifications: Notifications;
   readonly sms: SMS;
+  readonly ai: AI;
 
   constructor(opts: ProInitOptions) {
     super({ appId: opts.appId, ...(opts.fasApiBase && { apiBase: opts.fasApiBase }) });
@@ -57,6 +68,7 @@ export class ProAppStore extends FreeAppStore {
     this.maps = new Maps(proApiBase);
     this.notifications = new Notifications(opts.appId, proApiBase, this.auth);
     this.sms = new SMS(opts.appId, proApiBase, this.auth);
+    this.ai = new AI(proApiBase, this.auth);
   }
 }
 
