@@ -1,0 +1,158 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
+[
+  {
+    "detail": "missing: Manrope, Fraunces",
+    "name": "Brand fonts present",
+    "status": "fail",
+    "suggestions": [
+      "Add the Google Fonts <link> for Manrope + Fraunces to web/index.html.",
+      "Use them as your body / display fonts in CSS so storefront and apps feel consistent.",
+    ],
+  },
+  {
+    "detail": "missing CSS tokens: --paper, --ink",
+    "name": "Brand tokens defined",
+    "status": "fail",
+    "suggestions": [
+      "Define --paper, --ink in your theme CSS (typically web/src/index.css).",
+      "Apps use --paper / --ink / --accent; games use --bg / --ink / --accent.",
+    ],
+  },
+  {
+    "detail": "web/dist not built yet — run \`pnpm build\` to measure",
+    "name": "Bundle size",
+    "status": "warn",
+  },
+  {
+    "detail": "platform-boilerplate sections: Platform: ProAppStore, Tech Stack, Brand Guidelines, Rules; missing SKILLS.md pointer",
+    "name": "CLAUDE.md is slim (no platform boilerplate)",
+    "status": "warn",
+    "suggestions": [
+      "Per-repo CLAUDE.md should hold only what is unique to this repo (description, dev/build/deploy, repo-specific setup).",
+      "Anything platform-wide (tech stack, brand, mobile rules, deploy flow) belongs in SKILLS.md instead.",
+      "See the "Per-repo CLAUDE.md convention" section of SKILLS.md: https://raw.githubusercontent.com/proappstore-online/proappstore/main/SKILLS.md",
+    ],
+  },
+  {
+    "detail": "no prefers-color-scheme / data-theme / color-scheme signal in web/src/",
+    "name": "Dark mode support",
+    "status": "warn",
+    "suggestions": [
+      "Add a \`@media (prefers-color-scheme: dark) { ... }\` block to your theme CSS, or",
+      "Use \`color-scheme: light dark;\` to opt the page into native scrollbars / form controls.",
+    ],
+  },
+  {
+    "detail": "missing: lang attribute on <html>, viewport meta, non-empty <title>",
+    "name": "HTML meta tags",
+    "status": "fail",
+    "suggestions": [
+      "Restore the canonical <head>: \`<html lang="en">\`, \`<meta name="viewport" content="width=device-width, initial-scale=1" />\`, \`<title>App name</title>\`.",
+    ],
+  },
+  {
+    "detail": "no LICENSE file at repo root",
+    "name": "MIT License",
+    "status": "fail",
+    "suggestions": [
+      "Add a LICENSE file with the MIT license text. The platform requires MIT for publication.",
+      "Template: https://github.com/proappstore-online/template-standalone/blob/main/LICENSE",
+    ],
+  },
+  {
+    "detail": "1 .env.production file(s): .env.production",
+    "name": "No .env.production",
+    "status": "fail",
+    "suggestions": [
+      "Delete the file and add \`.env.production\` to .gitignore.",
+      "Use Cloudflare Pages → Settings → Environment Variables for production secrets instead.",
+    ],
+  },
+  {
+    "detail": "2 apparent overrides",
+    "name": "No brand overrides",
+    "status": "fail",
+    "suggestions": [
+      "web/src/extra.css:4 redefines --accent (template owns this token)",
+      "web/src/index.css:5 non-brand font "comic sans ms"",
+      "Use the template tokens (var(--accent), var(--ink), etc.) instead of redefining them.",
+      "Brand fonts are Manrope (body) + Fraunces (display). Stick to those + system / monospace.",
+    ],
+  },
+  {
+    "detail": "not a game project — check skipped",
+    "name": "No scroll (games only)",
+    "status": "pass",
+  },
+  {
+    "detail": "2 file(s) still contain APPNAME: package.json, web/src/tracking.ts",
+    "name": "No template placeholders",
+    "status": "fail",
+    "suggestions": [
+      "Run \`fas init <id>\` instead of cloning the template manually — it does the substitution.",
+      "Or do a project-wide find/replace: APPNAME → your app id (lowercase, hyphenated).",
+    ],
+  },
+  {
+    "detail": "1 file(s) reference trackers: web/src/tracking.ts (amplitude)",
+    "name": "No tracking SDKs",
+    "status": "fail",
+    "suggestions": [
+      "ProAppStore apps must be tracking-free. Remove the SDK + any analytics calls.",
+      "For private-by-design metrics, CF edge analytics already counts requests anonymously.",
+    ],
+  },
+  {
+    "detail": "2 occurrences of 100vh / h-screen — breaks on iOS Safari with URL bar visible",
+    "name": "No unsafe 100vh",
+    "status": "warn",
+    "suggestions": [
+      "web/src/index.css:4 100vh — use 100svh or 100dvh",
+      "web/src/index.css:9 100vh — use 100svh or 100dvh",
+      "Replace with 100svh (preferred) or 100dvh. Add \`// allow-100vh\` on the line if intentional.",
+    ],
+  },
+  {
+    "detail": "web/public/manifest.json missing",
+    "name": "PWA manifest",
+    "status": "fail",
+    "suggestions": [
+      "Add a manifest.json with at least name, short_name, start_url, display, icons.",
+      "See template-standalone for a working example.",
+    ],
+  },
+  {
+    "detail": "no apple-mobile-web-app-capable / mobile-web-app-capable meta",
+    "name": "PWA meta tags",
+    "status": "warn",
+    "suggestions": [
+      "Add \`<meta name="apple-mobile-web-app-capable" content="yes" />\` to <head> so iOS installs launch standalone.",
+    ],
+  },
+  {
+    "detail": "platform mandate: every app on proappstore.online must be an installable PWA, but no service worker is registered",
+    "name": "PWA offline correctness",
+    "status": "fail",
+    "suggestions": [
+      "Add \`vite-plugin-pwa\` to web/devDependencies, then wire \`VitePWA({...})\` into vite.config.ts plugins. Mirror the canonical config used in the canonical scaffolds, etc.",
+      "Or, if you prefer to manage your own SW, register it from web/src/main.tsx with \`navigator.serviceWorker.register("/sw.js")\` and ship the SW yourself.",
+    ],
+  },
+  {
+    "detail": "no link to proappstore.online found in web/src/",
+    "name": "Store link",
+    "status": "warn",
+    "suggestions": [
+      "Add a small "Built for proappstore.online" link in the footer or about screen.",
+      "It helps visitors find the rest of the catalog — and it counts for storefront ranking.",
+    ],
+  },
+  {
+    "detail": "web/public/manifest.json not found",
+    "name": "Viewport support",
+    "status": "fail",
+  },
+]
+`;

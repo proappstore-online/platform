@@ -1,0 +1,6 @@
+/* Redefining brand tokens outside the canonical theme file —
+   no-brand-overrides flags this. */
+.button {
+  --accent: hotpink;
+  color: var(--accent);
+}

@@ -13,6 +13,7 @@ on:
     paths:
       - 'packages/cli/**'
       - 'packages/sdk/**'
+      - 'packages/compliance/**'
       - '.github/workflows/publish.yml'
   workflow_dispatch: # manual trigger from the Actions UI
 
@@ -26,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [cli, sdk]
+        package: [cli, sdk, compliance]
     steps:
       - uses: actions/checkout@v4
 
@@ -63,4 +64,7 @@ jobs:
       - name: Publish via OIDC trusted publishing
         if: steps.decide.outputs.publish == 'true'
         working-directory: packages/${{ matrix.package }}
-        run: npm publish --access public --provenance
+        # `pnpm publish` rewrites `workspace:*` deps to real versions
+        # at pack time. `npm publish` would leave them as the literal
+        # `workspace:*` and consumers' installs would fail.
+        run: pnpm publish --access public --provenance --no-git-checks

@@ -1,0 +1,10 @@
+/* Brand fonts: missing on purpose. Brand tokens: missing on purpose.
+   Includes 100vh and a non-brand font-family — both are flagged. */
+body {
+  height: 100vh;
+  font-family: "Comic Sans MS", cursive;
+}
+
+.hero {
+  min-height: 100vh;
+}

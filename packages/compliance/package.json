@@ -1,0 +1,47 @@
+{
+  "name": "@proappstore/compliance",
+  "version": "0.1.0",
+  "description": "Compliance checks for apps published on proappstore.online \u2014 used by the CLI for local feedback and by CI for gating.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "homepage": "https://github.com/proappstore-online/platform#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/proappstore-online/platform.git",
+    "directory": "packages/compliance"
+  },
+  "bugs": {
+    "url": "https://github.com/proappstore-online/platform/issues"
+  },
+  "keywords": [
+    "proappstore",
+    "compliance",
+    "lint",
+    "audit",
+    "ci"
+  ],
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "sideEffects": false
+}

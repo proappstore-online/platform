@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import { checkCommand } from './check.js';
 import { createApp } from './create.js';
 import { publishApp } from './publish.js';
 
@@ -45,6 +46,8 @@ program
   .action(async (opts: { name?: string; category?: string; description?: string; icon?: string; iconBg?: string; proFeatures?: string; token?: string }) => {
     await publishApp(opts);
   });
+
+program.addCommand(checkCommand);
 
 program.parseAsync().catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err);

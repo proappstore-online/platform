@@ -1,6 +1,6 @@
 {
   "name": "@proappstore/cli",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "pas — CLI for publishing paid apps to proappstore.online",
   "license": "MIT",
   "type": "module",
@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@proappstore/compliance": "workspace:*",
     "commander": "^12.1.0"
   },
   "devDependencies": {

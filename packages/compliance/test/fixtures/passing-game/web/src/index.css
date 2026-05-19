@@ -1,0 +1,21 @@
+/* Game tokens: --bg / --ink / --accent. Brand fonts in name. */
+:root {
+  --bg: #050912;
+  --ink: #f7f7f0;
+  --accent: #00ffaa;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100svh;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Manrope, system-ui, sans-serif;
+  overflow: hidden;
+}
+
+h1 {
+  font-family: Fraunces, serif;
+}
