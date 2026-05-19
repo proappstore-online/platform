@@ -78,8 +78,8 @@ importers:
   packages/sdk:
     dependencies:
       '@freeappstore/sdk':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.7.1
+        version: 0.7.1
     devDependencies:
       '@types/react':
         specifier: ^19.0.0
@@ -736,8 +736,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@freeappstore/sdk@0.6.0':
-    resolution: {integrity: sha512-Etdx1fTEejExSe7wW/btvZ7j2cke6F7QW50zOM32rSsSAz5FYTIrzDRv1YWk0pgl7DKejjyGowWemR9KUa9Saw==}
+  '@freeappstore/sdk@0.7.1':
+    resolution: {integrity: sha512-yxcNe2oVM+ZJf7Lj5odFeQtkXZBMfyT/fR7Tq7XBlOvFSqfXNtmNNiJGuqCHKal/NTNaUcdkEzNkKYlaNzkI/w==}
 
   '@iconify-json/simple-icons@1.2.81':
     resolution: {integrity: sha512-Utjw4sPtoVdbpAQAkC4O0cYpt4ehQZYr6aFHhmvdeW8mQwkINyAe0ogTPqNptSSKogZ2lfgXM8zpuhO961Wnng==}
@@ -2617,7 +2617,7 @@ snapshots:
   '@esbuild/win32-x64@0.28.0':
     optional: true
 
-  '@freeappstore/sdk@0.6.0': {}
+  '@freeappstore/sdk@0.7.1': {}
 
   '@iconify-json/simple-icons@1.2.81':
     dependencies:

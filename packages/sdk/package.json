@@ -1,6 +1,6 @@
 {
   "name": "@proappstore/sdk",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Browser SDK for paid apps on proappstore.online — subscriptions, license keys, premium modules.",
   "license": "MIT",
   "type": "module",
@@ -34,7 +34,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@freeappstore/sdk": "^0.6.0"
+    "@freeappstore/sdk": "^0.7.1"
   },
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0"
