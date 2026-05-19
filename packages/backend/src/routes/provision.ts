@@ -81,8 +81,10 @@ async function callAdminProvision(
     proFeatures: body.proFeatures,
   };
   // Service-binding fetch — bypasses the public edge (and CF Access). The
-  // host part of the URL is ignored; only the path matters.
-  const res = await admin.fetch('https://admin.freeappstore.online/api/provision', {
+  // host is intentionally synthetic ("internal-admin") because fas/admin's
+  // isAuthenticated() treats any *.freeappstore.online host as a public
+  // call requiring a CF Access JWT, which service-binding calls don't have.
+  const res = await admin.fetch('https://internal-admin/api/provision', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -136,21 +138,41 @@ provisionRoutes.post('/provision', async (c) => {
       steps.push({ name: 'fas_admin', status: 'skip', detail: reason });
     }
 
-    // 2. Create D1 database.
+    // 2. Create D1 database — or, if it already exists, look up its id so the
+    // Data Worker deploy can still proceed. Without the lookup, re-running
+    // provision on an existing app skips the worker step ("No D1 database
+    // created") even though the D1 is right there.
     let dbId = '';
+    const dbName = `pas-data-${appId}`;
     try {
       const dbRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/d1/database`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${cfToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: `pas-data-${appId}` }),
+        body: JSON.stringify({ name: dbName }),
       });
       const dbData = (await dbRes.json()) as { success: boolean; result?: { uuid: string }; errors?: { message: string }[] };
       if (dbData.success && dbData.result) {
         dbId = dbData.result.uuid;
-        steps.push({ name: 'create_d1', status: 'ok', detail: `pas-data-${appId} (${dbId})` });
+        steps.push({ name: 'create_d1', status: 'ok', detail: `${dbName} (${dbId})` });
       } else {
         const err = dbData.errors?.[0]?.message || 'unknown';
-        steps.push({ name: 'create_d1', status: err.includes('already exists') ? 'skip' : 'fail', detail: err });
+        if (err.includes('already exists')) {
+          // Look up the existing db's id.
+          const listRes = await fetch(
+            `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/d1/database?name=${dbName}`,
+            { headers: { Authorization: `Bearer ${cfToken}` } },
+          );
+          const listData = (await listRes.json()) as { result?: { uuid: string; name: string }[] };
+          const existing = listData.result?.find((d) => d.name === dbName);
+          if (existing) {
+            dbId = existing.uuid;
+            steps.push({ name: 'create_d1', status: 'skip', detail: `${dbName} already exists (${dbId})` });
+          } else {
+            steps.push({ name: 'create_d1', status: 'fail', detail: `exists per create but list returned nothing` });
+          }
+        } else {
+          steps.push({ name: 'create_d1', status: 'fail', detail: err });
+        }
       }
     } catch (e) {
       steps.push({ name: 'create_d1', status: 'fail', detail: String(e) });

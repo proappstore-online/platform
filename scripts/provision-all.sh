@@ -36,23 +36,32 @@ APPS=(
 call_provision() {
   local id=$1 name=$2 category=$3 icon=$4 iconBg=$5 description=$6 proFeatures=$7
 
-  # Convert comma-sep proFeatures string → JSON array.
-  local proFeaturesJson
-  proFeaturesJson=$(printf '%s' "$proFeatures" | python3 -c 'import sys,json; print(json.dumps([x.strip() for x in sys.stdin.read().split(",") if x.strip()]))')
-
+  # Build the JSON body in python (where escaping is sane) instead of via
+  # bash string interpolation, which has bitten us with apostrophes and
+  # commas in descriptions.
   local body
-  body=$(python3 -c "
-import json
+  body=$(
+    APP_ID="$id" \
+    APP_NAME="$name" \
+    APP_CATEGORY="$category" \
+    APP_ICON="$icon" \
+    APP_ICON_BG="$iconBg" \
+    APP_DESCRIPTION="$description" \
+    APP_PRO_FEATURES="$proFeatures" \
+    python3 -c '
+import json, os
+features = [f.strip() for f in os.environ["APP_PRO_FEATURES"].split(",") if f.strip()]
 print(json.dumps({
-    'appId': '$id',
-    'name': '$name',
-    'category': '$category',
-    'icon': '$icon',
-    'iconBg': '$iconBg',
-    'description': '''$description''',
-    'proFeatures': $proFeaturesJson,
+    "appId": os.environ["APP_ID"],
+    "name": os.environ["APP_NAME"],
+    "category": os.environ["APP_CATEGORY"],
+    "icon": os.environ["APP_ICON"],
+    "iconBg": os.environ["APP_ICON_BG"],
+    "description": os.environ["APP_DESCRIPTION"],
+    "proFeatures": features,
 }))
-")
+'
+  )
 
   echo "─── $id ($name) ───"
   curl -sS -X POST "$PAS_API/v1/provision" \
@@ -61,18 +70,22 @@ print(json.dumps({
     -d "$body" \
   | python3 -c '
 import sys, json
+raw = sys.stdin.read()
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(raw)
 except Exception as e:
-    print(f"  ! parse error: {e}")
+    print("  ! parse error:", e, "body:", raw[:200])
+    sys.exit(0)
+if "steps" not in d:
+    print("  ! response:", d)
     sys.exit(0)
 for s in d.get("steps", []):
     icon = {"ok": "+", "skip": "-", "fail": "!"}.get(s["status"], "?")
-    print(f"  [{icon}] {s['name']}: {s['detail']}")
+    print("  [" + icon + "] " + s["name"] + ": " + s["detail"])
 if d.get("success"):
-    print(f"  ✓ provisioned. URL: https://{d['appId']}.proappstore.online")
+    print("  ✓ provisioned. URL: https://" + d["appId"] + ".proappstore.online")
 else:
-    print(f"  ✗ some steps failed")
+    print("  ✗ some steps failed")
 '
   echo
 }
