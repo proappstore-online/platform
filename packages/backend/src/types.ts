@@ -44,6 +44,12 @@ export interface Env {
   TWILIO_AUTH_TOKEN?: string;
   /** Sender number in E.164 format, e.g. "+15551234567". */
   TWILIO_FROM_NUMBER?: string;
+  /**
+   * Comma-separated list of `gh:<id>` strings allowed to approve/reject
+   * submissions and to list all submissions across the platform. Other
+   * authenticated users see only their own submissions.
+   */
+  ADMIN_GITHUB_IDS?: string;
 }
 
 export interface PushSubscriptionRow {
@@ -76,4 +82,25 @@ export interface LicenseRow {
   issued_at: number;
   expires_at: number | null;
   revoked: number;
+}
+
+/** A pending / reviewed dev submission. Mirrors `submissions` table. */
+export interface SubmissionRow {
+  id: string;
+  app_id: string;
+  creator_id: string;
+  status: 'pending' | 'approved' | 'rejected' | 'published';
+  name: string;
+  category: string;
+  description: string;
+  icon: string | null;
+  icon_bg: string | null;
+  /** JSON-stringified string[]. Null when not set. */
+  pro_features: string | null;
+  suggested_monthly_price_cents: number | null;
+  repo_url: string | null;
+  reviewer_id: string | null;
+  rejection_reason: string | null;
+  created_at: number;
+  reviewed_at: number | null;
 }

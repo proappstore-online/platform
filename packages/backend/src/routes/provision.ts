@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
 import { deployDataWorker } from '../lib/deploy-worker.js';
+import { callAdminProvision, type ProvisionBody, type ProvisionStep } from '../lib/provision-client.js';
 
 /**
  * App provisioning — pro side.
@@ -29,76 +30,12 @@ import { deployDataWorker } from '../lib/deploy-worker.js';
  */
 export const provisionRoutes = new Hono<{ Bindings: Env }>();
 
-interface ProvisionStep {
-  name: string;
-  status: 'ok' | 'skip' | 'fail';
-  detail: string;
-}
-
 interface ProvisionResult {
   appId: string;
   steps: ProvisionStep[];
   dataWorkerUrl: string;
   pagesUrl: string;
   success: boolean;
-}
-
-interface ProvisionBody {
-  appId: string;
-  /** Display name. Defaults to a Title Case of appId. */
-  name?: string;
-  category?: string;
-  icon?: string;
-  iconBg?: string;
-  description?: string;
-  /** "standalone" | "connected". Defaults to "connected" for pro apps. */
-  type?: string;
-  proFeatures?: string[];
-  /** Skip the FAS-admin call (e.g. when the GitHub repo + CF Pages already exist). */
-  skipPublish?: boolean;
-}
-
-function toTitleCase(id: string): string {
-  return id
-    .split('-')
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(' ');
-}
-
-async function callAdminProvision(
-  admin: Fetcher,
-  body: ProvisionBody & { appId: string },
-): Promise<{ steps: ProvisionStep[]; success: boolean } | { error: string }> {
-  const payload = {
-    id: body.appId,
-    name: body.name || toTitleCase(body.appId),
-    category: body.category || 'utilities',
-    icon: body.icon || '&#128230;',
-    iconBg: body.iconBg || '#f5f3ff',
-    description: body.description || `${body.name || toTitleCase(body.appId)} — pro app on ProAppStore.`,
-    store: 'apps_pro',
-    type: body.type || 'connected',
-    proFeatures: body.proFeatures,
-  };
-  // Service-binding fetch — bypasses the public edge (and CF Access). The
-  // host is intentionally synthetic ("internal-admin") because fas/admin's
-  // isAuthenticated() treats any *.freeappstore.online host as a public
-  // call requiring a CF Access JWT, which service-binding calls don't have.
-  const res = await admin.fetch('https://internal-admin/api/provision', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  // FAS admin returns 200 on full success, 400 if any step failed but the
-  // call itself completed. Both shapes carry { steps, success }.
-  if (res.status >= 500) {
-    return { error: `FAS admin returned ${res.status}: ${await res.text()}` };
-  }
-  try {
-    return (await res.json()) as { steps: ProvisionStep[]; success: boolean };
-  } catch (e) {
-    return { error: `Invalid response from FAS admin: ${e}` };
-  }
 }
 
 provisionRoutes.post('/provision', async (c) => {

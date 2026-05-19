@@ -8,6 +8,8 @@ workers_dev = true
 FAS_API_BASE = "https://api.freeappstore.online"
 CF_ACCOUNT_ID = "c1089bfcc43c1c6c2aa89e584e86f0bc"
 VAPID_PUBLIC_KEY = "BPg6E92QAOhdcif_HckOEGY6mL03VKWNQ3CS1xQX5q59fXURI1xCGwwBr4Vsv7gn3TXIGSJquJwvHGYRbMcAQc0"
+# Comma-separated `gh:<id>` strings allowed to approve/reject submissions.
+ADMIN_GITHUB_IDS = "gh:2824906"
 
 [[d1_databases]]
 binding = "DB"
