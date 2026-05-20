@@ -157,11 +157,17 @@ interface ListingPatch {
   screenshots?: string[];
 }
 
-function clean(v: unknown, max?: number): string | null {
+function clean(v: unknown, max?: number, fieldName?: string): string | null {
   if (typeof v !== 'string') return null;
   const s = v.trim();
   if (!s) return null;
-  return max && s.length > max ? s.slice(0, max) : s;
+  if (max && s.length > max) {
+    // Don't silently truncate — API clients deserve to know their data is being
+    // rejected. The form-side already enforces maxLength so well-behaved
+    // browser submissions never hit this; this guards SDKs / curl / scripts.
+    throw new HttpError(`${fieldName ?? 'field'} too long (max ${max} characters)`, 400);
+  }
+  return s;
 }
 
 function urlOrNull(v: unknown): string | null {
@@ -181,7 +187,7 @@ function emailOrNull(v: unknown): string | null {
 function hexOrNull(v: unknown): string | null {
   const s = clean(v);
   if (!s) return null;
-  if (!HEX.test(s)) throw new HttpError('invalid color (must be #RRGGBB)', 400);
+  if (!HEX.test(s)) throw new HttpError('invalid color (must be #RGB, #RRGGBB, or #RRGGBBAA)', 400);
   return s;
 }
 
@@ -205,18 +211,18 @@ listingsRoutes.put('/apps/:id/listing', async (c) => {
     if ('iconUrl' in body) patch.icon_url = urlOrNull(body.iconUrl);
     if ('themeColor' in body) patch.theme_color = hexOrNull(body.themeColor);
     if ('splashColor' in body) patch.splash_color = hexOrNull(body.splashColor);
-    if ('tagline' in body) patch.tagline = clean(body.tagline, MAX_TAGLINE);
-    if ('longDescription' in body) patch.long_description = clean(body.longDescription, MAX_LONG_DESC);
-    if ('category' in body) patch.category = clean(body.category, 40);
+    if ('tagline' in body) patch.tagline = clean(body.tagline, MAX_TAGLINE, 'tagline');
+    if ('longDescription' in body) patch.long_description = clean(body.longDescription, MAX_LONG_DESC, 'longDescription');
+    if ('category' in body) patch.category = clean(body.category, 40, 'category');
     if ('websiteUrl' in body) patch.website_url = urlOrNull(body.websiteUrl);
     if ('supportEmail' in body) patch.support_email = emailOrNull(body.supportEmail);
     if ('supportUrl' in body) patch.support_url = urlOrNull(body.supportUrl);
     if ('socialTwitter' in body) patch.social_twitter = handleOrNull(body.socialTwitter);
     if ('socialGithub' in body) patch.social_github = handleOrNull(body.socialGithub);
     if ('socialMastodon' in body) patch.social_mastodon = urlOrNull(body.socialMastodon);
-    if ('socialBluesky' in body) patch.social_bluesky = clean(body.socialBluesky, 128);
+    if ('socialBluesky' in body) patch.social_bluesky = clean(body.socialBluesky, 128, 'socialBluesky');
     if ('privacyPolicyUrl' in body) patch.privacy_policy_url = urlOrNull(body.privacyPolicyUrl);
-    if ('terms_url' in body || 'termsUrl' in body) patch.terms_url = urlOrNull(body.termsUrl);
+    if ('termsUrl' in body) patch.terms_url = urlOrNull(body.termsUrl);
     if ('screenshots' in body) {
       const arr = Array.isArray(body.screenshots) ? body.screenshots : [];
       const cleaned = arr
