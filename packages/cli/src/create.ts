@@ -1,6 +1,15 @@
 import { execSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, existsSync, cpSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Resolve the CLI package's bundled `templates/` directory (contains
+// binary placeholder icons that can't be inlined into TEMPLATE_FILES).
+// In published form: <pkg>/dist/create.js + <pkg>/templates/*. In dev
+// (tsx, esno): <pkg>/src/create.ts + <pkg>/templates/*. Walk up from
+// __dirname to the package root and append templates/.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const TEMPLATES_DIR = join(__dirname, '..', 'templates');
 
 interface CreateOptions {
   skipInstall?: boolean;
@@ -53,7 +62,8 @@ const TEMPLATE_FILES: Record<string, string> = {
     "@vitejs/plugin-react": "^6.0.1",
     "tailwindcss": "^4.2.4",
     "typescript": "~6.0.2",
-    "vite": "^8.0.10"
+    "vite": "^8.0.10",
+    "vite-plugin-pwa": "^1.3.0"
   }
 }`,
   'web/tsconfig.json': `{\n  "files": [],\n  "references": [\n    { "path": "./tsconfig.app.json" },\n    { "path": "./tsconfig.node.json" }\n  ]\n}`,
@@ -93,11 +103,63 @@ const TEMPLATE_FILES: Record<string, string> = {
   },
   "include": ["vite.config.ts"]
 }`,
-  'web/vite.config.ts': `import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\nimport tailwindcss from '@tailwindcss/vite'\n\nexport default defineConfig({\n  plugins: [react(), tailwindcss()],\n  server: { host: true },\n})`,
+  'web/vite.config.ts': `import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+import { VitePWA } from 'vite-plugin-pwa'
+
+export default defineConfig({
+  plugins: [
+    react(),
+    tailwindcss(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,png,svg,ico,woff2,wasm,json}'],
+        maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\\/\\/fonts\\.googleapis\\.com\\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'google-fonts-stylesheets',
+              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            urlPattern: /^https:\\/\\/fonts\\.gstatic\\.com\\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'google-fonts-webfonts',
+              expiration: { maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
+      },
+      manifest: {
+        name: '__APP_NAME__',
+        short_name: '__APP_NAME__',
+        description: '__APP_NAME__ — pro app on ProAppStore',
+        start_url: '/',
+        display: 'standalone',
+        background_color: '#ffffff',
+        theme_color: '#7c3aed',
+        orientation: 'any',
+        icons: [
+          { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
+          { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+        ],
+      },
+    }),
+  ],
+  server: { host: true },
+})`,
   'web/index.html': `<!doctype html>\n<html lang="en">\n  <head>\n    <meta charset="UTF-8" />\n    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />\n    <meta name="theme-color" content="#7c3aed" />\n    <link rel="preconnect" href="https://fonts.googleapis.com" />\n    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />\n    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />\n    <title>__APP_NAME__ — ProAppStore</title>\n  </head>\n  <body>\n    <div id="root"></div>\n    <script type="module" src="/src/main.tsx"></script>\n  </body>\n</html>`,
   'web/src/main.tsx': `import { StrictMode } from 'react'\nimport { createRoot } from 'react-dom/client'\nimport './index.css'\nimport App from './App.tsx'\n\ncreateRoot(document.getElementById('root')!).render(\n  <StrictMode>\n    <App />\n  </StrictMode>,\n)`,
   'web/src/index.css': `@import "tailwindcss";\n\n@layer base {\n:root {\n  color-scheme: light;\n  --paper: #ffffff;\n  --ink: #111111;\n  --muted: #666666;\n  --accent: #7c3aed;\n  --accent-soft: #f5f3ff;\n  --line: rgba(0,0,0,0.08);\n  --glass: rgba(255,255,255,0.72);\n  --glass-hover: rgba(255,255,255,0.85);\n  --error: #c74f43;\n  --success: #2f8f57;\n}\n\n:root[data-theme='dark'] {\n  color-scheme: dark;\n  --paper: #000000;\n  --ink: #f0f0f0;\n  --muted: #888888;\n  --accent: #a78bfa;\n  --accent-soft: #1e1533;\n  --line: rgba(255,255,255,0.08);\n  --glass: rgba(26,26,26,0.8);\n  --glass-hover: rgba(38,38,38,0.9);\n  --error: #ff7a72;\n  --success: #74d49a;\n}\n\nhtml { min-height: 100%; }\nbody {\n  min-height: 100dvh;\n  background: var(--paper);\n  color: var(--ink);\n  font-family: 'Manrope', -apple-system, sans-serif;\n  -webkit-font-smoothing: antialiased;\n}\n#root { min-height: 100dvh; }\n.display-font { font-family: 'Fraunces', Georgia, serif; letter-spacing: -0.04em; }\n} /* end @layer base */`,
-  'web/src/App.tsx': `import { initPro } from '@proappstore/sdk'\nimport { useProGate } from '@proappstore/sdk/hooks'\n\nconst app = initPro({ appId: '__APP_ID__' })\n\nexport default function App() {\n  const { gate, user, signIn, upgrade } = useProGate(app, { allowFree: true })\n\n  if (gate === 'loading') {\n    return (\n      <div className="flex min-h-[100dvh] items-center justify-center">\n        <p className="text-[var(--muted)]">Loading...</p>\n      </div>\n    )\n  }\n\n  if (gate === 'signed-out') {\n    return (\n      <div className="flex min-h-[100dvh] flex-col items-center justify-center gap-4 px-4">\n        <h1 className="display-font text-3xl font-bold text-[var(--ink)]">__APP_NAME__</h1>\n        <p className="text-[var(--muted)]">Sign in to get started.</p>\n        <button onClick={signIn} className="rounded-2xl bg-[var(--accent)] px-6 py-2.5 text-sm font-semibold text-white">Sign in with GitHub</button>\n      </div>\n    )\n  }\n\n  return (\n    <div className="mx-auto max-w-2xl px-4 py-8">\n      <h1 className="display-font text-2xl font-bold text-[var(--ink)]">__APP_NAME__</h1>\n      <p className="mt-2 text-[var(--muted)]">Welcome, {user?.login}! Edit web/src/App.tsx to start building.</p>\n    </div>\n  )\n}`,
+  'web/src/App.tsx': `import { initPro } from '@proappstore/sdk'\nimport { useProGate } from '@proappstore/sdk/hooks'\n\nconst app = initPro({ appId: '__APP_ID__' })\n\nexport default function App() {\n  const { gate, user, signIn } = useProGate(app, { allowFree: true })\n\n  if (gate === 'loading') {\n    return (\n      <div className="flex min-h-[100dvh] items-center justify-center">\n        <p className="text-[var(--muted)]">Loading...</p>\n      </div>\n    )\n  }\n\n  if (gate === 'signed-out') {\n    return (\n      <div className="flex min-h-[100dvh] flex-col items-center justify-center gap-4 px-4">\n        <h1 className="display-font text-3xl font-bold text-[var(--ink)]">__APP_NAME__</h1>\n        <p className="text-[var(--muted)]">Sign in to get started.</p>\n        <button onClick={signIn} className="rounded-2xl bg-[var(--accent)] px-6 py-2.5 text-sm font-semibold text-white">Sign in with GitHub</button>\n      </div>\n    )\n  }\n\n  return (\n    <div className="mx-auto max-w-2xl px-4 py-8">\n      <h1 className="display-font text-2xl font-bold text-[var(--ink)]">__APP_NAME__</h1>\n      <p className="mt-2 text-[var(--muted)]">Welcome, {user?.login}! Edit web/src/App.tsx to start building.</p>\n    </div>\n  )\n}`,
   // Pre-committed privacy template — served by CF Pages at
   // <app>.proappstore.online/privacy.md. The Console's "Use privacy.md from
   // my app" affordance points to that URL. Fill in {{APP_NAME}}/{{DATE}}/
@@ -137,6 +199,15 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
       .replace(/__APP_NAME__/g, appName)
       .replace(/__APP_DESCRIPTION__/g, `A pro app on ProAppStore.`);
     writeFileSync(fullPath, processed);
+  }
+
+  // Binary placeholders that can't live in the inline string map.
+  // Without these the manifest references /icon-192.png and Android
+  // would either 404 or install the app as a launcher shortcut.
+  const publicDir = join(targetDir, 'web', 'public');
+  mkdirSync(publicDir, { recursive: true });
+  for (const iconName of ['icon-192.png', 'icon-512.png']) {
+    cpSync(join(TEMPLATES_DIR, iconName), join(publicDir, iconName));
   }
 
   // Step 2: Install
