@@ -17,6 +17,10 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Build first: @proappstore/cli depends on @proappstore/compliance
+      # via workspace:* and its typecheck reads compliance's `.d.ts` files
+      # which only exist after a build. Without this, the typecheck step
+      # below fails with "Cannot find module '@proappstore/compliance'".
+      - run: pnpm -r --filter './packages/*' build
       - run: pnpm -r typecheck
       - run: pnpm test
-      - run: pnpm -r --filter './packages/*' build
