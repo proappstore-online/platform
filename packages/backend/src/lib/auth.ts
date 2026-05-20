@@ -36,3 +36,26 @@ export async function requireUser(c: Context<{ Bindings: Env }>): Promise<FasUse
   }
   return (await response.json()) as FasUser;
 }
+
+/**
+ * Verify the signed-in user owns the given app — i.e. they're the
+ * creator_id on the apps table row. Admins (per ADMIN_GITHUB_IDS) bypass
+ * the check. Returns the user object on success; throws 403 / 404 otherwise.
+ *
+ * Use on any endpoint that mutates per-app config (listing metadata, asset
+ * uploads, etc.) so one dev can't overwrite another dev's app.
+ */
+export async function requireAppOwner(
+  c: Context<{ Bindings: Env }>,
+  appId: string,
+): Promise<FasUser> {
+  const user = await requireUser(c);
+  const row = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?')
+    .bind(appId)
+    .first<{ creator_id: string }>();
+  if (!row) throw new HttpError('app not found', 404);
+  if (row.creator_id === user.id) return user;
+  const admins = (c.env.ADMIN_GITHUB_IDS ?? '').split(',').map((s) => s.trim());
+  if (admins.includes(user.id)) return user;
+  throw new HttpError('not the app owner', 403);
+}
