@@ -374,6 +374,28 @@ describe('POST /v1/submissions/:id/approve', () => {
   });
 });
 
+describe('GET /v1/me/is-admin', () => {
+  it('returns { admin: true } when caller is in ADMIN_GITHUB_IDS', async () => {
+    const res = await app.request(
+      '/v1/me/is-admin',
+      { headers: { Authorization: 'Bearer tok' } },
+      makeEnv(undefined, { ADMIN_GITHUB_IDS: 'gh:1' }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ admin: true });
+  });
+
+  it('returns { admin: false } when caller is not an admin', async () => {
+    const res = await app.request(
+      '/v1/me/is-admin',
+      { headers: { Authorization: 'Bearer tok' } },
+      makeEnv(undefined, { ADMIN_GITHUB_IDS: 'gh:9999' }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ admin: false });
+  });
+});
+
 describe('POST /v1/submissions/:id/reject', () => {
   it('rejects without a reason → 400', async () => {
     const db = mockD1();

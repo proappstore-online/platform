@@ -54,6 +54,21 @@ function isAdmin(user: FasUser, env: Env): boolean {
   return ids.includes(user.id);
 }
 
+/**
+ * Lightweight admin probe used by the Console to decide whether to render
+ * the Admin tab. Same membership check as the approve/reject gates — kept
+ * here next to `isAdmin` so the source of truth is one function.
+ */
+submissionRoutes.get('/me/is-admin', async (c) => {
+  try {
+    const user = await requireUser(c);
+    return c.json({ admin: isAdmin(user, c.env) });
+  } catch (err) {
+    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    throw err;
+  }
+});
+
 /** Hydrate a raw D1 row into the typed SubmissionRow shape. */
 function rowToSubmission(row: Record<string, unknown>): SubmissionRow {
   return {
