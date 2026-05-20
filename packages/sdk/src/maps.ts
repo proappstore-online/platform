@@ -31,12 +31,16 @@ export class Maps {
   constructor(private readonly apiBase: string) {}
 
   /** Convert an address string to coordinates. Returns up to `limit` results. */
-  async geocode(query: string, limit = 5): Promise<GeoResult[]> {
+  async geocode(
+    query: string,
+    limit = 5,
+    opts?: { signal?: AbortSignal },
+  ): Promise<GeoResult[]> {
     const url = new URL(`${this.apiBase}/v1/maps/geocode`);
     url.searchParams.set('q', query);
     url.searchParams.set('limit', String(limit));
 
-    const response = await fetch(url.toString());
+    const response = await fetch(url.toString(), opts?.signal ? { signal: opts.signal } : undefined);
     if (!response.ok) throw new Error(`maps.geocode failed: ${response.status}`);
 
     const data = (await response.json()) as { results: GeoResult[] };
@@ -48,24 +52,32 @@ export class Maps {
    * plus distance and duration. Backed by OSRM (OpenStreetMap), proxied
    * through the platform — no API key needed.
    */
-  async route(from: { lat: number; lng: number }, to: { lat: number; lng: number }): Promise<RouteResult> {
+  async route(
+    from: { lat: number; lng: number },
+    to: { lat: number; lng: number },
+    opts?: { signal?: AbortSignal },
+  ): Promise<RouteResult> {
     const url = new URL(`${this.apiBase}/v1/maps/route`);
     url.searchParams.set('from', `${from.lat},${from.lng}`);
     url.searchParams.set('to', `${to.lat},${to.lng}`);
 
-    const response = await fetch(url.toString());
+    const response = await fetch(url.toString(), opts?.signal ? { signal: opts.signal } : undefined);
     if (!response.ok) throw new Error(`maps.route failed: ${response.status}`);
 
     return (await response.json()) as RouteResult;
   }
 
   /** Convert coordinates to an address. */
-  async reverseGeocode(lat: number, lng: number): Promise<ReverseResult> {
+  async reverseGeocode(
+    lat: number,
+    lng: number,
+    opts?: { signal?: AbortSignal },
+  ): Promise<ReverseResult> {
     const url = new URL(`${this.apiBase}/v1/maps/reverse`);
     url.searchParams.set('lat', String(lat));
     url.searchParams.set('lng', String(lng));
 
-    const response = await fetch(url.toString());
+    const response = await fetch(url.toString(), opts?.signal ? { signal: opts.signal } : undefined);
     if (!response.ok) throw new Error(`maps.reverseGeocode failed: ${response.status}`);
 
     return (await response.json()) as ReverseResult;
