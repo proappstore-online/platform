@@ -160,6 +160,52 @@ listingsRoutes.get('/storefront/apps/:id', async (c) => {
   }
 });
 
+/**
+ * Public list of every app + its (partial) listing. Powers the storefront
+ * homepage cards so the icon a dev uploads via Console actually surfaces
+ * publicly. One round-trip instead of N per-app fetches; cached at the
+ * edge for 60s like the single-app endpoint.
+ *
+ * Excludes support_email (owner-private). Includes `iconUrl`, `tagline`,
+ * `category`, `themeColor` — enough for a card. Detail-page payloads still
+ * come from /storefront/apps/:id when the user clicks through.
+ */
+listingsRoutes.get('/storefront/apps', async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT a.id              AS app_id,
+              l.icon_url,
+              l.tagline,
+              l.category,
+              l.theme_color,
+              l.updated_at
+         FROM apps a
+    LEFT JOIN app_listings l ON l.app_id = a.id
+        ORDER BY a.created_at DESC`,
+    ).all<{
+      app_id: string;
+      icon_url: string | null;
+      tagline: string | null;
+      category: string | null;
+      theme_color: string | null;
+      updated_at: number | null;
+    }>();
+    const apps = (results ?? []).map((r) => ({
+      appId: r.app_id,
+      iconUrl: r.icon_url,
+      tagline: r.tagline,
+      category: r.category,
+      themeColor: r.theme_color,
+      updatedAt: r.updated_at ?? 0,
+    }));
+    c.header('Cache-Control', 'public, max-age=60');
+    return c.json({ apps });
+  } catch (err) {
+    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    throw err;
+  }
+});
+
 /** Owner read. */
 listingsRoutes.get('/apps/:id/listing', async (c) => {
   try {
