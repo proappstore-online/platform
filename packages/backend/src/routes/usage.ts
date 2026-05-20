@@ -276,3 +276,57 @@ usageRoutes.get('/usage/me', async (c) => {
     throw err;
   }
 });
+
+interface OwnerSummaryRow {
+  active_users: number | null;
+  session_seconds: number | null;
+  api_calls: number | null;
+}
+
+/**
+ * Owner-wide usage summary across every app the caller owns. Powers the
+ * Console Dashboard's "Active 30d" stat. Two D1 queries (apps list, then
+ * aggregate over their ids) — short-circuits to zeros when the caller owns
+ * no apps so the empty-state load is cheap.
+ */
+usageRoutes.get('/usage/owner-summary', async (c) => {
+  try {
+    const user = await requireUser(c);
+    const days = parseDaysParam(c.req.query('days'));
+    const today = utcDayKey();
+    const startDay = addDays(today, -(days - 1));
+
+    const ownedApps = await c.env.DB.prepare('SELECT id FROM apps WHERE creator_id = ?')
+      .bind(user.id)
+      .all<{ id: string }>();
+    const appIds = (ownedApps.results ?? []).map((r) => r.id);
+
+    if (appIds.length === 0) {
+      return c.json({ days, appCount: 0, activeUsers: 0, sessionSeconds: 0, apiCalls: 0 });
+    }
+
+    const placeholders = appIds.map(() => '?').join(', ');
+    const summary = await c.env.DB.prepare(
+      `SELECT COUNT(DISTINCT user_id) AS active_users,
+              COALESCE(SUM(session_seconds), 0) AS session_seconds,
+              COALESCE(SUM(api_calls), 0) AS api_calls
+         FROM usage_daily
+        WHERE app_id IN (${placeholders})
+          AND day >= ?
+          AND day <= ?`,
+    )
+      .bind(...appIds, startDay, today)
+      .first<OwnerSummaryRow>();
+
+    return c.json({
+      days,
+      appCount: appIds.length,
+      activeUsers: Number(summary?.active_users ?? 0),
+      sessionSeconds: Number(summary?.session_seconds ?? 0),
+      apiCalls: Number(summary?.api_calls ?? 0),
+    });
+  } catch (err) {
+    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    throw err;
+  }
+});

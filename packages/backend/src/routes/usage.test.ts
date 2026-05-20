@@ -316,3 +316,101 @@ describe('GET /v1/usage/me', () => {
     expect(body.totals).toEqual({ sessionSeconds: 0, apiCalls: 0 });
   });
 });
+
+describe('GET /v1/usage/owner-summary', () => {
+  it('returns all zeros when the caller owns no apps (short-circuits the summary query)', async () => {
+    const ownedApps = mockStmt({ all: { results: [] } });
+    const db = mockD1(ownedApps);
+    const res = await app.request(
+      '/v1/usage/owner-summary?days=30',
+      { headers: { Authorization: 'Bearer t' } },
+      makeEnv(db),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      days: number;
+      appCount: number;
+      activeUsers: number;
+      sessionSeconds: number;
+      apiCalls: number;
+    };
+    expect(body).toEqual({ days: 30, appCount: 0, activeUsers: 0, sessionSeconds: 0, apiCalls: 0 });
+    // Only the apps query should have been prepared; no second query.
+    expect((db.prepare as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+  });
+
+  it('aggregates session_seconds + api_calls + distinct users across owned apps', async () => {
+    const ownedApps = mockStmt({ all: { results: [{ id: 'meetup' }, { id: 'dating' }] } });
+    const summary = mockStmt({
+      first: { active_users: 42, session_seconds: 12345, api_calls: 678 },
+    });
+    const db = mockD1(ownedApps, summary);
+    const res = await app.request(
+      '/v1/usage/owner-summary?days=30',
+      { headers: { Authorization: 'Bearer t' } },
+      makeEnv(db),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      days: number;
+      appCount: number;
+      activeUsers: number;
+      sessionSeconds: number;
+      apiCalls: number;
+    };
+    expect(body).toEqual({
+      days: 30,
+      appCount: 2,
+      activeUsers: 42,
+      sessionSeconds: 12345,
+      apiCalls: 678,
+    });
+    // The summary query must bind the app ids before the day window.
+    const summaryBindCalls = (summary.bind as ReturnType<typeof vi.fn>).mock.calls;
+    const bound = summaryBindCalls[0] as unknown[];
+    expect(bound[0]).toBe('meetup');
+    expect(bound[1]).toBe('dating');
+  });
+
+  it('returns zeros (not nulls) when there are owned apps but no rows in the window', async () => {
+    const ownedApps = mockStmt({ all: { results: [{ id: 'meetup' }] } });
+    // first() returns the COALESCE-zero row even when no rows match
+    const summary = mockStmt({
+      first: { active_users: 0, session_seconds: 0, api_calls: 0 },
+    });
+    const db = mockD1(ownedApps, summary);
+    const res = await app.request(
+      '/v1/usage/owner-summary',
+      { headers: { Authorization: 'Bearer t' } },
+      makeEnv(db),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { appCount: number; activeUsers: number };
+    expect(body.appCount).toBe(1);
+    expect(body.activeUsers).toBe(0);
+  });
+
+  it('clamps days too-large → 365', async () => {
+    const ownedApps = mockStmt({ all: { results: [] } });
+    const db = mockD1(ownedApps);
+    const res = await app.request(
+      '/v1/usage/owner-summary?days=1000',
+      { headers: { Authorization: 'Bearer t' } },
+      makeEnv(db),
+    );
+    expect(((await res.json()) as { days: number }).days).toBe(365);
+  });
+
+  it('clamps days malformed → default 30', async () => {
+    // Re-mock auth so each test gets a fresh Response (Body is single-use).
+    mockAuthAs('gh:1');
+    const ownedApps = mockStmt({ all: { results: [] } });
+    const db = mockD1(ownedApps);
+    const res = await app.request(
+      '/v1/usage/owner-summary?days=abc',
+      { headers: { Authorization: 'Bearer t' } },
+      makeEnv(db),
+    );
+    expect(((await res.json()) as { days: number }).days).toBe(30);
+  });
+});
