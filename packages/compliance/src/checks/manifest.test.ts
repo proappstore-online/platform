@@ -20,10 +20,10 @@ async function withManifest(content: string): Promise<void> {
 }
 
 describe('checkManifest', () => {
-  it('fails when manifest.json missing', async () => {
+  it('fails when no manifest source (static OR inline) is present', async () => {
     const r = await checkManifest(fsFileSource(dir));
     expect(r.status).toBe('fail');
-    expect(r.detail).toMatch(/missing/);
+    expect(r.detail).toMatch(/no manifest source/);
   });
 
   it('fails when manifest.json is not valid JSON', async () => {

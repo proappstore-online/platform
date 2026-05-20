@@ -115,12 +115,12 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
-    "detail": "web/public/manifest.json missing",
+    "detail": "no manifest source found (looked for web/public/manifest.json and a VitePWA(...) block in web/vite.config.ts)",
     "name": "PWA manifest",
     "status": "fail",
     "suggestions": [
-      "Add a manifest.json with at least name, short_name, start_url, display, icons.",
-      "See template-standalone for a working example.",
+      "Add a VitePWA(...) plugin to web/vite.config.ts with an inline manifest:{...} block, OR",
+      "Add a static web/public/manifest.json with at least name, short_name, start_url, display, icons.",
     ],
   },
   {
@@ -150,7 +150,7 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
-    "detail": "web/public/manifest.json not found",
+    "detail": "no manifest source found (looked for web/public/manifest.json and a VitePWA(...) block in web/vite.config.ts)",
     "name": "Viewport support",
     "status": "fail",
   },

@@ -1,14 +1,21 @@
 {
   "name": "@proappstore/cli",
-  "version": "2.1.0",
-  "description": "pas — CLI for publishing paid apps to proappstore.online",
+  "version": "2.1.1",
+  "description": "pas \u2014 CLI for publishing paid apps to proappstore.online",
   "license": "MIT",
   "type": "module",
   "bin": {
     "pas": "./dist/index.js"
   },
-  "repository": { "type": "git", "url": "git+https://github.com/proappstore-online/platform.git", "directory": "packages/cli" },
-  "files": ["dist", "README.md"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/proappstore-online/platform.git",
+    "directory": "packages/cli"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "engines": {
     "node": ">=22"
   },
