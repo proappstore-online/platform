@@ -58,6 +58,57 @@ export class Stripe {
     return this.post('/v1/customers', body);
   }
 
+  /**
+   * Create an Express Connect account for a creator. We use Express (not
+   * Standard) because creators don't need a full Stripe dashboard — the
+   * platform handles invoicing, refunds, disputes. They just need a place
+   * for payouts to land.
+   */
+  async createConnectAccount(params: {
+    email?: string;
+    country?: string;
+    metadata?: Record<string, string>;
+  }): Promise<StripeAccount> {
+    const body = new URLSearchParams();
+    body.set('type', 'express');
+    if (params.country) body.set('country', params.country);
+    if (params.email) body.set('email', params.email);
+    // Request the capabilities we'll actually use. `transfers` is the
+    // platform-pays-the-creator path; `card_payments` is left off since
+    // creators don't accept their own cards on PAS.
+    body.set('capabilities[transfers][requested]', 'true');
+    if (params.metadata) {
+      for (const [k, v] of Object.entries(params.metadata)) {
+        body.set(`metadata[${k}]`, v);
+      }
+    }
+    return this.post('/v1/accounts', body);
+  }
+
+  /**
+   * Generate an account-onboarding link the creator follows to complete
+   * Stripe's hosted KYC + bank-account setup. Links expire ~5 min after
+   * creation; create a fresh one every time the Console needs to redirect.
+   */
+  async createAccountLink(params: {
+    account: string;
+    refreshUrl: string;
+    returnUrl: string;
+    type?: 'account_onboarding' | 'account_update';
+  }): Promise<{ url: string; expires_at: number }> {
+    const body = new URLSearchParams();
+    body.set('account', params.account);
+    body.set('refresh_url', params.refreshUrl);
+    body.set('return_url', params.returnUrl);
+    body.set('type', params.type ?? 'account_onboarding');
+    return this.post('/v1/account_links', body);
+  }
+
+  /** Get the current state of a Connect account. */
+  async getAccount(accountId: string): Promise<StripeAccount> {
+    return this.get(`/v1/accounts/${encodeURIComponent(accountId)}`);
+  }
+
   private async post<T>(path: string, body: URLSearchParams): Promise<T> {
     const response = await fetch(`https://api.stripe.com${path}`, {
       method: 'POST',
@@ -73,6 +124,27 @@ export class Stripe {
     }
     return (await response.json()) as T;
   }
+
+  private async get<T>(path: string): Promise<T> {
+    const response = await fetch(`https://api.stripe.com${path}`, {
+      headers: { Authorization: `Basic ${btoa(`${this.secretKey}:`)}` },
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Stripe GET ${path} failed (${response.status}): ${text}`);
+    }
+    return (await response.json()) as T;
+  }
+}
+
+/** Subset of the Stripe Account object we read. The full object has 50+ fields. */
+export interface StripeAccount {
+  id: string;
+  email?: string | null;
+  country?: string;
+  charges_enabled?: boolean;
+  payouts_enabled?: boolean;
+  details_submitted?: boolean;
 }
 
 /**
