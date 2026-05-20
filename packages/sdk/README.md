@@ -170,6 +170,28 @@ const response = await app.storage.download('docs/resume.pdf')
 await app.storage.delete('docs/resume.pdf')
 ```
 
+### Usage tracking (auto-on; drives creator payouts)
+
+ProAppStore is a single $9/mo subscription that unlocks every Pro app. Creators are paid monthly from the pool (minus the 10% platform fee) in proportion to their app's share of total usage. To compute that, the SDK heartbeats `POST /v1/usage/ping` every 60 seconds while the tab is visible and the user is signed in.
+
+**Auto-started by `initPro()`** — you don't need to do anything for your app's usage to count toward your payout. Hidden tabs don't accrue time; closed tabs flush a final ping via `navigator.sendBeacon`.
+
+```ts
+// Default behavior — telemetry on
+const app = initPro({ appId: 'my-app' })
+
+// Opt out (your app won't count toward payouts; you also won't see analytics)
+const app = initPro({ appId: 'my-app', usage: { auto: false } })
+
+// Manual controls (rarely needed)
+app.usage.start()              // idempotent
+app.usage.stop()               // halt heartbeats
+app.usage.recordApiCall(1)     // piggybacks on next heartbeat
+app.usage.flush()              // final ping (called automatically on pagehide)
+```
+
+What we record (also documented at <https://proappstore.online/privacy#usage-analytics>): per `(app, user, day)` rollups of session-seconds and API calls. No event-by-event logs, no IP, nothing while the tab is hidden or the user is signed out.
+
 ## React Hooks (recommended)
 
 Hooks give you full control over your UI while the platform handles auth, subscriptions, and gating. Import from `@proappstore/sdk/hooks`.

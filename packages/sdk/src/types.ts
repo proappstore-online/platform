@@ -6,6 +6,11 @@ export interface ProInitOptions {
   proApiBase?: string;
   /** Defaults to https://data-{appId}.proappstore.online (per-app data worker). */
   dataApiBase?: string;
+  /** Usage telemetry options. Auto-heartbeat is on by default. */
+  usage?: {
+    /** Default true. Set false to disable the auto-heartbeat in this app. */
+    auto?: boolean;
+  };
 }
 
 export type SubscriptionStatus = 'active' | 'past_due' | 'canceled' | 'incomplete';

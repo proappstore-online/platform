@@ -7,6 +7,7 @@ import { SMS } from './sms.js';
 import { Storage } from './storage.js';
 import { SubscriptionApi } from './subscription.js';
 import { LicenseApi } from './license.js';
+import { Usage } from './usage.js';
 import type { ProInitOptions } from './types.js';
 
 // Re-export everything from FAS SDK so pro apps only need one import
@@ -41,6 +42,8 @@ export type {
   EmbedResult,
 } from './ai.js';
 export { TenantScope } from './tenant.js';
+export { Usage } from './usage.js';
+export type { UsageOptions } from './usage.js';
 
 /**
  * Pro SDK instance — includes everything from @freeappstore/sdk (auth, kv,
@@ -57,6 +60,7 @@ export class ProAppStore extends FreeAppStore {
   readonly notifications: Notifications;
   readonly sms: SMS;
   readonly ai: AI;
+  readonly usage: Usage;
 
   constructor(opts: ProInitOptions) {
     super({ appId: opts.appId, ...(opts.fasApiBase && { apiBase: opts.fasApiBase }) });
@@ -69,6 +73,11 @@ export class ProAppStore extends FreeAppStore {
     this.notifications = new Notifications(opts.appId, proApiBase, this.auth);
     this.sms = new SMS(opts.appId, proApiBase, this.auth);
     this.ai = new AI(proApiBase, this.auth);
+    this.usage = new Usage(opts.appId, proApiBase, this.auth);
+    // Auto-start telemetry unless the app opts out. `start()` is a no-op in
+    // SSR / non-browser contexts, so this is safe even when the SDK is
+    // imported on the server side.
+    if (opts.usage?.auto !== false) this.usage.start();
   }
 }
 
