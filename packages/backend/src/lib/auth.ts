@@ -59,3 +59,16 @@ export async function requireAppOwner(
   if (admins.includes(user.id)) return user;
   throw new HttpError('not the app owner', 403);
 }
+
+/**
+ * Require a platform admin. Authenticated user whose id is in the
+ * comma-separated `ADMIN_GITHUB_IDS` env var. Used to gate the
+ * cross-app analytics aggregate. When the env var is unset, no user
+ * is admin and this always 403s.
+ */
+export async function requireAdmin(c: Context<{ Bindings: Env }>): Promise<FasUser> {
+  const user = await requireUser(c);
+  const admins = (c.env.ADMIN_GITHUB_IDS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (!admins.includes(user.id)) throw new HttpError('admin only', 403);
+  return user;
+}
