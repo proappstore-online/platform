@@ -257,59 +257,6 @@ domainRoutes.post(
   }),
 );
 
-/**
- * Cron-callable: re-check every pending custom domain against CF Pages and
- * persist the new status. Returns a summary { checked, activated, stillPending,
- * failed, errors } so the cron handler can log it. Owners shouldn't have to
- * run `pas domain verify` manually — once they add the DNS records CF wants,
- * this loop catches it within the cron interval (typically 1h).
- *
- * Idempotent and tolerant of CF errors — one bad row doesn't poison the
- * sweep. The :domain/verify route is still useful for instant feedback;
- * this is the background convenience.
- */
-export async function sweepPendingDomains(env: Env): Promise<{
-  checked: number;
-  activated: number;
-  stillPending: number;
-  failed: number;
-  errors: string[];
-}> {
-  const summary = { checked: 0, activated: 0, stillPending: 0, failed: 0, errors: [] as string[] };
-  if (!env.ADMIN) {
-    summary.errors.push('ADMIN binding not configured');
-    return summary;
-  }
-  const rows = await env.DB.prepare(
-    `SELECT app_id, domain FROM app_custom_domains WHERE status = 'pending' OR status = 'failed' LIMIT 200`,
-  ).all<{ app_id: string; domain: string }>();
-  const items = rows.results ?? [];
-  for (const item of items) {
-    summary.checked++;
-    try {
-      const cf = await callAdminDomain(env.ADMIN, projectName(item.app_id), { method: 'PATCH', domain: item.domain });
-      const { ok, result } = extractCfResult(cf.body);
-      const cfStatus = ok ? readCfStatus(result) : null;
-      const status = deriveStatus(cfStatus);
-      const now = Date.now();
-      await env.DB.prepare(
-        `UPDATE app_custom_domains
-         SET status = ?, cf_status = ?, cf_payload = ?,
-             verified_at = CASE WHEN ? = 'active' AND verified_at IS NULL THEN ? ELSE verified_at END
-         WHERE app_id = ? AND domain = ?`,
-      )
-        .bind(status, cfStatus, JSON.stringify(result ?? {}), status, now, item.app_id, item.domain)
-        .run();
-      if (status === 'active') summary.activated++;
-      else if (status === 'pending') summary.stillPending++;
-      else summary.failed++;
-    } catch (e) {
-      summary.errors.push(`${item.app_id}/${item.domain}: ${(e as Error).message}`);
-    }
-  }
-  return summary;
-}
-
 // DELETE /v1/apps/:appId/domains/:domain — detach. Removes from CF Pages
 // and from our table. Idempotent — a 404 from CF is treated as success
 // since "already not attached" is the desired end state.

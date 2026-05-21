@@ -17,7 +17,7 @@ import { listingsRoutes } from './routes/listings.js';
 import { usageRoutes } from './routes/usage.js';
 import { connectRoutes } from './routes/connect.js';
 import { payoutsRoutes } from './routes/payouts.js';
-import { domainRoutes, sweepPendingDomains } from './routes/domains.js';
+import { domainRoutes } from './routes/domains.js';
 
 export const app = new Hono<{ Bindings: Env }>();
 
@@ -69,25 +69,4 @@ app.route('/v1', v1);
 // Stripe webhook is outside /v1 — it's not user-facing API
 app.route('/', webhookRoutes);
 
-// Module-format Worker export: fetch + scheduled. Tests import `app` directly
-// (the named export above), so they're unaffected.
-export default {
-  fetch: app.fetch.bind(app),
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    // Re-check pending custom domains against CF. waitUntil lets the cron
-    // return immediately while the sweep runs to completion in the
-    // background (sweep is bounded by LIMIT 200 + per-call timeouts).
-    ctx.waitUntil(
-      (async () => {
-        try {
-          const summary = await sweepPendingDomains(env);
-          if (summary.checked > 0 || summary.errors.length > 0) {
-            console.log(`[cron ${event.cron}] domain sweep:`, JSON.stringify(summary));
-          }
-        } catch (e) {
-          console.error(`[cron ${event.cron}] domain sweep failed:`, e);
-        }
-      })(),
-    );
-  },
-};
+export default app;

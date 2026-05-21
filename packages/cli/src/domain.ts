@@ -119,6 +119,15 @@ function renderDomain(d: DomainDto, appId: string): void {
     return;
   }
 
+  // Status is cached at the time it was last attached or verified. PAS does
+  // no background polling — the owner triggers a fresh check by running
+  // `pas domain verify <domain>`. Make that contract explicit here so the
+  // owner isn't surprised when nothing changes between `pas domain list`
+  // invocations.
+  process.stdout.write(
+    `    ${dim(`status as of ${new Date(d.addedAt).toLocaleString()} — run \`pas domain verify ${d.domain}\` to refresh`)}\n`,
+  );
+
   const vd = d.verificationData || {};
   const valid = d.validationData || {};
   process.stdout.write(`\n    ${bold('Add this DNS record at your registrar:')}\n\n`);
