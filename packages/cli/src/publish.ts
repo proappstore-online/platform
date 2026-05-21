@@ -30,6 +30,38 @@ function toTitleCase(id: string): string {
 }
 
 /**
+ * Map a failing step's detail to an actionable next-step hint. Returns
+ * null when the failure is generic ('Fix and retry' is enough). Hints are
+ * shown indented under the failing step line.
+ */
+function hintForStep(name: string, detail: string): string | null {
+  const d = detail.toLowerCase();
+  if (d.includes('limit of projects') || d.includes('reached the limit')) {
+    return (
+      'CF Pages cap: this account is at the 100-project ceiling.\n' +
+      '→ Free a slot:  npx wrangler pages project list\n' +
+      '                npx wrangler pages project delete <name>\n' +
+      '→ Long-term:    PAS apps are scheduled to migrate to Path B\n' +
+      '                (single host Worker + R2) which removes the cap.'
+    );
+  }
+  if (name.toLowerCase().includes('analytics') && d.includes('auth')) {
+    return (
+      'CF Web Analytics token lacks the analytics scope.\n' +
+      '→ Non-blocking — your app still ships; the analytics dashboard\n' +
+      '  will be empty until the platform token is widened.'
+    );
+  }
+  if (d.includes('repo') && d.includes('already exists')) {
+    return (
+      'Repo already exists on GitHub. `pas publish` is idempotent —\n' +
+      'this step is harmless; the remaining steps still ran.'
+    );
+  }
+  return null;
+}
+
+/**
  * Publish an existing repo to ProAppStore.
  *
  * Reads the local package.json to discover the app id, then calls
@@ -114,6 +146,14 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
   for (const step of data.steps) {
     const icon = step.status === 'ok' ? '+' : step.status === 'skip' ? '-' : '!';
     process.stdout.write(`  [${icon}] ${step.name}: ${step.detail}\n`);
+    if (step.status === 'fail') {
+      const hint = hintForStep(step.name, step.detail);
+      if (hint) {
+        for (const line of hint.split('\n')) {
+          process.stdout.write(`      ${line}\n`);
+        }
+      }
+    }
   }
 
   if (data.success) {
