@@ -60,6 +60,25 @@ export interface Env {
    *   wrangler secret put GITHUB_TOKEN
    */
   GITHUB_TOKEN?: string;
+  /**
+   * Shared secret the admin Worker uses to authenticate inbound calls to
+   * `/v1/internal/*` (e.g. PUT analytics/cf-token after minting a CF Web
+   * Analytics site for a pro app). Set via `wrangler secret put
+   * INTERNAL_TOKEN` and mirror the same value on the admin Worker. Internal
+   * routes 403 when the secret is unset.
+   */
+  INTERNAL_TOKEN?: string;
+  /**
+   * Workers Analytics Engine dataset binding for first-party server-side
+   * visitor + custom event analytics. Powers the in-platform dashboard
+   * (queryable via the SQL API at /v1/apps/:id/analytics/stats).
+   */
+  ANALYTICS?: AnalyticsEngineDataset;
+  /**
+   * CF API token with 'Account Analytics:Read' permission. Used by the
+   * /stats endpoint to query Analytics Engine via the SQL API.
+   */
+  CF_ANALYTICS_API_TOKEN?: string;
 }
 
 export interface PushSubscriptionRow {
