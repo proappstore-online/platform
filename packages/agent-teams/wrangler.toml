@@ -1,0 +1,40 @@
+name = "proappstore-agent-teams"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# Not deployed yet. v0.1 is scaffolding only.
+# Production route (when ready):
+# [[routes]]
+# pattern = "agents.proappstore.online/*"
+# zone_name = "proappstore.online"
+
+[vars]
+FAS_API_BASE = "https://api.freeappstore.online"
+PAS_API_BASE = "https://api.proappstore.online"
+
+# Project Durable Object — one per PAS Agent Teams project.
+# Holds: backlog tickets, transitions, message log, role configs, cost ledger.
+# WebSocket hibernation for streaming.
+[[durable_objects.bindings]]
+name = "PROJECT"
+class_name = "ProjectDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ProjectDO"]
+
+# R2 for offloaded message bodies, ToolResult payloads, browse screenshots,
+# and (deferred) checkpoint blobs.
+[[r2_buckets]]
+binding = "AGENT_STORAGE"
+bucket_name = "pas-agent-teams"
+
+# Service binding to PAS backend — for BYO key vault read + publish trigger.
+[[services]]
+binding = "PAS_BACKEND"
+service = "proappstore-api"
+
+# Secrets (set via `wrangler secret put`, never committed):
+#   FAS_SESSION_SIGNING_KEY  — to validate FAS-issued session cookies for auth
