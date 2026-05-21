@@ -39,6 +39,13 @@ zone_name = "proappstore.online"
 binding = "ADMIN"
 service = "freeappstore-admin"
 
+# Cron — every hour, sweep pending custom domains and re-check CF Pages
+# verification status. Lets owners attach a domain, add DNS records at their
+# registrar, and have the domain flip to active without re-running the CLI.
+# DNS propagation can take hours, so polling more often is wasted budget.
+[triggers]
+crons = ["0 * * * *"]
+
 # Secrets (set via `wrangler secret put`):
 #   CF_API_TOKEN                    (for provisioning D1/Pages/Workers)
 #   STRIPE_SECRET_KEY

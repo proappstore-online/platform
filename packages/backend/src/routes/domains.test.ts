@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { sweepPendingDomains } from './domains.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -291,6 +292,55 @@ describe('POST /v1/apps/:appId/domains/:domain/verify', () => {
     const body = (await res.json()) as { domain: { status: string } };
     expect(body.domain.status).toBe('active');
     expect(admin.calls.map((c) => c.method)).toEqual(['PATCH', 'GET']);
+  });
+});
+
+describe('sweepPendingDomains (cron)', () => {
+  it('flips a pending domain to active when CF says verified', async () => {
+    const list = mockStmt({
+      all: { results: [{ app_id: 'meetup', domain: 'meetup.example.com' }] },
+    });
+    const update = mockStmt({ run: { meta: { changes: 1 } } });
+    const db = mockD1(list, update);
+    const admin = mockAdmin([
+      { status: 200, body: { success: true, result: { verification_status: 'pending' } } }, // PATCH
+      { status: 200, body: { success: true, result: { verification_status: 'active' } } }, // GET
+    ]);
+    const summary = await sweepPendingDomains({
+      DB: db as unknown as D1Database,
+      ADMIN: admin.fetcher,
+    } as any);
+    expect(summary).toEqual({ checked: 1, activated: 1, stillPending: 0, failed: 0, errors: [] });
+  });
+
+  it('reports an error but keeps sweeping when one row fails', async () => {
+    const list = mockStmt({
+      all: {
+        results: [
+          { app_id: 'meetup', domain: 'one.example.com' },
+          { app_id: 'meetup', domain: 'two.example.com' },
+        ],
+      },
+    });
+    const update = mockStmt({ run: { meta: { changes: 1 } } });
+    const db = mockD1(list, update, update);
+    const admin = {
+      fetch: vi
+        .fn()
+        // First domain: PATCH then GET both succeed.
+        .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, result: { verification_status: 'pending' } }), { status: 200 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, result: { verification_status: 'pending' } }), { status: 200 }))
+        // Second domain: PATCH throws.
+        .mockRejectedValueOnce(new Error('CF unreachable')),
+    };
+    const summary = await sweepPendingDomains({
+      DB: db as unknown as D1Database,
+      ADMIN: admin as unknown as Fetcher,
+    } as any);
+    expect(summary.checked).toBe(2);
+    expect(summary.stillPending).toBe(1);
+    expect(summary.errors).toHaveLength(1);
+    expect(summary.errors[0]).toContain('two.example.com');
   });
 });
 
