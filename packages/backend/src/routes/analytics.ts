@@ -220,13 +220,19 @@ analyticsRoutes.get(
       STATS_DAYS_MAX,
       Math.max(1, Number(c.req.query('days') ?? STATS_DAYS_DEFAULT) | 0),
     );
+    // `?kind=` lets the same dashboard machinery render any event kind,
+    // not just pageview. Defaults to 'pageview' so existing consumers
+    // keep working. Validated against EVENT_KIND_RE so the value can be
+    // safely embedded in the SQL WHERE clause.
+    const kindParam = (c.req.query('kind') ?? 'pageview').trim().toLowerCase();
+    if (!EVENT_KIND_RE.test(kindParam)) throw new HttpError('invalid kind', 400);
     // Effective event time: prefer client-recorded `t` stored in doubles[1]
     // (set for offline-replayed events), fall back to server-write timestamp
     // for older rows that pre-date the second double.
     const effectiveTime =
       `if(length(doubles) > 1, fromUnixTimestamp64Milli(toInt64(double2)), timestamp)`;
     const sinceClause = `${effectiveTime} > NOW() - INTERVAL '${days}' DAY`;
-    const where = `WHERE index1 = '${appId}' AND blob2 = 'pageview' AND ${sinceClause}`;
+    const where = `WHERE index1 = '${appId}' AND blob2 = '${kindParam}' AND ${sinceClause}`;
 
     const totalsQ = `SELECT SUM(_sample_interval) AS views, COUNT(DISTINCT blob3) AS uniq_paths FROM ${STATS_DATASET} ${where}`;
     const dailyQ = `SELECT toStartOfDay(${effectiveTime}) AS day, SUM(_sample_interval) AS views FROM ${STATS_DATASET} ${where} GROUP BY day ORDER BY day ASC`;
@@ -254,10 +260,43 @@ analyticsRoutes.get(
         top_countries: ctys.map((r) => ({ country: r.country, views: Number(r.views) })),
         device_split: devs.map((r) => ({ device: r.device, views: Number(r.views) })),
       };
-      return c.json({ appId, days, stats: body });
+      return c.json({ appId, days, kind: kindParam, stats: body });
     } catch (err) {
       if (err instanceof HttpError) throw err;
       throw new HttpError(err instanceof Error ? err.message : 'stats query failed', 502);
+    }
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// Custom events index — lists distinct non-pageview event kinds with counts.
+// Powers the "Custom events" panel in the PAS console analytics dashboard.
+// -----------------------------------------------------------------------------
+
+analyticsRoutes.get(
+  '/apps/:appId/analytics/events',
+  wrap(async (c) => {
+    const appId = c.req.param('appId')!;
+    await requireAppOwner(c, appId);
+    const days = Math.min(
+      STATS_DAYS_MAX,
+      Math.max(1, Number(c.req.query('days') ?? STATS_DAYS_DEFAULT) | 0),
+    );
+    const effectiveTime =
+      `if(length(doubles) > 1, fromUnixTimestamp64Milli(toInt64(double2)), timestamp)`;
+    const sinceClause = `${effectiveTime} > NOW() - INTERVAL '${days}' DAY`;
+    const where = `WHERE index1 = '${appId}' AND blob2 != 'pageview' AND ${sinceClause}`;
+    const kindsQ = `SELECT blob2 AS kind, SUM(_sample_interval) AS count FROM ${STATS_DATASET} ${where} GROUP BY kind ORDER BY count DESC LIMIT 20`;
+
+    const env = c.env as Env & { CF_ACCOUNT_ID?: string; CF_ANALYTICS_API_TOKEN?: string };
+    try {
+      const rows = await cfAnalyticsSql<{ kind: string; count: number }>(env, kindsQ);
+      const events = rows.map((r) => ({ kind: r.kind, count: Number(r.count) }));
+      const total = events.reduce((sum, e) => sum + e.count, 0);
+      return c.json({ appId, days, total_events: total, events });
+    } catch (err) {
+      if (err instanceof HttpError) throw err;
+      throw new HttpError(err instanceof Error ? err.message : 'events query failed', 502);
     }
   }),
 );
