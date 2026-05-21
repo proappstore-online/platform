@@ -152,13 +152,17 @@ export function useProGate(app: ProAppStore, opts?: { allowFree?: boolean }) {
   const auth = useProAuth(app);
   const sub = useProSubscription(app);
 
+  // allowFree defaults to true while the platform has no payments wired up —
+  // see ProShell for the matching default. Flip back when Stripe is live.
+  const allowFree = opts?.allowFree ?? true;
+
   let gate: 'loading' | 'signed-out' | 'no-subscription' | 'ready';
 
   if (auth.loading || (auth.user && sub.loading)) {
     gate = 'loading';
   } else if (!auth.user) {
     gate = 'signed-out';
-  } else if (!opts?.allowFree && !sub.isPro) {
+  } else if (!allowFree && !sub.isPro) {
     gate = 'no-subscription';
   } else {
     gate = 'ready';

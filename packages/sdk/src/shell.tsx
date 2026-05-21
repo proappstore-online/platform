@@ -86,7 +86,7 @@ export function ProShell({ app, children, appName, allowFree = true }: ProShellP
   const handleDeleteAccount = useCallback(async () => {
     const subClause = subscription?.status === 'active' ? ' and cancels your subscription' : '';
     if (!confirm(`Delete your account? This permanently removes ALL your data across ALL apps${subClause}. This cannot be undone.`)) return;
-    if (!confirm('Are you absolutely sure? Type thinking... Last chance.')) return;
+    if (!confirm('Are you absolutely sure? Last chance.')) return;
     // Delete all KV data
     try {
       const keys = await app.kv.list();
