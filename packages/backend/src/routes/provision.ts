@@ -98,17 +98,29 @@ provisionRoutes.post('/provision', async (c) => {
           detail: `${results.length - warnings.length} rules passed at ${loc.owner}/${loc.repo}@${fetched.sha.slice(0, 7)}${warnings.length ? ` (${warnings.length} warnings)` : ''}`,
         });
       } catch (e) {
-        // If we can't reach GitHub, fail closed — better than silently
-        // skipping the check on a network blip. The user can retry.
-        steps.push({
-          name: 'compliance',
-          status: 'fail',
-          detail: `Could not run compliance check: ${(e as Error).message}`,
-        });
-        return c.json(
-          { appId, steps, dataWorkerUrl: '', pagesUrl: '', success: false },
-          412,
-        );
+        // A 404 from GitHub means the repo doesn't exist yet — this is the
+        // first publish, and step 1 below is what creates it. Skip compliance
+        // (it'll run on the next push via the in-repo CI workflow) and let
+        // provision continue. Any other error (network blip, rate limit,
+        // auth) still fails closed.
+        const msg = (e as Error).message;
+        if (/\(404\)/.test(msg)) {
+          steps.push({
+            name: 'compliance',
+            status: 'skip',
+            detail: `Repo ${loc.owner}/${loc.repo} doesn't exist yet — first publish; compliance will run via CI on the next push`,
+          });
+        } else {
+          steps.push({
+            name: 'compliance',
+            status: 'fail',
+            detail: `Could not run compliance check: ${msg}`,
+          });
+          return c.json(
+            { appId, steps, dataWorkerUrl: '', pagesUrl: '', success: false },
+            412,
+          );
+        }
       }
     } else {
       steps.push({
