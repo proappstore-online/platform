@@ -1,7 +1,7 @@
 {
   "name": "@proappstore/backend",
   "version": "0.0.0",
-  "description": "Cloudflare Worker for @proappstore/sdk — Stripe webhooks, subscriptions, license keys.",
+  "description": "Cloudflare Worker — Stripe webhooks, subscriptions, license keys, app + listing CRUD, analytics, BYO custom domains.",
   "license": "MIT",
   "private": true,
   "type": "module",
