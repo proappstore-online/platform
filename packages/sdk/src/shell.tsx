@@ -9,7 +9,12 @@ export interface ProShellProps {
   children: ReactNode;
   /** App name shown in the topbar. */
   appName?: string;
-  /** If true, allow free users to see the app (no subscription gate). Default: false. */
+  /**
+   * If true, allow free users to see the app (no subscription gate).
+   *
+   * Default: true while the platform has no payments wired up — every PAS app
+   * is free to use. Flip the default back to false once Stripe billing is live.
+   */
   allowFree?: boolean;
 }
 
@@ -40,7 +45,7 @@ type Gate = 'loading' | 'signed-out' | 'no-subscription' | 'ready';
  * }
  * ```
  */
-export function ProShell({ app, children, appName, allowFree = false }: ProShellProps) {
+export function ProShell({ app, children, appName, allowFree = true }: ProShellProps) {
   const [user, setUser] = useState(app.auth.user);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [gate, setGate] = useState<Gate>('loading');
@@ -54,22 +59,22 @@ export function ProShell({ app, children, appName, allowFree = false }: ProShell
     });
   }, [app]);
 
-  // Check subscription after auth
+  // Check subscription after auth.
+  // We always fetch — even when allowFree is true — so the topbar can show the
+  // PRO badge / billing link to users who do happen to be subscribed. allowFree
+  // only controls whether non-active subs get blocked at the gate.
   useEffect(() => {
     if (!user) return;
-    if (allowFree) {
-      setGate('ready');
-      return;
-    }
     app.subscription.status().then((sub) => {
       setSubscription(sub);
-      if (sub?.status === 'active') {
+      if (allowFree || sub?.status === 'active') {
         setGate('ready');
       } else {
         setGate('no-subscription');
       }
     }).catch(() => {
-      setGate('no-subscription');
+      setSubscription(null);
+      setGate(allowFree ? 'ready' : 'no-subscription');
     });
   }, [user, app, allowFree]);
 
@@ -79,7 +84,8 @@ export function ProShell({ app, children, appName, allowFree = false }: ProShell
   }, [app]);
 
   const handleDeleteAccount = useCallback(async () => {
-    if (!confirm('Delete your account? This permanently removes ALL your data across ALL apps and cancels your subscription. This cannot be undone.')) return;
+    const subClause = subscription?.status === 'active' ? ' and cancels your subscription' : '';
+    if (!confirm(`Delete your account? This permanently removes ALL your data across ALL apps${subClause}. This cannot be undone.`)) return;
     if (!confirm('Are you absolutely sure? Type thinking... Last chance.')) return;
     // Delete all KV data
     try {
@@ -171,9 +177,11 @@ export function ProShell({ app, children, appName, allowFree = false }: ProShell
             <div style={styles.menu}>
               <div style={styles.menuHeader}>
                 <strong>{user?.login}</strong>
-                <span style={styles.proBadge}>PRO</span>
+                {subscription?.status === 'active' && <span style={styles.proBadge}>PRO</span>}
               </div>
-              <button onClick={handleManageBilling} style={styles.menuItem}>Manage billing</button>
+              {subscription?.status === 'active' && (
+                <button onClick={handleManageBilling} style={styles.menuItem}>Manage billing</button>
+              )}
               <button onClick={handleSignOut} style={styles.menuItem}>Sign out</button>
               <button onClick={handleDeleteAccount} style={{ ...styles.menuItem, color: '#dc2626' }}>Delete account</button>
             </div>
