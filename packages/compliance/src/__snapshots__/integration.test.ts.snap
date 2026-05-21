@@ -124,6 +124,11 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "detail": "no manifest source (already reported by PWA manifest check)",
+    "name": "PWA maskable icon",
+    "status": "pass",
+  },
+  {
     "detail": "no apple-mobile-web-app-capable / mobile-web-app-capable meta",
     "name": "PWA meta tags",
     "status": "warn",
