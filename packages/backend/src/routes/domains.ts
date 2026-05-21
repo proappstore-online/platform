@@ -50,9 +50,14 @@ interface DomainDto {
 //   - localhost / .local / .test / .invalid
 //   - our own platform domains (would shadow store routing)
 //   - hostnames over 253 chars (DNS limit)
+//   - labels that start or end with a hyphen (RFC 1035)
 // Permissive enough to accept apex (example.com) and subdomain (app.example.com)
 // and IDN punycode (xn--).
-const HOSTNAME_RE = /^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63})+$/;
+//
+// Each label: `[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?` — must start AND end
+// with alphanumeric, hyphens allowed only in the interior.
+const LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+const HOSTNAME_RE = new RegExp(`^(?=.{1,253}$)${LABEL}(?:\\.${LABEL})+$`);
 const RESERVED_TLDS = new Set(['local', 'localhost', 'test', 'invalid', 'example']);
 const PLATFORM_DOMAINS = [
   'proappstore.online',
@@ -64,7 +69,8 @@ const PLATFORM_DOMAINS = [
   'workers.dev',
 ];
 
-function validateDomain(input: string): string {
+function validateDomain(input: unknown): string {
+  if (typeof input !== 'string') throw new HttpError('domain must be a string', 400);
   const domain = input.toLowerCase().trim().replace(/\.$/, '');
   if (!HOSTNAME_RE.test(domain)) throw new HttpError('invalid domain', 400);
   // Reject IPs (HOSTNAME_RE accepts "1.2.3.4" because it's all digits + dots).
@@ -154,8 +160,10 @@ domainRoutes.post(
     if (!c.env.ADMIN) {
       throw new HttpError('admin binding not configured — custom domains unavailable in this env', 503);
     }
-    const body = (await c.req.json().catch(() => ({}))) as { domain?: string };
-    if (!body.domain) throw new HttpError('domain required', 400);
+    const body = (await c.req.json().catch(() => ({}))) as { domain?: unknown };
+    if (body.domain === undefined || body.domain === null) {
+      throw new HttpError('domain required', 400);
+    }
     const domain = validateDomain(body.domain);
 
     const cf = await callAdminDomain(c.env.ADMIN, projectName(appId), {
@@ -219,7 +227,10 @@ domainRoutes.post(
   '/apps/:appId/domains/:domain/verify',
   wrap(async (c) => {
     const appId = c.req.param('appId')!;
-    const domain = c.req.param('domain')!.toLowerCase();
+    // Defensive: validate the URL param before touching CF. A garbage value
+    // (e.g. someone hand-crafting a request) would otherwise burn an admin →
+    // CF round trip before being rejected.
+    const domain = validateDomain(c.req.param('domain')!);
     await requireAppOwner(c, appId);
     if (!c.env.ADMIN) throw new HttpError('admin binding not configured', 503);
 
@@ -264,16 +275,24 @@ domainRoutes.delete(
   '/apps/:appId/domains/:domain',
   wrap(async (c) => {
     const appId = c.req.param('appId')!;
-    const domain = c.req.param('domain')!.toLowerCase();
+    const domain = validateDomain(c.req.param('domain')!);
     await requireAppOwner(c, appId);
     if (!c.env.ADMIN) throw new HttpError('admin binding not configured', 503);
     const cf = await callAdminDomain(c.env.ADMIN, projectName(appId), {
       method: 'DELETE',
       domain,
     });
-    // Admin Worker already collapses 404→200 for us; anything else 5xx is
-    // a real problem.
-    if (cf.status >= 500) throw new HttpError(`CF returned ${cf.status}`, 502);
+    // Admin Worker collapses CF's 404 (already-not-attached) to 200, so any
+    // 4xx/5xx that reaches us is a real failure — domain locked, permission
+    // denied, etc. Surface it; do NOT delete the DB row, otherwise CF and
+    // our table diverge and the owner gets a fake "Detached" message.
+    if (cf.status >= 400) {
+      const { error } = extractCfResult(cf.body);
+      throw new HttpError(
+        error || `CF returned ${cf.status}`,
+        cf.status < 500 ? cf.status : 502,
+      );
+    }
     await c.env.DB.prepare(`DELETE FROM app_custom_domains WHERE app_id = ? AND domain = ?`)
       .bind(appId, domain)
       .run();

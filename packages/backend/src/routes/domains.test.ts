@@ -66,8 +66,14 @@ function makeEnv(opts: {
 }
 
 function mockUserAuth(user = { id: 'gh:1', login: 'testuser' }) {
-  globalThis.fetch = vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id: user.id, login: user.login, avatarUrl: null }), { status: 200 }),
+  // Fresh Response per call — Response bodies are single-use, so a shared
+  // mockResolvedValue throws "Body is unusable" on the 2nd call. Tests that
+  // make multiple requests in a loop need a factory, not a frozen value.
+  globalThis.fetch = vi.fn().mockImplementation(
+    () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ id: user.id, login: user.login, avatarUrl: null }), { status: 200 }),
+      ),
   );
 }
 
@@ -166,6 +172,47 @@ describe('POST /v1/apps/:appId/domains', () => {
       makeEnv({ db, admin: admin.fetcher }),
     );
     expect(res.status).toBe(400);
+    expect(admin.calls).toHaveLength(0);
+  });
+
+  // Regression: previously `(body.domain || '').toLowerCase()` threw if
+  // body.domain was a number, returning 500 instead of 400.
+  it('rejects non-string domain (e.g. {domain: 123})', async () => {
+    const ownerCheck = mockStmt({ first: { creator_id: 'gh:1' } });
+    const db = mockD1(ownerCheck);
+    const admin = mockAdmin([]);
+    const res = await app.request(
+      '/v1/apps/meetup/domains',
+      {
+        method: 'POST',
+        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain: 123 }),
+      },
+      makeEnv({ db, admin: admin.fetcher }),
+    );
+    expect(res.status).toBe(400);
+    expect(admin.calls).toHaveLength(0);
+  });
+
+  // Regression: previous regex `(?!-)[a-z0-9-]{1,63}` only blocked hyphens
+  // at the start of the FIRST label, so `foo.-bar.com` and `foo.bar-.com`
+  // slipped through despite violating RFC 1035.
+  it('rejects labels with leading or trailing hyphens', async () => {
+    const ownerCheck = mockStmt({ first: { creator_id: 'gh:1' } });
+    const db = mockD1(ownerCheck);
+    const admin = mockAdmin([]);
+    for (const bad of ['foo.-bar.com', 'foo.bar-.com', '-foo.com', 'foo-.com']) {
+      const res = await app.request(
+        '/v1/apps/meetup/domains',
+        {
+          method: 'POST',
+          headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain: bad }),
+        },
+        makeEnv({ db: mockD1(mockStmt({ first: { creator_id: 'gh:1' } })), admin: admin.fetcher }),
+      );
+      expect(res.status, `expected 400 for ${bad}`).toBe(400);
+    }
     expect(admin.calls).toHaveLength(0);
   });
 
@@ -342,5 +389,41 @@ describe('DELETE /v1/apps/:appId/domains/:domain', () => {
     expect(res.status).toBe(200);
     expect(admin.calls[0]?.method).toBe('DELETE');
     expect(admin.calls[0]?.path).toBe('/api/apps/proappstore-meetup/domains/meetup.example.com');
+  });
+
+  // Regression: previously only `cf.status >= 500` triggered an error, so
+  // a 4xx from CF (e.g. "domain locked") would still delete our DB row,
+  // diverging from CF and lying to the owner.
+  it('does NOT delete the DB row when CF returns 4xx', async () => {
+    const ownerCheck = mockStmt({ first: { creator_id: 'gh:1' } });
+    const del = mockStmt({ run: { meta: { changes: 1 } } });
+    const db = mockD1(ownerCheck, del);
+    const admin = mockAdmin([
+      { status: 403, body: { success: false, errors: [{ code: 0, message: 'Domain is locked' }] } },
+    ]);
+    const res = await app.request(
+      '/v1/apps/meetup/domains/meetup.example.com',
+      { method: 'DELETE', headers: { Authorization: 'Bearer t' } },
+      makeEnv({ db, admin: admin.fetcher }),
+    );
+    expect(res.status).toBe(403);
+    // db.prepare was called once for the owner check; the DELETE statement
+    // must not have been issued.
+    expect(db.prepare).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression: previously the :domain URL param wasn't validated, so a
+  // junk value burned an admin → CF round trip before being rejected.
+  it('rejects malformed :domain in the URL without calling admin', async () => {
+    const ownerCheck = mockStmt({ first: { creator_id: 'gh:1' } });
+    const db = mockD1(ownerCheck);
+    const admin = mockAdmin([]);
+    const res = await app.request(
+      '/v1/apps/meetup/domains/not-a-domain',
+      { method: 'DELETE', headers: { Authorization: 'Bearer t' } },
+      makeEnv({ db, admin: admin.fetcher }),
+    );
+    expect(res.status).toBe(400);
+    expect(admin.calls).toHaveLength(0);
   });
 });
