@@ -10,7 +10,7 @@ export type { NotificationPayload, SendResult } from './notifications.js';
 // useTheme — vendored from @freeappstore/sdk/hooks
 // ---------------------------------------------------------------------------
 
-const THEME_KEY = 'fas:theme';
+const THEME_KEY = 'stores-theme';
 type ThemePreference = 'light' | 'dark' | 'system';
 type ResolvedTheme = 'light' | 'dark';
 
@@ -34,8 +34,11 @@ function resolveTheme(pref: ThemePreference): ResolvedTheme {
 
 function applyTheme(theme: ResolvedTheme): void {
   if (typeof document === 'undefined') return;
-  document.documentElement.setAttribute('data-theme', theme);
-  document.documentElement.classList.toggle('dark', theme === 'dark');
+  if (theme === 'dark') {
+    document.documentElement.dataset.theme = 'dark';
+  } else {
+    delete document.documentElement.dataset.theme;
+  }
 }
 
 function notifyThemeListeners(): void {
@@ -69,7 +72,7 @@ function getSnapshot(): { theme: ResolvedTheme; preference: ThemePreference } {
 }
 
 /**
- * Theme hook — zero-provider. Reads/writes localStorage, applies data-theme on <html>.
+ * Theme hook — zero-provider. Persists preference, applies data-theme on html element.
  * Shared with FAS SDK (vendored, same localStorage key).
  */
 export function useTheme() {

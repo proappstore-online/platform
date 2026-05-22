@@ -22,5 +22,7 @@ jobs:
       # which only exist after a build. Without this, the typecheck step
       # below fails with "Cannot find module '@proappstore/compliance'".
       - run: pnpm -r --filter './packages/*' build
+      - name: Design system lint
+        run: bash scripts/check-design-system.sh .
       - run: pnpm -r typecheck
       - run: pnpm test
