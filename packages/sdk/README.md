@@ -36,7 +36,9 @@ GitHub OAuth — shared identity across all FreeAppStore and ProAppStore apps.
 ```ts
 await app.auth.init()
 app.auth.onChange((user) => console.log(user))
-app.auth.signIn()
+app.auth.signIn()          // GitHub (default)
+app.auth.signIn('google')  // Google
+app.auth.signIn('apple')   // Apple
 app.auth.signOut()
 ```
 
@@ -441,7 +443,20 @@ Props:
 ProShell handles:
 - Auth initialization and sign-in gate
 - Subscription check and upgrade wall (unless `allowFree=true`)
-- Topbar with avatar, app name, and user menu (sign out, manage billing, delete account)
+- Topbar with avatar, app name, text size toggle, and user menu (sign out, manage billing, delete account)
+
+## UI Components
+
+Import from `@proappstore/sdk/ui`:
+
+```tsx
+import { Avatar, SignInButton, ThemeToggle, TextSizeToggle, ProBadge, ProfileMenu } from '@proappstore/sdk/ui'
+```
+
+- **TextSizeToggle** -- A/A+/A- button, cycles default/large/small text size. No props. Persists to localStorage.
+- **ThemeToggle** -- Sun/moon button, cycles system/light/dark. No props.
+
+See the [UI Component Library](https://proappstore.online/docs/ui) for the full list.
 
 ## Per-app SQL Database
 
