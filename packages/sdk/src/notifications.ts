@@ -130,6 +130,42 @@ export class Notifications {
     return this._send(payload);
   }
 
+  /**
+   * Peer-to-peer push: notify another user in the same app.
+   * Caller must be subscribed to the app (no creator check).
+   * Rate-limited: 30 per minute per app.
+   */
+  async notifyUser(userId: string, payload: NotificationPayload): Promise<SendResult> {
+    const token = this.auth.token;
+    if (!token) throw new Error('Not signed in.');
+
+    const res = await fetch(`${this.apiBase}/v1/notifications/notify-user`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        appId: this.appId,
+        targetUserId: userId,
+        title: payload.title,
+        body: payload.body,
+        url: payload.url,
+        icon: payload.icon,
+        tag: payload.tag,
+      }),
+    });
+
+    if (res.status === 401) {
+      this.auth.handleUnauthorized();
+      throw new Error('Not signed in.');
+    }
+    if (res.status === 429) throw new Error('Rate limit exceeded: max 30 notifications per minute.');
+    if (!res.ok) throw new Error(`notifyUser failed: ${res.status}`);
+
+    return (await res.json()) as SendResult;
+  }
+
   private async _send(payload: NotificationPayload & { userId?: string }): Promise<SendResult> {
     const token = this.auth.token;
     if (!token) throw new Error('Not signed in.');
