@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import webpush from 'web-push';
 import type { Env, PushSubscriptionRow } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
+import { dispatchWebhook } from '../lib/webhook-dispatch.js';
 
 export const notificationRoutes = new Hono<{ Bindings: Env }>();
 
@@ -247,6 +248,18 @@ notificationRoutes.post('/notifications/send', async (c) => {
       )
         .bind(...deadEndpoints)
         .run();
+    }
+
+    // Fire webhook (non-blocking)
+    if (sent > 0) {
+      const promise = dispatchWebhook(c.env.DB, appId, 'notification.sent', {
+        appId,
+        userId: userId ?? null,
+        title,
+        sent,
+        failed,
+      });
+      try { c.executionCtx.waitUntil(promise); } catch { /* no executionCtx in tests */ }
     }
 
     return c.json({ sent, failed });

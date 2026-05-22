@@ -308,7 +308,7 @@ describe('POST /v1/notifications/send', () => {
     }, makeEnv(db));
 
     expect(res.status).toBe(200);
-    expect(db.prepare).toHaveBeenCalledTimes(2); // apps + subs only, no cleanup
+    expect(db.prepare).toHaveBeenCalledTimes(3); // apps + subs + webhook dispatch query (no cleanup)
   });
 
   it('returns 403 when user is not app creator', async () => {

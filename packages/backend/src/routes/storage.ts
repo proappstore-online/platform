@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
+import { dispatchWebhook } from '../lib/webhook-dispatch.js';
 
 /**
  * File storage routes — shared R2 bucket, scoped by app + user.
@@ -47,6 +48,16 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
       httpMetadata: { contentType },
       customMetadata: { uploadedBy: user.id, uploadedAt: Date.now().toString() },
     });
+
+    // Fire webhook (non-blocking)
+    const webhookPromise = dispatchWebhook(c.env.DB, appId, 'storage.uploaded', {
+      appId,
+      userId: user.id,
+      key: filePath,
+      size: body.byteLength,
+      contentType,
+    });
+    try { c.executionCtx.waitUntil(webhookPromise); } catch { /* no executionCtx in tests */ }
 
     return c.json({
       key: filePath,

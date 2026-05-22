@@ -8,6 +8,8 @@ import { Storage } from './storage.js';
 import { SubscriptionApi } from './subscription.js';
 import { LicenseApi } from './license.js';
 import { Usage } from './usage.js';
+import { Email } from './email.js';
+import { Webhooks } from './webhooks.js';
 import type { ProInitOptions } from './types.js';
 
 // Re-export everything from FAS SDK so pro apps only need one import
@@ -44,6 +46,9 @@ export type {
 export { TenantScope } from './tenant.js';
 export { Usage } from './usage.js';
 export type { UsageOptions } from './usage.js';
+export { Email } from './email.js';
+export { Webhooks } from './webhooks.js';
+export type { WebhookConfig, WebhookTestResult } from './webhooks.js';
 
 /**
  * Pro SDK instance — includes everything from @freeappstore/sdk (auth, kv,
@@ -61,6 +66,8 @@ export class ProAppStore extends FreeAppStore {
   readonly sms: SMS;
   readonly ai: AI;
   readonly usage: Usage;
+  readonly email: Email;
+  readonly webhooks: Webhooks;
 
   constructor(opts: ProInitOptions) {
     super({ appId: opts.appId, ...(opts.fasApiBase && { apiBase: opts.fasApiBase }) });
@@ -74,6 +81,8 @@ export class ProAppStore extends FreeAppStore {
     this.sms = new SMS(opts.appId, proApiBase, this.auth);
     this.ai = new AI(proApiBase, this.auth);
     this.usage = new Usage(opts.appId, proApiBase, this.auth);
+    this.email = new Email(opts.appId, proApiBase, this.auth);
+    this.webhooks = new Webhooks(opts.appId, proApiBase, this.auth);
     // Auto-start telemetry unless the app opts out. `start()` is a no-op in
     // SSR / non-browser contexts, so this is safe even when the SDK is
     // imported on the server side.

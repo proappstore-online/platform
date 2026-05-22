@@ -79,6 +79,10 @@ export interface Env {
    * /stats endpoint to query Analytics Engine via the SQL API.
    */
   CF_ANALYTICS_API_TOKEN?: string;
+  /** Resend API key for transactional email. If unset, /v1/email/send returns 503. */
+  RESEND_API_KEY?: string;
+  /** Sender address for outbound emails. Defaults to "ProAppStore <noreply@proappstore.online>". */
+  EMAIL_FROM?: string;
 }
 
 export interface PushSubscriptionRow {
