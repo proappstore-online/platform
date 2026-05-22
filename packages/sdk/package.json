@@ -1,6 +1,6 @@
 {
   "name": "@proappstore/sdk",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "description": "Browser SDK for paid apps on proappstore.online — subscriptions, license keys, premium modules.",
   "license": "MIT",
   "type": "module",
@@ -20,8 +20,8 @@
       "import": "./dist/hooks.js"
     },
     "./ui": {
-      "types": "./dist/ui-primitives.d.ts",
-      "import": "./dist/ui-primitives.js"
+      "types": "./dist/ui.d.ts",
+      "import": "./dist/ui.js"
     }
   },
   "repository": {
