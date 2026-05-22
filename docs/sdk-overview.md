@@ -43,6 +43,9 @@ app.db.query(sql, params) / .execute(sql, params) / .batch([...]) / .tables()
 // Multi-tenant helpers
 app.db.tenant(tenantId) → tx.find() / .findMany() / .insert() / .update() / .delete() / .count()
 
+// Roles (app-level RBAC)
+app.roles.assign(userId, role) / .revoke(userId, role) / .has(role) / .list()
+
 // File storage (R2)
 app.storage.upload() / .uploadPublic() / .publicUrl() / .download() / .list() / .delete()
 

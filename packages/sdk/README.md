@@ -307,6 +307,37 @@ const { rows } = await tx.db.query(
 
 Your multi-tenant tables must have a `tenant_id TEXT` column. TenantScope doesn't replace `app.db.query` / `app.db.execute` — use those for joins, aggregates, or cross-tenant admin queries.
 
+### Roles (App-level RBAC)
+
+Per-app role management. Every app gets a set of default roles out of the box:
+
+| Role | How assigned | Description |
+|------|-------------|-------------|
+| `owner` | Automatic (app creator) | Full control — cannot be revoked |
+| `member` | Default for new users | Basic access |
+| `moderator` | Assigned by owner | Content moderation privileges |
+| `editor` | Assigned by owner | Can create and edit content |
+| `viewer` | Assigned by owner | Read-only access |
+
+Custom roles are supported — pass any string as a role name.
+
+```ts
+// Assign a role
+await app.roles.assign('user-456', 'moderator')
+
+// Revoke a role
+await app.roles.revoke('user-456', 'moderator')
+
+// Check if the current user has a role
+const isMod = app.roles.has('moderator')
+
+// List all roles for the current user
+const myRoles = app.roles.list()
+// ['member', 'moderator']
+```
+
+Roles are baked into the session token, so `app.roles.has()` and `app.roles.list()` are zero-I/O — no network call, no latency.
+
 ## React Hooks (recommended)
 
 Hooks give you full control over your UI while the platform handles auth, subscriptions, and gating. Import from `@proappstore/sdk/hooks`.
