@@ -44,7 +44,7 @@ app.db.query(sql, params) / .execute(sql, params) / .batch([...]) / .tables()
 app.db.tenant(tenantId) → tx.find() / .findMany() / .insert() / .update() / .delete() / .count()
 
 // Roles (app-level RBAC)
-app.roles.assign(userId, role) / .revoke(userId, role) / .has(role) / .list()
+app.roles.assign(userId, role) / .revoke(userId, role) / .check(role) / .myRoles() / .listAll()
 
 // File storage (R2)
 app.storage.upload() / .uploadPublic() / .publicUrl() / .download() / .list() / .delete()
@@ -53,7 +53,7 @@ app.storage.upload() / .uploadPublic() / .publicUrl() / .download() / .list() / 
 app.maps.geocode(query) / .reverseGeocode(lat, lng) / .route(from, to) / .embedUrl() / .staticUrl()
 
 // Push notifications (Web Push + VAPID)
-app.notifications.subscribe() / .unsubscribe() / .isSubscribed() / .send(userId, payload) / .broadcast(payload)
+app.notifications.subscribe() / .unsubscribe() / .isSubscribed() / .send(userId, payload) / .broadcast(payload) / .notifyUser(userId, payload)
 
 // SMS (Twilio-backed, creator-only)
 app.sms.send(to, message) / .broadcast(numbers, message)

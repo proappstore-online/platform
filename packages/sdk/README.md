@@ -224,6 +224,15 @@ await app.notifications.broadcast({
   title: 'New feature!',
   body: 'Check out the new map view.',
 })
+
+// Peer-to-peer: notify another user in the same app (no creator check)
+await app.notifications.notifyUser('gh:123', {
+  title: '@serge mentioned you',
+  body: 'In "Wire the broadcast"',
+  url: 'https://kanban.proappstore.online/#/...',
+  tag: 'mention:card-1',
+})
+// Rate-limited: 30/min per user per app
 ```
 
 Your app needs a service worker for push. Save `Notifications.getServiceWorkerScript()` as `/sw.js`, or append it to an existing one:
@@ -329,14 +338,16 @@ await app.roles.assign('user-456', 'moderator')
 await app.roles.revoke('user-456', 'moderator')
 
 // Check if the current user has a role
-const isMod = app.roles.has('moderator')
+const isMod = await app.roles.check('moderator')
 
 // List all roles for the current user
-const myRoles = app.roles.list()
+const myRoles = await app.roles.myRoles()
 // ['member', 'moderator']
-```
 
-Roles are baked into the session token, so `app.roles.has()` and `app.roles.list()` are zero-I/O — no network call, no latency.
+// List all role assignments for the app (owner-only)
+const all = await app.roles.listAll()
+// [{ userId: 'user-456', role: 'moderator' }, ...]
+```
 
 ## React Hooks (recommended)
 
