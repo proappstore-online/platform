@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, type ReactNode } from 'react';
 import type { ProAppStore } from './index.js';
 import type { Subscription } from './types.js';
-import { ProfileMenu, SignInButton, ProBadge, GateScreen } from './ui.js';
+import { ProfileMenu, SignInButton, ProBadge, GateScreen, TextSizeToggle } from './ui.js';
 
 export interface ProShellProps {
   /** The ProAppStore SDK instance from initPro(). */
@@ -93,6 +93,7 @@ export function ProShell({ app, children, appName, allowFree = true, showThemeTo
           {subscription?.status === 'active' && <ProBadge />}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <TextSizeToggle />
           {!user && <SignInButton app={app} label="Sign in" />}
           {user && <ProfileMenu app={app} showThemeToggle={showThemeToggle} />}
         </div>

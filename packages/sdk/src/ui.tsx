@@ -12,7 +12,7 @@ import type { Subscription } from './types.js';
 import { useProAuth, useProSubscription, useTheme } from './hooks.js';
 
 // Re-export base primitives
-export { Avatar, ThemeToggle } from './ui-primitives.js';
+export { Avatar, ThemeToggle, TextSizeToggle } from './ui-primitives.js';
 export type { AvatarProps } from './ui-primitives.js';
 
 // ---------------------------------------------------------------------------

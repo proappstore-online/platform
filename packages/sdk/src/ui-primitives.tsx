@@ -118,6 +118,77 @@ export function ThemeToggle() {
 }
 
 // ---------------------------------------------------------------------------
+// TextSizeToggle
+// ---------------------------------------------------------------------------
+
+const TEXT_SIZE_KEY = 'stores-text-size';
+type TextSize = 'default' | 'lg' | 'sm';
+
+function getTextSize(): TextSize {
+  if (typeof window === 'undefined') return 'default';
+  const stored = window.localStorage.getItem(TEXT_SIZE_KEY);
+  if (stored === 'lg' || stored === 'sm') return stored;
+  return 'default';
+}
+
+function applyTextSize(size: TextSize): void {
+  if (typeof document === 'undefined') return;
+  if (size === 'default') {
+    delete document.documentElement.dataset.text;
+  } else {
+    document.documentElement.dataset.text = size;
+  }
+}
+
+/** Text size toggle. Cycles: default -> large -> small. Shows A/A+/A-. */
+export function TextSizeToggle() {
+  const [size, setSize] = useState<TextSize>(getTextSize);
+
+  useEffect(() => {
+    applyTextSize(size);
+  }, [size]);
+
+  const cycle = useCallback(() => {
+    const order: TextSize[] = ['default', 'lg', 'sm'];
+    const idx = order.indexOf(size);
+    const next = order[(idx + 1) % order.length]!;
+    setSize(next);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(TEXT_SIZE_KEY, next);
+    }
+  }, [size]);
+
+  const label = size === 'lg' ? 'A+' : size === 'sm' ? 'A\u2212' : 'A';
+  const title = size === 'lg' ? 'Text: large' : size === 'sm' ? 'Text: small' : 'Text: default';
+
+  return (
+    <button
+      onClick={cycle}
+      aria-label={title}
+      title={title}
+      style={{
+        width: 36,
+        height: 36,
+        borderRadius: 'var(--radius, 0.75rem)',
+        border: '1px solid var(--line, var(--border, #e2e8f0))',
+        background: 'var(--panel, var(--surface, #ffffff))',
+        color: 'var(--ink, #1e293b)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        cursor: 'pointer',
+        padding: 0,
+        fontFamily: 'inherit',
+        fontSize: '0.85rem',
+        fontWeight: 700,
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // ProfileMenu
 // ---------------------------------------------------------------------------
 
