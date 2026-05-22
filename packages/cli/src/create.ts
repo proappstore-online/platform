@@ -1,7 +1,8 @@
 import { execSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, existsSync, cpSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, cpSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
 
 // Resolve the CLI package's bundled `templates/` directory (contains
 // binary placeholder icons that can't be inlined into TEMPLATE_FILES).
@@ -198,6 +199,16 @@ export default defineConfig({
   'web/public/_headers': `/*\n  Content-Security-Policy: default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https: https://api.proappstore.online https://static.cloudflareinsights.com https://www.googletagmanager.com https://plausible.io; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss: https://api.proappstore.online https://cloudflareinsights.com https://www.google-analytics.com https://plausible.io; frame-ancestors 'self' https://proappstore.online https://*.proappstore.online; base-uri 'self'; object-src 'none'; upgrade-insecure-requests\n  Permissions-Policy: geolocation=(), microphone=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=(), midi=(), interest-cohort=()\n  X-Content-Type-Options: nosniff\n  Referrer-Policy: strict-origin-when-cross-origin\n  Strict-Transport-Security: max-age=31536000; includeSubDomains\n`,
 };
 
+function readFasSessionToken(): string | undefined {
+  try {
+    const raw = readFileSync(join(homedir(), '.fas', 'config.json'), 'utf8');
+    const config = JSON.parse(raw) as { session?: { token: string } };
+    return config.session?.token;
+  } catch {
+    return undefined;
+  }
+}
+
 function toTitleCase(id: string): string {
   return id.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
@@ -269,7 +280,7 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
 
   // Step 4: Provision platform resources (D1 + Data Worker)
   if (!opts.skipProvision) {
-    const token = opts.token || process.env.FAS_SESSION_TOKEN;
+    const token = opts.token || process.env.FAS_SESSION_TOKEN || readFasSessionToken();
     if (token) {
       process.stdout.write(`  [4/4] Provisioning platform resources...\n`);
       try {

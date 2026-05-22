@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { homedir } from 'node:os';
 
 interface PublishOptions {
   name?: string;
@@ -19,6 +20,16 @@ function readJsonIfExists<T = unknown>(path: string): T | null {
     return JSON.parse(readFileSync(path, 'utf8')) as T;
   } catch {
     return null;
+  }
+}
+
+function readFasSessionToken(): string | undefined {
+  try {
+    const raw = readFileSync(join(homedir(), '.fas', 'config.json'), 'utf8');
+    const config = JSON.parse(raw) as { session?: { token: string } };
+    return config.session?.token;
+  } catch {
+    return undefined;
   }
 }
 
@@ -87,11 +98,10 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
     process.exit(1);
   }
 
-  const token = opts.token || process.env.FAS_SESSION_TOKEN;
+  const token = opts.token || process.env.FAS_SESSION_TOKEN || readFasSessionToken();
   if (!token) {
     process.stderr.write(
-      'pas publish: no auth token. Set FAS_SESSION_TOKEN env var or use --token.\n' +
-        'Tokens come from `fas login` (shared identity with the free side).\n',
+      'pas publish: no auth token. Run `fas login` first, or use --token.\n',
     );
     process.exit(1);
   }
