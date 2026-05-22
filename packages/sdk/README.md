@@ -1,6 +1,6 @@
 # @proappstore/sdk
 
-Unified SDK for paid apps on **proappstore.online**. Includes everything from `@freeappstore/sdk` (auth, kv, counters, rooms, proxy) plus subscription management, license keys, and a per-app SQL database.
+Unified SDK for paid apps on **proappstore.online**. Includes everything from `@freeappstore/sdk` (auth, kv, counters, rooms, proxy) plus per-app SQL database, file storage, maps & routing, subscriptions, license keys, push notifications, SMS, server-side AI, and multi-tenant helpers.
 
 ## Installation
 
@@ -133,9 +133,9 @@ const license = await app.license.current()
 const valid = await app.license.validate('LIC-ABC-123')
 ```
 
-### Maps (Geocoding + Embeds)
+### Maps (Geocoding, Routing + Embeds)
 
-Address-to-coordinates and map embeds. Powered by OpenStreetMap/Nominatim. No Google API keys needed.
+Address-to-coordinates, driving directions, and map embeds. Powered by OpenStreetMap/Nominatim/OSRM. No Google API keys needed.
 
 ```ts
 // Geocode an address
@@ -144,6 +144,15 @@ const results = await app.maps.geocode('Times Square, New York')
 
 // Reverse geocode
 const place = await app.maps.reverseGeocode(40.758, -73.985)
+
+// Driving route between two points
+const route = await app.maps.route(
+  { lat: 40.758, lng: -73.985 },  // from
+  { lat: 40.748, lng: -73.986 },  // to
+)
+// route.geometry      — GeoJSON LineString ([lng, lat] pairs)
+// route.distanceMeters
+// route.durationSeconds
 
 // Embed map in iframe
 <iframe src={app.maps.embedUrl(40.758, -73.985)} />
@@ -191,6 +200,112 @@ app.usage.flush()              // final ping (called automatically on pagehide)
 ```
 
 What we record (also documented at <https://proappstore.online/privacy#usage-analytics>): per `(app, user, day)` rollups of session-seconds and API calls. No event-by-event logs, no IP, nothing while the tab is hidden or the user is signed out.
+
+### Notifications (Web Push)
+
+Push notifications to your users. Subscribe from the browser, send targeted or broadcast pushes from your app (creator-only).
+
+```ts
+// User side — subscribe to push notifications
+await app.notifications.subscribe()        // requests permission + registers SW
+await app.notifications.unsubscribe()
+const subscribed = await app.notifications.isSubscribed()
+const permission = app.notifications.getPermission()  // 'granted' | 'denied' | 'default'
+
+// Creator side — send notifications
+await app.notifications.send('user-123', {
+  title: 'Event starting!',
+  body: 'The meetup begins in 10 minutes.',
+  url: '/events/evt-1',                   // opens on click
+})
+
+// Broadcast to all subscribers
+await app.notifications.broadcast({
+  title: 'New feature!',
+  body: 'Check out the new map view.',
+})
+```
+
+Your app needs a service worker for push. Save `Notifications.getServiceWorkerScript()` as `/sw.js`, or append it to an existing one:
+
+```ts
+import { Notifications } from '@proappstore/sdk'
+
+// Generate sw.js content
+const swCode = Notifications.getServiceWorkerScript()
+```
+
+### SMS
+
+Send text messages via the platform (Twilio-backed server-side). The platform owns the Twilio credentials — your app never sees them. Creator-only. Numbers must be E.164 format (`+15551234567`).
+
+```ts
+// Send to one recipient
+await app.sms.send('+15551234567', 'Your reservation is confirmed!')
+
+// Broadcast to many
+await app.sms.broadcast(
+  ['+15551234567', '+15559876543'],
+  'Meetup starts in 30 minutes!',
+)
+```
+
+### AI (Server-side LLM + Embeddings)
+
+Workers AI — text generation, chat, and embeddings included in the platform subscription. No per-app key management; the platform handles billing.
+
+```ts
+// Text generation
+const { text } = await app.ai.generate('Write a haiku about coding')
+
+// With model selection: 'fast' (Llama-3.1-8B) or 'smart' (Llama-3.3-70B)
+const { text } = await app.ai.generate('Summarize this article...', {
+  model: 'smart',
+  maxTokens: 512,
+  temperature: 0.7,
+})
+
+// Multi-turn chat
+const { text } = await app.ai.chat([
+  { role: 'system', content: 'You are a helpful event planner.' },
+  { role: 'user', content: 'Suggest a venue for 50 people in SF.' },
+])
+
+// Embeddings — for search, recommendations, clustering
+const { vectors } = await app.ai.embed('vinyasa flow')
+// vectors[0] is a 1024-dim float array
+
+// Batch embeddings with model selection: 'm3' (multilingual, 1024-dim) or 'base' (English, 768-dim)
+const { vectors, dimensions } = await app.ai.embed(
+  ['yoga', 'pilates', 'meditation'],
+  { model: 'base' },
+)
+```
+
+### Tenant Scope (Multi-tenant helpers)
+
+Safe-by-default CRUD helpers for multi-tenant tables. Auto-injects `tenant_id` on inserts and auto-scopes all reads/writes — prevents accidental cross-tenant data leaks.
+
+```ts
+// Create a scoped handle for a specific tenant
+const tx = app.db.tenant('studio-123')
+
+// All operations are automatically scoped to tenant_id = 'studio-123'
+await tx.insert('clients', { id: 'c-1', name: 'Alice' })
+const alice = await tx.find('clients', { id: 'c-1' })
+const all = await tx.findMany('clients')
+const count = await tx.count('clients')
+await tx.update('clients', { id: 'c-1' }, { name: 'Alicia' })
+await tx.delete('clients', { id: 'c-1' })
+
+// Escape hatch — raw SQL with tenant_id available
+const { rows } = await tx.db.query(
+  'SELECT * FROM clients WHERE name LIKE ? AND tenant_id = ?',
+  ['A%', tx.tenantId],
+)
+```
+
+Your multi-tenant tables must have a `tenant_id TEXT` column. TenantScope doesn't replace `app.db.query` / `app.db.execute` — use those for joins, aggregates, or cross-tenant admin queries.
 
 ## React Hooks (recommended)
 
