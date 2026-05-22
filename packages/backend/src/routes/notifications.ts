@@ -92,16 +92,24 @@ notificationRoutes.post('/notifications/notify-user', async (c) => {
       return c.text('you must be subscribed to this app to notify other users', 403);
     }
 
-    // Rate limit: 30 per minute per user per app
-    const rateKey = `notify:${user.id}:${appId}`;
+    // Rate limit: 30 sends per minute per sender per app
     const now = Math.floor(Date.now() / 1000);
     const windowStart = now - 60;
-    const recentCount = await c.env.DB.prepare(
+    const senderCount = await c.env.DB.prepare(
       `SELECT COUNT(*) as n FROM notification_log
        WHERE sender_id = ?1 AND app_id = ?2 AND sent_at > ?3`,
     ).bind(user.id, appId, windowStart).first<{ n: number }>();
-    if (recentCount && recentCount.n >= 30) {
+    if (senderCount && senderCount.n >= 30) {
       return c.text('rate limit exceeded: max 30 notifications per minute per app', 429);
+    }
+
+    // Rate limit: 10 pushes per minute per recipient (anti-spam)
+    const recipientCount = await c.env.DB.prepare(
+      `SELECT COUNT(*) as n FROM notification_log
+       WHERE target_user_id = ?1 AND app_id = ?2 AND sent_at > ?3`,
+    ).bind(targetUserId, appId, windowStart).first<{ n: number }>();
+    if (recipientCount && recipientCount.n >= 10) {
+      return c.text('rate limit exceeded: target user receiving too many notifications', 429);
     }
 
     // Log this send for rate limiting

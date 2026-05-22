@@ -1,20 +1,50 @@
 import { Hono } from 'hono';
+import { requireUser, HttpError } from '../lib/auth.js';
 import type { Env } from '../types.js';
 
 /**
- * Maps API — geocoding + reverse geocoding proxied through the platform.
- * Uses Nominatim (OpenStreetMap) — free, no API key needed.
- * Platform proxies to avoid rate limits on individual apps.
- * No auth required for reads (public data).
+ * Maps API — geocoding, routing, reverse geocoding proxied through the platform.
+ * Uses Nominatim (OpenStreetMap) + OSRM — free, no API key needed.
+ * Auth required. Rate-limited: 100 requests per user per hour.
  */
 
 const NOMINATIM_BASE = 'https://nominatim.openstreetmap.org';
 const USER_AGENT = 'ProAppStore-Platform/1.0 (https://proappstore.online)';
+const MAPS_RATE_LIMIT = 100; // per user per hour
+const MAPS_RATE_WINDOW = 3600; // seconds
 
 export const mapsRoutes = new Hono<{ Bindings: Env }>();
 
+/** Rate-limit check for maps endpoints. Returns true if over limit. */
+async function isRateLimited(db: D1Database, userId: string): Promise<boolean> {
+  const windowStart = Math.floor(Date.now() / 1000) - MAPS_RATE_WINDOW;
+  try {
+    const row = await db.prepare(
+      'SELECT COUNT(*) as n FROM maps_usage WHERE user_id = ? AND ts > ?',
+    ).bind(userId, windowStart).first<{ n: number }>();
+    return (row?.n ?? 0) >= MAPS_RATE_LIMIT;
+  } catch {
+    return false; // table might not exist yet
+  }
+}
+
+async function logMapsUsage(db: D1Database, userId: string): Promise<void> {
+  try {
+    await db.prepare(
+      'INSERT INTO maps_usage (user_id, ts) VALUES (?, ?)',
+    ).bind(userId, Math.floor(Date.now() / 1000)).run();
+  } catch {
+    // table might not exist yet — non-blocking
+  }
+}
+
 /** Geocode: address string -> lat/lng */
 mapsRoutes.get('/maps/geocode', async (c) => {
+  const user = await requireUser(c);
+  if (await isRateLimited(c.env.DB, user.id)) {
+    return c.json({ error: 'rate limit: 100 maps requests per hour' }, 429);
+  }
+  await logMapsUsage(c.env.DB, user.id);
   const q = c.req.query('q');
   if (!q) return c.json({ error: 'q parameter required' }, 400);
 
@@ -61,6 +91,12 @@ mapsRoutes.get('/maps/geocode', async (c) => {
  * and duration. Apps draw the geometry as the trip path on a map.
  */
 mapsRoutes.get('/maps/route', async (c) => {
+  const user = await requireUser(c);
+  if (await isRateLimited(c.env.DB, user.id)) {
+    return c.json({ error: 'rate limit: 100 maps requests per hour' }, 429);
+  }
+  await logMapsUsage(c.env.DB, user.id);
+
   const from = c.req.query('from');
   const to = c.req.query('to');
   if (!from || !to) return c.json({ error: 'from and to required as "lat,lng"' }, 400);
@@ -113,6 +149,12 @@ mapsRoutes.get('/maps/route', async (c) => {
 
 /** Reverse geocode: lat/lng -> address */
 mapsRoutes.get('/maps/reverse', async (c) => {
+  const user = await requireUser(c);
+  if (await isRateLimited(c.env.DB, user.id)) {
+    return c.json({ error: 'rate limit: 100 maps requests per hour' }, 429);
+  }
+  await logMapsUsage(c.env.DB, user.id);
+
   const lat = c.req.query('lat');
   const lng = c.req.query('lng');
   if (!lat || !lng) return c.json({ error: 'lat and lng parameters required' }, 400);
