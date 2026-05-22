@@ -228,6 +228,11 @@ analyticsRoutes.get(
     // can be safely embedded in the SQL WHERE clause.
     const kindParam = (c.req.query('kind') ?? 'pageview').trim().toLowerCase();
     if (!EVENT_KIND_RE.test(kindParam)) throw new HttpError('invalid kind', 400);
+    // `?path=` narrows the dashboard to a single page path (drill-down).
+    // Length-capped at 256; single quotes doubled before embedding in SQL.
+    const pathParamRaw = c.req.query('path');
+    const pathParam = pathParamRaw ? pathParamRaw.slice(0, 256) : '';
+    const pathClause = pathParam ? ` AND blob3 = '${pathParam.replace(/'/g, "''")}'` : '';
     // `?bucket=hour|day` controls series granularity. Auto-picks 'hour' when
     // days==1 (24-point chart for spike investigation), 'day' otherwise.
     const bucketParam = (c.req.query('bucket') ?? '').trim().toLowerCase();
@@ -244,7 +249,7 @@ analyticsRoutes.get(
     const effectiveTime =
       `if(length(doubles) > 1, fromUnixTimestamp64Milli(toInt64(double2)), timestamp)`;
     const sinceClause = `${effectiveTime} > NOW() - INTERVAL '${days}' DAY`;
-    const where = `WHERE index1 = '${appId}' AND blob2 = '${kindParam}' AND ${sinceClause}`;
+    const where = `WHERE index1 = '${appId}' AND blob2 = '${kindParam}'${pathClause} AND ${sinceClause}`;
 
     const totalsQ = `SELECT SUM(_sample_interval) AS views, COUNT(DISTINCT blob3) AS uniq_paths FROM ${STATS_DATASET} ${where}`;
     const seriesQ = `SELECT ${seriesGroup}(${effectiveTime}) AS t, SUM(_sample_interval) AS views FROM ${STATS_DATASET} ${where} GROUP BY t ORDER BY t ASC`;
@@ -272,7 +277,7 @@ analyticsRoutes.get(
         top_countries: ctys.map((r) => ({ country: r.country, views: Number(r.views) })),
         device_split: devs.map((r) => ({ device: r.device, views: Number(r.views) })),
       };
-      return c.json({ appId, days, kind: kindParam, bucket, stats: body });
+      return c.json({ appId, days, kind: kindParam, bucket, path: pathParam || null, stats: body });
     } catch (err) {
       if (err instanceof HttpError) throw err;
       throw new HttpError(err instanceof Error ? err.message : 'stats query failed', 502);
