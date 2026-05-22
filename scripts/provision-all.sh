@@ -31,6 +31,7 @@ APPS=(
   "dating|Dating|social|&#10084;|#fff1f2|Swipe-style dating with real-time chat when both like each other.|Profile photos,Real-time chat,Mutual-match detection"
   "loopride|Loopride|transport|&#128260;|#ecfdf5|Recurring rides — set route once, driver shows up every week.|Recurring schedule,Live GPS tracking,Driver communication"
   "studio|Studio|productivity|&#127908;|#fffaf0|Multi-tenant studio booking — Mindbody/Momence-shaped product on PAS.|Bookings,Class schedules,Member management"
+  "bandmates|Bandmates|social|&#127928;|#fef3c7|Find musicians, manage bands, discover events.|Musician discovery,Band management,Real-time chat,Event RSVP"
 )
 
 call_provision() {
