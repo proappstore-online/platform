@@ -37,7 +37,15 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
       return c.text(`file too large (max ${MAX_FILE_SIZE / 1024 / 1024}MB)`, 413);
     }
 
-    const contentType = c.req.header('Content-Type') || 'application/octet-stream';
+    const rawType = c.req.header('Content-Type') || 'application/octet-stream';
+    // Strip parameters (charset, boundary) and block dangerous MIME types
+    // that browsers would execute if served back on a *.proappstore.online subdomain.
+    const contentType = rawType.split(';')[0]!.trim().toLowerCase();
+    const blocked = ['text/html', 'application/xhtml+xml', 'application/javascript',
+      'text/javascript', 'application/x-javascript', 'image/svg+xml'];
+    if (blocked.includes(contentType)) {
+      return c.text('content type not allowed for uploads', 400);
+    }
     // Public files go under {appId}/_public/ directly (no user prefix)
     // so the public download route can find them without auth.
     const key = filePath.startsWith('_public/')
