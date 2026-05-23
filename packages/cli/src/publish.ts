@@ -1,6 +1,5 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
-import { homedir } from 'node:os';
 
 interface PublishOptions {
   name?: string;
@@ -23,15 +22,7 @@ function readJsonIfExists<T = unknown>(path: string): T | null {
   }
 }
 
-function readFasSessionToken(): string | undefined {
-  try {
-    const raw = readFileSync(join(homedir(), '.fas', 'config.json'), 'utf8');
-    const config = JSON.parse(raw) as { session?: { token: string } };
-    return config.session?.token;
-  } catch {
-    return undefined;
-  }
-}
+import { resolveToken } from './lib/config.js';
 
 function toTitleCase(id: string): string {
   return id
@@ -98,7 +89,7 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
     process.exit(1);
   }
 
-  const token = opts.token || process.env.FAS_SESSION_TOKEN || readFasSessionToken();
+  const token = resolveToken(opts.token);
   if (!token) {
     process.stderr.write(
       'pas publish: no auth token. Run `fas login` first, or use --token.\n',

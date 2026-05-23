@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { checkCommand } from './check.js';
 import { createApp } from './create.js';
 import { domainCommand } from './domain.js';
+import { loginCommand } from './login.js';
 import { publishApp } from './publish.js';
 
 const program = new Command();
@@ -23,16 +24,7 @@ program
     await createApp(appId, opts);
   });
 
-program
-  .command('login')
-  .description('Sign in with GitHub (shared identity with `fas`).')
-  .action(() => {
-    process.stdout.write(
-      'pas login is not yet implemented.\n' +
-        'For now: run `fas login` (from @freeappstore/cli) — pro shares the same identity.\n',
-    );
-    process.exit(2);
-  });
+program.addCommand(loginCommand);
 
 program
   .command('publish')
