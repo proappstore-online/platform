@@ -1,16 +1,18 @@
-import { execSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, existsSync, cpSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
+import { access, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { writeFileSync } from 'node:fs';
+import { extname, join, resolve } from 'node:path';
 import { resolveToken } from './lib/config.js';
 
-// Resolve the CLI package's bundled `templates/` directory (contains
-// binary placeholder icons that can't be inlined into TEMPLATE_FILES).
-// In published form: <pkg>/dist/create.js + <pkg>/templates/*. In dev
-// (tsx, esno): <pkg>/src/create.ts + <pkg>/templates/*. Walk up from
-// __dirname to the package root and append templates/.
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const TEMPLATES_DIR = join(__dirname, '..', 'templates');
+const TEMPLATE_REPO = 'proappstore-online/template-app';
+const PAS_API = 'https://api.proappstore.online';
+
+const TEXT_EXTENSIONS = new Set([
+  '.md', '.txt', '.json', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+  '.html', '.htm', '.css', '.scss', '.yaml', '.yml', '.toml', '.svg',
+]);
+
+const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', '.cache']);
 
 interface CreateOptions {
   skipInstall?: boolean;
@@ -19,199 +21,18 @@ interface CreateOptions {
   token?: string;
 }
 
-const PAS_API = 'https://api.proappstore.online';
-
-const TEMPLATE_FILES: Record<string, string> = {
-  'package.json': `{
-  "name": "__APP_ID__",
-  "private": true,
-  "packageManager": "pnpm@10.30.3",
-  "engines": { "node": ">=22" },
-  "repository": { "type": "git", "url": "git+https://github.com/proappstore-online/__APP_ID__.git" },
-  "scripts": {
-    "dev": "pnpm --filter @__APP_ID__/web dev",
-    "build": "pnpm --filter @__APP_ID__/web build",
-    "preview": "pnpm --filter @__APP_ID__/web preview",
-    "typecheck": "pnpm --filter @__APP_ID__/web exec tsc -b",
-    "test": "pnpm --filter @__APP_ID__/web exec tsc -b"
-  }
-}`,
-  'pnpm-workspace.yaml': `packages:\n  - web`,
-  'tsconfig.json': `{ "references": [{ "path": "./web" }], "files": [] }`,
-  'LICENSE': `MIT License\n\nCopyright (c) ${new Date().getFullYear()} ProAppStore\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.`,
-  'CLAUDE.md': `# __APP_ID__\n\n__APP_DESCRIPTION__\n\n- Subdomain: \`__APP_ID__.proappstore.online\`\n- Dev: \`pnpm install && pnpm dev\`\n- Build: \`pnpm build\`\n- Deploy: \`git push origin main\` (auto-deploys via Cloudflare Pages)\n\nFor platform conventions, read\nhttps://proappstore.online/skills.md\nbefore writing or changing anything.`,
-  '.gitignore': `node_modules/\ndist/\n.DS_Store\n*.log\n.env\n.env.local`,
-  'web/package.json': `{
-  "name": "@__APP_ID__/web",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "prebuild": "npx -y @proappstore/cli@latest check",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@proappstore/sdk": "^1.5.0",
-    "react": "^19.2.5",
-    "react-dom": "^19.2.5"
-  },
-  "devDependencies": {
-    "@tailwindcss/vite": "^4.2.4",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.1",
-    "tailwindcss": "^4.2.4",
-    "typescript": "~6.0.2",
-    "vite": "^8.0.10",
-    "vite-plugin-pwa": "^1.3.0"
-  }
-}`,
-  'web/tsconfig.json': `{\n  "files": [],\n  "references": [\n    { "path": "./tsconfig.app.json" },\n    { "path": "./tsconfig.node.json" }\n  ]\n}`,
-  // Declares the PAS-specific `min_viewport_width` field on vite-plugin-pwa's
-  // ManifestOptions so vite.config.ts can set it without @ts-expect-error.
-  // tsconfig.node.json picks this up because it's in the include list.
-  'web/vite-plugin-pwa.d.ts': `import 'vite-plugin-pwa';
-
-declare module 'vite-plugin-pwa' {
-  interface ManifestOptions {
-    /**
-     * PAS-specific manifest extension. Narrowest viewport width (in CSS
-     * pixels) the app is designed to support. The platform compliance
-     * check grades mobile readiness against this; recommended values
-     * are 320 | 360 | 414 | 600 | 768 | 1024.
-     */
-    min_viewport_width?: number;
-  }
-}
-`,
-  'web/tsconfig.app.json': `{
-  "compilerOptions": {
-    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
-    "target": "es2023",
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
-    "module": "esnext",
-    "types": ["vite/client"],
-    "skipLibCheck": true,
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "moduleDetection": "force",
-    "noEmit": true,
-    "jsx": "react-jsx",
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true
-  },
-  "include": ["src"]
-}`,
-  'web/tsconfig.node.json': `{
-  "compilerOptions": {
-    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
-    "target": "es2023",
-    "lib": ["ES2023"],
-    "module": "esnext",
-    "skipLibCheck": true,
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "moduleDetection": "force",
-    "noEmit": true
-  },
-  "include": ["vite.config.ts", "vite-plugin-pwa.d.ts"]
-}`,
-  'web/vite.config.ts': `import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
-import { VitePWA } from 'vite-plugin-pwa'
-
-export default defineConfig({
-  plugins: [
-    react(),
-    tailwindcss(),
-    VitePWA({
-      registerType: 'autoUpdate',
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,png,svg,ico,woff2,wasm,json}'],
-        maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\\/\\/fonts\\.googleapis\\.com\\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'google-fonts-stylesheets',
-              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-          {
-            urlPattern: /^https:\\/\\/fonts\\.gstatic\\.com\\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'google-fonts-webfonts',
-              expiration: { maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-        ],
-      },
-      manifest: {
-        name: '__APP_NAME__',
-        short_name: '__APP_NAME__',
-        description: '__APP_NAME__ — pro app on ProAppStore',
-        start_url: '/',
-        display: 'standalone',
-        background_color: '#ffffff',
-        theme_color: '#7c3aed',
-        orientation: 'any',
-        // PAS-specific manifest extension — declares the narrowest viewport
-        // the app supports. The compliance check uses this to grade mobile
-        // readiness. Augmented into ManifestOptions in src/vite-plugin-pwa.d.ts.
-        min_viewport_width: 360,
-        icons: [
-          { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
-          { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
-        ],
-      },
-    }),
-  ],
-  server: { host: true },
-})`,
-  'web/index.html': `<!doctype html>\n<html lang="en">\n  <head>\n    <meta charset="UTF-8" />\n    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />\n    <meta name="theme-color" content="#7c3aed" />\n    <link rel="preconnect" href="https://fonts.googleapis.com" />\n    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />\n    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />\n    <title>__APP_NAME__ — ProAppStore</title>\n    <!-- Platform analytics loader. CF Web Analytics is auto-provisioned at publish;\n         GA4 / Plausible / custom <head> are opt-in via PUT /v1/apps/__APP_ID__/analytics. -->\n    <script src="https://api.proappstore.online/v1/analytics.js?app=__APP_ID__" defer></script>\n  </head>\n  <body>\n    <div id="root"></div>\n    <script type="module" src="/src/main.tsx"></script>\n  </body>\n</html>`,
-  'web/src/main.tsx': `import { StrictMode } from 'react'\nimport { createRoot } from 'react-dom/client'\nimport './index.css'\nimport App from './App.tsx'\n\ncreateRoot(document.getElementById('root')!).render(\n  <StrictMode>\n    <App />\n  </StrictMode>,\n)`,
-  'web/src/index.css': `@import "tailwindcss";\n\n@layer base {\n:root {\n  color-scheme: light;\n  --paper: #ffffff;\n  --ink: #111111;\n  --muted: #666666;\n  --accent: #7c3aed;\n  --accent-soft: #f5f3ff;\n  --line: rgba(0,0,0,0.08);\n  --glass: rgba(255,255,255,0.72);\n  --glass-hover: rgba(255,255,255,0.85);\n  --error: #c74f43;\n  --success: #2f8f57;\n}\n\n:root[data-theme='dark'] {\n  color-scheme: dark;\n  --paper: #000000;\n  --ink: #f0f0f0;\n  --muted: #888888;\n  --accent: #a78bfa;\n  --accent-soft: #1e1533;\n  --line: rgba(255,255,255,0.08);\n  --glass: rgba(26,26,26,0.8);\n  --glass-hover: rgba(38,38,38,0.9);\n  --error: #ff7a72;\n  --success: #74d49a;\n}\n\nhtml { min-height: 100%; }\nbody {\n  min-height: 100dvh;\n  background: var(--paper);\n  color: var(--ink);\n  font-family: 'Manrope', -apple-system, sans-serif;\n  -webkit-font-smoothing: antialiased;\n}\n#root { min-height: 100dvh; }\n.display-font { font-family: 'Fraunces', Georgia, serif; letter-spacing: -0.04em; }\n} /* end @layer base */`,
-  'web/src/App.tsx': `import { initPro } from '@proappstore/sdk'\nimport { useProGate } from '@proappstore/sdk/hooks'\n\nconst app = initPro({ appId: '__APP_ID__' })\n\nexport default function App() {\n  const { gate, user, signIn } = useProGate(app, { allowFree: true })\n\n  if (gate === 'loading') {\n    return (\n      <div className="flex min-h-[100dvh] items-center justify-center">\n        <p className="text-[var(--muted)]">Loading...</p>\n      </div>\n    )\n  }\n\n  if (gate === 'signed-out') {\n    return (\n      <div className="flex min-h-[100dvh] flex-col items-center justify-center gap-4 px-4">\n        <h1 className="display-font text-3xl font-bold text-[var(--ink)]">__APP_NAME__</h1>\n        <p className="text-[var(--muted)]">Sign in to get started.</p>\n        <button onClick={signIn} className="rounded-2xl bg-[var(--accent)] px-6 py-2.5 text-sm font-semibold text-white">Sign in with GitHub</button>\n      </div>\n    )\n  }\n\n  return (\n    <div className="mx-auto max-w-2xl px-4 py-8">\n      <h1 className="display-font text-2xl font-bold text-[var(--ink)]">__APP_NAME__</h1>\n      <p className="mt-2 text-[var(--muted)]">Welcome, {user?.login}! Edit web/src/App.tsx to start building.</p>\n    </div>\n  )\n}`,
-  // Pre-committed privacy template — served by CF Pages at
-  // <app>.proappstore.online/privacy.md. The Console's "Use privacy.md from
-  // my app" affordance points to that URL. Fill in {{APP_NAME}}/{{DATE}}/
-  // {{CONTACT}} (or just delete this file and point Console at the platform
-  // policy if your app doesn't add anything app-specific).
-  'web/public/privacy.md': `# Privacy Policy — __APP_NAME__\n\n_Last updated: {{DATE}}_\n\nThis is the privacy policy for **__APP_NAME__**, a Pro app on\n[ProAppStore](https://proappstore.online). It covers what _this app_ does\nwith your data. For platform-wide data handling (sign-in, billing, file\nstorage, usage analytics for creator payouts, account deletion) see the\n[platform privacy policy](https://proappstore.online/privacy).\n\n---\n\n## What __APP_NAME__ stores about you\n\n> _Fill in what your app keeps. Examples below — delete the ones that don't\n> apply, add app-specific ones._\n\n- The data you explicitly enter into the app. Stored in your private\n  per-user KV / database / file storage. No one else has access except you.\n\n## What __APP_NAME__ does NOT store\n\n- No contacts scraping, no background location, no microphone access, no\n  behavioral analytics, no advertising IDs.\n\n## Where data lives\n\nEverything you save in __APP_NAME__ is stored on Cloudflare infrastructure\n(D1, R2, KV) under your ProAppStore account. The app developer does not\nhave access to your personal data — only daily aggregate counts (active\nusers, session-minutes, API calls) used to size their payout share.\n\n## Third-party services\n\n> _List any third-party APIs your app calls on the user's behalf. Delete\n> this section if there are none._\n\n## Cookies & Analytics\n\n__APP_NAME__ uses the same session cookie as the rest of ProAppStore for\nauthentication. Visitor analytics is handled by **Cloudflare Web Analytics**,\nwhich is cookieless and stores no personal data — only aggregate page-view\ncounts visible to the app developer. No advertising cookies. No third-party\ntrackers unless the developer has explicitly opted into Google Analytics or\nPlausible in their app settings (in which case the relevant provider's\nprivacy notice also applies).\n\n## Data deletion\n\nDelete your account from [dashboard.proappstore.online](https://dashboard.proappstore.online).\nThat removes all data __APP_NAME__ stored for you, alongside the\nplatform-level deletion described in the [platform privacy policy](https://proappstore.online/privacy#data-deletion).\n\n## Contact\n\n{{CONTACT}}\n`,
-  // Default CSP for newly-scaffolded PAS apps. Permissive on app-internal
-  // resources (vibecoded apps legitimately load fonts/images/scripts from
-  // many places) but explicitly allows the platform analytics origins so
-  // the loader script at api.proappstore.online/v1/analytics.js can run.
-  // Apps that don't need a CSP can delete this file; apps that tighten it
-  // further MUST keep the analytics origins in script-src + connect-src
-  // or the platform analytics dashboard goes blank.
-  'web/public/_headers': `/*\n  Content-Security-Policy: default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https: https://api.proappstore.online https://static.cloudflareinsights.com https://www.googletagmanager.com https://plausible.io; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss: https://api.proappstore.online https://cloudflareinsights.com https://www.google-analytics.com https://plausible.io; frame-ancestors 'self' https://proappstore.online https://*.proappstore.online; base-uri 'self'; object-src 'none'; upgrade-insecure-requests\n  Permissions-Policy: geolocation=(), microphone=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=(), midi=(), interest-cohort=()\n  X-Content-Type-Options: nosniff\n  Referrer-Policy: strict-origin-when-cross-origin\n  Strict-Transport-Security: max-age=31536000; includeSubDomains\n`,
-};
-
 function toTitleCase(id: string): string {
   return id.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
 export async function createApp(appId: string, opts: CreateOptions = {}): Promise<void> {
-  // Validate app ID
   if (!/^[a-z][a-z0-9-]*$/.test(appId) || appId.length > 58) {
     process.stderr.write(`Invalid app ID "${appId}". Use lowercase letters, numbers, hyphens. Max 58 chars.\n`);
     process.exit(1);
   }
 
   const targetDir = resolve(appId);
-  if (existsSync(targetDir)) {
+  if (await exists(targetDir)) {
     process.stderr.write(`Directory "${appId}" already exists.\n`);
     process.exit(1);
   }
@@ -219,56 +40,34 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
   const appName = toTitleCase(appId);
   process.stdout.write(`\n  Creating ${appName}...\n\n`);
 
-  // Step 1: Scaffold
-  process.stdout.write(`  [1/3] Scaffolding from template...\n`);
-  for (const [path, content] of Object.entries(TEMPLATE_FILES)) {
-    const fullPath = join(targetDir, path);
-    const dir = join(fullPath, '..');
-    mkdirSync(dir, { recursive: true });
-    const processed = content
-      .replace(/__APP_ID__/g, appId)
-      .replace(/__APP_NAME__/g, appName)
-      .replace(/__APP_DESCRIPTION__/g, `A pro app on ProAppStore.`);
-    writeFileSync(fullPath, processed);
-  }
+  // Step 1: Clone template
+  process.stdout.write(`  [1/4] Cloning template...\n`);
+  await run('git', ['clone', '--depth=1', `https://github.com/${TEMPLATE_REPO}.git`, targetDir]);
+  await rm(join(targetDir, '.git'), { recursive: true, force: true });
 
-  // Binary placeholders that can't live in the inline string map.
-  // Without these the manifest references /icon-192.png and Android
-  // would either 404 or install the app as a launcher shortcut.
-  const publicDir = join(targetDir, 'web', 'public');
-  mkdirSync(publicDir, { recursive: true });
-  for (const iconName of ['icon-192.png', 'icon-512.png']) {
-    cpSync(join(TEMPLATES_DIR, iconName), join(publicDir, iconName));
-  }
+  // Step 2: Replace APPNAME placeholders
+  process.stdout.write(`  [2/4] Configuring for ${appId}...\n`);
+  const substitutionCount = await substituteAppName(targetDir, appId, appName);
 
-  // Step 2: Install
+  // Step 3: Install
   if (!opts.skipInstall) {
-    process.stdout.write(`  [2/3] Installing dependencies...\n`);
+    process.stdout.write(`  [3/4] Installing dependencies...\n`);
     try {
-      execSync('pnpm install', { cwd: targetDir, stdio: 'pipe' });
+      await run('pnpm', ['install'], targetDir);
     } catch {
-      process.stdout.write(`  [2/3] pnpm install failed. Run it manually.\n`);
+      process.stdout.write(`  [3/4] pnpm install failed. Run it manually.\n`);
     }
   } else {
-    process.stdout.write(`  [2/3] Skipping install (--skip-install)\n`);
+    process.stdout.write(`  [3/4] Skipping install (--skip-install)\n`);
   }
 
-  // Step 3: Init git
+  // Step 4: Init git + provision
   if (!opts.skipGit) {
-    process.stdout.write(`  [3/3] Initializing git...\n`);
-    try {
-      execSync('git init && git add -A && git commit -m "Initial scaffold from pas create"', {
-        cwd: targetDir,
-        stdio: 'pipe',
-      });
-    } catch {
-      process.stdout.write(`  [3/3] Git init failed. Run it manually.\n`);
-    }
-  } else {
-    process.stdout.write(`  [3/3] Skipping git init (--skip-git)\n`);
+    await run('git', ['init', '-q', '-b', 'main'], targetDir);
+    await run('git', ['add', '-A'], targetDir);
+    await run('git', ['commit', '-q', '-m', 'Initial commit from pas create'], targetDir);
   }
 
-  // Step 4: Provision platform resources (D1 + Data Worker)
   if (!opts.skipProvision) {
     const token = resolveToken(opts.token);
     if (token) {
@@ -281,8 +80,6 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
             appId,
             name: appName,
             description: `${appName} — pro app on ProAppStore.`,
-            // Repo doesn't exist on GitHub yet — `pas publish` creates it
-            // and runs the real compliance check + cross-store steps then.
             skipCompliance: true,
             skipPublish: true,
           }),
@@ -293,7 +90,6 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
           process.stdout.write(`    [${icon}] ${step.name}: ${step.detail}\n`);
         }
 
-        // Write the Data Worker URL into the app's config
         const dbStep = data.steps.find(s => s.name === 'create_d1' && s.status === 'ok');
         if (dbStep) {
           const configPath = join(targetDir, '.pas.json');
@@ -315,15 +111,58 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
   }
 
   process.stdout.write(`
-  Done! Your app is ready.
+  Done! Replaced APPNAME in ${substitutionCount} files.
 
   Next steps:
     cd ${appId}
     pnpm dev
 
-  SDK docs:  https://proappstore.online/skills.md
-  Console:   https://console.proappstore.online
-  Dashboard: https://dashboard.proappstore.online
+  Docs:    https://proappstore.online/docs
+  Console: https://console.proappstore.online
 
 `);
+}
+
+async function substituteAppName(dir: string, appId: string, appName: string): Promise<number> {
+  let count = 0;
+  for await (const file of walk(dir)) {
+    if (!TEXT_EXTENSIONS.has(extname(file).toLowerCase())) continue;
+    const content = await readFile(file, 'utf8');
+    if (!content.includes('APPNAME')) continue;
+    await writeFile(file, content.split('APPNAME').join(appId));
+    count++;
+  }
+  return count;
+}
+
+async function* walk(dir: string): AsyncGenerator<string> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+      yield* walk(join(dir, entry.name));
+    } else if (entry.isFile()) {
+      yield join(dir, entry.name);
+    }
+  }
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function run(cmd: string, args: string[], cwd?: string): Promise<void> {
+  return new Promise((resolveFn, rejectFn) => {
+    const child = spawn(cmd, args, { stdio: 'inherit', cwd });
+    child.on('exit', (code) => {
+      if (code === 0) resolveFn();
+      else rejectFn(new Error(`${cmd} exited with code ${code}`));
+    });
+    child.on('error', rejectFn);
+  });
 }
