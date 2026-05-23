@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
+import { resolveToken } from './lib/config.js';
 
 interface PublishOptions {
   name?: string;
@@ -21,8 +22,6 @@ function readJsonIfExists<T = unknown>(path: string): T | null {
     return null;
   }
 }
-
-import { resolveToken } from './lib/config.js';
 
 function toTitleCase(id: string): string {
   return id
