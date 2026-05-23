@@ -1,6 +1,6 @@
 # @proappstore/sdk
 
-Unified SDK for paid apps on **proappstore.online**. Includes everything from `@freeappstore/sdk` (auth, kv, counters, rooms, proxy) plus per-app SQL database, file storage, maps & routing, subscriptions, license keys, push notifications, SMS, server-side AI, and multi-tenant helpers.
+Full SDK for premium apps on **proappstore.online**. Auth, per-user KV, counters, real-time rooms, API proxy, per-app SQL database, file storage, maps & routing, subscriptions, license keys, push notifications, SMS, email, webhooks, server-side AI, and multi-tenant helpers.
 
 ## Installation
 
@@ -23,9 +23,50 @@ Options:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `appId` | (required) | Your app's unique identifier |
-| `fasApiBase` | `https://api.freeappstore.online` | Free-tier backend URL |
-| `proApiBase` | `https://api.proappstore.online` | Pro-tier backend URL |
+| `proApiBase` | `https://api.proappstore.online` | Platform API base URL |
 | `dataApiBase` | `https://data-{appId}.proappstore.online` | Per-app data worker URL |
+
+## Types
+
+```ts
+import type { User, Subscription, QueryResult, ExecuteResult, Migration } from '@proappstore/sdk'
+// Also available from hooks:
+import type { User } from '@proappstore/sdk/hooks'
+```
+
+**User** — returned by `app.auth.user` and `useProAuth()`:
+
+```ts
+interface User {
+  id: string
+  login: string
+  avatarUrl: string | null
+  dateOfBirth: string | null  // YYYY-MM-DD, null until set
+}
+```
+
+**Database types:**
+
+```ts
+interface QueryResult<T> {
+  rows: T[]
+  meta: { changes: number; duration: number }
+}
+
+interface ExecuteResult {
+  meta: { changes: number; duration: number; last_row_id: number }
+}
+
+interface Migration {
+  name: string   // e.g. "0001_init" — tracked, only applied once
+  sql: string    // semicolon-separated statements
+}
+
+interface MigrateResult {
+  applied: string[]   // migrations just applied
+  already: string[]   // previously applied
+}
+```
 
 ## Modules
 
@@ -87,22 +128,37 @@ const response = await app.proxy.fetch('/openai/chat/completions', {
 Each Pro app gets its own D1 SQL database accessed through a dedicated data worker at `data-{appId}.proappstore.online`.
 
 ```ts
+// Schema migrations — idempotent, tracked by name
+const { applied, already } = await app.db.migrate([
+  {
+    name: '0001_init',
+    sql: `
+      CREATE TABLE IF NOT EXISTS users (
+        id   TEXT PRIMARY KEY,
+        name TEXT NOT NULL
+      );
+    `,
+  },
+])
+
 // Query rows
-const { rows } = await app.db.query('SELECT * FROM users WHERE active = ?', [true])
+const { rows } = await app.db.query<User>('SELECT * FROM users WHERE active = ?', [true])
 
 // Execute writes
-const { meta } = await app.db.execute('INSERT INTO users (name) VALUES (?)', ['Alice'])
+const { meta } = await app.db.execute('INSERT INTO users (id, name) VALUES (?,?)', ['u1', 'Alice'])
 console.log(meta.last_row_id) // auto-increment id
 
 // Batch (transactional)
 const results = await app.db.batch([
-  { sql: 'INSERT INTO orders (user_id, total) VALUES (?, ?)', params: [1, 99.99] },
-  { sql: 'UPDATE users SET order_count = order_count + 1 WHERE id = ?', params: [1] },
+  { sql: 'INSERT INTO orders (user_id, total) VALUES (?, ?)', params: ['u1', 99.99] },
+  { sql: 'UPDATE users SET order_count = order_count + 1 WHERE id = ?', params: ['u1'] },
 ])
 
 // List tables
 const tables = await app.db.tables()
 ```
+
+**Recommended pattern:** define migrations in a `db/core.ts` file and call `ensureMigrated()` at the top of each query function. See the [kanban app](https://github.com/proappstore-online/kanban/blob/main/web/src/lib/db/core.ts) for the full pattern.
 
 ### Subscription (Stripe-powered)
 
@@ -462,7 +518,7 @@ See the [UI Component Library](https://proappstore.online/docs/ui) for the full 
 
 Each Pro app is provisioned with a dedicated Cloudflare D1 database fronted by a data worker (`data-{appId}.proappstore.online`). The SDK's `db` module provides a typed client for this worker.
 
-The database is per-user isolated at the auth layer — all requests require a valid Bearer token. The data worker validates the token against the FAS auth API before executing queries.
+The database is per-user isolated at the auth layer — all requests require a valid Bearer token. The data worker validates the token against the platform auth API before executing queries.
 
 Tables are user-defined (create them via `db.execute('CREATE TABLE IF NOT EXISTS ...')`). The schema is entirely up to the app developer.
 
