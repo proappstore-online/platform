@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { HttpError } from './lib/auth.js';
 import type { Env } from './types.js';
 import { subscriptionRoutes } from './routes/subscription.js';
 import { licenseRoutes } from './routes/license.js';
@@ -46,6 +47,14 @@ app.use(
     maxAge: 600,
   }),
 );
+
+app.onError((err, c) => {
+  if (err instanceof HttpError) {
+    return c.json({ error: err.message }, err.status as 401);
+  }
+  console.error('Unhandled error:', err);
+  return c.json({ error: 'Internal server error' }, 500);
+});
 
 app.get('/', (c) => c.json({ ok: true, service: 'proappstore-api' }));
 app.get('/health', (c) => c.json({ ok: true }));
