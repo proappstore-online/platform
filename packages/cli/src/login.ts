@@ -2,8 +2,7 @@ import { Command } from 'commander';
 import { readConfig, writeConfig } from './lib/config.js';
 import { startDeviceFlow } from './lib/github.js';
 
-// PAS shares identity with FAS — same GitHub OAuth App, same exchange endpoint.
-// The client_id is public (device-flow apps have no secret).
+// Shared GitHub OAuth App with FAS — same identity, same session, same config file.
 const DEFAULT_CLIENT_ID = process.env.PAS_GITHUB_CLIENT_ID ?? 'Ov23liuUpYPXc1ikEFm2';
 
 export async function runLogin(): Promise<{ login: string }> {
@@ -14,9 +13,9 @@ export async function runLogin(): Promise<{ login: string }> {
   const { accessToken, login } = await flow.poll();
   const config = await readConfig();
 
-  // Exchange GitHub token for a platform session token via the FAS API
-  // (PAS identity is built on top of FAS identity).
-  const exchangeUrl = `${config.fasApiBase}/v1/auth/exchange`;
+  // Exchange GitHub token for a platform session via the FAS API
+  // (identity lives on FAS — one login for both CLIs).
+  const exchangeUrl = `${config.apiBase}/v1/auth/exchange`;
   const exchangeRes = await fetch(exchangeUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -39,7 +38,7 @@ export async function runLogin(): Promise<{ login: string }> {
 }
 
 export const loginCommand = new Command('login')
-  .description('Sign in with GitHub (shared identity with FreeAppStore).')
+  .description('Sign in with GitHub (shared session with fas CLI).')
   .action(async () => {
     await runLogin();
   });
