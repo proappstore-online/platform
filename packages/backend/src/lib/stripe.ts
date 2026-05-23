@@ -180,5 +180,13 @@ export async function verifyWebhookSignature(
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 
-  return parts.signatures.includes(expected);
+  // Constant-time comparison to prevent timing attacks
+  return parts.signatures.some((sig) => {
+    if (sig.length !== expected.length) return false;
+    let result = 0;
+    for (let i = 0; i < sig.length; i++) {
+      result |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
+    }
+    return result === 0;
+  });
 }

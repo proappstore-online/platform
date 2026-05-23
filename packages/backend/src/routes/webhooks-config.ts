@@ -38,10 +38,19 @@ webhookConfigRoutes.post('/apps/:appId/webhooks', async (c) => {
       return c.text(`unsupported event. supported: ${SUPPORTED_EVENTS.join(', ')}`, 400);
     }
 
+    let parsed: URL;
     try {
-      new URL(url);
+      parsed = new URL(url);
     } catch {
       return c.text('invalid URL', 400);
+    }
+    if (parsed.protocol !== 'https:') return c.text('webhook URL must use HTTPS', 400);
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' ||
+        host === '[::1]' || host.endsWith('.local') ||
+        host.startsWith('10.') || host.startsWith('192.168.') ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(host) || host === '169.254.169.254') {
+      return c.text('webhook URL must not point to private/internal addresses', 400);
     }
 
     const id = crypto.randomUUID();
