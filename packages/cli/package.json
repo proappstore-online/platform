@@ -1,6 +1,6 @@
 {
   "name": "@proappstore/cli",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "pas \u2014 CLI for publishing paid apps to proappstore.online",
   "license": "MIT",
   "type": "module",
