@@ -20,6 +20,7 @@ import { payoutsRoutes } from './routes/payouts.js';
 import { domainRoutes } from './routes/domains.js';
 import { emailRoutes } from './routes/email.js';
 import { webhookConfigRoutes } from './routes/webhooks-config.js';
+import { logsRoutes } from './routes/logs.js';
 
 export const app = new Hono<{ Bindings: Env }>();
 
@@ -68,6 +69,7 @@ v1.route('/', payoutsRoutes);
 v1.route('/', domainRoutes);
 v1.route('/', emailRoutes);
 v1.route('/', webhookConfigRoutes);
+v1.route('/', logsRoutes);
 app.route('/v1', v1);
 
 // Stripe webhook is outside /v1 — it's not user-facing API
