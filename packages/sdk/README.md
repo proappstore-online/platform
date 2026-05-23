@@ -72,7 +72,7 @@ interface MigrateResult {
 
 ### Auth
 
-GitHub OAuth — shared identity across all FreeAppStore and ProAppStore apps.
+GitHub OAuth — shared identity across all ProAppStore apps.
 
 ```ts
 await app.auth.init()
