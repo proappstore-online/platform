@@ -309,7 +309,7 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
         process.stdout.write(`    Provisioning failed: ${e}. You can provision later.\n`);
       }
     } else {
-      process.stdout.write(`  [4/4] Skipping provision (no auth token). Run \`pas login\`, set FAS_SESSION_TOKEN, or use --token.\n`);
+      process.stdout.write(`  [4/4] Skipping provision (no auth token). Run \`pas login\`, set PAS_SESSION_TOKEN, or use --token.\n`);
     }
   } else {
     process.stdout.write(`  [4/4] Skipping provision (--skip-provision)\n`);

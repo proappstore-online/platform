@@ -1,5 +1,4 @@
 // GitHub Device Authorization Grant flow.
-// Vendored from @freeappstore/cli — identical logic, no store-specific behavior.
 // Spec: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow
 
 interface DeviceCodeResponse {

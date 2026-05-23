@@ -2,7 +2,6 @@ import { Command } from 'commander';
 import { readConfig, writeConfig } from './lib/config.js';
 import { startDeviceFlow } from './lib/github.js';
 
-// Shared GitHub OAuth App with FAS — same identity, same session, same config file.
 const DEFAULT_CLIENT_ID = process.env.PAS_GITHUB_CLIENT_ID ?? 'Ov23liuUpYPXc1ikEFm2';
 
 export async function runLogin(): Promise<{ login: string }> {
@@ -13,18 +12,14 @@ export async function runLogin(): Promise<{ login: string }> {
   const { accessToken, login } = await flow.poll();
   const config = await readConfig();
 
-  // Exchange GitHub token for a platform session via the FAS API
-  // (identity lives on FAS — one login for both CLIs).
-  const exchangeUrl = `${config.apiBase}/v1/auth/exchange`;
+  const exchangeUrl = `${config.authApiBase}/v1/auth/exchange`;
   const exchangeRes = await fetch(exchangeUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ githubToken: accessToken }),
   });
   if (!exchangeRes.ok) {
-    throw new Error(
-      `Auth exchange failed (${exchangeRes.status} from ${exchangeUrl}): ${await exchangeRes.text()}`,
-    );
+    throw new Error(`Auth exchange failed (${exchangeRes.status}): ${await exchangeRes.text()}`);
   }
   const { sessionToken } = (await exchangeRes.json()) as { sessionToken: string };
 
@@ -38,7 +33,7 @@ export async function runLogin(): Promise<{ login: string }> {
 }
 
 export const loginCommand = new Command('login')
-  .description('Sign in with GitHub (shared session with fas CLI).')
+  .description('Sign in with GitHub.')
   .action(async () => {
     await runLogin();
   });

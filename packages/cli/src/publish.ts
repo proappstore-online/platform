@@ -92,7 +92,7 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
   const token = resolveToken(opts.token);
   if (!token) {
     process.stderr.write(
-      'pas publish: no auth token. Run `fas login` first, or use --token.\n',
+      'pas publish: no auth token. Run `pas login` first, or use --token.\n',
     );
     process.exit(1);
   }

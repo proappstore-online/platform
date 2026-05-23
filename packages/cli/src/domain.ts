@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Command } from 'commander';
+import { resolveToken } from './lib/config.js';
 
 const PAS_API = 'https://api.proappstore.online';
 
@@ -68,11 +69,10 @@ function getAppId(): string {
 }
 
 function getToken(opts: { token?: string }): string {
-  const token = opts.token || process.env.FAS_SESSION_TOKEN;
+  const token = resolveToken(opts.token);
   if (!token) {
     process.stderr.write(
-      'pas domain: no auth token. Set FAS_SESSION_TOKEN env var or use --token.\n' +
-        'Tokens come from `fas login`.\n',
+      'pas domain: no auth token. Run `pas login` first, or use --token.\n',
     );
     process.exit(1);
   }
@@ -223,26 +223,26 @@ export const domainCommand = new Command('domain').description('Manage BYO custo
 domainCommand
   .command('add <domain>')
   .description('Attach a custom domain (apex or subdomain) to the current app')
-  .option('--token <token>', 'FAS session token (or set FAS_SESSION_TOKEN)')
+  .option('--token <token>', 'Session token (or set PAS_SESSION_TOKEN)')
   .action(addDomain);
 
 domainCommand
   .command('list')
   .alias('ls')
   .description('List custom domains attached to the current app + their verification state')
-  .option('--token <token>', 'FAS session token (or set FAS_SESSION_TOKEN)')
+  .option('--token <token>', 'Session token (or set PAS_SESSION_TOKEN)')
   .action(listCmd);
 
 domainCommand
   .command('verify <domain>')
   .description('Ask Cloudflare to re-check DNS / cert for a pending domain')
-  .option('--token <token>', 'FAS session token (or set FAS_SESSION_TOKEN)')
+  .option('--token <token>', 'Session token (or set PAS_SESSION_TOKEN)')
   .action(verifyCmd);
 
 domainCommand
   .command('remove <domain>')
   .alias('rm')
   .description('Detach a custom domain from the current app')
-  .option('--token <token>', 'FAS session token (or set FAS_SESSION_TOKEN)')
+  .option('--token <token>', 'Session token (or set PAS_SESSION_TOKEN)')
   .option('--yes', 'Skip the confirmation prompt')
   .action(removeCmd);

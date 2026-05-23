@@ -19,7 +19,7 @@ program
   .option('--skip-install', 'Skip pnpm install')
   .option('--skip-git', 'Skip git init')
   .option('--skip-provision', 'Skip D1 + platform provisioning')
-  .option('--token <token>', 'FAS session token (or set FAS_SESSION_TOKEN env var)')
+  .option('--token <token>', 'Session token (or set PAS_SESSION_TOKEN env var)')
   .action(async (appId: string, opts: { skipInstall?: boolean; skipGit?: boolean; skipProvision?: boolean; token?: string }) => {
     await createApp(appId, opts);
   });
@@ -35,7 +35,7 @@ program
   .option('--icon <icon>', 'Icon HTML entity, e.g. "&#128197;"')
   .option('--icon-bg <color>', 'Icon background hex color')
   .option('--pro-features <list>', 'Comma-separated list of features the pro subscription unlocks')
-  .option('--token <token>', 'FAS session token (or set FAS_SESSION_TOKEN env var)')
+  .option('--token <token>', 'Session token (or set PAS_SESSION_TOKEN env var)')
   .action(async (opts: { name?: string; category?: string; description?: string; icon?: string; iconBg?: string; proFeatures?: string; token?: string }) => {
     await publishApp(opts);
   });
