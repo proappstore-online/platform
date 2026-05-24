@@ -1,10 +1,7 @@
 # CLI overview
 
-`pas` is the publisher-facing command-line tool. It mirrors the free
-side's `fas` CLI, with extras for paid features.
-
-> **v0 status: skeleton.** Command shapes are defined; some subcommands
-> currently print "TODO" and return.
+`@proappstore/cli` is the developer-facing command-line tool for creating,
+checking, and publishing Pro apps.
 
 ## Install
 
@@ -12,79 +9,82 @@ side's `fas` CLI, with extras for paid features.
 npm i -g @proappstore/cli
 ```
 
-Or run via `pnpx @proappstore/cli` for a one-off.
+Or run via `npx @proappstore/cli` for a one-off.
 
 ## Commands
 
 ```bash
-pas login                         # GitHub device-flow auth (shared with fas)
-pas init <name>                   # scaffold a new pro app from a template
-pas publish                       # provision repo + Pages + DNS + (Tailored) D1 + registry
-pas list                          # list apps you've published
-pas doctor                        # diagnose local setup
-pas logs <app>                    # tail Cloudflare logs for an app
+# Auth
+pas login                           # GitHub OAuth sign-in (shared session with fas)
+pas whoami                          # show current user
+pas logout                          # clear session
 
-pas stripe link                   # connect a Stripe account to publish paid features
-pas stripe price create           # interactive: create a Stripe price for an app
-pas license mint <app>            # mint a license key (interactive, prompts for email + metadata)
-pas license revoke <key>          # revoke a license key
+# Create
+pas create <app-id>                 # scaffold a new Pro app from the template
+pas create <app-id> --repo org/name # scaffold + create GitHub repo + push
+
+# Develop
+pas check                           # run platform compliance checks locally
+
+# Publish
+pas publish                         # provision CF Pages + DNS + D1 + Data Worker
+pas publish --name "My App"         # with display name
+pas publish --category productivity # with store category
+
+# Custom domains
+pas domain add my-custom.com        # add a custom domain
+pas domain list                     # list configured domains
+pas domain verify my-custom.com     # check DNS verification status
+pas domain remove my-custom.com     # remove a custom domain
+
+# Version
+pas --version
 ```
 
-## Init templates
+## Create
 
-`pas init` scaffolds from the relevant template. Two starting points,
-matching the [two categories](/tailored-vs-ready):
+`pas create` clones the template repo (`proappstore-online/template-app`),
+replaces `APPNAME` placeholders, runs `pnpm install`, initializes git,
+and optionally provisions D1 + Data Worker.
+
+The `--repo` flag creates a GitHub repo and pushes in one step:
 
 ```bash
-pas init pipeline --tailored      # B2B back-office Tailored template
-pas init events --ready           # multi-tenant Ready template
+pas create flights --repo Flights-Stays/flights
 ```
 
-The `--tailored` / `--ready` flag drives:
+Without `--repo`, you create the repo manually:
 
-- Which template repo is cloned + scrubbed.
-- Which `wrangler.toml` shape lands (Tailored: own D1; Ready: BYO).
-- What `package.json` scripts are wired (`db:migrate:remote` only for
-  Tailored).
-- What the README says about the customization motion.
-
-`pas init <name>` without a category flag prompts.
+```bash
+pas create flights
+cd flights && pnpm dev
+# When ready:
+gh repo create my-org/flights --private --source . --remote origin --push
+pas publish
+```
 
 ## Publish
 
-`pas publish` reads `pas.config.json` (created by `pas init`), validates
-it, then calls the `pas` Worker, which calls the `fas` Worker, which
-calls `fas/admin` over the service binding. See [publishing
-flow](/publishing-flow) for the sequence.
+`pas publish` reads `package.json` for the app ID, then provisions:
 
-Required config:
+1. CF Pages project (`proappstore-<id>`)
+2. DNS CNAME (`<id>.proappstore.online`)
+3. Custom domain on the Pages project
+4. D1 database (`pas-data-<id>`)
+5. Data Worker (`data-<id>.proappstore.online`)
+6. App record in the platform database
+7. Cross-registration in FAS (enables proxy + secrets)
+8. Deploy secret on external-org repos (auto-sets `CLOUDFLARE_API_TOKEN`)
 
-```json
-{
-  "appId": "pipeline",
-  "name": "Pipeline",
-  "category": "tailored",
-  "store": "apps"
-}
-```
+Idempotent — re-running fills in only missing pieces.
 
-`pas publish` is idempotent — re-running on an already-published app
-re-syncs the registry entry but does not recreate the repo / Pages
-project / D1.
+## Shared auth with FAS
 
-## Pairing with `fas`
-
-`pas` shares auth with `fas`. Once you `pas login` (or `fas login`), the
-session lives in `~/.config/freeappstore/session.json` and both CLIs
-read it. No second login.
-
-Some `pas` commands (`pas init`, `pas publish`) end up calling `fas`
-internally — for example, `pas publish` is just `fas publish` plus a
-category flag plus Stripe wiring. Calling `fas publish` directly with
-`--category tailored` works too; `pas` is a friendlier wrapper.
+`pas` shares auth with `fas`. Both CLIs read the session from
+`~/.config/freeappstore/session.json`. One `pas login` (or `fas login`)
+covers both.
 
 ## Source
 
-- Package: `~/personal/proapps/sdk/packages/cli`
-- Built with `commander` + `prompts` for interaction
-- TUI screens (Ink-based) under `src/tui/screens` for richer flows
+- Package: `packages/cli` in the [platform monorepo](https://github.com/proappstore-online/platform)
+- Built with `commander`

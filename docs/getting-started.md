@@ -1,85 +1,105 @@
 # Getting Started
 
-ProAppStore is the paid counterpart to FreeAppStore. Same Cloudflare Workers
-+ D1 stack, plus Stripe-backed subscriptions, license keys, and premium
-primitives.
+ProAppStore is the paid counterpart to FreeAppStore. Same Cloudflare
+Workers + D1 stack, plus Stripe subscriptions, license keys, server-side
+AI, file storage, maps, push notifications, and more.
 
-> **v0 status: skeleton.** Public API surfaces are defined; backend
-> implementations are stubs. The published packages compile and export the
-> right types — bodies will land iteratively. Read the [strategy
-> doc](https://github.com/proappstore-online/platform/blob/main/STRATEGY.md) for
-> the bet, then this site for how it fits together.
+## Quick start
+
+```bash
+# Install the CLI
+npm i -g @proappstore/cli
+
+# Sign in with GitHub
+pas login
+
+# Create a new app
+pas create my-app --repo my-org/my-app
+
+# Develop
+cd my-app
+pnpm dev
+
+# Publish to the platform
+pas publish --name "My App" --category productivity
+
+# Deploy (push triggers GitHub Actions)
+git add -A && git commit -m "first feature" && git push
+```
+
+Your app is live at `https://my-app.proappstore.online` in under 2 minutes.
 
 ## Tech stack
 
-- **TypeScript 5.7**, Node 22, pnpm workspaces
-- **Backend:** Cloudflare Workers + D1 + Stripe
-- **Frontend templates** (scaffolded by `pas init`): React 19 + Vite +
-  Tailwind, deployed to Cloudflare Pages
-- **Auth:** GitHub OAuth (shared with `fas`), HMAC-signed sessions,
-  `SESSION_SIGNING_KEY` matched between `fas` and `pas` so identity
-  carries across both
-- **Payments:** Stripe (Checkout + Portal + webhook)
+- **TypeScript**, Node 22, pnpm workspaces
+- **Frontend:** React 19 + Vite 8 + Tailwind CSS 4 (template choice, not required)
+- **Backend:** Cloudflare Workers + D1 + Durable Objects
+- **Auth:** GitHub OAuth (shared with FAS), HMAC-signed sessions
+- **Payments:** Stripe (Checkout + Portal + webhooks)
+- **Publishing:** OIDC trusted publishing (no stored npm tokens)
 
-No Firebase. No alternative cloud. The bet is one provider, one runtime.
+## SDK — one import, all features
+
+```ts
+import { initPro } from '@proappstore/sdk'
+
+const app = initPro({ appId: 'my-app' })
+
+// Auth
+app.auth.signIn()
+
+// Database
+await app.db.query('SELECT * FROM items')
+
+// File storage
+await app.storage.upload(file, 'photos/pic.jpg')
+
+// AI
+const result = await app.ai.generate('Summarize this text...')
+
+// Subscriptions
+const sub = await app.subscription.status()
+```
+
+See the full [SDK reference](/sdk-overview) for all modules.
 
 ## Monorepo layout
 
 ```
-sdk/
+platform/
 ├── packages/
-│   ├── cli/        # `pas` binary
-│   ├── sdk/        # @proappstore/sdk (browser ESM, framework-agnostic)
-│   └── backend/    # Cloudflare Worker — Stripe webhooks, entitlements, licenses
-├── docs/           # this VitePress site
+│   ├── cli/          # @proappstore/cli
+│   ├── sdk/          # @proappstore/sdk (browser ESM)
+│   ├── backend/      # CF Worker — API, Stripe, provisioning
+│   ├── compliance/   # build-time compliance checks
+│   └── data-worker/  # per-app D1 proxy worker
+├── migrations/       # D1 schema migrations
+├── docs/             # this documentation
 └── pnpm-workspace.yaml
 ```
 
-Three packages mirror the free side's shape. Backend is one CF Worker with
-its own `wrangler.toml` and (eventually) its own D1 database.
-
 ## Relationship to FreeAppStore
 
-App developers building a free + pro pair import both SDKs:
+Pro SDK extends the free SDK — `ProAppStore extends FreeAppStore`.
+One import gives you everything:
 
 ```ts
-import { initApp } from '@freeappstore/sdk';
-import { initPro } from '@proappstore/sdk';
+import { initPro } from '@proappstore/sdk'
+const app = initPro({ appId: 'my-app' })
 
-const fas = initApp({ appId: 'pipeline' });
-const pas = initPro({ appId: 'pipeline' });
+// All free features work:
+app.auth, app.kv, app.counters, app.rooms, app.proxy, app.roles
 
-await fas.auth.init();                    // identity, KV, rooms
-
-const sub = await pas.subscription.status();
-if (sub?.tier !== 'pro') {
-  pas.subscription.openCheckout({ priceId: 'price_...' });
-}
+// Plus pro features:
+app.db, app.storage, app.ai, app.subscription, app.license,
+app.maps, app.notifications, app.sms, app.email, app.webhooks
 ```
 
-The free SDK provides identity + per-user KV + Durable-Object rooms. The
-pro SDK provides Stripe entitlements + license keys + premium primitives.
-Same `userId` across both — the pro SDK validates the session signed by
-`fas`.
-
-## Key commands
-
-```bash
-pnpm install
-pnpm build               # build all packages
-pnpm test                # vitest across all packages
-pnpm typecheck           # tsc -b across all packages
-
-pnpm docs:dev            # local docs site (this site)
-pnpm docs:build          # static build into docs/.vitepress/dist
-```
+No need to import both SDKs. `initPro()` initializes everything.
 
 ## What to read next
 
-- [Architecture](/architecture) — the three Workers and how they collaborate
-- [Tailored vs Ready](/tailored-vs-ready) — the two app categories
-- [Publishing flow](/publishing-flow) — what `pas publish` actually does
-- [Stripe & entitlements](/stripe-entitlements) — billing primitives the
-  pro SDK exposes
-- [ADRs](/adr/001-cloudflare-workers-only) — load-bearing architectural
-  decisions
+- [SDK overview](/sdk-overview) — all modules and their APIs
+- [CLI overview](/cli-overview) — every command explained
+- [Publishing flow](/publishing-flow) — what `pas publish` does under the hood
+- [Stripe & entitlements](/stripe-entitlements) — billing primitives
