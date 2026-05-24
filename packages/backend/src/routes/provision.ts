@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { runChecksFromFiles } from '@proappstore/compliance';
 import type { Env } from '../types.js';
-import { requireUser, HttpError } from '../lib/auth.js';
+import { requireUser, requireAppOwner, HttpError } from '../lib/auth.js';
 import { deployDataWorker } from '../lib/deploy-worker.js';
 import { fetchRepoFiles, type RepoLocation } from '../lib/github-fetch.js';
 
@@ -253,5 +253,21 @@ provisionRoutes.post('/provision', async (c) => {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
+});
+
+/**
+ * Return CF deploy credentials so the CLI can set them as GitHub repo secrets
+ * on external-org repos. Requires app ownership (creator or admin).
+ *
+ * Pre-launch: returns the platform CF_API_TOKEN directly. Production: should
+ * mint scoped per-app tokens via CF API.
+ */
+provisionRoutes.get('/apps/:appId/deploy-credentials', async (c) => {
+  const appId = c.req.param('appId');
+  await requireAppOwner(c, appId);
+  return c.json({
+    cfApiToken: c.env.CF_API_TOKEN,
+    cfAccountId: c.env.CF_ACCOUNT_ID,
+  });
 });
 

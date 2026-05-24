@@ -19,6 +19,7 @@ interface CreateOptions {
   skipGit?: boolean;
   skipProvision?: boolean;
   token?: string;
+  repo?: string;
 }
 
 function toTitleCase(id: string): string {
@@ -66,6 +67,20 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
     await run('git', ['init', '-q', '-b', 'main'], targetDir);
     await run('git', ['add', '-A'], targetDir);
     await run('git', ['commit', '-q', '-m', 'Initial commit from pas create'], targetDir);
+
+    // Optional: create GitHub repo and push
+    if (opts.repo) {
+      try {
+        process.stdout.write(`  Creating GitHub repo ${opts.repo}...\n`);
+        await run('gh', ['repo', 'create', opts.repo, '--private', '--source', '.', '--remote', 'origin', '--push'], targetDir);
+        process.stdout.write(`  [+] Repo created and pushed to ${opts.repo}\n`);
+      } catch {
+        process.stdout.write(`  [!] Failed to create repo. Create it manually:\n`);
+        process.stdout.write(`      gh repo create ${opts.repo} --private\n`);
+        process.stdout.write(`      git remote add origin https://github.com/${opts.repo}.git\n`);
+        process.stdout.write(`      git push -u origin main\n`);
+      }
+    }
   }
 
   if (!opts.skipProvision) {
@@ -110,19 +125,24 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
     process.stdout.write(`  [4/4] Skipping provision (--skip-provision)\n`);
   }
 
+  const hasRemote = opts.repo && !opts.skipGit;
   process.stdout.write(`
   Done! Replaced APPNAME in ${substitutionCount} files.
 
   Next steps:
     cd ${appId}
     pnpm dev
-
+${hasRemote ? `
+  When ready to deploy:
+    git push origin main
+    pas publish
+` : `
   When ready to deploy:
     1. Create a GitHub repo in your own account/org
     2. git remote add origin <your-repo-url>
     3. git push -u origin main
     4. pas publish
-
+`}
   Docs:    https://proappstore.online/docs
   Console: https://console.proappstore.online
 

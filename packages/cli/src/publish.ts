@@ -1,4 +1,5 @@
 import { readFileSync, existsSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { resolve, join } from 'node:path';
 import { resolveToken } from './lib/config.js';
 
@@ -181,6 +182,9 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
   }
 
   if (data.success) {
+    // Set deploy secret on external-org repos
+    await ensureDeploySecret(appId, token);
+
     process.stdout.write(`\n  Published. Push your code to deploy:\n`);
     process.stdout.write(`    git push origin main\n\n`);
     process.stdout.write(`  Live URL:        https://${appId}.proappstore.online\n`);
@@ -190,5 +194,68 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
   } else {
     process.stderr.write(`\n  Some steps failed. Fix the failing step and retry — pas publish is idempotent.\n`);
     process.exit(1);
+  }
+}
+
+/**
+ * Detect git remote and set CLOUDFLARE_API_TOKEN on external-org repos.
+ * Repos in proappstore-online use the org-level secret and don't need this.
+ */
+async function ensureDeploySecret(appId: string, token: string): Promise<void> {
+  // Parse git remote
+  let remoteUrl: string;
+  try {
+    remoteUrl = execSync('git remote get-url origin', { encoding: 'utf8' }).trim();
+  } catch {
+    return; // No remote configured yet — they'll set it later
+  }
+
+  // Extract owner/repo from HTTPS or SSH URLs
+  const match = remoteUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)/);
+  if (!match) return;
+  const [, owner, repo] = match;
+
+  // Skip if it's already in the platform org
+  if (owner === 'proappstore-online') return;
+
+  // Check if gh CLI is available
+  try {
+    execSync('gh --version', { encoding: 'utf8', stdio: 'pipe' });
+  } catch {
+    process.stdout.write(`\n  Deploy secret needed for ${owner}/${repo}.\n`);
+    process.stdout.write(`  Install GitHub CLI (gh) and rerun, or set manually:\n`);
+    process.stdout.write(`    gh secret set CLOUDFLARE_API_TOKEN -R ${owner}/${repo}\n\n`);
+    return;
+  }
+
+  // Check if secret already exists
+  try {
+    const secrets = execSync(`gh secret list -R ${owner}/${repo}`, { encoding: 'utf8', stdio: 'pipe' });
+    if (secrets.includes('CLOUDFLARE_API_TOKEN')) return; // Already set
+  } catch {
+    // gh secret list failed — might not have admin access, skip silently
+    return;
+  }
+
+  // Fetch deploy credentials from backend
+  process.stdout.write(`\n  Setting deploy secret on ${owner}/${repo}...\n`);
+  try {
+    const res = await fetch(`${PAS_API}/v1/apps/${appId}/deploy-credentials`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      process.stdout.write(`  [!] Could not fetch deploy credentials (${res.status}). Set manually:\n`);
+      process.stdout.write(`      gh secret set CLOUDFLARE_API_TOKEN -R ${owner}/${repo}\n\n`);
+      return;
+    }
+    const creds = (await res.json()) as { cfApiToken: string; cfAccountId: string };
+    execSync(`gh secret set CLOUDFLARE_API_TOKEN -R ${owner}/${repo} --body -`, {
+      input: creds.cfApiToken,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    process.stdout.write(`  [+] CLOUDFLARE_API_TOKEN set on ${owner}/${repo}\n`);
+  } catch (e) {
+    process.stdout.write(`  [!] Failed to set deploy secret: ${e}\n`);
+    process.stdout.write(`      Set manually: gh secret set CLOUDFLARE_API_TOKEN -R ${owner}/${repo}\n\n`);
   }
 }

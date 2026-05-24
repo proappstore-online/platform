@@ -28,7 +28,8 @@ program
   .option('--skip-git', 'Skip git init')
   .option('--skip-provision', 'Skip D1 + platform provisioning')
   .option('--token <token>', 'Session token (or set PAS_SESSION_TOKEN env var)')
-  .action(async (appId: string, opts: { skipInstall?: boolean; skipGit?: boolean; skipProvision?: boolean; token?: string }) => {
+  .option('--repo <owner/name>', 'Create a GitHub repo and push (e.g. my-org/my-app)')
+  .action(async (appId: string, opts: { skipInstall?: boolean; skipGit?: boolean; skipProvision?: boolean; token?: string; repo?: string }) => {
     await createApp(appId, opts);
   });
 
