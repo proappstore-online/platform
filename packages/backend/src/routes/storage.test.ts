@@ -261,18 +261,22 @@ describe('PUT /v1/apps/:appId/storage/* — upload', () => {
     expect(key).toBe('myapp/gh:1/notes/draft.txt');
   });
 
-  it('uses _public prefix for public files without user scope', async () => {
+  it('uses _public prefix for public files when user is app owner', async () => {
     const storage = makeStorage();
-    await app.request(
+    // requireAppOwner needs DB to return the app with matching creator_id
+    const ownerStmt = mockStmt({ first: { creator_id: 'gh:1' } });
+    const db = mockD1(ownerStmt);
+    const res = await app.request(
       '/v1/apps/myapp/storage/_public/logo.png',
       {
         method: 'PUT',
         headers: { Authorization: 'Bearer tok', 'Content-Type': 'image/png' },
         body: new Uint8Array([1, 2, 3]),
       },
-      makeEnv({ STORAGE: storage }),
+      makeEnv({ STORAGE: storage }, db),
     );
-    const putCall = vi.mocked(storage.put).mock.calls[0];
+    expect(res.status).toBe(200);
+    const putCall = vi.mocked(storage.put).mock.calls[0]!;
     const key = putCall[0] as string;
     expect(key).toBe('myapp/_public/logo.png');
     expect(key).not.toContain('gh:1');

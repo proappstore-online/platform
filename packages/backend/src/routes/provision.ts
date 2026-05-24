@@ -69,8 +69,9 @@ provisionRoutes.post('/provision', async (c) => {
       return c.text('Platform provisioning not configured (missing CF credentials)', 503);
     }
 
-    // 0. Compliance check
-    if (!body.skipCompliance) {
+    // 0. Compliance check — skipCompliance is admin-only (used by `pas create` bootstrap)
+    const canSkipCompliance = body.skipCompliance && user.roles.includes('admin');
+    if (!canSkipCompliance) {
       const loc: RepoLocation = {
         owner: body.repoOwner || ORG,
         repo: body.repoName || appId,
@@ -101,7 +102,7 @@ provisionRoutes.post('/provision', async (c) => {
         }
       }
     } else {
-      steps.push({ name: 'compliance', status: 'skip', detail: 'skipCompliance=true (bootstrap)' });
+      steps.push({ name: 'compliance', status: 'skip', detail: 'skipCompliance=true (admin bootstrap)' });
     }
 
     // 1. CF Pages project + DNS + custom domain

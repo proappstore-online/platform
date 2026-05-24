@@ -183,8 +183,8 @@ describe('POST /v1/checkout', () => {
         headers: { Authorization: 'Bearer bad', 'Content-Type': 'application/json' },
         body: JSON.stringify({
           priceId: 'price_abc',
-          successUrl: 'https://example.com/success',
-          cancelUrl: 'https://example.com/cancel',
+          successUrl: 'https://proappstore.online/success',
+          cancelUrl: 'https://proappstore.online/cancel',
         }),
       },
       makeEnv(),
@@ -230,8 +230,8 @@ describe('POST /v1/checkout', () => {
         headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
         body: JSON.stringify({
           priceId: 'price_abc',
-          successUrl: 'https://example.com/success',
-          cancelUrl: 'https://example.com/cancel',
+          successUrl: 'https://proappstore.online/success',
+          cancelUrl: 'https://proappstore.online/cancel',
         }),
       },
       makeEnv({}, db),
@@ -272,8 +272,8 @@ describe('POST /v1/checkout', () => {
         headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
         body: JSON.stringify({
           priceId: 'price_abc',
-          successUrl: 'https://example.com/success',
-          cancelUrl: 'https://example.com/cancel',
+          successUrl: 'https://proappstore.online/success',
+          cancelUrl: 'https://proappstore.online/cancel',
         }),
       },
       makeEnv({}, db),
@@ -294,7 +294,7 @@ describe('POST /v1/portal', () => {
       {
         method: 'POST',
         headers: { Authorization: 'Bearer bad', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ returnUrl: 'https://example.com' }),
+        body: JSON.stringify({ returnUrl: 'https://proappstore.online' }),
       },
       makeEnv(),
     );
@@ -322,7 +322,7 @@ describe('POST /v1/portal', () => {
       {
         method: 'POST',
         headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ returnUrl: 'https://example.com' }),
+        body: JSON.stringify({ returnUrl: 'https://proappstore.online' }),
       },
       makeEnv({}, db),
     );
@@ -349,7 +349,7 @@ describe('POST /v1/portal', () => {
       {
         method: 'POST',
         headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ returnUrl: 'https://example.com/account' }),
+        body: JSON.stringify({ returnUrl: 'https://proappstore.online/account' }),
       },
       makeEnv({}, db),
     );

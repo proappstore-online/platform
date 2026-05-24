@@ -58,6 +58,18 @@ connectRoutes.post('/connect/onboard', async (c) => {
     if (!body.returnUrl || !body.refreshUrl) {
       return c.text('returnUrl and refreshUrl are required', 400);
     }
+    // Prevent open redirect via Stripe onboarding
+    for (const url of [body.returnUrl, body.refreshUrl]) {
+      try {
+        const host = new URL(url).hostname.toLowerCase();
+        const ok = host === 'localhost' || host === '127.0.0.1' ||
+          host === 'proappstore.online' || host.endsWith('.proappstore.online') ||
+          host.endsWith('.pages.dev');
+        if (!ok) return c.text('redirect URLs must be on proappstore.online or localhost', 400);
+      } catch {
+        return c.text('invalid redirect URL', 400);
+      }
+    }
 
     const stripe = new Stripe(c.env.STRIPE_SECRET_KEY);
 

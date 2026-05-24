@@ -42,7 +42,7 @@ function multiFetch(cfResponses: Record<string, { status: number; body: unknown 
 
     // FAS auth — any call to freeappstore.online returns a valid user
     if (urlStr.includes('freeappstore.online')) {
-      return new Response(JSON.stringify({ id: 'gh:1', login: 'tester', avatarUrl: null }), { status: 200 });
+      return new Response(JSON.stringify({ id: 'gh:1', login: 'tester', avatarUrl: null, roles: ['admin'] }), { status: 200 });
     }
 
     // CF API — match by URL pattern
@@ -190,7 +190,7 @@ describe('POST /v1/provision', () => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
       const method = init?.method || 'GET';
       if (urlStr.includes('freeappstore.online')) {
-        return new Response(JSON.stringify({ id: 'gh:1', login: 'tester', avatarUrl: null }), { status: 200 });
+        return new Response(JSON.stringify({ id: 'gh:1', login: 'tester', avatarUrl: null, roles: ['admin'] }), { status: 200 });
       }
       if (urlStr.includes('d1/database') && method === 'POST') {
         return new Response(JSON.stringify({ success: false, errors: [{ message: 'already exists' }] }), { status: 200 });

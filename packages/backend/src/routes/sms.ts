@@ -46,8 +46,19 @@ smsRoutes.post('/sms/send', async (c) => {
 
     const numbers = Array.isArray(to) ? to : [to];
     if (numbers.length === 0) return c.text('to must include at least one number', 400);
+    if (numbers.length > 20) return c.text('max 20 recipients per request', 400);
     for (const n of numbers) {
       if (!isE164(n)) return c.text(`invalid E.164 number: ${n}`, 400);
+    }
+
+    // Daily rate limit: 100 SMS per app per day
+    const dayStart = new Date();
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const countRow = await c.env.DB.prepare(
+      'SELECT COUNT(*) AS cnt FROM sms_usage WHERE app_id = ? AND sent_at >= ?',
+    ).bind(appId, dayStart.getTime()).first<{ cnt: number }>();
+    if ((countRow?.cnt ?? 0) + numbers.length > 100) {
+      return c.text('daily SMS limit reached (100/day per app)', 429);
     }
 
     const app = await c.env.DB
@@ -65,6 +76,14 @@ smsRoutes.post('/sms/send', async (c) => {
     };
 
     const result = await sendViaTwilio(cfg, numbers, message);
+
+    // Log SMS usage for rate limiting
+    if (result.sent > 0) {
+      const now = Date.now();
+      const stmt = c.env.DB.prepare('INSERT INTO sms_usage (app_id, sent_at) VALUES (?, ?)');
+      await c.env.DB.batch(Array.from({ length: result.sent }, () => stmt.bind(appId, now)));
+    }
+
     return c.json(result satisfies SmsSendResult);
   } catch (err) {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);

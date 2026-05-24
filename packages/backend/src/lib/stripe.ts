@@ -167,6 +167,10 @@ export async function verifyWebhookSignature(
 
   if (!parts.timestamp || parts.signatures.length === 0) return false;
 
+  // Reject events older than 5 minutes to prevent replay attacks
+  const ageSeconds = Math.floor(Date.now() / 1000) - Number(parts.timestamp);
+  if (ageSeconds > 300 || ageSeconds < -60) return false;
+
   const signedPayload = `${parts.timestamp}.${payload}`;
   const key = await crypto.subtle.importKey(
     'raw',

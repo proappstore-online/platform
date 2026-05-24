@@ -35,7 +35,7 @@ function corsOrigin(origin: string | undefined): string | null {
     if (host === 'localhost' || host === '127.0.0.1') return origin;
     if (host.endsWith('.proappstore.online') || host === 'proappstore.online') return origin;
     if (host.endsWith('.freeappstore.online') || host === 'freeappstore.online') return origin;
-    if (host.endsWith('.pages.dev')) return origin;
+    if (host.endsWith('.pages.dev') && host.includes('proappstore')) return origin;
     return null;
   } catch {
     return null;

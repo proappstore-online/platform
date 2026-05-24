@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
-import { requireUser, HttpError } from '../lib/auth.js';
+import { requireUser, requireAppOwner, HttpError } from '../lib/auth.js';
 import { dispatchWebhook } from '../lib/webhook-dispatch.js';
 
 /**
@@ -19,15 +19,22 @@ const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
 export const storageRoutes = new Hono<{ Bindings: Env }>();
 
-/** Upload a file. Auth required. */
+/** Upload a file. Auth required. App owner required for _public/ writes. */
 storageRoutes.put('/apps/:appId/storage/*', async (c) => {
   try {
-    const user = await requireUser(c);
     const appId = c.req.param('appId');
     const filePath = c.req.path.replace(`/v1/apps/${appId}/storage/`, '');
 
     if (!filePath || filePath === '') {
       return c.text('file path required', 400);
+    }
+
+    // Auth check before reading body — _public/ requires app ownership
+    let user;
+    if (filePath.startsWith('_public/')) {
+      user = await requireAppOwner(c, appId);
+    } else {
+      user = await requireUser(c);
     }
 
     const body = await c.req.arrayBuffer();
@@ -39,16 +46,12 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
     }
 
     const rawType = c.req.header('Content-Type') || 'application/octet-stream';
-    // Strip parameters (charset, boundary) and block dangerous MIME types
-    // that browsers would execute if served back on a *.proappstore.online subdomain.
     const contentType = rawType.split(';')[0]!.trim().toLowerCase();
     const blocked = ['text/html', 'application/xhtml+xml', 'application/javascript',
       'text/javascript', 'application/x-javascript', 'image/svg+xml'];
     if (blocked.includes(contentType)) {
       return c.text('content type not allowed for uploads', 400);
     }
-    // Public files go under {appId}/_public/ directly (no user prefix)
-    // so the public download route can find them without auth.
     const key = filePath.startsWith('_public/')
       ? `${appId}/${filePath}`
       : `${appId}/${user.id}/${filePath}`;

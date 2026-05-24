@@ -4,7 +4,7 @@
  */
 
 import { Hono } from 'hono';
-import { HttpError, requireUser } from '../lib/auth.js';
+import { HttpError, requireUser, requireAppOwner } from '../lib/auth.js';
 import type { Env } from '../types.js';
 
 export const logsRoutes = new Hono<{ Bindings: Env }>();
@@ -54,8 +54,8 @@ logsRoutes.post('/apps/:appId/logs', async (c) => {
 });
 
 logsRoutes.get('/apps/:appId/logs', async (c) => {
-  await requireUser(c);
   const appId = c.req.param('appId')!;
+  await requireAppOwner(c, appId);
 
   const level = c.req.query('level');
   const category = c.req.query('category');
@@ -96,8 +96,8 @@ logsRoutes.get('/apps/:appId/logs', async (c) => {
 });
 
 logsRoutes.get('/apps/:appId/logs/build', async (c) => {
-  await requireUser(c);
   const appId = c.req.param('appId')!;
+  await requireAppOwner(c, appId);
 
   const row = await c.env.DB.prepare(
     `SELECT build_meta, ts FROM app_logs

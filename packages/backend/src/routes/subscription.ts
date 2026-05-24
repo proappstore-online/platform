@@ -4,6 +4,18 @@ import type { Env, SubscriptionRow } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
 import { Stripe } from '../lib/stripe.js';
 
+/** Validate redirect URLs against allowed domains to prevent open redirects via Stripe. */
+function isAllowedRedirectUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' ||
+      host === 'proappstore.online' || host.endsWith('.proappstore.online') ||
+      host.endsWith('.pages.dev');
+  } catch {
+    return false;
+  }
+}
+
 export const subscriptionRoutes = new Hono<{ Bindings: Env }>();
 
 /**
@@ -63,6 +75,9 @@ subscriptionRoutes.post('/checkout', async (c) => {
     if (!priceId || !successUrl || !cancelUrl) {
       return c.text('missing priceId, successUrl, or cancelUrl', 400);
     }
+    if (!isAllowedRedirectUrl(successUrl) || !isAllowedRedirectUrl(cancelUrl)) {
+      return c.text('redirect URLs must be on proappstore.online or localhost', 400);
+    }
 
     const stripe = new Stripe(c.env.STRIPE_SECRET_KEY);
 
@@ -112,6 +127,9 @@ subscriptionRoutes.post('/portal', async (c) => {
     const { returnUrl } = await c.req.json<{ returnUrl: string }>();
 
     if (!returnUrl) return c.text('missing returnUrl', 400);
+    if (!isAllowedRedirectUrl(returnUrl)) {
+      return c.text('returnUrl must be on proappstore.online or localhost', 400);
+    }
 
     const row = await c.env.DB.prepare(
       'SELECT stripe_customer_id FROM subscriptions WHERE user_id = ?',

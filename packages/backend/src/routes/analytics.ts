@@ -219,6 +219,7 @@ analyticsRoutes.get(
   '/apps/:appId/analytics/stats',
   wrap(async (c) => {
     const appId = c.req.param('appId')!;
+    if (!APP_ID_RE.test(appId)) throw new HttpError('invalid app id', 400);
     await requireAppOwner(c, appId);
     const days = Math.min(
       STATS_DAYS_MAX,
@@ -295,6 +296,7 @@ analyticsRoutes.get(
   '/apps/:appId/analytics/events',
   wrap(async (c) => {
     const appId = c.req.param('appId')!;
+    if (!APP_ID_RE.test(appId)) throw new HttpError('invalid app id', 400);
     await requireAppOwner(c, appId);
     const days = Math.min(
       STATS_DAYS_MAX,
@@ -328,6 +330,7 @@ analyticsRoutes.get(
   '/apps/:appId/analytics/live',
   wrap(async (c) => {
     const appId = c.req.param('appId')!;
+    if (!APP_ID_RE.test(appId)) throw new HttpError('invalid app id', 400);
     await requireAppOwner(c, appId);
     // Use server-write timestamp (not the effectiveTime two-stage expression)
     // — offline-replayed events legitimately *are* recent network arrivals
@@ -429,6 +432,7 @@ analyticsRoutes.get(
   '/apps/:appId/analytics/diagnostics',
   wrap(async (c) => {
     const appId = c.req.param('appId')!;
+    if (!APP_ID_RE.test(appId)) throw new HttpError('invalid app id', 400);
     await requireAppOwner(c, appId);
 
     const env = c.env as Env & {

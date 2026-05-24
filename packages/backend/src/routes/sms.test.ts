@@ -16,7 +16,7 @@ function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
   const prepare = vi.fn();
   for (const stmt of stmts) prepare.mockReturnValueOnce(stmt);
   prepare.mockReturnValue(mockStmt());
-  return { prepare };
+  return { prepare, batch: vi.fn().mockResolvedValue([]) };
 }
 
 function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof mockD1>) {
@@ -145,8 +145,9 @@ describe('POST /v1/sms/send', () => {
       return fasMock(url);
     });
 
+    const rateLimitStmt = mockStmt({ first: { cnt: 0 } });
     const appsStmt = mockStmt({ first: { creator_id: 'gh:1' } });
-    const db = mockD1(appsStmt);
+    const db = mockD1(rateLimitStmt, appsStmt);
 
     const res = await app.request(
       '/v1/sms/send',
@@ -181,8 +182,9 @@ describe('POST /v1/sms/send', () => {
       return fasMock(url);
     });
 
+    const rateLimitStmt = mockStmt({ first: { cnt: 0 } });
     const appsStmt = mockStmt({ first: { creator_id: 'gh:1' } });
-    const db = mockD1(appsStmt);
+    const db = mockD1(rateLimitStmt, appsStmt);
 
     const res = await app.request(
       '/v1/sms/send',
