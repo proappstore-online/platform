@@ -9,6 +9,12 @@ export interface Env {
   SESSION_SIGNING_KEY: string;
   /** FAS API for verifying auth tokens (user identity lives on free side). */
   FAS_API_BASE: string;
+  /**
+   * Shared secret with FAS backend for internal cross-store API calls
+   * (e.g. registering PAS apps in FAS's apps table so proxy works).
+   * Must match FAS's INTERNAL_TOKEN. Set via `wrangler secret put FAS_INTERNAL_TOKEN`.
+   */
+  FAS_INTERNAL_TOKEN?: string;
   /** CF credentials for provisioning (D1, Pages, Workers). */
   CF_API_TOKEN: string;
   CF_ACCOUNT_ID: string;
