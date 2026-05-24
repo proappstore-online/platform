@@ -247,4 +247,91 @@ describe('POST /v1/provision', () => {
     }, makeEnv());
     expect(res.status).toBe(400);
   });
+
+  it('calls correct CF API URLs with correct methods', async () => {
+    const db = mockD1();
+    const fetchSpy = multiFetch({
+      'pages/projects': { status: 200, body: { success: true, result: {} } },
+      'dns_records': { status: 200, body: { success: true, result: {} } },
+      'domains': { status: 200, body: { success: true, result: {} } },
+      'd1/database': { status: 200, body: { success: true, result: { uuid: 'db-1' } } },
+    });
+    globalThis.fetch = fetchSpy;
+
+    await app.request('/v1/provision', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'url-test', skipCompliance: true }),
+    }, makeEnv({}, db));
+
+    const calls = fetchSpy.mock.calls.map((c: any[]) => {
+      const url = typeof c[0] === 'string' ? c[0] : c[0].url;
+      return { url, method: c[1]?.method || 'GET' };
+    });
+
+    // Verify CF Pages project created with POST
+    const pagesCall = calls.find((c: any) => c.url.includes('pages/projects') && !c.url.includes('domains'));
+    expect(pagesCall).toBeDefined();
+    expect(pagesCall!.method).toBe('POST');
+
+    // Verify DNS CNAME created with POST to correct zone
+    const dnsCall = calls.find((c: any) => c.url.includes('dns_records'));
+    expect(dnsCall).toBeDefined();
+    expect(dnsCall!.method).toBe('POST');
+    expect(dnsCall!.url).toContain('14928daaff60902cc89003a2ebeb99fe');
+
+    // Verify D1 created with POST
+    const d1Call = calls.find((c: any) => c.url.includes('d1/database') && c.method === 'POST');
+    expect(d1Call).toBeDefined();
+  });
+
+  it('inserts app record with correct creator ID', async () => {
+    const appStmt = mockStmt();
+    const db = mockD1(appStmt);
+    globalThis.fetch = multiFetch();
+
+    await app.request('/v1/provision', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'record-test', skipCompliance: true, skipPublish: true }),
+    }, makeEnv({}, db));
+
+    // Verify DB.prepare was called for INSERT INTO apps
+    const prepareCalls = db.prepare.mock.calls.map((c: any[]) => c[0]);
+    const insertCall = prepareCalls.find((sql: string) => sql.includes('INSERT') && sql.includes('apps'));
+    expect(insertCall).toBeDefined();
+
+    // Verify bind was called with correct app ID and user ID
+    expect(appStmt.bind).toHaveBeenCalled();
+    const bindArgs = appStmt.bind.mock.calls[0];
+    expect(bindArgs[0]).toBe('record-test');
+    expect(bindArgs[1]).toBe('gh:1');
+  });
+
+  it('full flow verifies every step status is ok', async () => {
+    const db = mockD1();
+    globalThis.fetch = multiFetch({
+      'pages/projects': { status: 200, body: { success: true, result: {} } },
+      'dns_records': { status: 200, body: { success: true, result: {} } },
+      'domains': { status: 200, body: { success: true, result: {} } },
+      'd1/database': { status: 200, body: { success: true, result: { uuid: 'db-1' } } },
+    });
+
+    const res = await app.request('/v1/provision', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'full-check', skipCompliance: true }),
+    }, makeEnv({}, db));
+
+    const data = await res.json() as { steps: { name: string; status: string }[] };
+    const failed = data.steps.filter((s: any) => s.status === 'fail');
+    expect(failed).toEqual([]);
+
+    // Every expected step is present
+    const names = data.steps.map((s: any) => s.name);
+    expect(names).toEqual(expect.arrayContaining([
+      'compliance', 'CF Pages project', 'DNS', 'custom domain',
+      'create_d1', 'deploy_worker', 'record_app',
+    ]));
+  });
 });
