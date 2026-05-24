@@ -83,10 +83,12 @@ export class ProAppStore extends FreeAppStore {
     this.usage = new Usage(opts.appId, proApiBase, this.auth);
     this.email = new Email(opts.appId, proApiBase, this.auth);
     this.webhooks = new Webhooks(opts.appId, proApiBase, this.auth);
-    // Auto-start telemetry unless the app opts out. `start()` is a no-op in
-    // SSR / non-browser contexts, so this is safe even when the SDK is
-    // imported on the server side.
-    if (opts.usage?.auto !== false) this.usage.start();
+    // Auto-start telemetry unless the app opts out. Wrapped in try-catch
+    // because localStorage can throw in incognito, sandboxed iframes, or
+    // when storage quota is exceeded.
+    if (opts.usage?.auto !== false) {
+      try { this.usage.start(); } catch { /* non-fatal — app runs without usage tracking */ }
+    }
   }
 }
 

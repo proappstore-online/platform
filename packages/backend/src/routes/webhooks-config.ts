@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireAppOwner, HttpError } from '../lib/auth.js';
 
@@ -21,7 +22,7 @@ webhookConfigRoutes.get('/apps/:appId/webhooks', async (c) => {
 
     return c.json({ webhooks: results });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -62,7 +63,7 @@ webhookConfigRoutes.post('/apps/:appId/webhooks', async (c) => {
 
     return c.json({ id, secret });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -81,7 +82,7 @@ webhookConfigRoutes.delete('/apps/:appId/webhooks/:id', async (c) => {
     if (!result.meta.changes) return c.text('webhook not found', 404);
     return c.json({ ok: true });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -134,7 +135,7 @@ webhookConfigRoutes.post('/apps/:appId/webhooks/:id/test', async (c) => {
 
     return c.json({ status, body: responseBody.slice(0, 1000) });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });

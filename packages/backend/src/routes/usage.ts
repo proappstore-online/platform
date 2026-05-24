@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, requireAppOwner, HttpError } from '../lib/auth.js';
 
@@ -135,7 +136,7 @@ usageRoutes.post('/usage/ping', async (c) => {
       apiCalls: row ? Number(row.api_calls) : deltaApiCalls,
     });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -218,7 +219,7 @@ usageRoutes.get('/apps/:id/usage', async (c) => {
       },
     });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -272,7 +273,7 @@ usageRoutes.get('/usage/me', async (c) => {
       totals,
     });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -326,7 +327,7 @@ usageRoutes.get('/usage/owner-summary', async (c) => {
       apiCalls: Number(summary?.api_calls ?? 0),
     });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });

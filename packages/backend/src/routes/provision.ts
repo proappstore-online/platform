@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { runChecksFromFiles } from '@proappstore/compliance';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
@@ -249,7 +250,7 @@ provisionRoutes.post('/provision', async (c) => {
     const success = !steps.some((s) => s.status === 'fail');
     return c.json({ appId, steps, dataWorkerUrl, pagesUrl, success }, success ? 200 : 207);
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });

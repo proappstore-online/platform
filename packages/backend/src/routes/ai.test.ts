@@ -213,7 +213,7 @@ describe('POST /v1/ai/generate', () => {
     );
   });
 
-  it('returns 500 with a useful message when Workers AI errors', async () => {
+  it('returns structured error when Workers AI errors', async () => {
     const aiRun = vi.fn().mockRejectedValue(new Error('AI model unavailable'));
     const res = await app.request(
       '/v1/ai/generate',
@@ -224,8 +224,10 @@ describe('POST /v1/ai/generate', () => {
       },
       makeEnv(aiRun),
     );
-    expect(res.status).toBe(500);
-    expect(await res.text()).toContain('AI model unavailable');
+    expect(res.status).toBe(502);
+    const body = await res.json() as { error: string; message: string };
+    expect(body.error).toBe('model_unavailable');
+    expect(body.message).toContain('AI model unavailable');
   });
 });
 

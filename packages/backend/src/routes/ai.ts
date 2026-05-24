@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { HttpError, requireUser } from '../lib/auth.js';
 import type { Env } from '../types.js';
 
@@ -102,9 +103,17 @@ aiRoutes.post('/ai/generate', async (c) => {
 
     return c.json({ text, model, alias });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     const msg = err instanceof Error ? err.message : 'unknown error';
-    return c.text(`ai.generate failed: ${msg}`, 500);
+    const lower = msg.toLowerCase();
+    const { code, status } = lower.includes('quota') || lower.includes('rate limit')
+      ? { code: 'quota_exceeded', status: 429 as const }
+      : lower.includes('model') && (lower.includes('not found') || lower.includes('unavailable'))
+      ? { code: 'model_unavailable', status: 502 as const }
+      : lower.includes('timeout')
+      ? { code: 'timeout', status: 504 as const }
+      : { code: 'internal_error', status: 500 as const };
+    return c.json({ error: code, message: msg }, status);
   }
 });
 
@@ -147,9 +156,15 @@ aiRoutes.post('/ai/embed', async (c) => {
       dimensions: vectors[0]?.length ?? 0,
     });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     const msg = err instanceof Error ? err.message : 'unknown error';
-    return c.text(`ai.embed failed: ${msg}`, 500);
+    const lower = msg.toLowerCase();
+    const { code, status } = lower.includes('quota') || lower.includes('rate limit')
+      ? { code: 'quota_exceeded', status: 429 as const }
+      : lower.includes('model') && (lower.includes('not found') || lower.includes('unavailable'))
+      ? { code: 'model_unavailable', status: 502 as const }
+      : { code: 'internal_error', status: 500 as const };
+    return c.json({ error: code, message: msg }, status);
   }
 });
 

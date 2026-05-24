@@ -77,15 +77,21 @@ logsRoutes.get('/apps/:appId/logs', async (c) => {
   const result = await c.env.DB.prepare(sql).bind(...params).all();
 
   return c.json({
-    logs: (result.results ?? []).map((r: Record<string, unknown>) => ({
-      ts: r.ts,
-      level: r.level,
-      category: r.category,
-      message: r.message,
-      data: r.data ? JSON.parse(r.data as string) : undefined,
-      userId: r.user_id,
-      build: r.build_meta ? JSON.parse(r.build_meta as string) : undefined,
-    })),
+    logs: (result.results ?? []).map((r: Record<string, unknown>) => {
+      let data: unknown;
+      let build: unknown;
+      if (r.data) { try { data = JSON.parse(r.data as string); } catch { data = null; } }
+      if (r.build_meta) { try { build = JSON.parse(r.build_meta as string); } catch { build = null; } }
+      return {
+        ts: r.ts,
+        level: r.level,
+        category: r.category,
+        message: r.message,
+        data,
+        userId: r.user_id,
+        build,
+      };
+    }),
   });
 });
 
@@ -102,5 +108,7 @@ logsRoutes.get('/apps/:appId/logs/build', async (c) => {
     .first<{ build_meta: string; ts: number }>();
 
   if (!row) return c.json({ build: null });
-  return c.json({ build: JSON.parse(row.build_meta), ts: row.ts });
+  let build: unknown = null;
+  try { build = JSON.parse(row.build_meta); } catch { /* corrupted JSON — return null */ }
+  return c.json({ build, ts: row.ts });
 });

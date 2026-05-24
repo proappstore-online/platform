@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
 import { dispatchWebhook } from '../lib/webhook-dispatch.js';
@@ -74,7 +75,7 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
       url: `/v1/apps/${appId}/storage/${filePath}`,
     });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -117,7 +118,7 @@ storageRoutes.get('/apps/:appId/storage/*', async (c) => {
 
     return new Response(object.body, { headers });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -139,7 +140,7 @@ storageRoutes.get('/apps/:appId/files', async (c) => {
 
     return c.json({ files, count: files.length });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -158,7 +159,7 @@ storageRoutes.delete('/apps/:appId/storage/*', async (c) => {
 
     return c.body(null, 204);
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });

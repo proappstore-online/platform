@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
 import { Stripe } from '../lib/stripe.js';
@@ -101,7 +102,7 @@ connectRoutes.post('/connect/onboard', async (c) => {
     });
     return c.json({ url: link.url, stripeAccountId: row.stripe_connect_account_id });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     if (err instanceof Error && err.message.startsWith('Stripe')) {
       return c.json({ error: err.message }, 502);
     }
@@ -156,7 +157,7 @@ connectRoutes.get('/connect/status', async (c) => {
 
     return c.json(statusDto(row));
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });

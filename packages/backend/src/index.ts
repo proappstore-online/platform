@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { HttpError } from './lib/auth.js';
 import type { Env } from './types.js';
 import { subscriptionRoutes } from './routes/subscription.js';
@@ -22,26 +23,29 @@ import { domainRoutes } from './routes/domains.js';
 import { emailRoutes } from './routes/email.js';
 import { webhookConfigRoutes } from './routes/webhooks-config.js';
 import { logsRoutes } from './routes/logs.js';
+import { toolsRoutes } from './routes/tools.js';
 
 export const app = new Hono<{ Bindings: Env }>();
 
-// CORS — allow proappstore.online + freeappstore.online (shared identity)
+// CORS origin check — shared between middleware and onError handler
+function corsOrigin(origin: string | undefined): string | null {
+  if (!origin) return null;
+  try {
+    const host = new URL(origin).hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1') return origin;
+    if (host.endsWith('.proappstore.online') || host === 'proappstore.online') return origin;
+    if (host.endsWith('.freeappstore.online') || host === 'freeappstore.online') return origin;
+    if (host.endsWith('.pages.dev')) return origin;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 app.use(
   '*',
   cors({
-    origin: (origin) => {
-      if (!origin) return null;
-      try {
-        const host = new URL(origin).hostname.toLowerCase();
-        if (host === 'localhost' || host === '127.0.0.1') return origin;
-        if (host.endsWith('.proappstore.online') || host === 'proappstore.online') return origin;
-        if (host.endsWith('.freeappstore.online') || host === 'freeappstore.online') return origin;
-        if (host.endsWith('.pages.dev')) return origin;
-        return null;
-      } catch {
-        return null;
-      }
-    },
+    origin: corsOrigin,
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Authorization', 'Content-Type'],
     maxAge: 600,
@@ -49,11 +53,22 @@ app.use(
 );
 
 app.onError((err, c) => {
-  if (err instanceof HttpError) {
-    return c.json({ error: err.message }, err.status as 401);
+  const status = err instanceof HttpError ? err.status as ContentfulStatusCode : 500;
+  const body = err instanceof HttpError
+    ? { error: err.message }
+    : { error: 'Internal server error' };
+
+  if (!(err instanceof HttpError)) console.error('Unhandled error:', err);
+
+  // CORS middleware doesn't run on error responses, so set headers here
+  const origin = corsOrigin(c.req.header('Origin'));
+  const res = c.json(body, status);
+  if (origin) {
+    res.headers.set('Access-Control-Allow-Origin', origin);
+    res.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
   }
-  console.error('Unhandled error:', err);
-  return c.json({ error: 'Internal server error' }, 500);
+  return res;
 });
 
 app.get('/', (c) => c.json({ ok: true, service: 'proappstore-api' }));
@@ -79,6 +94,7 @@ v1.route('/', domainRoutes);
 v1.route('/', emailRoutes);
 v1.route('/', webhookConfigRoutes);
 v1.route('/', logsRoutes);
+v1.route('/', toolsRoutes);
 app.route('/v1', v1);
 
 // Stripe webhook is outside /v1 — it's not user-facing API

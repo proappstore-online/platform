@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env, SubscriptionRow } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
 import { Stripe } from '../lib/stripe.js';
@@ -44,7 +45,7 @@ subscriptionRoutes.get('/subscription', async (c) => {
       cancelAtPeriodEnd: row.cancel_at_period_end === 1,
     });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -99,7 +100,7 @@ subscriptionRoutes.post('/checkout', async (c) => {
 
     return c.json({ url: session.url });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -130,7 +131,7 @@ subscriptionRoutes.post('/portal', async (c) => {
 
     return c.json({ url: session.url });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });

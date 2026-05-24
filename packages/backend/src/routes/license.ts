@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env, LicenseRow } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
 
@@ -30,7 +31,7 @@ licenseRoutes.get('/apps/:appId/license', async (c) => {
       expiresAt: row.expires_at,
     });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });

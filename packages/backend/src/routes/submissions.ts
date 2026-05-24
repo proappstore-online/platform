@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env, SubmissionRow } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
 
@@ -63,7 +64,7 @@ submissionRoutes.get('/me/is-admin', async (c) => {
     const user = await requireUser(c);
     return c.json({ admin: isAdmin(user, c.env) });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -191,7 +192,7 @@ submissionRoutes.post('/submissions', async (c) => {
     };
     return c.json({ submission: row }, 201);
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -224,7 +225,7 @@ submissionRoutes.get('/submissions', async (c) => {
     const submissions = (results ?? []).map(rowToSubmission);
     return c.json({ submissions });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -243,7 +244,7 @@ submissionRoutes.get('/submissions/:id', async (c) => {
     }
     return c.json({ submission });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -356,7 +357,7 @@ submissionRoutes.post('/submissions/:id/approve', async (c) => {
       provisionResult,
     });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -396,7 +397,7 @@ submissionRoutes.post('/submissions/:id/reject', async (c) => {
       .first<Record<string, unknown>>();
     return c.json({ submission: updated ? rowToSubmission(updated) : submission });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -419,7 +420,7 @@ submissionRoutes.delete('/submissions/:id', async (c) => {
     await c.env.DB.prepare(`DELETE FROM submissions WHERE id = ?1`).bind(id).run();
     return c.json({ ok: true });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });

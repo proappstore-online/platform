@@ -90,7 +90,8 @@ export class Maps {
    * Usage: <iframe src={app.maps.embedUrl(lat, lng, zoom)} />
    */
   embedUrl(lat: number, lng: number, zoom = 15): string {
-    return `https://www.openstreetmap.org/export/embed.html?bbox=${lng - 0.01},${lat - 0.01},${lng + 0.01},${lat + 0.01}&layer=mapnik&marker=${lat},${lng}`;
+    const delta = 360 / Math.pow(2, zoom);
+    return `https://www.openstreetmap.org/export/embed.html?bbox=${lng - delta},${lat - delta},${lng + delta},${lat + delta}&layer=mapnik&marker=${lat},${lng}`;
   }
 
   /**
@@ -100,8 +101,9 @@ export class Maps {
    * Usage: <img src={app.maps.staticUrl(lat, lng)} />
    */
   staticUrl(lat: number, lng: number, zoom = 15): string {
+    const clampedLat = Math.max(-85.05, Math.min(85.05, lat));
     const x = Math.floor(((lng + 180) / 360) * Math.pow(2, zoom));
-    const y = Math.floor((1 - Math.log(Math.tan((lat * Math.PI) / 180) + 1 / Math.cos((lat * Math.PI) / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
+    const y = Math.floor((1 - Math.log(Math.tan((clampedLat * Math.PI) / 180) + 1 / Math.cos((clampedLat * Math.PI) / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
     return `https://tile.openstreetmap.org/${zoom}/${x}/${y}.png`;
   }
 }

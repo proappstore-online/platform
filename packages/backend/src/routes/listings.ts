@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireAppOwner, HttpError } from '../lib/auth.js';
 
@@ -155,7 +156,7 @@ listingsRoutes.get('/storefront/apps/:id', async (c) => {
     c.header('Cache-Control', 'public, max-age=60');
     return c.json(publicDto);
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -201,7 +202,7 @@ listingsRoutes.get('/storefront/apps', async (c) => {
     c.header('Cache-Control', 'public, max-age=60');
     return c.json({ apps });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -216,7 +217,7 @@ listingsRoutes.get('/apps/:id/listing', async (c) => {
       .first<ListingRow>();
     return c.json(row ? rowToDto(row) : emptyDto(appId));
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -356,7 +357,7 @@ listingsRoutes.put('/apps/:id/listing', async (c) => {
       .first<ListingRow>();
     return c.json(row ? rowToDto(row) : emptyDto(appId));
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -435,7 +436,7 @@ listingsRoutes.put('/apps/:id/listing-assets/:kind', async (c) => {
     )}`;
     return c.json({ url: publicUrl, key, size: body.byteLength });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });

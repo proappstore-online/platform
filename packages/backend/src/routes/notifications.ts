@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import webpush from 'web-push';
 import type { Env, PushSubscriptionRow } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
@@ -38,7 +39,7 @@ notificationRoutes.post('/notifications/subscribe', async (c) => {
 
     return c.json({ ok: true });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -59,7 +60,7 @@ notificationRoutes.post('/notifications/unsubscribe', async (c) => {
 
     return c.json({ ok: true });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -165,7 +166,7 @@ notificationRoutes.post('/notifications/notify-user', async (c) => {
 
     return c.json({ sent, failed });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -264,7 +265,7 @@ notificationRoutes.post('/notifications/send', async (c) => {
 
     return c.json({ sent, failed });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });

@@ -15,6 +15,7 @@
 //                                       stays admin-managed)
 
 import { type Context, Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { HttpError, requireAdmin, requireAppOwner } from '../lib/auth.js';
 import type { Env } from '../types.js';
 
@@ -72,7 +73,7 @@ function wrap(handler: (c: Ctx) => Promise<Response>) {
     try {
       return await handler(c);
     } catch (err) {
-      if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+      if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
       throw err;
     }
   };

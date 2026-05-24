@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
 
@@ -132,7 +133,7 @@ appsRoutes.get('/apps', async (c) => {
 
     return c.json({ apps: dtos });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
@@ -163,7 +164,7 @@ appsRoutes.delete('/apps/:id', async (c) => {
     await c.env.DB.prepare('DELETE FROM apps WHERE id = ?').bind(id).run();
     return c.json({ ok: true });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as 401);
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
 });
