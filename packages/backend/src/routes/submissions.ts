@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, SubmissionRow } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
-import { callAdminProvision } from '../lib/provision-client.js';
 
 /**
  * Submission flow — pro side.
@@ -310,24 +309,33 @@ submissionRoutes.post('/submissions/:id/approve', async (c) => {
         })()
       : undefined;
 
+    // Provision the app using PAS's own provision endpoint (self-contained).
+    const token = c.req.header('Authorization')?.slice(7) || '';
+    const provisionBody: Record<string, unknown> = {
+      appId: submission.app_id,
+      name: submission.name,
+      category: submission.category,
+      description: submission.description,
+      skipCompliance: true,
+    };
+    if (submission.icon) provisionBody.icon = submission.icon;
+    if (submission.icon_bg) provisionBody.iconBg = submission.icon_bg;
+    if (proFeatures) provisionBody.proFeatures = proFeatures;
+
     let provisionResult: unknown = null;
-    if (c.env.ADMIN) {
-      // Build options without undefined fields — exactOptionalPropertyTypes
-      // is strict, so we omit instead of passing `undefined`.
-      const opts: import('../lib/provision-client.js').ProvisionBody = {
-        appId: submission.app_id,
-        name: submission.name,
-        category: submission.category,
-        description: submission.description,
-      };
-      if (submission.icon) opts.icon = submission.icon;
-      if (submission.icon_bg) opts.iconBg = submission.icon_bg;
-      if (proFeatures) opts.proFeatures = proFeatures;
-      provisionResult = await callAdminProvision(c.env.ADMIN, opts);
+    try {
+      const provRes = await fetch(`https://api.proappstore.online/v1/provision`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(provisionBody),
+      });
+      provisionResult = await provRes.json();
       const provisionSucceeded =
         provisionResult &&
         typeof provisionResult === 'object' &&
-        !('error' in (provisionResult as Record<string, unknown>)) &&
         (provisionResult as { success?: boolean }).success === true;
       if (provisionSucceeded) {
         await c.env.DB.prepare(
@@ -336,8 +344,8 @@ submissionRoutes.post('/submissions/:id/approve', async (c) => {
           .bind(id)
           .run();
       }
-    } else {
-      provisionResult = { error: 'ADMIN service binding not configured' };
+    } catch (e) {
+      provisionResult = { error: String(e) };
     }
 
     const updated = await c.env.DB.prepare(`SELECT * FROM submissions WHERE id = ?1`)

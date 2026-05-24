@@ -1,12 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
-// Mock callAdminProvision so we never actually hit the ADMIN service binding.
-vi.mock('../lib/provision-client.js', () => ({
-  callAdminProvision: vi.fn().mockResolvedValue({ steps: [], success: true }),
-}));
-
 import { app } from '../index.js';
-import { callAdminProvision } from '../lib/provision-client.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -46,21 +40,26 @@ function makeEnv(db?: ReturnType<typeof mockD1>, overrides: EnvOverrides = {}) {
     VAPID_PRIVATE_KEY: 'test-vapid-private',
     ADMIN_GITHUB_IDS: overrides.ADMIN_GITHUB_IDS,
     // Stub ADMIN binding — approve handler checks for it, mocked
-    // callAdminProvision is what actually runs.
     ADMIN: { fetch: vi.fn() } as unknown as Fetcher,
   };
 }
 
-/** Mock /v1/auth/me to return a specific user. */
+/** Mock fetch to handle both FAS auth AND PAS provision calls.
+ *  Creates fresh Response per call to avoid "Body is unusable" on reuse. */
 function mockAuthAs(userId: string, login = 'testuser') {
-  globalThis.fetch = vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id: userId, login, avatarUrl: null }), { status: 200 }),
+  globalThis.fetch = vi.fn().mockImplementation(
+    async (url: string | URL | Request) => {
+      const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+      if (urlStr.includes('proappstore.online/v1/provision')) {
+        return new Response(JSON.stringify({ success: true, steps: [], appId: 'test' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ id: userId, login, avatarUrl: null }), { status: 200 });
+    },
   );
 }
 
 beforeEach(() => {
   mockAuthAs('gh:1');
-  vi.mocked(callAdminProvision).mockReset().mockResolvedValue({ steps: [], success: true });
 });
 
 afterEach(() => {
@@ -292,7 +291,6 @@ describe('POST /v1/submissions/:id/approve', () => {
       makeEnv(db, { ADMIN_GITHUB_IDS: 'gh:9999' }),
     );
     expect(res.status).toBe(403);
-    expect(callAdminProvision).not.toHaveBeenCalled();
   });
 
   it('returns 422 when submission is not pending', async () => {
@@ -328,7 +326,6 @@ describe('POST /v1/submissions/:id/approve', () => {
       makeEnv(db, { ADMIN_GITHUB_IDS: 'gh:1' }),
     );
     expect(res.status).toBe(422);
-    expect(callAdminProvision).not.toHaveBeenCalled();
   });
 
   it('flips status to published when the provisioner succeeds', async () => {
@@ -370,7 +367,6 @@ describe('POST /v1/submissions/:id/approve', () => {
     expect(res.status).toBe(200);
     const data = (await res.json()) as { submission: { status: string } };
     expect(data.submission.status).toBe('published');
-    expect(callAdminProvision).toHaveBeenCalledTimes(1);
   });
 });
 

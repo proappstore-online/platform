@@ -10,18 +10,37 @@
 // last-known state in `app_custom_domains` and surfaces CF's DNS instructions
 // (`verification_data`, `validation_data`) back to the CLI/UI so the owner
 // knows which records to add at their registrar.
-//
-// CF API is talked to via the FAS admin Worker's /api/apps/:proj/domains
-// proxy through the ADMIN service binding — PAS never holds CF credentials.
 
 import { type Context, Hono } from 'hono';
 import { HttpError, requireAppOwner } from '../lib/auth.js';
-import { callAdminDomain } from '../lib/provision-client.js';
 import type { Env } from '../types.js';
 
 export const domainRoutes = new Hono<{ Bindings: Env }>();
 
 type Ctx = Context<{ Bindings: Env }>;
+
+/** Direct CF Pages custom domains API call — no FAS admin proxy. */
+async function cfPagesDomain(
+  c: Ctx,
+  proj: string,
+  opts: { method: string; domain?: string; body?: unknown },
+): Promise<{ status: number; body: unknown }> {
+  const cfToken = c.env.CF_API_TOKEN;
+  const cfAccount = c.env.CF_ACCOUNT_ID;
+  if (!cfToken || !cfAccount) throw new HttpError('CF credentials not configured', 503);
+
+  const path = opts.domain
+    ? `/accounts/${cfAccount}/pages/projects/${encodeURIComponent(proj)}/domains/${encodeURIComponent(opts.domain)}`
+    : `/accounts/${cfAccount}/pages/projects/${encodeURIComponent(proj)}/domains`;
+  const init: RequestInit = { method: opts.method, headers: { Authorization: `Bearer ${cfToken}` } };
+  if (opts.body !== undefined) {
+    (init.headers as Record<string, string>)['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(opts.body);
+  }
+  const res = await fetch(`https://api.cloudflare.com/client/v4${path}`, init);
+  const body = await res.json().catch(() => null);
+  return { status: res.status, body };
+}
 
 interface DomainRow {
   app_id: string;
@@ -157,16 +176,13 @@ domainRoutes.post(
   wrap(async (c) => {
     const appId = c.req.param('appId')!;
     await requireAppOwner(c, appId);
-    if (!c.env.ADMIN) {
-      throw new HttpError('admin binding not configured — custom domains unavailable in this env', 503);
-    }
     const body = (await c.req.json().catch(() => ({}))) as { domain?: unknown };
     if (body.domain === undefined || body.domain === null) {
       throw new HttpError('domain required', 400);
     }
     const domain = validateDomain(body.domain);
 
-    const cf = await callAdminDomain(c.env.ADMIN, projectName(appId), {
+    const cf = await cfPagesDomain(c, projectName(appId), {
       method: 'POST',
       body: { name: domain },
     });
@@ -232,12 +248,7 @@ domainRoutes.post(
     // param before auth would leak "not a domain" → 400 to anyone.
     await requireAppOwner(c, appId);
     const domain = validateDomain(c.req.param('domain')!);
-    if (!c.env.ADMIN) throw new HttpError('admin binding not configured', 503);
-
-    // PATCH on /pages/projects/:proj/domains/:name triggers re-verification
-    // and returns the latest Domain object in the same response. No follow-up
-    // GET needed.
-    const cf = await callAdminDomain(c.env.ADMIN, projectName(appId), {
+    const cf = await cfPagesDomain(c, projectName(appId), {
       method: 'PATCH',
       domain,
     });
@@ -293,8 +304,7 @@ domainRoutes.delete(
     // Auth first — see /verify route for rationale.
     await requireAppOwner(c, appId);
     const domain = validateDomain(c.req.param('domain')!);
-    if (!c.env.ADMIN) throw new HttpError('admin binding not configured', 503);
-    const cf = await callAdminDomain(c.env.ADMIN, projectName(appId), {
+    const cf = await cfPagesDomain(c, projectName(appId), {
       method: 'DELETE',
       domain,
     });
