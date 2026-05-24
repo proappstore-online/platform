@@ -1,4 +1,5 @@
 import { FreeAppStore } from '@freeappstore/sdk';
+import { ApiProxy } from './proxy.js';
 import { AI } from './ai.js';
 import { Database } from './db.js';
 import { Maps } from './maps.js';
@@ -72,6 +73,9 @@ export class ProAppStore extends FreeAppStore {
   constructor(opts: ProInitOptions) {
     super({ appId: opts.appId, ...(opts.fasApiBase && { apiBase: opts.fasApiBase }) });
     const proApiBase = opts.proApiBase ?? 'https://api.proappstore.online';
+    // Override proxy to use PAS backend (not FAS) — PAS has its own
+    // proxy/secrets/allowlist routes so it doesn't depend on FAS's DB.
+    (this as unknown as { proxy: ApiProxy }).proxy = new ApiProxy(opts.appId, proApiBase, this.auth);
     this.subscription = new SubscriptionApi(opts.appId, proApiBase, this.auth);
     this.license = new LicenseApi(opts.appId, proApiBase, this.auth);
     this.db = new Database(opts.appId, opts.dataApiBase ?? `https://data-${opts.appId}.proappstore.online`, this.auth);

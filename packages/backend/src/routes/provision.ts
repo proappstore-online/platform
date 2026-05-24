@@ -248,29 +248,6 @@ provisionRoutes.post('/provision', async (c) => {
       steps.push({ name: 'record_app', status: 'fail', detail: String(e) });
     }
 
-    // 6. Cross-register in FAS so proxy, secrets, and allowlist features work.
-    // PAS apps use FAS backend for these features; FAS requires the app to
-    // exist in its own `apps` table.
-    try {
-      const fasBase = c.env.FAS_API_BASE || 'https://api.freeappstore.online';
-      const fasToken = (c.env as Record<string, string>).FAS_INTERNAL_TOKEN;
-      if (fasToken) {
-        const fasRes = await fetch(`${fasBase}/v1/internal/register-app`, {
-          method: 'POST',
-          headers: { 'X-Internal-Token': fasToken, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ appId, ownerLogin: user.login }),
-        });
-        if (fasRes.ok) {
-          steps.push({ name: 'fas_register', status: 'ok', detail: 'proxy + secrets enabled' });
-        } else {
-          steps.push({ name: 'fas_register', status: 'fail', detail: `FAS returned ${fasRes.status}` });
-        }
-      } else {
-        steps.push({ name: 'fas_register', status: 'skip', detail: 'FAS_INTERNAL_TOKEN not set' });
-      }
-    } catch (e) {
-      steps.push({ name: 'fas_register', status: 'fail', detail: String(e) });
-    }
 
     const success = !steps.some((s) => s.status === 'fail');
     return c.json({ appId, steps, dataWorkerUrl, pagesUrl, success }, success ? 200 : 207);
