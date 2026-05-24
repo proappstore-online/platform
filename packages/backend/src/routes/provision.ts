@@ -23,6 +23,8 @@ import { fetchRepoFiles, type RepoLocation } from '../lib/github-fetch.js';
  * Idempotent — re-running skips already-provisioned resources.
  */
 const ORG = 'proappstore-online';
+const DOMAIN = 'proappstore.online';
+const ZONE_ID = '14928daaff60902cc89003a2ebeb99fe';
 
 interface ProvisionStep {
   name: string;
@@ -100,10 +102,10 @@ provisionRoutes.post('/provision', async (c) => {
       steps.push({ name: 'compliance', status: 'skip', detail: 'skipCompliance=true (bootstrap)' });
     }
 
-    // 1. CF Pages project
+    // 1. CF Pages project + DNS + custom domain
     let pagesUrl = '';
+    const projectName = `proappstore-${appId}`;
     if (!body.skipPublish) {
-      const projectName = `proappstore-${appId}`;
       try {
         const pagesRes = await fetch(
           `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/pages/projects`,
@@ -131,6 +133,53 @@ provisionRoutes.post('/provision', async (c) => {
         }
       } catch (e) {
         steps.push({ name: 'CF Pages project', status: 'fail', detail: String(e) });
+      }
+
+      // 2. DNS CNAME + Pages custom domain
+      const subdomain = `${appId}.${DOMAIN}`;
+      try {
+        const dnsRes = await fetch(`https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${cfToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'CNAME', name: appId, content: `${projectName}.pages.dev`, proxied: true }),
+        });
+        const dnsData = (await dnsRes.json()) as { success: boolean; errors?: { message: string; code: number }[] };
+        if (dnsData.success) {
+          steps.push({ name: 'DNS', status: 'ok', detail: `${subdomain} → ${projectName}.pages.dev` });
+        } else {
+          const err = dnsData.errors?.[0]?.message || '';
+          if (err.includes('already exists') || dnsData.errors?.[0]?.code === 81057) {
+            steps.push({ name: 'DNS', status: 'skip', detail: `${subdomain} CNAME already exists` });
+          } else {
+            steps.push({ name: 'DNS', status: 'fail', detail: err || 'unknown' });
+          }
+        }
+      } catch (e) {
+        steps.push({ name: 'DNS', status: 'fail', detail: String(e) });
+      }
+
+      try {
+        const domRes = await fetch(
+          `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/pages/projects/${projectName}/domains`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${cfToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: subdomain }),
+          },
+        );
+        const domData = (await domRes.json()) as { success: boolean; errors?: { message: string }[] };
+        if (domData.success) {
+          steps.push({ name: 'custom domain', status: 'ok', detail: subdomain });
+        } else {
+          const err = domData.errors?.[0]?.message || '';
+          if (err.includes('already') || err.includes('exists')) {
+            steps.push({ name: 'custom domain', status: 'skip', detail: `${subdomain} already configured` });
+          } else {
+            steps.push({ name: 'custom domain', status: 'fail', detail: err || 'unknown' });
+          }
+        }
+      } catch (e) {
+        steps.push({ name: 'custom domain', status: 'fail', detail: String(e) });
       }
     }
 
