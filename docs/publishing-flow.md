@@ -27,6 +27,8 @@ publisher                  PAS backend (api.proappstore.online)        FAS admin
   │                                       ├─ 5. Create D1 database (pas-data-<id>)
   │                                       ├─ 6. Deploy Data Worker bound to that D1
   │                                       ├─ 7. INSERT INTO apps (id, creator_id, …)
+  │                                       ├─ 8. POST /v1/internal/register-app → FAS API
+  │                                       │     (cross-register so proxy + secrets work)
   │                                       │
   │ ←──── result + URL ─────────────────  │
   │
@@ -49,6 +51,11 @@ FAS admin — the binding itself is the auth.
 - **Idempotent.** Re-running `pas publish` on a partially-provisioned
   app fills in only the missing pieces — every step checks existence
   before creating.
+- **FAS cross-registration (step 8).** PAS apps inherit proxy, secrets,
+  and allowlist features from FAS. These features look up the app in
+  FAS's `apps` table. Without cross-registration, `app.proxy.fetch()`
+  returns "app not found" for every PAS app. Auth: `FAS_INTERNAL_TOKEN`
+  secret on PAS must match `INTERNAL_TOKEN` on FAS.
 
 ## What `POST /api/provision` does, by category
 

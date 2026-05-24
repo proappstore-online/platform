@@ -48,3 +48,6 @@ service = "freeappstore-admin"
 #                                    and the Console hides the Upgrade button)
 #   SESSION_SIGNING_KEY
 #   VAPID_PRIVATE_KEY               (for Web Push notifications)
+#   FAS_INTERNAL_TOKEN              (shared secret with FAS backend — must match
+#                                    FAS's INTERNAL_TOKEN; enables cross-registration
+#                                    so PAS apps can use proxy, secrets, allowlist)
