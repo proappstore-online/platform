@@ -7,6 +7,8 @@ import { checkCommand } from './check.js';
 import { createApp } from './create.js';
 import { domainCommand } from './domain.js';
 import { loginCommand } from './login.js';
+import { logoutCommand } from './logout.js';
+import { whoamiCommand } from './whoami.js';
 import { publishApp } from './publish.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -31,6 +33,8 @@ program
   });
 
 program.addCommand(loginCommand);
+program.addCommand(logoutCommand);
+program.addCommand(whoamiCommand);
 
 program
   .command('publish')
