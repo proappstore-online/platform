@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import { checkCommand } from './check.js';
 import { createApp } from './create.js';
@@ -6,12 +9,15 @@ import { domainCommand } from './domain.js';
 import { loginCommand } from './login.js';
 import { publishApp } from './publish.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as { version: string };
+
 const program = new Command();
 
 program
   .name('pas')
   .description('ProAppStore CLI — create, develop, and publish pro apps.')
-  .version('1.0.0');
+  .version(pkg.version);
 
 program
   .command('create <app-id>')
@@ -28,7 +34,7 @@ program.addCommand(loginCommand);
 
 program
   .command('publish')
-  .description('Publish the current repo to ProAppStore: GitHub repo, CF Pages, DNS, D1 database, registry entry.')
+  .description('Provision platform resources for this app (CF Pages, D1 database, Data Worker).')
   .option('--name <name>', 'Display name (defaults to Title Case of package.json name)')
   .option('--category <category>', 'Storefront category (e.g. social, productivity)')
   .option('--description <description>', 'Short description for the storefront listing')
