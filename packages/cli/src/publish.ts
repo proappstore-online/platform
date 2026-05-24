@@ -66,10 +66,9 @@ function hintForStep(name: string, detail: string): string | null {
  * Publish an existing repo to ProAppStore.
  *
  * Reads the local package.json to discover the app id, then calls
- * /v1/provision on the PAS backend. The backend delegates GitHub + CF Pages
- * + DNS + registry to FAS admin via service binding, and runs D1 + Data
- * Worker locally. Idempotent — re-running on a partially-provisioned app
- * fills in the missing pieces.
+ * /v1/provision on the PAS backend which creates the CF Pages project,
+ * D1 database, and Data Worker. Idempotent — re-running on a
+ * partially-provisioned app fills in the missing pieces.
  */
 export async function publishApp(opts: PublishOptions): Promise<void> {
   const cwd = process.cwd();

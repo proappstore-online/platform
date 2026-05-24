@@ -5,8 +5,24 @@ import { requireUser, HttpError } from '../lib/auth.js';
 import { deployDataWorker } from '../lib/deploy-worker.js';
 import { fetchRepoFiles, type RepoLocation } from '../lib/github-fetch.js';
 
+/**
+ * PAS app provisioning — fully self-contained.
+ *
+ * What it does (in order):
+ *   1. Compliance check — fetches repo from GitHub, runs checks (optional)
+ *   2. CF Pages project — creates proappstore-<id>.pages.dev
+ *   3. D1 database — creates pas-data-<id>
+ *   4. Data Worker — deploys to data-<id>.proappstore.online
+ *   5. App record — inserts into the platform apps table
+ *
+ * What it does NOT do:
+ *   - GitHub repo creation — developers own their own repos
+ *   - DNS / custom domains — handled separately via `pas domain`
+ *   - Repo secrets — use org-level CLOUDFLARE_API_TOKEN secret
+ *
+ * Idempotent — re-running skips already-provisioned resources.
+ */
 const ORG = 'proappstore-online';
-const DOMAIN = 'proappstore.online';
 
 interface ProvisionStep {
   name: string;
