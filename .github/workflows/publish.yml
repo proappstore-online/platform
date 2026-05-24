@@ -1,8 +1,9 @@
 name: Publish to npm
 
 # Triggers on any push to main that touches the publishable packages.
-# Each package self-checks: if its package.json version is unchanged
-# vs what's already on npm, the publish is a no-op.
+# Auto-bumps patch version when changes exist but no manual bump was made.
+# Manual bumps (minor/major) are respected — auto-bump only kicks in
+# when local version == npm version.
 #
 # Auth: OIDC trusted publishing — no stored NPM_TOKEN needed.
 # Each @proappstore/* package is linked to this repo on npmjs.com.
@@ -18,7 +19,7 @@ on:
   workflow_dispatch: # manual trigger from the Actions UI
 
 permissions:
-  contents: read
+  contents: write # push version bumps back to main
   id-token: write # OIDC token for npm trusted publishing + provenance
 
 jobs:
@@ -53,12 +54,22 @@ jobs:
           LOCAL_VER=$(node -p "require('./package.json').version")
           NPM_VER=$(npm view "$PKG_NAME" version 2>/dev/null || echo "0.0.0")
           echo "$PKG_NAME — local=$LOCAL_VER  npm=$NPM_VER"
-          if [ "$LOCAL_VER" = "$NPM_VER" ]; then
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "Version unchanged — skipping publish."
-          else
+          if [ "$LOCAL_VER" != "$NPM_VER" ]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
-            echo "Version bumped ($NPM_VER → $LOCAL_VER) — will publish."
+            echo "Manual bump ($NPM_VER → $LOCAL_VER) — will publish."
+          else
+            # Auto-bump patch: 1.16.0 → 1.16.1
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$LOCAL_VER"
+            NEW_VER="$MAJOR.$MINOR.$((PATCH + 1))"
+            echo "Auto-bumping $LOCAL_VER → $NEW_VER"
+            node -e "
+              const fs = require('fs');
+              const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+              pkg.version = '$NEW_VER';
+              fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+            "
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Publish via OIDC trusted publishing
@@ -68,3 +79,14 @@ jobs:
         # at pack time. `npm publish` would leave them as the literal
         # `workspace:*` and consumers' installs would fail.
         run: pnpm publish --access public --provenance --no-git-checks
+
+      - name: Commit version bump
+        if: steps.decide.outputs.bumped == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/${{ matrix.package }}/package.json
+          PKG_NAME=$(node -p "require('./packages/${{ matrix.package }}/package.json').name")
+          NEW_VER=$(node -p "require('./packages/${{ matrix.package }}/package.json').version")
+          git commit -m "chore: auto-bump $PKG_NAME to $NEW_VER [skip ci]"
+          git push
