@@ -87,28 +87,31 @@ provisionRoutes.post('/provision', async (c) => {
 
     // 1. GitHub repo
     if (ghToken && !body.skipPublish) {
-      const repoCheck = await ghApi(ghToken, `/repos/${ORG}/${appId}`);
-      if (repoCheck.id) {
-        steps.push({ name: 'GitHub repo', status: 'skip', detail: `${ORG}/${appId} already exists` });
-      } else {
-        const createRepo = await ghApi(ghToken, `/orgs/${ORG}/repos`, 'POST', {
-          name: appId,
-          description: body.description || `${body.name || appId} — pro app`,
-          private: false,
-          auto_init: false,
-          has_issues: true,
-          has_wiki: false,
-          has_projects: false,
-        });
-        if (createRepo.id) {
-          steps.push({ name: 'GitHub repo', status: 'ok', detail: `${ORG}/${appId}` });
+      try {
+        const repoCheck = await ghApi(ghToken, `/repos/${ORG}/${appId}`);
+        if (repoCheck.id) {
+          steps.push({ name: 'GitHub repo', status: 'skip', detail: `${ORG}/${appId} already exists` });
         } else {
-          steps.push({ name: 'GitHub repo', status: 'fail', detail: createRepo.message || 'unknown error' });
+          const createRepo = await ghApi(ghToken, `/orgs/${ORG}/repos`, 'POST', {
+            name: appId,
+            description: body.description || `${body.name || appId} — pro app`,
+            private: false,
+            auto_init: false,
+            has_issues: true,
+            has_wiki: false,
+            has_projects: false,
+          });
+          if (createRepo.id) {
+            steps.push({ name: 'GitHub repo', status: 'ok', detail: `${ORG}/${appId}` });
+          } else {
+            steps.push({ name: 'GitHub repo', status: 'fail', detail: createRepo.message || 'unknown error' });
+          }
         }
+      } catch (e) {
+        steps.push({ name: 'GitHub repo', status: 'fail', detail: String(e) });
       }
 
       // Set CLOUDFLARE_API_TOKEN as repo secret if we can
-      // (org-level secret is better — this is a fallback)
       try {
         const pubKeyRes = await ghApi(ghToken, `/repos/${ORG}/${appId}/actions/secrets/public-key`);
         if (pubKeyRes.key) {
@@ -120,7 +123,7 @@ provisionRoutes.post('/provision', async (c) => {
           steps.push({ name: 'repo secret', status: 'ok', detail: 'CLOUDFLARE_API_TOKEN set' });
         }
       } catch {
-        steps.push({ name: 'repo secret', status: 'skip', detail: 'Could not set secret — use org-level secret' });
+        steps.push({ name: 'repo secret', status: 'skip', detail: 'Could not set — use org-level secret' });
       }
     } else {
       steps.push({ name: 'GitHub repo', status: 'skip', detail: body.skipPublish ? 'skipPublish=true' : 'No GitHub token' });
