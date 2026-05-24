@@ -259,8 +259,13 @@ provisionRoutes.post('/provision', async (c) => {
  * Return CF deploy credentials so the CLI can set them as GitHub repo secrets
  * on external-org repos. Requires app ownership (creator or admin).
  *
- * Pre-launch: returns the platform CF_API_TOKEN directly. Production: should
- * mint scoped per-app tokens via CF API.
+ * SECURITY: Pre-launch only — returns the platform-wide CF_API_TOKEN.
+ * This token has broad scope (Pages, D1, DNS, Workers) across the entire
+ * CF account. Acceptable while the only creator is the platform owner.
+ *
+ * TODO(production): Mint scoped per-project tokens via CF API
+ * (POST /user/tokens with Pages:Edit permission restricted to the
+ * specific project). This limits blast radius if a token leaks.
  */
 provisionRoutes.get('/apps/:appId/deploy-credentials', async (c) => {
   const appId = c.req.param('appId');
