@@ -117,6 +117,12 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
     cd ${appId}
     pnpm dev
 
+  When ready to deploy:
+    1. Create a GitHub repo in your own account/org
+    2. git remote add origin <your-repo-url>
+    3. git push -u origin main
+    4. pas publish
+
   Docs:    https://proappstore.online/docs
   Console: https://console.proappstore.online
 

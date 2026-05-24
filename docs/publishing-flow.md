@@ -1,9 +1,13 @@
 # Publishing flow
 
 `pas publish` is the publisher-facing command. It calls the PAS backend
-`POST /v1/provision`, which delegates the cross-store steps (repo, Pages,
+`POST /v1/provision`, which delegates the cross-store steps (Pages,
 DNS, custom domain, registry) to the FAS admin Worker via service binding
 and runs the PAS-specific steps (D1, Data Worker, apps row) locally.
+
+**Note:** The platform does NOT create GitHub repos for creators. Developers
+own their own repos — they create one in their own GitHub account/org, push
+their code, then run `pas publish` to provision platform infrastructure.
 
 ## End-to-end sequence
 
@@ -14,16 +18,15 @@ publisher                  PAS backend (api.proappstore.online)        FAS admin
   │  (metadata)                           │                                       │
   │                                       ├─ env.ADMIN.fetch('/api/provision') ─→ │
   │                                       │   store: 'apps_pro'                   │
-  │                                       │                                       ├─ 1. GitHub repo (proappstore-online)
-  │                                       │                                       ├─ 2. CF Pages project (proappstore-<id>)
-  │                                       │                                       ├─ 3. Custom domain (<id>.proappstore.online)
-  │                                       │                                       ├─ 4. DNS CNAME
-  │                                       │                                       ├─ 5. Storefront registry entry
+  │                                       │                                       ├─ 1. CF Pages project (proappstore-<id>)
+  │                                       │                                       ├─ 2. Custom domain (<id>.proappstore.online)
+  │                                       │                                       ├─ 3. DNS CNAME
+  │                                       │                                       ├─ 4. Storefront registry entry
   │                                       │ ←──── steps[] + success ───────────── │
   │                                       │                                       │
-  │                                       ├─ 6. Create D1 database (pas-data-<id>)
-  │                                       ├─ 7. Deploy Data Worker bound to that D1
-  │                                       ├─ 8. INSERT INTO apps (id, creator_id, …)
+  │                                       ├─ 5. Create D1 database (pas-data-<id>)
+  │                                       ├─ 6. Deploy Data Worker bound to that D1
+  │                                       ├─ 7. INSERT INTO apps (id, creator_id, …)
   │                                       │
   │ ←──── result + URL ─────────────────  │
   │
@@ -37,9 +40,9 @@ FAS admin — the binding itself is the auth.
 
 ## Why this shape
 
-- **Single control plane for repo/CF/DNS/registry.** Same Worker
-  provisions FAS, FGS, and now PAS, so secrets (GitHub admin:org token,
-  CF API token with Pages + DNS scope) only live in `fas/admin`.
+- **Single control plane for CF/DNS/registry.** Same Worker
+  provisions FAS, FGS, and now PAS, so secrets (CF API token with
+  Pages + DNS scope) only live in `fas/admin`.
 - **PAS-specific steps stay in PAS.** D1 and the per-app Data Worker
   are concepts only the pro side has; no reason to leak them into
   `fas/admin`'s surface area.
@@ -49,16 +52,15 @@ FAS admin — the binding itself is the auth.
 
 ## What `POST /api/provision` does, by category
 
-Both categories share steps 1–4 and 6. **Step 5 is the meaningful split.**
+Both categories share steps 1–3 and 5. **Step 4 is the meaningful split.** (GitHub repo creation is the creator's responsibility — the platform does not create repos.)
 
 | # | Action | Tailored | Ready |
 |---|---|---|---|
-| 1 | `POST /orgs/<org>/repos` (empty repo, `auto_init: false`) | per-fork repo | one repo per publisher |
-| 2 | CF Pages project wired to the repo via GitHub integration | yes | yes |
-| 3 | Custom domain `<id>.<storezone>` | yes | yes |
-| 4 | DNS CNAME `<id> → <pages-domain>` | yes | yes |
-| 5 | **D1 database `db_<id>` + binding registered with the Pages project** | **yes** | **no** |
-| 6 | Append entry to storefront `registry.json` | yes | yes |
+| 1 | CF Pages project wired to the creator's repo via GitHub integration | yes | yes |
+| 2 | Custom domain `<id>.<storezone>` | yes | yes |
+| 3 | DNS CNAME `<id> → <pages-domain>` | yes | yes |
+| 4 | **D1 database `db_<id>` + binding registered with the Pages project** | **yes** | **no** |
+| 5 | Append entry to storefront `registry.json` | yes | yes |
 
 Failure of step 2 or 3 (most common: CF Pages GitHub-app not installed
 on the org) skips step 6 to avoid leaving dead-link entries on the
@@ -99,8 +101,8 @@ the migration runner is robust enough to run from the admin context.
 
 ## Why provisioning runs in admin, not pas
 
-Provisioning needs CF API tokens with broad scope: GitHub admin:org +
-CF account-level Pages and DNS edit. Concentrating those secrets in
+Provisioning needs CF API tokens with broad scope: account-level
+Pages and DNS edit. Concentrating those secrets in
 `fas/admin` (one Worker, narrow surface, CF Access fronted) is the
 security posture. `pas` doesn't need them — it deals with Stripe,
 which has its own secret set.
