@@ -80,13 +80,42 @@ jobs:
         # `workspace:*` and consumers' installs would fail.
         run: pnpm publish --access public --provenance --no-git-checks
 
-      - name: Commit version bump
-        if: steps.decide.outputs.bumped == 'true'
+  commit-bumps:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Bump versions that were auto-published
+        id: bump
+        run: |
+          BUMPED=""
+          for PKG in cli sdk compliance; do
+            PKG_NAME=$(node -p "require('./packages/$PKG/package.json').name")
+            LOCAL_VER=$(node -p "require('./packages/$PKG/package.json').version")
+            NPM_VER=$(npm view "$PKG_NAME" version 2>/dev/null || echo "0.0.0")
+            if [ "$LOCAL_VER" != "$NPM_VER" ]; then
+              echo "$PKG_NAME: $LOCAL_VER → $NPM_VER (published)"
+              node -e "
+                const fs = require('fs');
+                const pkg = JSON.parse(fs.readFileSync('./packages/$PKG/package.json', 'utf8'));
+                pkg.version = '$NPM_VER';
+                fs.writeFileSync('./packages/$PKG/package.json', JSON.stringify(pkg, null, 2) + '\n');
+              "
+              BUMPED="$BUMPED $PKG_NAME@$NPM_VER"
+            fi
+          done
+          echo "bumped=$BUMPED" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push
+        if: steps.bump.outputs.bumped != ''
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add packages/${{ matrix.package }}/package.json
-          PKG_NAME=$(node -p "require('./packages/${{ matrix.package }}/package.json').name")
-          NEW_VER=$(node -p "require('./packages/${{ matrix.package }}/package.json').version")
-          git commit -m "chore: auto-bump $PKG_NAME to $NEW_VER [skip ci]"
+          git add packages/*/package.json
+          git commit -m "chore: auto-bump published versions [skip ci]"
           git push
