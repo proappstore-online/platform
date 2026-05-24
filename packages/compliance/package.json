@@ -1,7 +1,7 @@
 {
   "name": "@proappstore/compliance",
-  "version": "0.2.0",
-  "description": "Compliance checks for apps published on proappstore.online \u2014 used by the CLI for local feedback and by CI for gating.",
+  "version": "0.2.1",
+  "description": "Compliance checks for apps published on proappstore.online — used by the CLI for local feedback and by CI for gating.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
