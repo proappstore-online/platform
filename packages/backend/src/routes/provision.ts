@@ -43,7 +43,6 @@ provisionRoutes.post('/provision', async (c) => {
     const appId = body.appId;
     const cfToken = c.env.CF_API_TOKEN;
     const cfAccount = c.env.CF_ACCOUNT_ID;
-    const ghToken = c.env.GITHUB_TOKEN;
     const steps: ProvisionStep[] = [];
 
     if (!cfToken || !cfAccount) {
@@ -58,7 +57,7 @@ provisionRoutes.post('/provision', async (c) => {
         ref: body.ref || 'main',
       };
       try {
-        const fetched = await fetchRepoFiles(loc, ghToken);
+        const fetched = await fetchRepoFiles(loc, c.env.GITHUB_TOKEN);
         const results = await runChecksFromFiles(fetched.files);
         const hardFails = results.filter((r) => r.status === 'fail');
         const warnings = results.filter((r) => r.status === 'warn');
@@ -85,51 +84,7 @@ provisionRoutes.post('/provision', async (c) => {
       steps.push({ name: 'compliance', status: 'skip', detail: 'skipCompliance=true (bootstrap)' });
     }
 
-    // 1. GitHub repo
-    if (ghToken && !body.skipPublish) {
-      try {
-        const repoCheck = await ghApi(ghToken, `/repos/${ORG}/${appId}`);
-        if (repoCheck.id) {
-          steps.push({ name: 'GitHub repo', status: 'skip', detail: `${ORG}/${appId} already exists` });
-        } else {
-          const createRepo = await ghApi(ghToken, `/orgs/${ORG}/repos`, 'POST', {
-            name: appId,
-            description: body.description || `${body.name || appId} — pro app`,
-            private: false,
-            auto_init: false,
-            has_issues: true,
-            has_wiki: false,
-            has_projects: false,
-          });
-          if (createRepo.id) {
-            steps.push({ name: 'GitHub repo', status: 'ok', detail: `${ORG}/${appId}` });
-          } else {
-            steps.push({ name: 'GitHub repo', status: 'fail', detail: createRepo.message || 'unknown error' });
-          }
-        }
-      } catch (e) {
-        steps.push({ name: 'GitHub repo', status: 'fail', detail: String(e) });
-      }
-
-      // Set CLOUDFLARE_API_TOKEN as repo secret if we can
-      try {
-        const pubKeyRes = await ghApi(ghToken, `/repos/${ORG}/${appId}/actions/secrets/public-key`);
-        if (pubKeyRes.key) {
-          const encrypted = await encryptSecret(pubKeyRes.key, cfToken);
-          await ghApi(ghToken, `/repos/${ORG}/${appId}/actions/secrets/CLOUDFLARE_API_TOKEN`, 'PUT', {
-            encrypted_value: encrypted,
-            key_id: pubKeyRes.key_id,
-          });
-          steps.push({ name: 'repo secret', status: 'ok', detail: 'CLOUDFLARE_API_TOKEN set' });
-        }
-      } catch {
-        steps.push({ name: 'repo secret', status: 'skip', detail: 'Could not set — use org-level secret' });
-      }
-    } else {
-      steps.push({ name: 'GitHub repo', status: 'skip', detail: body.skipPublish ? 'skipPublish=true' : 'No GitHub token' });
-    }
-
-    // 2. CF Pages project
+    // 1. CF Pages project
     let pagesUrl = '';
     if (!body.skipPublish) {
       const projectName = `proappstore-${appId}`;
@@ -233,26 +188,3 @@ provisionRoutes.post('/provision', async (c) => {
   }
 });
 
-async function ghApi(token: string, path: string, method = 'GET', body?: object): Promise<any> {
-  const url = path.startsWith('http') ? path : `https://api.github.com${path}`;
-  const res = await fetch(url, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      ...(body && { 'Content-Type': 'application/json' }),
-    },
-    ...(body && { body: JSON.stringify(body) }),
-  });
-  if (res.status === 204) return { __empty: true, __status: 204 };
-  return res.json();
-}
-
-async function encryptSecret(publicKey: string, secret: string): Promise<string> {
-  // GitHub requires libsodium-sealed-box encryption for secrets.
-  // In a Worker environment without libsodium, we base64-encode as a
-  // placeholder — the org-level secret is the real fix.
-  // For proper encryption, use tweetnacl-sealed-box or libsodium.
-  return btoa(secret);
-}
