@@ -11,3 +11,4 @@ coverage/
 .dev.vars
 docs/.vitepress/cache/
 docs/.vitepress/dist/
+.vibe-check/
