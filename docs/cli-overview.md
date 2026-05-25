@@ -31,6 +31,19 @@ pas publish                         # provision CF Pages + DNS + D1 + Data Worke
 pas publish --name "My App"         # with display name
 pas publish --category productivity # with store category
 
+# Integrations (one-command API setup)
+pas integrate openai                # connect OpenAI — prompts for API key
+pas integrate amadeus               # connect Amadeus — prompts for credentials
+pas integrate list                  # show all available integrations
+
+# Secrets & proxy (manual configuration)
+pas secret set API_KEY <value>      # store an encrypted API key
+pas secret list                     # list secret names (values never shown)
+pas secret rm API_KEY               # delete a secret
+pas proxy allow <pattern> --inject bearer --secret API_KEY
+pas proxy list                      # show proxy allowlist
+pas proxy deny <pattern>            # remove a proxy rule
+
 # Custom domains
 pas domain add my-custom.com        # add a custom domain
 pas domain list                     # list configured domains

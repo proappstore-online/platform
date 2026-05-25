@@ -21,16 +21,12 @@ export interface AllowlistRule {
 }
 
 /**
- * Hosts that must use the PAS key vault, not this proxy. Match is on the
- * registerable host (eTLD+1 conceptually); we check both exact and suffix
- * (`.openai.com`) so subdomains like `api.openai.com` are caught too.
+ * AI provider host blocklist — empty on PAS. Pro developers bring their
+ * own API keys and use the proxy like any other API. The blocklist only
+ * exists on FAS (free tier) where AI providers route through the user
+ * key vault instead.
  */
-const AI_PROVIDER_HOSTS = [
-  'openai.com',
-  'anthropic.com',
-  'openrouter.ai',
-  'generativelanguage.googleapis.com',
-] as const;
+const AI_PROVIDER_HOSTS: readonly string[] = [];
 
 export class AllowlistError extends Error {
   constructor(message: string) {

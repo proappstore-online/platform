@@ -1,0 +1,131 @@
+{
+  "openai": {
+    "name": "OpenAI (GPT, DALL-E, Whisper)",
+    "auth": "bearer",
+    "patterns": ["https://api.openai.com/"],
+    "methods": ["GET", "POST"],
+    "secrets": ["API_KEY"],
+    "docs": "https://platform.openai.com/api-keys"
+  },
+  "anthropic": {
+    "name": "Anthropic (Claude)",
+    "auth": "header",
+    "headerName": "x-api-key",
+    "patterns": ["https://api.anthropic.com/"],
+    "methods": ["GET", "POST"],
+    "secrets": ["API_KEY"],
+    "docs": "https://console.anthropic.com/settings/keys"
+  },
+  "google-ai": {
+    "name": "Google AI (Gemini)",
+    "auth": "query",
+    "queryParam": "key",
+    "patterns": ["https://generativelanguage.googleapis.com/"],
+    "methods": ["GET", "POST"],
+    "secrets": ["API_KEY"],
+    "docs": "https://aistudio.google.com/apikey"
+  },
+  "openrouter": {
+    "name": "OpenRouter (multi-model gateway)",
+    "auth": "bearer",
+    "patterns": ["https://openrouter.ai/api/"],
+    "methods": ["GET", "POST"],
+    "secrets": ["API_KEY"],
+    "docs": "https://openrouter.ai/keys"
+  },
+  "replicate": {
+    "name": "Replicate (open source models)",
+    "auth": "bearer",
+    "patterns": ["https://api.replicate.com/"],
+    "methods": ["GET", "POST"],
+    "secrets": ["API_KEY"],
+    "docs": "https://replicate.com/account/api-tokens"
+  },
+  "stability": {
+    "name": "Stability AI (image generation)",
+    "auth": "bearer",
+    "patterns": ["https://api.stability.ai/"],
+    "methods": ["GET", "POST"],
+    "secrets": ["API_KEY"],
+    "docs": "https://platform.stability.ai/account/keys"
+  },
+  "elevenlabs": {
+    "name": "ElevenLabs (text-to-speech)",
+    "auth": "header",
+    "headerName": "xi-api-key",
+    "patterns": ["https://api.elevenlabs.io/"],
+    "methods": ["GET", "POST"],
+    "secrets": ["API_KEY"],
+    "docs": "https://elevenlabs.io/app/settings/api-keys"
+  },
+  "amadeus": {
+    "name": "Amadeus (flights & hotels)",
+    "auth": "oauth2_cc",
+    "tokenUrl": "https://test.api.amadeus.com/v1/security/oauth2/token",
+    "patterns": ["https://test.api.amadeus.com/v2/"],
+    "methods": ["GET", "POST"],
+    "secrets": ["CLIENT_ID", "CLIENT_SECRET"],
+    "docs": "https://developers.amadeus.com/register"
+  },
+  "amadeus-prod": {
+    "name": "Amadeus Production (flights & hotels)",
+    "auth": "oauth2_cc",
+    "tokenUrl": "https://api.amadeus.com/v1/security/oauth2/token",
+    "patterns": ["https://api.amadeus.com/v2/"],
+    "methods": ["GET", "POST"],
+    "secrets": ["CLIENT_ID", "CLIENT_SECRET"],
+    "docs": "https://developers.amadeus.com/register"
+  },
+  "spotify": {
+    "name": "Spotify (music, playlists)",
+    "auth": "oauth2_cc",
+    "tokenUrl": "https://accounts.spotify.com/api/token",
+    "patterns": ["https://api.spotify.com/v1/"],
+    "methods": ["GET", "POST", "PUT", "DELETE"],
+    "secrets": ["CLIENT_ID", "CLIENT_SECRET"],
+    "docs": "https://developer.spotify.com/dashboard"
+  },
+  "github": {
+    "name": "GitHub API",
+    "auth": "bearer",
+    "patterns": ["https://api.github.com/"],
+    "methods": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    "secrets": ["TOKEN"],
+    "docs": "https://github.com/settings/tokens"
+  },
+  "openweathermap": {
+    "name": "OpenWeatherMap",
+    "auth": "query",
+    "queryParam": "appid",
+    "patterns": ["https://api.openweathermap.org/data/2.5/", "https://api.openweathermap.org/data/3.0/"],
+    "methods": ["GET"],
+    "secrets": ["API_KEY"],
+    "docs": "https://home.openweathermap.org/api_keys"
+  },
+  "rapidapi": {
+    "name": "RapidAPI (any API on the hub)",
+    "auth": "header",
+    "headerName": "X-RapidAPI-Key",
+    "patterns": [],
+    "methods": ["GET", "POST"],
+    "secrets": ["API_KEY"],
+    "docs": "https://rapidapi.com/developer/dashboard",
+    "note": "After integrating, add proxy rules for the specific RapidAPI host(s) you use."
+  },
+  "resend": {
+    "name": "Resend (email API)",
+    "auth": "bearer",
+    "patterns": ["https://api.resend.com/"],
+    "methods": ["GET", "POST"],
+    "secrets": ["API_KEY"],
+    "docs": "https://resend.com/api-keys"
+  },
+  "stripe": {
+    "name": "Stripe API",
+    "auth": "bearer",
+    "patterns": ["https://api.stripe.com/"],
+    "methods": ["GET", "POST", "DELETE"],
+    "secrets": ["SECRET_KEY"],
+    "docs": "https://dashboard.stripe.com/apikeys"
+  }
+}
