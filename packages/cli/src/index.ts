@@ -10,6 +10,8 @@ import { loginCommand } from './login.js';
 import { logoutCommand } from './logout.js';
 import { whoamiCommand } from './whoami.js';
 import { publishApp } from './publish.js';
+import { secretCommand } from './secret.js';
+import { proxyCommand } from './proxy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as { version: string };
@@ -53,6 +55,8 @@ program
 
 program.addCommand(checkCommand);
 program.addCommand(domainCommand);
+program.addCommand(secretCommand);
+program.addCommand(proxyCommand);
 
 program.parseAsync().catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err);
