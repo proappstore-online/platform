@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { createInterface } from 'node:readline/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import { bearer, dieFromHttp, requireSession, resolveAppIdOrExit } from './secret.js';
-import catalog from './integrations.json' with { type: 'json' };
 
 type InjectKind = 'query' | 'header' | 'bearer' | 'oauth2_cc';
 
@@ -17,15 +20,17 @@ interface Integration {
   note?: string;
 }
 
-const integrations = catalog as Record<string, Integration>;
+// Load catalog at runtime from the file shipped alongside the compiled JS.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const catalogPath = join(__dirname, 'integrations.json');
+const integrations = JSON.parse(readFileSync(catalogPath, 'utf8')) as Record<string, Integration>;
 
 export const integrateCommand = new Command('integrate')
   .description('Connect a third-party API using pre-configured proxy rules.')
-  .argument('<name>', `integration name (${Object.keys(integrations).join(', ')})`)
+  .argument('[name]', `integration name (run "pas integrate list" to see all)`)
   .option('--app <id>', 'app id (defaults to package.json name in cwd)')
-  .option('--list', 'list all available integrations')
-  .action(async (name: string, opts: { app?: string; list?: boolean }) => {
-    if (name === 'list' || opts.list) {
+  .action(async (name: string | undefined, opts: { app?: string }) => {
+    if (!name || name === 'list') {
       process.stdout.write('\nAvailable integrations:\n\n');
       for (const [id, int] of Object.entries(integrations)) {
         process.stdout.write(`  ${id.padEnd(20)} ${int.name}\n`);
@@ -47,24 +52,29 @@ export const integrateCommand = new Command('integrate')
     const appId = await resolveAppIdOrExit(opts.app);
     const prefix = name.toUpperCase().replace(/-/g, '_');
 
-    process.stdout.write(`\n  Integrating ${integration.name} for ${appId}\n\n`);
+    process.stdout.write(`\n  Integrating ${integration.name} for ${appId}\n`);
+    process.stdout.write(`  Docs: ${integration.docs}\n\n`);
 
     if (integration.note) {
       process.stdout.write(`  Note: ${integration.note}\n\n`);
     }
 
     // Collect secrets interactively
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
     const secretValues: Record<string, string> = {};
-    for (const secretSuffix of integration.secrets) {
-      const secretName = `${prefix}_${secretSuffix}`;
-      process.stdout.write(`  ${secretName}: `);
-      const value = await readLine();
-      if (!value.trim()) {
-        process.stderr.write(`\n  Aborted — ${secretName} is required.\n`);
-        process.stderr.write(`  Get yours at: ${integration.docs}\n\n`);
-        process.exit(1);
+    try {
+      for (const secretSuffix of integration.secrets) {
+        const secretName = `${prefix}_${secretSuffix}`;
+        const value = await rl.question(`  ${secretName}: `);
+        if (!value.trim()) {
+          process.stderr.write(`\n  Aborted — ${secretName} is required.\n`);
+          process.stderr.write(`  Get yours at: ${integration.docs}\n\n`);
+          process.exit(1);
+        }
+        secretValues[secretName] = value.trim();
       }
-      secretValues[secretName] = value.trim();
+    } finally {
+      rl.close();
     }
 
     // Store secrets
@@ -108,9 +118,9 @@ export const integrateCommand = new Command('integrate')
       process.stdout.write(`  [+] Proxy rule: ${pattern}\n`);
     }
 
-    process.stdout.write(`\n  Done! Use in your app:\n`);
     const exampleHost = new URL(integration.patterns[0]!).host;
     const examplePath = new URL(integration.patterns[0]!).pathname;
+    process.stdout.write(`\n  Done! Use in your app:\n`);
     process.stdout.write(`    const res = await app.proxy.fetch('${exampleHost}${examplePath}...')\n\n`);
   });
 
@@ -134,16 +144,4 @@ function mapAuth(int: Integration): string {
   if (int.auth === 'header') return `header:${int.headerName ?? 'X-API-Key'}`;
   if (int.auth === 'query') return `query:${int.queryParam ?? 'key'}`;
   return int.auth;
-}
-
-function readLine(): Promise<string> {
-  return new Promise((resolve) => {
-    let data = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.once('data', (chunk) => {
-      data = String(chunk).replace(/\n$/, '');
-      resolve(data);
-    });
-    process.stdin.resume();
-  });
 }

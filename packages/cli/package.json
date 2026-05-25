@@ -21,7 +21,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp src/integrations.json dist/integrations.json",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
