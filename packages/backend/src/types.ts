@@ -12,18 +12,9 @@ export interface Env {
   /** CF credentials for provisioning (D1, Pages, Workers). */
   CF_API_TOKEN: string;
   CF_ACCOUNT_ID: string;
-  /**
-   * Service binding to the FAS admin Worker (`freeappstore-admin`). PAS
-   * delegates the cross-store provisioning steps (GitHub repo, CF Pages,
-   * DNS, custom domain, storefront registry) to FAS admin via this binding;
-   * the D1 + data-worker steps stay local. See ADR 003 (one control plane).
-   *
-   * Service-binding fetches bypass CF Access entirely — no JWT needed.
-   * Optional so the Worker boots locally without binding, in which case
-   * /v1/provision falls back to D1+worker only and returns a 'skip' step
-   * for everything else.
-   */
-  ADMIN?: Fetcher;
+  // ADMIN service binding (was: freeappstore-admin) removed 2026-05-28
+  // per PLAN-ARCH-CLEANUP Phase 4. PAS provisioning is fully self-contained
+  // in routes/provision.ts; the binding was unused.
   /** VAPID keys for Web Push notifications. */
   VAPID_PUBLIC_KEY: string;
   VAPID_PRIVATE_KEY: string;

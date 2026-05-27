@@ -32,12 +32,11 @@ zone_name = "proappstore.online"
 
 # Service binding to FAS admin Worker — handles the cross-store provisioning
 # steps (GitHub repo, CF Pages, DNS, custom domain, storefront registry) so
-# PAS reuses the working FAS provisioner instead of duplicating it. PAS's
-# /v1/provision still does the PAS-specific D1 + data Worker steps locally.
-# Calls go Worker→Worker on the same CF account and bypass CF Access.
-[[services]]
-binding = "ADMIN"
-service = "freeappstore-admin"
+# PAS provisioning is fully self-contained in packages/backend/src/routes/
+# provision.ts — see ADR notes there. The legacy [[services]] binding to
+# freeappstore-admin was removed 2026-05-28 per PLAN-ARCH-CLEANUP Phase 4
+# (admin-worker-per-store principle). It had been dead config — no code
+# path called env.ADMIN.fetch().
 
 # Secrets (set via `wrangler secret put`):
 #   CF_API_TOKEN                    (for provisioning D1/Pages/Workers)
