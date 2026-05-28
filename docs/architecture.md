@@ -32,7 +32,7 @@ Browser / app                ┌────────────────
 
 ### 1. `fas` Worker — identity & app primitives
 
-Lives at `api.freeappstore.online`. Source: `~/personal/fas/sdk/packages/backend`.
+Lives at `api.freeappstore.online`. Source: `~/dev/stores/fas/platform/packages/backend`.
 
 - **Identity:** GitHub OAuth (device flow for CLI, web flow for browser).
   HMAC-signed sessions with `SESSION_SIGNING_KEY`, 30-day TTL.
@@ -50,8 +50,8 @@ Lives at `api.freeappstore.online`. Source: `~/personal/fas/sdk/packages/backend
 
 ### 2. `pas` Worker — payments & entitlements
 
-Lives at `api.proappstore.online` (custom domain pending). Source:
-`~/personal/proapps/sdk/packages/backend`. **v0 skeleton.**
+Lives at `api.proappstore.online`. Source:
+`~/dev/stores/pas/platform/packages/backend`.
 
 - **Stripe webhook receiver** — `subscription.created`, `updated`,
   `deleted`, `invoice.paid`, `customer.subscription.trial_will_end`.
@@ -66,28 +66,36 @@ Lives at `api.proappstore.online` (custom domain pending). Source:
 D1 binding: `pas` (not yet created). Migrations directory under
 `packages/backend/migrations`.
 
-### 3. `fas/admin` Worker — provisioning
+### 3. PAS provisioning — self-contained
 
-Lives at `admin.freeappstore.online`. Source: `~/personal/fas/admin`.
+> **Updated 2026-05-28 (PLAN-ARCH-CLEANUP Phase 4).** PAS no longer reuses
+> the FAS admin Worker for provisioning. The legacy `[[services]] ADMIN =
+> freeappstore-admin` binding was removed from
+> `pas/platform/packages/backend/wrangler.toml` — no code path was actually
+> calling it. PAS provisioning is fully self-contained in
+> `pas/platform/packages/backend/src/routes/provision.ts`.
 
-`POST /api/provision` is the only mutating endpoint. Given an app id,
-name, category, and store, it creates:
+`POST /v1/provision` on `api.proappstore.online` is the mutating endpoint.
+Given an app id, name, category, it creates the same chain as before, but
+all the CF API + GitHub calls happen from the PAS Worker directly:
 
 | Step | Action | Tailored | Ready |
 |---|---|---|---|
-| 1 | GitHub repo | yes (per fork) | yes (one for the publisher) |
-| 2 | CF Pages project + GitHub integration | yes | yes |
-| 3 | Custom domain `<id>.freeappstore.online` | yes | yes |
-| 4 | DNS CNAME | yes | yes |
-| 5 | **D1 database** | **yes (per fork)** | no (publisher BYO) |
-| 6 | Storefront registry entry | yes | yes |
+| 1 | GitHub repo (in `proappstore-online` org) | yes (per fork) | yes (one for the publisher) |
+| 2 | Host route via D1 routes table (Path B) | yes | yes |
+| 3 | Storefront registry entry | yes | yes |
+| 4 | **D1 database** | **yes (per fork)** | no (publisher BYO) |
 
-Step 5 is the meaningful branch and the work item that unblocks any
+Step 4 is the meaningful branch and the work item that unblocks any
 non-toy Tailored template. See [publishing flow](/publishing-flow).
 
-Auth: Cloudflare Access (Google sign-in for humans, service tokens for
-the `fas` Worker's service binding — service-binding calls bypass the
-edge entirely so they bypass CF Access too).
+The standalone `proappstore-admin` Worker (source: `~/dev/stores/pas/admin`)
+is a separate dashboard endpoint at `admin.proappstore.online` that
+exposes `/api/publish-app` for owner-driven catalog edits — it's not on
+the CLI publish path.
+
+Auth: PAS platform validates the HMAC session minted by FAS (same
+`SESSION_SIGNING_KEY`). No CF Access on `api.proappstore.online`.
 
 ## Why one control plane
 
