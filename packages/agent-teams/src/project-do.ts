@@ -258,8 +258,9 @@ export class ProjectDO implements DurableObject {
     const now = Date.now();
 
     // Idle timeout: auto-pause after 30 min of no user chat
-    const idleMs = now - (proj.last_user_activity || 0);
-    if (proj.last_user_activity > 0 && idleMs > 30 * 60 * 1000) {
+    const lastActivity = (proj.last_user_activity as number | null) ?? 0;
+    const idleMs = lastActivity > 0 ? now - lastActivity : 0;
+    if (lastActivity > 0 && idleMs > 30 * 60 * 1000) {
       this.state.storage.sql.exec("UPDATE project SET status = 'paused'");
       this.broadcast({ type: 'play-state', status: 'paused', reason: 'idle-timeout' });
       this.broadcast({ type: 'chat', role: 'system', body: 'Auto-paused: no activity for 30 minutes. Hit Play to resume.', id: uuid() });
@@ -287,19 +288,19 @@ export class ProjectDO implements DurableObject {
       return;
     }
 
-    // Count currently active tickets
-    const activeCount = this.state.storage.sql
-      .exec("SELECT COUNT(*) as c FROM tickets WHERE status IN ('ba-refining','dev-active','qa-active')")
-      .toArray()[0] as { c: number };
-
     const tickets = this.state.storage.sql
       .exec("SELECT id, status, iterations FROM tickets WHERE status NOT IN ('done','failed','cancelled','needs-input','ba-refining','dev-active','qa-active') ORDER BY created_at")
       .toArray() as { id: string; status: string; iterations: number }[];
 
     for (const t of tickets) {
+      // Re-query active count each iteration to prevent race condition
+      const activeCount = (this.state.storage.sql
+        .exec("SELECT COUNT(*) as c FROM tickets WHERE status IN ('ba-refining','dev-active','qa-active')")
+        .toArray()[0] as { c: number }).c;
+
       // Don't exceed max concurrent active tickets
-      if (activeCount.c >= 3 && (t.status === 'inbox' || t.status === 'ready' || t.status === 'qa-failed')) {
-        break; // Wait for an active ticket to finish
+      if (activeCount >= 3 && (t.status === 'inbox' || t.status === 'ready' || t.status === 'qa-failed')) {
+        break;
       }
 
       switch (t.status) {
@@ -309,7 +310,6 @@ export class ProjectDO implements DurableObject {
             now, t.id,
           );
           this.broadcast({ type: 'transition', ticketId: t.id, from: 'inbox', to: 'ba-refining', auto: true });
-          activeCount.c++;
           break;
 
         case 'awaiting-approval':
@@ -327,7 +327,6 @@ export class ProjectDO implements DurableObject {
             now, t.id,
           );
           this.broadcast({ type: 'transition', ticketId: t.id, from: 'ready', to: 'dev-active', auto: true });
-          activeCount.c++;
           break;
 
         case 'qa-failed':
@@ -337,7 +336,6 @@ export class ProjectDO implements DurableObject {
               now, t.id,
             );
             this.broadcast({ type: 'transition', ticketId: t.id, from: 'qa-failed', to: 'dev-active', auto: true });
-            activeCount.c++;
           } else {
             this.state.storage.sql.exec(
               "UPDATE tickets SET status = 'failed', stuck_reason = 'Iteration cap reached (5)', updated_at = ? WHERE id = ?",
@@ -699,6 +697,7 @@ export class ProjectDO implements DurableObject {
   private async handleChat(request: Request): Promise<Response> {
     const body = (await request.json()) as { message: string; apiKey?: string };
     if (!body.message?.trim()) return json({ error: 'message required' }, 400);
+    if (body.message.length > 8192) return json({ error: 'message too long (max 8KB)' }, 413);
 
     const userText = body.message.trim();
     const now = Date.now();
@@ -718,10 +717,11 @@ export class ProjectDO implements DurableObject {
         'INSERT INTO messages (id, ticket_id, author, body, created_at) VALUES (?, ?, ?, ?, ?)',
         uuid(), blocked.id, 'po', userText, now,
       );
-      // Resume the ticket based on which role was working on it
-      const resumeStatus = blocked.assignee_role === 'BA' ? 'ba-refining'
-        : blocked.assignee_role === 'QA' ? 'qa-active'
-        : 'dev-active';
+      // Resume to a "pending" state so autoAdvance picks it up and re-assigns
+      // Don't go directly to an active state — the agent needs to restart
+      const resumeStatus = blocked.assignee_role === 'BA' ? 'inbox'
+        : blocked.assignee_role === 'QA' ? 'dev-active' // QA re-runs after Dev
+        : 'ready'; // Dev picks up from ready
       this.state.storage.sql.exec(
         'UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?',
         resumeStatus, now, blocked.id,
@@ -806,12 +806,13 @@ Otherwise just respond in plain text. Be concise. You're a PO, not a chatbot.`;
         return this.savePOResponse(`Sorry, I couldn't process that: ${safeError}`, now, undefined);
       }
 
-      const aiRes = (await res.json()) as {
-        content: { type: string; text?: string }[];
-        usage: { input_tokens: number; output_tokens: number };
-      };
+      const aiRes = (await res.json()) as Record<string, unknown>;
+      const contentArr = aiRes.content;
+      if (!Array.isArray(contentArr)) {
+        return this.savePOResponse('I got an unexpected response format. Try again?', now, undefined);
+      }
 
-      const text = aiRes.content.find((c) => c.type === 'text')?.text ?? '';
+      const text = (contentArr as { type: string; text?: string }[]).find((c) => c.type === 'text')?.text ?? '';
 
       // Check if PO wants to create a ticket
       const toolMatch = text.match(/\{"tool":"create_ticket".*?\}/);
