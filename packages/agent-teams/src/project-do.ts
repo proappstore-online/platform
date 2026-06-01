@@ -99,6 +99,20 @@ export class ProjectDO implements DurableObject {
     }
   }
 
+  // ── Ownership check ────────────────────────────────────────
+
+  private assertOwner(request: Request): Response | null {
+    const userId = request.headers.get('X-User-Id');
+    if (!userId) return json({ error: 'forbidden' }, 403);
+    const row = this.state.storage.sql
+      .exec('SELECT owner_id FROM project LIMIT 1')
+      .toArray()[0] as { owner_id: string } | undefined;
+    // If no project exists yet (init), allow (ownership set during init)
+    if (!row) return null;
+    if (row.owner_id !== userId) return json({ error: 'not_found' }, 404);
+    return null;
+  }
+
   // ── HTTP + WebSocket handler ──────────────────────────────
 
   async fetch(request: Request): Promise<Response> {
@@ -107,16 +121,24 @@ export class ProjectDO implements DurableObject {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // WebSocket upgrade (hibernation-safe)
+    // WebSocket upgrade (hibernation-safe, with ownership check)
     if (request.headers.get('Upgrade') === 'websocket') {
+      const ownerErr = this.assertOwner(request);
+      if (ownerErr) return ownerErr;
       const pair = new WebSocketPair();
       this.state.acceptWebSocket(pair[1]);
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
+    // Init is special: only checks ownership if project already exists
+    if (path === '/project' && request.method === 'PUT') return this.initProject(request);
+
+    // All other routes require ownership
+    const ownerErr = this.assertOwner(request);
+    if (ownerErr) return ownerErr;
+
     // REST routes
     if (path === '/project' && request.method === 'GET') return this.getProject();
-    if (path === '/project' && request.method === 'PUT') return this.initProject(request);
 
     if (path === '/roles' && request.method === 'GET') return this.getRoles();
     if (path === '/roles' && request.method === 'PUT') return this.setRoles(request);
@@ -182,11 +204,29 @@ export class ProjectDO implements DurableObject {
       return json({ error: 'name, slug, ownerId required' }, 400);
     }
 
+    // Prevent re-init takeover: reject if project already exists
+    const existing = this.state.storage.sql
+      .exec('SELECT id, owner_id FROM project LIMIT 1')
+      .toArray()[0] as { id: string; owner_id: string } | undefined;
+    if (existing) {
+      // Only the owner can re-init (to update name/cap)
+      const userId = request.headers.get('X-User-Id');
+      if (existing.owner_id !== userId) {
+        return json({ error: 'not_found' }, 404);
+      }
+      // Update, don't replace (preserve cost tracking)
+      this.state.storage.sql.exec(
+        'UPDATE project SET name = ?, cost_cap_monthly_usd = ? WHERE id = ?',
+        body.name, body.costCapMonthlyUsd ?? 50.0, existing.id,
+      );
+      return json({ id: existing.id, slug: body.slug });
+    }
+
     const id = uuid();
     const now = Date.now();
 
     this.state.storage.sql.exec(
-      `INSERT OR REPLACE INTO project (id, owner_id, name, slug, created_at, cost_cap_monthly_usd)
+      `INSERT INTO project (id, owner_id, name, slug, created_at, cost_cap_monthly_usd)
        VALUES (?, ?, ?, ?, ?, ?)`,
       id, body.ownerId, body.name, body.slug, now, body.costCapMonthlyUsd ?? 50.0,
     );

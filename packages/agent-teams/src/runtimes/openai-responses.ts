@@ -152,8 +152,12 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
       });
 
       if (!res.ok) {
-        const errText = await res.text();
-        yield { type: 'error', message: `OpenAI ${res.status}: ${errText}`, retryable: res.status >= 500 };
+        // Sanitize error — never expose raw upstream response (may contain API key)
+        const safeError = res.status === 401 ? 'API authentication failed — check your API key'
+          : res.status === 429 ? 'Rate limited — retry later'
+          : res.status === 400 ? 'Invalid request to AI provider'
+          : `AI provider error (${res.status})`;
+        yield { type: 'error', message: safeError, retryable: res.status >= 500 };
         return;
       }
 
@@ -229,7 +233,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
   }
 
   async invokeTool(handle: RuntimeHandle, toolCall: ToolCall): Promise<ToolResult> {
-    const s = handle.state as { spineTools: string[] };
+    const s = handle.state as { spineTools: string[]; userToken?: string };
     if (!isAllowedTool(toolCall.name, s.spineTools)) {
       return {
         callId: toolCall.id,
@@ -238,7 +242,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
         durationMs: 0,
       };
     }
-    return dispatchTool(toolCall, null);
+    return dispatchTool(toolCall, s.userToken ?? null);
   }
 
   async terminate(_handle: RuntimeHandle): Promise<{ costUsd: number; tokensIn: number; tokensOut: number }> {
