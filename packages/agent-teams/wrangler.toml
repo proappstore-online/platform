@@ -2,13 +2,10 @@ name = "proappstore-agent-teams"
 main = "src/index.ts"
 compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
-workers_dev = true
 
-# Not deployed yet. v0.1 is scaffolding only.
-# Production route (when ready):
-# [[routes]]
-# pattern = "agents.proappstore.online/*"
-# zone_name = "proappstore.online"
+[[routes]]
+pattern = "agents.proappstore.online/*"
+zone_name = "proappstore.online"
 
 [vars]
 FAS_API_BASE = "https://api.freeappstore.online"
@@ -35,6 +32,3 @@ bucket_name = "pas-agent-teams"
 [[services]]
 binding = "PAS_BACKEND"
 service = "proappstore-api"
-
-# Secrets (set via `wrangler secret put`, never committed):
-#   FAS_SESSION_SIGNING_KEY  — to validate FAS-issued session cookies for auth
