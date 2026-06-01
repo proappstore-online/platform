@@ -5,6 +5,7 @@ import {
   assigneeForStatus,
   isTerminal,
   needsUserAction,
+  qaVerdict,
   MAX_ITERATIONS,
   MAX_RUN_MINUTES,
   IDLE_TIMEOUT_MINUTES,
@@ -167,6 +168,14 @@ describe('needsUserAction', () => {
   it('awaiting-approval needs user action', () => expect(needsUserAction('awaiting-approval')).toBe(true));
   it('dev-active does not', () => expect(needsUserAction('dev-active')).toBe(false));
   it('inbox does not', () => expect(needsUserAction('inbox')).toBe(false));
+});
+
+describe('qaVerdict', () => {
+  it('fails on a FAIL report', () => expect(qaVerdict('FAIL: button is broken')).toBe('qa-failed'));
+  it('fails on "failed"', () => expect(qaVerdict('The login flow failed acceptance')).toBe('qa-failed'));
+  it('passes on a PASS report', () => expect(qaVerdict('PASS — all criteria met')).toBe('done'));
+  it('defaults ambiguous output to done', () => expect(qaVerdict('Looks good to me, shipping.')).toBe('done'));
+  it('is case-insensitive', () => expect(qaVerdict('verdict: fail')).toBe('qa-failed'));
 });
 
 describe('safety constants', () => {

@@ -100,6 +100,15 @@ export function isTerminal(status: TicketStatus): boolean {
   return status === 'done' || status === 'failed' || status === 'cancelled';
 }
 
+/**
+ * Decide a QA verdict from the QA agent's free-text report. The QA prompt asks
+ * it to report PASS or FAIL; any FAIL signal routes the ticket back to Dev.
+ * Ambiguous output defaults to 'done' (the iteration cap guards against loops).
+ */
+export function qaVerdict(output: string): 'done' | 'qa-failed' {
+  return /\bFAIL(ED|S|URE)?\b/i.test(output) ? 'qa-failed' : 'done';
+}
+
 /** Is this a state where the user needs to respond? */
 export function needsUserAction(status: TicketStatus): boolean {
   return status === 'needs-input' || status === 'awaiting-approval';

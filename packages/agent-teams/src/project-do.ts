@@ -23,7 +23,12 @@ import {
   assigneeForStatus,
   canTransition,
   isTerminal,
+  qaVerdict,
 } from './ticket-machine.ts';
+import type { AgentRuntime } from './types.ts';
+import { CFNativeRuntime } from './runtimes/cf-native.ts';
+import { OpenAIResponsesRuntime } from './runtimes/openai-responses.ts';
+import { resolveByoKey, runtimeToProvider } from './byo-key.ts';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS project (
@@ -73,6 +78,8 @@ export class ProjectDO implements DurableObject {
   private state: DurableObjectState;
   private env: Bindings;
   private initialized = false;
+  /** Ticket IDs with an agent run in flight — prevents double-dispatch. */
+  private running = new Set<string>();
 
   constructor(state: DurableObjectState, env: Bindings) {
     this.state = state;
@@ -85,6 +92,11 @@ export class ProjectDO implements DurableObject {
     // Schema versioning: add columns that may not exist in older DOs
     try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN cost_month TEXT DEFAULT ''`); } catch { /* exists */ }
     try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN status TEXT DEFAULT 'paused'`); } catch { /* exists */ }
+    // Owner session token, captured at play time, used to authenticate the
+    // spine/MCP tool dispatch during autonomous agent runs. Pre-launch: stored
+    // in the DO's own SQLite. TODO: replace with INTERNAL_TOKEN-based MCP auth
+    // once issue #5 (MCP ownership scoping) lands.
+    try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN owner_session_token TEXT`); } catch { /* exists */ }
     this.initialized = true;
   }
 
@@ -141,7 +153,7 @@ export class ProjectDO implements DurableObject {
 
     // REST routes
     if (path === '/project' && request.method === 'GET') return this.getProject();
-    if (path === '/project/play' && request.method === 'POST') return this.setPlayState('running');
+    if (path === '/project/play' && request.method === 'POST') return this.setPlayState('running', request);
     if (path === '/project/pause' && request.method === 'POST') return this.setPlayState('paused');
 
     if (path === '/roles' && request.method === 'GET') return this.getRoles();
@@ -215,7 +227,7 @@ export class ProjectDO implements DurableObject {
     });
   }
 
-  private setPlayState(newStatus: 'running' | 'paused'): Response {
+  private setPlayState(newStatus: 'running' | 'paused', request?: Request): Response {
     const now = Date.now();
     this.state.storage.sql.exec('UPDATE project SET status = ?', newStatus);
 
@@ -223,6 +235,12 @@ export class ProjectDO implements DurableObject {
       // Record when we started running (for idle timeout)
       try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN last_user_activity INTEGER DEFAULT 0`); } catch { /* exists */ }
       this.state.storage.sql.exec('UPDATE project SET last_user_activity = ?', now);
+
+      // Capture the owner's session token for autonomous tool dispatch.
+      const ownerToken = request?.headers.get('X-User-Token');
+      if (ownerToken) {
+        this.state.storage.sql.exec('UPDATE project SET owner_session_token = ?', ownerToken);
+      }
     }
 
     this.broadcast({ type: 'play-state', status: newStatus });
@@ -346,6 +364,271 @@ export class ProjectDO implements DurableObject {
           break;
       }
     }
+
+    // Kick off agent runs for any tickets now sitting in an active state.
+    this.runPendingAgents();
+  }
+
+  // ── Agent dispatch ────────────────────────────────────────
+
+  /**
+   * Find tickets in an active state (ba-refining / dev-active / qa-active) that
+   * don't already have a run in flight, and dispatch an agent for each. Runs are
+   * fire-and-forget; each one transitions the ticket on completion and re-enters
+   * autoAdvance to keep the pipeline moving.
+   */
+  private runPendingAgents(): void {
+    const proj = this.state.storage.sql
+      .exec('SELECT status FROM project LIMIT 1')
+      .toArray()[0] as { status: string } | undefined;
+    if (!proj || proj.status !== 'running') return;
+
+    const active = this.state.storage.sql
+      .exec("SELECT id FROM tickets WHERE status IN ('ba-refining','dev-active','qa-active') ORDER BY updated_at")
+      .toArray() as { id: string }[];
+
+    for (const t of active) {
+      if (this.running.has(t.id)) continue;
+      this.running.add(t.id);
+      // Don't await — let the run proceed in the background. waitUntil keeps the
+      // DO alive for the duration when available.
+      const p = this.runAgentInternal(t.id).finally(() => this.running.delete(t.id));
+      try {
+        (this.state as unknown as { waitUntil?: (pr: Promise<unknown>) => void }).waitUntil?.(p);
+      } catch { /* waitUntil unavailable — promise still runs */ }
+    }
+  }
+
+  /**
+   * Run one agent turn for a ticket: resolve the owner's BYO key, instantiate
+   * the configured runtime, stream the turn (persisting messages + cost and
+   * broadcasting events), then transition the ticket based on the outcome.
+   */
+  private async runAgentInternal(ticketId: string): Promise<void> {
+    const row = this.state.storage.sql
+      .exec('SELECT * FROM tickets WHERE id = ?', ticketId)
+      .toArray()[0] as Record<string, unknown> | undefined;
+    if (!row) return;
+    const ticket = rowToTicket(row);
+    const role = assigneeForStatus(ticket.status);
+    if (!role) return;
+
+    const proj = this.state.storage.sql
+      .exec('SELECT owner_id, slug, owner_session_token FROM project LIMIT 1')
+      .toArray()[0] as { owner_id: string; slug: string; owner_session_token: string | null } | undefined;
+    if (!proj) return;
+
+    const rcRow = this.state.storage.sql
+      .exec('SELECT * FROM role_configs WHERE role = ?', role)
+      .toArray()[0] as Record<string, unknown> | undefined;
+    if (!rcRow) {
+      this.failTicket(ticketId, ticket.status, `Role ${role} is not configured`);
+      return;
+    }
+    const roleConfig = rowToRoleConfig(rcRow);
+
+    // Resolve the owner's BYO key for this runtime's provider.
+    const provider = runtimeToProvider(roleConfig.runtime);
+    const byoKey = await resolveByoKey(this.env, proj.owner_id, provider);
+    if (!byoKey) {
+      this.blockForInput(
+        ticketId,
+        role,
+        `${role} needs a ${provider} API key. Add one in the platform key vault (Settings → API Keys), then hit Play.`,
+      );
+      return;
+    }
+
+    this.broadcast({ type: 'agent-run-started', ticketId, role, runtime: roleConfig.runtime });
+
+    const runtime: AgentRuntime = roleConfig.runtime === 'openai-responses'
+      ? new OpenAIResponsesRuntime()
+      : new CFNativeRuntime();
+
+    const messages = this.buildSeedMessages(role, ticket, proj.slug);
+
+    let assistantText = '';
+    const toolCalls: ToolCall[] = [];
+    let costUsd = 0;
+    let tokensIn = 0;
+    let tokensOut = 0;
+    let errorMessage: string | null = null;
+
+    try {
+      const handle = await runtime.prepare({
+        projectId: proj.slug,
+        ticketId,
+        role: roleConfig,
+        byoKey,
+        userToken: proj.owner_session_token ?? undefined,
+      });
+
+      for await (const ev of runtime.run(handle, messages)) {
+        switch (ev.type) {
+          case 'text-delta':
+            assistantText += ev.text;
+            this.broadcast({ type: 'agent-text', ticketId, role, text: ev.text });
+            break;
+          case 'tool-call':
+            toolCalls.push(ev.call);
+            this.broadcast({ type: 'agent-tool-call', ticketId, role, name: ev.call.name });
+            break;
+          case 'tool-result':
+            this.broadcast({ type: 'agent-tool-result', ticketId, role, ok: ev.result.ok });
+            break;
+          case 'done':
+            costUsd = ev.costUsd;
+            tokensIn = ev.tokensIn;
+            tokensOut = ev.tokensOut;
+            break;
+          case 'error':
+            errorMessage = ev.message;
+            break;
+          case 'heartbeat':
+            this.broadcast({ type: 'agent-heartbeat', ticketId, role });
+            break;
+        }
+      }
+    } catch (err) {
+      errorMessage = err instanceof Error ? err.message : 'agent run failed';
+    }
+
+    // Persist the agent's output + cost.
+    if (assistantText.trim() || toolCalls.length > 0) {
+      await this.storeMessage({
+        ticketId,
+        author: role,
+        body: assistantText.trim() || `(${role} ran ${toolCalls.length} tool call(s))`,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        costUsd,
+        tokensIn,
+        tokensOut,
+        model: roleConfig.model,
+      });
+    }
+
+    // If the cap auto-failed this ticket mid-run, stop here.
+    const post = this.state.storage.sql
+      .exec('SELECT status FROM tickets WHERE id = ?', ticketId)
+      .toArray()[0] as { status: string } | undefined;
+    if (!post || isTerminal(post.status as TicketStatus)) {
+      this.autoAdvance();
+      return;
+    }
+
+    if (errorMessage) {
+      this.blockForInput(ticketId, role, `${role} hit an error: ${errorMessage}`);
+      this.autoAdvance();
+      return;
+    }
+
+    this.applyAgentOutcome(ticketId, role, assistantText);
+    this.autoAdvance();
+  }
+
+  /** Build the single seeded user message that frames one agent's turn. */
+  private buildSeedMessages(role: Role, ticket: Ticket, slug: string): Message[] {
+    const prior = this.state.storage.sql
+      .exec('SELECT author, body FROM messages WHERE ticket_id = ? ORDER BY created_at', ticket.id)
+      .toArray() as { author: string; body: string }[];
+    const lastFrom = (a: string) => [...prior].reverse().find((m) => m.author === a)?.body;
+
+    let context = `# Ticket: ${ticket.title}\n\n${ticket.rawIdea}`;
+    if (ticket.spec?.summary) context += `\n\n## Approved spec\n${ticket.spec.summary}`;
+
+    if (role === 'Dev') {
+      const ba = lastFrom('BA');
+      if (ba) context += `\n\n## BA analysis\n${ba}`;
+      if (ticket.status === 'qa-failed' || ticket.iterations > 0) {
+        const qa = lastFrom('QA');
+        if (qa) context += `\n\n## QA found these issues — fix them\n${qa}`;
+      }
+      context += `\n\nThe app id is "${slug}". Implement or modify the app to satisfy the spec, using your tools.`;
+    } else if (role === 'QA') {
+      const ba = lastFrom('BA');
+      if (ba) context += `\n\n## Spec to verify\n${ba}`;
+      context += `\n\nThe app id is "${slug}". Review the implemented code and report PASS or FAIL with specific findings.`;
+    }
+
+    return [{
+      id: uuid(),
+      ticketId: ticket.id,
+      author: 'po',
+      body: context,
+      createdAt: Date.now(),
+      costUsd: 0,
+      tokensIn: 0,
+      tokensOut: 0,
+    }];
+  }
+
+  /** Transition a ticket forward after a successful agent run. */
+  private applyAgentOutcome(ticketId: string, role: Role, output: string): void {
+    const now = Date.now();
+    if (role === 'BA') {
+      // Stash the BA's analysis as a minimal spec and await approval.
+      const spec: BaSpec = {
+        summary: output.slice(0, 4000),
+        acceptanceCriteria: [],
+        sdkPrimitives: [],
+        filesToCreate: [],
+        outOfScope: [],
+        approvedBy: null,
+        approvedAt: null,
+        revisionOf: null,
+      };
+      this.state.storage.sql.exec(
+        "UPDATE tickets SET status = 'awaiting-approval', assignee_role = NULL, spec_json = ?, updated_at = ? WHERE id = ?",
+        JSON.stringify(spec), now, ticketId,
+      );
+      this.broadcast({ type: 'transition', ticketId, from: 'ba-refining', to: 'awaiting-approval', trigger: 'BA' });
+    } else if (role === 'Dev') {
+      this.state.storage.sql.exec(
+        "UPDATE tickets SET status = 'qa-active', assignee_role = 'QA', updated_at = ? WHERE id = ?",
+        now, ticketId,
+      );
+      this.broadcast({ type: 'transition', ticketId, from: 'dev-active', to: 'qa-active', trigger: 'Dev' });
+    } else if (role === 'QA') {
+      const failed = qaVerdict(output) === 'qa-failed';
+      if (failed) {
+        this.state.storage.sql.exec(
+          "UPDATE tickets SET status = 'qa-failed', assignee_role = 'Dev', updated_at = ? WHERE id = ?",
+          now, ticketId,
+        );
+        this.broadcast({ type: 'transition', ticketId, from: 'qa-active', to: 'qa-failed', trigger: 'QA' });
+      } else {
+        this.state.storage.sql.exec(
+          "UPDATE tickets SET status = 'done', assignee_role = NULL, updated_at = ? WHERE id = ?",
+          now, ticketId,
+        );
+        this.broadcast({ type: 'transition', ticketId, from: 'qa-active', to: 'done', trigger: 'QA' });
+      }
+    }
+  }
+
+  /** Park a ticket in needs-input with a message to the user. */
+  private blockForInput(ticketId: string, role: Role, message: string): void {
+    const now = Date.now();
+    this.state.storage.sql.exec(
+      "UPDATE tickets SET status = 'needs-input', updated_at = ? WHERE id = ?",
+      now, ticketId,
+    );
+    this.state.storage.sql.exec(
+      'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
+      uuid(), 'system', message, now,
+    );
+    this.broadcast({ type: 'transition', ticketId, to: 'needs-input', reason: 'agent-blocked', role });
+    this.broadcast({ type: 'chat', role: 'system', body: message, id: uuid() });
+  }
+
+  /** Hard-fail a ticket (system trigger). */
+  private failTicket(ticketId: string, from: TicketStatus, reason: string): void {
+    const now = Date.now();
+    this.state.storage.sql.exec(
+      "UPDATE tickets SET status = 'failed', stuck_reason = ?, updated_at = ? WHERE id = ?",
+      reason, now, ticketId,
+    );
+    this.broadcast({ type: 'transition', ticketId, from, to: 'failed', trigger: 'system', reason });
   }
 
   private async initProject(request: Request): Promise<Response> {
@@ -604,31 +887,63 @@ export class ProjectDO implements DurableObject {
       return json({ error: 'author and body required' }, 400);
     }
 
+    const id = await this.storeMessage({
+      ticketId,
+      author: body.author,
+      body: body.body,
+      toolCalls: body.toolCalls,
+      costUsd: body.costUsd ?? 0,
+      tokensIn: body.tokensIn ?? 0,
+      tokensOut: body.tokensOut ?? 0,
+      model: 'unknown',
+    });
+    return json({ id }, 201);
+  }
+
+  /**
+   * Persist a message + roll up its cost. Shared by the public addMessage
+   * route and autonomous agent runs. Offloads bodies > 8KB to R2, updates the
+   * ticket + monthly project cost (with month reset), records the cost ledger,
+   * and auto-fails active tickets when the monthly cap is hit. Returns the id.
+   */
+  private async storeMessage(opts: {
+    ticketId: string;
+    author: string;
+    body: string;
+    toolCalls?: ToolCall[] | undefined;
+    costUsd?: number | undefined;
+    tokensIn?: number | undefined;
+    tokensOut?: number | undefined;
+    model?: string | undefined;
+  }): Promise<string> {
     const id = uuid();
     const now = Date.now();
+    const costUsd = opts.costUsd ?? 0;
+    const tokensIn = opts.tokensIn ?? 0;
+    const tokensOut = opts.tokensOut ?? 0;
 
     // Offload large bodies to R2
-    let storedBody = body.body;
+    let storedBody = opts.body;
     let offloadKey: string | null = null;
-    if (body.body.length > 8192) {
-      offloadKey = `messages/${ticketId}/${id}`;
-      await this.env.AGENT_STORAGE.put(offloadKey, body.body);
-      storedBody = body.body.slice(0, 200) + '... [offloaded]';
+    if (opts.body.length > 8192) {
+      offloadKey = `messages/${opts.ticketId}/${id}`;
+      await this.env.AGENT_STORAGE.put(offloadKey, opts.body);
+      storedBody = opts.body.slice(0, 200) + '... [offloaded]';
     }
 
     this.state.storage.sql.exec(
       `INSERT INTO messages (id, ticket_id, author, body, tool_calls_json, created_at, cost_usd, tokens_in, tokens_out, body_offload_key)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id, ticketId, body.author, storedBody,
-      body.toolCalls ? JSON.stringify(body.toolCalls) : null,
-      now, body.costUsd ?? 0, body.tokensIn ?? 0, body.tokensOut ?? 0, offloadKey,
+      id, opts.ticketId, opts.author, storedBody,
+      opts.toolCalls ? JSON.stringify(opts.toolCalls) : null,
+      now, costUsd, tokensIn, tokensOut, offloadKey,
     );
 
     // Update cost on ticket and project (with monthly reset)
-    if (body.costUsd && body.costUsd > 0) {
+    if (costUsd > 0) {
       this.state.storage.sql.exec(
         'UPDATE tickets SET cost_spent_usd = cost_spent_usd + ? WHERE id = ?',
-        body.costUsd, ticketId,
+        costUsd, opts.ticketId,
       );
 
       // Monthly cost reset: check if we're in a new month
@@ -641,12 +956,12 @@ export class ProjectDO implements DurableObject {
         // New month: reset counter
         this.state.storage.sql.exec(
           'UPDATE project SET cost_spent_monthly_usd = ?, cost_month = ?',
-          body.costUsd, currentMonth,
+          costUsd, currentMonth,
         );
       } else {
         this.state.storage.sql.exec(
           'UPDATE project SET cost_spent_monthly_usd = cost_spent_monthly_usd + ?, cost_month = ?',
-          body.costUsd, currentMonth,
+          costUsd, currentMonth,
         );
       }
 
@@ -654,7 +969,7 @@ export class ProjectDO implements DurableObject {
       this.state.storage.sql.exec(
         `INSERT INTO cost_ledger (ticket_id, role, cost_usd, tokens_in, tokens_out, model, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        ticketId, body.author, body.costUsd, body.tokensIn ?? 0, body.tokensOut ?? 0, 'unknown', now,
+        opts.ticketId, opts.author, costUsd, tokensIn, tokensOut, opts.model ?? 'unknown', now,
       );
 
       // Re-read after update for cap check
@@ -673,8 +988,8 @@ export class ProjectDO implements DurableObject {
       }
     }
 
-    this.broadcast({ type: 'message', ticketId, messageId: id, author: body.author });
-    return json({ id }, 201);
+    this.broadcast({ type: 'message', ticketId: opts.ticketId, messageId: id, author: opts.author });
+    return id;
   }
 
   // ── Chat (PO agent triage) ──────────────────────────────────
@@ -906,9 +1221,12 @@ Otherwise just respond in plain text. Be concise. You're a PO, not a chatbot.`;
     });
   }
 
-  // ── Agent run (placeholder — runtime adapters plug in here) ──
+  // ── Agent run (explicit trigger) ────────────────────────────
+  // Dispatches a single agent turn for a ticket that's in an active state.
+  // The run proceeds in the background; clients observe progress over the
+  // WebSocket and by polling the ticket. autoAdvance() drives autonomous runs.
 
-  private async runAgent(ticketId: string, _request: Request): Promise<Response> {
+  private runAgent(ticketId: string, _request: Request): Response {
     const row = this.state.storage.sql
       .exec('SELECT * FROM tickets WHERE id = ?', ticketId)
       .toArray()[0];
@@ -924,37 +1242,21 @@ Otherwise just respond in plain text. Be concise. You're a PO, not a chatbot.`;
       return json({ error: 'no_assignee_for_status', status: ticket.status }, 400);
     }
 
-    // Load role config
-    const rcRow = this.state.storage.sql
-      .exec('SELECT * FROM role_configs WHERE role = ?', role)
-      .toArray()[0];
-    if (!rcRow) {
-      return json({ error: 'role_not_configured', role }, 400);
+    if (this.running.has(ticketId)) {
+      return json({ status: 'already_running', ticketId, role }, 409);
     }
 
-    // Load message history for context
-    const msgRows = this.state.storage.sql
-      .exec('SELECT * FROM messages WHERE ticket_id = ? ORDER BY created_at', ticketId)
-      .toArray();
+    const rcRow = this.state.storage.sql
+      .exec('SELECT runtime FROM role_configs WHERE role = ?', role)
+      .toArray()[0] as { runtime: string } | undefined;
 
-    this.broadcast({
-      type: 'agent-run-started',
-      ticketId,
-      role,
-      runtime: (rcRow as Record<string, unknown>).runtime,
-    });
+    this.running.add(ticketId);
+    const p = this.runAgentInternal(ticketId).finally(() => this.running.delete(ticketId));
+    try {
+      (this.state as unknown as { waitUntil?: (pr: Promise<unknown>) => void }).waitUntil?.(p);
+    } catch { /* waitUntil unavailable — promise still runs */ }
 
-    // TODO: dispatch to runtime adapter (CFNativeRuntime or OpenAIResponsesRuntime)
-    // For now, return the context that would be passed to the adapter
-    return json({
-      status: 'ready',
-      ticketId,
-      role,
-      runtime: (rcRow as Record<string, unknown>).runtime,
-      model: (rcRow as Record<string, unknown>).model,
-      messageCount: msgRows.length,
-      note: 'Runtime adapter not wired yet. Schema, state machine, and message log are live.',
-    });
+    return json({ status: 'started', ticketId, role, runtime: rcRow?.runtime ?? null }, 202);
   }
 
   // ── Cost summary ──────────────────────────────────────────

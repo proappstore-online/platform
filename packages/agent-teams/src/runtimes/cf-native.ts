@@ -65,6 +65,7 @@ export class CFNativeRuntime implements AgentRuntime {
         spineTools: ctx.role.spineTools,
         projectId: ctx.projectId,
         ticketId: ctx.ticketId,
+        userToken: ctx.userToken,
       },
     };
   }

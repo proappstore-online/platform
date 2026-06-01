@@ -96,6 +96,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
         previousResponseId: null,
         projectId: ctx.projectId,
         ticketId: ctx.ticketId,
+        userToken: ctx.userToken,
       },
     };
   }

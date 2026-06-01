@@ -32,3 +32,8 @@ bucket_name = "pas-agent-teams"
 [[services]]
 binding = "PAS_BACKEND"
 service = "proappstore-api"
+
+# INTERNAL_TOKEN is set as a secret (not committed):
+#   wrangler secret put INTERNAL_TOKEN
+# Must match the same secret on the proappstore-api Worker. Authenticates
+# GET /v1/keys/resolve/:provider (BYO key vault read) over the service binding.

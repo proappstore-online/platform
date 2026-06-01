@@ -133,6 +133,7 @@ export type PrepareContext = {
   ticketId: string
   role: RoleConfig
   byoKey: string  // decrypted just-in-time, never logged
+  userToken?: string | undefined  // owner session token, forwarded to the spine for tool dispatch
 }
 
 export type RuntimeHandle = {

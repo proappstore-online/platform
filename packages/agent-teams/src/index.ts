@@ -16,6 +16,12 @@ export type Bindings = {
   PAS_BACKEND: Fetcher;
   FAS_API_BASE: string;
   PAS_API_BASE: string;
+  /**
+   * Shared secret for authenticating internal calls to the PAS backend
+   * (e.g. GET /v1/keys/resolve/:provider). Mirrors INTERNAL_TOKEN on the
+   * backend Worker. Set via `wrangler secret put INTERNAL_TOKEN`.
+   */
+  INTERNAL_TOKEN?: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -60,7 +66,7 @@ function forwardToDO(
   stub: DurableObjectStub,
   path: string,
   userId: string,
-  opts?: { method?: string; body?: string; raw?: Request },
+  opts?: { method?: string; body?: string; raw?: Request; userToken?: string | undefined },
 ): Promise<Response> {
   if (opts?.raw) {
     // For WebSocket upgrades, clone the request with the user ID header
@@ -68,12 +74,16 @@ function forwardToDO(
     headers.set('X-User-Id', userId);
     return stub.fetch(new Request(opts.raw.url, { headers, method: opts.raw.method }));
   }
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-User-Id': userId,
+  };
+  // Forward the owner session token so the DO can authenticate autonomous
+  // agent tool dispatch (captured at play time).
+  if (opts?.userToken) headers['X-User-Token'] = opts.userToken;
   return stub.fetch(new Request(`https://do${path}`, {
     method: opts?.method ?? 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-User-Id': userId,
-    },
+    headers,
     ...(opts?.body ? { body: opts.body } : {}),
   }));
 }
@@ -113,8 +123,9 @@ app.get('/v1/projects/:slug', async (c) => {
 
 app.post('/v1/projects/:slug/play', async (c) => {
   const user = c.get('user' as never) as { id: string };
+  const userToken = c.get('userToken' as never) as string | undefined;
   const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, '/project/play', user.id, { method: 'POST' });
+  const res = await forwardToDO(stub, '/project/play', user.id, { method: 'POST', userToken });
   return new Response(res.body, { status: res.status, headers: res.headers });
 });
 
