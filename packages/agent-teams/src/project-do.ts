@@ -195,7 +195,16 @@ export class ProjectDO implements DurableObject {
       .exec('SELECT * FROM project LIMIT 1')
       .toArray()[0] as Record<string, unknown> | undefined;
     if (!row) return json({ error: 'project_not_initialized' }, 404);
-    return json(row);
+    return json({
+      id: row.id,
+      ownerId: row.owner_id,
+      name: row.name,
+      slug: row.slug,
+      createdAt: row.created_at,
+      costCapMonthlyUsd: row.cost_cap_monthly_usd,
+      costSpentMonthlyUsd: row.cost_spent_monthly_usd,
+      repoUrl: row.repo_url,
+    });
   }
 
   private async initProject(request: Request): Promise<Response> {
@@ -444,6 +453,14 @@ export class ProjectDO implements DurableObject {
       tokensIn?: number;
       tokensOut?: number;
     };
+
+    // Validate non-negative cost/token values
+    if ((body.costUsd ?? 0) < 0 || (body.tokensIn ?? 0) < 0 || (body.tokensOut ?? 0) < 0) {
+      return json({ error: 'cost and token values must be non-negative' }, 400);
+    }
+    if (!body.body || !body.author) {
+      return json({ error: 'author and body required' }, 400);
+    }
 
     const id = uuid();
     const now = Date.now();
