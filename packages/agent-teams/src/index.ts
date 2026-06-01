@@ -109,6 +109,22 @@ app.get('/v1/projects/:slug', async (c) => {
   return new Response(res.body, { status: res.status, headers: res.headers });
 });
 
+// ── Play/Pause ──────────────────────────────────────────────
+
+app.post('/v1/projects/:slug/play', async (c) => {
+  const user = c.get('user' as never) as { id: string };
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
+  const res = await forwardToDO(stub, '/project/play', user.id, { method: 'POST' });
+  return new Response(res.body, { status: res.status, headers: res.headers });
+});
+
+app.post('/v1/projects/:slug/pause', async (c) => {
+  const user = c.get('user' as never) as { id: string };
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
+  const res = await forwardToDO(stub, '/project/pause', user.id, { method: 'POST' });
+  return new Response(res.body, { status: res.status, headers: res.headers });
+});
+
 // ── Chat (PO agent) ─────────────────────────────────────────
 
 app.post('/v1/projects/:slug/chat', async (c) => {

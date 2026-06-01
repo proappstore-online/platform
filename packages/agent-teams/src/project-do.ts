@@ -83,11 +83,8 @@ export class ProjectDO implements DurableObject {
     if (this.initialized) return;
     this.state.storage.sql.exec(SCHEMA);
     // Schema versioning: add columns that may not exist in older DOs
-    try {
-      this.state.storage.sql.exec(
-        `ALTER TABLE project ADD COLUMN cost_month TEXT DEFAULT ''`,
-      );
-    } catch { /* column already exists */ }
+    try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN cost_month TEXT DEFAULT ''`); } catch { /* exists */ }
+    try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN status TEXT DEFAULT 'paused'`); } catch { /* exists */ }
     this.initialized = true;
   }
 
@@ -144,6 +141,8 @@ export class ProjectDO implements DurableObject {
 
     // REST routes
     if (path === '/project' && request.method === 'GET') return this.getProject();
+    if (path === '/project/play' && request.method === 'POST') return this.setPlayState('running');
+    if (path === '/project/pause' && request.method === 'POST') return this.setPlayState('paused');
 
     if (path === '/roles' && request.method === 'GET') return this.getRoles();
     if (path === '/roles' && request.method === 'PUT') return this.setRoles(request);
@@ -212,7 +211,88 @@ export class ProjectDO implements DurableObject {
       costCapMonthlyUsd: row.cost_cap_monthly_usd,
       costSpentMonthlyUsd: row.cost_spent_monthly_usd,
       repoUrl: row.repo_url,
+      status: row.status ?? 'paused',
     });
+  }
+
+  private setPlayState(status: 'running' | 'paused'): Response {
+    this.state.storage.sql.exec('UPDATE project SET status = ?', status);
+    this.broadcast({ type: 'play-state', status });
+
+    if (status === 'running') {
+      // Kick off auto-advance: check if any tickets need work
+      this.autoAdvance();
+    }
+
+    return json({ status });
+  }
+
+  /** Auto-advance: move tickets through the pipeline when running.
+   *  Called after play, after ticket creation, and after transitions. */
+  private autoAdvance(): void {
+    const proj = this.state.storage.sql
+      .exec("SELECT status FROM project LIMIT 1")
+      .toArray()[0] as { status: string } | undefined;
+    if (!proj || proj.status !== 'running') return;
+
+    const tickets = this.state.storage.sql
+      .exec("SELECT id, status FROM tickets WHERE status NOT IN ('done','failed','cancelled') ORDER BY created_at")
+      .toArray() as { id: string; status: string }[];
+
+    const now = Date.now();
+
+    for (const t of tickets) {
+      switch (t.status) {
+        case 'inbox':
+          // Auto-assign to BA
+          this.state.storage.sql.exec(
+            "UPDATE tickets SET status = 'ba-refining', assignee_role = 'BA', updated_at = ? WHERE id = ?",
+            now, t.id,
+          );
+          this.broadcast({ type: 'transition', ticketId: t.id, from: 'inbox', to: 'ba-refining', auto: true });
+          break;
+
+        case 'awaiting-approval':
+          // Auto-approve (PO agent trusts BA for now — user can reject in chat)
+          this.state.storage.sql.exec(
+            "UPDATE tickets SET status = 'ready', assignee_role = NULL, updated_at = ? WHERE id = ?",
+            now, t.id,
+          );
+          this.broadcast({ type: 'transition', ticketId: t.id, from: 'awaiting-approval', to: 'ready', auto: true });
+          break;
+
+        case 'ready':
+          // Auto-assign to Dev
+          this.state.storage.sql.exec(
+            "UPDATE tickets SET status = 'dev-active', assignee_role = 'Dev', updated_at = ? WHERE id = ?",
+            now, t.id,
+          );
+          this.broadcast({ type: 'transition', ticketId: t.id, from: 'ready', to: 'dev-active', auto: true });
+          break;
+
+        case 'qa-failed':
+          // Auto-reassign to Dev (within iteration cap)
+          const ticket = this.state.storage.sql
+            .exec("SELECT iterations FROM tickets WHERE id = ?", t.id)
+            .toArray()[0] as { iterations: number } | undefined;
+          if (ticket && ticket.iterations < 5) {
+            this.state.storage.sql.exec(
+              "UPDATE tickets SET status = 'dev-active', assignee_role = 'Dev', iterations = iterations + 1, updated_at = ? WHERE id = ?",
+              now, t.id,
+            );
+            this.broadcast({ type: 'transition', ticketId: t.id, from: 'qa-failed', to: 'dev-active', auto: true });
+          } else {
+            this.state.storage.sql.exec(
+              "UPDATE tickets SET status = 'failed', stuck_reason = 'Iteration cap reached', updated_at = ? WHERE id = ?",
+              now, t.id,
+            );
+            this.broadcast({ type: 'transition', ticketId: t.id, from: 'qa-failed', to: 'failed', auto: true });
+          }
+          break;
+
+        // dev-active, ba-refining, qa-active: agent is working, don't touch
+      }
+    }
   }
 
   private async initProject(request: Request): Promise<Response> {
@@ -360,6 +440,7 @@ export class ProjectDO implements DurableObject {
     };
 
     this.broadcast({ type: 'ticket-created', ticket });
+    this.autoAdvance();
     return json(ticket, 201);
   }
 
@@ -664,6 +745,7 @@ Otherwise just respond in plain text. Be concise. You're a PO, not a chatbot.`;
             ticketId, tool.title, tool.rawIdea, ticketNow, ticketNow,
           );
           this.broadcast({ type: 'ticket-created', ticketId, title: tool.title });
+          this.autoAdvance();
 
           // Clean response (remove JSON, add confirmation)
           const cleanText = text.replace(toolMatch[0], '').trim();
@@ -712,6 +794,7 @@ Otherwise just respond in plain text. Be concise. You're a PO, not a chatbot.`;
       ticketId, title, userText, now, now,
     );
     this.broadcast({ type: 'ticket-created', ticketId, title });
+    this.autoAdvance();
 
     return this.savePOResponse(
       `Got it. I created a ticket: "${title}". It's in the inbox — BA will refine it into a spec when connected.`,
