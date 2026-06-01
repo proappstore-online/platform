@@ -14,6 +14,7 @@ import type {
   ToolCall,
   ToolResult,
 } from '../types.ts';
+import { dispatchTool, isAllowedTool } from '../tool-dispatch.ts';
 
 interface OAIFunctionTool {
   type: 'function';
@@ -228,14 +229,16 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
   }
 
   async invokeTool(handle: RuntimeHandle, toolCall: ToolCall): Promise<ToolResult> {
-    const start = Date.now();
-    // Same as cf-native — tools are executed via PAS MCP server
-    return {
-      callId: toolCall.id,
-      ok: false,
-      errorMessage: 'Tool dispatch not yet wired to MCP server',
-      durationMs: Date.now() - start,
-    };
+    const s = handle.state as { spineTools: string[] };
+    if (!isAllowedTool(toolCall.name, s.spineTools)) {
+      return {
+        callId: toolCall.id,
+        ok: false,
+        errorMessage: `Tool "${toolCall.name}" not in allowed spine tools for this role`,
+        durationMs: 0,
+      };
+    }
+    return dispatchTool(toolCall, null);
   }
 
   async terminate(_handle: RuntimeHandle): Promise<{ costUsd: number; tokensIn: number; tokensOut: number }> {

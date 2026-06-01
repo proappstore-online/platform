@@ -68,7 +68,6 @@ export class ProjectDO implements DurableObject {
   private state: DurableObjectState;
   private env: Bindings;
   private initialized = false;
-  private webSockets = new Set<WebSocket>();
 
   constructor(state: DurableObjectState, env: Bindings) {
     this.state = state;
@@ -78,19 +77,25 @@ export class ProjectDO implements DurableObject {
   private async ensureSchema(): Promise<void> {
     if (this.initialized) return;
     this.state.storage.sql.exec(SCHEMA);
+    // Schema versioning: add columns that may not exist in older DOs
+    try {
+      this.state.storage.sql.exec(
+        `ALTER TABLE project ADD COLUMN cost_month TEXT DEFAULT ''`,
+      );
+    } catch { /* column already exists */ }
     this.initialized = true;
   }
 
   // ── Broadcast to connected WebSocket clients ──────────────
+  // Uses ctx.getWebSockets() to survive DO hibernation — the manual
+  // Set pattern loses sockets when the DO sleeps and wakes.
 
   private broadcast(event: Record<string, unknown>): void {
     const data = JSON.stringify(event);
-    for (const ws of this.webSockets) {
+    for (const ws of this.state.getWebSockets()) {
       try {
         ws.send(data);
-      } catch {
-        this.webSockets.delete(ws);
-      }
+      } catch { /* dead socket, DO will clean up */ }
     }
   }
 
@@ -102,11 +107,10 @@ export class ProjectDO implements DurableObject {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // WebSocket upgrade
+    // WebSocket upgrade (hibernation-safe)
     if (request.headers.get('Upgrade') === 'websocket') {
       const pair = new WebSocketPair();
       this.state.acceptWebSocket(pair[1]);
-      this.webSockets.add(pair[1]);
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
@@ -154,12 +158,12 @@ export class ProjectDO implements DurableObject {
     // Client messages not used yet; agent output is server→client only
   }
 
-  webSocketClose(ws: WebSocket): void {
-    this.webSockets.delete(ws);
+  webSocketClose(_ws: WebSocket): void {
+    // DO runtime handles cleanup automatically with hibernation
   }
 
-  webSocketError(ws: WebSocket): void {
-    this.webSockets.delete(ws);
+  webSocketError(_ws: WebSocket): void {
+    // DO runtime handles cleanup automatically with hibernation
   }
 
   // ── Project CRUD ──────────────────────────────────────────
@@ -401,37 +405,52 @@ export class ProjectDO implements DurableObject {
       now, body.costUsd ?? 0, body.tokensIn ?? 0, body.tokensOut ?? 0, offloadKey,
     );
 
-    // Update cost on ticket and project
+    // Update cost on ticket and project (with monthly reset)
     if (body.costUsd && body.costUsd > 0) {
       this.state.storage.sql.exec(
         'UPDATE tickets SET cost_spent_usd = cost_spent_usd + ? WHERE id = ?',
         body.costUsd, ticketId,
       );
-      this.state.storage.sql.exec(
-        'UPDATE project SET cost_spent_monthly_usd = cost_spent_monthly_usd + ?',
-        body.costUsd,
-      );
 
-      // Record in cost ledger
+      // Monthly cost reset: check if we're in a new month
+      const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+      const proj = this.state.storage.sql
+        .exec('SELECT cost_month, cost_cap_monthly_usd, cost_spent_monthly_usd FROM project LIMIT 1')
+        .toArray()[0] as { cost_month: string; cost_cap_monthly_usd: number; cost_spent_monthly_usd: number } | undefined;
+
+      if (proj && proj.cost_month !== currentMonth) {
+        // New month: reset counter
+        this.state.storage.sql.exec(
+          'UPDATE project SET cost_spent_monthly_usd = ?, cost_month = ?',
+          body.costUsd, currentMonth,
+        );
+      } else {
+        this.state.storage.sql.exec(
+          'UPDATE project SET cost_spent_monthly_usd = cost_spent_monthly_usd + ?, cost_month = ?',
+          body.costUsd, currentMonth,
+        );
+      }
+
+      // Record in cost ledger (permanent, never reset)
       this.state.storage.sql.exec(
         `INSERT INTO cost_ledger (ticket_id, role, cost_usd, tokens_in, tokens_out, model, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         ticketId, body.author, body.costUsd, body.tokensIn ?? 0, body.tokensOut ?? 0, 'unknown', now,
       );
 
-      // Check cost cap
-      const proj = this.state.storage.sql
+      // Re-read after update for cap check
+      const updated = this.state.storage.sql
         .exec('SELECT cost_cap_monthly_usd, cost_spent_monthly_usd FROM project LIMIT 1')
         .toArray()[0] as { cost_cap_monthly_usd: number; cost_spent_monthly_usd: number } | undefined;
 
-      if (proj && proj.cost_spent_monthly_usd >= proj.cost_cap_monthly_usd) {
+      if (updated && updated.cost_spent_monthly_usd >= updated.cost_cap_monthly_usd) {
         // Auto-fail all active tickets
         this.state.storage.sql.exec(
           `UPDATE tickets SET status = 'failed', stuck_reason = 'Monthly cost cap reached', updated_at = ?
            WHERE status IN ('ba-refining', 'dev-active', 'qa-active', 'qa-failed')`,
           now,
         );
-        this.broadcast({ type: 'cost-cap-reached', spent: proj.cost_spent_monthly_usd, cap: proj.cost_cap_monthly_usd });
+        this.broadcast({ type: 'cost-cap-reached', spent: updated.cost_spent_monthly_usd, cap: updated.cost_cap_monthly_usd });
       }
     }
 

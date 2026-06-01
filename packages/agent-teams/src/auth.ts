@@ -27,5 +27,6 @@ export async function verifyToken(
 export function extractToken(request: Request): string | null {
   const header = request.headers.get('Authorization');
   if (!header?.startsWith('Bearer ')) return null;
-  return header.slice(7);
+  const token = header.slice(7).trim();
+  return token || null;
 }

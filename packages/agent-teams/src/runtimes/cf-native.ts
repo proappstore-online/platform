@@ -14,6 +14,7 @@ import type {
   ToolCall,
   ToolResult,
 } from '../types.ts';
+import { dispatchTool, isAllowedTool } from '../tool-dispatch.ts';
 
 interface AnthropicMessage {
   role: 'user' | 'assistant';
@@ -169,28 +170,16 @@ export class CFNativeRuntime implements AgentRuntime {
   }
 
   async invokeTool(handle: RuntimeHandle, toolCall: ToolCall): Promise<ToolResult> {
-    const start = Date.now();
-
-    // Tools are executed via the PAS MCP server
-    // The ProjectDO will call these — this is a placeholder for the dispatch
-    try {
-      const mcpUrl = 'https://mcp.proappstore.online/mcp';
-      // MCP tool invocation would go here
-      // For now, return a placeholder
+    const s = handle.state as { spineTools: string[] };
+    if (!isAllowedTool(toolCall.name, s.spineTools)) {
       return {
         callId: toolCall.id,
         ok: false,
-        errorMessage: 'Tool dispatch not yet wired to MCP server',
-        durationMs: Date.now() - start,
-      };
-    } catch (err) {
-      return {
-        callId: toolCall.id,
-        ok: false,
-        errorMessage: err instanceof Error ? err.message : String(err),
-        durationMs: Date.now() - start,
+        errorMessage: `Tool "${toolCall.name}" not in allowed spine tools for this role`,
+        durationMs: 0,
       };
     }
+    return dispatchTool(toolCall, null);
   }
 
   async terminate(_handle: RuntimeHandle): Promise<{ costUsd: number; tokensIn: number; tokensOut: number }> {
