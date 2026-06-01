@@ -262,7 +262,27 @@ export class ProjectDO implements DurableObject {
 
   private async setRoles(request: Request): Promise<Response> {
     const body = (await request.json()) as { roles: RoleConfig[] };
+
+    const VALID_ROLES = new Set(['BA', 'Dev', 'QA']);
+    const VALID_RUNTIMES = new Set(['cf-native', 'openai-responses']);
+    const VALID_TOOLS = new Set([
+      'scaffold_app', 'write_file', 'read_file', 'list_files', 'delete_file',
+      'search_files', 'batch_write_files', 'get_deploy_status', 'provision_app',
+    ]);
+
     for (const rc of body.roles) {
+      if (!VALID_ROLES.has(rc.role)) return json({ error: `invalid role: ${rc.role}` }, 400);
+      if (!VALID_RUNTIMES.has(rc.runtime)) return json({ error: `invalid runtime: ${rc.runtime}` }, 400);
+      if (!rc.model || rc.model.length > 64) return json({ error: 'model must be 1-64 chars' }, 400);
+      // Validate spine tools against catalog
+      for (const tool of rc.spineTools) {
+        if (!VALID_TOOLS.has(tool)) return json({ error: `unknown spine tool: ${tool}` }, 400);
+      }
+      // System prompt override: cap length, no prompt injection basics
+      if (rc.systemPromptOverride && rc.systemPromptOverride.length > 8192) {
+        return json({ error: 'systemPromptOverride too long (max 8KB)' }, 400);
+      }
+
       this.state.storage.sql.exec(
         `INSERT OR REPLACE INTO role_configs (role, runtime, model, system_prompt_override, spine_tools, vendor_tools)
          VALUES (?, ?, ?, ?, ?, ?)`,
