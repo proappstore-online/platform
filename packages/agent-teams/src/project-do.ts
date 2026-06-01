@@ -58,6 +58,11 @@ CREATE TABLE IF NOT EXISTS cost_ledger (
   model TEXT NOT NULL, created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cost_ticket ON cost_ledger(ticket_id);
+CREATE TABLE IF NOT EXISTS chat_history (
+  id TEXT PRIMARY KEY, role TEXT NOT NULL, body TEXT NOT NULL,
+  tool_call_json TEXT, created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_history ON chat_history(created_at);
 `;
 
 function uuid(): string {
@@ -142,6 +147,9 @@ export class ProjectDO implements DurableObject {
 
     if (path === '/roles' && request.method === 'GET') return this.getRoles();
     if (path === '/roles' && request.method === 'PUT') return this.setRoles(request);
+
+    if (path === '/chat' && request.method === 'POST') return this.handleChat(request);
+    if (path === '/chat/history' && request.method === 'GET') return this.getChatHistory();
 
     if (path === '/tickets' && request.method === 'GET') return this.listTickets();
     if (path === '/tickets' && request.method === 'POST') return this.createTicket(request);
@@ -533,6 +541,204 @@ export class ProjectDO implements DurableObject {
 
     this.broadcast({ type: 'message', ticketId, messageId: id, author: body.author });
     return json({ id }, 201);
+  }
+
+  // ── Chat (PO agent triage) ──────────────────────────────────
+
+  private getChatHistory(): Response {
+    const rows = this.state.storage.sql
+      .exec('SELECT * FROM chat_history ORDER BY created_at ASC')
+      .toArray();
+    return json({
+      messages: rows.map((r) => ({
+        id: r.id as string,
+        role: r.role as string,
+        body: r.body as string,
+        toolCall: r.tool_call_json ? JSON.parse(r.tool_call_json as string) : undefined,
+        createdAt: r.created_at as number,
+      })),
+    });
+  }
+
+  private async handleChat(request: Request): Promise<Response> {
+    const body = (await request.json()) as { message: string; apiKey?: string };
+    if (!body.message?.trim()) return json({ error: 'message required' }, 400);
+
+    const userText = body.message.trim();
+    const now = Date.now();
+    const userId = request.headers.get('X-User-Id') ?? 'unknown';
+
+    // Save user message to chat history
+    const userMsgId = uuid();
+    this.state.storage.sql.exec(
+      'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
+      userMsgId, 'user', userText, now,
+    );
+    this.broadcast({ type: 'chat', role: 'user', body: userText, id: userMsgId });
+
+    // Get current project state for context
+    const ticketRows = this.state.storage.sql
+      .exec('SELECT id, title, status, assignee_role FROM tickets ORDER BY created_at DESC LIMIT 20')
+      .toArray();
+    const backlogSummary = ticketRows.map((t) =>
+      `- [${t.status}] ${t.title}${t.assignee_role ? ` (${t.assignee_role})` : ''}`
+    ).join('\n');
+
+    // Get recent chat history for context
+    const recentChat = this.state.storage.sql
+      .exec('SELECT role, body FROM chat_history ORDER BY created_at DESC LIMIT 20')
+      .toArray()
+      .reverse()
+      .map((r) => ({ role: r.role as string, body: r.body as string }));
+
+    // If no API key provided, respond with a smart rule-based PO
+    if (!body.apiKey) {
+      return this.poTriageWithoutAI(userText, backlogSummary, now);
+    }
+
+    // Call Anthropic for real PO agent response
+    const systemPrompt = `You are the PO (Product Owner) agent for a ProAppStore project. You read the founder's messages and decide what to do.
+
+Your job:
+- If the founder describes a feature or something to build → respond with a JSON tool call to create a ticket
+- If the founder asks a technical question → answer it yourself or say you'll route it to Dev
+- If the founder gives feedback on existing work → acknowledge and update the relevant ticket
+- If the founder is just chatting → respond naturally
+
+Current backlog:
+${backlogSummary || '(empty)'}
+
+When creating a ticket, respond with EXACTLY this JSON on its own line:
+{"tool":"create_ticket","title":"short title","rawIdea":"full description"}
+
+Otherwise just respond in plain text. Be concise. You're a PO, not a chatbot.`;
+
+    const messages = [
+      ...recentChat.map((m) => ({
+        role: m.role === 'user' ? 'user' as const : 'assistant' as const,
+        content: m.body,
+      })),
+    ];
+    // The last message is already the user's current message from chat history
+
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': body.apiKey,
+          'anthropic-version': '2023-06-01',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1024,
+          system: systemPrompt,
+          messages,
+        }),
+      });
+
+      if (!res.ok) {
+        const safeError = res.status === 401 ? 'API key invalid'
+          : res.status === 429 ? 'Rate limited'
+          : `AI error (${res.status})`;
+        return this.savePOResponse(`Sorry, I couldn't process that: ${safeError}`, now, undefined);
+      }
+
+      const aiRes = (await res.json()) as {
+        content: { type: string; text?: string }[];
+        usage: { input_tokens: number; output_tokens: number };
+      };
+
+      const text = aiRes.content.find((c) => c.type === 'text')?.text ?? '';
+
+      // Check if PO wants to create a ticket
+      const toolMatch = text.match(/\{"tool":"create_ticket".*?\}/);
+      if (toolMatch) {
+        try {
+          const tool = JSON.parse(toolMatch[0]) as { title: string; rawIdea: string };
+          // Create the ticket
+          const ticketId = uuid();
+          const ticketNow = Date.now();
+          this.state.storage.sql.exec(
+            `INSERT INTO tickets (id, title, raw_idea, status, created_at, updated_at) VALUES (?, ?, ?, 'inbox', ?, ?)`,
+            ticketId, tool.title, tool.rawIdea, ticketNow, ticketNow,
+          );
+          this.broadcast({ type: 'ticket-created', ticketId, title: tool.title });
+
+          // Clean response (remove JSON, add confirmation)
+          const cleanText = text.replace(toolMatch[0], '').trim();
+          const poText = cleanText || `Got it. I created a ticket: "${tool.title}". It's in the inbox.`;
+          return this.savePOResponse(poText, ticketNow, { name: 'create_ticket', args: tool.title });
+        } catch {
+          // JSON parse failed, just return the text
+        }
+      }
+
+      // Regular response
+      return this.savePOResponse(text, Date.now(), undefined);
+
+    } catch (err) {
+      return this.savePOResponse(
+        `I had trouble processing that. Error: ${err instanceof Error ? err.message : 'unknown'}`,
+        Date.now(), undefined,
+      );
+    }
+  }
+
+  /** Rule-based PO when no API key is provided */
+  private poTriageWithoutAI(userText: string, backlogSummary: string, now: number): Response {
+    const lower = userText.toLowerCase();
+
+    // Detect intent
+    if (lower.includes('show') && (lower.includes('board') || lower.includes('ticket') || lower.includes('backlog'))) {
+      const text = backlogSummary
+        ? `Here's the current backlog:\n${backlogSummary}`
+        : 'The backlog is empty. Tell me what you want to build!';
+      return this.savePOResponse(text, now, undefined);
+    }
+
+    if (lower.includes('?') && (lower.includes('how') || lower.includes('what') || lower.includes('can') || lower.includes('why'))) {
+      return this.savePOResponse(
+        `That's a good question. I'll route it to the Dev agent once one is connected. For now, I've noted it.`,
+        now, undefined,
+      );
+    }
+
+    // Default: create a ticket
+    const title = userText.length > 100 ? userText.slice(0, 97) + '...' : userText;
+    const ticketId = uuid();
+    this.state.storage.sql.exec(
+      `INSERT INTO tickets (id, title, raw_idea, status, created_at, updated_at) VALUES (?, ?, ?, 'inbox', ?, ?)`,
+      ticketId, title, userText, now, now,
+    );
+    this.broadcast({ type: 'ticket-created', ticketId, title });
+
+    return this.savePOResponse(
+      `Got it. I created a ticket: "${title}". It's in the inbox — BA will refine it into a spec when connected.`,
+      now,
+      { name: 'create_ticket', args: title },
+    );
+  }
+
+  private savePOResponse(
+    text: string,
+    now: number,
+    toolCall: { name: string; args: string } | undefined,
+  ): Response {
+    const msgId = uuid();
+    this.state.storage.sql.exec(
+      'INSERT INTO chat_history (id, role, body, tool_call_json, created_at) VALUES (?, ?, ?, ?, ?)',
+      msgId, 'po', text, toolCall ? JSON.stringify(toolCall) : null, now,
+    );
+    this.broadcast({ type: 'chat', role: 'po', body: text, id: msgId, toolCall });
+
+    return json({
+      id: msgId,
+      role: 'po',
+      body: text,
+      toolCall,
+      createdAt: now,
+    });
   }
 
   // ── Agent run (placeholder — runtime adapters plug in here) ──
