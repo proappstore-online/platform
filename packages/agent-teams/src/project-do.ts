@@ -20,6 +20,7 @@ import type {
 } from './types.ts';
 import {
   MAX_ITERATIONS,
+  MAX_RUN_MINUTES,
   assigneeForStatus,
   canTransition,
   isTerminal,
@@ -73,6 +74,14 @@ CREATE INDEX IF NOT EXISTS idx_chat_history ON chat_history(created_at);
 function uuid(): string {
   return crypto.randomUUID();
 }
+
+/**
+ * Watchdog interval. While a project is running, an alarm fires on this cadence
+ * to drive the pipeline forward even if the in-process run chain stalls or the
+ * DO was evicted between runs. It also re-dispatches active tickets whose
+ * in-memory run flag was lost on hibernation.
+ */
+const WATCHDOG_MS = 60_000;
 
 export class ProjectDO implements DurableObject {
   private state: DurableObjectState;
@@ -246,10 +255,44 @@ export class ProjectDO implements DurableObject {
     this.broadcast({ type: 'play-state', status: newStatus });
 
     if (newStatus === 'running') {
+      this.scheduleWatchdog();
       this.autoAdvance();
+    } else {
+      this.clearWatchdog();
     }
 
     return json({ status: newStatus });
+  }
+
+  // ── Watchdog alarm ────────────────────────────────────────
+  // Keeps the pipeline moving without a user in the loop. The in-process run
+  // chain (runAgentInternal → autoAdvance) is the primary driver; this alarm is
+  // the backstop that recovers from stalls and DO eviction.
+
+  private scheduleWatchdog(): void {
+    try { this.state.storage.setAlarm(Date.now() + WATCHDOG_MS); } catch { /* unavailable in some test envs */ }
+  }
+
+  private clearWatchdog(): void {
+    try { this.state.storage.deleteAlarm(); } catch { /* unavailable */ }
+  }
+
+  async alarm(): Promise<void> {
+    await this.ensureSchema();
+    const proj = this.state.storage.sql
+      .exec('SELECT status FROM project LIMIT 1')
+      .toArray()[0] as { status: string } | undefined;
+    if (!proj || proj.status !== 'running') return; // paused → stop the watchdog
+
+    // Drive the pipeline + re-dispatch any active tickets that lost their
+    // in-memory run flag (e.g. after hibernation/eviction).
+    this.autoAdvance();
+
+    // Re-arm only while still running (autoAdvance may have auto-paused).
+    const after = this.state.storage.sql
+      .exec('SELECT status FROM project LIMIT 1')
+      .toArray()[0] as { status: string } | undefined;
+    if (after?.status === 'running') this.scheduleWatchdog();
   }
 
   /** Record user activity timestamp (for idle timeout) */
@@ -280,6 +323,7 @@ export class ProjectDO implements DurableObject {
     const idleMs = lastActivity > 0 ? now - lastActivity : 0;
     if (lastActivity > 0 && idleMs > 30 * 60 * 1000) {
       this.state.storage.sql.exec("UPDATE project SET status = 'paused'");
+      this.clearWatchdog();
       this.broadcast({ type: 'play-state', status: 'paused', reason: 'idle-timeout' });
       this.broadcast({ type: 'chat', role: 'system', body: 'Auto-paused: no activity for 30 minutes. Hit Play to resume.', id: uuid() });
       // Save to chat history
@@ -293,6 +337,7 @@ export class ProjectDO implements DurableObject {
     // Cost cap check
     if (proj.cost_spent_monthly_usd >= proj.cost_cap_monthly_usd) {
       this.state.storage.sql.exec("UPDATE project SET status = 'paused'");
+      this.clearWatchdog();
       this.broadcast({ type: 'play-state', status: 'paused', reason: 'cost-cap' });
       return;
     }
@@ -389,13 +434,7 @@ export class ProjectDO implements DurableObject {
 
     for (const t of active) {
       if (this.running.has(t.id)) continue;
-      this.running.add(t.id);
-      // Don't await — let the run proceed in the background. waitUntil keeps the
-      // DO alive for the duration when available.
-      const p = this.runAgentInternal(t.id).finally(() => this.running.delete(t.id));
-      try {
-        (this.state as unknown as { waitUntil?: (pr: Promise<unknown>) => void }).waitUntil?.(p);
-      } catch { /* waitUntil unavailable — promise still runs */ }
+      this.dispatchRun(t.id);
     }
   }
 
@@ -463,31 +502,46 @@ export class ProjectDO implements DurableObject {
         userToken: proj.owner_session_token ?? undefined,
       });
 
-      for await (const ev of runtime.run(handle, messages)) {
-        switch (ev.type) {
-          case 'text-delta':
-            assistantText += ev.text;
-            this.broadcast({ type: 'agent-text', ticketId, role, text: ev.text });
-            break;
-          case 'tool-call':
-            toolCalls.push(ev.call);
-            this.broadcast({ type: 'agent-tool-call', ticketId, role, name: ev.call.name });
-            break;
-          case 'tool-result':
-            this.broadcast({ type: 'agent-tool-result', ticketId, role, ok: ev.result.ok });
-            break;
-          case 'done':
-            costUsd = ev.costUsd;
-            tokensIn = ev.tokensIn;
-            tokensOut = ev.tokensOut;
-            break;
-          case 'error':
-            errorMessage = ev.message;
-            break;
-          case 'heartbeat':
-            this.broadcast({ type: 'agent-heartbeat', ticketId, role });
-            break;
+      // Consume the stream, but cap wall-clock time so a hung model call can't
+      // wedge the ticket forever. On timeout we keep whatever was accumulated
+      // and route the ticket to needs-input.
+      const consume = (async () => {
+        for await (const ev of runtime.run(handle, messages)) {
+          switch (ev.type) {
+            case 'text-delta':
+              assistantText += ev.text;
+              this.broadcast({ type: 'agent-text', ticketId, role, text: ev.text });
+              break;
+            case 'tool-call':
+              toolCalls.push(ev.call);
+              this.broadcast({ type: 'agent-tool-call', ticketId, role, name: ev.call.name });
+              break;
+            case 'tool-result':
+              this.broadcast({ type: 'agent-tool-result', ticketId, role, ok: ev.result.ok });
+              break;
+            case 'done':
+              costUsd = ev.costUsd;
+              tokensIn = ev.tokensIn;
+              tokensOut = ev.tokensOut;
+              break;
+            case 'error':
+              errorMessage = ev.message;
+              break;
+            case 'heartbeat':
+              this.broadcast({ type: 'agent-heartbeat', ticketId, role });
+              break;
+          }
         }
+      })();
+
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<'timeout'>((resolve) => {
+        timer = setTimeout(() => resolve('timeout'), MAX_RUN_MINUTES * 60_000);
+      });
+      const outcome = await Promise.race([consume.then(() => 'ok' as const), timeout]);
+      if (timer) clearTimeout(timer);
+      if (outcome === 'timeout') {
+        errorMessage = errorMessage ?? `run exceeded ${MAX_RUN_MINUTES} minutes`;
       }
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : 'agent run failed';
@@ -512,18 +566,33 @@ export class ProjectDO implements DurableObject {
       .exec('SELECT status FROM tickets WHERE id = ?', ticketId)
       .toArray()[0] as { status: string } | undefined;
     if (!post || isTerminal(post.status as TicketStatus)) {
-      this.autoAdvance();
-      return;
+      return; // dispatcher's finally re-advances the pipeline
     }
 
     if (errorMessage) {
       this.blockForInput(ticketId, role, `${role} hit an error: ${errorMessage}`);
-      this.autoAdvance();
       return;
     }
 
     this.applyAgentOutcome(ticketId, role, assistantText);
-    this.autoAdvance();
+  }
+
+  /**
+   * Dispatch a single agent run for a ticket, clearing the in-flight flag and
+   * re-advancing the pipeline once it settles. Centralizes the continuation so
+   * the next stage isn't skipped by a still-set run flag.
+   */
+  private dispatchRun(ticketId: string): void {
+    this.running.add(ticketId);
+    const p = this.runAgentInternal(ticketId)
+      .catch(() => { /* swallow — outcome already persisted as needs-input */ })
+      .finally(() => {
+        this.running.delete(ticketId);
+        try { this.autoAdvance(); } catch { /* keep the watchdog as backstop */ }
+      });
+    try {
+      (this.state as unknown as { waitUntil?: (pr: Promise<unknown>) => void }).waitUntil?.(p);
+    } catch { /* waitUntil unavailable — promise still runs */ }
   }
 
   /** Build the single seeded user message that frames one agent's turn. */
@@ -1068,8 +1137,19 @@ export class ProjectDO implements DurableObject {
       .reverse()
       .map((r) => ({ role: r.role as string, body: r.body as string }));
 
-    // If no API key provided, respond with a smart rule-based PO
-    if (!body.apiKey) {
+    // Resolve the PO's model key: prefer a client-supplied key, else fall back
+    // to the owner's BYO key in the vault. Only drop to the rule-based PO if
+    // neither is available.
+    let apiKey = body.apiKey;
+    if (!apiKey) {
+      const owner = this.state.storage.sql
+        .exec('SELECT owner_id FROM project LIMIT 1')
+        .toArray()[0] as { owner_id: string } | undefined;
+      if (owner) {
+        apiKey = (await resolveByoKey(this.env, owner.owner_id, 'anthropic')) ?? undefined;
+      }
+    }
+    if (!apiKey) {
       return this.poTriageWithoutAI(userText, backlogSummary, now);
     }
 
@@ -1102,7 +1182,7 @@ Otherwise just respond in plain text. Be concise. You're a PO, not a chatbot.`;
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
-          'x-api-key': body.apiKey,
+          'x-api-key': apiKey,
           'anthropic-version': '2023-06-01',
           'Content-Type': 'application/json',
         },
@@ -1250,11 +1330,7 @@ Otherwise just respond in plain text. Be concise. You're a PO, not a chatbot.`;
       .exec('SELECT runtime FROM role_configs WHERE role = ?', role)
       .toArray()[0] as { runtime: string } | undefined;
 
-    this.running.add(ticketId);
-    const p = this.runAgentInternal(ticketId).finally(() => this.running.delete(ticketId));
-    try {
-      (this.state as unknown as { waitUntil?: (pr: Promise<unknown>) => void }).waitUntil?.(p);
-    } catch { /* waitUntil unavailable — promise still runs */ }
+    this.dispatchRun(ticketId);
 
     return json({ status: 'started', ticketId, role, runtime: rcRow?.runtime ?? null }, 202);
   }
