@@ -3,7 +3,8 @@
   "compilerOptions": {
     "lib": ["ES2022"],
     "types": ["@cloudflare/workers-types"],
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
   "include": ["src/**/*"]
 }

@@ -72,6 +72,8 @@ export interface Env {
   CF_ANALYTICS_API_TOKEN?: string;
   /** Resend API key for transactional email. If unset, /v1/email/send returns 503. */
   RESEND_API_KEY?: string;
+  /** Anthropic API key for Managed Agents. If unset, /v1/agent/* returns 503. */
+  ANTHROPIC_API_KEY?: string;
   /**
    * Master key-encryption-key for the proxy's envelope encryption of app
    * secrets. Base64-encoded 32-byte key. Set via `wrangler secret put APP_SECRET_KEK`.
