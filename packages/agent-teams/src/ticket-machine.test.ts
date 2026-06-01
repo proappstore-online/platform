@@ -4,7 +4,11 @@ import {
   validNextStates,
   assigneeForStatus,
   isTerminal,
+  needsUserAction,
   MAX_ITERATIONS,
+  MAX_RUN_MINUTES,
+  IDLE_TIMEOUT_MINUTES,
+  MAX_CONCURRENT_ACTIVE,
 } from './ticket-machine.ts';
 
 describe('canTransition', () => {
@@ -134,6 +138,40 @@ describe('isTerminal', () => {
   it('qa-failed is not terminal', () => expect(isTerminal('qa-failed')).toBe(false));
 });
 
-describe('MAX_ITERATIONS', () => {
-  it('is 5', () => expect(MAX_ITERATIONS).toBe(5));
+describe('needs-input state', () => {
+  it('BA can move to needs-input', () => {
+    expect(canTransition('ba-refining', 'needs-input', 'BA')).toBe(true);
+  });
+  it('Dev can move to needs-input', () => {
+    expect(canTransition('dev-active', 'needs-input', 'Dev')).toBe(true);
+  });
+  it('QA can move to needs-input', () => {
+    expect(canTransition('qa-active', 'needs-input', 'QA')).toBe(true);
+  });
+  it('system can resume from needs-input to ba-refining', () => {
+    expect(canTransition('needs-input', 'ba-refining', 'system')).toBe(true);
+  });
+  it('system can resume from needs-input to dev-active', () => {
+    expect(canTransition('needs-input', 'dev-active', 'system')).toBe(true);
+  });
+  it('PO can cancel from needs-input', () => {
+    expect(canTransition('needs-input', 'cancelled', 'po')).toBe(true);
+  });
+  it('system can fail from needs-input', () => {
+    expect(canTransition('needs-input', 'failed', 'system')).toBe(true);
+  });
+});
+
+describe('needsUserAction', () => {
+  it('needs-input needs user action', () => expect(needsUserAction('needs-input')).toBe(true));
+  it('awaiting-approval needs user action', () => expect(needsUserAction('awaiting-approval')).toBe(true));
+  it('dev-active does not', () => expect(needsUserAction('dev-active')).toBe(false));
+  it('inbox does not', () => expect(needsUserAction('inbox')).toBe(false));
+});
+
+describe('safety constants', () => {
+  it('MAX_ITERATIONS is 5', () => expect(MAX_ITERATIONS).toBe(5));
+  it('MAX_RUN_MINUTES is 10', () => expect(MAX_RUN_MINUTES).toBe(10));
+  it('IDLE_TIMEOUT_MINUTES is 30', () => expect(IDLE_TIMEOUT_MINUTES).toBe(30));
+  it('MAX_CONCURRENT_ACTIVE is 3', () => expect(MAX_CONCURRENT_ACTIVE).toBe(3));
 });

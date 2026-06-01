@@ -215,45 +215,105 @@ export class ProjectDO implements DurableObject {
     });
   }
 
-  private setPlayState(status: 'running' | 'paused'): Response {
-    this.state.storage.sql.exec('UPDATE project SET status = ?', status);
-    this.broadcast({ type: 'play-state', status });
+  private setPlayState(newStatus: 'running' | 'paused'): Response {
+    const now = Date.now();
+    this.state.storage.sql.exec('UPDATE project SET status = ?', newStatus);
 
-    if (status === 'running') {
-      // Kick off auto-advance: check if any tickets need work
+    if (newStatus === 'running') {
+      // Record when we started running (for idle timeout)
+      try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN last_user_activity INTEGER DEFAULT 0`); } catch { /* exists */ }
+      this.state.storage.sql.exec('UPDATE project SET last_user_activity = ?', now);
+    }
+
+    this.broadcast({ type: 'play-state', status: newStatus });
+
+    if (newStatus === 'running') {
       this.autoAdvance();
     }
 
-    return json({ status });
+    return json({ status: newStatus });
+  }
+
+  /** Record user activity timestamp (for idle timeout) */
+  private touchUserActivity(): void {
+    try {
+      this.state.storage.sql.exec('UPDATE project SET last_user_activity = ?', Date.now());
+    } catch { /* column may not exist yet */ }
   }
 
   /** Auto-advance: move tickets through the pipeline when running.
-   *  Called after play, after ticket creation, and after transitions. */
+   *  Safety rails:
+   *  - Only runs when project status is 'running'
+   *  - Max 3 concurrent active tickets (ba-refining + dev-active + qa-active)
+   *  - Idle timeout: auto-pauses after 30 min of no user chat
+   *  - Tickets in 'needs-input' block the pipeline until user responds
+   *  - Iteration cap: 5 QA→Dev loops then auto-fail
+   */
   private autoAdvance(): void {
     const proj = this.state.storage.sql
-      .exec("SELECT status FROM project LIMIT 1")
-      .toArray()[0] as { status: string } | undefined;
+      .exec("SELECT status, last_user_activity, cost_cap_monthly_usd, cost_spent_monthly_usd FROM project LIMIT 1")
+      .toArray()[0] as { status: string; last_user_activity: number; cost_cap_monthly_usd: number; cost_spent_monthly_usd: number } | undefined;
     if (!proj || proj.status !== 'running') return;
-
-    const tickets = this.state.storage.sql
-      .exec("SELECT id, status FROM tickets WHERE status NOT IN ('done','failed','cancelled') ORDER BY created_at")
-      .toArray() as { id: string; status: string }[];
 
     const now = Date.now();
 
+    // Idle timeout: auto-pause after 30 min of no user chat
+    const idleMs = now - (proj.last_user_activity || 0);
+    if (proj.last_user_activity > 0 && idleMs > 30 * 60 * 1000) {
+      this.state.storage.sql.exec("UPDATE project SET status = 'paused'");
+      this.broadcast({ type: 'play-state', status: 'paused', reason: 'idle-timeout' });
+      this.broadcast({ type: 'chat', role: 'system', body: 'Auto-paused: no activity for 30 minutes. Hit Play to resume.', id: uuid() });
+      // Save to chat history
+      this.state.storage.sql.exec(
+        'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
+        uuid(), 'system', 'Auto-paused: no activity for 30 minutes. Hit Play to resume.', now,
+      );
+      return;
+    }
+
+    // Cost cap check
+    if (proj.cost_spent_monthly_usd >= proj.cost_cap_monthly_usd) {
+      this.state.storage.sql.exec("UPDATE project SET status = 'paused'");
+      this.broadcast({ type: 'play-state', status: 'paused', reason: 'cost-cap' });
+      return;
+    }
+
+    // Check if any tickets need user input — don't start new work until user responds
+    const needsInput = this.state.storage.sql
+      .exec("SELECT COUNT(*) as c FROM tickets WHERE status = 'needs-input'")
+      .toArray()[0] as { c: number };
+    if (needsInput.c > 0) {
+      // Agents are waiting for user — don't advance anything else
+      return;
+    }
+
+    // Count currently active tickets
+    const activeCount = this.state.storage.sql
+      .exec("SELECT COUNT(*) as c FROM tickets WHERE status IN ('ba-refining','dev-active','qa-active')")
+      .toArray()[0] as { c: number };
+
+    const tickets = this.state.storage.sql
+      .exec("SELECT id, status, iterations FROM tickets WHERE status NOT IN ('done','failed','cancelled','needs-input','ba-refining','dev-active','qa-active') ORDER BY created_at")
+      .toArray() as { id: string; status: string; iterations: number }[];
+
     for (const t of tickets) {
+      // Don't exceed max concurrent active tickets
+      if (activeCount.c >= 3 && (t.status === 'inbox' || t.status === 'ready' || t.status === 'qa-failed')) {
+        break; // Wait for an active ticket to finish
+      }
+
       switch (t.status) {
         case 'inbox':
-          // Auto-assign to BA
           this.state.storage.sql.exec(
             "UPDATE tickets SET status = 'ba-refining', assignee_role = 'BA', updated_at = ? WHERE id = ?",
             now, t.id,
           );
           this.broadcast({ type: 'transition', ticketId: t.id, from: 'inbox', to: 'ba-refining', auto: true });
+          activeCount.c++;
           break;
 
         case 'awaiting-approval':
-          // Auto-approve (PO agent trusts BA for now — user can reject in chat)
+          // Auto-approve (PO agent trusts BA — user can reject via chat)
           this.state.storage.sql.exec(
             "UPDATE tickets SET status = 'ready', assignee_role = NULL, updated_at = ? WHERE id = ?",
             now, t.id,
@@ -262,35 +322,30 @@ export class ProjectDO implements DurableObject {
           break;
 
         case 'ready':
-          // Auto-assign to Dev
           this.state.storage.sql.exec(
             "UPDATE tickets SET status = 'dev-active', assignee_role = 'Dev', updated_at = ? WHERE id = ?",
             now, t.id,
           );
           this.broadcast({ type: 'transition', ticketId: t.id, from: 'ready', to: 'dev-active', auto: true });
+          activeCount.c++;
           break;
 
         case 'qa-failed':
-          // Auto-reassign to Dev (within iteration cap)
-          const ticket = this.state.storage.sql
-            .exec("SELECT iterations FROM tickets WHERE id = ?", t.id)
-            .toArray()[0] as { iterations: number } | undefined;
-          if (ticket && ticket.iterations < 5) {
+          if (t.iterations < 5) {
             this.state.storage.sql.exec(
               "UPDATE tickets SET status = 'dev-active', assignee_role = 'Dev', iterations = iterations + 1, updated_at = ? WHERE id = ?",
               now, t.id,
             );
             this.broadcast({ type: 'transition', ticketId: t.id, from: 'qa-failed', to: 'dev-active', auto: true });
+            activeCount.c++;
           } else {
             this.state.storage.sql.exec(
-              "UPDATE tickets SET status = 'failed', stuck_reason = 'Iteration cap reached', updated_at = ? WHERE id = ?",
+              "UPDATE tickets SET status = 'failed', stuck_reason = 'Iteration cap reached (5)', updated_at = ? WHERE id = ?",
               now, t.id,
             );
             this.broadcast({ type: 'transition', ticketId: t.id, from: 'qa-failed', to: 'failed', auto: true });
           }
           break;
-
-        // dev-active, ba-refining, qa-active: agent is working, don't touch
       }
     }
   }
@@ -647,7 +702,33 @@ export class ProjectDO implements DurableObject {
 
     const userText = body.message.trim();
     const now = Date.now();
-    const userId = request.headers.get('X-User-Id') ?? 'unknown';
+
+    // Record user activity (resets idle timeout)
+    this.touchUserActivity();
+
+    // Check if any tickets are in needs-input — user's message might be the answer
+    const blockedTickets = this.state.storage.sql
+      .exec("SELECT id, assignee_role FROM tickets WHERE status = 'needs-input' ORDER BY updated_at LIMIT 1")
+      .toArray() as { id: string; assignee_role: string }[];
+
+    if (blockedTickets.length > 0) {
+      const blocked = blockedTickets[0]!;
+      // Save the user's answer as a message on the ticket
+      this.state.storage.sql.exec(
+        'INSERT INTO messages (id, ticket_id, author, body, created_at) VALUES (?, ?, ?, ?, ?)',
+        uuid(), blocked.id, 'po', userText, now,
+      );
+      // Resume the ticket based on which role was working on it
+      const resumeStatus = blocked.assignee_role === 'BA' ? 'ba-refining'
+        : blocked.assignee_role === 'QA' ? 'qa-active'
+        : 'dev-active';
+      this.state.storage.sql.exec(
+        'UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?',
+        resumeStatus, now, blocked.id,
+      );
+      this.broadcast({ type: 'transition', ticketId: blocked.id, from: 'needs-input', to: resumeStatus, reason: 'user-answered' });
+      this.autoAdvance();
+    }
 
     // Save user message to chat history
     const userMsgId = uuid();

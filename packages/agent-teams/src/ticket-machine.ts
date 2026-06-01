@@ -15,6 +15,8 @@ const TRANSITIONS: Transition[] = [
   { from: 'inbox', to: 'ba-refining', trigger: 'BA' },
   // BA finishes spec → PO reviews
   { from: 'ba-refining', to: 'awaiting-approval', trigger: 'BA' },
+  // BA is stuck → needs user input
+  { from: 'ba-refining', to: 'needs-input', trigger: 'BA' },
   // PO approves → ready for Dev
   { from: 'awaiting-approval', to: 'ready', trigger: 'po' },
   // PO rejects → back to BA
@@ -23,12 +25,24 @@ const TRANSITIONS: Transition[] = [
   { from: 'ready', to: 'dev-active', trigger: 'Dev' },
   // Dev finishes → QA
   { from: 'dev-active', to: 'qa-active', trigger: 'Dev' },
+  // Dev is stuck → needs user input
+  { from: 'dev-active', to: 'needs-input', trigger: 'Dev' },
   // QA passes → done
   { from: 'qa-active', to: 'done', trigger: 'QA' },
   // QA fails → back to Dev
   { from: 'qa-active', to: 'qa-failed', trigger: 'QA' },
+  // QA is stuck → needs user input
+  { from: 'qa-active', to: 'needs-input', trigger: 'QA' },
   // Dev picks up failed ticket
   { from: 'qa-failed', to: 'dev-active', trigger: 'Dev' },
+
+  // User answers a question → resume to previous active state
+  // (system puts it back to the right status based on assignee)
+  { from: 'needs-input', to: 'ba-refining', trigger: 'system' },
+  { from: 'needs-input', to: 'dev-active', trigger: 'system' },
+  { from: 'needs-input', to: 'qa-active', trigger: 'system' },
+  { from: 'needs-input', to: 'ready', trigger: 'po' },
+
   // PO can cancel from any active state
   { from: 'inbox', to: 'cancelled', trigger: 'po' },
   { from: 'ba-refining', to: 'cancelled', trigger: 'po' },
@@ -37,11 +51,14 @@ const TRANSITIONS: Transition[] = [
   { from: 'dev-active', to: 'cancelled', trigger: 'po' },
   { from: 'qa-active', to: 'cancelled', trigger: 'po' },
   { from: 'qa-failed', to: 'cancelled', trigger: 'po' },
-  // System can fail from active states (cost cap, iteration cap, stuck)
+  { from: 'needs-input', to: 'cancelled', trigger: 'po' },
+
+  // System can fail from active states (cost cap, iteration cap, stuck, timeout)
   { from: 'ba-refining', to: 'failed', trigger: 'system' },
   { from: 'dev-active', to: 'failed', trigger: 'system' },
   { from: 'qa-active', to: 'failed', trigger: 'system' },
   { from: 'qa-failed', to: 'failed', trigger: 'system' },
+  { from: 'needs-input', to: 'failed', trigger: 'system' },
 ];
 
 export function canTransition(
@@ -83,5 +100,19 @@ export function isTerminal(status: TicketStatus): boolean {
   return status === 'done' || status === 'failed' || status === 'cancelled';
 }
 
+/** Is this a state where the user needs to respond? */
+export function needsUserAction(status: TicketStatus): boolean {
+  return status === 'needs-input' || status === 'awaiting-approval';
+}
+
 /** Max QA→Dev iterations before auto-fail */
 export const MAX_ITERATIONS = 5;
+
+/** Max minutes a single agent run can take before timeout */
+export const MAX_RUN_MINUTES = 10;
+
+/** Auto-pause after this many minutes of no user chat activity */
+export const IDLE_TIMEOUT_MINUTES = 30;
+
+/** Max tickets that can be active (ba-refining + dev-active + qa-active) at once */
+export const MAX_CONCURRENT_ACTIVE = 3;
