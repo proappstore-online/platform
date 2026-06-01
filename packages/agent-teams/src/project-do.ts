@@ -719,9 +719,9 @@ export class ProjectDO implements DurableObject {
       );
       // Resume to a "pending" state so autoAdvance picks it up and re-assigns
       // Don't go directly to an active state — the agent needs to restart
-      const resumeStatus = blocked.assignee_role === 'BA' ? 'inbox'
-        : blocked.assignee_role === 'QA' ? 'dev-active' // QA re-runs after Dev
-        : 'ready'; // Dev picks up from ready
+      const resumeStatus = blocked.assignee_role === 'BA' ? 'ba-refining'
+        : blocked.assignee_role === 'QA' ? 'qa-active'
+        : 'dev-active';
       this.state.storage.sql.exec(
         'UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?',
         resumeStatus, now, blocked.id,
@@ -826,7 +826,7 @@ Otherwise just respond in plain text. Be concise. You're a PO, not a chatbot.`;
             `INSERT INTO tickets (id, title, raw_idea, status, created_at, updated_at) VALUES (?, ?, ?, 'inbox', ?, ?)`,
             ticketId, tool.title, tool.rawIdea, ticketNow, ticketNow,
           );
-          this.broadcast({ type: 'ticket-created', ticketId, title: tool.title });
+          this.broadcast({ type: 'ticket-created', ticket: { id: ticketId, title: tool.title, status: 'inbox', rawIdea: tool.rawIdea, assigneeRole: null, iterations: 0, costSpentUsd: 0, createdAt: ticketNow, updatedAt: ticketNow, stuckReason: null } });
           this.autoAdvance();
 
           // Clean response (remove JSON, add confirmation)
@@ -875,7 +875,7 @@ Otherwise just respond in plain text. Be concise. You're a PO, not a chatbot.`;
       `INSERT INTO tickets (id, title, raw_idea, status, created_at, updated_at) VALUES (?, ?, ?, 'inbox', ?, ?)`,
       ticketId, title, userText, now, now,
     );
-    this.broadcast({ type: 'ticket-created', ticketId, title });
+    this.broadcast({ type: 'ticket-created', ticket: { id: ticketId, title, status: 'inbox', rawIdea: userText, assigneeRole: null, iterations: 0, costSpentUsd: 0, createdAt: now, updatedAt: now, stuckReason: null } });
     this.autoAdvance();
 
     return this.savePOResponse(
