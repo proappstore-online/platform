@@ -10,7 +10,7 @@ import {
 } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { requireUser, requireAppOwner, HttpError } from '../lib/auth.js';
-import { deployDataWorker } from '../lib/deploy-worker.js';
+import { provisionData } from '../lib/provision-data.js';
 import { fetchRepoFiles, type RepoLocation } from '../lib/github-fetch.js';
 
 /**
@@ -126,68 +126,18 @@ provisionRoutes.post('/provision', async (c) => {
       steps.push(await ensureCustomDomain(cf, appId));
     }
 
-    // 3. Create D1 database
-    let dbId = '';
-    const dbName = `pas-data-${appId}`;
-    try {
-      const dbRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/d1/database`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${cfToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: dbName }),
-      });
-      const dbData = (await dbRes.json()) as { success: boolean; result?: { uuid: string }; errors?: { message: string }[] };
-      if (dbData.success && dbData.result) {
-        dbId = dbData.result.uuid;
-        steps.push({ name: 'create_d1', status: 'ok', detail: `${dbName} (${dbId})` });
-      } else {
-        const err = dbData.errors?.[0]?.message || 'unknown';
-        if (err.includes('already exists')) {
-          const listRes = await fetch(
-            `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/d1/database?name=${dbName}`,
-            { headers: { Authorization: `Bearer ${cfToken}` } },
-          );
-          const listData = (await listRes.json()) as { result?: { uuid: string; name: string }[] };
-          const existing = listData.result?.find((d) => d.name === dbName);
-          if (existing) {
-            dbId = existing.uuid;
-            steps.push({ name: 'create_d1', status: 'skip', detail: `${dbName} already exists (${dbId})` });
-          } else {
-            steps.push({ name: 'create_d1', status: 'fail', detail: 'exists per create but list returned nothing' });
-          }
-        } else {
-          steps.push({ name: 'create_d1', status: 'fail', detail: err });
-        }
-      }
-    } catch (e) {
-      steps.push({ name: 'create_d1', status: 'fail', detail: String(e) });
-    }
-
-    // 4. Deploy Data Worker
-    let dataWorkerUrl = '';
-    if (dbId) {
-      try {
-        const result = await deployDataWorker(appId, dbId, cfToken, cfAccount);
-        dataWorkerUrl = result.url;
-        steps.push({ name: 'deploy_worker', status: result.ok ? 'ok' : 'fail', detail: result.detail });
-      } catch (e) {
-        steps.push({ name: 'deploy_worker', status: 'fail', detail: String(e) });
-      }
-    } else {
-      steps.push({ name: 'deploy_worker', status: 'skip', detail: 'No D1 database created' });
-    }
-
-    // 5. Record the app in PAS
-    try {
-      await c.env.DB.prepare(
-        'INSERT OR IGNORE INTO apps (id, creator_id, d1_database_id, created_at) VALUES (?, ?, ?, ?)',
-      )
-        .bind(appId, user.id, dbId, Date.now())
-        .run();
-      steps.push({ name: 'record_app', status: 'ok', detail: `creator: ${user.login}` });
-    } catch (e) {
-      steps.push({ name: 'record_app', status: 'fail', detail: String(e) });
-    }
-
+    // 3–5. Data plane (D1 + data worker + app record) — shared with the agent
+    //      deploy stage via /v1/provision-data so both paths get the same layer.
+    const data = await provisionData({
+      appId,
+      creatorId: user.id,
+      creatorLabel: user.login,
+      cfToken,
+      cfAccount,
+      db: c.env.DB,
+    });
+    steps.push(...data.steps);
+    const dataWorkerUrl = data.dataWorkerUrl;
 
     const success = !steps.some((s) => s.status === 'fail');
     return c.json({ appId, steps, dataWorkerUrl, pagesUrl, success }, success ? 200 : 207);
@@ -195,6 +145,38 @@ provisionRoutes.post('/provision', async (c) => {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
   }
+});
+
+/**
+ * Internal (service-to-service): provision ONLY an app's data plane (D1 + data
+ * worker + app record). Called by the Agent Teams deploy stage over the
+ * PAS_BACKEND service binding so agent-built apps get the same data layer a
+ * CLI-published app gets from /v1/provision. Auth is the shared INTERNAL_TOKEN,
+ * not a user session — the agent flow has no session and supplies the owner as
+ * `creatorId`. Idempotent; safe to retry.
+ */
+provisionRoutes.post('/provision-data', async (c) => {
+  const provided = c.req.header('X-Internal-Token');
+  if (!c.env.INTERNAL_TOKEN || provided !== c.env.INTERNAL_TOKEN) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const body = await c.req.json<{ appId?: string; creatorId?: string }>();
+  if (!body.appId || !/^[a-z][a-z0-9-]*$/.test(body.appId) || body.appId.length > 58) {
+    return c.text('Invalid app ID', 400);
+  }
+  if (!body.creatorId) return c.text('creatorId required', 400);
+  if (!c.env.CF_API_TOKEN || !c.env.CF_ACCOUNT_ID) {
+    return c.text('Platform provisioning not configured (missing CF credentials)', 503);
+  }
+  const data = await provisionData({
+    appId: body.appId,
+    creatorId: body.creatorId,
+    cfToken: c.env.CF_API_TOKEN,
+    cfAccount: c.env.CF_ACCOUNT_ID,
+    db: c.env.DB,
+  });
+  const success = !data.steps.some((s) => s.status === 'fail');
+  return c.json({ appId: body.appId, steps: data.steps, dataWorkerUrl: data.dataWorkerUrl, success }, success ? 200 : 207);
 });
 
 /**

@@ -1,0 +1,98 @@
+import { deployDataWorker } from './deploy-worker.js';
+
+export interface ProvisionDataStep {
+  name: string;
+  status: 'ok' | 'fail' | 'skip';
+  detail: string;
+}
+
+export interface ProvisionDataArgs {
+  appId: string;
+  /** Platform user id recorded as the app's creator (for payouts). */
+  creatorId: string;
+  /** Human label for the record_app step detail (defaults to creatorId). */
+  creatorLabel?: string;
+  cfToken: string;
+  cfAccount: string;
+  db: D1Database;
+}
+
+/**
+ * Provision an app's DATA plane: D1 database + data worker + PAS app record.
+ * Idempotent — D1 create skips when it already exists, the app record is
+ * INSERT OR IGNORE, and re-deploying the (generic) data worker is harmless.
+ *
+ * Shared by `/v1/provision` (the CLI/SDK publish path) and `/v1/provision-data`
+ * (the Agent Teams deploy stage, service-to-service) so a CLI-published app and
+ * an agent-built app get the SAME data layer — closing the parity gap where
+ * agent apps had no D1/data worker and `app.data` 404'd at runtime.
+ */
+export async function provisionData(
+  args: ProvisionDataArgs,
+): Promise<{ steps: ProvisionDataStep[]; dataWorkerUrl: string; dbId: string }> {
+  const { appId, creatorId, creatorLabel, cfToken, cfAccount, db } = args;
+  const steps: ProvisionDataStep[] = [];
+
+  // 1. Create D1 database (skip if it already exists)
+  let dbId = '';
+  const dbName = `pas-data-${appId}`;
+  try {
+    const dbRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/d1/database`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${cfToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: dbName }),
+    });
+    const dbData = (await dbRes.json()) as { success: boolean; result?: { uuid: string }; errors?: { message: string }[] };
+    if (dbData.success && dbData.result) {
+      dbId = dbData.result.uuid;
+      steps.push({ name: 'create_d1', status: 'ok', detail: `${dbName} (${dbId})` });
+    } else {
+      const err = dbData.errors?.[0]?.message || 'unknown';
+      if (err.includes('already exists')) {
+        const listRes = await fetch(
+          `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/d1/database?name=${dbName}`,
+          { headers: { Authorization: `Bearer ${cfToken}` } },
+        );
+        const listData = (await listRes.json()) as { result?: { uuid: string; name: string }[] };
+        const existing = listData.result?.find((d) => d.name === dbName);
+        if (existing) {
+          dbId = existing.uuid;
+          steps.push({ name: 'create_d1', status: 'skip', detail: `${dbName} already exists (${dbId})` });
+        } else {
+          steps.push({ name: 'create_d1', status: 'fail', detail: 'exists per create but list returned nothing' });
+        }
+      } else {
+        steps.push({ name: 'create_d1', status: 'fail', detail: err });
+      }
+    }
+  } catch (e) {
+    steps.push({ name: 'create_d1', status: 'fail', detail: String(e) });
+  }
+
+  // 2. Deploy the data worker bound to that D1
+  let dataWorkerUrl = '';
+  if (dbId) {
+    try {
+      const result = await deployDataWorker(appId, dbId, cfToken, cfAccount);
+      dataWorkerUrl = result.url;
+      steps.push({ name: 'deploy_worker', status: result.ok ? 'ok' : 'fail', detail: result.detail });
+    } catch (e) {
+      steps.push({ name: 'deploy_worker', status: 'fail', detail: String(e) });
+    }
+  } else {
+    steps.push({ name: 'deploy_worker', status: 'skip', detail: 'No D1 database created' });
+  }
+
+  // 3. Record the app in PAS (creator → payouts; d1 id → data worker binding)
+  try {
+    await db
+      .prepare('INSERT OR IGNORE INTO apps (id, creator_id, d1_database_id, created_at) VALUES (?, ?, ?, ?)')
+      .bind(appId, creatorId, dbId, Date.now())
+      .run();
+    steps.push({ name: 'record_app', status: 'ok', detail: `creator: ${creatorLabel ?? creatorId}` });
+  } catch (e) {
+    steps.push({ name: 'record_app', status: 'fail', detail: String(e) });
+  }
+
+  return { steps, dataWorkerUrl, dbId };
+}

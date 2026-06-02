@@ -29,8 +29,8 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
     .toArray()[0] as { title: string; iterations: number; deploy_pushed_at: number | null; deploy_pushed_sha: string | null } | undefined;
   if (!ticket) return;
   const proj = sql
-    .exec('SELECT slug, name FROM project LIMIT 1')
-    .toArray()[0] as { slug: string; name: string } | undefined;
+    .exec('SELECT slug, name, owner_id, data_provisioned_at FROM project LIMIT 1')
+    .toArray()[0] as { slug: string; name: string; owner_id: string; data_provisioned_at: number | null } | undefined;
   if (!proj) return;
   const now = Date.now();
   const files = deps.loadFiles();
@@ -111,7 +111,46 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
     sql.exec("UPDATE tickets SET status = 'done', final_commit_sha = ?, updated_at = ? WHERE id = ?", sha ?? null, now, ticketId);
     deps.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'done', trigger: 'system' });
     deps.logActivity('deploy', `Deployed live ✓ ${sha?.slice(0, 7) ?? ''} ${r.url ?? ''}`.trim(), ticketId);
+
+    // 4) Ensure the data plane (D1 + data worker + app record) once per project,
+    //    so agent-built apps have a working `app.data` like CLI-published ones.
+    //    Best-effort: never fails the (already-green) frontend deploy.
+    await ensureDataInfra(deps, proj, ticketId);
   } catch (e) {
     fail(`Deploy error: ${e instanceof Error ? e.message : 'unknown'}`);
+  }
+}
+
+/**
+ * Provision the app's data plane via the PAS backend's internal endpoint, ONCE
+ * per project (gated by `project.data_provisioned_at`). Runs after a green
+ * frontend deploy; failures are logged and retried on the next deploy rather
+ * than blocking the deploy. Mirrors what `pas publish` → /v1/provision does for
+ * CLI apps, so both paths yield the same data layer.
+ */
+async function ensureDataInfra(
+  deps: DeployDeps,
+  proj: { slug: string; owner_id: string; data_provisioned_at: number | null },
+  ticketId: string,
+): Promise<void> {
+  const { sql, env } = deps;
+  if (proj.data_provisioned_at) return; // already provisioned
+  if (!env.PAS_BACKEND || !env.INTERNAL_TOKEN) return; // no backend binding (dev)
+  try {
+    const res = await env.PAS_BACKEND.fetch(new Request('https://api.proappstore.online/v1/provision-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': env.INTERNAL_TOKEN },
+      body: JSON.stringify({ appId: proj.slug, creatorId: proj.owner_id }),
+    }));
+    const r = await res.json() as { success?: boolean; dataWorkerUrl?: string; steps?: { name: string; status: string; detail: string }[] };
+    if (res.ok && r.success) {
+      sql.exec('UPDATE project SET data_provisioned_at = ? WHERE slug = ?', Date.now(), proj.slug);
+      deps.logActivity('deploy', `Data layer ready (D1 + data worker)${r.dataWorkerUrl ? ` → ${r.dataWorkerUrl}` : ''}`, ticketId);
+    } else {
+      const detail = (r.steps ?? []).filter((s) => s.status === 'fail').map((s) => `${s.name} — ${s.detail}`).join('; ');
+      deps.logActivity('deploy', `Data layer not ready (will retry next deploy): ${detail || `backend ${res.status}`}`, ticketId);
+    }
+  } catch (e) {
+    deps.logActivity('deploy', `Data layer provisioning error (will retry next deploy): ${e instanceof Error ? e.message : 'unknown'}`, ticketId);
   }
 }

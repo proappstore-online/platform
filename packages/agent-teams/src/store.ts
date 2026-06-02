@@ -90,6 +90,9 @@ export const MIGRATIONS: string[][] = [
   // Deploy stage bookkeeping: push ONCE per attempt, then poll CI for that commit.
   [`ALTER TABLE tickets ADD COLUMN deploy_pushed_at INTEGER`],
   [`ALTER TABLE tickets ADD COLUMN deploy_pushed_sha TEXT`],
+  // Data plane (D1 + data worker + app record) provisioned once, at first green
+  // deploy, via the PAS backend. Timestamp gates re-provisioning every ticket.
+  [`ALTER TABLE project ADD COLUMN data_provisioned_at INTEGER`],
 ];
 
 export function uuid(): string {

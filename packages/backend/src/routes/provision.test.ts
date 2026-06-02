@@ -335,3 +335,65 @@ describe('POST /v1/provision', () => {
     ]));
   });
 });
+
+// Internal data-plane endpoint the Agent Teams deploy stage calls (service-to-
+// service) so agent-built apps get the same D1 + data worker + app record a
+// CLI-published app gets. Auth is INTERNAL_TOKEN, not a user session.
+describe('POST /v1/provision-data (internal)', () => {
+  it('403 without the internal token', async () => {
+    globalThis.fetch = multiFetch();
+    const res = await app.request('/v1/provision-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'myapp', creatorId: 'gh:7' }),
+    }, makeEnv({ INTERNAL_TOKEN: 'sekret' }));
+    expect(res.status).toBe(403);
+  });
+
+  it('400 for invalid app ID', async () => {
+    globalThis.fetch = multiFetch();
+    const res = await app.request('/v1/provision-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': 'sekret' },
+      body: JSON.stringify({ appId: 'Bad_ID', creatorId: 'gh:7' }),
+    }, makeEnv({ INTERNAL_TOKEN: 'sekret' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('400 when creatorId missing', async () => {
+    globalThis.fetch = multiFetch();
+    const res = await app.request('/v1/provision-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': 'sekret' },
+      body: JSON.stringify({ appId: 'myapp' }),
+    }, makeEnv({ INTERNAL_TOKEN: 'sekret' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('provisions D1 + worker + app record (no Pages/DNS) and records the given creator', async () => {
+    const appStmt = mockStmt();
+    const db = mockD1(appStmt);
+    globalThis.fetch = multiFetch({
+      'd1/database': { status: 200, body: { success: true, result: { uuid: 'db-9' } } },
+    });
+    const res = await app.request('/v1/provision-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': 'sekret' },
+      body: JSON.stringify({ appId: 'cleanup', creatorId: 'gh:42' }),
+    }, makeEnv({ INTERNAL_TOKEN: 'sekret' }, db));
+
+    expect(res.status).toBe(200);
+    const data = await res.json() as { success: boolean; steps: { name: string }[] };
+    expect(data.success).toBe(true);
+    const names = data.steps.map((s) => s.name);
+    expect(names).toEqual(expect.arrayContaining(['create_d1', 'deploy_worker', 'record_app']));
+    // data-plane only — no hosting steps
+    expect(names).not.toContain('CF Pages project');
+    expect(names).not.toContain('DNS');
+    // app record uses the creatorId we passed (not a session user)
+    expect(appStmt.bind).toHaveBeenCalled();
+    const bindArgs = appStmt.bind.mock.calls[0];
+    expect(bindArgs[0]).toBe('cleanup');
+    expect(bindArgs[1]).toBe('gh:42');
+  });
+});
