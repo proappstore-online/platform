@@ -34,6 +34,40 @@ Pro primitives:
 - Messaging: \`app.email\`, \`app.sms.send(to, msg)\` / \`broadcast(nums, msg)\`, \`app.notifications.subscribe(swPath?)\` (web push).
 - Other: \`app.maps\` (geocode/route), \`app.webhooks.list()\`/\`register(event, url)\`/\`remove(id)\`, \`app.usage\` (telemetry, auto-started).
 
+Official docs (the SAME references users read — cite these links so the founder can learn the API):
+- Platform/SDK guide: https://proappstore.online/skills.md  (use the read_docs tool to read it live)
+- Docs site: https://proappstore.online/docs  · API base: https://api.proappstore.online
+When you explain a capability, include the relevant doc link so the founder can read more.
+
 Rules:
 - Free apps must be MIT; Pro unlocks DB/storage/server-AI/custom-domain/cron/uncapped-rooms.
-- If a capability isn't listed here and you can't confirm it in the code or the installed SDK types, it may not exist — say so, don't fabricate it.`;
+- If a capability isn't listed here and you can't confirm it in the code, the installed SDK types, or the live docs (read_docs), it may not exist — say so, don't fabricate it.`;
+
+/** Canonical, user-facing docs the agents should read + cite. */
+export const DOCS_SKILLS_URL = 'https://proappstore.online/skills.md';
+export const DOCS_SITE_URL = 'https://proappstore.online/docs';
+
+/**
+ * Return the doc section(s) whose heading matches `topic` (markdown ##–####),
+ * or the whole doc (capped) when no topic. Lets read_docs do progressive
+ * disclosure instead of dumping the full 600-line guide every call.
+ */
+export function sliceDocs(text: string, topic?: string, max = 16000): string {
+  if (!topic || !topic.trim()) return text.slice(0, max);
+  const t = topic.toLowerCase();
+  const lines = text.split('\n');
+  const out: string[] = [];
+  let capturing = false;
+  let captureLevel = 0;
+  for (const line of lines) {
+    const h = /^(#{2,4})\s+(.*)/.exec(line);
+    if (h) {
+      const level = h[1]!.length;
+      if (capturing && level <= captureLevel) capturing = false;
+      if (!capturing && h[2]!.toLowerCase().includes(t)) { capturing = true; captureLevel = level; }
+    }
+    if (capturing) out.push(line);
+  }
+  const section = out.join('\n').trim();
+  return (section || text).slice(0, max);
+}

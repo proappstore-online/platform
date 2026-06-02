@@ -45,7 +45,7 @@ import { buildSeedMessages } from './prompts.ts';
 import { toolActivityDetail } from './tool-activity.ts';
 import { slidingWindowAllow, CHAT_LIMIT, CHAT_WINDOW_MS } from './rate-limit.ts';
 import { DEFAULT_PERSONAS, PO_PERSONA, formatMemory, type MemoryEntry } from './memory.ts';
-import { PLATFORM_CAPABILITIES } from './platform-skill.ts';
+import { PLATFORM_CAPABILITIES, DOCS_SKILLS_URL, sliceDocs } from './platform-skill.ts';
 
 /**
  * Watchdog interval. While a project is running, an alarm fires on this cadence
@@ -63,6 +63,8 @@ export class ProjectDO implements DurableObject {
   private running = new Set<string>();
   /** Recent chat timestamps for the per-project throttle (in-memory). */
   private chatWindow: number[] = [];
+  /** Cached official docs (skills.md), TTL'd, so read_docs doesn't refetch each call. */
+  private docsCache: { text: string; at: number } | null = null;
 
   constructor(state: DurableObjectState, env: Bindings) {
     this.state = state;
@@ -739,6 +741,22 @@ export class ProjectDO implements DurableObject {
   // ── Project working tree (file map) ──────────────────────────
   // The Dev/QA file tools edit this map (in spine.ts). It persists between runs
   // so Dev's output survives into the QA run and back into a qa-failed re-run.
+
+  /** Fetch the official platform docs (skills.md) — the same reference users see.
+   *  Cached for an hour; UA header avoids the docs WAF 403. */
+  private async fetchDocs(): Promise<string> {
+    const now = Date.now();
+    if (this.docsCache && now - this.docsCache.at < 3_600_000) return this.docsCache.text;
+    try {
+      const res = await fetch(DOCS_SKILLS_URL, { headers: { 'User-Agent': 'proappstore-agent-teams/1.0' } });
+      if (!res.ok) return this.docsCache?.text ?? '';
+      const text = await res.text();
+      this.docsCache = { text, at: now };
+      return text;
+    } catch {
+      return this.docsCache?.text ?? '';
+    }
+  }
 
   // ── Project memory (durable decisions/facts the team reads each run) ───────
 
@@ -1617,6 +1635,14 @@ ${PLATFORM_CAPABILITIES}`;
         required: ['key', 'value'],
       },
     });
+    poTools.push({
+      name: 'read_docs',
+      description: 'Read the official ProAppStore platform/SDK docs (the same skills.md the user can read). Use to confirm a real SDK/API capability before answering, and cite the doc URL to the founder. Pass a topic (e.g. "database", "rooms", "subscription") to get just that section.',
+      input_schema: {
+        type: 'object',
+        properties: { topic: { type: 'string', description: 'optional section/keyword to focus on' } },
+      },
+    });
     const poFiles = this.loadFiles();
     const messages: { role: 'user' | 'assistant'; content: unknown }[] = recentChat.map((m) => ({
       role: m.role === 'user' ? 'user' as const : 'assistant' as const,
@@ -1661,8 +1687,9 @@ ${PLATFORM_CAPABILITIES}`;
         const toolUses = (contentArr as { type: string; id?: string; name?: string; input?: unknown }[]).filter((c) => c.type === 'tool_use');
         if (toolUses.length === 0 || aiRes.stop_reason !== 'tool_use') break;
 
-        // Execute tool calls: remember → memory write; everything else → read-only file tools.
-        const toolResults = toolUses.map((tu) => {
+        // Execute tool calls: remember → memory write; read_docs → official docs;
+        // everything else → read-only file tools.
+        const toolResults = await Promise.all(toolUses.map(async (tu) => {
           if (tu.name === 'remember') {
             const a = (tu.input ?? {}) as { key?: string; value?: string; category?: string };
             if (a.key && a.value) {
@@ -1671,12 +1698,18 @@ ${PLATFORM_CAPABILITIES}`;
             }
             return { type: 'tool_result' as const, tool_use_id: tu.id!, content: 'remember needs key and value' };
           }
+          if (tu.name === 'read_docs') {
+            const topic = (tu.input as { topic?: string } | undefined)?.topic;
+            const out = sliceDocs(await this.fetchDocs(), topic) || 'docs unavailable';
+            this.logActivity('tool', `PO: read_docs${topic ? ` ${topic}` : ''}`, null, JSON.stringify({ args: tu.input, result: out }));
+            return { type: 'tool_result' as const, tool_use_id: tu.id!, content: out };
+          }
           const r = executeFileTool({ id: tu.id!, name: tu.name!, args: tu.input }, poFiles);
           const out = (r.ok ? (typeof r.data === 'string' ? r.data : JSON.stringify(r.data)) : (r.errorMessage ?? 'error')) || '(no output)';
           this.logActivity('tool', `PO: ${toolActivityDetail(tu.name!, tu.input)}`, null,
             JSON.stringify({ args: tu.input, ok: r.ok, result: out }));
           return { type: 'tool_result' as const, tool_use_id: tu.id!, content: out };
-        });
+        }));
         messages.push({ role: 'user', content: toolResults });
       }
 
