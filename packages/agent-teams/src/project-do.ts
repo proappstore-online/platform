@@ -1261,6 +1261,9 @@ export class ProjectDO implements DurableObject {
       }
     }
 
+    // Bump the ticket's updated_at so the console's open-ticket panel detects the
+    // new message and reloads (the client uses updatedAt as the change signature).
+    this.state.storage.sql.exec('UPDATE tickets SET updated_at = ? WHERE id = ?', now, opts.ticketId);
     this.broadcast({ type: 'message', ticketId: opts.ticketId, messageId: id, author: opts.author });
     return id;
   }
