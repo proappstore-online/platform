@@ -520,6 +520,16 @@ export class ProjectDO implements DurableObject {
       if (this.running.has(t.id)) continue;
       this.dispatchRun(t.id);
     }
+
+    // Deterministic deploy stage (no LLM): push + verify the CI build, then route
+    // done | back-to-dev. "done" is only reachable through a verified green build.
+    const deploying = this.state.storage.sql
+      .exec("SELECT id FROM tickets WHERE status = 'deploying' ORDER BY updated_at")
+      .toArray() as { id: string }[];
+    for (const t of deploying) {
+      if (this.running.has(t.id)) continue;
+      this.dispatchDeploy(t.id);
+    }
   }
 
   /**
@@ -549,8 +559,11 @@ export class ProjectDO implements DurableObject {
       return;
     }
     const roleConfig = rowToRoleConfig(rcRow);
-    // Every role may consult the official docs, even on projects seeded before
-    // read_docs existed (union at run time, no migration needed).
+    // Deploy is now a deterministic system stage (after QA), not an agent action —
+    // strip the deploy tools so Dev/QA don't push un-QA'd code or self-declare
+    // "deployed". Every role may consult the official docs (union, no migration).
+    const DEPLOY_TOOLS = new Set(['scaffold_app', 'provision_app', 'get_deploy_status']);
+    roleConfig.spineTools = roleConfig.spineTools.filter((t) => !DEPLOY_TOOLS.has(t));
     if (!roleConfig.spineTools.includes('read_docs')) roleConfig.spineTools = [...roleConfig.spineTools, 'read_docs'];
 
     // Resolve the owner's BYO key for this runtime's provider.
@@ -739,6 +752,97 @@ export class ProjectDO implements DurableObject {
         this.touchUserActivity();
         try { this.autoAdvance(); } catch { /* keep the watchdog as backstop */ }
       });
+  }
+
+  /** Fire-and-forget the deterministic deploy stage for a `deploying` ticket. */
+  private dispatchDeploy(ticketId: string): void {
+    this.running.add(ticketId);
+    void this.runDeploy(ticketId)
+      .catch((e) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        try { this.logActivity('error', `Deploy crashed: ${msg}`, ticketId); } catch { /* noop */ }
+      })
+      .finally(() => {
+        this.running.delete(ticketId);
+        this.touchUserActivity();
+        try { this.autoAdvance(); } catch { /* watchdog backstop */ }
+      });
+  }
+
+  /**
+   * Deploy stage (no LLM): push the working tree to the repo and verify the CI
+   * build. Green → done. Red → back to dev-active with the build error attached
+   * (or failed at the iteration cap). This makes "done" mean "verified deployed".
+   */
+  private async runDeploy(ticketId: string): Promise<void> {
+    const ticket = this.state.storage.sql
+      .exec('SELECT title, iterations FROM tickets WHERE id = ?', ticketId)
+      .toArray()[0] as { title: string; iterations: number } | undefined;
+    if (!ticket) return;
+    const proj = this.state.storage.sql
+      .exec('SELECT slug, name FROM project LIMIT 1')
+      .toArray()[0] as { slug: string; name: string } | undefined;
+    if (!proj) return;
+    const now = Date.now();
+    const files = this.loadFiles();
+
+    // No deploy binding (e.g. local/dev) — can't verify; mark done with a note.
+    if (!this.env.ADMIN || !this.env.INTERNAL_TOKEN || files.size === 0) {
+      this.state.storage.sql.exec("UPDATE tickets SET status = 'done', updated_at = ? WHERE id = ?", now, ticketId);
+      this.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'done', trigger: 'system' });
+      this.logActivity('deploy', files.size === 0 ? 'No files to deploy → done' : 'Deploy binding unavailable → done', ticketId);
+      return;
+    }
+
+    const adminFetch = (path: string, body: unknown) => this.env.ADMIN!.fetch(new Request(`https://admin.proappstore.online${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': this.env.INTERNAL_TOKEN! },
+      body: JSON.stringify(body),
+    }));
+
+    const fail = (reason: string) => {
+      // Route back to Dev with the error, or fail at the iteration cap.
+      this.storeMessage({ ticketId, author: 'system', body: `Deploy failed — fix and it will redeploy:\n${reason}`.slice(0, 8000) }).catch(() => {});
+      if (ticket.iterations < 5) {
+        this.state.storage.sql.exec("UPDATE tickets SET status = 'dev-active', assignee_role = 'Dev', iterations = iterations + 1, updated_at = ? WHERE id = ?", now, ticketId);
+        this.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'dev-active', trigger: 'system', reason: 'deploy-failed' });
+        this.logActivity('deploy', `Deploy FAILED → back to Dev: ${reason.slice(0, 200)}`, ticketId);
+      } else {
+        this.state.storage.sql.exec("UPDATE tickets SET status = 'failed', stuck_reason = 'Deploy failed (iteration cap)', updated_at = ? WHERE id = ?", now, ticketId);
+        this.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'failed', trigger: 'system', reason: 'deploy-failed' });
+        this.logActivity('deploy', `Deploy FAILED (iteration cap) → failed: ${reason.slice(0, 200)}`, ticketId);
+      }
+    };
+
+    try {
+      // 1) Push the working tree (idempotent: creates the repo if needed).
+      const pushRes = await adminFetch('/api/agent-deploy', { id: proj.slug, name: proj.name, files: Object.fromEntries(files) });
+      const push = await pushRes.json() as { success?: boolean; repoUrl?: string | null; steps?: { name: string; status: string; detail: string }[] };
+      if (!pushRes.ok || !push.success) {
+        const detail = (push.steps ?? []).filter((s) => s.status === 'fail').map((s) => `${s.name} — ${s.detail}`).join('; ');
+        return fail(`Push to repo failed: ${detail || `admin ${pushRes.status}`}`);
+      }
+      if (push.repoUrl) this.state.storage.sql.exec('UPDATE project SET repo_url = ? WHERE repo_url IS NULL', push.repoUrl);
+      this.logActivity('deploy', `Pushed ${files.size} file(s) → building…`, ticketId);
+
+      // 2) Verify the CI build (waits for it to finish).
+      const statusRes = await adminFetch('/api/deploy-status', { id: proj.slug, waitMs: 85_000 });
+      const r = await statusRes.json() as { ok: boolean; status?: string; conclusion?: string; url?: string; errorTail?: string; error?: string };
+      if (r.error) return fail(`Could not verify build: ${r.error}`);
+      if (r.status !== 'completed') {
+        // Build still running past our wait — leave it in deploying; the watchdog re-checks.
+        this.logActivity('deploy', `Build still running (${r.status}) — will re-check`, ticketId);
+        return;
+      }
+      if (!r.ok) return fail(`CI build ${r.conclusion}:\n${r.errorTail ?? r.url ?? ''}`);
+
+      // 3) Green → done.
+      this.state.storage.sql.exec("UPDATE tickets SET status = 'done', updated_at = ? WHERE id = ?", now, ticketId);
+      this.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'done', trigger: 'system' });
+      this.logActivity('deploy', `Deployed live ✓ ${r.url ?? ''}`, ticketId);
+    } catch (e) {
+      fail(`Deploy error: ${e instanceof Error ? e.message : 'unknown'}`);
+    }
   }
 
   // ── Project working tree (file map) ──────────────────────────
@@ -1035,12 +1139,14 @@ export class ProjectDO implements DurableObject {
         this.broadcast({ type: 'transition', ticketId, from: 'qa-active', to: 'qa-failed', trigger: 'QA' });
         this.logActivity('transition', 'QA failed → back to Dev', ticketId);
       } else {
+        // QA approved the code → hand off to the deterministic deploy stage.
+        // "done" is only reached after the CI build is verified green.
         this.state.storage.sql.exec(
-          "UPDATE tickets SET status = 'done', assignee_role = NULL, updated_at = ? WHERE id = ?",
+          "UPDATE tickets SET status = 'deploying', assignee_role = NULL, updated_at = ? WHERE id = ?",
           now, ticketId,
         );
-        this.broadcast({ type: 'transition', ticketId, from: 'qa-active', to: 'done', trigger: 'QA' });
-        this.logActivity('transition', 'QA passed → done', ticketId);
+        this.broadcast({ type: 'transition', ticketId, from: 'qa-active', to: 'deploying', trigger: 'QA' });
+        this.logActivity('transition', 'QA passed → deploying', ticketId);
       }
     }
   }

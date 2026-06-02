@@ -49,8 +49,9 @@ export type TicketStatus =
   | 'dev-active'        // Dev agent running
   | 'qa-active'         // QA agent running
   | 'qa-failed'         // QA found bugs; routes back to Dev with comments
+  | 'deploying'         // QA passed; system is pushing + verifying the CI build
   | 'needs-input'       // agent is stuck, needs user decision before continuing
-  | 'done'              // QA passed, merged, deployed
+  | 'done'              // built + deployed live (verified green)
   | 'failed'            // hit iteration cap, cost cap, or stuck-ticket
   | 'cancelled'         // PO killed it
 
