@@ -19,6 +19,71 @@ interface Step {
   detail: string;
 }
 
+// Path of the deploy workflow we inject into agent-authored repos.
+const DEPLOY_WORKFLOW_PATH = ".github/workflows/deploy.yml";
+
+/**
+ * The push-triggered CI workflow that builds the app and ships it to its CF Pages
+ * project. Agent Teams authors only app source — never a workflow — so without
+ * this the repo has no CI, every push registers no run, and the deploy stage
+ * correctly times out with "CI never started". Injected at deploy time.
+ *
+ * Deliberately layout-adaptive: agents author either a flat Vite app (build →
+ * `dist`) or a `web/` sub-package (build → `web/dist`); this detects both. Uses
+ * `--no-frozen-lockfile` because agents don't commit a lockfile. Needs the
+ * `CLOUDFLARE_API_TOKEN` Actions secret (org-level, visibility=all on the
+ * publishers org — see SETUP) so every generated repo inherits it with no
+ * per-repo step. `\${{ }}` is escaped to survive the template literal.
+ */
+function deployWorkflowYaml(env: Env): string {
+  return `name: Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: deploy-\${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: pnpm install --no-frozen-lockfile
+
+      - name: Build
+        env:
+          VITE_COMMIT_SHA: \${{ github.sha }}
+        run: pnpm build
+
+      - name: Locate build output
+        id: dist
+        run: |
+          if [ -d web/dist ]; then echo "dir=web/dist" >> "\$GITHUB_OUTPUT"
+          elif [ -d dist ]; then echo "dir=dist" >> "\$GITHUB_OUTPUT"
+          else echo "::error::No build output (looked for ./dist and ./web/dist)"; exit 1; fi
+
+      - name: Deploy to Cloudflare Pages
+        run: npx wrangler@3 pages deploy "\${{ steps.dist.outputs.dir }}" --project-name=proappstore-\${{ github.event.repository.name }} --branch=main
+        env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${env.CF_ACCOUNT_ID}
+`;
+}
+
 function validateId(id: string): string | null {
   if (!id) return "id is required";
   if (id.length > 58) return "id must be 58 chars or less";
@@ -225,13 +290,23 @@ export interface AgentDeployRequest {
 }
 
 /**
- * Internal: create the repo (if needed) and push the authored file bundle.
- * Called by the agent-teams Worker over the service binding.
+ * Internal: provision a deployable app repo and push the authored file bundle.
+ * Called by the agent-teams deploy stage over the service binding.
  *
- * Deliberately does NOT add a registry entry: hosting (CF/Path B) isn't
- * provisioned here (issue #7), so listing the app would advertise an appUrl
- * that 404s. The storefront listing happens at the real publish/provision step.
- * This is purely "ship the agent's code to a sanctioned repo."
+ * Provisions everything the SHA-verified deploy gate needs to go green,
+ * idempotently (every step skips cleanly if already present):
+ *   1. GitHub repo
+ *   2. CF Pages project (the wrangler target — fatal if missing)
+ *   3. Custom domain + DNS CNAME (reachability; best-effort, non-fatal)
+ *   4. A push-triggered deploy workflow injected into the bundle (agents author
+ *      only app source, so without this CI never starts)
+ *   5. Push → one commit → returns its SHA for the deploy gate to verify
+ *
+ * The `CLOUDFLARE_API_TOKEN` the workflow needs is an org-level Actions secret
+ * (visibility=all on the publishers org) so it isn't set per-repo here.
+ *
+ * Deliberately does NOT add a storefront registry entry: listing is an explicit
+ * publish decision (an app can deploy and be iterated on before it's listed).
  */
 export async function handleAgentDeploy(
   req: AgentDeployRequest,
@@ -256,11 +331,30 @@ export async function handleAgentDeploy(
   steps.push(repoStep);
   if (repoStep.status === "fail") return { steps, success: false, repoUrl: null };
 
-  const pushStep = await pushFilesToGitHub(env, req.id, req.files || {});
+  // CF Pages project must exist before CI runs `wrangler pages deploy` — fatal.
+  const pagesStep = await createPagesProject(env, req.id);
+  steps.push(pagesStep);
+  if (pagesStep.status === "fail") return { steps, success: false, repoUrl };
+
+  // Reachability at <id>.proappstore.online. Non-fatal: CI still ships to
+  // *.pages.dev and goes green even if domain/DNS wiring lags.
+  steps.push(await addCustomDomain(env, req.id));
+  steps.push(await createDnsCname(env, req.id));
+
+  // Inject the deploy workflow unless the bundle already carries one, so a push
+  // actually triggers CI (the deploy gate verifies that exact commit's run).
+  const files: Record<string, string> = { ...(req.files || {}) };
+  const hasWorkflow = Object.keys(files).some((p) => /^\.github\/workflows\/.+\.ya?ml$/i.test(p));
+  if (!hasWorkflow) files[DEPLOY_WORKFLOW_PATH] = deployWorkflowYaml(env);
+
+  const pushStep = await pushFilesToGitHub(env, req.id, files);
   steps.push(pushStep);
   if (pushStep.status === "fail") return { steps, success: false, repoUrl };
 
-  return { steps, success: steps.every((s) => s.status !== "fail"), repoUrl, commitSha: pushStep.commitSha };
+  // Reaching here means repo + Pages project + push all succeeded (each fatal
+  // step early-returns on failure). Domain/DNS skips don't block a deploy whose
+  // code shipped and whose CI can go green.
+  return { steps, success: true, repoUrl, commitSha: pushStep.commitSha };
 }
 
 export async function handlePublish(req: PublishRequest, env: Env): Promise<{ steps: Step[]; success: boolean }> {

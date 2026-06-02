@@ -27,7 +27,11 @@ const TRANSITIONS: Transition[] = [
   { from: 'dev-active', to: 'qa-active', trigger: 'Dev' },
   // Dev is stuck → needs user input
   { from: 'dev-active', to: 'needs-input', trigger: 'Dev' },
-  // QA passes → done
+  // QA passes → deploy stage (deterministic system stage; SHA-verified CI gate).
+  // The auto-orchestrator drives qa-active→deploying directly; the legacy
+  // qa-active→done edge is kept for back-compat with any manual flow.
+  { from: 'qa-active', to: 'deploying', trigger: 'QA' },
+  { from: 'qa-active', to: 'deploying', trigger: 'system' },
   { from: 'qa-active', to: 'done', trigger: 'QA' },
   // QA fails → back to Dev
   { from: 'qa-active', to: 'qa-failed', trigger: 'QA' },
@@ -35,6 +39,14 @@ const TRANSITIONS: Transition[] = [
   { from: 'qa-active', to: 'needs-input', trigger: 'QA' },
   // Dev picks up failed ticket
   { from: 'qa-failed', to: 'dev-active', trigger: 'Dev' },
+
+  // Deploy stage (deploy-stage.ts) outcomes — all system-driven:
+  // CI green → done (verified live); CI red → back to Dev with the error;
+  // can't verify / never started → failed; PO may cancel a hung deploy.
+  { from: 'deploying', to: 'done', trigger: 'system' },
+  { from: 'deploying', to: 'dev-active', trigger: 'system' },
+  { from: 'deploying', to: 'failed', trigger: 'system' },
+  { from: 'deploying', to: 'cancelled', trigger: 'po' },
 
   // User answers a question → resume to previous active state
   // (system puts it back to the right status based on assignee)
