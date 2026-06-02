@@ -74,6 +74,10 @@ CREATE INDEX IF NOT EXISTS idx_chat_history ON chat_history(created_at);
 CREATE TABLE IF NOT EXISTS project_files (
   path TEXT PRIMARY KEY, content TEXT NOT NULL, updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS activity_log (
+  id TEXT PRIMARY KEY, ticket_id TEXT, type TEXT NOT NULL, detail TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_activity ON activity_log(created_at);
 `;
 
 function uuid(): string {
@@ -125,6 +129,33 @@ export class ProjectDO implements DurableObject {
         ws.send(data);
       } catch { /* dead socket, DO will clean up */ }
     }
+  }
+
+  // ── Activity log (persisted audit trail) ───────────────────
+  // Every meaningful action — play/pause, ticket created, agent started, tool
+  // calls, transitions, errors, cost — is written to the activity_log table so
+  // the full history is in the DB (traceable, survives refresh/eviction), not
+  // just in the browser. Also broadcast for live UIs.
+
+  private logActivity(type: string, detail: string, ticketId: string | null = null): void {
+    const id = uuid();
+    const now = Date.now();
+    this.state.storage.sql.exec(
+      'INSERT INTO activity_log (id, ticket_id, type, detail, created_at) VALUES (?, ?, ?, ?, ?)',
+      id, ticketId, type, detail.slice(0, 1000), now,
+    );
+    this.broadcast({ type: 'activity', entry: { id, ticketId, type, detail, createdAt: now } });
+  }
+
+  private getActivity(): Response {
+    const rows = this.state.storage.sql
+      .exec('SELECT id, ticket_id, type, detail, created_at FROM activity_log ORDER BY created_at DESC LIMIT 500')
+      .toArray() as { id: string; ticket_id: string | null; type: string; detail: string; created_at: number }[];
+    return json({
+      activity: rows.reverse().map((r) => ({
+        id: r.id, ticketId: r.ticket_id, type: r.type, detail: r.detail, createdAt: r.created_at,
+      })),
+    });
   }
 
   // ── Ownership check ────────────────────────────────────────
@@ -203,6 +234,7 @@ export class ProjectDO implements DurableObject {
     }
 
     if (path === '/cost' && request.method === 'GET') return this.getCostSummary();
+    if (path === '/activity' && request.method === 'GET') return this.getActivity();
 
     return json({ error: 'not_found' }, 404);
   }
@@ -258,6 +290,7 @@ export class ProjectDO implements DurableObject {
     }
 
     this.broadcast({ type: 'play-state', status: newStatus });
+    this.logActivity('control', newStatus === 'running' ? 'Agents started' : 'Agents paused');
 
     if (newStatus === 'running') {
       this.scheduleWatchdog();
@@ -489,6 +522,7 @@ export class ProjectDO implements DurableObject {
     }
 
     this.broadcast({ type: 'agent-run-started', ticketId, role, runtime: roleConfig.runtime });
+    this.logActivity('agent', `${role} started`, ticketId);
 
     const runtime: AgentRuntime = roleConfig.runtime === 'openai-responses'
       ? new OpenAIResponsesRuntime()
@@ -530,6 +564,7 @@ export class ProjectDO implements DurableObject {
             case 'tool-call':
               toolCalls.push(ev.call);
               this.broadcast({ type: 'agent-tool-call', ticketId, role, name: ev.call.name });
+              this.logActivity('tool', `${role}: ${ev.call.name}`, ticketId);
               break;
             case 'tool-result': {
               // Attach the result to its call so persisted toolCalls carry it
@@ -584,6 +619,10 @@ export class ProjectDO implements DurableObject {
         model: roleConfig.model,
       });
     }
+    if (costUsd > 0 || tokensIn > 0) {
+      this.logActivity('cost', `${role} finished · $${costUsd.toFixed(4)} · ${tokensIn}+${tokensOut} tok`, ticketId);
+    }
+    if (errorMessage) this.logActivity('error', `${role}: ${errorMessage}`, ticketId);
 
     // If the cap auto-failed this ticket mid-run, stop here.
     const post = this.state.storage.sql
@@ -789,12 +828,14 @@ export class ProjectDO implements DurableObject {
         JSON.stringify(spec), now, ticketId,
       );
       this.broadcast({ type: 'transition', ticketId, from: 'ba-refining', to: 'awaiting-approval', trigger: 'BA' });
+      this.logActivity('transition', 'BA finished spec → awaiting approval', ticketId);
     } else if (role === 'Dev') {
       this.state.storage.sql.exec(
         "UPDATE tickets SET status = 'qa-active', assignee_role = 'QA', updated_at = ? WHERE id = ?",
         now, ticketId,
       );
       this.broadcast({ type: 'transition', ticketId, from: 'dev-active', to: 'qa-active', trigger: 'Dev' });
+      this.logActivity('transition', 'Dev finished → QA review', ticketId);
     } else if (role === 'QA') {
       const failed = qaVerdict(output) === 'qa-failed';
       if (failed) {
@@ -803,12 +844,14 @@ export class ProjectDO implements DurableObject {
           now, ticketId,
         );
         this.broadcast({ type: 'transition', ticketId, from: 'qa-active', to: 'qa-failed', trigger: 'QA' });
+        this.logActivity('transition', 'QA failed → back to Dev', ticketId);
       } else {
         this.state.storage.sql.exec(
           "UPDATE tickets SET status = 'done', assignee_role = NULL, updated_at = ? WHERE id = ?",
           now, ticketId,
         );
         this.broadcast({ type: 'transition', ticketId, from: 'qa-active', to: 'done', trigger: 'QA' });
+        this.logActivity('transition', 'QA passed → done', ticketId);
       }
     }
   }
@@ -826,6 +869,7 @@ export class ProjectDO implements DurableObject {
       'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
       uuid(), 'system', message, now,
     );
+    this.logActivity('blocked', message, ticketId);
     this.broadcast({ type: 'transition', ticketId, to: 'needs-input', reason: 'agent-blocked', role });
     this.broadcast({ type: 'chat', role: 'system', body: message, id: uuid() });
   }
@@ -998,6 +1042,7 @@ export class ProjectDO implements DurableObject {
     };
 
     this.broadcast({ type: 'ticket-created', ticket });
+    this.logActivity('ticket', `Created: ${body.title}`, id);
     this.autoAdvance();
     return json(ticket, 201);
   }

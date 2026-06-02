@@ -278,6 +278,15 @@ app.get('/v1/projects/:slug/cost', async (c) => {
   return new Response(res.body, { status: res.status, headers: res.headers });
 });
 
+// ── Activity log (persisted audit trail) ────────────────────
+
+app.get('/v1/projects/:slug/activity', async (c) => {
+  const user = c.get('user' as never) as { id: string };
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
+  const res = await forwardToDO(stub, '/activity', user.id);
+  return new Response(res.body, { status: res.status, headers: res.headers });
+});
+
 // ── WebSocket upgrade ───────────────────────────────────────
 
 app.get('/v1/projects/:slug/ws', async (c) => {
