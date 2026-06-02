@@ -45,4 +45,17 @@ describe('sliceDocs', () => {
   it('falls back to the full doc when the topic is not found', () => {
     expect(sliceDocs(DOC, 'nonexistent')).toContain('# Guide');
   });
+
+  it('bounds output for a monolithic doc (no sub-headings) via windowing', () => {
+    // Mimics skills.md: one huge block with no ##/### headings → heading slicing
+    // returns everything, so the windowing fallback must cap it near `max`.
+    const big = '## SDK\n```ts\n' + 'filler line\n'.repeat(5000) + 'app.db.execute(sql)\n' + 'more\n'.repeat(5000) + '```';
+    const out = sliceDocs(big, 'db.execute', 2000);
+    expect(out.length).toBeLessThanOrEqual(2000);
+    expect(out).toContain('app.db.execute(sql)');
+  });
+
+  it('caps a no-topic read to max chars', () => {
+    expect(sliceDocs('x'.repeat(50000), undefined, 6000).length).toBe(6000);
+  });
 });

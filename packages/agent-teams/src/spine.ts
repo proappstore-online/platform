@@ -82,8 +82,14 @@ export function executeFileTool(call: ToolCall, files: Map<string, string>): Too
     }
 
     case 'list_files': {
-      const paths = [...files.keys()].sort();
-      return ok(call, paths.length ? paths.join('\n') : '(no files yet)');
+      // Honor an optional path prefix (the working tree is the app source only —
+      // there's no node_modules, so an SDK-types path correctly returns empty).
+      const prefix = String(args.path ?? '').replace(/^\.?\/+/, '').replace(/\/+$/, '');
+      let paths = [...files.keys()].sort();
+      if (prefix) paths = paths.filter((p) => p === prefix || p.startsWith(`${prefix}/`));
+      return ok(call, paths.length
+        ? paths.join('\n')
+        : prefix ? `(no files under "${prefix}")` : '(no files yet)');
     }
 
     case 'delete_file': {

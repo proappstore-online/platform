@@ -80,6 +80,18 @@ describe('executeFileTool', () => {
     expect(res.data).toBe('a.ts\nb.ts');
   });
 
+  it('honors a path prefix on list_files', () => {
+    const files = new Map([['src/a.ts', '1'], ['src/lib/b.ts', '2'], ['README.md', '3']]);
+    expect(executeFileTool(call('list_files', { path: 'src' }), files).data).toBe('src/a.ts\nsrc/lib/b.ts');
+    expect(executeFileTool(call('list_files', { path: 'src/lib' }), files).data).toBe('src/lib/b.ts');
+  });
+
+  it('returns an explicit empty message for a missing prefix (e.g. node_modules)', () => {
+    const files = new Map([['src/a.ts', '1']]);
+    expect(executeFileTool(call('list_files', { path: 'node_modules/@proappstore/sdk' }), files).data)
+      .toBe('(no files under "node_modules/@proappstore/sdk")');
+  });
+
   it('deletes a file', () => {
     const files = new Map([['x.ts', '1']]);
     expect(executeFileTool(call('delete_file', { path: 'x.ts' }), files).ok).toBe(true);

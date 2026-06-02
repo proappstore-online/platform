@@ -56,7 +56,12 @@ export const DOCS_SITE_URL = 'https://proappstore.online/docs';
  * like "SignInButton" returns just the UI-components section, not the whole 600-
  * line guide. Progressive disclosure that's actually precise + cheap.
  */
-export function sliceDocs(text: string, topic?: string, max = 16000): string {
+// Default cap kept small (~1.5k tokens). The old 16k default re-injected the
+// whole skills.md on every read_docs call across BA/Dev/QA — the single biggest
+// cost driver in agent runs (a Dev turn hit ~300k input tokens). skills.md is
+// largely ONE giant code block with no ##/### sub-headings, so heading-based
+// slicing alone returned everything; the windowing fallback bounds it.
+export function sliceDocs(text: string, topic?: string, max = 6000): string {
   if (!topic || !topic.trim()) return text.slice(0, max);
   const t = topic.toLowerCase();
   const lines = text.split('\n');
@@ -71,6 +76,13 @@ export function sliceDocs(text: string, topic?: string, max = 16000): string {
   if (cur.length) chunks.push(cur.join('\n'));
 
   const matched = chunks.filter((c) => c.toLowerCase().includes(t));
-  const out = matched.join('\n\n').trim();
-  return (out || text).slice(0, max);
+  let out = matched.join('\n\n').trim() || text;
+  if (out.length <= max) return out;
+
+  // Still too big (e.g. the monolithic SDK code block matched) — return a window
+  // centred on the first keyword hit so the agent gets the relevant lines, not
+  // the entire document.
+  const idx = Math.max(0, out.toLowerCase().indexOf(t));
+  const start = Math.max(0, idx - Math.floor(max / 4));
+  return out.slice(start, start + max);
 }
