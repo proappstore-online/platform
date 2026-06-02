@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS role_configs (
   system_prompt_override TEXT,
   spine_tools TEXT NOT NULL DEFAULT '[]',
   vendor_tools TEXT NOT NULL DEFAULT '[]',
+  max_tokens INTEGER,
   PRIMARY KEY (role)
 );
 

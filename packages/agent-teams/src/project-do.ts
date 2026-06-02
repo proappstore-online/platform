@@ -74,6 +74,8 @@ export class ProjectDO implements DurableObject {
     // in the DO's own SQLite. TODO: replace with INTERNAL_TOKEN-based MCP auth
     // once issue #5 (MCP ownership scoping) lands.
     try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN owner_session_token TEXT`); } catch { /* exists */ }
+    // Per-role output token cap (configurable from the console agent settings).
+    try { this.state.storage.sql.exec(`ALTER TABLE role_configs ADD COLUMN max_tokens INTEGER`); } catch { /* exists */ }
     this.initialized = true;
   }
 
@@ -925,16 +927,16 @@ export class ProjectDO implements DurableObject {
 
     // Set default role configs
     const defaults: RoleConfig[] = [
-      { role: 'BA', runtime: 'cf-native', model: 'claude-sonnet-4-6', spineTools: [], vendorTools: [] },
-      { role: 'Dev', runtime: 'cf-native', model: 'claude-sonnet-4-6', spineTools: ['scaffold_app', 'write_file', 'read_file', 'list_files', 'batch_write_files', 'search_files', 'get_deploy_status', 'provision_app'], vendorTools: [] },
-      { role: 'QA', runtime: 'cf-native', model: 'claude-sonnet-4-6', spineTools: ['read_file', 'list_files', 'search_files', 'get_deploy_status'], vendorTools: [] },
+      { role: 'BA', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 8192, spineTools: [], vendorTools: [] },
+      { role: 'Dev', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 16384, spineTools: ['scaffold_app', 'write_file', 'read_file', 'list_files', 'batch_write_files', 'search_files', 'get_deploy_status', 'provision_app'], vendorTools: [] },
+      { role: 'QA', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 8192, spineTools: ['read_file', 'list_files', 'search_files', 'get_deploy_status'], vendorTools: [] },
     ];
 
     for (const rc of defaults) {
       this.state.storage.sql.exec(
-        `INSERT OR REPLACE INTO role_configs (role, runtime, model, spine_tools, vendor_tools)
-         VALUES (?, ?, ?, ?, ?)`,
-        rc.role, rc.runtime, rc.model, JSON.stringify(rc.spineTools), JSON.stringify(rc.vendorTools),
+        `INSERT OR REPLACE INTO role_configs (role, runtime, model, spine_tools, vendor_tools, max_tokens)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        rc.role, rc.runtime, rc.model, JSON.stringify(rc.spineTools), JSON.stringify(rc.vendorTools), rc.maxTokens ?? null,
       );
     }
 
@@ -987,12 +989,16 @@ export class ProjectDO implements DurableObject {
       if (rc.systemPromptOverride && rc.systemPromptOverride.length > 8192) {
         return json({ error: 'systemPromptOverride too long (max 8KB)' }, 400);
       }
+      // Output token cap: optional, but bounded to sane limits when set.
+      if (rc.maxTokens != null && (!Number.isInteger(rc.maxTokens) || rc.maxTokens < 1024 || rc.maxTokens > 64000)) {
+        return json({ error: 'maxTokens must be an integer between 1024 and 64000' }, 400);
+      }
 
       this.state.storage.sql.exec(
-        `INSERT OR REPLACE INTO role_configs (role, runtime, model, system_prompt_override, spine_tools, vendor_tools)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO role_configs (role, runtime, model, system_prompt_override, spine_tools, vendor_tools, max_tokens)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         rc.role, rc.runtime, rc.model, rc.systemPromptOverride ?? null,
-        JSON.stringify(rc.spineTools), JSON.stringify(rc.vendorTools),
+        JSON.stringify(rc.spineTools), JSON.stringify(rc.vendorTools), rc.maxTokens ?? null,
       );
     }
     return json({ ok: true });

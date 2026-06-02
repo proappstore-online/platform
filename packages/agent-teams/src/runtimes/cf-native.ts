@@ -62,6 +62,7 @@ export class CFNativeRuntime implements AgentRuntime {
       state: {
         apiKey: ctx.byoKey,
         model: ctx.role.model,
+        maxTokens: ctx.role.maxTokens ?? 16384,
         systemPrompt: ctx.role.systemPromptOverride ?? buildDefaultPrompt(ctx.role.role),
         spineTools: ctx.role.spineTools,
         projectId: ctx.projectId,
@@ -73,9 +74,10 @@ export class CFNativeRuntime implements AgentRuntime {
   }
 
   async *run(handle: RuntimeHandle, messages: Message[]): AsyncIterable<StreamEvent> {
-    const { apiKey, model, systemPrompt, spineTools } = handle.state as {
+    const { apiKey, model, maxTokens, systemPrompt, spineTools } = handle.state as {
       apiKey: string;
       model: string;
+      maxTokens: number;
       systemPrompt: string;
       spineTools: string[];
     };
@@ -100,10 +102,11 @@ export class CFNativeRuntime implements AgentRuntime {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          // Generous output budget — the Dev writes whole files via
-          // batch_write_files; 4096 truncated mid-write and stranded the run.
+          // Per-role output budget (configurable in the console agent settings).
+          // The Dev writes whole files via batch_write_files; too small a cap
+          // truncated mid-write and stranded the run.
           model,
-          max_tokens: 16384,
+          max_tokens: maxTokens,
           system: systemPrompt,
           tools: tools.length > 0 ? tools : undefined,
           messages: anthropicMessages,

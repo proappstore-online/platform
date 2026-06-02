@@ -36,7 +36,7 @@ function mockAnthropic(responses: unknown[]) {
   return calls;
 }
 
-async function prepareHandle(opts?: { dispatch?: (c: ToolCall) => Promise<ToolResult> }) {
+async function prepareHandle(opts?: { dispatch?: (c: ToolCall) => Promise<ToolResult>; maxTokens?: number }) {
   const ctx: PrepareContext = {
     projectId: 'proj',
     ticketId: 'tick',
@@ -45,6 +45,7 @@ async function prepareHandle(opts?: { dispatch?: (c: ToolCall) => Promise<ToolRe
       role: 'Dev',
       runtime: 'cf-native',
       model: 'claude-sonnet-4-6',
+      ...(opts?.maxTokens != null ? { maxTokens: opts.maxTokens } : {}),
       spineTools: ['read_file', 'batch_write_files'],
       vendorTools: [],
     },
@@ -81,6 +82,16 @@ describe('CFNativeRuntime run loop', () => {
     const lastBody = calls.bodies[1] as { messages: { role: string; content: unknown }[] };
     const lastMsg = lastBody.messages[lastBody.messages.length - 1];
     expect(JSON.stringify(lastMsg)).toContain('Continue.');
+  });
+
+  it('uses the role-configured max_tokens (default 16384, override honored)', async () => {
+    const def = mockAnthropic([textResp('ok', 'end_turn')]);
+    await collect(await prepareHandle());
+    expect((def.bodies[0] as { max_tokens: number }).max_tokens).toBe(16384);
+
+    const custom = mockAnthropic([textResp('ok', 'end_turn')]);
+    await collect(await prepareHandle({ maxTokens: 2048 }));
+    expect((custom.bodies[0] as { max_tokens: number }).max_tokens).toBe(2048);
   });
 
   it('ends immediately on a genuine end_turn with no tool calls', async () => {

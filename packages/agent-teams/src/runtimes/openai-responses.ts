@@ -92,6 +92,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
       state: {
         apiKey: ctx.byoKey,
         model: ctx.role.model,
+        maxTokens: ctx.role.maxTokens ?? 16384,
         instructions: ctx.role.systemPromptOverride ?? buildDefaultPrompt(ctx.role.role),
         spineTools: ctx.role.spineTools,
         previousResponseId: null,
@@ -107,6 +108,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
     const s = handle.state as {
       apiKey: string;
       model: string;
+      maxTokens: number;
       instructions: string;
       spineTools: string[];
       previousResponseId: string | null;
@@ -139,6 +141,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
         input,
         instructions: s.instructions,
         tools: tools.length > 0 ? tools : undefined,
+        max_output_tokens: s.maxTokens,
         store: true,
       };
       if (s.previousResponseId) {
