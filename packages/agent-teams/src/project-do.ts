@@ -91,6 +91,14 @@ export class ProjectDO implements DurableObject {
     // Last GitHub commit synced into the working tree (GitHub = source of truth).
     try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN repo_synced_sha TEXT`); } catch { /* exists */ }
     try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN repo_synced_at INTEGER`); } catch { /* exists */ }
+    // Short, human-quotable per-project ticket number (#N). Backfill existing
+    // tickets in created_at order so old DOs get stable numbers too.
+    try {
+      this.state.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN seq INTEGER`);
+      this.state.storage.sql.exec(
+        `UPDATE tickets SET seq = (SELECT COUNT(*) FROM tickets t2 WHERE t2.created_at < tickets.created_at OR (t2.created_at = tickets.created_at AND t2.id <= tickets.id)) WHERE seq IS NULL`,
+      );
+    } catch { /* exists */ }
     this.initialized = true;
   }
 
@@ -1142,9 +1150,9 @@ export class ProjectDO implements DurableObject {
       const ticketId = uuid();
       const title = idea.length > 80 ? `${idea.slice(0, 77)}...` : idea;
       this.state.storage.sql.exec(
-        `INSERT INTO tickets (id, title, raw_idea, status, created_at, updated_at)
-         VALUES (?, ?, ?, 'inbox', ?, ?)`,
-        ticketId, title, idea, now, now,
+        `INSERT INTO tickets (id, seq, title, raw_idea, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'inbox', ?, ?)`,
+        ticketId, this.nextSeq(), title, idea, now, now,
       );
     }
 
@@ -1211,6 +1219,14 @@ export class ProjectDO implements DurableObject {
     return json({ tickets: rows.map(rowToTicket) });
   }
 
+  /** Next short per-project ticket number (#N). DO is single-threaded, so MAX+1 is race-free. */
+  private nextSeq(): number {
+    const row = this.state.storage.sql
+      .exec('SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM tickets')
+      .toArray()[0] as { n: number } | undefined;
+    return row?.n ?? 1;
+  }
+
   private getTicket(id: string): Response {
     const row = this.state.storage.sql
       .exec('SELECT * FROM tickets WHERE id = ?', id)
@@ -1227,15 +1243,17 @@ export class ProjectDO implements DurableObject {
 
     const id = uuid();
     const now = Date.now();
+    const seq = this.nextSeq();
 
     this.state.storage.sql.exec(
-      `INSERT INTO tickets (id, title, raw_idea, status, created_at, updated_at)
-       VALUES (?, ?, ?, 'inbox', ?, ?)`,
-      id, body.title, body.rawIdea, now, now,
+      `INSERT INTO tickets (id, seq, title, raw_idea, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'inbox', ?, ?)`,
+      id, seq, body.title, body.rawIdea, now, now,
     );
 
     const ticket: Ticket = {
       id,
+      seq,
       projectId: '',
       title: body.title,
       rawIdea: body.rawIdea,
@@ -1566,10 +1584,10 @@ export class ProjectDO implements DurableObject {
 
     // Get current project state for context
     const ticketRows = this.state.storage.sql
-      .exec('SELECT id, title, status, assignee_role FROM tickets ORDER BY created_at DESC LIMIT 20')
+      .exec('SELECT id, seq, title, status, assignee_role FROM tickets ORDER BY created_at DESC LIMIT 20')
       .toArray();
     const backlogSummary = ticketRows.map((t) =>
-      `- [${t.status}] ${t.title}${t.assignee_role ? ` (${t.assignee_role})` : ''}`
+      `- #${t.seq ?? '?'} [${t.status}] ${t.title}${t.assignee_role ? ` (${t.assignee_role})` : ''}`
     ).join('\n');
 
     // The app's current files — so the PO can answer questions about the actual
@@ -1641,8 +1659,10 @@ How to answer (think → research → verify → answer — do NOT skip for fact
 3. STATE CONFIDENCE / ABSTAIN. Only assert what you verified. If you could not confirm something, SAY SO ("I couldn't confirm X from the code") and either ask the founder or create a ticket for the team to investigate — never present an unverified guess as fact. A correct "I'm not sure, let me have the team check" beats a confident wrong answer.
 Greetings, opinions, and small talk need no tools — just reply naturally.
 
-Current backlog:
+Current backlog (each ticket has a short number "#N" the founder can quote):
 ${backlogSummary || '(empty)'}
+
+When the founder references a ticket by its number (e.g. "#3", "ticket 3", "do #3 next"), find that exact ticket in the backlog above and act on it specifically — answer about it, or acknowledge the requested action. Always refer back to tickets by their #N so the founder can follow along. Never invent a ticket number that isn't in the backlog.
 
 Current app files (${fileList.length}):
 ${fileList.length ? fileList.join('\n') : '(none yet — nothing built)'}
@@ -1757,16 +1777,17 @@ ${PLATFORM_CAPABILITIES}`;
           // Create the ticket
           const ticketId = uuid();
           const ticketNow = Date.now();
+          const ticketSeq = this.nextSeq();
           this.state.storage.sql.exec(
-            `INSERT INTO tickets (id, title, raw_idea, status, created_at, updated_at) VALUES (?, ?, ?, 'inbox', ?, ?)`,
-            ticketId, tool.title, tool.rawIdea, ticketNow, ticketNow,
+            `INSERT INTO tickets (id, seq, title, raw_idea, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'inbox', ?, ?)`,
+            ticketId, ticketSeq, tool.title, tool.rawIdea, ticketNow, ticketNow,
           );
-          this.broadcast({ type: 'ticket-created', ticket: { id: ticketId, title: tool.title, status: 'inbox', rawIdea: tool.rawIdea, assigneeRole: null, iterations: 0, costSpentUsd: 0, createdAt: ticketNow, updatedAt: ticketNow, stuckReason: null } });
+          this.broadcast({ type: 'ticket-created', ticket: { id: ticketId, seq: ticketSeq, title: tool.title, status: 'inbox', rawIdea: tool.rawIdea, assigneeRole: null, iterations: 0, costSpentUsd: 0, createdAt: ticketNow, updatedAt: ticketNow, stuckReason: null } });
           this.autoAdvance();
 
           // Clean response (remove JSON, add confirmation)
           const cleanText = text.replace(toolMatch[0], '').trim();
-          const poText = cleanText || `Got it. I created a ticket: "${tool.title}". It's in the inbox.`;
+          const poText = cleanText || `Got it. I created ticket #${ticketSeq}: "${tool.title}". It's in the inbox.`;
           return this.savePOResponse(poText, ticketNow, { name: 'create_ticket', args: tool.title });
         } catch {
           // JSON parse failed, just return the text
@@ -1806,11 +1827,12 @@ ${PLATFORM_CAPABILITIES}`;
     // Default: create a ticket
     const title = userText.length > 100 ? userText.slice(0, 97) + '...' : userText;
     const ticketId = uuid();
+    const seq = this.nextSeq();
     this.state.storage.sql.exec(
-      `INSERT INTO tickets (id, title, raw_idea, status, created_at, updated_at) VALUES (?, ?, ?, 'inbox', ?, ?)`,
-      ticketId, title, userText, now, now,
+      `INSERT INTO tickets (id, seq, title, raw_idea, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'inbox', ?, ?)`,
+      ticketId, seq, title, userText, now, now,
     );
-    this.broadcast({ type: 'ticket-created', ticket: { id: ticketId, title, status: 'inbox', rawIdea: userText, assigneeRole: null, iterations: 0, costSpentUsd: 0, createdAt: now, updatedAt: now, stuckReason: null } });
+    this.broadcast({ type: 'ticket-created', ticket: { id: ticketId, seq, title, status: 'inbox', rawIdea: userText, assigneeRole: null, iterations: 0, costSpentUsd: 0, createdAt: now, updatedAt: now, stuckReason: null } });
     this.autoAdvance();
 
     return this.savePOResponse(

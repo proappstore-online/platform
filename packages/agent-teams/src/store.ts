@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS project_memory (
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS tickets (
-  id TEXT PRIMARY KEY, title TEXT NOT NULL, raw_idea TEXT NOT NULL, spec_json TEXT,
+  id TEXT PRIMARY KEY, seq INTEGER, title TEXT NOT NULL, raw_idea TEXT NOT NULL, spec_json TEXT,
   status TEXT NOT NULL DEFAULT 'inbox', assignee_role TEXT, iterations INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, cost_spent_usd REAL NOT NULL DEFAULT 0.0,
   pr_url TEXT, final_commit_sha TEXT, stuck_reason TEXT
@@ -74,6 +74,7 @@ export function json(data: unknown, status = 200): Response {
 export function rowToTicket(row: Record<string, unknown>): Ticket {
   return {
     id: row.id as string,
+    seq: (row.seq as number) ?? 0,
     projectId: '',
     title: row.title as string,
     rawIdea: row.raw_idea as string,

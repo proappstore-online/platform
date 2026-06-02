@@ -57,6 +57,7 @@ export type TicketStatus =
 
 export type Ticket = {
   id: string                  // [v1] uuid
+  seq: number                 // [v1] short per-project number, human-quotable as #N
   projectId: string           // [v1]
   title: string               // [v1] PO-written
   rawIdea: string             // [v1] PO's free-text idea

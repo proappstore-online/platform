@@ -4,7 +4,7 @@ import type { Ticket } from './types.ts';
 
 function ticket(overrides: Partial<Ticket> = {}): Ticket {
   return {
-    id: 't1', projectId: '', title: 'Add login', rawIdea: 'users can sign in',
+    id: 't1', seq: 1, projectId: '', title: 'Add login', rawIdea: 'users can sign in',
     spec: null, status: 'ready', assigneeRole: null, iterations: 0,
     createdAt: 0, updatedAt: 0, costSpentUsd: 0, prUrl: null, finalCommitSha: null, stuckReason: null,
     ...overrides,
