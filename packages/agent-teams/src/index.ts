@@ -206,6 +206,13 @@ app.get('/v1/projects/:slug/chat/history', async (c) => {
   return new Response(res.body, { status: res.status, headers: res.headers });
 });
 
+app.delete('/v1/projects/:slug/chat/history', async (c) => {
+  const user = c.get('user' as never) as { id: string };
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
+  const res = await forwardToDO(stub, '/chat/history', user.id, { method: 'DELETE' });
+  return new Response(res.body, { status: res.status, headers: res.headers });
+});
+
 // ── Role configs ────────────────────────────────────────────
 
 app.get('/v1/projects/:slug/roles', async (c) => {
@@ -335,6 +342,13 @@ app.get('/v1/projects/:slug/activity', async (c) => {
   const user = c.get('user' as never) as { id: string };
   const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
   const res = await forwardToDO(stub, '/activity', user.id);
+  return new Response(res.body, { status: res.status, headers: res.headers });
+});
+
+app.delete('/v1/projects/:slug/activity', async (c) => {
+  const user = c.get('user' as never) as { id: string };
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
+  const res = await forwardToDO(stub, '/activity', user.id, { method: 'DELETE' });
   return new Response(res.body, { status: res.status, headers: res.headers });
 });
 

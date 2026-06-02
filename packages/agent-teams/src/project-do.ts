@@ -111,6 +111,13 @@ export class ProjectDO implements DurableObject {
     this.broadcast({ type: 'activity', entry: { id, ticketId, type, detail, createdAt: now } });
   }
 
+  // Wipe the persisted activity trail (start fresh). Audit-only data; safe to clear.
+  private clearActivity(): Response {
+    this.state.storage.sql.exec('DELETE FROM activity_log');
+    this.broadcast({ type: 'activity-cleared' });
+    return json({ ok: true });
+  }
+
   private getActivity(): Response {
     const rows = this.state.storage.sql
       .exec('SELECT id, ticket_id, type, detail, created_at FROM activity_log ORDER BY created_at DESC LIMIT 500')
@@ -170,6 +177,7 @@ export class ProjectDO implements DurableObject {
 
     if (path === '/chat' && request.method === 'POST') return this.handleChat(request);
     if (path === '/chat/history' && request.method === 'GET') return this.getChatHistory();
+    if (path === '/chat/history' && request.method === 'DELETE') return this.clearChat();
 
     if (path === '/tickets' && request.method === 'GET') return this.listTickets();
     if (path === '/tickets' && request.method === 'POST') return this.createTicket(request);
@@ -200,6 +208,7 @@ export class ProjectDO implements DurableObject {
 
     if (path === '/cost' && request.method === 'GET') return this.getCostSummary();
     if (path === '/activity' && request.method === 'GET') return this.getActivity();
+    if (path === '/activity' && request.method === 'DELETE') return this.clearActivity();
 
     if (path === '/files' && request.method === 'GET') return this.listProjectFiles();
     if (path === '/files/content' && request.method === 'GET') {
@@ -1294,6 +1303,15 @@ export class ProjectDO implements DurableObject {
 
   // ── Chat (PO agent triage) ──────────────────────────────────
 
+  // Wipe the chat history (start the conversation from scratch). Tickets/messages
+  // are unaffected — this only clears the founder↔PO chat panel.
+  private clearChat(): Response {
+    this.state.storage.sql.exec('DELETE FROM chat_history');
+    this.chatWindow = [];
+    this.broadcast({ type: 'chat-cleared' });
+    return json({ ok: true });
+  }
+
   private getChatHistory(): Response {
     const rows = this.state.storage.sql
       .exec('SELECT * FROM chat_history ORDER BY created_at ASC')
@@ -1366,6 +1384,10 @@ export class ProjectDO implements DurableObject {
       `- [${t.status}] ${t.title}${t.assignee_role ? ` (${t.assignee_role})` : ''}`
     ).join('\n');
 
+    // The app's current files — so the PO can answer questions about the actual
+    // app ("do we use google or github?") instead of guessing generically.
+    const fileList = [...this.loadFiles().keys()].sort();
+
     // Get recent chat history for context
     const recentChat = this.state.storage.sql
       .exec('SELECT role, body FROM chat_history ORDER BY created_at DESC LIMIT 20')
@@ -1394,17 +1416,20 @@ export class ProjectDO implements DurableObject {
 
 Your job:
 - If the founder describes a feature or something to build → respond with a JSON tool call to create a ticket
-- If the founder asks a technical question → answer it yourself or say you'll route it to Dev
+- If the founder asks a question → ANSWER IT. Use the app's current files and backlog below to give a concrete, decisive answer (with a clear recommendation), not a generic one. If you genuinely need code-level detail you don't have, say you'll have the Dev/BA investigate and create a ticket for it.
 - If the founder gives feedback on existing work → acknowledge and update the relevant ticket
 - If the founder is just chatting → respond naturally
 
 Current backlog:
 ${backlogSummary || '(empty)'}
 
+Current app files (${fileList.length}):
+${fileList.length ? fileList.join('\n') : '(none yet — nothing built)'}
+
 When creating a ticket, respond with EXACTLY this JSON on its own line:
 {"tool":"create_ticket","title":"short title","rawIdea":"full description"}
 
-Otherwise just respond in plain text. Be concise. You're a PO, not a chatbot.`;
+Otherwise just respond in plain text. Be concise and decisive. You're a PO, not a chatbot.`;
 
     const messages = [
       ...recentChat.map((m) => ({
