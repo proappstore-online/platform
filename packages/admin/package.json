@@ -1,0 +1,20 @@
+{
+  "name": "@proappstore/admin",
+  "version": "0.1.0",
+  "description": "ProAppStore admin Worker: app publish, agent-deploy, registry, GitHub App auth. Deploys as the proappstore-admin Worker. Moved into the platform monorepo 2026-06-02.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check src/",
+    "lint:fix": "biome check --write src/"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.15",
+    "@cloudflare/workers-types": "^4.20251130.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.0.0"
+  }
+}

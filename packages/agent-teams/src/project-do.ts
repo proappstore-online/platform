@@ -666,6 +666,8 @@ export class ProjectDO implements DurableObject {
           return { callId: call.id, ok: true, data: `Staged ${files.size} file(s) for "${slug}" (deploy binding not configured in this environment).`, durationMs: Date.now() - start };
         }
         try {
+          // CONTRACT (agent-deploy): body matches AgentDeployRequest in
+          // packages/admin/src/publish.ts. Same monorepo — keep in sync.
           const res = await this.env.ADMIN.fetch(new Request('https://admin.proappstore.online/api/agent-deploy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Internal-Token': this.env.INTERNAL_TOKEN },

@@ -1,0 +1,19 @@
+name = "proappstore-admin"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+workers_dev = true
+
+# Secrets (set via `wrangler secret put`):
+#   CF_API_TOKEN        Pages:Edit + DNS:Edit on proappstore.online
+#   GITHUB_TOKEN        fine-grained PAT for proappstore-online org (repo create + contents)
+#   SESSION_SIGNING_KEY HS256 key for /api/publish-app session auth
+#   INTERNAL_TOKEN      shared with proappstore-agent-teams — auth for /api/agent-deploy
+
+# Custom domain: admin.proappstore.online
+# Set via CF dashboard: Workers & Pages > proappstore-admin > Settings > Domains & Routes
+
+[vars]
+CF_ACCOUNT_ID = "c1089bfcc43c1c6c2aa89e584e86f0bc"
+PAS_ZONE_ID = "14928daaff60902cc89003a2ebeb99fe"
+PUBLISHERS_ORG = "proappstore-online"
+APPS_DOMAIN_BASE = "proappstore.online"
