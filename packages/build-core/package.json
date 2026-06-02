@@ -1,0 +1,25 @@
+{
+  "name": "@proappstore/build-core",
+  "version": "0.1.0",
+  "description": "Shared core for building PAS apps: GitHub repo create + file write/read + git push + app-ownership check. Used by packages/admin (agent-deploy) and packages/mcp (project-tools) so the build logic lives once.",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  },
+  "sideEffects": false
+}
