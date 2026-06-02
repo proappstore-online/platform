@@ -253,6 +253,18 @@ export class ProjectDO implements DurableObject {
     if (newStatus === 'running') {
       this.scheduleWatchdog();
       this.autoAdvance();
+      // If there's no work yet, tell the user instead of sitting silent.
+      const open = (this.state.storage.sql
+        .exec("SELECT COUNT(*) AS c FROM tickets WHERE status NOT IN ('done','failed','cancelled')")
+        .toArray()[0] as { c: number }).c;
+      if (open === 0) {
+        const msg = "Agents are on. There's no work yet — tell me what to build in the chat and I'll create tickets and get the team going.";
+        this.state.storage.sql.exec(
+          'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
+          uuid(), 'po', msg, now,
+        );
+        this.broadcast({ type: 'chat', role: 'po', body: msg, id: uuid() });
+      }
     } else {
       this.clearWatchdog();
     }

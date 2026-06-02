@@ -30,6 +30,8 @@ jobs:
           cache: pnpm
       - name: Install
         run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm -r --filter './packages/*' build
       - name: Typecheck
         run: pnpm -r typecheck
       - name: Tests
