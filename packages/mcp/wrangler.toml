@@ -1,0 +1,21 @@
+name = "proappstore-mcp"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+API_BASE = "https://api.proappstore.online"
+GITHUB_ORG = "proappstore-online"
+
+[[routes]]
+pattern = "mcp.proappstore.online/*"
+zone_name = "proappstore.online"
+
+[durable_objects]
+bindings = [
+  { name = "MCP_OBJECT", class_name = "PasMcpAgent" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PasMcpAgent"]

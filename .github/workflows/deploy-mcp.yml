@@ -1,0 +1,42 @@
+name: Deploy MCP Worker
+
+# Auto-deploys the proappstore-mcp Worker (mcp.proappstore.online) on push to
+# main that touches the mcp package. Replaces the standalone repo's deploy.yml.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/mcp/**'
+      - '.github/workflows/deploy-mcp.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-mcp
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm -r typecheck
+      - name: Tests
+        run: pnpm test
+      - name: Deploy Worker
+        working-directory: packages/mcp
+        run: pnpm exec wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

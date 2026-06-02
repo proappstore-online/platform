@@ -1,0 +1,42 @@
+name: Deploy Host Worker
+
+# proappstore-host serves published apps from R2 via subdomain routing.
+# It is still v0.1 scaffolding — the wildcard `*.proappstore.online/*` route is
+# intentionally commented out in wrangler.toml (it preempts every sibling
+# Worker custom_domain on the zone; see the wildcard-worker-route-preemption
+# note). So this deploy is MANUAL-ONLY for now. Switch to a push trigger
+# (paths: packages/host/**) once the route + service-binding dispatch are wired
+# and tested in staging.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-host
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm -r typecheck
+      - name: Tests
+        run: pnpm test
+      - name: Deploy Worker
+        working-directory: packages/host
+        run: pnpm exec wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
