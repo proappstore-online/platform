@@ -106,7 +106,9 @@ Your code MUST compile (\`tsc\`) — after QA approves, the system automatically
   } else if (role === 'QA') {
     const ba = lastFrom('BA');
     if (ba) context += `\n\n## Spec to verify\n${ba}`;
-    context += `\n\nThe app id is "${slug}". Review the implemented code against the spec; report PASS or FAIL with specific findings (correctness, obvious type errors, edge cases, accessibility, dark mode). On PASS, the system deploys and verifies the real CI build automatically — you don't need to (and can't) deploy. Focus on whether the code meets the spec and looks like it will compile.`;
+    context += `\n\nThe app id is "${slug}". Review the implemented code against the spec; report findings (correctness, obvious type errors, edge cases, accessibility, dark mode). On PASS, the system deploys and verifies the real CI build automatically — you don't need to (and can't) deploy. Focus on whether the code meets the spec and looks like it will compile.
+
+END YOUR REPORT WITH A SINGLE FINAL LINE, EXACTLY: \`VERDICT: PASS\` or \`VERDICT: FAIL\`. Use FAIL only for blocking defects that must be fixed before deploy (a spec violation, or code that won't compile). Minor/non-blocking notes are still a PASS — the CI build is the real compile gate, and a wrong FAIL just burns iterations on working code. Do NOT write the word "FAIL" anywhere except that final VERDICT line.`;
   }
 
   return [{

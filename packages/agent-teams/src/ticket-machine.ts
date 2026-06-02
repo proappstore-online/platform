@@ -101,12 +101,23 @@ export function isTerminal(status: TicketStatus): boolean {
 }
 
 /**
- * Decide a QA verdict from the QA agent's free-text report. The QA prompt asks
- * it to report PASS or FAIL; any FAIL signal routes the ticket back to Dev.
- * Ambiguous output defaults to 'done' (the iteration cap guards against loops).
+ * Decide a QA verdict from the QA agent's report. The QA prompt requires a final
+ * line `VERDICT: PASS` or `VERDICT: FAIL` — we parse the LAST such marker so the
+ * essay above it (full of "PASS"/"FAIL" in tables and criteria names) can't flip
+ * the result. Only an explicit `VERDICT: FAIL` routes back to Dev; anything else
+ * (PASS, or no marker at all) advances — the CI build gate is the real
+ * compile check, and the iteration cap guards against loops.
+ *
+ * Historical bug: this used to grep for the word "FAIL" anywhere, so every
+ * PASS report (which always contains "FAIL" in its rubric) bounced to Dev until
+ * the iteration cap — burning the whole budget on a working app.
  */
 export function qaVerdict(output: string): 'done' | 'qa-failed' {
-  return /\bFAIL(ED|S|URE)?\b/i.test(output) ? 'qa-failed' : 'done';
+  const markers = [...output.matchAll(/VERDICT:\s*(PASS|FAIL)/gi)];
+  if (markers.length > 0) {
+    return markers[markers.length - 1]![1]!.toUpperCase() === 'FAIL' ? 'qa-failed' : 'done';
+  }
+  return 'done'; // no explicit verdict → don't loop; CI build gate catches real breakage
 }
 
 /** Is this a state where the user needs to respond? */

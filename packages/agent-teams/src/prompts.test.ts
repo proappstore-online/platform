@@ -53,10 +53,10 @@ describe('buildSeedMessages', () => {
     expect(body).toContain('button is broken');
   });
 
-  it('QA is asked to report PASS or FAIL', () => {
+  it('QA is asked to end with a VERDICT marker', () => {
     const body = buildSeedMessages('QA', ticket(), 'myapp', [{ author: 'BA', body: 'spec' }])[0]!.body;
     expect(body).toContain('## Spec to verify');
-    expect(body).toContain('PASS or FAIL');
+    expect(body).toContain('VERDICT: PASS');
   });
 
   it('includes the approved spec summary when present', () => {

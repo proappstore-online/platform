@@ -171,11 +171,17 @@ describe('needsUserAction', () => {
 });
 
 describe('qaVerdict', () => {
-  it('fails on a FAIL report', () => expect(qaVerdict('FAIL: button is broken')).toBe('qa-failed'));
-  it('fails on "failed"', () => expect(qaVerdict('The login flow failed acceptance')).toBe('qa-failed'));
-  it('passes on a PASS report', () => expect(qaVerdict('PASS — all criteria met')).toBe('done'));
-  it('defaults ambiguous output to done', () => expect(qaVerdict('Looks good to me, shipping.')).toBe('done'));
-  it('is case-insensitive', () => expect(qaVerdict('verdict: fail')).toBe('qa-failed'));
+  it('fails on an explicit VERDICT: FAIL marker', () => expect(qaVerdict('Issues found.\nVERDICT: FAIL')).toBe('qa-failed'));
+  it('passes on an explicit VERDICT: PASS marker', () => expect(qaVerdict('All good.\nVERDICT: PASS')).toBe('done'));
+  it('is case-insensitive on the marker', () => expect(qaVerdict('verdict: fail')).toBe('qa-failed'));
+  // The regression that burned a whole budget: a PASS report whose rubric is
+  // full of the word "FAIL" must NOT be read as a failure.
+  it('passes a PASS report that mentions FAIL in its rubric', () =>
+    expect(qaVerdict('| Criterion | PASS or FAIL |\n| auth | ✅ PASS |\nNo blocking defects.\nVERDICT: PASS')).toBe('done'));
+  it('uses the LAST marker when retractions appear above it', () =>
+    expect(qaVerdict('## 🔴 FAIL — compile blockers\nActually not a blocker.\nVERDICT: PASS')).toBe('done'));
+  it('defaults to done when no marker is present (CI is the real gate)', () =>
+    expect(qaVerdict('Looks good to me, shipping.')).toBe('done'));
 });
 
 describe('safety constants', () => {
