@@ -46,8 +46,8 @@ importers:
   packages/agent-teams:
     dependencies:
       hono:
-        specifier: ^4.6.0
-        version: 4.12.16
+        specifier: ^4.12.23
+        version: 4.12.23
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^4.20250101.0
@@ -71,8 +71,8 @@ importers:
         specifier: workspace:*
         version: link:../compliance
       hono:
-        specifier: ^4.6.0
-        version: 4.12.16
+        specifier: ^4.12.23
+        version: 4.12.23
       web-push:
         specifier: ^3.6.0
         version: 3.6.7
@@ -124,8 +124,8 @@ importers:
   packages/data-worker:
     dependencies:
       hono:
-        specifier: ^4.6.0
-        version: 4.12.16
+        specifier: ^4.12.23
+        version: 4.12.23
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^4.20250101.0
@@ -164,8 +164,8 @@ importers:
         specifier: ^0.0.74
         version: 0.0.74(@cloudflare/workers-types@4.20260505.1)(react@19.2.6)
       hono:
-        specifier: ^4.7.0
-        version: 4.12.16
+        specifier: ^4.12.23
+        version: 4.12.23
       zod:
         specifier: ^3.24.3
         version: 3.25.76
@@ -2090,8 +2090,8 @@ packages:
   hast-util-whitespace@3.0.0:
     resolution: {integrity: sha512-88JUN06ipLwsnv+dVn+OIYOvAuvBMy/Qoi6O7mQHxdPXpjy+Cd6xRkWwux7DKO+4sYILtLBRIKgsdpS2gQc7qw==}
 
-  hono@4.12.16:
-    resolution: {integrity: sha512-jN0ZewiNAWSe5khM3EyCmBb250+b40wWbwNILNfEvq84VREWwOIkuUsFONk/3i3nqkz7Oe1PcpM2mwQEK2L9Kg==}
+  hono@4.12.23:
+    resolution: {integrity: sha512-eIaZ9qDgu7XV0pxOCrg7/WhnQ6Ivm22UcxhXx/A3dcbqbbYgBEkc6e/J/s7j2tS96zoB0S9VBdLwQNCWwUo4LA==}
     engines: {node: '>=16.9.0'}
 
   hookable@5.5.3:
@@ -3299,9 +3299,9 @@ snapshots:
     optionalDependencies:
       react: 19.2.6
 
-  '@hono/node-server@1.19.14(hono@4.12.16)':
+  '@hono/node-server@1.19.14(hono@4.12.23)':
     dependencies:
-      hono: 4.12.16
+      hono: 4.12.23
 
   '@iconify-json/simple-icons@1.2.81':
     dependencies:
@@ -3437,7 +3437,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.29.0(zod@3.25.76)':
     dependencies:
-      '@hono/node-server': 1.19.14(hono@4.12.16)
+      '@hono/node-server': 1.19.14(hono@4.12.23)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
@@ -3447,7 +3447,7 @@ snapshots:
       eventsource-parser: 3.1.0
       express: 5.2.1
       express-rate-limit: 8.5.2(express@5.2.1)
-      hono: 4.12.16
+      hono: 4.12.23
       jose: 6.2.3
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -4543,7 +4543,7 @@ snapshots:
     dependencies:
       '@types/hast': 3.0.4
 
-  hono@4.12.16: {}
+  hono@4.12.23: {}
 
   hookable@5.5.3: {}
 

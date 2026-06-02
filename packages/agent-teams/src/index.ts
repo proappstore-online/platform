@@ -5,6 +5,7 @@
  */
 
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { cors } from 'hono/cors';
 import type { Project, Ticket } from './types.ts';
 import { verifyToken, extractToken } from './auth.ts';
@@ -94,6 +95,27 @@ function forwardToDO(
   }));
 }
 
+/**
+ * Resolve the authed user + the project DO stub for a `:slug` route, proxy to
+ * `path` on the DO, and relay its response verbatim. Collapses the identical
+ * user→stub→forward→Response boilerplate that every project sub-route repeats.
+ * `forwardBody` re-sends the request's JSON body to the DO (Hono caches the
+ * parsed body, so this is safe even after a route already read it for validation).
+ */
+async function relay(
+  c: Context<{ Bindings: Bindings }>,
+  path: string,
+  opts?: { method?: string; forwardBody?: boolean },
+): Promise<Response> {
+  const user = c.get('user' as never) as { id: string };
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')!));
+  const init: { method?: string; body?: string } = {};
+  if (opts?.method) init.method = opts.method;
+  if (opts?.forwardBody) init.body = JSON.stringify(await c.req.json());
+  const res = await forwardToDO(stub, path, user.id, init);
+  return new Response(res.body, { status: res.status, headers: res.headers });
+}
+
 // ── Project lifecycle ───────────────────────────────────────
 
 // Create a new project
@@ -163,15 +185,11 @@ app.get('/v1/projects', async (c) => {
 });
 
 // Get project
-app.get('/v1/projects/:slug', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, '/project', user.id);
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
+app.get('/v1/projects/:slug', (c) => relay(c, '/project'));
 
 // ── Play/Pause ──────────────────────────────────────────────
-
+// Play forwards the owner session token so the DO can authenticate autonomous
+// agent tool dispatch — so it keeps its own forward (relay doesn't pass tokens).
 app.post('/v1/projects/:slug/play', async (c) => {
   const user = c.get('user' as never) as { id: string };
   const userToken = c.get('userToken' as never) as string | undefined;
@@ -180,152 +198,50 @@ app.post('/v1/projects/:slug/play', async (c) => {
   return new Response(res.body, { status: res.status, headers: res.headers });
 });
 
-app.post('/v1/projects/:slug/pause', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, '/project/pause', user.id, { method: 'POST' });
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
+app.post('/v1/projects/:slug/pause', (c) => relay(c, '/project/pause', { method: 'POST' }));
 
 // ── Chat (PO agent) ─────────────────────────────────────────
 
-app.post('/v1/projects/:slug/chat', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, '/chat', user.id, {
-    method: 'POST',
-    body: JSON.stringify(await c.req.json()),
-  });
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
-
-app.get('/v1/projects/:slug/chat/history', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, '/chat/history', user.id);
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
-
-app.delete('/v1/projects/:slug/chat/history', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, '/chat/history', user.id, { method: 'DELETE' });
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
+app.post('/v1/projects/:slug/chat', (c) => relay(c, '/chat', { method: 'POST', forwardBody: true }));
+app.get('/v1/projects/:slug/chat/history', (c) => relay(c, '/chat/history'));
+app.delete('/v1/projects/:slug/chat/history', (c) => relay(c, '/chat/history', { method: 'DELETE' }));
 
 // ── Role configs ────────────────────────────────────────────
 
-app.get('/v1/projects/:slug/roles', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, '/roles', user.id);
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
-
-app.put('/v1/projects/:slug/roles', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, '/roles', user.id, {
-    method: 'PUT',
-    body: JSON.stringify(await c.req.json()),
-  });
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
+app.get('/v1/projects/:slug/roles', (c) => relay(c, '/roles'));
+app.put('/v1/projects/:slug/roles', (c) => relay(c, '/roles', { method: 'PUT', forwardBody: true }));
 
 // ── Tickets ─────────────────────────────────────────────────
 
-app.get('/v1/projects/:slug/tickets', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, '/tickets', user.id);
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
+app.get('/v1/projects/:slug/tickets', (c) => relay(c, '/tickets'));
 
 app.post('/v1/projects/:slug/tickets', async (c) => {
-  const user = c.get('user' as never) as { id: string };
   const body = await c.req.json<{ title: string; rawIdea: string }>();
-
   // Input validation
   if (!body.title || body.title.length > 200) return c.json({ error: 'title required (max 200 chars)' }, 400);
   if (!body.rawIdea || body.rawIdea.length > 65536) return c.json({ error: 'rawIdea required (max 64KB)' }, 400);
-
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, '/tickets', user.id, {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-  return new Response(res.body, { status: res.status, headers: res.headers });
+  return relay(c, '/tickets', { method: 'POST', forwardBody: true });
 });
 
-app.get('/v1/projects/:slug/tickets/:id', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, `/tickets/${c.req.param('id')}`, user.id);
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
-
-app.patch('/v1/projects/:slug/tickets/:id', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, `/tickets/${c.req.param('id')}`, user.id, {
-    method: 'PATCH',
-    body: JSON.stringify(await c.req.json()),
-  });
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
-
-app.delete('/v1/projects/:slug/tickets/:id', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, `/tickets/${c.req.param('id')}`, user.id, { method: 'DELETE' });
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
-
-app.post('/v1/projects/:slug/tickets/:id/transition', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, `/tickets/${c.req.param('id')}/transition`, user.id, {
-    method: 'POST',
-    body: JSON.stringify(await c.req.json()),
-  });
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
+app.get('/v1/projects/:slug/tickets/:id', (c) => relay(c, `/tickets/${c.req.param('id')}`));
+app.patch('/v1/projects/:slug/tickets/:id', (c) => relay(c, `/tickets/${c.req.param('id')}`, { method: 'PATCH', forwardBody: true }));
+app.delete('/v1/projects/:slug/tickets/:id', (c) => relay(c, `/tickets/${c.req.param('id')}`, { method: 'DELETE' }));
+app.post('/v1/projects/:slug/tickets/:id/transition', (c) => relay(c, `/tickets/${c.req.param('id')}/transition`, { method: 'POST', forwardBody: true }));
 
 // ── Messages ────────────────────────────────────────────────
 
-app.get('/v1/projects/:slug/tickets/:id/messages', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, `/tickets/${c.req.param('id')}/messages`, user.id);
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
+app.get('/v1/projects/:slug/tickets/:id/messages', (c) => relay(c, `/tickets/${c.req.param('id')}/messages`));
 
 app.post('/v1/projects/:slug/tickets/:id/messages', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-
   // Body size limit (1MB)
   const contentLength = parseInt(c.req.header('Content-Length') ?? '0', 10);
   if (contentLength > 1_048_576) return c.json({ error: 'message body too large (max 1MB)' }, 413);
-
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, `/tickets/${c.req.param('id')}/messages`, user.id, {
-    method: 'POST',
-    body: JSON.stringify(await c.req.json()),
-  });
-  return new Response(res.body, { status: res.status, headers: res.headers });
+  return relay(c, `/tickets/${c.req.param('id')}/messages`, { method: 'POST', forwardBody: true });
 });
 
 // ── Agent run ───────────────────────────────────────────────
 
-app.post('/v1/projects/:slug/tickets/:id/run', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, `/tickets/${c.req.param('id')}/run`, user.id, {
-    method: 'POST',
-    body: JSON.stringify(await c.req.json()),
-  });
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
+app.post('/v1/projects/:slug/tickets/:id/run', (c) => relay(c, `/tickets/${c.req.param('id')}/run`, { method: 'POST', forwardBody: true }));
 
 // ── Cost ────────────────────────────────────────────────────
 
