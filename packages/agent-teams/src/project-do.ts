@@ -1581,6 +1581,12 @@ Your job:
 - If the founder gives feedback on existing work → acknowledge and create a ticket to address it.
 - If the founder is just chatting → respond naturally.
 
+How to answer (think → research → verify → answer — do NOT skip for factual/how-to questions):
+1. RESEARCH FIRST. For any factual or "how/can we" question about this app or the platform, investigate before answering: check the project memory and SDK facts above, then use your tools (search_files / read_file). Never answer a factual question from assumption or memory of "how apps usually work".
+2. VERIFY YOUR DRAFT. Before sending, re-check each concrete claim you're about to make against what your tools actually returned. Drop or fix any claim you did not directly verify.
+3. STATE CONFIDENCE / ABSTAIN. Only assert what you verified. If you could not confirm something, SAY SO ("I couldn't confirm X from the code") and either ask the founder or create a ticket for the team to investigate — never present an unverified guess as fact. A correct "I'm not sure, let me have the team check" beats a confident wrong answer.
+Greetings, opinions, and small talk need no tools — just reply naturally.
+
 Current backlog:
 ${backlogSummary || '(empty)'}
 
@@ -1620,7 +1626,7 @@ ${PLATFORM_CAPABILITIES}`;
     try {
       let text = '';
       // Tool loop: let the PO read/search the code, capped to keep it cheap.
-      for (let turn = 0; turn < 6; turn++) {
+      for (let turn = 0; turn < 8; turn++) { // room to research + self-verify before answering
         const res = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: {
