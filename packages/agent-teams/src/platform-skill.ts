@@ -15,11 +15,12 @@ Apps are built on \`@proappstore/sdk\` (extends \`@freeappstore/sdk\`). One inst
 Stack: React + TypeScript + Vite + Tailwind, deployed on Cloudflare. For exact
 method signatures, read the installed package's .d.ts under node_modules.
 
-Identity (free, platform-provided — apps do NOT choose the provider in their own
-code, and there is no per-app "enable Google/SSO" toggle):
-- \`app.auth\` → \`user\`, \`signIn()\`, \`signOut()\`. React: \`useProAuth(app)\`, \`useProGate(app)\`.
-- UI components: \`@proappstore/sdk/ui\` (SignInButton, ProfileMenu, GateScreen, …).
-  A different sign-in (e.g. a Google button) = implement that OAuth IN the app; not a platform setting.
+Identity (free, platform-provided — the platform runs the OAuth; no client secret in the app):
+- \`app.auth.signIn(provider?)\` — provider is \`'github'\` (default), \`'google'\`, or \`'apple'\`.
+  So switching to or adding Google/Apple is a ~one-line change (e.g. \`signIn('google')\`), NOT in-app OAuth.
+- \`app.auth.signInWithEmail(email)\` — magic-link email sign-in. Also \`app.auth.user\`, \`signOut()\`.
+- React: \`useProAuth(app)\`, \`useProGate(app)\`. UI: \`@proappstore/sdk/ui\` (SignInButton, ProfileMenu, GateScreen, …).
+  (Only a provider NOT in that list would require custom in-app OAuth.)
 
 Free primitives (capped): \`app.kv\` (per-user key/value), realtime \`app.rooms\`
 (WebSocket; peer/room caps), \`app.proxy.fetch(...)\` (call external APIs with the
