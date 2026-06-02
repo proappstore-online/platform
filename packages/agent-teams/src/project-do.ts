@@ -54,6 +54,9 @@ import { PLATFORM_CAPABILITIES, DOCS_SKILLS_URL, sliceDocs } from './platform-sk
  * in-memory run flag was lost on hibernation.
  */
 const WATCHDOG_MS = 60_000;
+// How long to wait for CI to register a run for a freshly pushed commit before
+// declaring the deploy dead (repo missing a push-triggered workflow, Actions off).
+const DEPLOY_CI_START_TIMEOUT_MS = 4 * 60_000;
 
 export class ProjectDO implements DurableObject {
   private state: DurableObjectState;
@@ -99,6 +102,10 @@ export class ProjectDO implements DurableObject {
         `UPDATE tickets SET seq = (SELECT COUNT(*) FROM tickets t2 WHERE t2.created_at < tickets.created_at OR (t2.created_at = tickets.created_at AND t2.id <= tickets.id)) WHERE seq IS NULL`,
       );
     } catch { /* exists */ }
+    // Deploy stage bookkeeping: push the working tree ONCE per attempt, then poll
+    // CI for that exact commit. Without this the watchdog re-pushed every tick.
+    try { this.state.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN deploy_pushed_at INTEGER`); } catch { /* exists */ }
+    try { this.state.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN deploy_pushed_sha TEXT`); } catch { /* exists */ }
     this.initialized = true;
   }
 
@@ -784,8 +791,8 @@ export class ProjectDO implements DurableObject {
    */
   private async runDeploy(ticketId: string): Promise<void> {
     const ticket = this.state.storage.sql
-      .exec('SELECT title, iterations FROM tickets WHERE id = ?', ticketId)
-      .toArray()[0] as { title: string; iterations: number } | undefined;
+      .exec('SELECT title, iterations, deploy_pushed_at, deploy_pushed_sha FROM tickets WHERE id = ?', ticketId)
+      .toArray()[0] as { title: string; iterations: number; deploy_pushed_at: number | null; deploy_pushed_sha: string | null } | undefined;
     if (!ticket) return;
     const proj = this.state.storage.sql
       .exec('SELECT slug, name FROM project LIMIT 1')
@@ -809,10 +816,11 @@ export class ProjectDO implements DurableObject {
     }));
 
     const fail = (reason: string) => {
-      // Route back to Dev with the error, or fail at the iteration cap.
+      // Route back to Dev with the error, or fail at the iteration cap. Clear the
+      // push marker so the next attempt re-pushes the fixed code.
       this.storeMessage({ ticketId, author: 'system', body: `Deploy failed — fix and it will redeploy:\n${reason}`.slice(0, 8000) }).catch(() => {});
       if (ticket.iterations < 5) {
-        this.state.storage.sql.exec("UPDATE tickets SET status = 'dev-active', assignee_role = 'Dev', iterations = iterations + 1, updated_at = ? WHERE id = ?", now, ticketId);
+        this.state.storage.sql.exec("UPDATE tickets SET status = 'dev-active', assignee_role = 'Dev', iterations = iterations + 1, deploy_pushed_at = NULL, deploy_pushed_sha = NULL, updated_at = ? WHERE id = ?", now, ticketId);
         this.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'dev-active', trigger: 'system', reason: 'deploy-failed' });
         this.logActivity('deploy', `Deploy FAILED → back to Dev: ${reason.slice(0, 200)}`, ticketId);
       } else {
@@ -823,31 +831,52 @@ export class ProjectDO implements DurableObject {
     };
 
     try {
-      // 1) Push the working tree (idempotent: creates the repo if needed).
-      const pushRes = await adminFetch('/api/agent-deploy', { id: proj.slug, name: proj.name, files: Object.fromEntries(files) });
-      const push = await pushRes.json() as { success?: boolean; repoUrl?: string | null; steps?: { name: string; status: string; detail: string }[] };
-      if (!pushRes.ok || !push.success) {
-        const detail = (push.steps ?? []).filter((s) => s.status === 'fail').map((s) => `${s.name} — ${s.detail}`).join('; ');
-        return fail(`Push to repo failed: ${detail || `admin ${pushRes.status}`}`);
+      // 1) Push the working tree ONCE per deploy attempt (idempotent: creates the
+      //    repo if needed). Re-checks (watchdog ticks) skip straight to polling so
+      //    we don't re-commit 55 files every cycle. The commit SHA fingerprints
+      //    this attempt and is recorded on the ticket.
+      let sha = ticket.deploy_pushed_sha ?? undefined;
+      if (!ticket.deploy_pushed_at) {
+        const pushRes = await adminFetch('/api/agent-deploy', { id: proj.slug, name: proj.name, files: Object.fromEntries(files) });
+        const push = await pushRes.json() as { success?: boolean; repoUrl?: string | null; commitSha?: string; steps?: { name: string; status: string; detail: string }[] };
+        if (!pushRes.ok || !push.success) {
+          const detail = (push.steps ?? []).filter((s) => s.status === 'fail').map((s) => `${s.name} — ${s.detail}`).join('; ');
+          return fail(`Push to repo failed: ${detail || `admin ${pushRes.status}`}`);
+        }
+        if (push.repoUrl) this.state.storage.sql.exec('UPDATE project SET repo_url = ? WHERE repo_url IS NULL', push.repoUrl);
+        sha = push.commitSha;
+        this.state.storage.sql.exec('UPDATE tickets SET deploy_pushed_at = ?, deploy_pushed_sha = ? WHERE id = ?', now, sha ?? null, ticketId);
+        this.logActivity('deploy', `Pushed ${files.size} file(s) @ ${sha?.slice(0, 7) ?? '?'} → building…`, ticketId);
       }
-      if (push.repoUrl) this.state.storage.sql.exec('UPDATE project SET repo_url = ? WHERE repo_url IS NULL', push.repoUrl);
-      this.logActivity('deploy', `Pushed ${files.size} file(s) → building…`, ticketId);
 
-      // 2) Verify the CI build (waits for it to finish).
-      const statusRes = await adminFetch('/api/deploy-status', { id: proj.slug, waitMs: 85_000 });
+      // 2) Verify the CI build for THIS commit (waits, bounded, for it to finish).
+      const statusRes = await adminFetch('/api/deploy-status', { id: proj.slug, waitMs: 85_000, ...(sha ? { sha } : {}) });
       const r = await statusRes.json() as { ok: boolean; status?: string; conclusion?: string; url?: string; errorTail?: string; error?: string };
       if (r.error) return fail(`Could not verify build: ${r.error}`);
+
+      // CI hasn't registered a run for this commit yet. Re-check next tick — but
+      // give up if it never starts (repo missing a push-triggered workflow, or
+      // Actions disabled) so we don't sit in 'deploying' forever.
+      if (r.status === 'pending') {
+        const pushedAt = ticket.deploy_pushed_at ?? now;
+        if (Date.now() - pushedAt > DEPLOY_CI_START_TIMEOUT_MS) {
+          return fail('CI never started for this commit. The repo needs a push-triggered workflow under .github/workflows (and Actions enabled).');
+        }
+        this.logActivity('deploy', 'Waiting for CI to start — will re-check', ticketId);
+        return;
+      }
       if (r.status !== 'completed') {
-        // Build still running past our wait — leave it in deploying; the watchdog re-checks.
-        this.logActivity('deploy', `Build still running (${r.status}) — will re-check`, ticketId);
+        // Build still running past our wait — stay in deploying; watchdog re-checks
+        // (and now only polls, no re-push).
+        this.logActivity('deploy', `Build still running — will re-check`, ticketId);
         return;
       }
       if (!r.ok) return fail(`CI build ${r.conclusion}:\n${r.errorTail ?? r.url ?? ''}`);
 
-      // 3) Green → done.
-      this.state.storage.sql.exec("UPDATE tickets SET status = 'done', updated_at = ? WHERE id = ?", now, ticketId);
+      // 3) Green → done. Record the verified commit as the ticket's final SHA.
+      this.state.storage.sql.exec("UPDATE tickets SET status = 'done', final_commit_sha = ?, updated_at = ? WHERE id = ?", sha ?? null, now, ticketId);
       this.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'done', trigger: 'system' });
-      this.logActivity('deploy', `Deployed live ✓ ${r.url ?? ''}`, ticketId);
+      this.logActivity('deploy', `Deployed live ✓ ${sha?.slice(0, 7) ?? ''} ${r.url ?? ''}`.trim(), ticketId);
     } catch (e) {
       fail(`Deploy error: ${e instanceof Error ? e.message : 'unknown'}`);
     }
@@ -1056,7 +1085,7 @@ export class ProjectDO implements DurableObject {
         // QA approved the code → hand off to the deterministic deploy stage.
         // "done" is only reached after the CI build is verified green.
         this.state.storage.sql.exec(
-          "UPDATE tickets SET status = 'deploying', assignee_role = NULL, updated_at = ? WHERE id = ?",
+          "UPDATE tickets SET status = 'deploying', assignee_role = NULL, deploy_pushed_at = NULL, deploy_pushed_sha = NULL, updated_at = ? WHERE id = ?",
           now, ticketId,
         );
         this.broadcast({ type: 'transition', ticketId, from: 'qa-active', to: 'deploying', trigger: 'QA' });

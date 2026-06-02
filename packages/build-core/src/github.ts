@@ -45,10 +45,14 @@ export interface GitHub {
     opts?: { initIfEmpty?: boolean },
   ): Promise<{ ok: boolean; commitSha?: string; error?: string }>;
   getDeployStatus(id: string, perPage?: number): Promise<GhResult>;
-  /** Latest CI run for the default branch, waiting (bounded) for an in-flight run
-   *  to finish. On failure, returns a tail of the failed job's log (the compiler
-   *  error etc.) so the Dev can actually fix it. This is the build gate. */
-  deployResult(id: string, opts?: { waitMs?: number }): Promise<{
+  /** CI result for the default branch (the build gate). Waits (bounded by waitMs)
+   *  for the relevant run(s) to finish. When `sha` is given, only runs for that
+   *  exact commit count — this avoids racing a not-yet-registered run (returns
+   *  status 'pending') or grading a stale previous run. A single push fans out to
+   *  several workflows (ci/compliance/deploy); the verdict aggregates them: ok iff
+   *  every matching run succeeds. On failure, returns a tail of the failed job's
+   *  log (the compiler error etc.) so the Dev can actually fix it. */
+  deployResult(id: string, opts?: { waitMs?: number; sha?: string }): Promise<{
     ok: boolean; status?: string | undefined; conclusion?: string | undefined; sha?: string | undefined; url?: string | undefined; errorTail?: string | undefined;
   }>;
   /** Latest commit SHA + date on the default branch (cheap freshness check). */
@@ -216,33 +220,46 @@ export function makeGitHub(token: string, org: string): GitHub {
 
     async deployResult(id, opts) {
       const waitMs = opts?.waitMs ?? 0;
+      const sha = opts?.sha;
       const deadline = Date.now() + waitMs;
-      let run: Record<string, unknown> | undefined;
-      // Poll the latest run until it completes (or we run out of wait budget).
+      // A push fans out to several workflows (ci/compliance/deploy). Grade the
+      // whole set for the head commit so a green "deploy" can't mask a red "ci".
+      const matching = (runs: Record<string, unknown>[]) =>
+        sha ? runs.filter((r) => (r.head_sha as string) === sha || (r.head_sha as string)?.startsWith(sha)) : runs.slice(0, 1);
+
+      let runs: Record<string, unknown>[] = [];
       for (;;) {
-        const r = await api(`/repos/${repo(id)}/actions/runs?per_page=1`);
-        run = ((d(r).workflow_runs as Record<string, unknown>[]) ?? [])[0];
-        if (!run) return { ok: false, errorTail: 'no CI runs found' };
-        if (run.status === 'completed' || Date.now() >= deadline) break;
+        const r = await api(`/repos/${repo(id)}/actions/runs?per_page=20`);
+        runs = matching((d(r).workflow_runs as Record<string, unknown>[]) ?? []);
+        // No run for this commit yet — it may not have registered. Keep waiting
+        // within budget; report 'pending' (not a failure) so the caller can
+        // re-check rather than misread it as a broken build.
+        if (runs.length === 0) {
+          if (Date.now() >= deadline) return { ok: false, status: 'pending', errorTail: 'no CI run registered yet for this commit' };
+          await sleep(4000);
+          continue;
+        }
+        if (runs.every((x) => x.status === 'completed') || Date.now() >= deadline) break;
         await sleep(4000);
       }
-      const status = run.status as string;
-      const conclusion = run.conclusion as string | undefined;
+
+      const allDone = runs.every((x) => x.status === 'completed');
+      const failed = runs.find((x) => x.conclusion && x.conclusion !== 'success');
       const result: { ok: boolean; status: string; conclusion?: string | undefined; sha?: string | undefined; url?: string | undefined; errorTail?: string | undefined } = {
-        ok: conclusion === 'success',
-        status,
-        conclusion: conclusion ?? undefined,
-        sha: (run.head_sha as string)?.slice(0, 7),
-        url: run.html_url as string,
+        ok: allDone && !failed,
+        status: allDone ? 'completed' : 'in_progress',
+        conclusion: failed ? (failed.conclusion as string) : allDone ? 'success' : undefined,
+        sha: (runs[0]!.head_sha as string)?.slice(0, 7),
+        url: (failed ?? runs[0]!).html_url as string,
       };
       // On failure, pull the failed job's plaintext log tail (the actual error).
-      if (conclusion && conclusion !== 'success') {
+      if (failed) {
         try {
-          const jobsRes = await api(`/repos/${repo(id)}/actions/runs/${run.id}/jobs`);
+          const jobsRes = await api(`/repos/${repo(id)}/actions/runs/${failed.id}/jobs`);
           const jobs = (d(jobsRes).jobs as Record<string, unknown>[]) ?? [];
-          const failed = jobs.find((j) => j.conclusion === 'failure');
-          if (failed) {
-            const logRes = await fetch(`https://api.github.com${`/repos/${repo(id)}/actions/jobs/${failed.id}/logs`}`, {
+          const failedJob = jobs.find((j) => j.conclusion === 'failure');
+          if (failedJob) {
+            const logRes = await fetch(`https://api.github.com${`/repos/${repo(id)}/actions/jobs/${failedJob.id}/logs`}`, {
               headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'proappstore-build-core', 'X-GitHub-Api-Version': '2022-11-28' },
               redirect: 'follow',
             });

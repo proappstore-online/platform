@@ -175,12 +175,12 @@ async function provisionAnalytics(env: Env, id: string): Promise<Step> {
 }
 
 // Push a file bundle as one commit via build-core (Git Data API; seeds empty repos).
-async function pushFilesToGitHub(env: Env, id: string, files: Record<string, string>): Promise<Step> {
+async function pushFilesToGitHub(env: Env, id: string, files: Record<string, string>): Promise<Step & { commitSha?: string }> {
   const entries = Object.entries(files).map(([path, content]) => ({ path, content }));
   if (entries.length === 0) return { name: "Push files", status: "skip", detail: "no files to push" };
   const res = await ghFor(env).pushFiles(id, entries, "Build update — ProAppStore Agent Teams", { initIfEmpty: true });
   if (!res.ok) return { name: "Push files", status: "fail", detail: res.error || "push failed" };
-  return { name: "Push files", status: "ok", detail: `Pushed ${entries.length} file(s) (${res.commitSha?.slice(0, 7)})` };
+  return { name: "Push files", status: "ok", detail: `Pushed ${entries.length} file(s) (${res.commitSha?.slice(0, 7)})`, commitSha: res.commitSha };
 }
 
 /**
@@ -203,12 +203,12 @@ export async function handleRepoPull(
 
 /** Internal: the real CI build/deploy result for an app (the build gate). */
 export async function handleDeployStatus(
-  req: { id: string; waitMs?: number },
+  req: { id: string; waitMs?: number; sha?: string },
   env: Env,
 ): Promise<{ ok: boolean; status?: string; conclusion?: string; sha?: string; url?: string; errorTail?: string; error?: string }> {
   const gh = ghFor(env);
   if (!(await gh.repoExists(req.id))) return { ok: false, error: "repo not found" };
-  return gh.deployResult(req.id, { waitMs: Math.min(req.waitMs ?? 0, 90_000) });
+  return gh.deployResult(req.id, { waitMs: Math.min(req.waitMs ?? 0, 90_000), ...(req.sha ? { sha: req.sha } : {}) });
 }
 
 // CONTRACT (agent-deploy): the request body sent by packages/agent-teams
@@ -236,7 +236,7 @@ export interface AgentDeployRequest {
 export async function handleAgentDeploy(
   req: AgentDeployRequest,
   env: Env,
-): Promise<{ steps: Step[]; success: boolean; repoUrl: string | null }> {
+): Promise<{ steps: Step[]; success: boolean; repoUrl: string | null; commitSha?: string }> {
   const idError = validateId(req.id);
   if (idError) return { steps: [{ name: "Validation", status: "fail", detail: idError }], success: false, repoUrl: null };
   if (!req.name) return { steps: [{ name: "Validation", status: "fail", detail: "name is required" }], success: false, repoUrl: null };
@@ -260,7 +260,7 @@ export async function handleAgentDeploy(
   steps.push(pushStep);
   if (pushStep.status === "fail") return { steps, success: false, repoUrl };
 
-  return { steps, success: steps.every((s) => s.status !== "fail"), repoUrl };
+  return { steps, success: steps.every((s) => s.status !== "fail"), repoUrl, commitSha: pushStep.commitSha };
 }
 
 export async function handlePublish(req: PublishRequest, env: Env): Promise<{ steps: Step[]; success: boolean }> {

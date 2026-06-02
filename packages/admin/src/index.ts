@@ -66,7 +66,7 @@ export default {
       if (!env.INTERNAL_TOKEN || provided !== env.INTERNAL_TOKEN) {
         return Response.json({ error: "forbidden" }, { status: 403 });
       }
-      const body = await request.json<{ id: string; waitMs?: number }>();
+      const body = await request.json<{ id: string; waitMs?: number; sha?: string }>();
       if (!body.id) return Response.json({ error: "id required" }, { status: 400 });
       return Response.json(await handleDeployStatus(body, env));
     }
