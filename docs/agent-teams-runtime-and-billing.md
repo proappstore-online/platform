@@ -59,6 +59,24 @@ billed to the user's own Anthropic account. Findings (Anthropic docs, June 2026)
 The only way to have the user's account pay is **BYOK + our own loop** — which is
 what's shipped. Adopting Managed Agents would flip us to "platform pays."
 
+## Runtime implementation (current)
+
+Both adapters run an in-Worker tool loop. Shipped hardening:
+
+- **Streaming** (`cf-native`): the Anthropic Messages call uses `stream: true` and
+  a custom SSE parser. A large non-streamed completion (e.g. the Dev writing files
+  at 16k `max_tokens`) could exceed Cloudflare's ~100s edge timeout and fail with
+  **524**; streaming flushes the first byte immediately so it never trips.
+- **Transient retry**: 429/5xx (incl. 524/504) retried up to 3× with backoff.
+- **Truncation recovery**: a `max_tokens`-truncated turn with no tool calls is
+  continued ("Continue."), not treated as done — fixed agents "going in circles".
+- **Per-role `max_tokens`** is configurable (`role_configs.max_tokens`); defaults
+  Dev 16384 / BA·QA 8192.
+- **Prompt caching**: system + tools + the rolling last message are marked
+  `cache_control: ephemeral` (≤4 breakpoints) — cuts input-token cost ~90% on hits
+  across the loop. `cache_read`/`cache_creation` tokens are counted toward usage so
+  the cost meter stays accurate (relevant to the metering note below).
+
 ## Billing options (pricing NOT yet decided)
 
 Anthropic won't do passthrough billing, but we can meter + charge ourselves. The

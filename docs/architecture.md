@@ -97,6 +97,19 @@ the CLI publish path.
 Auth: PAS platform validates the HMAC session minted by FAS (same
 `SESSION_SIGNING_KEY`). No CF Access on `api.proappstore.online`.
 
+### 4. `agent-teams` Worker — AI build team
+
+A team of AI agents (PO / BA / Dev / QA) that builds and maintains an app from a
+founder's chat. One Durable Object per project holds the backlog, the working-tree
+cache, project memory, cost ledger, and the live WebSocket. GitHub is the source
+of truth — the DO syncs from it before each run and pushes back via the `admin`
+Worker. Agents run on the user's **BYO key** (our own in-Worker loop, streamed,
+with prompt caching). Deployed at `agents.proappstore.online`; UI in the creator
+console's per-app **Agents** tab.
+
+Full detail: [`packages/agent-teams/README.md`](https://github.com/proappstore-online/platform/blob/main/packages/agent-teams/README.md)
+and [Agent Teams: runtime & billing](/agent-teams-runtime-and-billing).
+
 ## Why one control plane
 
 Identity, registry, billing, provisioning, and entitlements are the same
