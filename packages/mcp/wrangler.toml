@@ -7,6 +7,10 @@ compatibility_flags = ["nodejs_compat"]
 API_BASE = "https://api.proappstore.online"
 GITHUB_ORG = "proappstore-online"
 
+# Secrets set via `wrangler secret put`:
+#   SESSION_SIGNING_KEY
+#   GITHUB_TOKEN (org-level PAT for repo operations)
+
 [[routes]]
 pattern = "mcp.proappstore.online/*"
 zone_name = "proappstore.online"

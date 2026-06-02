@@ -1,10 +1,13 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { fetchTools, registerAppTools } from "./tool-loader.js";
+import { registerProjectTools } from "./project-tools.js";
 
 interface Env {
   API_BASE: string;
   GITHUB_ORG: string;
+  GITHUB_TOKEN: string;
 }
 
 async function getDeployStatus(org: string, appId: string) {
@@ -40,13 +43,49 @@ async function pasApi(apiBase: string, path: string, token?: string) {
   return await res.json();
 }
 
+/**
+ * Extract session token from the MCP transport's initial request headers.
+ * The agent passes `Authorization: Bearer <token>` when connecting.
+ */
+function extractToken(props: Record<string, unknown>): string | null {
+  // McpAgent passes connection props; check for auth header
+  const auth = (props as { authToken?: string }).authToken;
+  return auth ?? null;
+}
+
+/**
+ * Verify a session token against the FAS API. Returns user info or null.
+ */
+async function verifyToken(apiBase: string, token: string): Promise<{ id: string; login: string } | null> {
+  const fasBase = apiBase.replace('proappstore', 'freeappstore');
+  const res = await fetch(`${fasBase}/v1/auth/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  return (await res.json()) as { id: string; login: string };
+}
+
 export class PasMcpAgent extends McpAgent<Env> {
   server = new McpServer({
     name: "ProAppStore",
-    version: "0.1.0",
+    version: "0.2.0",
   });
 
+  // User context — set during init if a token is provided
+  private userId: string | null = null;
+  private userToken: string | null = null;
+
   async init() {
+    // Try to authenticate from connection props
+    const token = extractToken(this.props as Record<string, unknown>);
+    if (token) {
+      const user = await verifyToken(this.env.API_BASE, token);
+      if (user) {
+        this.userId = user.id;
+        this.userToken = token;
+      }
+    }
+
     // ── list_apps ──────────────────────────────────────────────
     this.server.tool(
       "list_apps",
@@ -293,6 +332,65 @@ Full docs: https://proappstore.online/docs/ui`,
         return { content: [{ type: "text" as const, text: `# @proappstore/sdk Reference\n\n${selected}` }] };
       }
     );
+
+    // ── Project-building tools (for AI agent app creation) ─────
+    registerProjectTools(this.server, this.env, () => ({
+      userId: this.userId,
+      token: this.userToken,
+    }));
+
+    // ── Load and register app tools dynamically ────────────────
+    const appTools = await fetchTools(this.env.API_BASE);
+    const registered = registerAppTools(
+      this.server,
+      appTools,
+      () => ({ userId: this.userId, token: this.userToken }),
+    );
+
+    // ── discover_tools ─────────────────────────────────────────
+    this.server.tool(
+      "discover_tools",
+      "List all app data tools available on ProAppStore. Shows tools grouped by app with descriptions and parameters.",
+      {},
+      async () => {
+        const tools = await fetchTools(this.env.API_BASE);
+        if (tools.length === 0) {
+          return { content: [{ type: "text" as const, text: "No app tools registered yet. Apps can expose tools by adding an mcp.json manifest." }] };
+        }
+
+        // Group by app
+        const byApp = new Map<string, typeof tools>();
+        for (const t of tools) {
+          const list = byApp.get(t.app_id) ?? [];
+          list.push(t);
+          byApp.set(t.app_id, list);
+        }
+
+        const lines: string[] = [];
+        for (const [appId, appTools] of byApp) {
+          lines.push(`## ${appId}`);
+          for (const t of appTools) {
+            const params = Object.entries(t.params)
+              .map(([name, def]) => {
+                const p = def as { type: string; optional?: boolean; description?: string };
+                const opt = p.optional ? '?' : '';
+                return `${name}${opt}: ${p.type}${p.description ? ` — ${p.description}` : ''}`;
+              })
+              .join(', ');
+            const auth = t.requires_auth ? ' [auth required]' : '';
+            lines.push(`- **${appId}/${t.name}**${auth}: ${t.description}`);
+            if (params) lines.push(`  Params: ${params}`);
+          }
+          lines.push('');
+        }
+
+        return { content: [{ type: "text" as const, text: `# Available App Tools\n\n${tools.length} tool(s) across ${byApp.size} app(s):\n\n${lines.join("\n")}` }] };
+      }
+    );
+
+    if (registered.length > 0) {
+      console.log(`Registered ${registered.length} app tool(s): ${registered.join(', ')}`);
+    }
   }
 }
 
@@ -302,7 +400,7 @@ export default {
 
     if (url.pathname === "/" || url.pathname === "") {
       return new Response(
-        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nTools: list_apps, deploy_status, app_info, platform_guide, sdk_reference\n",
+        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools\nProject tools: scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\n",
         { headers: { "content-type": "text/plain" } }
       );
     }
