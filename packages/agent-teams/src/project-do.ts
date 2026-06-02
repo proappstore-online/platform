@@ -83,6 +83,8 @@ export class ProjectDO implements DurableObject {
     try { this.state.storage.sql.exec(`ALTER TABLE role_configs ADD COLUMN max_tokens INTEGER`); } catch { /* exists */ }
     // Per-role persona ("soul") and the project memory table.
     try { this.state.storage.sql.exec(`ALTER TABLE role_configs ADD COLUMN persona TEXT`); } catch { /* exists */ }
+    // Tool-call output captured on the activity row (full audit / inspection).
+    try { this.state.storage.sql.exec(`ALTER TABLE activity_log ADD COLUMN meta TEXT`); } catch { /* exists */ }
     this.initialized = true;
   }
 
@@ -105,14 +107,23 @@ export class ProjectDO implements DurableObject {
   // the full history is in the DB (traceable, survives refresh/eviction), not
   // just in the browser. Also broadcast for live UIs.
 
-  private logActivity(type: string, detail: string, ticketId: string | null = null): void {
+  private logActivity(type: string, detail: string, ticketId: string | null = null, meta?: string): string {
     const id = uuid();
     const now = Date.now();
+    const metaStr = meta ? meta.slice(0, 20000) : null; // cap; full tool output kept for audit
     this.state.storage.sql.exec(
-      'INSERT INTO activity_log (id, ticket_id, type, detail, created_at) VALUES (?, ?, ?, ?, ?)',
-      id, ticketId, type, detail.slice(0, 1000), now,
+      'INSERT INTO activity_log (id, ticket_id, type, detail, created_at, meta) VALUES (?, ?, ?, ?, ?, ?)',
+      id, ticketId, type, detail.slice(0, 1000), now, metaStr,
     );
-    this.broadcast({ type: 'activity', entry: { id, ticketId, type, detail, createdAt: now } });
+    this.broadcast({ type: 'activity', entry: { id, ticketId, type, detail, createdAt: now, meta: metaStr ?? undefined } });
+    return id;
+  }
+
+  /** Attach the output of a tool call to its already-logged activity row (audit). */
+  private setActivityMeta(id: string, meta: string): void {
+    const metaStr = meta.slice(0, 20000);
+    this.state.storage.sql.exec('UPDATE activity_log SET meta = ? WHERE id = ?', metaStr, id);
+    this.broadcast({ type: 'activity-meta', id, meta: metaStr });
   }
 
   // Wipe the persisted activity trail (start fresh). Audit-only data; safe to clear.
@@ -124,11 +135,11 @@ export class ProjectDO implements DurableObject {
 
   private getActivity(): Response {
     const rows = this.state.storage.sql
-      .exec('SELECT id, ticket_id, type, detail, created_at FROM activity_log ORDER BY created_at DESC LIMIT 500')
-      .toArray() as { id: string; ticket_id: string | null; type: string; detail: string; created_at: number }[];
+      .exec('SELECT id, ticket_id, type, detail, created_at, meta FROM activity_log ORDER BY created_at DESC LIMIT 500')
+      .toArray() as { id: string; ticket_id: string | null; type: string; detail: string; created_at: number; meta: string | null }[];
     return json({
       activity: rows.reverse().map((r) => ({
-        id: r.id, ticketId: r.ticket_id, type: r.type, detail: r.detail, createdAt: r.created_at,
+        id: r.id, ticketId: r.ticket_id, type: r.type, detail: r.detail, createdAt: r.created_at, meta: r.meta ?? undefined,
       })),
     });
   }
@@ -575,6 +586,7 @@ export class ProjectDO implements DurableObject {
       // and route the ticket to needs-input. `aborted` stops the loop from
       // mutating shared state (files map, DB) after we've moved on.
       let aborted = false;
+      const toolActivityIds = new Map<string, string>(); // callId → activity row id
       const consume = (async () => {
         for await (const ev of runtime.run(handle, messages)) {
           if (aborted) break;
@@ -583,17 +595,26 @@ export class ProjectDO implements DurableObject {
               assistantText += ev.text;
               this.broadcast({ type: 'agent-text', ticketId, role, text: ev.text });
               break;
-            case 'tool-call':
+            case 'tool-call': {
               toolCalls.push(ev.call);
               this.broadcast({ type: 'agent-tool-call', ticketId, role, name: ev.call.name });
-              this.logActivity('tool', `${role}: ${toolActivityDetail(ev.call.name, ev.call.args)}`, ticketId);
+              const actId = this.logActivity('tool', `${role}: ${toolActivityDetail(ev.call.name, ev.call.args)}`, ticketId,
+                JSON.stringify({ args: ev.call.args }));
+              toolActivityIds.set(ev.call.id, actId);
               break;
+            }
             case 'tool-result': {
               // Attach the result to its call so persisted toolCalls carry it
               // (a future replay of history into the model needs matched pairs).
               const tc = toolCalls.find((c) => c.id === ev.result.callId);
               if (tc) tc.result = ev.result;
               this.broadcast({ type: 'agent-tool-result', ticketId, role, ok: ev.result.ok });
+              // Capture the tool's output on its activity row for the audit log.
+              const actId = toolActivityIds.get(ev.result.callId);
+              if (actId) {
+                const out = ev.result.ok ? (typeof ev.result.data === 'string' ? ev.result.data : JSON.stringify(ev.result.data)) : (ev.result.errorMessage ?? 'error');
+                this.setActivityMeta(actId, JSON.stringify({ args: tc?.args, ok: ev.result.ok, result: out ?? '(no output)' }));
+              }
               break;
             }
             case 'done':
@@ -1581,12 +1602,10 @@ Otherwise just respond in plain text. Be concise and decisive. You're a PO, not 
             return { type: 'tool_result' as const, tool_use_id: tu.id!, content: 'remember needs key and value' };
           }
           const r = executeFileTool({ id: tu.id!, name: tu.name!, args: tu.input }, poFiles);
-          this.logActivity('tool', `PO: ${toolActivityDetail(tu.name!, tu.input)}`);
-          return {
-            type: 'tool_result' as const,
-            tool_use_id: tu.id!,
-            content: (r.ok ? (typeof r.data === 'string' ? r.data : JSON.stringify(r.data)) : (r.errorMessage ?? 'error')) || '(no output)',
-          };
+          const out = (r.ok ? (typeof r.data === 'string' ? r.data : JSON.stringify(r.data)) : (r.errorMessage ?? 'error')) || '(no output)';
+          this.logActivity('tool', `PO: ${toolActivityDetail(tu.name!, tu.input)}`, null,
+            JSON.stringify({ args: tu.input, ok: r.ok, result: out }));
+          return { type: 'tool_result' as const, tool_use_id: tu.id!, content: out };
         });
         messages.push({ role: 'user', content: toolResults });
       }
