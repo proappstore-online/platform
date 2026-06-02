@@ -245,6 +245,20 @@ export class ProjectDO implements DurableObject {
       if (ownerToken) {
         this.state.storage.sql.exec('UPDATE project SET owner_session_token = ?', ownerToken);
       }
+
+      // Retry tickets parked in needs-input. They were blocked on a system
+      // condition (missing API key, a prior error) — Play means "go", so
+      // re-dispatch them rather than leaving them stuck (needs-input otherwise
+      // only resumes via a chat reply).
+      const blocked = this.state.storage.sql
+        .exec("SELECT id, assignee_role FROM tickets WHERE status = 'needs-input'")
+        .toArray() as { id: string; assignee_role: string | null }[];
+      for (const t of blocked) {
+        const resume = t.assignee_role === 'QA' ? 'qa-active' : t.assignee_role === 'Dev' ? 'dev-active' : 'ba-refining';
+        this.state.storage.sql.exec('UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?', resume, now, t.id);
+        this.logActivity('control', `Retrying blocked ${t.assignee_role ?? 'BA'} ticket`, t.id);
+        this.broadcast({ type: 'transition', ticketId: t.id, from: 'needs-input', to: resume, reason: 'retry-on-play' });
+      }
     }
 
     this.broadcast({ type: 'play-state', status: newStatus });
@@ -253,7 +267,7 @@ export class ProjectDO implements DurableObject {
     if (newStatus === 'running') {
       this.scheduleWatchdog();
       this.autoAdvance();
-      // If there's no work yet, tell the user instead of sitting silent.
+      // If there's no work yet, tell the user (in chat AND the activity feed).
       const open = (this.state.storage.sql
         .exec("SELECT COUNT(*) AS c FROM tickets WHERE status NOT IN ('done','failed','cancelled')")
         .toArray()[0] as { c: number }).c;
@@ -265,6 +279,7 @@ export class ProjectDO implements DurableObject {
           msgId, 'po', msg, now,
         );
         this.broadcast({ type: 'chat', role: 'po', body: msg, id: msgId });
+        this.logActivity('info', 'No open tickets — describe what to build in the chat.');
       }
     } else {
       this.clearWatchdog();
@@ -341,6 +356,7 @@ export class ProjectDO implements DurableObject {
         idleId, 'system', idleMsg, now,
       );
       this.broadcast({ type: 'chat', role: 'system', body: idleMsg, id: idleId });
+      this.logActivity('control', 'Auto-paused (idle 30 min)');
       return;
     }
 
@@ -354,6 +370,7 @@ export class ProjectDO implements DurableObject {
       this.state.storage.sql.exec("UPDATE project SET status = 'paused'");
       this.clearWatchdog();
       this.broadcast({ type: 'play-state', status: 'paused', reason: 'cost-cap' });
+      this.logActivity('control', `Auto-paused: monthly cost cap reached ($${proj.cost_cap_monthly_usd})`);
       return;
     }
 
@@ -594,6 +611,18 @@ export class ProjectDO implements DurableObject {
         model: roleConfig.model,
       });
     }
+    // Mirror the agent's output into the team chat so the collaboration is
+    // visible (the chat panel renders BA/Dev/QA roles). Full text lives on the
+    // ticket message; the chat copy is capped for readability.
+    if (assistantText.trim()) {
+      const cid = uuid();
+      const chatBody = assistantText.trim().slice(0, 4000);
+      this.state.storage.sql.exec(
+        'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
+        cid, role, chatBody, Date.now(),
+      );
+      this.broadcast({ type: 'chat', role, body: chatBody, id: cid });
+    }
     if (costUsd > 0 || tokensIn > 0) {
       this.logActivity('cost', `${role} finished · $${costUsd.toFixed(4)} · ${tokensIn}+${tokensOut} tok`, ticketId);
     }
@@ -626,7 +655,16 @@ export class ProjectDO implements DurableObject {
     // alarm watchdog re-dispatches active tickets if the DO is ever evicted
     // mid-run (so we don't rely on a waitUntil, which DO state doesn't have).
     void this.runAgentInternal(ticketId)
-      .catch(() => { /* swallow — outcome already persisted as needs-input */ })
+      .catch((e) => {
+        // Surface any uncaught run crash — full transparency, never silent.
+        const msg = e instanceof Error ? e.message : String(e);
+        try {
+          this.logActivity('error', `Run crashed: ${msg}`, ticketId);
+          this.blockForInput(ticketId, assigneeForStatus(
+            (this.state.storage.sql.exec('SELECT status FROM tickets WHERE id = ?', ticketId).toArray()[0] as { status: TicketStatus } | undefined)?.status ?? 'inbox',
+          ) ?? 'BA', `Run crashed: ${msg}`);
+        } catch { /* last-resort: don't throw from the error handler */ }
+      })
       .finally(() => {
         this.running.delete(ticketId);
         // A completed run is pipeline progress — reset the idle timer so a long
