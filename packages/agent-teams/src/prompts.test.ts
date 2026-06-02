@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSeedMessages } from './prompts.ts';
+import { buildSeedMessages, buildPOSystemPrompt } from './prompts.ts';
 import type { Ticket } from './types.ts';
 
 function ticket(overrides: Partial<Ticket> = {}): Ticket {
@@ -63,5 +63,30 @@ describe('buildSeedMessages', () => {
     const body = buildSeedMessages('Dev', ticket({ spec: { summary: 'SUMMARY', acceptanceCriteria: [], sdkPrimitives: [], filesToCreate: [], outOfScope: [], approvedBy: null, approvedAt: null, revisionOf: null } }), 'myapp', [])[0]!.body;
     expect(body).toContain('## Approved spec');
     expect(body).toContain('SUMMARY');
+  });
+});
+
+describe('buildPOSystemPrompt', () => {
+  const base = { appName: 'Interns', slug: 'interns', memoryBlock: '', backlogSummary: '', fileList: [] as string[] };
+
+  it('frames the PO around the app, not the platform', () => {
+    const p = buildPOSystemPrompt({ ...base, appIdea: 'manage interns' });
+    expect(p).toContain('"Interns"');
+    expect(p).toContain('ProAppStore is NOT this app');
+    expect(p).toContain('manage interns');
+  });
+
+  it('lists the backlog with #N numbers and the quote instruction', () => {
+    const p = buildPOSystemPrompt({ ...base, backlogSummary: '- #3 [inbox] Add auth' });
+    expect(p).toContain('- #3 [inbox] Add auth');
+    expect(p).toContain('#N');
+    expect(p).toContain('Never invent a ticket number');
+  });
+
+  it('falls back to an ask-first line when no idea is known, and renders file list', () => {
+    const p = buildPOSystemPrompt({ ...base, fileList: ['src/App.tsx'] });
+    expect(p).toContain('ASK them what they\'re building');
+    expect(p).toContain('Current app files (1)');
+    expect(p).toContain('src/App.tsx');
   });
 });
