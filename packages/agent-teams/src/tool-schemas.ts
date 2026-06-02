@@ -10,20 +10,9 @@ export interface ToolSchema {
   parameters: Record<string, unknown>;
 }
 
+// Deployment (scaffold/provision/deploy-status) is NOT an agent tool — it's a
+// deterministic system stage (ProjectDO.runDeploy) that runs after QA approves.
 export const TOOL_SCHEMAS: Record<string, ToolSchema> = {
-  scaffold_app: {
-    description: 'Create a new PAS app from template. Creates GitHub repo and provisions platform resources.',
-    parameters: {
-      type: 'object',
-      properties: {
-        app_id: { type: 'string', description: 'App ID (lowercase, e.g. chess-academy)' },
-        name: { type: 'string', description: 'Display name' },
-        description: { type: 'string', description: 'Short description' },
-      },
-      required: ['app_id', 'name', 'description'],
-      additionalProperties: false,
-    },
-  },
   write_file: {
     description: 'Create or overwrite a file in the app GitHub repo.',
     parameters: {
@@ -95,24 +84,6 @@ export const TOOL_SCHEMAS: Record<string, ToolSchema> = {
         message: { type: 'string', description: 'Commit message' },
       },
       required: ['app_id', 'files', 'message'],
-      additionalProperties: false,
-    },
-  },
-  get_deploy_status: {
-    description: 'Check GitHub Actions deploy status for the app.',
-    parameters: {
-      type: 'object',
-      properties: { app_id: { type: 'string' } },
-      required: ['app_id'],
-      additionalProperties: false,
-    },
-  },
-  provision_app: {
-    description: 'Provision CF Pages, D1, DNS for an existing app repo.',
-    parameters: {
-      type: 'object',
-      properties: { app_id: { type: 'string' } },
-      required: ['app_id'],
       additionalProperties: false,
     },
   },

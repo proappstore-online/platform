@@ -386,8 +386,9 @@ Use the PAS SDK (@proappstore/sdk) for auth, database, storage, rooms, maps, AI,
 Tech stack: React + Vite + TypeScript + Tailwind CSS.
 Read the ticket spec carefully. Build exactly what's specified.
 Use batch_write_files for efficiency. Follow platform conventions from skills.md.
-Author ALL files first, then call provision_app once to create the repo and push
-your code (that is the deploy step). Use get_deploy_status to confirm.`;
+Write type-correct code (it must pass tsc). You do NOT deploy — the system pushes
+and verifies the CI build automatically after QA approves, and routes the ticket
+back to you with the compiler error if the build fails.`;
 
     case 'QA':
       return `You are a QA Engineer reviewing a ProAppStore app.

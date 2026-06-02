@@ -607,7 +607,7 @@ export class ProjectDO implements DurableObject {
         role: roleConfig,
         byoKey,
         userToken: proj.owner_session_token ?? undefined,
-        dispatch: this.makeDispatch(files, proj.slug, proj.owner_session_token ?? null),
+        dispatch: this.makeDispatch(files),
       });
 
       // Consume the stream, but cap wall-clock time so a hung model call can't
@@ -992,12 +992,10 @@ export class ProjectDO implements DurableObject {
     }
   }
 
-  /** Build the tool executor injected into a runtime for one run. */
-  private makeDispatch(
-    files: Map<string, string>,
-    slug: string,
-    ownerToken: string | null,
-  ): (call: ToolCall) => Promise<ToolResult> {
+  /** Build the tool executor injected into a runtime for one run. Agents get
+   *  file tools + read_docs only; deployment is a system stage (runDeploy), not
+   *  an agent tool, so anything else is rejected. */
+  private makeDispatch(files: Map<string, string>): (call: ToolCall) => Promise<ToolResult> {
     return async (call) => {
       if (call.name === 'read_docs') {
         const topic = (call.args as { topic?: string } | undefined)?.topic;
@@ -1005,100 +1003,8 @@ export class ProjectDO implements DurableObject {
         return { callId: call.id, ok: true, data: out, durationMs: 0 };
       }
       if (isFileTool(call.name)) return executeFileTool(call, files);
-      return this.executeInfraTool(call, slug, files, ownerToken);
+      return { callId: call.id, ok: false, errorMessage: `Tool not available to agents: ${call.name}. Deployment is automatic after QA.`, durationMs: 0 };
     };
-  }
-
-  /**
-   * Infra tools (scaffold/provision/deploy-status). Repo creation + file push +
-   * registry is delegated to the PAS admin Worker (the sanctioned repo creator)
-   * over the ADMIN service binding. scaffold_app and provision_app both ship the
-   * current working tree — idempotent: admin creates the repo if needed and
-   * pushes the files on top.
-   */
-  private async executeInfraTool(
-    call: ToolCall,
-    slug: string,
-    files: Map<string, string>,
-    _ownerToken: string | null,
-  ): Promise<ToolResult> {
-    const start = Date.now();
-    const args = (call.args ?? {}) as Record<string, unknown>;
-
-    switch (call.name) {
-      case 'scaffold_app':
-      case 'provision_app': {
-        if (files.size === 0) {
-          return { callId: call.id, ok: false, errorMessage: 'No files to deploy yet — author the app first, then deploy.', durationMs: Date.now() - start };
-        }
-        if (!this.env.ADMIN || !this.env.INTERNAL_TOKEN) {
-          return { callId: call.id, ok: true, data: `Staged ${files.size} file(s) for "${slug}" (deploy binding not configured in this environment).`, durationMs: Date.now() - start };
-        }
-        try {
-          // CONTRACT (agent-deploy): body matches AgentDeployRequest in
-          // packages/admin/src/publish.ts. Same monorepo — keep in sync.
-          const res = await this.env.ADMIN.fetch(new Request('https://admin.proappstore.online/api/agent-deploy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Internal-Token': this.env.INTERNAL_TOKEN },
-            body: JSON.stringify({
-              id: slug,
-              name: String(args.name ?? slug),
-              description: String(args.description ?? ''),
-              files: Object.fromEntries(files),
-            }),
-          }));
-          const data = (await res.json()) as {
-            success?: boolean;
-            repoUrl?: string | null;
-            steps?: { name: string; status: string; detail: string }[];
-          };
-          const steps = (data.steps ?? []).map((s) => `${s.name}: ${s.status}`).join(', ');
-          if (!res.ok || !data.success) {
-            const detail = (data.steps ?? []).filter((s) => s.status === 'fail').map((s) => `${s.name} — ${s.detail}`).join('; ');
-            return { callId: call.id, ok: false, errorMessage: `Deploy failed: ${detail || `admin returned ${res.status}`}`, durationMs: Date.now() - start };
-          }
-          if (data.repoUrl) {
-            this.state.storage.sql.exec('UPDATE project SET repo_url = ? WHERE repo_url IS NULL', data.repoUrl);
-          }
-          return { callId: call.id, ok: true, data: `Deployed "${slug}" → ${data.repoUrl ?? 'repo'} (${steps}). CI deploys from the repo.`, durationMs: Date.now() - start };
-        } catch (err) {
-          return { callId: call.id, ok: false, errorMessage: `Deploy error: ${err instanceof Error ? err.message : 'unknown'}`, durationMs: Date.now() - start };
-        }
-      }
-
-      case 'get_deploy_status': {
-        const proj = this.state.storage.sql
-          .exec('SELECT repo_url FROM project LIMIT 1')
-          .toArray()[0] as { repo_url: string | null } | undefined;
-        if (!proj?.repo_url) {
-          return { callId: call.id, ok: true, data: `"${slug}" is not deployed yet. Author the app, then call provision_app.`, durationMs: Date.now() - start };
-        }
-        if (!this.env.ADMIN || !this.env.INTERNAL_TOKEN) {
-          return { callId: call.id, ok: true, data: `Repo: ${proj.repo_url} (deploy status unavailable in this environment).`, durationMs: Date.now() - start };
-        }
-        // Real build gate: wait for the CI run to finish and report success/failure
-        // (with the compiler error on failure) — not just "files pushed".
-        try {
-          const res = await this.env.ADMIN.fetch(new Request('https://admin.proappstore.online/api/deploy-status', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Internal-Token': this.env.INTERNAL_TOKEN },
-            body: JSON.stringify({ id: slug, waitMs: 75_000 }),
-          }));
-          const r = await res.json() as { ok: boolean; status?: string; conclusion?: string; url?: string; errorTail?: string; error?: string };
-          if (r.error) return { callId: call.id, ok: true, data: `Deploy status: ${r.error}`, durationMs: Date.now() - start };
-          if (r.status !== 'completed') return { callId: call.id, ok: true, data: `Build ${r.status ?? 'pending'} — not finished yet. ${r.url ?? ''}`, durationMs: Date.now() - start };
-          const head = r.ok
-            ? `Build SUCCESS — deployed live. ${r.url ?? ''}`
-            : `Build FAILED (${r.conclusion}). The code did NOT deploy. Fix this, then re-run provision_app.\n${r.errorTail ?? ''}\n${r.url ?? ''}`;
-          return { callId: call.id, ok: true, data: head, durationMs: Date.now() - start };
-        } catch (e) {
-          return { callId: call.id, ok: true, data: `Could not fetch deploy status: ${e instanceof Error ? e.message : 'error'}`, durationMs: Date.now() - start };
-        }
-      }
-
-      default:
-        return { callId: call.id, ok: false, errorMessage: `Unknown tool: ${call.name}`, durationMs: Date.now() - start };
-    }
   }
 
   /** Transition a ticket forward after a successful agent run. */
@@ -1216,8 +1122,8 @@ export class ProjectDO implements DurableObject {
     // Set default role configs
     const defaults: RoleConfig[] = [
       { role: 'BA', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 8192, spineTools: ['read_docs'], vendorTools: [] },
-      { role: 'Dev', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 16384, spineTools: ['scaffold_app', 'write_file', 'read_file', 'list_files', 'batch_write_files', 'search_files', 'get_deploy_status', 'provision_app', 'read_docs'], vendorTools: [] },
-      { role: 'QA', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 8192, spineTools: ['read_file', 'list_files', 'search_files', 'get_deploy_status', 'read_docs'], vendorTools: [] },
+      { role: 'Dev', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 16384, spineTools: ['write_file', 'read_file', 'list_files', 'batch_write_files', 'search_files', 'read_docs'], vendorTools: [] },
+      { role: 'QA', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 8192, spineTools: ['read_file', 'list_files', 'search_files', 'read_docs'], vendorTools: [] },
     ];
 
     for (const rc of defaults) {
@@ -1262,8 +1168,8 @@ export class ProjectDO implements DurableObject {
     const VALID_ROLES = new Set(['BA', 'Dev', 'QA']);
     const VALID_RUNTIMES = new Set(['cf-native', 'openai-responses']);
     const VALID_TOOLS = new Set([
-      'scaffold_app', 'write_file', 'read_file', 'list_files', 'delete_file',
-      'search_files', 'batch_write_files', 'get_deploy_status', 'provision_app', 'read_docs',
+      'write_file', 'read_file', 'list_files', 'delete_file',
+      'search_files', 'batch_write_files', 'read_docs',
     ]);
 
     for (const rc of body.roles) {

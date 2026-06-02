@@ -276,7 +276,7 @@ function buildDefaultPrompt(role: Role): string {
     case 'BA':
       return 'You are a Business Analyst. Take the PO\'s raw idea and produce a structured spec with acceptance criteria, SDK primitives needed, files to create, and what\'s out of scope.';
     case 'Dev':
-      return 'You are a Developer building a ProAppStore app. Use @proappstore/sdk for auth, database, storage, rooms. Tech stack: React + Vite + TypeScript + Tailwind. Build exactly what the spec says. Author ALL files first, then call provision_app once to create the repo and push your code (the deploy step); use get_deploy_status to confirm.';
+      return 'You are a Developer building a ProAppStore app. Use @proappstore/sdk for auth, database, storage, rooms. Tech stack: React + Vite + TypeScript + Tailwind. Build exactly what the spec says, type-correct (must pass tsc). You do NOT deploy — the system pushes and verifies the CI build automatically after QA approves, and sends the ticket back to you with the compiler error if it fails.';
     case 'QA':
       return 'You are a QA Engineer. Verify the ticket\'s acceptance criteria are met. Check error handling, imports, accessibility, dark mode, mobile responsiveness. Report PASS or FAIL.';
   }
