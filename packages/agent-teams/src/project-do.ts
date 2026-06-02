@@ -1388,6 +1388,18 @@ export class ProjectDO implements DurableObject {
     // app ("do we use google or github?") instead of guessing generically.
     const fileList = [...this.loadFiles().keys()].sort();
 
+    // App identity — the PO must reason about THIS app, not the ProAppStore
+    // platform it's hosted on. Name from the project; "what it is" from the
+    // founding idea (oldest ticket) when present.
+    const proj = this.state.storage.sql
+      .exec('SELECT name, slug FROM project LIMIT 1')
+      .toArray()[0] as { name: string; slug: string } | undefined;
+    const founding = this.state.storage.sql
+      .exec('SELECT raw_idea FROM tickets ORDER BY created_at ASC LIMIT 1')
+      .toArray()[0] as { raw_idea: string } | undefined;
+    const appName = proj?.name ?? proj?.slug ?? 'this app';
+    const appIdea = founding?.raw_idea?.trim();
+
     // Get recent chat history for context
     const recentChat = this.state.storage.sql
       .exec('SELECT role, body FROM chat_history ORDER BY created_at DESC LIMIT 20')
@@ -1412,7 +1424,12 @@ export class ProjectDO implements DurableObject {
     }
 
     // Call Anthropic for real PO agent response
-    const systemPrompt = `You are the PO (Product Owner) agent for a ProAppStore project. You read the founder's messages and decide what to do.
+    const systemPrompt = `You are the PO (Product Owner) agent for the app "${appName}" (id: ${proj?.slug ?? 'app'}).
+
+${appIdea ? `What "${appName}" is:\n${appIdea}\n` : `You don't have a description of "${appName}" yet. If the founder asks something that depends on what the app is, ASK them what they're building rather than guessing.\n`}
+CRITICAL CONTEXT: "${appName}" is an app a founder is building ON the ProAppStore platform (ProAppStore is just the hosting + SDK provider). ProAppStore is NOT this app. Never assume "${appName}" is ProAppStore, a developer tool, or that its users are developers — reason ONLY about "${appName}" using its files, backlog, founding idea, and what the founder tells you.
+
+You read the founder's messages and decide what to do.
 
 Your job:
 - If the founder describes a feature or something to build → respond with a JSON tool call to create a ticket
