@@ -42,6 +42,7 @@ import {
 } from './store.ts';
 import { buildSeedMessages } from './prompts.ts';
 import { toolActivityDetail } from './tool-activity.ts';
+import { slidingWindowAllow, CHAT_LIMIT, CHAT_WINDOW_MS } from './rate-limit.ts';
 
 /**
  * Watchdog interval. While a project is running, an alarm fires on this cadence
@@ -57,6 +58,8 @@ export class ProjectDO implements DurableObject {
   private initialized = false;
   /** Ticket IDs with an agent run in flight — prevents double-dispatch. */
   private running = new Set<string>();
+  /** Recent chat timestamps for the per-project throttle (in-memory). */
+  private chatWindow: number[] = [];
 
   constructor(state: DurableObjectState, env: Bindings) {
     this.state = state;
@@ -1310,6 +1313,11 @@ export class ProjectDO implements DurableObject {
     const body = (await request.json()) as { message: string; apiKey?: string };
     if (!body.message?.trim()) return json({ error: 'message required' }, 400);
     if (body.message.length > 8192) return json({ error: 'message too long (max 8KB)' }, 413);
+
+    // Per-project chat throttle (each message triggers a PO LLM call).
+    const limit = slidingWindowAllow(this.chatWindow, Date.now(), CHAT_LIMIT, CHAT_WINDOW_MS);
+    this.chatWindow = limit.times;
+    if (!limit.allowed) return json({ error: 'Too many messages — please slow down.' }, 429);
 
     const userText = body.message.trim();
     const now = Date.now();

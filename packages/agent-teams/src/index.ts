@@ -8,6 +8,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { Project, Ticket } from './types.ts';
 import { verifyToken, extractToken } from './auth.ts';
+import { MAX_PROJECTS_PER_USER } from './rate-limit.ts';
 export { ProjectDO } from './project-do.ts';
 
 export type Bindings = {
@@ -108,6 +109,21 @@ app.post('/v1/projects', async (c) => {
   // Validate cost cap range
   const cap = body.costCapMonthlyUsd ?? 50.0;
   if (cap < 1 || cap > 1000) return c.json({ error: 'costCapMonthlyUsd must be 1-1000' }, 400);
+
+  // Per-account project quota — prevents runaway repo/infra creation. Re-creating
+  // a slug the caller already owns is idempotent and doesn't count. Fail-open on a
+  // transient index error so a flaky DB never blocks a legitimate creation.
+  try {
+    const owned = await c.env.DB.prepare('SELECT 1 FROM agent_projects WHERE slug = ? AND owner_id = ?')
+      .bind(body.slug, user.id).first();
+    if (!owned) {
+      const row = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM agent_projects WHERE owner_id = ?')
+        .bind(user.id).first<{ n: number }>();
+      if ((row?.n ?? 0) >= MAX_PROJECTS_PER_USER) {
+        return c.json({ error: `Project limit reached (${MAX_PROJECTS_PER_USER} per account). Delete an app to make room.` }, 429);
+      }
+    }
+  } catch { /* fail open */ }
 
   const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(body.slug));
   // The agent team (BA/Dev/QA) is seeded on create. If an initial idea is given,
