@@ -183,6 +183,24 @@ async function pushFilesToGitHub(env: Env, id: string, files: Record<string, str
   return { name: "Push files", status: "ok", detail: `Pushed ${entries.length} file(s) (${res.commitSha?.slice(0, 7)})` };
 }
 
+/**
+ * Internal: read a repo's current files (GitHub = source of truth) so the
+ * agent-teams working tree can sync to the latest. `headOnly` returns just the
+ * commit SHA/date for a cheap freshness check before pulling blobs.
+ */
+export async function handleRepoPull(
+  req: { id: string; headOnly?: boolean },
+  env: Env,
+): Promise<{ ok: boolean; sha?: string; date?: string; files?: Record<string, string>; truncated?: boolean; error?: string }> {
+  const gh = ghFor(env);
+  if (!(await gh.repoExists(req.id))) return { ok: false, error: "repo not found" };
+  if (req.headOnly) {
+    const h = await gh.headSha(req.id);
+    return { ok: h.ok, sha: h.sha, date: h.date };
+  }
+  return gh.pullText(req.id);
+}
+
 // CONTRACT (agent-deploy): the request body sent by packages/agent-teams
 // (ProjectDO.executeInfraTool). Both ends now live in this monorepo — keep in
 // sync; a grep for "AgentDeployRequest" finds the caller.

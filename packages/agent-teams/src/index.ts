@@ -377,6 +377,13 @@ app.delete('/v1/projects/:slug/memory/:id', async (c) => {
 
 // ── Project files (read-only, for the console's preview panel) ──
 
+app.post('/v1/projects/:slug/sync', async (c) => {
+  const user = c.get('user' as never) as { id: string };
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
+  const res = await forwardToDO(stub, '/sync', user.id, { method: 'POST' });
+  return new Response(res.body, { status: res.status, headers: res.headers });
+});
+
 app.get('/v1/projects/:slug/files', async (c) => {
   const user = c.get('user' as never) as { id: string };
   const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));

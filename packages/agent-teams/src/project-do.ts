@@ -85,6 +85,9 @@ export class ProjectDO implements DurableObject {
     try { this.state.storage.sql.exec(`ALTER TABLE role_configs ADD COLUMN persona TEXT`); } catch { /* exists */ }
     // Tool-call output captured on the activity row (full audit / inspection).
     try { this.state.storage.sql.exec(`ALTER TABLE activity_log ADD COLUMN meta TEXT`); } catch { /* exists */ }
+    // Last GitHub commit synced into the working tree (GitHub = source of truth).
+    try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN repo_synced_sha TEXT`); } catch { /* exists */ }
+    try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN repo_synced_at INTEGER`); } catch { /* exists */ }
     this.initialized = true;
   }
 
@@ -229,6 +232,11 @@ export class ProjectDO implements DurableObject {
     if (path === '/memory' && request.method === 'POST') return this.addMemory(request);
     const memMatch = path.match(/^\/memory\/([a-f0-9-]+)$/);
     if (memMatch && request.method === 'DELETE') return this.forgetMemory(memMatch[1]!);
+
+    if (path === '/sync' && request.method === 'POST') {
+      const r = await this.syncFromGitHub('manual');
+      return json({ ok: true, ...r });
+    }
 
     if (path === '/files' && request.method === 'GET') return this.listProjectFiles();
     if (path === '/files/content' && request.method === 'GET') {
@@ -561,6 +569,8 @@ export class ProjectDO implements DurableObject {
     const prior = this.state.storage.sql
       .exec('SELECT author, body FROM messages WHERE ticket_id = ? ORDER BY created_at', ticket.id)
       .toArray() as { author: string; body: string }[];
+    // Pull the latest committed code before the agent reads/edits (GitHub = truth).
+    await this.syncFromGitHub(`before ${role} run`);
     const files = this.loadFiles();
     const messages = buildSeedMessages(role, ticket, proj.slug, prior, [...files.keys()].sort(), formatMemory(this.recallMemory()));
 
@@ -790,6 +800,51 @@ export class ProjectDO implements DurableObject {
     const MAX = 200_000;
     const truncated = row.content.length > MAX;
     return json({ path: row.path, content: truncated ? row.content.slice(0, MAX) : row.content, truncated });
+  }
+
+  /**
+   * Keep the working tree in sync with GitHub (the source of truth). Cheap:
+   * checks the latest commit SHA first and only pulls file contents when GitHub
+   * has moved since our last sync. Called before every run and PO investigation,
+   * so agents always see the latest committed code. Best-effort — never throws.
+   *
+   * Safety: when GitHub's HEAD equals our last-synced SHA we do nothing, so a
+   * team's mid-ticket unpushed edits (working tree ahead of GitHub) are never
+   * clobbered. We only replace the tree when GitHub itself moved.
+   */
+  private async syncFromGitHub(reason: string): Promise<{ pulled: boolean; count?: number }> {
+    if (!this.env.ADMIN || !this.env.INTERNAL_TOKEN) return { pulled: false };
+    const proj = this.state.storage.sql
+      .exec('SELECT slug, repo_synced_sha FROM project LIMIT 1')
+      .toArray()[0] as { slug: string; repo_synced_sha: string | null } | undefined;
+    if (!proj?.slug) return { pulled: false };
+
+    const callAdmin = async (headOnly: boolean) => {
+      const res = await this.env.ADMIN!.fetch(new Request('https://admin.proappstore.online/api/repo-pull', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Internal-Token': this.env.INTERNAL_TOKEN! },
+        body: JSON.stringify({ id: proj.slug, headOnly }),
+      }));
+      return res.json() as Promise<{ ok: boolean; sha?: string; files?: Record<string, string>; truncated?: boolean }>;
+    };
+
+    try {
+      const head = await callAdmin(true);
+      if (!head.ok || !head.sha) return { pulled: false }; // no repo / no commits
+      if (head.sha === proj.repo_synced_sha) return { pulled: false }; // already current
+
+      const pull = await callAdmin(false);
+      if (!pull.ok || !pull.files) return { pulled: false };
+      const entries = Object.entries(pull.files);
+      this.saveFiles(new Map(entries)); // mirror GitHub (only reached when it moved)
+      const now = Date.now();
+      this.state.storage.sql.exec('UPDATE project SET repo_synced_sha = ?, repo_synced_at = ?', pull.sha ?? head.sha, now);
+      this.logActivity('sync', `Synced ${entries.length} file(s) from GitHub @${(pull.sha ?? head.sha)!.slice(0, 7)} (${reason})`);
+      this.broadcast({ type: 'files-synced', count: entries.length });
+      return { pulled: true, count: entries.length };
+    } catch {
+      return { pulled: false };
+    }
   }
 
   private loadFiles(): Map<string, string> {
@@ -1417,6 +1472,9 @@ export class ProjectDO implements DurableObject {
 
     // Record user activity (resets idle timeout)
     this.touchUserActivity();
+
+    // Sync the working tree with GitHub so the PO answers from the latest code.
+    await this.syncFromGitHub('PO chat');
 
     // Check if any tickets are in needs-input — user's message might be the answer
     const blockedTickets = this.state.storage.sql

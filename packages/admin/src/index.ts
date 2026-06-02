@@ -1,5 +1,5 @@
 import type { Env } from "./env.js";
-import { handlePublish, handleAgentDeploy, type PublishRequest, type AgentDeployRequest } from "./publish.js";
+import { handlePublish, handleAgentDeploy, handleRepoPull, type PublishRequest, type AgentDeployRequest } from "./publish.js";
 import { verifySession, handleAuthExchange, handleAuthMe } from "./auth.js";
 
 export default {
@@ -45,6 +45,19 @@ export default {
       const body = await request.json<AgentDeployRequest>();
       const result = await handleAgentDeploy(body, env);
       return Response.json(result, { status: result.success ? 200 : 422 });
+    }
+
+    // Internal: agent-teams pulls a repo's current files (GitHub = source of
+    // truth) into its working tree. Cheap freshness check via ?head=1.
+    if (url.pathname === "/api/repo-pull" && request.method === "POST") {
+      const provided = request.headers.get("X-Internal-Token");
+      if (!env.INTERNAL_TOKEN || provided !== env.INTERNAL_TOKEN) {
+        return Response.json({ error: "forbidden" }, { status: 403 });
+      }
+      const body = await request.json<{ id: string; headOnly?: boolean }>();
+      if (!body.id) return Response.json({ error: "id required" }, { status: 400 });
+      const result = await handleRepoPull(body, env);
+      return Response.json(result, { status: result.ok ? 200 : 404 });
     }
 
     // Public read: list apps from registry

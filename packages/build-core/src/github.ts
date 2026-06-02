@@ -45,7 +45,17 @@ export interface GitHub {
     opts?: { initIfEmpty?: boolean },
   ): Promise<{ ok: boolean; commitSha?: string; error?: string }>;
   getDeployStatus(id: string, perPage?: number): Promise<GhResult>;
+  /** Latest commit SHA + date on the default branch (cheap freshness check). */
+  headSha(id: string): Promise<{ ok: boolean; sha?: string | undefined; date?: string | undefined }>;
+  /** Pull the repo's text files at HEAD (recursive tree → blobs), under caps.
+   *  Skips junk dirs and binary/large files. Returns the commit SHA it pulled. */
+  pullText(id: string, opts?: { maxFiles?: number; maxFileBytes?: number; maxTreeBytes?: number }):
+    Promise<{ ok: boolean; sha?: string | undefined; files?: Record<string, string> | undefined; truncated?: boolean | undefined; error?: string | undefined }>;
 }
+
+// Directories and extensions never worth pulling into the agent working tree.
+const SKIP_DIR = /(^|\/)(node_modules|\.git|dist|build|\.next|coverage|\.turbo|\.wrangler)(\/|$)/;
+const BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|svg|pdf|zip|gz|tgz|woff2?|ttf|eot|mp[34]|mov|wasm|lock)$/i;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -196,6 +206,50 @@ export function makeGitHub(token: string, org: string): GitHub {
 
     async getDeployStatus(id, perPage = 3) {
       return api(`/repos/${repo(id)}/actions/runs?per_page=${perPage}`);
+    },
+
+    async headSha(id) {
+      const r = await api(`/repos/${repo(id)}/commits?per_page=1`);
+      if (!r.ok || !Array.isArray(r.data) || !r.data.length) return { ok: false };
+      const c = (r.data as Record<string, unknown>[])[0]!;
+      const commit = c.commit as { committer?: { date?: string } } | undefined;
+      return { ok: true, sha: c.sha as string, date: commit?.committer?.date };
+    },
+
+    async pullText(id, opts) {
+      const maxFiles = opts?.maxFiles ?? 300;
+      const maxFileBytes = opts?.maxFileBytes ?? 512 * 1024;
+      const maxTreeBytes = opts?.maxTreeBytes ?? 12 * 1024 * 1024;
+      const head = await api(`/repos/${repo(id)}/commits?per_page=1`);
+      if (!head.ok || !Array.isArray(head.data) || !head.data.length) {
+        return { ok: false, error: 'repo has no commits or is unreachable' };
+      }
+      const sha = (head.data as Record<string, unknown>[])[0]!.sha as string;
+      const treeRes = await api(`/repos/${repo(id)}/git/trees/${sha}?recursive=1`);
+      if (!treeRes.ok) return { ok: false, error: `tree fetch failed (${treeRes.status})` };
+      const tree = (d(treeRes).tree as { path: string; type: string; size?: number; sha: string }[] | undefined) ?? [];
+      const blobs = tree.filter((t) => t.type === 'blob' && !SKIP_DIR.test(t.path) && !BINARY_EXT.test(t.path));
+
+      const files: Record<string, string> = {};
+      let total = 0;
+      let truncated = (d(treeRes).truncated as boolean) ?? false;
+      let count = 0;
+      for (const b of blobs) {
+        if (count >= maxFiles) { truncated = true; break; }
+        if ((b.size ?? 0) > maxFileBytes) { truncated = true; continue; }
+        const blob = await api(`/repos/${repo(id)}/git/blobs/${b.sha}`);
+        if (!blob.ok) continue;
+        const bd = d(blob);
+        if (bd.encoding !== 'base64' || typeof bd.content !== 'string') continue;
+        let content: string;
+        try { content = b64decode((bd.content as string).replace(/\n/g, '')); } catch { continue; }
+        if (content.includes(' ')) continue; // binary guard
+        if (total + content.length > maxTreeBytes) { truncated = true; break; }
+        files[b.path] = content;
+        total += content.length;
+        count += 1;
+      }
+      return { ok: true, sha, files, truncated };
     },
   };
 }
