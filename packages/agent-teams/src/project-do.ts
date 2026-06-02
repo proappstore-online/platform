@@ -32,6 +32,7 @@ import { CFNativeRuntime } from './runtimes/cf-native.ts';
 import { OpenAIResponsesRuntime } from './runtimes/openai-responses.ts';
 import { resolveByoKey, runtimeToProvider } from './byo-key.ts';
 import { executeFileTool, isFileTool } from './spine.ts';
+import { TOOL_SCHEMAS } from './tool-schemas.ts';
 import {
   SCHEMA,
   json,
@@ -1431,11 +1432,14 @@ CRITICAL CONTEXT: "${appName}" is an app a founder is building ON the ProAppStor
 
 You read the founder's messages and decide what to do.
 
+You have read-only tools to inspect the app's code: list_files, read_file, search_files. USE them.
+
 Your job:
-- If the founder describes a feature or something to build → respond with a JSON tool call to create a ticket
-- If the founder asks a question → ANSWER IT. Use the app's current files and backlog below to give a concrete, decisive answer (with a clear recommendation), not a generic one. If you genuinely need code-level detail you don't have, say you'll have the Dev/BA investigate and create a ticket for it.
-- If the founder gives feedback on existing work → acknowledge and update the relevant ticket
-- If the founder is just chatting → respond naturally
+- If the founder asks a FACTUAL question about the app ("does it use google or github sign-in?", "is there a settings page?") → investigate with your tools (search_files / read_file) and answer from the actual code. Don't guess, and don't ask the founder things the code already answers.
+- If the founder asks for a DECISION that isn't in the code yet, or the app has no files → give a concrete recommendation, and ask the founder only for the genuinely-undecided product call.
+- If the founder describes a feature or something to build → respond with the create_ticket JSON (the BA/Dev/QA team will pick it up).
+- If the founder gives feedback on existing work → acknowledge and create a ticket to address it.
+- If the founder is just chatting → respond naturally.
 
 Current backlog:
 ${backlogSummary || '(empty)'}
@@ -1448,44 +1452,66 @@ When creating a ticket, respond with EXACTLY this JSON on its own line:
 
 Otherwise just respond in plain text. Be concise and decisive. You're a PO, not a chatbot.`;
 
-    const messages = [
-      ...recentChat.map((m) => ({
-        role: m.role === 'user' ? 'user' as const : 'assistant' as const,
-        content: m.body,
-      })),
-    ];
-    // The last message is already the user's current message from chat history
+    // Read-only tools so the PO can investigate the code before answering.
+    const poTools = (['list_files', 'read_file', 'search_files'] as const).map((name) => ({
+      name, description: TOOL_SCHEMAS[name]!.description, input_schema: TOOL_SCHEMAS[name]!.parameters,
+    }));
+    const poFiles = this.loadFiles();
+    const messages: { role: 'user' | 'assistant'; content: unknown }[] = recentChat.map((m) => ({
+      role: m.role === 'user' ? 'user' as const : 'assistant' as const,
+      content: m.body,
+    }));
 
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 1024,
-          system: systemPrompt,
-          messages,
-        }),
-      });
+      let text = '';
+      // Tool loop: let the PO read/search the code, capped to keep it cheap.
+      for (let turn = 0; turn < 6; turn++) {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-6',
+            max_tokens: 2048,
+            system: systemPrompt,
+            tools: poTools,
+            messages,
+          }),
+        });
 
-      if (!res.ok) {
-        const safeError = res.status === 401 ? 'API key invalid'
-          : res.status === 429 ? 'Rate limited'
-          : `AI error (${res.status})`;
-        return this.savePOResponse(`Sorry, I couldn't process that: ${safeError}`, now, undefined);
+        if (!res.ok) {
+          const safeError = res.status === 401 ? 'API key invalid'
+            : res.status === 429 ? 'Rate limited'
+            : `AI error (${res.status})`;
+          return this.savePOResponse(`Sorry, I couldn't process that: ${safeError}`, now, undefined);
+        }
+
+        const aiRes = (await res.json()) as { content?: unknown; stop_reason?: string };
+        const contentArr = aiRes.content;
+        if (!Array.isArray(contentArr)) {
+          return this.savePOResponse('I got an unexpected response format. Try again?', now, undefined);
+        }
+        messages.push({ role: 'assistant', content: contentArr });
+        text = (contentArr as { type: string; text?: string }[]).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('');
+
+        const toolUses = (contentArr as { type: string; id?: string; name?: string; input?: unknown }[]).filter((c) => c.type === 'tool_use');
+        if (toolUses.length === 0 || aiRes.stop_reason !== 'tool_use') break;
+
+        // Execute the (read-only) tool calls against the working tree.
+        const toolResults = toolUses.map((tu) => {
+          const r = executeFileTool({ id: tu.id!, name: tu.name!, args: tu.input }, poFiles);
+          this.logActivity('tool', `PO: ${toolActivityDetail(tu.name!, tu.input)}`);
+          return {
+            type: 'tool_result' as const,
+            tool_use_id: tu.id!,
+            content: (r.ok ? (typeof r.data === 'string' ? r.data : JSON.stringify(r.data)) : (r.errorMessage ?? 'error')) || '(no output)',
+          };
+        });
+        messages.push({ role: 'user', content: toolResults });
       }
-
-      const aiRes = (await res.json()) as Record<string, unknown>;
-      const contentArr = aiRes.content;
-      if (!Array.isArray(contentArr)) {
-        return this.savePOResponse('I got an unexpected response format. Try again?', now, undefined);
-      }
-
-      const text = (contentArr as { type: string; text?: string }[]).find((c) => c.type === 'text')?.text ?? '';
 
       // Check if PO wants to create a ticket
       const toolMatch = text.match(/\{"tool":"create_ticket".*?\}/);
