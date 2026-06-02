@@ -188,6 +188,13 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
       );
 
       if (functionCalls.length === 0) {
+        // Truncated mid-thought (ran out of output budget before emitting tool
+        // calls)? Don't end the run — nudge it to continue. Mirrors the cf-native
+        // fix for agents that plan/read forever and never write.
+        if (response.status === 'incomplete') {
+          input = [{ role: 'user', content: 'Continue.' }];
+          continue;
+        }
         yield {
           type: 'done',
           costUsd: estimateCost(s.model, totalIn, totalOut),

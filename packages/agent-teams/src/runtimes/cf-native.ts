@@ -100,8 +100,10 @@ export class CFNativeRuntime implements AgentRuntime {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          // Generous output budget — the Dev writes whole files via
+          // batch_write_files; 4096 truncated mid-write and stranded the run.
           model,
-          max_tokens: 4096,
+          max_tokens: 16384,
           system: systemPrompt,
           tools: tools.length > 0 ? tools : undefined,
           messages: anthropicMessages,
@@ -132,8 +134,20 @@ export class CFNativeRuntime implements AgentRuntime {
         }
       }
 
-      // If no tool use, we're done
-      if (response.stop_reason !== 'tool_use') {
+      const toolUseBlocks = response.content.filter((b) => b.type === 'tool_use');
+
+      // No tool calls this turn.
+      if (toolUseBlocks.length === 0) {
+        // The model ran out of output budget mid-thought — it narrated intent
+        // ("now I'll write the files…") but was truncated before emitting the
+        // tool calls. Don't end the run on a truncation: nudge it to continue.
+        // This is the fix for agents "going in circles" — planning/reading
+        // forever and never writing because the run kept ending prematurely.
+        if (response.stop_reason === 'max_tokens') {
+          anthropicMessages.push({ role: 'user', content: [{ type: 'text', text: 'Continue.' }] });
+          continue;
+        }
+        // Genuine end_turn — the agent is finished.
         yield {
           type: 'done',
           costUsd: estimateCost(model, totalIn, totalOut),
@@ -143,7 +157,8 @@ export class CFNativeRuntime implements AgentRuntime {
         return;
       }
 
-      // Process tool calls
+      // Process tool calls (covers both a normal 'tool_use' stop and a
+      // 'max_tokens' turn that still completed at least one tool call).
       const toolResults: AnthropicContent[] = [];
       for (const block of response.content) {
         if (block.type === 'tool_use') {
