@@ -41,6 +41,7 @@ import {
   uuid,
 } from './store.ts';
 import { buildSeedMessages } from './prompts.ts';
+import { toolActivityDetail } from './tool-activity.ts';
 
 /**
  * Watchdog interval. While a project is running, an alarm fires on this cadence
@@ -193,6 +194,11 @@ export class ProjectDO implements DurableObject {
 
     if (path === '/cost' && request.method === 'GET') return this.getCostSummary();
     if (path === '/activity' && request.method === 'GET') return this.getActivity();
+
+    if (path === '/files' && request.method === 'GET') return this.listProjectFiles();
+    if (path === '/files/content' && request.method === 'GET') {
+      return this.getProjectFile(new URL(request.url).searchParams.get('path') ?? '');
+    }
 
     return json({ error: 'not_found' }, 404);
   }
@@ -556,7 +562,7 @@ export class ProjectDO implements DurableObject {
             case 'tool-call':
               toolCalls.push(ev.call);
               this.broadcast({ type: 'agent-tool-call', ticketId, role, name: ev.call.name });
-              this.logActivity('tool', `${role}: ${ev.call.name}`, ticketId);
+              this.logActivity('tool', `${role}: ${toolActivityDetail(ev.call.name, ev.call.args)}`, ticketId);
               break;
             case 'tool-result': {
               // Attach the result to its call so persisted toolCalls carry it
@@ -677,6 +683,28 @@ export class ProjectDO implements DurableObject {
   // ── Project working tree (file map) ──────────────────────────
   // The Dev/QA file tools edit this map (in spine.ts). It persists between runs
   // so Dev's output survives into the QA run and back into a qa-failed re-run.
+
+  /** List the project's working-tree files (path + size) for the console's file
+   *  preview panel. Content is fetched lazily per file via getProjectFile. */
+  private listProjectFiles(): Response {
+    const rows = this.state.storage.sql
+      .exec('SELECT path, length(content) AS size, updated_at FROM project_files ORDER BY path')
+      .toArray() as { path: string; size: number; updated_at: number }[];
+    return json({ files: rows.map((r) => ({ path: r.path, size: r.size, updatedAt: r.updated_at })) });
+  }
+
+  /** Return one file's content (for the preview panel). Capped to avoid shipping
+   *  a huge build artifact down the wire. */
+  private getProjectFile(filePath: string): Response {
+    if (!filePath) return json({ error: 'path required' }, 400);
+    const row = this.state.storage.sql
+      .exec('SELECT path, content FROM project_files WHERE path = ?', filePath)
+      .toArray()[0] as { path: string; content: string } | undefined;
+    if (!row) return json({ error: 'not_found' }, 404);
+    const MAX = 200_000;
+    const truncated = row.content.length > MAX;
+    return json({ path: row.path, content: truncated ? row.content.slice(0, MAX) : row.content, truncated });
+  }
 
   private loadFiles(): Map<string, string> {
     const rows = this.state.storage.sql

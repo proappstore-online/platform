@@ -315,6 +315,22 @@ app.get('/v1/projects/:slug/activity', async (c) => {
   return new Response(res.body, { status: res.status, headers: res.headers });
 });
 
+// ── Project files (read-only, for the console's preview panel) ──
+
+app.get('/v1/projects/:slug/files', async (c) => {
+  const user = c.get('user' as never) as { id: string };
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
+  const res = await forwardToDO(stub, '/files', user.id);
+  return new Response(res.body, { status: res.status, headers: res.headers });
+});
+
+app.get('/v1/projects/:slug/files/content', async (c) => {
+  const user = c.get('user' as never) as { id: string };
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
+  const res = await forwardToDO(stub, `/files/content?path=${encodeURIComponent(c.req.query('path') ?? '')}`, user.id);
+  return new Response(res.body, { status: res.status, headers: res.headers });
+});
+
 // ── WebSocket upgrade ───────────────────────────────────────
 
 app.get('/v1/projects/:slug/ws', async (c) => {
