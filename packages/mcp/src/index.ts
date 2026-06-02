@@ -76,7 +76,12 @@ export class PasMcpAgent extends McpAgent<Env> {
   private userToken: string | null = null;
 
   async init() {
-    // Try to authenticate from connection props
+    // KNOWN ISSUE: McpAgent.serve() (agents@0.0.74) does not populate ctx.props,
+    // so this.props is {} and connection-level auth is always null — the project
+    // tools (write_file etc.) will report "authentication required". This only
+    // affects EXTERNAL MCP clients; the agent-teams autonomous loop builds via
+    // pas/admin + build-core, not this server. Fix needs the SDK's auth wiring
+    // (parse Authorization in fetch → props) before the MCP build path works.
     const token = extractToken(this.props as Record<string, unknown>);
     if (token) {
       const user = await verifyToken(this.env.API_BASE, token);
@@ -136,8 +141,13 @@ export class PasMcpAgent extends McpAgent<Env> {
         const listingUrl = `https://${domain}/apps/${app_id}/`;
         const dataUrl = `https://data-${app_id}.${domain}`;
 
-        const check = await fetch(liveUrl, { method: "HEAD" });
-        const status = check.ok ? "Live (200)" : `Down (${check.status})`;
+        let status: string;
+        try {
+          const check = await fetch(liveUrl, { method: "HEAD" });
+          status = check.ok ? "Live (200)" : `Down (${check.status})`;
+        } catch {
+          status = "Down (unreachable)";
+        }
 
         return {
           content: [{

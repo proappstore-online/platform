@@ -317,8 +317,8 @@ export class ProjectDO implements DurableObject {
    */
   private autoAdvance(): void {
     const proj = this.state.storage.sql
-      .exec("SELECT status, last_user_activity, cost_cap_monthly_usd, cost_spent_monthly_usd FROM project LIMIT 1")
-      .toArray()[0] as { status: string; last_user_activity: number; cost_cap_monthly_usd: number; cost_spent_monthly_usd: number } | undefined;
+      .exec("SELECT status, last_user_activity, cost_cap_monthly_usd, cost_spent_monthly_usd, cost_month FROM project LIMIT 1")
+      .toArray()[0] as { status: string; last_user_activity: number; cost_cap_monthly_usd: number; cost_spent_monthly_usd: number; cost_month: string } | undefined;
     if (!proj || proj.status !== 'running') return;
 
     const now = Date.now();
@@ -339,8 +339,13 @@ export class ProjectDO implements DurableObject {
       return;
     }
 
-    // Cost cap check
-    if (proj.cost_spent_monthly_usd >= proj.cost_cap_monthly_usd) {
+    // Cost cap check — spend only counts for the current month. A project that
+    // capped last month must not stay paused into a new month (storeMessage
+    // resets the counter on the first new-month event, but the cap gate runs
+    // before any spend, so compute the effective current-month total here).
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const monthlySpent = proj.cost_month === currentMonth ? proj.cost_spent_monthly_usd : 0;
+    if (monthlySpent >= proj.cost_cap_monthly_usd) {
       this.state.storage.sql.exec("UPDATE project SET status = 'paused'");
       this.clearWatchdog();
       this.broadcast({ type: 'play-state', status: 'paused', reason: 'cost-cap' });
@@ -526,9 +531,14 @@ export class ProjectDO implements DurableObject {
               toolCalls.push(ev.call);
               this.broadcast({ type: 'agent-tool-call', ticketId, role, name: ev.call.name });
               break;
-            case 'tool-result':
+            case 'tool-result': {
+              // Attach the result to its call so persisted toolCalls carry it
+              // (a future replay of history into the model needs matched pairs).
+              const tc = toolCalls.find((c) => c.id === ev.result.callId);
+              if (tc) tc.result = ev.result;
               this.broadcast({ type: 'agent-tool-result', ticketId, role, ok: ev.result.ok });
               break;
+            }
             case 'done':
               costUsd = ev.costUsd;
               tokensIn = ev.tokensIn;
@@ -806,9 +816,11 @@ export class ProjectDO implements DurableObject {
   /** Park a ticket in needs-input with a message to the user. */
   private blockForInput(ticketId: string, role: Role, message: string): void {
     const now = Date.now();
+    // Persist the blocking role so the chat resume restarts the right stage
+    // (resume keys off assignee_role).
     this.state.storage.sql.exec(
-      "UPDATE tickets SET status = 'needs-input', updated_at = ? WHERE id = ?",
-      now, ticketId,
+      "UPDATE tickets SET status = 'needs-input', assignee_role = ?, updated_at = ? WHERE id = ?",
+      role, now, ticketId,
     );
     this.state.storage.sql.exec(
       'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',

@@ -117,8 +117,7 @@ keysRoutes.put('/keys/:provider', async (c) => {
        label = excluded.label,
        key_ciphertext = excluded.key_ciphertext,
        dek_wrapped = excluded.dek_wrapped,
-       iv = excluded.iv,
-       created_at = excluded.created_at`,
+       iv = excluded.iv`,
   )
     .bind(
       user.id,
