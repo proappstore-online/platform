@@ -21,16 +21,11 @@ import type {
 } from './types.ts';
 import {
   MAX_ITERATIONS,
-  MAX_RUN_MINUTES,
   assigneeForStatus,
   canTransition,
   isTerminal,
   qaVerdict,
 } from './ticket-machine.ts';
-import type { AgentRuntime } from './types.ts';
-import { CFNativeRuntime } from './runtimes/cf-native.ts';
-import { OpenAIResponsesRuntime } from './runtimes/openai-responses.ts';
-import { resolveByoKey, runtimeToProvider } from './byo-key.ts';
 import { executeFileTool, isFileTool } from './spine.ts';
 import {
   SCHEMA,
@@ -41,11 +36,10 @@ import {
   rowToTicket,
   uuid,
 } from './store.ts';
-import { buildSeedMessages } from './prompts.ts';
 import { runDeployStage } from './deploy-stage.ts';
 import { handlePOChat } from './po-chat.ts';
-import { toolActivityDetail } from './tool-activity.ts';
-import { DEFAULT_PERSONAS, formatMemory, type MemoryEntry } from './memory.ts';
+import { runAgentTurn } from './agent-runner.ts';
+import { DEFAULT_PERSONAS, type MemoryEntry } from './memory.ts';
 import { DOCS_SKILLS_URL, sliceDocs } from './platform-skill.ts';
 
 /**
@@ -522,196 +516,24 @@ export class ProjectDO implements DurableObject {
     }
   }
 
-  /**
-   * Run one agent turn for a ticket: resolve the owner's BYO key, instantiate
-   * the configured runtime, stream the turn (persisting messages + cost and
-   * broadcasting events), then transition the ticket based on the outcome.
-   */
-  private async runAgentInternal(ticketId: string): Promise<void> {
-    const row = this.state.storage.sql
-      .exec('SELECT * FROM tickets WHERE id = ?', ticketId)
-      .toArray()[0] as Record<string, unknown> | undefined;
-    if (!row) return;
-    const ticket = rowToTicket(row);
-    const role = assigneeForStatus(ticket.status);
-    if (!role) return;
-
-    const proj = this.state.storage.sql
-      .exec('SELECT owner_id, slug, owner_session_token FROM project LIMIT 1')
-      .toArray()[0] as { owner_id: string; slug: string; owner_session_token: string | null } | undefined;
-    if (!proj) return;
-
-    const rcRow = this.state.storage.sql
-      .exec('SELECT * FROM role_configs WHERE role = ?', role)
-      .toArray()[0] as Record<string, unknown> | undefined;
-    if (!rcRow) {
-      this.failTicket(ticketId, ticket.status, `Role ${role} is not configured`);
-      return;
-    }
-    const roleConfig = rowToRoleConfig(rcRow);
-    // Deploy is now a deterministic system stage (after QA), not an agent action —
-    // strip the deploy tools so Dev/QA don't push un-QA'd code or self-declare
-    // "deployed". Every role may consult the official docs (union, no migration).
-    const DEPLOY_TOOLS = new Set(['scaffold_app', 'provision_app', 'get_deploy_status']);
-    roleConfig.spineTools = roleConfig.spineTools.filter((t) => !DEPLOY_TOOLS.has(t));
-    if (!roleConfig.spineTools.includes('read_docs')) roleConfig.spineTools = [...roleConfig.spineTools, 'read_docs'];
-
-    // Resolve the owner's BYO key for this runtime's provider.
-    const provider = runtimeToProvider(roleConfig.runtime);
-    const byoKey = await resolveByoKey(this.env, proj.owner_id, provider);
-    if (!byoKey) {
-      this.blockForInput(
-        ticketId,
-        role,
-        `${role} needs a ${provider} API key. Add one in the platform key vault (Settings → API Keys), then hit Play.`,
-      );
-      return;
-    }
-
-    this.broadcast({ type: 'agent-run-started', ticketId, role, runtime: roleConfig.runtime });
-    this.logActivity('agent', `${role} started`, ticketId);
-
-    const runtime: AgentRuntime = roleConfig.runtime === 'openai-responses'
-      ? new OpenAIResponsesRuntime()
-      : new CFNativeRuntime();
-
-    const prior = this.state.storage.sql
-      .exec('SELECT author, body FROM messages WHERE ticket_id = ? ORDER BY created_at', ticket.id)
-      .toArray() as { author: string; body: string }[];
-    // Pull the latest committed code before the agent reads/edits (GitHub = truth).
-    await this.syncFromGitHub(`before ${role} run`);
-    const files = this.loadFiles();
-    const messages = buildSeedMessages(role, ticket, proj.slug, prior, [...files.keys()].sort(), formatMemory(this.recallMemory()));
-
-    let assistantText = '';
-    const toolCalls: ToolCall[] = [];
-    let costUsd = 0;
-    let tokensIn = 0;
-    let tokensOut = 0;
-    let errorMessage: string | null = null;
-
-    try {
-      const handle = await runtime.prepare({
-        projectId: proj.slug,
-        ticketId,
-        role: roleConfig,
-        byoKey,
-        userToken: proj.owner_session_token ?? undefined,
-        dispatch: this.makeDispatch(files),
-      });
-
-      // Consume the stream, but cap wall-clock time so a hung model call can't
-      // wedge the ticket forever. On timeout we keep whatever was accumulated
-      // and route the ticket to needs-input. `aborted` stops the loop from
-      // mutating shared state (files map, DB) after we've moved on.
-      let aborted = false;
-      const toolActivityIds = new Map<string, string>(); // callId → activity row id
-      const consume = (async () => {
-        for await (const ev of runtime.run(handle, messages)) {
-          if (aborted) break;
-          switch (ev.type) {
-            case 'text-delta':
-              assistantText += ev.text;
-              this.broadcast({ type: 'agent-text', ticketId, role, text: ev.text });
-              break;
-            case 'tool-call': {
-              toolCalls.push(ev.call);
-              this.broadcast({ type: 'agent-tool-call', ticketId, role, name: ev.call.name });
-              const actId = this.logActivity('tool', `${role}: ${toolActivityDetail(ev.call.name, ev.call.args)}`, ticketId,
-                JSON.stringify({ args: ev.call.args }));
-              toolActivityIds.set(ev.call.id, actId);
-              break;
-            }
-            case 'tool-result': {
-              // Attach the result to its call so persisted toolCalls carry it
-              // (a future replay of history into the model needs matched pairs).
-              const tc = toolCalls.find((c) => c.id === ev.result.callId);
-              if (tc) tc.result = ev.result;
-              this.broadcast({ type: 'agent-tool-result', ticketId, role, ok: ev.result.ok });
-              // Capture the tool's output on its activity row for the audit log.
-              const actId = toolActivityIds.get(ev.result.callId);
-              if (actId) {
-                const out = ev.result.ok ? (typeof ev.result.data === 'string' ? ev.result.data : JSON.stringify(ev.result.data)) : (ev.result.errorMessage ?? 'error');
-                this.setActivityMeta(actId, JSON.stringify({ args: tc?.args, ok: ev.result.ok, result: out ?? '(no output)' }));
-              }
-              break;
-            }
-            case 'done':
-              costUsd = ev.costUsd;
-              tokensIn = ev.tokensIn;
-              tokensOut = ev.tokensOut;
-              break;
-            case 'error':
-              errorMessage = ev.message;
-              break;
-            case 'heartbeat':
-              this.broadcast({ type: 'agent-heartbeat', ticketId, role });
-              break;
-          }
-        }
-      })();
-
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timeout = new Promise<'timeout'>((resolve) => {
-        timer = setTimeout(() => resolve('timeout'), MAX_RUN_MINUTES * 60_000);
-      });
-      const outcome = await Promise.race([consume.then(() => 'ok' as const), timeout]);
-      if (timer) clearTimeout(timer);
-      if (outcome === 'timeout') {
-        aborted = true; // stop the orphaned loop from further state mutation
-        errorMessage = errorMessage ?? `run exceeded ${MAX_RUN_MINUTES} minutes`;
-      }
-    } catch (err) {
-      errorMessage = err instanceof Error ? err.message : 'agent run failed';
-    }
-
-    // Persist the working tree — Dev's files must survive into the QA run.
-    this.saveFiles(files);
-
-    // Persist the agent's output + cost.
-    if (assistantText.trim() || toolCalls.length > 0) {
-      await this.storeMessage({
-        ticketId,
-        author: role,
-        body: assistantText.trim() || `(${role} ran ${toolCalls.length} tool call(s))`,
-        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-        costUsd,
-        tokensIn,
-        tokensOut,
-        model: roleConfig.model,
-      });
-    }
-    // Mirror the agent's output into the team chat so the collaboration is
-    // visible (the chat panel renders BA/Dev/QA roles). Full text lives on the
-    // ticket message; the chat copy is capped for readability.
-    if (assistantText.trim()) {
-      const cid = uuid();
-      const chatBody = assistantText.trim().slice(0, 4000);
-      this.state.storage.sql.exec(
-        'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
-        cid, role, chatBody, Date.now(),
-      );
-      this.broadcast({ type: 'chat', role, body: chatBody, id: cid });
-    }
-    if (costUsd > 0 || tokensIn > 0) {
-      this.logActivity('cost', `${role} finished · $${costUsd.toFixed(4)} · ${tokensIn}+${tokensOut} tok`, ticketId);
-    }
-    if (errorMessage) this.logActivity('error', `${role}: ${errorMessage}`, ticketId);
-
-    // If the cap auto-failed this ticket mid-run, stop here.
-    const post = this.state.storage.sql
-      .exec('SELECT status FROM tickets WHERE id = ?', ticketId)
-      .toArray()[0] as { status: string } | undefined;
-    if (!post || isTerminal(post.status as TicketStatus)) {
-      return; // dispatcher's finally re-advances the pipeline
-    }
-
-    if (errorMessage) {
-      this.blockForInput(ticketId, role, `${role} hit an error: ${errorMessage}`);
-      return;
-    }
-
-    this.applyAgentOutcome(ticketId, role, assistantText);
+  /** One agent turn — see agent-runner.ts. The DO supplies storage + callbacks. */
+  private runAgentInternal(ticketId: string): Promise<void> {
+    return runAgentTurn({
+      sql: this.state.storage.sql,
+      env: this.env,
+      broadcast: (e) => this.broadcast(e),
+      logActivity: (type, detail, tid, meta) => this.logActivity(type, detail, tid, meta),
+      setActivityMeta: (id, meta) => this.setActivityMeta(id, meta),
+      syncFromGitHub: (reason) => this.syncFromGitHub(reason),
+      loadFiles: () => this.loadFiles(),
+      saveFiles: (files) => this.saveFiles(files),
+      recallMemory: () => this.recallMemory(),
+      storeMessage: (opts) => this.storeMessage(opts),
+      makeDispatch: (files) => this.makeDispatch(files),
+      failTicket: (tid, from, reason) => this.failTicket(tid, from, reason),
+      blockForInput: (tid, role, message) => this.blockForInput(tid, role, message),
+      applyAgentOutcome: (tid, role, output) => this.applyAgentOutcome(tid, role, output),
+    }, ticketId);
   }
 
   /**
