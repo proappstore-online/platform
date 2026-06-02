@@ -67,6 +67,9 @@ importers:
 
   packages/backend:
     dependencies:
+      '@proappstore/build-core':
+        specifier: workspace:*
+        version: link:../build-core
       '@proappstore/compliance':
         specifier: workspace:*
         version: link:../compliance

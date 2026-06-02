@@ -15,7 +15,8 @@
   "dependencies": {
     "@proappstore/compliance": "workspace:*",
     "hono": "^4.12.23",
-    "web-push": "^3.6.0"
+    "web-push": "^3.6.0",
+    "@proappstore/build-core": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",

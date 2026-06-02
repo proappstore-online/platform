@@ -1,7 +1,21 @@
-import { makeGitHub } from "@proappstore/build-core";
+import {
+  makeGitHub,
+  ensurePagesProject,
+  ensureCustomDomain,
+  ensureDnsCname,
+  ensureAnalytics,
+  type CfConfig,
+} from "@proappstore/build-core";
 import type { Env } from "./env.js";
 
 const ghFor = (env: Env) => makeGitHub(env.GITHUB_TOKEN, env.PUBLISHERS_ORG);
+/** CF provisioning config from the admin Worker's bindings (shared primitives). */
+const cfFor = (env: Env): CfConfig => ({
+  token: env.CF_API_TOKEN,
+  accountId: env.CF_ACCOUNT_ID,
+  zoneId: env.PAS_ZONE_ID,
+  domainBase: env.APPS_DOMAIN_BASE,
+});
 
 export interface PublishRequest {
   id: string;
@@ -92,17 +106,8 @@ function validateId(id: string): string | null {
   return null;
 }
 
-async function cfApi(env: Env, path: string, method = "GET", body?: unknown) {
-  const res = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
-    method,
-    headers: { Authorization: `Bearer ${env.CF_API_TOKEN}`, "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  try { return JSON.parse(text); } catch { return { success: false, text }; }
-}
-
-// Step 1: GitHub repo (via build-core)
+// GitHub repo (via build-core). CF hosting steps (Pages project, custom domain,
+// DNS, analytics) are the shared build-core primitives — see provisionApp.
 async function createRepo(env: Env, req: PublishRequest): Promise<Step> {
   const gh = ghFor(env);
   if (await gh.repoExists(req.id)) {
@@ -113,55 +118,6 @@ async function createRepo(env: Env, req: PublishRequest): Promise<Step> {
     return { name: "GitHub repo", status: "ok", detail: `Created ${env.PUBLISHERS_ORG}/${req.id}` };
   }
   return { name: "GitHub repo", status: "fail", detail: (result.data as { message?: string }).message || "Failed to create repo" };
-}
-
-// Step 2: CF Pages project
-async function createPagesProject(env: Env, id: string): Promise<Step> {
-  const projectName = `proappstore-${id}`;
-  const check = await cfApi(env, `/accounts/${env.CF_ACCOUNT_ID}/pages/projects/${projectName}`);
-  if (check.success) return { name: "CF Pages project", status: "skip", detail: `${projectName} already exists` };
-
-  const result = await cfApi(env, `/accounts/${env.CF_ACCOUNT_ID}/pages/projects`, "POST", {
-    name: projectName,
-    production_branch: "main",
-  });
-  if (result.success) return { name: "CF Pages project", status: "ok", detail: `Created ${projectName}` };
-  return { name: "CF Pages project", status: "fail", detail: result.errors?.[0]?.message || "Failed" };
-}
-
-// Step 3: Custom domain on Pages project
-async function addCustomDomain(env: Env, id: string): Promise<Step> {
-  const projectName = `proappstore-${id}`;
-  const domain = `${id}.${env.APPS_DOMAIN_BASE}`;
-
-  const existing = await cfApi(env, `/accounts/${env.CF_ACCOUNT_ID}/pages/projects/${projectName}/domains`);
-  if (existing.success && existing.result?.some((d: { name: string }) => d.name === domain)) {
-    return { name: "Custom domain", status: "skip", detail: `${domain} already configured` };
-  }
-
-  const result = await cfApi(env, `/accounts/${env.CF_ACCOUNT_ID}/pages/projects/${projectName}/domains`, "POST", { name: domain });
-  if (result.success) return { name: "Custom domain", status: "ok", detail: `Added ${domain} to ${projectName}` };
-  return { name: "Custom domain", status: "fail", detail: result.errors?.[0]?.message || "Failed" };
-}
-
-// Step 4: DNS CNAME
-async function createDnsCname(env: Env, id: string): Promise<Step> {
-  const name = `${id}.${env.APPS_DOMAIN_BASE}`;
-  const target = `proappstore-${id}.pages.dev`;
-
-  const existing = await cfApi(env, `/zones/${env.PAS_ZONE_ID}/dns_records?name=${name}&type=CNAME`);
-  if (existing.success && existing.result?.length > 0) {
-    return { name: "DNS CNAME", status: "skip", detail: `${name} already exists` };
-  }
-
-  const result = await cfApi(env, `/zones/${env.PAS_ZONE_ID}/dns_records`, "POST", {
-    type: "CNAME",
-    name: id,
-    content: target,
-    proxied: true,
-  });
-  if (result.success) return { name: "DNS CNAME", status: "ok", detail: `${name} → ${target}` };
-  return { name: "DNS CNAME", status: "fail", detail: result.errors?.[0]?.message || "Failed to create CNAME" };
 }
 
 // NOTE: the workflow's CLOUDFLARE_API_TOKEN is an ORG-level Actions secret,
@@ -213,26 +169,6 @@ async function addToRegistry(env: Env, req: PublishRequest): Promise<Step> {
   if (update.ok) return { name: "Registry", status: "ok", detail: `Added ${req.name}` };
   if (update.status === 409) return { name: "Registry", status: "fail", detail: "Registry write contended — retry" };
   return { name: "Registry", status: "fail", detail: (update.data as { message?: string }).message || "Failed to update registry" };
-}
-
-// Step 7: CF Web Analytics
-async function provisionAnalytics(env: Env, id: string): Promise<Step> {
-  const host = `${id}.${env.APPS_DOMAIN_BASE}`;
-  try {
-    const existing = await cfApi(env, `/accounts/${env.CF_ACCOUNT_ID}/rum/site_info/list`);
-    if (existing?.success && existing.result?.some((s: { host: string }) => s.host === host)) {
-      return { name: "Analytics", status: "skip", detail: `RUM site already exists for ${host}` };
-    }
-    const result = await cfApi(env, `/accounts/${env.CF_ACCOUNT_ID}/rum/site_info`, "POST", {
-      host,
-      zone_tag: env.PAS_ZONE_ID,
-      auto_install: false,
-    });
-    if (result.success) return { name: "Analytics", status: "ok", detail: `Minted RUM site for ${host}` };
-    return { name: "Analytics", status: "skip", detail: `(non-fatal) ${result.errors?.[0]?.message || "failed"}` };
-  } catch (e) {
-    return { name: "Analytics", status: "skip", detail: `(non-fatal) ${e}` };
-  }
 }
 
 // Push a file bundle as one commit via build-core (Git Data API; seeds empty repos).
@@ -334,14 +270,15 @@ async function provisionApp(
   repoUrl = `https://github.com/${env.PUBLISHERS_ORG}/${req.id}`;
 
   // 2. CF Pages project — wrangler's deploy target, must exist before CI (fatal)
-  const pagesStep = await createPagesProject(env, req.id);
+  const cf = cfFor(env);
+  const pagesStep = await ensurePagesProject(cf, req.id);
   steps.push(pagesStep);
   if (pagesStep.status === "fail") return stop();
 
   // 3. Reachability at <id>.proappstore.online. Domain is always best-effort;
   //    DNS is fatal only on the publish path (see ProvisionOptions.dnsFatal).
-  steps.push(await addCustomDomain(env, req.id));
-  const dnsStep = await createDnsCname(env, req.id);
+  steps.push(await ensureCustomDomain(cf, req.id));
+  const dnsStep = await ensureDnsCname(cf, req.id);
   steps.push(dnsStep);
   if (opts.dnsFatal && dnsStep.status === "fail") return stop();
 
@@ -353,7 +290,7 @@ async function provisionApp(
   }
 
   // 5. CF Web Analytics — uniform across stores, non-fatal, both paths
-  steps.push(await provisionAnalytics(env, req.id));
+  steps.push(await ensureAnalytics(cf, req.id));
 
   // 6. Agent path: ensure a deploy workflow exists, then push the bundle as one
   //    commit. Without an injected workflow a push triggers no CI and the deploy
