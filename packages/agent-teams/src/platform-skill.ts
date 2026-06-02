@@ -49,26 +49,27 @@ export const DOCS_SKILLS_URL = 'https://proappstore.online/skills.md';
 export const DOCS_SITE_URL = 'https://proappstore.online/docs';
 
 /**
- * Return the doc section(s) whose heading matches `topic` (markdown ##–####),
- * or the whole doc (capped) when no topic. Lets read_docs do progressive
- * disclosure instead of dumping the full 600-line guide every call.
+ * Return the doc section(s) relevant to `topic`, or the whole doc (capped) when
+ * no topic. Splits at ##/### headings (#### stays nested with its parent) and
+ * returns every section whose heading OR body contains the topic — so a keyword
+ * like "SignInButton" returns just the UI-components section, not the whole 600-
+ * line guide. Progressive disclosure that's actually precise + cheap.
  */
 export function sliceDocs(text: string, topic?: string, max = 16000): string {
   if (!topic || !topic.trim()) return text.slice(0, max);
   const t = topic.toLowerCase();
   const lines = text.split('\n');
-  const out: string[] = [];
-  let capturing = false;
-  let captureLevel = 0;
+
+  // Split into chunks at level-2/3 headings (#### stays inside its ### parent).
+  const chunks: string[] = [];
+  let cur: string[] = [];
   for (const line of lines) {
-    const h = /^(#{2,4})\s+(.*)/.exec(line);
-    if (h) {
-      const level = h[1]!.length;
-      if (capturing && level <= captureLevel) capturing = false;
-      if (!capturing && h[2]!.toLowerCase().includes(t)) { capturing = true; captureLevel = level; }
-    }
-    if (capturing) out.push(line);
+    if (/^#{2,3}\s/.test(line) && cur.length) { chunks.push(cur.join('\n')); cur = []; }
+    cur.push(line);
   }
-  const section = out.join('\n').trim();
-  return (section || text).slice(0, max);
+  if (cur.length) chunks.push(cur.join('\n'));
+
+  const matched = chunks.filter((c) => c.toLowerCase().includes(t));
+  const out = matched.join('\n\n').trim();
+  return (out || text).slice(0, max);
 }

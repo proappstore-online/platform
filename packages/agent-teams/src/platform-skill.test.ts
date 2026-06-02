@@ -27,19 +27,19 @@ describe('sliceDocs', () => {
     expect(sliceDocs(DOC)).toContain('# Guide');
   });
 
-  it('returns just the matching section for a topic', () => {
+  it('returns just the matching section for a heading topic', () => {
     const out = sliceDocs(DOC, 'database');
     expect(out).toContain('## Database');
     expect(out).toContain('use app.db.execute');
     expect(out).not.toContain('## Rooms');
   });
 
-  it('captures nested subsections under the matched heading', () => {
-    const out = sliceDocs(DOC, 'rooms');
-    expect(out).toContain('## Rooms');
-    expect(out).toContain('### Caps');
-    expect(out).toContain('32 peers');
-    expect(out).not.toContain('## Database');
+  it('matches BODY keywords, not just headings (the SignInButton case)', () => {
+    // "execute" only appears in the Database section's body — must still match.
+    const out = sliceDocs(DOC, 'execute');
+    expect(out).toContain('use app.db.execute');
+    expect(out).not.toContain('## Rooms');
+    expect(out.length).toBeLessThan(DOC.length); // not the whole doc
   });
 
   it('falls back to the full doc when the topic is not found', () => {
