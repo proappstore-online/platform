@@ -44,6 +44,7 @@ import {
 import { buildSeedMessages } from './prompts.ts';
 import { toolActivityDetail } from './tool-activity.ts';
 import { slidingWindowAllow, CHAT_LIMIT, CHAT_WINDOW_MS } from './rate-limit.ts';
+import { DEFAULT_PERSONAS, PO_PERSONA, formatMemory, type MemoryEntry } from './memory.ts';
 
 /**
  * Watchdog interval. While a project is running, an alarm fires on this cadence
@@ -80,6 +81,8 @@ export class ProjectDO implements DurableObject {
     try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN owner_session_token TEXT`); } catch { /* exists */ }
     // Per-role output token cap (configurable from the console agent settings).
     try { this.state.storage.sql.exec(`ALTER TABLE role_configs ADD COLUMN max_tokens INTEGER`); } catch { /* exists */ }
+    // Per-role persona ("soul") and the project memory table.
+    try { this.state.storage.sql.exec(`ALTER TABLE role_configs ADD COLUMN persona TEXT`); } catch { /* exists */ }
     this.initialized = true;
   }
 
@@ -210,6 +213,11 @@ export class ProjectDO implements DurableObject {
     if (path === '/cost' && request.method === 'GET') return this.getCostSummary();
     if (path === '/activity' && request.method === 'GET') return this.getActivity();
     if (path === '/activity' && request.method === 'DELETE') return this.clearActivity();
+
+    if (path === '/memory' && request.method === 'GET') return json({ memory: this.recallMemory() });
+    if (path === '/memory' && request.method === 'POST') return this.addMemory(request);
+    const memMatch = path.match(/^\/memory\/([a-f0-9-]+)$/);
+    if (memMatch && request.method === 'DELETE') return this.forgetMemory(memMatch[1]!);
 
     if (path === '/files' && request.method === 'GET') return this.listProjectFiles();
     if (path === '/files/content' && request.method === 'GET') {
@@ -543,7 +551,7 @@ export class ProjectDO implements DurableObject {
       .exec('SELECT author, body FROM messages WHERE ticket_id = ? ORDER BY created_at', ticket.id)
       .toArray() as { author: string; body: string }[];
     const files = this.loadFiles();
-    const messages = buildSeedMessages(role, ticket, proj.slug, prior, [...files.keys()].sort());
+    const messages = buildSeedMessages(role, ticket, proj.slug, prior, [...files.keys()].sort(), formatMemory(this.recallMemory()));
 
     let assistantText = '';
     const toolCalls: ToolCall[] = [];
@@ -699,6 +707,47 @@ export class ProjectDO implements DurableObject {
   // ── Project working tree (file map) ──────────────────────────
   // The Dev/QA file tools edit this map (in spine.ts). It persists between runs
   // so Dev's output survives into the QA run and back into a qa-failed re-run.
+
+  // ── Project memory (durable decisions/facts the team reads each run) ───────
+
+  private recallMemory(): MemoryEntry[] {
+    const rows = this.state.storage.sql
+      .exec('SELECT id, category, key, value, created_at, updated_at FROM project_memory ORDER BY updated_at DESC')
+      .toArray() as { id: string; category: string; key: string; value: string; created_at: number; updated_at: number }[];
+    return rows.map((r) => ({ id: r.id, category: r.category, key: r.key, value: r.value, createdAt: r.created_at, updatedAt: r.updated_at }));
+  }
+
+  /** Upsert a memory by key (so a decision can be revised, not duplicated). */
+  private rememberFact(category: string, key: string, value: string): void {
+    const k = key.trim().slice(0, 120);
+    const v = value.trim().slice(0, 2000);
+    if (!k || !v) return;
+    const now = Date.now();
+    const existing = this.state.storage.sql.exec('SELECT id FROM project_memory WHERE key = ?', k).toArray()[0] as { id: string } | undefined;
+    if (existing) {
+      this.state.storage.sql.exec('UPDATE project_memory SET value = ?, category = ?, updated_at = ? WHERE key = ?', v, category, now, k);
+    } else {
+      this.state.storage.sql.exec(
+        'INSERT INTO project_memory (id, category, key, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+        uuid(), category, k, v, now, now,
+      );
+    }
+    this.logActivity('memory', `Remembered: ${k}`);
+    this.broadcast({ type: 'memory-updated' });
+  }
+
+  private async addMemory(request: Request): Promise<Response> {
+    const body = (await request.json()) as { category?: string; key?: string; value?: string };
+    if (!body.key?.trim() || !body.value?.trim()) return json({ error: 'key and value required' }, 400);
+    this.rememberFact(body.category ?? 'decision', body.key, body.value);
+    return json({ memory: this.recallMemory() });
+  }
+
+  private forgetMemory(id: string): Response {
+    this.state.storage.sql.exec('DELETE FROM project_memory WHERE id = ?', id);
+    this.broadcast({ type: 'memory-updated' });
+    return json({ ok: true });
+  }
 
   /** List the project's working-tree files (path + size) for the console's file
    *  preview panel. Content is fetched lazily per file via getProjectFile. */
@@ -948,9 +997,10 @@ export class ProjectDO implements DurableObject {
 
     for (const rc of defaults) {
       this.state.storage.sql.exec(
-        `INSERT OR REPLACE INTO role_configs (role, runtime, model, spine_tools, vendor_tools, max_tokens)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO role_configs (role, runtime, model, spine_tools, vendor_tools, max_tokens, persona)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         rc.role, rc.runtime, rc.model, JSON.stringify(rc.spineTools), JSON.stringify(rc.vendorTools), rc.maxTokens ?? null,
+        DEFAULT_PERSONAS[rc.role] ?? null,
       );
     }
 
@@ -1007,12 +1057,15 @@ export class ProjectDO implements DurableObject {
       if (rc.maxTokens != null && (!Number.isInteger(rc.maxTokens) || rc.maxTokens < 1024 || rc.maxTokens > 64000)) {
         return json({ error: 'maxTokens must be an integer between 1024 and 64000' }, 400);
       }
+      if (rc.persona && rc.persona.length > 4096) {
+        return json({ error: 'persona too long (max 4KB)' }, 400);
+      }
 
       this.state.storage.sql.exec(
-        `INSERT OR REPLACE INTO role_configs (role, runtime, model, system_prompt_override, spine_tools, vendor_tools, max_tokens)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO role_configs (role, runtime, model, system_prompt_override, spine_tools, vendor_tools, max_tokens, persona)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         rc.role, rc.runtime, rc.model, rc.systemPromptOverride ?? null,
-        JSON.stringify(rc.spineTools), JSON.stringify(rc.vendorTools), rc.maxTokens ?? null,
+        JSON.stringify(rc.spineTools), JSON.stringify(rc.vendorTools), rc.maxTokens ?? null, rc.persona ?? null,
       );
     }
     return json({ ok: true });
@@ -1424,19 +1477,23 @@ export class ProjectDO implements DurableObject {
       return this.poTriageWithoutAI(userText, backlogSummary, now);
     }
 
+    const memoryBlock = formatMemory(this.recallMemory());
+
     // Call Anthropic for real PO agent response
-    const systemPrompt = `You are the PO (Product Owner) agent for the app "${appName}" (id: ${proj?.slug ?? 'app'}).
+    const systemPrompt = `${PO_PERSONA}
+
+You are the PO (Product Owner) agent for the app "${appName}" (id: ${proj?.slug ?? 'app'}).
 
 ${appIdea ? `What "${appName}" is:\n${appIdea}\n` : `You don't have a description of "${appName}" yet. If the founder asks something that depends on what the app is, ASK them what they're building rather than guessing.\n`}
-CRITICAL CONTEXT: "${appName}" is an app a founder is building ON the ProAppStore platform (ProAppStore is just the hosting + SDK provider). ProAppStore is NOT this app. Never assume "${appName}" is ProAppStore, a developer tool, or that its users are developers — reason ONLY about "${appName}" using its files, backlog, founding idea, and what the founder tells you.
+${memoryBlock ? `${memoryBlock}\n\n` : ''}CRITICAL CONTEXT: "${appName}" is an app a founder is building ON the ProAppStore platform (ProAppStore is just the hosting + SDK provider). ProAppStore is NOT this app. Never assume "${appName}" is ProAppStore, a developer tool, or that its users are developers — reason ONLY about "${appName}" using its files, backlog, founding idea, and what the founder tells you.
 
 You read the founder's messages and decide what to do.
 
-You have read-only tools to inspect the app's code: list_files, read_file, search_files. USE them.
+You have read-only tools to inspect the app's code: list_files, read_file, search_files. USE them. You also have a "remember" tool — call it to record durable decisions/facts (e.g. {key:"auth", value:"GitHub OAuth"}) whenever the founder decides something, so the whole team keeps it as ground truth.
 
 Your job:
-- If the founder asks a FACTUAL question about the app ("does it use google or github sign-in?", "is there a settings page?") → investigate with your tools (search_files / read_file) and answer from the actual code. Don't guess, and don't ask the founder things the code already answers.
-- If the founder asks for a DECISION that isn't in the code yet, or the app has no files → give a concrete recommendation, and ask the founder only for the genuinely-undecided product call.
+- If the founder asks a FACTUAL question about the app ("does it use google or github sign-in?", "is there a settings page?") → check project memory above first, then investigate with your tools (search_files / read_file) and answer from the actual code. Don't guess, and don't ask the founder things memory or the code already answers.
+- If the founder asks for a DECISION that isn't decided yet → give a concrete recommendation; once they decide, record it with the remember tool.
 - If the founder describes a feature or something to build → respond with the create_ticket JSON (the BA/Dev/QA team will pick it up).
 - If the founder gives feedback on existing work → acknowledge and create a ticket to address it.
 - If the founder is just chatting → respond naturally.
@@ -1452,10 +1509,23 @@ When creating a ticket, respond with EXACTLY this JSON on its own line:
 
 Otherwise just respond in plain text. Be concise and decisive. You're a PO, not a chatbot.`;
 
-    // Read-only tools so the PO can investigate the code before answering.
-    const poTools = (['list_files', 'read_file', 'search_files'] as const).map((name) => ({
+    // Read-only code tools + a memory-write tool for the PO.
+    const poTools: { name: string; description: string; input_schema: unknown }[] = (['list_files', 'read_file', 'search_files'] as const).map((name) => ({
       name, description: TOOL_SCHEMAS[name]!.description, input_schema: TOOL_SCHEMAS[name]!.parameters,
     }));
+    poTools.push({
+      name: 'remember',
+      description: 'Record a durable decision or fact about this app (e.g. auth provider, target users, tech choice) so the whole team treats it as ground truth. Upserts by key.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          key: { type: 'string', description: 'short stable label, e.g. "auth" or "target_users"' },
+          value: { type: 'string', description: 'the decision/fact' },
+          category: { type: 'string', description: 'decision | fact | preference | architecture' },
+        },
+        required: ['key', 'value'],
+      },
+    });
     const poFiles = this.loadFiles();
     const messages: { role: 'user' | 'assistant'; content: unknown }[] = recentChat.map((m) => ({
       role: m.role === 'user' ? 'user' as const : 'assistant' as const,
@@ -1500,8 +1570,16 @@ Otherwise just respond in plain text. Be concise and decisive. You're a PO, not 
         const toolUses = (contentArr as { type: string; id?: string; name?: string; input?: unknown }[]).filter((c) => c.type === 'tool_use');
         if (toolUses.length === 0 || aiRes.stop_reason !== 'tool_use') break;
 
-        // Execute the (read-only) tool calls against the working tree.
+        // Execute tool calls: remember → memory write; everything else → read-only file tools.
         const toolResults = toolUses.map((tu) => {
+          if (tu.name === 'remember') {
+            const a = (tu.input ?? {}) as { key?: string; value?: string; category?: string };
+            if (a.key && a.value) {
+              this.rememberFact(a.category ?? 'decision', a.key, a.value);
+              return { type: 'tool_result' as const, tool_use_id: tu.id!, content: `Remembered: ${a.key} = ${a.value}` };
+            }
+            return { type: 'tool_result' as const, tool_use_id: tu.id!, content: 'remember needs key and value' };
+          }
           const r = executeFileTool({ id: tu.id!, name: tu.name!, args: tu.input }, poFiles);
           this.logActivity('tool', `PO: ${toolActivityDetail(tu.name!, tu.input)}`);
           return {

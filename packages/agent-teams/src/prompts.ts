@@ -17,11 +17,15 @@ export function buildSeedMessages(
   slug: string,
   prior: { author: string; body: string }[],
   files: string[] = [],
+  memoryBlock = '',
 ): Message[] {
   const lastFrom = (a: string) => [...prior].reverse().find((m) => m.author === a)?.body;
 
   let context = `# Ticket: ${ticket.title}\n\n${ticket.rawIdea}`;
   if (ticket.spec?.summary) context += `\n\n## Approved spec\n${ticket.spec.summary}`;
+
+  // Durable project decisions/facts — ground truth for every agent.
+  if (memoryBlock) context += `\n\n${memoryBlock}`;
 
   // Seed the working-tree file list so Dev/QA know the layout without a
   // list_files round-trip every run (saves tokens + re-discovery).

@@ -93,7 +93,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
         apiKey: ctx.byoKey,
         model: ctx.role.model,
         maxTokens: ctx.role.maxTokens ?? 16384,
-        instructions: ctx.role.systemPromptOverride ?? buildDefaultPrompt(ctx.role.role),
+        instructions: [ctx.role.persona, ctx.role.systemPromptOverride ?? buildDefaultPrompt(ctx.role.role)].filter(Boolean).join('\n\n'),
         spineTools: ctx.role.spineTools,
         previousResponseId: null,
         projectId: ctx.projectId,

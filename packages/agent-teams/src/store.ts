@@ -16,7 +16,14 @@ CREATE TABLE IF NOT EXISTS project (
 CREATE TABLE IF NOT EXISTS role_configs (
   role TEXT PRIMARY KEY, runtime TEXT NOT NULL, model TEXT NOT NULL,
   system_prompt_override TEXT, spine_tools TEXT NOT NULL DEFAULT '[]',
-  vendor_tools TEXT NOT NULL DEFAULT '[]', max_tokens INTEGER
+  vendor_tools TEXT NOT NULL DEFAULT '[]', max_tokens INTEGER, persona TEXT
+);
+-- Project memory (OpenClaw-style MEMORY.md): durable decisions/facts the whole
+-- team reads each run and the PO can write. Keyed for upsert/dedupe.
+CREATE TABLE IF NOT EXISTS project_memory (
+  id TEXT PRIMARY KEY, category TEXT NOT NULL DEFAULT 'decision',
+  key TEXT NOT NULL UNIQUE, value TEXT NOT NULL,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS tickets (
   id TEXT PRIMARY KEY, title TEXT NOT NULL, raw_idea TEXT NOT NULL, spec_json TEXT,
@@ -104,6 +111,7 @@ export function rowToRoleConfig(row: Record<string, unknown>): RoleConfig {
     runtime: row.runtime as RuntimeKind,
     model: row.model as string,
     maxTokens: (row.max_tokens as number) ?? undefined,
+    persona: (row.persona as string) ?? undefined,
     systemPromptOverride: (row.system_prompt_override as string) ?? undefined,
     spineTools: JSON.parse((row.spine_tools as string) || '[]'),
     vendorTools: JSON.parse((row.vendor_tools as string) || '[]'),

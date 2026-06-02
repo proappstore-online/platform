@@ -66,7 +66,8 @@ export class CFNativeRuntime implements AgentRuntime {
         apiKey: ctx.byoKey,
         model: ctx.role.model,
         maxTokens: ctx.role.maxTokens ?? 16384,
-        systemPrompt: ctx.role.systemPromptOverride ?? buildDefaultPrompt(ctx.role.role),
+        // Persona ("soul") is prepended to the role's working prompt each run.
+        systemPrompt: [ctx.role.persona, ctx.role.systemPromptOverride ?? buildDefaultPrompt(ctx.role.role)].filter(Boolean).join('\n\n'),
         spineTools: ctx.role.spineTools,
         projectId: ctx.projectId,
         ticketId: ctx.ticketId,

@@ -28,6 +28,12 @@ describe('buildSeedMessages', () => {
     expect(body).toContain('app id is "myapp"');
   });
 
+  it('injects project memory (decisions) as ground truth for the agent', () => {
+    const body = buildSeedMessages('Dev', ticket(), 'app', [], [], '## Project memory — decisions & facts (treat as ground truth)\n- auth: GitHub OAuth')[0]!.body;
+    expect(body).toContain('Project memory');
+    expect(body).toContain('auth: GitHub OAuth');
+  });
+
   it('Dev/QA get the seeded file tree (no list_files round-trip needed)', () => {
     const files = ['src/main.tsx', 'src/App.tsx', 'package.json'];
     const dev = buildSeedMessages('Dev', ticket(), 'myapp', [], files)[0]!.body;

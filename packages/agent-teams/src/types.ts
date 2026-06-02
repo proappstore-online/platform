@@ -33,6 +33,7 @@ export type RoleConfig = {
   runtime: RuntimeKind
   model: string                  // e.g. 'claude-opus-4-7' (cf-native), 'gpt-5' (openai)
   maxTokens?: number             // per-turn output cap; falls back to runtime default
+  persona?: string               // "soul" — identity/principles/tone, prepended to the system prompt
   systemPromptOverride?: string  // optional; default lives in role registry
   spineTools: string[]           // tool names round-tripped to spine
   vendorTools: string[]          // vendor-native tools (e.g. 'web_search')
