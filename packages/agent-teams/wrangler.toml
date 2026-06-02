@@ -28,6 +28,14 @@ new_sqlite_classes = ["ProjectDO"]
 binding = "AGENT_STORAGE"
 bucket_name = "pas-agent-teams"
 
+# Shared PAS D1 — used ONLY for the agent_projects index (list a user's
+# projects). Per-project state lives in the Durable Object, not here. Migrations
+# are owned/applied by the backend Worker (deploy-backend.yml), not this one.
+[[d1_databases]]
+binding = "DB"
+database_name = "pas"
+database_id = "585bbda3-0016-42ad-a53d-c089f1864fcb"
+
 # Service binding to PAS backend — for BYO key vault read + publish trigger.
 [[services]]
 binding = "PAS_BACKEND"

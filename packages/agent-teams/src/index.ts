@@ -13,6 +13,8 @@ export { ProjectDO } from './project-do.ts';
 export type Bindings = {
   PROJECT: DurableObjectNamespace;
   AGENT_STORAGE: R2Bucket;
+  /** Shared PAS D1 — the agent_projects index (list a user's projects). */
+  DB: D1Database;
   PAS_BACKEND: Fetcher;
   /** Service binding to the PAS admin Worker — for the agent deploy flow
    *  (repo create + file push + registry). */
@@ -115,7 +117,33 @@ app.post('/v1/projects', async (c) => {
     method: 'PUT',
     body: JSON.stringify({ name: body.name, slug: body.slug, ownerId: user.id, costCapMonthlyUsd: cap, idea: body.idea }),
   });
+  // Index the project so the creator console can list a user's projects (the DOs
+  // are isolated and can't be enumerated). Best-effort — don't fail create on it.
+  if (res.ok) {
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO agent_projects (slug, owner_id, name, created_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(slug) DO UPDATE SET name = excluded.name`,
+      ).bind(body.slug, user.id, body.name, Date.now()).run();
+    } catch { /* index write is non-fatal */ }
+  }
   return new Response(res.body, { status: res.status, headers: res.headers });
+});
+
+// List the caller's agent-teams projects (for merging into the console app list)
+app.get('/v1/projects', async (c) => {
+  const user = c.get('user' as never) as { id: string };
+  try {
+    const rows = await c.env.DB.prepare(
+      'SELECT slug, name, created_at FROM agent_projects WHERE owner_id = ? ORDER BY created_at DESC',
+    ).bind(user.id).all<{ slug: string; name: string; created_at: number }>();
+    return c.json({
+      projects: (rows.results ?? []).map((r) => ({ slug: r.slug, name: r.name, createdAt: r.created_at })),
+    });
+  } catch {
+    return c.json({ projects: [] });
+  }
 });
 
 // Get project

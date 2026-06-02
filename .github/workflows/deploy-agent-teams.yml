@@ -1,0 +1,63 @@
+name: Deploy Agent Teams Worker
+
+# Deploys the proappstore-agent-teams Worker (agents.proappstore.online) on push
+# to main touching the package. Applies D1 migrations first (from the backend
+# package, which owns the migrations dir) so the agent_projects index table
+# exists before the new code queries it.
+#
+# Worker secrets (INTERNAL_TOKEN) persist across deploys; set via wrangler secret.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/agent-teams/**'
+      - 'migrations/**'
+      - '.github/workflows/deploy-agent-teams.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-agent-teams
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm -r --filter './packages/*' build
+      - name: Typecheck
+        run: pnpm -r typecheck
+      - name: Tests
+        run: pnpm test
+      - name: Apply D1 migrations (backend owns the dir)
+        working-directory: packages/backend
+        run: pnpm exec wrangler d1 migrations apply pas --remote
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Deploy Worker
+        working-directory: packages/agent-teams
+        run: pnpm exec wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Smoke test
+        run: |
+          for i in 1 2 3 4 5; do
+            CODE=$(curl -sS -o /dev/null -w "%{http_code}" https://agents.proappstore.online/health)
+            if [ "$CODE" = "200" ]; then echo "✓ /health 200"; exit 0; fi
+            echo "attempt $i: $CODE"; sleep 5
+          done
+          echo "✗ /health never 200"; exit 1
