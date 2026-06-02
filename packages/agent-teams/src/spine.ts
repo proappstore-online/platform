@@ -40,6 +40,18 @@ function badPath(p: string): boolean {
   return !p || p.includes('..') || p.startsWith('/') || p.startsWith('.github/');
 }
 
+// Resource caps — a runaway/malicious agent could otherwise bloat the DO's
+// SQLite (our storage + cost). Generous enough for real apps.
+export const MAX_FILE_BYTES = 512 * 1024;      // 512KB per file
+export const MAX_FILES = 300;                  // files in the working tree
+export const MAX_TREE_BYTES = 12 * 1024 * 1024; // 12MB total
+
+function treeBytes(files: Map<string, string>): number {
+  let n = 0;
+  for (const v of files.values()) n += v.length;
+  return n;
+}
+
 /**
  * Execute a file tool against the working map. Mutates `files` in place.
  * Callers should route only file tools here (see isFileTool).
@@ -53,6 +65,11 @@ export function executeFileTool(call: ToolCall, files: Map<string, string>): Too
       const content = String(args.content ?? '');
       if (badPath(path)) {
         return err(call, `path "${path}" not allowed (no "..", absolute paths, or .github/ files)`);
+      }
+      if (content.length > MAX_FILE_BYTES) return err(call, `file too large: ${content.length} bytes (max ${MAX_FILE_BYTES})`);
+      if (!files.has(path) && files.size >= MAX_FILES) return err(call, `too many files (max ${MAX_FILES})`);
+      if (treeBytes(files) - (files.get(path)?.length ?? 0) + content.length > MAX_TREE_BYTES) {
+        return err(call, `working tree too large (max ${MAX_TREE_BYTES} bytes)`);
       }
       files.set(path, content);
       return ok(call, `Wrote ${path} (${content.length} bytes)`);
@@ -97,12 +114,26 @@ export function executeFileTool(call: ToolCall, files: Map<string, string>): Too
         ? (args.files as { path?: unknown; content?: unknown }[])
         : [];
       if (!list.length) return err(call, 'files array is required');
-      const written: string[] = [];
+      // Validate the whole batch against caps BEFORE writing (no partial writes).
+      let count = files.size;
+      let bytes = treeBytes(files);
       for (const f of list) {
         const path = String(f.path ?? '');
         const content = String(f.content ?? '');
         if (badPath(path)) return err(call, `path "${path}" not allowed`);
-        files.set(path, content);
+        if (content.length > MAX_FILE_BYTES) return err(call, `file too large: ${path} is ${content.length} bytes (max ${MAX_FILE_BYTES})`);
+        const existing = files.get(path)?.length;
+        if (existing === undefined) {
+          if (count >= MAX_FILES) return err(call, `too many files (max ${MAX_FILES})`);
+          count += 1;
+        }
+        bytes += content.length - (existing ?? 0);
+        if (bytes > MAX_TREE_BYTES) return err(call, `working tree too large (max ${MAX_TREE_BYTES} bytes)`);
+      }
+      const written: string[] = [];
+      for (const f of list) {
+        const path = String(f.path ?? '');
+        files.set(path, String(f.content ?? ''));
         written.push(path);
       }
       return ok(call, `Wrote ${written.length} file(s): ${written.join(', ')}`);

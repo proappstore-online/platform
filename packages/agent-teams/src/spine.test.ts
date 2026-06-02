@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { executeFileTool, isFileTool } from './spine.ts';
+import { executeFileTool, isFileTool, MAX_FILE_BYTES, MAX_FILES } from './spine.ts';
 import type { ToolCall } from './types.ts';
 
 function call(name: string, args: Record<string, unknown>): ToolCall {
@@ -15,6 +15,36 @@ describe('isFileTool', () => {
   it('rejects infra tools', () => {
     expect(isFileTool('scaffold_app')).toBe(false);
     expect(isFileTool('get_deploy_status')).toBe(false);
+  });
+});
+
+describe('executeFileTool resource caps', () => {
+  it('rejects a single file over the per-file byte cap', () => {
+    const files = new Map<string, string>();
+    const r = executeFileTool(call('write_file', { path: 'big.txt', content: 'x'.repeat(MAX_FILE_BYTES + 1) }), files);
+    expect(r.ok).toBe(false);
+    expect(r.errorMessage).toContain('file too large');
+    expect(files.size).toBe(0);
+  });
+
+  it('rejects creating beyond the file-count cap', () => {
+    const files = new Map<string, string>();
+    for (let i = 0; i < MAX_FILES; i++) files.set(`f${i}.ts`, 'a');
+    const r = executeFileTool(call('write_file', { path: 'one-too-many.ts', content: 'a' }), files);
+    expect(r.ok).toBe(false);
+    expect(r.errorMessage).toContain('too many files');
+    // overwriting an existing file is still allowed at the cap
+    const ok = executeFileTool(call('write_file', { path: 'f0.ts', content: 'b' }), files);
+    expect(ok.ok).toBe(true);
+  });
+
+  it('batch_write_files validates the whole batch before writing (no partial writes)', () => {
+    const files = new Map<string, string>();
+    const r = executeFileTool(call('batch_write_files', {
+      files: [{ path: 'a.ts', content: 'ok' }, { path: 'b.ts', content: 'x'.repeat(MAX_FILE_BYTES + 1) }],
+    }), files);
+    expect(r.ok).toBe(false);
+    expect(files.size).toBe(0); // a.ts was NOT written
   });
 });
 
