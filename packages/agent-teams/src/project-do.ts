@@ -641,10 +641,11 @@ export class ProjectDO implements DurableObject {
   }
 
   /**
-   * Infra tools (scaffold/provision/deploy-status). Repo creation + push +
-   * provisioning is the platform's job (PAS admin Worker, Path B). Until that
-   * path is wired (issue #7), we stage the authored files and report status so
-   * the build + QA loop still completes against a real, persisted codebase.
+   * Infra tools (scaffold/provision/deploy-status). Repo creation + file push +
+   * registry is delegated to the PAS admin Worker (the sanctioned repo creator)
+   * over the ADMIN service binding. scaffold_app and provision_app both ship the
+   * current working tree — idempotent: admin creates the repo if needed and
+   * pushes the files on top.
    */
   private async executeInfraTool(
     call: ToolCall,
@@ -652,24 +653,64 @@ export class ProjectDO implements DurableObject {
     files: Map<string, string>,
     _ownerToken: string | null,
   ): Promise<ToolResult> {
+    const start = Date.now();
+    const args = (call.args ?? {}) as Record<string, unknown>;
+
     switch (call.name) {
       case 'scaffold_app':
-      case 'provision_app':
+      case 'provision_app': {
+        if (files.size === 0) {
+          return { callId: call.id, ok: false, errorMessage: 'No files to deploy yet — author the app first, then deploy.', durationMs: Date.now() - start };
+        }
+        if (!this.env.ADMIN || !this.env.INTERNAL_TOKEN) {
+          return { callId: call.id, ok: true, data: `Staged ${files.size} file(s) for "${slug}" (deploy binding not configured in this environment).`, durationMs: Date.now() - start };
+        }
+        try {
+          const res = await this.env.ADMIN.fetch(new Request('https://admin.proappstore.online/api/agent-deploy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Internal-Token': this.env.INTERNAL_TOKEN },
+            body: JSON.stringify({
+              id: slug,
+              name: String(args.name ?? slug),
+              description: String(args.description ?? ''),
+              files: Object.fromEntries(files),
+            }),
+          }));
+          const data = (await res.json()) as {
+            success?: boolean;
+            repoUrl?: string | null;
+            steps?: { name: string; status: string; detail: string }[];
+          };
+          const steps = (data.steps ?? []).map((s) => `${s.name}: ${s.status}`).join(', ');
+          if (!res.ok || !data.success) {
+            const detail = (data.steps ?? []).filter((s) => s.status === 'fail').map((s) => `${s.name} — ${s.detail}`).join('; ');
+            return { callId: call.id, ok: false, errorMessage: `Deploy failed: ${detail || `admin returned ${res.status}`}`, durationMs: Date.now() - start };
+          }
+          if (data.repoUrl) {
+            this.state.storage.sql.exec('UPDATE project SET repo_url = ? WHERE repo_url IS NULL', data.repoUrl);
+          }
+          return { callId: call.id, ok: true, data: `Deployed "${slug}" → ${data.repoUrl ?? 'repo'} (${steps}). CI deploys from the repo.`, durationMs: Date.now() - start };
+        } catch (err) {
+          return { callId: call.id, ok: false, errorMessage: `Deploy error: ${err instanceof Error ? err.message : 'unknown'}`, durationMs: Date.now() - start };
+        }
+      }
+
+      case 'get_deploy_status': {
+        const proj = this.state.storage.sql
+          .exec('SELECT repo_url FROM project LIMIT 1')
+          .toArray()[0] as { repo_url: string | null } | undefined;
         return {
           callId: call.id,
           ok: true,
-          data: `Staged ${files.size} file(s) for "${slug}". Repo provisioning + deploy is handled by the platform after the build is approved — keep authoring and let QA review the code.`,
-          durationMs: 0,
+          data: proj?.repo_url
+            ? `Repo: ${proj.repo_url} — files pushed; CI deploys from the repo.`
+            : `"${slug}" is not deployed yet. Author the app, then call provision_app.`,
+          durationMs: Date.now() - start,
         };
-      case 'get_deploy_status':
-        return {
-          callId: call.id,
-          ok: true,
-          data: `"${slug}" is not deployed yet — deploy runs after the build is approved.`,
-          durationMs: 0,
-        };
+      }
+
       default:
-        return { callId: call.id, ok: false, errorMessage: `Unknown tool: ${call.name}`, durationMs: 0 };
+        return { callId: call.id, ok: false, errorMessage: `Unknown tool: ${call.name}`, durationMs: Date.now() - start };
     }
   }
 

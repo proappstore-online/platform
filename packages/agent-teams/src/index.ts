@@ -14,6 +14,9 @@ export type Bindings = {
   PROJECT: DurableObjectNamespace;
   AGENT_STORAGE: R2Bucket;
   PAS_BACKEND: Fetcher;
+  /** Service binding to the PAS admin Worker — for the agent deploy flow
+   *  (repo create + file push + registry). */
+  ADMIN?: Fetcher;
   FAS_API_BASE: string;
   PAS_API_BASE: string;
   /**

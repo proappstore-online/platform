@@ -35,5 +35,13 @@ service = "proappstore-api"
 
 # INTERNAL_TOKEN is set as a secret (not committed):
 #   wrangler secret put INTERNAL_TOKEN
-# Must match the same secret on the proappstore-api Worker. Authenticates
-# GET /v1/keys/resolve/:provider (BYO key vault read) over the service binding.
+# Must match the same secret on the proappstore-api AND proappstore-admin Workers.
+# Authenticates GET /v1/keys/resolve/:provider (BYO key vault read) and
+# POST /api/agent-deploy (repo create + file push) over the service bindings.
+
+# Service binding to the PAS admin Worker — the sanctioned repo creator. The
+# agent deploy flow (scaffold_app/provision_app) pushes the authored file bundle
+# here to create the repo + push code + register the app.
+[[services]]
+binding = "ADMIN"
+service = "proappstore-admin"
