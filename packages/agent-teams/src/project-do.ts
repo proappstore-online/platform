@@ -822,7 +822,7 @@ export class ProjectDO implements DurableObject {
   }
 
   private async initProject(request: Request): Promise<Response> {
-    const body = (await request.json()) as Partial<Project>;
+    const body = (await request.json()) as Partial<Project> & { idea?: string };
     if (!body.name || !body.slug || !body.ownerId) {
       return json({ error: 'name, slug, ownerId required' }, 400);
     }
@@ -869,8 +869,21 @@ export class ProjectDO implements DurableObject {
       );
     }
 
+    // Seed the first ticket from the initial idea so the project is play-ready:
+    // the agent team is already configured above, and now there's work for it.
+    const idea = body.idea?.trim();
+    if (idea) {
+      const ticketId = uuid();
+      const title = idea.length > 80 ? `${idea.slice(0, 77)}...` : idea;
+      this.state.storage.sql.exec(
+        `INSERT INTO tickets (id, title, raw_idea, status, created_at, updated_at)
+         VALUES (?, ?, ?, 'inbox', ?, ?)`,
+        ticketId, title, idea, now, now,
+      );
+    }
+
     this.broadcast({ type: 'project-created', projectId: id });
-    return json({ id, slug: body.slug });
+    return json({ id, slug: body.slug, seededTicket: Boolean(idea) });
   }
 
   // ── Role configs ──────────────────────────────────────────
