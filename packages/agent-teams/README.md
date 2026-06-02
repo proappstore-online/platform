@@ -18,13 +18,28 @@ project holds the backlog, the working tree, memory, and the live connection.
 |---|---|---|
 | **PO** (Product Owner) | the **chat** panel | Talks to the founder. Answers questions by reading the actual code (read-only tools) and project memory; records decisions (`remember`); turns requests into tickets. Does not write app code. |
 | **BA** (Business Analyst) | per ticket | Turns a ticket into a spec with acceptance criteria; rejects vague tickets. |
-| **Dev** (Developer) | per ticket | Implements the spec with the PAS SDK; writes files (`batch_write_files`), deploys (`provision_app`). |
-| **QA** | per ticket | Verifies the spec against the real code; PASS → done, FAIL → back to Dev. |
+| **Dev** (Developer) | per ticket | Implements the spec with the PAS SDK; writes files (`write_file`/`batch_write_files`), reads code (`read_file`/`search_files`/`list_files`), checks the docs (`read_docs`). Does **not** deploy — deployment is a deterministic system stage (see below). |
+| **QA** | per ticket | Verifies the spec against the real code; must end its report with `VERDICT: PASS` or `VERDICT: FAIL`. PASS → deploy stage; FAIL → back to Dev. |
 
 **Ticket lifecycle:** `inbox → ba-refining → awaiting-approval → ready →
-dev-active → qa-active → (qa-failed → dev-active …) → done`. `needs-input` when an
-agent is blocked (answer in chat or press Play to retry). Dev↔QA loop caps at 5
-iterations.
+dev-active → qa-active → (qa-failed → dev-active …) → deploying → done`. Terminal:
+`failed` (iteration/cost cap, or deploy can't verify) and `cancelled`. `needs-input`
+when an agent is blocked (answer in chat or press Play to retry). Dev↔QA loop caps
+at 5 iterations.
+
+**Deployment is a system stage, not an agent action.** After QA passes, the DO
+(not an agent) pushes the working tree to the app repo **once**, captures the
+commit SHA, and verifies CI **for that exact commit** (`/api/deploy-status`,
+aggregating all of the repo's push-triggered workflows). Green → `done` with the
+verified SHA recorded on the ticket (`final_commit_sha`); red → back to Dev with
+the compiler error attached; "CI never started" times out cleanly instead of
+looping. This is why "done" means "verified live", and why Dev/QA have no
+deploy/scaffold tools — they can't self-declare a deploy. Logic: `deploy-stage.ts`.
+
+**QA verdict is parsed from an explicit marker.** QA must end with
+`VERDICT: PASS` or `VERDICT: FAIL`; `qaVerdict()` reads the last marker only. (It
+used to grep for the word "FAIL" anywhere, so PASS reports — whose rubrics are
+full of "FAIL" — bounced to Dev until the iteration cap. Don't reintroduce that.)
 
 ## Architecture
 
@@ -39,17 +54,25 @@ Browser ──WS (hibernation) + poll fallback──► ProjectDO (one per proje
                                               │   ├─ CFNativeRuntime (Anthropic Messages, streamed)
                                               │   └─ OpenAIResponsesRuntime (OpenAI Responses)
                                               ├─ spine file tools (read/write/search/...)
+                                              ├─ deploy stage (deploy-stage.ts, no LLM)
                                               └─ ADMIN service binding
-                                                   ├─ /api/agent-deploy  (repo create + push)
+                                                   ├─ /api/agent-deploy  (repo create + push → commit SHA)
+                                                   ├─ /api/deploy-status (CI build gate, by SHA)
                                                    └─ /api/repo-pull     (sync FROM GitHub)
 BYO API keys ◄─ PAS backend key vault (/keys/resolve, INTERNAL_TOKEN)
 ```
+
+The DO class is a thin orchestrator; cohesive logic lives in sibling modules:
+`deploy-stage.ts` (push + CI-verify), `po-chat.ts` (PO chat handler),
+`agent-runner.ts` (one agent turn), `prompts.ts` (seed + PO system prompts),
+`store.ts` (`SCHEMA` + append-only `MIGRATIONS`).
 
 ### GitHub is the source of truth
 `project_files` in the DO is a **cache**, not a second authority. Before every run
 and PO chat, `syncFromGitHub()` checks GitHub's latest commit SHA against the
 last-synced SHA and **pulls only when GitHub moved** (so unpushed mid-ticket work
-isn't clobbered). Dev's writes push back via `provision_app` as one commit.
+isn't clobbered). Dev's file-tool writes commit to the repo; the deploy stage
+pushes the final working tree as one commit and records its SHA on the ticket.
 Manual refresh: `POST /v1/projects/:slug/sync` (console: "Sync GitHub").
 
 ### Identity & memory (OpenClaw-adapted)
@@ -109,5 +132,12 @@ Deploy via GitHub Actions only (no laptop deploys). Secrets/bindings:
 
 ## Known production gaps
 Tracked as issues in `proappstore-online/platform`. Notable: PAS Path B hosting
-(escape the CF Pages cap), a build/lint gate before deploy, tool-dispatch
-ownership scoping (#5), operator observability, account deletion.
+(escape the CF Pages cap), tool-dispatch ownership scoping (#5), operator
+observability, account deletion, and **SDK-types grounding** — agents have no
+`node_modules` in the working tree, so they check signatures against
+`PLATFORM_CAPABILITIES` + `read_docs` (prose) rather than the real `.d.ts`; the CI
+build gate catches the resulting type errors but costs an iteration.
+
+Resolved (see git history): the build/lint gate before deploy (now the
+SHA-verified CI deploy stage), the QA-verdict false-fail loop, and the
+re-push-every-tick deploy loop.
