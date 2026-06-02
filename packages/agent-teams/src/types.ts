@@ -134,6 +134,10 @@ export type PrepareContext = {
   role: RoleConfig
   byoKey: string  // decrypted just-in-time, never logged
   userToken?: string | undefined  // owner session token, forwarded to the spine for tool dispatch
+  // Tool executor injected by the DO. When set, the runtime routes every tool
+  // call here (file tools → in-memory map, infra tools → provisioning) instead
+  // of the legacy MCP dispatch. Keeps stateful execution in the DO.
+  dispatch?: ((call: ToolCall) => Promise<ToolResult>) | undefined
 }
 
 export type RuntimeHandle = {

@@ -97,6 +97,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
         projectId: ctx.projectId,
         ticketId: ctx.ticketId,
         userToken: ctx.userToken,
+        dispatch: ctx.dispatch,
       },
     };
   }
@@ -234,7 +235,11 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
   }
 
   async invokeTool(handle: RuntimeHandle, toolCall: ToolCall): Promise<ToolResult> {
-    const s = handle.state as { spineTools: string[]; userToken?: string };
+    const s = handle.state as {
+      spineTools: string[];
+      userToken?: string;
+      dispatch?: (call: ToolCall) => Promise<ToolResult>;
+    };
     if (!isAllowedTool(toolCall.name, s.spineTools)) {
       return {
         callId: toolCall.id,
@@ -243,6 +248,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
         durationMs: 0,
       };
     }
+    if (s.dispatch) return s.dispatch(toolCall);
     return dispatchTool(toolCall, s.userToken ?? null);
   }
 

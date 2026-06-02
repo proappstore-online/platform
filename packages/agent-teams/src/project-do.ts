@@ -17,6 +17,7 @@ import type {
   Ticket,
   TicketStatus,
   ToolCall,
+  ToolResult,
 } from './types.ts';
 import {
   MAX_ITERATIONS,
@@ -30,6 +31,7 @@ import type { AgentRuntime } from './types.ts';
 import { CFNativeRuntime } from './runtimes/cf-native.ts';
 import { OpenAIResponsesRuntime } from './runtimes/openai-responses.ts';
 import { resolveByoKey, runtimeToProvider } from './byo-key.ts';
+import { executeFileTool, isFileTool } from './spine.ts';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS project (
@@ -69,6 +71,9 @@ CREATE TABLE IF NOT EXISTS chat_history (
   tool_call_json TEXT, created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chat_history ON chat_history(created_at);
+CREATE TABLE IF NOT EXISTS project_files (
+  path TEXT PRIMARY KEY, content TEXT NOT NULL, updated_at INTEGER NOT NULL
+);
 `;
 
 function uuid(): string {
@@ -485,6 +490,7 @@ export class ProjectDO implements DurableObject {
       : new CFNativeRuntime();
 
     const messages = this.buildSeedMessages(role, ticket, proj.slug);
+    const files = this.loadFiles();
 
     let assistantText = '';
     const toolCalls: ToolCall[] = [];
@@ -500,6 +506,7 @@ export class ProjectDO implements DurableObject {
         role: roleConfig,
         byoKey,
         userToken: proj.owner_session_token ?? undefined,
+        dispatch: this.makeDispatch(files, proj.slug, proj.owner_session_token ?? null),
       });
 
       // Consume the stream, but cap wall-clock time so a hung model call can't
@@ -547,6 +554,9 @@ export class ProjectDO implements DurableObject {
       errorMessage = err instanceof Error ? err.message : 'agent run failed';
     }
 
+    // Persist the working tree — Dev's files must survive into the QA run.
+    this.saveFiles(files);
+
     // Persist the agent's output + cost.
     if (assistantText.trim() || toolCalls.length > 0) {
       await this.storeMessage({
@@ -593,6 +603,74 @@ export class ProjectDO implements DurableObject {
     try {
       (this.state as unknown as { waitUntil?: (pr: Promise<unknown>) => void }).waitUntil?.(p);
     } catch { /* waitUntil unavailable — promise still runs */ }
+  }
+
+  // ── Project working tree (file map) ──────────────────────────
+  // The Dev/QA file tools edit this map (in spine.ts). It persists between runs
+  // so Dev's output survives into the QA run and back into a qa-failed re-run.
+
+  private loadFiles(): Map<string, string> {
+    const rows = this.state.storage.sql
+      .exec('SELECT path, content FROM project_files')
+      .toArray() as { path: string; content: string }[];
+    return new Map(rows.map((r) => [r.path, r.content]));
+  }
+
+  private saveFiles(files: Map<string, string>): void {
+    const now = Date.now();
+    // Small projects — replace wholesale so deletions are reflected.
+    this.state.storage.sql.exec('DELETE FROM project_files');
+    for (const [path, content] of files) {
+      this.state.storage.sql.exec(
+        'INSERT INTO project_files (path, content, updated_at) VALUES (?, ?, ?)',
+        path, content, now,
+      );
+    }
+  }
+
+  /** Build the tool executor injected into a runtime for one run. */
+  private makeDispatch(
+    files: Map<string, string>,
+    slug: string,
+    ownerToken: string | null,
+  ): (call: ToolCall) => Promise<ToolResult> {
+    return async (call) => {
+      if (isFileTool(call.name)) return executeFileTool(call, files);
+      return this.executeInfraTool(call, slug, files, ownerToken);
+    };
+  }
+
+  /**
+   * Infra tools (scaffold/provision/deploy-status). Repo creation + push +
+   * provisioning is the platform's job (PAS admin Worker, Path B). Until that
+   * path is wired (issue #7), we stage the authored files and report status so
+   * the build + QA loop still completes against a real, persisted codebase.
+   */
+  private async executeInfraTool(
+    call: ToolCall,
+    slug: string,
+    files: Map<string, string>,
+    _ownerToken: string | null,
+  ): Promise<ToolResult> {
+    switch (call.name) {
+      case 'scaffold_app':
+      case 'provision_app':
+        return {
+          callId: call.id,
+          ok: true,
+          data: `Staged ${files.size} file(s) for "${slug}". Repo provisioning + deploy is handled by the platform after the build is approved — keep authoring and let QA review the code.`,
+          durationMs: 0,
+        };
+      case 'get_deploy_status':
+        return {
+          callId: call.id,
+          ok: true,
+          data: `"${slug}" is not deployed yet — deploy runs after the build is approved.`,
+          durationMs: 0,
+        };
+      default:
+        return { callId: call.id, ok: false, errorMessage: `Unknown tool: ${call.name}`, durationMs: 0 };
+    }
   }
 
   /** Build the single seeded user message that frames one agent's turn. */
