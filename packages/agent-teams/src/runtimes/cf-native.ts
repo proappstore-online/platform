@@ -15,6 +15,7 @@ import type {
   ToolResult,
 } from '../types.ts';
 import { dispatchTool, isAllowedTool } from '../tool-dispatch.ts';
+import { TOOL_SCHEMAS } from '../tool-schemas.ts';
 
 interface AnthropicMessage {
   role: 'user' | 'assistant';
@@ -264,112 +265,7 @@ Report PASS or FAIL with specific findings.`;
 }
 
 function nameToToolDef(name: string): AnthropicTool {
-  // MCP tool schemas — these match project-tools.ts in the MCP server
-  const defs: Record<string, AnthropicTool> = {
-    scaffold_app: {
-      name: 'scaffold_app',
-      description: 'Create a new PAS app from template. Creates GitHub repo and provisions platform resources.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          app_id: { type: 'string', description: 'App ID (lowercase, e.g. chess-academy)' },
-          name: { type: 'string', description: 'Display name' },
-          description: { type: 'string', description: 'Short description' },
-        },
-        required: ['app_id', 'name', 'description'],
-      },
-    },
-    write_file: {
-      name: 'write_file',
-      description: 'Create or overwrite a file in the app GitHub repo.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          app_id: { type: 'string' },
-          path: { type: 'string', description: 'File path relative to repo root' },
-          content: { type: 'string', description: 'Full file content' },
-          message: { type: 'string', description: 'Commit message' },
-        },
-        required: ['app_id', 'path', 'content'],
-      },
-    },
-    read_file: {
-      name: 'read_file',
-      description: 'Read a file from the app GitHub repo.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          app_id: { type: 'string' },
-          path: { type: 'string' },
-        },
-        required: ['app_id', 'path'],
-      },
-    },
-    list_files: {
-      name: 'list_files',
-      description: 'List files in the app GitHub repo.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          app_id: { type: 'string' },
-          path: { type: 'string', description: 'Subdirectory (default: root)' },
-        },
-        required: ['app_id'],
-      },
-    },
-    search_files: {
-      name: 'search_files',
-      description: 'Search for text across all files in the app repo.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          app_id: { type: 'string' },
-          query: { type: 'string' },
-        },
-        required: ['app_id', 'query'],
-      },
-    },
-    batch_write_files: {
-      name: 'batch_write_files',
-      description: 'Write multiple files in a single commit.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          app_id: { type: 'string' },
-          files: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                path: { type: 'string' },
-                content: { type: 'string' },
-              },
-              required: ['path', 'content'],
-            },
-          },
-          message: { type: 'string', description: 'Commit message' },
-        },
-        required: ['app_id', 'files', 'message'],
-      },
-    },
-    get_deploy_status: {
-      name: 'get_deploy_status',
-      description: 'Check GitHub Actions deploy status for the app.',
-      input_schema: {
-        type: 'object',
-        properties: { app_id: { type: 'string' } },
-        required: ['app_id'],
-      },
-    },
-    provision_app: {
-      name: 'provision_app',
-      description: 'Provision CF Pages, D1, DNS for an existing app repo.',
-      input_schema: {
-        type: 'object',
-        properties: { app_id: { type: 'string' } },
-        required: ['app_id'],
-      },
-    },
-  };
-  return defs[name] ?? { name, description: `Tool: ${name}`, input_schema: { type: 'object', properties: {} } };
+  const def = TOOL_SCHEMAS[name];
+  if (!def) return { name, description: `Tool: ${name}`, input_schema: { type: 'object', properties: {} } };
+  return { name, description: def.description, input_schema: def.parameters };
 }

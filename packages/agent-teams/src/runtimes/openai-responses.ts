@@ -15,6 +15,7 @@ import type {
   ToolResult,
 } from '../types.ts';
 import { dispatchTool, isAllowedTool } from '../tool-dispatch.ts';
+import { TOOL_SCHEMAS } from '../tool-schemas.ts';
 
 interface OAIFunctionTool {
   type: 'function';
@@ -271,93 +272,14 @@ function buildDefaultPrompt(role: Role): string {
 }
 
 function nameToOAITool(name: string): OAIFunctionTool {
-  // Same tool definitions as cf-native, formatted for OpenAI
-  const defs: Record<string, { description: string; parameters: Record<string, unknown> }> = {
-    scaffold_app: {
-      description: 'Create a new PAS app from template with GitHub repo and platform resources.',
-      parameters: {
-        type: 'object',
-        properties: {
-          app_id: { type: 'string', description: 'App ID (lowercase)' },
-          name: { type: 'string', description: 'Display name' },
-          description: { type: 'string', description: 'Short description' },
-        },
-        required: ['app_id', 'name', 'description'],
-        additionalProperties: false,
-      },
-    },
-    write_file: {
-      description: 'Create or overwrite a file in the app GitHub repo.',
-      parameters: {
-        type: 'object',
-        properties: {
-          app_id: { type: 'string' },
-          path: { type: 'string' },
-          content: { type: 'string' },
-          message: { type: 'string' },
-        },
-        required: ['app_id', 'path', 'content'],
-        additionalProperties: false,
-      },
-    },
-    read_file: {
-      description: 'Read a file from the app GitHub repo.',
-      parameters: {
-        type: 'object',
-        properties: { app_id: { type: 'string' }, path: { type: 'string' } },
-        required: ['app_id', 'path'],
-        additionalProperties: false,
-      },
-    },
-    list_files: {
-      description: 'List files in the app GitHub repo.',
-      parameters: {
-        type: 'object',
-        properties: { app_id: { type: 'string' }, path: { type: 'string' } },
-        required: ['app_id'],
-        additionalProperties: false,
-      },
-    },
-    search_files: {
-      description: 'Search for text across all files in the app repo.',
-      parameters: {
-        type: 'object',
-        properties: { app_id: { type: 'string' }, query: { type: 'string' } },
-        required: ['app_id', 'query'],
-        additionalProperties: false,
-      },
-    },
-    batch_write_files: {
-      description: 'Write multiple files in a single commit.',
-      parameters: {
-        type: 'object',
-        properties: {
-          app_id: { type: 'string' },
-          files: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'], additionalProperties: false } },
-          message: { type: 'string' },
-        },
-        required: ['app_id', 'files', 'message'],
-        additionalProperties: false,
-      },
-    },
-    get_deploy_status: {
-      description: 'Check GitHub Actions deploy status.',
-      parameters: { type: 'object', properties: { app_id: { type: 'string' } }, required: ['app_id'], additionalProperties: false },
-    },
-    provision_app: {
-      description: 'Provision CF Pages, D1, DNS for an app.',
-      parameters: { type: 'object', properties: { app_id: { type: 'string' } }, required: ['app_id'], additionalProperties: false },
-    },
-  };
-
-  const def = defs[name];
+  const def = TOOL_SCHEMAS[name];
   return {
     type: 'function',
     name,
     description: def?.description ?? `Tool: ${name}`,
     parameters: def?.parameters ?? { type: 'object', properties: {}, additionalProperties: false },
-    // strict mode requires EVERY property to be in `required`; some tools have
-    // optional fields (e.g. write_file.message), so strict:true 400s. Keep loose.
+    // strict requires every property in `required`; some tools have optional
+    // fields (e.g. write_file.message), so strict:true 400s. Keep loose.
     strict: false,
   };
 }

@@ -1,0 +1,119 @@
+/**
+ * Canonical spine tool schemas (JSON Schema), shared by both runtime adapters.
+ * cf-native wraps each as an Anthropic tool (input_schema); openai-responses
+ * wraps it as a function tool (parameters). These match project-tools.ts in the
+ * MCP server.
+ */
+
+export interface ToolSchema {
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export const TOOL_SCHEMAS: Record<string, ToolSchema> = {
+  scaffold_app: {
+    description: 'Create a new PAS app from template. Creates GitHub repo and provisions platform resources.',
+    parameters: {
+      type: 'object',
+      properties: {
+        app_id: { type: 'string', description: 'App ID (lowercase, e.g. chess-academy)' },
+        name: { type: 'string', description: 'Display name' },
+        description: { type: 'string', description: 'Short description' },
+      },
+      required: ['app_id', 'name', 'description'],
+      additionalProperties: false,
+    },
+  },
+  write_file: {
+    description: 'Create or overwrite a file in the app GitHub repo.',
+    parameters: {
+      type: 'object',
+      properties: {
+        app_id: { type: 'string' },
+        path: { type: 'string', description: 'File path relative to repo root' },
+        content: { type: 'string', description: 'Full file content' },
+        message: { type: 'string', description: 'Commit message' },
+      },
+      required: ['app_id', 'path', 'content'],
+      additionalProperties: false,
+    },
+  },
+  read_file: {
+    description: 'Read a file from the app GitHub repo.',
+    parameters: {
+      type: 'object',
+      properties: {
+        app_id: { type: 'string' },
+        path: { type: 'string' },
+      },
+      required: ['app_id', 'path'],
+      additionalProperties: false,
+    },
+  },
+  list_files: {
+    description: 'List files in the app GitHub repo.',
+    parameters: {
+      type: 'object',
+      properties: {
+        app_id: { type: 'string' },
+        path: { type: 'string', description: 'Subdirectory (default: root)' },
+      },
+      required: ['app_id'],
+      additionalProperties: false,
+    },
+  },
+  search_files: {
+    description: 'Search for text across all files in the app repo.',
+    parameters: {
+      type: 'object',
+      properties: {
+        app_id: { type: 'string' },
+        query: { type: 'string' },
+      },
+      required: ['app_id', 'query'],
+      additionalProperties: false,
+    },
+  },
+  batch_write_files: {
+    description: 'Write multiple files in a single commit.',
+    parameters: {
+      type: 'object',
+      properties: {
+        app_id: { type: 'string' },
+        files: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              content: { type: 'string' },
+            },
+            required: ['path', 'content'],
+            additionalProperties: false,
+          },
+        },
+        message: { type: 'string', description: 'Commit message' },
+      },
+      required: ['app_id', 'files', 'message'],
+      additionalProperties: false,
+    },
+  },
+  get_deploy_status: {
+    description: 'Check GitHub Actions deploy status for the app.',
+    parameters: {
+      type: 'object',
+      properties: { app_id: { type: 'string' } },
+      required: ['app_id'],
+      additionalProperties: false,
+    },
+  },
+  provision_app: {
+    description: 'Provision CF Pages, D1, DNS for an existing app repo.',
+    parameters: {
+      type: 'object',
+      properties: { app_id: { type: 'string' } },
+      required: ['app_id'],
+      additionalProperties: false,
+    },
+  },
+};
