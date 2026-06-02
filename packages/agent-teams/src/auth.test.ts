@@ -34,4 +34,16 @@ describe('extractToken', () => {
     });
     expect(extractToken(req)).toBe('tok_abc.123-xyz');
   });
+
+  it('falls back to ?token= query param (browser WebSocket upgrade)', () => {
+    const req = new Request('https://example.com/v1/projects/x/ws?token=ws-tok-1');
+    expect(extractToken(req)).toBe('ws-tok-1');
+  });
+
+  it('prefers the Authorization header over the query param', () => {
+    const req = new Request('https://example.com/v1/x?token=qp', {
+      headers: { Authorization: 'Bearer hdr' },
+    });
+    expect(extractToken(req)).toBe('hdr');
+  });
 });

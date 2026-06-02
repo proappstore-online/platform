@@ -26,7 +26,16 @@ export async function verifyToken(
 
 export function extractToken(request: Request): string | null {
   const header = request.headers.get('Authorization');
-  if (!header?.startsWith('Bearer ')) return null;
-  const token = header.slice(7).trim();
-  return token || null;
+  if (header?.startsWith('Bearer ')) {
+    const token = header.slice(7).trim();
+    if (token) return token;
+  }
+  // Browser WebSockets can't set an Authorization header, so the WS upgrade
+  // passes the session token as ?token=. (Same token as REST; the only added
+  // exposure is URL logging — acceptable for the upgrade request.)
+  try {
+    const qp = new URL(request.url).searchParams.get('token');
+    if (qp) return qp.trim() || null;
+  } catch { /* malformed url */ }
+  return null;
 }
