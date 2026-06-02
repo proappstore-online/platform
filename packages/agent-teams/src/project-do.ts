@@ -32,18 +32,19 @@ import { CFNativeRuntime } from './runtimes/cf-native.ts';
 import { OpenAIResponsesRuntime } from './runtimes/openai-responses.ts';
 import { resolveByoKey, runtimeToProvider } from './byo-key.ts';
 import { executeFileTool, isFileTool } from './spine.ts';
-import { TOOL_SCHEMAS } from './tool-schemas.ts';
 import {
   SCHEMA,
+  MIGRATIONS,
   json,
   rowToMessage,
   rowToRoleConfig,
   rowToTicket,
   uuid,
 } from './store.ts';
-import { buildSeedMessages, buildPOSystemPrompt } from './prompts.ts';
+import { buildSeedMessages } from './prompts.ts';
+import { runDeployStage } from './deploy-stage.ts';
+import { handlePOChat } from './po-chat.ts';
 import { toolActivityDetail } from './tool-activity.ts';
-import { slidingWindowAllow, CHAT_LIMIT, CHAT_WINDOW_MS } from './rate-limit.ts';
 import { DEFAULT_PERSONAS, formatMemory, type MemoryEntry } from './memory.ts';
 import { DOCS_SKILLS_URL, sliceDocs } from './platform-skill.ts';
 
@@ -54,9 +55,6 @@ import { DOCS_SKILLS_URL, sliceDocs } from './platform-skill.ts';
  * in-memory run flag was lost on hibernation.
  */
 const WATCHDOG_MS = 60_000;
-// How long to wait for CI to register a run for a freshly pushed commit before
-// declaring the deploy dead (repo missing a push-triggered workflow, Actions off).
-const DEPLOY_CI_START_TIMEOUT_MS = 4 * 60_000;
 
 export class ProjectDO implements DurableObject {
   private state: DurableObjectState;
@@ -77,35 +75,12 @@ export class ProjectDO implements DurableObject {
   private async ensureSchema(): Promise<void> {
     if (this.initialized) return;
     this.state.storage.sql.exec(SCHEMA);
-    // Schema versioning: add columns that may not exist in older DOs
-    try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN cost_month TEXT DEFAULT ''`); } catch { /* exists */ }
-    try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN status TEXT DEFAULT 'paused'`); } catch { /* exists */ }
-    // Owner session token, captured at play time, used to authenticate the
-    // spine/MCP tool dispatch during autonomous agent runs. Pre-launch: stored
-    // in the DO's own SQLite. TODO: replace with INTERNAL_TOKEN-based MCP auth
-    // once issue #5 (MCP ownership scoping) lands.
-    try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN owner_session_token TEXT`); } catch { /* exists */ }
-    // Per-role output token cap (configurable from the console agent settings).
-    try { this.state.storage.sql.exec(`ALTER TABLE role_configs ADD COLUMN max_tokens INTEGER`); } catch { /* exists */ }
-    // Per-role persona ("soul") and the project memory table.
-    try { this.state.storage.sql.exec(`ALTER TABLE role_configs ADD COLUMN persona TEXT`); } catch { /* exists */ }
-    // Tool-call output captured on the activity row (full audit / inspection).
-    try { this.state.storage.sql.exec(`ALTER TABLE activity_log ADD COLUMN meta TEXT`); } catch { /* exists */ }
-    // Last GitHub commit synced into the working tree (GitHub = source of truth).
-    try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN repo_synced_sha TEXT`); } catch { /* exists */ }
-    try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN repo_synced_at INTEGER`); } catch { /* exists */ }
-    // Short, human-quotable per-project ticket number (#N). Backfill existing
-    // tickets in created_at order so old DOs get stable numbers too.
-    try {
-      this.state.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN seq INTEGER`);
-      this.state.storage.sql.exec(
-        `UPDATE tickets SET seq = (SELECT COUNT(*) FROM tickets t2 WHERE t2.created_at < tickets.created_at OR (t2.created_at = tickets.created_at AND t2.id <= tickets.id)) WHERE seq IS NULL`,
-      );
-    } catch { /* exists */ }
-    // Deploy stage bookkeeping: push the working tree ONCE per attempt, then poll
-    // CI for that exact commit. Without this the watchdog re-pushed every tick.
-    try { this.state.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN deploy_pushed_at INTEGER`); } catch { /* exists */ }
-    try { this.state.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN deploy_pushed_sha TEXT`); } catch { /* exists */ }
+    // Additive column migrations for older DOs (see store.ts MIGRATIONS). Each
+    // group is best-effort: if the column already exists the ALTER throws and the
+    // group is skipped.
+    for (const stmts of MIGRATIONS) {
+      try { for (const s of stmts) this.state.storage.sql.exec(s); } catch { /* already applied */ }
+    }
     this.initialized = true;
   }
 
@@ -784,102 +759,17 @@ export class ProjectDO implements DurableObject {
       });
   }
 
-  /**
-   * Deploy stage (no LLM): push the working tree to the repo and verify the CI
-   * build. Green → done. Red → back to dev-active with the build error attached
-   * (or failed at the iteration cap). This makes "done" mean "verified deployed".
-   */
-  private async runDeploy(ticketId: string): Promise<void> {
-    const ticket = this.state.storage.sql
-      .exec('SELECT title, iterations, deploy_pushed_at, deploy_pushed_sha FROM tickets WHERE id = ?', ticketId)
-      .toArray()[0] as { title: string; iterations: number; deploy_pushed_at: number | null; deploy_pushed_sha: string | null } | undefined;
-    if (!ticket) return;
-    const proj = this.state.storage.sql
-      .exec('SELECT slug, name FROM project LIMIT 1')
-      .toArray()[0] as { slug: string; name: string } | undefined;
-    if (!proj) return;
-    const now = Date.now();
-    const files = this.loadFiles();
-
-    // No deploy binding (e.g. local/dev) — can't verify; mark done with a note.
-    if (!this.env.ADMIN || !this.env.INTERNAL_TOKEN || files.size === 0) {
-      this.state.storage.sql.exec("UPDATE tickets SET status = 'done', updated_at = ? WHERE id = ?", now, ticketId);
-      this.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'done', trigger: 'system' });
-      this.logActivity('deploy', files.size === 0 ? 'No files to deploy → done' : 'Deploy binding unavailable → done', ticketId);
-      return;
-    }
-
-    const adminFetch = (path: string, body: unknown) => this.env.ADMIN!.fetch(new Request(`https://admin.proappstore.online${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': this.env.INTERNAL_TOKEN! },
-      body: JSON.stringify(body),
-    }));
-
-    const fail = (reason: string) => {
-      // Route back to Dev with the error, or fail at the iteration cap. Clear the
-      // push marker so the next attempt re-pushes the fixed code.
-      this.storeMessage({ ticketId, author: 'system', body: `Deploy failed — fix and it will redeploy:\n${reason}`.slice(0, 8000) }).catch(() => {});
-      if (ticket.iterations < 5) {
-        this.state.storage.sql.exec("UPDATE tickets SET status = 'dev-active', assignee_role = 'Dev', iterations = iterations + 1, deploy_pushed_at = NULL, deploy_pushed_sha = NULL, updated_at = ? WHERE id = ?", now, ticketId);
-        this.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'dev-active', trigger: 'system', reason: 'deploy-failed' });
-        this.logActivity('deploy', `Deploy FAILED → back to Dev: ${reason.slice(0, 200)}`, ticketId);
-      } else {
-        this.state.storage.sql.exec("UPDATE tickets SET status = 'failed', stuck_reason = 'Deploy failed (iteration cap)', updated_at = ? WHERE id = ?", now, ticketId);
-        this.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'failed', trigger: 'system', reason: 'deploy-failed' });
-        this.logActivity('deploy', `Deploy FAILED (iteration cap) → failed: ${reason.slice(0, 200)}`, ticketId);
-      }
-    };
-
-    try {
-      // 1) Push the working tree ONCE per deploy attempt (idempotent: creates the
-      //    repo if needed). Re-checks (watchdog ticks) skip straight to polling so
-      //    we don't re-commit 55 files every cycle. The commit SHA fingerprints
-      //    this attempt and is recorded on the ticket.
-      let sha = ticket.deploy_pushed_sha ?? undefined;
-      if (!ticket.deploy_pushed_at) {
-        const pushRes = await adminFetch('/api/agent-deploy', { id: proj.slug, name: proj.name, files: Object.fromEntries(files) });
-        const push = await pushRes.json() as { success?: boolean; repoUrl?: string | null; commitSha?: string; steps?: { name: string; status: string; detail: string }[] };
-        if (!pushRes.ok || !push.success) {
-          const detail = (push.steps ?? []).filter((s) => s.status === 'fail').map((s) => `${s.name} — ${s.detail}`).join('; ');
-          return fail(`Push to repo failed: ${detail || `admin ${pushRes.status}`}`);
-        }
-        if (push.repoUrl) this.state.storage.sql.exec('UPDATE project SET repo_url = ? WHERE repo_url IS NULL', push.repoUrl);
-        sha = push.commitSha;
-        this.state.storage.sql.exec('UPDATE tickets SET deploy_pushed_at = ?, deploy_pushed_sha = ? WHERE id = ?', now, sha ?? null, ticketId);
-        this.logActivity('deploy', `Pushed ${files.size} file(s) @ ${sha?.slice(0, 7) ?? '?'} → building…`, ticketId);
-      }
-
-      // 2) Verify the CI build for THIS commit (waits, bounded, for it to finish).
-      const statusRes = await adminFetch('/api/deploy-status', { id: proj.slug, waitMs: 85_000, ...(sha ? { sha } : {}) });
-      const r = await statusRes.json() as { ok: boolean; status?: string; conclusion?: string; url?: string; errorTail?: string; error?: string };
-      if (r.error) return fail(`Could not verify build: ${r.error}`);
-
-      // CI hasn't registered a run for this commit yet. Re-check next tick — but
-      // give up if it never starts (repo missing a push-triggered workflow, or
-      // Actions disabled) so we don't sit in 'deploying' forever.
-      if (r.status === 'pending') {
-        const pushedAt = ticket.deploy_pushed_at ?? now;
-        if (Date.now() - pushedAt > DEPLOY_CI_START_TIMEOUT_MS) {
-          return fail('CI never started for this commit. The repo needs a push-triggered workflow under .github/workflows (and Actions enabled).');
-        }
-        this.logActivity('deploy', 'Waiting for CI to start — will re-check', ticketId);
-        return;
-      }
-      if (r.status !== 'completed') {
-        // Build still running past our wait — stay in deploying; watchdog re-checks
-        // (and now only polls, no re-push).
-        this.logActivity('deploy', `Build still running — will re-check`, ticketId);
-        return;
-      }
-      if (!r.ok) return fail(`CI build ${r.conclusion}:\n${r.errorTail ?? r.url ?? ''}`);
-
-      // 3) Green → done. Record the verified commit as the ticket's final SHA.
-      this.state.storage.sql.exec("UPDATE tickets SET status = 'done', final_commit_sha = ?, updated_at = ? WHERE id = ?", sha ?? null, now, ticketId);
-      this.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'done', trigger: 'system' });
-      this.logActivity('deploy', `Deployed live ✓ ${sha?.slice(0, 7) ?? ''} ${r.url ?? ''}`.trim(), ticketId);
-    } catch (e) {
-      fail(`Deploy error: ${e instanceof Error ? e.message : 'unknown'}`);
-    }
+  /** Deploy stage (no LLM) — see deploy-stage.ts. The DO just supplies storage +
+   *  the few callbacks; runDeployStage does push + CI-verify + routing. */
+  private runDeploy(ticketId: string): Promise<void> {
+    return runDeployStage({
+      sql: this.state.storage.sql,
+      env: this.env,
+      broadcast: (e) => this.broadcast(e),
+      logActivity: (type, detail, tid, meta) => this.logActivity(type, detail, tid, meta),
+      storeMessage: (opts) => this.storeMessage(opts),
+      loadFiles: () => this.loadFiles(),
+    }, ticketId);
   }
 
   // ── Project working tree (file map) ──────────────────────────
@@ -1559,304 +1449,24 @@ export class ProjectDO implements DurableObject {
     });
   }
 
-  private async handleChat(request: Request): Promise<Response> {
-    const body = (await request.json()) as { message: string; apiKey?: string };
-    if (!body.message?.trim()) return json({ error: 'message required' }, 400);
-    if (body.message.length > 8192) return json({ error: 'message too long (max 8KB)' }, 413);
-
-    // Per-project chat throttle (each message triggers a PO LLM call).
-    const limit = slidingWindowAllow(this.chatWindow, Date.now(), CHAT_LIMIT, CHAT_WINDOW_MS);
-    this.chatWindow = limit.times;
-    if (!limit.allowed) return json({ error: 'Too many messages — please slow down.' }, 429);
-
-    const userText = body.message.trim();
-    const now = Date.now();
-
-    // Record user activity (resets idle timeout)
-    this.touchUserActivity();
-
-    // Sync the working tree with GitHub so the PO answers from the latest code.
-    await this.syncFromGitHub('PO chat');
-
-    // Check if any tickets are in needs-input — user's message might be the answer
-    const blockedTickets = this.state.storage.sql
-      .exec("SELECT id, assignee_role FROM tickets WHERE status = 'needs-input' ORDER BY updated_at LIMIT 1")
-      .toArray() as { id: string; assignee_role: string }[];
-
-    if (blockedTickets.length > 0) {
-      const blocked = blockedTickets[0]!;
-      // Save the user's answer as a message on the ticket
-      this.state.storage.sql.exec(
-        'INSERT INTO messages (id, ticket_id, author, body, created_at) VALUES (?, ?, ?, ?, ?)',
-        uuid(), blocked.id, 'po', userText, now,
-      );
-      // Resume to a "pending" state so autoAdvance picks it up and re-assigns
-      // Don't go directly to an active state — the agent needs to restart
-      const resumeStatus = blocked.assignee_role === 'BA' ? 'ba-refining'
-        : blocked.assignee_role === 'QA' ? 'qa-active'
-        : 'dev-active';
-      this.state.storage.sql.exec(
-        'UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?',
-        resumeStatus, now, blocked.id,
-      );
-      this.broadcast({ type: 'transition', ticketId: blocked.id, from: 'needs-input', to: resumeStatus, reason: 'user-answered' });
-      this.autoAdvance();
-    }
-
-    // Save user message to chat history
-    const userMsgId = uuid();
-    this.state.storage.sql.exec(
-      'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
-      userMsgId, 'user', userText, now,
-    );
-    this.broadcast({ type: 'chat', role: 'user', body: userText, id: userMsgId });
-
-    // Get current project state for context
-    const ticketRows = this.state.storage.sql
-      .exec('SELECT id, seq, title, status, assignee_role FROM tickets ORDER BY created_at DESC LIMIT 20')
-      .toArray();
-    const backlogSummary = ticketRows.map((t) =>
-      `- #${t.seq ?? '?'} [${t.status}] ${t.title}${t.assignee_role ? ` (${t.assignee_role})` : ''}`
-    ).join('\n');
-
-    // The app's current files — so the PO can answer questions about the actual
-    // app ("do we use google or github?") instead of guessing generically.
-    const fileList = [...this.loadFiles().keys()].sort();
-
-    // App identity — the PO must reason about THIS app, not the ProAppStore
-    // platform it's hosted on. Name from the project; "what it is" from the
-    // founding idea (oldest ticket) when present.
-    const proj = this.state.storage.sql
-      .exec('SELECT name, slug FROM project LIMIT 1')
-      .toArray()[0] as { name: string; slug: string } | undefined;
-    const founding = this.state.storage.sql
-      .exec('SELECT raw_idea FROM tickets ORDER BY created_at ASC LIMIT 1')
-      .toArray()[0] as { raw_idea: string } | undefined;
-    const appName = proj?.name ?? proj?.slug ?? 'this app';
-    const appIdea = founding?.raw_idea?.trim();
-
-    // Get recent chat history for context
-    const recentChat = this.state.storage.sql
-      .exec('SELECT role, body FROM chat_history ORDER BY created_at DESC LIMIT 20')
-      .toArray()
-      .reverse()
-      .map((r) => ({ role: r.role as string, body: r.body as string }));
-
-    // Resolve the PO's model key: prefer a client-supplied key, else fall back
-    // to the owner's BYO key in the vault. Only drop to the rule-based PO if
-    // neither is available.
-    let apiKey = body.apiKey;
-    if (!apiKey) {
-      const owner = this.state.storage.sql
-        .exec('SELECT owner_id FROM project LIMIT 1')
-        .toArray()[0] as { owner_id: string } | undefined;
-      if (owner) {
-        apiKey = (await resolveByoKey(this.env, owner.owner_id, 'anthropic')) ?? undefined;
-      }
-    }
-    if (!apiKey) {
-      return this.poTriageWithoutAI(userText, backlogSummary, now);
-    }
-
-    const memoryBlock = formatMemory(this.recallMemory());
-
-    // Call Anthropic for real PO agent response (prompt built by a pure helper).
-    const systemPrompt = buildPOSystemPrompt({
-      appName,
-      slug: proj?.slug ?? 'app',
-      appIdea,
-      memoryBlock,
-      backlogSummary,
-      fileList,
-    });
-
-    // Read-only code tools + a memory-write tool for the PO.
-    const poTools: { name: string; description: string; input_schema: unknown }[] = (['list_files', 'read_file', 'search_files'] as const).map((name) => ({
-      name, description: TOOL_SCHEMAS[name]!.description, input_schema: TOOL_SCHEMAS[name]!.parameters,
-    }));
-    poTools.push({
-      name: 'remember',
-      description: 'Record a durable decision or fact about this app (e.g. auth provider, target users, tech choice) so the whole team treats it as ground truth. Upserts by key.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          key: { type: 'string', description: 'short stable label, e.g. "auth" or "target_users"' },
-          value: { type: 'string', description: 'the decision/fact' },
-          category: { type: 'string', description: 'decision | fact | preference | architecture' },
-        },
-        required: ['key', 'value'],
-      },
-    });
-    poTools.push({
-      name: 'read_docs',
-      description: 'Read the official ProAppStore platform/SDK docs (the same skills.md the user can read). Use to confirm a real SDK/API capability before answering, and cite the doc URL to the founder. Pass a topic (e.g. "database", "rooms", "subscription") to get just that section.',
-      input_schema: {
-        type: 'object',
-        properties: { topic: { type: 'string', description: 'optional section/keyword to focus on' } },
-      },
-    });
-    const poFiles = this.loadFiles();
-    const messages: { role: 'user' | 'assistant'; content: unknown }[] = recentChat.map((m) => ({
-      role: m.role === 'user' ? 'user' as const : 'assistant' as const,
-      content: m.body,
-    }));
-
-    try {
-      let text = '';
-      // Tool loop: let the PO read/search the code, capped to keep it cheap.
-      for (let turn = 0; turn < 8; turn++) { // room to research + self-verify before answering
-        const res = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: 'claude-sonnet-4-6',
-            max_tokens: 2048,
-            system: systemPrompt,
-            tools: poTools,
-            messages,
-          }),
-        });
-
-        if (!res.ok) {
-          const safeError = res.status === 401 ? 'API key invalid'
-            : res.status === 429 ? 'Rate limited'
-            : `AI error (${res.status})`;
-          return this.savePOResponse(`Sorry, I couldn't process that: ${safeError}`, now, undefined);
-        }
-
-        const aiRes = (await res.json()) as { content?: unknown; stop_reason?: string };
-        const contentArr = aiRes.content;
-        if (!Array.isArray(contentArr)) {
-          return this.savePOResponse('I got an unexpected response format. Try again?', now, undefined);
-        }
-        messages.push({ role: 'assistant', content: contentArr });
-        text = (contentArr as { type: string; text?: string }[]).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('');
-
-        const toolUses = (contentArr as { type: string; id?: string; name?: string; input?: unknown }[]).filter((c) => c.type === 'tool_use');
-        if (toolUses.length === 0 || aiRes.stop_reason !== 'tool_use') break;
-
-        // Execute tool calls: remember → memory write; read_docs → official docs;
-        // everything else → read-only file tools.
-        const toolResults = await Promise.all(toolUses.map(async (tu) => {
-          if (tu.name === 'remember') {
-            const a = (tu.input ?? {}) as { key?: string; value?: string; category?: string };
-            if (a.key && a.value) {
-              this.rememberFact(a.category ?? 'decision', a.key, a.value);
-              return { type: 'tool_result' as const, tool_use_id: tu.id!, content: `Remembered: ${a.key} = ${a.value}` };
-            }
-            return { type: 'tool_result' as const, tool_use_id: tu.id!, content: 'remember needs key and value' };
-          }
-          if (tu.name === 'read_docs') {
-            const topic = (tu.input as { topic?: string } | undefined)?.topic;
-            const out = sliceDocs(await this.fetchDocs(), topic) || 'docs unavailable';
-            this.logActivity('tool', `PO: read_docs${topic ? ` ${topic}` : ''}`, null, JSON.stringify({ args: tu.input, result: out }));
-            return { type: 'tool_result' as const, tool_use_id: tu.id!, content: out };
-          }
-          const r = executeFileTool({ id: tu.id!, name: tu.name!, args: tu.input }, poFiles);
-          const out = (r.ok ? (typeof r.data === 'string' ? r.data : JSON.stringify(r.data)) : (r.errorMessage ?? 'error')) || '(no output)';
-          this.logActivity('tool', `PO: ${toolActivityDetail(tu.name!, tu.input)}`, null,
-            JSON.stringify({ args: tu.input, ok: r.ok, result: out }));
-          return { type: 'tool_result' as const, tool_use_id: tu.id!, content: out };
-        }));
-        messages.push({ role: 'user', content: toolResults });
-      }
-
-      // Check if PO wants to create a ticket
-      const toolMatch = text.match(/\{"tool":"create_ticket".*?\}/);
-      if (toolMatch) {
-        try {
-          const tool = JSON.parse(toolMatch[0]) as { title: string; rawIdea: string };
-          // Create the ticket
-          const ticketId = uuid();
-          const ticketNow = Date.now();
-          const ticketSeq = this.nextSeq();
-          this.state.storage.sql.exec(
-            `INSERT INTO tickets (id, seq, title, raw_idea, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'inbox', ?, ?)`,
-            ticketId, ticketSeq, tool.title, tool.rawIdea, ticketNow, ticketNow,
-          );
-          this.broadcast({ type: 'ticket-created', ticket: { id: ticketId, seq: ticketSeq, title: tool.title, status: 'inbox', rawIdea: tool.rawIdea, assigneeRole: null, iterations: 0, costSpentUsd: 0, createdAt: ticketNow, updatedAt: ticketNow, stuckReason: null } });
-          this.autoAdvance();
-
-          // Clean response (remove JSON, add confirmation)
-          const cleanText = text.replace(toolMatch[0], '').trim();
-          const poText = cleanText || `Got it. I created ticket #${ticketSeq}: "${tool.title}". It's in the inbox.`;
-          return this.savePOResponse(poText, ticketNow, { name: 'create_ticket', args: tool.title });
-        } catch {
-          // JSON parse failed, just return the text
-        }
-      }
-
-      // Regular response
-      return this.savePOResponse(text, Date.now(), undefined);
-
-    } catch (err) {
-      return this.savePOResponse(
-        `I had trouble processing that. Error: ${err instanceof Error ? err.message : 'unknown'}`,
-        Date.now(), undefined,
-      );
-    }
-  }
-
-  /** Rule-based PO when no API key is provided */
-  private poTriageWithoutAI(userText: string, backlogSummary: string, now: number): Response {
-    const lower = userText.toLowerCase();
-
-    // Detect intent
-    if (lower.includes('show') && (lower.includes('board') || lower.includes('ticket') || lower.includes('backlog'))) {
-      const text = backlogSummary
-        ? `Here's the current backlog:\n${backlogSummary}`
-        : 'The backlog is empty. Tell me what you want to build!';
-      return this.savePOResponse(text, now, undefined);
-    }
-
-    if (lower.includes('?') && (lower.includes('how') || lower.includes('what') || lower.includes('can') || lower.includes('why'))) {
-      return this.savePOResponse(
-        `That's a good question. I'll route it to the Dev agent once one is connected. For now, I've noted it.`,
-        now, undefined,
-      );
-    }
-
-    // Default: create a ticket
-    const title = userText.length > 100 ? userText.slice(0, 97) + '...' : userText;
-    const ticketId = uuid();
-    const seq = this.nextSeq();
-    this.state.storage.sql.exec(
-      `INSERT INTO tickets (id, seq, title, raw_idea, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'inbox', ?, ?)`,
-      ticketId, seq, title, userText, now, now,
-    );
-    this.broadcast({ type: 'ticket-created', ticket: { id: ticketId, seq, title, status: 'inbox', rawIdea: userText, assigneeRole: null, iterations: 0, costSpentUsd: 0, createdAt: now, updatedAt: now, stuckReason: null } });
-    this.autoAdvance();
-
-    return this.savePOResponse(
-      `Got it. I created a ticket: "${title}". It's in the inbox — BA will refine it into a spec when connected.`,
-      now,
-      { name: 'create_ticket', args: title },
-    );
-  }
-
-  private savePOResponse(
-    text: string,
-    now: number,
-    toolCall: { name: string; args: string } | undefined,
-  ): Response {
-    const msgId = uuid();
-    this.state.storage.sql.exec(
-      'INSERT INTO chat_history (id, role, body, tool_call_json, created_at) VALUES (?, ?, ?, ?, ?)',
-      msgId, 'po', text, toolCall ? JSON.stringify(toolCall) : null, now,
-    );
-    this.broadcast({ type: 'chat', role: 'po', body: text, id: msgId, toolCall });
-
-    return json({
-      id: msgId,
-      role: 'po',
-      body: text,
-      toolCall,
-      createdAt: now,
-    });
+  /** PO chat — see po-chat.ts. The DO supplies storage + the few callbacks. */
+  private handleChat(request: Request): Promise<Response> {
+    return handlePOChat({
+      sql: this.state.storage.sql,
+      env: this.env,
+      getChatWindow: () => this.chatWindow,
+      setChatWindow: (w) => { this.chatWindow = w; },
+      touchUserActivity: () => this.touchUserActivity(),
+      syncFromGitHub: (reason) => this.syncFromGitHub(reason),
+      broadcast: (e) => this.broadcast(e),
+      autoAdvance: () => this.autoAdvance(),
+      loadFiles: () => this.loadFiles(),
+      recallMemory: () => this.recallMemory(),
+      rememberFact: (c, k, v) => this.rememberFact(c, k, v),
+      fetchDocs: () => this.fetchDocs(),
+      logActivity: (type, detail, tid, meta) => this.logActivity(type, detail, tid, meta),
+      nextSeq: () => this.nextSeq(),
+    }, request);
   }
 
   // ── Agent run (explicit trigger) ────────────────────────────

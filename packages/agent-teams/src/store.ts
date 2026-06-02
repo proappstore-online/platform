@@ -60,6 +60,38 @@ CREATE TABLE IF NOT EXISTS activity_log (
 CREATE INDEX IF NOT EXISTS idx_activity ON activity_log(created_at);
 `;
 
+/**
+ * Additive migrations for columns/backfills not in the base SCHEMA, applied after
+ * it on every DO wake (older DOs may predate a column). Each entry is a group of
+ * statements run in one try/catch — if the first throws (column already exists),
+ * the rest of that group is skipped. Append-only; never reorder or remove.
+ */
+export const MIGRATIONS: string[][] = [
+  [`ALTER TABLE project ADD COLUMN cost_month TEXT DEFAULT ''`],
+  [`ALTER TABLE project ADD COLUMN status TEXT DEFAULT 'paused'`],
+  // Owner session token, captured at play time, to authenticate spine/MCP tool
+  // dispatch during autonomous runs (pre-launch: stored in the DO's SQLite).
+  [`ALTER TABLE project ADD COLUMN owner_session_token TEXT`],
+  // Per-role output token cap (configurable from the console agent settings).
+  [`ALTER TABLE role_configs ADD COLUMN max_tokens INTEGER`],
+  // Per-role persona ("soul").
+  [`ALTER TABLE role_configs ADD COLUMN persona TEXT`],
+  // Tool-call output captured on the activity row (full audit / inspection).
+  [`ALTER TABLE activity_log ADD COLUMN meta TEXT`],
+  // Last GitHub commit synced into the working tree (GitHub = source of truth).
+  [`ALTER TABLE project ADD COLUMN repo_synced_sha TEXT`],
+  [`ALTER TABLE project ADD COLUMN repo_synced_at INTEGER`],
+  // Short, human-quotable per-project ticket number (#N), backfilled in
+  // created_at order so old DOs get stable numbers too.
+  [
+    `ALTER TABLE tickets ADD COLUMN seq INTEGER`,
+    `UPDATE tickets SET seq = (SELECT COUNT(*) FROM tickets t2 WHERE t2.created_at < tickets.created_at OR (t2.created_at = tickets.created_at AND t2.id <= tickets.id)) WHERE seq IS NULL`,
+  ],
+  // Deploy stage bookkeeping: push ONCE per attempt, then poll CI for that commit.
+  [`ALTER TABLE tickets ADD COLUMN deploy_pushed_at INTEGER`],
+  [`ALTER TABLE tickets ADD COLUMN deploy_pushed_sha TEXT`],
+];
+
 export function uuid(): string {
   return crypto.randomUUID();
 }
