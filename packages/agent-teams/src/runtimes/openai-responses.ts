@@ -356,6 +356,8 @@ function nameToOAITool(name: string): OAIFunctionTool {
     name,
     description: def?.description ?? `Tool: ${name}`,
     parameters: def?.parameters ?? { type: 'object', properties: {}, additionalProperties: false },
-    strict: true,
+    // strict mode requires EVERY property to be in `required`; some tools have
+    // optional fields (e.g. write_file.message), so strict:true 400s. Keep loose.
+    strict: false,
   };
 }

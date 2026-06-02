@@ -108,12 +108,16 @@ export function makeGitHub(token: string, org: string): GitHub {
       const r = await api(`/repos/${repo(id)}/contents/${path}`);
       if (!r.ok) return { ok: false, status: r.status };
       const data = d(r);
-      return {
-        ok: true,
-        status: r.status,
-        sha: data.sha as string,
-        content: data.content ? b64decode((data.content as string).replace(/\n/g, '')) : undefined,
-      };
+      let content = data.content ? b64decode((data.content as string).replace(/\n/g, '')) : undefined;
+      // Files > 1MB come back with empty content + a download_url — fetch raw so
+      // callers don't mistake a large file for "not found".
+      if (content === undefined && typeof data.download_url === 'string') {
+        try {
+          const raw = await fetch(data.download_url as string);
+          if (raw.ok) content = await raw.text();
+        } catch { /* fall through with undefined */ }
+      }
+      return { ok: true, status: r.status, sha: data.sha as string, content };
     },
 
     async putFile(id, path, content, message, sha) {
@@ -140,17 +144,23 @@ export function makeGitHub(token: string, org: string): GitHub {
       if (files.length === 0) return { ok: true };
 
       // Git Data API needs an existing ref. Seed empty repos via Contents API.
+      const refSha = (res: GhResult) => (d(res).object as { sha?: string } | undefined)?.sha;
       let ref = await api(`/repos/${r}/git/ref/heads/main`);
-      if (!ref.ok || !(d(ref).object as { sha?: string } | undefined)?.sha) {
+      if (!ref.ok || !refSha(ref)) {
         if (!opts?.initIfEmpty) return { ok: false, error: 'repo has no main ref (not initialized)' };
         await api(`/repos/${r}/contents/README.md`, {
           method: 'PUT',
           body: { message: 'Initialize repo', content: b64encode('# Initial commit\n') },
         });
-        await sleep(1000);
-        ref = await api(`/repos/${r}/git/ref/heads/main`);
+        // Poll for the new ref to propagate — a parentless commit on a now
+        // non-empty repo would fail the non-fast-forward ref update.
+        for (let i = 0; i < 5 && !refSha(ref); i++) {
+          await sleep(700);
+          ref = await api(`/repos/${r}/git/ref/heads/main`);
+        }
+        if (!refSha(ref)) return { ok: false, error: 'repo init did not propagate (no main ref)' };
       }
-      const parentSha = (d(ref).object as { sha?: string } | undefined)?.sha;
+      const parentSha = refSha(ref);
 
       const treeItems: { path: string; mode: string; type: string; sha: string }[] = [];
       for (const f of files) {

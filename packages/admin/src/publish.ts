@@ -197,10 +197,13 @@ export interface AgentDeployRequest {
 }
 
 /**
- * Internal: create the repo (if needed), push the authored file bundle, and
- * register the app. Called by the agent-teams Worker over the service binding.
- * Hosting provisioning (CF/Path B) stays with the human publish flow / issue #7;
- * this is the "ship the agent's code to a sanctioned repo + register it" path.
+ * Internal: create the repo (if needed) and push the authored file bundle.
+ * Called by the agent-teams Worker over the service binding.
+ *
+ * Deliberately does NOT add a registry entry: hosting (CF/Path B) isn't
+ * provisioned here (issue #7), so listing the app would advertise an appUrl
+ * that 404s. The storefront listing happens at the real publish/provision step.
+ * This is purely "ship the agent's code to a sanctioned repo."
  */
 export async function handleAgentDeploy(
   req: AgentDeployRequest,
@@ -228,9 +231,6 @@ export async function handleAgentDeploy(
   const pushStep = await pushFilesToGitHub(env, req.id, req.files || {});
   steps.push(pushStep);
   if (pushStep.status === "fail") return { steps, success: false, repoUrl };
-
-  const registryStep = await addToRegistry(env, pubReq);
-  steps.push(registryStep);
 
   return { steps, success: steps.every((s) => s.status !== "fail"), repoUrl };
 }

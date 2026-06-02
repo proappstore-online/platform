@@ -157,12 +157,15 @@ export class CFNativeRuntime implements AgentRuntime {
           const result = await this.invokeTool(handle, call);
           yield { type: 'tool-result', result };
 
+          // Anthropic rejects empty tool_result content with a 400, so coalesce
+          // empty output (e.g. an empty file list) to a placeholder.
+          const resultText = result.ok
+            ? (typeof result.data === 'string' ? result.data : JSON.stringify(result.data))
+            : (result.errorMessage ?? 'Tool execution failed');
           toolResults.push({
             type: 'tool_result',
             tool_use_id: block.id,
-            content: result.ok
-              ? (typeof result.data === 'string' ? result.data : JSON.stringify(result.data))
-              : (result.errorMessage ?? 'Tool execution failed'),
+            content: resultText || '(no output)',
           });
         }
       }

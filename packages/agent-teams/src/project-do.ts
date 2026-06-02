@@ -511,9 +511,12 @@ export class ProjectDO implements DurableObject {
 
       // Consume the stream, but cap wall-clock time so a hung model call can't
       // wedge the ticket forever. On timeout we keep whatever was accumulated
-      // and route the ticket to needs-input.
+      // and route the ticket to needs-input. `aborted` stops the loop from
+      // mutating shared state (files map, DB) after we've moved on.
+      let aborted = false;
       const consume = (async () => {
         for await (const ev of runtime.run(handle, messages)) {
+          if (aborted) break;
           switch (ev.type) {
             case 'text-delta':
               assistantText += ev.text;
@@ -548,6 +551,7 @@ export class ProjectDO implements DurableObject {
       const outcome = await Promise.race([consume.then(() => 'ok' as const), timeout]);
       if (timer) clearTimeout(timer);
       if (outcome === 'timeout') {
+        aborted = true; // stop the orphaned loop from further state mutation
         errorMessage = errorMessage ?? `run exceeded ${MAX_RUN_MINUTES} minutes`;
       }
     } catch (err) {
@@ -594,15 +598,18 @@ export class ProjectDO implements DurableObject {
    */
   private dispatchRun(ticketId: string): void {
     this.running.add(ticketId);
-    const p = this.runAgentInternal(ticketId)
+    // Fire-and-forget. The DO stays alive while the promise has pending I/O; the
+    // alarm watchdog re-dispatches active tickets if the DO is ever evicted
+    // mid-run (so we don't rely on a waitUntil, which DO state doesn't have).
+    void this.runAgentInternal(ticketId)
       .catch(() => { /* swallow — outcome already persisted as needs-input */ })
       .finally(() => {
         this.running.delete(ticketId);
+        // A completed run is pipeline progress — reset the idle timer so a long
+        // autonomous build (no user chat) isn't auto-paused mid-flight.
+        this.touchUserActivity();
         try { this.autoAdvance(); } catch { /* keep the watchdog as backstop */ }
       });
-    try {
-      (this.state as unknown as { waitUntil?: (pr: Promise<unknown>) => void }).waitUntil?.(p);
-    } catch { /* waitUntil unavailable — promise still runs */ }
   }
 
   // ── Project working tree (file map) ──────────────────────────

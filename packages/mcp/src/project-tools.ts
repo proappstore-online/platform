@@ -46,9 +46,17 @@ export function registerProjectTools(
 
       const createRes = await gh.createRepoFromTemplate(app_id, { description });
       let repoCreated = false;
-      if (createRes.ok) repoCreated = true;
-      else if (createRes.status === 422) repoCreated = false; // already exists
-      else return text(`Error creating repo: ${JSON.stringify(createRes.data)}`);
+      if (createRes.ok) {
+        repoCreated = true;
+      } else if (createRes.status === 422) {
+        // 422 can mean "exists" OR a real validation failure — confirm.
+        if (!(await gh.repoExists(app_id))) {
+          return text(`Error creating repo: ${JSON.stringify(createRes.data)}`);
+        }
+        repoCreated = false; // already exists
+      } else {
+        return text(`Error creating repo: ${JSON.stringify(createRes.data)}`);
+      }
 
       if (repoCreated) {
         await new Promise((r) => setTimeout(r, 3000)); // let GitHub finish the template copy
@@ -135,7 +143,9 @@ export function registerProjectTools(
       if (!await owns(userToken, app_id)) return ownershipError(app_id);
       const res = await gh.listFiles(app_id, path);
       if (!res.ok) return text(`Error listing files: ${res.status}`);
-      const files = res.data as { path: string; type: string; size?: number }[];
+      // Contents API returns a single object when `path` is a file, an array for dirs.
+      const raw = res.data as { path: string; type: string; size?: number } | { path: string; type: string; size?: number }[];
+      const files = Array.isArray(raw) ? raw : [raw];
       const tree = files.map((f) => `${f.type === "dir" ? "d" : "f"} ${f.path}${f.size ? ` (${f.size}B)` : ""}`).join("\n");
       return text(tree || "Empty directory");
     },
@@ -236,7 +246,7 @@ export function registerProjectTools(
       const { token: userToken } = getUserContext();
       if (!userToken) return authError();
       if (!await owns(userToken, app_id)) return ownershipError(app_id);
-      const res = await gh.pushFiles(app_id, files, message);
+      const res = await gh.pushFiles(app_id, files, message, { initIfEmpty: true });
       if (!res.ok) return text(`Error committing files: ${res.error ?? "unknown"}`);
       return text(`Committed ${files.length} file(s): ${message}\n${files.map((f) => `  + ${f.path}`).join("\n")}`);
     },

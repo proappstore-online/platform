@@ -69,6 +69,28 @@ describe('makeGitHub', () => {
     const res = await gh.pushFiles('app', [{ path: 'a.ts', content: 'x' }], 'msg');
     expect(res.ok).toBe(false);
   });
+
+  it('pushFiles seeds an empty repo with initIfEmpty, then commits on the seeded ref', async () => {
+    let refReads = 0;
+    mockFetch((url, init) => {
+      if (url.endsWith('/git/ref/heads/main') && (init?.method ?? 'GET') === 'GET') {
+        refReads++;
+        return refReads === 1 ? { status: 404, body: {} } : { body: { object: { sha: 'seeded' } } };
+      }
+      if (url.endsWith('/contents/README.md')) return { status: 201, body: { commit: { sha: 'seeded' } } };
+      if (url.endsWith('/git/commits/seeded')) return { body: { tree: { sha: 'basetree' } } };
+      if (url.endsWith('/git/blobs')) return { body: { sha: 'b' } };
+      if (url.endsWith('/git/trees')) return { body: { sha: 't' } };
+      if (url.endsWith('/git/commits')) return { body: { sha: 'c' } };
+      if (url.endsWith('/git/refs/heads/main')) return { body: { ref: 'refs/heads/main' } };
+      return { body: {} };
+    });
+    const gh = makeGitHub('t', 'org');
+    const res = await gh.pushFiles('app', [{ path: 'a.ts', content: 'x' }], 'msg', { initIfEmpty: true });
+    expect(res.ok).toBe(true);
+    expect(res.commitSha).toBe('c');
+    expect(refReads).toBeGreaterThanOrEqual(2); // initial 404 + at least one poll
+  });
 });
 
 describe('verifyAppOwnership', () => {
