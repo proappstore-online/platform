@@ -8,56 +8,20 @@ import type {
   AgentRuntime,
   Message,
   PrepareContext,
-  Role,
   RuntimeHandle,
   StreamEvent,
   ToolCall,
   ToolResult,
 } from '../types.ts';
 import { dispatchTool, isAllowedTool } from '../tool-dispatch.ts';
-import { TOOL_SCHEMAS } from '../tool-schemas.ts';
 import { PLATFORM_CAPABILITIES } from '../platform-skill.ts';
-
-interface AnthropicMessage {
-  role: 'user' | 'assistant';
-  content: AnthropicContent[];
-}
-
-type AnthropicContent =
-  | { type: 'text'; text: string }
-  | { type: 'tool_use'; id: string; name: string; input: unknown }
-  | { type: 'tool_result'; tool_use_id: string; content: string };
-
-interface AnthropicTool {
-  name: string;
-  description: string;
-  input_schema: Record<string, unknown>;
-}
-
-interface AnthropicResponse {
-  id: string;
-  content: AnthropicContent[];
-  stop_reason: 'end_turn' | 'tool_use' | 'max_tokens' | null;
-  usage: { input_tokens: number; output_tokens: number };
-  model: string;
-}
+import type { AnthropicContent, AnthropicMessage } from './cf-native-types.ts';
+import { estimateCost } from './cf-native-pricing.ts';
+import { buildDefaultPrompt } from './cf-native-prompt.ts';
+import { messagesToAnthropic, nameToToolDef } from './cf-native-helpers.ts';
+import { parseAnthropicStream } from './cf-native-stream.ts';
 
 const MAX_ITERATIONS = 25;
-
-// Pricing per 1M tokens (approximate, June 2026). Unknown models fall back to
-// Sonnet pricing for the cost meter.
-const PRICING: Record<string, { input: number; output: number }> = {
-  'claude-opus-4-8': { input: 15, output: 75 },
-  'claude-opus-4-6': { input: 15, output: 75 },
-  'claude-sonnet-4-6': { input: 3, output: 15 },
-  'claude-sonnet-4-5': { input: 3, output: 15 },
-  'claude-haiku-4-5': { input: 0.8, output: 4 },
-};
-
-function estimateCost(model: string, tokensIn: number, tokensOut: number): number {
-  const pricing = PRICING[model] ?? PRICING['claude-sonnet-4-6']!;
-  return (tokensIn * pricing.input + tokensOut * pricing.output) / 1_000_000;
-}
 
 export class CFNativeRuntime implements AgentRuntime {
   async prepare(ctx: PrepareContext): Promise<RuntimeHandle> {
@@ -163,7 +127,7 @@ export class CFNativeRuntime implements AgentRuntime {
       if (!res || !res.body) { yield { type: 'error', message: 'No response stream from AI provider', retryable: true }; return; }
 
       // Parse the Anthropic SSE stream into a response (content blocks + stop_reason).
-      const response = yield* this.parseStream(res.body);
+      const response = yield* parseAnthropicStream(res.body);
       totalIn += response.usage.input_tokens;
       totalOut += response.usage.output_tokens;
 
@@ -230,90 +194,6 @@ export class CFNativeRuntime implements AgentRuntime {
     yield { type: 'done', costUsd: estimateCost(model, totalIn, totalOut), tokensIn: totalIn, tokensOut: totalOut };
   }
 
-  /**
-   * Parse the Anthropic Messages SSE stream into a complete response. Emits
-   * text-delta events live as tokens arrive; assembles text + tool_use blocks
-   * (tool input from concatenated input_json_delta) and the final stop_reason.
-   */
-  private async *parseStream(body: ReadableStream<Uint8Array>): AsyncGenerator<StreamEvent, AnthropicResponse> {
-    const reader = body.getReader();
-    const decoder = new TextDecoder();
-    const content: AnthropicContent[] = [];
-    const partialJson: Record<number, string> = {};
-    let stopReason: AnthropicResponse['stop_reason'] = null;
-    let inputTokens = 0;
-    let outputTokens = 0;
-    let buf = '';
-
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let nl: number;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (!data || data === '[DONE]') continue;
-        let ev: Record<string, unknown>;
-        try { ev = JSON.parse(data); } catch { continue; }
-
-        switch (ev.type) {
-          case 'message_start': {
-            const u = (ev.message as { usage?: { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } })?.usage;
-            // Count cached reads + cache writes toward input so the cost meter
-            // reflects total tokens processed (Anthropic reports them separately).
-            if (u) inputTokens = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-            break;
-          }
-          case 'content_block_start': {
-            const idx = ev.index as number;
-            const cb = ev.content_block as { type: string; id?: string; name?: string; text?: string };
-            if (cb.type === 'text') content[idx] = { type: 'text', text: cb.text ?? '' };
-            else if (cb.type === 'tool_use') { content[idx] = { type: 'tool_use', id: cb.id!, name: cb.name!, input: {} }; partialJson[idx] = ''; }
-            break;
-          }
-          case 'content_block_delta': {
-            const idx = ev.index as number;
-            const d = ev.delta as { type: string; text?: string; partial_json?: string };
-            if (d.type === 'text_delta') {
-              const b = content[idx];
-              if (b?.type === 'text') b.text += d.text ?? '';
-              if (d.text) yield { type: 'text-delta', text: d.text };
-            } else if (d.type === 'input_json_delta') {
-              partialJson[idx] = (partialJson[idx] ?? '') + (d.partial_json ?? '');
-            }
-            break;
-          }
-          case 'content_block_stop': {
-            const idx = ev.index as number;
-            const b = content[idx];
-            if (b?.type === 'tool_use') {
-              try { b.input = JSON.parse(partialJson[idx] || '{}'); } catch { b.input = {}; }
-            }
-            break;
-          }
-          case 'message_delta': {
-            const delta = ev.delta as { stop_reason?: AnthropicResponse['stop_reason'] };
-            if (delta?.stop_reason) stopReason = delta.stop_reason;
-            const u = ev.usage as { output_tokens?: number } | undefined;
-            if (u?.output_tokens != null) outputTokens = u.output_tokens; // cumulative
-            break;
-          }
-        }
-      }
-    }
-
-    return {
-      id: 'stream',
-      content: content.filter(Boolean),
-      stop_reason: stopReason,
-      usage: { input_tokens: inputTokens, output_tokens: outputTokens },
-      model: '',
-    };
-  }
-
   async invokeTool(handle: RuntimeHandle, toolCall: ToolCall): Promise<ToolResult> {
     const s = handle.state as {
       spineTools: string[];
@@ -335,73 +215,4 @@ export class CFNativeRuntime implements AgentRuntime {
   async terminate(_handle: RuntimeHandle): Promise<{ costUsd: number; tokensIn: number; tokensOut: number }> {
     return { costUsd: 0, tokensIn: 0, tokensOut: 0 };
   }
-}
-
-// ── Helpers ──────────────────────────────────────────────────
-
-function messagesToAnthropic(messages: Message[]): AnthropicMessage[] {
-  const result: AnthropicMessage[] = [];
-  for (const msg of messages) {
-    const role = msg.author === 'po' || msg.author === 'system' ? 'user' : 'assistant';
-    const content: AnthropicContent[] = [{ type: 'text', text: msg.body }];
-
-    if (msg.toolCalls) {
-      for (const tc of msg.toolCalls) {
-        content.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.args });
-        if (tc.result) {
-          // Tool results go in the next user message
-          result.push({ role, content });
-          result.push({
-            role: 'user',
-            content: [{
-              type: 'tool_result',
-              tool_use_id: tc.id,
-              content: tc.result.ok
-                ? (typeof tc.result.data === 'string' ? tc.result.data : JSON.stringify(tc.result.data))
-                : (tc.result.errorMessage ?? 'failed'),
-            }],
-          });
-          continue;
-        }
-      }
-    }
-
-    result.push({ role, content });
-  }
-  return result;
-}
-
-function buildDefaultPrompt(role: Role): string {
-  switch (role) {
-    case 'BA':
-      return `You are a Business Analyst for a ProAppStore app project.
-Your job: take the PO's raw idea and produce a structured specification.
-Output a spec with: summary, acceptance criteria (testable checklist),
-SDK primitives needed, files to create, and what's out of scope.
-Be specific. Be concise. Challenge vague requirements.`;
-
-    case 'Dev':
-      return `You are a Developer building a ProAppStore app.
-Use the PAS SDK (@proappstore/sdk) for auth, database, storage, rooms, maps, AI, etc.
-Tech stack: React + Vite + TypeScript + Tailwind CSS.
-Read the ticket spec carefully. Build exactly what's specified.
-Use batch_write_files for efficiency. Follow platform conventions from skills.md.
-Write type-correct code (it must pass tsc). You do NOT deploy — the system pushes
-and verifies the CI build automatically after QA approves, and routes the ticket
-back to you with the compiler error if the build fails.`;
-
-    case 'QA':
-      return `You are a QA Engineer reviewing a ProAppStore app.
-Your job: verify the ticket's acceptance criteria are met.
-Read the code. Check for: missing error handling, broken imports,
-unused variables, accessibility issues, dark mode support,
-mobile responsiveness, and SDK usage correctness.
-Report PASS or FAIL with specific findings.`;
-  }
-}
-
-function nameToToolDef(name: string): AnthropicTool {
-  const def = TOOL_SCHEMAS[name];
-  if (!def) return { name, description: `Tool: ${name}`, input_schema: { type: 'object', properties: {} } };
-  return { name, description: def.description, input_schema: def.parameters };
 }

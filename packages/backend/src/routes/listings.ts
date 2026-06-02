@@ -2,6 +2,31 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireAppOwner, HttpError } from '../lib/auth.js';
+import type { ListingRow, ListingPatch } from './listing-types.js';
+import { rowToDto, emptyDto } from './listing-types.js';
+import {
+  URL_LIKE,
+  BLUESKY_HANDLE,
+  MAX_TAGLINE,
+  MAX_LONG_DESC,
+  MAX_SCREENSHOTS,
+  clean,
+  urlOrNull,
+  emailOrNull,
+  hexOrNull,
+  handleOrNull,
+} from './listing-validation.js';
+import {
+  ALLOWED_KINDS,
+  SCREENSHOT_KIND,
+  MAX_ICON,
+  MAX_SCREENSHOT,
+  MAX_MD,
+  IMAGE_TYPES,
+  extFor,
+} from './listing-assets.js';
+
+export type { ListingDto } from './listing-types.js';
 
 /**
  * Per-app store-listing CRUD — the data the storefront renders on an
@@ -19,113 +44,6 @@ import { requireAppOwner, HttpError } from '../lib/auth.js';
  */
 
 export const listingsRoutes = new Hono<{ Bindings: Env }>();
-
-interface ListingRow {
-  app_id: string;
-  icon_url: string | null;
-  theme_color: string | null;
-  splash_color: string | null;
-  tagline: string | null;
-  long_description: string | null;
-  category: string | null;
-  website_url: string | null;
-  support_email: string | null;
-  support_url: string | null;
-  social_twitter: string | null;
-  social_github: string | null;
-  social_mastodon: string | null;
-  social_bluesky: string | null;
-  privacy_policy_url: string | null;
-  terms_url: string | null;
-  screenshots_json: string;
-  updated_at: number;
-}
-
-export interface ListingDto {
-  appId: string;
-  iconUrl: string | null;
-  themeColor: string | null;
-  splashColor: string | null;
-  tagline: string | null;
-  longDescription: string | null;
-  category: string | null;
-  websiteUrl: string | null;
-  supportEmail: string | null;
-  supportUrl: string | null;
-  socialTwitter: string | null;
-  socialGithub: string | null;
-  socialMastodon: string | null;
-  socialBluesky: string | null;
-  privacyPolicyUrl: string | null;
-  termsUrl: string | null;
-  screenshots: string[];
-  updatedAt: number;
-}
-
-const HEX = /^#[0-9a-fA-F]{3,8}$/;
-const URL_LIKE = /^https?:\/\/.+/i;
-const EMAIL_LIKE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const HANDLE = /^[a-zA-Z0-9._-]{1,64}$/;
-// Bluesky handles look like "alice.bsky.social" or "alice.example.com" —
-// dot-separated DNS-ish identifier, conservative ASCII subset.
-const BLUESKY_HANDLE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)+$/;
-
-const MAX_TAGLINE = 60;
-const MAX_LONG_DESC = 5000;
-const MAX_SCREENSHOTS = 8;
-
-function rowToDto(r: ListingRow): ListingDto {
-  let screenshots: string[] = [];
-  try {
-    const parsed = JSON.parse(r.screenshots_json);
-    if (Array.isArray(parsed)) screenshots = parsed.filter((s): s is string => typeof s === 'string');
-  } catch {
-    // bad JSON — return empty rather than 500
-  }
-  return {
-    appId: r.app_id,
-    iconUrl: r.icon_url,
-    themeColor: r.theme_color,
-    splashColor: r.splash_color,
-    tagline: r.tagline,
-    longDescription: r.long_description,
-    category: r.category,
-    websiteUrl: r.website_url,
-    supportEmail: r.support_email,
-    supportUrl: r.support_url,
-    socialTwitter: r.social_twitter,
-    socialGithub: r.social_github,
-    socialMastodon: r.social_mastodon,
-    socialBluesky: r.social_bluesky,
-    privacyPolicyUrl: r.privacy_policy_url,
-    termsUrl: r.terms_url,
-    screenshots,
-    updatedAt: r.updated_at,
-  };
-}
-
-function emptyDto(appId: string): ListingDto {
-  return {
-    appId,
-    iconUrl: null,
-    themeColor: null,
-    splashColor: null,
-    tagline: null,
-    longDescription: null,
-    category: null,
-    websiteUrl: null,
-    supportEmail: null,
-    supportUrl: null,
-    socialTwitter: null,
-    socialGithub: null,
-    socialMastodon: null,
-    socialBluesky: null,
-    privacyPolicyUrl: null,
-    termsUrl: null,
-    screenshots: [],
-    updatedAt: 0,
-  };
-}
 
 /**
  * Public read for the storefront. No auth, no support email — that one's
@@ -222,68 +140,6 @@ listingsRoutes.get('/apps/:id/listing', async (c) => {
   }
 });
 
-interface ListingPatch {
-  iconUrl?: string | null;
-  themeColor?: string | null;
-  splashColor?: string | null;
-  tagline?: string | null;
-  longDescription?: string | null;
-  category?: string | null;
-  websiteUrl?: string | null;
-  supportEmail?: string | null;
-  supportUrl?: string | null;
-  socialTwitter?: string | null;
-  socialGithub?: string | null;
-  socialMastodon?: string | null;
-  socialBluesky?: string | null;
-  privacyPolicyUrl?: string | null;
-  termsUrl?: string | null;
-  screenshots?: string[];
-}
-
-function clean(v: unknown, max?: number, fieldName?: string): string | null {
-  if (typeof v !== 'string') return null;
-  const s = v.trim();
-  if (!s) return null;
-  if (max && s.length > max) {
-    // Don't silently truncate — API clients deserve to know their data is being
-    // rejected. The form-side already enforces maxLength so well-behaved
-    // browser submissions never hit this; this guards SDKs / curl / scripts.
-    throw new HttpError(`${fieldName ?? 'field'} too long (max ${max} characters)`, 400);
-  }
-  return s;
-}
-
-function urlOrNull(v: unknown): string | null {
-  const s = clean(v);
-  if (!s) return null;
-  if (!URL_LIKE.test(s)) throw new HttpError('invalid URL', 400);
-  return s;
-}
-
-function emailOrNull(v: unknown): string | null {
-  const s = clean(v);
-  if (!s) return null;
-  if (!EMAIL_LIKE.test(s)) throw new HttpError('invalid email', 400);
-  return s;
-}
-
-function hexOrNull(v: unknown): string | null {
-  const s = clean(v);
-  if (!s) return null;
-  if (!HEX.test(s)) throw new HttpError('invalid color (must be #RGB, #RRGGBB, or #RRGGBBAA)', 400);
-  return s;
-}
-
-function handleOrNull(v: unknown): string | null {
-  const s = clean(v);
-  if (!s) return null;
-  // Strip a leading @ if the user pasted one
-  const stripped = s.startsWith('@') ? s.slice(1) : s;
-  if (!HANDLE.test(stripped)) throw new HttpError('invalid handle', 400);
-  return stripped;
-}
-
 /** Owner write. Merges in the provided fields; absent fields are unchanged. */
 listingsRoutes.put('/apps/:id/listing', async (c) => {
   try {
@@ -361,33 +217,6 @@ listingsRoutes.put('/apps/:id/listing', async (c) => {
     throw err;
   }
 });
-
-const ALLOWED_KINDS = new Set(['icon', 'privacy-policy', 'terms']);
-const SCREENSHOT_KIND = /^screenshot-[0-7]$/;
-
-const MAX_ICON = 5 * 1024 * 1024;
-const MAX_SCREENSHOT = 8 * 1024 * 1024;
-const MAX_MD = 200 * 1024;
-
-const IMAGE_TYPES = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/jpg',
-  'image/webp',
-  'image/svg+xml',
-]);
-
-function extFor(contentType: string): string | null {
-  return {
-    'image/png': 'png',
-    'image/jpeg': 'jpg',
-    'image/jpg': 'jpg',
-    'image/webp': 'webp',
-    'image/svg+xml': 'svg',
-    'text/markdown': 'md',
-    'text/plain': 'md',
-  }[contentType.toLowerCase()] ?? null;
-}
 
 /** Owner-only listing-asset upload. Returns the public URL. */
 listingsRoutes.put('/apps/:id/listing-assets/:kind', async (c) => {

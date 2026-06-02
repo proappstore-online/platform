@@ -1,6 +1,16 @@
 import type { FileSource } from '../lib/file-source.js';
 import { stripCommentsAndStrings, stripHtmlComments } from '../lib/strip.js';
 import type { CheckResult } from '../types.js';
+import {
+  findUncoveredAssets,
+  sourceHasSwRegistration,
+} from './pwa-offline-assets.js';
+import {
+  extOf,
+  extractBalancedBlock,
+  extractCoveredExtensions,
+  parseBundleCap,
+} from './pwa-offline-workbox.js';
 
 const VITE_CONFIG = 'web/vite.config.ts';
 const INDEX_HTML = 'web/index.html';
@@ -242,173 +252,4 @@ export async function checkPwaOffline(source: FileSource): Promise<CheckResult> 
     detail: issues.join('; '),
     suggestions,
   };
-}
-
-/**
- * Parse the numeric value assigned to `maximumFileSizeToCacheInBytes`.
- * Handles simple integer literals (`10485760`), underscore separators
- * (`10_485_760`), and `A * B * C` arithmetic chains that workbox docs
- * recommend (`10 * 1024 * 1024`). Returns null if the key isn't present
- * or the value isn't a recognisable arithmetic literal.
- */
-function parseBundleCap(workbox: string): number | null {
-  const m = workbox.match(/maximumFileSizeToCacheInBytes\s*:\s*([^,\n}]+)/);
-  if (!m) return null;
-  const expr = (m[1] ?? '').trim().replace(/_/g, '');
-  // Strict: only digits, *, whitespace. Anything else (variable
-  // reference, function call) → can't evaluate, treat as unknown.
-  if (!/^[\d*\s]+$/.test(expr)) return null;
-  const parts = expr.split('*').map((s) => Number(s.trim()));
-  if (parts.some((n) => !Number.isFinite(n) || n < 0)) return null;
-  return parts.reduce((a, b) => a * b, 1);
-}
-
-/**
- * Extracts the `{ ... }` body that follows the first match of `opener`,
- * walking the source character-by-character to balance braces.
- *
- * Two source views are required:
- *   - `src` — the real source, used for the returned substring.
- *   - `code` — the stripped view (comments/strings blanked) with the
- *     same character offsets as `src`. Used for matching the opener and
- *     counting braces, so that `}` in a string doesn't close the block.
- *
- * Regex alone can't handle this because workbox blocks contain nested
- * objects (`options: { expiration: {...} }`) and regex doesn't balance.
- */
-function extractBalancedBlock(
-  src: string,
-  code: string,
-  opener: RegExp,
-): string | null {
-  const m = code.match(opener);
-  if (!m || m.index === undefined) return null;
-  let i = m.index + m[0].length; // start just after the `{`
-  let depth = 1;
-  const start = i;
-  while (i < code.length) {
-    const c = code[i];
-    if (c === '{') depth++;
-    else if (c === '}') {
-      depth--;
-      if (depth === 0) return src.slice(start, i);
-    }
-    i++;
-  }
-  return null;
-}
-
-/**
- * Parses every string literal in the workbox block, finds those that
- * look like glob patterns with a brace-expansion (e.g.
- * `**\/*.{js,css,wasm}`), and unions their extensions. Returns null if
- * no `globPatterns:` key is present at all.
- *
- * Bracket-balances the array body on a string-stripped view so that
- * glob bracket expressions like `**\/[abc]/*` don't truncate the array
- * — that `]` lives inside a string literal and isn't the array's close.
- */
-function extractCoveredExtensions(workbox: string): Set<string> | null {
-  const workboxCode = stripCommentsAndStrings(workbox);
-  const keyMatch = workboxCode.match(/globPatterns\s*:\s*\[/);
-  if (!keyMatch || keyMatch.index === undefined) return null;
-  // Walk the stripped view to find the matching `]` for this `[`.
-  let i = keyMatch.index + keyMatch[0].length;
-  const start = i;
-  let depth = 1;
-  while (i < workboxCode.length && depth > 0) {
-    const c = workboxCode[i];
-    if (c === '[') depth++;
-    else if (c === ']') depth--;
-    if (depth === 0) break;
-    i++;
-  }
-  if (depth !== 0) return null;
-  // Pull the real (un-stripped) array body so we still see the
-  // quoted patterns.
-  const arrayBody = workbox.slice(start, i);
-  const covered = new Set<string>();
-  for (const m of arrayBody.matchAll(/["']([^"']+)["']/g)) {
-    const pattern = m[1] ?? '';
-    const brace = pattern.match(/\{([^}]+)\}/);
-    if (brace) {
-      for (const ext of brace[1]!.split(',')) {
-        covered.add(ext.trim().toLowerCase());
-      }
-    } else {
-      // Bare pattern like "**/*.wasm" — extract the extension after the
-      // last `.` (or the entire pattern if it's literally `**/*.wasm`).
-      const ext = pattern.match(/\.([a-zA-Z0-9]+)$/);
-      if (ext) covered.add(ext[1]!.toLowerCase());
-    }
-  }
-  return covered;
-}
-
-function extOf(filename: string): string {
-  const dot = filename.lastIndexOf('.');
-  return dot === -1 ? '' : filename.slice(dot + 1).toLowerCase();
-}
-
-/**
- * Walks web/public/ (one level deep is enough — workbox precache
- * resolves the pattern recursively, but most public assets sit at the
- * top level or one level down), returns extensions not in `covered`.
- * Ignores the manifest icons and favicons we already know are listed.
- */
-async function findUncoveredAssets(
-  source: FileSource,
-  dir: string,
-  covered: Set<string>,
-): Promise<string[]> {
-  if (!source.listDir) return [];
-  const seen = new Set<string>();
-  await walkPublic(source, dir, seen, covered, 0);
-  return [...seen].sort();
-}
-
-/**
- * Best-effort scan of web/src/ entry points for a manual
- * `serviceWorker.register` call. Doesn't recurse into the whole src
- * tree — we only care about top-level entry files (main, index,
- * registerSW) where this conventionally lives.
- */
-async function sourceHasSwRegistration(source: FileSource): Promise<boolean> {
-  const candidates = [
-    'web/src/main.tsx',
-    'web/src/main.ts',
-    'web/src/index.tsx',
-    'web/src/index.ts',
-    'web/src/registerSW.ts',
-    'web/src/registerSW.js',
-  ];
-  for (const p of candidates) {
-    const text = await source.read(p);
-    if (text !== null && /serviceWorker\.register/.test(text)) return true;
-  }
-  return false;
-}
-
-async function walkPublic(
-  source: FileSource,
-  dir: string,
-  seen: Set<string>,
-  covered: Set<string>,
-  depth: number,
-): Promise<void> {
-  if (depth > 3) return;
-  if (!source.listDir) return;
-  const entries = await source.listDir(dir);
-  if (entries === null) return;
-  for (const name of entries) {
-    const full = `${dir}/${name}`;
-    if (name.includes('.')) {
-      const ext = extOf(name);
-      if (!ext || covered.has(ext)) continue;
-      seen.add(name);
-    } else {
-      // Probably a subdirectory — recurse. listDir returns null if it's actually a file.
-      await walkPublic(source, full, seen, covered, depth + 1);
-    }
-  }
 }

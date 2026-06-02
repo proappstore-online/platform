@@ -2,6 +2,9 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env, SubmissionRow } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
+import type { CreateBody } from './submissions-types.js';
+import { isAdmin, rowToSubmission, APP_ID_RE } from './submissions-helpers.js';
+import { registerReviewRoutes } from './submissions-review.js';
 
 /**
  * Submission flow — pro side.
@@ -21,39 +24,6 @@ import { requireUser, HttpError } from '../lib/auth.js';
  */
 export const submissionRoutes = new Hono<{ Bindings: Env }>();
 
-interface FasUser {
-  id: string;
-  login: string;
-  avatarUrl: string | null;
-}
-
-interface CreateBody {
-  appId?: string;
-  name?: string;
-  category?: string;
-  description?: string;
-  icon?: string;
-  iconBg?: string;
-  proFeatures?: string[];
-  suggestedMonthlyPriceCents?: number;
-  repoUrl?: string;
-}
-
-interface ApproveBody {
-  suggestedMonthlyPriceCents?: number;
-}
-
-interface RejectBody {
-  reason?: string;
-}
-
-function isAdmin(user: FasUser, env: Env): boolean {
-  const raw = env.ADMIN_GITHUB_IDS;
-  if (!raw) return false;
-  const ids = raw.split(',').map((s) => s.trim()).filter(Boolean);
-  return ids.includes(user.id);
-}
-
 /**
  * Lightweight admin probe used by the Console to decide whether to render
  * the Admin tab. Same membership check as the approve/reject gates — kept
@@ -68,33 +38,6 @@ submissionRoutes.get('/me/is-admin', async (c) => {
     throw err;
   }
 });
-
-/** Hydrate a raw D1 row into the typed SubmissionRow shape. */
-function rowToSubmission(row: Record<string, unknown>): SubmissionRow {
-  return {
-    id: row.id as string,
-    app_id: row.app_id as string,
-    creator_id: row.creator_id as string,
-    status: row.status as SubmissionRow['status'],
-    name: row.name as string,
-    category: row.category as string,
-    description: row.description as string,
-    icon: (row.icon as string | null) ?? null,
-    icon_bg: (row.icon_bg as string | null) ?? null,
-    pro_features: (row.pro_features as string | null) ?? null,
-    suggested_monthly_price_cents:
-      row.suggested_monthly_price_cents == null
-        ? null
-        : Number(row.suggested_monthly_price_cents),
-    repo_url: (row.repo_url as string | null) ?? null,
-    reviewer_id: (row.reviewer_id as string | null) ?? null,
-    rejection_reason: (row.rejection_reason as string | null) ?? null,
-    created_at: Number(row.created_at),
-    reviewed_at: row.reviewed_at == null ? null : Number(row.reviewed_at),
-  };
-}
-
-const APP_ID_RE = /^[a-z][a-z0-9-]*$/;
 
 submissionRoutes.post('/submissions', async (c) => {
   try {
@@ -249,158 +192,8 @@ submissionRoutes.get('/submissions/:id', async (c) => {
   }
 });
 
-submissionRoutes.post('/submissions/:id/approve', async (c) => {
-  try {
-    const user = await requireUser(c);
-    if (!isAdmin(user, c.env)) return c.text('Forbidden', 403);
-
-    const id = c.req.param('id');
-    const body = await c.req.json<ApproveBody>().catch(() => ({} as ApproveBody));
-
-    const row = await c.env.DB.prepare(`SELECT * FROM submissions WHERE id = ?1`)
-      .bind(id)
-      .first<Record<string, unknown>>();
-    if (!row) return c.text('Not found', 404);
-    const submission = rowToSubmission(row);
-    if (submission.status !== 'pending') {
-      return c.text(`Submission is ${submission.status}, not pending`, 422);
-    }
-
-    const overridePrice =
-      body.suggestedMonthlyPriceCents != null &&
-      typeof body.suggestedMonthlyPriceCents === 'number' &&
-      Number.isFinite(body.suggestedMonthlyPriceCents) &&
-      body.suggestedMonthlyPriceCents >= 0
-        ? body.suggestedMonthlyPriceCents
-        : null;
-
-    const now = Date.now();
-    if (overridePrice != null) {
-      await c.env.DB.prepare(
-        `UPDATE submissions
-           SET status = 'approved',
-               reviewer_id = ?1,
-               reviewed_at = ?2,
-               suggested_monthly_price_cents = ?3
-         WHERE id = ?4`,
-      )
-        .bind(user.id, now, overridePrice, id)
-        .run();
-    } else {
-      await c.env.DB.prepare(
-        `UPDATE submissions
-           SET status = 'approved',
-               reviewer_id = ?1,
-               reviewed_at = ?2
-         WHERE id = ?3`,
-      )
-        .bind(user.id, now, id)
-        .run();
-    }
-
-    // Call existing provisioning logic via the shared helper.
-    const proFeatures = submission.pro_features
-      ? (() => {
-          try {
-            const parsed = JSON.parse(submission.pro_features as string);
-            return Array.isArray(parsed) ? (parsed as string[]) : undefined;
-          } catch {
-            return undefined;
-          }
-        })()
-      : undefined;
-
-    // Provision the app using PAS's own provision endpoint (self-contained).
-    const token = c.req.header('Authorization')?.slice(7) || '';
-    const provisionBody: Record<string, unknown> = {
-      appId: submission.app_id,
-      name: submission.name,
-      category: submission.category,
-      description: submission.description,
-      skipCompliance: true,
-    };
-    if (submission.icon) provisionBody.icon = submission.icon;
-    if (submission.icon_bg) provisionBody.iconBg = submission.icon_bg;
-    if (proFeatures) provisionBody.proFeatures = proFeatures;
-
-    let provisionResult: unknown = null;
-    try {
-      const provRes = await fetch(`https://api.proappstore.online/v1/provision`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(provisionBody),
-      });
-      provisionResult = await provRes.json();
-      const provisionSucceeded =
-        provisionResult &&
-        typeof provisionResult === 'object' &&
-        (provisionResult as { success?: boolean }).success === true;
-      if (provisionSucceeded) {
-        await c.env.DB.prepare(
-          `UPDATE submissions SET status = 'published' WHERE id = ?1`,
-        )
-          .bind(id)
-          .run();
-      }
-    } catch (e) {
-      provisionResult = { error: String(e) };
-    }
-
-    const updated = await c.env.DB.prepare(`SELECT * FROM submissions WHERE id = ?1`)
-      .bind(id)
-      .first<Record<string, unknown>>();
-    return c.json({
-      submission: updated ? rowToSubmission(updated) : submission,
-      provisionResult,
-    });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
-
-submissionRoutes.post('/submissions/:id/reject', async (c) => {
-  try {
-    const user = await requireUser(c);
-    if (!isAdmin(user, c.env)) return c.text('Forbidden', 403);
-
-    const id = c.req.param('id');
-    const body = await c.req.json<RejectBody>().catch(() => ({} as RejectBody));
-    const reason = (body.reason ?? '').trim();
-    if (!reason || reason.length < 1 || reason.length > 500) {
-      return c.text('reason is required (1–500 chars)', 400);
-    }
-
-    const row = await c.env.DB.prepare(`SELECT * FROM submissions WHERE id = ?1`)
-      .bind(id)
-      .first<Record<string, unknown>>();
-    if (!row) return c.text('Not found', 404);
-    const submission = rowToSubmission(row);
-    if (submission.status !== 'pending') {
-      return c.text(`Submission is ${submission.status}, not pending`, 422);
-    }
-
-    const now = Date.now();
-    await c.env.DB.prepare(
-      `UPDATE submissions
-         SET status = 'rejected', reviewer_id = ?1, reviewed_at = ?2, rejection_reason = ?3
-       WHERE id = ?4`,
-    )
-      .bind(user.id, now, reason, id)
-      .run();
-
-    const updated = await c.env.DB.prepare(`SELECT * FROM submissions WHERE id = ?1`)
-      .bind(id)
-      .first<Record<string, unknown>>();
-    return c.json({ submission: updated ? rowToSubmission(updated) : submission });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
+// Admin review handlers (approve + reject) live in a sibling module.
+registerReviewRoutes(submissionRoutes);
 
 submissionRoutes.delete('/submissions/:id', async (c) => {
   try {
