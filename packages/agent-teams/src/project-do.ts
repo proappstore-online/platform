@@ -45,6 +45,7 @@ import { buildSeedMessages } from './prompts.ts';
 import { toolActivityDetail } from './tool-activity.ts';
 import { slidingWindowAllow, CHAT_LIMIT, CHAT_WINDOW_MS } from './rate-limit.ts';
 import { DEFAULT_PERSONAS, PO_PERSONA, formatMemory, type MemoryEntry } from './memory.ts';
+import { PLATFORM_CAPABILITIES } from './platform-skill.ts';
 
 /**
  * Watchdog interval. While a project is running, an alarm fires on this cadence
@@ -1589,7 +1590,9 @@ ${fileList.length ? fileList.join('\n') : '(none yet — nothing built)'}
 When creating a ticket, respond with EXACTLY this JSON on its own line:
 {"tool":"create_ticket","title":"short title","rawIdea":"full description"}
 
-Otherwise just respond in plain text. Be concise and decisive. You're a PO, not a chatbot.`;
+Otherwise just respond in plain text. Be concise and decisive. You're a PO, not a chatbot.
+
+${PLATFORM_CAPABILITIES}`;
 
     // Read-only code tools + a memory-write tool for the PO.
     const poTools: { name: string; description: string; input_schema: unknown }[] = (['list_files', 'read_file', 'search_files'] as const).map((name) => ({

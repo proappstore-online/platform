@@ -16,6 +16,7 @@ import type {
 } from '../types.ts';
 import { dispatchTool, isAllowedTool } from '../tool-dispatch.ts';
 import { TOOL_SCHEMAS } from '../tool-schemas.ts';
+import { PLATFORM_CAPABILITIES } from '../platform-skill.ts';
 
 interface OAIFunctionTool {
   type: 'function';
@@ -93,7 +94,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
         apiKey: ctx.byoKey,
         model: ctx.role.model,
         maxTokens: ctx.role.maxTokens ?? 16384,
-        instructions: [ctx.role.persona, ctx.role.systemPromptOverride ?? buildDefaultPrompt(ctx.role.role)].filter(Boolean).join('\n\n'),
+        instructions: [ctx.role.persona, ctx.role.systemPromptOverride ?? buildDefaultPrompt(ctx.role.role), PLATFORM_CAPABILITIES].filter(Boolean).join('\n\n'),
         spineTools: ctx.role.spineTools,
         previousResponseId: null,
         projectId: ctx.projectId,

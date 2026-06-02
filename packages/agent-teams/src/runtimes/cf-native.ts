@@ -16,6 +16,7 @@ import type {
 } from '../types.ts';
 import { dispatchTool, isAllowedTool } from '../tool-dispatch.ts';
 import { TOOL_SCHEMAS } from '../tool-schemas.ts';
+import { PLATFORM_CAPABILITIES } from '../platform-skill.ts';
 
 interface AnthropicMessage {
   role: 'user' | 'assistant';
@@ -66,8 +67,9 @@ export class CFNativeRuntime implements AgentRuntime {
         apiKey: ctx.byoKey,
         model: ctx.role.model,
         maxTokens: ctx.role.maxTokens ?? 16384,
-        // Persona ("soul") is prepended to the role's working prompt each run.
-        systemPrompt: [ctx.role.persona, ctx.role.systemPromptOverride ?? buildDefaultPrompt(ctx.role.role)].filter(Boolean).join('\n\n'),
+        // Persona ("soul") + role prompt + the platform capabilities reference.
+        // All stable across the run → lands in the cached system block.
+        systemPrompt: [ctx.role.persona, ctx.role.systemPromptOverride ?? buildDefaultPrompt(ctx.role.role), PLATFORM_CAPABILITIES].filter(Boolean).join('\n\n'),
         spineTools: ctx.role.spineTools,
         projectId: ctx.projectId,
         ticketId: ctx.ticketId,

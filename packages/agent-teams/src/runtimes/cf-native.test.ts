@@ -130,6 +130,14 @@ describe('CFNativeRuntime run loop', () => {
     expect(body.system[0]!.text).toContain('You are the Developer. Vibe: pragmatic.');
   });
 
+  it('includes the PAS platform capabilities reference in the system prompt', async () => {
+    const calls = mockAnthropic([textResp('ok', 'end_turn')]);
+    await collect(await prepareHandle());
+    const body = calls.bodies[0] as { system: { type: string; text: string }[] };
+    expect(body.system[0]!.text).toContain('PAS platform & SDK');
+    expect(body.system[0]!.text).toContain('app.db.execute');
+  });
+
   it('marks system + tools as prompt-cache breakpoints', async () => {
     const calls = mockAnthropic([textResp('ok', 'end_turn')]);
     await collect(await prepareHandle());
