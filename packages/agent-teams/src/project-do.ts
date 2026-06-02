@@ -259,11 +259,12 @@ export class ProjectDO implements DurableObject {
         .toArray()[0] as { c: number }).c;
       if (open === 0) {
         const msg = "Agents are on. There's no work yet — tell me what to build in the chat and I'll create tickets and get the team going.";
+        const msgId = uuid();
         this.state.storage.sql.exec(
           'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
-          uuid(), 'po', msg, now,
+          msgId, 'po', msg, now,
         );
-        this.broadcast({ type: 'chat', role: 'po', body: msg, id: uuid() });
+        this.broadcast({ type: 'chat', role: 'po', body: msg, id: msgId });
       }
     } else {
       this.clearWatchdog();
@@ -333,12 +334,13 @@ export class ProjectDO implements DurableObject {
       this.state.storage.sql.exec("UPDATE project SET status = 'paused'");
       this.clearWatchdog();
       this.broadcast({ type: 'play-state', status: 'paused', reason: 'idle-timeout' });
-      this.broadcast({ type: 'chat', role: 'system', body: 'Auto-paused: no activity for 30 minutes. Hit Play to resume.', id: uuid() });
-      // Save to chat history
+      const idleMsg = 'Auto-paused: no activity for 30 minutes. Hit Play to resume.';
+      const idleId = uuid();
       this.state.storage.sql.exec(
         'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
-        uuid(), 'system', 'Auto-paused: no activity for 30 minutes. Hit Play to resume.', now,
+        idleId, 'system', idleMsg, now,
       );
+      this.broadcast({ type: 'chat', role: 'system', body: idleMsg, id: idleId });
       return;
     }
 
@@ -802,13 +804,14 @@ export class ProjectDO implements DurableObject {
       "UPDATE tickets SET status = 'needs-input', assignee_role = ?, updated_at = ? WHERE id = ?",
       role, now, ticketId,
     );
+    const blockId = uuid();
     this.state.storage.sql.exec(
       'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
-      uuid(), 'system', message, now,
+      blockId, 'system', message, now,
     );
     this.logActivity('blocked', message, ticketId);
     this.broadcast({ type: 'transition', ticketId, to: 'needs-input', reason: 'agent-blocked', role });
-    this.broadcast({ type: 'chat', role: 'system', body: message, id: uuid() });
+    this.broadcast({ type: 'chat', role: 'system', body: message, id: blockId });
   }
 
   /** Hard-fail a ticket (system trigger). */
