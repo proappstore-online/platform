@@ -122,6 +122,19 @@ describe('CFNativeRuntime run loop', () => {
     expect((custom.bodies[0] as { max_tokens: number }).max_tokens).toBe(2048);
   });
 
+  it('marks system + tools as prompt-cache breakpoints', async () => {
+    const calls = mockAnthropic([textResp('ok', 'end_turn')]);
+    await collect(await prepareHandle());
+    const body = calls.bodies[0] as {
+      system: { type: string; cache_control?: unknown }[];
+      tools: { cache_control?: unknown }[];
+    };
+    expect(Array.isArray(body.system)).toBe(true);
+    expect(body.system[0]!.cache_control).toEqual({ type: 'ephemeral' });
+    // last tool carries a cache breakpoint
+    expect(body.tools[body.tools.length - 1]!.cache_control).toEqual({ type: 'ephemeral' });
+  });
+
   it('ends immediately on a genuine end_turn with no tool calls', async () => {
     const calls = mockAnthropic([textResp('All set.', 'end_turn')]);
     const events = await collect(await prepareHandle());

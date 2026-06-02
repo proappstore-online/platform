@@ -43,10 +43,13 @@ interface AnthropicResponse {
 
 const MAX_ITERATIONS = 25;
 
-// Pricing per 1M tokens (approximate, June 2026)
+// Pricing per 1M tokens (approximate, June 2026). Unknown models fall back to
+// Sonnet pricing for the cost meter.
 const PRICING: Record<string, { input: number; output: number }> = {
-  'claude-sonnet-4-6': { input: 3, output: 15 },
+  'claude-opus-4-8': { input: 15, output: 75 },
   'claude-opus-4-6': { input: 15, output: 75 },
+  'claude-sonnet-4-6': { input: 3, output: 15 },
+  'claude-sonnet-4-5': { input: 3, output: 15 },
   'claude-haiku-4-5': { input: 0.8, output: 4 },
 };
 
@@ -91,18 +94,40 @@ export class CFNativeRuntime implements AgentRuntime {
     let totalIn = 0;
     let totalOut = 0;
 
-    const reqBody = (msgs: AnthropicMessage[]) => JSON.stringify({
-      // Per-role output budget (configurable in the console agent settings).
-      // STREAMED — a 16k-token non-streamed completion can exceed Cloudflare's
-      // ~100s edge timeout and fail with 524; streaming flushes the first byte
-      // immediately so the long generation never trips the timeout.
-      model,
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      tools: tools.length > 0 ? tools : undefined,
-      messages: msgs,
-      stream: true,
-    });
+    const cache = { type: 'ephemeral' as const };
+    const reqBody = (msgs: AnthropicMessage[]) => {
+      // Prompt caching: mark the system prompt, the tool block, and the last
+      // message's last block as cache breakpoints (≤4 allowed). The system +
+      // tools are stable across the whole run, and the rolling breakpoint on the
+      // last message caches the growing prefix (incl. re-read file contents in
+      // tool_results), cutting input-token cost ~90% on hits (5-min TTL).
+      const cachedTools = tools.length > 0
+        ? tools.map((t, i) => (i === tools.length - 1 ? { ...t, cache_control: cache } : t))
+        : undefined;
+      let cachedMsgs: unknown[] = msgs;
+      if (msgs.length > 0) {
+        const last = msgs[msgs.length - 1]!;
+        const content = typeof last.content === 'string'
+          ? [{ type: 'text', text: last.content }]
+          : last.content;
+        if (Array.isArray(content) && content.length > 0) {
+          const blocks = content.map((b, i) => (i === content.length - 1 ? { ...b, cache_control: cache } : b));
+          cachedMsgs = [...msgs.slice(0, -1), { ...last, content: blocks }];
+        }
+      }
+      return JSON.stringify({
+        // Per-role output budget (configurable in the console agent settings).
+        // STREAMED — a 16k-token non-streamed completion can exceed Cloudflare's
+        // ~100s edge timeout and fail with 524; streaming flushes the first byte
+        // immediately so the long generation never trips the timeout.
+        model,
+        max_tokens: maxTokens,
+        system: [{ type: 'text', text: systemPrompt, cache_control: cache }],
+        tools: cachedTools,
+        messages: cachedMsgs,
+        stream: true,
+      });
+    };
 
     for (let i = 0; i < MAX_ITERATIONS; i++) {
       yield { type: 'heartbeat' };
@@ -233,8 +258,10 @@ export class CFNativeRuntime implements AgentRuntime {
 
         switch (ev.type) {
           case 'message_start': {
-            const u = (ev.message as { usage?: { input_tokens?: number } })?.usage;
-            if (u?.input_tokens) inputTokens = u.input_tokens;
+            const u = (ev.message as { usage?: { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } })?.usage;
+            // Count cached reads + cache writes toward input so the cost meter
+            // reflects total tokens processed (Anthropic reports them separately).
+            if (u) inputTokens = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
             break;
           }
           case 'content_block_start': {

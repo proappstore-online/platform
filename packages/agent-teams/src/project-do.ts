@@ -176,6 +176,7 @@ export class ProjectDO implements DurableObject {
       const ticketId = ticketMatch[1]!;
       if (request.method === 'GET') return this.getTicket(ticketId);
       if (request.method === 'PATCH') return this.updateTicket(ticketId, request);
+      if (request.method === 'DELETE') return this.deleteTicket(ticketId);
     }
 
     const transitionMatch = path.match(/^\/tickets\/([a-f0-9-]+)\/transition$/);
@@ -528,8 +529,8 @@ export class ProjectDO implements DurableObject {
     const prior = this.state.storage.sql
       .exec('SELECT author, body FROM messages WHERE ticket_id = ? ORDER BY created_at', ticket.id)
       .toArray() as { author: string; body: string }[];
-    const messages = buildSeedMessages(role, ticket, proj.slug, prior);
     const files = this.loadFiles();
+    const messages = buildSeedMessages(role, ticket, proj.slug, prior, [...files.keys()].sort());
 
     let assistantText = '';
     const toolCalls: ToolCall[] = [];
@@ -1080,6 +1081,20 @@ export class ProjectDO implements DurableObject {
 
     this.broadcast({ type: 'ticket-updated', ticketId: id });
     return this.getTicket(id);
+  }
+
+  // Delete a ticket and its messages. Activity/cost-ledger rows are kept as an
+  // audit trail. Broadcasts so open boards/panels drop it live.
+  private deleteTicket(id: string): Response {
+    const row = this.state.storage.sql
+      .exec('SELECT title FROM tickets WHERE id = ?', id)
+      .toArray()[0] as { title: string } | undefined;
+    if (!row) return json({ error: 'not_found' }, 404);
+    this.state.storage.sql.exec('DELETE FROM messages WHERE ticket_id = ?', id);
+    this.state.storage.sql.exec('DELETE FROM tickets WHERE id = ?', id);
+    this.logActivity('control', `Ticket deleted: ${row.title}`, null);
+    this.broadcast({ type: 'ticket-deleted', ticketId: id });
+    return json({ ok: true });
   }
 
   private async transitionTicket(id: string, request: Request): Promise<Response> {

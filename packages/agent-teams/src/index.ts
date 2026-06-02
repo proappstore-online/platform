@@ -251,6 +251,13 @@ app.patch('/v1/projects/:slug/tickets/:id', async (c) => {
   return new Response(res.body, { status: res.status, headers: res.headers });
 });
 
+app.delete('/v1/projects/:slug/tickets/:id', async (c) => {
+  const user = c.get('user' as never) as { id: string };
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
+  const res = await forwardToDO(stub, `/tickets/${c.req.param('id')}`, user.id, { method: 'DELETE' });
+  return new Response(res.body, { status: res.status, headers: res.headers });
+});
+
 app.post('/v1/projects/:slug/tickets/:id/transition', async (c) => {
   const user = c.get('user' as never) as { id: string };
   const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));

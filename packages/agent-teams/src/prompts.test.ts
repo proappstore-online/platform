@@ -28,6 +28,15 @@ describe('buildSeedMessages', () => {
     expect(body).toContain('app id is "myapp"');
   });
 
+  it('Dev/QA get the seeded file tree (no list_files round-trip needed)', () => {
+    const files = ['src/main.tsx', 'src/App.tsx', 'package.json'];
+    const dev = buildSeedMessages('Dev', ticket(), 'myapp', [], files)[0]!.body;
+    expect(dev).toContain('## Existing files (3)');
+    expect(dev).toContain('src/App.tsx');
+    const ba = buildSeedMessages('BA', ticket(), 'myapp', [], files)[0]!.body;
+    expect(ba).not.toContain('Existing files');
+  });
+
   it('Dev on a qa-failed ticket gets the QA findings', () => {
     const prior = [
       { author: 'BA', body: 'spec' },
