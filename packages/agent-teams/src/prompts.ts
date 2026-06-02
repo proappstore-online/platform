@@ -40,11 +40,13 @@ export function buildSeedMessages(
       const qa = lastFrom('QA');
       if (qa) context += `\n\n## QA found these issues — fix them\n${qa}`;
     }
-    context += `\n\nThe app id is "${slug}". Implement or modify the app to satisfy the spec, using your tools. If unsure about a PAS SDK API/signature, call \`read_docs\` (e.g. topic "database") to confirm from the official docs BEFORE writing it — don't guess. Write the code with your file tools (batch_write_files) BEFORE explaining — keep prose brief. Do not end your turn after only reading/planning; you must actually create or edit the files. If \`src/main.tsx\` imports a file that doesn't exist (e.g. \`./App\`), create it.`;
+    context += `\n\nThe app id is "${slug}". Implement or modify the app to satisfy the spec, using your tools. If unsure about a PAS SDK API/signature, call \`read_docs\` (e.g. topic "database") to confirm from the official docs BEFORE writing it — don't guess. Write the code with your file tools (batch_write_files) BEFORE explaining — keep prose brief. Do not end your turn after only reading/planning; you must actually create or edit the files. If \`src/main.tsx\` imports a file that doesn't exist (e.g. \`./App\`), create it.
+
+CRITICAL — ship it for real: after writing files you MUST call \`provision_app\` to push, then call \`get_deploy_status\` to confirm the build is GREEN. If it reports "Build FAILED", the code did NOT deploy — read the compiler error, fix it, and call provision_app again. Repeat until the build succeeds. Do NOT end your turn on a red or unverified build, and never claim "done/deployed" unless get_deploy_status returned SUCCESS. (Note: the \`useProAuth\` hook's \`signIn\` is zero-arg — to pass a provider, call \`app.auth.signIn(provider)\` directly, not the hook's \`signIn(provider)\`.)`;
   } else if (role === 'QA') {
     const ba = lastFrom('BA');
     if (ba) context += `\n\n## Spec to verify\n${ba}`;
-    context += `\n\nThe app id is "${slug}". Review the implemented code and report PASS or FAIL with specific findings.`;
+    context += `\n\nThe app id is "${slug}". Review the implemented code against the spec. You MUST call \`get_deploy_status\`: if the build/deploy did not SUCCEED, that is an automatic FAIL — code that doesn't compile is a fail no matter how correct it reads. Quote the build error in your findings. Only PASS when the spec is met AND the build is green. Report PASS or FAIL with specific findings.`;
   }
 
   return [{

@@ -1,5 +1,5 @@
 import type { Env } from "./env.js";
-import { handlePublish, handleAgentDeploy, handleRepoPull, type PublishRequest, type AgentDeployRequest } from "./publish.js";
+import { handlePublish, handleAgentDeploy, handleRepoPull, handleDeployStatus, type PublishRequest, type AgentDeployRequest } from "./publish.js";
 import { verifySession, handleAuthExchange, handleAuthMe } from "./auth.js";
 
 export default {
@@ -58,6 +58,17 @@ export default {
       if (!body.id) return Response.json({ error: "id required" }, { status: 400 });
       const result = await handleRepoPull(body, env);
       return Response.json(result, { status: result.ok ? 200 : 404 });
+    }
+
+    // Internal: real CI build/deploy result (the build gate for agent-teams).
+    if (url.pathname === "/api/deploy-status" && request.method === "POST") {
+      const provided = request.headers.get("X-Internal-Token");
+      if (!env.INTERNAL_TOKEN || provided !== env.INTERNAL_TOKEN) {
+        return Response.json({ error: "forbidden" }, { status: 403 });
+      }
+      const body = await request.json<{ id: string; waitMs?: number }>();
+      if (!body.id) return Response.json({ error: "id required" }, { status: 400 });
+      return Response.json(await handleDeployStatus(body, env));
     }
 
     // Public read: list apps from registry

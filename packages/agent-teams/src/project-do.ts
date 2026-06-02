@@ -966,14 +966,30 @@ export class ProjectDO implements DurableObject {
         const proj = this.state.storage.sql
           .exec('SELECT repo_url FROM project LIMIT 1')
           .toArray()[0] as { repo_url: string | null } | undefined;
-        return {
-          callId: call.id,
-          ok: true,
-          data: proj?.repo_url
-            ? `Repo: ${proj.repo_url} — files pushed; CI deploys from the repo.`
-            : `"${slug}" is not deployed yet. Author the app, then call provision_app.`,
-          durationMs: Date.now() - start,
-        };
+        if (!proj?.repo_url) {
+          return { callId: call.id, ok: true, data: `"${slug}" is not deployed yet. Author the app, then call provision_app.`, durationMs: Date.now() - start };
+        }
+        if (!this.env.ADMIN || !this.env.INTERNAL_TOKEN) {
+          return { callId: call.id, ok: true, data: `Repo: ${proj.repo_url} (deploy status unavailable in this environment).`, durationMs: Date.now() - start };
+        }
+        // Real build gate: wait for the CI run to finish and report success/failure
+        // (with the compiler error on failure) — not just "files pushed".
+        try {
+          const res = await this.env.ADMIN.fetch(new Request('https://admin.proappstore.online/api/deploy-status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Internal-Token': this.env.INTERNAL_TOKEN },
+            body: JSON.stringify({ id: slug, waitMs: 75_000 }),
+          }));
+          const r = await res.json() as { ok: boolean; status?: string; conclusion?: string; url?: string; errorTail?: string; error?: string };
+          if (r.error) return { callId: call.id, ok: true, data: `Deploy status: ${r.error}`, durationMs: Date.now() - start };
+          if (r.status !== 'completed') return { callId: call.id, ok: true, data: `Build ${r.status ?? 'pending'} — not finished yet. ${r.url ?? ''}`, durationMs: Date.now() - start };
+          const head = r.ok
+            ? `Build SUCCESS — deployed live. ${r.url ?? ''}`
+            : `Build FAILED (${r.conclusion}). The code did NOT deploy. Fix this, then re-run provision_app.\n${r.errorTail ?? ''}\n${r.url ?? ''}`;
+          return { callId: call.id, ok: true, data: head, durationMs: Date.now() - start };
+        } catch (e) {
+          return { callId: call.id, ok: true, data: `Could not fetch deploy status: ${e instanceof Error ? e.message : 'error'}`, durationMs: Date.now() - start };
+        }
       }
 
       default:

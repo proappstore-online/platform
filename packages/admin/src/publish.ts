@@ -201,6 +201,16 @@ export async function handleRepoPull(
   return gh.pullText(req.id);
 }
 
+/** Internal: the real CI build/deploy result for an app (the build gate). */
+export async function handleDeployStatus(
+  req: { id: string; waitMs?: number },
+  env: Env,
+): Promise<{ ok: boolean; status?: string; conclusion?: string; sha?: string; url?: string; errorTail?: string; error?: string }> {
+  const gh = ghFor(env);
+  if (!(await gh.repoExists(req.id))) return { ok: false, error: "repo not found" };
+  return gh.deployResult(req.id, { waitMs: Math.min(req.waitMs ?? 0, 90_000) });
+}
+
 // CONTRACT (agent-deploy): the request body sent by packages/agent-teams
 // (ProjectDO.executeInfraTool). Both ends now live in this monorepo — keep in
 // sync; a grep for "AgentDeployRequest" finds the caller.

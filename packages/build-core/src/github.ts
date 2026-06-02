@@ -45,6 +45,12 @@ export interface GitHub {
     opts?: { initIfEmpty?: boolean },
   ): Promise<{ ok: boolean; commitSha?: string; error?: string }>;
   getDeployStatus(id: string, perPage?: number): Promise<GhResult>;
+  /** Latest CI run for the default branch, waiting (bounded) for an in-flight run
+   *  to finish. On failure, returns a tail of the failed job's log (the compiler
+   *  error etc.) so the Dev can actually fix it. This is the build gate. */
+  deployResult(id: string, opts?: { waitMs?: number }): Promise<{
+    ok: boolean; status?: string | undefined; conclusion?: string | undefined; sha?: string | undefined; url?: string | undefined; errorTail?: string | undefined;
+  }>;
   /** Latest commit SHA + date on the default branch (cheap freshness check). */
   headSha(id: string): Promise<{ ok: boolean; sha?: string | undefined; date?: string | undefined }>;
   /** Pull the repo's text files at HEAD (recursive tree → blobs), under caps.
@@ -206,6 +212,49 @@ export function makeGitHub(token: string, org: string): GitHub {
 
     async getDeployStatus(id, perPage = 3) {
       return api(`/repos/${repo(id)}/actions/runs?per_page=${perPage}`);
+    },
+
+    async deployResult(id, opts) {
+      const waitMs = opts?.waitMs ?? 0;
+      const deadline = Date.now() + waitMs;
+      let run: Record<string, unknown> | undefined;
+      // Poll the latest run until it completes (or we run out of wait budget).
+      for (;;) {
+        const r = await api(`/repos/${repo(id)}/actions/runs?per_page=1`);
+        run = ((d(r).workflow_runs as Record<string, unknown>[]) ?? [])[0];
+        if (!run) return { ok: false, errorTail: 'no CI runs found' };
+        if (run.status === 'completed' || Date.now() >= deadline) break;
+        await sleep(4000);
+      }
+      const status = run.status as string;
+      const conclusion = run.conclusion as string | undefined;
+      const result: { ok: boolean; status: string; conclusion?: string | undefined; sha?: string | undefined; url?: string | undefined; errorTail?: string | undefined } = {
+        ok: conclusion === 'success',
+        status,
+        conclusion: conclusion ?? undefined,
+        sha: (run.head_sha as string)?.slice(0, 7),
+        url: run.html_url as string,
+      };
+      // On failure, pull the failed job's plaintext log tail (the actual error).
+      if (conclusion && conclusion !== 'success') {
+        try {
+          const jobsRes = await api(`/repos/${repo(id)}/actions/runs/${run.id}/jobs`);
+          const jobs = (d(jobsRes).jobs as Record<string, unknown>[]) ?? [];
+          const failed = jobs.find((j) => j.conclusion === 'failure');
+          if (failed) {
+            const logRes = await fetch(`https://api.github.com${`/repos/${repo(id)}/actions/jobs/${failed.id}/logs`}`, {
+              headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'proappstore-build-core', 'X-GitHub-Api-Version': '2022-11-28' },
+              redirect: 'follow',
+            });
+            if (logRes.ok) {
+              const text = await logRes.text();
+              const lines = text.split('\n').filter((l) => /error|fail|✘|exit status|cannot|not found|TS\d{3,}/i.test(l));
+              result.errorTail = (lines.length ? lines.slice(-25) : text.split('\n').slice(-25)).join('\n').slice(0, 4000);
+            }
+          }
+        } catch { /* best-effort */ }
+      }
+      return result;
     },
 
     async headSha(id) {
