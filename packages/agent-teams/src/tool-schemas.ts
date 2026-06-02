@@ -116,4 +116,12 @@ export const TOOL_SCHEMAS: Record<string, ToolSchema> = {
       additionalProperties: false,
     },
   },
+  read_docs: {
+    description: 'Read the official ProAppStore platform/SDK docs (skills.md) — the real API reference. Pass a topic (e.g. "database", "rooms", "subscription") to get just that section. Use it to confirm a real SDK capability/signature before writing or reviewing code.',
+    parameters: {
+      type: 'object',
+      properties: { topic: { type: 'string', description: 'optional section/keyword to focus on' } },
+      additionalProperties: false,
+    },
+  },
 };

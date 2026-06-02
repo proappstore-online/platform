@@ -549,6 +549,9 @@ export class ProjectDO implements DurableObject {
       return;
     }
     const roleConfig = rowToRoleConfig(rcRow);
+    // Every role may consult the official docs, even on projects seeded before
+    // read_docs existed (union at run time, no migration needed).
+    if (!roleConfig.spineTools.includes('read_docs')) roleConfig.spineTools = [...roleConfig.spineTools, 'read_docs'];
 
     // Resolve the owner's BYO key for this runtime's provider.
     const provider = runtimeToProvider(roleConfig.runtime);
@@ -892,6 +895,11 @@ export class ProjectDO implements DurableObject {
     ownerToken: string | null,
   ): (call: ToolCall) => Promise<ToolResult> {
     return async (call) => {
+      if (call.name === 'read_docs') {
+        const topic = (call.args as { topic?: string } | undefined)?.topic;
+        const out = sliceDocs(await this.fetchDocs(), topic) || 'docs unavailable';
+        return { callId: call.id, ok: true, data: out, durationMs: 0 };
+      }
       if (isFileTool(call.name)) return executeFileTool(call, files);
       return this.executeInfraTool(call, slug, files, ownerToken);
     };
@@ -1085,9 +1093,9 @@ export class ProjectDO implements DurableObject {
 
     // Set default role configs
     const defaults: RoleConfig[] = [
-      { role: 'BA', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 8192, spineTools: [], vendorTools: [] },
-      { role: 'Dev', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 16384, spineTools: ['scaffold_app', 'write_file', 'read_file', 'list_files', 'batch_write_files', 'search_files', 'get_deploy_status', 'provision_app'], vendorTools: [] },
-      { role: 'QA', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 8192, spineTools: ['read_file', 'list_files', 'search_files', 'get_deploy_status'], vendorTools: [] },
+      { role: 'BA', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 8192, spineTools: ['read_docs'], vendorTools: [] },
+      { role: 'Dev', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 16384, spineTools: ['scaffold_app', 'write_file', 'read_file', 'list_files', 'batch_write_files', 'search_files', 'get_deploy_status', 'provision_app', 'read_docs'], vendorTools: [] },
+      { role: 'QA', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 8192, spineTools: ['read_file', 'list_files', 'search_files', 'get_deploy_status', 'read_docs'], vendorTools: [] },
     ];
 
     for (const rc of defaults) {
@@ -1133,7 +1141,7 @@ export class ProjectDO implements DurableObject {
     const VALID_RUNTIMES = new Set(['cf-native', 'openai-responses']);
     const VALID_TOOLS = new Set([
       'scaffold_app', 'write_file', 'read_file', 'list_files', 'delete_file',
-      'search_files', 'batch_write_files', 'get_deploy_status', 'provision_app',
+      'search_files', 'batch_write_files', 'get_deploy_status', 'provision_app', 'read_docs',
     ]);
 
     for (const rc of body.roles) {

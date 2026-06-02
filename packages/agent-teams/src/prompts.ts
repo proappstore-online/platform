@@ -40,7 +40,7 @@ export function buildSeedMessages(
       const qa = lastFrom('QA');
       if (qa) context += `\n\n## QA found these issues — fix them\n${qa}`;
     }
-    context += `\n\nThe app id is "${slug}". Implement or modify the app to satisfy the spec, using your tools. Write the code with your file tools (batch_write_files) BEFORE explaining — keep prose brief. Do not end your turn after only reading/planning; you must actually create or edit the files. If \`src/main.tsx\` imports a file that doesn't exist (e.g. \`./App\`), create it.`;
+    context += `\n\nThe app id is "${slug}". Implement or modify the app to satisfy the spec, using your tools. If unsure about a PAS SDK API/signature, call \`read_docs\` (e.g. topic "database") to confirm from the official docs BEFORE writing it — don't guess. Write the code with your file tools (batch_write_files) BEFORE explaining — keep prose brief. Do not end your turn after only reading/planning; you must actually create or edit the files. If \`src/main.tsx\` imports a file that doesn't exist (e.g. \`./App\`), create it.`;
   } else if (role === 'QA') {
     const ba = lastFrom('BA');
     if (ba) context += `\n\n## Spec to verify\n${ba}`;
