@@ -91,51 +91,56 @@ export class CFNativeRuntime implements AgentRuntime {
     let totalIn = 0;
     let totalOut = 0;
 
+    const reqBody = (msgs: AnthropicMessage[]) => JSON.stringify({
+      // Per-role output budget (configurable in the console agent settings).
+      // STREAMED — a 16k-token non-streamed completion can exceed Cloudflare's
+      // ~100s edge timeout and fail with 524; streaming flushes the first byte
+      // immediately so the long generation never trips the timeout.
+      model,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      tools: tools.length > 0 ? tools : undefined,
+      messages: msgs,
+      stream: true,
+    });
+
     for (let i = 0; i < MAX_ITERATIONS; i++) {
       yield { type: 'heartbeat' };
 
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          // Per-role output budget (configurable in the console agent settings).
-          // The Dev writes whole files via batch_write_files; too small a cap
-          // truncated mid-write and stranded the run.
-          model,
-          max_tokens: maxTokens,
-          system: systemPrompt,
-          tools: tools.length > 0 ? tools : undefined,
-          messages: anthropicMessages,
-        }),
-      });
-
-      if (!res.ok) {
-        // Sanitize error — never expose raw upstream response (may contain API key)
-        const safeError = res.status === 401 ? 'API authentication failed — check your API key'
-          : res.status === 429 ? 'Rate limited — retry later'
-          : res.status === 400 ? 'Invalid request to AI provider'
-          : `AI provider error (${res.status})`;
-        yield { type: 'error', message: safeError, retryable: res.status >= 500 };
-        return;
+      // Open the request, retrying transient failures (429, 5xx incl. CF 524).
+      let res: Response | null = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'Content-Type': 'application/json',
+          },
+          body: reqBody(anthropicMessages),
+        });
+        if (res.ok) break;
+        const transient = res.status === 429 || res.status >= 500;
+        if (!transient || attempt === 2) {
+          const safeError = res.status === 401 ? 'API authentication failed — check your API key'
+            : res.status === 429 ? 'Rate limited — retry later'
+            : res.status === 400 ? 'Invalid request to AI provider'
+            : res.status === 524 || res.status === 504 ? 'AI provider timed out — try again or lower this role’s max tokens'
+            : `AI provider error (${res.status})`;
+          yield { type: 'error', message: safeError, retryable: transient };
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
       }
+      if (!res || !res.body) { yield { type: 'error', message: 'No response stream from AI provider', retryable: true }; return; }
 
-      const response = (await res.json()) as AnthropicResponse;
+      // Parse the Anthropic SSE stream into a response (content blocks + stop_reason).
+      const response = yield* this.parseStream(res.body);
       totalIn += response.usage.input_tokens;
       totalOut += response.usage.output_tokens;
 
-      // Append assistant response to conversation
+      // Append assistant response to conversation (text already emitted live).
       anthropicMessages.push({ role: 'assistant', content: response.content });
-
-      // Emit text deltas
-      for (const block of response.content) {
-        if (block.type === 'text') {
-          yield { type: 'text-delta', text: block.text };
-        }
-      }
 
       const toolUseBlocks = response.content.filter((b) => b.type === 'tool_use');
 
@@ -195,6 +200,88 @@ export class CFNativeRuntime implements AgentRuntime {
 
     yield { type: 'error', message: `Max iterations (${MAX_ITERATIONS}) reached`, retryable: false };
     yield { type: 'done', costUsd: estimateCost(model, totalIn, totalOut), tokensIn: totalIn, tokensOut: totalOut };
+  }
+
+  /**
+   * Parse the Anthropic Messages SSE stream into a complete response. Emits
+   * text-delta events live as tokens arrive; assembles text + tool_use blocks
+   * (tool input from concatenated input_json_delta) and the final stop_reason.
+   */
+  private async *parseStream(body: ReadableStream<Uint8Array>): AsyncGenerator<StreamEvent, AnthropicResponse> {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    const content: AnthropicContent[] = [];
+    const partialJson: Record<number, string> = {};
+    let stopReason: AnthropicResponse['stop_reason'] = null;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let buf = '';
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === '[DONE]') continue;
+        let ev: Record<string, unknown>;
+        try { ev = JSON.parse(data); } catch { continue; }
+
+        switch (ev.type) {
+          case 'message_start': {
+            const u = (ev.message as { usage?: { input_tokens?: number } })?.usage;
+            if (u?.input_tokens) inputTokens = u.input_tokens;
+            break;
+          }
+          case 'content_block_start': {
+            const idx = ev.index as number;
+            const cb = ev.content_block as { type: string; id?: string; name?: string; text?: string };
+            if (cb.type === 'text') content[idx] = { type: 'text', text: cb.text ?? '' };
+            else if (cb.type === 'tool_use') { content[idx] = { type: 'tool_use', id: cb.id!, name: cb.name!, input: {} }; partialJson[idx] = ''; }
+            break;
+          }
+          case 'content_block_delta': {
+            const idx = ev.index as number;
+            const d = ev.delta as { type: string; text?: string; partial_json?: string };
+            if (d.type === 'text_delta') {
+              const b = content[idx];
+              if (b?.type === 'text') b.text += d.text ?? '';
+              if (d.text) yield { type: 'text-delta', text: d.text };
+            } else if (d.type === 'input_json_delta') {
+              partialJson[idx] = (partialJson[idx] ?? '') + (d.partial_json ?? '');
+            }
+            break;
+          }
+          case 'content_block_stop': {
+            const idx = ev.index as number;
+            const b = content[idx];
+            if (b?.type === 'tool_use') {
+              try { b.input = JSON.parse(partialJson[idx] || '{}'); } catch { b.input = {}; }
+            }
+            break;
+          }
+          case 'message_delta': {
+            const delta = ev.delta as { stop_reason?: AnthropicResponse['stop_reason'] };
+            if (delta?.stop_reason) stopReason = delta.stop_reason;
+            const u = ev.usage as { output_tokens?: number } | undefined;
+            if (u?.output_tokens != null) outputTokens = u.output_tokens; // cumulative
+            break;
+          }
+        }
+      }
+    }
+
+    return {
+      id: 'stream',
+      content: content.filter(Boolean),
+      stop_reason: stopReason,
+      usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+      model: '',
+    };
   }
 
   async invokeTool(handle: RuntimeHandle, toolCall: ToolCall): Promise<ToolResult> {

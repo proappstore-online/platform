@@ -24,14 +24,42 @@ function toolResp(name: string, input: unknown) {
   };
 }
 
-// Mock global fetch to return a queue of Anthropic responses; returns a call counter.
-function mockAnthropic(responses: unknown[]) {
+// Encode an Anthropic response as the SSE stream the runtime now parses.
+function sseFromResponse(resp: {
+  content: { type: string; text?: string; id?: string; name?: string; input?: unknown }[];
+  stop_reason: string;
+  usage: { input_tokens: number; output_tokens: number };
+}): ReadableStream<Uint8Array> {
+  const lines: string[] = [];
+  const push = (o: Record<string, unknown>) => lines.push(`event: ${o.type}\ndata: ${JSON.stringify(o)}\n\n`);
+  push({ type: 'message_start', message: { usage: { input_tokens: resp.usage.input_tokens, output_tokens: 0 } } });
+  resp.content.forEach((b, i) => {
+    if (b.type === 'text') {
+      push({ type: 'content_block_start', index: i, content_block: { type: 'text', text: '' } });
+      push({ type: 'content_block_delta', index: i, delta: { type: 'text_delta', text: b.text } });
+      push({ type: 'content_block_stop', index: i });
+    } else if (b.type === 'tool_use') {
+      push({ type: 'content_block_start', index: i, content_block: { type: 'tool_use', id: b.id, name: b.name, input: {} } });
+      push({ type: 'content_block_delta', index: i, delta: { type: 'input_json_delta', partial_json: JSON.stringify(b.input ?? {}) } });
+      push({ type: 'content_block_stop', index: i });
+    }
+  });
+  push({ type: 'message_delta', delta: { stop_reason: resp.stop_reason }, usage: { output_tokens: resp.usage.output_tokens } });
+  push({ type: 'message_stop' });
+  const bytes = new TextEncoder().encode(lines.join(''));
+  return new ReadableStream({ start(c) { c.enqueue(bytes); c.close(); } });
+}
+
+type Resp = { content: { type: string; text?: string; id?: string; name?: string; input?: unknown }[]; stop_reason: string; usage: { input_tokens: number; output_tokens: number } };
+
+// Mock global fetch to stream a queue of Anthropic responses; returns a call counter.
+function mockAnthropic(responses: Resp[]) {
   const calls = { count: 0, bodies: [] as unknown[] };
   globalThis.fetch = (async (_url: string, init: { body: string }) => {
     calls.bodies.push(JSON.parse(init.body));
-    const r = responses[Math.min(calls.count, responses.length - 1)];
+    const r = responses[Math.min(calls.count, responses.length - 1)]!;
     calls.count += 1;
-    return { ok: true, status: 200, json: async () => r };
+    return { ok: true, status: 200, body: sseFromResponse(r) };
   }) as unknown as typeof fetch;
   return calls;
 }
