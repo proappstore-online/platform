@@ -12,6 +12,8 @@ name: Deploy Admin Worker
 # must carry the `workflow` permission so agent-deploy can commit
 # .github/workflows/deploy.yml into app repos. CF_API_TOKEN, SESSION_SIGNING_KEY,
 # and INTERNAL_TOKEN are still set manually (same pattern can migrate them later).
+# PAS_ADMIN_GH_TOKEN is live in Doppler as of 2026-06-03 (fine-grained PAT with
+# Workflows: write) — this deploy syncs it into the Worker's GITHUB_TOKEN.
 
 on:
   push:
