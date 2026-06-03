@@ -8,6 +8,7 @@ import {
   type Step,
 } from "@proappstore/build-core";
 import type { Env } from "./env.js";
+import { e2eHarnessFiles, E2E_SPEC_PREFIX } from "./e2e-harness.js";
 
 const ghFor = (env: Env) => makeGitHub(env.GITHUB_TOKEN, env.PUBLISHERS_ORG);
 /** CF provisioning config from the admin Worker's bindings (shared primitives). */
@@ -90,6 +91,32 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${env.CF_ACCOUNT_ID}
+
+  # Behavioural gate: drive the LIVE app in a real browser (the thing tsc/build
+  # can't check). Runs after deploy; a failure fails the run, so the deploy
+  # gate routes the ticket back to Dev with the Playwright output. Auth uses a
+  # platform fixture session via the SDK's real sign-in path (no test bypass);
+  # auth-gated specs skip when PAS_E2E_SESSION_TOKEN is unset.
+  e2e:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install E2E deps
+        working-directory: e2e
+        run: npm install
+      - name: Install Playwright browser
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+      - name: Run E2E against the live app
+        working-directory: e2e
+        env:
+          E2E_BASE_URL: https://\${{ github.event.repository.name }}.proappstore.online
+          E2E_SESSION_TOKEN: \${{ secrets.PAS_E2E_SESSION_TOKEN }}
+        run: npx playwright test
 `;
 }
 
@@ -295,6 +322,16 @@ async function provisionApp(
     const files: Record<string, string> = { ...opts.files };
     const hasWorkflow = Object.keys(files).some((p) => /^\.github\/workflows\/.+\.ya?ml$/i.test(p));
     if (!hasWorkflow) files[DEPLOY_WORKFLOW_PATH] = deployWorkflowYaml(env);
+    // Inject the Playwright E2E harness (config + fixtures + baseline smoke) so
+    // the CI e2e job has something to run. Each file is added only when absent
+    // (never clobber authored harness edits); the baseline smoke is skipped once
+    // the bundle carries QA-authored specs under e2e/specs/.
+    const hasAuthoredSpecs = Object.keys(files).some((p) => p.startsWith(E2E_SPEC_PREFIX));
+    for (const [path, content] of Object.entries(e2eHarnessFiles())) {
+      if (path in files) continue;
+      if (hasAuthoredSpecs && path.startsWith(E2E_SPEC_PREFIX)) continue;
+      files[path] = content;
+    }
     const pushStep = await pushFilesToGitHub(env, req.id, files);
     steps.push(pushStep);
     if (pushStep.status === "fail") return stop();
