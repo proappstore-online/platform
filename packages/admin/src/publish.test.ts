@@ -145,6 +145,8 @@ describe("deploy-workflow injection (agent path)", () => {
     expect(wf).toContain("${{ secrets.CLOUDFLARE_API_TOKEN }}"); // org-level secret
     expect(wf).toContain("--no-frozen-lockfile"); // agents commit no lockfile
     expect(wf).toContain("npx playwright test"); // behavioural gate runs after deploy
+    expect(wf).toContain("@vibecodeqa/cli"); // code-health scan (report-only)
+    expect(wf).toContain(".vcqa/report.json"); // written into dist for the Dev Ops tab
     // 1 input file + injected deploy.yml + 4 E2E harness files (config, fixtures,
     // package.json, baseline smoke spec).
     expect(rec.blobs).toHaveLength(6);

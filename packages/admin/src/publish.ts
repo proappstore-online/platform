@@ -86,6 +86,20 @@ jobs:
           elif [ -d dist ]; then echo "dir=dist" >> "\$GITHUB_OUTPUT"
           else echo "::error::No build output (looked for ./dist and ./web/dist)"; exit 1; fi
 
+      # Code-health scan (VCQA) — REPORT ONLY, never blocks the deploy. Writes
+      # report.json into the deployed output so the console's Dev Ops tab can read
+      # it at <app>.proappstore.online/.vcqa/report.json. A low score is a signal,
+      # not a gate (a fresh scaffold legitimately scores low on test coverage).
+      - name: Code-health scan (VCQA, report-only)
+        continue-on-error: true
+        run: |
+          npx -y @vibecodeqa/cli@latest --skip-tests . || true
+          if [ -f .vibe-check/report.json ]; then
+            mkdir -p "\${{ steps.dist.outputs.dir }}/.vcqa"
+            cp .vibe-check/report.json "\${{ steps.dist.outputs.dir }}/.vcqa/report.json"
+            [ -f .vibe-check/badge.svg ] && cp .vibe-check/badge.svg "\${{ steps.dist.outputs.dir }}/.vcqa/badge.svg" || true
+          fi
+
       - name: Deploy to Cloudflare Pages
         run: npx wrangler@3 pages deploy "\${{ steps.dist.outputs.dir }}" --project-name=proappstore-\${{ github.event.repository.name }} --branch=main
         env:
