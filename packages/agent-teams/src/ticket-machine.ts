@@ -53,6 +53,8 @@ const TRANSITIONS: Transition[] = [
   { from: 'needs-input', to: 'ba-refining', trigger: 'system' },
   { from: 'needs-input', to: 'dev-active', trigger: 'system' },
   { from: 'needs-input', to: 'qa-active', trigger: 'system' },
+  // Deploy-infra block (null assignee) retried via Play → straight back to deploy.
+  { from: 'needs-input', to: 'deploying', trigger: 'system' },
   { from: 'needs-input', to: 'ready', trigger: 'po' },
 
   // PO can cancel from any active state

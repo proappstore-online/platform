@@ -49,9 +49,26 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
     body: JSON.stringify(body),
   }));
 
+  // Infra/provisioning failure (push rejected, CI never registered, admin
+  // unreachable). Agents CAN'T fix this by editing code, so do NOT loop through
+  // Dev→QA — that burns iterations + cost and QA has nothing real to verify.
+  // Park the ticket in needs-input with the reason; fix the infra and press Play
+  // to retry the deploy directly (resume maps a null-assignee needs-input back to
+  // 'deploying'). Clears the push marker so the retry re-pushes.
+  const infraFail = (reason: string) => {
+    deps.storeMessage({ ticketId, author: 'system', body: `Deploy blocked — this is an infrastructure problem, not your code. Fix it and press Play to retry:\n${reason}`.slice(0, 8000) }).catch(() => {});
+    sql.exec(
+      "UPDATE tickets SET status = 'needs-input', assignee_role = NULL, stuck_reason = ?, deploy_pushed_at = NULL, deploy_pushed_sha = NULL, updated_at = ? WHERE id = ?",
+      reason.slice(0, 500), now, ticketId,
+    );
+    deps.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'needs-input', trigger: 'system', reason: 'deploy-infra' });
+    deps.logActivity('deploy', `Deploy BLOCKED (infra, not code) → needs-input: ${reason.slice(0, 200)}`, ticketId);
+  };
+
   const fail = (reason: string) => {
-    // Route back to Dev with the error, or fail at the iteration cap. Clear the
-    // push marker so the next attempt re-pushes the fixed code.
+    // CI build failed (a real code error) → route back to Dev with the error, or
+    // fail at the iteration cap. Clear the push marker so the next attempt
+    // re-pushes the fixed code.
     deps.storeMessage({ ticketId, author: 'system', body: `Deploy failed — fix and it will redeploy:\n${reason}`.slice(0, 8000) }).catch(() => {});
     if (ticket.iterations < 5) {
       sql.exec("UPDATE tickets SET status = 'dev-active', assignee_role = 'Dev', iterations = iterations + 1, deploy_pushed_at = NULL, deploy_pushed_sha = NULL, updated_at = ? WHERE id = ?", now, ticketId);
@@ -75,7 +92,7 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
       const push = await pushRes.json() as { success?: boolean; repoUrl?: string | null; commitSha?: string; steps?: { name: string; status: string; detail: string }[] };
       if (!pushRes.ok || !push.success) {
         const detail = (push.steps ?? []).filter((s) => s.status === 'fail').map((s) => `${s.name} — ${s.detail}`).join('; ');
-        return fail(`Push to repo failed: ${detail || `admin ${pushRes.status}`}`);
+        return infraFail(`Push to repo failed: ${detail || `admin ${pushRes.status}`}`);
       }
       if (push.repoUrl) sql.exec('UPDATE project SET repo_url = ? WHERE repo_url IS NULL', push.repoUrl);
       sha = push.commitSha;
@@ -86,7 +103,7 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
     // 2) Verify the CI build for THIS commit (waits, bounded, for it to finish).
     const statusRes = await adminFetch('/api/deploy-status', { id: proj.slug, waitMs: 85_000, ...(sha ? { sha } : {}) });
     const r = await statusRes.json() as { ok: boolean; status?: string; conclusion?: string; url?: string; errorTail?: string; error?: string };
-    if (r.error) return fail(`Could not verify build: ${r.error}`);
+    if (r.error) return infraFail(`Could not verify build: ${r.error}`);
 
     // CI hasn't registered a run for this commit yet. Re-check next tick — but
     // give up if it never starts (repo missing a push-triggered workflow, or
@@ -94,7 +111,7 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
     if (r.status === 'pending') {
       const pushedAt = ticket.deploy_pushed_at ?? now;
       if (Date.now() - pushedAt > DEPLOY_CI_START_TIMEOUT_MS) {
-        return fail('CI never started for this commit. The repo needs a push-triggered workflow under .github/workflows (and Actions enabled).');
+        return infraFail('CI never started for this commit. The repo needs a push-triggered workflow under .github/workflows, Actions enabled, and the admin GitHub token must have the `workflow` scope to commit it.');
       }
       deps.logActivity('deploy', 'Waiting for CI to start — will re-check', ticketId);
       return;

@@ -280,7 +280,12 @@ export class ProjectDO implements DurableObject {
         .exec("SELECT id, assignee_role FROM tickets WHERE status = 'needs-input'")
         .toArray() as { id: string; assignee_role: string | null }[];
       for (const t of blocked) {
-        const resume = t.assignee_role === 'QA' ? 'qa-active' : t.assignee_role === 'Dev' ? 'dev-active' : 'ba-refining';
+        // null assignee means a deploy-infra block (deploy-stage.infraFail) →
+        // retry the deploy directly, not Dev/BA.
+        const resume = t.assignee_role === 'QA' ? 'qa-active'
+          : t.assignee_role === 'Dev' ? 'dev-active'
+          : t.assignee_role === 'BA' ? 'ba-refining'
+          : 'deploying';
         this.state.storage.sql.exec('UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?', resume, now, t.id);
         this.logActivity('control', `Retrying blocked ${t.assignee_role ?? 'BA'} ticket`, t.id);
         this.broadcast({ type: 'transition', ticketId: t.id, from: 'needs-input', to: resume, reason: 'retry-on-play' });
