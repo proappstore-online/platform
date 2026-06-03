@@ -1,0 +1,38 @@
+name: Smoke — Agent Teams loop
+
+# Drives the REAL Agent Teams API end-to-end and asserts each stage (the only way
+# to prove the loop without the console UI). Manual-only — it spends an Architect
+# + PO run (~$0.30) on the token-owner's BYO key, and --full also does a real
+# build/deploy (more $$ + a CF Pages slot). Needs a PAS session token whose user
+# has a BYO Anthropic key, stored as the PAS_SMOKE_SESSION_TOKEN secret.
+
+on:
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: "Project slug to reuse (fixed slug = no new repo/Pages)"
+        default: "smoke-loop"
+      full:
+        description: "Also Play → build → deploy → verify live + E2E (expensive)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-agent-loop
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run smoke
+        env:
+          SESSION_TOKEN: ${{ secrets.PAS_SMOKE_SESSION_TOKEN }}
+        run: node packages/agent-teams/scripts/smoke.mjs "${{ inputs.slug }}" ${{ inputs.full && '--full' || '' }}
