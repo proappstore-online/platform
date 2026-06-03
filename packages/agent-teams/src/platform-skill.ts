@@ -19,6 +19,11 @@ Identity (free, platform-provided — the platform runs the OAuth; no client sec
 - \`app.auth.signIn(provider?)\` — provider is \`'github'\` (default), \`'google'\`, or \`'apple'\`.
   So switching to or adding Google/Apple is a ~one-line change (e.g. \`signIn('google')\`), NOT in-app OAuth.
 - \`app.auth.signInWithEmail(email)\` — magic-link email sign-in. Also \`app.auth.user\`, \`signOut()\`.
+- CRITICAL — the user object (\`app.auth.user\`, or \`user\` from \`useProAuth\`) is EXACTLY
+  \`{ id: string; login: string; avatarUrl: string | null; dateOfBirth: string | null }\`.
+  There is NO \`name\` and NO \`email\` field. Use \`user.login\` for the display name and
+  \`user.id\` (e.g. \`"gh:123"\`) as the stable key. Writing \`user.name\` or \`user.email\`
+  (or \`user.name ?? user.email\`) FAILS \`tsc\` and breaks the deploy build.
 - React: \`useProAuth(app)\`, \`useProGate(app)\`. UI: \`@proappstore/sdk/ui\` (SignInButton, ProfileMenu, GateScreen, …).
   (Only a provider NOT in that list would require custom in-app OAuth.)
 - IMPORTANT — \`<SignInButton>\` props are ONLY \`{ app, label? }\`; it has NO \`provider\` prop and always calls \`app.auth.signIn()\` (GitHub). For a Google/Apple button, render your OWN button: \`<button onClick={() => app.auth.signIn('google')}>Sign in with Google</button>\`. Do NOT pass \`provider\`/\`onClick\`/etc. to \`<SignInButton>\` — that fails \`tsc\`. Confirm any component's exact props in node_modules/@proappstore/sdk before using it.
