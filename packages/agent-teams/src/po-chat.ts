@@ -17,6 +17,31 @@ import { executeFileTool } from './spine.ts';
 import { toolActivityDetail } from './tool-activity.ts';
 import { sliceDocs } from './platform-skill.ts';
 
+/**
+ * Extract the first complete JSON object beginning at `startToken`, balancing
+ * braces while respecting string literals so a `}` inside a value (e.g. the PO
+ * writing "{ id, login, avatarUrl, dateOfBirth }" in rawIdea) doesn't truncate
+ * it. A naive `/\{"tool":"create_ticket".*?\}/` matched only to the first `}` —
+ * any brace in the ticket text broke JSON.parse and silently dropped the ticket.
+ * Returns the JSON substring, or null if no balanced object is found.
+ */
+export function extractJsonObject(text: string, startToken: string): string | null {
+  const start = text.indexOf(startToken);
+  if (start === -1) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+    } else if (ch === '"') inStr = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) return text.slice(start, i + 1);
+  }
+  return null;
+}
+
 export interface PoChatDeps {
   sql: SqlStorage;
   env: Bindings;
@@ -234,11 +259,12 @@ export async function handlePOChat(deps: PoChatDeps, request: Request): Promise<
       messages.push({ role: 'user', content: toolResults });
     }
 
-    // Check if PO wants to create a ticket
-    const toolMatch = text.match(/\{"tool":"create_ticket".*?\}/);
-    if (toolMatch) {
+    // Check if PO wants to create a ticket (brace-balanced extract so a `}` in
+    // the ticket text doesn't truncate the JSON).
+    const toolJson = extractJsonObject(text, '{"tool":"create_ticket"');
+    if (toolJson) {
       try {
-        const tool = JSON.parse(toolMatch[0]) as { title: string; rawIdea: string };
+        const tool = JSON.parse(toolJson) as { title: string; rawIdea: string };
         // Create the ticket
         const ticketId = uuid();
         const ticketNow = Date.now();
@@ -251,7 +277,7 @@ export async function handlePOChat(deps: PoChatDeps, request: Request): Promise<
         deps.autoAdvance();
 
         // Clean response (remove JSON, add confirmation)
-        const cleanText = text.replace(toolMatch[0], '').trim();
+        const cleanText = text.replace(toolJson, '').trim();
         const poText = cleanText || `Got it. I created ticket #${ticketSeq}: "${tool.title}". It's in the inbox.`;
         return savePOResponse(deps, poText, ticketNow, { name: 'create_ticket', args: tool.title });
       } catch {
