@@ -906,16 +906,33 @@ export class ProjectDO implements DurableObject {
    * exists (KB is built once; later changes go through memory/tickets).
    */
   private buildKnowledgeBase(): Response {
+    const now = Date.now();
     const existing = this.state.storage.sql
-      .exec("SELECT id FROM tickets WHERE kind = 'research' LIMIT 1")
-      .toArray()[0] as { id: string } | undefined;
-    if (existing) return json({ ok: false, error: 'Knowledge Base already built (or in progress).' }, 409);
+      .exec("SELECT id, status FROM tickets WHERE kind = 'research' LIMIT 1")
+      .toArray()[0] as { id: string; status: string } | undefined;
+    if (existing) {
+      // Already written, or a run is genuinely in flight → nothing to do.
+      if (existing.status === 'done' || this.running.has(existing.id)) {
+        return json({ ok: false, error: 'Knowledge Base already built (or in progress).' }, 409);
+      }
+      // Otherwise it's STUCK — created but never dispatched (e.g. seeded while the
+      // project was paused by older code), or its run died. Recover it: (re)route
+      // to the Architect and dispatch now, regardless of play-state. This is why
+      // "Build KB" was a no-op on projects with an old stuck research ticket.
+      this.state.storage.sql.exec(
+        "UPDATE tickets SET status = 'architect-active', assignee_role = 'Architect', updated_at = ? WHERE id = ?",
+        now, existing.id,
+      );
+      this.broadcast({ type: 'transition', ticketId: existing.id, from: existing.status, to: 'architect-active', auto: true });
+      this.logActivity('control', 'Re-dispatched the Knowledge Base build (was stuck)', null);
+      this.dispatchRun(existing.id);
+      return json({ ok: true, ticketId: existing.id, redispatched: true });
+    }
 
     const proj = this.state.storage.sql
       .exec('SELECT app_idea FROM project LIMIT 1')
       .toArray()[0] as { app_idea: string | null } | undefined;
     const idea = proj?.app_idea?.trim() || 'See the project memory + chat for what this app is.';
-    const now = Date.now();
     const id = uuid();
     // Seed the research ticket STRAIGHT into architect-active and dispatch it now.
     // The research lane is founder-triggered and runs independent of the build
