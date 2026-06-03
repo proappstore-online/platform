@@ -167,6 +167,7 @@ export class ProjectDO implements DurableObject {
     if (path === '/project' && request.method === 'GET') return this.getProject();
     if (path === '/project/play' && request.method === 'POST') return this.setPlayState('running', request);
     if (path === '/project/pause' && request.method === 'POST') return this.setPlayState('paused');
+    if (path === '/project/research' && request.method === 'POST') return this.buildKnowledgeBase();
 
     if (path === '/roles' && request.method === 'GET') return this.getRoles();
     if (path === '/roles' && request.method === 'PUT') return this.setRoles(request);
@@ -858,9 +859,9 @@ export class ProjectDO implements DurableObject {
     const now = Date.now();
 
     this.state.storage.sql.exec(
-      `INSERT INTO project (id, owner_id, name, slug, created_at, cost_cap_monthly_usd)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      id, body.ownerId, body.name, body.slug, now, body.costCapMonthlyUsd ?? 50.0,
+      `INSERT INTO project (id, owner_id, name, slug, created_at, cost_cap_monthly_usd, app_idea)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      id, body.ownerId, body.name, body.slug, now, body.costCapMonthlyUsd ?? 50.0, body.idea?.trim() ?? null,
     );
 
     // Set default role configs
@@ -880,32 +881,44 @@ export class ProjectDO implements DurableObject {
       );
     }
 
-    // Seed the first ticket from the initial idea so the project is play-ready:
-    // the agent team is already configured above, and now there's work for it.
-    const idea = body.idea?.trim();
-    if (idea) {
-      // Research ticket FIRST (own lane, non-blocking): the Architect builds the
-      // project Knowledge Base the rest of the team is grounded by.
-      this.state.storage.sql.exec(
-        `INSERT INTO tickets (id, seq, title, raw_idea, status, kind, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'inbox', 'research', ?, ?)`,
-        uuid(), this.nextSeq(),
-        'Research & write the project Knowledge Base',
-        `Research this app and write KNOWLEDGE.md + docs/ as the team's source of truth. App idea:\n${idea}`,
-        now, now,
-      );
-      // First build ticket from the idea.
-      const ticketId = uuid();
-      const title = idea.length > 80 ? `${idea.slice(0, 77)}...` : idea;
-      this.state.storage.sql.exec(
-        `INSERT INTO tickets (id, seq, title, raw_idea, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'inbox', ?, ?)`,
-        ticketId, this.nextSeq(), title, idea, now, now,
-      );
-    }
+    // Brainstorm-first: do NOT auto-seed any tickets. The founder brainstorms with
+    // the PO, presses "Build Knowledge Base" when ready (Architect runs once), and
+    // building only starts when the founder asks the PO to build something. The
+    // idea is persisted on the project (above) so the PO + Architect have it.
 
     this.broadcast({ type: 'project-created', projectId: id });
-    return json({ id, slug: body.slug, seededTicket: Boolean(idea) });
+    return json({ id, slug: body.slug, seededTicket: false });
+  }
+
+  /**
+   * Founder-triggered, one-time KB build (brainstorm-first flow): seed a research
+   * ticket so the Architect writes KNOWLEDGE.md + docs/ from the (brainstormed)
+   * idea + project memory. Idempotent — refuses if a research ticket already
+   * exists (KB is built once; later changes go through memory/tickets).
+   */
+  private buildKnowledgeBase(): Response {
+    const existing = this.state.storage.sql
+      .exec("SELECT id FROM tickets WHERE kind = 'research' LIMIT 1")
+      .toArray()[0] as { id: string } | undefined;
+    if (existing) return json({ ok: false, error: 'Knowledge Base already built (or in progress).' }, 409);
+
+    const proj = this.state.storage.sql
+      .exec('SELECT app_idea FROM project LIMIT 1')
+      .toArray()[0] as { app_idea: string | null } | undefined;
+    const idea = proj?.app_idea?.trim() || 'See the project memory + chat for what this app is.';
+    const now = Date.now();
+    const id = uuid();
+    this.state.storage.sql.exec(
+      `INSERT INTO tickets (id, seq, title, raw_idea, status, kind, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'inbox', 'research', ?, ?)`,
+      id, this.nextSeq(),
+      'Research & write the project Knowledge Base',
+      `Research this app and write KNOWLEDGE.md + docs/ as the team's source of truth (read project memory for any decisions made while brainstorming). App idea:\n${idea}`,
+      now, now,
+    );
+    this.broadcast({ type: 'ticket-created', ticket: { id, seq: 0, title: 'Research & write the project Knowledge Base', status: 'inbox', rawIdea: idea, assigneeRole: null, iterations: 0, costSpentUsd: 0, createdAt: now, updatedAt: now, stuckReason: null, kind: 'research' } });
+    this.autoAdvance();
+    return json({ ok: true, ticketId: id });
   }
 
   // ── Role configs ──────────────────────────────────────────

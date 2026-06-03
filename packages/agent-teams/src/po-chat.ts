@@ -125,15 +125,16 @@ export async function handlePOChat(deps: PoChatDeps, request: Request): Promise<
 
   // App identity — the PO must reason about THIS app, not the ProAppStore
   // platform it's hosted on. Name from the project; "what it is" from the
-  // founding idea (oldest ticket) when present.
+  // founding idea: the persisted project idea (brainstorm-first projects have no
+  // seeded ticket), falling back to the oldest ticket for older projects.
   const proj = sql
-    .exec('SELECT name, slug FROM project LIMIT 1')
-    .toArray()[0] as { name: string; slug: string } | undefined;
+    .exec('SELECT name, slug, app_idea FROM project LIMIT 1')
+    .toArray()[0] as { name: string; slug: string; app_idea: string | null } | undefined;
   const founding = sql
     .exec('SELECT raw_idea FROM tickets ORDER BY created_at ASC LIMIT 1')
     .toArray()[0] as { raw_idea: string } | undefined;
   const appName = proj?.name ?? proj?.slug ?? 'this app';
-  const appIdea = founding?.raw_idea?.trim();
+  const appIdea = proj?.app_idea?.trim() || founding?.raw_idea?.trim();
 
   // Get recent chat history for context
   const recentChat = sql

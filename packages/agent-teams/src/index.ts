@@ -199,6 +199,7 @@ app.post('/v1/projects/:slug/play', async (c) => {
 });
 
 app.post('/v1/projects/:slug/pause', (c) => relay(c, '/project/pause', { method: 'POST' }));
+app.post('/v1/projects/:slug/research', (c) => relay(c, '/project/research', { method: 'POST' }));
 
 // ── Chat (PO agent) ─────────────────────────────────────────
 

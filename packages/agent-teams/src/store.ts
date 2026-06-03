@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS project (
   id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, slug TEXT NOT NULL,
   created_at INTEGER NOT NULL, cost_cap_monthly_usd REAL NOT NULL DEFAULT 50.0,
   cost_spent_monthly_usd REAL NOT NULL DEFAULT 0.0, repo_url TEXT,
-  repo_provisioned_at INTEGER, registry_entry_id TEXT
+  repo_provisioned_at INTEGER, registry_entry_id TEXT, app_idea TEXT
 );
 CREATE TABLE IF NOT EXISTS role_configs (
   role TEXT PRIMARY KEY, runtime TEXT NOT NULL, model TEXT NOT NULL,
@@ -95,6 +95,9 @@ export const MIGRATIONS: string[][] = [
   [`ALTER TABLE project ADD COLUMN data_provisioned_at INTEGER`],
   // Ticket kind: 'build' (BA→Dev→QA) or 'research' (Architect builds the KB).
   [`ALTER TABLE tickets ADD COLUMN kind TEXT NOT NULL DEFAULT 'build'`],
+  // Persisted founding idea — so brainstorm-first projects (no seeded ticket)
+  // still give the PO + Architect the idea.
+  [`ALTER TABLE project ADD COLUMN app_idea TEXT`],
 ];
 
 export function uuid(): string {
