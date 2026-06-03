@@ -127,11 +127,34 @@ jobs:
         working-directory: e2e
         run: npx playwright install --with-deps chromium
       - name: Run E2E against the live app
+        id: e2e
+        continue-on-error: true
         working-directory: e2e
         env:
           E2E_BASE_URL: https://\${{ github.event.repository.name }}.proappstore.online
           E2E_SESSION_TOKEN: \${{ secrets.PAS_E2E_SESSION_TOKEN }}
         run: npx playwright test
+      - name: Publish test results (kb.proappstore.online/<app>/.e2e/summary.json)
+        if: always()
+        working-directory: e2e
+        env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${env.CF_ACCOUNT_ID}
+          APP: \${{ github.event.repository.name }}
+        run: |
+          node -e '
+            const fs=require("fs");
+            let r={}; try{ r=JSON.parse(fs.readFileSync("results.json","utf8")); }catch{}
+            const s=r.stats||{}, specs=[];
+            const walk=(su=[])=>su.forEach(x=>{ (x.specs||[]).forEach(sp=>specs.push({title:[x.title,sp.title].filter(Boolean).join(" > "),ok:sp.ok!==false})); walk(x.suites||[]); });
+            walk(r.suites||[]);
+            fs.writeFileSync("summary.json", JSON.stringify({ ranAt:new Date().toISOString(), passed:s.expected||0, failed:s.unexpected||0, flaky:s.flaky||0, skipped:s.skipped||0, ok:(s.unexpected||0)===0, specs }));
+          '
+          npm install -g wrangler@4 >/dev/null 2>&1
+          wrangler r2 object put "pas-kb/\$APP/.e2e/summary.json" --file=summary.json --remote >/dev/null && echo "results → kb.proappstore.online/\$APP/.e2e/summary.json"
+      - name: Fail the run if E2E failed (bounces the ticket to Dev)
+        if: steps.e2e.outcome != 'success'
+        run: echo "::error::E2E tests failed — see the results above" && exit 1
 `;
 }
 

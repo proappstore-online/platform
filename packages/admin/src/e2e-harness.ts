@@ -44,7 +44,7 @@ export default defineConfig({
   expect: { timeout: 15000 },
   retries: 1,
   forbidOnly: true,
-  reporter: [['github'], ['list']],
+  reporter: [['github'], ['list'], ['json', { outputFile: 'results.json' }]],
   use: {
     baseURL: process.env.E2E_BASE_URL,
     trace: 'retain-on-failure',
