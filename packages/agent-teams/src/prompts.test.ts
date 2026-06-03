@@ -43,20 +43,18 @@ describe('buildSeedMessages', () => {
     expect(ba).not.toContain('Existing files');
   });
 
-  it('Dev on a qa-failed ticket gets the QA findings', () => {
-    const prior = [
-      { author: 'BA', body: 'spec' },
-      { author: 'QA', body: 'button is broken' },
-    ];
-    const body = buildSeedMessages('Dev', ticket({ status: 'qa-failed' }), 'myapp', prior)[0]!.body;
-    expect(body).toContain('QA found these issues');
-    expect(body).toContain('button is broken');
+  it('Dev re-fixing after a failed deploy/E2E is pointed at the error + the specs', () => {
+    const body = buildSeedMessages('Dev', ticket({ iterations: 1 }), 'myapp', [{ author: 'BA', body: 'spec' }])[0]!.body;
+    expect(body).toContain('A previous deploy or E2E run failed');
+    expect(body).toContain('e2e/specs/');
   });
 
-  it('QA is asked to end with a VERDICT marker', () => {
+  it('QA is told to WRITE E2E specs (not review) + end with READY/BLOCKED', () => {
     const body = buildSeedMessages('QA', ticket(), 'myapp', [{ author: 'BA', body: 'spec' }])[0]!.body;
-    expect(body).toContain('## Spec to verify');
-    expect(body).toContain('VERDICT: PASS');
+    expect(body).toContain('## Acceptance criteria to test');
+    expect(body).toContain("write_file");
+    expect(body).toContain('e2e/specs/');
+    expect(body).toContain('VERDICT: READY');
   });
 
   it('includes the approved spec summary when present', () => {

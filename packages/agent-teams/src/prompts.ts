@@ -119,18 +119,29 @@ END YOUR REPORT WITH A SINGLE FINAL LINE, EXACTLY: \`VERDICT: READY\` or \`VERDI
     const ba = lastFrom('BA');
     if (ba) context += `\n\n## BA analysis\n${ba}`;
     if (ticket.status === 'qa-failed' || ticket.iterations > 0) {
-      const qa = lastFrom('QA');
-      if (qa) context += `\n\n## QA found these issues — fix them\n${qa}`;
+      context += `\n\n## A previous deploy or E2E run failed — fix it\nSee the most recent "Deploy failed" message above for the exact error: a compiler error, or a failing Playwright assertion from the E2E run. The behavioural specs you must satisfy live in \`e2e/specs/\` — \`read_file\` them to see exactly what is asserted, then make the app actually pass them. (Edit app source only — do not edit the specs.)`;
     }
     context += `\n\nThe app id is "${slug}". Implement or modify the app to satisfy the spec, using your tools. If unsure about a PAS SDK API/signature, call \`read_docs\` (e.g. topic "database") to confirm from the official docs BEFORE writing it — don't guess. Write the code with your file tools (batch_write_files) BEFORE explaining — keep prose brief. Do not end your turn after only reading/planning; you must actually create or edit the files. If \`src/main.tsx\` imports a file that doesn't exist (e.g. \`./App\`), create it.
 
-Your code MUST compile (\`tsc\`) — after QA approves, the system automatically pushes it and verifies the CI build; if the build fails, the ticket comes straight back to you with the compiler error to fix. So write type-correct code. Do NOT deploy yourself (no provision/deploy tools — the system handles it). If a previous deploy failed, a "Deploy failed" message above has the exact error — fix that. (Note: the \`useProAuth\` hook's \`signIn\` is zero-arg — to pass a provider, call \`app.auth.signIn(provider)\` directly, not the hook's \`signIn(provider)\`.)`;
+Your code MUST compile (\`tsc\`) AND pass the end-to-end tests. After the team finishes, the system automatically pushes the app, verifies the CI build, and runs Playwright E2E specs (in \`e2e/specs/\`) against the LIVE deployed app; if the build fails OR a test fails, the ticket comes straight back to you with the exact error / failing assertion to fix. So write type-correct code that actually makes those specs pass. Do NOT deploy yourself, and do NOT edit \`e2e/\` (those are QA's tests — make the app satisfy them). If a previous deploy failed, a "Deploy failed" message above has the exact error — fix that. (Note: the \`useProAuth\` hook's \`signIn\` is zero-arg — to pass a provider, call \`app.auth.signIn(provider)\` directly, not the hook's \`signIn(provider)\`.)`;
   } else if (role === 'QA') {
     const ba = lastFrom('BA');
-    if (ba) context += `\n\n## Spec to verify\n${ba}`;
-    context += `\n\nThe app id is "${slug}". Review the implemented code against the spec; report findings (correctness, obvious type errors, edge cases, accessibility, dark mode). On PASS, the system deploys and verifies the real CI build automatically — you don't need to (and can't) deploy. Focus on whether the code meets the spec and looks like it will compile.
+    if (ba) context += `\n\n## Acceptance criteria to test\n${ba}`;
+    context += `\n\nThe app id is "${slug}". You are QA, and your job is to WRITE END-TO-END TESTS — NOT to review prose or give an opinion. Turn each acceptance criterion into executable Playwright assertions that drive the REAL deployed app in a browser. That E2E run (not your judgement) is what gates the ticket: after you finish, the system deploys the app and runs your specs against the live site; a failing assertion routes the ticket back to Dev with the Playwright output.
 
-END YOUR REPORT WITH A SINGLE FINAL LINE, EXACTLY: \`VERDICT: PASS\` or \`VERDICT: FAIL\`. Use FAIL only for blocking defects that must be fixed before deploy (a spec violation, or code that won't compile). Minor/non-blocking notes are still a PASS — the CI build is the real compile gate, and a wrong FAIL just burns iterations on working code. Do NOT write the word "FAIL" anywhere except that final VERDICT line.`;
+The harness already exists in the repo — do NOT recreate it. In a spec, import it:
+\`import { test, expect, hasSession } from '../fixtures'\`
+The \`app\` fixture is a Page already navigated (and signed-in when a fixture session is configured). Gate any sign-in-only assertion with \`test.skip(!hasSession, 'needs a session')\`. The app mounts to \`#root\`.
+
+Write your spec(s) with \`write_file\` to \`e2e/specs/<short-name>.spec.ts\`. Rules:
+- ONLY create/edit files under \`e2e/specs/\`. NEVER touch app source (\`src/\`, \`package.json\`, etc.) — that's Dev's job; you only add tests.
+- One concern per \`test()\`. Assert on user-visible behaviour via \`getByRole\`/\`getByText\`/\`getByLabel\` — never on implementation details. Use \`expect\`'s auto-waiting; no fixed \`waitForTimeout\` sleeps.
+- Cover the happy path of each acceptance criterion plus the key edge/failure cases the spec calls out. A spec must pass IFF the feature actually works.
+- You can \`read_file\` the app source to find the right selectors/text, and \`read_docs\` to confirm SDK behaviour.
+
+END YOUR REPORT WITH A SINGLE FINAL LINE, EXACTLY: \`VERDICT: READY\` or \`VERDICT: BLOCKED\`.
+- \`VERDICT: READY\` → you wrote spec file(s) covering the acceptance criteria (almost always).
+- \`VERDICT: BLOCKED\` → you genuinely cannot express a criterion as a test without a decision only the founder can make. List the specific questions; the ticket pauses for an answer. Do NOT use BLOCKED to avoid writing tests.`;
   }
 
   return [{

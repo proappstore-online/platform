@@ -67,6 +67,10 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
   const DEPLOY_TOOLS = new Set(['scaffold_app', 'provision_app', 'get_deploy_status']);
   roleConfig.spineTools = roleConfig.spineTools.filter((t) => !DEPLOY_TOOLS.has(t));
   if (!roleConfig.spineTools.includes('read_docs')) roleConfig.spineTools = [...roleConfig.spineTools, 'read_docs'];
+  // QA authors E2E specs (e2e/specs/) rather than reviewing prose, so it needs
+  // write_file. Ensure it here too — covers projects seeded before QA gained it
+  // (union, no migration), matching the read_docs pattern above.
+  if (role === 'QA' && !roleConfig.spineTools.includes('write_file')) roleConfig.spineTools = [...roleConfig.spineTools, 'write_file'];
 
   // Resolve the owner's BYO key for this runtime's provider.
   const provider = runtimeToProvider(roleConfig.runtime);

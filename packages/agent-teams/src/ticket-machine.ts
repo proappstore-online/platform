@@ -30,8 +30,11 @@ const TRANSITIONS: Transition[] = [
   { from: 'awaiting-approval', to: 'ba-refining', trigger: 'po' },
   // Dev picks up
   { from: 'ready', to: 'dev-active', trigger: 'Dev' },
-  // Dev finishes → QA
+  // Dev finishes → QA authors the E2E specs (first pass).
   { from: 'dev-active', to: 'qa-active', trigger: 'Dev' },
+  // Dev finishes a re-fix when E2E specs already exist → straight to deploy and
+  // re-run them; no need to re-author. System-driven (see applyAgentOutcome).
+  { from: 'dev-active', to: 'deploying', trigger: 'system' },
   // Dev is stuck → needs user input
   { from: 'dev-active', to: 'needs-input', trigger: 'Dev' },
   // QA passes → deploy stage (deterministic system stage; SHA-verified CI gate).
