@@ -20,6 +20,29 @@ export function b64decode(s: string): string {
   return decodeURIComponent(escape(atob(s)));
 }
 
+/**
+ * Fetch a failed Actions job's plaintext log. GitHub's job-logs endpoint
+ * 302-redirects to a short-lived SIGNED blob URL that must be fetched with NO
+ * auth header — `redirect: 'follow'` forwards the `Authorization: Bearer` token
+ * to Azure storage, which 403s, so the log silently came back empty and the Dev
+ * was left with only a run URL it can't open. Resolve the redirect manually,
+ * then GET the signed location with no headers. Returns '' on any failure.
+ */
+async function fetchJobLog(jobId: number, repoFullName: string, token: string): Promise<string> {
+  const url = `https://api.github.com/repos/${repoFullName}/actions/jobs/${jobId}/logs`;
+  const headers = { Authorization: `Bearer ${token}`, 'User-Agent': 'proappstore-build-core', 'X-GitHub-Api-Version': '2022-11-28' };
+  const first = await fetch(url, { headers, redirect: 'manual' });
+  // Manual redirect → follow the signed Location WITHOUT auth.
+  if (first.status >= 300 && first.status < 400) {
+    const loc = first.headers.get('location');
+    if (!loc) return '';
+    const blob = await fetch(loc); // signed URL — must NOT carry the GitHub token
+    return blob.ok ? blob.text() : '';
+  }
+  // Some runtimes hand back the body directly (no redirect surfaced).
+  return first.ok ? first.text() : '';
+}
+
 export interface GitHub {
   api(path: string, opts?: { method?: string; body?: unknown }): Promise<GhResult>;
   repoExists(id: string): Promise<boolean>;
@@ -258,19 +281,16 @@ export function makeGitHub(token: string, org: string): GitHub {
         sha: (runs[0]!.head_sha as string)?.slice(0, 7),
         url: (failed ?? runs[0]!).html_url as string,
       };
-      // On failure, pull the failed job's plaintext log tail (the actual error).
+      // On failure, pull the failed job's plaintext log tail (the actual error)
+      // so the Dev sees the real compiler output, not just a URL it can't open.
       if (failed) {
         try {
           const jobsRes = await api(`/repos/${repo(id)}/actions/runs/${failed.id}/jobs`);
           const jobs = (d(jobsRes).jobs as Record<string, unknown>[]) ?? [];
-          const failedJob = jobs.find((j) => j.conclusion === 'failure');
+          const failedJob = jobs.find((j) => j.conclusion === 'failure') ?? jobs[0];
           if (failedJob) {
-            const logRes = await fetch(`https://api.github.com${`/repos/${repo(id)}/actions/jobs/${failedJob.id}/logs`}`, {
-              headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'proappstore-build-core', 'X-GitHub-Api-Version': '2022-11-28' },
-              redirect: 'follow',
-            });
-            if (logRes.ok) {
-              const text = await logRes.text();
+            const text = await fetchJobLog(failedJob.id as number, repo(id), token);
+            if (text) {
               const lines = text.split('\n').filter((l) => /error|fail|✘|exit status|cannot|not found|TS\d{3,}/i.test(l));
               result.errorTail = (lines.length ? lines.slice(-25) : text.split('\n').slice(-25)).join('\n').slice(0, 4000);
             }

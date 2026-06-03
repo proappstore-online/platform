@@ -31,8 +31,13 @@ Identity (free, platform-provided — the platform runs the OAuth; no client sec
   There is NO \`name\` and NO \`email\` field. Use \`user.login\` for the display name and
   \`user.id\` (e.g. \`"gh:123"\`) as the stable key. Writing \`user.name\` or \`user.email\`
   (or \`user.name ?? user.email\`) FAILS \`tsc\` and breaks the deploy build.
-- React: \`useProAuth(app)\`, \`useProGate(app)\`. UI: \`@proappstore/sdk/ui\` (SignInButton, ProfileMenu, GateScreen, …).
-  (Only a provider NOT in that list would require custom in-app OAuth.)
+- React — IMPORT PATHS MATTER (the root \`@proappstore/sdk\` is React-free; importing a
+  hook or component from it FAILS \`tsc\` with "no exported member"):
+  • Hooks → \`import { useProAuth, useProGate, useProSubscription, useProNotifications, useTheme } from '@proappstore/sdk/hooks'\`.
+    \`useProAuth(app)\` returns \`{ user, loading, signIn, signOut, deleteAccount }\` (its \`signIn\` is zero-arg / GitHub).
+  • UI → \`import { SignInButton, ProfileMenu, Avatar, GateScreen, … } from '@proappstore/sdk/ui'\`.
+  • Root → \`import { initPro } from '@proappstore/sdk'\` (the \`app\` instance + \`app.*\` only — NO hooks/components).
+  (Only a provider NOT supported would require custom in-app OAuth.)
 - IMPORTANT — \`<SignInButton>\` props are ONLY \`{ app, label? }\`; it has NO \`provider\` prop and always calls \`app.auth.signIn()\` (GitHub). For a Google/Apple button, render your OWN button: \`<button onClick={() => app.auth.signIn('google')}>Sign in with Google</button>\`. Do NOT pass \`provider\`/\`onClick\`/etc. to \`<SignInButton>\` — that fails \`tsc\`. Confirm any component's exact props in node_modules/@proappstore/sdk before using it.
 
 Free primitives (capped): \`app.kv\` (per-user key/value), realtime \`app.rooms\`
