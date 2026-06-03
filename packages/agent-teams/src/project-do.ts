@@ -39,6 +39,7 @@ import {
 } from './store.ts';
 import { runDeployStage } from './deploy-stage.ts';
 import { handlePOChat } from './po-chat.ts';
+import { handleArchitectChat } from './architect-chat.ts';
 import { runAgentTurn } from './agent-runner.ts';
 import { validateRoleConfig } from './role-config.ts';
 import { loadFiles, saveFiles, recallMemory, upsertMemory } from './project-store.ts';
@@ -172,8 +173,8 @@ export class ProjectDO implements DurableObject {
     if (path === '/roles' && request.method === 'PUT') return this.setRoles(request);
 
     if (path === '/chat' && request.method === 'POST') return this.handleChat(request);
-    if (path === '/chat/history' && request.method === 'GET') return this.getChatHistory();
-    if (path === '/chat/history' && request.method === 'DELETE') return this.clearChat();
+    if (path === '/chat/history' && request.method === 'GET') return this.getChatHistory(request);
+    if (path === '/chat/history' && request.method === 'DELETE') return this.clearChat(request);
 
     if (path === '/tickets' && request.method === 'GET') return this.listTickets();
     if (path === '/tickets' && request.method === 'POST') return this.createTicket(request);
@@ -1263,16 +1264,18 @@ export class ProjectDO implements DurableObject {
 
   // Wipe the chat history (start the conversation from scratch). Tickets/messages
   // are unaffected — this only clears the founder↔PO chat panel.
-  private clearChat(): Response {
-    this.state.storage.sql.exec('DELETE FROM chat_history');
+  private clearChat(request: Request): Response {
+    const thread = new URL(request.url).searchParams.get('thread') ?? 'build';
+    this.state.storage.sql.exec('DELETE FROM chat_history WHERE thread = ?', thread);
     this.chatWindow = [];
-    this.broadcast({ type: 'chat-cleared' });
+    this.broadcast({ type: 'chat-cleared', thread });
     return json({ ok: true });
   }
 
-  private getChatHistory(): Response {
+  private getChatHistory(request: Request): Response {
+    const thread = new URL(request.url).searchParams.get('thread') ?? 'build';
     const rows = this.state.storage.sql
-      .exec('SELECT * FROM chat_history ORDER BY created_at ASC')
+      .exec('SELECT * FROM chat_history WHERE thread = ? ORDER BY created_at ASC', thread)
       .toArray();
     return json({
       messages: rows.map((r) => ({
@@ -1285,8 +1288,28 @@ export class ProjectDO implements DurableObject {
     });
   }
 
-  /** PO chat — see po-chat.ts. The DO supplies storage + the few callbacks. */
-  private handleChat(request: Request): Promise<Response> {
+  /** Founder chat. Two separate threads/agents: 'research' → the Architect (KB),
+   *  anything else → the PO (build). Peek the thread off a clone so the chosen
+   *  handler can still read the body. */
+  private async handleChat(request: Request): Promise<Response> {
+    const peek = await request.clone().json().catch(() => ({})) as { thread?: string };
+    if (peek.thread === 'research') {
+      return handleArchitectChat({
+        sql: this.state.storage.sql,
+        env: this.env,
+        getChatWindow: () => this.chatWindow,
+        setChatWindow: (w) => { this.chatWindow = w; },
+        touchUserActivity: () => this.touchUserActivity(),
+        syncFromGitHub: (reason) => this.syncFromGitHub(reason),
+        broadcast: (e) => this.broadcast(e),
+        loadFiles: () => this.loadFiles(),
+        saveFiles: (files) => this.saveFiles(files),
+        recallMemory: () => this.recallMemory(),
+        rememberFact: (c, k, v) => this.rememberFact(c, k, v),
+        fetchDocs: () => this.fetchDocs(),
+        logActivity: (type, detail, tid, meta) => this.logActivity(type, detail, tid, meta),
+      }, request);
+    }
     return handlePOChat({
       sql: this.state.storage.sql,
       env: this.env,

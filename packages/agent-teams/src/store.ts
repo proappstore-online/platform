@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS cost_ledger (
 CREATE INDEX IF NOT EXISTS idx_cost_ticket ON cost_ledger(ticket_id);
 CREATE TABLE IF NOT EXISTS chat_history (
   id TEXT PRIMARY KEY, role TEXT NOT NULL, body TEXT NOT NULL,
-  tool_call_json TEXT, created_at INTEGER NOT NULL
+  tool_call_json TEXT, created_at INTEGER NOT NULL,
+  thread TEXT NOT NULL DEFAULT 'build'
 );
 CREATE INDEX IF NOT EXISTS idx_chat_history ON chat_history(created_at);
 CREATE TABLE IF NOT EXISTS project_files (
@@ -98,6 +99,10 @@ export const MIGRATIONS: string[][] = [
   // Persisted founding idea — so brainstorm-first projects (no seeded ticket)
   // still give the PO + Architect the idea.
   [`ALTER TABLE project ADD COLUMN app_idea TEXT`],
+  // Chat thread: 'build' (PO ↔ founder, backlog) or 'research' (Architect ↔
+  // founder, the Knowledge Base). Separate agents own separate threads so the KB
+  // is authored + checked independently of the build. Old rows → 'build'.
+  [`ALTER TABLE chat_history ADD COLUMN thread TEXT NOT NULL DEFAULT 'build'`],
 ];
 
 export function uuid(): string {
@@ -112,12 +117,12 @@ export function uuid(): string {
  */
 export function insertChatMessage(
   sql: SqlStorage,
-  msg: { role: string; body: string; toolCall?: { name: string; args: string } | null; at?: number },
+  msg: { role: string; body: string; toolCall?: { name: string; args: string } | null; at?: number; thread?: string },
 ): string {
   const id = uuid();
   sql.exec(
-    'INSERT INTO chat_history (id, role, body, tool_call_json, created_at) VALUES (?, ?, ?, ?, ?)',
-    id, msg.role, msg.body, msg.toolCall ? JSON.stringify(msg.toolCall) : null, msg.at ?? Date.now(),
+    'INSERT INTO chat_history (id, role, body, tool_call_json, created_at, thread) VALUES (?, ?, ?, ?, ?, ?)',
+    id, msg.role, msg.body, msg.toolCall ? JSON.stringify(msg.toolCall) : null, msg.at ?? Date.now(), msg.thread ?? 'build',
   );
   return id;
 }
