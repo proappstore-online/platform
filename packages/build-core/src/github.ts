@@ -195,22 +195,28 @@ export function makeGitHub(token: string, org: string): GitHub {
         const parent = await api(`/repos/${r}/git/commits/${parentSha}`);
         baseTree = (d(parent).tree as { sha?: string } | undefined)?.sha;
       }
+      // GitHub returns the real reason in `.message` — surface it (e.g. "refusing
+      // to allow a Personal Access Token to create or update workflow
+      // `.github/workflows/deploy.yml` without `workflow` scope"). A bare "tree
+      // creation failed" hides exactly the kind of cause callers need.
+      const why = (res: GhResult) => (d(res).message as string | undefined) ?? `HTTP ${res.status}`;
+
       const tree = await api(`/repos/${r}/git/trees`, {
         method: 'POST',
         body: baseTree ? { base_tree: baseTree, tree: treeItems } : { tree: treeItems },
       });
       const treeSha = d(tree).sha as string | undefined;
-      if (!treeSha) return { ok: false, error: 'tree creation failed' };
+      if (!treeSha) return { ok: false, error: `tree creation failed: ${why(tree)}` };
 
       const commit = await api(`/repos/${r}/git/commits`, {
         method: 'POST',
         body: { message, tree: treeSha, parents: parentSha ? [parentSha] : [] },
       });
       const commitSha = d(commit).sha as string | undefined;
-      if (!commitSha) return { ok: false, error: 'commit creation failed' };
+      if (!commitSha) return { ok: false, error: `commit creation failed: ${why(commit)}` };
 
       const upd = await api(`/repos/${r}/git/refs/heads/main`, { method: 'PATCH', body: { sha: commitSha } });
-      if (!upd.ok) return { ok: false, error: 'ref update failed' };
+      if (!upd.ok) return { ok: false, error: `ref update failed: ${why(upd)}` };
       return { ok: true, commitSha };
     },
 
