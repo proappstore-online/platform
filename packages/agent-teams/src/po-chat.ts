@@ -7,7 +7,7 @@
  */
 
 import type { Bindings } from './index.ts';
-import { json, uuid } from './store.ts';
+import { json, uuid, insertChatMessage } from './store.ts';
 import { slidingWindowAllow, CHAT_LIMIT, CHAT_WINDOW_MS } from './rate-limit.ts';
 import { formatMemory, type MemoryEntry } from './memory.ts';
 import { buildPOSystemPrompt } from './prompts.ts';
@@ -77,11 +77,7 @@ export async function handlePOChat(deps: PoChatDeps, request: Request): Promise<
   }
 
   // Save user message to chat history
-  const userMsgId = uuid();
-  sql.exec(
-    'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
-    userMsgId, 'user', userText, now,
-  );
+  const userMsgId = insertChatMessage(sql, { role: 'user', body: userText, at: now });
   deps.broadcast({ type: 'chat', role: 'user', body: userText, id: userMsgId });
 
   // Get current project state for context
@@ -317,11 +313,7 @@ function savePOResponse(
   now: number,
   toolCall: { name: string; args: string } | undefined,
 ): Response {
-  const msgId = uuid();
-  deps.sql.exec(
-    'INSERT INTO chat_history (id, role, body, tool_call_json, created_at) VALUES (?, ?, ?, ?, ?)',
-    msgId, 'po', text, toolCall ? JSON.stringify(toolCall) : null, now,
-  );
+  const msgId = insertChatMessage(deps.sql, { role: 'po', body: text, toolCall: toolCall ?? null, at: now });
   deps.broadcast({ type: 'chat', role: 'po', body: text, id: msgId, toolCall });
 
   return json({ id: msgId, role: 'po', body: text, toolCall, createdAt: now });

@@ -22,6 +22,7 @@
  */
 
 import { Hono } from 'hono';
+import { internalTokenOk } from '@proappstore/build-core';
 import { requireUser } from '../lib/auth.js';
 import { openSecret, sealSecret } from '../lib/encryption.js';
 import { renderKeysPage } from './keys-page.js';
@@ -161,9 +162,7 @@ keysRoutes.get('/keys/resolve/:provider', async (c) => {
   const provider = c.req.param('provider');
 
   let userId: string;
-  const internalToken = c.req.header('X-Internal-Token');
-  const expected = c.env.INTERNAL_TOKEN;
-  if (expected && internalToken && internalToken === expected) {
+  if (internalTokenOk(c.req.header('X-Internal-Token'), c.env.INTERNAL_TOKEN)) {
     const ownerId = c.req.header('X-Owner-Id');
     if (!ownerId) return c.json({ key: null, error: 'X-Owner-Id required for internal resolve' }, 400);
     userId = ownerId;

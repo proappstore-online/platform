@@ -99,6 +99,24 @@ export function uuid(): string {
   return crypto.randomUUID();
 }
 
+/**
+ * Append a row to chat_history and return its id (for the matching broadcast).
+ * One place owns the INSERT shape — system notices, user messages, and agent
+ * replies all funnel through here. Pass `at` to share a handler's timestamp;
+ * omit it to stamp now.
+ */
+export function insertChatMessage(
+  sql: SqlStorage,
+  msg: { role: string; body: string; toolCall?: { name: string; args: string } | null; at?: number },
+): string {
+  const id = uuid();
+  sql.exec(
+    'INSERT INTO chat_history (id, role, body, tool_call_json, created_at) VALUES (?, ?, ?, ?, ?)',
+    id, msg.role, msg.body, msg.toolCall ? JSON.stringify(msg.toolCall) : null, msg.at ?? Date.now(),
+  );
+  return id;
+}
+
 export function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,

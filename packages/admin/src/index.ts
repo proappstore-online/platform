@@ -1,3 +1,4 @@
+import { internalTokenOk } from "@proappstore/build-core";
 import type { Env } from "./env.js";
 import { handlePublish, handleAgentDeploy, handleRepoPull, handleDeployStatus, type PublishRequest, type AgentDeployRequest } from "./publish.js";
 import { verifySession, handleAuthExchange, handleAuthMe } from "./auth.js";
@@ -38,8 +39,7 @@ export default {
     // Internal: agent-teams ships an authored app (create repo + push files +
     // register). Service-to-service auth via INTERNAL_TOKEN, not a user session.
     if (url.pathname === "/api/agent-deploy" && request.method === "POST") {
-      const provided = request.headers.get("X-Internal-Token");
-      if (!env.INTERNAL_TOKEN || provided !== env.INTERNAL_TOKEN) {
+      if (!internalTokenOk(request.headers.get("X-Internal-Token"), env.INTERNAL_TOKEN)) {
         return Response.json({ error: "forbidden" }, { status: 403 });
       }
       const body = await request.json<AgentDeployRequest>();
@@ -50,8 +50,7 @@ export default {
     // Internal: agent-teams pulls a repo's current files (GitHub = source of
     // truth) into its working tree. Cheap freshness check via ?head=1.
     if (url.pathname === "/api/repo-pull" && request.method === "POST") {
-      const provided = request.headers.get("X-Internal-Token");
-      if (!env.INTERNAL_TOKEN || provided !== env.INTERNAL_TOKEN) {
+      if (!internalTokenOk(request.headers.get("X-Internal-Token"), env.INTERNAL_TOKEN)) {
         return Response.json({ error: "forbidden" }, { status: 403 });
       }
       const body = await request.json<{ id: string; headOnly?: boolean }>();
@@ -62,8 +61,7 @@ export default {
 
     // Internal: real CI build/deploy result (the build gate for agent-teams).
     if (url.pathname === "/api/deploy-status" && request.method === "POST") {
-      const provided = request.headers.get("X-Internal-Token");
-      if (!env.INTERNAL_TOKEN || provided !== env.INTERNAL_TOKEN) {
+      if (!internalTokenOk(request.headers.get("X-Internal-Token"), env.INTERNAL_TOKEN)) {
         return Response.json({ error: "forbidden" }, { status: 403 });
       }
       const body = await request.json<{ id: string; waitMs?: number; sha?: string }>();

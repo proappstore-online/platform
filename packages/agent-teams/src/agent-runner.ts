@@ -8,7 +8,7 @@
 
 import type { Bindings } from './index.ts';
 import type { AgentRuntime, Role, TicketStatus, ToolCall, ToolResult } from './types.ts';
-import { rowToTicket, rowToRoleConfig, uuid } from './store.ts';
+import { rowToTicket, rowToRoleConfig, insertChatMessage } from './store.ts';
 import { MAX_RUN_MINUTES, assigneeForStatus, isTerminal } from './ticket-machine.ts';
 import { runtimeToProvider, resolveByoKey } from './byo-key.ts';
 import { CFNativeRuntime } from './runtimes/cf-native.ts';
@@ -197,12 +197,8 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
   // visible (the chat panel renders BA/Dev/QA roles). Full text lives on the
   // ticket message; the chat copy is capped for readability.
   if (assistantText.trim()) {
-    const cid = uuid();
     const chatBody = assistantText.trim().slice(0, 4000);
-    sql.exec(
-      'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
-      cid, role, chatBody, Date.now(),
-    );
+    const cid = insertChatMessage(sql, { role, body: chatBody });
     deps.broadcast({ type: 'chat', role, body: chatBody, id: cid });
   }
   if (costUsd > 0 || tokensIn > 0) {

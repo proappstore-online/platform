@@ -6,6 +6,7 @@ import {
   ensureDnsCname,
   ensureCustomDomain,
   pagesProjectName,
+  internalTokenOk,
   type CfConfig,
   type Step,
 } from '@proappstore/build-core';
@@ -151,8 +152,7 @@ provisionRoutes.post('/provision', async (c) => {
  * `creatorId`. Idempotent; safe to retry.
  */
 provisionRoutes.post('/provision-data', async (c) => {
-  const provided = c.req.header('X-Internal-Token');
-  if (!c.env.INTERNAL_TOKEN || provided !== c.env.INTERNAL_TOKEN) {
+  if (!internalTokenOk(c.req.header('X-Internal-Token'), c.env.INTERNAL_TOKEN)) {
     return c.json({ error: 'forbidden' }, 403);
   }
   const body = await c.req.json<{ appId?: string; creatorId?: string }>();

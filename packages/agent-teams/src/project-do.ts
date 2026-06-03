@@ -35,10 +35,12 @@ import {
   rowToRoleConfig,
   rowToTicket,
   uuid,
+  insertChatMessage,
 } from './store.ts';
 import { runDeployStage } from './deploy-stage.ts';
 import { handlePOChat } from './po-chat.ts';
 import { runAgentTurn } from './agent-runner.ts';
+import { validateRoleConfig } from './role-config.ts';
 import { DEFAULT_PERSONAS, type MemoryEntry } from './memory.ts';
 import { DOCS_SKILLS_URL, sliceDocs } from './platform-skill.ts';
 
@@ -309,11 +311,7 @@ export class ProjectDO implements DurableObject {
         .toArray()[0] as { c: number }).c;
       if (open === 0) {
         const msg = "Agents are on. There's no work yet — tell me what to build in the chat and I'll create tickets and get the team going.";
-        const msgId = uuid();
-        this.state.storage.sql.exec(
-          'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
-          msgId, 'po', msg, now,
-        );
+        const msgId = insertChatMessage(this.state.storage.sql, { role: 'po', body: msg, at: now });
         this.broadcast({ type: 'chat', role: 'po', body: msg, id: msgId });
         this.logActivity('info', 'No open tickets — describe what to build in the chat.');
       }
@@ -386,11 +384,7 @@ export class ProjectDO implements DurableObject {
       this.clearWatchdog();
       this.broadcast({ type: 'play-state', status: 'paused', reason: 'idle-timeout' });
       const idleMsg = 'Auto-paused: no activity for 30 minutes. Hit Play to resume.';
-      const idleId = uuid();
-      this.state.storage.sql.exec(
-        'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
-        idleId, 'system', idleMsg, now,
-      );
+      const idleId = insertChatMessage(this.state.storage.sql, { role: 'system', body: idleMsg, at: now });
       this.broadcast({ type: 'chat', role: 'system', body: idleMsg, id: idleId });
       this.logActivity('control', 'Auto-paused (idle 30 min)');
       return;
@@ -815,11 +809,7 @@ export class ProjectDO implements DurableObject {
       "UPDATE tickets SET status = 'needs-input', assignee_role = ?, updated_at = ? WHERE id = ?",
       role, now, ticketId,
     );
-    const blockId = uuid();
-    this.state.storage.sql.exec(
-      'INSERT INTO chat_history (id, role, body, created_at) VALUES (?, ?, ?, ?)',
-      blockId, 'system', message, now,
-    );
+    const blockId = insertChatMessage(this.state.storage.sql, { role: 'system', body: message, at: now });
     this.logActivity('blocked', message, ticketId);
     this.broadcast({ type: 'transition', ticketId, to: 'needs-input', reason: 'agent-blocked', role });
     this.broadcast({ type: 'chat', role: 'system', body: message, id: blockId });
@@ -914,32 +904,9 @@ export class ProjectDO implements DurableObject {
   private async setRoles(request: Request): Promise<Response> {
     const body = (await request.json()) as { roles: RoleConfig[] };
 
-    const VALID_ROLES = new Set(['BA', 'Dev', 'QA']);
-    const VALID_RUNTIMES = new Set(['cf-native', 'openai-responses']);
-    const VALID_TOOLS = new Set([
-      'write_file', 'read_file', 'list_files', 'delete_file',
-      'search_files', 'batch_write_files', 'read_docs',
-    ]);
-
     for (const rc of body.roles) {
-      if (!VALID_ROLES.has(rc.role)) return json({ error: `invalid role: ${rc.role}` }, 400);
-      if (!VALID_RUNTIMES.has(rc.runtime)) return json({ error: `invalid runtime: ${rc.runtime}` }, 400);
-      if (!rc.model || rc.model.length > 64) return json({ error: 'model must be 1-64 chars' }, 400);
-      // Validate spine tools against catalog
-      for (const tool of rc.spineTools) {
-        if (!VALID_TOOLS.has(tool)) return json({ error: `unknown spine tool: ${tool}` }, 400);
-      }
-      // System prompt override: cap length, no prompt injection basics
-      if (rc.systemPromptOverride && rc.systemPromptOverride.length > 8192) {
-        return json({ error: 'systemPromptOverride too long (max 8KB)' }, 400);
-      }
-      // Output token cap: optional, but bounded to sane limits when set.
-      if (rc.maxTokens != null && (!Number.isInteger(rc.maxTokens) || rc.maxTokens < 1024 || rc.maxTokens > 64000)) {
-        return json({ error: 'maxTokens must be an integer between 1024 and 64000' }, 400);
-      }
-      if (rc.persona && rc.persona.length > 4096) {
-        return json({ error: 'persona too long (max 4KB)' }, 400);
-      }
+      const err = validateRoleConfig(rc);
+      if (err) return json({ error: err }, 400);
 
       this.state.storage.sql.exec(
         `INSERT OR REPLACE INTO role_configs (role, runtime, model, system_prompt_override, spine_tools, vendor_tools, max_tokens, persona)
