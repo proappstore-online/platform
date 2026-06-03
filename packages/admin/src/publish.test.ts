@@ -147,9 +147,12 @@ describe("deploy-workflow injection (agent path)", () => {
     expect(wf).toContain("npx playwright test"); // behavioural gate runs after deploy
     expect(wf).toContain("@vibecodeqa/cli"); // code-health scan (report-only)
     expect(wf).toContain(".vcqa/report.json"); // written into dist for the Dev Ops tab
+    // KB publish workflow injected too (Zensical → R2 → kb.proappstore.online).
+    expect(rec.blobs.some((b) => b.includes("Publish Knowledge Base") && b.includes("zensical build"))).toBe(true);
+    expect(rec.blobs.some((b) => b.includes("kb.proappstore.online"))).toBe(true);
     // 1 input file + injected deploy.yml + 4 E2E harness files (config, fixtures,
     // package.json, baseline smoke spec).
-    expect(rec.blobs).toHaveLength(6);
+    expect(rec.blobs).toHaveLength(7); // +kb.yml
     expect(rec.blobs.some((b) => b.includes("@playwright/test"))).toBe(true);
     expect(rec.blobs.some((b) => b.includes("fas_session"))).toBe(true); // auth fixture
   });
@@ -163,7 +166,7 @@ describe("deploy-workflow injection (agent path)", () => {
     // No deploy.yml injected (bundle has its own workflow)...
     expect(rec.blobs.some((b) => b.includes("pages deploy"))).toBe(false);
     // ...but the E2E harness is still added: 2 input + 4 harness files.
-    expect(rec.blobs).toHaveLength(6);
+    expect(rec.blobs).toHaveLength(7); // +kb.yml
   });
 
   it("does NOT clobber QA-authored e2e specs (skips the baseline smoke)", async () => {
@@ -176,7 +179,7 @@ describe("deploy-workflow injection (agent path)", () => {
     // (config, fixtures, package.json) — baseline smoke.spec.ts NOT added.
     expect(rec.blobs.some((b) => b.includes("// authored"))).toBe(true);
     expect(rec.blobs.some((b) => b.includes("app boots and mounts"))).toBe(false); // baseline skipped
-    expect(rec.blobs).toHaveLength(6);
+    expect(rec.blobs).toHaveLength(7); // +kb.yml
   });
 });
 

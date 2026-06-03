@@ -31,6 +31,7 @@ export interface PublishRequest {
 
 // Path of the deploy workflow we inject into agent-authored repos.
 const DEPLOY_WORKFLOW_PATH = ".github/workflows/deploy.yml";
+const KB_WORKFLOW_PATH = ".github/workflows/kb.yml";
 
 /**
  * The push-triggered CI workflow that builds the app and ships it to its CF Pages
@@ -131,6 +132,74 @@ jobs:
           E2E_BASE_URL: https://\${{ github.event.repository.name }}.proappstore.online
           E2E_SESSION_TOKEN: \${{ secrets.PAS_E2E_SESSION_TOKEN }}
         run: npx playwright test
+`;
+}
+
+/**
+ * Build the project's Knowledge Base (KNOWLEDGE.md + docs/) into a Zensical
+ * static site and publish it to the shared `pas-kb` R2 bucket under `<app>/`,
+ * served by proappstore-kb-host at kb.proappstore.online/<app>/. ONE bucket for
+ * every KB — no CF Pages project per KB. Reuses the org CLOUDFLARE_API_TOKEN
+ * (wrangler r2), so no new secret. Injected at deploy; triggers only when the KB
+ * markdown changes. `\${{ }}` escaped to survive the template literal.
+ */
+function kbWorkflowYaml(env: Env): string {
+  return `name: Publish Knowledge Base
+
+on:
+  push:
+    branches: [main]
+    paths: ['KNOWLEDGE.md', 'docs/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kb-\${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Gate on a Knowledge Base existing
+        id: gate
+        run: |
+          if [ -f KNOWLEDGE.md ]; then echo "go=1" >> "\$GITHUB_OUTPUT"; else echo "go=0" >> "\$GITHUB_OUTPUT"; fi
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.go == '1'
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.go == '1'
+        with:
+          node-version: 22
+      - name: Build Zensical site
+        if: steps.gate.outputs.go == '1'
+        run: |
+          python -m pip install --quiet zensical
+          rm -rf kb-src && mkdir -p kb-src
+          cp KNOWLEDGE.md kb-src/index.md
+          if [ -d docs ]; then cp -r docs/. kb-src/; fi
+          printf 'site_name: Knowledge Base\\ndocs_dir: kb-src\\n' > mkdocs.yml
+          zensical build
+      - name: Publish to R2 (pas-kb/<app>/)
+        if: steps.gate.outputs.go == '1'
+        env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${env.CF_ACCOUNT_ID}
+          APP: \${{ github.event.repository.name }}
+        run: |
+          npm install -g wrangler@4 >/dev/null 2>&1
+          out=site
+          [ -d "\$out" ] || out=public
+          cd "\$out"
+          find . -type f | while read -r f; do
+            wrangler r2 object put "pas-kb/\$APP/\${f#./}" --file="\$f" --remote >/dev/null
+          done
+          echo "Knowledge Base published → https://kb.proappstore.online/\$APP/"
 `;
 }
 
@@ -334,8 +403,13 @@ async function provisionApp(
   let commitSha: string | undefined;
   if (opts.files) {
     const files: Record<string, string> = { ...opts.files };
-    const hasWorkflow = Object.keys(files).some((p) => /^\.github\/workflows\/.+\.ya?ml$/i.test(p));
-    if (!hasWorkflow) files[DEPLOY_WORKFLOW_PATH] = deployWorkflowYaml(env);
+    // Inject our deploy workflow unless the app already carries its OWN CI
+    // workflow (kb.yml below is ours, so it doesn't count as "the app's").
+    const hasOwnWorkflow = Object.keys(files).some((p) => /^\.github\/workflows\/.+\.ya?ml$/i.test(p) && p !== KB_WORKFLOW_PATH);
+    if (!hasOwnWorkflow) files[DEPLOY_WORKFLOW_PATH] = deployWorkflowYaml(env);
+    // Publish the Knowledge Base as a Zensical site to R2 (kb.proappstore.online/<app>/).
+    // Separate workflow so it only runs when the KB markdown changes.
+    if (!(KB_WORKFLOW_PATH in files)) files[KB_WORKFLOW_PATH] = kbWorkflowYaml(env);
     // Inject the Playwright E2E harness (config + fixtures + baseline smoke) so
     // the CI e2e job has something to run. Each file is added only when absent
     // (never clobber authored harness edits); the baseline smoke is skipped once
