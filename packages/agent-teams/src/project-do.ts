@@ -42,6 +42,7 @@ import { handlePOChat } from './po-chat.ts';
 import { runAgentTurn } from './agent-runner.ts';
 import { validateRoleConfig } from './role-config.ts';
 import { loadFiles, saveFiles, recallMemory, upsertMemory } from './project-store.ts';
+import { insertActivity, updateActivityMeta, clearActivityLog, readActivity, costSummary } from './activity-log.ts';
 import { DEFAULT_PERSONAS, type MemoryEntry } from './memory.ts';
 import { DOCS_SKILLS_URL, sliceDocs } from './platform-skill.ts';
 
@@ -101,40 +102,26 @@ export class ProjectDO implements DurableObject {
   // just in the browser. Also broadcast for live UIs.
 
   private logActivity(type: string, detail: string, ticketId: string | null = null, meta?: string): string {
-    const id = uuid();
-    const now = Date.now();
-    const metaStr = meta ? meta.slice(0, 20000) : null; // cap; full tool output kept for audit
-    this.state.storage.sql.exec(
-      'INSERT INTO activity_log (id, ticket_id, type, detail, created_at, meta) VALUES (?, ?, ?, ?, ?, ?)',
-      id, ticketId, type, detail.slice(0, 1000), now, metaStr,
-    );
-    this.broadcast({ type: 'activity', entry: { id, ticketId, type, detail, createdAt: now, meta: metaStr ?? undefined } });
+    const { id, createdAt, meta: metaStr } = insertActivity(this.state.storage.sql, { type, detail, ticketId, ...(meta !== undefined ? { meta } : {}) });
+    this.broadcast({ type: 'activity', entry: { id, ticketId, type, detail, createdAt, meta: metaStr ?? undefined } });
     return id;
   }
 
   /** Attach the output of a tool call to its already-logged activity row (audit). */
   private setActivityMeta(id: string, meta: string): void {
-    const metaStr = meta.slice(0, 20000);
-    this.state.storage.sql.exec('UPDATE activity_log SET meta = ? WHERE id = ?', metaStr, id);
+    const metaStr = updateActivityMeta(this.state.storage.sql, id, meta);
     this.broadcast({ type: 'activity-meta', id, meta: metaStr });
   }
 
   // Wipe the persisted activity trail (start fresh). Audit-only data; safe to clear.
   private clearActivity(): Response {
-    this.state.storage.sql.exec('DELETE FROM activity_log');
+    clearActivityLog(this.state.storage.sql);
     this.broadcast({ type: 'activity-cleared' });
     return json({ ok: true });
   }
 
   private getActivity(): Response {
-    const rows = this.state.storage.sql
-      .exec('SELECT id, ticket_id, type, detail, created_at, meta FROM activity_log ORDER BY created_at DESC LIMIT 500')
-      .toArray() as { id: string; ticket_id: string | null; type: string; detail: string; created_at: number; meta: string | null }[];
-    return json({
-      activity: rows.reverse().map((r) => ({
-        id: r.id, ticketId: r.ticket_id, type: r.type, detail: r.detail, createdAt: r.created_at, meta: r.meta ?? undefined,
-      })),
-    });
+    return json({ activity: readActivity(this.state.storage.sql) });
   }
 
   // ── Ownership check ────────────────────────────────────────
@@ -1272,23 +1259,6 @@ export class ProjectDO implements DurableObject {
   // ── Cost summary ──────────────────────────────────────────
 
   private getCostSummary(): Response {
-    const proj = this.state.storage.sql
-      .exec('SELECT cost_cap_monthly_usd, cost_spent_monthly_usd FROM project LIMIT 1')
-      .toArray()[0] as { cost_cap_monthly_usd: number; cost_spent_monthly_usd: number } | undefined;
-
-    const byRole = this.state.storage.sql
-      .exec('SELECT role, SUM(cost_usd) as total, SUM(tokens_in) as tokens_in, SUM(tokens_out) as tokens_out FROM cost_ledger GROUP BY role')
-      .toArray();
-
-    const byTicket = this.state.storage.sql
-      .exec('SELECT ticket_id, SUM(cost_usd) as total FROM cost_ledger GROUP BY ticket_id ORDER BY total DESC LIMIT 10')
-      .toArray();
-
-    return json({
-      cap: proj?.cost_cap_monthly_usd ?? 0,
-      spent: proj?.cost_spent_monthly_usd ?? 0,
-      byRole,
-      topTickets: byTicket,
-    });
+    return json(costSummary(this.state.storage.sql));
   }
 }
