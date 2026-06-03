@@ -16,8 +16,10 @@ Stack: React + TypeScript + Vite + Tailwind, deployed on Cloudflare. For exact
 method signatures, read the installed package's .d.ts under node_modules.
 
 Identity (free, platform-provided — the platform runs the OAuth; no client secret in the app):
-- \`app.auth.signIn(provider?)\` — provider is \`'github'\` (default), \`'google'\`, or \`'apple'\`.
-  So switching to or adding Google/Apple is a ~one-line change (e.g. \`signIn('google')\`), NOT in-app OAuth.
+- \`app.auth.signIn(provider?)\` — provider is ONLY \`'github'\` (default) or \`'google'\`.
+  There is NO \`'apple'\` — \`signIn('apple')\` fails \`tsc\`. Adding Google is a ~one-line
+  change (\`signIn('google')\`), NOT in-app OAuth.
+- There is NO \`app.roles\` API — do RBAC in \`app.db\` (a roles table). \`app.roles.*\` fails \`tsc\`.
 - \`app.auth.signInWithEmail(email)\` — magic-link email sign-in. Also \`app.auth.user\`, \`signOut()\`.
 - CRITICAL — the user object (\`app.auth.user\`, or \`user\` from \`useProAuth\`) is EXACTLY
   \`{ id: string; login: string; avatarUrl: string | null; dateOfBirth: string | null }\`.
@@ -32,9 +34,11 @@ Free primitives (capped): \`app.kv\` (per-user key/value), realtime \`app.rooms\
 (WebSocket; peer/room caps), \`app.proxy.fetch(...)\` (call external APIs with the
 user's keys from the vault — keys never touch client code).
 
-Pro primitives:
-- DB (per-app SQLite/D1): \`app.db.execute(sql, params?)\`, \`app.db.batch(stmts)\`,
-  \`app.db.migrate(migrations)\`, and tenant scoping \`app.db.tenant(id).insert(table, row)\` / \`.findMany(table)\`.
+Pro primitives (read_docs has exact return shapes — check before assuming fields):
+- DB (per-app SQLite/D1): \`app.db.execute(sql, params?)\` → \`{ meta: { changes, duration, last_row_id } }\`
+  (snake_case \`last_row_id\`, and NO \`.rows\`); \`app.db.query<T>(sql, params?)\` → \`{ rows: T[]; meta }\`
+  (pass \`<T>\` or rows are \`unknown\`); \`app.db.batch(stmts)\`, \`app.db.migrate(migrations)\`, tenant scoping
+  \`app.db.tenant(id).insert(table, row)\` / \`.findMany(table)\`.
 - Storage (R2): \`app.storage.upload(path, data, contentType?)\`, \`app.storage.download(path)\`.
 - Server AI: \`app.ai.generate(prompt, opts?)\`, \`app.ai.chat(messages, opts?)\`, \`app.ai.embed(text, opts?)\`.
 - Subscriptions/payments: \`app.subscription.status()\`, \`openCheckout(req)\`, \`openPortal(url)\`; \`app.license.current()\`, \`validate(key)\`.
