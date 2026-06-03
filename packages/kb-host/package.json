@@ -1,0 +1,18 @@
+{
+  "name": "@proappstore/kb-host",
+  "version": "0.1.0",
+  "description": "Serves Knowledge Base sites (Zensical static output) from R2 at kb.proappstore.online/<app>/ — Path B: ONE Worker + ONE bucket for every KB, no CF Pages project per KB.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251130.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.0.0"
+  }
+}

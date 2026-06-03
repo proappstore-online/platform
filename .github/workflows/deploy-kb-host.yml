@@ -1,0 +1,40 @@
+name: Deploy KB Host Worker
+
+# proappstore-kb-host serves Knowledge Base sites from the shared pas-kb R2
+# bucket at kb.proappstore.online/<app>/. Dedicated subdomain (not a wildcard),
+# so it's safe to auto-deploy on change.
+
+on:
+  push:
+    branches: [main]
+    paths: ['packages/kb-host/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-kb-host
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        working-directory: packages/kb-host
+        run: pnpm exec tsc --noEmit
+      - name: Deploy Worker
+        working-directory: packages/kb-host
+        run: pnpm exec wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
