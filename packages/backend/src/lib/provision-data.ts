@@ -1,10 +1,5 @@
+import type { Step } from '@proappstore/build-core';
 import { deployDataWorker } from './deploy-worker.js';
-
-export interface ProvisionDataStep {
-  name: string;
-  status: 'ok' | 'fail' | 'skip';
-  detail: string;
-}
 
 export interface ProvisionDataArgs {
   appId: string;
@@ -29,9 +24,9 @@ export interface ProvisionDataArgs {
  */
 export async function provisionData(
   args: ProvisionDataArgs,
-): Promise<{ steps: ProvisionDataStep[]; dataWorkerUrl: string; dbId: string }> {
+): Promise<{ steps: Step[]; dataWorkerUrl: string; dbId: string }> {
   const { appId, creatorId, creatorLabel, cfToken, cfAccount, db } = args;
-  const steps: ProvisionDataStep[] = [];
+  const steps: Step[] = [];
 
   // 1. Create D1 database (skip if it already exists)
   let dbId = '';

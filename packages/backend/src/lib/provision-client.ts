@@ -10,11 +10,10 @@
  * requiring a CF Access JWT, which service-binding calls don't have.
  */
 
-export interface ProvisionStep {
-  name: string;
-  status: 'ok' | 'skip' | 'fail';
-  detail: string;
-}
+import type { Step } from '@proappstore/build-core';
+
+/** Provisioning step outcome — canonical shape lives in build-core. */
+export type ProvisionStep = Step;
 
 export interface ProvisionBody {
   appId: string;

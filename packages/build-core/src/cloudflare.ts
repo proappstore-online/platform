@@ -6,7 +6,7 @@
  * being copied per entrypoint (the copies had already drifted).
  *
  * All `ensure*` calls are idempotent: POST-first, and a CF "already exists"
- * error is reported as `skip`, not `fail`. Each returns a {@link CfStep} the
+ * error is reported as `skip`, not `fail`. Each returns a {@link Step} the
  * caller appends to its step list.
  */
 
@@ -19,7 +19,9 @@ export interface CfConfig {
   domainBase: string;
 }
 
-export interface CfStep {
+/** A single provisioning step's outcome. The canonical shape shared by every
+ *  provisioning path (admin publish/agent-deploy, backend /v1/provision). */
+export interface Step {
   name: string;
   status: "ok" | "skip" | "fail";
   detail: string;
@@ -56,7 +58,7 @@ function alreadyExists(r: CfResponse): boolean {
 const firstErr = (r: CfResponse) => r.errors?.[0]?.message || "unknown error";
 
 /** CF Pages project (POST-first; skip if it already exists). */
-export async function ensurePagesProject(cfg: CfConfig, id: string): Promise<CfStep> {
+export async function ensurePagesProject(cfg: CfConfig, id: string): Promise<Step> {
   const name = pagesProjectName(id);
   const r = await cfApi(cfg, `/accounts/${cfg.accountId}/pages/projects`, "POST", {
     name,
@@ -68,7 +70,7 @@ export async function ensurePagesProject(cfg: CfConfig, id: string): Promise<CfS
 }
 
 /** DNS CNAME <id>.<domainBase> → <project>.pages.dev (proxied). */
-export async function ensureDnsCname(cfg: CfConfig, id: string): Promise<CfStep> {
+export async function ensureDnsCname(cfg: CfConfig, id: string): Promise<Step> {
   const host = `${id}.${cfg.domainBase}`;
   const r = await cfApi(cfg, `/zones/${cfg.zoneId}/dns_records`, "POST", {
     type: "CNAME",
@@ -82,7 +84,7 @@ export async function ensureDnsCname(cfg: CfConfig, id: string): Promise<CfStep>
 }
 
 /** Attach the custom domain <id>.<domainBase> to the Pages project. */
-export async function ensureCustomDomain(cfg: CfConfig, id: string): Promise<CfStep> {
+export async function ensureCustomDomain(cfg: CfConfig, id: string): Promise<Step> {
   const host = `${id}.${cfg.domainBase}`;
   const r = await cfApi(cfg, `/accounts/${cfg.accountId}/pages/projects/${pagesProjectName(id)}/domains`, "POST", { name: host });
   if (r.success) return { name: "custom domain", status: "ok", detail: host };
@@ -92,7 +94,7 @@ export async function ensureCustomDomain(cfg: CfConfig, id: string): Promise<CfS
 
 /** CF Web Analytics (RUM) site for the app host. Non-fatal by nature — minting
  *  analytics should never block a deploy, so failures come back as `skip`. */
-export async function ensureAnalytics(cfg: CfConfig, id: string): Promise<CfStep> {
+export async function ensureAnalytics(cfg: CfConfig, id: string): Promise<Step> {
   const host = `${id}.${cfg.domainBase}`;
   try {
     const existing = await cfApi(cfg, `/accounts/${cfg.accountId}/rum/site_info/list`);

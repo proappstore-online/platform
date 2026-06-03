@@ -8,4 +8,4 @@ export {
   ensureCustomDomain,
   ensureAnalytics,
 } from './cloudflare.js';
-export type { CfConfig, CfStep } from './cloudflare.js';
+export type { CfConfig, Step } from './cloudflare.js';

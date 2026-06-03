@@ -7,6 +7,7 @@ import {
   ensureCustomDomain,
   pagesProjectName,
   type CfConfig,
+  type Step,
 } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { requireUser, requireAppOwner, HttpError } from '../lib/auth.js';
@@ -34,12 +35,6 @@ import { fetchRepoFiles, type RepoLocation } from '../lib/github-fetch.js';
 const ORG = 'proappstore-online';
 const DOMAIN = 'proappstore.online';
 const ZONE_ID = '14928daaff60902cc89003a2ebeb99fe';
-
-interface ProvisionStep {
-  name: string;
-  status: 'ok' | 'fail' | 'skip';
-  detail: string;
-}
 
 interface ProvisionBody {
   appId: string;
@@ -70,7 +65,7 @@ provisionRoutes.post('/provision', async (c) => {
     const appId = body.appId;
     const cfToken = c.env.CF_API_TOKEN;
     const cfAccount = c.env.CF_ACCOUNT_ID;
-    const steps: ProvisionStep[] = [];
+    const steps: Step[] = [];
 
     if (!cfToken || !cfAccount) {
       return c.text('Platform provisioning not configured (missing CF credentials)', 503);

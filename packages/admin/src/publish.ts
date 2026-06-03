@@ -5,6 +5,7 @@ import {
   ensureDnsCname,
   ensureAnalytics,
   type CfConfig,
+  type Step,
 } from "@proappstore/build-core";
 import type { Env } from "./env.js";
 
@@ -25,12 +26,6 @@ export interface PublishRequest {
   iconBg: string;
   description: string;
   proFeatures?: string[];
-}
-
-interface Step {
-  name: string;
-  status: "ok" | "skip" | "fail";
-  detail: string;
 }
 
 // Path of the deploy workflow we inject into agent-authored repos.
