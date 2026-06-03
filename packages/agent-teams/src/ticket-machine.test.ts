@@ -185,6 +185,19 @@ describe('qaVerdict', () => {
     expect(qaVerdict('Looks good to me, shipping.')).toBe('done'));
 });
 
+describe('research / Architect lane', () => {
+  it('routes inbox → architect-active and architect-active → done', () => {
+    expect(canTransition('inbox', 'architect-active', 'Architect')).toBe(true);
+    expect(canTransition('architect-active', 'done', 'Architect')).toBe(true);
+  });
+  it('architect-active is assigned to the Architect', () =>
+    expect(assigneeForStatus('architect-active')).toBe('Architect'));
+  it('a research block + system-fail are valid', () => {
+    expect(canTransition('architect-active', 'needs-input', 'Architect')).toBe(true);
+    expect(canTransition('architect-active', 'failed', 'system')).toBe(true);
+  });
+});
+
 describe('baVerdict', () => {
   it('blocks on an explicit VERDICT: BLOCKED marker', () => expect(baVerdict('Need a decision.\nVERDICT: BLOCKED')).toBe('blocked'));
   it('proceeds on VERDICT: READY', () => expect(baVerdict('Spec done.\nVERDICT: READY')).toBe('ready'));

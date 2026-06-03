@@ -78,11 +78,16 @@ export function buildSeedMessages(
   prior: { author: string; body: string }[],
   files: string[] = [],
   memoryBlock = '',
+  kb = '',
 ): Message[] {
   const lastFrom = (a: string) => [...prior].reverse().find((m) => m.author === a)?.body;
 
   let context = `# Ticket: ${ticket.title}\n\n${ticket.rawIdea}`;
   if (ticket.spec?.summary) context += `\n\n## Approved spec\n${ticket.spec.summary}`;
+
+  // Project Knowledge Base (the Architect's research) — ground truth the build
+  // roles MUST follow. The Architect itself writes it, so don't feed it back.
+  if (kb && role !== 'Architect') context += `\n\n## Project Knowledge Base (ground truth — build to this)\n${kb.slice(0, 12000)}`;
 
   // Durable project decisions/facts — ground truth for every agent.
   if (memoryBlock) context += `\n\n${memoryBlock}`;
@@ -93,7 +98,18 @@ export function buildSeedMessages(
     context += `\n\n## Existing files (${files.length})\n${files.join('\n')}`;
   }
 
-  if (role === 'BA') {
+  if (role === 'Architect') {
+    context += `\n\nThe app id is "${slug}". RESEARCH this app, then WRITE its Knowledge Base — the source of truth the BA/Dev/QA will build from. Use your read-only tools to inspect any existing code and \`read_docs\` to confirm the REAL PAS SDK primitives + signatures (do NOT invent APIs — wrong signatures break the build).
+
+Write these files with \`batch_write_files\` (markdown only — NEVER touch \`src/\` or app code):
+- \`KNOWLEDGE.md\` — the index + the essentials: what the app is, who it's for, core features, explicit non-goals.
+- \`docs/data-model.md\` — entities and their \`app.db\` tables (columns + types).
+- \`docs/sdk-plan.md\` — exactly which \`@proappstore/sdk\` primitives this app uses, each with its REAL signature/return shape from read_docs (auth/User shape, db query/execute, storage, notifications, etc.).
+- \`docs/design.md\` — UX/layout conventions, the shared design system, dark mode.
+- \`docs/quality.md\` — the bar: tsc clean, no \`as any\`/\`@ts-ignore\`, lint, a11y, mobile.
+
+Keep each file focused and concrete. This is reference material the team reads — not prose. When done, the KB is complete; there's no deploy step for this ticket.`;
+  } else if (role === 'BA') {
     context += `\n\nThe app id is "${slug}". Turn this ticket into a crisp, buildable spec: concrete acceptance criteria, the SDK primitives/files involved, and what's out of scope. Ground it in the ACTUAL code (your read-only tools) and the real SDK (\`read_docs\`) — don't invent APIs.
 
 END YOUR REPORT WITH A SINGLE FINAL LINE, EXACTLY: \`VERDICT: READY\` or \`VERDICT: BLOCKED\`.

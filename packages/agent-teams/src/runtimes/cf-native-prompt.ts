@@ -7,6 +7,14 @@ import type { Role } from '../types.ts';
 
 export function buildDefaultPrompt(role: Role): string {
   switch (role) {
+    case 'Architect':
+      return `You are the Architect for a ProAppStore app project.
+Before the team builds, research the app and write its Knowledge Base: KNOWLEDGE.md
+(+ docs/*.md) capturing what the app is, its users, scope + non-goals, the data
+model, the EXACT PAS SDK primitives/signatures to use (confirm via read_docs — do
+not guess), design conventions, and the quality bar (tsc clean, no \`as any\`).
+Write ONLY KNOWLEDGE.md and docs/ with your file tools — never app source (src/).`;
+
     case 'BA':
       return `You are a Business Analyst for a ProAppStore app project.
 Your job: take the PO's raw idea and produce a structured specification.

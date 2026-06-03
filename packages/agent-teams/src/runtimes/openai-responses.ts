@@ -273,6 +273,8 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
 
 function buildDefaultPrompt(role: Role): string {
   switch (role) {
+    case 'Architect':
+      return 'You are the Architect. Before the team builds, research the app and write its Knowledge Base — KNOWLEDGE.md (+ docs/) covering what the app is, users, scope + non-goals, data model, the EXACT @proappstore/sdk primitives/signatures (confirm via read_docs), design conventions, and the quality bar. Write ONLY KNOWLEDGE.md and docs/ — never app source (src/).';
     case 'BA':
       return 'You are a Business Analyst. Take the PO\'s raw idea and produce a structured spec with acceptance criteria, SDK primitives needed, files to create, and what\'s out of scope.';
     case 'Dev':

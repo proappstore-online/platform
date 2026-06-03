@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS tickets (
   id TEXT PRIMARY KEY, seq INTEGER, title TEXT NOT NULL, raw_idea TEXT NOT NULL, spec_json TEXT,
   status TEXT NOT NULL DEFAULT 'inbox', assignee_role TEXT, iterations INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, cost_spent_usd REAL NOT NULL DEFAULT 0.0,
-  pr_url TEXT, final_commit_sha TEXT, stuck_reason TEXT
+  pr_url TEXT, final_commit_sha TEXT, stuck_reason TEXT, kind TEXT NOT NULL DEFAULT 'build'
 );
 CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
 CREATE TABLE IF NOT EXISTS messages (
@@ -93,6 +93,8 @@ export const MIGRATIONS: string[][] = [
   // Data plane (D1 + data worker + app record) provisioned once, at first green
   // deploy, via the PAS backend. Timestamp gates re-provisioning every ticket.
   [`ALTER TABLE project ADD COLUMN data_provisioned_at INTEGER`],
+  // Ticket kind: 'build' (BA→Dev→QA) or 'research' (Architect builds the KB).
+  [`ALTER TABLE tickets ADD COLUMN kind TEXT NOT NULL DEFAULT 'build'`],
 ];
 
 export function uuid(): string {
@@ -133,6 +135,7 @@ export function rowToTicket(row: Record<string, unknown>): Ticket {
     rawIdea: row.raw_idea as string,
     spec: row.spec_json ? JSON.parse(row.spec_json as string) as BaSpec : null,
     status: row.status as TicketStatus,
+    kind: (row.kind as 'build' | 'research') ?? 'build',
     assigneeRole: (row.assignee_role as Role) ?? null,
     iterations: row.iterations as number,
     createdAt: row.created_at as number,

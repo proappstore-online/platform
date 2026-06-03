@@ -93,7 +93,9 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
   // Pull the latest committed code before the agent reads/edits (GitHub = truth).
   await deps.syncFromGitHub(`before ${role} run`);
   const files = deps.loadFiles();
-  const messages = buildSeedMessages(role, ticket, proj.slug, prior, [...files.keys()].sort(), formatMemory(deps.recallMemory()));
+  // The Architect's KB (KNOWLEDGE.md) grounds every build role — inject its content.
+  const kb = files.get('KNOWLEDGE.md') ?? '';
+  const messages = buildSeedMessages(role, ticket, proj.slug, prior, [...files.keys()].sort(), formatMemory(deps.recallMemory()), kb);
 
   let assistantText = '';
   const toolCalls: ToolCall[] = [];

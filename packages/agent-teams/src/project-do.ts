@@ -398,17 +398,33 @@ export class ProjectDO implements DurableObject {
       return;
     }
 
+    // Research lane (non-blocking): route any inbox research ticket to the
+    // Architect immediately — independent of the build concurrency cap and the
+    // needs-input halt, so the KB is built alongside (not gated by) the build loop.
+    const researchInbox = this.state.storage.sql
+      .exec("SELECT id FROM tickets WHERE status = 'inbox' AND kind = 'research'")
+      .toArray() as { id: string }[];
+    for (const t of researchInbox) {
+      this.state.storage.sql.exec(
+        "UPDATE tickets SET status = 'architect-active', assignee_role = 'Architect', updated_at = ? WHERE id = ?",
+        now, t.id,
+      );
+      this.broadcast({ type: 'transition', ticketId: t.id, from: 'inbox', to: 'architect-active', auto: true });
+    }
+
     // Check if any tickets need user input — don't start new work until user responds
     const needsInput = this.state.storage.sql
       .exec("SELECT COUNT(*) as c FROM tickets WHERE status = 'needs-input'")
       .toArray()[0] as { c: number };
     if (needsInput.c > 0) {
-      // Agents are waiting for user — don't advance anything else
+      // Agents are waiting for user — don't advance anything else (the research
+      // lane above already ran, so the KB still progresses).
+      this.runPendingAgents();
       return;
     }
 
     const tickets = this.state.storage.sql
-      .exec("SELECT id, status, iterations FROM tickets WHERE status NOT IN ('done','failed','cancelled','needs-input','ba-refining','dev-active','qa-active') ORDER BY created_at")
+      .exec("SELECT id, status, iterations FROM tickets WHERE status NOT IN ('done','failed','cancelled','needs-input','architect-active','ba-refining','dev-active','qa-active') ORDER BY created_at")
       .toArray() as { id: string; status: string; iterations: number }[];
 
     for (const t of tickets) {
@@ -485,7 +501,7 @@ export class ProjectDO implements DurableObject {
     if (!proj || proj.status !== 'running') return;
 
     const active = this.state.storage.sql
-      .exec("SELECT id FROM tickets WHERE status IN ('ba-refining','dev-active','qa-active') ORDER BY updated_at")
+      .exec("SELECT id FROM tickets WHERE status IN ('architect-active','ba-refining','dev-active','qa-active') ORDER BY updated_at")
       .toArray() as { id: string }[];
 
     for (const t of active) {
@@ -723,6 +739,18 @@ export class ProjectDO implements DurableObject {
   /** Transition a ticket forward after a successful agent run. */
   private applyAgentOutcome(ticketId: string, role: Role, output: string): void {
     const now = Date.now();
+    if (role === 'Architect') {
+      // Research ticket: the KB was written to the working tree (KNOWLEDGE.md +
+      // docs/). Mark done — no deploy stage (docs aren't a build; they ride along
+      // on the next app deploy). It rode its own lane the whole way.
+      this.state.storage.sql.exec(
+        "UPDATE tickets SET status = 'done', assignee_role = NULL, updated_at = ? WHERE id = ?",
+        now, ticketId,
+      );
+      this.broadcast({ type: 'transition', ticketId, from: 'architect-active', to: 'done', trigger: 'Architect' });
+      this.logActivity('transition', 'Architect finished the Knowledge Base → done', ticketId);
+      return;
+    }
     if (role === 'BA') {
       // BA can block on the founder when a buildable spec needs a product/scope
       // decision — park in needs-input with the questions instead of loosing Dev
@@ -837,6 +865,7 @@ export class ProjectDO implements DurableObject {
 
     // Set default role configs
     const defaults: RoleConfig[] = [
+      { role: 'Architect', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 16384, spineTools: ['write_file', 'batch_write_files', 'read_file', 'list_files', 'search_files', 'read_docs'], vendorTools: [] },
       { role: 'BA', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 8192, spineTools: ['read_file', 'list_files', 'search_files', 'read_docs'], vendorTools: [] },
       { role: 'Dev', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 16384, spineTools: ['write_file', 'read_file', 'list_files', 'batch_write_files', 'search_files', 'read_docs'], vendorTools: [] },
       { role: 'QA', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 8192, spineTools: ['read_file', 'list_files', 'search_files', 'read_docs'], vendorTools: [] },
@@ -855,6 +884,17 @@ export class ProjectDO implements DurableObject {
     // the agent team is already configured above, and now there's work for it.
     const idea = body.idea?.trim();
     if (idea) {
+      // Research ticket FIRST (own lane, non-blocking): the Architect builds the
+      // project Knowledge Base the rest of the team is grounded by.
+      this.state.storage.sql.exec(
+        `INSERT INTO tickets (id, seq, title, raw_idea, status, kind, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'inbox', 'research', ?, ?)`,
+        uuid(), this.nextSeq(),
+        'Research & write the project Knowledge Base',
+        `Research this app and write KNOWLEDGE.md + docs/ as the team's source of truth. App idea:\n${idea}`,
+        now, now,
+      );
+      // First build ticket from the idea.
       const ticketId = uuid();
       const title = idea.length > 80 ? `${idea.slice(0, 77)}...` : idea;
       this.state.storage.sql.exec(
@@ -944,6 +984,7 @@ export class ProjectDO implements DurableObject {
       rawIdea: body.rawIdea,
       spec: null,
       status: 'inbox',
+      kind: 'build',
       assigneeRole: null,
       iterations: 0,
       createdAt: now,

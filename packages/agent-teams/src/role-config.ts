@@ -5,7 +5,7 @@
  */
 import type { RoleConfig } from './types.ts';
 
-export const VALID_ROLES = new Set(['BA', 'Dev', 'QA']);
+export const VALID_ROLES = new Set(['Architect', 'BA', 'Dev', 'QA']);
 export const VALID_RUNTIMES = new Set(['cf-native', 'openai-responses']);
 /** Spine tools a role may be granted. Keep in sync with spine.ts dispatch. */
 export const VALID_SPINE_TOOLS = new Set([
