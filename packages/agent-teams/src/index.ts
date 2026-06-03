@@ -112,7 +112,11 @@ async function relay(
   const init: { method?: string; body?: string } = {};
   if (opts?.method) init.method = opts.method;
   if (opts?.forwardBody) init.body = JSON.stringify(await c.req.json());
-  const res = await forwardToDO(stub, path, user.id, init);
+  // Preserve the incoming query string (e.g. /chat/history?thread=research) — the
+  // DO reads it off request.url. Without this every thread-scoped GET/DELETE
+  // silently fell back to the default thread.
+  const search = new URL(c.req.url).search;
+  const res = await forwardToDO(stub, path + search, user.id, init);
   return new Response(res.body, { status: res.status, headers: res.headers });
 }
 

@@ -138,7 +138,7 @@ export async function handlePOChat(deps: PoChatDeps, request: Request): Promise<
 
   // Get recent chat history for context
   const recentChat = sql
-    .exec('SELECT role, body FROM chat_history ORDER BY created_at DESC LIMIT 20')
+    .exec("SELECT role, body FROM chat_history WHERE thread = 'build' ORDER BY created_at DESC LIMIT 20")
     .toArray()
     .reverse()
     .map((r) => ({ role: r.role as string, body: r.body as string }));
