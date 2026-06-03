@@ -104,7 +104,7 @@ export function buildSeedMessages(
 Write these files with \`batch_write_files\` (markdown only — NEVER touch \`src/\` or app code):
 - \`KNOWLEDGE.md\` — the index + the essentials: what the app is, who it's for, core features, explicit non-goals.
 - \`docs/data-model.md\` — entities and their \`app.db\` tables (columns + types).
-- \`docs/sdk-plan.md\` — exactly which \`@proappstore/sdk\` primitives this app uses, each with its REAL signature/return shape from read_docs (auth/User shape, db query/execute, storage, notifications, etc.).
+- \`docs/sdk-plan.md\` — exactly which \`@proappstore/sdk\` primitives this app uses, each with its REAL signature/return shape from read_docs (auth/User shape, db query/execute, storage, notifications, etc.). If the app has ANY permission/gating need (admins, moderators, owner-only, member vs viewer), plan it on \`app.roles\` (built-in RBAC) — never a custom roles table.
 - \`docs/design.md\` — UX/layout conventions, the shared design system, dark mode.
 - \`docs/quality.md\` — the bar: tsc clean, no \`as any\`/\`@ts-ignore\`, lint, a11y, mobile.
 

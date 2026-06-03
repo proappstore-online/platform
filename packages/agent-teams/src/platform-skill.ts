@@ -19,8 +19,12 @@ Identity (free, platform-provided — the platform runs the OAuth; no client sec
 - \`app.auth.signIn(provider?)\` — provider is ONLY \`'github'\` (default) or \`'google'\`.
   There is NO \`'apple'\` — \`signIn('apple')\` fails \`tsc\`. Adding Google is a ~one-line
   change (\`signIn('google')\`), NOT in-app OAuth.
-- RBAC: \`app.roles\` — \`assign(userId, role)\`, \`revoke(userId, role)\`, \`check(role)\` → boolean,
-  \`myRoles()\` → string[], \`listAll()\` (owner-only). Default roles: owner/member/moderator/editor/viewer.
+- RBAC is a BUILT-IN PLATFORM FEATURE — use \`app.roles\` for any permission/gating
+  need (admins, moderators, owner-only screens, member vs viewer). Do NOT roll your
+  own roles table or hardcode user ids. API: \`assign(userId, role)\`,
+  \`revoke(userId, role)\`, \`check(role)\` → boolean, \`myRoles()\` → string[],
+  \`listAll()\` (owner-only). Default roles: owner/member/moderator/editor/viewer;
+  custom roles = pass any string. \`owner\` is auto-assigned to the app creator.
 - \`app.auth.signInWithEmail(email)\` — magic-link email sign-in. Also \`app.auth.user\`, \`signOut()\`.
 - CRITICAL — the user object (\`app.auth.user\`, or \`user\` from \`useProAuth\`) is EXACTLY
   \`{ id: string; login: string; avatarUrl: string | null; dateOfBirth: string | null }\`.
