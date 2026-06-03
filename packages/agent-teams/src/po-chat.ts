@@ -42,6 +42,25 @@ export function extractJsonObject(text: string, startToken: string): string | nu
   return null;
 }
 
+/**
+ * Extract EVERY balanced JSON object starting at `startToken` (capped). The PO
+ * can file a whole backlog in one reply (one create_ticket object per line, in
+ * priority order) — extractJsonObject only finds the first, so multi-ticket
+ * backlogs were silently truncated to a single ticket.
+ */
+export function extractAllJsonObjects(text: string, startToken: string, cap = 25): string[] {
+  const out: string[] = [];
+  let from = 0;
+  while (out.length < cap) {
+    const slice = text.slice(from);
+    const obj = extractJsonObject(slice, startToken);
+    if (!obj) break;
+    out.push(obj);
+    from += slice.indexOf(obj) + obj.length;
+  }
+  return out;
+}
+
 export interface PoChatDeps {
   sql: SqlStorage;
   env: Bindings;
@@ -267,29 +286,37 @@ export async function handlePOChat(deps: PoChatDeps, request: Request): Promise<
       messages.push({ role: 'user', content: toolResults });
     }
 
-    // Check if PO wants to create a ticket (brace-balanced extract so a `}` in
-    // the ticket text doesn't truncate the JSON).
-    const toolJson = extractJsonObject(text, '{"tool":"create_ticket"');
-    if (toolJson) {
-      try {
-        const tool = JSON.parse(toolJson) as { title: string; rawIdea: string };
-        // Create the ticket
-        const ticketId = uuid();
-        const ticketNow = Date.now();
-        const ticketSeq = deps.nextSeq();
-        sql.exec(
-          `INSERT INTO tickets (id, seq, title, raw_idea, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'inbox', ?, ?)`,
-          ticketId, ticketSeq, tool.title, tool.rawIdea, ticketNow, ticketNow,
-        );
-        deps.broadcast({ type: 'ticket-created', ticket: { id: ticketId, seq: ticketSeq, title: tool.title, status: 'inbox', rawIdea: tool.rawIdea, assigneeRole: null, iterations: 0, costSpentUsd: 0, createdAt: ticketNow, updatedAt: ticketNow, stuckReason: null } });
+    // The PO can file a WHOLE backlog in one reply (one create_ticket object per
+    // line, in dependency/priority order). Create EVERY one — not just the first
+    // (brace-balanced extract so a `}` inside the ticket text doesn't truncate).
+    const toolJsons = extractAllJsonObjects(text, '{"tool":"create_ticket"');
+    if (toolJsons.length > 0) {
+      const created: { seq: number; title: string }[] = [];
+      const ticketNow = Date.now();
+      let cleanText = text;
+      for (const tj of toolJsons) {
+        cleanText = cleanText.replace(tj, '');
+        try {
+          const tool = JSON.parse(tj) as { title: string; rawIdea: string };
+          if (!tool.title || !tool.rawIdea) continue;
+          const title = tool.title.replace(/^#\d+\s*/, '').trim(); // drop any "#N " the PO prefixed (seq is the real number)
+          const ticketId = uuid();
+          const ticketSeq = deps.nextSeq();
+          sql.exec(
+            `INSERT INTO tickets (id, seq, title, raw_idea, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'inbox', ?, ?)`,
+            ticketId, ticketSeq, title, tool.rawIdea, ticketNow, ticketNow,
+          );
+          deps.broadcast({ type: 'ticket-created', ticket: { id: ticketId, seq: ticketSeq, title, status: 'inbox', rawIdea: tool.rawIdea, assigneeRole: null, iterations: 0, costSpentUsd: 0, createdAt: ticketNow, updatedAt: ticketNow, stuckReason: null } });
+          created.push({ seq: ticketSeq, title });
+        } catch { /* skip a malformed block, keep the rest */ }
+      }
+      if (created.length > 0) {
         deps.autoAdvance();
-
-        // Clean response (remove JSON, add confirmation)
-        const cleanText = text.replace(toolJson, '').trim();
-        const poText = cleanText || `Got it. I created ticket #${ticketSeq}: "${tool.title}". It's in the inbox.`;
-        return savePOResponse(deps, poText, ticketNow, { name: 'create_ticket', args: tool.title });
-      } catch {
-        // JSON parse failed, just return the text
+        const summary = created.length === 1
+          ? `Got it — created ticket #${created[0]!.seq}: "${created[0]!.title}". It's in the inbox.`
+          : `Got it — filed ${created.length} tickets into the backlog, in build order:\n${created.map((c) => `#${c.seq} ${c.title}`).join('\n')}`;
+        const poText = cleanText.trim() || summary;
+        return savePOResponse(deps, poText, ticketNow, { name: 'create_ticket', args: `${created.length} ticket(s): ${created.map((c) => `#${c.seq}`).join(', ')}` });
       }
     }
 
