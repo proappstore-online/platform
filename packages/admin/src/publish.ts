@@ -451,6 +451,58 @@ export async function handleAgentDeploy(
   return provisionApp(pubReq, env, { files: req.files ?? {}, dnsFatal: false });
 }
 
+export interface PublishKbRequest {
+  id: string;
+  name?: string;
+  description?: string;
+  files: Record<string, string>; // KNOWLEDGE.md + docs/*.md (markdown only)
+}
+
+/**
+ * Internal (agent-teams): publish a project's Knowledge Base as a Zensical site
+ * WITHOUT building the app. Ensures the repo exists, then pushes ONLY the KB
+ * markdown + the kb.yml workflow; kb.yml builds the Zensical site and uploads it
+ * to R2 (kb.proappstore.online/<app>/). This lets a brainstorm-first KB be shared
+ * before any app code is written. No CF/Pages/registry — KB hosting is the shared
+ * pas-kb bucket + kb-host Worker. Idempotent (re-runs just re-push + rebuild).
+ */
+export async function handlePublishKb(
+  req: PublishKbRequest,
+  env: Env,
+): Promise<{ success: boolean; repoUrl?: string; steps: Step[] }> {
+  const steps: Step[] = [];
+  const idError = validateId(req.id);
+  if (idError) return { success: false, steps: [{ name: "Validation", status: "fail", detail: idError }] };
+
+  // Guard: only KB markdown gets pushed here (never app source).
+  const kbFiles: Record<string, string> = {};
+  for (const [p, c] of Object.entries(req.files ?? {})) {
+    if (p === "KNOWLEDGE.md" || /^docs\/.+\.(md|markdown)$/i.test(p)) kbFiles[p] = c;
+  }
+  if (Object.keys(kbFiles).length === 0) {
+    return { success: false, steps: [{ name: "KB", status: "fail", detail: "no KNOWLEDGE.md / docs markdown to publish" }] };
+  }
+
+  // Ensure the repo exists (idempotent; pushFiles seeds it if empty).
+  const gh = ghFor(env);
+  if (!(await gh.repoExists(req.id))) {
+    const r = await gh.createRepo(req.id, { description: req.description || `${req.name ?? req.id} — Knowledge Base` });
+    if (!(r.data as { id?: number }).id) {
+      steps.push({ name: "GitHub repo", status: "fail", detail: (r.data as { message?: string }).message || "create failed" });
+      return { success: false, steps };
+    }
+    steps.push({ name: "GitHub repo", status: "ok", detail: `Created ${env.PUBLISHERS_ORG}/${req.id}` });
+  } else {
+    steps.push({ name: "GitHub repo", status: "skip", detail: "exists" });
+  }
+
+  // Add the publish workflow so this push triggers the Zensical build + R2 upload.
+  kbFiles[KB_WORKFLOW_PATH] = kbWorkflowYaml(env);
+  const pushStep = await pushFilesToGitHub(env, req.id, kbFiles);
+  steps.push(pushStep);
+  return { success: pushStep.status !== "fail", repoUrl: `https://github.com/${env.PUBLISHERS_ORG}/${req.id}`, steps };
+}
+
 /**
  * SDK/CLI publish (`/api/publish-app`, user session): full provision including
  * the storefront listing. Thin wrapper over {@link provisionApp} — DNS fatal,

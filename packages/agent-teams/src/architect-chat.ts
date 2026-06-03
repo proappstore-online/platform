@@ -36,6 +36,8 @@ export interface ArchitectChatDeps {
   rememberFact(category: string, key: string, value: string): void;
   fetchDocs(): Promise<string>;
   logActivity(type: string, detail: string, ticketId?: string | null, meta?: string): string;
+  /** Publish the KB as a shareable Zensical site (best-effort, non-blocking). */
+  publishKb(): void;
 }
 
 function save(deps: ArchitectChatDeps, text: string, now: number): Response {
@@ -165,10 +167,11 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       messages.push({ role: 'user', content: toolResults });
     }
 
-    // Persist any KB writes and tell the live KB preview to refresh.
+    // Persist any KB writes, refresh the live preview, and publish the site.
     if (wrote) {
       deps.saveFiles(files);
       deps.broadcast({ type: 'files-synced', count: files.size });
+      deps.publishKb(); // republish the shareable Zensical site (non-blocking)
     }
     return save(deps, text || 'Done.', Date.now());
   } catch (err) {

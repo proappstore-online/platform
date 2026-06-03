@@ -722,6 +722,38 @@ export class ProjectDO implements DurableObject {
     saveFiles(this.state.storage.sql, files);
   }
 
+  /**
+   * Publish the Knowledge Base as a shareable Zensical site at
+   * kb.proappstore.online/<slug>/ — INDEPENDENT of an app build. Pushes just the
+   * KB markdown (+ kb.yml) to the repo via admin, which builds + uploads to R2.
+   * Best-effort + non-blocking, so a brainstorm-first KB is shareable the moment
+   * the Architect finishes writing it (no need to build the app first).
+   */
+  private async publishKb(): Promise<void> {
+    const env = this.env;
+    if (!env.ADMIN || !env.INTERNAL_TOKEN) return; // no admin binding (dev)
+    const proj = this.state.storage.sql
+      .exec('SELECT slug, name FROM project LIMIT 1')
+      .toArray()[0] as { slug: string; name: string } | undefined;
+    if (!proj) return;
+    const kb: Record<string, string> = {};
+    for (const [p, c] of this.loadFiles()) {
+      if (p === 'KNOWLEDGE.md' || /^docs\/.+\.(md|markdown)$/i.test(p)) kb[p] = c;
+    }
+    if (Object.keys(kb).length === 0) return; // nothing written yet
+    try {
+      const res = await env.ADMIN.fetch(new Request('https://admin.proappstore.online/api/publish-kb', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Internal-Token': env.INTERNAL_TOKEN },
+        body: JSON.stringify({ id: proj.slug, name: proj.name, files: kb }),
+      }));
+      if (res.ok) this.logActivity('control', `Knowledge Base published → kb.proappstore.online/${proj.slug}/`, null);
+      else this.logActivity('control', `KB publish skipped (admin ${res.status}) — retries on next KB change`, null);
+    } catch (e) {
+      this.logActivity('control', `KB publish error (non-fatal): ${e instanceof Error ? e.message : 'unknown'}`, null);
+    }
+  }
+
   /** Build the tool executor injected into a runtime for one run. Agents get
    *  file tools + read_docs only; deployment is a system stage (runDeploy), not
    *  an agent tool, so anything else is rejected. */
@@ -750,6 +782,7 @@ export class ProjectDO implements DurableObject {
       );
       this.broadcast({ type: 'transition', ticketId, from: 'architect-active', to: 'done', trigger: 'Architect' });
       this.logActivity('transition', 'Architect finished the Knowledge Base → done', ticketId);
+      void this.publishKb(); // publish the shareable KB site (non-blocking)
       return;
     }
     if (role === 'BA') {
@@ -1325,6 +1358,7 @@ export class ProjectDO implements DurableObject {
         rememberFact: (c, k, v) => this.rememberFact(c, k, v),
         fetchDocs: () => this.fetchDocs(),
         logActivity: (type, detail, tid, meta) => this.logActivity(type, detail, tid, meta),
+        publishKb: () => { void this.publishKb(); },
       }, request);
     }
     return handlePOChat({

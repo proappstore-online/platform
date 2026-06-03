@@ -1,6 +1,6 @@
 import { internalTokenOk } from "@proappstore/build-core";
 import type { Env } from "./env.js";
-import { handlePublish, handleAgentDeploy, handleRepoPull, handleDeployStatus, type PublishRequest, type AgentDeployRequest } from "./publish.js";
+import { handlePublish, handleAgentDeploy, handleRepoPull, handleDeployStatus, handlePublishKb, type PublishRequest, type AgentDeployRequest, type PublishKbRequest } from "./publish.js";
 import { verifySession, handleAuthExchange, handleAuthMe } from "./auth.js";
 
 export default {
@@ -44,6 +44,18 @@ export default {
       }
       const body = await request.json<AgentDeployRequest>();
       const result = await handleAgentDeploy(body, env);
+      return Response.json(result, { status: result.success ? 200 : 422 });
+    }
+
+    // Internal: agent-teams publishes the KB as a Zensical site (no app build) —
+    // ensure repo + push KB markdown + kb.yml, which builds + uploads to R2.
+    if (url.pathname === "/api/publish-kb" && request.method === "POST") {
+      if (!internalTokenOk(request.headers.get("X-Internal-Token"), env.INTERNAL_TOKEN)) {
+        return Response.json({ error: "forbidden" }, { status: 403 });
+      }
+      const body = await request.json<PublishKbRequest>();
+      if (!body.id) return Response.json({ error: "id required" }, { status: 400 });
+      const result = await handlePublishKb(body, env);
       return Response.json(result, { status: result.success ? 200 : 422 });
     }
 
