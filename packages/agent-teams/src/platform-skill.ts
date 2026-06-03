@@ -10,7 +10,7 @@
  */
 export const PLATFORM_CAPABILITIES = `## PAS platform & SDK — ground truth (use these real APIs; do NOT invent platform features)
 
-Apps are built on \`@proappstore/sdk\` (extends \`@freeappstore/sdk\`). One instance:
+Apps are built on \`@proappstore/sdk\` (self-contained — do NOT import \`@freeappstore/sdk\`). One instance:
 \`import { initPro } from '@proappstore/sdk'; const app = initPro({ appId })\`.
 Stack: React + TypeScript + Vite + Tailwind, deployed on Cloudflare. For exact
 method signatures, read the installed package's .d.ts under node_modules.
