@@ -41,6 +41,7 @@ import { runDeployStage } from './deploy-stage.ts';
 import { handlePOChat } from './po-chat.ts';
 import { runAgentTurn } from './agent-runner.ts';
 import { validateRoleConfig } from './role-config.ts';
+import { loadFiles, saveFiles, recallMemory, upsertMemory } from './project-store.ts';
 import { DEFAULT_PERSONAS, type MemoryEntry } from './memory.ts';
 import { DOCS_SKILLS_URL, sliceDocs } from './platform-skill.ts';
 
@@ -611,27 +612,14 @@ export class ProjectDO implements DurableObject {
   // ── Project memory (durable decisions/facts the team reads each run) ───────
 
   private recallMemory(): MemoryEntry[] {
-    const rows = this.state.storage.sql
-      .exec('SELECT id, category, key, value, created_at, updated_at FROM project_memory ORDER BY updated_at DESC')
-      .toArray() as { id: string; category: string; key: string; value: string; created_at: number; updated_at: number }[];
-    return rows.map((r) => ({ id: r.id, category: r.category, key: r.key, value: r.value, createdAt: r.created_at, updatedAt: r.updated_at }));
+    return recallMemory(this.state.storage.sql);
   }
 
-  /** Upsert a memory by key (so a decision can be revised, not duplicated). */
+  /** Upsert a memory by key (so a decision can be revised, not duplicated), then
+   *  log + broadcast the change. Persistence lives in project-store. */
   private rememberFact(category: string, key: string, value: string): void {
-    const k = key.trim().slice(0, 120);
-    const v = value.trim().slice(0, 2000);
-    if (!k || !v) return;
-    const now = Date.now();
-    const existing = this.state.storage.sql.exec('SELECT id FROM project_memory WHERE key = ?', k).toArray()[0] as { id: string } | undefined;
-    if (existing) {
-      this.state.storage.sql.exec('UPDATE project_memory SET value = ?, category = ?, updated_at = ? WHERE key = ?', v, category, now, k);
-    } else {
-      this.state.storage.sql.exec(
-        'INSERT INTO project_memory (id, category, key, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-        uuid(), category, k, v, now, now,
-      );
-    }
+    const k = upsertMemory(this.state.storage.sql, category, key, value);
+    if (!k) return;
     this.logActivity('memory', `Remembered: ${k}`);
     this.broadcast({ type: 'memory-updated' });
   }
@@ -717,22 +705,11 @@ export class ProjectDO implements DurableObject {
   }
 
   private loadFiles(): Map<string, string> {
-    const rows = this.state.storage.sql
-      .exec('SELECT path, content FROM project_files')
-      .toArray() as { path: string; content: string }[];
-    return new Map(rows.map((r) => [r.path, r.content]));
+    return loadFiles(this.state.storage.sql);
   }
 
   private saveFiles(files: Map<string, string>): void {
-    const now = Date.now();
-    // Small projects — replace wholesale so deletions are reflected.
-    this.state.storage.sql.exec('DELETE FROM project_files');
-    for (const [path, content] of files) {
-      this.state.storage.sql.exec(
-        'INSERT INTO project_files (path, content, updated_at) VALUES (?, ?, ?)',
-        path, content, now,
-      );
-    }
+    saveFiles(this.state.storage.sql, files);
   }
 
   /** Build the tool executor injected into a runtime for one run. Agents get
