@@ -7,7 +7,7 @@
  */
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import type { ProAppStore } from './index.js';
-import type { User } from '@freeappstore/sdk';
+import type { User } from './base-types.js';
 import { useProAuth } from './hooks.js';
 import { useTheme } from './hooks.js';
 

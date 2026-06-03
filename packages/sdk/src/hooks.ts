@@ -3,7 +3,7 @@ import type { ProAppStore } from './index.js';
 import type { Subscription } from './types.js';
 
 // Re-export User type for convenience
-export type { User } from '@freeappstore/sdk';
+export type { User } from './base-types.js';
 export type { NotificationPayload, SendResult } from './notifications.js';
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,12 @@
-import { FreeAppStore } from '@freeappstore/sdk';
+// Self-contained PAS SDK — no runtime dependency on @freeappstore/sdk. The free
+// primitives (auth, kv, counters, rooms, proxy, roles) are VENDORED here (copied
+// from the FAS SDK source, per the workspace "vendor, don't depend" rule), so a
+// published @proappstore/sdk stands alone and never lags a separate package.
+import { Auth } from './auth.js';
+import { Kv } from './kv.js';
+import { Counters } from './counters.js';
+import { Rooms } from './rooms.js';
+import { Roles } from './roles.js';
 import { ApiProxy } from './proxy.js';
 import { AI } from './ai.js';
 import { Database } from './db.js';
@@ -13,16 +21,12 @@ import { Email } from './email.js';
 import { Webhooks } from './webhooks.js';
 import type { ProInitOptions } from './types.js';
 
-// Re-export everything from FAS SDK so pro apps only need one import
-export type {
-  User,
-  Unsubscribe,
-  FasInitOptions,
-  ConnectionState,
-  Room,
-  RoomMessage,
-  RoomPeer,
-} from '@freeappstore/sdk';
+// Vendored base primitive types — one import for app authors.
+export type { User, Unsubscribe } from './base-types.js';
+export type { AuthProvider } from './auth.js';
+export type { ConnectionState, Room, RoomMessage, RoomPeer } from './rooms.js';
+export type { DefaultRole, RoleAssignment } from './roles.js';
+export { DEFAULT_ROLES } from './roles.js';
 
 export type {
   ProInitOptions,
@@ -52,12 +56,22 @@ export { Webhooks } from './webhooks.js';
 export type { WebhookConfig, WebhookTestResult } from './webhooks.js';
 
 /**
- * Pro SDK instance — includes everything from @freeappstore/sdk (auth, kv,
- * counters, rooms, proxy) plus subscription management and license keys.
+ * Pro SDK instance — the free primitives (auth, kv, counters, rooms, proxy,
+ * roles) PLUS the Pro features (db, storage, maps, notifications, sms, ai, usage,
+ * email, webhooks, subscription, license). One import, one instance, all features.
  *
- * One import, one instance, all features.
+ * auth/kv/counters/rooms/roles are FAS-backed (shared identity + free tier);
+ * proxy + every Pro feature hit the PAS backend.
  */
-export class ProAppStore extends FreeAppStore {
+export class ProAppStore {
+  // Free primitives (FAS-backed)
+  readonly auth: Auth;
+  readonly kv: Kv;
+  readonly counters: Counters;
+  readonly rooms: Rooms;
+  readonly roles: Roles;
+  readonly proxy: ApiProxy;
+  // Pro features (PAS-backed)
   readonly subscription: SubscriptionApi;
   readonly license: LicenseApi;
   readonly db: Database;
@@ -71,11 +85,16 @@ export class ProAppStore extends FreeAppStore {
   readonly webhooks: Webhooks;
 
   constructor(opts: ProInitOptions) {
-    super({ appId: opts.appId, ...(opts.fasApiBase && { apiBase: opts.fasApiBase }) });
+    const fasApiBase = opts.fasApiBase ?? 'https://api.freeappstore.online';
     const proApiBase = opts.proApiBase ?? 'https://api.proappstore.online';
-    // Override proxy to use PAS backend (not FAS) — PAS has its own
-    // proxy/secrets/allowlist routes so it doesn't depend on FAS's DB.
-    (this as unknown as { proxy: ApiProxy }).proxy = new ApiProxy(opts.appId, proApiBase, this.auth);
+    // Free primitives + identity live on FAS (shared auth/kv/counters/rooms/roles).
+    this.auth = new Auth(opts.appId, fasApiBase);
+    this.kv = new Kv(opts.appId, fasApiBase, this.auth);
+    this.counters = new Counters(opts.appId, fasApiBase, this.auth);
+    this.rooms = new Rooms(opts.appId, fasApiBase, this.auth);
+    this.roles = new Roles(opts.appId, fasApiBase, this.auth);
+    // proxy + Pro features hit the PAS backend (its own proxy/secrets/allowlist).
+    this.proxy = new ApiProxy(opts.appId, proApiBase, this.auth);
     this.subscription = new SubscriptionApi(opts.appId, proApiBase, this.auth);
     this.license = new LicenseApi(opts.appId, proApiBase, this.auth);
     this.db = new Database(opts.appId, opts.dataApiBase ?? `https://data-${opts.appId}.proappstore.online`, this.auth);
