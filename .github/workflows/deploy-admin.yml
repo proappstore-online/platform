@@ -4,8 +4,14 @@ name: Deploy Admin Worker
 # the admin package. wrangler deploy is idempotent. Admin owns no D1, so there
 # are no migrations to apply (it talks to the GitHub + Cloudflare APIs).
 #
-# Worker secrets (GITHUB_TOKEN, CF_API_TOKEN, SESSION_SIGNING_KEY, INTERNAL_TOKEN)
-# persist across deploys and are managed via `wrangler secret put`, not CI.
+# Worker secrets: Doppler (project `pas`) is the source of truth. Doppler can't
+# push into a Worker's RUNTIME secrets, so we sync them here via `wrangler secret
+# put` from the Doppler→GitHub-org-synced values on each deploy. GITHUB_TOKEN (the
+# Worker's runtime name) is sourced from Doppler's PAS_ADMIN_GH_TOKEN — GitHub
+# reserves `GITHUB_*` secret names so the Doppler/org key uses a GH-suffix. It
+# must carry the `workflow` permission so agent-deploy can commit
+# .github/workflows/deploy.yml into app repos. CF_API_TOKEN, SESSION_SIGNING_KEY,
+# and INTERNAL_TOKEN are still set manually (same pattern can migrate them later).
 
 on:
   push:
@@ -51,6 +57,23 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # Source the Worker's runtime GITHUB_TOKEN from Doppler (PAS_ADMIN_GH_TOKEN,
+      # synced to org secrets). Needs the `workflow` permission. No-op if the key
+      # isn't set yet, so this never breaks a deploy during migration.
+      - name: Sync GITHUB_TOKEN from Doppler
+        working-directory: packages/admin
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PAS_ADMIN_GH_TOKEN: ${{ secrets.PAS_ADMIN_GH_TOKEN }}
+        run: |
+          if [ -n "$PAS_ADMIN_GH_TOKEN" ]; then
+            printf '%s' "$PAS_ADMIN_GH_TOKEN" | pnpm exec wrangler secret put GITHUB_TOKEN
+            echo "✓ Worker GITHUB_TOKEN synced from Doppler (PAS_ADMIN_GH_TOKEN)"
+          else
+            echo "⚠ PAS_ADMIN_GH_TOKEN not set in Doppler/org yet — leaving the existing Worker GITHUB_TOKEN unchanged"
+          fi
 
       - name: Smoke test
         run: |
