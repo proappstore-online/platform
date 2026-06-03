@@ -178,12 +178,14 @@ jobs:
           node-version: 22
       - name: Build Zensical site
         if: steps.gate.outputs.go == '1'
+        env:
+          APP: \${{ github.event.repository.name }}
         run: |
           python -m pip install --quiet zensical
           rm -rf kb-src && mkdir -p kb-src
           cp KNOWLEDGE.md kb-src/index.md
           if [ -d docs ]; then cp -r docs/. kb-src/; fi
-          printf 'site_name: Knowledge Base\\ndocs_dir: kb-src\\n' > mkdocs.yml
+          printf 'site_name: %s — Knowledge Base\\ndocs_dir: kb-src\\n' "\$APP" > mkdocs.yml
           zensical build
       - name: Publish to R2 (pas-kb/<app>/)
         if: steps.gate.outputs.go == '1'
