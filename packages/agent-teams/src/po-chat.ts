@@ -105,6 +105,12 @@ export async function handlePOChat(deps: PoChatDeps, request: Request): Promise<
   const userMsgId = insertChatMessage(sql, { role: 'user', body: userText, at: now });
   deps.broadcast({ type: 'chat', role: 'user', body: userText, id: userMsgId });
 
+  // Signal "PO is working" to the UI (the agent loop below can take many seconds
+  // with no other events). The console's working indicator keys off this + the
+  // per-turn heartbeats and clears on staleness — same model as the BA/Dev/QA
+  // runner (no explicit finished event needed).
+  deps.broadcast({ type: 'agent-run-started', role: 'PO' });
+
   // Get current project state for context
   const ticketRows = sql
     .exec('SELECT id, seq, title, status, assignee_role FROM tickets ORDER BY created_at DESC LIMIT 20')
@@ -199,6 +205,7 @@ export async function handlePOChat(deps: PoChatDeps, request: Request): Promise<
     let text = '';
     // Tool loop: let the PO read/search the code, capped to keep it cheap.
     for (let turn = 0; turn < 8; turn++) { // room to research + self-verify before answering
+      deps.broadcast({ type: 'agent-heartbeat', role: 'PO' }); // keep the UI's working indicator alive across LLM turns
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
