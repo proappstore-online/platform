@@ -916,16 +916,24 @@ export class ProjectDO implements DurableObject {
     const idea = proj?.app_idea?.trim() || 'See the project memory + chat for what this app is.';
     const now = Date.now();
     const id = uuid();
+    // Seed the research ticket STRAIGHT into architect-active and dispatch it now.
+    // The research lane is founder-triggered and runs independent of the build
+    // loop, so "Build KB" must start the Architect even when the project is paused
+    // (e.g. idle auto-pause) — autoAdvance/runPendingAgents both bail when the
+    // project isn't 'running', which previously left the ticket stuck in inbox
+    // with nothing happening. dispatchRun is not play-gated; its post-run
+    // autoAdvance is, so the (paused) build loop stays paused.
     this.state.storage.sql.exec(
-      `INSERT INTO tickets (id, seq, title, raw_idea, status, kind, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'inbox', 'research', ?, ?)`,
+      `INSERT INTO tickets (id, seq, title, raw_idea, status, kind, assignee_role, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'architect-active', 'research', 'Architect', ?, ?)`,
       id, this.nextSeq(),
       'Research & write the project Knowledge Base',
       `Research this app and write KNOWLEDGE.md + docs/ as the team's source of truth (read project memory for any decisions made while brainstorming). App idea:\n${idea}`,
       now, now,
     );
-    this.broadcast({ type: 'ticket-created', ticket: { id, seq: 0, title: 'Research & write the project Knowledge Base', status: 'inbox', rawIdea: idea, assigneeRole: null, iterations: 0, costSpentUsd: 0, createdAt: now, updatedAt: now, stuckReason: null, kind: 'research' } });
-    this.autoAdvance();
+    this.broadcast({ type: 'ticket-created', ticket: { id, seq: 0, title: 'Research & write the project Knowledge Base', status: 'architect-active', rawIdea: idea, assigneeRole: 'Architect', iterations: 0, costSpentUsd: 0, createdAt: now, updatedAt: now, stuckReason: null, kind: 'research' } });
+    this.broadcast({ type: 'transition', ticketId: id, from: 'inbox', to: 'architect-active', auto: true });
+    this.dispatchRun(id);
     return json({ ok: true, ticketId: id });
   }
 
