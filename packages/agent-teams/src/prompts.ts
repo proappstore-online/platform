@@ -34,7 +34,7 @@ You read the founder's messages and decide what to do.
 
 You have read-only tools to inspect the app's code: list_files, read_file, search_files. USE them. You also have a "remember" tool — call it to record durable decisions/facts (e.g. {key:"auth", value:"GitHub OAuth"}) whenever the founder decides something, so the whole team keeps it as ground truth.
 
-Platform facts (confirm specifics with read_docs; do NOT invent beyond these): the app is built on the PAS SDK \`@proappstore/sdk\` (extends \`@freeappstore/sdk\`). Identity is platform-provided: \`app.auth.signIn(provider?)\` supports \`'github'\` (default), \`'google'\`, and \`'apple'\`, plus \`signInWithEmail(email)\` — the platform runs the OAuth (no client secret in the app), so switching/adding Google or Apple is a ~one-line change, not custom in-app OAuth. Only a provider NOT in that set would require building OAuth in the app.
+Platform facts (confirm specifics with read_docs; do NOT invent beyond these): the app is built on the PAS SDK \`@proappstore/sdk\` (extends \`@freeappstore/sdk\`). Identity is platform-provided: \`app.auth.signIn(provider?)\` supports \`'github'\` (default) and \`'google'\` only (there is NO \`'apple'\`), plus \`signInWithEmail(email)\` — the platform runs the OAuth (no client secret in the app), so switching/adding Google is a ~one-line change, not custom in-app OAuth. Only a provider NOT in that set would require building OAuth in the app.
 
 Your job:
 - If the founder asks a FACTUAL question about the app ("does it use google or github sign-in?", "is there a settings page?") → check project memory first, then investigate with your tools (search_files / read_file) and answer from the actual code. Don't guess.
@@ -93,7 +93,13 @@ export function buildSeedMessages(
     context += `\n\n## Existing files (${files.length})\n${files.join('\n')}`;
   }
 
-  if (role === 'Dev') {
+  if (role === 'BA') {
+    context += `\n\nThe app id is "${slug}". Turn this ticket into a crisp, buildable spec: concrete acceptance criteria, the SDK primitives/files involved, and what's out of scope. Ground it in the ACTUAL code (your read-only tools) and the real SDK (\`read_docs\`) — don't invent APIs.
+
+END YOUR REPORT WITH A SINGLE FINAL LINE, EXACTLY: \`VERDICT: READY\` or \`VERDICT: BLOCKED\`.
+- \`VERDICT: READY\` → the spec is complete and a Dev can build it with NO open product/scope decisions. Most tickets — including straightforward bug/build fixes — are READY.
+- \`VERDICT: BLOCKED\` → you genuinely cannot write a buildable spec without a decision only the founder can make (real product ambiguity or conflicting requirements). List the SPECIFIC questions; the ticket then PAUSES for the founder to answer in chat and you re-run with their answer. Do NOT use BLOCKED for anything you can resolve from the code/docs, or to ask permission for the obvious — that just stalls the build. When in doubt, make the smallest reasonable assumption, note it, and go READY.`;
+  } else if (role === 'Dev') {
     const ba = lastFrom('BA');
     if (ba) context += `\n\n## BA analysis\n${ba}`;
     if (ticket.status === 'qa-failed' || ticket.iterations > 0) {

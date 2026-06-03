@@ -6,6 +6,7 @@ import {
   isTerminal,
   needsUserAction,
   qaVerdict,
+  baVerdict,
   MAX_ITERATIONS,
   MAX_RUN_MINUTES,
   IDLE_TIMEOUT_MINUTES,
@@ -182,6 +183,16 @@ describe('qaVerdict', () => {
     expect(qaVerdict('## 🔴 FAIL — compile blockers\nActually not a blocker.\nVERDICT: PASS')).toBe('done'));
   it('defaults to done when no marker is present (CI is the real gate)', () =>
     expect(qaVerdict('Looks good to me, shipping.')).toBe('done'));
+});
+
+describe('baVerdict', () => {
+  it('blocks on an explicit VERDICT: BLOCKED marker', () => expect(baVerdict('Need a decision.\nVERDICT: BLOCKED')).toBe('blocked'));
+  it('proceeds on VERDICT: READY', () => expect(baVerdict('Spec done.\nVERDICT: READY')).toBe('ready'));
+  it('is case-insensitive', () => expect(baVerdict('verdict: blocked')).toBe('blocked'));
+  it('defaults to ready when no marker (do not stall every ticket)', () =>
+    expect(baVerdict('Here is the spec, looks buildable.')).toBe('ready'));
+  it('uses the LAST marker', () =>
+    expect(baVerdict('Initially I thought BLOCKED.\nOn reflection it is fine.\nVERDICT: READY')).toBe('ready'));
 });
 
 describe('safety constants', () => {

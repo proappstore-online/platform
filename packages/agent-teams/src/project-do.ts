@@ -25,6 +25,7 @@ import {
   canTransition,
   isTerminal,
   qaVerdict,
+  baVerdict,
 } from './ticket-machine.ts';
 import { executeFileTool, isFileTool } from './spine.ts';
 import {
@@ -723,6 +724,13 @@ export class ProjectDO implements DurableObject {
   private applyAgentOutcome(ticketId: string, role: Role, output: string): void {
     const now = Date.now();
     if (role === 'BA') {
+      // BA can block on the founder when a buildable spec needs a product/scope
+      // decision — park in needs-input with the questions instead of loosing Dev
+      // on an unspecced ticket (which just burns Dev/QA/deploy iterations).
+      if (baVerdict(output) === 'blocked') {
+        this.blockForInput(ticketId, 'BA', output.slice(0, 8000));
+        return;
+      }
       // Stash the BA's analysis as a minimal spec and await approval.
       const spec: BaSpec = {
         summary: output.slice(0, 4000),

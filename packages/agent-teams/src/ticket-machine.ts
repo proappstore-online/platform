@@ -134,6 +134,22 @@ export function qaVerdict(output: string): 'done' | 'qa-failed' {
   return 'done'; // no explicit verdict → don't loop; CI build gate catches real breakage
 }
 
+/**
+ * Decide whether a BA spec is buildable or blocked on the founder. The BA ends
+ * with `VERDICT: READY` (spec complete) or `VERDICT: BLOCKED` (genuine product/
+ * scope decision needed). BLOCKED → the ticket parks in needs-input with the
+ * questions, so Dev isn't loosed on an unspecced ticket. Default READY (no marker
+ * → proceed) so a forgetful BA doesn't stall every ticket — same bias as
+ * qaVerdict. Last marker wins (the essay above can mention both words).
+ */
+export function baVerdict(output: string): 'ready' | 'blocked' {
+  const markers = [...output.matchAll(/VERDICT:\s*(READY|BLOCKED)/gi)];
+  if (markers.length > 0) {
+    return markers[markers.length - 1]![1]!.toUpperCase() === 'BLOCKED' ? 'blocked' : 'ready';
+  }
+  return 'ready';
+}
+
 /** Is this a state where the user needs to respond? */
 export function needsUserAction(status: TicketStatus): boolean {
   return status === 'needs-input' || status === 'awaiting-approval';
