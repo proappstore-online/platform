@@ -83,15 +83,29 @@ export async function provisionData(
     steps.push({ name: 'deploy_worker', status: 'skip', detail: 'No D1 database created' });
   }
 
-  // 3. Record the app in PAS (creator → payouts; d1 id → data worker binding)
-  try {
-    await db
-      .prepare('INSERT OR IGNORE INTO apps (id, creator_id, d1_database_id, created_at) VALUES (?, ?, ?, ?)')
-      .bind(appId, creatorId, dbId, Date.now())
-      .run();
-    steps.push({ name: 'record_app', status: 'ok', detail: `creator: ${creatorLabel ?? creatorId}` });
-  } catch (e) {
-    steps.push({ name: 'record_app', status: 'fail', detail: String(e) });
+  // 3. Record the app in PAS (creator → payouts; d1 id → data worker binding).
+  //    Skip when D1 didn't yield an id — recording a row with an empty
+  //    d1_database_id would freeze it (plain INSERT OR IGNORE never backfills),
+  //    leaving the data worker bound to nothing. The D1 step already failed, so
+  //    success=false and the caller retries. On retry we upsert: a row whose
+  //    d1_database_id was left empty by an earlier partial run gets healed,
+  //    while a good id (and the original creator_id) is preserved.
+  if (!dbId) {
+    steps.push({ name: 'record_app', status: 'skip', detail: 'no D1 id yet — record deferred to retry' });
+  } else {
+    try {
+      await db
+        .prepare(
+          `INSERT INTO apps (id, creator_id, d1_database_id, created_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET d1_database_id = excluded.d1_database_id
+           WHERE apps.d1_database_id IS NULL OR apps.d1_database_id = ''`,
+        )
+        .bind(appId, creatorId, dbId, Date.now())
+        .run();
+      steps.push({ name: 'record_app', status: 'ok', detail: `creator: ${creatorLabel ?? creatorId}` });
+    } catch (e) {
+      steps.push({ name: 'record_app', status: 'fail', detail: String(e) });
+    }
   }
 
   return { steps, dataWorkerUrl, dbId };

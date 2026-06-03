@@ -396,4 +396,26 @@ describe('POST /v1/provision-data (internal)', () => {
     expect(bindArgs[0]).toBe('cleanup');
     expect(bindArgs[1]).toBe('gh:42');
   });
+
+  it('does NOT write an app row when D1 fails (would freeze an empty d1_database_id)', async () => {
+    const db = mockD1();
+    globalThis.fetch = multiFetch({
+      'd1/database': { status: 200, body: { success: false, errors: [{ message: 'quota exceeded' }] } },
+    });
+    const res = await app.request('/v1/provision-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': 'sekret' },
+      body: JSON.stringify({ appId: 'broken', creatorId: 'gh:42' }),
+    }, makeEnv({ INTERNAL_TOKEN: 'sekret' }, db));
+
+    expect(res.status).toBe(207);
+    const data = await res.json() as { success: boolean; steps: { name: string; status: string }[] };
+    expect(data.success).toBe(false);
+    const byName = Object.fromEntries(data.steps.map((s) => [s.name, s.status]));
+    expect(byName['create_d1']).toBe('fail');
+    expect(byName['record_app']).toBe('skip'); // deferred to retry, no frozen row
+    // critically: the apps table was never written with an empty d1_database_id
+    const wroteApps = db.prepare.mock.calls.some((c: any[]) => /INTO apps/i.test(c[0]));
+    expect(wroteApps).toBe(false);
+  });
 });
