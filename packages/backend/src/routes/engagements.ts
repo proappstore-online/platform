@@ -296,13 +296,22 @@ engagementRoutes.post('/services/engagements/:id/messages', async (c) => {
     let chargeCents = 0;
 
     if (isDev) {
-      // Rate limit: max 10 dev messages per minute per engagement
+      // Rate limit: max 10 dev messages per minute per engagement, 30 globally
       const recentCount = await c.env.DB.prepare(
         `SELECT COUNT(*) AS c FROM service_messages
          WHERE engagement_id = ? AND sender_role = 'developer' AND created_at > ?`,
       ).bind(id, now - 60_000).first<{ c: number }>();
       if ((recentCount?.c ?? 0) >= 10) {
         return c.json({ error: 'Rate limit: max 10 messages per minute. Wait a moment.' }, 429);
+      }
+      // Global rate limit across all engagements
+      const globalCount = await c.env.DB.prepare(
+        `SELECT COUNT(*) AS c FROM service_messages sm
+         JOIN engagements e ON e.id = sm.engagement_id
+         WHERE e.developer_id = ? AND sm.sender_role = 'developer' AND sm.created_at > ?`,
+      ).bind(user.id, now - 60_000).first<{ c: number }>();
+      if ((globalCount?.c ?? 0) >= 30) {
+        return c.json({ error: 'Global rate limit: max 30 messages per minute across all engagements.' }, 429);
       }
 
       // Minimum message length for charged messages
@@ -386,6 +395,12 @@ engagementRoutes.post('/services/requests', async (c) => {
     if (!body.title?.trim() || !body.description?.trim()) return c.json({ error: 'title and description required' }, 400);
     if (body.title.length > 200) return c.json({ error: 'title too long (max 200)' }, 400);
     if (body.description.length > 10000) return c.json({ error: 'description too long (max 10K)' }, 400);
+
+    // Max 5 open requests per client
+    const openCount = await c.env.DB.prepare(
+      "SELECT COUNT(*) AS c FROM build_requests WHERE client_id = ? AND status = 'open'",
+    ).bind(user.id).first<{ c: number }>();
+    if ((openCount?.c ?? 0) >= 5) return c.json({ error: 'Too many open requests (max 5). Cancel one first.' }, 429);
 
     const id = crypto.randomUUID();
     const now = Date.now();
@@ -490,6 +505,47 @@ engagementRoutes.delete('/services/requests/:id', async (c) => {
     ).bind(Date.now(), c.req.param('id'), user.id).run();
     if (!result.meta.changes) return c.json({ error: 'not found or already accepted' }, 404);
     return c.json({ ok: true });
+  } catch (err) {
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
+    throw err;
+  }
+});
+
+// ── Admin: refund ────────────────────────────────────────────
+
+// Admin-only: refund a client for a specific engagement (or partial amount)
+engagementRoutes.post('/services/engagements/:id/refund', async (c) => {
+  try {
+    const user = await requireUser(c);
+    // Admin check
+    const adminIds = (c.env.ADMIN_GITHUB_IDS ?? '').split(',').map((s: string) => s.trim()).filter(Boolean);
+    if (!adminIds.includes(user.id)) return c.json({ error: 'admin only' }, 403);
+
+    const body = await c.req.json<{ amountCents: number; reason?: string }>();
+    if (!body.amountCents || body.amountCents < 1) return c.json({ error: 'amountCents required (positive integer)' }, 400);
+
+    const id = c.req.param('id');
+    const eng = await c.env.DB.prepare('SELECT * FROM engagements WHERE id = ?')
+      .bind(id).first<{ client_id: string; developer_id: string; total_charged_cents: number }>();
+    if (!eng) return c.json({ error: 'engagement not found' }, 404);
+    if (body.amountCents > eng.total_charged_cents) return c.json({ error: 'refund cannot exceed total charged' }, 400);
+
+    const now = Date.now();
+    const txId = crypto.randomUUID();
+
+    await c.env.DB.batch([
+      // Credit the client
+      c.env.DB.prepare(
+        'UPDATE client_balances SET balance_cents = balance_cents + ?, updated_at = ? WHERE user_id = ?',
+      ).bind(body.amountCents, now, eng.client_id),
+      // Record the refund transaction
+      c.env.DB.prepare(
+        `INSERT INTO balance_transactions (id, user_id, type, amount_cents, engagement_id, description, created_at)
+         VALUES (?, ?, 'refund', ?, ?, ?, ?)`,
+      ).bind(txId, eng.client_id, body.amountCents, id, body.reason ?? `Admin refund — $${(body.amountCents / 100).toFixed(2)}`, now),
+    ]);
+
+    return c.json({ ok: true, refundedCents: body.amountCents, transactionId: txId });
   } catch (err) {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
