@@ -88,6 +88,20 @@ servicesRoutes.get('/services/developers/:id', async (c) => {
   return c.json(profileDto(row, { login: row.login ?? undefined, avatarUrl: row.avatar_url ?? undefined }));
 });
 
+// Auth: get own dev profile (returns null fields if not yet created)
+servicesRoutes.get('/services/profile', async (c) => {
+  try {
+    const user = await requireUser(c);
+    const row = await c.env.DB.prepare('SELECT * FROM dev_profiles WHERE creator_id = ?')
+      .bind(user.id).first<DevProfileRow>();
+    if (!row) return c.json({ exists: false });
+    return c.json({ exists: true, ...profileDto(row) });
+  } catch (err) {
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
+    throw err;
+  }
+});
+
 // Auth: create or update own dev profile
 servicesRoutes.put('/services/profile', async (c) => {
   try {
