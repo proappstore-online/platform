@@ -138,8 +138,7 @@ jobs:
         if: always()
         working-directory: e2e
         env:
-          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${env.CF_ACCOUNT_ID}
+          INTERNAL_TOKEN: \${{ secrets.INTERNAL_TOKEN }}
           APP: \${{ github.event.repository.name }}
         run: |
           node -e '
@@ -150,8 +149,7 @@ jobs:
             walk(r.suites||[]);
             fs.writeFileSync("summary.json", JSON.stringify({ ranAt:new Date().toISOString(), passed:s.expected||0, failed:s.unexpected||0, flaky:s.flaky||0, skipped:s.skipped||0, ok:(s.unexpected||0)===0, specs }));
           '
-          npm install -g wrangler@4 >/dev/null 2>&1
-          wrangler r2 object put "pas-kb/\$APP/.e2e/summary.json" --file=summary.json --remote >/dev/null && echo "results → kb.proappstore.online/\$APP/.e2e/summary.json"
+          [ -n "\$INTERNAL_TOKEN" ] && curl -fsS -X PUT "https://kb.proappstore.online/_ingest/\$APP/.e2e/summary.json" -H "x-internal-token: \$INTERNAL_TOKEN" --data-binary @summary.json >/dev/null && echo "results → kb.proappstore.online/\$APP/.e2e/summary.json" || echo "skipped results upload (no INTERNAL_TOKEN)"
       - name: Fail the run if E2E failed (bounces the ticket to Dev)
         if: steps.e2e.outcome != 'success'
         run: echo "::error::E2E tests failed — see the results above" && exit 1
@@ -162,11 +160,12 @@ jobs:
  * Build the project's Knowledge Base (KNOWLEDGE.md + docs/) into a Zensical
  * static site and publish it to the shared `pas-kb` R2 bucket under `<app>/`,
  * served by proappstore-kb-host at kb.proappstore.online/<app>/. ONE bucket for
- * every KB — no CF Pages project per KB. Reuses the org CLOUDFLARE_API_TOKEN
- * (wrangler r2), so no new secret. Injected at deploy; triggers only when the KB
- * markdown changes. `\${{ }}` escaped to survive the template literal.
+ * every KB — no CF Pages project per KB. Uploads each built file to the kb-host
+ * Worker's `/_ingest` endpoint (which writes R2 via its binding) authed with the
+ * shared INTERNAL_TOKEN — no R2 API-token scope needed. Injected at deploy;
+ * triggers only when the KB markdown changes. `\${{ }}` escaped for the literal.
  */
-function kbWorkflowYaml(env: Env): string {
+function kbWorkflowYaml(): string {
   return `name: Publish Knowledge Base
 
 on:
@@ -214,19 +213,18 @@ jobs:
           if [ -d docs ]; then cp -r docs/. kb-src/; fi
           printf 'site_name: %s — Knowledge Base\\ndocs_dir: kb-src\\n' "\$APP" > mkdocs.yml
           zensical build
-      - name: Publish to R2 (pas-kb/<app>/)
+      - name: Publish to kb-host (R2 via Worker binding)
         if: steps.gate.outputs.go == '1'
         env:
-          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${env.CF_ACCOUNT_ID}
+          INTERNAL_TOKEN: \${{ secrets.INTERNAL_TOKEN }}
           APP: \${{ github.event.repository.name }}
         run: |
-          npm install -g wrangler@4 >/dev/null 2>&1
+          if [ -z "\$INTERNAL_TOKEN" ]; then echo "INTERNAL_TOKEN missing — cannot publish KB"; exit 1; fi
           out=site
           [ -d "\$out" ] || out=public
           cd "\$out"
           find . -type f | while read -r f; do
-            wrangler r2 object put "pas-kb/\$APP/\${f#./}" --file="\$f" --remote >/dev/null
+            curl -fsS -X PUT "https://kb.proappstore.online/_ingest/\$APP/\${f#./}" -H "x-internal-token: \$INTERNAL_TOKEN" --data-binary "@\$f" >/dev/null
           done
           echo "Knowledge Base published → https://kb.proappstore.online/\$APP/"
 `;
@@ -438,7 +436,7 @@ async function provisionApp(
     if (!hasOwnWorkflow) files[DEPLOY_WORKFLOW_PATH] = deployWorkflowYaml(env);
     // Publish the Knowledge Base as a Zensical site to R2 (kb.proappstore.online/<app>/).
     // Separate workflow so it only runs when the KB markdown changes.
-    if (!(KB_WORKFLOW_PATH in files)) files[KB_WORKFLOW_PATH] = kbWorkflowYaml(env);
+    if (!(KB_WORKFLOW_PATH in files)) files[KB_WORKFLOW_PATH] = kbWorkflowYaml();
     // Inject the Playwright E2E harness (config + fixtures + baseline smoke) so
     // the CI e2e job has something to run. Each file is added only when absent
     // (never clobber authored harness edits); the baseline smoke is skipped once
@@ -524,7 +522,7 @@ export async function handlePublishKb(
   }
 
   // Add the publish workflow so this push triggers the Zensical build + R2 upload.
-  kbFiles[KB_WORKFLOW_PATH] = kbWorkflowYaml(env);
+  kbFiles[KB_WORKFLOW_PATH] = kbWorkflowYaml();
   const pushStep = await pushFilesToGitHub(env, req.id, kbFiles);
   steps.push(pushStep);
   return { success: pushStep.status !== "fail", repoUrl: `https://github.com/${env.PUBLISHERS_ORG}/${req.id}`, steps };

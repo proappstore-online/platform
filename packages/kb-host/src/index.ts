@@ -15,6 +15,8 @@
 
 export interface Env {
   KB_R2: R2Bucket;
+  /** Shared internal token (Doppler INTERNAL_TOKEN) — auth for the CI ingest. */
+  INTERNAL_TOKEN: string;
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -61,6 +63,20 @@ export default {
     if (url.pathname === "/health") {
       return Response.json({ ok: true, worker: "proappstore-kb-host", version: "0.1.0" });
     }
+
+    // ── Ingest: CI uploads each built KB file here, written to R2 via the
+    //    binding (no R2 API token needed → no token-scope 403). Authed by the
+    //    shared INTERNAL_TOKEN. PUT /_ingest/<app>/<path> with the file as body.
+    if (request.method === "PUT" && url.pathname.startsWith("/_ingest/")) {
+      if (!env.INTERNAL_TOKEN || request.headers.get("x-internal-token") !== env.INTERNAL_TOKEN) {
+        return new Response("forbidden", { status: 403 });
+      }
+      const key = decodeURIComponent(url.pathname.slice("/_ingest/".length));
+      if (!key || key.includes("..") || key.endsWith("/")) return new Response("bad key", { status: 400 });
+      await env.KB_R2.put(key, request.body);
+      return new Response("ok\n");
+    }
+
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method not allowed", { status: 405, headers: { allow: "GET, HEAD" } });
     }
