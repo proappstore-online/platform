@@ -74,13 +74,16 @@ export function buildAgentCatalog(
     const rc = byRole.get(role);
     const identity = rc?.persona ?? DEFAULT_PERSONAS[role];
     const override = rc?.systemPromptOverride;
+    // The default persona is SEEDED into role_configs at project creation, so a
+    // non-null persona alone doesn't mean "custom" — compare against the default.
+    const personaIsCustom = !!rc?.persona && rc.persona !== DEFAULT_PERSONAS[role];
     return {
       id: role,
       label: role,
       summary,
       surface: 'build',
       identity,
-      identitySource: rc?.persona ? 'custom' : 'default',
+      identitySource: personaIsCustom ? 'custom' : 'default',
       systemPrompt: override ?? buildDefaultPrompt(role),
       systemPromptSource: override ? 'custom' : 'default',
       tools: rc?.spineTools ?? [],

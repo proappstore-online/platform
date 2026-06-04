@@ -47,6 +47,16 @@ describe('buildAgentCatalog', () => {
     expect(dev.systemPromptSource).toBe('custom');
   });
 
+  it('treats a persona equal to the seeded default as "default", not "custom"', () => {
+    // role_configs seeds DEFAULT_PERSONAS into the persona column at creation, so
+    // a non-null persona that equals the default must still read as "default".
+    const cat = buildAgentCatalog([
+      ...defaults.filter((d) => d.role !== 'Dev'),
+      rc({ role: 'Dev', persona: DEFAULT_PERSONAS.Dev }),
+    ]);
+    expect(cat.find((a) => a.id === 'Dev')!.identitySource).toBe('default');
+  });
+
   it('surfaces the granted tools per role', () => {
     const cat = buildAgentCatalog(defaults);
     expect(cat.find((a) => a.id === 'Architect')!.tools).toEqual(['write_file', 'read_docs']);
