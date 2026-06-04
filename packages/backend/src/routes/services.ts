@@ -114,8 +114,8 @@ servicesRoutes.put('/services/profile', async (c) => {
       available?: boolean;
     }>();
 
-    const rate = body.promptRateCents ?? 100;
-    if (rate < 10 || rate > 5000) return c.json({ error: 'promptRateCents must be 10-5000' }, 400);
+    const rate = Math.round(body.promptRateCents ?? 100);
+    if (!Number.isFinite(rate) || rate < 10 || rate > 5000) return c.json({ error: 'promptRateCents must be an integer 10-5000' }, 400);
     if (body.bioServices && body.bioServices.length > 2000) return c.json({ error: 'bioServices too long (max 2000)' }, 400);
 
     const now = Date.now();
@@ -303,7 +303,8 @@ servicesRoutes.post('/services/balance/deposit', async (c) => {
   } catch (err) {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     if (err instanceof Error && err.message.startsWith('Stripe')) {
-      return c.json({ error: err.message }, 502);
+      console.error('Stripe error:', err.message);
+      return c.json({ error: 'Payment provider error. Please try again.' }, 502);
     }
     throw err;
   }
@@ -330,35 +331,37 @@ servicesRoutes.post('/services/balance/confirm', async (c) => {
       return c.json({ error: 'session does not belong to you' }, 403);
     }
 
-    // Idempotency: check if we already credited this session
-    const existing = await c.env.DB.prepare(
-      'SELECT id FROM balance_transactions WHERE stripe_payment_intent_id = ?',
-    ).bind(session.payment_intent ?? body.sessionId).first();
-    if (existing) {
-      // Already credited — return current balance
-      const bal = await c.env.DB.prepare('SELECT balance_cents FROM client_balances WHERE user_id = ?')
-        .bind(user.id).first<{ balance_cents: number }>();
-      return c.json({ balanceCents: bal?.balance_cents ?? 0, alreadyCredited: true });
-    }
-
     const amountCents = session.amount_total ?? 0;
     if (amountCents <= 0) return c.json({ error: 'invalid amount' }, 400);
 
+    const piId = session.payment_intent ?? body.sessionId;
     const txId = crypto.randomUUID();
     const now = Date.now();
 
-    // Credit balance + record transaction (batch for consistency)
-    await c.env.DB.batch([
-      c.env.DB.prepare(
-        `UPDATE client_balances
-         SET balance_cents = balance_cents + ?, total_deposited_cents = total_deposited_cents + ?, updated_at = ?
-         WHERE user_id = ?`,
-      ).bind(amountCents, amountCents, now, user.id),
-      c.env.DB.prepare(
-        `INSERT INTO balance_transactions (id, user_id, type, amount_cents, stripe_payment_intent_id, description, created_at)
-         VALUES (?, ?, 'deposit', ?, ?, ?, ?)`,
-      ).bind(txId, user.id, amountCents, session.payment_intent ?? body.sessionId, `Deposit $${(amountCents / 100).toFixed(2)}`, now),
-    ]);
+    // Idempotent credit: the UNIQUE index on stripe_payment_intent_id prevents
+    // double-crediting even under concurrent confirm calls. If the INSERT fails
+    // (constraint violation), the batch aborts and we return "already credited".
+    try {
+      await c.env.DB.batch([
+        c.env.DB.prepare(
+          `INSERT INTO balance_transactions (id, user_id, type, amount_cents, stripe_payment_intent_id, description, created_at)
+           VALUES (?, ?, 'deposit', ?, ?, ?, ?)`,
+        ).bind(txId, user.id, amountCents, piId, `Deposit $${(amountCents / 100).toFixed(2)}`, now),
+        c.env.DB.prepare(
+          `UPDATE client_balances
+           SET balance_cents = balance_cents + ?, total_deposited_cents = total_deposited_cents + ?, updated_at = ?
+           WHERE user_id = ?`,
+        ).bind(amountCents, amountCents, now, user.id),
+      ]);
+    } catch (batchErr) {
+      // UNIQUE constraint violation = already credited (concurrent confirm)
+      if (batchErr instanceof Error && batchErr.message.includes('UNIQUE')) {
+        const bal = await c.env.DB.prepare('SELECT balance_cents FROM client_balances WHERE user_id = ?')
+          .bind(user.id).first<{ balance_cents: number }>();
+        return c.json({ balanceCents: bal?.balance_cents ?? 0, alreadyCredited: true });
+      }
+      throw batchErr;
+    }
 
     const bal = await c.env.DB.prepare('SELECT balance_cents FROM client_balances WHERE user_id = ?')
       .bind(user.id).first<{ balance_cents: number }>();
@@ -367,7 +370,8 @@ servicesRoutes.post('/services/balance/confirm', async (c) => {
   } catch (err) {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     if (err instanceof Error && err.message.startsWith('Stripe')) {
-      return c.json({ error: err.message }, 502);
+      console.error('Stripe error:', err.message);
+      return c.json({ error: 'Payment provider error. Please try again.' }, 502);
     }
     throw err;
   }

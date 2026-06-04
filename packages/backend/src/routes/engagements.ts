@@ -156,7 +156,8 @@ engagementRoutes.post('/services/engagements/:id/rate', async (c) => {
     const body = await c.req.json<{ score: number; comment?: string }>();
     const id = c.req.param('id');
 
-    if (!body.score || body.score < 1 || body.score > 5) return c.json({ error: 'score must be 1-5' }, 400);
+    if (!body.score || body.score < 1 || body.score > 5 || !Number.isInteger(body.score)) return c.json({ error: 'score must be an integer 1-5' }, 400);
+    if (body.comment && body.comment.length > 2000) return c.json({ error: 'comment too long (max 2000)' }, 400);
 
     const eng = await c.env.DB.prepare('SELECT * FROM engagements WHERE id = ?')
       .bind(id).first<{ client_id: string; developer_id: string; status: string }>();
@@ -257,24 +258,35 @@ engagementRoutes.post('/services/engagements/:id/messages', async (c) => {
     let chargeCents = 0;
 
     if (isDev) {
-      // Charge the client
-      const bal = await c.env.DB.prepare('SELECT balance_cents FROM client_balances WHERE user_id = ?')
-        .bind(eng.client_id).first<{ balance_cents: number }>();
-
-      if (!bal || bal.balance_cents < eng.prompt_rate_cents) {
-        return c.json({ error: 'Client has insufficient balance. Ask them to top up.' }, 402);
+      // Rate limit: max 10 dev messages per minute per engagement
+      const recentCount = await c.env.DB.prepare(
+        `SELECT COUNT(*) AS c FROM service_messages
+         WHERE engagement_id = ? AND sender_role = 'developer' AND created_at > ?`,
+      ).bind(id, now - 60_000).first<{ c: number }>();
+      if ((recentCount?.c ?? 0) >= 10) {
+        return c.json({ error: 'Rate limit: max 10 messages per minute. Wait a moment.' }, 429);
       }
 
+      // Minimum message length for charged messages
+      if (body.body.trim().length < 20) {
+        return c.json({ error: 'Developer messages must be at least 20 characters (you are charging for this).' }, 400);
+      }
+
+      // Conditional deduct: only succeeds if balance is sufficient (prevents overdraft race)
       chargeCents = eng.prompt_rate_cents;
       const devEarned = Math.round(chargeCents * (10000 - PLATFORM_FEE_BPS) / 10000);
       const platformFee = chargeCents - devEarned;
 
-      // Atomic: deduct balance + record charge + store message + update engagement
+      const deductResult = await c.env.DB.prepare(
+        'UPDATE client_balances SET balance_cents = balance_cents - ?, total_spent_cents = total_spent_cents + ?, updated_at = ? WHERE user_id = ? AND balance_cents >= ?',
+      ).bind(chargeCents, chargeCents, now, eng.client_id, chargeCents).run();
+
+      if (!deductResult.meta.changes) {
+        return c.json({ error: 'Client has insufficient balance. Ask them to top up.' }, 402);
+      }
+
+      // Balance deducted — now store the rest atomically
       await c.env.DB.batch([
-        // Deduct from client
-        c.env.DB.prepare(
-          'UPDATE client_balances SET balance_cents = balance_cents - ?, total_spent_cents = total_spent_cents + ?, updated_at = ? WHERE user_id = ?',
-        ).bind(chargeCents, chargeCents, now, eng.client_id),
         // Record transaction
         c.env.DB.prepare(
           `INSERT INTO balance_transactions (id, user_id, type, amount_cents, engagement_id, description, created_at)
@@ -388,8 +400,14 @@ engagementRoutes.post('/services/requests/:id/accept', async (c) => {
       return c.json({ error: 'client has insufficient balance for even one prompt' }, 402);
     }
 
-    const engId = crypto.randomUUID();
+    // Atomically claim the request (prevents two devs accepting the same one)
     const now = Date.now();
+    const claim = await c.env.DB.prepare(
+      `UPDATE build_requests SET status = 'accepted', accepted_by = ?, updated_at = ? WHERE id = ? AND status = 'open'`,
+    ).bind(user.id, now, reqId).run();
+    if (!claim.meta.changes) return c.json({ error: 'request already accepted by another developer' }, 409);
+
+    const engId = crypto.randomUUID();
 
     await c.env.DB.batch([
       c.env.DB.prepare(
@@ -397,8 +415,8 @@ engagementRoutes.post('/services/requests/:id/accept', async (c) => {
          VALUES (?, ?, ?, ?, 'active', ?, ?, ?)`,
       ).bind(engId, req.client_id, user.id, reqId, dev.prompt_rate_cents, now, now),
       c.env.DB.prepare(
-        `UPDATE build_requests SET status = 'accepted', accepted_by = ?, engagement_id = ?, updated_at = ? WHERE id = ?`,
-      ).bind(user.id, engId, now, reqId),
+        `UPDATE build_requests SET engagement_id = ? WHERE id = ?`,
+      ).bind(engId, reqId),
       // Seed system message
       c.env.DB.prepare(
         `INSERT INTO service_messages (id, engagement_id, sender_role, sender_id, body, created_at)
