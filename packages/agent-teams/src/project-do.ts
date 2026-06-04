@@ -1388,6 +1388,9 @@ export class ProjectDO implements DurableObject {
     if (peek.thread === 'research') {
       return this.runArchitectChat(request);
     }
+    if (peek.thread === 'test') {
+      return this.handleQAChat(request);
+    }
     return handlePOChat({
       sql: this.state.storage.sql,
       env: this.env,
@@ -1404,6 +1407,66 @@ export class ProjectDO implements DurableObject {
       logActivity: (type, detail, tid, meta) => this.logActivity(type, detail, tid, meta),
       nextSeq: () => this.nextSeq(),
     }, request);
+  }
+
+  // ── QA Chat (test thread) ──────────────────────────────────
+  // Rule-based QA agent that reads done tickets + KB to generate test scenarios.
+
+  private async handleQAChat(request: Request): Promise<Response> {
+    const body = (await request.json()) as { message: string; thread?: string };
+    if (!body.message?.trim()) return json({ error: 'message required' }, 400);
+    if (body.message.length > 8192) return json({ error: 'message too long (max 8KB)' }, 413);
+
+    const thread = 'test';
+    const userText = body.message.trim();
+    const now = Date.now();
+    this.touchUserActivity();
+
+    // Save user message
+    const userMsgId = insertChatMessage(this.state.storage.sql, { role: 'user', body: userText, at: now, thread });
+    this.broadcast({ type: 'chat', thread, role: 'user', body: userText, id: userMsgId });
+
+    // Gather context: done tickets with acceptance criteria
+    const doneTickets = this.state.storage.sql
+      .exec("SELECT title, raw_idea, spec_json FROM tickets WHERE status = 'done' ORDER BY updated_at DESC LIMIT 20")
+      .toArray() as { title: string; raw_idea: string; spec_json: string | null }[];
+
+    // Gather KB
+    const kbFile = this.state.storage.sql
+      .exec("SELECT content FROM project_files WHERE path = 'KNOWLEDGE.md' LIMIT 1")
+      .toArray()[0] as { content: string } | undefined;
+
+    const lower = userText.toLowerCase();
+    let reply: string;
+
+    if (lower.includes('generate') || lower.includes('create') || lower.includes('write') || lower.includes('test')) {
+      if (doneTickets.length === 0 && !kbFile) {
+        reply = 'No completed tickets or Knowledge Base yet. Once the team ships features, I\'ll generate test scenarios from the acceptance criteria and KB.';
+      } else {
+        const scenarios: string[] = [];
+        for (const t of doneTickets.slice(0, 8)) {
+          let ac = '';
+          if (t.spec_json) {
+            try { const s = JSON.parse(t.spec_json); ac = s.summary || s.acceptanceCriteria || ''; } catch { /* */ }
+          }
+          scenarios.push(`### ${t.title}\n${ac ? `**Spec:** ${ac}\n` : ''}**Scenario:** Navigate to the feature, interact with it, assert the expected behavior.`);
+        }
+        reply = `Generated ${scenarios.length} test scenario(s) from completed tickets:\n\n${scenarios.join('\n\n')}`;
+        if (kbFile) reply += '\n\n*KB context available for deeper scenario generation when AI is wired.*';
+      }
+    } else if (lower.includes('status') || lower.includes('coverage')) {
+      const testFiles = this.state.storage.sql
+        .exec("SELECT path FROM project_files WHERE path LIKE 'e2e/%'")
+        .toArray() as { path: string }[];
+      reply = `**Coverage:** ${doneTickets.length} done tickets, ${testFiles.length} e2e test file(s) in the working tree.${kbFile ? ' KB available.' : ' No KB yet.'}\nSay "generate tests" to create scenarios.`;
+    } else {
+      reply = `I'm the QA agent. I generate end-to-end test scenarios from completed tickets and the Knowledge Base.\n\nTry:\n- **"generate tests"** — create test scenarios from done tickets\n- **"status"** — see test coverage\n- Or describe a specific scenario to test`;
+    }
+
+    const replyId = insertChatMessage(this.state.storage.sql, { role: 'QA', body: reply, at: Date.now(), thread });
+    this.broadcast({ type: 'chat', thread, role: 'QA', body: reply, id: replyId });
+
+    return json({ id: replyId, role: 'QA', body: reply, createdAt: Date.now() });
   }
 
   // ── Agent run (explicit trigger) ────────────────────────────
