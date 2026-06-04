@@ -1,7 +1,9 @@
 /**
- * Helpers for talking to GitHub + the PAS/FAS platform APIs, plus
- * connection-token extraction/verification for the MCP transport.
+ * Helpers for talking to GitHub + the PAS platform API, plus connection-token
+ * extraction/verification for the MCP transport.
  */
+
+import { verifySession } from '@proappstore/build-core';
 
 export async function getDeployStatus(org: string, appId: string) {
   const res = await fetch(
@@ -47,13 +49,11 @@ export function extractToken(props: Record<string, unknown>): string | null {
 }
 
 /**
- * Verify a session token against the FAS API. Returns user info or null.
+ * Verify a PAS session token locally (build-core/session-jwt) with the shared
+ * SESSION_SIGNING_KEY. No network, no FAS.
  */
-export async function verifyToken(apiBase: string, token: string): Promise<{ id: string; login: string } | null> {
-  const fasBase = apiBase.replace('proappstore', 'freeappstore');
-  const res = await fetch(`${fasBase}/v1/auth/me`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) return null;
-  return (await res.json()) as { id: string; login: string };
+export async function verifyToken(signingKey: string, token: string): Promise<{ id: string; login: string } | null> {
+  const claims = await verifySession(token, signingKey);
+  if (!claims) return null;
+  return { id: claims.sub, login: claims.login };
 }

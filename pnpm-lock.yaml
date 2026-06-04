@@ -45,6 +45,9 @@ importers:
 
   packages/agent-teams:
     dependencies:
+      '@proappstore/build-core':
+        specifier: workspace:*
+        version: link:../build-core
       hono:
         specifier: ^4.12.23
         version: 4.12.23

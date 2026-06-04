@@ -21,7 +21,8 @@ export type Bindings = {
   /** Service binding to the PAS admin Worker — for the agent deploy flow
    *  (repo create + file push + registry). */
   ADMIN?: Fetcher;
-  FAS_API_BASE: string;
+  /** Signs/verifies PAS session JWTs (shared with the backend auth service). */
+  SESSION_SIGNING_KEY: string;
   PAS_API_BASE: string;
   /**
    * Shared secret for authenticating internal calls to the PAS backend
@@ -56,7 +57,7 @@ app.use('/v1/*', async (c, next) => {
   const token = extractToken(c.req.raw);
   if (!token) return c.json({ error: 'missing bearer token' }, 401);
 
-  const user = await verifyToken(c.env.FAS_API_BASE, token);
+  const user = await verifyToken(c.env.SESSION_SIGNING_KEY, token);
   if (!user) return c.json({ error: 'invalid or expired session' }, 401);
 
   c.set('user' as never, user);

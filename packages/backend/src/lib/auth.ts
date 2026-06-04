@@ -1,4 +1,5 @@
 import type { Context } from 'hono';
+import { verifySession } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 
 export class HttpError extends Error {
@@ -10,7 +11,7 @@ export class HttpError extends Error {
   }
 }
 
-export interface FasUser {
+export interface SessionUser {
   id: string;
   login: string;
   avatarUrl: string | null;
@@ -19,30 +20,29 @@ export interface FasUser {
   /** Per-app roles: { appId: ['moderator', ...] }. */
   appRoles: Record<string, string[]>;
 }
+/** @deprecated kept as an alias during the de-FAS rename; use SessionUser. */
+export type FasUser = SessionUser;
 
 /**
- * Verify the Bearer token against the FAS API (/v1/auth/me).
- * Pro identity is built on top of free identity — same user, just
- * subscription state added. Roles come from the session token claims.
+ * Verify the Bearer token as a PAS-signed session JWT (build-core/session-jwt),
+ * locally — no network, no FAS. The auth service (routes/auth.ts) minted it.
  */
-export async function requireUser(c: Context<{ Bindings: Env }>): Promise<FasUser> {
+export async function requireUser(c: Context<{ Bindings: Env }>): Promise<SessionUser> {
   const header = c.req.header('Authorization');
   if (!header?.startsWith('Bearer ')) {
     throw new HttpError('missing bearer token', 401);
   }
-  const token = header.slice(7);
-  const fasBase = c.env.FAS_API_BASE || 'https://api.freeappstore.online';
-  const response = await fetch(`${fasBase}/v1/auth/me`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) {
+  const claims = await verifySession(header.slice(7), c.env.SESSION_SIGNING_KEY);
+  if (!claims) {
     throw new HttpError('invalid or expired session', 401);
   }
-  const user = (await response.json()) as FasUser;
-  // Ensure roles array exists even if FAS returns an older token format
-  user.roles = user.roles ?? ['user'];
-  user.appRoles = user.appRoles ?? {};
-  return user;
+  return {
+    id: claims.sub,
+    login: claims.login,
+    avatarUrl: claims.avatarUrl ?? null,
+    roles: claims.roles ?? ['user'],
+    appRoles: claims.appRoles ?? {},
+  };
 }
 
 /**

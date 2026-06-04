@@ -25,7 +25,7 @@ export class PasMcpAgent extends McpAgent<Env> {
     // `token` arg, so they work even without this.)
     const token = extractToken(this.props as Record<string, unknown>);
     if (token) {
-      const user = await verifyToken(this.env.API_BASE, token);
+      const user = await verifyToken(this.env.SESSION_SIGNING_KEY, token);
       if (user) {
         this.userId = user.id;
         this.userToken = token;

@@ -1,7 +1,10 @@
 /**
- * Auth — verify FAS session tokens for agent-teams requests.
- * Same pattern as the PAS backend: Bearer token → FAS /v1/auth/me.
+ * Auth — verify PAS session tokens locally (build-core/session-jwt). No network,
+ * no FAS: the PAS auth service signs the JWT with SESSION_SIGNING_KEY and every
+ * worker verifies it with the same key.
  */
+
+import { verifySession } from '@proappstore/build-core';
 
 export interface AuthUser {
   id: string;
@@ -10,18 +13,12 @@ export interface AuthUser {
 }
 
 export async function verifyToken(
-  fasApiBase: string,
+  signingKey: string,
   token: string,
 ): Promise<AuthUser | null> {
-  try {
-    const res = await fetch(`${fasApiBase}/v1/auth/me`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as AuthUser;
-  } catch {
-    return null;
-  }
+  const claims = await verifySession(token, signingKey);
+  if (!claims) return null;
+  return { id: claims.sub, login: claims.login, avatarUrl: claims.avatarUrl ?? null };
 }
 
 export function extractToken(request: Request): string | null {

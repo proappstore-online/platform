@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "hono": "^4.12.23"
+    "hono": "^4.12.23",
+    "@proappstore/build-core": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",
