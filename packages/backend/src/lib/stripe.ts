@@ -125,7 +125,9 @@ export class Stripe {
     body.set('line_items[0][price_data][product_data][name]', 'ProAppStore Balance Top-Up');
     body.set('line_items[0][price_data][unit_amount]', String(params.amountCents));
     body.set('line_items[0][quantity]', '1');
-    body.set('success_url', params.successUrl);
+    // Append {CHECKOUT_SESSION_ID} so Stripe fills in the session ID on redirect.
+    const sep = params.successUrl.includes('?') ? '&' : '?';
+    body.set('success_url', `${params.successUrl}${sep}session_id={CHECKOUT_SESSION_ID}`);
     body.set('cancel_url', params.cancelUrl);
     if (params.metadata) {
       for (const [k, v] of Object.entries(params.metadata)) {
