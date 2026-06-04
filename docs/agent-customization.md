@@ -128,8 +128,9 @@ back as `…Source: "default"`.
 
 The data model + read/write APIs above are the foundation. Building on them:
 
-- **Console UI** — an Agents view that renders `GET /agents` (every identity,
-  prompt, skill, model) and edits the build roles inline via `PUT /roles`.
+- **Console UI — done.** The Creator Console's **Settings** tab has an *Agent
+  team* section that renders `GET /agents` (every identity, prompt, skill, model,
+  with default/custom badges) and edits the build roles inline via `PUT /roles`.
 - **Tune over MCP** — platform MCP tools to read and update a project's agent
   config, so you can retune the team from your own AI client.
 - **PO identity tuning** — a first-class override for the PO (and a full
