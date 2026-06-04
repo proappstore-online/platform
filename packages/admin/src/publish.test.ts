@@ -154,7 +154,7 @@ describe("deploy-workflow injection (agent path)", () => {
     // package.json, baseline smoke spec).
     expect(rec.blobs).toHaveLength(7); // +kb.yml
     expect(rec.blobs.some((b) => b.includes("@playwright/test"))).toBe(true);
-    expect(rec.blobs.some((b) => b.includes("fas_session"))).toBe(true); // auth fixture
+    expect(rec.blobs.some((b) => b.includes("pas_session"))).toBe(true); // auth fixture
   });
 
   it("does NOT inject a deploy workflow when the bundle already carries one", async () => {
