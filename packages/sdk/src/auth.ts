@@ -2,11 +2,16 @@ import type { Unsubscribe, User } from './base-types.js';
 
 export type AuthProvider = 'github' | 'google' | 'email';
 
+/** PAS-owned localStorage key for the cached session (per-origin). */
+const STORAGE_KEY = 'pas:session';
+
 /**
- * Shared across all FAS apps on the same origin — this is intentional SSO.
- * A user signed in on one FAS app is signed in on all of them.
+ * Hash param the platform auth service returns the session in. This is the one
+ * remaining brand leak: PAS does not yet run its own auth worker, so the shared
+ * platform auth service issues the callback as `#fas_session=`. When PAS owns
+ * auth (see the de-FAS plan) this becomes `#pas_session=`.
  */
-const STORAGE_KEY = 'fas:session';
+const SESSION_HASH = '#fas_session=';
 
 interface Session {
   token: string;
@@ -48,7 +53,7 @@ export class Auth {
    * which redirects back to the current page with a session token in the hash.
    *
    * The current page's `location.hash` is dropped from `return_to` because
-   * the OAuth callback writes its own `#fas_session=…` and would clobber any
+   * the OAuth callback writes its own session hash and would clobber any
    * hash-based router state otherwise.
    */
   signIn(provider: AuthProvider = 'github'): void {
@@ -66,7 +71,7 @@ export class Auth {
 
   /**
    * Email magic-link sign-in. Sends the user an email with a one-time link
-   * that completes auth and redirects back here with `#fas_session=…`.
+   * that completes auth and redirects back here with the session hash.
    *
    * Resolves once the email has been queued. The caller should show a
    * "check your inbox" message — the actual sign-in happens later when
@@ -118,14 +123,14 @@ export class Auth {
    * session from localStorage.
    *
    * @example
-   *   const fas = initApp({ appId: 'my-app' });
-   *   await fas.auth.init();
+   *   const app = initPro({ appId: 'my-app' });
+   *   await app.auth.init();
    *   render();
    */
   async init(): Promise<void> {
     if (typeof window === 'undefined') return;
     const hash = window.location.hash;
-    if (!hash.startsWith('#fas_session=')) return;
+    if (!hash.startsWith(SESSION_HASH)) return;
 
     // Always clear the hash before doing anything else — even on failure.
     // Otherwise a bad token gets re-tried on every reload and the user is
@@ -134,7 +139,7 @@ export class Auth {
 
     let token: string;
     try {
-      token = decodeURIComponent(hash.slice('#fas_session='.length));
+      token = decodeURIComponent(hash.slice(SESSION_HASH.length));
     } catch {
       // Malformed hash (% with nothing after, etc.). Hash already cleared.
       return;
