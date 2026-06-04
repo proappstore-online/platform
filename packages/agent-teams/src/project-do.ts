@@ -925,6 +925,11 @@ export class ProjectDO implements DurableObject {
     if (this.architectChatBusy) {
       return json({ ok: false, error: 'The Architect is already writing the Knowledge Base.' }, 409);
     }
+    // Self-heal: physically drop any legacy kind=research ticket here too. The
+    // store migration only runs on a cold isolate, but a long-lived DO can stay
+    // "initialized" across a deploy and skip it — so clean it at this reliable
+    // runtime point as well (the board already hides it; this removes the row).
+    this.state.storage.sql.exec("DELETE FROM tickets WHERE kind = 'research'");
     const hasKb = [...this.loadFiles().keys()].some(
       (p) => p === 'KNOWLEDGE.md' || /^docs\/.+\.(md|markdown)$/i.test(p),
     );
@@ -936,20 +941,20 @@ export class ProjectDO implements DurableObject {
       ? 'Re-research this app and refresh the Knowledge Base (KNOWLEDGE.md + docs/) — update anything stale and keep every SDK fact correct.'
       : `Research this app and write its Knowledge Base — KNOWLEDGE.md plus docs/ — as the team's source of truth.${idea ? ` The app idea: ${idea}` : ''}`;
 
-    // Drive the Architect on the Research thread (same engine as the chat). It
-    // writes KNOWLEDGE.md + docs/ and publishes the site itself. Fire-and-forget:
-    // its progress streams over the WS; the busy flag blocks overlapping builds.
+    // Drive the Architect on the Research thread via the SAME guarded path as the
+    // chat (runArchitectChat owns the architectChatBusy lock — it sets the flag
+    // synchronously at its top, so this fire-and-forget can't race a chat send).
+    // Its progress streams over the WS; we don't await the reply here.
     const chatReq = new Request('https://do/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ thread: RESEARCH_THREAD, message }),
     });
-    this.architectChatBusy = true;
-    void this.handleChat(chatReq)
+    void this.runArchitectChat(chatReq)
       .catch((e) => {
         try { this.logActivity('error', `KB build crashed: ${e instanceof Error ? e.message : String(e)}`, null); } catch { /* noop */ }
       })
-      .finally(() => { this.architectChatBusy = false; this.touchUserActivity(); });
+      .finally(() => { this.touchUserActivity(); });
     return json({ ok: true, started: true });
   }
 
@@ -1014,8 +1019,10 @@ export class ProjectDO implements DurableObject {
   // ── Tickets ───────────────────────────────────────────────
 
   private listTickets(): Response {
+    // Build tickets only — the Knowledge Base is a conversation, not a ticket.
+    // Excludes any legacy kind='research' row so it can never surface on the board.
     const rows = this.state.storage.sql
-      .exec('SELECT * FROM tickets ORDER BY created_at DESC')
+      .exec("SELECT * FROM tickets WHERE kind != 'research' ORDER BY created_at DESC")
       .toArray();
     return json({ tickets: rows.map(rowToTicket) });
   }
@@ -1337,10 +1344,21 @@ export class ProjectDO implements DurableObject {
   /** Founder chat. Two separate threads/agents: 'research' → the Architect (KB),
    *  anything else → the PO (build). Peek the thread off a clone so the chosen
    *  handler can still read the body. */
-  private async handleChat(request: Request): Promise<Response> {
-    const peek = await request.clone().json().catch(() => ({})) as { thread?: string };
-    if (peek.thread === 'research') {
-      return handleArchitectChat({
+  /**
+   * Run the Architect (Research thread) for one message — the single serialized
+   * entry point for ALL KB authoring (the Research-tab chat AND the "Build KB"
+   * button). The architectChatBusy lock prevents two concurrent runs from each
+   * snapshotting the file tree and clobbering the other's KB writes on save. The
+   * check+set is synchronous (no await before it), so it's race-free in the DO's
+   * single-threaded model even across the awaits inside handleArchitectChat.
+   */
+  private async runArchitectChat(request: Request): Promise<Response> {
+    if (this.architectChatBusy) {
+      return json({ error: 'The Architect is already writing the Knowledge Base — give it a moment.' }, 409);
+    }
+    this.architectChatBusy = true;
+    try {
+      return await handleArchitectChat({
         sql: this.state.storage.sql,
         env: this.env,
         getChatWindow: () => this.chatWindow,
@@ -1356,6 +1374,15 @@ export class ProjectDO implements DurableObject {
         logActivity: (type, detail, tid, meta) => this.logActivity(type, detail, tid, meta),
         publishKb: () => { void this.publishKb(); },
       }, request);
+    } finally {
+      this.architectChatBusy = false;
+    }
+  }
+
+  private async handleChat(request: Request): Promise<Response> {
+    const peek = await request.clone().json().catch(() => ({})) as { thread?: string };
+    if (peek.thread === 'research') {
+      return this.runArchitectChat(request);
     }
     return handlePOChat({
       sql: this.state.storage.sql,

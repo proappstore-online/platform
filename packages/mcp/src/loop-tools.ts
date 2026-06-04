@@ -85,11 +85,11 @@ export function registerLoopTools(server: McpServer, env: LoopEnv): void {
   // ── build_knowledge_base ──────────────────────────────────
   server.tool(
     "build_knowledge_base",
-    "Trigger the Architect to research the app and write its Knowledge Base (KNOWLEDGE.md + docs/). One-shot + idempotent: if a KB build already ran it won't re-run (chat the Architect with chat_agent thread='research' to revise). Returns once dispatched; poll get_project_files for KNOWLEDGE.md.",
+    "Trigger the Architect to research the app (it has live web access) and write/refresh its Knowledge Base (KNOWLEDGE.md + docs/). The KB is a conversation, not a ticket — this is a shortcut for chat_agent(thread='research'); running it again refreshes the KB. Returns once started (409 if a build is already in flight); poll get_project_files for KNOWLEDGE.md.",
     { token: TOKEN, slug: SLUG },
     async ({ token, slug }) => {
       const r = await call(`/v1/projects/${slug}/research`, token, { method: "POST" });
-      return text(r.ok ? `KB build dispatched for ${slug}. Poll get_project_files for KNOWLEDGE.md.\n${JSON.stringify(r.data)}` : String(r.data));
+      return text(r.ok ? `KB build started for ${slug}. Poll get_project_files for KNOWLEDGE.md.\n${JSON.stringify(r.data)}` : String(r.data));
     },
   );
 
