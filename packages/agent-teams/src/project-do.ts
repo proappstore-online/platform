@@ -173,6 +173,7 @@ export class ProjectDO implements DurableObject {
     if (path === '/roles' && request.method === 'GET') return this.getRoles();
     if (path === '/roles' && request.method === 'PUT') return this.setRoles(request);
     if (path === '/agents' && request.method === 'GET') return this.getAgents();
+    if (path === '/budget' && request.method === 'PUT') return this.setBudget(request);
 
     if (path === '/chat' && request.method === 'POST') return this.handleChat(request);
     if (path === '/chat/history' && request.method === 'GET') return this.getChatHistory(request);
@@ -1016,6 +1017,18 @@ export class ProjectDO implements DurableObject {
       .toArray()[0] as { persona: string | null } | undefined;
     const agents = buildAgentCatalog(configs.filter((c) => c.role !== ('PO' as Role)), { poPersona: po?.persona ?? null });
     return json({ agents });
+  }
+
+  /** Update the project's monthly cost cap (the budget that auto-pauses the loop). */
+  private async setBudget(request: Request): Promise<Response> {
+    const body = (await request.json()) as { costCapMonthlyUsd?: number };
+    const cap = body.costCapMonthlyUsd;
+    if (typeof cap !== 'number' || !Number.isFinite(cap) || cap < 1 || cap > 1000) {
+      return json({ error: 'costCapMonthlyUsd must be a number between 1 and 1000' }, 400);
+    }
+    this.state.storage.sql.exec('UPDATE project SET cost_cap_monthly_usd = ? WHERE id = (SELECT id FROM project LIMIT 1)', cap);
+    this.logActivity('control', `Monthly budget set to $${cap.toFixed(2)}`);
+    return json({ ok: true, costCapMonthlyUsd: cap });
   }
 
   private async setRoles(request: Request): Promise<Response> {

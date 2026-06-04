@@ -217,6 +217,8 @@ app.get('/v1/projects/:slug/roles', (c) => relay(c, '/roles'));
 app.put('/v1/projects/:slug/roles', (c) => relay(c, '/roles', { method: 'PUT', forwardBody: true }));
 // Resolved catalog of every agent (identity + prompt + skills + model) — read-only.
 app.get('/v1/projects/:slug/agents', (c) => relay(c, '/agents'));
+// Monthly cost cap for the team (the budget that auto-pauses the loop when hit).
+app.put('/v1/projects/:slug/budget', (c) => relay(c, '/budget', { method: 'PUT', forwardBody: true }));
 
 // ── Tickets ─────────────────────────────────────────────────
 

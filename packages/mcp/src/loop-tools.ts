@@ -159,6 +159,17 @@ export function registerLoopTools(server: McpServer, env: LoopEnv): void {
     },
   );
 
+  // ── set_project_budget ────────────────────────────────────
+  server.tool(
+    "set_project_budget",
+    "Set the project's monthly cost cap in USD (1–1000). The loop auto-pauses when the team's spend for the month reaches this cap.",
+    { token: TOKEN, slug: SLUG, monthly_usd: z.number().min(1).max(1000).describe("Monthly budget cap in USD") },
+    async ({ token, slug, monthly_usd }) => {
+      const r = await call(`/v1/projects/${slug}/budget`, token, { method: "PUT", body: { costCapMonthlyUsd: monthly_usd } });
+      return text(r.ok ? `Budget for ${slug} set to $${monthly_usd}/mo.` : String(r.data));
+    },
+  );
+
   // ── set_project_running ───────────────────────────────────
   server.tool(
     "set_project_running",
