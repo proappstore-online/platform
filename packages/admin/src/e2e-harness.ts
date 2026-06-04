@@ -4,7 +4,7 @@
  * browser — the behavioural gate that `tsc`/build cannot be: it catches apps
  * that compile but white-screen, crash on boot, or don't actually work.
  *
- * Auth re-uses the SDK's own `#fas_session=<token>` callback path with a
+ * Auth re-uses the SDK's own `#pas_session=<token>` callback path with a
  * platform FIXTURE session (the `PAS_E2E_SESSION_TOKEN` Actions secret), so
  * there is NO test-bypass code in apps or the SDK — E2E exercises the exact
  * production sign-in path. Without a token, auth-gated specs skip and only the
@@ -82,7 +82,7 @@ async function gotoWithRetry(page: Page, path: string) {
 }
 
 // 'app' fixture: a Page already past the sign-in wall when a fixture session is
-// configured. The SDK's auth.init() reads fas_session from the URL hash, calls
+// configured. The SDK's auth.init() reads the session from the URL hash, calls
 // /v1/auth/me, persists the session, and clears the hash — the SAME path a real
 // GitHub/Google OAuth callback uses. Without a token, returns an un-authed page
 // (the sign-in screen) so unauthenticated smokes still run.
@@ -90,7 +90,7 @@ export const test = base.extend<{ app: Page; pageErrors: string[] }>({
   pageErrors: async ({}, use) => { await use([]); },
   app: async ({ page, pageErrors }, use) => {
     page.on('pageerror', (e) => pageErrors.push(String(e)));
-    const target = hasSession ? '/#fas_session=' + encodeURIComponent(SESSION_TOKEN) : '/';
+    const target = hasSession ? '/#pas_session=' + encodeURIComponent(SESSION_TOKEN) : '/';
     await gotoWithRetry(page, target);
     await page.waitForLoadState('networkidle').catch(() => {});
     await use(page);
