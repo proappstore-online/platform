@@ -29,16 +29,22 @@ export const engagementRoutes = new Hono<{ Bindings: Env }>();
 
 const PLATFORM_FEE_BPS = 1000; // 10%
 
-/** Best-effort email notification. Never throws — failures are silent. */
+function escHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** Best-effort email notification. Never throws — failures are silent.
+ *  Body is plaintext (HTML-escaped before insertion into the email template). */
 async function notify(env: Env, userId: string, subject: string, body: string): Promise<void> {
   if (!env.RESEND_API_KEY) return;
   try {
     const user = await env.DB.prepare('SELECT email FROM users WHERE id = ?')
       .bind(userId).first<{ email: string | null }>();
     if (!user?.email) return;
+    const safe = escHtml(body);
     await sendEmail(
       { apiKey: env.RESEND_API_KEY, from: env.EMAIL_FROM ?? 'ProAppStore <noreply@proappstore.online>' },
-      { to: user.email, subject, html: `<p>${body}</p><p style="color:#999;font-size:12px"><a href="https://console.proappstore.online/#/services">Open Console</a></p>`, text: body },
+      { to: user.email, subject: escHtml(subject), html: `<p>${safe}</p><p style="color:#999;font-size:12px"><a href="https://console.proappstore.online/#/services">Open Console</a></p>`, text: body },
     );
   } catch { /* best-effort */ }
 }
@@ -58,6 +64,12 @@ engagementRoutes.post('/services/engagements', async (c) => {
     if (!dev) return c.json({ error: 'developer not found' }, 404);
     if (!dev.available) return c.json({ error: 'developer is not accepting clients' }, 400);
     if (body.developerId === user.id) return c.json({ error: 'cannot hire yourself' }, 400);
+
+    // Rate limit: max 5 active engagements per client
+    const activeCount = await c.env.DB.prepare(
+      "SELECT COUNT(*) AS c FROM engagements WHERE client_id = ? AND status = 'active'",
+    ).bind(user.id).first<{ c: number }>();
+    if ((activeCount?.c ?? 0) >= 5) return c.json({ error: 'Too many active engagements (max 5). Complete or cancel one first.' }, 429);
 
     // Check client has minimum balance
     const bal = await c.env.DB.prepare('SELECT balance_cents FROM client_balances WHERE user_id = ?')
@@ -149,6 +161,13 @@ engagementRoutes.patch('/services/engagements/:id', async (c) => {
     if (body.status === 'delivered' && row.developer_id !== user.id) return c.json({ error: 'only the developer can mark delivered' }, 403);
     if (!['delivered', 'cancelled'].includes(body.status)) return c.json({ error: 'status must be delivered or cancelled' }, 400);
     if (row.status !== 'active') return c.json({ error: 'engagement is not active' }, 400);
+
+    // Require at least 1 dev message before delivery (prevents badge gaming)
+    if (body.status === 'delivered') {
+      const eng = await c.env.DB.prepare('SELECT prompts_count FROM engagements WHERE id = ?')
+        .bind(id).first<{ prompts_count: number }>();
+      if (!eng || eng.prompts_count < 1) return c.json({ error: 'Cannot deliver with zero prompts. Send at least one message first.' }, 400);
+    }
 
     const now = Date.now();
     await c.env.DB.prepare('UPDATE engagements SET status = ?, updated_at = ? WHERE id = ?')
@@ -291,32 +310,34 @@ engagementRoutes.post('/services/engagements/:id/messages', async (c) => {
         return c.json({ error: 'Developer messages must be at least 20 characters (you are charging for this).' }, 400);
       }
 
-      // Conditional deduct: only succeeds if balance is sufficient (prevents overdraft race)
+      // Charge flow: check balance, then do everything in one atomic batch.
+      // The batch is a D1 transaction — if any statement fails, all roll back.
+      // The conditional WHERE on the deduct prevents overdraft under concurrency.
       chargeCents = eng.prompt_rate_cents;
       const devEarned = Math.round(chargeCents * (10000 - PLATFORM_FEE_BPS) / 10000);
       const platformFee = chargeCents - devEarned;
 
-      const deductResult = await c.env.DB.prepare(
-        'UPDATE client_balances SET balance_cents = balance_cents - ?, total_spent_cents = total_spent_cents + ?, updated_at = ? WHERE user_id = ? AND balance_cents >= ?',
-      ).bind(chargeCents, chargeCents, now, eng.client_id, chargeCents).run();
-
-      if (!deductResult.meta.changes) {
+      // Pre-check balance (fast reject without touching the DB in a write path)
+      const bal = await c.env.DB.prepare('SELECT balance_cents FROM client_balances WHERE user_id = ?')
+        .bind(eng.client_id).first<{ balance_cents: number }>();
+      if (!bal || bal.balance_cents < chargeCents) {
         return c.json({ error: 'Client has insufficient balance. Ask them to top up.' }, 402);
       }
 
-      // Balance deducted — now store the rest atomically
+      // Atomic batch: deduct + record + message + totals. If any statement
+      // fails the entire transaction rolls back (D1 batch guarantee).
       await c.env.DB.batch([
-        // Record transaction
+        c.env.DB.prepare(
+          'UPDATE client_balances SET balance_cents = balance_cents - ?, total_spent_cents = total_spent_cents + ?, updated_at = ? WHERE user_id = ? AND balance_cents >= ?',
+        ).bind(chargeCents, chargeCents, now, eng.client_id, chargeCents),
         c.env.DB.prepare(
           `INSERT INTO balance_transactions (id, user_id, type, amount_cents, engagement_id, description, created_at)
            VALUES (?, ?, 'charge', ?, ?, ?, ?)`,
         ).bind(crypto.randomUUID(), eng.client_id, -chargeCents, id, `Dev prompt — $${(chargeCents / 100).toFixed(2)}`, now),
-        // Store message
         c.env.DB.prepare(
           `INSERT INTO service_messages (id, engagement_id, sender_role, sender_id, body, charged, charge_cents, created_at)
            VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
         ).bind(msgId, id, senderRole, user.id, body.body.trim(), chargeCents, now),
-        // Update engagement totals
         c.env.DB.prepare(
           `UPDATE engagements SET
              prompts_count = prompts_count + 1,

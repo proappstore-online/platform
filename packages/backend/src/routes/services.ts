@@ -467,7 +467,9 @@ servicesRoutes.post('/services/balance/confirm', async (c) => {
     const amountCents = session.amount_total ?? 0;
     if (amountCents <= 0) return c.json({ error: 'invalid amount' }, 400);
 
-    const piId = session.payment_intent ?? body.sessionId;
+    // Always use the Stripe session ID as the idempotency key (guaranteed
+    // unique and present), not payment_intent (can be null for some payment methods).
+    const piId = session.id ?? body.sessionId;
     const txId = crypto.randomUUID();
     const now = Date.now();
 
