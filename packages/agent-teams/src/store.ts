@@ -103,6 +103,11 @@ export const MIGRATIONS: string[][] = [
   // founder, the Knowledge Base). Separate agents own separate threads so the KB
   // is authored + checked independently of the build. Old rows → 'build'.
   [`ALTER TABLE chat_history ADD COLUMN thread TEXT NOT NULL DEFAULT 'build'`],
+  // Idle-timeout marker. Previously ALTER-ed in lazily on first Play, so it was
+  // missing during chat/KB flows that run BEFORE Play — autoAdvance's unguarded
+  // SELECT then threw "no such column: last_user_activity" and 500'd every
+  // agent/chat run. Now a real migration so the column always exists.
+  [`ALTER TABLE project ADD COLUMN last_user_activity INTEGER DEFAULT 0`],
 ];
 
 export function uuid(): string {

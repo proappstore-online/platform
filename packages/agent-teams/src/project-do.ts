@@ -272,8 +272,8 @@ export class ProjectDO implements DurableObject {
     this.state.storage.sql.exec('UPDATE project SET status = ?', newStatus);
 
     if (newStatus === 'running') {
-      // Record when we started running (for idle timeout)
-      try { this.state.storage.sql.exec(`ALTER TABLE project ADD COLUMN last_user_activity INTEGER DEFAULT 0`); } catch { /* exists */ }
+      // Record when we started running (for idle timeout). The column is created
+      // by a migration (store.ts), so no lazy ALTER needed.
       this.state.storage.sql.exec('UPDATE project SET last_user_activity = ?', now);
 
       // Capture the owner's session token for autonomous tool dispatch.
