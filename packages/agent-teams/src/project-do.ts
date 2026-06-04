@@ -42,6 +42,7 @@ import { handlePOChat } from './po-chat.ts';
 import { handleArchitectChat } from './architect-chat.ts';
 import { runAgentTurn } from './agent-runner.ts';
 import { validateRoleConfig } from './role-config.ts';
+import { buildAgentCatalog } from './agents-catalog.ts';
 import { loadFiles, saveFiles, recallMemory, upsertMemory } from './project-store.ts';
 import { insertActivity, updateActivityMeta, clearActivityLog, readActivity, costSummary } from './activity-log.ts';
 import { DEFAULT_PERSONAS, type MemoryEntry } from './memory.ts';
@@ -171,6 +172,7 @@ export class ProjectDO implements DurableObject {
 
     if (path === '/roles' && request.method === 'GET') return this.getRoles();
     if (path === '/roles' && request.method === 'PUT') return this.setRoles(request);
+    if (path === '/agents' && request.method === 'GET') return this.getAgents();
 
     if (path === '/chat' && request.method === 'POST') return this.handleChat(request);
     if (path === '/chat/history' && request.method === 'GET') return this.getChatHistory(request);
@@ -996,6 +998,24 @@ export class ProjectDO implements DurableObject {
       .toArray();
     const configs = rows.map(rowToRoleConfig);
     return json({ roles: configs });
+  }
+
+  /**
+   * The resolved catalog of EVERY agent on this project — identity, base system
+   * prompt, granted skills/tools, model/runtime — with defaults applied. Powers
+   * "see all prompts / skills / identities" in the console and over MCP. Pure
+   * resolution lives in agents-catalog.ts; this just feeds it the stored configs.
+   */
+  private getAgents(): Response {
+    const rows = this.state.storage.sql
+      .exec('SELECT * FROM role_configs ORDER BY role')
+      .toArray();
+    const configs = rows.map(rowToRoleConfig);
+    const po = this.state.storage.sql
+      .exec("SELECT persona FROM role_configs WHERE role = 'PO'")
+      .toArray()[0] as { persona: string | null } | undefined;
+    const agents = buildAgentCatalog(configs.filter((c) => c.role !== ('PO' as Role)), { poPersona: po?.persona ?? null });
+    return json({ agents });
   }
 
   private async setRoles(request: Request): Promise<Response> {

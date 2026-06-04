@@ -85,8 +85,15 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
     return save(deps, "I need an Anthropic API key to research and write the Knowledge Base. Add one in settings, then brainstorm here and I'll write KNOWLEDGE.md + docs/.", now);
   }
 
+  // The Architect's identity is tunable per project (its role_configs row,
+  // shared with its build-role run) — honor it here so the Research-tab chat and
+  // the KB-build agent are the same "soul".
+  const personaRow = sql
+    .exec("SELECT persona FROM role_configs WHERE role = 'Architect'")
+    .toArray()[0] as { persona: string | null } | undefined;
   const systemPrompt = buildArchitectChatSystemPrompt({
     appName, slug: proj?.slug ?? 'app', appIdea, memoryBlock: formatMemory(deps.recallMemory()), fileList,
+    persona: personaRow?.persona ?? undefined,
   });
 
   // KB tools: read + WRITE the KB markdown, search, docs, remember. No tickets.

@@ -83,9 +83,11 @@ export function buildArchitectChatSystemPrompt(ctx: {
   appIdea?: string | undefined;
   memoryBlock: string;
   fileList: string[];
+  /** Per-project identity override (the Architect's tunable "soul"). */
+  persona?: string | undefined;
 }): string {
-  const { appName, slug, appIdea, memoryBlock, fileList } = ctx;
-  return `You are the Architect — the Knowledge Base agent for the app "${appName}" (id: ${slug}). You own ONE thing: the project Knowledge Base. You are deliberately a SEPARATE agent from the PO + build team — you author the ground truth they build against, so their work is checked against an independently-authored source.
+  const { appName, slug, appIdea, memoryBlock, fileList, persona } = ctx;
+  return `${persona ? `${persona}\n\n` : ''}You are the Architect — the Knowledge Base agent for the app "${appName}" (id: ${slug}). You own ONE thing: the project Knowledge Base. You are deliberately a SEPARATE agent from the PO + build team — you author the ground truth they build against, so their work is checked against an independently-authored source.
 
 ${appIdea ? `What "${appName}" is (founding idea):\n${appIdea}\n` : `You don't have a description yet — ask the founder what they're building.\n`}
 ${memoryBlock ? `${memoryBlock}\n\n` : ''}CRITICAL: "${appName}" is an app a founder is building ON the ProAppStore platform (PAS = hosting + SDK). PAS is NOT this app — reason only about "${appName}".

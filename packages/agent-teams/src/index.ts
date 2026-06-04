@@ -215,6 +215,8 @@ app.delete('/v1/projects/:slug/chat/history', (c) => relay(c, '/chat/history', {
 
 app.get('/v1/projects/:slug/roles', (c) => relay(c, '/roles'));
 app.put('/v1/projects/:slug/roles', (c) => relay(c, '/roles', { method: 'PUT', forwardBody: true }));
+// Resolved catalog of every agent (identity + prompt + skills + model) — read-only.
+app.get('/v1/projects/:slug/agents', (c) => relay(c, '/agents'));
 
 // ── Tickets ─────────────────────────────────────────────────
 

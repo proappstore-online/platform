@@ -52,6 +52,13 @@ const mainSidebar = [
     ],
   },
   {
+    text: "AI & Agents",
+    items: [
+      { text: "MCP: App Tools", link: "/mcp-app-tools" },
+      { text: "Agent Customization", link: "/agent-customization" },
+    ],
+  },
+  {
     text: "Reference",
     items: [
       { text: "SDK Overview", link: "/sdk-overview" },
@@ -74,6 +81,7 @@ export default withMermaid(
       nav: [
         { text: "Guide", link: "/getting-started" },
         { text: "Architecture", link: "/architecture" },
+        { text: "AI & Agents", link: "/mcp-app-tools" },
         { text: "SDK", link: "/sdk-overview" },
         { text: "ADRs", link: "/adr/001-cloudflare-workers-only" },
       ],
