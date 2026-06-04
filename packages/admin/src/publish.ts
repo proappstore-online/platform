@@ -208,10 +208,58 @@ jobs:
           APP: \${{ github.event.repository.name }}
         run: |
           python -m pip install --quiet zensical
-          rm -rf kb-src && mkdir -p kb-src
+          rm -rf kb-src && mkdir -p kb-src/assets kb-src/stylesheets
           cp KNOWLEDGE.md kb-src/index.md
           if [ -d docs ]; then cp -r docs/. kb-src/; fi
-          printf 'site_name: %s — Knowledge Base\\ndocs_dir: kb-src\\n' "\$APP" > mkdocs.yml
+          # ── ProAppStore brand: logo + favicon (purple gradient "A" mark) ──
+          cat > kb-src/assets/logo.svg <<'SVG'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#7c3aed"/></linearGradient></defs><rect width="512" height="512" rx="96" fill="url(#bg)"/><text x="256" y="346" font-family="Manrope, -apple-system, BlinkMacSystemFont, sans-serif" font-weight="800" font-size="300" fill="white" text-anchor="middle">A</text></svg>
+          SVG
+          cp kb-src/assets/logo.svg kb-src/assets/favicon.svg
+          # ── ProAppStore brand: accent purple (#7c3aed light / #a78bfa dark) ──
+          cat > kb-src/stylesheets/extra.css <<'CSS'
+          :root > * {
+            --md-primary-fg-color: #7c3aed;
+            --md-primary-fg-color--light: #a78bfa;
+            --md-primary-fg-color--dark: #4c1d95;
+            --md-accent-fg-color: #7c3aed;
+          }
+          [data-md-color-scheme="slate"] {
+            --md-primary-fg-color: #a78bfa;
+            --md-primary-fg-color--light: #c4b5fd;
+            --md-primary-fg-color--dark: #7c3aed;
+            --md-accent-fg-color: #a78bfa;
+          }
+          .md-header__title { font-weight: 700; letter-spacing: -0.01em; }
+          CSS
+          # ── Branded site config ──
+          cat > mkdocs.yml <<YAML
+          site_name: \$APP — Knowledge Base
+          site_url: https://kb.proappstore.online/\$APP/
+          docs_dir: kb-src
+          copyright: Built on ProAppStore · proappstore.online
+          theme:
+            name: material
+            logo: assets/logo.svg
+            favicon: assets/favicon.svg
+            palette:
+              - media: "(prefers-color-scheme: light)"
+                scheme: default
+                primary: custom
+                accent: custom
+                toggle:
+                  icon: lucide/sun
+                  name: Switch to dark mode
+              - media: "(prefers-color-scheme: dark)"
+                scheme: slate
+                primary: custom
+                accent: custom
+                toggle:
+                  icon: lucide/moon
+                  name: Switch to light mode
+          extra_css:
+            - stylesheets/extra.css
+          YAML
           zensical build
       - name: Publish to kb-host (R2 via Worker binding)
         if: steps.gate.outputs.go == '1'
