@@ -163,6 +163,38 @@ servicesRoutes.patch('/services/profile/availability', async (c) => {
   }
 });
 
+// ── Stats recomputation ─────────────────────────────────────
+
+// Recompute avg_prompt_length and median_response_time_ms for all developers
+// from service_messages. Called periodically or on-demand.
+servicesRoutes.post('/services/recompute-stats', async (c) => {
+  // Internal only — require INTERNAL_TOKEN
+  const token = c.req.header('X-Internal-Token');
+  if (!c.env.INTERNAL_TOKEN || token !== c.env.INTERNAL_TOKEN) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+
+  // Avg prompt length per developer
+  const avgLens = await c.env.DB.prepare(
+    `SELECT e.developer_id, AVG(LENGTH(m.body)) AS avg_len
+     FROM service_messages m
+     JOIN engagements e ON e.id = m.engagement_id
+     WHERE m.sender_role = 'developer'
+     GROUP BY e.developer_id`,
+  ).all<{ developer_id: string; avg_len: number }>();
+
+  const now = Date.now();
+  let updated = 0;
+  for (const row of avgLens.results ?? []) {
+    await c.env.DB.prepare(
+      'UPDATE dev_profiles SET avg_prompt_length = ?, updated_at = ? WHERE creator_id = ?',
+    ).bind(Math.round(row.avg_len), now, row.developer_id).run();
+    updated++;
+  }
+
+  return c.json({ ok: true, updated });
+});
+
 // ── Client balance ──────────────────────────────────────────
 
 interface BalanceRow {
