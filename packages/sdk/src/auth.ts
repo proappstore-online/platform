@@ -5,13 +5,8 @@ export type AuthProvider = 'github' | 'google' | 'email';
 /** PAS-owned localStorage key for the cached session (per-origin). */
 const STORAGE_KEY = 'pas:session';
 
-/**
- * Hash param the platform auth service returns the session in. This is the one
- * remaining brand leak: PAS does not yet run its own auth worker, so the shared
- * platform auth service issues the callback as `#fas_session=`. When PAS owns
- * auth (see the de-FAS plan) this becomes `#pas_session=`.
- */
-const SESSION_HASH = '#fas_session=';
+/** Hash param the PAS auth service returns the session in (routes/auth.ts). */
+const SESSION_HASH = '#pas_session=';
 
 interface Session {
   token: string;

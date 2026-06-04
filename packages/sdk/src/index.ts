@@ -87,8 +87,10 @@ export class ProAppStore {
   constructor(opts: ProInitOptions) {
     const fasApiBase = opts.fasApiBase ?? 'https://api.freeappstore.online';
     const proApiBase = opts.proApiBase ?? 'https://api.proappstore.online';
-    // Free primitives + identity live on FAS (shared auth/kv/counters/rooms/roles).
-    this.auth = new Auth(opts.appId, fasApiBase);
+    // Identity is PAS-owned (its own OAuth + user store); tokens are signed with
+    // the shared key so the free-tier primitives (kv/counters/rooms/roles, which
+    // run on the free-tier backend) still accept them.
+    this.auth = new Auth(opts.appId, proApiBase);
     this.kv = new Kv(opts.appId, fasApiBase, this.auth);
     this.counters = new Counters(opts.appId, fasApiBase, this.auth);
     this.rooms = new Rooms(opts.appId, fasApiBase, this.auth);
