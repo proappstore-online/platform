@@ -56,22 +56,58 @@ function profileDto(row: DevProfileRow, extra?: { login?: string | undefined; av
   };
 }
 
-// Public: list available developers
+function computeBadges(row: DevProfileRow): string[] {
+  const badges: string[] = [];
+  if (row.completed_engagements >= 5) badges.push('verified-developer');
+  if ((row.avg_rating ?? 0) >= 4.5 && row.rating_count >= 3) badges.push('top-rated');
+  if (row.completed_engagements >= 20) badges.push('expert');
+  return badges;
+}
+
+// Public: list developers with optional filters
+// ?minRate=50&maxRate=500 — cents range
+// ?minRating=4 — minimum avg rating (1-5)
+// ?q=keyword — search login and bio
+// ?sort=rate|rating|engagements (default: quality)
 servicesRoutes.get('/services/developers', async (c) => {
+  const minRate = parseInt(c.req.query('minRate') ?? '') || 0;
+  const maxRate = parseInt(c.req.query('maxRate') ?? '') || 999999;
+  const minRating = parseFloat(c.req.query('minRating') ?? '') || 0;
+  const q = c.req.query('q')?.trim().toLowerCase() ?? '';
+  const sort = c.req.query('sort') ?? 'quality';
+
+  const orderBy = sort === 'rate' ? 'd.prompt_rate_cents ASC'
+    : sort === 'rating' ? 'd.avg_rating DESC NULLS LAST'
+    : sort === 'engagements' ? 'd.completed_engagements DESC'
+    : 'd.quality_score DESC NULLS LAST, d.completed_engagements DESC';
+
+  let where = 'd.available = 1 AND d.prompt_rate_cents >= ? AND d.prompt_rate_cents <= ?';
+  const binds: unknown[] = [minRate, maxRate];
+
+  if (minRating > 0) {
+    where += ' AND d.avg_rating >= ?';
+    binds.push(minRating);
+  }
+  if (q) {
+    where += ' AND (LOWER(u.login) LIKE ? OR LOWER(d.bio_services) LIKE ?)';
+    binds.push(`%${q}%`, `%${q}%`);
+  }
+
   const rows = await c.env.DB.prepare(
     `SELECT d.*, u.login, u.avatar_url,
        (SELECT COUNT(*) FROM apps WHERE creator_id = d.creator_id) AS app_count
      FROM dev_profiles d
      LEFT JOIN users u ON u.id = d.creator_id
-     WHERE d.available = 1
-     ORDER BY d.quality_score DESC NULLS LAST, d.completed_engagements DESC
+     WHERE ${where}
+     ORDER BY ${orderBy}
      LIMIT 50`,
-  ).all<DevProfileRow & { login: string | null; avatar_url: string | null; app_count: number }>();
+  ).bind(...binds).all<DevProfileRow & { login: string | null; avatar_url: string | null; app_count: number }>();
 
   return c.json({
     developers: (rows.results ?? []).map((r) => ({
       ...profileDto(r, { login: r.login ?? undefined, avatarUrl: r.avatar_url ?? undefined }),
       appCount: r.app_count,
+      badges: computeBadges(r),
     })),
   });
 });
@@ -157,6 +193,103 @@ servicesRoutes.patch('/services/profile/availability', async (c) => {
 
     if (!result.meta.changes) return c.json({ error: 'profile not found — create one first' }, 404);
     return c.json({ available: body.available });
+  } catch (err) {
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
+    throw err;
+  }
+});
+
+// ── Developer earnings ──────────────────────────────────────
+
+// Auth: earnings breakdown for the developer
+servicesRoutes.get('/services/earnings', async (c) => {
+  try {
+    const user = await requireUser(c);
+
+    // Total earnings across all engagements
+    const totals = await c.env.DB.prepare(
+      `SELECT
+         COUNT(*) AS total_engagements,
+         SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS delivered,
+         SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
+         SUM(total_dev_earned_cents) AS total_earned_cents,
+         SUM(prompts_count) AS total_prompts
+       FROM engagements WHERE developer_id = ?`,
+    ).bind(user.id).first<{
+      total_engagements: number; delivered: number; active: number;
+      total_earned_cents: number; total_prompts: number;
+    }>();
+
+    // Per-engagement breakdown (recent 20)
+    const engagements = await c.env.DB.prepare(
+      `SELECT e.id, e.status, e.prompt_rate_cents, e.prompts_count,
+              e.total_dev_earned_cents, e.total_charged_cents, e.created_at, e.updated_at,
+              u.login AS client_login
+       FROM engagements e
+       LEFT JOIN users u ON u.id = e.client_id
+       WHERE e.developer_id = ?
+       ORDER BY e.updated_at DESC LIMIT 20`,
+    ).bind(user.id).all<Record<string, unknown>>();
+
+    // Connect status (can they actually receive payouts?)
+    const connect = await c.env.DB.prepare(
+      'SELECT charges_enabled, payouts_enabled, details_submitted FROM creator_payouts WHERE creator_id = ?',
+    ).bind(user.id).first<{ charges_enabled: number; payouts_enabled: number; details_submitted: number }>();
+
+    return c.json({
+      totalEarnedCents: totals?.total_earned_cents ?? 0,
+      totalPrompts: totals?.total_prompts ?? 0,
+      totalEngagements: totals?.total_engagements ?? 0,
+      deliveredEngagements: totals?.delivered ?? 0,
+      activeEngagements: totals?.active ?? 0,
+      payoutsEnabled: (connect?.payouts_enabled ?? 0) === 1,
+      connectOnboarded: (connect?.details_submitted ?? 0) === 1,
+      engagements: (engagements.results ?? []).map((r) => ({
+        id: r.id,
+        clientLogin: r.client_login ?? null,
+        status: r.status,
+        promptRateCents: r.prompt_rate_cents,
+        promptsCount: r.prompts_count,
+        earnedCents: r.total_dev_earned_cents,
+        chargedCents: r.total_charged_cents,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      })),
+    });
+  } catch (err) {
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
+    throw err;
+  }
+});
+
+// ── Client: my requests ─────────────────────────────────────
+
+// Auth: list the client's own build requests (all statuses, not just open)
+servicesRoutes.get('/services/my-requests', async (c) => {
+  try {
+    const user = await requireUser(c);
+    const rows = await c.env.DB.prepare(
+      `SELECT r.*, u.login AS dev_login
+       FROM build_requests r
+       LEFT JOIN users u ON u.id = r.accepted_by
+       WHERE r.client_id = ?
+       ORDER BY r.created_at DESC LIMIT 50`,
+    ).bind(user.id).all<Record<string, unknown>>();
+
+    return c.json({
+      requests: (rows.results ?? []).map((r) => ({
+        id: r.id,
+        title: r.title,
+        description: r.description,
+        budgetCents: r.budget_cents,
+        status: r.status,
+        acceptedBy: r.accepted_by ?? null,
+        devLogin: r.dev_login ?? null,
+        engagementId: r.engagement_id ?? null,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      })),
+    });
   } catch (err) {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
