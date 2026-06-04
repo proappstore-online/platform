@@ -1447,7 +1447,10 @@ export class ProjectDO implements DurableObject {
         for (const t of doneTickets.slice(0, 8)) {
           let ac = '';
           if (t.spec_json) {
-            try { const s = JSON.parse(t.spec_json); ac = s.summary || s.acceptanceCriteria || ''; } catch { /* */ }
+            try {
+              const s = JSON.parse(t.spec_json);
+              ac = s.summary || (Array.isArray(s.acceptanceCriteria) ? s.acceptanceCriteria.join('; ') : s.acceptanceCriteria) || '';
+            } catch { /* */ }
           }
           scenarios.push(`### ${t.title}\n${ac ? `**Spec:** ${ac}\n` : ''}**Scenario:** Navigate to the feature, interact with it, assert the expected behavior.`);
         }
