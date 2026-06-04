@@ -27,6 +27,10 @@ export interface PublishRequest {
   iconBg: string;
   description: string;
   proFeatures?: string[];
+  /** GitHub login of the creator — injected from the verified session by the
+   *  /api/provision handler. Granted push access to the app repo (so creators
+   *  can push/clone their own app, not just the platform). */
+  creatorGithub?: string;
 }
 
 // Path of the deploy workflow we inject into agent-authored repos.
@@ -300,6 +304,36 @@ async function createRepo(env: Env, req: PublishRequest): Promise<Step> {
   return { name: "GitHub repo", status: "fail", detail: (result.data as { message?: string }).message || "Failed to create repo" };
 }
 
+// Grant the creator push access to their own app repo. Without this the repo is
+// owned only by the org and the creator gets 403 on `git push`. Non-fatal — the
+// app still provisions if this fails. Outside collaborators get a pending invite
+// they must accept (expires in ~7 days), so we surface that.
+async function addCollaborator(env: Env, id: string, username: string): Promise<Step> {
+  const res = await fetch(
+    `https://api.github.com/repos/${env.PUBLISHERS_ORG}/${id}/collaborators/${encodeURIComponent(username)}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": "proappstore-admin",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      body: JSON.stringify({ permission: "push" }),
+    },
+  );
+  if (res.status === 204) return { name: "Collaborator", status: "skip", detail: `${username} already has push access` };
+  if (res.ok) {
+    return {
+      name: "Collaborator",
+      status: "ok",
+      detail: `${username} invited as push collaborator — accept the GitHub invite at https://github.com/${env.PUBLISHERS_ORG}/${id}/invitations (check email/notifications) before pushing`,
+    };
+  }
+  const body = await res.text().catch(() => "");
+  return { name: "Collaborator", status: "fail", detail: `Failed to add ${username} (status ${res.status})${body ? `: ${body.slice(0, 120)}` : ""}` };
+}
+
 // NOTE: the workflow's CLOUDFLARE_API_TOKEN is an ORG-level Actions secret,
 // managed in Doppler (project `pas`, auto-synced to the proappstore-online org —
 // see stores/SECRETS.md). It is deliberately NOT set per-repo here: the admin
@@ -336,6 +370,7 @@ async function addToRegistry(env: Env, req: PublishRequest): Promise<Step> {
     type: "connected",
     developer: "ProAppStore",
     ...(req.proFeatures?.length ? { proFeatures: req.proFeatures } : {}),
+    ...(req.creatorGithub ? { creatorGithub: req.creatorGithub } : {}),
   });
   content.apps = apps;
 
@@ -448,6 +483,13 @@ async function provisionApp(
   steps.push(repoStep);
   if (repoStep.status === "fail") return stop();
   repoUrl = `https://github.com/${env.PUBLISHERS_ORG}/${req.id}`;
+
+  // 1b. Grant the creator push access to their own repo (non-fatal). Without
+  //     this the repo is org-owned only and the creator gets 403 on `git push`.
+  //     creatorGithub is injected from the verified session in /api/provision.
+  if (req.creatorGithub) {
+    steps.push(await addCollaborator(env, req.id, req.creatorGithub));
+  }
 
   // 2. CF Pages project — wrangler's deploy target, must exist before CI (fatal)
   const cf = cfFor(env);

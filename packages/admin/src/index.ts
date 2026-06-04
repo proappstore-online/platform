@@ -32,7 +32,10 @@ export default {
         return Response.json({ error: "invalid or expired session" }, { status: 401 });
       }
       const body = await request.json<PublishRequest>();
-      const result = await handlePublish(body, env);
+      // Inject the verified creator login (can't be spoofed by the client) so
+      // publish grants them push access to their app repo. Without this the
+      // creator gets 403 on `git push` to proappstore-online/<id>.
+      const result = await handlePublish({ ...body, creatorGithub: body.creatorGithub || login }, env);
       return Response.json(result, { status: result.success ? 200 : 422 });
     }
 
