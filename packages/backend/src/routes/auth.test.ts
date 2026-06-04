@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, afterEach } from 'vitest';
 import { app } from '../index.js';
 import { mintSession } from '@proappstore/build-core';
+
+const b64url = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 const KEY = 'test-signing-key';
 const env = () => ({ DB: {} as D1Database, STORAGE: {} as R2Bucket, SESSION_SIGNING_KEY: KEY } as never);
@@ -66,5 +68,29 @@ describe('auth provider start', () => {
   it('email sign-in returns 501 (not enabled)', async () => {
     const res = await app.request('/v1/auth/email/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, env());
     expect(res.status).toBe(501);
+  });
+});
+
+describe('auth callback — state decoding (base64url padding regression)', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  it('decodes state of every length (no padding bug) → reaches profile fetch, not "invalid state"', async () => {
+    // Token exchange fails → githubProfile returns null → 401, NOT 400. A broken
+    // padding decode would drop return_to → 400 "invalid state" for some lengths.
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 400 }));
+    // return_to lengths chosen so the state's base64url length hits each n%4 case.
+    for (const path of ['/', '/a', '/ab', '/abc']) {
+      const state = b64url(JSON.stringify({ r: `https://console.proappstore.online${path}`, n: 'fixed-nonce' }));
+      const res = await app.request(`/v1/auth/github/callback?code=x&state=${state}`, {}, env());
+      expect(res.status, `path ${path} (state len ${state.length})`).not.toBe(400);
+      expect(res.status).toBe(401);
+    }
+  });
+
+  it('400s when state carries a disallowed return_to', async () => {
+    const state = b64url(JSON.stringify({ r: 'https://evil.com', n: 'x' }));
+    const res = await app.request(`/v1/auth/github/callback?code=x&state=${state}`, {}, env());
+    expect(res.status).toBe(400);
   });
 });

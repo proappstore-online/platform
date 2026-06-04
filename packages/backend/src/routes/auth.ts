@@ -90,7 +90,8 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
 
   let returnTo = '';
   try {
-    const json = atob(stateRaw.replace(/-/g, '+').replace(/_/g, '/') + '=='.slice((stateRaw.length + 3) % 4));
+    const b64 = stateRaw.replace(/-/g, '+').replace(/_/g, '/');
+    const json = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
     returnTo = (JSON.parse(json) as { r?: string }).r || '';
   } catch { /* fall through to validation */ }
   if (!returnToAllowed(returnTo)) return c.text('invalid state', 400);
