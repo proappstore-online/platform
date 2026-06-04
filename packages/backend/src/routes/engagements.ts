@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
+import { sendEmail } from '../lib/email.js';
 
 /**
  * Services Phase 2: engagements + service chat with per-prompt billing.
@@ -27,6 +28,20 @@ import { requireUser, HttpError } from '../lib/auth.js';
 export const engagementRoutes = new Hono<{ Bindings: Env }>();
 
 const PLATFORM_FEE_BPS = 1000; // 10%
+
+/** Best-effort email notification. Never throws — failures are silent. */
+async function notify(env: Env, userId: string, subject: string, body: string): Promise<void> {
+  if (!env.RESEND_API_KEY) return;
+  try {
+    const user = await env.DB.prepare('SELECT email FROM users WHERE id = ?')
+      .bind(userId).first<{ email: string | null }>();
+    if (!user?.email) return;
+    await sendEmail(
+      { apiKey: env.RESEND_API_KEY, from: env.EMAIL_FROM ?? 'ProAppStore <noreply@proappstore.online>' },
+      { to: user.email, subject, html: `<p>${body}</p><p style="color:#999;font-size:12px"><a href="https://console.proappstore.online/#/services">Open Console</a></p>`, text: body },
+    );
+  } catch { /* best-effort */ }
+}
 
 // ── Engagements ──────────────────────────────────────────────
 
@@ -65,6 +80,10 @@ engagementRoutes.post('/services/engagements', async (c) => {
          VALUES (?, ?, 'system', 'system', ?, ?)`,
       ).bind(crypto.randomUUID(), id, `Client wants: ${body.description}`, now).run();
     }
+
+    // Notify the developer
+    void notify(c.env, body.developerId, 'New client engagement on ProAppStore',
+      `A client has hired you${body.description ? ` for: ${body.description.slice(0, 200)}` : ''}. Rate: $${(dev.prompt_rate_cents / 100).toFixed(2)}/prompt.`);
 
     return c.json({ id, status: 'active', promptRateCents: dev.prompt_rate_cents }, 201);
   } catch (err) {
@@ -316,6 +335,12 @@ engagementRoutes.post('/services/engagements/:id/messages', async (c) => {
       ).bind(msgId, id, senderRole, user.id, body.body.trim(), now).run();
     }
 
+    // Notify the other party (best-effort, async)
+    const recipientId = isDev ? eng.client_id : eng.developer_id;
+    const preview = body.body.trim().slice(0, 100);
+    void notify(c.env, recipientId, `New message in your ProAppStore engagement`,
+      `${isDev ? 'Developer' : 'Client'}: "${preview}${body.body.trim().length > 100 ? '...' : ''}"`);
+
     return c.json({
       id: msgId,
       senderRole,
@@ -423,6 +448,10 @@ engagementRoutes.post('/services/requests/:id/accept', async (c) => {
          VALUES (?, ?, 'system', 'system', ?, ?)`,
       ).bind(crypto.randomUUID(), engId, `Build request: ${req.title}\n\n${req.description}`, now),
     ]);
+
+    // Notify the client their request was accepted
+    void notify(c.env, req.client_id, 'Your build request was accepted on ProAppStore',
+      `A developer accepted your request "${req.title}". The engagement is now active.`);
 
     return c.json({ engagementId: engId, status: 'active' }, 201);
   } catch (err) {
