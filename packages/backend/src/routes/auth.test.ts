@@ -75,21 +75,36 @@ describe('auth callback — state decoding (base64url padding regression)', () =
   const realFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = realFetch; });
 
-  it('decodes state of every length (no padding bug) → reaches profile fetch, not "invalid state"', async () => {
-    // Token exchange fails → githubProfile returns null → 401, NOT 400. A broken
-    // padding decode would drop return_to → 400 "invalid state" for some lengths.
+  it('decodes state of every length (no padding bug) → reaches profile, then bounces back with auth_error', async () => {
+    // Token exchange fails → profile null → graceful 302 back to return_to with
+    // #auth_error, NOT 400. A broken padding decode would drop return_to → 400.
     globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 400 }));
     // return_to lengths chosen so the state's base64url length hits each n%4 case.
     for (const path of ['/', '/a', '/ab', '/abc']) {
-      const state = b64url(JSON.stringify({ r: `https://console.proappstore.online${path}`, n: 'fixed-nonce' }));
+      const ret = `https://console.proappstore.online${path}`;
+      const state = b64url(JSON.stringify({ r: ret, n: 'fixed-nonce' }));
       const res = await app.request(
         `/v1/auth/github/callback?code=x&state=${state}`,
         { headers: { Cookie: `pas_oauth_state=${state}` } }, // CSRF cookie matches
         env(),
       );
-      expect(res.status, `path ${path} (state len ${state.length})`).not.toBe(400);
-      expect(res.status).toBe(401);
+      expect(res.status, `path ${path} (state len ${state.length})`).toBe(302);
+      const loc = res.headers.get('location')!;
+      expect(loc.startsWith(ret)).toBe(true);
+      expect(loc).toContain('auth_error=profile_fetch_failed');
     }
+  });
+
+  it('bounces back with auth_error when the provider denies consent', async () => {
+    const ret = 'https://console.proappstore.online/';
+    const state = b64url(JSON.stringify({ r: ret, n: 'x' }));
+    const res = await app.request(
+      `/v1/auth/github/callback?error=access_denied&state=${state}`,
+      { headers: { Cookie: `pas_oauth_state=${state}` } },
+      env(),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toContain('auth_error=access_denied');
   });
 
   it('400s on a state/cookie mismatch (login CSRF guard)', async () => {

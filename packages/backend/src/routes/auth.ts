@@ -91,15 +91,16 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
   const provider = c.req.param('provider') as Provider;
   if (!PROVIDERS.has(provider)) return c.text('unknown provider', 404);
 
-  const code = c.req.query('code');
   const stateRaw = c.req.query('state') || '';
-  if (!code) return c.text('missing code', 400);
 
   // CSRF: the state must match the cookie we set at /start (same browser).
   const cookieState = getCookie(c, STATE_COOKIE);
   deleteCookie(c, STATE_COOKIE, { path: '/v1/auth' });
   if (!cookieState || cookieState !== stateRaw) return c.text('invalid state', 400);
 
+  // Recover the (own-origin) return_to from the verified state first, so any
+  // later failure can bounce the user back to the app with a clean error
+  // instead of a bare error page.
   let returnTo = '';
   try {
     const b64 = stateRaw.replace(/-/g, '+').replace(/_/g, '/');
@@ -108,26 +109,44 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
   } catch { /* fall through to validation */ }
   if (!returnToAllowed(returnTo)) return c.text('invalid state', 400);
 
-  const profile = provider === 'github'
-    ? await githubProfile(c.env, code)
-    : await googleProfile(c.env, code);
-  if (!profile) return c.text('sign-in failed (could not fetch profile)', 401);
+  /** Bounce back to the app with `#auth_error=<reason>` (the SDK clears the hash). */
+  const fail = (reason: string) => {
+    const dest = new URL(returnTo);
+    dest.hash = `auth_error=${encodeURIComponent(reason)}`;
+    return c.redirect(dest.toString(), 302);
+  };
 
-  const userId = `${provider === 'github' ? 'gh' : 'google'}:${profile.providerId}`;
-  const now = Date.now();
-  await c.env.DB.prepare(
-    `INSERT INTO users (id, provider, provider_id, login, email, avatar_url, created_at, last_login_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
-     ON CONFLICT(id) DO UPDATE SET login = excluded.login, email = excluded.email,
-       avatar_url = excluded.avatar_url, last_login_at = excluded.last_login_at`,
-  ).bind(userId, provider, profile.providerId, profile.login, profile.email, profile.avatarUrl, now).run();
+  // The provider can redirect back with an error (e.g. the user denied consent).
+  const provErr = c.req.query('error');
+  if (provErr) return fail(provErr);
 
-  const claims: NewSession = { sub: userId, login: profile.login, avatarUrl: profile.avatarUrl, roles: rolesFor(userId, c.env) };
-  const token = await mintSession(claims, c.env.SESSION_SIGNING_KEY);
+  const code = c.req.query('code');
+  if (!code) return fail('missing_code');
 
-  const dest = new URL(returnTo);
-  dest.hash = `pas_session=${encodeURIComponent(token)}`;
-  return c.redirect(dest.toString(), 302);
+  try {
+    const profile = provider === 'github'
+      ? await githubProfile(c.env, code)
+      : await googleProfile(c.env, code);
+    if (!profile) return fail('profile_fetch_failed');
+
+    const userId = `${provider === 'github' ? 'gh' : 'google'}:${profile.providerId}`;
+    const now = Date.now();
+    await c.env.DB.prepare(
+      `INSERT INTO users (id, provider, provider_id, login, email, avatar_url, created_at, last_login_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+       ON CONFLICT(id) DO UPDATE SET login = excluded.login, email = excluded.email,
+         avatar_url = excluded.avatar_url, last_login_at = excluded.last_login_at`,
+    ).bind(userId, provider, profile.providerId, profile.login, profile.email, profile.avatarUrl, now).run();
+
+    const claims: NewSession = { sub: userId, login: profile.login, avatarUrl: profile.avatarUrl, roles: rolesFor(userId, c.env) };
+    const token = await mintSession(claims, c.env.SESSION_SIGNING_KEY);
+
+    const dest = new URL(returnTo);
+    dest.hash = `pas_session=${encodeURIComponent(token)}`;
+    return c.redirect(dest.toString(), 302);
+  } catch {
+    return fail('server_error');
+  }
 });
 
 // ── GET /v1/auth/me ────────────────────────────────────────

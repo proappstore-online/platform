@@ -22,6 +22,7 @@ interface Session {
 export class Auth {
   private session: Session | null = null;
   private listeners = new Set<(user: User | null) => void>();
+  private lastAuthError: string | null = null;
 
   constructor(
     private readonly appId: string,
@@ -34,6 +35,14 @@ export class Auth {
   /** Current signed-in user, or null if not authenticated. */
   get user(): User | null {
     return this.session?.user ?? null;
+  }
+
+  /**
+   * Reason the last sign-in failed (e.g. 'access_denied', 'profile_fetch_failed'),
+   * captured from the `#auth_error=` callback hash by init(); null if none.
+   */
+  get authError(): string | null {
+    return this.lastAuthError;
   }
 
   /** Current session token, or null if not authenticated. */
@@ -130,6 +139,15 @@ export class Auth {
   async init(): Promise<void> {
     if (typeof window === 'undefined') return;
     const hash = window.location.hash;
+
+    // A failed sign-in bounces back with `#auth_error=<reason>` — record it and
+    // clear the hash so the user isn't stuck on a broken URL or stuck retrying.
+    if (hash.startsWith('#auth_error=')) {
+      try { this.lastAuthError = decodeURIComponent(hash.slice('#auth_error='.length)) || 'unknown'; } catch { this.lastAuthError = 'unknown'; }
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      return;
+    }
+
     if (!hash.startsWith(SESSION_HASH)) return;
 
     // Always clear the hash before doing anything else — even on failure.
