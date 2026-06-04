@@ -17,6 +17,23 @@ Remote MCP server for AI agents to interact with the ProAppStore platform.
 | `sdk_reference` | None | Quick SDK reference (auth, db, storage, maps, AI, subscriptions, hooks, UI) |
 | `discover_tools` | None | List the per-app tools currently registered (the `<app>/<tool>` set) |
 
+### Agent Teams loop (drive the autonomous build over MCP)
+
+Each takes an explicit `token` (PAS session token) argument. The token's user must
+own the project and have a BYO Anthropic key in the vault for agents to run.
+
+| Tool | Description |
+|------|-------------|
+| `create_app` | Create an Agent Teams project (idempotent on slug) |
+| `list_projects` | List your projects |
+| `get_project` | One project's status (play state, cost, repo) |
+| `build_knowledge_base` | Trigger the Architect to write KNOWLEDGE.md + docs/ |
+| `chat_agent` | Message the PO (`thread:'build'` → files tickets) or Architect (`thread:'research'` → revises KB) |
+| `list_tickets` | The kanban — status + assignee per ticket |
+| `list_agents` | Resolved agent catalog (identity, skills, model) |
+| `get_project_files` | List working-tree files, or read one (e.g. `KNOWLEDGE.md`) |
+| `set_project_running` | Play / pause the autonomous build loop |
+
 ### Per-app tools (dynamic)
 
 Beyond the fixed tools above, the server loads each app's own tools from its

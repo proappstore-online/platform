@@ -5,6 +5,7 @@ import { extractToken, verifyToken } from "./api-helpers.js";
 import { registerPlatformTools } from "./platform-tools.js";
 import { fetchTools, registerAppTools } from "./tool-loader.js";
 import { registerProjectTools } from "./project-tools.js";
+import { registerLoopTools } from "./loop-tools.js";
 
 export class PasMcpAgent extends McpAgent<Env> {
   server = new McpServer({
@@ -17,12 +18,11 @@ export class PasMcpAgent extends McpAgent<Env> {
   private userToken: string | null = null;
 
   async init() {
-    // KNOWN ISSUE: McpAgent.serve() (agents@0.0.74) does not populate ctx.props,
-    // so this.props is {} and connection-level auth is always null — the project
-    // tools (write_file etc.) will report "authentication required". This only
-    // affects EXTERNAL MCP clients; the agent-teams autonomous loop builds via
-    // pas/admin + build-core, not this server. Fix needs the SDK's auth wiring
-    // (parse Authorization in fetch → props) before the MCP build path works.
+    // Connection-level auth: the `fetch` handler below copies the request's
+    // `Authorization` token into `ctx.props.authToken`, which agents@0.0.74's
+    // serve() persists and replays into `this.props` here. So write_file etc.
+    // now see the user. (The agent-teams loop tools also accept an explicit
+    // `token` arg, so they work even without this.)
     const token = extractToken(this.props as Record<string, unknown>);
     if (token) {
       const user = await verifyToken(this.env.API_BASE, token);
@@ -41,6 +41,10 @@ export class PasMcpAgent extends McpAgent<Env> {
       userId: this.userId,
       token: this.userToken,
     }));
+
+    // ── Agent Teams loop tools (create app, KB, chat PO/Architect, ─
+    //    tickets, agents, play/pause) — drive the whole build over MCP ─
+    registerLoopTools(this.server, this.env);
 
     // ── Load and register app tools dynamically ────────────────
     const appTools = await fetchTools(this.env.API_BASE);
@@ -62,9 +66,21 @@ export default {
 
     if (url.pathname === "/" || url.pathname === "") {
       return new Response(
-        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools\nProject tools: scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\n",
+        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools\nProject tools: scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\n",
         { headers: { "content-type": "text/plain" } }
       );
+    }
+
+    // Lift the request's bearer token into ctx.props so connection-authed tools
+    // (write_file etc.) can see the user. serve() persists props into the DO and
+    // replays them into the agent's `this.props` (read by extractToken in init()).
+    const auth = request.headers.get("Authorization");
+    const bearer = auth?.replace(/^Bearer\s+/i, "");
+    if (bearer) {
+      (ctx as unknown as { props?: Record<string, unknown> }).props = {
+        ...((ctx as unknown as { props?: Record<string, unknown> }).props ?? {}),
+        authToken: bearer,
+      };
     }
 
     return PasMcpAgent.serve("/mcp").fetch(request, env, ctx);

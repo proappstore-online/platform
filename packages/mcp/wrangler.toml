@@ -5,6 +5,7 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 API_BASE = "https://api.proappstore.online"
+AGENTS_BASE = "https://agents.proappstore.online"
 GITHUB_ORG = "proappstore-online"
 
 # Secrets set via `wrangler secret put`:
