@@ -124,16 +124,31 @@ default personas (the "directive / boundaries / vibe" blocks in `memory.ts`).
 Override only what you need; anything you don't set keeps the default and reads
 back as `…Source: "default"`.
 
+## Driving + tuning over MCP
+
+The platform MCP server (`mcp.proappstore.online/mcp`) can drive and inspect the
+whole loop — each tool takes an explicit PAS session `token`:
+
+- `create_app`, `list_projects`, `get_project`, `build_knowledge_base`,
+  `chat_agent` (PO/Architect), `list_tickets`, `set_project_running`,
+  `get_project_files`.
+- `list_agents` — the resolved agent catalog (same data as `GET /agents`).
+- `set_project_budget` — set the monthly cost cap (also `PUT /v1/projects/:slug/budget`).
+
+So an external AI client can build an app end-to-end and read every agent's
+identity/skills/model without the Console.
+
+## Budget
+
+Each project has a monthly cost cap (default $50) that auto-pauses the loop when
+the month's spend reaches it. Set it via `PUT /v1/projects/:slug/budget`
+(`{ costCapMonthlyUsd }`, 1–1000), the `set_project_budget` MCP tool, or the
+**Agents** section of the Console Settings tab (which shows spend vs cap).
+
 ## Roadmap
 
-The data model + read/write APIs above are the foundation. Building on them:
-
-- **Console UI — done.** The Creator Console's **Settings** tab has an *Agent
-  team* section that renders `GET /agents` (every identity, prompt, skill, model,
-  with default/custom badges) and edits the build roles inline via `PUT /roles`.
-- **Tune over MCP** — platform MCP tools to read and update a project's agent
-  config, so you can retune the team from your own AI client.
 - **PO identity tuning** — a first-class override for the PO (and a full
   systemPrompt override for the chat agents), so *every* agent's identity is
   editable, not just the build roles. (`GET /agents` already surfaces a PO
-  override when one is stored.)
+  override when one is stored, but PO isn't in `role_configs` yet so there's no
+  write path.)
