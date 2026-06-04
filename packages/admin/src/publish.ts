@@ -172,7 +172,11 @@ function kbWorkflowYaml(env: Env): string {
 on:
   push:
     branches: [main]
-    paths: ['KNOWLEDGE.md', 'docs/**']
+    # Include the workflow's own path so the commit that FIRST adds this file
+    # triggers a build. Otherwise, when the KB content is unchanged, the publish
+    # commit only touches kb.yml and the path filter never matches — so the
+    # Zensical site never builds (the bug that left KBs unpublished / 404).
+    paths: ['KNOWLEDGE.md', 'docs/**', '.github/workflows/kb.yml']
   workflow_dispatch:
 
 permissions:
