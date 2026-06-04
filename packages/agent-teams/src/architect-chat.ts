@@ -97,7 +97,12 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
   });
 
   // KB tools: read + WRITE the KB markdown, search, docs, remember. No tickets.
-  const tools: { name: string; description: string; input_schema: unknown }[] =
+  // The union admits Anthropic's server tools (web_search/web_fetch), which are
+  // shaped { type, name, ... } rather than { name, description, input_schema }.
+  type ArchitectTool =
+    | { name: string; description: string; input_schema: unknown }
+    | { type: string; name: string; max_uses?: number; max_content_tokens?: number };
+  const tools: ArchitectTool[] =
     (['list_files', 'read_file', 'search_files', 'write_file', 'batch_write_files'] as const).map((name) => ({
       name, description: TOOL_SCHEMAS[name]!.description, input_schema: TOOL_SCHEMAS[name]!.parameters,
     }));
@@ -119,6 +124,12 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
     description: 'Read the official ProAppStore platform/SDK docs (skills.md). Use to confirm a real SDK capability/signature BEFORE writing it into the KB. Pass a topic (e.g. "database", "rooms") for just that section.',
     input_schema: { type: 'object', properties: { topic: { type: 'string', description: 'optional section/keyword' } } },
   });
+  // Real web research (Anthropic server tools — executed model-side, billed to
+  // the BYO key). web_search finds current sources; web_fetch reads a specific
+  // page. This is what makes "research the competition / find the market gap"
+  // actual research rather than recall from the model's training cutoff.
+  tools.push({ type: 'web_search_20250305', name: 'web_search', max_uses: 8 });
+  tools.push({ type: 'web_fetch_20250910', name: 'web_fetch', max_uses: 5, max_content_tokens: 8000 });
 
   const files = deps.loadFiles();
   let wrote = false;
@@ -133,8 +144,13 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       deps.broadcast({ type: 'agent-heartbeat', role: 'Architect' });
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
-        headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 4096, system: systemPrompt, tools, messages }),
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-beta': 'web-fetch-2025-09-10', // enables the web_fetch server tool
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 8192, system: systemPrompt, tools, messages }),
       });
       if (!res.ok) {
         const safe = res.status === 401 ? 'API key invalid' : res.status === 429 ? 'Rate limited' : `AI error (${res.status})`;
@@ -147,6 +163,12 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       messages.push({ role: 'assistant', content: contentArr });
       text = (contentArr as { type: string; text?: string }[]).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('');
 
+      // web_search/web_fetch are SERVER tools: Anthropic runs them and returns
+      // server_tool_use + *_tool_result blocks already resolved (never type
+      // 'tool_use'), so they don't appear here and need no client handling. If a
+      // long search made the model pause, resume by re-invoking with the turn so
+      // far (no client tool_result to add).
+      if (aiRes.stop_reason === 'pause_turn') continue;
       const toolUses = (contentArr as { type: string; id?: string; name?: string; input?: unknown }[]).filter((c) => c.type === 'tool_use');
       if (toolUses.length === 0 || aiRes.stop_reason !== 'tool_use') break;
 

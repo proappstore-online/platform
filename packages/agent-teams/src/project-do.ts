@@ -916,7 +916,7 @@ export class ProjectDO implements DurableObject {
 
     // Set default role configs
     const defaults: RoleConfig[] = [
-      { role: 'Architect', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 16384, spineTools: ['write_file', 'batch_write_files', 'read_file', 'list_files', 'search_files', 'read_docs'], vendorTools: [] },
+      { role: 'Architect', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 16384, spineTools: ['write_file', 'batch_write_files', 'read_file', 'list_files', 'search_files', 'read_docs'], vendorTools: ['web_search', 'web_fetch'] },
       { role: 'BA', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 8192, spineTools: ['read_file', 'list_files', 'search_files', 'read_docs'], vendorTools: [] },
       { role: 'Dev', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 16384, spineTools: ['write_file', 'read_file', 'list_files', 'batch_write_files', 'search_files', 'read_docs'], vendorTools: [] },
       { role: 'QA', runtime: 'cf-native', model: 'claude-sonnet-4-6', maxTokens: 16384, spineTools: ['write_file', 'read_file', 'list_files', 'search_files', 'read_docs'], vendorTools: [] },
