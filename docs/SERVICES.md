@@ -265,30 +265,41 @@ Developer sends message →
 - **My engagements:** active clients, chat, workspace link
 - **Earnings:** per-engagement breakdown, pending payouts
 
-## Build sequence
+## Build sequence — status
 
-### Phase 1: Profiles + Balance (foundation)
-1. D1 migrations: `dev_profiles`, `client_balances`, `balance_transactions`
-2. API: dev profile CRUD, balance deposit (Stripe checkout), balance read
-3. Console: dev profile editor, client balance + top-up
-4. Storefront: developer directory with rates + quality scores
+### Phase 1: Profiles + Balance — DONE
+1. [x] D1 migrations: `dev_profiles`, `client_balances`, `balance_transactions`
+2. [x] API: dev profile CRUD, balance deposit (Stripe checkout), balance read
+3. [x] Console: dev profile editor, client balance + top-up
+4. [x] Storefront: developer directory with rates + quality scores (`/services`)
+5. [x] Auto-seed dev profiles on app publish
 
-### Phase 2: Engagements + Chat (the product)
-5. D1 migrations: `build_requests`, `engagements`, `service_messages`, `engagement_ratings`
-6. API: build requests CRUD, engagements CRUD, service chat with per-prompt billing
-7. Console: engagement view, service chat (both dev and client), progress view
-8. Balance enforcement: reject dev messages when client balance = 0
+### Phase 2: Engagements + Chat — DONE
+6. [x] D1 migrations: `build_requests`, `engagements`, `service_messages`, `engagement_ratings`
+7. [x] API: build requests CRUD, engagements CRUD, service chat with per-prompt billing
+8. [x] Console: engagement view with chat, build requests board, direct hire
+9. [x] Balance enforcement: conditional UPDATE prevents overdraft, rate limit (10/min)
+10. [x] Security: UNIQUE index prevents deposit double-credit, XSS escaped on storefront
 
-### Phase 3: Quality + Trust (the moat)
-9. Quality score cron (LLM judge on dev messages)
-10. Client ratings → avg_rating on dev profile
-11. Avg prompt length + response time computation
-12. Trust badges: verified, top-rated
+### Phase 3: Quality + Trust — DONE
+11. [x] Client ratings: star rating UI + backend, avg_rating computed on dev profile
+12. [x] Trust badges: verified-developer (5+ jobs), top-rated (4.5+, 3+ reviews), expert (20+)
+13. [x] Stats recomputation endpoint (POST /services/recompute-stats)
+14. [ ] Quality score cron (LLM judge on dev messages) — endpoint ready, cron not wired
+15. [ ] Avg prompt length + response time — endpoint ready, cron not wired
 
-### Phase 4: Discovery (growth)
-13. Build request board (public or auth-gated)
-14. Developer search + filters (rate range, quality, availability, specialty)
-15. Engagement notifications (email/push)
+### Phase 4: Discovery — DONE
+16. [x] Build request board (public browse)
+17. [x] Developer search + filters (q, minRate, maxRate, minRating, sort)
+18. [x] Email notifications (new engagement, new message, request accepted)
+19. [x] Earnings dashboard (per-engagement breakdown, Stripe Connect status)
+20. [x] My Requests view (client sees own requests with status)
+
+### Remaining
+- [ ] Quality score cron job (scheduled Worker that calls /services/recompute-stats + LLM judge)
+- [ ] Dev payout cron (transfer total_dev_earned_cents to Stripe Connect at month end)
+- [ ] Wire engagement to agent-teams project (needs service binding or API call)
+- [ ] Push notifications for new messages (WebPush via existing infrastructure)
 
 ## What this doesn't change
 
