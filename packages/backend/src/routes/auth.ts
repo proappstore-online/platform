@@ -13,11 +13,15 @@
  */
 
 import { Hono } from 'hono';
+import { setCookie, getCookie, deleteCookie } from 'hono/cookie';
 import { mintSession, verifySession, type NewSession } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { HttpError } from '../lib/auth.js';
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
+
+/** Cookie that binds the OAuth `state` to the initiating browser (CSRF guard). */
+const STATE_COOKIE = 'pas_oauth_state';
 
 type Provider = 'github' | 'google';
 const PROVIDERS = new Set<Provider>(['github', 'google']);
@@ -62,6 +66,9 @@ authRoutes.get('/auth/:provider/start', (c) => {
 
   const state = btoa(JSON.stringify({ r: returnTo, n: crypto.randomUUID() }))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  // Bind the state to this browser so the callback can reject forged/replayed
+  // states (login CSRF). SameSite=Lax survives the top-level OAuth redirect back.
+  setCookie(c, STATE_COOKIE, state, { httpOnly: true, secure: true, sameSite: 'Lax', path: '/v1/auth', maxAge: 600 });
   const redirectUri = callbackUrl(c.env, provider);
 
   const authorize = new URL(
@@ -87,6 +94,11 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
   const code = c.req.query('code');
   const stateRaw = c.req.query('state') || '';
   if (!code) return c.text('missing code', 400);
+
+  // CSRF: the state must match the cookie we set at /start (same browser).
+  const cookieState = getCookie(c, STATE_COOKIE);
+  deleteCookie(c, STATE_COOKIE, { path: '/v1/auth' });
+  if (!cookieState || cookieState !== stateRaw) return c.text('invalid state', 400);
 
   let returnTo = '';
   try {

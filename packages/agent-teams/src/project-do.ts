@@ -249,6 +249,11 @@ export class ProjectDO implements DurableObject {
       .exec('SELECT * FROM project LIMIT 1')
       .toArray()[0] as Record<string, unknown> | undefined;
     if (!row) return json({ error: 'project_not_initialized' }, 404);
+    // Spend is stored against cost_month and only reset on the first spend of a
+    // new month (storeMessage). Report 0 for a stale month so the UI/budget bar
+    // doesn't show last month's total — matching the auto-pause gate in autoAdvance.
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const spent = row.cost_month === currentMonth ? (row.cost_spent_monthly_usd as number) : 0;
     return json({
       id: row.id,
       ownerId: row.owner_id,
@@ -256,7 +261,7 @@ export class ProjectDO implements DurableObject {
       slug: row.slug,
       createdAt: row.created_at,
       costCapMonthlyUsd: row.cost_cap_monthly_usd,
-      costSpentMonthlyUsd: row.cost_spent_monthly_usd,
+      costSpentMonthlyUsd: spent,
       repoUrl: row.repo_url,
       status: row.status ?? 'paused',
     });

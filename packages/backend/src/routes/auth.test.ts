@@ -82,15 +82,39 @@ describe('auth callback — state decoding (base64url padding regression)', () =
     // return_to lengths chosen so the state's base64url length hits each n%4 case.
     for (const path of ['/', '/a', '/ab', '/abc']) {
       const state = b64url(JSON.stringify({ r: `https://console.proappstore.online${path}`, n: 'fixed-nonce' }));
-      const res = await app.request(`/v1/auth/github/callback?code=x&state=${state}`, {}, env());
+      const res = await app.request(
+        `/v1/auth/github/callback?code=x&state=${state}`,
+        { headers: { Cookie: `pas_oauth_state=${state}` } }, // CSRF cookie matches
+        env(),
+      );
       expect(res.status, `path ${path} (state len ${state.length})`).not.toBe(400);
       expect(res.status).toBe(401);
     }
   });
 
-  it('400s when state carries a disallowed return_to', async () => {
-    const state = b64url(JSON.stringify({ r: 'https://evil.com', n: 'x' }));
+  it('400s on a state/cookie mismatch (login CSRF guard)', async () => {
+    const state = b64url(JSON.stringify({ r: 'https://console.proappstore.online/', n: 'a' }));
+    const res = await app.request(
+      `/v1/auth/github/callback?code=x&state=${state}`,
+      { headers: { Cookie: `pas_oauth_state=DIFFERENT` } },
+      env(),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('400s when no state cookie is present', async () => {
+    const state = b64url(JSON.stringify({ r: 'https://console.proappstore.online/', n: 'a' }));
     const res = await app.request(`/v1/auth/github/callback?code=x&state=${state}`, {}, env());
+    expect(res.status).toBe(400);
+  });
+
+  it('400s when state carries a disallowed return_to (even with a matching cookie)', async () => {
+    const state = b64url(JSON.stringify({ r: 'https://evil.com', n: 'x' }));
+    const res = await app.request(
+      `/v1/auth/github/callback?code=x&state=${state}`,
+      { headers: { Cookie: `pas_oauth_state=${state}` } },
+      env(),
+    );
     expect(res.status).toBe(400);
   });
 });
