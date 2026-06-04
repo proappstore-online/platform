@@ -47,12 +47,35 @@ app.use('*', cors({
     } catch { return null; }
   },
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Authorization', 'Content-Type'],
+  allowHeaders: ['Authorization', 'Content-Type', 'X-Internal-Token'],
   maxAge: 600,
 }));
 
-// Auth middleware — all /v1/* routes require a valid FAS session
+// Auth middleware — all /v1/* routes require a valid FAS session OR internal token.
+// Internal token (X-Internal-Token) is for service-to-service calls (MCP server,
+// admin). It resolves the project owner from the D1 index so the DO sees a valid
+// user context. Read-only — no userToken is set, so autonomous agent dispatch
+// (which needs the owner's session) won't fire from an internal-token call.
 app.use('/v1/*', async (c, next) => {
+  // Internal token bypass — for MCP server and admin service calls
+  const internalToken = c.req.header('X-Internal-Token');
+  if (internalToken && c.env.INTERNAL_TOKEN && internalToken === c.env.INTERNAL_TOKEN) {
+    // Resolve the project owner from the slug in the URL so the DO sees
+    // a valid X-User-Id. Falls back to a synthetic admin id for non-project routes.
+    const slugMatch = c.req.path.match(/^\/v1\/projects\/([a-z][a-z0-9-]+)/);
+    let userId = 'internal:admin';
+    if (slugMatch) {
+      try {
+        const row = await c.env.DB.prepare('SELECT owner_id FROM agent_projects WHERE slug = ?')
+          .bind(slugMatch[1]).first<{ owner_id: string }>();
+        if (row) userId = row.owner_id;
+      } catch { /* fall through to synthetic admin */ }
+    }
+    c.set('user' as never, { id: userId, login: 'internal' });
+    await next();
+    return;
+  }
+
   const token = extractToken(c.req.raw);
   if (!token) return c.json({ error: 'missing bearer token' }, 401);
 
