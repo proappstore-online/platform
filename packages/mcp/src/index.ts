@@ -6,6 +6,8 @@ import { registerPlatformTools } from "./platform-tools.js";
 import { fetchTools, registerAppTools } from "./tool-loader.js";
 import { registerProjectTools } from "./project-tools.js";
 import { registerLoopTools } from "./loop-tools.js";
+import { registerAgentsTools } from "./agents-tools.js";
+import { handleOAuthRoute, resolveOAuthToken } from "./oauth-provider.js";
 
 export class PasMcpAgent extends McpAgent<Env> {
   server = new McpServer({
@@ -46,6 +48,14 @@ export class PasMcpAgent extends McpAgent<Env> {
     //    tickets, agents, play/pause) — drive the whole build over MCP ─
     registerLoopTools(this.server, this.env);
 
+    // ── Agent-team introspection tools ──────────────────────────
+    registerAgentsTools(
+      this.server,
+      () => ({ userId: this.userId, token: this.userToken }),
+      this.env.INTERNAL_TOKEN ?? null,
+      this.env.AGENTS_BASE,
+    );
+
     // ── Load and register app tools dynamically ────────────────
     const appTools = await fetchTools(this.env.API_BASE);
     const registered = registerAppTools(
@@ -61,21 +71,34 @@ export class PasMcpAgent extends McpAgent<Env> {
 }
 
 export default {
-  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
+
+    // OAuth 2.1 routes (discovery, registration, authorize, token)
+    if (env.OAUTH_KV && env.SESSION_SIGNING_KEY) {
+      const oauthRes = await handleOAuthRoute(request, {
+        issuer: `${url.protocol}//${url.host}`,
+        fasAuthStart: env.FAS_AUTH_START ?? `${env.API_BASE.replace('proappstore', 'freeappstore')}/v1/auth/github/start`,
+        kv: env.OAUTH_KV,
+        sessionSigningKey: env.SESSION_SIGNING_KEY,
+      });
+      if (oauthRes) return oauthRes;
+    }
 
     if (url.pathname === "/" || url.pathname === "") {
       return new Response(
-        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools\nProject tools: scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\n",
+        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools\nProject tools: scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running\nAgent introspection: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\n",
         { headers: { "content-type": "text/plain" } }
       );
     }
 
-    // Lift the request's bearer token into ctx.props so connection-authed tools
-    // (write_file etc.) can see the user. serve() persists props into the DO and
-    // replays them into the agent's `this.props` (read by extractToken in init()).
+    // Resolve OAuth token → FAS session, then lift into ctx.props
     const auth = request.headers.get("Authorization");
-    const bearer = auth?.replace(/^Bearer\s+/i, "");
+    let bearer = auth?.replace(/^Bearer\s+/i, "");
+    if (bearer && env.OAUTH_KV) {
+      const fasSession = await resolveOAuthToken(bearer, env.OAUTH_KV);
+      if (fasSession) bearer = fasSession;
+    }
     if (bearer) {
       (ctx as unknown as { props?: Record<string, unknown> }).props = {
         ...((ctx as unknown as { props?: Record<string, unknown> }).props ?? {}),

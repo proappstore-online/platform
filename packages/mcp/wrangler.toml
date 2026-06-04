@@ -7,14 +7,20 @@ compatibility_flags = ["nodejs_compat"]
 API_BASE = "https://api.proappstore.online"
 AGENTS_BASE = "https://agents.proappstore.online"
 GITHUB_ORG = "proappstore-online"
+FAS_AUTH_START = "https://api.freeappstore.online/v1/auth/github/start"
 
 # Secrets set via `wrangler secret put`:
 #   SESSION_SIGNING_KEY
 #   GITHUB_TOKEN (org-level PAT for repo operations)
+#   INTERNAL_TOKEN (service-to-service auth for agents Worker)
 
 [[routes]]
 pattern = "mcp.proappstore.online/*"
 zone_name = "proappstore.online"
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "125418919bd640dcb3c45a7687b27162"
 
 [durable_objects]
 bindings = [
