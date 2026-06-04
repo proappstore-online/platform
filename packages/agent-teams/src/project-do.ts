@@ -39,7 +39,7 @@ import {
 } from './store.ts';
 import { runDeployStage } from './deploy-stage.ts';
 import { handlePOChat } from './po-chat.ts';
-import { handleArchitectChat } from './architect-chat.ts';
+import { handleArchitectChat, RESEARCH_THREAD } from './architect-chat.ts';
 import { runAgentTurn } from './agent-runner.ts';
 import { validateRoleConfig } from './role-config.ts';
 import { buildAgentCatalog } from './agents-catalog.ts';
@@ -62,6 +62,9 @@ export class ProjectDO implements DurableObject {
   private initialized = false;
   /** Ticket IDs with an agent run in flight — prevents double-dispatch. */
   private running = new Set<string>();
+  /** True while a chat-driven Knowledge Base build is in flight (the Architect is
+   *  writing in the Research thread). Prevents overlapping "Build KB" runs. */
+  private architectChatBusy = false;
   /** Recent chat timestamps for the per-project throttle (in-memory). */
   private chatWindow: number[] = [];
   /** Cached official docs (skills.md), TTL'd, so read_docs doesn't refetch each call. */
@@ -407,33 +410,18 @@ export class ProjectDO implements DurableObject {
       return;
     }
 
-    // Research lane (non-blocking): route any inbox research ticket to the
-    // Architect immediately — independent of the build concurrency cap and the
-    // needs-input halt, so the KB is built alongside (not gated by) the build loop.
-    const researchInbox = this.state.storage.sql
-      .exec("SELECT id FROM tickets WHERE status = 'inbox' AND kind = 'research'")
-      .toArray() as { id: string }[];
-    for (const t of researchInbox) {
-      this.state.storage.sql.exec(
-        "UPDATE tickets SET status = 'architect-active', assignee_role = 'Architect', updated_at = ? WHERE id = ?",
-        now, t.id,
-      );
-      this.broadcast({ type: 'transition', ticketId: t.id, from: 'inbox', to: 'architect-active', auto: true });
-    }
-
     // Check if any tickets need user input — don't start new work until user responds
     const needsInput = this.state.storage.sql
       .exec("SELECT COUNT(*) as c FROM tickets WHERE status = 'needs-input'")
       .toArray()[0] as { c: number };
     if (needsInput.c > 0) {
-      // Agents are waiting for user — don't advance anything else (the research
-      // lane above already ran, so the KB still progresses).
+      // Agents are waiting for user — don't advance anything else.
       this.runPendingAgents();
       return;
     }
 
     const tickets = this.state.storage.sql
-      .exec("SELECT id, status, iterations FROM tickets WHERE status NOT IN ('done','failed','cancelled','needs-input','architect-active','ba-refining','dev-active','qa-active') ORDER BY created_at")
+      .exec("SELECT id, status, iterations FROM tickets WHERE status NOT IN ('done','failed','cancelled','needs-input','ba-refining','dev-active','qa-active') ORDER BY created_at")
       .toArray() as { id: string; status: string; iterations: number }[];
 
     for (const t of tickets) {
@@ -510,7 +498,7 @@ export class ProjectDO implements DurableObject {
     if (!proj || proj.status !== 'running') return;
 
     const active = this.state.storage.sql
-      .exec("SELECT id FROM tickets WHERE status IN ('architect-active','ba-refining','dev-active','qa-active') ORDER BY updated_at")
+      .exec("SELECT id FROM tickets WHERE status IN ('ba-refining','dev-active','qa-active') ORDER BY updated_at")
       .toArray() as { id: string }[];
 
     for (const t of active) {
@@ -780,19 +768,6 @@ export class ProjectDO implements DurableObject {
   /** Transition a ticket forward after a successful agent run. */
   private applyAgentOutcome(ticketId: string, role: Role, output: string): void {
     const now = Date.now();
-    if (role === 'Architect') {
-      // Research ticket: the KB was written to the working tree (KNOWLEDGE.md +
-      // docs/). Mark done — no deploy stage (docs aren't a build; they ride along
-      // on the next app deploy). It rode its own lane the whole way.
-      this.state.storage.sql.exec(
-        "UPDATE tickets SET status = 'done', assignee_role = NULL, updated_at = ? WHERE id = ?",
-        now, ticketId,
-      );
-      this.broadcast({ type: 'transition', ticketId, from: 'architect-active', to: 'done', trigger: 'Architect' });
-      this.logActivity('transition', 'Architect finished the Knowledge Base → done', ticketId);
-      void this.publishKb(); // publish the shareable KB site (non-blocking)
-      return;
-    }
     if (role === 'BA') {
       // BA can block on the founder when a buildable spec needs a product/scope
       // decision — park in needs-input with the questions instead of loosing Dev
@@ -947,54 +922,37 @@ export class ProjectDO implements DurableObject {
    * exists (KB is built once; later changes go through memory/tickets).
    */
   private buildKnowledgeBase(): Response {
-    const now = Date.now();
-    const existing = this.state.storage.sql
-      .exec("SELECT id, status FROM tickets WHERE kind = 'research' LIMIT 1")
-      .toArray()[0] as { id: string; status: string } | undefined;
-    if (existing) {
-      // Already written, or a run is genuinely in flight → nothing to do.
-      if (existing.status === 'done' || this.running.has(existing.id)) {
-        return json({ ok: false, error: 'Knowledge Base already built (or in progress).' }, 409);
-      }
-      // Otherwise it's STUCK — created but never dispatched (e.g. seeded while the
-      // project was paused by older code), or its run died. Recover it: (re)route
-      // to the Architect and dispatch now, regardless of play-state. This is why
-      // "Build KB" was a no-op on projects with an old stuck research ticket.
-      this.state.storage.sql.exec(
-        "UPDATE tickets SET status = 'architect-active', assignee_role = 'Architect', updated_at = ? WHERE id = ?",
-        now, existing.id,
-      );
-      this.broadcast({ type: 'transition', ticketId: existing.id, from: existing.status, to: 'architect-active', auto: true });
-      this.logActivity('control', 'Re-dispatched the Knowledge Base build (was stuck)', null);
-      this.dispatchRun(existing.id);
-      return json({ ok: true, ticketId: existing.id, redispatched: true });
+    if (this.architectChatBusy) {
+      return json({ ok: false, error: 'The Architect is already writing the Knowledge Base.' }, 409);
     }
-
+    const hasKb = [...this.loadFiles().keys()].some(
+      (p) => p === 'KNOWLEDGE.md' || /^docs\/.+\.(md|markdown)$/i.test(p),
+    );
     const proj = this.state.storage.sql
       .exec('SELECT app_idea FROM project LIMIT 1')
       .toArray()[0] as { app_idea: string | null } | undefined;
-    const idea = proj?.app_idea?.trim() || 'See the project memory + chat for what this app is.';
-    const id = uuid();
-    // Seed the research ticket STRAIGHT into architect-active and dispatch it now.
-    // The research lane is founder-triggered and runs independent of the build
-    // loop, so "Build KB" must start the Architect even when the project is paused
-    // (e.g. idle auto-pause) — autoAdvance/runPendingAgents both bail when the
-    // project isn't 'running', which previously left the ticket stuck in inbox
-    // with nothing happening. dispatchRun is not play-gated; its post-run
-    // autoAdvance is, so the (paused) build loop stays paused.
-    this.state.storage.sql.exec(
-      `INSERT INTO tickets (id, seq, title, raw_idea, status, kind, assignee_role, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'architect-active', 'research', 'Architect', ?, ?)`,
-      id, this.nextSeq(),
-      'Research & write the project Knowledge Base',
-      `Research this app and write KNOWLEDGE.md + docs/ as the team's source of truth (read project memory for any decisions made while brainstorming). App idea:\n${idea}`,
-      now, now,
-    );
-    this.broadcast({ type: 'ticket-created', ticket: { id, seq: 0, title: 'Research & write the project Knowledge Base', status: 'architect-active', rawIdea: idea, assigneeRole: 'Architect', iterations: 0, costSpentUsd: 0, createdAt: now, updatedAt: now, stuckReason: null, kind: 'research' } });
-    this.broadcast({ type: 'transition', ticketId: id, from: 'inbox', to: 'architect-active', auto: true });
-    this.dispatchRun(id);
-    return json({ ok: true, ticketId: id });
+    const idea = proj?.app_idea?.trim();
+    const message = hasKb
+      ? 'Re-research this app and refresh the Knowledge Base (KNOWLEDGE.md + docs/) — update anything stale and keep every SDK fact correct.'
+      : `Research this app and write its Knowledge Base — KNOWLEDGE.md plus docs/ — as the team's source of truth.${idea ? ` The app idea: ${idea}` : ''}`;
+
+    // Drive the Architect on the Research thread (same engine as the chat). It
+    // writes KNOWLEDGE.md + docs/ and publishes the site itself. Fire-and-forget:
+    // its progress streams over the WS; the busy flag blocks overlapping builds.
+    const chatReq = new Request('https://do/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ thread: RESEARCH_THREAD, message }),
+    });
+    this.architectChatBusy = true;
+    void this.handleChat(chatReq)
+      .catch((e) => {
+        try { this.logActivity('error', `KB build crashed: ${e instanceof Error ? e.message : String(e)}`, null); } catch { /* noop */ }
+      })
+      .finally(() => { this.architectChatBusy = false; this.touchUserActivity(); });
+    return json({ ok: true, started: true });
   }
+
 
   // ── Role configs ──────────────────────────────────────────
 

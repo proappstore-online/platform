@@ -108,6 +108,10 @@ export const MIGRATIONS: string[][] = [
   // SELECT then threw "no such column: last_user_activity" and 500'd every
   // agent/chat run. Now a real migration so the column always exists.
   [`ALTER TABLE project ADD COLUMN last_user_activity INTEGER DEFAULT 0`],
+  // The Knowledge Base is no longer a ticket — it's authored in the Research-tab
+  // conversation. Remove any legacy 'research' tickets so they vanish from the
+  // Kanban (the board is build work only now).
+  [`DELETE FROM tickets WHERE kind = 'research'`],
 ];
 
 export function uuid(): string {

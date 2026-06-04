@@ -86,7 +86,10 @@ export function buildAgentCatalog(
       identitySource: personaIsCustom ? 'custom' : 'default',
       systemPrompt: override ?? buildDefaultPrompt(role),
       systemPromptSource: override ? 'custom' : 'default',
-      tools: rc?.spineTools ?? [],
+      // Surface both the in-process spine tools and any vendor-native server
+      // tools (e.g. the Architect's web_search / web_fetch) so the catalog/UI
+      // shows the role's full capability set.
+      tools: [...(rc?.spineTools ?? []), ...(rc?.vendorTools ?? [])],
       model: rc?.model ?? 'claude-sonnet-4-6',
       runtime: rc?.runtime ?? 'cf-native',
       maxTokens: rc?.maxTokens,

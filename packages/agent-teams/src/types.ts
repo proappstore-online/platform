@@ -43,7 +43,6 @@ export type RoleConfig = {
 
 export type TicketStatus =
   | 'inbox'             // PO created, BA not started
-  | 'architect-active'  // Architect researching + writing the project Knowledge Base
   | 'ba-refining'       // BA agent active
   | 'awaiting-approval' // BA done, PO must approve spec
   | 'ready'             // approved, waiting for Dev to pick up
@@ -64,7 +63,7 @@ export type Ticket = {
   rawIdea: string             // [v1] PO's free-text idea
   spec: BaSpec | null         // [v1] populated by BA, approved by PO
   status: TicketStatus        // [v1]
-  kind: 'build' | 'research'  // 'research' = Architect builds the KB (own lane, non-blocking)
+  kind: 'build' | 'research'  // always 'build' now; the KB is a conversation, not a ticket. 'research' kept only for safe deserialize of pre-migration rows.
   assigneeRole: Role | null   // [v1]
   iterations: number          // [v1] QA→Dev loop count; capped at 5
   createdAt: number           // [v1]

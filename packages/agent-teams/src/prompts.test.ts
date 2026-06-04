@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSeedMessages, buildPOSystemPrompt } from './prompts.ts';
+import { buildSeedMessages, buildPOSystemPrompt, buildArchitectChatSystemPrompt } from './prompts.ts';
 import type { Ticket } from './types.ts';
 
 function ticket(overrides: Partial<Ticket> = {}): Ticket {
@@ -86,5 +86,28 @@ describe('buildPOSystemPrompt', () => {
     expect(p).toContain('ASK them what they\'re building');
     expect(p).toContain('Current app files (1)');
     expect(p).toContain('src/App.tsx');
+  });
+});
+
+describe('buildArchitectChatSystemPrompt', () => {
+  const ctx = { appName: 'Tasker', slug: 'tasker', appIdea: 'a todo app', memoryBlock: '', fileList: [] as string[] };
+
+  it('tells the Architect it has live web access (web_search + web_fetch)', () => {
+    const p = buildArchitectChatSystemPrompt(ctx);
+    expect(p).toContain('LIVE WEB ACCESS');
+    expect(p).toContain('web_search');
+    expect(p).toContain('web_fetch');
+  });
+
+  it('requires actually searching the web for market/competitor work (no recall from memory)', () => {
+    const p = buildArchitectChatSystemPrompt(ctx);
+    expect(p).toMatch(/market research|competitor|find the gap/i);
+    expect(p).toMatch(/never answer from memory|MUST actually search/i);
+  });
+
+  it('owns the Knowledge Base only — not tickets or building', () => {
+    const p = buildArchitectChatSystemPrompt(ctx);
+    expect(p).toContain('KNOWLEDGE.md');
+    expect(p).toMatch(/do NOT create build tickets/i);
   });
 });

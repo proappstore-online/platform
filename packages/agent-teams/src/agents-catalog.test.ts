@@ -64,6 +64,17 @@ describe('buildAgentCatalog', () => {
     expect(cat.find((a) => a.id === 'PO')!.tools).toContain('create_ticket');
   });
 
+  it('surfaces vendor-native tools (e.g. the Architect web research) alongside spine tools', () => {
+    const cat = buildAgentCatalog([
+      ...defaults.filter((d) => d.role !== 'Architect'),
+      rc({ role: 'Architect', spineTools: ['write_file', 'read_docs'], vendorTools: ['web_search', 'web_fetch'] }),
+    ]);
+    const tools = cat.find((a) => a.id === 'Architect')!.tools;
+    expect(tools).toContain('web_search');
+    expect(tools).toContain('web_fetch');
+    expect(tools).toContain('write_file');
+  });
+
   it('PO defaults to PO_PERSONA and is templated; honors an override', () => {
     const cat = buildAgentCatalog(defaults);
     const po = cat.find((a) => a.id === 'PO')!;

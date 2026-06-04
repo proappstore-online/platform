@@ -185,16 +185,20 @@ describe('qaVerdict', () => {
     expect(qaVerdict('Looks good to me, shipping.')).toBe('done'));
 });
 
-describe('research / Architect lane', () => {
-  it('routes inbox → architect-active and architect-active → done', () => {
-    expect(canTransition('inbox', 'architect-active', 'Architect')).toBe(true);
-    expect(canTransition('architect-active', 'done', 'Architect')).toBe(true);
+describe('the Knowledge Base is NOT a ticket lane', () => {
+  // The KB is authored in the Research-tab conversation (architect-chat.ts), not
+  // on the Kanban. So the board must have no Architect lane: inbox routes straight
+  // to the BA, and no status is ever assigned to the Architect.
+  it('inbox routes to the BA, never to an Architect ticket', () => {
+    expect(canTransition('inbox', 'ba-refining', 'BA')).toBe(true);
+    expect(validNextStates('inbox', 'BA')).toEqual(['ba-refining']);
   });
-  it('architect-active is assigned to the Architect', () =>
-    expect(assigneeForStatus('architect-active')).toBe('Architect'));
-  it('a research block + system-fail are valid', () => {
-    expect(canTransition('architect-active', 'needs-input', 'Architect')).toBe(true);
-    expect(canTransition('architect-active', 'failed', 'system')).toBe(true);
+  it('no ticket status is assigned to the Architect', () => {
+    const statuses = [
+      'inbox', 'ba-refining', 'awaiting-approval', 'ready', 'dev-active',
+      'qa-active', 'qa-failed', 'deploying', 'needs-input', 'done', 'failed', 'cancelled',
+    ] as const;
+    for (const s of statuses) expect(assigneeForStatus(s)).not.toBe('Architect');
   });
 });
 

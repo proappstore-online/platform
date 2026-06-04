@@ -11,13 +11,9 @@ interface Transition {
 }
 
 const TRANSITIONS: Transition[] = [
-  // Research ticket: PO/init creates it → Architect builds the KB → done. Its own
-  // lane, runs concurrently with the build loop (non-blocking).
-  { from: 'inbox', to: 'architect-active', trigger: 'Architect' },
-  { from: 'architect-active', to: 'done', trigger: 'Architect' },
-  { from: 'architect-active', to: 'needs-input', trigger: 'Architect' },
-  { from: 'architect-active', to: 'failed', trigger: 'system' },
-  { from: 'architect-active', to: 'cancelled', trigger: 'po' },
+  // NOTE: the Knowledge Base is NOT a ticket — it's authored by the Architect in
+  // the Research-tab conversation (see architect-chat.ts), which writes
+  // KNOWLEDGE.md + docs/ and publishes directly. The Kanban is build work only.
   // PO creates ticket → BA picks it up
   { from: 'inbox', to: 'ba-refining', trigger: 'BA' },
   // BA finishes spec → PO reviews
@@ -107,8 +103,6 @@ export function validNextStates(
 /** Which role should pick up a ticket in a given status? */
 export function assigneeForStatus(status: TicketStatus): Role | null {
   switch (status) {
-    case 'architect-active':
-      return 'Architect';
     case 'ba-refining':
       return 'BA';
     case 'dev-active':
