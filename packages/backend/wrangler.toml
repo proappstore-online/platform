@@ -5,6 +5,9 @@ compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
 [vars]
+# Public base URL of this API — used to build OAuth callback URLs (routes/auth.ts).
+APP_BASE = "https://api.proappstore.online"
+# DEPRECATED: removed in the de-FAS cutover — PAS now owns auth (routes/auth.ts).
 FAS_API_BASE = "https://api.freeappstore.online"
 CF_ACCOUNT_ID = "c1089bfcc43c1c6c2aa89e584e86f0bc"
 VAPID_PUBLIC_KEY = "BPg6E92QAOhdcif_HckOEGY6mL03VKWNQ3CS1xQX5q59fXURI1xCGwwBr4Vsv7gn3TXIGSJquJwvHGYRbMcAQc0"
@@ -43,8 +46,12 @@ zone_name = "proappstore.online"
 #   STRIPE_PRO_MONTHLY_PRICE_ID     (the live Stripe price for $9/mo Pro;
 #                                    until set, GET /v1/pricing returns null
 #                                    and the Console hides the Upgrade button)
-#   SESSION_SIGNING_KEY
+#   SESSION_SIGNING_KEY             (signs PAS session JWTs — routes/auth.ts)
 #   VAPID_PRIVATE_KEY               (for Web Push notifications)
+#   GITHUB_CLIENT_ID                (PAS GitHub OAuth app — enables browser sign-in;
+#   GITHUB_CLIENT_SECRET             callback: https://api.proappstore.online/v1/auth/github/callback)
+#   GOOGLE_CLIENT_ID                (shared Google OAuth client — add the same
+#   GOOGLE_CLIENT_SECRET             callback as an authorized redirect URI)
 #   APP_SECRET_KEK                  (32-byte base64 key for envelope encryption
 #                                    of app proxy secrets; without this, proxy/
 #                                    secrets/allowlist endpoints return 503)

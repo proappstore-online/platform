@@ -10,3 +10,5 @@ export {
 } from './cloudflare.js';
 export type { CfConfig, Step } from './cloudflare.js';
 export { internalTokenOk } from './internal-auth.js';
+export { mintSession, verifySession } from './session-jwt.js';
+export type { SessionClaims, NewSession } from './session-jwt.js';

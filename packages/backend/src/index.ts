@@ -26,6 +26,7 @@ import { logsRoutes } from './routes/logs.js';
 import { toolsRoutes } from './routes/tools.js';
 import { secretsRoutes } from './routes/secrets.js';
 import { keysRoutes } from './routes/keys.js';
+import { authRoutes } from './routes/auth.js';
 
 export const app = new Hono<{ Bindings: Env }>();
 
@@ -77,6 +78,7 @@ app.get('/', (c) => c.json({ ok: true, service: 'proappstore-api' }));
 app.get('/health', (c) => c.json({ ok: true }));
 
 const v1 = new Hono<{ Bindings: Env }>();
+v1.route('/', authRoutes);
 v1.route('/', subscriptionRoutes);
 v1.route('/', licenseRoutes);
 v1.route('/', storageRoutes);

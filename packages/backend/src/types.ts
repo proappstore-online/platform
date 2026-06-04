@@ -6,8 +6,20 @@ export interface Env {
   STRIPE_WEBHOOK_SECRET: string;
   /** Stripe price ID for the $9/mo platform subscription. Read by GET /v1/pricing. */
   STRIPE_PRO_MONTHLY_PRICE_ID?: string;
+  /** Signs + verifies PAS session JWTs (build-core/session-jwt). */
   SESSION_SIGNING_KEY: string;
-  /** FAS API for verifying auth tokens (user identity lives on free side). */
+  /** Public base URL of this API, for building OAuth callback URLs. e.g. https://api.proappstore.online */
+  APP_BASE?: string;
+  /** PAS OAuth app credentials — set as secrets to enable browser sign-in. */
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  /**
+   * DEPRECATED — removed in the de-FAS cutover. PAS now mints + verifies its own
+   * session tokens (routes/auth.ts + build-core/session-jwt). Kept only until
+   * requireUser is flipped to local verification.
+   */
   FAS_API_BASE: string;
   /** CF credentials for provisioning (D1, Pages, Workers). */
   CF_API_TOKEN: string;
