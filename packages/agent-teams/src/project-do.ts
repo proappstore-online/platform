@@ -1002,10 +1002,14 @@ export class ProjectDO implements DurableObject {
   private async setRoles(request: Request): Promise<Response> {
     const body = (await request.json()) as { roles: RoleConfig[] };
 
-    for (const rc of body.roles) {
+    // Validate the WHOLE batch first — otherwise an invalid role mid-list would
+    // leave the earlier ones already written (partial update on a 400).
+    for (const rc of body.roles ?? []) {
       const err = validateRoleConfig(rc);
       if (err) return json({ error: err }, 400);
+    }
 
+    for (const rc of body.roles ?? []) {
       this.state.storage.sql.exec(
         `INSERT OR REPLACE INTO role_configs (role, runtime, model, system_prompt_override, spine_tools, vendor_tools, max_tokens, persona)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

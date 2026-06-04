@@ -43,7 +43,7 @@ export class CFNativeRuntime implements AgentRuntime {
     };
   }
 
-  async *run(handle: RuntimeHandle, messages: Message[]): AsyncIterable<StreamEvent> {
+  async *run(handle: RuntimeHandle, messages: Message[], signal?: AbortSignal): AsyncIterable<StreamEvent> {
     const { apiKey, model, maxTokens, systemPrompt, spineTools } = handle.state as {
       apiKey: string;
       model: string;
@@ -110,6 +110,7 @@ export class CFNativeRuntime implements AgentRuntime {
             'Content-Type': 'application/json',
           },
           body: reqBody(anthropicMessages),
+          signal: signal ?? null,
         });
         if (res.ok) break;
         const transient = res.status === 429 || res.status >= 500;

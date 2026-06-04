@@ -13,28 +13,30 @@ export function messagesToAnthropic(messages: Message[]): AnthropicMessage[] {
     const role = msg.author === 'po' || msg.author === 'system' ? 'user' : 'assistant';
     const content: AnthropicContent[] = [{ type: 'text', text: msg.body }];
 
+    // One assistant message holds the text + ALL tool_use blocks; the matching
+    // tool_result blocks then go together in ONE following user message. (The old
+    // code pushed the accumulating `content` once per tool-with-result AND again
+    // below, duplicating tool_use blocks and orphaning tool_results → Anthropic
+    // 400s. Currently history collapses to a single text message so this was
+    // latent, but keep it correct for any future tool-call replay.)
+    const toolResults: AnthropicContent[] = [];
     if (msg.toolCalls) {
       for (const tc of msg.toolCalls) {
         content.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.args });
         if (tc.result) {
-          // Tool results go in the next user message
-          result.push({ role, content });
-          result.push({
-            role: 'user',
-            content: [{
-              type: 'tool_result',
-              tool_use_id: tc.id,
-              content: tc.result.ok
-                ? (typeof tc.result.data === 'string' ? tc.result.data : JSON.stringify(tc.result.data))
-                : (tc.result.errorMessage ?? 'failed'),
-            }],
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: tc.id,
+            content: tc.result.ok
+              ? (typeof tc.result.data === 'string' ? tc.result.data : JSON.stringify(tc.result.data))
+              : (tc.result.errorMessage ?? 'failed'),
           });
-          continue;
         }
       }
     }
 
     result.push({ role, content });
+    if (toolResults.length > 0) result.push({ role: 'user', content: toolResults });
   }
   return result;
 }

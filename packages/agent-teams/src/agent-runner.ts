@@ -123,9 +123,14 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
     // and route the ticket to needs-input. `aborted` stops the loop from
     // mutating shared state (files map, DB) after we've moved on.
     let aborted = false;
+    // Aborts the in-flight model fetch on timeout so the runtime generator
+    // actually stops — otherwise a hung request keeps calling the model (and
+    // billing the BYO key) after the ticket has already moved to needs-input.
+    const ac = new AbortController();
     const toolActivityIds = new Map<string, string>(); // callId → activity row id
     const consume = (async () => {
-      for await (const ev of runtime.run(handle, messages)) {
+     try {
+      for await (const ev of runtime.run(handle, messages, ac.signal)) {
         if (aborted) break;
         switch (ev.type) {
           case 'text-delta':
@@ -167,6 +172,12 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
             break;
         }
       }
+     } catch (e) {
+       // On timeout we abort the model fetch, which makes the generator throw —
+       // that's expected, swallow it. A throw when NOT aborted is a genuine
+       // failure, so re-raise it to the outer try/catch.
+       if (!aborted) throw e;
+     }
     })();
 
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -177,6 +188,7 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
     if (timer) clearTimeout(timer);
     if (outcome === 'timeout') {
       aborted = true; // stop the orphaned loop from further state mutation
+      ac.abort();     // and actually cancel the in-flight model fetch (stop the spend)
       errorMessage = errorMessage ?? `run exceeded ${MAX_RUN_MINUTES} minutes`;
     }
   } catch (err) {

@@ -105,7 +105,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
     };
   }
 
-  async *run(handle: RuntimeHandle, messages: Message[]): AsyncIterable<StreamEvent> {
+  async *run(handle: RuntimeHandle, messages: Message[], signal?: AbortSignal): AsyncIterable<StreamEvent> {
     const s = handle.state as {
       apiKey: string;
       model: string;
@@ -156,6 +156,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
           Authorization: `Bearer ${s.apiKey}`,
         },
         body: JSON.stringify(body),
+        signal: signal ?? null,
       });
 
       if (!res.ok) {

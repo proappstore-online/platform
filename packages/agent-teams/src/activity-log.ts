@@ -58,13 +58,18 @@ export function costSummary(sql: SqlStorage): {
   cap: number; spent: number; byRole: unknown[]; topTickets: unknown[];
 } {
   const proj = sql
-    .exec('SELECT cost_cap_monthly_usd, cost_spent_monthly_usd FROM project LIMIT 1')
-    .toArray()[0] as { cost_cap_monthly_usd: number; cost_spent_monthly_usd: number } | undefined;
+    .exec('SELECT cost_cap_monthly_usd, cost_spent_monthly_usd, cost_month FROM project LIMIT 1')
+    .toArray()[0] as { cost_cap_monthly_usd: number; cost_spent_monthly_usd: number; cost_month: string } | undefined;
+  // Spend is only reset on the first spend of a new month (storeMessage), so a
+  // stale cost_month means "this month's spend is 0" — match getProject/autoAdvance
+  // and don't report last month's total after a rollover.
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const spent = proj && proj.cost_month === currentMonth ? proj.cost_spent_monthly_usd : 0;
   const byRole = sql
     .exec('SELECT role, SUM(cost_usd) as total, SUM(tokens_in) as tokens_in, SUM(tokens_out) as tokens_out FROM cost_ledger GROUP BY role')
     .toArray();
   const topTickets = sql
     .exec('SELECT ticket_id, SUM(cost_usd) as total FROM cost_ledger GROUP BY ticket_id ORDER BY total DESC LIMIT 10')
     .toArray();
-  return { cap: proj?.cost_cap_monthly_usd ?? 0, spent: proj?.cost_spent_monthly_usd ?? 0, byRole, topTickets };
+  return { cap: proj?.cost_cap_monthly_usd ?? 0, spent, byRole, topTickets };
 }

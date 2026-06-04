@@ -172,8 +172,10 @@ export type RuntimeTerminationStats = {
 export interface AgentRuntime {
   prepare(ctx: PrepareContext): Promise<RuntimeHandle>
 
-  // Stream agent output for a single turn given full message history.
-  run(handle: RuntimeHandle, messages: Message[]): AsyncIterable<StreamEvent>
+  // Stream agent output for a single turn given full message history. The
+  // optional signal aborts the in-flight model call on a run timeout, so a hung
+  // request doesn't keep generating (and billing) after the runner has moved on.
+  run(handle: RuntimeHandle, messages: Message[], signal?: AbortSignal): AsyncIterable<StreamEvent>
 
   // Execute a tool the agent requested. Spine tools round-trip here;
   // vendor-native tools may be handled in-runtime per RoleConfig.vendorTools.
