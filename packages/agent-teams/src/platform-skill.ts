@@ -47,8 +47,11 @@ user's keys from the vault — keys never touch client code).
 Pro primitives (read_docs has exact return shapes — check before assuming fields):
 - DB (per-app SQLite/D1): \`app.db.execute(sql, params?)\` → \`{ meta: { changes, duration, last_row_id } }\`
   (snake_case \`last_row_id\`, and NO \`.rows\`); \`app.db.query<T>(sql, params?)\` → \`{ rows: T[]; meta }\`
-  (pass \`<T>\` or rows are \`unknown\`); \`app.db.batch(stmts)\`, \`app.db.migrate(migrations)\`, tenant scoping
+  (pass \`<T>\` or rows are \`unknown\`); \`app.db.batch(stmts)\`, tenant scoping
   \`app.db.tenant(id).insert(table, row)\` / \`.findMany(table)\`.
+  - \`app.db.migrate(migrations)\` — \`migrations\` is \`{ name: string; sql: string }[]\` (the ONLY two
+    fields — there is NO \`id\`/\`version\`/\`up\`/\`down\`). Each runs once, in array order; idempotent.
+    Example: \`await app.db.migrate([{ name: '0001_init', sql: 'CREATE TABLE events (id TEXT PRIMARY KEY, title TEXT)' }, { name: '0002_photos', sql: 'ALTER TABLE events ADD COLUMN photo_url TEXT' }])\`.
 - Storage (R2): \`app.storage.upload(path, data, contentType?)\`, \`app.storage.download(path)\`.
 - Server AI: \`app.ai.generate(prompt, opts?)\`, \`app.ai.chat(messages, opts?)\`, \`app.ai.embed(text, opts?)\`.
 - Subscriptions/payments: \`app.subscription.status()\`, \`openCheckout(req)\`, \`openPortal(url)\`; \`app.license.current()\`, \`validate(key)\`.
