@@ -98,6 +98,19 @@ export async function provisionData(
         .bind(appId, creatorId, dbId, Date.now())
         .run();
       steps.push({ name: 'record_app', status: 'ok', detail: `creator: ${creatorLabel ?? creatorId}` });
+
+      // Auto-create a dev services profile for the creator (no-op if exists)
+      try {
+        const now = Date.now();
+        await db
+          .prepare(
+            `INSERT INTO dev_profiles (creator_id, prompt_rate_cents, available, completed_engagements, rating_count, created_at, updated_at)
+             VALUES (?, 100, 1, 0, 0, ?, ?)
+             ON CONFLICT(creator_id) DO NOTHING`,
+          )
+          .bind(creatorId, now, now)
+          .run();
+      } catch { /* non-fatal — profile creation is best-effort */ }
     } catch (e) {
       steps.push({ name: 'record_app', status: 'fail', detail: String(e) });
     }

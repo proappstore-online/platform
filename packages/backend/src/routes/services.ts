@@ -59,18 +59,20 @@ function profileDto(row: DevProfileRow, extra?: { login?: string | undefined; av
 // Public: list available developers
 servicesRoutes.get('/services/developers', async (c) => {
   const rows = await c.env.DB.prepare(
-    `SELECT d.*, u.login, u.avatar_url
+    `SELECT d.*, u.login, u.avatar_url,
+       (SELECT COUNT(*) FROM apps WHERE creator_id = d.creator_id) AS app_count
      FROM dev_profiles d
      LEFT JOIN users u ON u.id = d.creator_id
      WHERE d.available = 1
      ORDER BY d.quality_score DESC NULLS LAST, d.completed_engagements DESC
      LIMIT 50`,
-  ).all<DevProfileRow & { login: string | null; avatar_url: string | null }>();
+  ).all<DevProfileRow & { login: string | null; avatar_url: string | null; app_count: number }>();
 
   return c.json({
-    developers: (rows.results ?? []).map((r) =>
-      profileDto(r, { login: r.login ?? undefined, avatarUrl: r.avatar_url ?? undefined }),
-    ),
+    developers: (rows.results ?? []).map((r) => ({
+      ...profileDto(r, { login: r.login ?? undefined, avatarUrl: r.avatar_url ?? undefined }),
+      appCount: r.app_count,
+    })),
   });
 });
 
