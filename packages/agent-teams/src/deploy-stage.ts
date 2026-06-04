@@ -133,6 +133,12 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
     //    so agent-built apps have a working `app.data` like CLI-published ones.
     //    Best-effort: never fails the (already-green) frontend deploy.
     await ensureDataInfra(deps, proj, ticketId);
+
+    // 5) Register the app's MCP tools from its mcp.json (if any), so the app is
+    //    callable from the platform MCP server the same way `pas publish` makes
+    //    CLI apps callable. Runs after the data plane exists (tools query its
+    //    D1). Best-effort — never fails the green deploy.
+    await registerMcpTools(deps, proj, ticketId, files);
   } catch (e) {
     fail(`Deploy error: ${e instanceof Error ? e.message : 'unknown'}`);
   }
@@ -169,5 +175,52 @@ async function ensureDataInfra(
     }
   } catch (e) {
     deps.logActivity('deploy', `Data layer provisioning error (will retry next deploy): ${e instanceof Error ? e.message : 'unknown'}`, ticketId);
+  }
+}
+
+/**
+ * Register the app's MCP tool manifest (`mcp.json` at the repo root) with the
+ * platform backend so the app's tools show up on the platform MCP server
+ * (`mcp.proappstore.online/mcp`) as `<app>/<tool>`. This is what makes an
+ * agent-built app callable by an external Claude — the same registration the
+ * CLI's `pas publish` does. Re-runs every green deploy (cheap DELETE+INSERT) so
+ * the registered tools stay in sync with the shipped manifest. No-op (and no
+ * network call) when the app ships no `mcp.json`. Best-effort.
+ */
+async function registerMcpTools(
+  deps: DeployDeps,
+  proj: { slug: string },
+  ticketId: string,
+  files: Map<string, string>,
+): Promise<void> {
+  const { env } = deps;
+  const raw = files.get('mcp.json');
+  if (!raw) return; // app declares no tools — nothing to register
+  if (!env.PAS_BACKEND || !env.INTERNAL_TOKEN) return; // no backend binding (dev)
+
+  let tools: unknown;
+  try {
+    const parsed = JSON.parse(raw) as { tools?: unknown };
+    tools = Array.isArray(parsed?.tools) ? parsed.tools : [];
+  } catch {
+    deps.logActivity('deploy', 'mcp.json is not valid JSON — skipped tool registration', ticketId);
+    return;
+  }
+  if (!Array.isArray(tools) || tools.length === 0) return;
+
+  try {
+    const res = await env.PAS_BACKEND.fetch(new Request(`https://api.proappstore.online/v1/apps/${proj.slug}/tools/internal`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': env.INTERNAL_TOKEN },
+      body: JSON.stringify({ tools }),
+    }));
+    const r = await res.json().catch(() => ({})) as { registered?: number; error?: string };
+    if (res.ok) {
+      deps.logActivity('deploy', `MCP tools registered: ${r.registered ?? 0} tool(s) → callable at mcp.proappstore.online`, ticketId);
+    } else {
+      deps.logActivity('deploy', `MCP tools not registered (will retry next deploy): ${r.error ?? `backend ${res.status}`}`, ticketId);
+    }
+  } catch (e) {
+    deps.logActivity('deploy', `MCP tool registration error (will retry next deploy): ${e instanceof Error ? e.message : 'unknown'}`, ticketId);
   }
 }

@@ -349,3 +349,57 @@ describe('DELETE /v1/apps/:appId/tools', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Teams deploy)', () => {
+  const internalPost = (body: unknown, headers: Record<string, string> = {}, db = mockD1()) =>
+    app.request(
+      '/v1/apps/test-app/tools/internal',
+      { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) },
+      makeEnv({ INTERNAL_TOKEN: 'secret' }, db),
+    ).then((res) => ({ res, db }));
+
+  it('403s without the internal token (no owner session needed either)', async () => {
+    const { res } = await internalPost({ tools: [validTool] });
+    expect(res.status).toBe(403);
+  });
+
+  it('403s with the wrong internal token', async () => {
+    const { res } = await internalPost({ tools: [validTool] }, { 'X-Internal-Token': 'nope' });
+    expect(res.status).toBe(403);
+  });
+
+  it('registers valid tools with just the internal token', async () => {
+    const { res, db } = await internalPost({ tools: [validTool] }, { 'X-Internal-Token': 'secret' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, registered: 1 });
+    expect(db.batch).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats empty/missing tools as a clear (200, DELETE-only batch)', async () => {
+    const { res, db } = await internalPost({ tools: [] }, { 'X-Internal-Token': 'secret' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, registered: 0 });
+    expect(db.batch.mock.calls[0]![0]).toHaveLength(1);
+
+    const missing = await internalPost({}, { 'X-Internal-Token': 'secret' });
+    expect(missing.res.status).toBe(200);
+  });
+
+  it('applies the same manifest validation as the owner PUT', async () => {
+    const { res } = await internalPost(
+      { tools: [{ ...validTool, sql: 'SELECT 1; DROP TABLE items' }] },
+      { 'X-Internal-Token': 'secret' },
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json() as { error: string }).error).toContain('semicolon');
+  });
+
+  it('rejects an invalid app id', async () => {
+    const res = await app.request(
+      '/v1/apps/Bad_Id/tools/internal',
+      { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Internal-Token': 'secret' }, body: JSON.stringify({ tools: [] }) },
+      makeEnv({ INTERNAL_TOKEN: 'secret' }),
+    );
+    expect(res.status).toBe(400);
+  });
+});

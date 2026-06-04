@@ -4,6 +4,7 @@
  */
 
 import { Hono } from 'hono';
+import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { requireAppOwner } from '../lib/auth.js';
 
@@ -100,40 +101,67 @@ function validateManifest(tool: ToolManifest): string | null {
   return null;
 }
 
+/**
+ * Validate a tools[] manifest and replace the app's registered tools (atomic
+ * DELETE + INSERT). Shared by the owner-auth PUT (CLI `pas publish`) and the
+ * internal POST (Agent Teams deploy stage). Returns a status + payload the
+ * caller hands straight back as JSON.
+ */
+async function replaceAppTools(
+  db: D1Database,
+  appId: string,
+  tools: unknown,
+): Promise<{ status: number; payload: Record<string, unknown> }> {
+  if (!tools || !Array.isArray(tools)) {
+    return { status: 400, payload: { error: 'tools array required' } };
+  }
+  if (tools.length > 50) {
+    return { status: 400, payload: { error: 'max 50 tools per app' } };
+  }
+  for (const tool of tools as ToolManifest[]) {
+    const err = validateManifest(tool);
+    if (err) return { status: 400, payload: { error: `tool "${tool?.name}": ${err}` } };
+  }
+
+  const now = Date.now();
+  const stmts = [
+    db.prepare('DELETE FROM app_tools WHERE app_id = ?').bind(appId),
+    ...(tools as ToolManifest[]).map(tool =>
+      db.prepare(
+        'INSERT INTO app_tools (app_id, name, manifest, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      ).bind(appId, tool.name, JSON.stringify(tool), now, now),
+    ),
+  ];
+  await db.batch(stmts);
+  return { status: 200, payload: { ok: true, registered: tools.length } };
+}
+
 // ── PUT /v1/apps/:appId/tools — bulk register tools from mcp.json ──
 toolsRoutes.put('/apps/:appId/tools', async (c) => {
   const appId = c.req.param('appId')!;
   await requireAppOwner(c, appId);
 
   const body = await c.req.json<{ tools?: ToolManifest[] }>().catch(() => null);
-  if (!body?.tools || !Array.isArray(body.tools)) {
-    return c.json({ error: 'tools array required' }, 400);
+  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools);
+  return c.json(payload, status as 200 | 400);
+});
+
+// ── POST /v1/apps/:appId/tools/internal — register tools service-to-service ──
+// Called by the Agent Teams deploy stage over the PAS_BACKEND binding so
+// agent-built apps register their mcp.json the same way `pas publish` does for
+// CLI apps. Auth is the shared INTERNAL_TOKEN (the agent flow has no session).
+// An empty/missing tools array clears the app's tools (the manifest was removed).
+toolsRoutes.post('/apps/:appId/tools/internal', async (c) => {
+  if (!internalTokenOk(c.req.header('X-Internal-Token'), c.env.INTERNAL_TOKEN)) {
+    return c.json({ error: 'forbidden' }, 403);
   }
-
-  if (body.tools.length > 50) {
-    return c.json({ error: 'max 50 tools per app' }, 400);
+  const appId = c.req.param('appId')!;
+  if (!/^[a-z][a-z0-9-]*$/.test(appId) || appId.length > 58) {
+    return c.json({ error: 'invalid app id' }, 400);
   }
-
-  // Validate all tools first
-  for (const tool of body.tools) {
-    const err = validateManifest(tool);
-    if (err) return c.json({ error: `tool "${tool.name}": ${err}` }, 400);
-  }
-
-  const now = Date.now();
-
-  // Delete existing tools for this app, then insert new ones
-  const stmts = [
-    c.env.DB.prepare('DELETE FROM app_tools WHERE app_id = ?').bind(appId),
-    ...body.tools.map(tool =>
-      c.env.DB.prepare(
-        'INSERT INTO app_tools (app_id, name, manifest, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-      ).bind(appId, tool.name, JSON.stringify(tool), now, now),
-    ),
-  ];
-
-  await c.env.DB.batch(stmts);
-  return c.json({ ok: true, registered: body.tools.length });
+  const body = await c.req.json<{ tools?: ToolManifest[] }>().catch(() => null);
+  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools ?? []);
+  return c.json(payload, status as 200 | 400);
 });
 
 // ── GET /v1/apps/:appId/tools — list tools for one app ──────────
