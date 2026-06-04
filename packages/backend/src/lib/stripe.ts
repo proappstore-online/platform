@@ -109,6 +109,37 @@ export class Stripe {
     return this.get(`/v1/accounts/${encodeURIComponent(accountId)}`);
   }
 
+  /** Create a one-time payment checkout session (for balance top-ups). */
+  async createPaymentCheckout(params: {
+    customer: string;
+    amountCents: number;
+    currency: string;
+    successUrl: string;
+    cancelUrl: string;
+    metadata?: Record<string, string>;
+  }): Promise<StripeCheckoutSession> {
+    const body = new URLSearchParams();
+    body.set('customer', params.customer);
+    body.set('mode', 'payment');
+    body.set('line_items[0][price_data][currency]', params.currency);
+    body.set('line_items[0][price_data][product_data][name]', 'ProAppStore Balance Top-Up');
+    body.set('line_items[0][price_data][unit_amount]', String(params.amountCents));
+    body.set('line_items[0][quantity]', '1');
+    body.set('success_url', params.successUrl);
+    body.set('cancel_url', params.cancelUrl);
+    if (params.metadata) {
+      for (const [k, v] of Object.entries(params.metadata)) {
+        body.set(`metadata[${k}]`, v);
+      }
+    }
+    return this.post('/v1/checkout/sessions', body);
+  }
+
+  /** Retrieve a checkout session to verify payment status. */
+  async getCheckoutSession(sessionId: string): Promise<StripeCheckoutSessionDetail> {
+    return this.get(`/v1/checkout/sessions/${encodeURIComponent(sessionId)}`);
+  }
+
   private async post<T>(path: string, body: URLSearchParams): Promise<T> {
     const response = await fetch(`https://api.stripe.com${path}`, {
       method: 'POST',
@@ -135,6 +166,15 @@ export class Stripe {
     }
     return (await response.json()) as T;
   }
+}
+
+/** Subset of the Stripe Checkout Session for verifying payment. */
+export interface StripeCheckoutSessionDetail {
+  id: string;
+  payment_status: 'paid' | 'unpaid' | 'no_payment_required';
+  payment_intent: string | null;
+  amount_total: number | null;
+  metadata: Record<string, string> | null;
 }
 
 /** Subset of the Stripe Account object we read. The full object has 50+ fields. */
