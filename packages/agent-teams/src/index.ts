@@ -88,7 +88,7 @@ app.use('/v1/*', async (c, next) => {
 });
 
 // Health
-app.get('/health', (c) => c.json({ ok: true, version: '0.3.0', stage: 'security-hardened' }));
+app.get('/health', (c) => c.json({ ok: true, version: '0.3.1', stage: 'internal-token' }));
 
 // ── Helper: forward to DO with user ID header ───────────────
 
