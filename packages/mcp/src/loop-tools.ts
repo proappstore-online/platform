@@ -147,13 +147,17 @@ export function registerLoopTools(server: McpServer, env: LoopEnv): void {
     "List the project's working-tree files (and optionally read one). Use to verify the KB (KNOWLEDGE.md, docs/*.md) or app source the team wrote.",
     { token: TOKEN, slug: SLUG, path: z.string().optional().describe("If set, return this file's content instead of the list.") },
     async ({ token, slug, path }) => {
+      // Reading a file: the list endpoint returns paths only (no content) — the
+      // content lives behind a separate endpoint.
+      if (path) {
+        const r = await call(`/v1/projects/${slug}/files/content?path=${encodeURIComponent(path)}`, token);
+        if (!r.ok) return text(String(r.data));
+        const d = r.data as { content?: string };
+        return text(d.content ?? "(empty)");
+      }
       const r = await call(`/v1/projects/${slug}/files`, token);
       if (!r.ok) return text(String(r.data));
-      const files = (r.data as { files?: { path: string; content?: string }[] }).files ?? [];
-      if (path) {
-        const f = files.find((x) => x.path === path);
-        return text(f ? (f.content ?? "(empty)") : `Not found: ${path}\nAvailable: ${files.map((x) => x.path).join(", ")}`);
-      }
+      const files = (r.data as { files?: { path: string }[] }).files ?? [];
       if (files.length === 0) return text("No files yet — nothing built.");
       return text(files.map((f) => f.path).sort().join("\n"));
     },
