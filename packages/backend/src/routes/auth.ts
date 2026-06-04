@@ -138,7 +138,7 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
          avatar_url = excluded.avatar_url, last_login_at = excluded.last_login_at`,
     ).bind(userId, provider, profile.providerId, profile.login, profile.email, profile.avatarUrl, now).run();
 
-    const claims: NewSession = { sub: userId, login: profile.login, avatarUrl: profile.avatarUrl, roles: rolesFor(userId, c.env) };
+    const claims: NewSession = { uid: userId, login: profile.login, avatarUrl: profile.avatarUrl, roles: rolesFor(userId, c.env) };
     const token = await mintSession(claims, c.env.SESSION_SIGNING_KEY);
 
     const dest = new URL(returnTo);
@@ -156,7 +156,7 @@ authRoutes.get('/auth/me', async (c) => {
   const claims = await verifySession(header.slice(7), c.env.SESSION_SIGNING_KEY);
   if (!claims) throw new HttpError('invalid or expired session', 401);
   return c.json({
-    id: claims.sub,
+    id: claims.uid,
     login: claims.login,
     avatarUrl: claims.avatarUrl ?? null,
     roles: claims.roles,
@@ -177,10 +177,10 @@ authRoutes.patch('/auth/me/date-of-birth', async (c) => {
   const age = (Date.now() - new Date(dob + 'T00:00:00Z').getTime()) / (365.25 * 24 * 3600 * 1000);
   if (!(age >= 13)) throw new HttpError('must be at least 13', 400);
 
-  const existing = await c.env.DB.prepare('SELECT date_of_birth FROM users WHERE id = ?').bind(claims.sub).first<{ date_of_birth: string | null }>();
+  const existing = await c.env.DB.prepare('SELECT date_of_birth FROM users WHERE id = ?').bind(claims.uid).first<{ date_of_birth: string | null }>();
   if (existing?.date_of_birth) throw new HttpError('date of birth already set', 409);
-  await c.env.DB.prepare('UPDATE users SET date_of_birth = ? WHERE id = ?').bind(dob, claims.sub).run();
-  return c.json({ id: claims.sub, login: claims.login, avatarUrl: claims.avatarUrl ?? null, roles: claims.roles, appRoles: claims.appRoles ?? {} });
+  await c.env.DB.prepare('UPDATE users SET date_of_birth = ? WHERE id = ?').bind(dob, claims.uid).run();
+  return c.json({ id: claims.uid, login: claims.login, avatarUrl: claims.avatarUrl ?? null, roles: claims.roles, appRoles: claims.appRoles ?? {} });
 });
 
 // ── POST /v1/auth/email/start ──────────────────────────────

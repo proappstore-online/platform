@@ -14,13 +14,13 @@ describe('GET /v1/auth/me (PAS-owned session verification)', () => {
   });
 
   it('401s on a token signed with a different key', async () => {
-    const token = await mintSession({ sub: 'gh:1', login: 'x', roles: ['user'] }, 'wrong-key');
+    const token = await mintSession({ uid: 'gh:1', login: 'x', roles: ['user'] }, 'wrong-key');
     const res = await app.request('/v1/auth/me', { headers: { Authorization: `Bearer ${token}` } }, env());
     expect(res.status).toBe(401);
   });
 
   it('returns the user for a valid PAS token', async () => {
-    const token = await mintSession({ sub: 'gh:1', login: 'octocat', avatarUrl: 'a.png', roles: ['user', 'creator'] }, KEY);
+    const token = await mintSession({ uid: 'gh:1', login: 'octocat', avatarUrl: 'a.png', roles: ['user', 'creator'] }, KEY);
     const res = await app.request('/v1/auth/me', { headers: { Authorization: `Bearer ${token}` } }, env());
     expect(res.status).toBe(200);
     const body = await res.json() as { id: string; login: string; roles: string[]; appRoles: Record<string, unknown> };

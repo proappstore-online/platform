@@ -7,6 +7,9 @@ workers_dev = true
 [vars]
 # Public base URL of this API — used to build OAuth callback URLs (routes/auth.ts).
 APP_BASE = "https://api.proappstore.online"
+# PAS GitHub OAuth App client id (public — sent in the authorize URL). The secret
+# is a Worker secret (GITHUB_CLIENT_SECRET, from Doppler OAUTH_CLIENT_SECRET).
+GITHUB_CLIENT_ID = "Ov23ctEs8trbfizdBGfQ"
 # DEPRECATED: removed in the de-FAS cutover — PAS now owns auth (routes/auth.ts).
 FAS_API_BASE = "https://api.freeappstore.online"
 CF_ACCOUNT_ID = "c1089bfcc43c1c6c2aa89e584e86f0bc"

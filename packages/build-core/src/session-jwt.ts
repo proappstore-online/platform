@@ -1,96 +1,96 @@
 /**
- * PAS session tokens — self-contained HS256 JWTs minted + verified with the
- * platform's own SESSION_SIGNING_KEY. This is the keystone of PAS owning its
- * identity: the auth service (backend/routes/auth.ts) mints these on OAuth
- * callback, and every PAS worker (backend, agent-teams, data-worker, mcp)
- * verifies them LOCALLY with this helper — no network round-trip, no FAS.
+ * PAS session tokens — FAS-COMPATIBLE so one token works on both PAS and the
+ * shared free-tier services (kv/rooms/counters/roles) that verify by signature.
  *
- * Standard base64url JWTs (`header.payload.signature`). UTF-8 safe.
+ * Format matches fas/.../lib/session.ts exactly: a 2-part `body.sig` token where
+ * body = base64url(JSON payload) and sig = HMAC-SHA256(body, SESSION_SIGNING_KEY).
+ * PAS signs with the SAME key as FAS, so FAS's `verifySession` accepts PAS tokens
+ * (it checks signature + exp only, ignores unknown fields). The payload carries
+ * `uid` (e.g. "gh:1234", the same id FAS uses) plus PAS extras (login, avatarUrl)
+ * that FAS ignores.
  */
 
 export interface SessionClaims {
-  /** Stable user id, e.g. "gh:1234" or "google:sub". */
-  sub: string;
-  /** Display handle (GitHub login, Google name, or email local-part). */
-  login: string;
-  /** Avatar URL, when the provider gives one. */
+  /** Stable user id, e.g. "gh:1234" or "google:<sub>" — the same scheme as FAS. */
+  uid: string;
+  /** Display handle (PAS extra; ignored by FAS). */
+  login?: string;
+  /** Avatar URL (PAS extra; ignored by FAS). */
   avatarUrl?: string | null;
   /** Platform roles: 'user' | 'creator' | 'admin'. */
   roles: string[];
   /** Per-app roles: { appId: ['moderator', ...] }. */
   appRoles?: Record<string, string[]>;
-  /** Issued-at (epoch seconds). */
   iat: number;
-  /** Expiry (epoch seconds). */
   exp: number;
-  /** Issuer — always "proappstore". */
-  iss: string;
 }
 
-/** Claims the caller supplies; iat/exp/iss are filled in by mintSession. */
-export type NewSession = Omit<SessionClaims, 'iat' | 'exp' | 'iss'>;
+/** Claims the caller supplies; iat/exp are filled in by mintSession. */
+export type NewSession = Omit<SessionClaims, 'iat' | 'exp'>;
 
-const ISSUER = 'proappstore';
-const DEFAULT_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
+const DEFAULT_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days, matching FAS
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-function b64urlFromBytes(bytes: Uint8Array): string {
+function b64urlBytes(bytes: Uint8Array): string {
   let bin = '';
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function b64urlFromString(s: string): string {
-  return b64urlFromBytes(enc.encode(s));
+function b64url(s: string): string {
+  return b64urlBytes(enc.encode(s));
 }
 
-function bytesFromB64url(s: string): Uint8Array {
-  const pad = (4 - (s.length % 4)) % 4;
-  const b64 = s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat(pad);
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+/** Decode base64url → UTF-8 string (TextDecoder, so multibyte login/name survive
+ *  the round-trip; FAS's ASCII-only payloads decode identically). */
+function b64urlDecode(s: string): string {
+  const padded = s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4);
+  const bin = atob(padded);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return dec.decode(bytes);
 }
 
-function stringFromB64url(s: string): string {
-  return dec.decode(bytesFromB64url(s));
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
-async function hmacKey(signingKey: string, usage: KeyUsage): Promise<CryptoKey> {
-  return crypto.subtle.importKey('raw', enc.encode(signingKey) as BufferSource, { name: 'HMAC', hash: 'SHA-256' }, false, [usage]);
+async function hmac(data: string, signingKey: string): Promise<string> {
+  const key = await crypto.subtle.importKey('raw', enc.encode(signingKey) as BufferSource, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(data) as BufferSource);
+  return b64urlBytes(new Uint8Array(sig));
 }
 
-/** Mint a signed session token for the given claims. */
+/** Mint a signed, FAS-compatible session token. */
 export async function mintSession(claims: NewSession, signingKey: string, ttlSeconds = DEFAULT_TTL_SECONDS): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  const payload: SessionClaims = { ...claims, iat: now, exp: now + ttlSeconds, iss: ISSUER };
-  const header = b64urlFromString(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const body = b64urlFromString(JSON.stringify(payload));
-  const key = await hmacKey(signingKey, 'sign');
-  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(`${header}.${body}`) as BufferSource);
-  return `${header}.${body}.${b64urlFromBytes(new Uint8Array(sig))}`;
+  const payload: SessionClaims = { ...claims, iat: now, exp: now + ttlSeconds };
+  const body = b64url(JSON.stringify(payload));
+  const sig = await hmac(body, signingKey);
+  return `${body}.${sig}`;
 }
 
 /**
- * Verify a session token's signature, issuer, and expiry. Returns the claims on
- * success, or null on any failure (bad shape, bad signature, wrong issuer,
- * expired). Never throws.
+ * Verify a session token's signature + expiry. Returns the claims on success, or
+ * null on any failure (bad shape, bad signature, expired). Never throws. Accepts
+ * tokens minted by FAS too (same format + key) — FAS tokens just lack login/avatar.
  */
 export async function verifySession(token: string, signingKey: string): Promise<SessionClaims | null> {
   try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const [header, body, sig] = parts as [string, string, string];
-    const key = await hmacKey(signingKey, 'verify');
-    const ok = await crypto.subtle.verify('HMAC', key, bytesFromB64url(sig) as BufferSource, enc.encode(`${header}.${body}`) as BufferSource);
-    if (!ok) return null;
-    const claims = JSON.parse(stringFromB64url(body)) as SessionClaims;
-    if (claims.iss !== ISSUER) return null;
+    const dot = token.lastIndexOf('.');
+    if (dot < 0) return null;
+    const body = token.slice(0, dot);
+    const sig = token.slice(dot + 1);
+    const expected = await hmac(body, signingKey);
+    if (!timingSafeEqual(sig, expected)) return null;
+    const claims = JSON.parse(b64urlDecode(body)) as SessionClaims;
+    if (!claims.uid) return null;
     if (typeof claims.exp !== 'number' || claims.exp < Math.floor(Date.now() / 1000)) return null;
-    if (!claims.sub) return null;
     claims.roles = claims.roles ?? ['user'];
     claims.appRoles = claims.appRoles ?? {};
     return claims;
