@@ -144,6 +144,30 @@ export class Stripe {
     return this.get(`/v1/checkout/sessions/${encodeURIComponent(sessionId)}`);
   }
 
+  /**
+   * Transfer funds from the platform's Stripe balance to a connected account.
+   * Used by the monthly payout cron to pay developers their earned service fees.
+   */
+  async createTransfer(params: {
+    amountCents: number;
+    currency: string;
+    destination: string;
+    description?: string;
+    metadata?: Record<string, string>;
+  }): Promise<StripeTransfer> {
+    const body = new URLSearchParams();
+    body.set('amount', String(params.amountCents));
+    body.set('currency', params.currency);
+    body.set('destination', params.destination);
+    if (params.description) body.set('description', params.description);
+    if (params.metadata) {
+      for (const [k, v] of Object.entries(params.metadata)) {
+        body.set(`metadata[${k}]`, v);
+      }
+    }
+    return this.post('/v1/transfers', body);
+  }
+
   private async post<T>(path: string, body: URLSearchParams): Promise<T> {
     const response = await fetch(`https://api.stripe.com${path}`, {
       method: 'POST',
@@ -179,6 +203,14 @@ export interface StripeCheckoutSessionDetail {
   payment_intent: string | null;
   amount_total: number | null;
   metadata: Record<string, string> | null;
+}
+
+/** Subset of the Stripe Transfer object returned by POST /v1/transfers. */
+export interface StripeTransfer {
+  id: string;
+  amount: number;
+  currency: string;
+  destination: string;
 }
 
 /** Subset of the Stripe Account object we read. The full object has 50+ fields. */
