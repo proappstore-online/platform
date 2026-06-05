@@ -20,6 +20,8 @@ export interface DeployDeps {
   logActivity(type: string, detail: string, ticketId?: string | null, meta?: string): string;
   storeMessage(opts: { ticketId: string; author: string; body: string }): Promise<string>;
   loadFiles(): Map<string, string>;
+  /** Sync the working tree from GitHub. Used to handle concurrent deploy conflicts. */
+  syncFromGitHub?(reason: string): Promise<{ pulled: boolean; count?: number }>;
 }
 
 export async function runDeployStage(deps: DeployDeps, ticketId: string): Promise<void> {
@@ -88,11 +90,28 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
     //    this attempt and is recorded on the ticket.
     let sha = ticket.deploy_pushed_sha ?? undefined;
     if (!ticket.deploy_pushed_at) {
-      const pushRes = await adminFetch('/api/agent-deploy', { id: proj.slug, name: proj.name, files: Object.fromEntries(files) });
-      const push = await pushRes.json() as { success?: boolean; repoUrl?: string | null; commitSha?: string; steps?: { name: string; status: string; detail: string }[] };
+      // Push with retry: if another ticket's deploy moved the branch (non-fast-forward),
+      // sync from GitHub and retry once. This handles concurrent deploys gracefully.
+      let pushRes = await adminFetch('/api/agent-deploy', { id: proj.slug, name: proj.name, files: Object.fromEntries(files) });
+      let push = await pushRes.json() as { success?: boolean; repoUrl?: string | null; commitSha?: string; steps?: { name: string; status: string; detail: string }[] };
       if (!pushRes.ok || !push.success) {
         const detail = (push.steps ?? []).filter((s) => s.status === 'fail').map((s) => `${s.name} — ${s.detail}`).join('; ');
-        return infraFail(`Push to repo failed: ${detail || `admin ${pushRes.status}`}`);
+        // Retry on git ref conflicts (concurrent push by another ticket's deploy)
+        if (detail.includes('fast forward') || detail.includes('ref update failed') || detail.includes('Reference cannot be updated')) {
+          deps.logActivity('deploy', 'Push conflict (concurrent deploy) — syncing and retrying…', ticketId);
+          // Sync from GitHub to get the latest commit, then retry push
+          await deps.syncFromGitHub?.('deploy-retry').catch(() => {});
+          // Reload files after sync (they may have been updated by the other deploy)
+          const freshFiles = deps.loadFiles();
+          pushRes = await adminFetch('/api/agent-deploy', { id: proj.slug, name: proj.name, files: Object.fromEntries(freshFiles) });
+          push = await pushRes.json() as typeof push;
+          if (!pushRes.ok || !push.success) {
+            const retryDetail = (push.steps ?? []).filter((s) => s.status === 'fail').map((s) => `${s.name} — ${s.detail}`).join('; ');
+            return infraFail(`Push to repo failed (after retry): ${retryDetail || `admin ${pushRes.status}`}`);
+          }
+        } else {
+          return infraFail(`Push to repo failed: ${detail || `admin ${pushRes.status}`}`);
+        }
       }
       if (push.repoUrl) sql.exec('UPDATE project SET repo_url = ? WHERE repo_url IS NULL', push.repoUrl);
       sha = push.commitSha;

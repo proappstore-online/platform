@@ -605,6 +605,7 @@ export class ProjectDO implements DurableObject {
       logActivity: (type, detail, tid, meta) => this.logActivity(type, detail, tid, meta),
       storeMessage: (opts) => this.storeMessage(opts),
       loadFiles: () => this.loadFiles(),
+      syncFromGitHub: (reason) => this.syncFromGitHub(reason),
     }, ticketId);
   }
 
