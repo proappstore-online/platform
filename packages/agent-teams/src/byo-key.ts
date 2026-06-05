@@ -32,7 +32,14 @@ export async function resolveByoKey(
   ownerId: string,
   provider: string,
 ): Promise<string | null> {
-  if (!env.INTERNAL_TOKEN) return null;
+  if (!env.INTERNAL_TOKEN) {
+    console.error('[byo-key] INTERNAL_TOKEN not set');
+    return null;
+  }
+  if (!env.PAS_BACKEND) {
+    console.error('[byo-key] PAS_BACKEND service binding not available');
+    return null;
+  }
 
   try {
     const res = await env.PAS_BACKEND.fetch(
@@ -44,10 +51,16 @@ export async function resolveByoKey(
         },
       }),
     );
-    if (!res.ok) return null;
-    const data = (await res.json()) as { key?: string | null };
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      console.error(`[byo-key] resolve failed: ${res.status} ${text.slice(0, 200)}`);
+      return null;
+    }
+    const data = (await res.json()) as { key?: string | null; error?: string };
+    if (data.error) console.error(`[byo-key] resolve returned error: ${data.error}`);
     return data.key ?? null;
-  } catch {
+  } catch (err) {
+    console.error(`[byo-key] resolve threw: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }

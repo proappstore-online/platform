@@ -82,7 +82,8 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
   let apiKey = body.apiKey;
   if (!apiKey && proj) apiKey = (await resolveByoKey(env, proj.owner_id, 'anthropic')) ?? undefined;
   if (!apiKey) {
-    return save(deps, "I need an Anthropic API key to research and write the Knowledge Base. Add one in settings, then brainstorm here and I'll write KNOWLEDGE.md + docs/.", now);
+    const hint = proj ? `(looked up owner ${proj.owner_id} for provider 'anthropic')` : '(no project found in DO)';
+    return save(deps, `I need an Anthropic API key to research and write the Knowledge Base. Go to your Profile (top-right avatar) and add an Anthropic key, then come back here. ${hint}`, now);
   }
 
   // The Architect's identity is tunable per project (its role_configs row,
