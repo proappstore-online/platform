@@ -554,6 +554,117 @@ engagementRoutes.post('/services/engagements/:id/refund', async (c) => {
 
 // ── Helpers ──────────────────────────────────────────────────
 
+// ── Client workspace view ────────────────────────────────────
+
+// Get the workspace link for an engagement (client sees the dev's project)
+engagementRoutes.get('/services/engagements/:id/workspace', async (c) => {
+  try {
+    const user = await requireUser(c);
+    const id = c.req.param('id');
+    const eng = await c.env.DB.prepare(
+      'SELECT client_id, developer_id, project_slug, status FROM engagements WHERE id = ?',
+    ).bind(id).first<{ client_id: string; developer_id: string; project_slug: string | null; status: string }>();
+    if (!eng) return c.json({ error: 'not found' }, 404);
+    if (eng.client_id !== user.id && eng.developer_id !== user.id) return c.json({ error: 'forbidden' }, 403);
+
+    if (!eng.project_slug) {
+      return c.json({ hasWorkspace: false, message: 'No workspace linked yet. The developer creates one from the Build tab.' });
+    }
+
+    return c.json({
+      hasWorkspace: true,
+      projectSlug: eng.project_slug,
+      // Client gets a read-only view URL; dev gets the full workspace
+      viewUrl: `/app/#/apps/${eng.project_slug}/build`,
+      role: user.id === eng.client_id ? 'client' : 'developer',
+    });
+  } catch (err) {
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
+    throw err;
+  }
+});
+
+// Link an engagement to an agent-teams project (dev only)
+engagementRoutes.post('/services/engagements/:id/workspace', async (c) => {
+  try {
+    const user = await requireUser(c);
+    const body = await c.req.json<{ projectSlug: string }>();
+    const id = c.req.param('id');
+    if (!body.projectSlug) return c.json({ error: 'projectSlug required' }, 400);
+
+    const eng = await c.env.DB.prepare('SELECT developer_id, status FROM engagements WHERE id = ?')
+      .bind(id).first<{ developer_id: string; status: string }>();
+    if (!eng) return c.json({ error: 'not found' }, 404);
+    if (eng.developer_id !== user.id) return c.json({ error: 'only the developer can link a workspace' }, 403);
+    if (eng.status !== 'active') return c.json({ error: 'engagement is not active' }, 400);
+
+    await c.env.DB.prepare('UPDATE engagements SET project_slug = ?, updated_at = ? WHERE id = ?')
+      .bind(body.projectSlug, Date.now(), id).run();
+
+    return c.json({ ok: true, projectSlug: body.projectSlug });
+  } catch (err) {
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
+    throw err;
+  }
+});
+
+// ── Unread tracking ──────────────────────────────────────────
+
+// Get unread counts across all user's engagements (for badge)
+engagementRoutes.get('/services/unread', async (c) => {
+  try {
+    const user = await requireUser(c);
+    const rows = await c.env.DB.prepare(
+      `SELECT e.id, e.status,
+              (SELECT COUNT(*) FROM service_messages m
+               WHERE m.engagement_id = e.id
+                 AND m.created_at > COALESCE(
+                   (SELECT last_read_at FROM engagement_reads
+                    WHERE engagement_id = e.id AND user_id = ?), 0)
+                 AND m.sender_id != ?
+              ) AS unread
+       FROM engagements e
+       WHERE (e.client_id = ? OR e.developer_id = ?) AND e.status = 'active'`,
+    ).bind(user.id, user.id, user.id, user.id).all<{ id: string; unread: number }>();
+
+    const total = (rows.results ?? []).reduce((sum, r) => sum + r.unread, 0);
+    return c.json({
+      total,
+      engagements: (rows.results ?? []).filter(r => r.unread > 0).map(r => ({ id: r.id, unread: r.unread })),
+    });
+  } catch (err) {
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
+    throw err;
+  }
+});
+
+// Mark an engagement as read (updates last_read_at)
+engagementRoutes.post('/services/engagements/:id/read', async (c) => {
+  try {
+    const user = await requireUser(c);
+    const id = c.req.param('id');
+    // Verify access
+    const eng = await c.env.DB.prepare('SELECT client_id, developer_id FROM engagements WHERE id = ?')
+      .bind(id).first<{ client_id: string; developer_id: string }>();
+    if (!eng) return c.json({ error: 'not found' }, 404);
+    if (eng.client_id !== user.id && eng.developer_id !== user.id) return c.json({ error: 'forbidden' }, 403);
+
+    const now = Date.now();
+    await c.env.DB.prepare(
+      `INSERT INTO engagement_reads (engagement_id, user_id, last_read_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(engagement_id, user_id) DO UPDATE SET last_read_at = excluded.last_read_at`,
+    ).bind(id, user.id, now).run();
+
+    return c.json({ ok: true });
+  } catch (err) {
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
+    throw err;
+  }
+});
+
+// ── Helpers ──────────────────────────────────────────────────
+
 function engagementDto(row: Record<string, unknown>, userId: string) {
   return {
     id: row.id,
