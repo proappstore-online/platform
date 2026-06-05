@@ -21,6 +21,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_service_payouts_dev_month
 CREATE INDEX IF NOT EXISTS idx_service_payouts_month
   ON service_payouts(payout_month);
 
--- Track which month each engagement's earnings were paid out.
--- NULL means unpaid; set to YYYY-MM when the payout cron runs.
-ALTER TABLE engagements ADD COLUMN payout_month TEXT;
+-- The payout_month column on engagements was added via a separate migration
+-- (applied manually before this migration file was created). If running fresh,
+-- add it manually: ALTER TABLE engagements ADD COLUMN payout_month TEXT;
