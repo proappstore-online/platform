@@ -40,6 +40,7 @@ import {
 import { runDeployStage } from './deploy-stage.ts';
 import { handlePOChat } from './po-chat.ts';
 import { handleArchitectChat, RESEARCH_THREAD } from './architect-chat.ts';
+import { resolveByoKey } from './byo-key.ts';
 import { runAgentTurn } from './agent-runner.ts';
 import { validateRoleConfig } from './role-config.ts';
 import { buildAgentCatalog } from './agents-catalog.ts';
@@ -1518,7 +1519,8 @@ export class ProjectDO implements DurableObject {
   }
 
   // ── QA Chat (test thread) ──────────────────────────────────
-  // Rule-based QA agent that reads done tickets + KB to generate test scenarios.
+  // AI-powered QA agent — uses the BYO Anthropic key (same as Dev/BA) to
+  // generate real Playwright test code from done tickets + KB + app code.
 
   private async handleQAChat(request: Request): Promise<Response> {
     const body = (await request.json()) as { message: string; thread?: string };
@@ -1534,50 +1536,127 @@ export class ProjectDO implements DurableObject {
     const userMsgId = insertChatMessage(this.state.storage.sql, { role: 'user', body: userText, at: now, thread });
     this.broadcast({ type: 'chat', thread, role: 'user', body: userText, id: userMsgId });
 
-    // Gather context: done tickets with acceptance criteria
+    // Resolve the BYO API key (same path as Dev/BA/Architect)
+    const proj = this.state.storage.sql
+      .exec('SELECT owner_id, slug, name FROM project LIMIT 1')
+      .toArray()[0] as { owner_id: string; slug: string; name: string } | undefined;
+
+    let apiKey: string | undefined;
+    if (proj) apiKey = (await resolveByoKey(this.env, proj.owner_id, 'anthropic')) ?? undefined;
+
+    // Gather context
     const doneTickets = this.state.storage.sql
       .exec("SELECT title, raw_idea, spec_json FROM tickets WHERE status = 'done' ORDER BY updated_at DESC LIMIT 20")
       .toArray() as { title: string; raw_idea: string; spec_json: string | null }[];
 
-    // Gather KB
     const kbFile = this.state.storage.sql
       .exec("SELECT content FROM project_files WHERE path = 'KNOWLEDGE.md' LIMIT 1")
       .toArray()[0] as { content: string } | undefined;
 
-    const lower = userText.toLowerCase();
-    let reply: string;
+    const existingSpecs = this.state.storage.sql
+      .exec("SELECT path, content FROM project_files WHERE path LIKE 'e2e/specs/%'")
+      .toArray() as { path: string; content: string }[];
 
-    if (lower.includes('generate') || lower.includes('create') || lower.includes('write') || lower.includes('test')) {
-      if (doneTickets.length === 0 && !kbFile) {
-        reply = 'No completed tickets or Knowledge Base yet. Once the team ships features, I\'ll generate test scenarios from the acceptance criteria and KB.';
-      } else {
-        const scenarios: string[] = [];
-        for (const t of doneTickets.slice(0, 8)) {
-          let ac = '';
-          if (t.spec_json) {
-            try {
-              const s = JSON.parse(t.spec_json);
-              ac = s.summary || (Array.isArray(s.acceptanceCriteria) ? s.acceptanceCriteria.join('; ') : s.acceptanceCriteria) || '';
-            } catch { /* */ }
-          }
-          scenarios.push(`### ${t.title}\n${ac ? `**Spec:** ${ac}\n` : ''}**Scenario:** Navigate to the feature, interact with it, assert the expected behavior.`);
-        }
-        reply = `Generated ${scenarios.length} test scenario(s) from completed tickets:\n\n${scenarios.join('\n\n')}`;
-        if (kbFile) reply += '\n\n*KB context available for deeper scenario generation when AI is wired.*';
-      }
-    } else if (lower.includes('status') || lower.includes('coverage')) {
-      const testFiles = this.state.storage.sql
-        .exec("SELECT path FROM project_files WHERE path LIKE 'e2e/%'")
-        .toArray() as { path: string }[];
-      reply = `**Coverage:** ${doneTickets.length} done tickets, ${testFiles.length} e2e test file(s) in the working tree.${kbFile ? ' KB available.' : ' No KB yet.'}\nSay "generate tests" to create scenarios.`;
-    } else {
-      reply = `I'm the QA agent. I generate end-to-end test scenarios from completed tickets and the Knowledge Base.\n\nTry:\n- **"generate tests"** — create test scenarios from done tickets\n- **"status"** — see test coverage\n- Or describe a specific scenario to test`;
+    const appFiles = this.state.storage.sql
+      .exec("SELECT path FROM project_files WHERE path LIKE 'src/%' ORDER BY path")
+      .toArray() as { path: string }[];
+
+    // If no API key, fall back to rule-based
+    if (!apiKey) {
+      const hint = proj ? `(owner ${proj.owner_id})` : '';
+      const reply = `I need an Anthropic API key to generate real Playwright tests. Add one in your Profile. ${hint}\n\nIn the meantime, here's a summary: ${doneTickets.length} done tickets, ${existingSpecs.length} e2e spec file(s).`;
+      const replyId = insertChatMessage(this.state.storage.sql, { role: 'QA', body: reply, at: Date.now(), thread });
+      this.broadcast({ type: 'chat', thread, role: 'QA', body: reply, id: replyId });
+      return json({ id: replyId, role: 'QA', body: reply, createdAt: Date.now() });
     }
 
-    const replyId = insertChatMessage(this.state.storage.sql, { role: 'QA', body: reply, at: Date.now(), thread });
-    this.broadcast({ type: 'chat', thread, role: 'QA', body: reply, id: replyId });
+    // Build context for the LLM
+    const ticketSummaries = doneTickets.map(t => {
+      let ac = '';
+      if (t.spec_json) {
+        try {
+          const s = JSON.parse(t.spec_json);
+          ac = s.summary || (Array.isArray(s.acceptanceCriteria) ? s.acceptanceCriteria.join('; ') : s.acceptanceCriteria) || '';
+        } catch { /* */ }
+      }
+      return `- ${t.title}${ac ? `\n  Spec: ${ac}` : ''}`;
+    }).join('\n');
 
-    return json({ id: replyId, role: 'QA', body: reply, createdAt: Date.now() });
+    const existingSpecNames = existingSpecs.map(s => s.path).join(', ') || 'none';
+    const appFileList = appFiles.map(f => f.path).join('\n');
+
+    const systemPrompt = `You are a QA engineer for a ProAppStore web app called "${proj?.name ?? 'app'}" (slug: ${proj?.slug ?? 'app'}).
+Your job is to generate Playwright end-to-end test specifications.
+
+The app is deployed at https://${proj?.slug ?? 'app'}.proappstore.online/
+Test files go in e2e/specs/*.spec.ts using Playwright Test.
+The test fixture at e2e/fixtures.ts provides an \`app\` fixture (a Playwright Page navigated to the app URL).
+
+Done tickets (features to test):
+${ticketSummaries || '(none)'}
+
+${kbFile ? `Knowledge Base:\n${kbFile.content.slice(0, 3000)}` : ''}
+
+Existing e2e specs: ${existingSpecNames}
+App source files:\n${appFileList}
+
+When the user asks you to generate tests, write complete Playwright spec files.
+When they ask about coverage, analyze what's tested vs what's not.
+When they describe a scenario, write a focused test for it.
+Be concise. Output code in markdown code blocks.`;
+
+    const recentChat = this.state.storage.sql
+      .exec("SELECT role, body FROM chat_history WHERE thread = 'test' ORDER BY created_at DESC LIMIT 10")
+      .toArray()
+      .reverse()
+      .map((r) => ({ role: r.role as string, body: r.body as string }));
+
+    const messages = recentChat.map(m => ({
+      role: m.role === 'user' ? 'user' as const : 'assistant' as const,
+      content: m.body,
+    }));
+
+    try {
+      this.broadcast({ type: 'agent-heartbeat', role: 'QA' });
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 8192,
+          system: systemPrompt,
+          messages,
+        }),
+      });
+
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => '');
+        console.error(`[qa-chat] Anthropic ${res.status}: ${errBody.slice(0, 300)}`);
+        const safe = res.status === 401 ? 'API key invalid'
+          : res.status === 429 ? 'Rate limited — wait a moment'
+          : `AI error (${res.status}): ${errBody.slice(0, 150)}`;
+        const reply = `Sorry: ${safe}`;
+        const replyId = insertChatMessage(this.state.storage.sql, { role: 'QA', body: reply, at: Date.now(), thread });
+        this.broadcast({ type: 'chat', thread, role: 'QA', body: reply, id: replyId });
+        return json({ id: replyId, role: 'QA', body: reply, createdAt: Date.now() });
+      }
+
+      const aiRes = (await res.json()) as { content?: { type: string; text?: string }[] };
+      const reply = (aiRes.content ?? []).filter(c => c.type === 'text').map(c => c.text ?? '').join('') || 'No response from AI.';
+
+      const replyId = insertChatMessage(this.state.storage.sql, { role: 'QA', body: reply, at: Date.now(), thread });
+      this.broadcast({ type: 'chat', thread, role: 'QA', body: reply, id: replyId });
+      return json({ id: replyId, role: 'QA', body: reply, createdAt: Date.now() });
+    } catch (err) {
+      const reply = `Error: ${err instanceof Error ? err.message : String(err)}`;
+      const replyId = insertChatMessage(this.state.storage.sql, { role: 'QA', body: reply, at: Date.now(), thread });
+      this.broadcast({ type: 'chat', thread, role: 'QA', body: reply, id: replyId });
+      return json({ id: replyId, role: 'QA', body: reply, createdAt: Date.now() });
+    }
   }
 
   // ── Agent run (explicit trigger) ────────────────────────────
