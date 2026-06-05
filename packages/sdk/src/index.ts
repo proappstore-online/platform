@@ -101,7 +101,7 @@ export class ProAppStore {
     this.license = new LicenseApi(opts.appId, proApiBase, this.auth);
     this.db = new Database(opts.appId, opts.dataApiBase ?? `https://data-${opts.appId}.proappstore.online`, this.auth);
     this.storage = new Storage(opts.appId, proApiBase, this.auth);
-    this.maps = new Maps(proApiBase);
+    this.maps = new Maps(proApiBase, this.auth);
     this.notifications = new Notifications(opts.appId, proApiBase, this.auth);
     this.sms = new SMS(opts.appId, proApiBase, this.auth);
     this.ai = new AI(proApiBase, this.auth);

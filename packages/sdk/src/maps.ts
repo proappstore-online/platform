@@ -28,7 +28,13 @@ export interface RouteResult {
 }
 
 export class Maps {
-  constructor(private readonly apiBase: string) {}
+  constructor(private readonly apiBase: string, private readonly auth?: { token: string | null }) {}
+
+  private headers(): Record<string, string> {
+    const h: Record<string, string> = {};
+    if (this.auth?.token) h['Authorization'] = `Bearer ${this.auth.token}`;
+    return h;
+  }
 
   /** Convert an address string to coordinates. Returns up to `limit` results. */
   async geocode(
@@ -40,7 +46,7 @@ export class Maps {
     url.searchParams.set('q', query);
     url.searchParams.set('limit', String(limit));
 
-    const response = await fetch(url.toString(), opts?.signal ? { signal: opts.signal } : undefined);
+    const response = await fetch(url.toString(), { headers: this.headers(), ...(opts?.signal ? { signal: opts.signal } : {}) });
     if (!response.ok) throw new Error(`maps.geocode failed: ${response.status}`);
 
     const data = (await response.json()) as { results: GeoResult[] };
@@ -61,7 +67,7 @@ export class Maps {
     url.searchParams.set('from', `${from.lat},${from.lng}`);
     url.searchParams.set('to', `${to.lat},${to.lng}`);
 
-    const response = await fetch(url.toString(), opts?.signal ? { signal: opts.signal } : undefined);
+    const response = await fetch(url.toString(), { headers: this.headers(), ...(opts?.signal ? { signal: opts.signal } : {}) });
     if (!response.ok) throw new Error(`maps.route failed: ${response.status}`);
 
     return (await response.json()) as RouteResult;
@@ -77,7 +83,7 @@ export class Maps {
     url.searchParams.set('lat', String(lat));
     url.searchParams.set('lng', String(lng));
 
-    const response = await fetch(url.toString(), opts?.signal ? { signal: opts.signal } : undefined);
+    const response = await fetch(url.toString(), { headers: this.headers(), ...(opts?.signal ? { signal: opts.signal } : {}) });
     if (!response.ok) throw new Error(`maps.reverseGeocode failed: ${response.status}`);
 
     return (await response.json()) as ReverseResult;
