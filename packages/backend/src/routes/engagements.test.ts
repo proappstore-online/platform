@@ -179,6 +179,96 @@ describe('POST /v1/services/engagements/:id/rate', () => {
   });
 });
 
+describe('POST /v1/services/engagements/:id/rate', () => {
+  it('rejects non-integer score', async () => {
+    const db = mockD1(
+      mockStmt({ first: { client_id: 'gh:1', developer_id: 'gh:2', status: 'delivered' } }),
+    );
+    const res = await app.request('/v1/services/engagements/test-id/rate', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ score: 3.5 }),
+    }, env({}, db));
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects comment too long', async () => {
+    const db = mockD1(
+      mockStmt({ first: { client_id: 'gh:1', developer_id: 'gh:2', status: 'delivered' } }),
+    );
+    const res = await app.request('/v1/services/engagements/test-id/rate', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ score: 5, comment: 'x'.repeat(2001) }),
+    }, env({}, db));
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects rating from non-client', async () => {
+    // User is gh:1, developer is gh:1 — they are the dev, not the client
+    const db = mockD1(
+      mockStmt({ first: { client_id: 'gh:99', developer_id: 'gh:1', status: 'delivered' } }),
+    );
+    const res = await app.request('/v1/services/engagements/test-id/rate', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ score: 5 }),
+    }, env({}, db));
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects rating on active (non-delivered) engagement', async () => {
+    const db = mockD1(
+      mockStmt({ first: { client_id: 'gh:1', developer_id: 'gh:2', status: 'active' } }),
+    );
+    const res = await app.request('/v1/services/engagements/test-id/rate', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ score: 5 }),
+    }, env({}, db));
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('PATCH /v1/services/engagements/:id', () => {
+  it('rejects invalid status', async () => {
+    const db = mockD1(
+      mockStmt({ first: { client_id: 'gh:1', developer_id: 'gh:2', status: 'active' } }),
+    );
+    const res = await app.request('/v1/services/engagements/test-id', {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'bogus' }),
+    }, env({}, db));
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects delivery by client (only dev can deliver)', async () => {
+    // User gh:1 is the client, not the developer
+    const db = mockD1(
+      mockStmt({ first: { client_id: 'gh:1', developer_id: 'gh:2', status: 'active' } }),
+    );
+    const res = await app.request('/v1/services/engagements/test-id', {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'delivered' }),
+    }, env({}, db));
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects status change on non-active engagement', async () => {
+    const db = mockD1(
+      mockStmt({ first: { client_id: 'gh:1', developer_id: 'gh:2', status: 'delivered' } }),
+    );
+    const res = await app.request('/v1/services/engagements/test-id', {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'cancelled' }),
+    }, env({}, db));
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('POST /v1/services/engagements/:id/refund', () => {
   it('rejects non-admin', async () => {
     const res = await app.request('/v1/services/engagements/test-id/refund', {
@@ -187,5 +277,28 @@ describe('POST /v1/services/engagements/:id/refund', () => {
       body: JSON.stringify({ amountCents: 100 }),
     }, env({ ADMIN_GITHUB_IDS: 'gh:99' }));
     expect(res.status).toBe(403);
+  });
+
+  it('rejects refund with no amount', async () => {
+    // User gh:1 IS the admin
+    const db = mockD1(
+      mockStmt({ first: { client_id: 'gh:2', developer_id: 'gh:3', total_charged_cents: 500 } }),
+    );
+    const res = await app.request('/v1/services/engagements/test-id/refund', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amountCents: 0 }),
+    }, env({ ADMIN_GITHUB_IDS: 'gh:1' }, db));
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('DELETE /v1/services/requests/:id', () => {
+  it('returns 401 without auth', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 401 }));
+    const res = await app.request('/v1/services/requests/test-id', {
+      method: 'DELETE',
+    }, env());
+    expect(res.status).toBe(401);
   });
 });
