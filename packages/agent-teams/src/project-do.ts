@@ -1376,7 +1376,10 @@ export class ProjectDO implements DurableObject {
         rememberFact: (c, k, v) => this.rememberFact(c, k, v),
         fetchDocs: () => this.fetchDocs(),
         logActivity: (type, detail, tid, meta) => this.logActivity(type, detail, tid, meta),
-        publishKb: () => { void this.publishKb(); },
+        // KB publishing disabled — KB stays private in the working tree.
+        // The Research tab reads from /files/content (auth-gated), not the public site.
+        // Re-enable when there's a per-project "publish KB" toggle.
+        publishKb: () => { /* disabled — KB is private */ },
       }, request);
     } finally {
       this.architectChatBusy = false;
