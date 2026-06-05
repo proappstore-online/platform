@@ -90,35 +90,7 @@ app.use('/v1/*', async (c, next) => {
 // Health
 app.get('/health', (c) => c.json({ ok: true, version: '0.3.2', stage: 'byo-debug' }));
 
-// Diagnostic: test the BYO key resolution service binding (admin only)
-app.get('/debug/byo-key/:ownerId', async (c) => {
-  const token = c.req.header('X-Internal-Token');
-  if (!c.env.INTERNAL_TOKEN || token !== c.env.INTERNAL_TOKEN) {
-    return c.json({ error: 'forbidden' }, 403);
-  }
-  const ownerId = c.req.param('ownerId');
-  const checks: Record<string, unknown> = {
-    hasInternalToken: !!c.env.INTERNAL_TOKEN,
-    hasPasBackend: !!c.env.PAS_BACKEND,
-    ownerId,
-  };
-  try {
-    const res = await c.env.PAS_BACKEND.fetch(
-      new Request(`https://api.proappstore.online/v1/keys/resolve/anthropic`, {
-        method: 'GET',
-        headers: {
-          'X-Internal-Token': c.env.INTERNAL_TOKEN!,
-          'X-Owner-Id': ownerId,
-        },
-      }),
-    );
-    checks.status = res.status;
-    checks.body = await res.text();
-  } catch (err) {
-    checks.error = err instanceof Error ? err.message : String(err);
-  }
-  return c.json(checks);
-});
+// (debug endpoint removed — BYO key issue was stale INTERNAL_TOKEN on the backend Worker)
 
 // ── Helper: forward to DO with user ID header ───────────────
 
