@@ -154,7 +154,11 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
         body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 8192, system: systemPrompt, tools, messages }),
       });
       if (!res.ok) {
-        const safe = res.status === 401 ? 'API key invalid' : res.status === 429 ? 'Rate limited' : `AI error (${res.status})`;
+        const errBody = await res.text().catch(() => '');
+        console.error(`[architect] Anthropic ${res.status}: ${errBody.slice(0, 500)}`);
+        const safe = res.status === 401 ? 'API key invalid or expired'
+          : res.status === 429 ? 'Rate limited — wait a moment'
+          : `AI error (${res.status}): ${errBody.slice(0, 200)}`;
         if (wrote) { deps.saveFiles(files); deps.broadcast({ type: 'files-synced', count: files.size }); }
         return save(deps, `Sorry, I couldn't finish that: ${safe}`, Date.now());
       }
