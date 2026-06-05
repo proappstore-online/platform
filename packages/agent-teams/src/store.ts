@@ -112,6 +112,12 @@ export const MIGRATIONS: string[][] = [
   // conversation. Remove any legacy 'research' tickets so they vanish from the
   // Kanban (the board is build work only now).
   [`DELETE FROM tickets WHERE kind = 'research'`],
+  // KB sharing: access-controlled share links.
+  [`CREATE TABLE IF NOT EXISTS kb_shares (
+    id TEXT PRIMARY KEY, access_type TEXT NOT NULL DEFAULT 'open', allowlist TEXT,
+    label TEXT, expires_at INTEGER, revoked INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL, view_count INTEGER NOT NULL DEFAULT 0
+  )`],
 ];
 
 export function uuid(): string {

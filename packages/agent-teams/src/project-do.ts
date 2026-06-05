@@ -683,11 +683,6 @@ export class ProjectDO implements DurableObject {
 
   private listShares(): Response {
     // Share data lives in the DO's SQLite (not D1) so it's co-located with the KB files.
-    try { this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS kb_shares (
-      id TEXT PRIMARY KEY, access_type TEXT NOT NULL DEFAULT 'open', allowlist TEXT,
-      label TEXT, expires_at INTEGER, revoked INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL, view_count INTEGER NOT NULL DEFAULT 0
-    )`); } catch { /* exists */ }
 
     const rows = this.state.storage.sql
       .exec('SELECT * FROM kb_shares WHERE revoked = 0 ORDER BY created_at DESC')
@@ -705,11 +700,6 @@ export class ProjectDO implements DurableObject {
       return json({ error: 'accessType must be open, google, github, or password' }, 400);
     }
 
-    try { this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS kb_shares (
-      id TEXT PRIMARY KEY, access_type TEXT NOT NULL DEFAULT 'open', allowlist TEXT,
-      label TEXT, expires_at INTEGER, revoked INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL, view_count INTEGER NOT NULL DEFAULT 0
-    )`); } catch { /* exists */ }
 
     const id = crypto.randomUUID().replace(/-/g, '').slice(0, 16); // short URL-safe ID
     const now = Date.now();
@@ -731,11 +721,6 @@ export class ProjectDO implements DurableObject {
 
   /** Public: serve KB content if the share link is valid. */
   private accessKbViaShare(shareId: string): Response {
-    try { this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS kb_shares (
-      id TEXT PRIMARY KEY, access_type TEXT NOT NULL DEFAULT 'open', allowlist TEXT,
-      label TEXT, expires_at INTEGER, revoked INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL, view_count INTEGER NOT NULL DEFAULT 0
-    )`); } catch { /* exists */ }
 
     const share = this.state.storage.sql
       .exec('SELECT * FROM kb_shares WHERE id = ? AND revoked = 0', shareId)
@@ -762,11 +747,6 @@ export class ProjectDO implements DurableObject {
 
   /** Public: serve a specific KB file if the share link is valid. */
   private accessKbFileViaShare(shareId: string, filePath: string): Response {
-    try { this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS kb_shares (
-      id TEXT PRIMARY KEY, access_type TEXT NOT NULL DEFAULT 'open', allowlist TEXT,
-      label TEXT, expires_at INTEGER, revoked INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL, view_count INTEGER NOT NULL DEFAULT 0
-    )`); } catch { /* exists */ }
 
     const share = this.state.storage.sql
       .exec('SELECT * FROM kb_shares WHERE id = ? AND revoked = 0', shareId)
