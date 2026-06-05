@@ -90,7 +90,26 @@ app.use('/v1/*', async (c, next) => {
 // Health
 app.get('/health', (c) => c.json({ ok: true, version: '0.3.2', stage: 'byo-debug' }));
 
-// (debug endpoint removed — BYO key issue was stale INTERNAL_TOKEN on the backend Worker)
+// ── KB sharing (public, no auth) ──────────────────────────────
+// Serves KB content to anyone with a valid share link.
+// The share link ID is the access token — no user session needed.
+
+app.get('/kb/:slug/s/:shareId', async (c) => {
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
+  const res = await stub.fetch(new Request(`https://do/kb/share/${c.req.param('shareId')}`, {
+    headers: { 'Content-Type': 'application/json' },
+  }));
+  return new Response(res.body, { status: res.status, headers: res.headers });
+});
+
+app.get('/kb/:slug/s/:shareId/:path{.+}', async (c) => {
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
+  const filePath = c.req.param('path');
+  const res = await stub.fetch(new Request(`https://do/kb/share/${c.req.param('shareId')}/file?path=${encodeURIComponent(filePath)}`, {
+    headers: { 'Content-Type': 'application/json' },
+  }));
+  return new Response(res.body, { status: res.status, headers: res.headers });
+});
 
 // ── Helper: forward to DO with user ID header ───────────────
 
@@ -345,6 +364,31 @@ app.get('/v1/projects/:slug/files/content', async (c) => {
   const user = c.get('user' as never) as { id: string };
   const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
   const res = await forwardToDO(stub, `/files/content?path=${encodeURIComponent(c.req.query('path') ?? '')}`, user.id);
+  return new Response(res.body, { status: res.status, headers: res.headers });
+});
+
+// ── KB share links (auth: project owner) ─────────────────────
+
+app.get('/v1/projects/:slug/shares', async (c) => {
+  const user = c.get('user' as never) as { id: string };
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
+  const res = await forwardToDO(stub, '/shares', user.id);
+  return new Response(res.body, { status: res.status, headers: res.headers });
+});
+
+app.post('/v1/projects/:slug/shares', async (c) => {
+  const user = c.get('user' as never) as { id: string };
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
+  const res = await forwardToDO(stub, '/shares', user.id, {
+    method: 'POST', body: JSON.stringify(await c.req.json()),
+  });
+  return new Response(res.body, { status: res.status, headers: res.headers });
+});
+
+app.delete('/v1/projects/:slug/shares/:shareId', async (c) => {
+  const user = c.get('user' as never) as { id: string };
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
+  const res = await forwardToDO(stub, `/shares/${c.req.param('shareId')}`, user.id, { method: 'DELETE' });
   return new Response(res.body, { status: res.status, headers: res.headers });
 });
 

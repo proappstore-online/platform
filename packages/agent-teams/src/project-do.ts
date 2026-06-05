@@ -163,6 +163,13 @@ export class ProjectDO implements DurableObject {
     // Init is special: only checks ownership if project already exists
     if (path === '/project' && request.method === 'PUT') return this.initProject(request);
 
+    // KB share access is PUBLIC — the share ID is the auth token.
+    // Must be checked before the ownership gate.
+    const shareAccessMatch = path.match(/^\/kb\/share\/([a-zA-Z0-9_-]+)$/);
+    if (shareAccessMatch) return this.accessKbViaShare(shareAccessMatch[1]!);
+    const shareFileMatch = path.match(/^\/kb\/share\/([a-zA-Z0-9_-]+)\/file$/);
+    if (shareFileMatch) return this.accessKbFileViaShare(shareFileMatch[1]!, new URL(request.url).searchParams.get('path') ?? '');
+
     // All other routes require ownership
     const ownerErr = this.assertOwner(request);
     if (ownerErr) return ownerErr;
@@ -227,6 +234,12 @@ export class ProjectDO implements DurableObject {
     if (path === '/files/content' && request.method === 'GET') {
       return this.getProjectFile(new URL(request.url).searchParams.get('path') ?? '');
     }
+
+    // KB share link management (owner only)
+    if (path === '/shares' && request.method === 'GET') return this.listShares();
+    if (path === '/shares' && request.method === 'POST') return this.createShare(request);
+    const shareDeleteMatch = path.match(/^\/shares\/([a-zA-Z0-9_-]+)$/);
+    if (shareDeleteMatch && request.method === 'DELETE') return this.revokeShare(shareDeleteMatch[1]!);
 
     return json({ error: 'not_found' }, 404);
   }
@@ -663,6 +676,117 @@ export class ProjectDO implements DurableObject {
     const MAX = 200_000;
     const truncated = row.content.length > MAX;
     return json({ path: row.path, content: truncated ? row.content.slice(0, MAX) : row.content, truncated });
+  }
+
+  // ── KB Share Links ──────────────────────────────────────────
+  // Private by default. Owner creates share links with configurable access.
+
+  private listShares(): Response {
+    // Share data lives in the DO's SQLite (not D1) so it's co-located with the KB files.
+    try { this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS kb_shares (
+      id TEXT PRIMARY KEY, access_type TEXT NOT NULL DEFAULT 'open', allowlist TEXT,
+      label TEXT, expires_at INTEGER, revoked INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL, view_count INTEGER NOT NULL DEFAULT 0
+    )`); } catch { /* exists */ }
+
+    const rows = this.state.storage.sql
+      .exec('SELECT * FROM kb_shares WHERE revoked = 0 ORDER BY created_at DESC')
+      .toArray();
+    return json({ shares: rows.map((r) => ({
+      id: r.id, accessType: r.access_type, allowlist: r.allowlist,
+      label: r.label, expiresAt: r.expires_at, createdAt: r.created_at, viewCount: r.view_count,
+    })) });
+  }
+
+  private async createShare(request: Request): Promise<Response> {
+    const body = (await request.json()) as { accessType?: string; allowlist?: string; label?: string; expiresAt?: number };
+    const accessType = body.accessType ?? 'open';
+    if (!['open', 'google', 'github', 'password'].includes(accessType)) {
+      return json({ error: 'accessType must be open, google, github, or password' }, 400);
+    }
+
+    try { this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS kb_shares (
+      id TEXT PRIMARY KEY, access_type TEXT NOT NULL DEFAULT 'open', allowlist TEXT,
+      label TEXT, expires_at INTEGER, revoked INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL, view_count INTEGER NOT NULL DEFAULT 0
+    )`); } catch { /* exists */ }
+
+    const id = crypto.randomUUID().replace(/-/g, '').slice(0, 16); // short URL-safe ID
+    const now = Date.now();
+    this.state.storage.sql.exec(
+      'INSERT INTO kb_shares (id, access_type, allowlist, label, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      id, accessType, body.allowlist ?? null, body.label ?? null, body.expiresAt ?? null, now,
+    );
+
+    const proj = this.state.storage.sql.exec('SELECT slug FROM project LIMIT 1').toArray()[0] as { slug: string } | undefined;
+    const url = `https://agents.proappstore.online/kb/${proj?.slug ?? 'unknown'}/s/${id}`;
+
+    return json({ id, url, accessType }, 201);
+  }
+
+  private revokeShare(shareId: string): Response {
+    this.state.storage.sql.exec('UPDATE kb_shares SET revoked = 1 WHERE id = ?', shareId);
+    return json({ ok: true });
+  }
+
+  /** Public: serve KB content if the share link is valid. */
+  private accessKbViaShare(shareId: string): Response {
+    try { this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS kb_shares (
+      id TEXT PRIMARY KEY, access_type TEXT NOT NULL DEFAULT 'open', allowlist TEXT,
+      label TEXT, expires_at INTEGER, revoked INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL, view_count INTEGER NOT NULL DEFAULT 0
+    )`); } catch { /* exists */ }
+
+    const share = this.state.storage.sql
+      .exec('SELECT * FROM kb_shares WHERE id = ? AND revoked = 0', shareId)
+      .toArray()[0] as { access_type: string; expires_at: number | null } | undefined;
+
+    if (!share) return json({ error: 'Share link not found or revoked' }, 404);
+    if (share.expires_at && Date.now() > share.expires_at) return json({ error: 'Share link expired' }, 410);
+
+    // For 'open' type, serve immediately. Other types need additional auth (Phase 2).
+    if (share.access_type !== 'open') {
+      return json({ error: `This link requires ${share.access_type} authentication (coming soon)` }, 403);
+    }
+
+    // Bump view count
+    this.state.storage.sql.exec('UPDATE kb_shares SET view_count = view_count + 1 WHERE id = ?', shareId);
+
+    // Return KB file list
+    const files = this.state.storage.sql
+      .exec("SELECT path, length(content) AS size FROM project_files WHERE path = 'KNOWLEDGE.md' OR path LIKE 'docs/%' ORDER BY path")
+      .toArray() as { path: string; size: number }[];
+
+    return json({ files, accessType: share.access_type });
+  }
+
+  /** Public: serve a specific KB file if the share link is valid. */
+  private accessKbFileViaShare(shareId: string, filePath: string): Response {
+    try { this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS kb_shares (
+      id TEXT PRIMARY KEY, access_type TEXT NOT NULL DEFAULT 'open', allowlist TEXT,
+      label TEXT, expires_at INTEGER, revoked INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL, view_count INTEGER NOT NULL DEFAULT 0
+    )`); } catch { /* exists */ }
+
+    const share = this.state.storage.sql
+      .exec('SELECT * FROM kb_shares WHERE id = ? AND revoked = 0', shareId)
+      .toArray()[0] as { access_type: string; expires_at: number | null } | undefined;
+
+    if (!share) return json({ error: 'Share link not found or revoked' }, 404);
+    if (share.expires_at && Date.now() > share.expires_at) return json({ error: 'Share link expired' }, 410);
+    if (share.access_type !== 'open') return json({ error: `Requires ${share.access_type} auth` }, 403);
+
+    // Only serve KB files (KNOWLEDGE.md + docs/*)
+    if (filePath !== 'KNOWLEDGE.md' && !filePath.startsWith('docs/')) {
+      return json({ error: 'Only KB files (KNOWLEDGE.md + docs/*) are accessible via share links' }, 403);
+    }
+
+    const row = this.state.storage.sql
+      .exec('SELECT content FROM project_files WHERE path = ?', filePath)
+      .toArray()[0] as { content: string } | undefined;
+
+    if (!row) return json({ error: 'file not found' }, 404);
+    return json({ path: filePath, content: row.content });
   }
 
   /**
