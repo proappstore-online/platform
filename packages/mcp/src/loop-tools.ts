@@ -212,7 +212,7 @@ export function registerLoopTools(server: McpServer, env: LoopEnv): void {
     },
     async ({ token, slug, roles }) => {
       const r = await call(`/v1/projects/${slug}/roles`, token, { method: "PUT", body: { roles } });
-      return text(r.ok ? `Models updated for ${slug}: ${roles.map(r => `${r.role}=${r.model}`).join(', ')}` : String(r.data));
+      return text(r.ok ? `Models updated for ${slug}: ${roles.map(rc => `${rc.role}=${rc.model}`).join(', ')}` : String(r.data));
     },
   );
 

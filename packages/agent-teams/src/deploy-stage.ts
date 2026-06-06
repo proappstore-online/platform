@@ -200,6 +200,14 @@ async function harvestTestResults(
     };
 
     const { sql } = deps;
+
+    // Deduplicate: skip if we already have a run for this commit SHA (the same
+    // summary.json gets served until the next test run overwrites it).
+    if (sha) {
+      const existing = sql.exec('SELECT id FROM test_runs WHERE commit_sha = ? LIMIT 1', sha).toArray();
+      if (existing.length > 0) return;
+    }
+
     const runId = crypto.randomUUID();
     const passed = summary.passed ?? 0;
     const failed = summary.failed ?? 0;

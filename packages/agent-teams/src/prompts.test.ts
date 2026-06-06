@@ -63,6 +63,29 @@ describe('buildSeedMessages', () => {
     expect(body).toContain('## Approved spec');
     expect(body).toContain('SUMMARY');
   });
+
+  it('Dev/QA get the cached app context summary when available', () => {
+    const files = ['src/main.tsx', 'src/App.tsx'];
+    const summary = '# App Context Summary\n\n## Components\n- App\n## SDK Usage\n- app.auth';
+    const dev = buildSeedMessages('Dev', ticket(), 'myapp', [], files, '', '', summary)[0]!.body;
+    expect(dev).toContain('# App Context Summary');
+    expect(dev).toContain('app.auth');
+    // File list is still included alongside the summary
+    expect(dev).toContain('## File list (2)');
+  });
+
+  it('falls back to raw file list when no context summary is available', () => {
+    const files = ['src/main.tsx', 'src/App.tsx'];
+    const dev = buildSeedMessages('Dev', ticket(), 'myapp', [], files)[0]!.body;
+    expect(dev).toContain('## Existing files (2)');
+    expect(dev).not.toContain('App Context Summary');
+  });
+
+  it('BA does not get the context summary (only Dev/QA)', () => {
+    const summary = '# App Context Summary\n\n## Components\n- App';
+    const ba = buildSeedMessages('BA', ticket(), 'myapp', [], [], '', '', summary)[0]!.body;
+    expect(ba).not.toContain('App Context Summary');
+  });
 });
 
 describe('buildPOSystemPrompt', () => {
