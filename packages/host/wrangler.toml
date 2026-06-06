@@ -1,52 +1,50 @@
 name = "proappstore-host"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
-workers_dev = false
+workers_dev = true
 
-# v0.1 scaffolding. Not deployed.
-#
-# CRITICAL — wildcard route preemption (per wildcard-worker-route-preemption memory):
-# A `*.proappstore.online/*` route preempts every sibling Worker custom_domain
-# binding on this zone — including admin.proappstore.online, api.proappstore.online,
-# data-*.proappstore.online (the per-app D1 worker). This Worker MUST explicitly
-# dispatch those hostnames back via service bindings (see ADMIN, API below).
-# Mirror of fas/host's pattern.
-#
-# Before enabling the route in stage 0:
-# 1. ENUMERATE every subdomain currently bound on proappstore.online
-# 2. Add a service binding here for each one
-# 3. Add a dispatch branch in src/index.ts
-# 4. Test in a staging account first
-#
-# [[routes]]
-# pattern = "*.proappstore.online/*"
-# zone_name = "proappstore.online"
+# CRITICAL — wildcard route preemption:
+# *.proappstore.online/* preempts every sibling Worker custom_domain on this
+# zone. This Worker MUST dispatch reserved subdomains via service bindings.
+# See RESERVED_SUBDOMAINS in host.ts and dispatch branches in index.ts.
 
-# Apex stays on the storefront's Pages project; this Worker only handles
-# subdomains. (No route for "proappstore.online/*".)
+[[routes]]
+pattern = "*.proappstore.online/*"
+zone_name = "proappstore.online"
 
-# Path B storage — every published app's files live at apps/{slug}/* here.
-# Shared bucket with pas/admin (admin writes, host reads).
-# [[r2_buckets]]
-# binding = "APPS_R2"
-# bucket_name = "pas-apps"
+# Apex stays on the storefront's Pages project; this Worker handles subdomains only.
 
-# Service binding to PAS admin Worker — for admin.proappstore.online dispatch.
-# Wire after pas/admin is deployed.
-# [[services]]
-# binding = "ADMIN"
-# service = "proappstore-admin"
+[[r2_buckets]]
+binding = "APPS"
+bucket_name = "pas-apps"
 
-# Service binding to PAS backend Worker — for api.proappstore.online dispatch.
-# [[services]]
-# binding = "API"
-# service = "proappstore-api"
+[[d1_databases]]
+binding = "DB"
+database_name = "pas"
+database_id = "585bbda3-0016-42ad-a53d-c089f1864fcb"
+migrations_dir = "migrations"
 
-# Routes registry — same pattern as fas/host. D1 table maps
-# {subdomain → r2_prefix} so multi-version + canary cuts are O(1) and
-# the host doesn't need to redeploy when a new app publishes.
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "pas"
-# database_id = "585bbda3-0016-42ad-a53d-c089f1864fcb"
-# migrations_dir = "migrations"
+# Service bindings — zero-hop dispatch to sibling Workers on this zone.
+# Every Worker with a custom_domain on proappstore.online MUST be listed here.
+[[services]]
+binding = "API"
+service = "proappstore-api"
+
+[[services]]
+binding = "ADMIN"
+service = "proappstore-admin"
+
+[[services]]
+binding = "AGENTS"
+service = "proappstore-agent-teams"
+
+[[services]]
+binding = "MCP"
+service = "proappstore-mcp"
+
+[[services]]
+binding = "KB"
+service = "proappstore-kb-host"
+
+# Secrets (set via `wrangler secret put`):
+# (none — host is read-only, all secrets live on the Workers it dispatches to)

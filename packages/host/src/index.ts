@@ -1,70 +1,112 @@
 /**
- * proappstore-host — serves every published app from R2 via subdomain routing.
+ * proappstore-host — serves every published Pro app from R2 via subdomain routing.
  *
- *   ┌────────────────────────────────────────────────────────────────────────┐
- *   │  user visits  meetup.proappstore.online/  ────▶  Wildcard route        │
- *   │                                              │                          │
- *   │                                              ▼                          │
- *   │                                  this Worker (proappstore-host)         │
- *   │                                              │                          │
- *   │  1. slugFromHostname()                                                   │
- *   │  2. if RESERVED → dispatch via service binding (ADMIN / API)             │
- *   │  3. else → lookup route in D1 → R2.get(apps/{slug}/{path})              │
- *   │              + content-type, cache headers, etag handling                │
- *   └────────────────────────────────────────────────────────────────────────┘
+ * Wildcard route `*.proappstore.online/*` catches all subdomains. Reserved
+ * subdomains (api, admin, agents, mcp, kb, console, dashboard) are dispatched
+ * via service bindings or proxied to CF Pages. Everything else is looked up
+ * in the D1 routes table and served from R2.
  *
- * Wildcard pattern (NOT path-based) — every app gets its own subdomain
- * URL identity. Mirrors fas/host. Per `wildcard-worker-route-preemption`
- * memory: enabling `*.proappstore.online/*` preempts every sibling Worker
- * custom_domain on this zone, so this Worker MUST dispatch reserved
- * subdomains (admin, api, etc.) via service bindings instead of letting
- * the original Workers respond.
- *
- * v0.1: only /health on the apex subdomain check and a 501 catch-all.
- * Stage 0 wires R2, DB, and service bindings; ports the dispatch + serve
- * logic from fas/host.
+ * data-* subdomains (per-app D1 Workers) are proxied via fetch since they're
+ * dynamically created and can't have static service bindings.
  */
 
-import type { Env } from "./env.js";
-import { RESERVED_SUBDOMAINS, slugFromHostname } from "./host.js";
+import type { Env } from './env.js';
+import {
+  slugFromHostname,
+  resolveRoute,
+  r2KeyFor,
+  contentType,
+  etagsMatch,
+  securityHeaders,
+} from './host.js';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname === "/health") {
-      return Response.json({
-        ok: true,
-        worker: "proappstore-host",
-        version: "0.1.0",
-        stage: "scaffold",
-      });
+    // Health check (any hostname)
+    if (url.pathname === '/health') {
+      return Response.json({ ok: true, worker: 'proappstore-host', version: '1.0.0' });
     }
 
     const slug = slugFromHostname(url.hostname);
 
+    // Apex or non-proappstore hostname
     if (slug === null) {
-      return new Response("Not found", { status: 404 });
+      return new Response('Not found', { status: 404 });
     }
 
-    if (RESERVED_SUBDOMAINS.has(slug)) {
-      // Stage 0 wires service-binding dispatch here:
-      //   if (slug === "admin") return env.ADMIN.fetch(request);
-      //   if (slug === "api")   return env.API.fetch(request);
-      return Response.json(
-        { error: "not_implemented", stage: "scaffold", reserved: slug },
-        { status: 501 },
-      );
+    // ── Reserved subdomain dispatch ──────────────────────────────
+
+    // Service-bound Workers (zero-hop, no external fetch)
+    if (slug === 'api') return env.API.fetch(request);
+    if (slug === 'admin') return env.ADMIN.fetch(request);
+    if (slug === 'agents') return env.AGENTS.fetch(request);
+    if (slug === 'mcp') return env.MCP.fetch(request);
+    if (slug === 'kb') return env.KB.fetch(request);
+
+    // www → redirect to apex
+    if (slug === 'www') {
+      return Response.redirect(`https://proappstore.online${url.pathname}${url.search}`, 301);
     }
 
-    // Stage 0: lookup slug in routes table → resolve r2_prefix → serve from R2.
-    // Suppress unused-warning until then.
-    void env;
-    void ctx;
+    // Console + Dashboard → proxy to CF Pages (can't service-bind Pages projects)
+    if (slug === 'console') return fetch(new Request(`https://proappstore-console.pages.dev${url.pathname}${url.search}`, request));
+    if (slug === 'dashboard') return fetch(new Request(`https://proappstore-dashboard.pages.dev${url.pathname}${url.search}`, request));
 
-    return Response.json(
-      { error: "not_implemented", stage: "scaffold", slug, path: url.pathname },
-      { status: 501 },
-    );
+    // data-* → proxy to per-app D1 Workers (dynamically created, no static binding)
+    if (slug.startsWith('data-')) {
+      return fetch(new Request(`https://pas-${slug}.serge-the-dev.workers.dev${url.pathname}${url.search}`, request));
+    }
+
+    // ── App serving from R2 ──────────────────────────────────────
+
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return new Response('Method not allowed', { status: 405 });
+    }
+
+    const route = await resolveRoute(env.DB, slug);
+    if (!route) {
+      return new Response('App not found', { status: 404 });
+    }
+
+    // Compute the R2 key
+    let key = r2KeyFor(route, url.pathname);
+    let object = await env.APPS.get(key);
+
+    // SPA fallback: if the path has no file extension and the key misses R2,
+    // fall back to index.html (React Router, etc.)
+    const hasExtension = url.pathname.split('/').pop()?.includes('.') ?? false;
+    if (!object && !hasExtension) {
+      key = `${route.r2_prefix}/index.html`;
+      object = await env.APPS.get(key);
+    }
+
+    if (!object) {
+      return new Response('Not found', { status: 404 });
+    }
+
+    // 304 Not Modified
+    const etag = object.httpEtag;
+    if (etagsMatch(request.headers.get('If-None-Match'), etag)) {
+      return new Response(null, { status: 304, headers: { ETag: etag } });
+    }
+
+    // Serve the object
+    const isHtml = key.endsWith('.html');
+    const headers = securityHeaders(isHtml);
+    headers.set('Content-Type', contentType(key));
+    headers.set('ETag', etag);
+    if (object.size !== undefined) headers.set('Content-Length', String(object.size));
+
+    const body = request.method === 'HEAD' ? null : object.body;
+    const response = new Response(body, { status: 200, headers });
+
+    // Edge cache: cache the R2 response so subsequent requests don't hit R2
+    if (request.method === 'GET') {
+      ctx.waitUntil((caches as unknown as { default: Cache }).default.put(request, response.clone()));
+    }
+
+    return response;
   },
 };

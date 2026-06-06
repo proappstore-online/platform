@@ -1,18 +1,16 @@
-/**
- * Worker bindings — type-safe wrapper around what wrangler.toml declares.
- *
- * v0.1: minimal. Stage 0 (~week 3) wires:
- *   - APPS_R2 (R2 bucket, shared with pas/admin)
- *   - ADMIN service binding (admin.proappstore.online dispatch)
- *   - API service binding (api.proappstore.online dispatch)
- *   - DB (D1 routes table for subdomain → r2_prefix lookup)
- *
- * Patterns inherited from fas/host/src/env.ts.
- */
-export type Env = {
-  // bindings (to be wired in stage 0)
-  // APPS_R2: R2Bucket;
-  // ADMIN: Fetcher;
-  // API: Fetcher;
-  // DB: D1Database;
-};
+export interface Env {
+  /** R2 bucket: published app files at apps/{slug}/* */
+  APPS: R2Bucket;
+  /** D1: routes table maps subdomain → r2_prefix */
+  DB: D1Database;
+  /** Service binding: api.proappstore.online → proappstore-api */
+  API: Fetcher;
+  /** Service binding: admin.proappstore.online → proappstore-admin */
+  ADMIN: Fetcher;
+  /** Service binding: agents.proappstore.online → proappstore-agent-teams */
+  AGENTS: Fetcher;
+  /** Service binding: mcp.proappstore.online → proappstore-mcp */
+  MCP: Fetcher;
+  /** Service binding: kb.proappstore.online → proappstore-kb-host */
+  KB: Fetcher;
+}
