@@ -197,11 +197,13 @@ export class CFNativeRuntime implements AgentRuntime {
         }
       }
 
-      // Feed results back. If we're running hot on context, warn the model.
-      if (totalIn > 120_000) {
-        toolResults.push({ type: 'text', text: `[SYSTEM: You have used ${Math.round(totalIn / 1000)}k input tokens. Finish your current task and stop — do NOT start reading more files. Write what you have and end your turn.]` } as AnthropicContent);
-      }
+      // Feed tool results back.
       anthropicMessages.push({ role: 'user', content: toolResults });
+      // If running hot on context, inject a warning as a SEPARATE user message
+      // (mixing text with tool_result in one message violates the Anthropic API).
+      if (totalIn > 120_000) {
+        anthropicMessages.push({ role: 'user', content: [{ type: 'text', text: `[SYSTEM: You have used ${Math.round(totalIn / 1000)}k input tokens. Finish your current task and stop. Do NOT read more files. Write what you have and end your turn.]` }] });
+      }
     }
 
     yield { type: 'error', message: `Max iterations (${MAX_ITERATIONS}) reached`, retryable: false };

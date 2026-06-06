@@ -181,4 +181,23 @@ describe('read_file truncation and offset/limit', () => {
     expect(r.data).toContain('line 449');
     expect(r.data).not.toContain('truncated');
   });
+
+  it('offset past end of file returns a clear message', () => {
+    const content = Array.from({ length: 10 }, (_, i) => `line ${i}`).join('\n');
+    const files = new Map([['small.ts', content]]);
+    const r = executeFileTool(call('read_file', { path: 'small.ts', offset: 999 }), files);
+    expect(r.ok).toBe(true);
+    expect(r.data).toContain('past end of file');
+  });
+
+  it('offset=0 with explicit limit reads that many lines without truncation', () => {
+    const content = Array.from({ length: 500 }, (_, i) => `line ${i}`).join('\n');
+    const files = new Map([['big.ts', content]]);
+    const r = executeFileTool(call('read_file', { path: 'big.ts', offset: 0, limit: 10 }), files);
+    expect(r.ok).toBe(true);
+    expect(r.data).toContain('line 0');
+    expect(r.data).toContain('line 9');
+    expect(r.data).toContain('lines 1-10 of 500');
+    expect(r.data).not.toContain('truncated');
+  });
 });

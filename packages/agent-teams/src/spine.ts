@@ -80,14 +80,16 @@ export function executeFileTool(call: ToolCall, files: Map<string, string>): Too
       const content = files.get(path);
       if (content === undefined) return err(call, `file not found: ${path}`);
       const lines = content.split('\n');
-      const offset = Math.max(0, Number(args.offset ?? 0));
-      const limit = Number(args.limit ?? 0) || 0;
-      // If offset/limit specified, return that range.
-      if (offset > 0 || limit > 0) {
-        const slice = lines.slice(offset, limit > 0 ? offset + limit : undefined);
+      const offset = Math.max(0, Math.floor(Number(args.offset ?? 0)));
+      const limit = Math.max(0, Math.floor(Number(args.limit ?? 0)));
+      // If offset/limit explicitly provided, return that range (bypasses truncation).
+      if (args.offset !== undefined || args.limit !== undefined) {
+        const end = limit > 0 ? Math.min(offset + limit, lines.length) : lines.length;
+        const slice = lines.slice(offset, end);
+        if (slice.length === 0) return ok(call, `[${path}: ${lines.length} lines, offset ${offset} is past end of file]`);
         return ok(call, `[${path} lines ${offset + 1}-${offset + slice.length} of ${lines.length}]\n${slice.join('\n')}`);
       }
-      // Truncate large files to save context. Agent can re-read with offset.
+      // No offset/limit: truncate large files to save context.
       const MAX_LINES = 300;
       if (lines.length > MAX_LINES) {
         return ok(call, `${lines.slice(0, MAX_LINES).join('\n')}\n\n... (truncated: showing ${MAX_LINES} of ${lines.length} lines. Use offset/limit to read more.)`);
