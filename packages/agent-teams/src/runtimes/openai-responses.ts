@@ -160,11 +160,13 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
       });
 
       if (!res.ok) {
-        // Sanitize error — never expose raw upstream response (may contain API key)
-        const safeError = res.status === 401 ? 'API authentication failed — check your API key'
-          : res.status === 429 ? 'Rate limited — retry later'
-          : res.status === 400 ? 'Invalid request to AI provider'
-          : `AI provider error (${res.status})`;
+        // Extract the upstream error detail (OpenAI returns { error: { message } }).
+        let detail = '';
+        try { const b = await res.json() as { error?: { message?: string } }; detail = b?.error?.message ?? ''; } catch { /* body not JSON */ }
+        const safeError = res.status === 401 ? 'API key rejected — check your OpenAI API key in Profile → API Keys'
+          : res.status === 429 ? 'Rate limited by OpenAI — retry in a minute'
+          : res.status === 400 ? `OpenAI rejected the request: ${detail || 'bad request (400)'}. This often means the conversation is too long or the model name is wrong — check Settings → Agents.`
+          : `OpenAI error ${res.status}${detail ? `: ${detail}` : ''}`;
         yield { type: 'error', message: safeError, retryable: res.status >= 500 };
         return;
       }

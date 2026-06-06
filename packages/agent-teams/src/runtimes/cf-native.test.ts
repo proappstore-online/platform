@@ -187,6 +187,6 @@ describe('CFNativeRuntime run loop', () => {
     const events = await collect(await prepareHandle());
     const err = events.find((e) => e.type === 'error') as { type: 'error'; message: string } | undefined;
     expect(err).toBeDefined();
-    expect(err!.message).toContain('authentication');
+    expect(err!.message).toContain('API key rejected');
   });
 });

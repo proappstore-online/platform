@@ -191,7 +191,7 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
     if (outcome === 'timeout') {
       aborted = true; // stop the orphaned loop from further state mutation
       ac.abort();     // and actually cancel the in-flight model fetch (stop the spend)
-      errorMessage = errorMessage ?? `run exceeded ${maxRunMinutes} min timeout — increase it with the timeout selector on the board (current: ${maxRunMinutes}m, max: 60m)`;
+      errorMessage = errorMessage ?? `Run timed out after ${maxRunMinutes} min. The task may be too large for one pass. Fix: increase the timeout (board header dropdown, max 60m) or break the ticket into smaller pieces.`;
     }
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : 'agent run failed';
