@@ -161,7 +161,7 @@ export type StreamEvent =
   // Emitted every 5s during model streaming AND long tool runs.
   // Anytime upstream is alive but not emitting semantic events.
   // Prevents stuck-ticket false positives on slow model responses.
-  | { type: 'heartbeat' }
+  | { type: 'heartbeat'; costUsd?: number; tokensIn?: number; tokensOut?: number }
 
 export type RuntimeTerminationStats = {
   costUsd: number

@@ -97,7 +97,7 @@ export class CFNativeRuntime implements AgentRuntime {
     };
 
     for (let i = 0; i < MAX_ITERATIONS; i++) {
-      yield { type: 'heartbeat' };
+      yield { type: 'heartbeat', costUsd: estimateCost(model, totalIn, totalOut), tokensIn: totalIn, tokensOut: totalOut };
 
       // Open the request, retrying transient failures (429, 5xx incl. CF 524).
       let res: Response | null = null;

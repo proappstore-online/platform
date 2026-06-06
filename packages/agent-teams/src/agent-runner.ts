@@ -168,7 +168,8 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
             errorMessage = ev.message;
             break;
           case 'heartbeat':
-            deps.broadcast({ type: 'agent-heartbeat', ticketId, role });
+            deps.broadcast({ type: 'agent-heartbeat', ticketId, role,
+              costUsd: ev.costUsd ?? 0, tokensIn: ev.tokensIn ?? 0, tokensOut: ev.tokensOut ?? 0 });
             break;
         }
       }
