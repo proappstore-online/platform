@@ -66,8 +66,15 @@ export default {
     }
 
     const route = await resolveRoute(env.DB, slug);
+
+    // App not in routes table (or not yet migrated to R2) → fall back to the
+    // CF Pages project. This keeps apps working during the Pages→R2 migration.
+    // Once all apps are in R2, this fallback can be removed.
     if (!route) {
-      return new Response('App not found', { status: 404 });
+      return fetch(new Request(
+        `https://proappstore-${slug}.pages.dev${url.pathname}${url.search}`,
+        request,
+      ));
     }
 
     // Compute the R2 key
@@ -83,7 +90,12 @@ export default {
     }
 
     if (!object) {
-      return new Response('Not found', { status: 404 });
+      // R2 has no files for this app yet (route exists but not migrated).
+      // Fall back to CF Pages during the migration period.
+      return fetch(new Request(
+        `https://proappstore-${slug}.pages.dev${url.pathname}${url.search}`,
+        request,
+      ));
     }
 
     // 304 Not Modified
