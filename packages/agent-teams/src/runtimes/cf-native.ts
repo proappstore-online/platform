@@ -18,7 +18,7 @@ import { PLATFORM_CAPABILITIES } from '../platform-skill.ts';
 import type { AnthropicContent, AnthropicMessage } from './cf-native-types.ts';
 import { estimateCost } from './cf-native-pricing.ts';
 import { buildDefaultPrompt } from './cf-native-prompt.ts';
-import { messagesToAnthropic, nameToToolDef } from './cf-native-helpers.ts';
+import { messagesToAnthropic, nameToToolDef, trimConversation } from './cf-native-helpers.ts';
 import { parseAnthropicStream } from './cf-native-stream.ts';
 
 const MAX_ITERATIONS = 25;
@@ -98,6 +98,12 @@ export class CFNativeRuntime implements AgentRuntime {
 
     for (let i = 0; i < MAX_ITERATIONS; i++) {
       yield { type: 'heartbeat', costUsd: estimateCost(model, totalIn, totalOut), tokensIn: totalIn, tokensOut: totalOut };
+
+      // Guard: trim old tool results if the conversation is too large for the
+      // model's context window. Keep the last 2 turns intact; older tool_result
+      // blocks are truncated to a short summary. Prevents the 400 "prompt too
+      // long" error that kills the run on iteration-heavy tickets.
+      trimConversation(anthropicMessages);
 
       // Open the request, retrying transient failures (429, 5xx incl. CF 524).
       let res: Response | null = null;

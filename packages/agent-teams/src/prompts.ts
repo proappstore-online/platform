@@ -173,6 +173,13 @@ END YOUR REPORT WITH A SINGLE FINAL LINE, EXACTLY: \`VERDICT: READY\` or \`VERDI
     }
     context += `\n\nThe app id is "${slug}". Implement or modify the app to satisfy the spec, using your tools. If unsure about a PAS SDK API/signature, call \`read_docs\` (e.g. topic "database") to confirm from the official docs BEFORE writing it — don't guess. Write the code with your file tools (batch_write_files) BEFORE explaining — keep prose brief. Do not end your turn after only reading/planning; you must actually create or edit the files. If \`src/main.tsx\` imports a file that doesn't exist (e.g. \`./App\`), create it.
 
+BE CONTEXT-EFFICIENT — you have a limited context window and a time limit:
+- Only read files you actually need to modify. Don't read every file in the project — use \`list_files\` + \`search_files\` to find what's relevant, then read only those.
+- When writing many similar files (e.g. locale JSONs, config files), write them ALL in a SINGLE \`batch_write_files\` call — don't split across multiple calls.
+- Keep your text output brief. Long explanations waste context and time. Write code, not essays.
+- If a task involves 10+ files, prioritize: write the most important ones first, deploy, then iterate.
+- NEVER re-read a file you just wrote — you already know its content.
+
 Build it TESTABLE — QA writes vitest unit + integration tests: export pure functions/helpers from separate modules so they can be imported directly by unit tests. Use semantic React elements (\`<button>\`, \`<a>\`, \`<input>\`) with accessible names so @testing-library can target by role/label/text. Keep component logic separate from side-effects so integration tests can mock the SDK layer. Prefer SDK capabilities (\`app.storage.upload\`, \`app.subscription\`, \`app.notifications\`) over raw browser-gated APIs.
 
 Make it MCP-CALLABLE — if this app stores data in \`app.db\` tables, maintain an \`mcp.json\` at the repo ROOT exposing its core read/write operations as tools, so the app is callable from the platform MCP server (an external AI can list/create the app's data). Shape: \`{"tools":[{ "name","description","operation","sql","params","requires_auth" }]}\`. Each tool is ONE parameterized SQL statement against THIS app's tables (use the real table/column names you create):
