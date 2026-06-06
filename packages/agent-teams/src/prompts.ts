@@ -162,6 +162,8 @@ Keep each file focused and concrete. This is reference material the team reads �
   } else if (role === 'BA') {
     context += `\n\nThe app id is "${slug}". Turn this ticket into a crisp, buildable spec: concrete acceptance criteria, the SDK primitives/files involved, and what's out of scope. Ground it in the ACTUAL code (your read-only tools) and the real SDK (\`read_docs\`) — don't invent APIs.
 
+SCOPE GUARD: estimate the number of source files the Dev will create or modify. If >8 files, the ticket is TOO LARGE for one Dev pass — split it in your spec. Example: "Add i18n with 10 languages" should become "Add i18n framework + English strings" (ticket 1) + "Add Chinese, Vietnamese, Arabic, Hindi translations" (ticket 2) + "Add Greek, Italian, Punjabi, Cantonese translations" (ticket 3). Each sub-scope should be <=8 files. List the sub-scopes clearly so the PO can create separate tickets.
+
 END YOUR REPORT WITH A SINGLE FINAL LINE, EXACTLY: \`VERDICT: READY\` or \`VERDICT: BLOCKED\`.
 - \`VERDICT: READY\` → the spec is complete and a Dev can build it with NO open product/scope decisions. Most tickets — including straightforward bug/build fixes — are READY.
 - \`VERDICT: BLOCKED\` → you genuinely cannot write a buildable spec without a decision only the founder can make (real product ambiguity or conflicting requirements). List the SPECIFIC questions; the ticket then PAUSES for the founder to answer in chat and you re-run with their answer. Do NOT use BLOCKED for anything you can resolve from the code/docs, or to ask permission for the obvious — that just stalls the build. When in doubt, make the smallest reasonable assumption, note it, and go READY.`;

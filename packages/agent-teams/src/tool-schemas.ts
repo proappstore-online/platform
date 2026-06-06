@@ -28,12 +28,14 @@ export const TOOL_SCHEMAS: Record<string, ToolSchema> = {
     },
   },
   read_file: {
-    description: 'Read a file from the app GitHub repo.',
+    description: 'Read a file from the app repo. Large files (>300 lines) are auto-truncated; use offset+limit to read specific ranges. Prefer search_files to find what you need, then read_file only the relevant file.',
     parameters: {
       type: 'object',
       properties: {
         app_id: { type: 'string' },
         path: { type: 'string' },
+        offset: { type: 'integer', description: 'Start line (0-based). Omit to start from the beginning.' },
+        limit: { type: 'integer', description: 'Max lines to return. Omit for full file (up to 300 lines).' },
       },
       required: ['app_id', 'path'],
       additionalProperties: false,
@@ -52,7 +54,7 @@ export const TOOL_SCHEMAS: Record<string, ToolSchema> = {
     },
   },
   search_files: {
-    description: 'Search for text across all files in the app repo.',
+    description: 'Search for text across all files in the app repo. Returns path:line:match. Use the line numbers to read_file with offset+limit for targeted reads instead of reading whole files.',
     parameters: {
       type: 'object',
       properties: {
@@ -64,7 +66,7 @@ export const TOOL_SCHEMAS: Record<string, ToolSchema> = {
     },
   },
   batch_write_files: {
-    description: 'Write multiple files in a single commit.',
+    description: 'Write multiple files at once. Always prefer this over multiple write_file calls — it saves context and time. Group ALL related file writes into one batch.',
     parameters: {
       type: 'object',
       properties: {

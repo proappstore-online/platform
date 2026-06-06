@@ -92,6 +92,12 @@ Status: **live** — agents are serving real users. Every fix must be backward-c
 - [x] Configurable run timeout (1-60 min, board UI)
 - [x] Context trimming at 150k tokens (auto, transparent)
 - [x] Actual API error messages (not "Invalid request")
+- [x] Run checkpointing via `_AGENT_PLAN.md` (Dev writes plan, resumes on retry)
+- [x] BA auto-split (scope guard: >8 files = split into sub-tickets)
+- [x] `read_file` truncation (>300 lines auto-truncated, offset/limit for ranges)
+- [x] `search_files` → `read_file` workflow (line numbers enable targeted reads)
+- [x] In-run context budget warning at 120k tokens (model told to wrap up)
+- [x] Tool schema hints (batch_write_files preferred, read_file context cost)
 - [x] Error feedback to retry runs (stored as ticket message, injected into prompt)
 - [x] Dev prudence instructions (read less, batch writes, don't re-read)
 - [x] Model/runtime selector on board header

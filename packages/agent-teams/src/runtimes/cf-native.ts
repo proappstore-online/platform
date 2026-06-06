@@ -197,7 +197,10 @@ export class CFNativeRuntime implements AgentRuntime {
         }
       }
 
-      // Feed results back
+      // Feed results back. If we're running hot on context, warn the model.
+      if (totalIn > 120_000) {
+        toolResults.push({ type: 'text', text: `[SYSTEM: You have used ${Math.round(totalIn / 1000)}k input tokens. Finish your current task and stop — do NOT start reading more files. Write what you have and end your turn.]` } as AnthropicContent);
+      }
       anthropicMessages.push({ role: 'user', content: toolResults });
     }
 

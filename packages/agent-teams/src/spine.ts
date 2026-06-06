@@ -78,7 +78,21 @@ export function executeFileTool(call: ToolCall, files: Map<string, string>): Too
     case 'read_file': {
       const path = String(args.path ?? '');
       const content = files.get(path);
-      return content === undefined ? err(call, `file not found: ${path}`) : ok(call, content);
+      if (content === undefined) return err(call, `file not found: ${path}`);
+      const lines = content.split('\n');
+      const offset = Math.max(0, Number(args.offset ?? 0));
+      const limit = Number(args.limit ?? 0) || 0;
+      // If offset/limit specified, return that range.
+      if (offset > 0 || limit > 0) {
+        const slice = lines.slice(offset, limit > 0 ? offset + limit : undefined);
+        return ok(call, `[${path} lines ${offset + 1}-${offset + slice.length} of ${lines.length}]\n${slice.join('\n')}`);
+      }
+      // Truncate large files to save context. Agent can re-read with offset.
+      const MAX_LINES = 300;
+      if (lines.length > MAX_LINES) {
+        return ok(call, `${lines.slice(0, MAX_LINES).join('\n')}\n\n... (truncated: showing ${MAX_LINES} of ${lines.length} lines. Use offset/limit to read more.)`);
+      }
+      return ok(call, content);
     }
 
     case 'list_files': {
