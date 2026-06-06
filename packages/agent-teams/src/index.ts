@@ -320,6 +320,14 @@ app.post('/v1/projects/:slug/run-tests', async (c) => {
   return relay(c, '/run-tests', { method: 'POST' });
 });
 
+app.get('/v1/projects/:slug/test-history', async (c) => {
+  return relay(c, '/test-history');
+});
+
+app.post('/v1/projects/:slug/test-history', async (c) => {
+  return relay(c, '/test-history', { method: 'POST', forwardBody: true });
+});
+
 // ── Activity log (persisted audit trail) ────────────────────
 
 app.get('/v1/projects/:slug/activity', async (c) => {

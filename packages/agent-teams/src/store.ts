@@ -120,6 +120,21 @@ export const MIGRATIONS: string[][] = [
   )`],
   // Per-project agent run timeout (default 10 min, configurable in UI).
   [`ALTER TABLE project ADD COLUMN max_run_minutes INTEGER NOT NULL DEFAULT 10`],
+  // Test run history — per-test tracking for trending and success rates.
+  [`CREATE TABLE IF NOT EXISTS test_runs (
+    id TEXT PRIMARY KEY, triggered_at INTEGER NOT NULL, source TEXT NOT NULL DEFAULT 'ci',
+    commit_sha TEXT, status TEXT NOT NULL DEFAULT 'running',
+    passed INTEGER NOT NULL DEFAULT 0, failed INTEGER NOT NULL DEFAULT 0,
+    skipped INTEGER NOT NULL DEFAULT 0, flaky INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER, coverage_pct REAL
+  )`,
+  `CREATE TABLE IF NOT EXISTS test_results (
+    id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES test_runs(id),
+    spec_file TEXT NOT NULL, test_name TEXT NOT NULL, status TEXT NOT NULL,
+    duration_ms INTEGER, error_text TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_test_results_run ON test_results(run_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_test_results_spec ON test_results(spec_file, status)`],
 ];
 
 export function uuid(): string {

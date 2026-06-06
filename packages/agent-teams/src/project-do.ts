@@ -222,6 +222,8 @@ export class ProjectDO implements DurableObject {
 
     if (path === '/generate-listing' && request.method === 'POST') return this.generateListing(request);
     if (path === '/run-tests' && request.method === 'POST') return this.triggerTestRun();
+    if (path === '/test-history' && request.method === 'GET') return this.getTestHistory();
+    if (path === '/test-history' && request.method === 'POST') return this.ingestTestResults(request);
     if (path === '/cost' && request.method === 'GET') return this.getCostSummary();
     if (path === '/cost/detail' && request.method === 'GET') return json(costDetail(this.state.storage.sql));
     if (path === '/activity' && request.method === 'GET') return this.getActivity();
@@ -1833,5 +1835,79 @@ Respond with ONLY the JSON object, no markdown fences, no explanation.`;
       this.logActivity('test', `Test run error: ${e instanceof Error ? e.message : 'unknown'}`, null);
       return json({ error: `Test run failed: ${e instanceof Error ? e.message : 'unknown'}` }, 500);
     }
+  }
+
+  /** Get test run history with per-test results. */
+  private getTestHistory(): Response {
+    const runs = this.state.storage.sql
+      .exec('SELECT * FROM test_runs ORDER BY triggered_at DESC LIMIT 50')
+      .toArray() as { id: string; triggered_at: number; source: string; commit_sha: string | null; status: string; passed: number; failed: number; skipped: number; flaky: number; duration_ms: number | null; coverage_pct: number | null }[];
+
+    // Per-spec trending: success rate over last 20 runs
+    const specStats = this.state.storage.sql
+      .exec(`SELECT spec_file, status, COUNT(*) as cnt FROM test_results
+             WHERE run_id IN (SELECT id FROM test_runs ORDER BY triggered_at DESC LIMIT 20)
+             GROUP BY spec_file, status`)
+      .toArray() as { spec_file: string; status: string; cnt: number }[];
+
+    const specTrending: Record<string, { pass: number; fail: number; total: number; pct: number }> = {};
+    for (const r of specStats) {
+      const s = specTrending[r.spec_file] ?? { pass: 0, fail: 0, total: 0, pct: 0 };
+      if (r.status === 'pass') s.pass += r.cnt;
+      else if (r.status === 'fail') s.fail += r.cnt;
+      s.total += r.cnt;
+      s.pct = s.total > 0 ? Math.round((s.pass / s.total) * 100) : 0;
+      specTrending[r.spec_file] = s;
+    }
+
+    // Overall stats
+    const totalRuns = runs.length;
+    const passedRuns = runs.filter(r => r.status === 'passed').length;
+    const overallPct = totalRuns > 0 ? Math.round((passedRuns / totalRuns) * 100) : 0;
+
+    return json({
+      runs: runs.map(r => ({
+        id: r.id, triggeredAt: r.triggered_at, source: r.source, commitSha: r.commit_sha,
+        status: r.status, passed: r.passed, failed: r.failed, skipped: r.skipped,
+        flaky: r.flaky, durationMs: r.duration_ms, coveragePct: r.coverage_pct,
+      })),
+      specTrending,
+      stats: { totalRuns, passedRuns, overallPct },
+    });
+  }
+
+  /** Ingest test results from CI or manual run. */
+  private async ingestTestResults(request: Request): Promise<Response> {
+    const body = (await request.json()) as {
+      runId?: string; source?: string; commitSha?: string; status?: string;
+      passed?: number; failed?: number; skipped?: number; flaky?: number;
+      durationMs?: number; coveragePct?: number;
+      results?: { specFile: string; testName: string; status: string; durationMs?: number; error?: string }[];
+    };
+    const sql = this.state.storage.sql;
+    const runId = body.runId ?? crypto.randomUUID();
+    const now = Date.now();
+
+    sql.exec(
+      `INSERT OR REPLACE INTO test_runs (id, triggered_at, source, commit_sha, status, passed, failed, skipped, flaky, duration_ms, coverage_pct)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      runId, now, body.source ?? 'ci', body.commitSha ?? null,
+      body.status ?? (body.failed ? 'failed' : 'passed'),
+      body.passed ?? 0, body.failed ?? 0, body.skipped ?? 0, body.flaky ?? 0,
+      body.durationMs ?? null, body.coveragePct ?? null,
+    );
+
+    if (body.results) {
+      for (const r of body.results) {
+        sql.exec(
+          'INSERT INTO test_results (id, run_id, spec_file, test_name, status, duration_ms, error_text) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          crypto.randomUUID(), runId, r.specFile, r.testName, r.status, r.durationMs ?? null, r.error ?? null,
+        );
+      }
+    }
+
+    this.logActivity('test', `Test run ${body.status ?? 'completed'}: ${body.passed ?? 0} passed, ${body.failed ?? 0} failed`, null);
+    this.broadcast({ type: 'test-run-completed', runId, status: body.status, passed: body.passed, failed: body.failed });
+    return json({ ok: true, runId });
   }
 }
