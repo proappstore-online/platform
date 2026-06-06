@@ -13,6 +13,7 @@ import { formatMemory, type MemoryEntry } from './memory.ts';
 import { buildPOSystemPrompt } from './prompts.ts';
 import { TOOL_SCHEMAS } from './tool-schemas.ts';
 import { resolveByoKey } from './byo-key.ts';
+import { parseAnthropicStream } from './runtimes/cf-native-stream.ts';
 import { executeFileTool } from './spine.ts';
 import { toolActivityDetail } from './tool-activity.ts';
 import { sliceDocs } from './platform-skill.ts';
@@ -239,6 +240,7 @@ export async function handlePOChat(deps: PoChatDeps, request: Request): Promise<
           system: systemPrompt,
           tools: poTools,
           messages,
+          stream: true,
         }),
       });
 
@@ -247,20 +249,24 @@ export async function handlePOChat(deps: PoChatDeps, request: Request): Promise<
         try { const t = await res.text(); const b = JSON.parse(t) as { error?: { message?: string } }; detail = b?.error?.message ?? t.slice(0, 200); } catch { /* already captured what we could */ }
         const safeError = res.status === 401 ? 'API key rejected - check your Anthropic key in Profile > API Keys'
           : res.status === 429 ? 'Rate limited by Anthropic - wait a moment'
-          : res.status === 524 || res.status === 504 ? 'Anthropic took too long to respond (timeout). Try a shorter message.'
           : `Anthropic error: ${detail.slice(0, 200) || `status ${res.status}`}`;
         return savePOResponse(deps, `Sorry, I couldn't process that: ${safeError}`, now, undefined);
       }
+      if (!res.body) return savePOResponse(deps, 'No response from Anthropic.', now, undefined);
 
-      const aiRes = (await res.json()) as { content?: unknown; stop_reason?: string };
-      const contentArr = aiRes.content;
-      if (!Array.isArray(contentArr)) {
-        return savePOResponse(deps, 'I got an unexpected response format. Try again?', now, undefined);
+      // Stream the response — prevents CF 524 timeout on large contexts.
+      const stream = parseAnthropicStream(res.body);
+      let sr = await stream.next();
+      while (!sr.done) {
+        if (sr.value.type === 'text-delta') deps.broadcast({ type: 'agent-text', role: 'PO', text: sr.value.text });
+        sr = await stream.next();
       }
+      const aiRes = sr.value;
+      const contentArr = aiRes.content;
       messages.push({ role: 'assistant', content: contentArr });
       text = (contentArr as { type: string; text?: string }[]).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('');
 
-      const toolUses = (contentArr as { type: string; id?: string; name?: string; input?: unknown }[]).filter((c) => c.type === 'tool_use');
+      const toolUses = contentArr.filter((c) => c.type === 'tool_use') as { type: 'tool_use'; id: string; name: string; input: unknown }[];
       if (toolUses.length === 0 || aiRes.stop_reason !== 'tool_use') break;
 
       // Execute tool calls: remember → memory write; read_docs → official docs;

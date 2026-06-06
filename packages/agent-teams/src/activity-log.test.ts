@@ -43,7 +43,8 @@ describe('insertActivity', () => {
     expect(result.id).toBeTruthy();
     expect(result.createdAt).toBeGreaterThan(0);
     // Verify the SQL was called with the right positional args
-    const call = sql.exec.mock.calls[0]!;
+    const mock = sql.exec as unknown as ReturnType<typeof vi.fn>;
+    const call = mock.mock.calls[0]!;
     expect(call[0]).toContain('INSERT INTO activity_log');
     expect(call[1]).toBe(result.id);       // id
     expect(call[2]).toBe('tk1');           // ticket_id
@@ -55,7 +56,7 @@ describe('insertActivity', () => {
   it('caps detail at 1000 chars and meta at 20000 chars', () => {
     const sql = mockSql();
     insertActivity(sql, { type: 'x', detail: 'a'.repeat(2000), meta: 'b'.repeat(30000) });
-    const call = sql.exec.mock.calls[0]!;
+    const call = (sql.exec as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect((call[4] as string).length).toBe(1000);
     expect((call[6] as string).length).toBe(20000);
   });

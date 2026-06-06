@@ -65,7 +65,11 @@ export async function* parseAnthropicStream(body: ReadableStream<Uint8Array>): A
           const idx = ev.index as number;
           const b = content[idx];
           if (b?.type === 'tool_use') {
-            try { b.input = JSON.parse(partialJson[idx] || '{}'); } catch { b.input = {}; }
+            const raw = partialJson[idx] || '{}';
+            try { b.input = JSON.parse(raw); } catch {
+              console.error(`[stream] Truncated tool JSON for ${b.name}: ${raw.slice(0, 200)}`);
+              b.input = { _error: 'truncated_json', _raw: raw.slice(0, 500) };
+            }
           }
           break;
         }
