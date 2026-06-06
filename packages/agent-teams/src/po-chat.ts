@@ -243,9 +243,12 @@ export async function handlePOChat(deps: PoChatDeps, request: Request): Promise<
       });
 
       if (!res.ok) {
-        const safeError = res.status === 401 ? 'API key invalid'
-          : res.status === 429 ? 'Rate limited'
-          : `AI error (${res.status})`;
+        let detail = '';
+        try { const b = await res.json() as { error?: { message?: string } }; detail = b?.error?.message ?? ''; } catch { /* not JSON */ }
+        const safeError = res.status === 401 ? 'API key rejected - check your Anthropic key in Profile > API Keys'
+          : res.status === 429 ? 'Rate limited by Anthropic - wait a moment'
+          : res.status === 524 || res.status === 504 ? 'Anthropic took too long to respond (timeout). Try a shorter message.'
+          : `Anthropic error: ${detail.slice(0, 200) || `status ${res.status}`}`;
         return savePOResponse(deps, `Sorry, I couldn't process that: ${safeError}`, now, undefined);
       }
 

@@ -154,11 +154,13 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
         body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 8192, system: systemPrompt, tools, messages }),
       });
       if (!res.ok) {
-        const errBody = await res.text().catch(() => '');
-        console.error(`[architect] Anthropic ${res.status}: ${errBody.slice(0, 500)}`);
-        const safe = res.status === 401 ? 'API key invalid or expired'
-          : res.status === 429 ? 'Rate limited — wait a moment'
-          : `AI error (${res.status}): ${errBody.slice(0, 200)}`;
+        let detail = '';
+        try { const b = await res.json() as { error?: { message?: string } }; detail = b?.error?.message ?? ''; } catch { detail = await res.text().catch(() => ''); }
+        console.error(`[architect] Anthropic ${res.status}: ${detail.slice(0, 500)}`);
+        const safe = res.status === 401 ? 'API key rejected - check your Anthropic key in Profile > API Keys'
+          : res.status === 429 ? 'Rate limited by Anthropic - wait a moment and try again'
+          : res.status === 524 || res.status === 504 ? 'Anthropic took too long to respond (timeout). The conversation may be too large - try a shorter message or start a new chat.'
+          : `Anthropic error: ${detail.slice(0, 200) || `status ${res.status}`}`;
         if (wrote) { deps.saveFiles(files); deps.broadcast({ type: 'files-synced', count: files.size }); }
         return save(deps, `Sorry, I couldn't finish that: ${safe}`, Date.now());
       }
