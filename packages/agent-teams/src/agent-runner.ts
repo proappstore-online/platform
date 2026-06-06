@@ -135,6 +135,9 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
     // billing the BYO key) after the ticket has already moved to needs-input.
     const ac = new AbortController();
     const toolActivityIds = new Map<string, string>(); // callId → activity row id
+    // Track the latest cost from heartbeats so every WS event carries it
+    // (the console needs it for real-time cost display on ticket tiles).
+    let liveCost = { costUsd: 0, tokensIn: 0, tokensOut: 0 };
     const consume = (async () => {
      try {
       for await (const ev of runtime.run(handle, messages, ac.signal)) {
@@ -142,11 +145,11 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
         switch (ev.type) {
           case 'text-delta':
             assistantText += ev.text;
-            deps.broadcast({ type: 'agent-text', ticketId, role, text: ev.text });
+            deps.broadcast({ type: 'agent-text', ticketId, role, text: ev.text, ...liveCost });
             break;
           case 'tool-call': {
             toolCalls.push(ev.call);
-            deps.broadcast({ type: 'agent-tool-call', ticketId, role, name: ev.call.name });
+            deps.broadcast({ type: 'agent-tool-call', ticketId, role, name: ev.call.name, ...liveCost });
             const actId = deps.logActivity('tool', `${role}: ${toolActivityDetail(ev.call.name, ev.call.args)}`, ticketId,
               JSON.stringify({ args: ev.call.args }));
             toolActivityIds.set(ev.call.id, actId);
@@ -157,7 +160,7 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
             // (a future replay of history into the model needs matched pairs).
             const tc = toolCalls.find((c) => c.id === ev.result.callId);
             if (tc) tc.result = ev.result;
-            deps.broadcast({ type: 'agent-tool-result', ticketId, role, ok: ev.result.ok });
+            deps.broadcast({ type: 'agent-tool-result', ticketId, role, ok: ev.result.ok, ...liveCost });
             // Capture the tool's output on its activity row for the audit log.
             const actId = toolActivityIds.get(ev.result.callId);
             if (actId) {
@@ -175,8 +178,8 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
             errorMessage = ev.message;
             break;
           case 'heartbeat':
-            deps.broadcast({ type: 'agent-heartbeat', ticketId, role,
-              costUsd: ev.costUsd ?? 0, tokensIn: ev.tokensIn ?? 0, tokensOut: ev.tokensOut ?? 0 });
+            liveCost = { costUsd: ev.costUsd ?? 0, tokensIn: ev.tokensIn ?? 0, tokensOut: ev.tokensOut ?? 0 };
+            deps.broadcast({ type: 'agent-heartbeat', ticketId, role, ...liveCost });
             break;
         }
       }
