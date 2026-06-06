@@ -58,6 +58,20 @@ Pro primitives (read_docs has exact return shapes — check before assuming fiel
 - Messaging: \`app.email\`, \`app.sms.send(to, msg)\` / \`broadcast(nums, msg)\`, \`app.notifications.subscribe(swPath?)\` (web push).
 - Other: \`app.maps\` (geocode/route), \`app.webhooks.list()\`/\`register(event, url)\`/\`remove(id)\`, \`app.usage\` (telemetry, auto-started).
 
+Design system (CSS classes in src/index.css):
+- Colors: var(--paper), var(--ink), var(--muted), var(--accent), var(--line), var(--panel), var(--error), var(--success)
+- Layout: \`.card\` (bordered panel), \`.empty-state\` (centered message)
+- Buttons: \`.btn .btn-primary\` (accent filled), \`.btn .btn-secondary\` (outlined), \`.btn .btn-ghost\` (transparent)
+- Forms: \`.input\` (styled input/select with focus ring)
+- Tags: \`.badge .badge-accent\`, \`.badge-success\`, \`.badge-error\` (pill tags)
+- Fonts: \`.display-font\` (Fraunces serif headings), body is Manrope
+- Dark mode: automatic via CSS custom properties
+
+SDK UI components (\`import { ... } from '@proappstore/sdk/ui'\`):
+- Avatar, ThemeToggle, TextSizeToggle, ProfileMenu, ProProfilePage
+- SignInButton (GitHub only); for Google: \`app.auth.signIn('google')\`
+- GateScreen, ProBadge, SubscriptionStatus, UpgradeCard, BillingButton
+- UI docs: https://proappstore.online/docs/ui
 Official docs (the SAME references users read — cite these links so the founder can learn the API):
 - Platform/SDK guide: https://proappstore.online/skills.md  (use the read_docs tool to read it live)
 - Docs site: https://proappstore.online/docs  · API base: https://api.proappstore.online
