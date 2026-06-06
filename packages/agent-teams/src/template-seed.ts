@@ -49,6 +49,7 @@ SOFTWARE.
     name: slug,
     private: true,
     type: 'module',
+    repository: { type: 'git', url: `https://github.com/proappstore-online/${slug}` },
     scripts: {
       dev: 'vite',
       build: 'tsc -b && vite build',
@@ -63,9 +64,12 @@ SOFTWARE.
     },
     devDependencies: {
       '@tailwindcss/vite': '^4.2.4',
+      '@testing-library/react': '^16.0.0',
+      '@testing-library/jest-dom': '^6.6.0',
       '@types/react': '^19.2.14',
       '@types/react-dom': '^19.2.3',
       '@vitejs/plugin-react': '^6.0.1',
+      'jsdom': '^26.0.0',
       'tailwindcss': '^4.2.4',
       'typescript': '~6.0.2',
       'vite': '^8.0.10',
@@ -144,6 +148,70 @@ export default function App() {
 
   files.set('src/index.css', `@import 'tailwindcss';
 `);
+
+  files.set('vitest.config.ts', `import { defineConfig } from 'vitest/config'
+
+export default defineConfig({
+  test: {
+    environment: 'jsdom',
+    include: ['tests/**/*.test.{ts,tsx}'],
+  },
+})
+`);
+
+  files.set('README.md', `# ${slug}
+
+A [ProAppStore](https://proappstore.online) web app.
+
+## Development
+
+\`\`\`bash
+pnpm install
+pnpm dev        # start dev server
+pnpm build      # production build
+pnpm test       # run tests
+pnpm typecheck  # type-check without emit
+\`\`\`
+
+## Deployment
+
+Push to \`main\` → auto-deploys via GitHub Actions to \`${slug}.proappstore.online\`.
+
+## Stack
+
+- React 19 + TypeScript + Vite + Tailwind CSS
+- [ProAppStore SDK](https://proappstore.online/docs) (auth, database, storage, rooms, AI)
+- Vitest for unit/integration tests
+`);
+
+  // Deploy workflow — uses string concatenation to avoid template literal
+  // conflicts with GitHub Actions ${{ }} expressions.
+  const GH = '$' + '{{';  // workaround for template literal parsing
+  files.set('.github/workflows/deploy.yml',
+    'name: Deploy to Cloudflare Pages\n\n' +
+    'on:\n  push:\n    branches: [main]\n\n' +
+    'permissions:\n  contents: read\n  deployments: write\n\n' +
+    'concurrency:\n  group: deploy-' + GH + ' github.repository }}\n  cancel-in-progress: true\n\n' +
+    'jobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n' +
+    '      - uses: actions/checkout@v4\n' +
+    '      - uses: pnpm/action-setup@v4\n        with:\n          version: 9\n' +
+    '      - uses: actions/setup-node@v4\n        with:\n          node-version: 22\n' +
+    '      - run: pnpm install --no-frozen-lockfile\n' +
+    '      - name: Build\n        env:\n          VITE_COMMIT_SHA: ' + GH + ' github.sha }}\n        run: pnpm build\n' +
+    '      - name: Locate build output\n        id: dist\n        run: |\n' +
+    '          if [ -d dist ]; then echo "dir=dist" >> "$GITHUB_OUTPUT"\n' +
+    '          else echo "::error::No build output"; exit 1; fi\n' +
+    '      - name: Code-health scan\n        continue-on-error: true\n        run: |\n' +
+    '          npx -y @vibecodeqa/cli@latest --skip-tests . || true\n' +
+    '          if [ -f .vibe-check/report.json ]; then\n' +
+    '            mkdir -p "' + GH + ' steps.dist.outputs.dir }}/.vcqa"\n' +
+    '            cp .vibe-check/report.json "' + GH + ' steps.dist.outputs.dir }}/.vcqa/report.json"\n' +
+    '          fi\n' +
+    '      - name: Deploy to Cloudflare Pages\n' +
+    '        run: npx wrangler@3 pages deploy "' + GH + ' steps.dist.outputs.dir }}" --project-name=proappstore-' + slug + ' --branch=main\n' +
+    '        env:\n          CLOUDFLARE_API_TOKEN: ' + GH + ' secrets.CLOUDFLARE_API_TOKEN }}\n' +
+    '          CLOUDFLARE_ACCOUNT_ID: c1089bfcc43c1c6c2aa89e584e86f0bc\n'
+  );
 
   return files;
 }
