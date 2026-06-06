@@ -80,12 +80,31 @@ Status: **live** — agents are serving real users. Every fix must be backward-c
 
 ## Implementation priority
 
-| Phase | Impact | Effort | Ship target |
-|-------|--------|--------|-------------|
-| 1 — Run checkpointing | High | Low (prompt only) | This week |
-| 2 — BA auto-split | Medium | Low (prompt only) | This week |
-| 3 — Smarter tool results | Medium | Medium (spine changes) | Next week |
-| 4 — Observability | Low-Med | Medium (runtime + console) | Next week |
+| Phase | Impact | Effort | Status |
+|-------|--------|--------|--------|
+| 1 — Run checkpointing | High | Low (prompt only) | **SHIPPED** |
+| 2 — BA auto-split | Medium | Low (prompt only) | **SHIPPED** |
+| 3 — Smarter tool results | Medium | Medium (spine changes) | **SHIPPED** |
+| 4 — Observability | Low-Med | Medium (runtime + console) | Partial (issue #11 open) |
+
+## Architecture debt (from 2026-06-06 review)
+
+| File | Lines | Issue | Priority |
+|------|-------|-------|----------|
+| project-do.ts | 1,713 | God file — 0 tests, 19 imports, mixed concerns | P1 |
+| AppAgents.tsx | 1,182 | Still large after WS extraction — mixed state/UI/polling | P2 |
+| po-chat.ts | 381 | Mixed prompt construction + orchestration + JSON parsing | P3 |
+| openai-responses.ts | 301 | Stream/pricing/tools mixed (unlike cf-native which is split) | P3 |
+
+### Refactoring plan for project-do.ts
+
+Split into focused modules with dependency injection:
+1. `project-do.ts` — DO class shell, init, HTTP dispatch (thin router)
+2. `project-orchestrator.ts` — watchdog, auto-advance, play/pause, dispatch
+3. `ticket-workflow.ts` — transition, fail, blockForInput, applyAgentOutcome
+4. `kb-manager.ts` — KB building, publishing, share links
+5. `github-sync.ts` — syncFromGitHub, file persistence
+6. Each module gets a `deps` interface → unit-testable without SqlStorage
 
 ## What's already shipped (done)
 
