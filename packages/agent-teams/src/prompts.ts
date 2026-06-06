@@ -148,17 +148,16 @@ export function buildSeedMessages(
   }
 
   if (role === 'Architect') {
-    context += `\n\nThe app id is "${slug}". RESEARCH this app, then WRITE its Knowledge Base — the source of truth the BA/Dev/QA will build from. Use your read-only tools to inspect any existing code and \`read_docs\` to confirm the REAL PAS SDK primitives + signatures (do NOT invent APIs — wrong signatures break the build).
+    context += `\n\nThe app id is "${slug}". WRITE the Knowledge Base for this app.
 
-Write these files with \`batch_write_files\` (markdown only — NEVER touch \`src/\` or app code):
-- \`KNOWLEDGE.md\` — the index + the essentials: what the app is, who it's for, core features, explicit non-goals.
-- \`docs/data-model.md\` — entities and their \`app.db\` tables (columns + types).
-- \`docs/sdk-plan.md\` — exactly which \`@proappstore/sdk\` primitives this app uses, each with its REAL signature/return shape from read_docs (auth/User shape, db query/execute, storage, notifications, etc.). If the app has ANY permission/gating need (admins, moderators, owner-only, member vs viewer), plan it on \`app.roles\` (built-in RBAC) — never a custom roles table.
-- \`docs/mcp-tools.md\` — the app's intended MCP tool surface (skip ONLY if the app has no \`app.db\` data). For each core entity, list the read/write tools an external AI should be able to call (e.g. \`list_items\`, \`get_item\`, \`create_item\`, \`update_item\`) with: a one-line description, whether it reads or writes, which table/columns it touches, its params, and whether it's per-user (scoped to the caller) or shared. This is the spec the Dev materializes into a root \`mcp.json\` — keep it to the genuinely useful operations, not every possible query.
-- \`docs/design.md\` — UX/layout conventions, the shared design system, dark mode.
-- \`docs/quality.md\` — the bar: tsc clean, no \`as any\`/\`@ts-ignore\`, lint, a11y, mobile.
+BE EFFICIENT — you have limited turns. Do NOT read every file. Use \`list_files\` once, then read only 3-5 KEY files (App.tsx, main data/types file, one representative component). Use \`read_docs\` once for SDK reference. Then WRITE immediately — do not keep reading.
 
-Keep each file focused and concrete. This is reference material the team reads — not prose. When done, the KB is complete; there's no deploy step for this ticket.`;
+Write ALL KB files in ONE \`batch_write_files\` call (markdown only — NEVER touch \`src/\`):
+- \`KNOWLEDGE.md\` — what the app is, who it's for, core features, non-goals.
+- \`docs/data-model.md\` — entities and their tables.
+- \`docs/sdk-plan.md\` — which SDK primitives this app uses with confirmed signatures.
+
+Keep each file concise. Write EARLY — you can always refine in a follow-up message. A written KB is infinitely better than a perfect plan that never ships.`;
   } else if (role === 'BA') {
     context += `\n\nThe app id is "${slug}". Turn this ticket into a crisp, buildable spec: concrete acceptance criteria, the SDK primitives/files involved, and what's out of scope. Ground it in the ACTUAL code (your read-only tools) and the real SDK (\`read_docs\`) — don't invent APIs.
 

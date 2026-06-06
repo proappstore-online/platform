@@ -142,7 +142,7 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
 
   try {
     let text = '';
-    for (let turn = 0; turn < 20; turn++) { // room to research (reads) + write multiple KB files
+    for (let turn = 0; turn < 25; turn++) { // room for reads + writes + follow-up tools
       deps.broadcast({ type: 'agent-heartbeat', role: 'Architect' });
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
