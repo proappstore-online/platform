@@ -11,8 +11,8 @@ describe('messagesToAnthropic', () => {
 
   it('maps po/system to user, others to assistant', () => {
     const result = messagesToAnthropic([msg('po', 'hi'), msg('Dev', 'code')]);
-    expect(result[0].role).toBe('user');
-    expect(result[1].role).toBe('assistant');
+    expect(result[0]!.role).toBe('user');
+    expect(result[1]!.role).toBe('assistant');
   });
 
   it('handles messages with tool calls and results', () => {
@@ -25,8 +25,8 @@ describe('messagesToAnthropic', () => {
     };
     const result = messagesToAnthropic([m]);
     expect(result).toHaveLength(2); // assistant + user (tool_result)
-    expect(result[0].content).toHaveLength(2); // text + tool_use
-    expect(result[1].content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'tc1' });
+    expect(result[0]!.content).toHaveLength(2); // text + tool_use
+    expect(result[1]!.content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'tc1' });
   });
 });
 
@@ -42,7 +42,7 @@ describe('trimConversation', () => {
   it('does nothing when under budget', () => {
     const msgs: AnthropicMessage[] = [userMsg('seed'), userMsg('short')];
     trimConversation(msgs);
-    expect(msgs[1].content[0]).toMatchObject({ type: 'text', text: 'short' });
+    expect(msgs[1]!.content[0]).toMatchObject({ type: 'text', text: 'short' });
   });
 
   it('trims old tool_result blocks when over budget', () => {
@@ -57,12 +57,12 @@ describe('trimConversation', () => {
     ];
     trimConversation(msgs);
     // Old tool_result trimmed
-    const trimmedBlock = msgs[1].content[0];
+    const trimmedBlock = msgs[1]!.content[0];
     expect(trimmedBlock).toMatchObject({ type: 'tool_result' });
     expect((trimmedBlock as { content: string }).content).toContain('trimmed');
     expect((trimmedBlock as { content: string }).content).toContain('700000');
     // Recent messages untouched
-    expect(msgs[5].content[0]).toMatchObject({ type: 'text', text: 'recent-4' });
+    expect(msgs[5]!.content[0]).toMatchObject({ type: 'text', text: 'recent-4' });
   });
 
   it('preserves the seed message (index 0)', () => {
@@ -74,9 +74,9 @@ describe('trimConversation', () => {
     ];
     trimConversation(msgs);
     // Seed (index 0) NOT trimmed
-    expect((msgs[0].content[0] as { content: string }).content).toBe(bigContent);
+    expect((msgs[0]!.content[0] as { content: string }).content).toBe(bigContent);
     // Index 1 IS trimmed
-    expect((msgs[1].content[0] as { content: string }).content).toContain('trimmed');
+    expect((msgs[1]!.content[0] as { content: string }).content).toContain('trimmed');
   });
 
   it('preserves the last 4 messages', () => {
@@ -91,7 +91,7 @@ describe('trimConversation', () => {
     ];
     trimConversation(msgs);
     // Index 2 is in the last 4 — should NOT be trimmed
-    expect((msgs[2].content[0] as { content: string }).content).toBe(bigContent);
+    expect((msgs[2]!.content[0] as { content: string }).content).toBe(bigContent);
   });
 
   it('keeps short tool_result blocks intact', () => {
@@ -104,8 +104,8 @@ describe('trimConversation', () => {
     ];
     trimConversation(msgs);
     // Short result (<200 chars) not trimmed
-    expect((msgs[1].content[0] as { content: string }).content).toBe('short result');
+    expect((msgs[1]!.content[0] as { content: string }).content).toBe('short result');
     // Big result trimmed
-    expect((msgs[2].content[0] as { content: string }).content).toContain('trimmed');
+    expect((msgs[2]!.content[0] as { content: string }).content).toContain('trimmed');
   });
 });
