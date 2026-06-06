@@ -37,12 +37,43 @@ function mockSql() {
 }
 
 describe('insertActivity', () => {
-  it('returns an id and timestamp', () => {
+  it('returns an id and timestamp and passes correct args to SQL', () => {
     const sql = mockSql();
-    const result = insertActivity(sql, { type: 'test', detail: 'hello' });
+    const result = insertActivity(sql, { type: 'test', detail: 'hello world', ticketId: 'tk1', meta: '{"x":1}' });
     expect(result.id).toBeTruthy();
     expect(result.createdAt).toBeGreaterThan(0);
-    expect(sql.exec).toHaveBeenCalled();
+    // Verify the SQL was called with the right positional args
+    const call = sql.exec.mock.calls[0]!;
+    expect(call[0]).toContain('INSERT INTO activity_log');
+    expect(call[1]).toBe(result.id);       // id
+    expect(call[2]).toBe('tk1');           // ticket_id
+    expect(call[3]).toBe('test');          // type
+    expect(call[4]).toBe('hello world');   // detail (capped at 1000)
+    expect(call[6]).toBe('{"x":1}');       // meta
+  });
+
+  it('caps detail at 1000 chars and meta at 20000 chars', () => {
+    const sql = mockSql();
+    insertActivity(sql, { type: 'x', detail: 'a'.repeat(2000), meta: 'b'.repeat(30000) });
+    const call = sql.exec.mock.calls[0]!;
+    expect((call[4] as string).length).toBe(1000);
+    expect((call[6] as string).length).toBe(20000);
+  });
+});
+
+describe('readActivity', () => {
+  it('returns camelCased rows in oldest-first order', () => {
+    const sql = mockSql();
+    // Insert two entries
+    insertActivity(sql, { type: 'a', detail: 'first', ticketId: 't1' });
+    insertActivity(sql, { type: 'b', detail: 'second' });
+    const rows = readActivity(sql);
+    // Mock returns reversed (simulating DESC), readActivity reverses back → insertion order
+    expect(rows.length).toBe(2);
+    expect(rows[0]!.type).toBe('a');    // first inserted = oldest
+    expect(rows[0]!.ticketId).toBe('t1');  // camelCase mapping
+    expect(rows[0]!.createdAt).toBeGreaterThan(0);
+    expect(rows[1]!.type).toBe('b');    // second inserted = newest
   });
 });
 
@@ -53,6 +84,20 @@ describe('costSummary', () => {
     expect(result.spent).toBe(10);
     expect(result.byRole).toHaveLength(1);
     expect(result.topTickets).toHaveLength(1);
+  });
+
+  it('returns spent=0 when cost_month is stale (previous month)', () => {
+    const sql = {
+      exec: vi.fn((q: string) => {
+        if (q.includes('FROM project')) {
+          return { toArray: () => [{ cost_cap_monthly_usd: 50, cost_spent_monthly_usd: 99, cost_month: '2020-01' }] };
+        }
+        return { toArray: () => [] };
+      }),
+    } as unknown as SqlStorage;
+    const result = costSummary(sql);
+    expect(result.spent).toBe(0); // stale month → 0, not 99
+    expect(result.cap).toBe(50);
   });
 });
 

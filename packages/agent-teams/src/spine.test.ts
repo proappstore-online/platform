@@ -201,3 +201,29 @@ describe('read_file truncation and offset/limit', () => {
     expect(r.data).not.toContain('truncated');
   });
 });
+
+describe('search_files accepts pattern alias', () => {
+  it('finds matches using the pattern param (alias for query)', () => {
+    const files = new Map([['a.ts', 'const foo = 1']]);
+    const r = executeFileTool(call('search_files', { pattern: 'foo' }), files);
+    expect(r.ok).toBe(true);
+    expect(r.data).toContain('a.ts:1:');
+  });
+});
+
+describe('tree-size cap', () => {
+  it('rejects a write that would exceed MAX_TREE_BYTES', () => {
+    const files = new Map<string, string>();
+    const chunk = 'x'.repeat(MAX_FILE_BYTES - 1); // just under per-file cap
+    // Fill to ~11.5MB (24 files × ~512KB each)
+    for (let i = 0; i < 24; i++) {
+      executeFileTool(call('write_file', { path: `f${i}.ts`, content: chunk }), files);
+    }
+    expect(files.size).toBe(24);
+    // One more should exceed 12MB tree cap
+    const r = executeFileTool(call('write_file', { path: 'overflow.ts', content: chunk }), files);
+    expect(r.ok).toBe(false);
+    expect(r.errorMessage).toContain('working tree too large');
+    expect(files.size).toBe(24); // overflow was NOT written
+  });
+});
