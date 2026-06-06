@@ -129,3 +129,56 @@ describe('executeFileTool', () => {
     expect(res.ok).toBe(false);
   });
 });
+
+describe('read_file truncation and offset/limit', () => {
+  it('returns full content for small files', () => {
+    const content = Array.from({ length: 50 }, (_, i) => `line ${i}`).join('\n');
+    const files = new Map([['small.ts', content]]);
+    const r = executeFileTool(call('read_file', { path: 'small.ts' }), files);
+    expect(r.ok).toBe(true);
+    expect(r.data).toBe(content);
+  });
+
+  it('truncates files over 300 lines', () => {
+    const content = Array.from({ length: 500 }, (_, i) => `line ${i}`).join('\n');
+    const files = new Map([['big.ts', content]]);
+    const r = executeFileTool(call('read_file', { path: 'big.ts' }), files);
+    expect(r.ok).toBe(true);
+    expect(r.data).toContain('line 0');
+    expect(r.data).toContain('line 299');
+    expect(r.data).not.toContain('line 300\n');
+    expect(r.data).toContain('truncated');
+    expect(r.data).toContain('500 lines');
+  });
+
+  it('supports offset parameter', () => {
+    const content = Array.from({ length: 100 }, (_, i) => `line ${i}`).join('\n');
+    const files = new Map([['f.ts', content]]);
+    const r = executeFileTool(call('read_file', { path: 'f.ts', offset: 50 }), files);
+    expect(r.ok).toBe(true);
+    expect(r.data).toContain('line 50');
+    expect(r.data).toContain('lines 51-100 of 100');
+    expect(r.data).not.toContain('line 49');
+  });
+
+  it('supports offset + limit parameters', () => {
+    const content = Array.from({ length: 100 }, (_, i) => `line ${i}`).join('\n');
+    const files = new Map([['f.ts', content]]);
+    const r = executeFileTool(call('read_file', { path: 'f.ts', offset: 10, limit: 5 }), files);
+    expect(r.ok).toBe(true);
+    expect(r.data).toContain('line 10');
+    expect(r.data).toContain('line 14');
+    expect(r.data).toContain('lines 11-15 of 100');
+    expect(r.data).not.toContain('line 15\n');
+  });
+
+  it('offset/limit bypasses truncation', () => {
+    const content = Array.from({ length: 500 }, (_, i) => `line ${i}`).join('\n');
+    const files = new Map([['big.ts', content]]);
+    const r = executeFileTool(call('read_file', { path: 'big.ts', offset: 400, limit: 50 }), files);
+    expect(r.ok).toBe(true);
+    expect(r.data).toContain('line 400');
+    expect(r.data).toContain('line 449');
+    expect(r.data).not.toContain('truncated');
+  });
+});
