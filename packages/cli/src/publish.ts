@@ -38,15 +38,6 @@ function toTitleCase(id: string): string {
  */
 function hintForStep(name: string, detail: string): string | null {
   const d = detail.toLowerCase();
-  if (d.includes('limit of projects') || d.includes('reached the limit')) {
-    return (
-      'CF Pages cap: this account is at the 100-project ceiling.\n' +
-      '→ Free a slot:  npx wrangler pages project list\n' +
-      '                npx wrangler pages project delete <name>\n' +
-      '→ Long-term:    PAS apps are scheduled to migrate to Path B\n' +
-      '                (single host Worker + R2) which removes the cap.'
-    );
-  }
   if (name.toLowerCase().includes('analytics') && d.includes('auth')) {
     return (
       'CF Web Analytics token lacks the analytics scope.\n' +
@@ -67,7 +58,7 @@ function hintForStep(name: string, detail: string): string | null {
  * Publish an existing repo to ProAppStore.
  *
  * Reads the local package.json to discover the app id, then calls
- * /v1/provision on the PAS backend which creates the CF Pages project,
+ * /v1/provision on the PAS backend which registers the R2 route,
  * D1 database, and Data Worker. Idempotent — re-running on a
  * partially-provisioned app fills in the missing pieces.
  */
@@ -139,7 +130,7 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
     appId: string;
     steps: { name: string; status: string; detail: string }[];
     dataWorkerUrl: string;
-    pagesUrl: string;
+    appUrl: string;
     success: boolean;
   };
 
@@ -182,13 +173,12 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
   }
 
   if (data.success) {
-    // Set deploy secret on external-org repos
-    await ensureDeploySecret(appId, token);
+    // Set R2 deploy secrets on external-org repos
+    await ensureDeploySecrets(appId, token);
 
     process.stdout.write(`\n  Published. Push your code to deploy:\n`);
     process.stdout.write(`    git push origin main\n\n`);
     process.stdout.write(`  Live URL:        https://${appId}.proappstore.online\n`);
-    if (data.pagesUrl) process.stdout.write(`  Pages preview:   ${data.pagesUrl}\n`);
     if (data.dataWorkerUrl) process.stdout.write(`  Data Worker:     ${data.dataWorkerUrl}\n`);
     process.stdout.write('\n');
   } else {
@@ -198,69 +188,38 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
 }
 
 /**
- * Detect git remote and set CLOUDFLARE_API_TOKEN on external-org repos.
- * Repos in proappstore-online use the org-level secret and don't need this.
+ * Check if an external-org repo needs R2 deploy secrets.
+ * Repos in proappstore-online inherit org-level secrets automatically.
+ * External repos need the secrets set manually (R2 tokens can't be
+ * programmatically shared — they're created in the CF dashboard).
  */
-async function ensureDeploySecret(appId: string, token: string): Promise<void> {
-  // Parse git remote
+async function ensureDeploySecrets(_appId: string, _token: string): Promise<void> {
   let remoteUrl: string;
   try {
     remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], { encoding: 'utf8' }).trim();
   } catch {
-    return; // No remote configured yet — they'll set it later
+    return;
   }
 
-  // Extract owner/repo from HTTPS or SSH URLs
   const match = remoteUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)/);
   if (!match) return;
-  const [, owner, repo] = match;
-  const fullRepo = `${owner}/${repo}`;
+  const [, owner] = match;
 
-  // Skip if it's already in the platform org
   if (owner === 'proappstore-online') return;
 
-  // Check if gh CLI is available
+  // External repo — check if R2 secrets are set
+  const fullRepo = `${owner}/${match[2]}`;
   try {
     execFileSync('gh', ['--version'], { stdio: 'pipe' });
-  } catch {
-    process.stdout.write(`\n  Deploy secret needed for ${fullRepo}.\n`);
-    process.stdout.write(`  Install GitHub CLI (gh) and rerun, or set manually:\n`);
-    process.stdout.write(`    gh secret set CLOUDFLARE_API_TOKEN -R ${fullRepo}\n\n`);
-    return;
-  }
-
-  // Check if secret already exists
-  try {
     const secrets = execFileSync('gh', ['secret', 'list', '-R', fullRepo], { encoding: 'utf8', stdio: 'pipe' });
-    if (secrets.includes('CLOUDFLARE_API_TOKEN')) return; // Already set
+    if (secrets.includes('R2_ACCESS_KEY_ID')) return;
   } catch {
-    // gh secret list failed — might not have admin access, skip silently
-    return;
+    // gh not available or can't list secrets
   }
 
-  // Fetch deploy credentials from backend
-  // NOTE: Pre-launch only. Returns platform-wide CF token — acceptable while
-  // the only creator is the platform owner. Production should mint scoped
-  // per-project tokens via the CF API.
-  process.stdout.write(`\n  Setting deploy secret on ${fullRepo}...\n`);
-  try {
-    const res = await fetch(`${PAS_API}/v1/apps/${appId}/deploy-credentials`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-      process.stdout.write(`  [!] Could not fetch deploy credentials (${res.status}). Set manually:\n`);
-      process.stdout.write(`      gh secret set CLOUDFLARE_API_TOKEN -R ${fullRepo}\n\n`);
-      return;
-    }
-    const creds = (await res.json()) as { cfApiToken: string; cfAccountId: string };
-    // execFileSync avoids shell interpretation; gh reads secret value from stdin
-    execFileSync('gh', ['secret', 'set', 'CLOUDFLARE_API_TOKEN', '-R', fullRepo], {
-      input: creds.cfApiToken,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    process.stdout.write(`  [+] CLOUDFLARE_API_TOKEN set on ${fullRepo}\n`);
-  } catch (e) {
-    process.stdout.write(`  [!] Failed to set deploy secret: ${e}\n`);
-    process.stdout.write(`      Set manually: gh secret set CLOUDFLARE_API_TOKEN -R ${fullRepo}\n\n`);
-  }
+  process.stdout.write(`\n  Your repo is outside the proappstore-online org.\n`);
+  process.stdout.write(`  Set these GitHub Actions secrets on ${fullRepo}:\n`);
+  process.stdout.write(`    R2_ACCESS_KEY_ID      (from CF Dashboard → R2 → API Tokens)\n`);
+  process.stdout.write(`    R2_SECRET_ACCESS_KEY\n`);
+  process.stdout.write(`    R2_ACCOUNT_ID\n\n`);
 }
