@@ -435,15 +435,8 @@ export class ProjectDO implements DurableObject {
       return;
     }
 
-    // Check if any tickets need user input — don't start new work until user responds
-    const needsInput = this.state.storage.sql
-      .exec("SELECT COUNT(*) as c FROM tickets WHERE status = 'needs-input'")
-      .toArray()[0] as { c: number };
-    if (needsInput.c > 0) {
-      // Agents are waiting for user — don't advance anything else.
-      this.runPendingAgents();
-      return;
-    }
+    // Run any already-active agents first (they're mid-flight — don't block them).
+    this.runPendingAgents();
 
     const tickets = this.state.storage.sql
       .exec("SELECT id, status, iterations FROM tickets WHERE status NOT IN ('done','failed','cancelled','needs-input','ba-refining','dev-active','qa-active') ORDER BY created_at")
