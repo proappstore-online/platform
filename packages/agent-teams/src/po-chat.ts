@@ -244,7 +244,7 @@ export async function handlePOChat(deps: PoChatDeps, request: Request): Promise<
 
       if (!res.ok) {
         let detail = '';
-        try { const b = await res.json() as { error?: { message?: string } }; detail = b?.error?.message ?? ''; } catch { /* not JSON */ }
+        try { const t = await res.text(); const b = JSON.parse(t) as { error?: { message?: string } }; detail = b?.error?.message ?? t.slice(0, 200); } catch { /* already captured what we could */ }
         const safeError = res.status === 401 ? 'API key rejected - check your Anthropic key in Profile > API Keys'
           : res.status === 429 ? 'Rate limited by Anthropic - wait a moment'
           : res.status === 524 || res.status === 504 ? 'Anthropic took too long to respond (timeout). Try a shorter message.'

@@ -155,7 +155,7 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       });
       if (!res.ok) {
         let detail = '';
-        try { const b = await res.json() as { error?: { message?: string } }; detail = b?.error?.message ?? ''; } catch { detail = await res.text().catch(() => ''); }
+        try { const t = await res.text(); const b = JSON.parse(t) as { error?: { message?: string } }; detail = b?.error?.message ?? t.slice(0, 200); } catch { /* already captured what we could */ }
         console.error(`[architect] Anthropic ${res.status}: ${detail.slice(0, 500)}`);
         const safe = res.status === 401 ? 'API key rejected - check your Anthropic key in Profile > API Keys'
           : res.status === 429 ? 'Rate limited by Anthropic - wait a moment and try again'
