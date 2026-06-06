@@ -241,6 +241,13 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
   }
 
   if (errorMessage) {
+    // Store the error as a ticket message so the NEXT run sees it in `prior`
+    // and can adapt (e.g. use fewer files, simpler approach).
+    await deps.storeMessage({
+      ticketId,
+      author: 'system',
+      body: `Previous ${role} run failed: ${errorMessage}`,
+    });
     deps.blockForInput(ticketId, role, `${role} hit an error: ${errorMessage}`);
     return;
   }

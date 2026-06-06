@@ -168,6 +168,10 @@ END YOUR REPORT WITH A SINGLE FINAL LINE, EXACTLY: \`VERDICT: READY\` or \`VERDI
   } else if (role === 'Dev') {
     const ba = lastFrom('BA');
     if (ba) context += `\n\n## BA analysis\n${ba}`;
+    // Surface the last system error (timeout, API error, deploy failure) so
+    // Dev can adapt its approach on retry instead of repeating the same mistake.
+    const lastError = [...prior].reverse().find((m) => m.author === 'system' && m.body.includes('failed'))?.body;
+    if (lastError) context += `\n\n## Previous run error\n${lastError.slice(0, 1000)}\nADAPT your approach: if you timed out, work on fewer files per batch. If the API rejected the request, the conversation was too long — read fewer files and be more targeted.`;
     if (ticket.status === 'qa-failed' || ticket.iterations > 0) {
       context += `\n\n## A previous deploy or test run failed — fix it\nSee the most recent "Deploy failed" message above for the exact error: a compiler error, or a failing vitest assertion. The test files live in \`tests/unit/\` and \`tests/integration/\` — \`read_file\` them to see exactly what is asserted, then make the app actually pass them. (Edit app source only — do not edit the tests.)`;
     }
