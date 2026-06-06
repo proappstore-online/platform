@@ -43,17 +43,18 @@ describe('buildSeedMessages', () => {
     expect(ba).not.toContain('Existing files');
   });
 
-  it('Dev re-fixing after a failed deploy/E2E is pointed at the error + the specs', () => {
+  it('Dev re-fixing after a failed deploy/test is pointed at the error + the tests', () => {
     const body = buildSeedMessages('Dev', ticket({ iterations: 1 }), 'myapp', [{ author: 'BA', body: 'spec' }])[0]!.body;
-    expect(body).toContain('A previous deploy or E2E run failed');
-    expect(body).toContain('e2e/specs/');
+    expect(body).toContain('A previous deploy or test run failed');
+    expect(body).toContain('tests/unit/');
   });
 
-  it('QA is told to WRITE E2E specs (not review) + end with READY/BLOCKED', () => {
+  it('QA writes vitest unit/integration tests + ends with READY/BLOCKED', () => {
     const body = buildSeedMessages('QA', ticket(), 'myapp', [{ author: 'BA', body: 'spec' }])[0]!.body;
     expect(body).toContain('## Acceptance criteria to test');
     expect(body).toContain("write_file");
-    expect(body).toContain('e2e/specs/');
+    expect(body).toContain('tests/unit/');
+    expect(body).toContain('vitest');
     expect(body).toContain('VERDICT: READY');
   });
 
