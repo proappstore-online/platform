@@ -49,10 +49,16 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
   if (!role) return;
 
   const proj = sql
-    .exec('SELECT owner_id, slug, owner_session_token, max_run_minutes FROM project LIMIT 1')
-    .toArray()[0] as { owner_id: string; slug: string; owner_session_token: string | null; max_run_minutes?: number } | undefined;
+    .exec('SELECT owner_id, slug, owner_session_token FROM project LIMIT 1')
+    .toArray()[0] as { owner_id: string; slug: string; owner_session_token: string | null } | undefined;
   if (!proj) return;
-  const maxRunMinutes = proj.max_run_minutes ?? DEFAULT_MAX_RUN_MINUTES;
+  // max_run_minutes was added by a migration; read it separately so DOs that
+  // haven't applied the migration yet don't crash the whole run.
+  let maxRunMinutes = DEFAULT_MAX_RUN_MINUTES;
+  try {
+    const m = sql.exec('SELECT max_run_minutes FROM project LIMIT 1').toArray()[0] as { max_run_minutes?: number } | undefined;
+    if (m?.max_run_minutes) maxRunMinutes = m.max_run_minutes;
+  } catch { /* column doesn't exist yet — use default */ }
 
   const rcRow = sql
     .exec('SELECT * FROM role_configs WHERE role = ?', role)
