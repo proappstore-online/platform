@@ -207,57 +207,186 @@ createRoot(document.getElementById('root')!).render(
 `);
 
   files.set('src/App.tsx', `import { initPro } from '@proappstore/sdk'
-import { ProShell } from '@proappstore/sdk/shell'
+import { useProAuth } from '@proappstore/sdk/hooks'
+import { useTheme } from '@proappstore/sdk/hooks'
+import { Avatar, SignInButton, ThemeToggle, TextSizeToggle, ProProfilePage } from '@proappstore/sdk/ui'
+import { useState } from 'react'
 
-const app = initPro({ appId: '${slug}' })
+export const app = initPro({ appId: '${slug}' })
+
+type View = 'home' | 'profile' | 'settings'
 
 export default function App() {
+  const { user, loading, signIn, signOut } = useProAuth(app)
+  const { theme } = useTheme()
+  const [view, setView] = useState<View>('home')
+
   return (
-    <ProShell app={app} appName="${slug}">
-      <main className="max-w-2xl mx-auto p-6">
-        <h1 className="text-2xl font-bold mb-4">${slug}</h1>
-        <p className="text-muted">Your app is ready. Start building!</p>
+    <div className="min-h-[100dvh] flex flex-col" data-theme={theme}>
+      {/* Nav bar */}
+      <header className="sticky top-0 z-50 border-b border-[var(--line)] bg-[var(--paper)]/90 backdrop-blur">
+        <div className="max-w-5xl mx-auto px-4 h-12 flex items-center justify-between">
+          <button onClick={() => setView('home')} className="font-bold text-[var(--ink)] display-font">${slug}</button>
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            {loading ? null : user ? (
+              <>
+                <button onClick={() => setView('settings')} className="text-xs text-[var(--muted)] hover:text-[var(--ink)]">Settings</button>
+                <button onClick={() => setView('profile')}>
+                  <Avatar user={user} size={28} />
+                </button>
+              </>
+            ) : (
+              <SignInButton onSignIn={signIn} />
+            )}
+          </div>
+        </div>
+      </header>
+
+      {/* Content */}
+      <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-6">
+        {view === 'profile' && user && (
+          <ProProfilePage app={app} user={user} onSignOut={signOut} onBack={() => setView('home')} />
+        )}
+        {view === 'settings' && (
+          <div className="max-w-md space-y-6">
+            <h2 className="text-xl font-bold text-[var(--ink)]">Settings</h2>
+            <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-[var(--ink)]">Theme</span>
+                <ThemeToggle />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-[var(--ink)]">Text size</span>
+                <TextSizeToggle />
+              </div>
+            </div>
+            <button onClick={() => setView('home')} className="text-sm text-[var(--accent)] hover:underline">&larr; Back</button>
+          </div>
+        )}
+        {view === 'home' && (
+          <div className="space-y-4">
+            <h1 className="text-2xl font-bold text-[var(--ink)]">${slug}</h1>
+            <p className="text-[var(--muted)]">Your app is ready. Start building!</p>
+          </div>
+        )}
       </main>
-    </ProShell>
+    </div>
   )
 }
 `);
 
-  // Design tokens + dark mode (matches the platform design system)
+  // Design tokens + dark mode + common components (matches the platform design system)
   files.set('src/index.css', `@import 'tailwindcss';
 
-/* ProAppStore design tokens */
+/* ── ProAppStore design tokens ────────────────────────────────────
+   Override these in the Style tab (console) or directly here.
+   The Dev agent should use var(--token), never hardcoded colors. */
 :root {
   --paper: #ffffff;
+  --paper-deep: #f7f7f7;
   --ink: #1a1a2e;
+  --ink-strong: #0f0f1a;
   --muted: #6b7280;
   --accent: #7c3aed;
+  --accent-hover: #6d28d9;
+  --accent-soft: rgba(124, 58, 237, 0.08);
   --line: #e5e7eb;
+  --line-strong: #d1d5db;
   --panel: rgba(255, 255, 255, 0.72);
+  --panel-hover: rgba(0, 0, 0, 0.03);
   --error: #dc2626;
   --success: #16a34a;
+  --warning: #ca8a04;
+  --shadow: 0 1px 3px rgba(0,0,0,0.06);
+  --shadow-lg: 0 4px 12px rgba(0,0,0,0.08);
+  --radius: 12px;
+  --radius-sm: 8px;
   color-scheme: light dark;
 }
 
 [data-theme="dark"], @media (prefers-color-scheme: dark) {
   :root {
     --paper: #0a0a0a;
+    --paper-deep: #050505;
     --ink: #e5e7eb;
+    --ink-strong: #f9fafb;
     --muted: #9ca3af;
     --accent: #a78bfa;
+    --accent-hover: #8b5cf6;
+    --accent-soft: rgba(167, 139, 250, 0.1);
     --line: #2a2a3e;
+    --line-strong: #3a3a52;
     --panel: rgba(20, 20, 35, 0.72);
+    --panel-hover: rgba(255, 255, 255, 0.04);
+    --shadow: 0 1px 3px rgba(0,0,0,0.3);
+    --shadow-lg: 0 4px 12px rgba(0,0,0,0.4);
   }
 }
+
+/* Text size (set by useTheme hook) */
+html[data-text="sm"] { font-size: 14px; }
+html[data-text="lg"] { font-size: 18px; }
+html[data-text="xl"] { font-size: 20px; }
 
 body {
   background: var(--paper);
   color: var(--ink);
-  font-family: 'Manrope', system-ui, sans-serif;
+  font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
+/* ── Utility classes ──────────────────────────────────────────── */
 .display-font { font-family: 'Fraunces', serif; }
 .text-muted { color: var(--muted); }
+
+/* Card component */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  box-shadow: var(--shadow);
+}
+.card:hover { border-color: var(--line-strong); box-shadow: var(--shadow-lg); }
+
+/* Button variants */
+.btn {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  padding: 0.5rem 1rem; border-radius: var(--radius-sm);
+  font-size: 0.875rem; font-weight: 600; transition: all 0.15s;
+  cursor: pointer; border: none;
+}
+.btn-primary { background: var(--accent); color: white; }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-secondary { background: var(--panel); color: var(--ink); border: 1px solid var(--line); }
+.btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+.btn-ghost { background: transparent; color: var(--muted); }
+.btn-ghost:hover { color: var(--ink); background: var(--panel-hover); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Input */
+.input {
+  width: 100%; padding: 0.5rem 0.75rem; border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong); background: var(--paper);
+  color: var(--ink); font-size: 0.875rem;
+}
+.input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+
+/* Badge */
+.badge {
+  display: inline-flex; align-items: center; padding: 0.125rem 0.5rem;
+  border-radius: 999px; font-size: 0.75rem; font-weight: 600;
+}
+.badge-accent { background: var(--accent-soft); color: var(--accent); }
+.badge-success { background: rgba(22,163,106,0.1); color: var(--success); }
+.badge-error { background: rgba(220,38,38,0.1); color: var(--error); }
+
+/* Empty state */
+.empty-state {
+  text-align: center; padding: 3rem 1rem; color: var(--muted);
+}
+.empty-state h3 { color: var(--ink); font-weight: 700; margin-bottom: 0.5rem; }
 `);
 
   // ── MCP scaffold ────────────────────────────────────────────

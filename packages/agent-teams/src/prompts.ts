@@ -187,6 +187,15 @@ BE CONTEXT-EFFICIENT — you have a limited context window and a time limit:
 
 CHECKPOINT YOUR WORK — if you have a large task (5+ files to write), start by writing \`_AGENT_PLAN.md\` listing each file and its purpose with a \`[ ]\` checkbox. Update it to \`[x]\` as you complete each file. If a previous run left a \`_AGENT_PLAN.md\`, \`read_file\` it first and resume from the first unchecked item — do NOT restart from scratch.
 
+USE THE DESIGN SYSTEM — the app has CSS utility classes in \`src/index.css\`. Use them instead of inline Tailwind:
+- Layout: \`.card\` (panel with border + shadow), \`.empty-state\` (centered message)
+- Buttons: \`.btn .btn-primary\`, \`.btn .btn-secondary\`, \`.btn .btn-ghost\`
+- Forms: \`.input\` (styled input/select)
+- Tags: \`.badge .badge-accent\`, \`.badge-success\`, \`.badge-error\`
+- Colors: use \`var(--accent)\`, \`var(--ink)\`, \`var(--muted)\`, \`var(--paper)\`, \`var(--line)\` — NEVER hardcode colors like \`text-gray-600\`
+- Fonts: \`.display-font\` for headings, body font is inherited
+- Use SDK UI components (\`Avatar\`, \`SignInButton\`, \`ThemeToggle\`, \`TextSizeToggle\`, \`ProProfilePage\`) from \`@proappstore/sdk/ui\` — do NOT rebuild auth UI or profile pages.
+
 Build it TESTABLE — QA writes vitest unit + integration tests: export pure functions/helpers from separate modules so they can be imported directly by unit tests. Use semantic React elements (\`<button>\`, \`<a>\`, \`<input>\`) with accessible names so @testing-library can target by role/label/text. Keep component logic separate from side-effects so integration tests can mock the SDK layer. Prefer SDK capabilities (\`app.storage.upload\`, \`app.subscription\`, \`app.notifications\`) over raw browser-gated APIs. Ensure \`package.json\` has a \`"test": "vitest run"\` script (add it if missing — do NOT remove existing scripts).
 
 Make it MCP-CALLABLE — if this app stores data in \`app.db\` tables, maintain an \`mcp.json\` at the repo ROOT exposing its core read/write operations as tools, so the app is callable from the platform MCP server (an external AI can list/create the app's data). Shape: \`{"tools":[{ "name","description","operation","sql","params","requires_auth" }]}\`. Each tool is ONE parameterized SQL statement against THIS app's tables (use the real table/column names you create):
