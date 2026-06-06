@@ -18,6 +18,7 @@ import { resolveByoKey } from './byo-key.ts';
 import { executeFileTool } from './spine.ts';
 import { toolActivityDetail } from './tool-activity.ts';
 import { sliceDocs } from './platform-skill.ts';
+import { parseAnthropicStream } from './runtimes/cf-native-stream.ts';
 
 /** The Architect's chat thread (kept out of the PO/build transcript). */
 export const RESEARCH_THREAD = 'research';
@@ -148,10 +149,10 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
         headers: {
           'x-api-key': apiKey,
           'anthropic-version': '2023-06-01',
-          'anthropic-beta': 'web-fetch-2025-09-10', // enables the web_fetch server tool
+          'anthropic-beta': 'web-fetch-2025-09-10',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 8192, system: systemPrompt, tools, messages }),
+        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 8192, system: systemPrompt, tools, messages, stream: true }),
       });
       if (!res.ok) {
         let detail = '';
@@ -159,14 +160,25 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
         console.error(`[architect] Anthropic ${res.status}: ${detail.slice(0, 500)}`);
         const safe = res.status === 401 ? 'API key rejected - check your Anthropic key in Profile > API Keys'
           : res.status === 429 ? 'Rate limited by Anthropic - wait a moment and try again'
-          : res.status === 524 || res.status === 504 ? 'Anthropic took too long to respond (timeout). The conversation may be too large - try a shorter message or start a new chat.'
           : `Anthropic error: ${detail.slice(0, 200) || `status ${res.status}`}`;
         if (wrote) { deps.saveFiles(files); deps.broadcast({ type: 'files-synced', count: files.size }); }
         return save(deps, `Sorry, I couldn't finish that: ${safe}`, Date.now());
       }
-      const aiRes = (await res.json()) as { content?: unknown; stop_reason?: string };
+      if (!res.body) return save(deps, 'No response body from Anthropic.', Date.now());
+      // Stream the response — prevents Cloudflare 524 timeout on large contexts.
+      // parseAnthropicStream yields text-delta events (which we broadcast live)
+      // and returns the full AnthropicResponse at the end.
+      const stream = parseAnthropicStream(res.body);
+      let streamResult = await stream.next();
+      while (!streamResult.done) {
+        const ev = streamResult.value;
+        if (ev.type === 'text-delta') {
+          deps.broadcast({ type: 'agent-text', role: 'Architect', text: ev.text });
+        }
+        streamResult = await stream.next();
+      }
+      const aiRes = streamResult.value;
       const contentArr = aiRes.content;
-      if (!Array.isArray(contentArr)) return save(deps, 'I got an unexpected response format. Try again?', Date.now());
       messages.push({ role: 'assistant', content: contentArr });
       text = (contentArr as { type: string; text?: string }[]).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('');
 
@@ -175,8 +187,8 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       // 'tool_use'), so they don't appear here and need no client handling. If a
       // long search made the model pause, resume by re-invoking with the turn so
       // far (no client tool_result to add).
-      if (aiRes.stop_reason === 'pause_turn') continue;
-      const toolUses = (contentArr as { type: string; id?: string; name?: string; input?: unknown }[]).filter((c) => c.type === 'tool_use');
+      if (aiRes.stop_reason === 'pause_turn' as string) continue;
+      const toolUses = contentArr.filter((c) => c.type === 'tool_use') as { type: 'tool_use'; id: string; name: string; input: unknown }[];
       if (toolUses.length === 0 || aiRes.stop_reason !== 'tool_use') break;
 
       const toolResults = await Promise.all(toolUses.map(async (tu) => {
