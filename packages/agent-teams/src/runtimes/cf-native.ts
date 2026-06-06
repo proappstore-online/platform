@@ -127,7 +127,7 @@ export class CFNativeRuntime implements AgentRuntime {
           try { const b = await res.json() as { error?: { message?: string } }; detail = b?.error?.message ?? ""; } catch { /* body not JSON */ }
           const safeError = res.status === 401 ? "API key rejected - check your Anthropic API key in Profile > API Keys"
             : res.status === 429 ? "Rate limited by Anthropic - retry in a minute"
-            : res.status === 400 ? `Anthropic rejected the request: ${detail || "bad request (400)"}. This often means the conversation is too long - try a simpler ticket or increase max_tokens in Settings > Agents.`
+            : res.status === 400 ? `Anthropic error: ${detail || "bad request (400)"}`
             : res.status === 524 || res.status === 504 ? `Anthropic timed out (${res.status}) - try again or lower max tokens in Settings > Agents`
             : `Anthropic error ${res.status}${detail ? ": " + detail : ""}`;
           yield { type: 'error', message: safeError, retryable: transient };

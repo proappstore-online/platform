@@ -1,0 +1,99 @@
+# Agent Reliability Plan
+
+Status: **live** — agents are serving real users. Every fix must be backward-compatible (no migration-gated features that break unmigrated DOs).
+
+## The five failure modes (observed in production)
+
+| # | Failure | Root cause | Current fix | Remaining gap |
+|---|---------|-----------|-------------|---------------|
+| 1 | **Timeout** — "run exceeded 10 min" | Large tasks (i18n: 14 locale files) take >10 min | Configurable timeout (1-60m), error feedback on retry | Agent restarts from scratch on retry, re-reads everything |
+| 2 | **Context overflow** — "Anthropic rejected: prompt too long" | Tool results (file reads/writes) balloon the conversation | `trimConversation()` at 150k tokens, Dev prudence rules | Silent trim — model doesn't know content was removed |
+| 3 | **Stuck loop** — agent retries same failing approach | No error feedback to next run | Error stored as ticket message, surfaced in Dev prompt | Works for timeout/API errors; doesn't cover "agent chose a bad approach" |
+| 4 | **Stale UI** — button shows Pause when agent is dead | No `agent-run-ended` event, staleness timer is 20s | Filed as issue #11 | Not yet implemented |
+| 5 | **Deploy race** — concurrent pushes cause non-fast-forward | Multiple tickets deploying simultaneously | Retry with sync on conflict | Mostly fixed; rare edge case remains with 3+ concurrent deploys |
+
+## Plan: three phases
+
+### Phase 1: Run checkpointing (highest impact, medium effort)
+
+**Problem:** When a run times out or fails, the agent starts completely fresh. It re-reads every file it already read, re-generates code it already wrote. A 10-min run that was 80% done throws away all progress and does the same 80% again.
+
+**Solution:** Checkpoint the agent's progress within a run using a lightweight `_AGENT_PLAN.md` file.
+
+1. **At the start of each Dev run**, inject an instruction: "Before writing any code, create `_AGENT_PLAN.md` listing every file you plan to create/modify and its purpose. Check off items as you complete them."
+
+2. **On retry**, the agent sees `_AGENT_PLAN.md` in its file list (already persisted by `saveFiles`). The prompt says: "You have a plan from a previous run. Read it. Skip completed items. Continue from where you left off."
+
+3. **Files already written** are visible in the existing file list. Combined with the plan, the agent knows: "I already wrote 8 of 14 locale files — continue from `el.json`."
+
+**Implementation:**
+- `prompts.ts`: Add plan-file instruction to Dev prompt
+- `prompts.ts`: On retry (iterations > 0 OR prior system error), add "resume from plan" instruction
+- `spine.ts`: No changes — `_AGENT_PLAN.md` is just a regular file the agent writes
+- **No backend changes needed.** This is purely a prompt-level convention.
+
+**Files to change:** `prompts.ts` only.
+
+### Phase 2: Pre-flight estimation + auto-split (medium impact, medium effort)
+
+**Problem:** The BA creates tickets that are too large for one Dev run. "Add i18n with 10 languages" becomes one ticket that requires 14 file writes, exceeding the timeout.
+
+**Solution:** The BA estimates the work size and auto-splits large tickets.
+
+1. **BA prompt update:** After producing the spec, estimate the number of files to create/modify. If >8 files, split into sub-tickets (e.g. "Add i18n framework + English" and "Add Chinese, Vietnamese, Arabic translations").
+
+2. **Dev prompt update:** If the file list shows >30 source files, the Dev should work in passes: critical files first, then secondary files on the next iteration.
+
+3. **Ticket iteration budget:** Instead of a hard 5-iteration cap, give feedback at iteration 3: "You've used 3 of 5 iterations. Focus on getting the core working — polish can be a follow-up ticket."
+
+**Implementation:**
+- `prompts.ts`: BA ticket-splitting heuristic
+- `prompts.ts`: Dev multi-pass awareness
+- `ticket-machine.ts`: Soft warning at iteration 3 (message, not hard stop)
+
+### Phase 3: Smarter conversation management (medium impact, higher effort)
+
+**Problem:** Even with trimming, the conversation within a single run can be inefficient. The agent reads 20 files (each becomes a tool_result in the conversation), then writes files, then the tool results from 3 turns ago are trimmed but the damage (wasted tokens) is already done.
+
+**Solution:** Smarter tool result handling in the runtime.
+
+1. **Streaming file reads:** Instead of returning full file content as tool_result, return a summary for files >2KB: first 50 lines + "... (truncated, 847 lines total)". The agent can re-read specific sections if needed.
+
+2. **Write confirmation instead of echo:** `batch_write_files` currently returns the full content of written files as confirmation. Change to: "Wrote 5 files: src/a.tsx (142 lines), src/b.tsx (89 lines), ..." — the agent knows its own output.
+
+3. **Context budget in the tool schemas:** Add a `_context_note` to tool descriptions: "You have ~150k tokens of context. Each file read uses ~{filesize/4} tokens. Be selective."
+
+**Implementation:**
+- `spine.ts`: Truncate `read_file` results for files >2KB (keep first 80 lines + size note)
+- `spine.ts`: Change `batch_write_files` result from echo to summary
+- `tool-schemas.ts`: Add context budget note to read_file/batch_write_files descriptions
+
+### Phase 4: Observability + self-healing (lower priority, ongoing)
+
+1. **`agent-run-ended` event** (issue #11): Emit when a run finishes (success or error). Console clears the working indicator immediately.
+
+2. **Cost guard per-ticket:** If a single ticket has spent >$5, warn the user before starting another Dev iteration. The agent is probably stuck.
+
+3. **Token counter in the runtime:** Track cumulative tokens within the run. If approaching 80% of model context, inject a system message: "Context budget warning: you've used 160k of 200k tokens. Finish your current task and stop reading files."
+
+4. **Dead-run detection:** If no heartbeat for 60s during an active run, the watchdog should mark the ticket as needs-input rather than waiting for the full timeout.
+
+## Implementation priority
+
+| Phase | Impact | Effort | Ship target |
+|-------|--------|--------|-------------|
+| 1 — Run checkpointing | High | Low (prompt only) | This week |
+| 2 — BA auto-split | Medium | Low (prompt only) | This week |
+| 3 — Smarter tool results | Medium | Medium (spine changes) | Next week |
+| 4 — Observability | Low-Med | Medium (runtime + console) | Next week |
+
+## What's already shipped (done)
+
+- [x] Configurable run timeout (1-60 min, board UI)
+- [x] Context trimming at 150k tokens (auto, transparent)
+- [x] Actual API error messages (not "Invalid request")
+- [x] Error feedback to retry runs (stored as ticket message, injected into prompt)
+- [x] Dev prudence instructions (read less, batch writes, don't re-read)
+- [x] Model/runtime selector on board header
+- [x] Elapsed timer on active tickets
+- [x] Resilient `max_run_minutes` read (survives unmigrated DOs)

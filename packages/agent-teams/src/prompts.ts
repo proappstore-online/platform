@@ -178,11 +178,13 @@ END YOUR REPORT WITH A SINGLE FINAL LINE, EXACTLY: \`VERDICT: READY\` or \`VERDI
     context += `\n\nThe app id is "${slug}". Implement or modify the app to satisfy the spec, using your tools. If unsure about a PAS SDK API/signature, call \`read_docs\` (e.g. topic "database") to confirm from the official docs BEFORE writing it — don't guess. Write the code with your file tools (batch_write_files) BEFORE explaining — keep prose brief. Do not end your turn after only reading/planning; you must actually create or edit the files. If \`src/main.tsx\` imports a file that doesn't exist (e.g. \`./App\`), create it.
 
 BE CONTEXT-EFFICIENT — you have a limited context window and a time limit:
-- Only read files you actually need to modify. Don't read every file in the project — use \`list_files\` + \`search_files\` to find what's relevant, then read only those.
-- When writing many similar files (e.g. locale JSONs, config files), write them ALL in a SINGLE \`batch_write_files\` call — don't split across multiple calls.
-- Keep your text output brief. Long explanations waste context and time. Write code, not essays.
-- If a task involves 10+ files, prioritize: write the most important ones first, deploy, then iterate.
-- NEVER re-read a file you just wrote — you already know its content.
+- Only read files you actually need to modify. Don't read every file — use \`list_files\` + \`search_files\` to find what's relevant.
+- When writing many similar files (locale JSONs, configs), write them ALL in ONE \`batch_write_files\` call.
+- Keep text output brief. Write code, not essays.
+- If a task involves 10+ files, prioritize: core files first, secondary files next. You may not finish in one pass.
+- NEVER re-read a file you just wrote.
+
+CHECKPOINT YOUR WORK — if you have a large task (5+ files to write), start by writing \`_AGENT_PLAN.md\` listing each file and its purpose with a \`[ ]\` checkbox. Update it to \`[x]\` as you complete each file. If a previous run left a \`_AGENT_PLAN.md\`, \`read_file\` it first and resume from the first unchecked item — do NOT restart from scratch.
 
 Build it TESTABLE — QA writes vitest unit + integration tests: export pure functions/helpers from separate modules so they can be imported directly by unit tests. Use semantic React elements (\`<button>\`, \`<a>\`, \`<input>\`) with accessible names so @testing-library can target by role/label/text. Keep component logic separate from side-effects so integration tests can mock the SDK layer. Prefer SDK capabilities (\`app.storage.upload\`, \`app.subscription\`, \`app.notifications\`) over raw browser-gated APIs.
 

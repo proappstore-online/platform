@@ -165,7 +165,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
         try { const b = await res.json() as { error?: { message?: string } }; detail = b?.error?.message ?? ''; } catch { /* body not JSON */ }
         const safeError = res.status === 401 ? 'API key rejected — check your OpenAI API key in Profile → API Keys'
           : res.status === 429 ? 'Rate limited by OpenAI — retry in a minute'
-          : res.status === 400 ? `OpenAI rejected the request: ${detail || 'bad request (400)'}. This often means the conversation is too long or the model name is wrong — check Settings → Agents.`
+          : res.status === 400 ? `OpenAI error: ${detail || "bad request (400)"}`
           : `OpenAI error ${res.status}${detail ? `: ${detail}` : ''}`;
         yield { type: 'error', message: safeError, retryable: res.status >= 500 };
         return;
