@@ -217,6 +217,7 @@ export class ProjectDO implements DurableObject {
       return this.runAgent(runMatch[1]!, request);
     }
 
+    if (path === '/generate-listing' && request.method === 'POST') return this.generateListing(request);
     if (path === '/cost' && request.method === 'GET') return this.getCostSummary();
     if (path === '/cost/detail' && request.method === 'GET') return json(costDetail(this.state.storage.sql));
     if (path === '/activity' && request.method === 'GET') return this.getActivity();
@@ -1709,5 +1710,62 @@ Be concise. Output code in markdown code blocks.`;
 
   private getCostSummary(): Response {
     return json(costSummary(this.state.storage.sql));
+  }
+
+  /** AI-powered listing generator: reads the app's source, calls the owner's
+   *  BYO Anthropic key to generate a tagline, description, and category. */
+  private async generateListing(request: Request): Promise<Response> {
+    const body = (await request.json().catch(() => ({}))) as { fields?: string[] };
+    const fields = body.fields ?? ['tagline', 'longDescription', 'category'];
+    const proj = this.state.storage.sql
+      .exec('SELECT owner_id, slug, name FROM project LIMIT 1')
+      .toArray()[0] as { owner_id: string; slug: string; name: string } | undefined;
+    if (!proj) return json({ error: 'project not found' }, 404);
+
+    const byoKey = await resolveByoKey(this.env, proj.owner_id, 'anthropic');
+    if (!byoKey) return json({ error: 'No Anthropic API key configured. Add one in Profile > API Keys.' }, 400);
+
+    // Gather app context from the working tree
+    const files = loadFiles(this.state.storage.sql);
+    const fileList = [...files.keys()].sort();
+    const readme = files.get('README.md') ?? '';
+    const kb = files.get('KNOWLEDGE.md') ?? '';
+    const appTs = files.get('src/App.tsx') ?? files.get('src/App.jsx') ?? '';
+    const pkgJson = files.get('package.json') ?? '';
+
+    const prompt = `You are writing a store listing for a web app called "${proj.name}" (id: ${proj.slug}) on ProAppStore.
+
+App context:
+${kb ? `Knowledge Base:\n${kb.slice(0, 3000)}\n` : ''}${readme ? `README:\n${readme.slice(0, 1500)}\n` : ''}${appTs ? `App.tsx (first 100 lines):\n${appTs.split('\n').slice(0, 100).join('\n')}\n` : ''}${pkgJson ? `package.json deps:\n${pkgJson.slice(0, 500)}\n` : ''}
+Files: ${fileList.slice(0, 30).join(', ')}
+
+Generate a JSON object with these fields:
+- "tagline": 1 sentence, max 60 chars, catchy — what the app does
+- "longDescription": 2-3 paragraphs, markdown OK, what the app does + key features + who it's for
+- "category": one of: productivity, social, marketplace, transport, finance, health, education, entertainment, tools, other
+
+Respond with ONLY the JSON object, no markdown fences, no explanation.`;
+
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': byoKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-haiku-4-5', max_tokens: 1024, messages: [{ role: 'user', content: prompt }] }),
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        return json({ error: `Anthropic ${res.status}: ${t.slice(0, 200)}` }, 502);
+      }
+      const aiRes = (await res.json()) as { content?: { type: string; text?: string }[] };
+      const text = aiRes.content?.find(c => c.type === 'text')?.text ?? '';
+      try {
+        const listing = JSON.parse(text);
+        return json({ listing, tokensUsed: true });
+      } catch {
+        return json({ listing: { tagline: '', longDescription: text, category: 'other' }, tokensUsed: true });
+      }
+    } catch (e) {
+      return json({ error: `AI generation failed: ${e instanceof Error ? e.message : 'unknown'}` }, 500);
+    }
   }
 }

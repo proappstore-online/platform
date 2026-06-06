@@ -312,6 +312,10 @@ app.get('/v1/projects/:slug/cost/detail', async (c) => {
   return new Response(res.body, { status: res.status, headers: res.headers });
 });
 
+app.post('/v1/projects/:slug/generate-listing', async (c) => {
+  return relay(c, '/generate-listing', { method: 'POST', forwardBody: true });
+});
+
 // ── Activity log (persisted audit trail) ────────────────────
 
 app.get('/v1/projects/:slug/activity', async (c) => {
