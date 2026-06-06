@@ -207,7 +207,12 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
           return { type: 'tool_result' as const, tool_use_id: tu.id!, content: out };
         }
         const r = executeFileTool({ id: tu.id!, name: tu.name!, args: tu.input }, files);
-        if (r.ok && (tu.name === 'write_file' || tu.name === 'batch_write_files')) wrote = true;
+        if (r.ok && (tu.name === 'write_file' || tu.name === 'batch_write_files')) {
+          wrote = true;
+          // Save immediately after each write — don't wait for the loop to end.
+          // This prevents data loss if the DO is evicted or the loop errors later.
+          deps.saveFiles(files);
+        }
         const out = (r.ok ? (typeof r.data === 'string' ? r.data : JSON.stringify(r.data)) : (r.errorMessage ?? 'error')) || '(no output)';
         deps.logActivity('tool', `Architect: ${toolActivityDetail(tu.name!, tu.input)}`, null, JSON.stringify({ args: tu.input, ok: r.ok, result: out }));
         return { type: 'tool_result' as const, tool_use_id: tu.id!, content: out };
