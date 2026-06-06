@@ -118,6 +118,8 @@ export function seedFiles(slug: string): Map<string, string> {
     },
     dependencies: {
       '@proappstore/sdk': '^1.9.0', 'react': '^19.2.5', 'react-dom': '^19.2.5',
+      'lucide-react': '^0.460.0', 'date-fns': '^4.1.0',
+      'react-i18next': '^15.4.0', 'i18next': '^24.2.0',
     },
     devDependencies: {
       '@tailwindcss/vite': '^4.2.4', '@testing-library/react': '^16.0.0',

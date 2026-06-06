@@ -31,6 +31,7 @@ import { TOOL_SCHEMAS } from './tool-schemas.ts';
 import { toolActivityDetail } from './tool-activity.ts';
 import { parseAnthropicStream } from './runtimes/cf-native-stream.ts';
 import { seedFiles } from './template-seed.ts';
+import { RECIPES, getRecipe } from './recipes.ts';
 import {
   SCHEMA,
   MIGRATIONS,
@@ -873,6 +874,13 @@ export class ProjectDO implements DurableObject {
     return async (call) => {
       if (call.name === 'read_docs') {
         const topic = (call.args as { topic?: string } | undefined)?.topic;
+        // Check if the topic matches a recipe name first
+        if (topic && RECIPES[topic.toLowerCase().replace(/\s+/g, '-')]) {
+          return { callId: call.id, ok: true, data: getRecipe(topic), durationMs: 0 };
+        }
+        if (topic === 'recipes') {
+          return { callId: call.id, ok: true, data: getRecipe(), durationMs: 0 };
+        }
         const out = sliceDocs(await this.fetchDocs(), topic) || 'docs unavailable';
         return { callId: call.id, ok: true, data: out, durationMs: 0 };
       }

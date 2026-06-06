@@ -194,7 +194,12 @@ USE THE DESIGN SYSTEM — the app has CSS utility classes in \`src/index.css\`. 
 - Tags: \`.badge .badge-accent\`, \`.badge-success\`, \`.badge-error\`
 - Colors: use \`var(--accent)\`, \`var(--ink)\`, \`var(--muted)\`, \`var(--paper)\`, \`var(--line)\` — NEVER hardcode colors like \`text-gray-600\`
 - Fonts: \`.display-font\` for headings, body font is inherited
-- Use SDK UI components (\`Avatar\`, \`SignInButton\`, \`ThemeToggle\`, \`TextSizeToggle\`, \`ProProfilePage\`) from \`@proappstore/sdk/ui\` — do NOT rebuild auth UI or profile pages.
+- Icons: \`import { MapPin, Plus, Search, ... } from 'lucide-react'\` — NEVER use emoji. Pre-installed.
+- Dates: \`import { format, formatDistanceToNow } from 'date-fns'\` — pre-installed.
+- i18n: \`react-i18next\` + \`i18next\` are pre-installed. See \`read_docs recipes\` or \`read_docs i18n-setup\` for the pattern.
+- Use SDK UI components (\`Avatar\`, \`ThemeToggle\`, \`TextSizeToggle\`, \`ProProfilePage\`) from \`@proappstore/sdk/ui\` — do NOT rebuild auth UI or profile pages.
+
+RECIPES — before writing boilerplate, call \`read_docs recipes\` to see available pre-built patterns (CRUD list, form, search, modal, file upload, data table, tabs, i18n, icons). Call \`read_docs <recipe-name>\` for the full code. Copy and adapt — don't generate from scratch.
 
 Build it TESTABLE — QA writes vitest unit + integration tests: export pure functions/helpers from separate modules so they can be imported directly by unit tests. Use semantic React elements (\`<button>\`, \`<a>\`, \`<input>\`) with accessible names so @testing-library can target by role/label/text. Keep component logic separate from side-effects so integration tests can mock the SDK layer. Prefer SDK capabilities (\`app.storage.upload\`, \`app.subscription\`, \`app.notifications\`) over raw browser-gated APIs. Ensure \`package.json\` has a \`"test": "vitest run"\` script (add it if missing — do NOT remove existing scripts).
 
