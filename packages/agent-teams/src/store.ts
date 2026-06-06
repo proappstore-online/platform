@@ -118,6 +118,8 @@ export const MIGRATIONS: string[][] = [
     label TEXT, expires_at INTEGER, revoked INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL, view_count INTEGER NOT NULL DEFAULT 0
   )`],
+  // Per-project agent run timeout (default 10 min, configurable in UI).
+  [`ALTER TABLE project ADD COLUMN max_run_minutes INTEGER NOT NULL DEFAULT 10`],
 ];
 
 export function uuid(): string {

@@ -45,7 +45,7 @@ import { runAgentTurn } from './agent-runner.ts';
 import { validateRoleConfig } from './role-config.ts';
 import { buildAgentCatalog } from './agents-catalog.ts';
 import { loadFiles, saveFiles, recallMemory, upsertMemory } from './project-store.ts';
-import { insertActivity, updateActivityMeta, clearActivityLog, readActivity, costSummary } from './activity-log.ts';
+import { insertActivity, updateActivityMeta, clearActivityLog, readActivity, costSummary, costDetail } from './activity-log.ts';
 import { DEFAULT_PERSONAS, type MemoryEntry } from './memory.ts';
 import { DOCS_SKILLS_URL, sliceDocs } from './platform-skill.ts';
 
@@ -218,6 +218,7 @@ export class ProjectDO implements DurableObject {
     }
 
     if (path === '/cost' && request.method === 'GET') return this.getCostSummary();
+    if (path === '/cost/detail' && request.method === 'GET') return json(costDetail(this.state.storage.sql));
     if (path === '/activity' && request.method === 'GET') return this.getActivity();
     if (path === '/activity' && request.method === 'DELETE') return this.clearActivity();
 
@@ -279,6 +280,7 @@ export class ProjectDO implements DurableObject {
       createdAt: row.created_at,
       costCapMonthlyUsd: row.cost_cap_monthly_usd,
       costSpentMonthlyUsd: spent,
+      maxRunMinutes: (row.max_run_minutes as number) ?? 10,
       repoUrl: row.repo_url,
       status: row.status ?? 'paused',
     });
@@ -900,30 +902,30 @@ export class ProjectDO implements DurableObject {
       this.broadcast({ type: 'transition', ticketId, from: 'ba-refining', to: 'awaiting-approval', trigger: 'BA' });
       this.logActivity('transition', 'BA finished spec → awaiting approval', ticketId);
     } else if (role === 'Dev') {
-      // First pass → QA authors the E2E specs. On a re-fix (Dev addressing a
-      // failed CI build or E2E run) the specs already exist, so skip QA and go
-      // straight to the deploy stage to re-run them against the fixed code.
-      const hasSpecs = [...this.loadFiles().keys()].some((p) => /^e2e\/specs\/.+\.spec\.[tj]sx?$/i.test(p));
-      if (hasSpecs) {
+      // First pass → QA writes unit/integration tests. On a re-fix (Dev
+      // addressing a failed CI build or test run) tests already exist, so
+      // skip QA and go straight to the deploy stage to re-run them.
+      const hasTests = [...this.loadFiles().keys()].some((p) => /^tests\/(unit|integration)\/.+\.test\.[tj]sx?$/i.test(p));
+      if (hasTests) {
         this.state.storage.sql.exec(
           "UPDATE tickets SET status = 'deploying', assignee_role = NULL, deploy_pushed_at = NULL, deploy_pushed_sha = NULL, updated_at = ? WHERE id = ?",
           now, ticketId,
         );
         this.broadcast({ type: 'transition', ticketId, from: 'dev-active', to: 'deploying', trigger: 'system' });
-        this.logActivity('transition', 'Dev finished (E2E specs exist) → deploying', ticketId);
+        this.logActivity('transition', 'Dev finished (tests exist) → deploying', ticketId);
       } else {
         this.state.storage.sql.exec(
           "UPDATE tickets SET status = 'qa-active', assignee_role = 'QA', updated_at = ? WHERE id = ?",
           now, ticketId,
         );
         this.broadcast({ type: 'transition', ticketId, from: 'dev-active', to: 'qa-active', trigger: 'Dev' });
-        this.logActivity('transition', 'Dev finished → QA (write E2E specs)', ticketId);
+        this.logActivity('transition', 'Dev finished → QA (write unit/integration tests)', ticketId);
       }
     } else if (role === 'QA') {
-      // QA's job is to AUTHOR E2E specs (to e2e/specs/), not to opine. It can
-      // still block on a genuine untestable-without-a-decision case (READY/BLOCKED,
-      // same parser as the BA). Otherwise hand to the deploy stage, which pushes +
-      // runs the specs against the live app; a failing spec routes back to Dev.
+      // QA's job is to WRITE unit/integration tests (to tests/), not to opine.
+      // It can still block on a genuine untestable-without-a-decision case
+      // (READY/BLOCKED, same parser as the BA). Otherwise hand to the deploy
+      // stage, which pushes + runs CI; a failing test routes back to Dev.
       if (baVerdict(output) === 'blocked') {
         this.blockForInput(ticketId, 'QA', output.slice(0, 8000));
         return;
@@ -933,7 +935,7 @@ export class ProjectDO implements DurableObject {
         now, ticketId,
       );
       this.broadcast({ type: 'transition', ticketId, from: 'qa-active', to: 'deploying', trigger: 'QA' });
-      this.logActivity('transition', 'QA wrote E2E specs → deploying', ticketId);
+      this.logActivity('transition', 'QA wrote tests → deploying', ticketId);
     }
   }
 
@@ -1093,16 +1095,26 @@ export class ProjectDO implements DurableObject {
     return json({ agents });
   }
 
-  /** Update the project's monthly cost cap (the budget that auto-pauses the loop). */
+  /** Update project settings: monthly cost cap and/or agent run timeout. */
   private async setBudget(request: Request): Promise<Response> {
-    const body = (await request.json()) as { costCapMonthlyUsd?: number };
+    const body = (await request.json()) as { costCapMonthlyUsd?: number; maxRunMinutes?: number };
     const cap = body.costCapMonthlyUsd;
-    if (typeof cap !== 'number' || !Number.isFinite(cap) || cap < 1 || cap > 1000) {
-      return json({ error: 'costCapMonthlyUsd must be a number between 1 and 1000' }, 400);
+    const timeout = body.maxRunMinutes;
+    if (cap !== undefined) {
+      if (typeof cap !== 'number' || !Number.isFinite(cap) || cap < 1 || cap > 1000) {
+        return json({ error: 'costCapMonthlyUsd must be a number between 1 and 1000' }, 400);
+      }
+      this.state.storage.sql.exec('UPDATE project SET cost_cap_monthly_usd = ? WHERE id = (SELECT id FROM project LIMIT 1)', cap);
+      this.logActivity('control', `Monthly budget set to $${cap.toFixed(2)}`);
     }
-    this.state.storage.sql.exec('UPDATE project SET cost_cap_monthly_usd = ? WHERE id = (SELECT id FROM project LIMIT 1)', cap);
-    this.logActivity('control', `Monthly budget set to $${cap.toFixed(2)}`);
-    return json({ ok: true, costCapMonthlyUsd: cap });
+    if (timeout !== undefined) {
+      if (typeof timeout !== 'number' || !Number.isInteger(timeout) || timeout < 1 || timeout > 60) {
+        return json({ error: 'maxRunMinutes must be an integer between 1 and 60' }, 400);
+      }
+      this.state.storage.sql.exec('UPDATE project SET max_run_minutes = ? WHERE id = (SELECT id FROM project LIMIT 1)', timeout);
+      this.logActivity('control', `Agent run timeout set to ${timeout} min`);
+    }
+    return json({ ok: true, ...(cap !== undefined ? { costCapMonthlyUsd: cap } : {}), ...(timeout !== undefined ? { maxRunMinutes: timeout } : {}) });
   }
 
   private async setRoles(request: Request): Promise<Response> {

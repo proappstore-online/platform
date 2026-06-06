@@ -169,11 +169,11 @@ END YOUR REPORT WITH A SINGLE FINAL LINE, EXACTLY: \`VERDICT: READY\` or \`VERDI
     const ba = lastFrom('BA');
     if (ba) context += `\n\n## BA analysis\n${ba}`;
     if (ticket.status === 'qa-failed' || ticket.iterations > 0) {
-      context += `\n\n## A previous deploy or E2E run failed — fix it\nSee the most recent "Deploy failed" message above for the exact error: a compiler error, or a failing Playwright assertion from the E2E run. The behavioural specs you must satisfy live in \`e2e/specs/\` — \`read_file\` them to see exactly what is asserted, then make the app actually pass them. (Edit app source only — do not edit the specs.)`;
+      context += `\n\n## A previous deploy or test run failed — fix it\nSee the most recent "Deploy failed" message above for the exact error: a compiler error, or a failing vitest assertion. The test files live in \`tests/unit/\` and \`tests/integration/\` — \`read_file\` them to see exactly what is asserted, then make the app actually pass them. (Edit app source only — do not edit the tests.)`;
     }
     context += `\n\nThe app id is "${slug}". Implement or modify the app to satisfy the spec, using your tools. If unsure about a PAS SDK API/signature, call \`read_docs\` (e.g. topic "database") to confirm from the official docs BEFORE writing it — don't guess. Write the code with your file tools (batch_write_files) BEFORE explaining — keep prose brief. Do not end your turn after only reading/planning; you must actually create or edit the files. If \`src/main.tsx\` imports a file that doesn't exist (e.g. \`./App\`), create it.
 
-Build it TESTABLE — QA writes browser E2E specs that drive this app: every interactive control needs an accessible name (visible button text or \`aria-label\`), every input an associated \`<label>\`, and the app mounts to \`#root\`. Use semantic elements (\`<button>\`, \`<a>\`, \`<input>\`) so specs can target by role/label/text — not click handlers on bare \`<div>\`s. Prefer SDK capabilities (\`app.storage.upload\`, \`app.subscription\`, \`app.notifications\`) over raw browser-gated APIs.
+Build it TESTABLE — QA writes vitest unit + integration tests: export pure functions/helpers from separate modules so they can be imported directly by unit tests. Use semantic React elements (\`<button>\`, \`<a>\`, \`<input>\`) with accessible names so @testing-library can target by role/label/text. Keep component logic separate from side-effects so integration tests can mock the SDK layer. Prefer SDK capabilities (\`app.storage.upload\`, \`app.subscription\`, \`app.notifications\`) over raw browser-gated APIs.
 
 Make it MCP-CALLABLE — if this app stores data in \`app.db\` tables, maintain an \`mcp.json\` at the repo ROOT exposing its core read/write operations as tools, so the app is callable from the platform MCP server (an external AI can list/create the app's data). Shape: \`{"tools":[{ "name","description","operation","sql","params","requires_auth" }]}\`. Each tool is ONE parameterized SQL statement against THIS app's tables (use the real table/column names you create):
 - \`operation\`: \`"query"\` → a single \`SELECT\` (returns rows); \`"execute"\` → a single \`INSERT\`/\`UPDATE\`/\`DELETE\` (\`UPDATE\`/\`DELETE\` MUST have a \`WHERE\`). No semicolons, one statement only.
@@ -182,25 +182,32 @@ Make it MCP-CALLABLE — if this app stores data in \`app.db\` tables, maintain 
 - Magic placeholders (don't declare in params): \`:__user_id\` (the caller — REQUIRES \`"requires_auth": true\`), \`:__now\` (ms epoch), \`:__uuid\` (a new id). Scope per-user rows with \`WHERE user_id = :__user_id\`.
 Add a \`list_*\`/\`get_*\` + the natural \`create_*\`/\`update_*\` per core entity (skip if the app has no \`app.db\` tables, e.g. a pure KV/static app). The deploy stage registers \`mcp.json\` automatically — you only write the file. If a \`docs/mcp-tools.md\` exists in the KB, follow the tool surface it specifies.
 
-Your code MUST compile (\`tsc\`) AND pass the end-to-end tests. After the team finishes, the system automatically pushes the app, verifies the CI build, and runs Playwright E2E specs (in \`e2e/specs/\`) against the LIVE deployed app; if the build fails OR a test fails, the ticket comes straight back to you with the exact error / failing assertion to fix. So write type-correct code that actually makes those specs pass. Do NOT deploy yourself, and do NOT edit \`e2e/\` (those are QA's tests — make the app satisfy them). If a previous deploy failed, a "Deploy failed" message above has the exact error — fix that. (Note: the \`useProAuth\` hook's \`signIn\` is zero-arg — to pass a provider, call \`app.auth.signIn(provider)\` directly, not the hook's \`signIn(provider)\`.)`;
+Your code MUST compile (\`tsc\`) AND pass the vitest suite. After the team finishes, the system automatically pushes the app and verifies the CI build (which runs \`vitest run\`); if the build fails OR a test fails, the ticket comes straight back to you with the exact error / failing assertion to fix. So write type-correct code that actually makes those tests pass. Do NOT deploy yourself, and do NOT edit \`tests/\` (those are QA's tests — make the app satisfy them). If a previous deploy failed, a "Deploy failed" message above has the exact error — fix that. (Note: the \`useProAuth\` hook's \`signIn\` is zero-arg — to pass a provider, call \`app.auth.signIn(provider)\` directly, not the hook's \`signIn(provider)\`.)`;
   } else if (role === 'QA') {
     const ba = lastFrom('BA');
     if (ba) context += `\n\n## Acceptance criteria to test\n${ba}`;
-    context += `\n\nThe app id is "${slug}". You are QA, and your job is to WRITE END-TO-END TESTS — NOT to review prose or give an opinion. Turn each acceptance criterion into executable Playwright assertions that drive the REAL deployed app in a browser. That E2E run (not your judgement) is what gates the ticket: after you finish, the system deploys the app and runs your specs against the live site; a failing assertion routes the ticket back to Dev with the Playwright output.
+    context += `\n\nThe app id is "${slug}". You are QA, and your job is to WRITE UNIT AND INTEGRATION TESTS using vitest — NOT to review prose or give an opinion. Turn each acceptance criterion into fast, reliable test assertions.
 
-The harness already exists in the repo — do NOT recreate it. In a spec, import it:
-\`import { test, expect, hasSession } from '../fixtures'\`
-The \`app\` fixture is a Page already navigated (and signed-in when a fixture session is configured). Gate any sign-in-only assertion with \`test.skip(!hasSession, 'needs a session')\`. The app mounts to \`#root\`.
+**Test layers (in priority order):**
+1. **Unit tests** (\`tests/unit/*.test.ts\`) — pure function/logic tests. Test utilities, helpers, data transformations, validation, state derivations. Import the function directly and assert.
+2. **Integration tests** (\`tests/integration/*.test.tsx\`) — React component tests with jsdom. Test rendering, user interactions, prop handling, state changes. Use \`@testing-library/react\` patterns (render, screen, fireEvent, waitFor).
 
-Write your spec(s) with \`write_file\` to \`e2e/specs/<short-name>.spec.ts\`. Rules:
-- ONLY create/edit files under \`e2e/specs/\`. NEVER touch app source (\`src/\`, \`package.json\`, etc.) — that's Dev's job; you only add tests.
-- One concern per \`test()\`. Assert on user-visible behaviour via \`getByRole\`/\`getByText\`/\`getByLabel\` — never on implementation details. Use \`expect\`'s auto-waiting; no fixed \`waitForTimeout\` sleeps.
-- Cover the happy path of each acceptance criterion plus the key edge/failure cases the spec calls out. A spec must pass IFF the feature actually works.
-- You can \`read_file\` the app source to find the right selectors/text, and \`read_docs\` to confirm SDK behaviour.
+**Do NOT write E2E/Playwright tests.** E2E tests are handled separately in the Test tab. Your job is fast, cheap unit + integration tests that run in CI in seconds.
+
+Write tests with \`write_file\` to \`tests/unit/\` or \`tests/integration/\`. Rules:
+- ONLY create/edit files under \`tests/\`. NEVER touch app source under \`src/\`.
+- You MAY also create/edit \`vitest.config.ts\` (at the repo root) and \`tests/setup.ts\` if they don't exist yet:
+  - \`vitest.config.ts\`: \`import { defineConfig } from 'vitest/config'; export default defineConfig({ test: { environment: 'jsdom', setupFiles: ['./tests/setup.ts'], include: ['tests/**/*.test.{ts,tsx}'] } });\`
+  - \`tests/setup.ts\`: \`import '@testing-library/jest-dom/vitest';\` (optional; for DOM matchers)
+- Use \`import { describe, it, expect, vi } from 'vitest'\` — the project uses vitest.
+- One concern per \`it()\`. Test behaviour, not implementation.
+- Cover the happy path + key edge cases from the acceptance criteria.
+- You can \`read_file\` the app source to understand what to test, and \`read_docs\` to confirm SDK behaviour.
+- For component tests, mock external dependencies (SDK calls, fetch) with \`vi.mock()\`.
 
 END YOUR REPORT WITH A SINGLE FINAL LINE, EXACTLY: \`VERDICT: READY\` or \`VERDICT: BLOCKED\`.
-- \`VERDICT: READY\` → you wrote spec file(s) covering the acceptance criteria (almost always).
-- \`VERDICT: BLOCKED\` → you genuinely cannot express a criterion as a test without a decision only the founder can make. List the specific questions; the ticket pauses for an answer. Do NOT use BLOCKED to avoid writing tests.`;
+- \`VERDICT: READY\` → you wrote test file(s) covering the acceptance criteria.
+- \`VERDICT: BLOCKED\` → you cannot test without a product decision. List the questions.`;
   }
 
   return [{

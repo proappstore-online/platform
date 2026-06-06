@@ -19,7 +19,7 @@ project holds the backlog, the working tree, memory, and the live connection.
 | **PO** (Product Owner) | the **chat** panel | Talks to the founder. Answers questions by reading the actual code (read-only tools) and project memory; records decisions (`remember`); turns requests into tickets. Does not write app code. |
 | **BA** (Business Analyst) | per ticket | Turns a ticket into a spec with acceptance criteria; rejects vague tickets. |
 | **Dev** (Developer) | per ticket | Implements the spec with the PAS SDK; writes files (`write_file`/`batch_write_files`), reads code (`read_file`/`search_files`/`list_files`), checks the docs (`read_docs`). Does **not** deploy — deployment is a deterministic system stage (see below). |
-| **QA** | per ticket | Verifies the spec against the real code; must end its report with `VERDICT: PASS` or `VERDICT: FAIL`. PASS → deploy stage; FAIL → back to Dev. |
+| **QA** | per ticket | Writes **unit + integration tests** (vitest) from the acceptance criteria. Must end with `VERDICT: READY` or `VERDICT: BLOCKED`. Tests run in CI on deploy. |
 
 **Ticket lifecycle:** `inbox → ba-refining → awaiting-approval → ready →
 dev-active → qa-active → (qa-failed → dev-active …) → deploying → done`. Terminal:
@@ -37,9 +37,23 @@ looping. This is why "done" means "verified live", and why Dev/QA have no
 deploy/scaffold tools — they can't self-declare a deploy. Logic: `deploy-stage.ts`.
 
 **QA verdict is parsed from an explicit marker.** QA must end with
-`VERDICT: PASS` or `VERDICT: FAIL`; `qaVerdict()` reads the last marker only. (It
-used to grep for the word "FAIL" anywhere, so PASS reports — whose rubrics are
-full of "FAIL" — bounced to Dev until the iteration cap. Don't reintroduce that.)
+`VERDICT: READY` or `VERDICT: BLOCKED`; `baVerdict()` reads the last marker only.
+
+## Testing strategy (two layers)
+
+| Layer | Where | Tool | Who writes | When runs |
+|---|---|---|---|---|
+| **Unit + integration** | `tests/unit/*.test.ts`, `tests/integration/*.test.tsx` | vitest | QA agent (Build pipeline) | CI on every push (`vitest run`) |
+| **End-to-end** | `e2e/specs/*.spec.ts` | Playwright | QA agent (Test tab, manual/opt-in) | On demand from the Test tab |
+
+The Build pipeline QA agent writes fast vitest tests (pure-function unit tests +
+jsdom component integration tests via @testing-library/react). These run in CI in
+seconds and gate the deploy — a failing test sends the ticket back to Dev.
+
+The Test tab's QA agent writes Playwright E2E specs against the live deployed app.
+These are slower, more expensive, and run on demand — not in the deploy pipeline.
+This separation keeps the build loop fast while still providing full-stack E2E
+coverage when the owner wants it.
 
 ## Architecture
 
@@ -116,6 +130,8 @@ exactly what `list_files`/`search_files`/`read_file` returned. Clearable:
 | GET/POST/DELETE | `.../memory` | project memory |
 | GET | `.../files` · `.../files/content?path=` | working-tree preview |
 | POST | `.../sync` | pull latest from GitHub |
+| GET | `.../cost` | monthly cap/spent + per-role/top-ticket summary |
+| GET | `.../cost/detail` | full breakdown: per-ticket per-role + ledger history |
 | GET/DELETE | `.../activity` | audit trail |
 | GET (WS) | `.../ws?token=` | live updates (hibernation) |
 

@@ -73,3 +73,59 @@ export function costSummary(sql: SqlStorage): {
     .toArray();
   return { cap: proj?.cost_cap_monthly_usd ?? 0, spent, byRole, topTickets };
 }
+
+/** Full cost detail: per-ticket breakdown by role, plus the raw ledger entries. */
+export function costDetail(sql: SqlStorage): {
+  totalUsd: number;
+  byRole: { role: string; total: number; tokensIn: number; tokensOut: number }[];
+  byTicket: { ticketId: string; title: string; total: number; byRole: { role: string; total: number; tokensIn: number; tokensOut: number }[] }[];
+  ledger: { ticketId: string; role: string; costUsd: number; tokensIn: number; tokensOut: number; model: string; createdAt: number }[];
+} {
+  const totalRow = sql
+    .exec('SELECT COALESCE(SUM(cost_usd), 0) as total FROM cost_ledger')
+    .toArray()[0] as { total: number };
+  const totalUsd = totalRow.total;
+
+  const byRole = sql
+    .exec('SELECT role, SUM(cost_usd) as total, SUM(tokens_in) as tokens_in, SUM(tokens_out) as tokens_out FROM cost_ledger GROUP BY role ORDER BY total DESC')
+    .toArray() as { role: string; total: number; tokens_in: number; tokens_out: number }[];
+
+  // Per-ticket totals joined with ticket title
+  const ticketTotals = sql
+    .exec(`SELECT cl.ticket_id, t.title, SUM(cl.cost_usd) as total
+           FROM cost_ledger cl LEFT JOIN tickets t ON cl.ticket_id = t.id
+           GROUP BY cl.ticket_id ORDER BY total DESC`)
+    .toArray() as { ticket_id: string; title: string | null; total: number }[];
+
+  // Per-ticket per-role breakdown
+  const ticketRoles = sql
+    .exec(`SELECT ticket_id, role, SUM(cost_usd) as total, SUM(tokens_in) as tokens_in, SUM(tokens_out) as tokens_out
+           FROM cost_ledger GROUP BY ticket_id, role`)
+    .toArray() as { ticket_id: string; role: string; total: number; tokens_in: number; tokens_out: number }[];
+
+  const rolesByTicket = new Map<string, { role: string; total: number; tokensIn: number; tokensOut: number }[]>();
+  for (const r of ticketRoles) {
+    const arr = rolesByTicket.get(r.ticket_id) ?? [];
+    arr.push({ role: r.role, total: r.total, tokensIn: r.tokens_in, tokensOut: r.tokens_out });
+    rolesByTicket.set(r.ticket_id, arr);
+  }
+
+  const byTicket = ticketTotals.map(t => ({
+    ticketId: t.ticket_id,
+    title: t.title ?? '(deleted)',
+    total: t.total,
+    byRole: rolesByTicket.get(t.ticket_id) ?? [],
+  }));
+
+  // Recent ledger entries (newest first, capped)
+  const ledger = sql
+    .exec('SELECT ticket_id, role, cost_usd, tokens_in, tokens_out, model, created_at FROM cost_ledger ORDER BY created_at DESC LIMIT 200')
+    .toArray() as { ticket_id: string; role: string; cost_usd: number; tokens_in: number; tokens_out: number; model: string; created_at: number }[];
+
+  return {
+    totalUsd,
+    byRole: byRole.map(r => ({ role: r.role, total: r.total, tokensIn: r.tokens_in, tokensOut: r.tokens_out })),
+    byTicket,
+    ledger: ledger.map(l => ({ ticketId: l.ticket_id, role: l.role, costUsd: l.cost_usd, tokensIn: l.tokens_in, tokensOut: l.tokens_out, model: l.model, createdAt: l.created_at })),
+  };
+}

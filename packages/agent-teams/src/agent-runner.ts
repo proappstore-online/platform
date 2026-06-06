@@ -9,7 +9,7 @@
 import type { Bindings } from './index.ts';
 import type { AgentRuntime, Role, TicketStatus, ToolCall, ToolResult } from './types.ts';
 import { rowToTicket, rowToRoleConfig, insertChatMessage } from './store.ts';
-import { MAX_RUN_MINUTES, assigneeForStatus, isTerminal } from './ticket-machine.ts';
+import { MAX_RUN_MINUTES as DEFAULT_MAX_RUN_MINUTES, assigneeForStatus, isTerminal } from './ticket-machine.ts';
 import { runtimeToProvider, resolveByoKey } from './byo-key.ts';
 import { CFNativeRuntime } from './runtimes/cf-native.ts';
 import { OpenAIResponsesRuntime } from './runtimes/openai-responses.ts';
@@ -49,9 +49,10 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
   if (!role) return;
 
   const proj = sql
-    .exec('SELECT owner_id, slug, owner_session_token FROM project LIMIT 1')
-    .toArray()[0] as { owner_id: string; slug: string; owner_session_token: string | null } | undefined;
+    .exec('SELECT owner_id, slug, owner_session_token, max_run_minutes FROM project LIMIT 1')
+    .toArray()[0] as { owner_id: string; slug: string; owner_session_token: string | null; max_run_minutes?: number } | undefined;
   if (!proj) return;
+  const maxRunMinutes = proj.max_run_minutes ?? DEFAULT_MAX_RUN_MINUTES;
 
   const rcRow = sql
     .exec('SELECT * FROM role_configs WHERE role = ?', role)
@@ -183,14 +184,14 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<'timeout'>((resolve) => {
-      timer = setTimeout(() => resolve('timeout'), MAX_RUN_MINUTES * 60_000);
+      timer = setTimeout(() => resolve('timeout'), maxRunMinutes * 60_000);
     });
     const outcome = await Promise.race([consume.then(() => 'ok' as const), timeout]);
     if (timer) clearTimeout(timer);
     if (outcome === 'timeout') {
       aborted = true; // stop the orphaned loop from further state mutation
       ac.abort();     // and actually cancel the in-flight model fetch (stop the spend)
-      errorMessage = errorMessage ?? `run exceeded ${MAX_RUN_MINUTES} minutes`;
+      errorMessage = errorMessage ?? `run exceeded ${maxRunMinutes} minutes`;
     }
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : 'agent run failed';
