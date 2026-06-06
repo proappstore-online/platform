@@ -221,6 +221,7 @@ export class ProjectDO implements DurableObject {
     }
 
     if (path === '/generate-listing' && request.method === 'POST') return this.generateListing(request);
+    if (path === '/run-tests' && request.method === 'POST') return this.triggerTestRun();
     if (path === '/cost' && request.method === 'GET') return this.getCostSummary();
     if (path === '/cost/detail' && request.method === 'GET') return json(costDetail(this.state.storage.sql));
     if (path === '/activity' && request.method === 'GET') return this.getActivity();
@@ -1794,6 +1795,43 @@ Respond with ONLY the JSON object, no markdown fences, no explanation.`;
       }
     } catch (e) {
       return json({ error: `AI generation failed: ${e instanceof Error ? e.message : 'unknown'}` }, 500);
+    }
+  }
+
+  /** Trigger a Playwright E2E test run via GitHub Actions dispatch. */
+  private async triggerTestRun(): Promise<Response> {
+    const proj = this.state.storage.sql
+      .exec('SELECT slug, owner_id FROM project LIMIT 1')
+      .toArray()[0] as { slug: string; owner_id: string } | undefined;
+    if (!proj) return json({ error: 'project not found' }, 404);
+    if (!this.env.ADMIN || !this.env.INTERNAL_TOKEN) return json({ error: 'admin binding not available' }, 500);
+
+    // Check if e2e specs exist in the working tree
+    const specs = [...this.loadFiles().keys()].filter(p => p.startsWith('e2e/specs/') && p.endsWith('.spec.ts'));
+    if (specs.length === 0) return json({ error: 'No test specs found in e2e/specs/. Ask the QA agent to generate them first.' }, 400);
+
+    this.logActivity('test', `Test run triggered (${specs.length} spec file(s))`, null);
+    this.broadcast({ type: 'test-run-started', specs: specs.length });
+
+    // Trigger the workflow via the GitHub API (dispatch event)
+    try {
+      const ghToken = this.env.INTERNAL_TOKEN;
+      const res = await this.env.ADMIN!.fetch(new Request('https://admin.proappstore.online/api/trigger-test-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Internal-Token': ghToken },
+        body: JSON.stringify({ repo: proj.slug, specs }),
+      }));
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        this.logActivity('test', `Test run trigger failed: ${res.status} ${text.slice(0, 200)}`, null);
+        return json({ error: `Could not trigger test run: ${text.slice(0, 200) || `admin ${res.status}`}` }, 502);
+      }
+      const result = await res.json() as { runId?: number; runUrl?: string };
+      this.logActivity('test', `Test run started → ${result.runUrl ?? 'GitHub Actions'}`, null);
+      return json({ ok: true, specs: specs.length, runUrl: result.runUrl });
+    } catch (e) {
+      this.logActivity('test', `Test run error: ${e instanceof Error ? e.message : 'unknown'}`, null);
+      return json({ error: `Test run failed: ${e instanceof Error ? e.message : 'unknown'}` }, 500);
     }
   }
 }

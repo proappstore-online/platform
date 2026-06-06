@@ -316,6 +316,10 @@ app.post('/v1/projects/:slug/generate-listing', async (c) => {
   return relay(c, '/generate-listing', { method: 'POST', forwardBody: true });
 });
 
+app.post('/v1/projects/:slug/run-tests', async (c) => {
+  return relay(c, '/run-tests', { method: 'POST' });
+});
+
 // ── Activity log (persisted audit trail) ────────────────────
 
 app.get('/v1/projects/:slug/activity', async (c) => {
