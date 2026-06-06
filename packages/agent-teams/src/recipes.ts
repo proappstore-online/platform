@@ -385,6 +385,357 @@ import {
 // Sizes: 14-16 for inline, 20-24 for buttons, 40-48 for empty states
 // Colors: always via className, never via color prop`,
   },
+  // ── SDK primitive recipes ──────────────────────────────────
+
+  'maps-autocomplete': {
+    title: 'Address Autocomplete (app.maps)',
+    description: 'Location input with debounced geocode, dropdown results, lat/lng capture.',
+    code: `// src/components/LocationInput.tsx
+import { useState, useEffect, useRef } from 'react'
+import { app } from '../App'
+import { MapPin, Loader2 } from 'lucide-react'
+
+interface Result { lat: number; lng: number; displayName: string }
+
+export function LocationInput({ onSelect }: { onSelect: (r: Result) => void }) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<Result[]>([])
+  const [loading, setLoading] = useState(false)
+  const [open, setOpen] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+
+  useEffect(() => {
+    clearTimeout(timer.current)
+    if (!query.trim()) { setResults([]); setOpen(false); return }
+    timer.current = setTimeout(async () => {
+      setLoading(true)
+      try {
+        const r = await app.maps.geocode(query, 5)
+        setResults(r); setOpen(r.length > 0)
+      } catch { setResults([]) }
+      setLoading(false)
+    }, 400)
+    return () => clearTimeout(timer.current)
+  }, [query])
+
+  return (
+    <div className="relative">
+      <div className="relative">
+        <MapPin size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]" />
+        <input value={query} onChange={e => { setQuery(e.target.value) }}
+          onFocus={() => results.length > 0 && setOpen(true)}
+          className="input pl-9" placeholder="Search address..." />
+        {loading && <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-[var(--muted)]" />}
+      </div>
+      {open && (
+        <ul className="absolute z-50 w-full mt-1 rounded-lg border border-[var(--line)] bg-[var(--paper)] shadow-lg max-h-48 overflow-y-auto">
+          {results.map((r, i) => (
+            <li key={i}>
+              <button className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--panel-hover)] text-[var(--ink)]"
+                onClick={() => { setQuery(r.displayName); setOpen(false); onSelect(r) }}>
+                {r.displayName}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+// Also: app.maps.reverseGeocode(lat, lng) → address from coordinates
+// Also: app.maps.route(from, to) → driving directions (GeoJSON LineString)
+// Also: app.maps.embedUrl(lat, lng, zoom) → OpenStreetMap iframe URL
+// Also: app.maps.staticUrl(lat, lng, zoom) → tile image URL`,
+  },
+
+  'realtime-chat': {
+    title: 'Real-time Chat Room (app.rooms)',
+    description: 'WebSocket chat room with presence, message history, and typing indicator.',
+    code: `// src/components/ChatRoom.tsx
+import { useState, useEffect, useRef } from 'react'
+import { app } from '../App'
+import { useProAuth } from '@proappstore/sdk/hooks'
+import { Send, Users } from 'lucide-react'
+
+export function ChatRoom({ roomId }: { roomId: string }) {
+  const { user } = useProAuth(app)
+  const [messages, setMessages] = useState<{ user: string; text: string; at: number }[]>([])
+  const [input, setInput] = useState('')
+  const [peers, setPeers] = useState(0)
+  const bottomRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!user) return
+    const room = app.rooms.join(roomId)
+    room.onMessage((msg: { type: string; user?: string; text?: string; at?: number }) => {
+      if (msg.type === 'chat') {
+        setMessages(prev => [...prev.slice(-100), { user: msg.user!, text: msg.text!, at: msg.at! }])
+        bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+      }
+    })
+    room.onPeers((p: string[]) => setPeers(p.length))
+    return () => room.close()
+  }, [roomId, user])
+
+  const send = () => {
+    if (!input.trim() || !user) return
+    const room = app.rooms.join(roomId)
+    room.send({ type: 'chat', user: user.login, text: input.trim(), at: Date.now() })
+    setInput('')
+  }
+
+  return (
+    <div className="card flex flex-col h-96">
+      <div className="flex items-center justify-between pb-2 border-b border-[var(--line)]">
+        <span className="font-semibold text-[var(--ink)]">Chat</span>
+        <span className="badge badge-accent"><Users size={12} /> {peers} online</span>
+      </div>
+      <div className="flex-1 overflow-y-auto py-2 space-y-2">
+        {messages.map((m, i) => (
+          <div key={i} className="text-sm">
+            <span className="font-bold text-[var(--accent)]">{m.user}: </span>
+            <span className="text-[var(--ink)]">{m.text}</span>
+          </div>
+        ))}
+        <div ref={bottomRef} />
+      </div>
+      <div className="flex gap-2 pt-2 border-t border-[var(--line)]">
+        <input value={input} onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && send()}
+          className="input" placeholder="Type a message..." />
+        <button onClick={send} className="btn btn-primary"><Send size={14} /></button>
+      </div>
+    </div>
+  )
+}`,
+  },
+
+  'ai-chat': {
+    title: 'AI Chat Interface (app.ai)',
+    description: 'Multi-turn chat with server-side AI (Workers AI). System prompt + history.',
+    code: `// src/components/AIChat.tsx
+import { useState } from 'react'
+import { app } from '../App'
+import { Send, Bot, User, Loader2 } from 'lucide-react'
+
+interface Message { role: 'user' | 'assistant'; content: string }
+
+export function AIChat({ systemPrompt = 'You are a helpful assistant.' }: { systemPrompt?: string }) {
+  const [messages, setMessages] = useState<Message[]>([])
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const send = async () => {
+    if (!input.trim() || loading) return
+    const userMsg: Message = { role: 'user', content: input.trim() }
+    const history = [...messages, userMsg]
+    setMessages(history); setInput(''); setLoading(true)
+    try {
+      const { text } = await app.ai.chat([
+        { role: 'system', content: systemPrompt },
+        ...history.map(m => ({ role: m.role, content: m.content })),
+      ])
+      setMessages([...history, { role: 'assistant', content: text }])
+    } catch (err) {
+      setMessages([...history, { role: 'assistant', content: 'Sorry, something went wrong.' }])
+    }
+    setLoading(false)
+  }
+
+  return (
+    <div className="card flex flex-col h-[500px]">
+      <div className="flex-1 overflow-y-auto space-y-3 p-2">
+        {messages.length === 0 && <p className="text-center text-[var(--muted)] py-8">Ask me anything!</p>}
+        {messages.map((m, i) => (
+          <div key={i} className={\`flex gap-2 \${m.role === 'user' ? 'justify-end' : ''}\`}>
+            {m.role === 'assistant' && <Bot size={18} className="text-[var(--accent)] mt-1 flex-shrink-0" />}
+            <div className={\`rounded-xl px-3 py-2 max-w-[80%] text-sm \${
+              m.role === 'user' ? 'bg-[var(--accent)] text-white' : 'bg-[var(--panel-hover)] text-[var(--ink)]'
+            }\`}>{m.content}</div>
+            {m.role === 'user' && <User size={18} className="text-[var(--muted)] mt-1 flex-shrink-0" />}
+          </div>
+        ))}
+        {loading && <div className="flex gap-2"><Bot size={18} className="text-[var(--accent)]" /><Loader2 size={16} className="animate-spin text-[var(--muted)]" /></div>}
+      </div>
+      <div className="flex gap-2 pt-2 border-t border-[var(--line)]">
+        <input value={input} onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && send()}
+          disabled={loading} className="input" placeholder="Message..." />
+        <button onClick={send} disabled={loading} className="btn btn-primary"><Send size={14} /></button>
+      </div>
+    </div>
+  )
+}`,
+  },
+
+  'notifications': {
+    title: 'Push Notifications (app.notifications)',
+    description: 'Subscribe to push, send to users, notification bell with count.',
+    code: `// src/components/NotificationBell.tsx
+import { app } from '../App'
+import { useProNotifications } from '@proappstore/sdk/hooks'
+import { Bell, BellOff } from 'lucide-react'
+
+export function NotificationBell() {
+  const { permission, isSubscribed, subscribe, unsubscribe, loading } = useProNotifications(app)
+  if (permission === 'denied') return null
+  return (
+    <button onClick={isSubscribed ? unsubscribe : subscribe} disabled={loading}
+      className="btn btn-ghost p-1.5" title={isSubscribed ? 'Disable notifications' : 'Enable notifications'}>
+      {isSubscribed ? <Bell size={18} className="text-[var(--accent)]" /> : <BellOff size={18} className="text-[var(--muted)]" />}
+    </button>
+  )
+}
+
+// Send a notification to a specific user (from app owner):
+// await app.notifications.send('user-123', { title: 'New message', body: '...', url: '/chat' })
+// Broadcast to all subscribers:
+// await app.notifications.broadcast({ title: 'Update', body: '...' })
+// Peer-to-peer (any user to any user):
+// await app.notifications.notifyUser('gh:456', { title: '@you mentioned you', body: '...' })`,
+  },
+
+  'roles-rbac': {
+    title: 'Role-Based Access Control (app.roles)',
+    description: 'Assign roles, check permissions, gate UI by role.',
+    code: `// Role-based access — use app.roles (built-in RBAC), never a custom roles table.
+// Default roles: owner (automatic), member, moderator, editor, viewer + any custom string.
+
+// Check if current user has a role:
+const isMod = await app.roles.check('moderator')
+
+// Assign a role (owner only):
+await app.roles.assign('user-456', 'editor')
+
+// Revoke a role:
+await app.roles.revoke('user-456', 'editor')
+
+// List current user's roles:
+const myRoles = await app.roles.myRoles() // ['member', 'editor']
+
+// Gate UI by role:
+function AdminPanel() {
+  const [isAdmin, setIsAdmin] = useState(false)
+  useEffect(() => { app.roles.check('moderator').then(setIsAdmin) }, [])
+  if (!isAdmin) return null
+  return <div className="card">Admin-only content</div>
+}`,
+  },
+
+  'kv-preferences': {
+    title: 'User Preferences (app.kv)',
+    description: 'Per-user settings stored in KV with React state sync.',
+    code: `// src/hooks/usePreferences.ts
+import { useState, useEffect, useCallback } from 'react'
+import { app } from '../App'
+
+interface Prefs { theme: 'light' | 'dark' | 'system'; notifications: boolean; language: string }
+const DEFAULTS: Prefs = { theme: 'system', notifications: true, language: 'en' }
+
+export function usePreferences() {
+  const [prefs, setPrefs] = useState<Prefs>(DEFAULTS)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    app.kv.get('preferences').then((v: Prefs | null) => {
+      if (v) setPrefs(v)
+    }).finally(() => setLoading(false))
+  }, [])
+
+  const update = useCallback(async (patch: Partial<Prefs>) => {
+    const next = { ...prefs, ...patch }
+    setPrefs(next)
+    await app.kv.set('preferences', next)
+  }, [prefs])
+
+  return { prefs, update, loading }
+}
+
+// Usage in a component:
+// const { prefs, update } = usePreferences()
+// <select value={prefs.language} onChange={e => update({ language: e.target.value })}>`,
+  },
+
+  'stripe-paywall': {
+    title: 'Subscription Paywall (app.subscription)',
+    description: 'Gate premium features behind a Stripe subscription.',
+    code: `// src/components/ProGate.tsx
+import { useProGate } from '@proappstore/sdk/hooks'
+import { app } from '../App'
+import { Lock, Sparkles } from 'lucide-react'
+
+export function ProGate({ children }: { children: React.ReactNode }) {
+  const { gate, user, signIn, upgrade } = useProGate(app, { allowFree: false })
+
+  if (gate === 'loading') return <div className="empty-state"><p>Loading...</p></div>
+  if (gate === 'signed-out') return (
+    <div className="empty-state">
+      <Lock size={40} className="mx-auto mb-2 text-[var(--muted)]" />
+      <h3>Sign in required</h3>
+      <p>Sign in to access this feature.</p>
+      <button onClick={signIn} className="btn btn-primary mt-3">Sign in</button>
+    </div>
+  )
+  if (gate === 'no-subscription') return (
+    <div className="empty-state">
+      <Sparkles size={40} className="mx-auto mb-2 text-[var(--accent)]" />
+      <h3>Pro feature</h3>
+      <p>Upgrade to Pro to unlock this feature.</p>
+      <button onClick={() => upgrade()} className="btn btn-primary mt-3">Upgrade to Pro</button>
+    </div>
+  )
+  return <>{children}</>
+}`,
+  },
+
+  'email-send': {
+    title: 'Transactional Email (app.email)',
+    description: 'Send confirmation/notification emails (100/day free).',
+    code: `// Send a transactional email (must be app owner or editor):
+await app.email.send(
+  'alice@example.com',
+  'Your reservation is confirmed',
+  '<h1>Confirmed!</h1><p>Your reservation for June 1 is all set.</p>',
+)
+
+// With reply-to:
+await app.email.send(
+  'bob@example.com',
+  'Password reset',
+  '<p>Click <a href="...">here</a> to reset your password.</p>',
+  { replyTo: 'support@myapp.com' },
+)
+
+// Limits: 100 emails/day per app, 200 char subject, 50KB body.
+// Platform Resend account — no API key needed.`,
+  },
+
+  'map-embed': {
+    title: 'Map Embed + Route (app.maps)',
+    description: 'Embed an OpenStreetMap iframe and show driving directions.',
+    code: `// Embed a map (no API key, free forever):
+function MapView({ lat, lng }: { lat: number; lng: number }) {
+  return (
+    <iframe
+      src={app.maps.embedUrl(lat, lng, 15)}
+      className="w-full h-64 rounded-lg border border-[var(--line)]"
+      title="Map"
+    />
+  )
+}
+
+// Static map tile (for thumbnails, no JS needed):
+// <img src={app.maps.staticUrl(lat, lng, 15)} alt="Map" />
+
+// Driving route between two points:
+// const route = await app.maps.route({ lat: -33.86, lng: 151.21 }, { lat: -33.87, lng: 151.20 })
+// route.geometry — GeoJSON LineString (coordinates are [lng, lat] pairs)
+// route.distanceMeters, route.durationSeconds
+
+// Reverse geocode (coordinates → address):
+// const place = await app.maps.reverseGeocode(-33.86, 151.21)
+// place.displayName, place.address`,
+  },
 };
 
 /** Get a recipe by name, or list all available recipes. */
