@@ -48,10 +48,12 @@ const TRANSITIONS: Transition[] = [
 
   // Deploy stage (deploy-stage.ts) outcomes — all system-driven:
   // CI green → done (verified live); CI red → back to Dev with the error;
-  // can't verify / never started → failed; PO may cancel a hung deploy.
+  // can't verify / never started → failed; infra problem → needs-input;
+  // PO may cancel a hung deploy.
   { from: 'deploying', to: 'done', trigger: 'system' },
   { from: 'deploying', to: 'dev-active', trigger: 'system' },
   { from: 'deploying', to: 'failed', trigger: 'system' },
+  { from: 'deploying', to: 'needs-input', trigger: 'system' },
   { from: 'deploying', to: 'cancelled', trigger: 'po' },
 
   // User answers a question → resume to previous active state

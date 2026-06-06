@@ -325,7 +325,7 @@ export class ProjectDO implements DurableObject {
           : t.assignee_role === 'BA' ? 'ba-refining'
           : 'deploying';
         this.state.storage.sql.exec('UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?', resume, now, t.id);
-        this.logActivity('control', `Retrying blocked ${t.assignee_role ?? 'BA'} ticket`, t.id);
+        this.logActivity('control', `Retrying blocked ${t.assignee_role ?? 'deploy'} ticket`, t.id);
         this.broadcast({ type: 'transition', ticketId: t.id, from: 'needs-input', to: resume, reason: 'retry-on-play' });
       }
     }
@@ -598,7 +598,17 @@ export class ProjectDO implements DurableObject {
     void this.runDeploy(ticketId)
       .catch((e) => {
         const msg = e instanceof Error ? e.message : String(e);
-        try { this.logActivity('error', `Deploy crashed: ${msg}`, ticketId); } catch { /* noop */ }
+        try {
+          this.logActivity('error', `Deploy crashed: ${msg}`, ticketId);
+          // Transition out of 'deploying' to prevent infinite crash-redispatch
+          // via the watchdog alarm. Match the pattern in dispatchRun's catch.
+          const now = Date.now();
+          this.state.storage.sql.exec(
+            "UPDATE tickets SET status = 'needs-input', assignee_role = NULL, stuck_reason = ?, deploy_pushed_at = NULL, deploy_pushed_sha = NULL, updated_at = ? WHERE id = ?",
+            `Deploy crashed: ${msg}`.slice(0, 500), now, ticketId,
+          );
+          this.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'needs-input', trigger: 'system', reason: 'deploy-crash' });
+        } catch { /* last-resort: don't throw from the error handler */ }
       })
       .finally(() => {
         this.running.delete(ticketId);

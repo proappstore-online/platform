@@ -3,10 +3,12 @@
  * connection-token extraction/verification for the MCP transport.
  */
 
-export async function getDeployStatus(org: string, appId: string) {
+export async function getDeployStatus(org: string, appId: string, ghToken?: string) {
+  const headers: Record<string, string> = { Accept: "application/vnd.github+json", "User-Agent": "proappstore-mcp" };
+  if (ghToken) headers.Authorization = `Bearer ${ghToken}`;
   const res = await fetch(
     `https://api.github.com/repos/${org}/${appId}/actions/runs?per_page=5`,
-    { headers: { Accept: "application/vnd.github+json", "User-Agent": "proappstore-mcp" } }
+    { headers },
   );
   if (!res.ok) return { error: `GitHub API ${res.status}` };
   const data = (await res.json()) as {

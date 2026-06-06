@@ -42,7 +42,7 @@ room.onMessage(msg => console.log(msg))
 room.onPeers(peers => console.log(peers))
 room.close()
 \`\`\`
-Uncapped on Pro (5 rooms, 50 user-hrs/day on Free).`,
+Uncapped on Pro (32 peers/room, 64 rooms/app on Free).`,
     proxy: `## Secret-injecting API Proxy
 \`\`\`tsx
 const res = await app.proxy.fetch('api.example.com/v1/data')

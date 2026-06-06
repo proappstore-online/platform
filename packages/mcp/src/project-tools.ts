@@ -43,6 +43,7 @@ export function registerProjectTools(
     },
     async ({ app_id, name, description }) => {
       const { token: userToken } = getUserContext();
+      if (!userToken) return authError();
 
       const createRes = await gh.createRepoFromTemplate(app_id, { description });
       let repoCreated = false;

@@ -41,7 +41,7 @@ export function registerPlatformTools(server: McpServer, env: Env) {
     "Check the deploy status of a Pro app (last 5 GitHub Actions runs).",
     { app_id: z.string().describe("App ID (e.g. 'meetup', 'kanban')") },
     async ({ app_id }) => {
-      const runs = await getDeployStatus(env.GITHUB_ORG, app_id);
+      const runs = await getDeployStatus(env.GITHUB_ORG, app_id, env.GITHUB_TOKEN);
       if ("error" in runs) return { content: [{ type: "text" as const, text: `Error: ${(runs as { error: string }).error}` }] };
       if ((runs as Array<unknown>).length === 0)
         return { content: [{ type: "text" as const, text: `No workflow runs found for ${app_id}.` }] };
