@@ -11,6 +11,15 @@ import type { Env } from "./env.js";
  * (the drift was the "CI never started" stuck-deploy bug).
  */
 
+const fakeDb = {
+  prepare: (_sql: string) => ({
+    bind: (..._args: unknown[]) => ({
+      run: async () => ({ meta: {}, success: true }),
+      first: async () => null,
+    }),
+  }),
+} as unknown as D1Database;
+
 const ENV: Env = {
   CF_ACCOUNT_ID: "acct123",
   PAS_ZONE_ID: "zone123",
@@ -20,6 +29,7 @@ const ENV: Env = {
   GITHUB_TOKEN: "gh-tok",
   SESSION_SIGNING_KEY: "sk",
   INTERNAL_TOKEN: "it",
+  DB: fakeDb,
 };
 
 const realFetch = globalThis.fetch;
@@ -102,7 +112,7 @@ describe("provisioning: shared core", () => {
       ENV,
     );
     expect(r.success).toBe(true);
-    expect(names(r)).toEqual(["GitHub repo", "CF Pages project", "custom domain", "DNS", "Registry", "Analytics"]);
+    expect(names(r)).toEqual(["GitHub repo", "R2 route", "Registry", "Analytics"]);
     expect(rec.blobs).toHaveLength(0); // CLI pushes app files itself
   });
 
@@ -115,7 +125,7 @@ describe("provisioning: shared core", () => {
     expect(r.success).toBe(true);
     expect(r.commitSha).toBe("commit-abc");
     expect(r.repoUrl).toBe("https://github.com/proappstore-online/widget");
-    expect(names(r)).toEqual(["GitHub repo", "CF Pages project", "custom domain", "DNS", "Analytics", "Push files"]);
+    expect(names(r)).toEqual(["GitHub repo", "R2 route", "Analytics", "Push files"]);
     expect(names(r)).not.toContain("Registry");
     expect(rec.blobs.length).toBeGreaterThan(0);
   });
@@ -126,9 +136,7 @@ describe("provisioning: shared core", () => {
     const agentRec = install();
     await handleAgentDeploy({ id: "same", name: "Same", files: { "a.txt": "x" } }, ENV);
     expect(cfHosting(agentRec)).toEqual(cfHosting(pubRec));
-    // and the surface actually includes the load-bearing bits
-    expect(cfHosting(pubRec)).toContain("POST /accounts/acct123/pages/projects");
-    expect(cfHosting(pubRec)).toContain("POST /zones/zone123/dns_records");
+    // the surface includes the analytics step (R2 route is via D1, not CF API)
     expect(cfHosting(pubRec)).toContain("POST /accounts/acct123/rum/site_info");
   });
 });
@@ -137,12 +145,11 @@ describe("deploy-workflow injection (agent path)", () => {
   it("injects a layout-adaptive deploy.yml when the bundle has none", async () => {
     const rec = install();
     await handleAgentDeploy({ id: "flatapp", name: "Flat", files: { "index.html": "x" } }, ENV);
-    const wf = rec.blobs.find((b) => b.includes("wrangler") && b.includes("pages deploy"));
-    expect(wf, "a deploy workflow blob should be pushed").toBeTruthy();
-    expect(wf).toContain("--project-name=proappstore-${{ github.event.repository.name }}");
+    const wf = rec.blobs.find((b) => b.includes("Deploy to R2") && b.includes("aws s3 sync"));
+    expect(wf, "an R2 deploy workflow blob should be pushed").toBeTruthy();
+    expect(wf).toContain("s3://pas-apps/apps/");
     expect(wf).toContain("if [ -d web/dist ]"); // adaptive: web/dist OR dist
-    expect(wf).toContain("CLOUDFLARE_ACCOUNT_ID: acct123");
-    expect(wf).toContain("${{ secrets.CLOUDFLARE_API_TOKEN }}"); // org-level secret
+    expect(wf).toContain("${{ secrets.R2_ACCESS_KEY_ID }}"); // org-level R2 secrets
     expect(wf).toContain("--no-frozen-lockfile"); // agents commit no lockfile
     expect(wf).toContain("npx playwright test"); // behavioural gate runs after deploy
     expect(wf).toContain("@vibecodeqa/cli"); // code-health scan (report-only)
@@ -184,21 +191,6 @@ describe("deploy-workflow injection (agent path)", () => {
 });
 
 describe("documented divergences", () => {
-  it("DNS failure is FATAL for publish but TOLERATED for agent deploy", async () => {
-    install({ failDnsPost: true });
-    const pub = await handlePublish(
-      { id: "dnsfail", name: "X", category: "C", icon: "x", iconBg: "#000", description: "d" },
-      ENV,
-    );
-    expect(pub.success).toBe(false);
-    expect(names(pub)).not.toContain("Registry"); // stopped at DNS, before registry
-
-    install({ failDnsPost: true });
-    const agent = await handleAgentDeploy({ id: "dnsfail", name: "X", files: { "a.txt": "x" } }, ENV);
-    expect(agent.success).toBe(true); // CI still ships to *.pages.dev
-    expect(names(agent)).toContain("Push files"); // proceeded past DNS to push
-  });
-
   it("rejects an invalid id on both paths with a Validation step", async () => {
     install();
     const pub = await handlePublish(

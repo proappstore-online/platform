@@ -17,3 +17,8 @@ CF_ACCOUNT_ID = "c1089bfcc43c1c6c2aa89e584e86f0bc"
 PAS_ZONE_ID = "14928daaff60902cc89003a2ebeb99fe"
 PUBLISHERS_ORG = "proappstore-online"
 APPS_DOMAIN_BASE = "proappstore.online"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pas"
+database_id = "585bbda3-0016-42ad-a53d-c089f1864fcb"

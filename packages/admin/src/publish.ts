@@ -1,8 +1,5 @@
 import {
   makeGitHub,
-  ensurePagesProject,
-  ensureCustomDomain,
-  ensureDnsCname,
   ensureAnalytics,
   type CfConfig,
   type Step,
@@ -38,20 +35,19 @@ const DEPLOY_WORKFLOW_PATH = ".github/workflows/deploy.yml";
 const KB_WORKFLOW_PATH = ".github/workflows/kb.yml";
 
 /**
- * The push-triggered CI workflow that builds the app and ships it to its CF Pages
- * project. Agent Teams authors only app source — never a workflow — so without
+ * The push-triggered CI workflow that builds the app and uploads to R2.
+ * Agent Teams authors only app source — never a workflow — so without
  * this the repo has no CI, every push registers no run, and the deploy stage
  * correctly times out with "CI never started". Injected at deploy time.
  *
- * Deliberately layout-adaptive: agents author either a flat Vite app (build →
- * `dist`) or a `web/` sub-package (build → `web/dist`); this detects both. Uses
- * `--no-frozen-lockfile` because agents don't commit a lockfile. Needs the
- * `CLOUDFLARE_API_TOKEN` Actions secret (org-level, visibility=all on the
- * publishers org — see SETUP) so every generated repo inherits it with no
- * per-repo step. `\${{ }}` is escaped to survive the template literal.
+ * Layout-adaptive: agents author either a flat Vite app (build → `dist`) or
+ * a `web/` sub-package (build → `web/dist`); this detects both. Uses
+ * `--no-frozen-lockfile` because agents don't commit a lockfile. R2_* secrets
+ * are org-level (set once on the publishers org). `\${{ }}` is escaped to
+ * survive the template literal.
  */
-function deployWorkflowYaml(env: Env): string {
-  return `name: Deploy to Cloudflare Pages
+function deployWorkflowYaml(_env: Env): string {
+  return `name: Deploy to R2
 
 on:
   push:
@@ -59,7 +55,6 @@ on:
 
 permissions:
   contents: read
-  deployments: write
 
 concurrency:
   group: deploy-\${{ github.repository }}
@@ -71,8 +66,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -82,7 +75,7 @@ jobs:
       - name: Build
         env:
           VITE_COMMIT_SHA: \${{ github.sha }}
-        run: pnpm build
+        run: pnpm build || (cd web 2>/dev/null || true; npx vite build)
 
       - name: Locate build output
         id: dist
@@ -91,10 +84,6 @@ jobs:
           elif [ -d dist ]; then echo "dir=dist" >> "\$GITHUB_OUTPUT"
           else echo "::error::No build output (looked for ./dist and ./web/dist)"; exit 1; fi
 
-      # Code-health scan (VCQA) — REPORT ONLY, never blocks the deploy. Writes
-      # report.json into the deployed output so the console's Dev Ops tab can read
-      # it at <app>.proappstore.online/.vcqa/report.json. A low score is a signal,
-      # not a gate (a fresh scaffold legitimately scores low on test coverage).
       - name: Code-health scan (VCQA, report-only)
         continue-on-error: true
         run: |
@@ -105,11 +94,17 @@ jobs:
             [ -f .vibe-check/badge.svg ] && cp .vibe-check/badge.svg "\${{ steps.dist.outputs.dir }}/.vcqa/badge.svg" || true
           fi
 
-      - name: Deploy to Cloudflare Pages
-        run: npx wrangler@3 pages deploy "\${{ steps.dist.outputs.dir }}" --project-name=proappstore-\${{ github.event.repository.name }} --branch=main
+      - name: Upload to R2
         env:
-          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${env.CF_ACCOUNT_ID}
+          AWS_ACCESS_KEY_ID: \${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: \${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: \${{ secrets.R2_ACCOUNT_ID }}
+        run: |
+          aws s3 sync "\${{ steps.dist.outputs.dir }}" "s3://pas-apps/apps/\${{ github.event.repository.name }}/" \\
+            --endpoint-url "https://\$R2_ACCOUNT_ID.r2.cloudflarestorage.com" \\
+            --delete --no-progress
+          echo "Deployed apps/\${{ github.event.repository.name }} from \${{ github.sha }}"
 
   # Behavioural gate: drive the LIVE app in a real browser (the thing tsc/build
   # can't check). Runs after deploy; a failure fails the run, so the deploy
@@ -290,7 +285,7 @@ function validateId(id: string): string | null {
   return null;
 }
 
-// GitHub repo (via build-core). CF hosting steps (Pages project, custom domain,
+// GitHub repo (via build-core). R2 route + analytics are shared; only the
 // DNS, analytics) are the shared build-core primitives — see provisionApp.
 async function createRepo(env: Env, req: PublishRequest): Promise<Step> {
   const gh = ghFor(env);
@@ -439,9 +434,7 @@ export interface AgentDeployRequest {
 /**
  * Per-path knobs for {@link provisionApp}. Everything NOT named here is shared:
  * the SDK/CLI publish path and the web/agent-teams deploy path provision the
- * exact same hosting (repo + CF Pages project + custom domain + DNS + analytics).
- * Only these documented deltas differ — keep new behaviour shared by default and
- * add a knob only when the two paths genuinely must diverge.
+ * exact same hosting (repo + R2 route + analytics).
  */
 interface ProvisionOptions {
   /**
@@ -453,15 +446,12 @@ interface ProvisionOptions {
   /** Publish path: add the storefront registry entry. The agent path leaves
    *  listing to an explicit publish decision (apps deploy + iterate first). */
   addRegistry?: boolean;
-  /** Publish path treats a DNS failure as fatal (the user asked for the custom
-   *  domain). The agent path tolerates it — CI still ships to *.pages.dev. */
-  dnsFatal?: boolean;
 }
 
 /**
  * The single provisioning core both entry points share, so a repo provisioned by
  * `pas publish` and one provisioned by the Agent Teams deploy stage are identical
- * (same Pages project, domain, DNS, analytics). Every step is idempotent — it
+ * (same R2 route, analytics). Every step is idempotent — it
  * skips cleanly if the resource already exists. `repoUrl` is null until the repo
  * is created; `commitSha` is set only when `files` were pushed.
  */
@@ -491,18 +481,21 @@ async function provisionApp(
     steps.push(await addCollaborator(env, req.id, req.creatorGithub));
   }
 
-  // 2. CF Pages project — wrangler's deploy target, must exist before CI (fatal)
-  const cf = cfFor(env);
-  const pagesStep = await ensurePagesProject(cf, req.id);
-  steps.push(pagesStep);
-  if (pagesStep.status === "fail") return stop();
-
-  // 3. Reachability at <id>.proappstore.online. Domain is always best-effort;
-  //    DNS is fatal only on the publish path (see ProvisionOptions.dnsFatal).
-  steps.push(await ensureCustomDomain(cf, req.id));
-  const dnsStep = await ensureDnsCname(cf, req.id);
-  steps.push(dnsStep);
-  if (opts.dnsFatal && dnsStep.status === "fail") return stop();
+  // 2. R2 route — register the app in the host Worker's routes table so
+  //    <id>.proappstore.online resolves to R2. Idempotent (INSERT OR IGNORE).
+  try {
+    await env.DB
+      .prepare(
+        `INSERT OR IGNORE INTO routes (slug, zone, r2_prefix, store, hosted_on, created_at, updated_at)
+         VALUES (?, ?, ?, 'pas', 'r2', ?, ?)`,
+      )
+      .bind(req.id, env.APPS_DOMAIN_BASE, `apps/${req.id}`, Date.now(), Date.now())
+      .run();
+    steps.push({ name: "R2 route", status: "ok", detail: `${req.id}.${env.APPS_DOMAIN_BASE} → apps/${req.id}/` });
+  } catch (e) {
+    steps.push({ name: "R2 route", status: "fail", detail: `Route insert failed: ${(e as Error).message}` });
+    return stop();
+  }
 
   // 4. Storefront listing (publish path only; fatal — the point of publishing)
   if (opts.addRegistry) {
@@ -511,7 +504,8 @@ async function provisionApp(
     if (registryStep.status === "fail") return stop();
   }
 
-  // 5. CF Web Analytics — uniform across stores, non-fatal, both paths
+  // 4. CF Web Analytics — uniform across stores, non-fatal, both paths
+  const cf = cfFor(env);
   steps.push(await ensureAnalytics(cf, req.id));
 
   // 6. Agent path: ensure a deploy workflow exists, then push the bundle as one
@@ -563,7 +557,7 @@ export async function handleAgentDeploy(
     iconBg: req.iconBg || "#7c3aed",
     description: req.description || req.name,
   };
-  return provisionApp(pubReq, env, { files: req.files ?? {}, dnsFatal: false });
+  return provisionApp(pubReq, env, { files: req.files ?? {} });
 }
 
 export interface PublishKbRequest {
@@ -624,6 +618,6 @@ export async function handlePublishKb(
  * registry added, files pushed separately by the CLI.
  */
 export async function handlePublish(req: PublishRequest, env: Env): Promise<{ steps: Step[]; success: boolean }> {
-  const { steps, success } = await provisionApp(req, env, { addRegistry: true, dnsFatal: true });
+  const { steps, success } = await provisionApp(req, env, { addRegistry: true });
   return { steps, success };
 }

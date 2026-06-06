@@ -2,12 +2,7 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { runChecksFromFiles } from '@proappstore/compliance';
 import {
-  ensurePagesProject,
-  ensureDnsCname,
-  ensureCustomDomain,
-  pagesProjectName,
   internalTokenOk,
-  type CfConfig,
   type Step,
 } from '@proappstore/build-core';
 import type { Env } from '../types.js';
@@ -20,22 +15,18 @@ import { fetchRepoFiles, type RepoLocation } from '../lib/github-fetch.js';
  *
  * What it does (in order):
  *   1. Compliance check — fetches repo from GitHub, runs checks (optional)
- *   2. CF Pages project — creates proappstore-<id>.pages.dev
- *   3. DNS CNAME — <id>.proappstore.online → proappstore-<id>.pages.dev
- *   4. Custom domain — adds <id>.proappstore.online to the Pages project
- *   5. D1 database — creates pas-data-<id>
- *   6. Data Worker — deploys to data-<id>.proappstore.online
- *   7. App record — inserts into the platform apps table
+ *   2. R2 route — inserts into the host Worker's D1 routes table
+ *   3. D1 database — creates pas-data-<id>
+ *   4. Data Worker — deploys to data-<id>.proappstore.online
+ *   5. App record — inserts into the platform apps table
  *
- * What it does NOT do:
- *   - GitHub repo creation — developers own their own repos
- *   - Repo secrets — use org-level CLOUDFLARE_API_TOKEN secret
+ * Hosting: R2 + host Worker at *.proappstore.online (no CF Pages).
+ * Apps deploy via GitHub Actions → R2 upload. The host Worker serves.
  *
  * Idempotent — re-running skips already-provisioned resources.
  */
 const ORG = 'proappstore-online';
 const DOMAIN = 'proappstore.online';
-const ZONE_ID = '14928daaff60902cc89003a2ebeb99fe';
 
 interface ProvisionBody {
   appId: string;
@@ -88,7 +79,7 @@ provisionRoutes.post('/provision', async (c) => {
         if (hardFails.length > 0) {
           const detail = hardFails.map((r) => `${r.name}: ${r.detail}`).join('; ');
           steps.push({ name: 'compliance', status: 'fail', detail: `${hardFails.length} rule(s) failed — ${detail}` });
-          return c.json({ appId, steps, dataWorkerUrl: '', pagesUrl: '', success: false }, 412);
+          return c.json({ appId, steps, dataWorkerUrl: '', appUrl: '', success: false }, 412);
         }
         steps.push({
           name: 'compliance',
@@ -101,28 +92,31 @@ provisionRoutes.post('/provision', async (c) => {
           steps.push({ name: 'compliance', status: 'skip', detail: 'Repo not found — first publish; compliance runs via CI on push' });
         } else {
           steps.push({ name: 'compliance', status: 'fail', detail: `Compliance check error: ${msg}` });
-          return c.json({ appId, steps, dataWorkerUrl: '', pagesUrl: '', success: false }, 412);
+          return c.json({ appId, steps, dataWorkerUrl: '', appUrl: '', success: false }, 412);
         }
       }
     } else {
       steps.push({ name: 'compliance', status: 'skip', detail: 'skipCompliance=true (admin bootstrap)' });
     }
 
-    // 1. CF Pages project + DNS + custom domain — shared build-core primitives
-    //    (same code path the admin Worker's publish + agent-deploy use, so a repo
-    //    provisioned by the CLI and one by Agent Teams get identical hosting).
-    let pagesUrl = '';
-    const projectName = pagesProjectName(appId);
+    // 1. R2 route — register the app in the host Worker's routes table so
+    //    <appId>.proappstore.online resolves to R2. Idempotent (INSERT OR IGNORE).
     if (!body.skipPublish) {
-      const cf: CfConfig = { token: cfToken, accountId: cfAccount, zoneId: ZONE_ID, domainBase: DOMAIN };
-      const pagesStep = await ensurePagesProject(cf, appId);
-      steps.push(pagesStep);
-      if (pagesStep.status !== 'fail') pagesUrl = `https://${projectName}.pages.dev`;
-      steps.push(await ensureDnsCname(cf, appId));
-      steps.push(await ensureCustomDomain(cf, appId));
+      try {
+        await c.env.DB
+          .prepare(
+            `INSERT OR IGNORE INTO routes (slug, zone, r2_prefix, store, hosted_on, created_at, updated_at)
+             VALUES (?, ?, ?, 'pas', 'r2', ?, ?)`,
+          )
+          .bind(appId, DOMAIN, `apps/${appId}`, Date.now(), Date.now())
+          .run();
+        steps.push({ name: 'route', status: 'ok', detail: `${appId}.${DOMAIN} → apps/${appId}/` });
+      } catch (e) {
+        steps.push({ name: 'route', status: 'fail', detail: `Route insert failed: ${(e as Error).message}` });
+      }
     }
 
-    // 3–5. Data plane (D1 + data worker + app record) — shared with the agent
+    // 2–4. Data plane (D1 + data worker + app record) — shared with the agent
     //      deploy stage via /v1/provision-data so both paths get the same layer.
     const data = await provisionData({
       appId,
@@ -136,7 +130,7 @@ provisionRoutes.post('/provision', async (c) => {
     const dataWorkerUrl = data.dataWorkerUrl;
 
     const success = !steps.some((s) => s.status === 'fail');
-    return c.json({ appId, steps, dataWorkerUrl, pagesUrl, success }, success ? 200 : 207);
+    return c.json({ appId, steps, dataWorkerUrl, appUrl: `https://${appId}.${DOMAIN}`, success }, success ? 200 : 207);
   } catch (err) {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
@@ -175,112 +169,21 @@ provisionRoutes.post('/provision-data', async (c) => {
 });
 
 /**
- * Return CF deploy credentials so the CLI can set them as GitHub repo secrets.
- * Requires app ownership (creator or admin).
+ * Return CF deploy credentials. Requires app ownership (creator or admin).
  *
- * Mints a scoped Cloudflare API token with only Cloudflare Pages:Edit on the
- * specific project. If minting fails (e.g. the platform token lacks the
- * `user:tokens:write` scope), falls back to the platform-wide token with a
- * warning — so existing deploys don't break while the platform token is being
- * upgraded to include token-minting capability.
+ * With R2 hosting, the deploy workflow uses org-level R2_* secrets — this
+ * endpoint is only needed for the data-worker provisioning (D1, Workers).
+ * Returns the platform CF token (scoped token minting removed since Pages
+ * is no longer used).
  */
 provisionRoutes.get('/apps/:appId/deploy-credentials', async (c) => {
   const appId = c.req.param('appId');
   await requireAppOwner(c, appId);
 
-  const cfAccount = c.env.CF_ACCOUNT_ID;
-  const cfToken = c.env.CF_API_TOKEN;
-
-  // Try to mint a scoped token for this specific app's Pages project.
-  const projectName = pagesProjectName(appId);
-  const scoped = await mintScopedDeployToken(cfToken, cfAccount, appId, projectName);
-
-  if (scoped) {
-    return c.json({
-      cfApiToken: scoped.token,
-      cfAccountId: cfAccount,
-      scoped: true,
-      expiresAt: scoped.expiresAt,
-    });
-  }
-
-  // Fallback: platform-wide token (pre-launch or if minting isn't available).
   return c.json({
-    cfApiToken: cfToken,
-    cfAccountId: cfAccount,
-    scoped: false,
+    cfApiToken: c.env.CF_API_TOKEN,
+    cfAccountId: c.env.CF_ACCOUNT_ID,
   });
 });
 
-/**
- * Mint a Cloudflare API token scoped to Pages:Edit on the account.
- * Returns null if minting fails (the caller falls back to the platform token).
- *
- * The token expires in 90 days. GitHub Actions workflows that deploy daily
- * will always have a fresh token from the most recent `pas publish`, and the
- * org-level CLOUDFLARE_API_TOKEN secret (synced from Doppler) serves as the
- * primary deploy credential anyway. This scoped token is only for external-org
- * repos that can't use the org secret.
- *
- * NOTE: CF API token policies can scope to account-level resources but NOT to
- * individual Pages projects (as of 2026-06). The scoped token gets Pages:Edit
- * on the whole account — still much narrower than the platform token which has
- * D1, DNS, Workers, etc. Per-project scoping will be possible when CF adds
- * project-level resource identifiers to their token policy model.
- */
-async function mintScopedDeployToken(
-  platformToken: string,
-  accountId: string,
-  appId: string,
-  _projectName: string,
-): Promise<{ token: string; expiresAt: string } | null> {
-  try {
-    // Look up the "Cloudflare Pages:Edit" permission group ID dynamically.
-    const pgRes = await fetch('https://api.cloudflare.com/client/v4/user/tokens/permission_groups', {
-      headers: { Authorization: `Bearer ${platformToken}` },
-    });
-    if (!pgRes.ok) return null;
-    const pgData = (await pgRes.json()) as {
-      success: boolean;
-      result?: { id: string; name: string; scopes: string[] }[];
-    };
-    const pagesEdit = pgData.result?.find(
-      (pg) => pg.name === 'Cloudflare Pages:Edit' || pg.name === 'Pages:Edit',
-    );
-    if (!pagesEdit) return null;
-
-    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
-    const res = await fetch('https://api.cloudflare.com/client/v4/user/tokens', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${platformToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        name: `pas-deploy-${appId}`,
-        policies: [
-          {
-            effect: 'allow',
-            resources: { [`com.cloudflare.api.account.${accountId}`]: '*' },
-            permission_groups: [{ id: pagesEdit.id }],
-          },
-        ],
-        not_before: new Date().toISOString(),
-        expires_on: expiresAt,
-      }),
-    });
-
-    if (!res.ok) return null;
-
-    const data = (await res.json()) as {
-      success: boolean;
-      result?: { id: string; value: string };
-    };
-    if (!data.success || !data.result?.value) return null;
-
-    return { token: data.result.value, expiresAt };
-  } catch {
-    return null;
-  }
-}
 

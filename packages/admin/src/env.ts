@@ -5,6 +5,9 @@ export type Env = {
   PUBLISHERS_ORG: string;
   APPS_DOMAIN_BASE: string;
 
+  /** D1 database — the platform's shared D1 (routes table for host Worker). */
+  DB: D1Database;
+
   // secrets (wrangler secret put)
   CF_API_TOKEN: string;
   GITHUB_TOKEN: string;

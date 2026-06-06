@@ -119,17 +119,13 @@ describe('POST /v1/provision', () => {
     expect(stepNames).toContain('compliance');
     expect(stepNames).toContain('create_d1');
     expect(stepNames).toContain('record_app');
-    // No Pages/DNS steps when skipPublish
-    expect(stepNames).not.toContain('CF Pages project');
-    expect(stepNames).not.toContain('DNS');
+    // No route step when skipPublish
+    expect(stepNames).not.toContain('route');
   });
 
-  it('provisions full flow (Pages + DNS + custom domain + D1 + worker + record)', async () => {
+  it('provisions full flow (R2 route + D1 + worker + record)', async () => {
     const db = mockD1();
     globalThis.fetch = multiFetch({
-      'pages/projects': { status: 200, body: { success: true, result: { subdomain: 'proappstore-myapp.pages.dev' } } },
-      'dns_records': { status: 200, body: { success: true, result: { id: 'dns-1' } } },
-      'domains': { status: 200, body: { success: true, result: { name: 'myapp.proappstore.online' } } },
       'd1/database': { status: 200, body: { success: true, result: { uuid: 'db-uuid-123' } } },
     });
     const res = await app.request('/v1/provision', {
@@ -138,49 +134,17 @@ describe('POST /v1/provision', () => {
       body: JSON.stringify({ appId: 'myapp', skipCompliance: true }),
     }, makeEnv({}, db));
 
-    const data = await res.json() as { success: boolean; steps: { name: string; status: string }[]; pagesUrl: string };
+    const data = await res.json() as { success: boolean; steps: { name: string; status: string }[]; appUrl: string };
     expect(data.success).toBe(true);
-    expect(data.pagesUrl).toBe('https://proappstore-myapp.pages.dev');
+    expect(data.appUrl).toBe('https://myapp.proappstore.online');
 
     const stepNames = data.steps.map((s: any) => s.name);
-    expect(stepNames).toContain('CF Pages project');
-    expect(stepNames).toContain('DNS');
-    expect(stepNames).toContain('custom domain');
+    expect(stepNames).toContain('route');
     expect(stepNames).toContain('create_d1');
     expect(stepNames).toContain('record_app');
-  });
-
-  it('handles CF Pages already exists (idempotent)', async () => {
-    const db = mockD1();
-    globalThis.fetch = multiFetch({
-      'pages/projects': { status: 200, body: { success: false, errors: [{ message: 'A project with this name already exists' }] } },
-    });
-    const res = await app.request('/v1/provision', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ appId: 'existing-app', skipCompliance: true }),
-    }, makeEnv({}, db));
-
-    const data = await res.json() as { steps: { name: string; status: string }[] };
-    const pagesStep = data.steps.find((s: any) => s.name === 'CF Pages project');
-    expect(pagesStep?.status).toBe('skip');
-  });
-
-  it('handles DNS CNAME already exists (idempotent)', async () => {
-    const db = mockD1();
-    globalThis.fetch = multiFetch({
-      'pages/projects': { status: 200, body: { success: true, result: {} } },
-      'dns_records': { status: 200, body: { success: false, errors: [{ message: 'already exists', code: 81057 }] } },
-    });
-    const res = await app.request('/v1/provision', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ appId: 'existing-dns', skipCompliance: true }),
-    }, makeEnv({}, db));
-
-    const data = await res.json() as { steps: { name: string; status: string }[] };
-    const dnsStep = data.steps.find((s: any) => s.name === 'DNS');
-    expect(dnsStep?.status).toBe('skip');
+    // No Pages/DNS steps
+    expect(stepNames).not.toContain('CF Pages project');
+    expect(stepNames).not.toContain('DNS');
   });
 
   it('handles D1 already exists (idempotent)', async () => {
@@ -215,7 +179,7 @@ describe('POST /v1/provision', () => {
   it('returns 207 when some steps fail', async () => {
     const db = mockD1();
     globalThis.fetch = multiFetch({
-      'pages/projects': { status: 200, body: { success: false, errors: [{ message: 'quota exceeded' }] } },
+      'd1/database': { status: 200, body: { success: false, errors: [{ message: 'quota exceeded' }] } },
     });
     const res = await app.request('/v1/provision', {
       method: 'POST',
@@ -248,12 +212,9 @@ describe('POST /v1/provision', () => {
     expect(res.status).toBe(400);
   });
 
-  it('calls correct CF API URLs with correct methods', async () => {
+  it('calls D1 API for data plane provisioning', async () => {
     const db = mockD1();
     const fetchSpy = multiFetch({
-      'pages/projects': { status: 200, body: { success: true, result: {} } },
-      'dns_records': { status: 200, body: { success: true, result: {} } },
-      'domains': { status: 200, body: { success: true, result: {} } },
       'd1/database': { status: 200, body: { success: true, result: { uuid: 'db-1' } } },
     });
     globalThis.fetch = fetchSpy;
@@ -269,20 +230,13 @@ describe('POST /v1/provision', () => {
       return { url, method: c[1]?.method || 'GET' };
     });
 
-    // Verify CF Pages project created with POST
-    const pagesCall = calls.find((c: any) => c.url.includes('pages/projects') && !c.url.includes('domains'));
-    expect(pagesCall).toBeDefined();
-    expect(pagesCall!.method).toBe('POST');
-
-    // Verify DNS CNAME created with POST to correct zone
-    const dnsCall = calls.find((c: any) => c.url.includes('dns_records'));
-    expect(dnsCall).toBeDefined();
-    expect(dnsCall!.method).toBe('POST');
-    expect(dnsCall!.url).toContain('14928daaff60902cc89003a2ebeb99fe');
-
     // Verify D1 created with POST
     const d1Call = calls.find((c: any) => c.url.includes('d1/database') && c.method === 'POST');
     expect(d1Call).toBeDefined();
+
+    // Route inserted via D1 binding (not CF API)
+    const routeInsert = db.prepare.mock.calls.some((c: any[]) => /INSERT.*routes/i.test(c[0]));
+    expect(routeInsert).toBe(true);
   });
 
   it('inserts app record with correct creator ID', async () => {
@@ -330,8 +284,7 @@ describe('POST /v1/provision', () => {
     // Every expected step is present
     const names = data.steps.map((s: any) => s.name);
     expect(names).toEqual(expect.arrayContaining([
-      'compliance', 'CF Pages project', 'DNS', 'custom domain',
-      'create_d1', 'deploy_worker', 'record_app',
+      'compliance', 'route', 'create_d1', 'deploy_worker', 'record_app',
     ]));
   });
 });
@@ -388,8 +341,7 @@ describe('POST /v1/provision-data (internal)', () => {
     const names = data.steps.map((s) => s.name);
     expect(names).toEqual(expect.arrayContaining(['create_d1', 'deploy_worker', 'record_app']));
     // data-plane only — no hosting steps
-    expect(names).not.toContain('CF Pages project');
-    expect(names).not.toContain('DNS');
+    expect(names).not.toContain('route');
     // app record uses the creatorId we passed (not a session user)
     expect(appStmt.bind).toHaveBeenCalled();
     const bindArgs = appStmt.bind.mock.calls[0];
