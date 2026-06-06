@@ -88,10 +88,6 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
     //    repo if needed). Re-checks (watchdog ticks) skip straight to polling so
     //    we don't re-commit every file each cycle. The commit SHA fingerprints
     //    this attempt and is recorded on the ticket.
-    // Ensure platform-level files exist (agents don't create these).
-    if (!files.has('.gitignore')) files.set('.gitignore', 'node_modules/\ndist/\n.env\n.env.local\n*.local\n.DS_Store\n');
-    if (!files.has('LICENSE')) files.set('LICENSE', `MIT License\n\nCopyright (c) ${new Date().getFullYear()} ${proj.name}\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the "Software"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n`);
-
     let sha = ticket.deploy_pushed_sha ?? undefined;
     if (!ticket.deploy_pushed_at) {
       // Push with retry: if another ticket's deploy moved the branch (non-fast-forward),

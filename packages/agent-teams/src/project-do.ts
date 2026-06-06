@@ -30,6 +30,7 @@ import { executeFileTool, isFileTool } from './spine.ts';
 import { TOOL_SCHEMAS } from './tool-schemas.ts';
 import { toolActivityDetail } from './tool-activity.ts';
 import { parseAnthropicStream } from './runtimes/cf-native-stream.ts';
+import { seedFiles } from './template-seed.ts';
 import {
   SCHEMA,
   MIGRATIONS,
@@ -1021,10 +1022,12 @@ export class ProjectDO implements DurableObject {
       );
     }
 
-    // Brainstorm-first: do NOT auto-seed any tickets. The founder brainstorms with
-    // the PO, presses "Build Knowledge Base" when ready (Architect runs once), and
-    // building only starts when the founder asks the PO to build something. The
-    // idea is persisted on the project (above) so the PO + Architect have it.
+    // Seed the working tree from the platform template. This gives every new app
+    // the correct infrastructure files (.gitignore, LICENSE, package.json with test
+    // script, vite.config.ts, tsconfig.json, etc.) so the Dev agent writes INTO a
+    // proper scaffold — not from scratch. Matches pas/templates/template-app/.
+    const templateFiles = seedFiles(body.slug);
+    this.saveFiles(templateFiles);
 
     this.broadcast({ type: 'project-created', projectId: id });
     return json({ id, slug: body.slug, seededTicket: false });
