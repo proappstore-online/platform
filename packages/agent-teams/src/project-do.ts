@@ -27,6 +27,9 @@ import {
   baVerdict,
 } from './ticket-machine.ts';
 import { executeFileTool, isFileTool } from './spine.ts';
+import { TOOL_SCHEMAS } from './tool-schemas.ts';
+import { toolActivityDetail } from './tool-activity.ts';
+import { parseAnthropicStream } from './runtimes/cf-native-stream.ts';
 import {
   SCHEMA,
   MIGRATIONS,
@@ -1599,7 +1602,7 @@ export class ProjectDO implements DurableObject {
     const appFileList = appFiles.map(f => f.path).join('\n');
 
     const systemPrompt = `You are a QA engineer for a ProAppStore web app called "${proj?.name ?? 'app'}" (slug: ${proj?.slug ?? 'app'}).
-Your job is to generate Playwright end-to-end test specifications.
+Your job is to generate Playwright end-to-end test specifications and WRITE THEM TO FILES.
 
 The app is deployed at https://${proj?.slug ?? 'app'}.proappstore.online/
 Test files go in e2e/specs/*.spec.ts using Playwright Test.
@@ -1613,10 +1616,10 @@ ${kbFile ? `Knowledge Base:\n${kbFile.content.slice(0, 3000)}` : ''}
 Existing e2e specs: ${existingSpecNames}
 App source files:\n${appFileList}
 
-When the user asks you to generate tests, write complete Playwright spec files.
-When they ask about coverage, analyze what's tested vs what's not.
-When they describe a scenario, write a focused test for it.
-Be concise. Output code in markdown code blocks.`;
+IMPORTANT: When generating tests, use the write_file or batch_write_files tool to SAVE them to e2e/specs/.
+Do NOT just output code in chat — write it to files so it can be run.
+When asked about coverage, analyze what's tested vs what's not.
+Be concise. Write the files first, then briefly summarize what you wrote.`;
 
     const recentChat = this.state.storage.sql
       .exec("SELECT role, body FROM chat_history WHERE thread = 'test' ORDER BY created_at DESC LIMIT 10")
@@ -1624,47 +1627,72 @@ Be concise. Output code in markdown code blocks.`;
       .reverse()
       .map((r) => ({ role: r.role as string, body: r.body as string }));
 
-    const messages = recentChat.map(m => ({
+    const messages: { role: 'user' | 'assistant'; content: unknown }[] = recentChat.map(m => ({
       role: m.role === 'user' ? 'user' as const : 'assistant' as const,
-      content: m.body,
+      content: m.body as unknown,
     }));
 
-    try {
-      this.broadcast({ type: 'agent-heartbeat', role: 'QA' });
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 8192,
-          system: systemPrompt,
-          messages,
-        }),
-      });
+    // QA tools: read + write e2e specs, read app source
+    const tools = (['write_file', 'batch_write_files', 'read_file', 'list_files', 'search_files'] as const).map((name) => ({
+      name, description: TOOL_SCHEMAS[name]!.description, input_schema: TOOL_SCHEMAS[name]!.parameters,
+    }));
 
-      if (!res.ok) {
-        const errBody = await res.text().catch(() => '');
-        console.error(`[qa-chat] Anthropic ${res.status}: ${errBody.slice(0, 300)}`);
-        const safe = res.status === 401 ? 'API key invalid'
-          : res.status === 429 ? 'Rate limited — wait a moment'
-          : `AI error (${res.status}): ${errBody.slice(0, 150)}`;
-        const reply = `Sorry: ${safe}`;
-        const replyId = insertChatMessage(this.state.storage.sql, { role: 'QA', body: reply, at: Date.now(), thread });
-        this.broadcast({ type: 'chat', thread, role: 'QA', body: reply, id: replyId });
-        return json({ id: replyId, role: 'QA', body: reply, createdAt: Date.now() });
+    const files = this.loadFiles();
+    let wrote = false;
+
+    try {
+      let reply = '';
+      for (let turn = 0; turn < 10; turn++) {
+        this.broadcast({ type: 'agent-heartbeat', role: 'QA' });
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 8192, system: systemPrompt, tools, messages, stream: true }),
+        });
+
+        if (!res.ok) {
+          let detail = '';
+          try { const t = await res.text(); const b = JSON.parse(t) as { error?: { message?: string } }; detail = b?.error?.message ?? t.slice(0, 200); } catch { /* */ }
+          const safe = res.status === 401 ? 'API key rejected - check Profile > API Keys'
+            : res.status === 429 ? 'Rate limited - wait a moment'
+            : `Anthropic error: ${detail || `status ${res.status}`}`;
+          const r = `Sorry: ${safe}`;
+          const rid = insertChatMessage(this.state.storage.sql, { role: 'QA', body: r, at: Date.now(), thread });
+          this.broadcast({ type: 'chat', thread, role: 'QA', body: r, id: rid });
+          return json({ id: rid, role: 'QA', body: r, createdAt: Date.now() });
+        }
+        if (!res.body) break;
+
+        const stream = parseAnthropicStream(res.body);
+        let sr = await stream.next();
+        while (!sr.done) {
+          if (sr.value.type === 'text-delta') this.broadcast({ type: 'agent-text', role: 'QA', text: sr.value.text });
+          sr = await stream.next();
+        }
+        const aiRes = sr.value;
+        const contentArr = aiRes.content;
+        messages.push({ role: 'assistant', content: contentArr });
+        reply = (contentArr as { type: string; text?: string }[]).filter(c => c.type === 'text').map(c => c.text ?? '').join('');
+
+        const toolUses = contentArr.filter(c => c.type === 'tool_use') as { type: 'tool_use'; id: string; name: string; input: unknown }[];
+        if (toolUses.length === 0 || aiRes.stop_reason !== 'tool_use') break;
+
+        const toolResults = toolUses.map(tu => {
+          const r = executeFileTool({ id: tu.id, name: tu.name, args: tu.input }, files);
+          if (r.ok && (tu.name === 'write_file' || tu.name === 'batch_write_files')) wrote = true;
+          this.logActivity('tool', `QA: ${toolActivityDetail(tu.name, tu.input)}`, null, JSON.stringify({ args: tu.input, ok: r.ok, result: r.ok ? r.data : r.errorMessage }));
+          return { type: 'tool_result' as const, tool_use_id: tu.id, content: (r.ok ? (typeof r.data === 'string' ? r.data : JSON.stringify(r.data)) : (r.errorMessage ?? 'error')) || '(no output)' };
+        });
+        messages.push({ role: 'user', content: toolResults });
       }
 
-      const aiRes = (await res.json()) as { content?: { type: string; text?: string }[] };
-      const reply = (aiRes.content ?? []).filter(c => c.type === 'text').map(c => c.text ?? '').join('') || 'No response from AI.';
-
+      if (wrote) { this.saveFiles(files); this.broadcast({ type: 'files-synced', count: files.size }); }
+      reply = reply || 'Done.';
       const replyId = insertChatMessage(this.state.storage.sql, { role: 'QA', body: reply, at: Date.now(), thread });
       this.broadcast({ type: 'chat', thread, role: 'QA', body: reply, id: replyId });
       return json({ id: replyId, role: 'QA', body: reply, createdAt: Date.now() });
     } catch (err) {
+      if (wrote) { this.saveFiles(files); this.broadcast({ type: 'files-synced', count: files.size }); }
       const reply = `Error: ${err instanceof Error ? err.message : String(err)}`;
       const replyId = insertChatMessage(this.state.storage.sql, { role: 'QA', body: reply, at: Date.now(), thread });
       this.broadcast({ type: 'chat', thread, role: 'QA', body: reply, id: replyId });
