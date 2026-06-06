@@ -7,7 +7,7 @@
 //     plus any creator-configured BYO tags (GA4, Plausible, custom <head>)
 //     into the page. Pro apps will also stream an aggregated page-view
 //     event to Workers Analytics Engine in a follow-up so Pro creators
-//     get a first-party in-platform dashboard (TODO: wire ANALYTICS binding).
+//     get a first-party in-platform dashboard (ANALYTICS binding wired in wrangler.toml).
 //
 //   * Creator-protected CRUD:
 //     GET  /v1/apps/:appId/analytics — read current settings

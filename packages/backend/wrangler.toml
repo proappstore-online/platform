@@ -32,6 +32,13 @@ bucket_name = "pas-storage"
 [ai]
 binding = "AI"
 
+# Workers Analytics Engine — first-party cookieless analytics for Pro apps.
+# Events written by analytics-ingest.ts, queried by analytics-stats-routes.ts
+# via the CF SQL API (CF_ANALYTICS_API_TOKEN secret).
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "pas_analytics"
+
 [[routes]]
 pattern = "api.proappstore.online/*"
 zone_name = "proappstore.online"

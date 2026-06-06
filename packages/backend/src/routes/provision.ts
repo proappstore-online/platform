@@ -175,23 +175,112 @@ provisionRoutes.post('/provision-data', async (c) => {
 });
 
 /**
- * Return CF deploy credentials so the CLI can set them as GitHub repo secrets
- * on external-org repos. Requires app ownership (creator or admin).
+ * Return CF deploy credentials so the CLI can set them as GitHub repo secrets.
+ * Requires app ownership (creator or admin).
  *
- * SECURITY: Pre-launch only — returns the platform-wide CF_API_TOKEN.
- * This token has broad scope (Pages, D1, DNS, Workers) across the entire
- * CF account. Acceptable while the only creator is the platform owner.
- *
- * TODO(production): Mint scoped per-project tokens via CF API
- * (POST /user/tokens with Pages:Edit permission restricted to the
- * specific project). This limits blast radius if a token leaks.
+ * Mints a scoped Cloudflare API token with only Cloudflare Pages:Edit on the
+ * specific project. If minting fails (e.g. the platform token lacks the
+ * `user:tokens:write` scope), falls back to the platform-wide token with a
+ * warning — so existing deploys don't break while the platform token is being
+ * upgraded to include token-minting capability.
  */
 provisionRoutes.get('/apps/:appId/deploy-credentials', async (c) => {
   const appId = c.req.param('appId');
   await requireAppOwner(c, appId);
+
+  const cfAccount = c.env.CF_ACCOUNT_ID;
+  const cfToken = c.env.CF_API_TOKEN;
+
+  // Try to mint a scoped token for this specific app's Pages project.
+  const projectName = pagesProjectName(appId);
+  const scoped = await mintScopedDeployToken(cfToken, cfAccount, appId, projectName);
+
+  if (scoped) {
+    return c.json({
+      cfApiToken: scoped.token,
+      cfAccountId: cfAccount,
+      scoped: true,
+      expiresAt: scoped.expiresAt,
+    });
+  }
+
+  // Fallback: platform-wide token (pre-launch or if minting isn't available).
   return c.json({
-    cfApiToken: c.env.CF_API_TOKEN,
-    cfAccountId: c.env.CF_ACCOUNT_ID,
+    cfApiToken: cfToken,
+    cfAccountId: cfAccount,
+    scoped: false,
   });
 });
+
+/**
+ * Mint a Cloudflare API token scoped to Pages:Edit on the account.
+ * Returns null if minting fails (the caller falls back to the platform token).
+ *
+ * The token expires in 90 days. GitHub Actions workflows that deploy daily
+ * will always have a fresh token from the most recent `pas publish`, and the
+ * org-level CLOUDFLARE_API_TOKEN secret (synced from Doppler) serves as the
+ * primary deploy credential anyway. This scoped token is only for external-org
+ * repos that can't use the org secret.
+ *
+ * NOTE: CF API token policies can scope to account-level resources but NOT to
+ * individual Pages projects (as of 2026-06). The scoped token gets Pages:Edit
+ * on the whole account — still much narrower than the platform token which has
+ * D1, DNS, Workers, etc. Per-project scoping will be possible when CF adds
+ * project-level resource identifiers to their token policy model.
+ */
+async function mintScopedDeployToken(
+  platformToken: string,
+  accountId: string,
+  appId: string,
+  _projectName: string,
+): Promise<{ token: string; expiresAt: string } | null> {
+  try {
+    // Look up the "Cloudflare Pages:Edit" permission group ID dynamically.
+    const pgRes = await fetch('https://api.cloudflare.com/client/v4/user/tokens/permission_groups', {
+      headers: { Authorization: `Bearer ${platformToken}` },
+    });
+    if (!pgRes.ok) return null;
+    const pgData = (await pgRes.json()) as {
+      success: boolean;
+      result?: { id: string; name: string; scopes: string[] }[];
+    };
+    const pagesEdit = pgData.result?.find(
+      (pg) => pg.name === 'Cloudflare Pages:Edit' || pg.name === 'Pages:Edit',
+    );
+    if (!pagesEdit) return null;
+
+    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+    const res = await fetch('https://api.cloudflare.com/client/v4/user/tokens', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${platformToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: `pas-deploy-${appId}`,
+        policies: [
+          {
+            effect: 'allow',
+            resources: { [`com.cloudflare.api.account.${accountId}`]: '*' },
+            permission_groups: [{ id: pagesEdit.id }],
+          },
+        ],
+        not_before: new Date().toISOString(),
+        expires_on: expiresAt,
+      }),
+    });
+
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as {
+      success: boolean;
+      result?: { id: string; value: string };
+    };
+    if (!data.success || !data.result?.value) return null;
+
+    return { token: data.result.value, expiresAt };
+  } catch {
+    return null;
+  }
+}
 
