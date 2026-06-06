@@ -220,11 +220,11 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       messages.push({ role: 'user', content: toolResults });
     }
 
-    // Persist any KB writes, refresh the live preview, and publish the site.
+    // Files are saved immediately after each write (line 214). Only broadcast
+    // the sync event and publish at the end (not after every individual write).
     if (wrote) {
-      deps.saveFiles(files);
       deps.broadcast({ type: 'files-synced', count: files.size });
-      deps.publishKb(); // republish the shareable Zensical site (non-blocking)
+      deps.publishKb();
     }
     return save(deps, text || 'Done.', Date.now());
   } catch (err) {

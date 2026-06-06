@@ -1898,10 +1898,14 @@ Respond with ONLY the JSON object, no markdown fences, no explanation.`;
     );
 
     if (body.results) {
-      for (const r of body.results) {
+      for (const r of body.results.slice(0, 500)) { // cap at 500 results per run
+        if (!r.specFile || !r.testName || !r.status) continue; // skip malformed entries
         sql.exec(
           'INSERT INTO test_results (id, run_id, spec_file, test_name, status, duration_ms, error_text) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          crypto.randomUUID(), runId, r.specFile, r.testName, r.status, r.durationMs ?? null, r.error ?? null,
+          crypto.randomUUID(), runId,
+          String(r.specFile).slice(0, 500), String(r.testName).slice(0, 500),
+          String(r.status).slice(0, 20),
+          r.durationMs ?? null, r.error ? String(r.error).slice(0, 5000) : null,
         );
       }
     }
