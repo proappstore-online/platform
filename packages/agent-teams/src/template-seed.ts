@@ -207,9 +207,8 @@ createRoot(document.getElementById('root')!).render(
 `);
 
   files.set('src/App.tsx', `import { initPro } from '@proappstore/sdk'
-import { useProAuth } from '@proappstore/sdk/hooks'
-import { useTheme } from '@proappstore/sdk/hooks'
-import { Avatar, SignInButton, ThemeToggle, TextSizeToggle, ProProfilePage } from '@proappstore/sdk/ui'
+import { useProAuth, useTheme } from '@proappstore/sdk/hooks'
+import { Avatar, ThemeToggle, TextSizeToggle, ProProfilePage } from '@proappstore/sdk/ui'
 import { useState } from 'react'
 
 export const app = initPro({ appId: '${slug}' })
@@ -217,7 +216,7 @@ export const app = initPro({ appId: '${slug}' })
 type View = 'home' | 'profile' | 'settings'
 
 export default function App() {
-  const { user, loading, signIn, signOut } = useProAuth(app)
+  const { user, loading, signOut } = useProAuth(app)
   const { theme } = useTheme()
   const [view, setView] = useState<View>('home')
 
@@ -237,7 +236,14 @@ export default function App() {
                 </button>
               </>
             ) : (
-              <SignInButton onSignIn={signIn} />
+              <div className="flex items-center gap-2">
+                <button onClick={() => app.auth.signIn('github')} className="btn btn-primary text-xs">
+                  Sign in with GitHub
+                </button>
+                <button onClick={() => app.auth.signIn('google')} className="btn btn-secondary text-xs">
+                  Sign in with Google
+                </button>
+              </div>
             )}
           </div>
         </div>
