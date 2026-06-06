@@ -128,6 +128,7 @@ export function buildSeedMessages(
   files: string[] = [],
   memoryBlock = '',
   kb = '',
+  appContextSummary = '',
 ): Message[] {
   const lastFrom = (a: string) => [...prior].reverse().find((m) => m.author === a)?.body;
 
@@ -141,9 +142,15 @@ export function buildSeedMessages(
   // Durable project decisions/facts — ground truth for every agent.
   if (memoryBlock) context += `\n\n${memoryBlock}`;
 
-  // Seed the working-tree file list so Dev/QA know the layout without a
-  // list_files round-trip every run (saves tokens + re-discovery).
-  if (files.length > 0 && (role === 'Dev' || role === 'QA')) {
+  // Seed app context: prefer the cached summary (compact, ~2-3KB) over the raw
+  // file list (which agents would then re-read) for Dev/QA. Falls back to the
+  // file list when no summary is available yet (first build).
+  if ((role === 'Dev' || role === 'QA') && appContextSummary) {
+    context += `\n\n${appContextSummary}`;
+    if (files.length > 0) {
+      context += `\n\n## File list (${files.length})\n${files.join('\n')}`;
+    }
+  } else if (files.length > 0 && (role === 'Dev' || role === 'QA')) {
     context += `\n\n## Existing files (${files.length})\n${files.join('\n')}`;
   }
 

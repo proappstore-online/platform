@@ -106,7 +106,10 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
   const files = deps.loadFiles();
   // The Architect's KB (KNOWLEDGE.md) grounds every build role — inject its content.
   const kb = files.get('KNOWLEDGE.md') ?? '';
-  const messages = buildSeedMessages(role, ticket, proj.slug, prior, [...files.keys()].sort(), formatMemory(deps.recallMemory()), kb);
+  // Cached app context summary (built at deploy) — compact structural snapshot
+  // so Dev/QA don't need to re-read every file to understand the app.
+  const appCtx = (sql.exec('SELECT app_context_summary FROM project LIMIT 1').toArray()[0] as { app_context_summary: string | null } | undefined)?.app_context_summary ?? '';
+  const messages = buildSeedMessages(role, ticket, proj.slug, prior, [...files.keys()].sort(), formatMemory(deps.recallMemory()), kb, appCtx);
 
   let assistantText = '';
   const toolCalls: ToolCall[] = [];

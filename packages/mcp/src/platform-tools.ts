@@ -1,6 +1,6 @@
 /**
  * Platform-info MCP tools — list_apps, deploy_status, app_info,
- * platform_guide, sdk_reference, discover_tools.
+ * platform_guide, sdk_reference, discover_tools, recipe.
  *
  * Registers the static (non project-building, non app-data) tools on the
  * MCP server.
@@ -12,6 +12,7 @@ import type { Env } from "./env.js";
 import { getDeployStatus, pasApi } from "./api-helpers.js";
 import { buildSdkReferenceSections } from "./sdk-reference.js";
 import { fetchTools } from "./tool-loader.js";
+import { getRecipe } from "../../agent-teams/src/recipes.js";
 
 export function registerPlatformTools(server: McpServer, env: Env) {
   // ── list_apps ──────────────────────────────────────────────
@@ -110,7 +111,7 @@ export function registerPlatformTools(server: McpServer, env: Env) {
       feature: z.enum([
         "all", "auth", "kv", "counters", "rooms", "proxy",
         "db", "storage", "maps", "ai", "notifications", "sms",
-        "subscription", "tenant", "hooks", "ui"
+        "subscription", "tenant", "hooks", "ui", "recipes", "design_system"
       ]).optional().describe("Specific feature or 'all'")
     },
     async ({ feature }) => {
@@ -162,6 +163,16 @@ export function registerPlatformTools(server: McpServer, env: Env) {
       }
 
       return { content: [{ type: "text" as const, text: `# Available App Tools\n\n${tools.length} tool(s) across ${byApp.size} app(s):\n\n${lines.join("\n")}` }] };
+    }
+  );
+
+  // ── recipe ──────────────────────────────────────────────────
+  server.tool(
+    "recipe",
+    "Get a pre-built code recipe for common PAS app patterns (CRUD list, forms, modals, maps, AI chat, notifications, etc.). No name = list all recipes. With name = full copy-paste-ready code.",
+    { name: z.string().optional().describe("Recipe name (e.g. 'crud-list', 'ai-chat'). Omit to list all.") },
+    async ({ name }) => {
+      return { content: [{ type: "text" as const, text: getRecipe(name) }] };
     }
   );
 }

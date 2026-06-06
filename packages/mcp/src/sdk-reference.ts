@@ -147,5 +147,69 @@ import { ProShell } from '@proappstore/sdk/shell'
 <ProProfilePage app={app} />
 \`\`\`
 Full docs: https://proappstore.online/docs/ui`,
+    recipes: `## Recipes (pre-built code patterns)
+Available recipes — copy-paste-ready patterns using the PAS SDK, design system, and pre-installed libraries:
+
+- **crud-list** — Fetch rows from app.db, render a list with cards, click to view detail
+- **form-create** — Form to create a new DB row with inline validation
+- **search-filter** — Search bar with debounce, category filter, sort dropdown
+- **modal** — Accessible modal with backdrop, escape to close, focus trap
+- **file-upload** — Upload images/files to app.storage with drag-drop and preview
+- **data-table** — Sortable table with pagination for DB query results
+- **tabs** — Accessible tab switcher with active state
+- **i18n-setup** — Multi-language setup with react-i18next and language switcher
+- **icons** — Pre-installed lucide-react icon library reference
+- **maps-autocomplete** — Location input with debounced geocode and dropdown
+- **realtime-chat** — WebSocket chat room with presence and typing indicator
+- **ai-chat** — Multi-turn chat with server-side AI (Workers AI)
+- **notifications** — Push notification subscribe, send, and bell component
+- **roles-rbac** — Role-based access control with app.roles
+- **kv-preferences** — Per-user settings stored in KV with React state sync
+- **stripe-paywall** — Gate premium features behind a Stripe subscription
+- **email-send** — Transactional email (100/day free)
+- **map-embed** — Embed OpenStreetMap iframe and show driving directions
+
+Use the \`recipe\` MCP tool with a recipe name to get the full code.`,
+    design_system: `## Design System (CSS Classes)
+The PAS app scaffold includes a design system with CSS custom properties and utility classes in \`src/index.css\`.
+
+### Colors (CSS variables)
+\`\`\`css
+var(--accent)    /* Brand accent (configurable per app) */
+var(--ink)       /* Primary text */
+var(--muted)     /* Secondary text */
+var(--paper)     /* Background */
+var(--line)      /* Borders */
+var(--panel-hover) /* Hover state for panels */
+var(--error)     /* Error state */
+\`\`\`
+
+### Layout
+- \`.card\` — Panel with border, shadow, padding, rounded corners
+- \`.empty-state\` — Centered message with icon + text + action
+
+### Buttons
+- \`.btn .btn-primary\` — Accent-colored filled button
+- \`.btn .btn-secondary\` — Outlined button
+- \`.btn .btn-ghost\` — Transparent/minimal button
+
+### Forms
+- \`.input\` — Styled input/select with border, focus ring
+
+### Tags
+- \`.badge .badge-accent\` — Accent-colored pill
+- \`.badge-success\` — Green pill
+- \`.badge-error\` — Red pill
+
+### Typography
+- \`.display-font\` — Display/heading font (Fraunces)
+- Body font is Manrope (inherited)
+
+### Icons
+Import from \`lucide-react\`: \`import { MapPin, Plus, Search } from 'lucide-react'\`
+Never use emoji for icons. Sizes: 14-16 inline, 20-24 buttons, 40-48 empty states.
+
+### Dates
+\`import { format, formatDistanceToNow } from 'date-fns'\` (pre-installed)`,
   };
 }

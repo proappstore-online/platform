@@ -8,6 +8,7 @@
  */
 
 import type { Bindings } from './index.ts';
+import { buildAppSummary } from './context-summary.ts';
 
 /** How long to wait for CI to register a run for a freshly pushed commit before
  *  declaring the deploy dead (repo missing a push-triggered workflow, Actions off). */
@@ -148,18 +149,85 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
     deps.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'done', trigger: 'system' });
     deps.logActivity('deploy', `Deployed live ✓ ${sha?.slice(0, 7) ?? ''} ${r.url ?? ''}`.trim(), ticketId);
 
-    // 4) Ensure the data plane (D1 + data worker + app record) once per project,
+    // 4) Build + cache the deterministic app context summary so Dev/QA agents
+    //    can skip re-reading files on subsequent tickets.
+    try {
+      const summary = buildAppSummary(files);
+      if (summary) {
+        sql.exec('UPDATE project SET app_context_summary = ? WHERE slug = ?', summary, proj.slug);
+      }
+    } catch { /* best-effort */ }
+
+    // 5) Harvest CI test results (vitest) from the KB into the DO's test_runs
+    //    table so the Test tab has data. Best-effort: never fails a green deploy.
+    await harvestTestResults(deps, proj, ticketId, sha);
+
+    // 6) Ensure the data plane (D1 + data worker + app record) once per project,
     //    so agent-built apps have a working `app.data` like CLI-published ones.
     //    Best-effort: never fails the (already-green) frontend deploy.
     await ensureDataInfra(deps, proj, ticketId);
 
-    // 5) Register the app's MCP tools from its mcp.json (if any), so the app is
+    // 7) Register the app's MCP tools from its mcp.json (if any), so the app is
     //    callable from the platform MCP server the same way `pas publish` makes
     //    CLI apps callable. Runs after the data plane exists (tools query its
     //    D1). Best-effort — never fails the green deploy.
     await registerMcpTools(deps, proj, ticketId, files);
   } catch (e) {
     fail(`Deploy error: ${e instanceof Error ? e.message : 'unknown'}`);
+  }
+}
+
+/**
+ * Harvest CI test results from the KB host into the DO's test_runs/test_results
+ * tables so the console Test tab has data. After a green CI build, the workflow
+ * publishes a summary.json to R2; we fetch it and INSERT into the DO's SQLite.
+ * Best-effort: failures are logged and silently ignored.
+ */
+async function harvestTestResults(
+  deps: DeployDeps,
+  proj: { slug: string },
+  ticketId: string,
+  sha: string | undefined,
+): Promise<void> {
+  try {
+    const res = await fetch(`https://kb.proappstore.online/${proj.slug}/.e2e/summary.json`);
+    if (!res.ok) return; // no summary published (e.g. no e2e tests yet)
+
+    const summary = await res.json() as {
+      passed?: number; failed?: number; skipped?: number; flaky?: number;
+      ok?: boolean; durationMs?: number;
+      specs?: { title: string; ok: boolean; durationMs?: number; error?: string }[];
+    };
+
+    const { sql } = deps;
+    const runId = crypto.randomUUID();
+    const passed = summary.passed ?? 0;
+    const failed = summary.failed ?? 0;
+    const status = summary.ok !== false && failed === 0 ? 'passed' : 'failed';
+
+    sql.exec(
+      `INSERT OR REPLACE INTO test_runs (id, triggered_at, source, commit_sha, status, passed, failed, skipped, flaky, duration_ms, coverage_pct)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      runId, Date.now(), 'ci', sha ?? null, status,
+      passed, failed, summary.skipped ?? 0, summary.flaky ?? 0,
+      summary.durationMs ?? null, null,
+    );
+
+    if (summary.specs) {
+      for (const spec of summary.specs.slice(0, 500)) {
+        sql.exec(
+          'INSERT INTO test_results (id, run_id, spec_file, test_name, status, duration_ms, error_text) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          crypto.randomUUID(), runId,
+          spec.title.slice(0, 500), spec.title.slice(0, 500),
+          spec.ok ? 'pass' : 'fail',
+          spec.durationMs ?? null, spec.error ? spec.error.slice(0, 5000) : null,
+        );
+      }
+    }
+
+    deps.logActivity('test', `Test results harvested: ${passed} passed, ${failed} failed`, ticketId);
+  } catch {
+    // Best-effort — never fails a green deploy
   }
 }
 

@@ -120,6 +120,9 @@ export const MIGRATIONS: string[][] = [
   )`],
   // Per-project agent run timeout (default 10 min, configurable in UI).
   [`ALTER TABLE project ADD COLUMN max_run_minutes INTEGER NOT NULL DEFAULT 10`],
+  // Cached deterministic app context summary — components, data model, SDK
+  // usage, deps, routes — so Dev/QA agents skip re-reading the same files.
+  [`ALTER TABLE project ADD COLUMN app_context_summary TEXT`],
   // Test run history — per-test tracking for trending and success rates.
   [`CREATE TABLE IF NOT EXISTS test_runs (
     id TEXT PRIMARY KEY, triggered_at INTEGER NOT NULL, source TEXT NOT NULL DEFAULT 'ci',

@@ -184,4 +184,53 @@ export function registerLoopTools(server: McpServer, env: LoopEnv): void {
       return text(r.ok ? `Project ${slug} ${running ? "running" : "paused"}.` : String(r.data));
     },
   );
+
+  // ── run_tests ────────────────────────────────────────────
+  server.tool(
+    "run_tests",
+    "Trigger a Playwright E2E test run for a project. The tests run via GitHub Actions and results appear in the Test tab.",
+    { token: TOKEN, slug: SLUG },
+    async ({ token, slug }) => {
+      const r = await call(`/v1/projects/${slug}/run-tests`, token, { method: "POST" });
+      if (!r.ok) return text(String(r.data));
+      const d = r.data as { ok?: boolean; specs?: number; runUrl?: string; error?: string };
+      return text(d.error ? `Error: ${d.error}` : `Test run started (${d.specs ?? '?'} spec file(s)). ${d.runUrl ?? ''}`);
+    },
+  );
+
+  // ── set_model ──────────────────────────────────────────────
+  server.tool(
+    "set_model",
+    "Set the AI model for a specific agent role (BA, Dev, or QA). Example models: 'claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'gpt-4o'.",
+    {
+      token: TOKEN,
+      slug: SLUG,
+      roles: z.array(z.object({
+        role: z.enum(["BA", "Dev", "QA"]).describe("Agent role"),
+        model: z.string().describe("Model ID"),
+      })).describe("Array of {role, model} pairs to update"),
+    },
+    async ({ token, slug, roles }) => {
+      const r = await call(`/v1/projects/${slug}/roles`, token, { method: "PUT", body: { roles } });
+      return text(r.ok ? `Models updated for ${slug}: ${roles.map(r => `${r.role}=${r.model}`).join(', ')}` : String(r.data));
+    },
+  );
+
+  // ── add_ticket ─────────────────────────────────────────────
+  server.tool(
+    "add_ticket",
+    "Add a ticket to the project's backlog directly (bypasses the PO chat). The ticket enters 'inbox' status and the BA agent refines it when the loop is running.",
+    {
+      token: TOKEN,
+      slug: SLUG,
+      title: z.string().describe("Short ticket title"),
+      rawIdea: z.string().describe("Full description of what to build/fix"),
+    },
+    async ({ token, slug, title, rawIdea }) => {
+      const r = await call(`/v1/projects/${slug}/tickets`, token, { method: "POST", body: { title, rawIdea } });
+      if (!r.ok) return text(String(r.data));
+      const d = r.data as { ticket?: { id?: string; seq?: number } };
+      return text(`Ticket created: #${d.ticket?.seq ?? '?'} "${title}"`);
+    },
+  );
 }
