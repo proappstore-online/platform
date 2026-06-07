@@ -77,9 +77,14 @@ appsRoutes.get('/apps', async (c) => {
     const wantAll = c.req.query('all') === 'true' && isAdmin(user.id, c.env);
     const creatorFilter = wantAll ? null : user.id;
 
-    // Pull apps for this creator (or all if admin).
+    // Pull apps: owned by this user OR where they're a team member (or all if admin).
     const appsQuery = creatorFilter
-      ? c.env.DB.prepare('SELECT * FROM apps WHERE creator_id = ? ORDER BY created_at DESC').bind(creatorFilter)
+      ? c.env.DB.prepare(
+          `SELECT DISTINCT a.* FROM apps a
+           LEFT JOIN team_members tm ON tm.app_id = a.id AND tm.user_id = ?1
+           WHERE a.creator_id = ?1 OR tm.user_id IS NOT NULL
+           ORDER BY a.created_at DESC`,
+        ).bind(creatorFilter)
       : c.env.DB.prepare('SELECT * FROM apps ORDER BY created_at DESC');
     const appsResult = await appsQuery.all<AppRow>();
     const apps = appsResult.results ?? [];

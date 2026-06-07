@@ -117,7 +117,7 @@ function forwardToDO(
   stub: DurableObjectStub,
   path: string,
   userId: string,
-  opts?: { method?: string; body?: string; raw?: Request; userToken?: string | undefined },
+  opts?: { method?: string; body?: string; raw?: Request; userToken?: string | undefined; teamRole?: string },
 ): Promise<Response> {
   if (opts?.raw) {
     // For WebSocket upgrades, clone the request with the user ID header
@@ -132,6 +132,7 @@ function forwardToDO(
   // Forward the owner session token so the DO can authenticate autonomous
   // agent tool dispatch (captured at play time).
   if (opts?.userToken) headers['X-User-Token'] = opts.userToken;
+  if (opts?.teamRole) headers['X-Team-Role'] = opts.teamRole;
   return stub.fetch(new Request(`https://do${path}`, {
     method: opts?.method ?? 'GET',
     headers,
@@ -152,13 +153,20 @@ async function relay(
   opts?: { method?: string; forwardBody?: boolean },
 ): Promise<Response> {
   const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')!));
-  const init: { method?: string; body?: string } = {};
+  const slug = c.req.param('slug')!;
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(slug));
+  const init: { method?: string; body?: string; teamRole?: string } = {};
   if (opts?.method) init.method = opts.method;
   if (opts?.forwardBody) init.body = JSON.stringify(await c.req.json());
-  // Preserve the incoming query string (e.g. /chat/history?thread=research) — the
-  // DO reads it off request.url. Without this every thread-scoped GET/DELETE
-  // silently fell back to the default thread.
+
+  // Check team membership for non-owner access
+  try {
+    const teamRow = await c.env.DB.prepare(
+      'SELECT role FROM team_members WHERE app_id = ? AND user_id = ?',
+    ).bind(slug, user.id).first<{ role: string }>();
+    if (teamRow) init.teamRole = teamRow.role;
+  } catch { /* fail open — owner check in DO is the backstop */ }
+
   const search = new URL(c.req.url).search;
   const res = await forwardToDO(stub, path + search, user.id, init);
   return new Response(res.body, { status: res.status, headers: res.headers });

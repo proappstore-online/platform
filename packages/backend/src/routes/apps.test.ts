@@ -147,7 +147,7 @@ describe('GET /v1/apps', () => {
     );
     // prepare was called once for apps query; bind was called with creator id
     expect(db.prepare).toHaveBeenCalledWith(
-      expect.stringContaining('WHERE creator_id = ?'),
+      expect.stringContaining('creator_id'),
     );
     expect(appsStmt.bind).toHaveBeenCalledWith('gh:1');
   });
@@ -177,7 +177,7 @@ describe('GET /v1/apps', () => {
       makeEnv({ ADMIN_GITHUB_IDS: 'gh:other' }, db),
     );
     expect(db.prepare).toHaveBeenCalledWith(
-      expect.stringContaining('WHERE creator_id = ?'),
+      expect.stringContaining('creator_id'),
     );
   });
 });

@@ -137,7 +137,7 @@ export class ProjectDO implements DurableObject {
 
   // ── Ownership check ────────────────────────────────────────
 
-  private assertOwner(request: Request): Response | null {
+  private assertAccess(request: Request): Response | null {
     const userId = request.headers.get('X-User-Id');
     if (!userId) return json({ error: 'forbidden' }, 403);
     const row = this.state.storage.sql
@@ -145,8 +145,12 @@ export class ProjectDO implements DurableObject {
       .toArray()[0] as { owner_id: string } | undefined;
     // If no project exists yet (init), allow (ownership set during init)
     if (!row) return null;
-    if (row.owner_id !== userId) return json({ error: 'not_found' }, 404);
-    return null;
+    // Owner always has access
+    if (row.owner_id === userId) return null;
+    // Team member access: the router sets X-Team-Role after checking D1
+    const teamRole = request.headers.get('X-Team-Role');
+    if (teamRole) return null; // any team role = access granted
+    return json({ error: 'not_found' }, 404);
   }
 
   // ── HTTP + WebSocket handler ──────────────────────────────
@@ -159,7 +163,7 @@ export class ProjectDO implements DurableObject {
 
     // WebSocket upgrade (hibernation-safe, with ownership check)
     if (request.headers.get('Upgrade') === 'websocket') {
-      const ownerErr = this.assertOwner(request);
+      const ownerErr = this.assertAccess(request);
       if (ownerErr) return ownerErr;
       const pair = new WebSocketPair();
       this.state.acceptWebSocket(pair[1]);
@@ -177,7 +181,7 @@ export class ProjectDO implements DurableObject {
     if (shareFileMatch) return this.accessKbFileViaShare(shareFileMatch[1]!, new URL(request.url).searchParams.get('path') ?? '');
 
     // All other routes require ownership
-    const ownerErr = this.assertOwner(request);
+    const ownerErr = this.assertAccess(request);
     if (ownerErr) return ownerErr;
 
     // REST routes
