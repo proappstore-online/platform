@@ -22,9 +22,8 @@ interface ProjectToolsEnv {
 
 type Text = { content: { type: "text"; text: string }[] };
 const text = (s: string): Text => ({ content: [{ type: "text" as const, text: s }] });
-const authError = (): Text => text("Error: authentication required. Connect with a session token.");
-const ownershipError = (appId: string): Text =>
-  text(`Error: you don't own app "${appId}". Only the app owner can use project tools on it.`);
+
+const APP_ID = z.string().regex(/^[a-z][a-z0-9-]*$/).describe("App ID (lowercase, e.g. 'chess-academy')");
 
 export function registerProjectTools(
   server: McpServer,
@@ -33,37 +32,91 @@ export function registerProjectTools(
 ): void {
   const { GITHUB_ORG: org, GITHUB_TOKEN: ghToken, API_BASE: apiBase } = env;
   const gh = makeGitHub(ghToken, org);
-  const owns = (token: string, appId: string) => verifyAppOwnership(apiBase, token, appId);
+
+  /** Require a valid session token; return it or the error response. */
+  function requireAuth(): { token: string } | Text {
+    const { token } = getUserContext();
+    if (!token) return text("Error: authentication required. Connect with a session token.");
+    return { token };
+  }
+
+  /** Require auth + app ownership. Returns the token or an error response. */
+  async function requireOwner(appId: string): Promise<{ token: string } | Text> {
+    const auth = requireAuth();
+    if ('content' in auth) return auth;
+    if (!await verifyAppOwnership(apiBase, auth.token, appId)) {
+      return text(`Error: you don't own app "${appId}". Only the app owner can use project tools on it.`);
+    }
+    return auth;
+  }
+
+  /** Set R2 deploy credentials as GitHub Actions variables on a repo. */
+  async function setR2Variables(appId: string): Promise<string[]> {
+    const vars: [string, string][] = [
+      ['R2_ACCESS_KEY_ID', env.R2_ACCESS_KEY_ID ?? ''],
+      ['R2_SECRET_ACCESS_KEY', env.R2_SECRET_ACCESS_KEY ?? ''],
+      ['R2_ACCOUNT_ID', env.R2_ACCOUNT_ID ?? ''],
+    ];
+    if (vars.some(([, v]) => !v)) return ['R2 credentials not configured on MCP server'];
+
+    const errors: string[] = [];
+    for (const [name, value] of vars) {
+      const res = await gh.setRepoVariable(appId, name, value).catch(() => ({ ok: false }));
+      if (!res.ok) errors.push(`Failed to set ${name}`);
+    }
+    return errors;
+  }
+
+  /** Call /v1/provision and format the step results. */
+  async function provision(appId: string, token: string): Promise<string> {
+    try {
+      const res = await fetch(`${apiBase}/v1/provision`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ appId, skipCompliance: true, repoOwner: org, repoName: appId }),
+      });
+      const data = (await res.json()) as { steps?: { name: string; status: string; detail: string }[] };
+      return (data.steps ?? [])
+        .map((s) => `${s.status === "ok" ? "+" : s.status === "skip" ? "~" : "!"} ${s.name}: ${s.detail}`)
+        .join("\n");
+    } catch (e) {
+      return `! provision error: ${e instanceof Error ? e.message : 'unknown'}`;
+    }
+  }
 
   // ── scaffold_app ──────────────────────────────────────────
   server.tool(
     "scaffold_app",
-    "Create a new PAS app from the template. Creates a GitHub repo, copies template files, and provisions platform resources (CF Pages, D1, DNS). Returns the app URL and repo URL.",
+    "Create a new PAS app. Creates a GitHub repo from the template, sets R2 deploy credentials, provisions the route + D1 database + data worker. The app is live after the first push.",
     {
-      app_id: z.string().regex(/^[a-z][a-z0-9-]*$/).describe("App ID (lowercase, e.g. 'chess-academy')"),
+      app_id: APP_ID,
       name: z.string().describe("Display name (e.g. 'Chess Academy')"),
       description: z.string().describe("Short description of the app"),
     },
     async ({ app_id, name, description }) => {
-      const { token: userToken } = getUserContext();
-      if (!userToken) return authError();
+      const auth = requireAuth();
+      if ('content' in auth) return auth;
 
+      // 1. Create repo from template
       const createRes = await gh.createRepoFromTemplate(app_id, { description });
       let repoCreated = false;
       if (createRes.ok) {
         repoCreated = true;
       } else if (createRes.status === 422) {
-        // 422 can mean "exists" OR a real validation failure — confirm.
         if (!(await gh.repoExists(app_id))) {
           return text(`Error creating repo: ${JSON.stringify(createRes.data)}`);
         }
-        repoCreated = false; // already exists
       } else {
         return text(`Error creating repo: ${JSON.stringify(createRes.data)}`);
       }
 
+      const steps: string[] = [];
+
       if (repoCreated) {
-        await new Promise((r) => setTimeout(r, 3000)); // let GitHub finish the template copy
+        steps.push("+ Repo created from template");
+
+        // 2. Replace APPNAME placeholders (wait for GitHub to finish template copy)
+        await new Promise((r) => setTimeout(r, 4000));
         for (const filePath of ["web/index.html", "web/package.json", "CLAUDE.md"]) {
           const file = await gh.getFile(app_id, filePath);
           if (!file.ok || file.content === undefined || !file.sha) continue;
@@ -72,42 +125,29 @@ export function registerProjectTools(
             await gh.putFile(app_id, filePath, patched, `chore: replace APPNAME with ${app_id}`, file.sha);
           }
         }
-      }
 
-      // Set R2 deploy credentials as repo variables so the deploy workflow can
-      // upload to R2. Variables (not secrets) because GitHub's secret encryption
-      // requires libsodium which isn't available in CF Workers. The deploy workflow
-      // reads from secrets || vars, so repos with per-repo secrets still work.
-      if (repoCreated && env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY && env.R2_ACCOUNT_ID) {
-        for (const [name, value] of [
-          ['R2_ACCESS_KEY_ID', env.R2_ACCESS_KEY_ID],
-          ['R2_SECRET_ACCESS_KEY', env.R2_SECRET_ACCESS_KEY],
-          ['R2_ACCOUNT_ID', env.R2_ACCOUNT_ID],
-        ] as const) {
-          await gh.setRepoVariable(app_id, name, value).catch(() => {});
+        // 3. Set R2 deploy credentials
+        const r2Errors = await setR2Variables(app_id);
+        if (r2Errors.length === 0) {
+          steps.push("+ R2 deploy credentials set");
+        } else {
+          steps.push(`! R2 credentials: ${r2Errors.join(', ')}`);
         }
+      } else {
+        steps.push("~ Repo already existed");
       }
 
-      let provisionResult = "";
-      if (userToken) {
-        const provRes = await fetch(`${apiBase}/v1/provision`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${userToken}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ appId: app_id, skipCompliance: true, repoOwner: org, repoName: app_id }),
-        });
-        const provData = (await provRes.json()) as { steps?: { name: string; status: string; detail: string }[] };
-        provisionResult = (provData.steps ?? [])
-          .map((s) => `${s.status === "ok" ? "+" : s.status === "skip" ? "~" : "!"} ${s.name}: ${s.detail}`)
-          .join("\n");
-      }
+      // 4. Provision (route + D1 + data worker)
+      const provResult = await provision(app_id, auth.token);
+      if (provResult) steps.push(provResult);
 
       return text([
         `App scaffolded: **${name}** (${app_id})`,
         `Repo: https://github.com/${org}/${app_id}`,
         `Live URL: https://${app_id}.proappstore.online`,
         `Data worker: https://data-${app_id}.proappstore.online`,
-        repoCreated ? "Repo created from template." : "Repo already existed.",
-        provisionResult ? `\nProvisioning:\n${provisionResult}` : "Provisioning skipped (no auth token).",
+        "",
+        ...steps,
       ].join("\n"));
     },
   );
@@ -117,16 +157,14 @@ export function registerProjectTools(
     "write_file",
     "Create or overwrite a file in a PAS app's GitHub repo. Commits directly to the main branch.",
     {
-      app_id: z.string().describe("App ID"),
+      app_id: APP_ID,
       path: z.string().describe("File path relative to repo root (e.g. 'web/src/App.tsx')"),
       content: z.string().describe("Full file content"),
       message: z.string().optional().describe("Commit message (auto-generated if omitted)"),
     },
     async ({ app_id, path, content, message }) => {
-      const { token: userToken } = getUserContext();
-      if (!userToken) return authError();
-      if (!await owns(userToken, app_id)) return ownershipError(app_id);
-
+      const auth = await requireOwner(app_id);
+      if ('content' in auth) return auth;
       const existing = await gh.getFile(app_id, path);
       const sha = existing.ok ? existing.sha : undefined;
       const put = await gh.putFile(app_id, path, content, message ?? `${sha ? "update" : "create"}: ${path}`, sha);
@@ -139,11 +177,10 @@ export function registerProjectTools(
   server.tool(
     "read_file",
     "Read a file from a PAS app's GitHub repo.",
-    { app_id: z.string().describe("App ID"), path: z.string().describe("File path relative to repo root") },
+    { app_id: APP_ID, path: z.string().describe("File path relative to repo root") },
     async ({ app_id, path }) => {
-      const { token: userToken } = getUserContext();
-      if (!userToken) return authError();
-      if (!await owns(userToken, app_id)) return ownershipError(app_id);
+      const auth = await requireOwner(app_id);
+      if ('content' in auth) return auth;
       const file = await gh.getFile(app_id, path);
       if (!file.ok || file.content === undefined) return text(`File not found: ${path} (${file.status})`);
       return text(file.content);
@@ -154,18 +191,15 @@ export function registerProjectTools(
   server.tool(
     "list_files",
     "List all files in a PAS app's GitHub repo.",
-    { app_id: z.string().describe("App ID"), path: z.string().optional().describe("Subdirectory path (default: repo root)") },
+    { app_id: APP_ID, path: z.string().optional().describe("Subdirectory path (default: repo root)") },
     async ({ app_id, path }) => {
-      const { token: userToken } = getUserContext();
-      if (!userToken) return authError();
-      if (!await owns(userToken, app_id)) return ownershipError(app_id);
+      const auth = await requireOwner(app_id);
+      if ('content' in auth) return auth;
       const res = await gh.listFiles(app_id, path);
       if (!res.ok) return text(`Error listing files: ${res.status}`);
-      // Contents API returns a single object when `path` is a file, an array for dirs.
       const raw = res.data as { path: string; type: string; size?: number } | { path: string; type: string; size?: number }[];
       const files = Array.isArray(raw) ? raw : [raw];
-      const tree = files.map((f) => `${f.type === "dir" ? "d" : "f"} ${f.path}${f.size ? ` (${f.size}B)` : ""}`).join("\n");
-      return text(tree || "Empty directory");
+      return text(files.map((f) => `${f.type === "dir" ? "d" : "f"} ${f.path}${f.size ? ` (${f.size}B)` : ""}`).join("\n") || "Empty directory");
     },
   );
 
@@ -173,11 +207,10 @@ export function registerProjectTools(
   server.tool(
     "delete_file",
     "Delete a file from a PAS app's GitHub repo.",
-    { app_id: z.string().describe("App ID"), path: z.string().describe("File path to delete"), message: z.string().optional().describe("Commit message") },
+    { app_id: APP_ID, path: z.string().describe("File path to delete"), message: z.string().optional().describe("Commit message") },
     async ({ app_id, path, message }) => {
-      const { token: userToken } = getUserContext();
-      if (!userToken) return authError();
-      if (!await owns(userToken, app_id)) return ownershipError(app_id);
+      const auth = await requireOwner(app_id);
+      if ('content' in auth) return auth;
       const existing = await gh.getFile(app_id, path);
       if (!existing.ok || !existing.sha) return text(`File not found: ${path}`);
       const del = await gh.deleteFile(app_id, path, message ?? `delete: ${path}`, existing.sha);
@@ -190,20 +223,18 @@ export function registerProjectTools(
   server.tool(
     "search_files",
     "Search for text across all files in a PAS app's GitHub repo. Returns matching files with line previews.",
-    { app_id: z.string().describe("App ID"), query: z.string().describe("Search text (case-insensitive)") },
+    { app_id: APP_ID, query: z.string().describe("Search text (case-insensitive)") },
     async ({ app_id, query }) => {
-      const { token: userToken } = getUserContext();
-      if (!userToken) return authError();
-      if (!await owns(userToken, app_id)) return ownershipError(app_id);
+      const auth = await requireOwner(app_id);
+      if ('content' in auth) return auth;
       const res = await gh.searchCode(app_id, query);
       if (!res.ok) return text(`Search error: ${res.status}`);
       const items = (res.data as { items?: { path: string; text_matches?: { fragment: string }[] }[] }).items ?? [];
       if (items.length === 0) return text(`No results for "${query}"`);
-      const results = items.slice(0, 20).map((item) => {
+      return text(`${items.length} result(s):\n\n${items.slice(0, 20).map((item) => {
         const preview = item.text_matches?.[0]?.fragment?.slice(0, 100) ?? "";
         return `${item.path}${preview ? `\n  ...${preview}...` : ""}`;
-      }).join("\n");
-      return text(`${items.length} result(s):\n\n${results}`);
+      }).join("\n")}`);
     },
   );
 
@@ -211,40 +242,28 @@ export function registerProjectTools(
   server.tool(
     "get_deploy_status",
     "Check the latest deploy status for a PAS app (GitHub Actions workflow runs).",
-    { app_id: z.string().describe("App ID") },
+    { app_id: APP_ID },
     async ({ app_id }) => {
-      const { token: userToken } = getUserContext();
-      if (!userToken) return authError();
-      if (!await owns(userToken, app_id)) return ownershipError(app_id);
+      const auth = await requireOwner(app_id);
+      if ('content' in auth) return auth;
       const res = await gh.getDeployStatus(app_id);
       if (!res.ok) return text(`Error: ${res.status}`);
       const runs = (res.data as { workflow_runs?: { name: string; conclusion: string | null; status: string; updated_at: string }[] }).workflow_runs ?? [];
       if (runs.length === 0) return text("No workflow runs found. Push to main to trigger deploy.");
-      return text(runs.map((r) => {
-        const icon = r.conclusion === "success" ? "+" : r.conclusion === "failure" ? "!" : "~";
-        return `${icon} ${r.name}: ${r.conclusion ?? r.status} (${r.updated_at})`;
-      }).join("\n"));
+      return text(runs.map((r) => `${r.conclusion === "success" ? "+" : r.conclusion === "failure" ? "!" : "~"} ${r.name}: ${r.conclusion ?? r.status} (${r.updated_at})`).join("\n"));
     },
   );
 
   // ── provision_app ─────────────────────────────────────────
   server.tool(
     "provision_app",
-    "Provision platform resources for an existing PAS app (CF Pages project, DNS, D1 database, data worker). Idempotent.",
-    { app_id: z.string().describe("App ID") },
+    "Provision platform resources for a PAS app (R2 route, D1 database, data worker). Idempotent — safe to call on already-provisioned apps.",
+    { app_id: APP_ID },
     async ({ app_id }) => {
-      const { token: userToken } = getUserContext();
-      if (!userToken) return text("Error: authentication required. Connect with a session token.");
-      const res = await fetch(`${apiBase}/v1/provision`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${userToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ appId: app_id, skipCompliance: true, repoOwner: org, repoName: app_id }),
-      });
-      const data = (await res.json()) as { steps?: { name: string; status: string; detail: string }[] };
-      const steps = (data.steps ?? [])
-        .map((s) => `${s.status === "ok" ? "+" : s.status === "skip" ? "~" : "!"} ${s.name}: ${s.detail}`)
-        .join("\n");
-      return text(steps || "Provisioning complete (no steps reported).");
+      const auth = requireAuth();
+      if ('content' in auth) return auth;
+      const result = await provision(app_id, auth.token);
+      return text(result || "Provisioning complete (no steps reported).");
     },
   );
 
@@ -253,7 +272,7 @@ export function registerProjectTools(
     "batch_write_files",
     "Write multiple files in a single commit to a PAS app's GitHub repo. More efficient than individual write_file calls.",
     {
-      app_id: z.string().describe("App ID"),
+      app_id: APP_ID,
       files: z.array(z.object({
         path: z.string().describe("File path relative to repo root"),
         content: z.string().describe("Full file content"),
@@ -261,9 +280,8 @@ export function registerProjectTools(
       message: z.string().describe("Commit message"),
     },
     async ({ app_id, files, message }) => {
-      const { token: userToken } = getUserContext();
-      if (!userToken) return authError();
-      if (!await owns(userToken, app_id)) return ownershipError(app_id);
+      const auth = await requireOwner(app_id);
+      if ('content' in auth) return auth;
       const res = await gh.pushFiles(app_id, files, message, { initIfEmpty: true });
       if (!res.ok) return text(`Error committing files: ${res.error ?? "unknown"}`);
       return text(`Committed ${files.length} file(s): ${message}\n${files.map((f) => `  + ${f.path}`).join("\n")}`);
