@@ -168,22 +168,9 @@ provisionRoutes.post('/provision-data', async (c) => {
   return c.json({ appId: body.appId, steps: data.steps, dataWorkerUrl: data.dataWorkerUrl, success }, success ? 200 : 207);
 });
 
-/**
- * Return CF deploy credentials. Requires app ownership (creator or admin).
- *
- * With R2 hosting, the deploy workflow uses org-level R2_* secrets — this
- * endpoint is only needed for the data-worker provisioning (D1, Workers).
- * Returns the platform CF token (scoped token minting removed since Pages
- * is no longer used).
- */
-provisionRoutes.get('/apps/:appId/deploy-credentials', async (c) => {
-  const appId = c.req.param('appId');
-  await requireAppOwner(c, appId);
-
-  return c.json({
-    cfApiToken: c.env.CF_API_TOKEN,
-    cfAccountId: c.env.CF_ACCOUNT_ID,
-  });
-});
+// deploy-credentials endpoint REMOVED — was leaking the platform-wide CF_API_TOKEN
+// to any app owner. With R2 hosting, deploy workflows use org-level R2_* secrets
+// (set via Doppler → GitHub org). Data-worker provisioning happens server-side
+// via /v1/provision — no client-side CF token needed.
 
 

@@ -65,6 +65,13 @@ export default {
       return new Response('Method not allowed', { status: 405 });
     }
 
+    // Edge cache check — serve from cache if available (avoids R2 + D1 on every hit)
+    const cache = (caches as unknown as { default: Cache }).default;
+    if (request.method === 'GET') {
+      const cached = await cache.match(request);
+      if (cached) return cached;
+    }
+
     const route = await resolveRoute(env.DB, slug);
     if (!route) {
       return new Response('App not found', { status: 404 });
@@ -102,10 +109,8 @@ export default {
     const body = request.method === 'HEAD' ? null : object.body;
     const response = new Response(body, { status: 200, headers });
 
-    // Edge cache: cache the R2 response so subsequent requests don't hit R2
-    if (request.method === 'GET') {
-      ctx.waitUntil((caches as unknown as { default: Cache }).default.put(request, response.clone()));
-    }
+    // Edge cache: store the response so next request skips R2 + D1
+    ctx.waitUntil(cache.put(request, response.clone()));
 
     return response;
   },

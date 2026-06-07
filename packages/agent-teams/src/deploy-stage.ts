@@ -181,6 +181,12 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
  * Harvest CI test results from the KB host into the DO's test_runs/test_results
  * tables so the console Test tab has data. After a green CI build, the workflow
  * publishes a summary.json to R2; we fetch it and INSERT into the DO's SQLite.
+ *
+ * NOTE: summary.json may contain results from a PREVIOUS deploy because the e2e
+ * job runs after the deploy job. This is expected — the dedup check below prevents
+ * double-ingestion, and the next deploy will pick up the current results. The
+ * primary ingest path is the e2e job POSTing directly to /test-history.
+ *
  * Best-effort: failures are logged and silently ignored.
  */
 async function harvestTestResults(
@@ -201,11 +207,16 @@ async function harvestTestResults(
 
     const { sql } = deps;
 
-    // Deduplicate: skip if we already have a run for this commit SHA (the same
-    // summary.json gets served until the next test run overwrites it).
+    // Deduplicate: skip if we already have a recent run for this commit SHA
+    // (the same summary.json is served until the next test run overwrites it).
+    // When sha is undefined, dedup against the most recent run's timestamp
+    // to prevent duplicates on repeated watchdog ticks.
     if (sha) {
       const existing = sql.exec('SELECT id FROM test_runs WHERE commit_sha = ? LIMIT 1', sha).toArray();
       if (existing.length > 0) return;
+    } else {
+      const recent = sql.exec('SELECT triggered_at FROM test_runs ORDER BY triggered_at DESC LIMIT 1').toArray() as { triggered_at: number }[];
+      if (recent.length > 0 && Date.now() - recent[0]!.triggered_at < 60_000) return;
     }
 
     const runId = crypto.randomUUID();

@@ -361,7 +361,7 @@ async function addToRegistry(env: Env, req: PublishRequest): Promise<Step> {
     description: req.description,
     appUrl: `https://${req.id}.${env.APPS_DOMAIN_BASE}`,
     repo: `${env.PUBLISHERS_ORG}/${req.id}`,
-    cfProject: `proappstore-${req.id}`,
+    hostedOn: "r2",
     type: "connected",
     developer: "ProAppStore",
     ...(req.proFeatures?.length ? { proFeatures: req.proFeatures } : {}),
