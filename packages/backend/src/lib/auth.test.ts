@@ -28,7 +28,11 @@ function makeContext(token: string | null, env: Record<string, any> = {}) {
       DB: {
         prepare: (sql: string) => ({
           bind: (..._args: any[]) => ({
-            first: async () => env._dbRow ?? null,
+            first: async () => {
+              // team_members query returns null unless explicitly provided
+              if (sql.includes('team_members')) return env._teamRow ?? null;
+              return env._dbRow ?? null;
+            },
           }),
         }),
       },
