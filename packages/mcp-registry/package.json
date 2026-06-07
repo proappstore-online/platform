@@ -1,0 +1,18 @@
+{
+  "name": "@proappstore/mcp",
+  "version": "1.0.0",
+  "description": "MCP server for ProAppStore — 35 tools for building, managing, and querying Pro apps via AI agents.",
+  "mcpName": "io.github.proappstore-online/proappstore",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/proappstore-online/platform.git",
+    "directory": "packages/mcp-registry"
+  },
+  "homepage": "https://proappstore.online/build-with-ai#mcp",
+  "keywords": ["mcp", "proappstore", "ai", "agents", "tools", "sdk", "platform"],
+  "bin": {
+    "proappstore-mcp": "./bin/cli.js"
+  },
+  "files": ["bin", "server.json", "README.md"]
+}

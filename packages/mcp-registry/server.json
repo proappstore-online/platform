@@ -1,0 +1,35 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.proappstore-online/proappstore",
+  "title": "ProAppStore",
+  "description": "35 AI agent tools for building, managing, and querying Pro web apps. Create apps, scaffold from templates, manage Agent Teams projects, chat with PO/Architect agents, read SDK docs, get code recipes, run tests, and query app databases.",
+  "version": "1.0.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@proappstore/mcp",
+      "version": "1.0.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ],
+  "remoteEndpoints": [
+    {
+      "transportType": "streamable-http",
+      "url": "https://mcp.proappstore.online/mcp"
+    }
+  ],
+  "tools": [
+    {"name": "sdk_reference", "description": "SDK reference for auth, db, storage, maps, AI, rooms, hooks, UI, recipes, design system"},
+    {"name": "recipe", "description": "19 pre-built code recipes (CRUD, forms, modals, maps, AI chat, notifications)"},
+    {"name": "scaffold_app", "description": "Create a new Pro app from template"},
+    {"name": "create_app", "description": "Create an Agent Teams project (AI-powered build)"},
+    {"name": "chat_agent", "description": "Chat with PO or Architect agent"},
+    {"name": "add_ticket", "description": "Add a ticket to the project backlog"},
+    {"name": "run_tests", "description": "Trigger Playwright E2E test run"},
+    {"name": "list_apps", "description": "List published Pro apps"},
+    {"name": "deploy_status", "description": "Check deploy status"},
+    {"name": "discover_tools", "description": "List per-app data tools"}
+  ]
+}
