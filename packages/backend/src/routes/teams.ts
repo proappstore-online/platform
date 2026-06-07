@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { requireUser, requireAppAccess, TEAM_ROLES, type TeamRole, HttpError } from '../lib/auth.js';
+import { sendEmail, type EmailConfig } from '../lib/email.js';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 export const teamRoutes = new Hono<{ Bindings: Env }>();
@@ -28,12 +29,27 @@ teamRoutes.get('/apps/:appId/team', async (c) => {
 
 /**
  * Add or update a team member. Requires admin or owner role.
+ * :userRef can be a user ID (gh:12345) or a GitHub username (serge-ivo).
  */
-teamRoutes.put('/apps/:appId/team/:userId', async (c) => {
+teamRoutes.put('/apps/:appId/team/:userRef', async (c) => {
   try {
     const appId = c.req.param('appId');
-    const userId = c.req.param('userId');
+    let userId = c.req.param('userRef');
     const user = await requireAppAccess(c, appId, 'admin');
+
+    // Resolve GitHub username to user ID
+    if (!userId.startsWith('gh:')) {
+      try {
+        const ghRes = await fetch(`https://api.github.com/users/${encodeURIComponent(userId)}`, {
+          headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'proappstore-api' },
+        });
+        if (!ghRes.ok) return c.text(`GitHub user "${userId}" not found`, 404);
+        const ghUser = (await ghRes.json()) as { id: number };
+        userId = `gh:${ghUser.id}`;
+      } catch {
+        return c.text(`Could not resolve GitHub user "${userId}"`, 502);
+      }
+    }
 
     const body = await c.req.json<{ role?: string }>();
     const role = (body.role ?? 'viewer') as TeamRole;
@@ -157,13 +173,25 @@ teamRoutes.post('/apps/:appId/team/invite', async (c) => {
       .bind(id, appId, role, user.id, body.email ?? null, token, expiresAt, Date.now())
       .run();
 
-    return c.json({
-      ok: true,
-      inviteUrl: `https://console.proappstore.online/invite/${token}`,
-      token,
-      role,
-      expiresAt,
-    });
+    const inviteUrl = `https://console.proappstore.online/invite/${token}`;
+
+    // Send invite email if address provided and Resend is configured
+    if (body.email && c.env.RESEND_API_KEY) {
+      const emailCfg: EmailConfig = {
+        apiKey: c.env.RESEND_API_KEY,
+        from: c.env.EMAIL_FROM ?? 'ProAppStore <noreply@proappstore.online>',
+      };
+      try {
+        await sendEmail(emailCfg, {
+          to: body.email,
+          subject: `You're invited to ${appId} on ProAppStore`,
+          html: `<p>You've been invited to join <strong>${appId}</strong> as a <strong>${role}</strong>.</p><p><a href="${inviteUrl}">Accept invite</a></p><p>This link expires in 7 days.</p>`,
+          text: `You've been invited to join ${appId} as a ${role}.\n\nAccept: ${inviteUrl}\n\nExpires in 7 days.`,
+        });
+      } catch { /* email is best-effort */ }
+    }
+
+    return c.json({ ok: true, inviteUrl, token, role, expiresAt });
   } catch (err) {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
