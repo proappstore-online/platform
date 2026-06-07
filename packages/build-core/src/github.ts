@@ -84,6 +84,8 @@ export interface GitHub {
    *  Skips junk dirs and binary/large files. Returns the commit SHA it pulled. */
   pullText(id: string, opts?: { maxFiles?: number; maxFileBytes?: number; maxTreeBytes?: number }):
     Promise<{ ok: boolean; sha?: string | undefined; files?: Record<string, string> | undefined; truncated?: boolean | undefined; error?: string | undefined }>;
+  /** Set a GitHub Actions variable on a repo (for non-secret config like R2_ACCOUNT_ID). */
+  setRepoVariable(id: string, name: string, value: string): Promise<GhResult>;
 }
 
 // Directories and extensions never worth pulling into the agent working tree.
@@ -342,6 +344,20 @@ export function makeGitHub(token: string, org: string): GitHub {
         count += 1;
       }
       return { ok: true, sha, files, truncated };
+    },
+
+    /** Set a GitHub Actions variable on a repo (not encrypted — for non-secret config). */
+    async setRepoVariable(id: string, name: string, value: string): Promise<GhResult> {
+      const res = await api(`/repos/${repo(id)}/actions/variables/${name}`, {
+        method: 'PATCH',
+        body: { name, value },
+      });
+      if (res.ok) return res;
+      // Create if it doesn't exist (PATCH returns 404 for new variables)
+      return api(`/repos/${repo(id)}/actions/variables`, {
+        method: 'POST',
+        body: { name, value },
+      });
     },
   };
 }

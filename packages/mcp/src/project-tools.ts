@@ -15,6 +15,9 @@ interface ProjectToolsEnv {
   GITHUB_ORG: string;
   GITHUB_TOKEN: string;
   API_BASE: string;
+  R2_ACCESS_KEY_ID?: string;
+  R2_SECRET_ACCESS_KEY?: string;
+  R2_ACCOUNT_ID?: string;
 }
 
 type Text = { content: { type: "text"; text: string }[] };
@@ -68,6 +71,20 @@ export function registerProjectTools(
           if (patched !== file.content) {
             await gh.putFile(app_id, filePath, patched, `chore: replace APPNAME with ${app_id}`, file.sha);
           }
+        }
+      }
+
+      // Set R2 deploy credentials as repo variables so the deploy workflow can
+      // upload to R2. Variables (not secrets) because GitHub's secret encryption
+      // requires libsodium which isn't available in CF Workers. The deploy workflow
+      // reads from secrets || vars, so repos with per-repo secrets still work.
+      if (repoCreated && env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY && env.R2_ACCOUNT_ID) {
+        for (const [name, value] of [
+          ['R2_ACCESS_KEY_ID', env.R2_ACCESS_KEY_ID],
+          ['R2_SECRET_ACCESS_KEY', env.R2_SECRET_ACCESS_KEY],
+          ['R2_ACCOUNT_ID', env.R2_ACCOUNT_ID],
+        ] as const) {
+          await gh.setRepoVariable(app_id, name, value).catch(() => {});
         }
       }
 

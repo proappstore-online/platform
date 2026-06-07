@@ -149,7 +149,7 @@ describe("deploy-workflow injection (agent path)", () => {
     expect(wf, "an R2 deploy workflow blob should be pushed").toBeTruthy();
     expect(wf).toContain("s3://pas-apps/apps/");
     expect(wf).toContain("if [ -d web/dist ]"); // adaptive: web/dist OR dist
-    expect(wf).toContain("${{ secrets.R2_ACCESS_KEY_ID }}"); // org-level R2 secrets
+    expect(wf).toContain("R2_ACCESS_KEY_ID"); // R2 credentials (secrets || vars)
     expect(wf).toContain("--no-frozen-lockfile"); // agents commit no lockfile
     expect(wf).toContain("npx playwright test"); // behavioural gate runs after deploy
     expect(wf).toContain("@vibecodeqa/cli"); // code-health scan (report-only)

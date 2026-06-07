@@ -96,10 +96,10 @@ jobs:
 
       - name: Upload to R2
         env:
-          AWS_ACCESS_KEY_ID: \${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: \${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ACCESS_KEY_ID: \${{ secrets.R2_ACCESS_KEY_ID || vars.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: \${{ secrets.R2_SECRET_ACCESS_KEY || vars.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
-          R2_ACCOUNT_ID: \${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCOUNT_ID: \${{ secrets.R2_ACCOUNT_ID || vars.R2_ACCOUNT_ID }}
         run: |
           aws s3 sync "\${{ steps.dist.outputs.dir }}" "s3://pas-apps/apps/\${{ github.event.repository.name }}/" \\
             --endpoint-url "https://\$R2_ACCOUNT_ID.r2.cloudflarestorage.com" \\

@@ -12,4 +12,8 @@ export interface Env {
   OAUTH_KV?: KVNamespace;
   /** FAS auth start URL for OAuth flow. */
   FAS_AUTH_START?: string;
+  /** R2 deploy secrets — set on new repos so the deploy workflow can upload to R2. */
+  R2_ACCESS_KEY_ID?: string;
+  R2_SECRET_ACCESS_KEY?: string;
+  R2_ACCOUNT_ID?: string;
 }
