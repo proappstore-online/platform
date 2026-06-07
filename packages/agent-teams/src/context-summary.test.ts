@@ -93,6 +93,17 @@ describe('buildAppSummary', () => {
     expect(summary).not.toContain('Views');
   });
 
+  it('deduplicates tables with the same name across files', () => {
+    const files = new Map([
+      ['src/db.ts', "CREATE TABLE items (id TEXT, name TEXT)"],
+      ['src/migrate.ts', "CREATE TABLE IF NOT EXISTS items (id TEXT, name TEXT, extra INTEGER)"],
+    ]);
+    const summary = buildAppSummary(files);
+    // Should only appear once (first occurrence wins)
+    const matches = summary.match(/`items`/g);
+    expect(matches).toHaveLength(1);
+  });
+
   it('produces a complete summary with all sections', () => {
     const files = new Map<string, string>([
       ['package.json', '{"dependencies":{"react":"^18"}}'],

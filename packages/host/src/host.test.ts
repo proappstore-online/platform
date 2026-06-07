@@ -72,16 +72,25 @@ describe('etagsMatch', () => {
 });
 
 describe('contentType', () => {
-  it('returns correct MIME for common extensions', () => {
-    expect(contentType('main.js')).toBe('application/javascript; charset=utf-8');
-    expect(contentType('style.css')).toBe('text/css; charset=utf-8');
+  it('returns correct MIME for all mapped extensions', () => {
     expect(contentType('index.html')).toBe('text/html; charset=utf-8');
+    expect(contentType('style.css')).toBe('text/css; charset=utf-8');
+    expect(contentType('main.js')).toBe('application/javascript; charset=utf-8');
+    expect(contentType('lib.mjs')).toBe('application/javascript; charset=utf-8');
     expect(contentType('data.json')).toBe('application/json; charset=utf-8');
-    expect(contentType('logo.png')).toBe('image/png');
-    expect(contentType('photo.webp')).toBe('image/webp');
-    expect(contentType('font.woff2')).toBe('font/woff2');
     expect(contentType('icon.svg')).toBe('image/svg+xml');
+    expect(contentType('logo.png')).toBe('image/png');
+    expect(contentType('photo.jpg')).toBe('image/jpeg');
+    expect(contentType('photo.jpeg')).toBe('image/jpeg');
+    expect(contentType('anim.gif')).toBe('image/gif');
+    expect(contentType('hero.webp')).toBe('image/webp');
+    expect(contentType('hero.avif')).toBe('image/avif');
+    expect(contentType('favicon.ico')).toBe('image/x-icon');
+    expect(contentType('font.woff2')).toBe('font/woff2');
+    expect(contentType('font.woff')).toBe('font/woff');
     expect(contentType('manifest.webmanifest')).toBe('application/manifest+json');
+    expect(contentType('readme.txt')).toBe('text/plain; charset=utf-8');
+    expect(contentType('feed.xml')).toBe('application/xml; charset=utf-8');
   });
 
   it('returns octet-stream for unknown extensions', () => {

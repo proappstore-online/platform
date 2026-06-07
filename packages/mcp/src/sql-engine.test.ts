@@ -127,6 +127,23 @@ describe('prepareQuery', () => {
     expect(() => prepareQuery(m, { min: 'nope' }, null)).toThrow('min must be a number');
   });
 
+  it('coerces boolean correctly (avoids Boolean("false") === true)', () => {
+    const m = manifest({
+      sql: 'WHERE active = :active',
+      params: { active: { type: 'boolean' } },
+    });
+    expect(prepareQuery(m, { active: true }, null).params).toEqual([true]);
+    expect(prepareQuery(m, { active: false }, null).params).toEqual([false]);
+    expect(prepareQuery(m, { active: 'true' }, null).params).toEqual([true]);
+    expect(prepareQuery(m, { active: 'false' }, null).params).toEqual([false]);
+    expect(prepareQuery(m, { active: '0' }, null).params).toEqual([false]);
+    expect(prepareQuery(m, { active: '' }, null).params).toEqual([false]);
+    expect(prepareQuery(m, { active: 'no' }, null).params).toEqual([false]);
+    expect(prepareQuery(m, { active: 'yes' }, null).params).toEqual([true]);
+    expect(prepareQuery(m, { active: 1 }, null).params).toEqual([true]);
+    expect(prepareQuery(m, { active: 0 }, null).params).toEqual([false]);
+  });
+
   it('coerces to string', () => {
     const m = manifest({
       sql: 'WHERE id = :id',
@@ -226,6 +243,14 @@ describe('prepareQuery', () => {
   });
 
   // ── Extra input params are ignored ─────────────────────────
+
+  it('throws on unresolved parameter not in manifest', () => {
+    const m = manifest({
+      sql: 'SELECT * FROM t WHERE x = :undeclared',
+      params: {},
+    });
+    expect(() => prepareQuery(m, {}, null)).toThrow(/[Uu]nresolved.*undeclared/);
+  });
 
   it('ignores extra input params not in manifest', () => {
     const m = manifest({

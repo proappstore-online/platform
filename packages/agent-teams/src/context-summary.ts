@@ -28,9 +28,13 @@ export function buildAppSummary(files: Map<string, string>): string {
 
   // 2. Data model — extract CREATE TABLE and app.db.migrate patterns
   const tables: string[] = [];
+  const seenTables = new Set<string>();
   for (const [, content] of files) {
     const createMatches = content.matchAll(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\(([\s\S]+?)\)/gi);
     for (const m of createMatches) {
+      const tableName = m[1]!.toLowerCase();
+      if (seenTables.has(tableName)) continue;
+      seenTables.add(tableName);
       const cols = m[2]!.split(',').map(c => c.trim().split(/\s+/)[0]).filter(Boolean);
       tables.push(`- \`${m[1]}\`: ${cols.join(', ')}`);
     }

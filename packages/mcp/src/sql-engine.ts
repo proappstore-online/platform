@@ -78,7 +78,12 @@ export function prepareQuery(
           value = String(value);
           break;
         case 'boolean':
-          value = Boolean(value);
+          // Avoid Boolean("false") === true. Treat "false", "0", "no", "" as false.
+          if (typeof value === 'string') {
+            value = value !== '' && value !== '0' && value.toLowerCase() !== 'false' && value.toLowerCase() !== 'no';
+          } else {
+            value = Boolean(value);
+          }
           break;
       }
     }

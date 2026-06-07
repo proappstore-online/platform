@@ -81,6 +81,16 @@ describe('envelope encryption', () => {
     await expect(openSecret(tampered, TEST_KEK)).rejects.toThrow();
   });
 
+  it('fails on tampered IV', async () => {
+    const sealed = await sealSecret('secret', TEST_KEK);
+    const tampered: SealedSecret = {
+      ...sealed,
+      iv: new Uint8Array([...sealed.iv]),
+    };
+    tampered.iv[0] ^= 0xff;
+    await expect(openSecret(tampered, TEST_KEK)).rejects.toThrow();
+  });
+
   it('rejects a KEK with wrong length', async () => {
     const shortKek = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
     await expect(sealSecret('test', shortKek)).rejects.toThrow(/must be 32 bytes/);
