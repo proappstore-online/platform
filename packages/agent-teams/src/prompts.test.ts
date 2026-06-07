@@ -81,10 +81,34 @@ describe('buildSeedMessages', () => {
     expect(dev).not.toContain('App Context Summary');
   });
 
+  it('QA also gets the context summary', () => {
+    const summary = '# App Context Summary\n\n## SDK Usage\n- app.db';
+    const qa = buildSeedMessages('QA', ticket(), 'myapp', [{ author: 'BA', body: 'spec' }], ['src/App.tsx'], '', '', summary)[0]!.body;
+    expect(qa).toContain('# App Context Summary');
+    expect(qa).toContain('app.db');
+  });
+
   it('BA does not get the context summary (only Dev/QA)', () => {
     const summary = '# App Context Summary\n\n## Components\n- App';
     const ba = buildSeedMessages('BA', ticket(), 'myapp', [], [], '', '', summary)[0]!.body;
     expect(ba).not.toContain('App Context Summary');
+  });
+
+  it('Architect gets KB-writing instructions and app slug', () => {
+    const body = buildSeedMessages('Architect', ticket(), 'myapp', [])[0]!.body;
+    expect(body).toContain('KNOWLEDGE.md');
+    expect(body).toContain('"myapp"');
+    expect(body).toContain('batch_write_files');
+  });
+
+  it('Dev gets previous system error when retrying', () => {
+    const prior = [
+      { author: 'BA', body: 'spec' },
+      { author: 'system', body: 'Deploy failed — fix and it will redeploy:\ntsc error TS2345' },
+    ];
+    const body = buildSeedMessages('Dev', ticket({ iterations: 1 }), 'myapp', prior)[0]!.body;
+    expect(body).toContain('## Previous run error');
+    expect(body).toContain('TS2345');
   });
 });
 

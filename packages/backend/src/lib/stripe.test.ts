@@ -116,6 +116,17 @@ describe('Stripe client', () => {
     expect(body).toContain('Balance+Top-Up');
   });
 
+  it('getCheckoutSession retrieves payment verification data', async () => {
+    mockOk({ id: 'cs_1', payment_status: 'paid', payment_intent: 'pi_1', amount_total: 900 });
+    const session = await stripe.getCheckoutSession('cs_1');
+    expect(session.payment_status).toBe('paid');
+    expect(session.amount_total).toBe(900);
+
+    const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.stripe.com/v1/checkout/sessions/cs_1');
+    expect(opts.method).toBeUndefined(); // GET
+  });
+
   it('createTransfer sends amount + destination', async () => {
     mockOk({ id: 'tr_1', amount: 1000, currency: 'usd', destination: 'acct_1' });
     const transfer = await stripe.createTransfer({

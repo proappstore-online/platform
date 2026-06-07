@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 /**
  * Tests for project-tools helper logic. Since registerProjectTools registers
@@ -86,18 +86,25 @@ describe('auth helpers', () => {
 });
 
 describe('scaffold_app', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  async function runScaffold(args: Record<string, unknown>) {
+    const p = tools.get('scaffold_app')!(args);
+    await vi.advanceTimersByTimeAsync(5000);
+    return p;
+  }
+
   it('creates repo, sets R2 vars, provisions', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
-    mockGh.getFile.mockResolvedValue({ ok: false, status: 404 }); // no APPNAME files
+    mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
     mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockFetch.mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ steps: [{ name: 'route', status: 'ok', detail: 'done' }] }),
     });
 
-    const result = await tools.get('scaffold_app')!({
-      app_id: 'my-app', name: 'My App', description: 'test',
-    });
+    const result = await runScaffold({ app_id: 'my-app', name: 'My App', description: 'test' });
     const out = getText(result);
 
     expect(out).toContain('my-app');
@@ -105,6 +112,26 @@ describe('scaffold_app', () => {
     expect(out).toContain('R2 deploy credentials set');
     expect(out).toContain('+ route: done');
     expect(mockGh.setRepoVariable).toHaveBeenCalledTimes(3);
+  });
+
+  it('replaces APPNAME in template files', async () => {
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
+    mockGh.getFile.mockImplementation(async (_id: string, path: string) => {
+      if (path === 'CLAUDE.md') return { ok: true, status: 200, content: '# APPNAME\nSubdomain: APPNAME.proappstore.online', sha: 'sha1' };
+      return { ok: false, status: 404 };
+    });
+    mockGh.putFile.mockResolvedValue({ ok: true, status: 200, data: {} });
+    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ steps: [] }) });
+
+    await runScaffold({ app_id: 'chess', name: 'Chess', description: 'test' });
+
+    expect(mockGh.putFile).toHaveBeenCalledWith(
+      'chess', 'CLAUDE.md',
+      '# chess\nSubdomain: chess.proappstore.online',
+      expect.stringContaining('replace APPNAME'),
+      'sha1',
+    );
   });
 
   it('handles existing repo (422 + repoExists=true)', async () => {
@@ -115,9 +142,7 @@ describe('scaffold_app', () => {
       json: () => Promise.resolve({ steps: [] }),
     });
 
-    const result = await tools.get('scaffold_app')!({
-      app_id: 'existing', name: 'Existing', description: 'test',
-    });
+    const result = await runScaffold({ app_id: 'existing', name: 'Existing', description: 'test' });
     expect(getText(result)).toContain('already existed');
     // Should NOT set R2 vars on existing repos
     expect(mockGh.setRepoVariable).not.toHaveBeenCalled();
@@ -127,18 +152,14 @@ describe('scaffold_app', () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: false, status: 422, data: { message: 'validation' } });
     mockGh.repoExists.mockResolvedValue(false);
 
-    const result = await tools.get('scaffold_app')!({
-      app_id: 'bad', name: 'Bad', description: 'test',
-    });
+    const result = await runScaffold({ app_id: 'bad', name: 'Bad', description: 'test' });
     expect(getText(result)).toContain('Error creating repo');
   });
 
   it('returns error on non-422 failure', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: false, status: 500, data: { message: 'server error' } });
 
-    const result = await tools.get('scaffold_app')!({
-      app_id: 'fail', name: 'Fail', description: 'test',
-    });
+    const result = await runScaffold({ app_id: 'fail', name: 'Fail', description: 'test' });
     expect(getText(result)).toContain('Error creating repo');
   });
 
@@ -151,24 +172,22 @@ describe('scaffold_app', () => {
       json: () => Promise.resolve({ steps: [] }),
     });
 
-    const result = await tools.get('scaffold_app')!({
-      app_id: 'r2fail', name: 'R2 Fail', description: 'test',
-    });
+    const result = await runScaffold({ app_id: 'r2fail', name: 'R2 Fail', description: 'test' });
     expect(getText(result)).toContain('Failed to set R2_ACCESS_KEY_ID');
   });
 
   it('requires auth', async () => {
     userCtx = { userId: null, token: null };
-    const result = await tools.get('scaffold_app')!({
-      app_id: 'x', name: 'X', description: 'test',
-    });
+    const result = await runScaffold({ app_id: 'x', name: 'X', description: 'test' });
     expect(getText(result)).toContain('authentication required');
   });
 });
 
 describe('setR2Variables (via scaffold_app)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
   it('skips when all R2 env vars are missing', async () => {
-    // Re-register with no R2 env
     const noR2Tools = new Map<string, Handler>();
     const noR2Server = { tool: (n: string, _d: string, _s: unknown, h: Handler) => { noR2Tools.set(n, h); } };
     registerProjectTools(noR2Server as any, { ...env, R2_ACCESS_KEY_ID: undefined, R2_SECRET_ACCESS_KEY: undefined, R2_ACCOUNT_ID: undefined }, () => userCtx);
@@ -177,11 +196,26 @@ describe('setR2Variables (via scaffold_app)', () => {
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
     mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ steps: [] }) });
 
-    const result = await noR2Tools.get('scaffold_app')!({
-      app_id: 'no-r2', name: 'No R2', description: 'test',
-    });
+    const p = noR2Tools.get('scaffold_app')!({ app_id: 'no-r2', name: 'No R2', description: 'test' });
+    await vi.advanceTimersByTimeAsync(5000);
+    const result = await p;
     expect(getText(result)).toContain('R2 credentials not configured');
     expect(mockGh.setRepoVariable).not.toHaveBeenCalled();
+  });
+
+  it('reports partial config when only some R2 vars are set', async () => {
+    const partialTools = new Map<string, Handler>();
+    const partialServer = { tool: (n: string, _d: string, _s: unknown, h: Handler) => { partialTools.set(n, h); } };
+    registerProjectTools(partialServer as any, { ...env, R2_SECRET_ACCESS_KEY: undefined }, () => userCtx);
+
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
+    mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ steps: [] }) });
+
+    const p = partialTools.get('scaffold_app')!({ app_id: 'partial', name: 'P', description: 'test' });
+    await vi.advanceTimersByTimeAsync(5000);
+    const result = await p;
+    expect(getText(result)).toContain('partially configured');
   });
 });
 

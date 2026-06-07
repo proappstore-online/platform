@@ -49,11 +49,26 @@ describe('dispatchWebhook', () => {
 
     const headers = init.headers as Record<string, string>;
     expect(headers['X-Webhook-Event']).toBe('storage.uploaded');
-    expect(headers['X-Webhook-Signature']).toMatch(/^[0-9a-f]{64}$/); // SHA-256 hex
     expect(headers['Content-Type']).toBe('application/json');
 
-    const body = JSON.parse(init.body as string);
-    expect(body.key).toBe('file.jpg');
+    const body = init.body as string;
+    expect(JSON.parse(body).key).toBe('file.jpg');
+
+    // Verify HMAC is correct (not just the right length)
+    const key = await crypto.subtle.importKey(
+      'raw', new TextEncoder().encode('whsec_test'),
+      { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+    );
+    const expectedSig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body));
+    const expectedHex = Array.from(new Uint8Array(expectedSig)).map(b => b.toString(16).padStart(2, '0')).join('');
+    expect(headers['X-Webhook-Signature']).toBe(expectedHex);
+  });
+
+  it('asserts webhook_id is correctly captured in delivery log', async () => {
+    mockFetch.mockResolvedValueOnce({ status: 200 } as Response);
+    const db = fakeDb([{ id: 'hook-42', url: 'https://example.com/hook', secret: 's' }]);
+    await dispatchWebhook(db, 'app1', 'test', {});
+    expect(db.deliveries[0]!.webhook_id).toBe('hook-42');
   });
 
   it('logs delivery with status code', async () => {
