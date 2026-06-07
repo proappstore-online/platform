@@ -133,7 +133,7 @@ function renderDomain(d: DomainDto, appId: string): void {
   process.stdout.write(`\n    ${bold('Add this DNS record at your registrar:')}\n\n`);
   process.stdout.write(`      Type:  CNAME\n`);
   process.stdout.write(`      Name:  ${d.domain}\n`);
-  process.stdout.write(`      Value: ${bold(`proappstore-${appId}.pages.dev`)}\n`);
+  process.stdout.write(`      Value: ${bold(`${appId}.proappstore.online`)}\n`);
   process.stdout.write(
     `\n    ${dim('Apex domains (e.g. example.com without a subdomain) can\'t use a raw CNAME')}\n` +
       `    ${dim('per RFC. Use ALIAS/ANAME if your registrar supports it, or set A/AAAA')}\n` +
