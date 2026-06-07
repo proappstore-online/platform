@@ -37,6 +37,12 @@ teamRoutes.put('/apps/:appId/team/:userId', async (c) => {
 
     const body = await c.req.json<{ role?: string }>();
     const role = (body.role ?? 'viewer') as TeamRole;
+
+    // Owner role can only be assigned via ownership transfer
+    if (role === 'owner') {
+      return c.text('Use ownership transfer to assign owner role', 400);
+    }
+
     if (!TEAM_ROLES.includes(role)) {
       return c.text(`Invalid role. Must be one of: ${TEAM_ROLES.join(', ')}`, 400);
     }
@@ -46,9 +52,16 @@ teamRoutes.put('/apps/:appId/team/:userId', async (c) => {
       return c.text(`Cannot assign ${role} role (you are ${user.teamRole})`, 403);
     }
 
-    // Can't modify owner role (only transfer ownership can do that)
-    if (role === 'owner') {
-      return c.text('Use ownership transfer to assign owner role', 400);
+    // Can't modify someone with equal or higher role (unless you're owner)
+    const target = await c.env.DB.prepare(
+      'SELECT role FROM team_members WHERE app_id = ? AND user_id = ?',
+    ).bind(appId, userId).first<{ role: string }>();
+    if (target && user.teamRole !== 'owner') {
+      const targetLevel = TEAM_ROLES.indexOf(target.role as TeamRole);
+      const userLevel = TEAM_ROLES.indexOf(user.teamRole);
+      if (targetLevel >= userLevel) {
+        return c.text(`Cannot modify a ${target.role} (you are ${user.teamRole})`, 403);
+      }
     }
 
     await c.env.DB.prepare(
@@ -76,14 +89,25 @@ teamRoutes.delete('/apps/:appId/team/:userId', async (c) => {
     const userId = c.req.param('userId');
     const user = await requireAppAccess(c, appId, 'admin');
 
-    // Prevent removing yourself if you're the last owner
     const member = await c.env.DB.prepare(
       'SELECT role FROM team_members WHERE app_id = ? AND user_id = ?',
     )
       .bind(appId, userId)
       .first<{ role: string }>();
 
-    if (member?.role === 'owner') {
+    if (!member) return c.text('Member not found', 404);
+
+    // Can't remove someone with equal or higher role (unless you're owner)
+    if (user.teamRole !== 'owner') {
+      const targetLevel = TEAM_ROLES.indexOf(member.role as TeamRole);
+      const userLevel = TEAM_ROLES.indexOf(user.teamRole);
+      if (targetLevel >= userLevel) {
+        return c.text(`Cannot remove a ${member.role} (you are ${user.teamRole})`, 403);
+      }
+    }
+
+    // Prevent removing the last owner
+    if (member.role === 'owner') {
       const ownerCount = await c.env.DB.prepare(
         "SELECT COUNT(*) as c FROM team_members WHERE app_id = ? AND role = 'owner'",
       )
