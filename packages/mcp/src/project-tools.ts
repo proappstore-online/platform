@@ -57,7 +57,8 @@ export function registerProjectTools(
       ['R2_SECRET_ACCESS_KEY', env.R2_SECRET_ACCESS_KEY ?? ''],
       ['R2_ACCOUNT_ID', env.R2_ACCOUNT_ID ?? ''],
     ];
-    if (vars.some(([, v]) => !v)) return ['R2 credentials not configured on MCP server'];
+    if (vars.every(([, v]) => !v)) return ['R2 credentials not configured on MCP server'];
+    if (vars.some(([, v]) => !v)) return ['R2 credentials partially configured (some missing)'];
 
     const errors: string[] = [];
     for (const [name, value] of vars) {
