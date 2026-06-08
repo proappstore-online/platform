@@ -169,6 +169,32 @@ export class Auth {
     return (await res.json()) as { uid: string; login: string; password: string; isChild: boolean };
   }
 
+  /**
+   * Reset the password for a credential (child) account. Returns the new
+   * random password ONCE — show it to the student immediately. Only callable
+   * by a signed-in creator (teacher/admin). The old password is invalidated.
+   */
+  async resetPassword(targetUserId: string): Promise<{ password: string }> {
+    if (!this.session) throw new Error('Not signed in.');
+    const res = await fetch(new URL('/v1/auth/credentials/reset-password', this.apiBase), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.session.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ targetUserId }),
+    });
+    if (res.status === 401) {
+      this.handleUnauthorized();
+      throw new Error('Not signed in.');
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Reset failed (${res.status}): ${body}`);
+    }
+    return (await res.json()) as { password: string };
+  }
+
   /** Clear the session and notify listeners. */
   signOut(): void {
     this.session = null;

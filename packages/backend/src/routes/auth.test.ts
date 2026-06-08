@@ -52,6 +52,12 @@ function fakeDb() {
             users.push({ id: uid, login: display, is_child: isChild, credential_login: login, password_hash: hash, created_by: createdBy, last_login_at: now });
             return { meta: { changes: 1 } };
           }
+          if (/UPDATE users SET password_hash/i.test(sql)) {
+            const [hash, id] = stmt._args as [string, string];
+            const u = users.find((x) => x.id === id);
+            if (u) u.password_hash = hash;
+            return { meta: { changes: u ? 1 : 0 } };
+          }
           if (/UPDATE users SET last_login_at/i.test(sql)) {
             const [now, id] = stmt._args as [number, string];
             const u = users.find((x) => x.id === id);
@@ -73,6 +79,10 @@ function fakeDb() {
           if (/FROM users WHERE credential_login/i.test(sql)) {
             const u = users.find((x) => x.credential_login === (stmt._args[0] as string));
             return (u ? { id: u.id, login: u.login, password_hash: u.password_hash } : null) as T | null;
+          }
+          if (/FROM users WHERE id = .* AND provider/i.test(sql)) {
+            const u = users.find((x) => x.id === (stmt._args[0] as string));
+            return (u ? { id: u.id, credential_login: u.credential_login, created_by: u.created_by } : null) as T | null;
           }
           if (/FROM credential_login_attempts WHERE login/i.test(sql)) {
             return (attempts.get(stmt._args[0] as string) ?? null) as T | null;
@@ -177,6 +187,62 @@ describe('POST /v1/auth/credentials/login', () => {
     }
     const blocked = await login({ login: 'fox-fox-fox', password: 'wrong' }, db);
     expect(blocked.status).toBe(429);
+  });
+});
+
+describe('POST /v1/auth/credentials/reset-password', () => {
+  const provision = async (body: unknown, db: ReturnType<typeof fakeDb>) =>
+    app.request('/v1/auth/credentials/provision', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await creatorToken()}` }, body: JSON.stringify(body),
+    }, { DB: db, SESSION_SIGNING_KEY: KEY } as never);
+  const login = (body: unknown, db: ReturnType<typeof fakeDb>) =>
+    app.request('/v1/auth/credentials/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }, { DB: db, SESSION_SIGNING_KEY: KEY } as never);
+  const resetPw = async (body: unknown, db: ReturnType<typeof fakeDb>) =>
+    app.request('/v1/auth/credentials/reset-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await creatorToken()}` }, body: JSON.stringify(body),
+    }, { DB: db, SESSION_SIGNING_KEY: KEY } as never);
+
+  it('resets password and old password stops working', async () => {
+    const db = fakeDb();
+    const prov = await (await provision({ login: 'reset-test' }, db)).json() as { uid: string; password: string };
+
+    // Old password works
+    expect((await login({ login: 'reset-test', password: prov.password }, db)).status).toBe(200);
+
+    // Reset
+    const resetRes = await resetPw({ targetUserId: prov.uid }, db);
+    expect(resetRes.status).toBe(200);
+    const { password: newPw } = await resetRes.json() as { password: string };
+    expect(newPw).toBeTruthy();
+    expect(newPw).not.toBe(prov.password);
+
+    // Old password no longer works
+    expect((await login({ login: 'reset-test', password: prov.password }, db)).status).toBe(401);
+
+    // New password works
+    expect((await login({ login: 'reset-test', password: newPw }, db)).status).toBe(200);
+  });
+
+  it('403s for non-creator callers', async () => {
+    const db = fakeDb();
+    const res = await app.request('/v1/auth/credentials/reset-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer badtoken' }, body: '{}',
+    }, { DB: db, SESSION_SIGNING_KEY: KEY } as never);
+    expect(res.status).toBe(401);
+  });
+
+  it('400s for non-credential accounts', async () => {
+    const db = fakeDb();
+    const res = await resetPw({ targetUserId: 'gh:12345' }, db);
+    expect(res.status).toBe(400);
+  });
+
+  it('404s for unknown user', async () => {
+    const db = fakeDb();
+    const res = await resetPw({ targetUserId: 'cred:nonexistent' }, db);
+    expect(res.status).toBe(404);
   });
 });
 

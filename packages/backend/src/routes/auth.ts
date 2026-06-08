@@ -306,6 +306,36 @@ authRoutes.post('/auth/credentials/login', async (c) => {
   return c.json({ token });
 });
 
+// ── POST /v1/auth/credentials/reset-password ───────────────
+// An authenticated adult resets the password of a credential (child) account.
+// Returns the new random password ONCE — the adult shows it to the child.
+authRoutes.post('/auth/credentials/reset-password', async (c) => {
+  const claims = await requireClaims(c);
+  if (!claims.roles.includes('creator')) throw new HttpError('only creators can reset passwords', 403);
+
+  const body = await c.req
+    .json<{ targetUserId?: string }>()
+    .catch(() => ({} as { targetUserId?: string }));
+  const targetId = body.targetUserId;
+  if (!targetId || typeof targetId !== 'string') throw new HttpError('targetUserId is required', 400);
+  if (!targetId.startsWith('cred:')) throw new HttpError('can only reset credential accounts', 400);
+
+  // Verify the target exists and is a credential account
+  const target = await c.env.DB.prepare(
+    'SELECT id, credential_login, created_by FROM users WHERE id = ? AND provider = ?',
+  ).bind(targetId, 'credential').first<{ id: string; credential_login: string; created_by: string | null }>();
+  if (!target) throw new HttpError('account not found', 404);
+
+  const password = generatePassword();
+  const passwordHash = await hashPassword(password);
+
+  await c.env.DB.prepare(
+    'UPDATE users SET password_hash = ? WHERE id = ?',
+  ).bind(passwordHash, targetId).run();
+
+  return c.json({ password });
+});
+
 // ── POST /v1/auth/exchange ────────────────────────────────
 // Swap a GitHub device-flow access token for a PAS session token.
 // Used by `pas login` (CLI). Verifies the token against GitHub /user,
