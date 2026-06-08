@@ -1,11 +1,6 @@
-import {
-  makeGitHub,
-  ensureAnalytics,
-  type CfConfig,
-  type Step,
-} from "@proappstore/build-core";
+import { type CfConfig, ensureAnalytics, makeGitHub, type Step } from "@proappstore/build-core";
+import { E2E_SPEC_PREFIX, e2eHarnessFiles } from "./e2e-harness.js";
 import type { Env } from "./env.js";
-import { e2eHarnessFiles, E2E_SPEC_PREFIX } from "./e2e-harness.js";
 
 const ghFor = (env: Env) => makeGitHub(env.GITHUB_TOKEN, env.PUBLISHERS_ORG);
 /** CF provisioning config from the admin Worker's bindings (shared primitives). */
@@ -80,8 +75,8 @@ jobs:
       - name: Locate build output
         id: dist
         run: |
-          if [ -d web/dist ]; then echo "dir=web/dist" >> "\$GITHUB_OUTPUT"
-          elif [ -d dist ]; then echo "dir=dist" >> "\$GITHUB_OUTPUT"
+          if [ -d web/dist ]; then echo "dir=web/dist" >> "$GITHUB_OUTPUT"
+          elif [ -d dist ]; then echo "dir=dist" >> "$GITHUB_OUTPUT"
           else echo "::error::No build output (looked for ./dist and ./web/dist)"; exit 1; fi
 
       - name: Code-health scan (VCQA, report-only)
@@ -102,7 +97,7 @@ jobs:
           R2_ACCOUNT_ID: \${{ secrets.R2_ACCOUNT_ID || vars.R2_ACCOUNT_ID }}
         run: |
           aws s3 sync "\${{ steps.dist.outputs.dir }}" "s3://pas-apps/apps/\${{ github.event.repository.name }}/" \\
-            --endpoint-url "https://\$R2_ACCOUNT_ID.r2.cloudflarestorage.com" \\
+            --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" \\
             --delete --no-progress
           echo "Deployed apps/\${{ github.event.repository.name }} from \${{ github.sha }}"
 
@@ -148,7 +143,7 @@ jobs:
             walk(r.suites||[]);
             fs.writeFileSync("summary.json", JSON.stringify({ ranAt:new Date().toISOString(), passed:s.expected||0, failed:s.unexpected||0, flaky:s.flaky||0, skipped:s.skipped||0, ok:(s.unexpected||0)===0, specs }));
           '
-          [ -n "\$INTERNAL_TOKEN" ] && curl -fsS -X PUT "https://kb.proappstore.online/_ingest/\$APP/.e2e/summary.json" -H "x-internal-token: \$INTERNAL_TOKEN" --data-binary @summary.json >/dev/null && echo "results → kb.proappstore.online/\$APP/.e2e/summary.json" || echo "skipped results upload (no INTERNAL_TOKEN)"
+          [ -n "$INTERNAL_TOKEN" ] && curl -fsS -X PUT "https://kb.proappstore.online/_ingest/$APP/.e2e/summary.json" -H "x-internal-token: $INTERNAL_TOKEN" --data-binary @summary.json >/dev/null && echo "results → kb.proappstore.online/$APP/.e2e/summary.json" || echo "skipped results upload (no INTERNAL_TOKEN)"
       - name: Fail the run if E2E failed (bounces the ticket to Dev)
         if: steps.e2e.outcome != 'success'
         run: echo "::error::E2E tests failed — see the results above" && exit 1
@@ -192,7 +187,7 @@ jobs:
       - name: Gate on a Knowledge Base existing
         id: gate
         run: |
-          if [ -f KNOWLEDGE.md ]; then echo "go=1" >> "\$GITHUB_OUTPUT"; else echo "go=0" >> "\$GITHUB_OUTPUT"; fi
+          if [ -f KNOWLEDGE.md ]; then echo "go=1" >> "$GITHUB_OUTPUT"; else echo "go=0" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/setup-python@v5
         if: steps.gate.outputs.go == '1'
         with:
@@ -233,8 +228,8 @@ jobs:
           CSS
           # ── Branded site config ──
           cat > mkdocs.yml <<YAML
-          site_name: \$APP — Knowledge Base
-          site_url: https://kb.proappstore.online/\$APP/
+          site_name: $APP — Knowledge Base
+          site_url: https://kb.proappstore.online/$APP/
           docs_dir: kb-src
           copyright: Built on ProAppStore · proappstore.online
           theme:
@@ -266,21 +261,22 @@ jobs:
           INTERNAL_TOKEN: \${{ secrets.INTERNAL_TOKEN }}
           APP: \${{ github.event.repository.name }}
         run: |
-          if [ -z "\$INTERNAL_TOKEN" ]; then echo "INTERNAL_TOKEN missing — cannot publish KB"; exit 1; fi
+          if [ -z "$INTERNAL_TOKEN" ]; then echo "INTERNAL_TOKEN missing — cannot publish KB"; exit 1; fi
           out=site
-          [ -d "\$out" ] || out=public
-          cd "\$out"
+          [ -d "$out" ] || out=public
+          cd "$out"
           find . -type f | while read -r f; do
-            curl -fsS -X PUT "https://kb.proappstore.online/_ingest/\$APP/\${f#./}" -H "x-internal-token: \$INTERNAL_TOKEN" --data-binary "@\$f" >/dev/null
+            curl -fsS -X PUT "https://kb.proappstore.online/_ingest/$APP/\${f#./}" -H "x-internal-token: $INTERNAL_TOKEN" --data-binary "@$f" >/dev/null
           done
-          echo "Knowledge Base published → https://kb.proappstore.online/\$APP/"
+          echo "Knowledge Base published → https://kb.proappstore.online/$APP/"
 `;
 }
 
 function validateId(id: string): string | null {
   if (!id) return "id is required";
   if (id.length > 58) return "id must be 58 chars or less";
-  if (!/^[a-z][a-z0-9-]*$/.test(id)) return "id: lowercase alphanumeric + dashes, must start with letter";
+  if (!/^[a-z][a-z0-9-]*$/.test(id))
+    return "id: lowercase alphanumeric + dashes, must start with letter";
   if (id.startsWith("pro")) return "id must not start with 'pro'";
   return null;
 }
@@ -290,13 +286,21 @@ function validateId(id: string): string | null {
 async function createRepo(env: Env, req: PublishRequest): Promise<Step> {
   const gh = ghFor(env);
   if (await gh.repoExists(req.id)) {
-    return { name: "GitHub repo", status: "skip", detail: `${env.PUBLISHERS_ORG}/${req.id} already exists` };
+    return {
+      name: "GitHub repo",
+      status: "skip",
+      detail: `${env.PUBLISHERS_ORG}/${req.id} already exists`,
+    };
   }
   const result = await gh.createRepo(req.id, { description: req.description });
   if ((result.data as { id?: number }).id) {
     return { name: "GitHub repo", status: "ok", detail: `Created ${env.PUBLISHERS_ORG}/${req.id}` };
   }
-  return { name: "GitHub repo", status: "fail", detail: (result.data as { message?: string }).message || "Failed to create repo" };
+  return {
+    name: "GitHub repo",
+    status: "fail",
+    detail: (result.data as { message?: string }).message || "Failed to create repo",
+  };
 }
 
 // Grant the creator push access to their own app repo. Without this the repo is
@@ -317,7 +321,8 @@ async function addCollaborator(env: Env, id: string, username: string): Promise<
       body: JSON.stringify({ permission: "push" }),
     },
   );
-  if (res.status === 204) return { name: "Collaborator", status: "skip", detail: `${username} already has push access` };
+  if (res.status === 204)
+    return { name: "Collaborator", status: "skip", detail: `${username} already has push access` };
   if (res.ok) {
     return {
       name: "Collaborator",
@@ -326,7 +331,11 @@ async function addCollaborator(env: Env, id: string, username: string): Promise<
     };
   }
   const body = await res.text().catch(() => "");
-  return { name: "Collaborator", status: "fail", detail: `Failed to add ${username} (status ${res.status})${body ? `: ${body.slice(0, 120)}` : ""}` };
+  return {
+    name: "Collaborator",
+    status: "fail",
+    detail: `Failed to add ${username} (status ${res.status})${body ? `: ${body.slice(0, 120)}` : ""}`,
+  };
 }
 
 // NOTE: the workflow's CLOUDFLARE_API_TOKEN is an ORG-level Actions secret,
@@ -377,17 +386,34 @@ async function addToRegistry(env: Env, req: PublishRequest): Promise<Step> {
     file.sha,
   );
   if (update.ok) return { name: "Registry", status: "ok", detail: `Added ${req.name}` };
-  if (update.status === 409) return { name: "Registry", status: "fail", detail: "Registry write contended — retry" };
-  return { name: "Registry", status: "fail", detail: (update.data as { message?: string }).message || "Failed to update registry" };
+  if (update.status === 409)
+    return { name: "Registry", status: "fail", detail: "Registry write contended — retry" };
+  return {
+    name: "Registry",
+    status: "fail",
+    detail: (update.data as { message?: string }).message || "Failed to update registry",
+  };
 }
 
 // Push a file bundle as one commit via build-core (Git Data API; seeds empty repos).
-async function pushFilesToGitHub(env: Env, id: string, files: Record<string, string>): Promise<Step & { commitSha?: string }> {
+async function pushFilesToGitHub(
+  env: Env,
+  id: string,
+  files: Record<string, string>,
+): Promise<Step & { commitSha?: string }> {
   const entries = Object.entries(files).map(([path, content]) => ({ path, content }));
-  if (entries.length === 0) return { name: "Push files", status: "skip", detail: "no files to push" };
-  const res = await ghFor(env).pushFiles(id, entries, "Build update — ProAppStore Agent Teams", { initIfEmpty: true });
+  if (entries.length === 0)
+    return { name: "Push files", status: "skip", detail: "no files to push" };
+  const res = await ghFor(env).pushFiles(id, entries, "Build update — ProAppStore Agent Teams", {
+    initIfEmpty: true,
+  });
   if (!res.ok) return { name: "Push files", status: "fail", detail: res.error || "push failed" };
-  return { name: "Push files", status: "ok", detail: `Pushed ${entries.length} file(s) (${res.commitSha?.slice(0, 7)})`, commitSha: res.commitSha };
+  return {
+    name: "Push files",
+    status: "ok",
+    detail: `Pushed ${entries.length} file(s) (${res.commitSha?.slice(0, 7)})`,
+    commitSha: res.commitSha,
+  };
 }
 
 /**
@@ -398,7 +424,14 @@ async function pushFilesToGitHub(env: Env, id: string, files: Record<string, str
 export async function handleRepoPull(
   req: { id: string; headOnly?: boolean },
   env: Env,
-): Promise<{ ok: boolean; sha?: string; date?: string; files?: Record<string, string>; truncated?: boolean; error?: string }> {
+): Promise<{
+  ok: boolean;
+  sha?: string;
+  date?: string;
+  files?: Record<string, string>;
+  truncated?: boolean;
+  error?: string;
+}> {
   const gh = ghFor(env);
   if (!(await gh.repoExists(req.id))) return { ok: false, error: "repo not found" };
   if (req.headOnly) {
@@ -412,10 +445,21 @@ export async function handleRepoPull(
 export async function handleDeployStatus(
   req: { id: string; waitMs?: number; sha?: string },
   env: Env,
-): Promise<{ ok: boolean; status?: string; conclusion?: string; sha?: string; url?: string; errorTail?: string; error?: string }> {
+): Promise<{
+  ok: boolean;
+  status?: string;
+  conclusion?: string;
+  sha?: string;
+  url?: string;
+  errorTail?: string;
+  error?: string;
+}> {
   const gh = ghFor(env);
   if (!(await gh.repoExists(req.id))) return { ok: false, error: "repo not found" };
-  return gh.deployResult(req.id, { waitMs: Math.min(req.waitMs ?? 0, 90_000), ...(req.sha ? { sha: req.sha } : {}) });
+  return gh.deployResult(req.id, {
+    waitMs: Math.min(req.waitMs ?? 0, 90_000),
+    ...(req.sha ? { sha: req.sha } : {}),
+  });
 }
 
 // CONTRACT (agent-deploy): the request body sent by packages/agent-teams
@@ -465,8 +509,14 @@ async function provisionApp(
   const stop = (commitSha?: string) => ({ steps, success: false, repoUrl, commitSha });
 
   const idError = validateId(req.id);
-  if (idError) { steps.push({ name: "Validation", status: "fail", detail: idError }); return stop(); }
-  if (!req.name) { steps.push({ name: "Validation", status: "fail", detail: "name is required" }); return stop(); }
+  if (idError) {
+    steps.push({ name: "Validation", status: "fail", detail: idError });
+    return stop();
+  }
+  if (!req.name) {
+    steps.push({ name: "Validation", status: "fail", detail: "name is required" });
+    return stop();
+  }
 
   // 1. GitHub repo (fatal)
   const repoStep = await createRepo(env, req);
@@ -484,16 +534,23 @@ async function provisionApp(
   // 2. R2 route — register the app in the host Worker's routes table so
   //    <id>.proappstore.online resolves to R2. Idempotent (INSERT OR IGNORE).
   try {
-    await env.DB
-      .prepare(
-        `INSERT OR IGNORE INTO routes (slug, zone, r2_prefix, store, hosted_on, created_at, updated_at)
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO routes (slug, zone, r2_prefix, store, hosted_on, created_at, updated_at)
          VALUES (?, ?, ?, 'pas', 'r2', ?, ?)`,
-      )
+    )
       .bind(req.id, env.APPS_DOMAIN_BASE, `apps/${req.id}`, Date.now(), Date.now())
       .run();
-    steps.push({ name: "R2 route", status: "ok", detail: `${req.id}.${env.APPS_DOMAIN_BASE} → apps/${req.id}/` });
+    steps.push({
+      name: "R2 route",
+      status: "ok",
+      detail: `${req.id}.${env.APPS_DOMAIN_BASE} → apps/${req.id}/`,
+    });
   } catch (e) {
-    steps.push({ name: "R2 route", status: "fail", detail: `Route insert failed: ${(e as Error).message}` });
+    steps.push({
+      name: "R2 route",
+      status: "fail",
+      detail: `Route insert failed: ${(e as Error).message}`,
+    });
     return stop();
   }
 
@@ -516,7 +573,9 @@ async function provisionApp(
     const files: Record<string, string> = { ...opts.files };
     // Inject our deploy workflow unless the app already carries its OWN CI
     // workflow (kb.yml below is ours, so it doesn't count as "the app's").
-    const hasOwnWorkflow = Object.keys(files).some((p) => /^\.github\/workflows\/.+\.ya?ml$/i.test(p) && p !== KB_WORKFLOW_PATH);
+    const hasOwnWorkflow = Object.keys(files).some(
+      (p) => /^\.github\/workflows\/.+\.ya?ml$/i.test(p) && p !== KB_WORKFLOW_PATH,
+    );
     if (!hasOwnWorkflow) files[DEPLOY_WORKFLOW_PATH] = deployWorkflowYaml(env);
     // Publish the Knowledge Base as a Zensical site to R2 (kb.proappstore.online/<app>/).
     // Separate workflow so it only runs when the KB markdown changes.
@@ -581,7 +640,8 @@ export async function handlePublishKb(
 ): Promise<{ success: boolean; repoUrl?: string; steps: Step[] }> {
   const steps: Step[] = [];
   const idError = validateId(req.id);
-  if (idError) return { success: false, steps: [{ name: "Validation", status: "fail", detail: idError }] };
+  if (idError)
+    return { success: false, steps: [{ name: "Validation", status: "fail", detail: idError }] };
 
   // Guard: only KB markdown gets pushed here (never app source).
   const kbFiles: Record<string, string> = {};
@@ -589,18 +649,31 @@ export async function handlePublishKb(
     if (p === "KNOWLEDGE.md" || /^docs\/.+\.(md|markdown)$/i.test(p)) kbFiles[p] = c;
   }
   if (Object.keys(kbFiles).length === 0) {
-    return { success: false, steps: [{ name: "KB", status: "fail", detail: "no KNOWLEDGE.md / docs markdown to publish" }] };
+    return {
+      success: false,
+      steps: [{ name: "KB", status: "fail", detail: "no KNOWLEDGE.md / docs markdown to publish" }],
+    };
   }
 
   // Ensure the repo exists (idempotent; pushFiles seeds it if empty).
   const gh = ghFor(env);
   if (!(await gh.repoExists(req.id))) {
-    const r = await gh.createRepo(req.id, { description: req.description || `${req.name ?? req.id} — Knowledge Base` });
+    const r = await gh.createRepo(req.id, {
+      description: req.description || `${req.name ?? req.id} — Knowledge Base`,
+    });
     if (!(r.data as { id?: number }).id) {
-      steps.push({ name: "GitHub repo", status: "fail", detail: (r.data as { message?: string }).message || "create failed" });
+      steps.push({
+        name: "GitHub repo",
+        status: "fail",
+        detail: (r.data as { message?: string }).message || "create failed",
+      });
       return { success: false, steps };
     }
-    steps.push({ name: "GitHub repo", status: "ok", detail: `Created ${env.PUBLISHERS_ORG}/${req.id}` });
+    steps.push({
+      name: "GitHub repo",
+      status: "ok",
+      detail: `Created ${env.PUBLISHERS_ORG}/${req.id}`,
+    });
   } else {
     steps.push({ name: "GitHub repo", status: "skip", detail: "exists" });
   }
@@ -609,7 +682,11 @@ export async function handlePublishKb(
   kbFiles[KB_WORKFLOW_PATH] = kbWorkflowYaml();
   const pushStep = await pushFilesToGitHub(env, req.id, kbFiles);
   steps.push(pushStep);
-  return { success: pushStep.status !== "fail", repoUrl: `https://github.com/${env.PUBLISHERS_ORG}/${req.id}`, steps };
+  return {
+    success: pushStep.status !== "fail",
+    repoUrl: `https://github.com/${env.PUBLISHERS_ORG}/${req.id}`,
+    steps,
+  };
 }
 
 /**
@@ -617,7 +694,10 @@ export async function handlePublishKb(
  * the storefront listing. Thin wrapper over {@link provisionApp} — DNS fatal,
  * registry added, files pushed separately by the CLI.
  */
-export async function handlePublish(req: PublishRequest, env: Env): Promise<{ steps: Step[]; success: boolean }> {
+export async function handlePublish(
+  req: PublishRequest,
+  env: Env,
+): Promise<{ steps: Step[]; success: boolean }> {
   const { steps, success } = await provisionApp(req, env, { addRegistry: true });
   return { steps, success };
 }

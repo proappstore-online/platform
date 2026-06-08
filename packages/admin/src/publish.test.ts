@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handlePublish, handleAgentDeploy } from "./publish.js";
 import type { Env } from "./env.js";
+import { handleAgentDeploy, handlePublish } from "./publish.js";
 
 /**
  * The two ways an app repo gets provisioned must yield the SAME hosting:
@@ -33,7 +33,9 @@ const ENV: Env = {
 };
 
 const realFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
 
 interface Recorder {
   calls: { method: string; url: string }[];
@@ -55,19 +57,26 @@ function install(opts: { failDnsPost?: boolean } = {}): Recorder {
     // ---- Cloudflare API ----
     if (url.includes("api.cloudflare.com")) {
       // Pages project existence check → "not found" so it gets created
-      if (method === "GET" && /\/pages\/projects\/[^/]+$/.test(url)) return ok({ success: false }, 404);
-      if (method === "POST" && /\/pages\/projects$/.test(url)) return ok({ success: true, result: {} });
+      if (method === "GET" && /\/pages\/projects\/[^/]+$/.test(url))
+        return ok({ success: false }, 404);
+      if (method === "POST" && /\/pages\/projects$/.test(url))
+        return ok({ success: true, result: {} });
       // Custom domain
       if (method === "GET" && url.includes("/domains")) return ok({ success: true, result: [] });
       if (method === "POST" && url.includes("/domains")) return ok({ success: true, result: {} });
       // DNS CNAME
-      if (method === "GET" && url.includes("/dns_records")) return ok({ success: true, result: [] });
+      if (method === "GET" && url.includes("/dns_records"))
+        return ok({ success: true, result: [] });
       if (method === "POST" && url.includes("/dns_records")) {
-        return opts.failDnsPost ? ok({ success: false, errors: [{ message: "dns boom" }] }) : ok({ success: true, result: {} });
+        return opts.failDnsPost
+          ? ok({ success: false, errors: [{ message: "dns boom" }] })
+          : ok({ success: true, result: {} });
       }
       // RUM analytics
-      if (method === "GET" && url.includes("/rum/site_info/list")) return ok({ success: true, result: [] });
-      if (method === "POST" && url.includes("/rum/site_info")) return ok({ success: true, result: {} });
+      if (method === "GET" && url.includes("/rum/site_info/list"))
+        return ok({ success: true, result: [] });
+      if (method === "POST" && url.includes("/rum/site_info"))
+        return ok({ success: true, result: {} });
       return ok({ success: true });
     }
 
@@ -82,7 +91,10 @@ function install(opts: { failDnsPost?: boolean } = {}): Recorder {
     // pushFiles: ref → parent commit → blobs → tree → commit → ref update
     if (url.endsWith("/git/ref/heads/main")) return ok({ object: { sha: "parent" } });
     if (url.includes("/git/commits/parent")) return ok({ tree: { sha: "basetree" } });
-    if (url.endsWith("/git/blobs")) { rec.blobs.push(String(body?.content ?? "")); return ok({ sha: `blob${rec.blobs.length}` }); }
+    if (url.endsWith("/git/blobs")) {
+      rec.blobs.push(String(body?.content ?? ""));
+      return ok({ sha: `blob${rec.blobs.length}` });
+    }
     if (url.endsWith("/git/trees")) return ok({ sha: "tree1" });
     if (url.endsWith("/git/commits")) return ok({ sha: "commit-abc" });
     if (url.endsWith("/git/refs/heads/main")) return ok({ ref: "refs/heads/main" });
@@ -108,7 +120,14 @@ describe("provisioning: shared core", () => {
   it("handlePublish provisions hosting + registry, succeeds, pushes no files", async () => {
     const rec = install();
     const r = await handlePublish(
-      { id: "widget", name: "Widget", category: "Productivity", icon: "🧩", iconBg: "#000", description: "d" },
+      {
+        id: "widget",
+        name: "Widget",
+        category: "Productivity",
+        icon: "🧩",
+        iconBg: "#000",
+        description: "d",
+      },
       ENV,
     );
     expect(r.success).toBe(true);
@@ -119,7 +138,11 @@ describe("provisioning: shared core", () => {
   it("handleAgentDeploy provisions the same hosting + pushes files, no registry", async () => {
     const rec = install();
     const r = await handleAgentDeploy(
-      { id: "widget", name: "Widget", files: { "index.html": "<h1>hi</h1>", "package.json": "{}" } },
+      {
+        id: "widget",
+        name: "Widget",
+        files: { "index.html": "<h1>hi</h1>", "package.json": "{}" },
+      },
       ENV,
     );
     expect(r.success).toBe(true);
@@ -132,7 +155,10 @@ describe("provisioning: shared core", () => {
 
   it("both paths touch the IDENTICAL Cloudflare hosting surface for the same app", async () => {
     const pubRec = install();
-    await handlePublish({ id: "same", name: "Same", category: "C", icon: "x", iconBg: "#000", description: "d" }, ENV);
+    await handlePublish(
+      { id: "same", name: "Same", category: "C", icon: "x", iconBg: "#000", description: "d" },
+      ENV,
+    );
     const agentRec = install();
     await handleAgentDeploy({ id: "same", name: "Same", files: { "a.txt": "x" } }, ENV);
     expect(cfHosting(agentRec)).toEqual(cfHosting(pubRec));
@@ -155,7 +181,9 @@ describe("deploy-workflow injection (agent path)", () => {
     expect(wf).toContain("@vibecodeqa/cli"); // code-health scan (report-only)
     expect(wf).toContain(".vcqa/report.json"); // written into dist for the Dev Ops tab
     // KB publish workflow injected too (Zensical → R2 → kb.proappstore.online).
-    expect(rec.blobs.some((b) => b.includes("Publish Knowledge Base") && b.includes("zensical build"))).toBe(true);
+    expect(
+      rec.blobs.some((b) => b.includes("Publish Knowledge Base") && b.includes("zensical build")),
+    ).toBe(true);
     expect(rec.blobs.some((b) => b.includes("kb.proappstore.online"))).toBe(true);
     // 1 input file + injected deploy.yml + 4 E2E harness files (config, fixtures,
     // package.json, baseline smoke spec).
@@ -167,7 +195,11 @@ describe("deploy-workflow injection (agent path)", () => {
   it("does NOT inject a deploy workflow when the bundle already carries one", async () => {
     const rec = install();
     await handleAgentDeploy(
-      { id: "hasci", name: "Has CI", files: { "index.html": "x", ".github/workflows/ci.yml": "name: ci" } },
+      {
+        id: "hasci",
+        name: "Has CI",
+        files: { "index.html": "x", ".github/workflows/ci.yml": "name: ci" },
+      },
       ENV,
     );
     // No deploy.yml injected (bundle has its own workflow)...
@@ -179,7 +211,11 @@ describe("deploy-workflow injection (agent path)", () => {
   it("does NOT clobber QA-authored e2e specs (skips the baseline smoke)", async () => {
     const rec = install();
     await handleAgentDeploy(
-      { id: "hasspec", name: "Has Spec", files: { "index.html": "x", "e2e/specs/booking.spec.ts": "// authored" } },
+      {
+        id: "hasspec",
+        name: "Has Spec",
+        files: { "index.html": "x", "e2e/specs/booking.spec.ts": "// authored" },
+      },
       ENV,
     );
     // input index.html + authored spec + deploy.yml + 3 harness files

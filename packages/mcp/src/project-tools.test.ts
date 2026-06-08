@@ -57,7 +57,7 @@ const env = {
   R2_ACCOUNT_ID: 'r2-acct',
 };
 
-let userCtx = { userId: 'u1', token: 'tok-1' };
+let userCtx: { userId: string | null; token: string | null } = { userId: 'u1', token: 'tok-1' };
 registerProjectTools(fakeServer as any, env, () => userCtx);
 
 function getText(result: { content: { type: string; text: string }[] }): string {

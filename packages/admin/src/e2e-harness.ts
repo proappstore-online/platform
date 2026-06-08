@@ -17,7 +17,7 @@
  */
 
 /** Specs authored by the QA agent live here; the baseline smoke is skipped when any exist. */
-export const E2E_SPEC_PREFIX = 'e2e/specs/';
+export const E2E_SPEC_PREFIX = "e2e/specs/";
 
 const PACKAGE_JSON = `{
   "name": "app-e2e",
@@ -127,9 +127,9 @@ test('signed-in: lands past the sign-in wall', async ({ app }) => {
  */
 export function e2eHarnessFiles(): Record<string, string> {
   return {
-    'e2e/package.json': PACKAGE_JSON,
-    'e2e/playwright.config.ts': PLAYWRIGHT_CONFIG,
-    'e2e/fixtures.ts': FIXTURES,
-    'e2e/specs/smoke.spec.ts': SMOKE_SPEC,
+    "e2e/package.json": PACKAGE_JSON,
+    "e2e/playwright.config.ts": PLAYWRIGHT_CONFIG,
+    "e2e/fixtures.ts": FIXTURES,
+    "e2e/specs/smoke.spec.ts": SMOKE_SPEC,
   };
 }

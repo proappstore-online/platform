@@ -6,6 +6,23 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 export const teamRoutes = new Hono<{ Bindings: Env }>();
 
+/** Resolve a GitHub username to a gh:<id> user ID. Returns null on failure. */
+async function resolveGitHubUser(username: string, ghToken?: string): Promise<string | null> {
+  try {
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'proappstore-api',
+    };
+    if (ghToken) headers.Authorization = `Bearer ${ghToken}`;
+    const res = await fetch(`https://api.github.com/users/${encodeURIComponent(username)}`, { headers });
+    if (!res.ok) return null;
+    const user = (await res.json()) as { id: number };
+    return `gh:${user.id}`;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * List team members for an app. Any team member can see the list.
  */
@@ -39,16 +56,9 @@ teamRoutes.put('/apps/:appId/team/:userRef', async (c) => {
 
     // Resolve GitHub username to user ID
     if (!userId.startsWith('gh:')) {
-      try {
-        const ghRes = await fetch(`https://api.github.com/users/${encodeURIComponent(userId)}`, {
-          headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'proappstore-api' },
-        });
-        if (!ghRes.ok) return c.text(`GitHub user "${userId}" not found`, 404);
-        const ghUser = (await ghRes.json()) as { id: number };
-        userId = `gh:${ghUser.id}`;
-      } catch {
-        return c.text(`Could not resolve GitHub user "${userId}"`, 502);
-      }
+      const resolved = await resolveGitHubUser(userId, c.env.GITHUB_TOKEN);
+      if (!resolved) return c.text(`GitHub user "${userId}" not found`, 404);
+      userId = resolved;
     }
 
     const body = await c.req.json<{ role?: string }>();
@@ -99,11 +109,17 @@ teamRoutes.put('/apps/:appId/team/:userRef', async (c) => {
  * Remove a team member. Requires admin or owner role.
  * Cannot remove the last owner.
  */
-teamRoutes.delete('/apps/:appId/team/:userId', async (c) => {
+teamRoutes.delete('/apps/:appId/team/:userRef', async (c) => {
   try {
     const appId = c.req.param('appId');
-    const userId = c.req.param('userId');
+    let userId = c.req.param('userRef');
     const user = await requireAppAccess(c, appId, 'admin');
+
+    if (!userId.startsWith('gh:')) {
+      const resolved = await resolveGitHubUser(userId, c.env.GITHUB_TOKEN);
+      if (!resolved) return c.text(`GitHub user "${userId}" not found`, 404);
+      userId = resolved;
+    }
 
     const member = await c.env.DB.prepare(
       'SELECT role FROM team_members WHERE app_id = ? AND user_id = ?',
@@ -218,14 +234,23 @@ teamRoutes.post('/team/accept/:token', async (c) => {
       return c.text('Invite expired', 410);
     }
 
-    // Add to team
-    await c.env.DB.prepare(
-      `INSERT INTO team_members (app_id, user_id, role, invited_by, created_at)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(app_id, user_id) DO UPDATE SET role = excluded.role`,
-    )
-      .bind(invite.app_id, user.id, invite.role, invite.invited_by, Date.now())
-      .run();
+    // Add to team — but don't downgrade if already a higher role
+    const existing = await c.env.DB.prepare(
+      'SELECT role FROM team_members WHERE app_id = ? AND user_id = ?',
+    ).bind(invite.app_id, user.id).first<{ role: string }>();
+
+    const inviteLevel = TEAM_ROLES.indexOf(invite.role as TeamRole);
+    const existingLevel = existing ? TEAM_ROLES.indexOf(existing.role as TeamRole) : -1;
+
+    if (inviteLevel > existingLevel) {
+      await c.env.DB.prepare(
+        `INSERT INTO team_members (app_id, user_id, role, invited_by, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(app_id, user_id) DO UPDATE SET role = excluded.role`,
+      )
+        .bind(invite.app_id, user.id, invite.role, invite.invited_by, Date.now())
+        .run();
+    }
 
     // Delete the invite
     await c.env.DB.prepare('DELETE FROM team_invites WHERE id = ?').bind(invite.id).run();

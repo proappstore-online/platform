@@ -81,17 +81,28 @@ export async function handleAuthExchange(
   try {
     body = (await request.json()) as { githubToken?: string };
   } catch {
-    return new Response(JSON.stringify({ error: "invalid JSON body" }), { status: 400, headers: JSON_HEADERS });
+    return new Response(JSON.stringify({ error: "invalid JSON body" }), {
+      status: 400,
+      headers: JSON_HEADERS,
+    });
   }
   if (!body.githubToken) {
-    return new Response(JSON.stringify({ error: "missing githubToken" }), { status: 400, headers: JSON_HEADERS });
+    return new Response(JSON.stringify({ error: "missing githubToken" }), {
+      status: 400,
+      headers: JSON_HEADERS,
+    });
   }
   const user = await verifyGithubToken(body.githubToken);
   if (!user) {
-    return new Response(JSON.stringify({ error: "invalid GitHub token" }), { status: 401, headers: JSON_HEADERS });
+    return new Response(JSON.stringify({ error: "invalid GitHub token" }), {
+      status: 401,
+      headers: JSON_HEADERS,
+    });
   }
   const sessionToken = await mintSessionToken(user.login, env.SESSION_SIGNING_KEY);
-  return new Response(JSON.stringify({ sessionToken, login: user.login }), { headers: JSON_HEADERS });
+  return new Response(JSON.stringify({ sessionToken, login: user.login }), {
+    headers: JSON_HEADERS,
+  });
 }
 
 export async function handleAuthMe(
@@ -100,11 +111,17 @@ export async function handleAuthMe(
 ): Promise<Response> {
   const authHeader = request.headers.get("Authorization");
   if (!authHeader?.startsWith("Bearer ")) {
-    return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: JSON_HEADERS });
+    return new Response(JSON.stringify({ error: "unauthorized" }), {
+      status: 401,
+      headers: JSON_HEADERS,
+    });
   }
   const login = await verifySession(authHeader.slice(7), env.SESSION_SIGNING_KEY);
   if (!login) {
-    return new Response(JSON.stringify({ error: "invalid or expired session" }), { status: 401, headers: JSON_HEADERS });
+    return new Response(JSON.stringify({ error: "invalid or expired session" }), {
+      status: 401,
+      headers: JSON_HEADERS,
+    });
   }
   return new Response(JSON.stringify({ login }), { headers: JSON_HEADERS });
 }

@@ -1,7 +1,16 @@
 import { internalTokenOk } from "@proappstore/build-core";
+import { handleAuthExchange, handleAuthMe, verifySession } from "./auth.js";
 import type { Env } from "./env.js";
-import { handlePublish, handleAgentDeploy, handleRepoPull, handleDeployStatus, handlePublishKb, type PublishRequest, type AgentDeployRequest, type PublishKbRequest } from "./publish.js";
-import { verifySession, handleAuthExchange, handleAuthMe } from "./auth.js";
+import {
+  type AgentDeployRequest,
+  handleAgentDeploy,
+  handleDeployStatus,
+  handlePublish,
+  handlePublishKb,
+  handleRepoPull,
+  type PublishKbRequest,
+  type PublishRequest,
+} from "./publish.js";
 
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
@@ -35,7 +44,10 @@ export default {
       // Inject the verified creator login (can't be spoofed by the client) so
       // publish grants them push access to their app repo. Without this the
       // creator gets 403 on `git push` to proappstore-online/<id>.
-      const result = await handlePublish({ ...body, creatorGithub: body.creatorGithub || login }, env);
+      const result = await handlePublish(
+        { ...body, creatorGithub: body.creatorGithub || login },
+        env,
+      );
       return Response.json(result, { status: result.success ? 200 : 422 });
     }
 
