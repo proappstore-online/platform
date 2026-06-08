@@ -322,6 +322,149 @@ describe('provision_app', () => {
   });
 });
 
+describe('publish_app', () => {
+  const publishArgs = {
+    app_id: 'chess-academy',
+    name: 'Chess Academy',
+    category: 'education',
+    description: 'Online chess teaching platform.',
+  };
+
+  it('publishes successfully and returns formatted steps', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        success: true,
+        steps: [
+          { name: 'GitHub repo', status: 'ok', detail: 'created' },
+          { name: 'R2 route', status: 'ok', detail: 'chess-academy.proappstore.online → apps/chess-academy/' },
+          { name: 'Registry', status: 'ok', detail: 'Added Chess Academy' },
+        ],
+      }),
+    });
+
+    const result = await tools.get('publish_app')!(publishArgs);
+    const out = getText(result);
+    expect(out).toContain('Published: **Chess Academy**');
+    expect(out).toContain('chess-academy.proappstore.online');
+    expect(out).toContain('+ GitHub repo: created');
+    expect(out).toContain('+ Registry: Added Chess Academy');
+
+    // Verify it called admin.test.com (hostname replaced from api.test.com)
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://admin.test.com/api/publish-app',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('passes all fields to admin API', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ success: true, steps: [] }),
+    });
+
+    await tools.get('publish_app')!({
+      ...publishArgs,
+      icon: '&#9822;',
+      icon_bg: '#fef3c7',
+      pro_features: ['Real-time games', 'Swiss tournaments'],
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.id).toBe('chess-academy');
+    expect(body.name).toBe('Chess Academy');
+    expect(body.icon).toBe('&#9822;');
+    expect(body.iconBg).toBe('#fef3c7');
+    expect(body.proFeatures).toEqual(['Real-time games', 'Swiss tournaments']);
+  });
+
+  it('uses default icon and iconBg when not provided', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ success: true, steps: [] }),
+    });
+
+    await tools.get('publish_app')!(publishArgs);
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.icon).toBe('📦');
+    expect(body.iconBg).toBe('#7c3aed');
+    expect(body.proFeatures).toBeUndefined();
+  });
+
+  it('shows failure when admin returns success:false', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        success: false,
+        steps: [
+          { name: 'Validation', status: 'fail', detail: 'name is required' },
+        ],
+      }),
+    });
+
+    const result = await tools.get('publish_app')!(publishArgs);
+    const out = getText(result);
+    expect(out).toContain('Publish failed');
+    expect(out).toContain('! Validation: name is required');
+  });
+
+  it('handles admin error response', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ error: 'invalid or expired session' }),
+    });
+
+    const result = await tools.get('publish_app')!(publishArgs);
+    expect(getText(result)).toContain('Error: invalid or expired session');
+  });
+
+  it('handles non-OK HTTP response', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: () => Promise.resolve('Internal Server Error'),
+    });
+
+    const result = await tools.get('publish_app')!(publishArgs);
+    expect(getText(result)).toContain('Error: admin API returned 500');
+    expect(getText(result)).toContain('Internal Server Error');
+  });
+
+  it('handles network error', async () => {
+    mockFetch.mockRejectedValue(new Error('DNS resolution failed'));
+
+    const result = await tools.get('publish_app')!(publishArgs);
+    expect(getText(result)).toContain('Error: publish failed');
+    expect(getText(result)).toContain('DNS resolution failed');
+  });
+
+  it('requires auth', async () => {
+    userCtx = { userId: null, token: null };
+    const result = await tools.get('publish_app')!(publishArgs);
+    expect(getText(result)).toContain('authentication required');
+  });
+
+  it('shows skip status for already-listed apps', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        success: true,
+        steps: [
+          { name: 'GitHub repo', status: 'skip', detail: 'already exists' },
+          { name: 'R2 route', status: 'skip', detail: 'already routed' },
+          { name: 'Registry', status: 'skip', detail: 'Already listed' },
+        ],
+      }),
+    });
+
+    const result = await tools.get('publish_app')!(publishArgs);
+    const out = getText(result);
+    expect(out).toContain('Published: **Chess Academy**');
+    expect(out).toContain('~ Registry: Already listed');
+  });
+});
+
 describe('search_files', () => {
   it('returns matching files', async () => {
     mockGh.searchCode.mockResolvedValue({

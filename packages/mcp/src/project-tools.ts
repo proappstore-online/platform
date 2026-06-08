@@ -268,6 +268,71 @@ export function registerProjectTools(
     },
   );
 
+  // ── publish_app ─────────────────────────────────────────
+  server.tool(
+    "publish_app",
+    "Publish a PAS app to the storefront. Provisions infrastructure (R2 route, D1, data worker) and adds it to the registry so it appears on proappstore.online with a detail page. Idempotent — skips already-provisioned resources and already-listed apps.",
+    {
+      app_id: APP_ID,
+      name: z.string().max(80).describe("Display name (e.g. 'Chess Academy')"),
+      category: z.string().max(80).describe("Category (e.g. 'education', 'productivity', 'social')"),
+      description: z.string().max(500).describe("Short description for the storefront card"),
+      icon: z.string().optional().describe("HTML entity for the icon (e.g. '&#9822;'). Defaults to '📦'."),
+      icon_bg: z.string().regex(/^#([0-9a-fA-F]{3,8})$/).optional().describe("Hex background color for the icon (e.g. '#fef3c7')"),
+      pro_features: z.array(z.string().max(60)).max(8).optional().describe("List of pro features (max 8, each max 60 chars)"),
+    },
+    async ({ app_id, name, category, description, icon, icon_bg, pro_features }) => {
+      const auth = requireAuth();
+      if ('content' in auth) return auth;
+
+      // Call the admin Worker's publish endpoint — same path as `pas publish` CLI.
+      // This provisions infra + adds to registry in one atomic flow.
+      const adminBase = new URL(apiBase);
+      adminBase.hostname = adminBase.hostname.replace(/^api\./, "admin.");
+      let data: {
+        steps?: { name: string; status: string; detail: string }[];
+        success?: boolean;
+        error?: string;
+      };
+      try {
+        const res = await fetch(`${adminBase.origin}/api/publish-app`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${auth.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: app_id,
+            name,
+            category,
+            description,
+            icon: icon || "📦",
+            iconBg: icon_bg || "#7c3aed",
+            ...(pro_features?.length ? { proFeatures: pro_features } : {}),
+          }),
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          return text(`Error: admin API returned ${res.status}${body ? `: ${body.slice(0, 200)}` : ""}`);
+        }
+        data = await res.json();
+      } catch (e) {
+        return text(`Error: publish failed — ${e instanceof Error ? e.message : "unknown"}`);
+      }
+
+      if (data.error) return text(`Error: ${data.error}`);
+
+      const steps = (data.steps ?? [])
+        .map((s) => `${s.status === "ok" ? "+" : s.status === "skip" ? "~" : "!"} ${s.name}: ${s.detail}`)
+        .join("\n");
+
+      return text([
+        data.success ? `Published: **${name}** (${app_id})` : `Publish failed for ${app_id}`,
+        `Live: https://${app_id}.proappstore.online`,
+        `Listing: https://proappstore.online/apps/${app_id}/`,
+        "",
+        steps,
+      ].join("\n"));
+    },
+  );
+
   // ── batch_write_files ─────────────────────────────────────
   server.tool(
     "batch_write_files",
