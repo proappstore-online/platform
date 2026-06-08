@@ -1,4 +1,5 @@
 import type { Context } from 'hono';
+import { verifySession } from './verify-session.js';
 import type { Env } from '../types.js';
 
 export class HttpError extends Error {
@@ -21,28 +22,25 @@ export interface FasUser {
 }
 
 /**
- * Verify the Bearer token against the FAS API (/v1/auth/me).
- * Pro identity is built on top of free identity — same user, just
- * subscription state added. Roles come from the session token claims.
+ * Verify the Bearer token locally via SESSION_SIGNING_KEY (no FAS round-trip).
+ * PAS mints its own tokens — see build-core/session-jwt.
  */
 export async function requireUser(c: Context<{ Bindings: Env }>): Promise<FasUser> {
   const header = c.req.header('Authorization');
   if (!header?.startsWith('Bearer ')) {
     throw new HttpError('missing bearer token', 401);
   }
-  const token = header.slice(7);
-  const fasBase = c.env.FAS_API_BASE || 'https://api.freeappstore.online';
-  const response = await fetch(`${fasBase}/v1/auth/me`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) {
+  const claims = await verifySession(header.slice(7), c.env.SESSION_SIGNING_KEY);
+  if (!claims) {
     throw new HttpError('invalid or expired session', 401);
   }
-  const user = (await response.json()) as FasUser;
-  // Ensure roles array exists even if FAS returns an older token format
-  user.roles = user.roles ?? ['user'];
-  user.appRoles = user.appRoles ?? {};
-  return user;
+  return {
+    id: claims.uid,
+    login: claims.login ?? claims.uid,
+    avatarUrl: claims.avatarUrl ?? null,
+    roles: claims.roles ?? ['user'],
+    appRoles: claims.appRoles ?? {},
+  };
 }
 
 /** Team roles ordered by privilege level (higher index = more access). */

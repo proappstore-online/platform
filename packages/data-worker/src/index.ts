@@ -5,7 +5,7 @@ import { HTTPException } from 'hono/http-exception';
 interface Env {
   DB: D1Database;
   APP_ID: string;
-  FAS_API_BASE: string;
+  SESSION_SIGNING_KEY: string;
 }
 
 interface FasUser {
@@ -41,47 +41,56 @@ app.use(
 );
 
 // ---------------------------------------------------------------------------
-// Auth (with 60s in-memory cache to avoid FAS API round-trip on every query)
+// Auth — local JWT verification (no FAS dependency)
 // ---------------------------------------------------------------------------
 
-const authCache = new Map<string, { user: FasUser; expires: number }>();
-const AUTH_CACHE_TTL_MS = 60_000;
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+async function verifySessionLocal(
+  token: string,
+  signingKey: string,
+): Promise<{ uid: string; login: string } | null> {
+  try {
+    const dot = token.lastIndexOf('.');
+    if (dot < 0) return null;
+    const body = token.slice(0, dot);
+    const sig = token.slice(dot + 1);
+    const key = await crypto.subtle.importKey(
+      'raw', enc.encode(signingKey) as BufferSource,
+      { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+    );
+    const expected = new Uint8Array(
+      await crypto.subtle.sign('HMAC', key, enc.encode(body) as BufferSource),
+    );
+    let b = '';
+    for (const byte of expected) b += String.fromCharCode(byte);
+    const expectedStr = btoa(b).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    if (sig.length !== expectedStr.length) return null;
+    let diff = 0;
+    for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ expectedStr.charCodeAt(i);
+    if (diff !== 0) return null;
+    const padded = body.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((body.length + 3) % 4);
+    const json = dec.decode(Uint8Array.from(atob(padded), (c) => c.charCodeAt(0)));
+    const claims = JSON.parse(json) as { uid?: string; login?: string; exp?: number };
+    if (!claims.uid) return null;
+    if (typeof claims.exp !== 'number' || claims.exp < Math.floor(Date.now() / 1000)) return null;
+    return { uid: claims.uid, login: claims.login ?? claims.uid };
+  } catch {
+    return null;
+  }
+}
 
 async function requireUser(c: { req: { header(name: string): string | undefined }; env: Env }): Promise<FasUser> {
   const header = c.req.header('Authorization');
   if (!header?.startsWith('Bearer ')) {
     throw new HTTPException(401, { message: 'missing bearer token' });
   }
-  const token = header.slice(7);
-
-  // Check cache
-  const cached = authCache.get(token);
-  if (cached && cached.expires > Date.now()) {
-    return cached.user;
-  }
-
-  const fasBase = c.env.FAS_API_BASE || 'https://api.freeappstore.online';
-  const response = await fetch(`${fasBase}/v1/auth/me`, {
-    headers: { Authorization: header },
-  });
-  if (!response.ok) {
-    authCache.delete(token);
+  const claims = await verifySessionLocal(header.slice(7), c.env.SESSION_SIGNING_KEY);
+  if (!claims) {
     throw new HTTPException(401, { message: 'invalid session' });
   }
-  const user = (await response.json()) as FasUser;
-
-  // Cache for 60s
-  authCache.set(token, { user, expires: Date.now() + AUTH_CACHE_TTL_MS });
-
-  // Evict stale entries (prevent unbounded growth)
-  if (authCache.size > 100) {
-    const now = Date.now();
-    for (const [key, entry] of authCache) {
-      if (entry.expires <= now) authCache.delete(key);
-    }
-  }
-
-  return user;
+  return { id: claims.uid, login: claims.login };
 }
 
 // ---------------------------------------------------------------------------

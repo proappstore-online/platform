@@ -125,6 +125,7 @@ provisionRoutes.post('/provision', async (c) => {
       cfToken,
       cfAccount,
       db: c.env.DB,
+      sessionSigningKey: c.env.SESSION_SIGNING_KEY,
     });
     steps.push(...data.steps);
     const dataWorkerUrl = data.dataWorkerUrl;
@@ -163,6 +164,7 @@ provisionRoutes.post('/provision-data', async (c) => {
     cfToken: c.env.CF_API_TOKEN,
     cfAccount: c.env.CF_ACCOUNT_ID,
     db: c.env.DB,
+    sessionSigningKey: c.env.SESSION_SIGNING_KEY,
   });
   const success = !data.steps.some((s) => s.status === 'fail');
   return c.json({ appId: body.appId, steps: data.steps, dataWorkerUrl: data.dataWorkerUrl, success }, success ? 200 : 207);

@@ -10,6 +10,8 @@ export interface ProvisionDataArgs {
   cfToken: string;
   cfAccount: string;
   db: D1Database;
+  /** SESSION_SIGNING_KEY — passed to the data-worker for local JWT verification. */
+  sessionSigningKey?: string;
 }
 
 /**
@@ -25,7 +27,7 @@ export interface ProvisionDataArgs {
 export async function provisionData(
   args: ProvisionDataArgs,
 ): Promise<{ steps: Step[]; dataWorkerUrl: string; dbId: string }> {
-  const { appId, creatorId, creatorLabel, cfToken, cfAccount, db } = args;
+  const { appId, creatorId, creatorLabel, cfToken, cfAccount, db, sessionSigningKey } = args;
   const steps: Step[] = [];
 
   // 1. Create D1 database (skip if it already exists)
@@ -68,7 +70,7 @@ export async function provisionData(
   let dataWorkerUrl = '';
   if (dbId) {
     try {
-      const result = await deployDataWorker(appId, dbId, cfToken, cfAccount);
+      const result = await deployDataWorker(appId, dbId, cfToken, cfAccount, sessionSigningKey);
       dataWorkerUrl = result.url;
       steps.push({ name: 'deploy_worker', status: result.ok ? 'ok' : 'fail', detail: result.detail });
     } catch (e) {

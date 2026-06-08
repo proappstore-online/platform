@@ -8,8 +8,9 @@ pattern = "agents.proappstore.online/*"
 zone_name = "proappstore.online"
 
 [vars]
-FAS_API_BASE = "https://api.freeappstore.online"
 PAS_API_BASE = "https://api.proappstore.online"
+# SESSION_SIGNING_KEY set as a secret:
+#   wrangler secret put SESSION_SIGNING_KEY
 
 # Project Durable Object — one per PAS Agent Teams project.
 # Holds: backlog tickets, transitions, message log, role configs, cost ledger.

@@ -16,9 +16,8 @@ export interface Env {
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   /**
-   * DEPRECATED — removed in the de-FAS cutover. PAS now mints + verifies its own
-   * session tokens (routes/auth.ts + build-core/session-jwt). Kept only until
-   * requireUser is flipped to local verification.
+   * FAS API base — only used by invite redeem to call FAS service-assign
+   * (role assignment for invite codes). Auth verification is local.
    */
   FAS_API_BASE: string;
   /** CF credentials for provisioning (D1, Pages, Workers). */

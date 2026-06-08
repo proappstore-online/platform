@@ -6,7 +6,7 @@ workers_dev = true
 
 [vars]
 APP_ID = "__APP_ID__"
-FAS_API_BASE = "https://api.freeappstore.online"
+# SESSION_SIGNING_KEY set as a secret binding at deploy time
 
 [[d1_databases]]
 binding = "DB"

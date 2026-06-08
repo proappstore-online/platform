@@ -28,6 +28,7 @@ export async function deployDataWorker(
   dbId: string,
   cfToken: string,
   cfAccount: string,
+  sessionSigningKey?: string,
 ): Promise<DeployResult> {
   const workerName = `pas-data-${appId}`;
   const workersDevUrl = `https://${workerName}.serge-the-dev.workers.dev`;
@@ -51,7 +52,9 @@ export async function deployDataWorker(
     compatibility_flags: ['nodejs_compat'],
     bindings: [
       { type: 'plain_text', name: 'APP_ID', text: appId },
-      { type: 'plain_text', name: 'FAS_API_BASE', text: 'https://api.freeappstore.online' },
+      ...(sessionSigningKey
+        ? [{ type: 'secret_text' as const, name: 'SESSION_SIGNING_KEY', text: sessionSigningKey }]
+        : []),
       { type: 'd1', name: 'DB', id: dbId },
     ],
   };
