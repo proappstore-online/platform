@@ -1788,11 +1788,8 @@ App context:
 ${kb ? `Knowledge Base:\n${kb.slice(0, 3000)}\n` : ''}${readme ? `README:\n${readme.slice(0, 1500)}\n` : ''}${appTs ? `App.tsx (first 100 lines):\n${appTs.split('\n').slice(0, 100).join('\n')}\n` : ''}${pkgJson ? `package.json deps:\n${pkgJson.slice(0, 500)}\n` : ''}
 Files: ${fileList.slice(0, 30).join(', ')}
 
-Generate a JSON object with these fields:
-- "tagline": 1 sentence, max 60 chars, catchy — what the app does
-- "longDescription": 2-3 paragraphs, markdown OK, what the app does + key features + who it's for
-- "category": one of: productivity, social, marketplace, transport, finance, health, education, entertainment, tools, other
-
+Generate a JSON object with ONLY these fields:
+${fields.includes('tagline') ? '- "tagline": 1 sentence, max 60 chars, catchy — what the app does\n' : ''}${fields.includes('longDescription') ? '- "longDescription": 2-3 paragraphs, markdown OK, what the app does + key features + who it\'s for\n' : ''}${fields.includes('category') ? '- "category": one of: productivity, social, marketplace, transport, finance, health, education, entertainment, tools, other\n' : ''}
 Respond with ONLY the JSON object, no markdown fences, no explanation.`;
 
     try {
