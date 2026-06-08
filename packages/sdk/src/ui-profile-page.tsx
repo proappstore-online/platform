@@ -18,7 +18,7 @@ export interface ProProfilePageProps {
 /** Full-page profile/settings with subscription info, billing, theme, danger zone. */
 export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePageProps) {
   const { user, loading, signOut, deleteAccount } = useProAuth(app);
-  const { subscription, isPro, loading: subLoading, upgrade, manageBilling } = useProSubscription(app);
+  const { subscription, isPro, loading: subLoading, upgrade } = useProSubscription(app);
   const { preference, setPreference } = useTheme();
 
   if (loading) {

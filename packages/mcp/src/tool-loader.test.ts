@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, vi, afterEach } from 'vitest';
 
 // We can't easily test registerAppTools (needs real McpServer), but we can
 // test the exported helpers and the internal logic via the module's exports.

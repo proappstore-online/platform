@@ -6,7 +6,7 @@ import {
   type Step,
 } from '@proappstore/build-core';
 import type { Env } from '../types.js';
-import { requireUser, requireAppOwner, HttpError } from '../lib/auth.js';
+import { requireUser, HttpError } from '../lib/auth.js';
 import { provisionData } from '../lib/provision-data.js';
 import { fetchRepoFiles, type RepoLocation } from '../lib/github-fetch.js';
 

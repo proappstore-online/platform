@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { requireUser, HttpError } from '../lib/auth.js';
+import { requireUser } from '../lib/auth.js';
 import type { Env } from '../types.js';
 
 /**

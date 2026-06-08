@@ -7,13 +7,9 @@
 import type { Bindings } from './index.ts';
 import type {
   BaSpec,
-  Message,
-  MessageAuthor,
   Project,
   Role,
   RoleConfig,
-  RuntimeKind,
-  StreamEvent,
   Ticket,
   TicketStatus,
   ToolCall,

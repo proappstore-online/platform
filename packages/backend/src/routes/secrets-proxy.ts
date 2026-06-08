@@ -65,7 +65,7 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
     try {
       // Auth: any valid platform session can call the proxy. The app's owner
       // pays the quota, not the caller. (See spec: free tier, per-app quota.)
-      const user = await requireUser(c);
+      await requireUser(c);
       const kek = requireKek(c);
       const appId = c.req.param('appId')!;
       const host = c.req.param('host')!;

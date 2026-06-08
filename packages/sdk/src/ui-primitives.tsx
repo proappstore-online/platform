@@ -283,7 +283,7 @@ export interface ProfilePageProps {
 }
 
 export function ProfilePage({ app, showThemeToggle = true }: ProfilePageProps) {
-  const { user, loading, signIn, signOut, deleteAccount } = useProAuth(app);
+  const { user, loading, signOut, deleteAccount } = useProAuth(app);
   const { preference, setPreference } = useTheme();
 
   if (loading) {

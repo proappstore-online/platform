@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises';
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 

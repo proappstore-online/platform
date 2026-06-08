@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { resolve, join } from 'node:path';
+import { resolve } from 'node:path';
 import { resolveToken } from './lib/config.js';
 
 interface PublishOptions {

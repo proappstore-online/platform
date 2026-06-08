@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type ReactNode } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import type { ProAppStore } from './index.js';
 import type { Subscription } from './types.js';
 import { ProfileMenu, SignInButton, ProBadge, GateScreen, TextSizeToggle } from './ui.js';

@@ -7,14 +7,6 @@ import type { ToolCall, ToolResult } from './types.ts';
 
 const MCP_BASE = 'https://mcp.proappstore.online';
 
-interface McpToolCallRequest {
-  method: 'tools/call';
-  params: {
-    name: string;
-    arguments: Record<string, unknown>;
-  };
-}
-
 interface McpToolCallResponse {
   content?: { type: string; text: string }[];
   isError?: boolean;

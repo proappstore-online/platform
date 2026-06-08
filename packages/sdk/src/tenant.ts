@@ -1,4 +1,4 @@
-import type { Database, ExecuteResult, QueryResult } from './db.js';
+import type { Database, ExecuteResult } from './db.js';
 
 /**
  * TenantScope — safe-by-default helpers for multi-tenant tables.
