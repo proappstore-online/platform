@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import type { ProAppStore } from './index.js';
 import type { Subscription } from './types.js';
+import { resolveApp } from './provider.js';
 
 // Re-export User type for convenience
 export type { User } from './base-types.js';
@@ -94,13 +95,14 @@ export function useTheme() {
  *
  * Usage:
  * ```tsx
- * const { user, loading, signIn, signOut, deleteAccount } = useProAuth(app)
+ * const { user, loading, signIn, signOut, deleteAccount } = useAuth()
  * if (loading) return <Spinner />
  * if (!user) return <MySignInPage onSignIn={signIn} />
  * return <MyApp user={user} onSignOut={signOut} />
  * ```
  */
-export function useProAuth(app: ProAppStore) {
+export function useAuth(app?: ProAppStore) {
+  app = resolveApp(app);
   const [user, setUser] = useState(app.auth.user);
   const [loading, setLoading] = useState(true);
 
@@ -130,11 +132,12 @@ export function useProAuth(app: ProAppStore) {
  *
  * Usage:
  * ```tsx
- * const { subscription, isPro, loading, upgrade, manageBilling } = useProSubscription(app)
+ * const { subscription, isPro, loading, upgrade, manageBilling } = useSubscription()
  * if (!isPro) return <UpgradePrompt onUpgrade={upgrade} />
  * ```
  */
-export function useProSubscription(app: ProAppStore) {
+export function useSubscription(app?: ProAppStore) {
+  app = resolveApp(app);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -171,7 +174,7 @@ export function useProSubscription(app: ProAppStore) {
  *
  * Usage:
  * ```tsx
- * const { permission, isSubscribed, subscribe, unsubscribe, loading } = useProNotifications(app)
+ * const { permission, isSubscribed, subscribe, unsubscribe, loading } = useNotifications()
  * if (permission === 'denied') return null
  * return (
  *   <button onClick={isSubscribed ? unsubscribe : subscribe}>
@@ -180,7 +183,8 @@ export function useProSubscription(app: ProAppStore) {
  * )
  * ```
  */
-export function useProNotifications(app: ProAppStore) {
+export function useNotifications(app?: ProAppStore) {
+  app = resolveApp(app);
   const [permission, setPermission] = useState<NotificationPermission>(
     app.notifications.getPermission(),
   );
@@ -223,7 +227,7 @@ export function useProNotifications(app: ProAppStore) {
  *
  * Usage:
  * ```tsx
- * const { gate, user, subscription, signIn, upgrade } = useProGate(app)
+ * const { gate, user, subscription, signIn, upgrade } = useGate()
  * if (gate === 'loading') return <Spinner />
  * if (gate === 'signed-out') return <SignInPage onSignIn={signIn} />
  * if (gate === 'no-subscription') return <UpgradePage onUpgrade={upgrade} />
@@ -231,9 +235,10 @@ export function useProNotifications(app: ProAppStore) {
  * return <MyApp user={user!} />
  * ```
  */
-export function useProGate(app: ProAppStore, opts?: { allowFree?: boolean }) {
-  const auth = useProAuth(app);
-  const sub = useProSubscription(app);
+export function useGate(app?: ProAppStore, opts?: { allowFree?: boolean }) {
+  app = resolveApp(app);
+  const auth = useAuth(app);
+  const sub = useSubscription(app);
 
   // allowFree defaults to true while the platform has no payments wired up —
   // see ProShell for the matching default. Flip back when Stripe is live.
@@ -263,3 +268,13 @@ export function useProGate(app: ProAppStore, opts?: { allowFree?: boolean }) {
     manageBilling: sub.manageBilling,
   };
 }
+
+// Backward-compat aliases (old names still work)
+/** @deprecated Use `useAuth` instead. */
+export const useProAuth = useAuth;
+/** @deprecated Use `useSubscription` instead. */
+export const useProSubscription = useSubscription;
+/** @deprecated Use `useGate` instead. */
+export const useProGate = useGate;
+/** @deprecated Use `useNotifications` instead. */
+export const useProNotifications = useNotifications;

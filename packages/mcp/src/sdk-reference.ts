@@ -13,7 +13,7 @@ const app = initPro({ appId: 'my-app' })
 await app.auth.init()
 app.auth.signIn()        // GitHub OAuth
 app.auth.signOut()
-app.auth.user            // { id, login, avatarUrl } | null
+app.auth.user            // { id, name, login, avatarUrl } | null
 app.auth.token           // session token
 app.auth.signIn('google') // Google OAuth
 await app.auth.signInWithEmail('user@example.com') // magic link
@@ -126,7 +126,7 @@ await tx.count('clients')
 Auto-scopes all queries by tenant_id. Tables need a \`tenant_id TEXT\` column.`,
     hooks: `## React Hooks
 \`\`\`tsx
-import { useProAuth, useProSubscription, useProGate, useProNotifications, useTheme } from '@proappstore/sdk/hooks'
+import { useProAuth, useProSubscription, useProGate, useProNotifications, useTheme } from '@proappstore/sdk'
 
 const { user, loading, signIn, signOut, deleteAccount } = useProAuth(app)
 const { isPro, upgrade, manageBilling } = useProSubscription(app)
@@ -136,11 +136,12 @@ const { isSubscribed, subscribe, unsubscribe } = useProNotifications(app)
 \`\`\``,
     ui: `## UI Components
 \`\`\`tsx
-import { Avatar, SignInButton, ThemeToggle, ProBadge, ProfileMenu, SubscriptionStatus, UpgradeCard, BillingButton, GateScreen, ProProfilePage } from '@proappstore/sdk/ui'
-import { ProShell } from '@proappstore/sdk/shell'
+import { initPro, ProShell, Avatar, SignInButton, ProBadge, ProfileMenu, ProProfilePage } from '@proappstore/sdk'
 
-// Zero-config shell:
-<ProShell app={app} appName="My App">{children}</ProShell>
+// Zero-config shell (handles auth gate, subscription gate, topbar, avatar menu):
+<ProShell app={app} appName="My App" menuItems={[{ label: 'Profile', onClick: () => navigate('/profile') }]}>
+  {children}
+</ProShell>
 
 // Individual components:
 <Avatar user={user} size={32} />

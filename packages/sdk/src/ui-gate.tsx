@@ -10,7 +10,7 @@ import { SignInButton, UpgradeCard } from './ui-pro-components.js';
 
 export interface GateScreenProps {
   gate: 'loading' | 'signed-out' | 'no-subscription';
-  app: ProAppStore;
+  app?: ProAppStore;
   appName?: string | undefined;
 }
 
@@ -34,7 +34,7 @@ export function GateScreen({ gate, app, appName }: GateScreenProps) {
           <p style={{ color: 'var(--muted, #64748b)', fontSize: '0.9rem', marginBottom: '1rem' }}>
             Sign in to your ProAppStore account to continue.
           </p>
-          <SignInButton app={app} />
+          <SignInButton {...(app ? { app } : {})} />
           <p style={{ color: 'var(--muted, #64748b)', fontSize: '0.75rem', marginTop: '0.75rem' }}>
             One account for all Pro apps.
           </p>
@@ -47,7 +47,7 @@ export function GateScreen({ gate, app, appName }: GateScreenProps) {
   return (
     <div style={{ minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
       <UpgradeCard
-        app={app}
+        {...(app ? { app } : {})}
         title="Pro subscription required"
         description={`${appName || 'This app'} requires an active ProAppStore subscription.`}
       />

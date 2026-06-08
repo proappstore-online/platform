@@ -35,19 +35,16 @@ Identity (free, platform-provided — the platform runs the OAuth; no client sec
   session — \`app.db\`/\`app.rooms\`/\`app.roles\` all work unchanged. Do NOT build your own
   username/password table — minting a usable session needs the platform signing key.
   Provisioning is adult-gated; there is NO public password self-signup.
-- CRITICAL — the user object (\`app.auth.user\`, or \`user\` from \`useProAuth\`) is EXACTLY
-  \`{ id: string; login: string; avatarUrl: string | null; dateOfBirth: string | null }\`.
-  There is NO \`name\` and NO \`email\` field. Use \`user.login\` for the display name and
-  \`user.id\` (e.g. \`"gh:123"\`) as the stable key. Writing \`user.name\` or \`user.email\`
-  (or \`user.name ?? user.email\`) FAILS \`tsc\` and breaks the deploy build.
-- React — IMPORT PATHS MATTER (the root \`@proappstore/sdk\` is React-free; importing a
-  hook or component from it FAILS \`tsc\` with "no exported member"):
-  • Hooks → \`import { useProAuth, useProGate, useProSubscription, useProNotifications, useTheme } from '@proappstore/sdk/hooks'\`.
-    \`useProAuth(app)\` returns \`{ user, loading, signIn, signOut, deleteAccount }\` (its \`signIn\` is zero-arg / GitHub).
-  • UI → \`import { SignInButton, ProfileMenu, Avatar, GateScreen, … } from '@proappstore/sdk/ui'\`.
-  • Root → \`import { initPro } from '@proappstore/sdk'\` (the \`app\` instance + \`app.*\` only — NO hooks/components).
-  (Only a provider NOT supported would require custom in-app OAuth.)
-- IMPORTANT — \`<SignInButton>\` props are ONLY \`{ app, label? }\`; it has NO \`provider\` prop and always calls \`app.auth.signIn()\` (GitHub). For a Google/Apple button, render your OWN button: \`<button onClick={() => app.auth.signIn('google')}>Sign in with Google</button>\`. Do NOT pass \`provider\`/\`onClick\`/etc. to \`<SignInButton>\` — that fails \`tsc\`. Confirm any component's exact props in node_modules/@proappstore/sdk before using it.
+- The user object (\`app.auth.user\`, or \`user\` from \`useProAuth\`) is
+  \`{ id: string; name: string; login: string; avatarUrl: string | null; dateOfBirth: string | null }\`.
+  Use \`user.name\` for display and \`user.id\` (e.g. \`"gh:123"\`) as the stable key.
+  There is NO \`email\` field.
+- Everything — hooks, components, \`initPro\`, types — imports from \`'@proappstore/sdk'\`:
+  \`import { initPro, useProAuth, ProShell, Avatar } from '@proappstore/sdk'\`.
+  Subpath imports (\`@proappstore/sdk/hooks\`, \`@proappstore/sdk/ui\`) also work but are not required.
+- ProShell wraps your entire app — handles auth gate, subscription gate, topbar, avatar menu, theme:
+  \`<ProShell app={app} appName="My App" menuItems={[{label:'Profile', onClick}]}>{children}</ProShell>\`.
+- \`<SignInButton>\` props are \`{ app, label? }\`. For Google: \`<button onClick={() => app.auth.signIn('google')}>Google</button>\`.
 
 Free primitives (capped): \`app.kv\` (per-user key/value), realtime \`app.rooms\`
 (WebSocket; peer/room caps), \`app.proxy.fetch(...)\` (call external APIs with the

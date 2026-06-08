@@ -1,6 +1,9 @@
-/** Authenticated user profile from GitHub OAuth. */
+/** Authenticated user profile. */
 export interface User {
   id: string;
+  /** Display name (GitHub handle, Google name, or credential login). */
+  name: string;
+  /** @deprecated Use `name` instead. Alias kept for backward compatibility. */
   login: string;
   avatarUrl: string | null;
   /**

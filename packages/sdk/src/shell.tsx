@@ -2,6 +2,12 @@ import { useState, useEffect, type ReactNode } from 'react';
 import type { ProAppStore } from './index.js';
 import type { Subscription } from './types.js';
 import { ProfileMenu, SignInButton, ProBadge, GateScreen, TextSizeToggle } from './ui.js';
+import { ProProvider } from './provider.js';
+
+export interface MenuItem {
+  label: string;
+  onClick: () => void;
+}
 
 export interface ProShellProps {
   /** The ProAppStore SDK instance from initPro(). */
@@ -19,6 +25,8 @@ export interface ProShellProps {
   allowFree?: boolean;
   /** Show theme toggle in the profile menu. Default: true. */
   showThemeToggle?: boolean;
+  /** Custom items added to the profile dropdown (above sign-out). */
+  menuItems?: MenuItem[];
 }
 
 type Gate = 'loading' | 'signed-out' | 'no-subscription' | 'ready';
@@ -49,7 +57,7 @@ type Gate = 'loading' | 'signed-out' | 'no-subscription' | 'ready';
  * }
  * ```
  */
-export function ProShell({ app, children, appName, allowFree = true, showThemeToggle = true }: ProShellProps) {
+export function ProShell({ app, children, appName, allowFree = true, showThemeToggle = true, menuItems }: ProShellProps) {
   const [user, setUser] = useState(app.auth.user);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [gate, setGate] = useState<Gate>('loading');
@@ -85,6 +93,7 @@ export function ProShell({ app, children, appName, allowFree = true, showThemeTo
 
   // --- Ready: render app with topbar ---
   return (
+    <ProProvider app={app}>
     <div style={styles.shell}>
       <header style={styles.topbar}>
         <div style={styles.topbarLeft}>
@@ -95,7 +104,13 @@ export function ProShell({ app, children, appName, allowFree = true, showThemeTo
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <TextSizeToggle />
           {!user && <SignInButton app={app} label="Sign in" />}
-          {user && <ProfileMenu app={app} showThemeToggle={showThemeToggle} />}
+          {user && (
+            <ProfileMenu app={app} showThemeToggle={showThemeToggle}>
+              {menuItems?.map((item, i) => (
+                <button key={i} onClick={item.onClick} style={menuItemStyle}>{item.label}</button>
+              ))}
+            </ProfileMenu>
+          )}
         </div>
       </header>
 
@@ -110,8 +125,16 @@ export function ProShell({ app, children, appName, allowFree = true, showThemeTo
         </a>
       </footer>
     </div>
+    </ProProvider>
   );
 }
+
+const menuItemStyle: React.CSSProperties = {
+  display: 'block', width: '100%', padding: '0.5rem 1rem',
+  background: 'none', border: 'none', textAlign: 'left',
+  fontSize: '0.85rem', cursor: 'pointer',
+  color: 'var(--ink, #1e293b)', fontFamily: 'inherit',
+};
 
 const styles: Record<string, React.CSSProperties> = {
   shell: { minHeight: '100dvh', display: 'flex', flexDirection: 'column' },

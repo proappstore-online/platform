@@ -280,7 +280,10 @@ export class Auth {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!response.ok) throw new Error(`Auth failed: ${response.status}`);
-    return (await response.json()) as User;
+    const data = (await response.json()) as User;
+    // Ensure `name` is always populated (API returns `login`)
+    if (!data.name) data.name = data.login;
+    return data;
   }
 
   /** Fire-and-forget: ensure the user has at least 'member' role in this app. */
@@ -299,7 +302,10 @@ export class Auth {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     try {
-      return JSON.parse(raw) as Session;
+      const session = JSON.parse(raw) as Session;
+      // Backfill `name` for sessions cached before the field was added
+      if (session.user && !session.user.name) session.user.name = session.user.login;
+      return session;
     } catch {
       return null;
     }

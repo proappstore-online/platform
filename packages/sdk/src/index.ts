@@ -31,7 +31,7 @@ export type { Invite, InviteListItem, CreateInviteOptions, RedeemResult } from '
 export type {
   ProInitOptions,
   Subscription,
-  SubscriptionStatus,
+  SubscriptionStatus as SubscriptionStatusType,
   CheckoutRequest,
   LicenseInfo,
 } from './types.js';
@@ -54,6 +54,21 @@ export type { UsageOptions } from './usage.js';
 export { Email } from './email.js';
 export { Webhooks } from './webhooks.js';
 export type { WebhookConfig, WebhookTestResult } from './webhooks.js';
+
+// Re-export hooks and UI from subpaths so `import { useProAuth } from '@proappstore/sdk'` works.
+// The subpath imports (`@proappstore/sdk/hooks`, `@proappstore/sdk/ui`) still work too.
+export { useAuth, useSubscription, useGate, useNotifications, useTheme } from './hooks.js';
+// Backward-compat aliases
+export { useProAuth, useProSubscription, useProGate, useProNotifications } from './hooks.js';
+export { ProProvider, useApp } from './provider.js';
+export type { ProProviderProps } from './provider.js';
+export { ProShell } from './shell.js';
+export type { ProShellProps, MenuItem } from './shell.js';
+export {
+  Avatar, ThemeToggle, TextSizeToggle, SignInButton, ProfileMenu,
+  ProBadge, SubscriptionStatus, UpgradeCard, BillingButton, GateScreen,
+  ProProfilePage,
+} from './ui.js';
 
 /**
  * Pro SDK instance — all features hit the PAS backend.

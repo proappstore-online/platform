@@ -8,7 +8,7 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import type { ProAppStore } from './index.js';
 import type { User } from './base-types.js';
-import { useProAuth } from './hooks.js';
+import { useAuth } from './hooks.js';
 import { useTheme } from './hooks.js';
 
 // ---------------------------------------------------------------------------
@@ -199,7 +199,7 @@ export interface ProfileMenuProps {
 }
 
 export function ProfileMenu({ app, showThemeToggle = true, children }: ProfileMenuProps) {
-  const { user, signOut, deleteAccount } = useProAuth(app);
+  const { user, signOut, deleteAccount } = useAuth(app);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -283,7 +283,7 @@ export interface ProfilePageProps {
 }
 
 export function ProfilePage({ app, showThemeToggle = true }: ProfilePageProps) {
-  const { user, loading, signOut, deleteAccount } = useProAuth(app);
+  const { user, loading, signOut, deleteAccount } = useAuth(app);
   const { preference, setPreference } = useTheme();
 
   if (loading) {

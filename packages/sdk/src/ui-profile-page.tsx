@@ -3,7 +3,7 @@
  */
 import { type ReactNode } from 'react';
 import type { ProAppStore } from './index.js';
-import { useProAuth, useProSubscription, useTheme } from './hooks.js';
+import { useAuth, useSubscription, useTheme } from './hooks.js';
 import { SignInButton, ProBadge, BillingButton } from './ui-pro-components.js';
 
 // ---------------------------------------------------------------------------
@@ -11,14 +11,14 @@ import { SignInButton, ProBadge, BillingButton } from './ui-pro-components.js';
 // ---------------------------------------------------------------------------
 
 export interface ProProfilePageProps {
-  app: ProAppStore;
+  app?: ProAppStore;
   showThemeToggle?: boolean;
 }
 
 /** Full-page profile/settings with subscription info, billing, theme, danger zone. */
 export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePageProps) {
-  const { user, loading, signOut, deleteAccount } = useProAuth(app);
-  const { subscription, isPro, loading: subLoading, upgrade } = useProSubscription(app);
+  const { user, loading, signOut, deleteAccount } = useAuth(app);
+  const { subscription, isPro, loading: subLoading, upgrade } = useSubscription(app);
   const { preference, setPreference } = useTheme();
 
   if (loading) {
@@ -29,7 +29,7 @@ export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePagePr
     return (
       <div style={{ padding: '2rem', textAlign: 'center' }}>
         <p style={{ color: 'var(--muted, #64748b)', marginBottom: '1rem' }}>Sign in to view your profile.</p>
-        <SignInButton app={app} />
+        <SignInButton {...(app ? { app } : {})} />
       </div>
     );
   }
@@ -82,7 +82,7 @@ export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePagePr
                 {subscription.cancelAtPeriodEnd ? 'Cancels' : 'Renews'} on {new Date(subscription.currentPeriodEnd).toLocaleDateString()}
               </p>
             )}
-            <BillingButton app={app} variant="secondary" />
+            <BillingButton {...(app ? { app } : {})} variant="secondary" />
           </div>
         ) : (
           <div>

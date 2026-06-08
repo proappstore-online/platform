@@ -5,18 +5,20 @@
  */
 import { useState, useCallback } from 'react';
 import type { ProAppStore } from './index.js';
-import { useProSubscription } from './hooks.js';
+import { useSubscription } from './hooks.js';
+import { resolveApp } from './provider.js';
 
 // ---------------------------------------------------------------------------
 // SignInButton (Pro-branded)
 // ---------------------------------------------------------------------------
 
 export interface SignInButtonProps {
-  app: ProAppStore;
+  app?: ProAppStore;
   label?: string;
 }
 
-export function SignInButton({ app, label = 'Sign in with GitHub' }: SignInButtonProps) {
+export function SignInButton({ app: appProp, label = 'Sign in with GitHub' }: SignInButtonProps) {
+  const app = resolveApp(appProp);
   return (
     <button
       onClick={() => app.auth.signIn()}
@@ -75,13 +77,13 @@ export function ProBadge({ size = 'sm' }: ProBadgeProps) {
 // ---------------------------------------------------------------------------
 
 export interface SubscriptionStatusProps {
-  app: ProAppStore;
+  app?: ProAppStore;
   showUpgrade?: boolean;
 }
 
 /** Inline subscription status: PRO badge or "Free" with optional upgrade link. */
 export function SubscriptionStatus({ app, showUpgrade = true }: SubscriptionStatusProps) {
-  const { subscription, isPro, loading, upgrade } = useProSubscription(app);
+  const { subscription, isPro, loading, upgrade } = useSubscription(app);
 
   if (loading) {
     return <span style={{ fontSize: '0.85rem', color: 'var(--muted, #64748b)' }}>...</span>;
@@ -131,7 +133,7 @@ export function SubscriptionStatus({ app, showUpgrade = true }: SubscriptionStat
 // ---------------------------------------------------------------------------
 
 export interface UpgradeCardProps {
-  app: ProAppStore;
+  app?: ProAppStore;
   title?: string;
   description?: string;
   priceLabel?: string;
@@ -146,7 +148,7 @@ export function UpgradeCard({
   priceLabel = '$9/month',
   features = ['Cloud sync across devices', 'AI-powered features', 'Unlimited storage', 'Priority support'],
 }: UpgradeCardProps) {
-  const { upgrade } = useProSubscription(app);
+  const { upgrade } = useSubscription(app);
 
   return (
     <div style={{
@@ -207,13 +209,14 @@ export function UpgradeCard({
 // ---------------------------------------------------------------------------
 
 export interface BillingButtonProps {
-  app: ProAppStore;
+  app?: ProAppStore;
   label?: string;
   variant?: 'primary' | 'secondary' | 'ghost';
 }
 
 /** Button that opens the Stripe billing portal. */
-export function BillingButton({ app, label = 'Manage billing', variant = 'secondary' }: BillingButtonProps) {
+export function BillingButton({ app: appProp, label = 'Manage billing', variant = 'secondary' }: BillingButtonProps) {
+  const app = resolveApp(appProp);
   const [loading, setLoading] = useState(false);
 
   const handleClick = useCallback(async () => {

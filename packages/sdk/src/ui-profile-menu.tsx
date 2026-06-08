@@ -3,7 +3,7 @@
  */
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import type { ProAppStore } from './index.js';
-import { useProAuth, useProSubscription, useTheme } from './hooks.js';
+import { useAuth, useSubscription, useTheme } from './hooks.js';
 import { ProBadge } from './ui-pro-components.js';
 
 // ---------------------------------------------------------------------------
@@ -11,7 +11,7 @@ import { ProBadge } from './ui-pro-components.js';
 // ---------------------------------------------------------------------------
 
 export interface ProfileMenuProps {
-  app: ProAppStore;
+  app?: ProAppStore;
   showThemeToggle?: boolean;
   showBilling?: boolean;
   children?: ReactNode;
@@ -19,8 +19,8 @@ export interface ProfileMenuProps {
 
 /** Avatar button that opens dropdown with Pro features: badge, billing, theme, sign out. */
 export function ProfileMenu({ app, showThemeToggle = true, showBilling = true, children }: ProfileMenuProps) {
-  const { user, signOut, deleteAccount } = useProAuth(app);
-  const { subscription, isPro, manageBilling } = useProSubscription(app);
+  const { user, signOut, deleteAccount } = useAuth(app);
+  const { subscription, isPro, manageBilling } = useSubscription(app);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
