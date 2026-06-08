@@ -26,6 +26,15 @@ Identity (free, platform-provided — the platform runs the OAuth; no client sec
   \`listAll()\` (owner-only). Default roles: owner/member/moderator/editor/viewer;
   custom roles = pass any string. \`owner\` is auto-assigned to the app creator.
 - \`app.auth.signInWithEmail(email)\` — magic-link email sign-in. Also \`app.auth.user\`, \`signOut()\`.
+- CREDENTIAL ACCOUNTS (username + password, NO email/OAuth) — for kids/students who
+  have no email (e.g. a classroom). An adult signed in as a creator calls
+  \`await app.auth.provisionChild({ displayName?, login?, isChild? })\` → returns
+  \`{ uid, login, password }\` ONCE (show it to the adult immediately — the password is
+  never retrievable again; if lost, re-provision). The child then signs in with
+  \`await app.auth.signInWithCredentials(login, password)\`, which mints a normal PAS
+  session — \`app.db\`/\`app.rooms\`/\`app.roles\` all work unchanged. Do NOT build your own
+  username/password table — minting a usable session needs the platform signing key.
+  Provisioning is adult-gated; there is NO public password self-signup.
 - CRITICAL — the user object (\`app.auth.user\`, or \`user\` from \`useProAuth\`) is EXACTLY
   \`{ id: string; login: string; avatarUrl: string | null; dateOfBirth: string | null }\`.
   There is NO \`name\` and NO \`email\` field. Use \`user.login\` for the display name and

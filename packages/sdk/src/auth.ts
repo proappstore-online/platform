@@ -100,6 +100,75 @@ export class Auth {
     }
   }
 
+  /**
+   * Sign in with a provisioned username + password (no email, no OAuth).
+   * These accounts are created by an adult via {@link provisionChild} — built
+   * for students/children who don't have email. On success the platform mints
+   * a normal PAS session and this stores it exactly like the OAuth flow, so
+   * `app.db`, `app.rooms`, roles, etc. all work unchanged.
+   *
+   * @throws if the credentials are invalid (401) or rate-limited (429).
+   */
+  async signInWithCredentials(login: string, password: string): Promise<User> {
+    const res = await fetch(new URL('/v1/auth/credentials/login', this.apiBase), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ login, password }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      if (res.status === 401) throw new Error('Invalid login or password.');
+      if (res.status === 429) throw new Error('Too many sign-in attempts — please try again later.');
+      throw new Error(`Sign-in failed (${res.status}): ${body}`);
+    }
+    const { token } = (await res.json()) as { token: string };
+    const user = await this.fetchUser(token);
+    this.session = { token, user };
+    this.lastAuthError = null;
+    if (typeof window !== 'undefined') this.writeStorage(this.session);
+    this.emit();
+    this.ensureMember();
+    return user;
+  }
+
+  /**
+   * Provision a child/student credential account. Requires the *current* user
+   * to be signed in as a creator (adult). Returns the generated `login` and
+   * `password` ONCE — the password is never retrievable again, so surface it
+   * to the adult immediately (copy/print) and let them re-provision if lost.
+   *
+   * Pass `login` to choose the username (else an `animal-animal-animal` triple
+   * is generated), `displayName` for a friendly display handle, and `isChild`
+   * (defaults to true). The provisioned account does NOT replace the current
+   * session — the adult stays signed in.
+   *
+   * @throws if not signed in as a creator (403) or the login is taken (409).
+   */
+  async provisionChild(
+    opts: { login?: string; displayName?: string; isChild?: boolean; password?: string } = {},
+  ): Promise<{ uid: string; login: string; password: string; isChild: boolean }> {
+    if (!this.session) throw new Error('Not signed in.');
+    const res = await fetch(new URL('/v1/auth/credentials/provision', this.apiBase), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.session.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(opts),
+    });
+    if (res.status === 401) {
+      this.handleUnauthorized();
+      throw new Error('Not signed in.');
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      if (res.status === 403) throw new Error('Only creators can provision accounts.');
+      if (res.status === 409) throw new Error('That login is already taken.');
+      throw new Error(`Provision failed (${res.status}): ${body}`);
+    }
+    return (await res.json()) as { uid: string; login: string; password: string; isChild: boolean };
+  }
+
   /** Clear the session and notify listeners. */
   signOut(): void {
     this.session = null;

@@ -24,6 +24,9 @@ first network call happens when you read auth state or call an API.
 ```ts
 // Auth (inherited from @freeappstore/sdk)
 app.auth.init() / .signIn() / .signOut() / .onChange(cb)
+// Provisioned credential accounts (no email/OAuth — for kids/students):
+app.auth.provisionChild({ displayName }) // adult-only → { login, password } once
+app.auth.signInWithCredentials(login, password) // child sign-in
 
 // Per-user KV storage
 app.kv.set(key, value) / .get(key) / .list() / .delete(key)

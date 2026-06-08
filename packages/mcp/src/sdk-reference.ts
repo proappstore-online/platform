@@ -17,6 +17,13 @@ app.auth.user            // { id, login, avatarUrl } | null
 app.auth.token           // session token
 app.auth.signIn('google') // Google OAuth
 await app.auth.signInWithEmail('user@example.com') // magic link
+
+// Provisioned credential accounts (username + password, NO email/OAuth) —
+// for kids/students without email. An adult (creator) provisions; the child
+// signs in with the returned login + password. Mints a normal PAS session.
+const { login, password } = await app.auth.provisionChild({ displayName: 'Sam' })
+// → show login+password to the adult ONCE (never retrievable again)
+await app.auth.signInWithCredentials(login, password) // child sign-in
 \`\`\``,
     kv: `## Per-user KV Storage
 \`\`\`tsx

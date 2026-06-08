@@ -14,11 +14,28 @@
 
 import { Hono } from 'hono';
 import { setCookie, getCookie, deleteCookie } from 'hono/cookie';
-import { mintSession, verifySession, type NewSession } from '@proappstore/build-core';
+import { mintSession, verifySession, type NewSession, type SessionClaims } from '@proappstore/build-core';
+import type { Context } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError } from '../lib/auth.js';
+import { hashPassword, verifyPassword } from '../lib/password.js';
+import { generateLogin, generatePassword, normalizeLogin, isValidLogin } from '../lib/credential-gen.js';
+import { d1AttemptStore, isBlocked, recordFailure, recordSuccess } from '../lib/credential-rate-limit.js';
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
+
+/**
+ * Verify the Bearer token as a PAS-signed session, locally (no FAS round-trip).
+ * Returns the claims or throws 401. Shared by /auth/me, the date-of-birth
+ * patch, and credential provisioning.
+ */
+async function requireClaims(c: Context<{ Bindings: Env }>): Promise<SessionClaims> {
+  const header = c.req.header('Authorization');
+  if (!header?.startsWith('Bearer ')) throw new HttpError('missing bearer token', 401);
+  const claims = await verifySession(header.slice(7), c.env.SESSION_SIGNING_KEY);
+  if (!claims) throw new HttpError('invalid or expired session', 401);
+  return claims;
+}
 
 /** Cookie that binds the OAuth `state` to the initiating browser (CSRF guard). */
 const STATE_COOKIE = 'pas_oauth_state';
@@ -151,10 +168,7 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
 
 // ── GET /v1/auth/me ────────────────────────────────────────
 authRoutes.get('/auth/me', async (c) => {
-  const header = c.req.header('Authorization');
-  if (!header?.startsWith('Bearer ')) throw new HttpError('missing bearer token', 401);
-  const claims = await verifySession(header.slice(7), c.env.SESSION_SIGNING_KEY);
-  if (!claims) throw new HttpError('invalid or expired session', 401);
+  const claims = await requireClaims(c);
   return c.json({
     id: claims.uid,
     login: claims.login,
@@ -166,10 +180,7 @@ authRoutes.get('/auth/me', async (c) => {
 
 // ── PATCH /v1/auth/me/date-of-birth ────────────────────────
 authRoutes.patch('/auth/me/date-of-birth', async (c) => {
-  const header = c.req.header('Authorization');
-  if (!header?.startsWith('Bearer ')) throw new HttpError('missing bearer token', 401);
-  const claims = await verifySession(header.slice(7), c.env.SESSION_SIGNING_KEY);
-  if (!claims) throw new HttpError('invalid or expired session', 401);
+  const claims = await requireClaims(c);
 
   const body = await c.req.json<{ dateOfBirth?: string }>().catch(() => ({} as { dateOfBirth?: string }));
   const dob = body.dateOfBirth;
@@ -187,6 +198,105 @@ authRoutes.patch('/auth/me/date-of-birth', async (c) => {
 // Magic-link sign-in needs an email sender; not wired on PAS yet. Use GitHub or
 // Google. (Returns 501 rather than silently failing so the SDK surfaces it.)
 authRoutes.post('/auth/email/start', (c) => c.json({ error: 'email sign-in is not enabled yet — use GitHub or Google' }, 501));
+
+// ── POST /v1/auth/credentials/provision ────────────────────
+// An authenticated adult (creator) provisions a child/student account that
+// signs in with a username + password — no email, no OAuth. Returns the
+// login + password ONCE (the password is never retrievable again). Built for
+// kids who don't have email (chess-academy); generalizes to any education
+// product. This is NOT public self-registration — provisioning is gated.
+authRoutes.post('/auth/credentials/provision', async (c) => {
+  const claims = await requireClaims(c);
+  // Only creators provision accounts. Credential (child) accounts get only the
+  // 'user' role, so this also prevents a provisioned child provisioning others.
+  if (!claims.roles.includes('creator')) throw new HttpError('only creators can provision accounts', 403);
+
+  const body = await c.req
+    .json<{ login?: string; displayName?: string; isChild?: boolean; password?: string }>()
+    .catch(() => ({} as { login?: string; displayName?: string; isChild?: boolean; password?: string }));
+
+  // A supplied login is used as-is (and a collision is a hard 409); otherwise we
+  // generate animal triples and retry past the rare collision.
+  const supplied = typeof body.login === 'string' && body.login.trim() !== '';
+  let suppliedLogin = '';
+  if (supplied) {
+    suppliedLogin = normalizeLogin(body.login!);
+    if (!isValidLogin(suppliedLogin)) {
+      throw new HttpError('login must be lowercase letters, digits, and hyphens (3–64 chars)', 400);
+    }
+  }
+
+  if (body.password !== undefined && (typeof body.password !== 'string' || body.password.length < 6)) {
+    throw new HttpError('password must be at least 6 characters', 400);
+  }
+  const password = body.password ?? generatePassword();
+  const passwordHash = await hashPassword(password);
+
+  const isChild = body.isChild !== false; // default true — the primary use case
+  const now = Date.now();
+
+  const attempts = supplied ? 1 : 6;
+  for (let i = 0; i < attempts; i++) {
+    const login = supplied ? suppliedLogin : generateLogin();
+    const uid = `cred:${crypto.randomUUID()}`;
+    const display = (body.displayName ?? '').trim() || login;
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO users (id, provider, provider_id, login, email, avatar_url, is_child,
+           credential_login, password_hash, created_by, created_at, last_login_at)
+         VALUES (?1, 'credential', ?1, ?2, NULL, NULL, ?3, ?4, ?5, ?6, ?7, ?7)`,
+      ).bind(uid, display, isChild ? 1 : 0, login, passwordHash, claims.uid, now).run();
+
+      // Returned ONCE — the password is not stored in plaintext and can't be
+      // fetched again. If lost, the adult re-provisions / resets.
+      return c.json({ uid, login, password, isChild });
+    } catch (err) {
+      const isUnique = err instanceof Error && /UNIQUE constraint failed/i.test(err.message);
+      if (isUnique && supplied) throw new HttpError('that login is already taken', 409);
+      if (isUnique) continue; // generated collision — try a fresh triple
+      throw err;
+    }
+  }
+  throw new HttpError('could not generate a unique login, please retry', 503);
+});
+
+// ── POST /v1/auth/credentials/login ────────────────────────
+// No auth. Verify login + password, mint a standard PAS session JWT — identical
+// shape to the OAuth path, so every downstream verifier is unchanged. Failed
+// attempts are rate-limited per login (lib/credential-rate-limit).
+authRoutes.post('/auth/credentials/login', async (c) => {
+  const body = await c.req
+    .json<{ login?: string; password?: string }>()
+    .catch(() => ({} as { login?: string; password?: string }));
+  const login = typeof body.login === 'string' ? normalizeLogin(body.login) : '';
+  const password = typeof body.password === 'string' ? body.password : '';
+  if (!login || !password) throw new HttpError('login and password are required', 400);
+
+  const store = d1AttemptStore(c.env.DB);
+  const now = Date.now();
+  if (await isBlocked(store, login, now)) {
+    throw new HttpError('too many sign-in attempts — please try again later', 429);
+  }
+
+  const row = await c.env.DB.prepare(
+    'SELECT id, login, password_hash FROM users WHERE credential_login = ?',
+  ).bind(login).first<{ id: string; login: string; password_hash: string | null }>();
+
+  const ok = !!row?.password_hash && (await verifyPassword(password, row.password_hash));
+  if (!ok || !row) {
+    await recordFailure(store, login, now);
+    // Same message whether the login exists or not — no account enumeration.
+    throw new HttpError('invalid login or password', 401);
+  }
+
+  await recordSuccess(store, login);
+  await c.env.DB.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').bind(now, row.id).run();
+
+  // Credential accounts are plain users (never 'creator'/'admin').
+  const session: NewSession = { uid: row.id, login: row.login, avatarUrl: null, roles: ['user'] };
+  const token = await mintSession(session, c.env.SESSION_SIGNING_KEY);
+  return c.json({ token });
+});
 
 // ── Provider profile fetchers ──────────────────────────────
 async function githubProfile(env: Env, code: string): Promise<Profile | null> {
