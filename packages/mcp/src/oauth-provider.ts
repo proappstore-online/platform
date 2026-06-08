@@ -1,19 +1,19 @@
 /**
  * OAuth 2.1 provider for MCP servers — vendorable, self-contained.
  * Vendor this + session.ts into each MCP worker.
- * Needs: OAUTH_KV binding, SESSION_SIGNING_KEY, FAS_AUTH_START var.
+ * Needs: OAUTH_KV binding, SESSION_SIGNING_KEY, AUTH_START var.
  */
 
 import { verifySession } from "./session.js";
 
 export interface OAuthConfig {
-  /** Base URL of this MCP server (e.g. "https://mcp.freeappstore.online") */
+  /** Base URL of this MCP server (e.g. "https://mcp.proappstore.online") */
   issuer: string;
-  /** FAS auth start URL (e.g. "https://api.freeappstore.online/v1/auth/github/start") */
-  fasAuthStart: string;
+  /** Auth start URL (e.g. "https://api.proappstore.online/v1/auth/github/start") */
+  authStart: string;
   /** Workers KV namespace for OAuth state */
   kv: KVNamespace;
-  /** HMAC signing key (shared with FAS backend) for session verification */
+  /** HMAC signing key for session verification */
   sessionSigningKey: string;
 }
 
@@ -82,7 +82,7 @@ export async function handleOAuthRoute(
 
 /**
  * Resolve a Bearer token that might be an OAuth access token.
- * Returns the underlying FAS session string, or null if not found in KV.
+ * Returns the underlying session string, or null if not found in KV.
  */
 export async function resolveOAuthToken(
   bearer: string,
@@ -143,7 +143,7 @@ async function register(request: Request, config: OAuthConfig): Promise<Response
   return json(client, 201);
 }
 
-/** GET /authorize — validate request, store auth state, redirect to FAS login */
+/** GET /authorize — validate request, store auth state, redirect to PAS login */
 async function authorize(request: Request, config: OAuthConfig): Promise<Response> {
   const url = new URL(request.url);
   const responseType = url.searchParams.get("response_type");
@@ -181,25 +181,25 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
     { expirationTtl: 600 },
   );
 
-  // Redirect to FAS GitHub login with response_mode=query
-  const fasUrl = new URL(config.fasAuthStart);
-  fasUrl.searchParams.set("response_mode", "query");
-  fasUrl.searchParams.set("app_id", "mcp");
+  // Redirect to auth login with response_mode=query
+  const authUrl = new URL(config.authStart);
+  authUrl.searchParams.set("response_mode", "query");
+  authUrl.searchParams.set("app_id", "mcp");
   const callbackUrl = new URL("/oauth/callback", config.issuer);
   callbackUrl.searchParams.set("nonce", nonce);
-  fasUrl.searchParams.set("return_to", callbackUrl.toString());
+  authUrl.searchParams.set("return_to", callbackUrl.toString());
 
-  return Response.redirect(fasUrl.toString(), 302);
+  return Response.redirect(authUrl.toString(), 302);
 }
 
-/** GET /oauth/callback — receives fas_session from FAS, issues auth code */
+/** GET /oauth/callback — receives session token from PAS auth, issues auth code */
 async function oauthCallback(request: Request, config: OAuthConfig): Promise<Response> {
   const url = new URL(request.url);
   const nonce = url.searchParams.get("nonce");
-  const fasSession = url.searchParams.get("fas_session");
+  const session = url.searchParams.get("session");
 
-  if (!nonce || !fasSession) {
-    return new Response("missing nonce or fas_session", { status: 400 });
+  if (!nonce || !session) {
+    return new Response("missing nonce or session", { status: 400 });
   }
 
   // Retrieve and consume auth request (single-use)
@@ -209,8 +209,8 @@ async function oauthCallback(request: Request, config: OAuthConfig): Promise<Res
   }
   await config.kv.delete(`authreq:${nonce}`);
 
-  // Verify the FAS session is valid
-  const payload = await verifySession(fasSession, config.sessionSigningKey);
+  // Verify the session is valid
+  const payload = await verifySession(session, config.sessionSigningKey);
   if (!payload) {
     return new Response("invalid session", { status: 400 });
   }
@@ -227,7 +227,7 @@ async function oauthCallback(request: Request, config: OAuthConfig): Promise<Res
   await config.kv.put(
     `code:${code}`,
     JSON.stringify({
-      fasSession,
+      session,
       codeChallenge: authReq.codeChallenge,
       redirectUri: authReq.redirectUri,
       clientId: authReq.clientId,
@@ -274,7 +274,7 @@ async function tokenExchange(request: Request, config: OAuthConfig): Promise<Res
   await config.kv.delete(`code:${code}`);
 
   const codeData = JSON.parse(codeRaw) as {
-    fasSession: string;
+    session: string;
     codeChallenge: string;
     redirectUri: string;
     clientId: string;
@@ -298,9 +298,9 @@ async function tokenExchange(request: Request, config: OAuthConfig): Promise<Res
     return json({ error: "invalid_grant", error_description: "PKCE verification failed" }, 400);
   }
 
-  // Issue opaque access token → maps to FAS session in KV (24h TTL)
+  // Issue opaque access token → maps to session in KV (24h TTL)
   const accessToken = crypto.randomUUID();
-  await config.kv.put(`token:${accessToken}`, codeData.fasSession, {
+  await config.kv.put(`token:${accessToken}`, codeData.session, {
     expirationTtl: 86_400,
   });
 

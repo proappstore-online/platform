@@ -4,9 +4,8 @@ import { mintSession, verifySession } from './session-jwt.js';
 const KEY = 'test-signing-key-please-change';
 const base = { uid: 'gh:1234', login: 'octocat', avatarUrl: 'https://x/y.png', roles: ['user', 'creator'] };
 
-/** Independent re-implementation of FAS's verifySession (2-part body.sig) to
- *  prove PAS tokens verify on the shared free-tier services. */
-async function fasVerify(token: string, key: string): Promise<{ uid: string } | null> {
+/** Independent HMAC verifier to prove the token format is correct. */
+async function independentVerify(token: string, key: string): Promise<{ uid: string } | null> {
   const dot = token.lastIndexOf('.');
   if (dot < 0) return null;
   const body = token.slice(0, dot);
@@ -20,7 +19,7 @@ async function fasVerify(token: string, key: string): Promise<{ uid: string } | 
   return JSON.parse(atob(padded));
 }
 
-describe('session-jwt (FAS-compatible)', () => {
+describe('session-jwt', () => {
   it('mints a 2-part body.sig token and verifies it round-trip', async () => {
     const token = await mintSession(base, KEY);
     expect(token.split('.')).toHaveLength(2);
@@ -31,11 +30,11 @@ describe('session-jwt (FAS-compatible)', () => {
     expect(claims!.exp).toBeGreaterThan(claims!.iat);
   });
 
-  it('produces tokens a FAS-format verifier accepts (cross-compat with kv/rooms)', async () => {
+  it('produces tokens an independent HMAC verifier accepts', async () => {
     const token = await mintSession(base, KEY);
-    const fas = await fasVerify(token, KEY);
-    expect(fas).not.toBeNull();
-    expect(fas!.uid).toBe('gh:1234'); // FAS reads uid; ignores login/avatarUrl
+    const result = await independentVerify(token, KEY);
+    expect(result).not.toBeNull();
+    expect(result!.uid).toBe('gh:1234');
   });
 
   it('handles UTF-8 in claims', async () => {

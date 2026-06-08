@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function makeEnv(db?: ReturnType<typeof mockD1>) {
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'p',
@@ -34,25 +34,10 @@ function makeEnv(db?: ReturnType<typeof mockD1>) {
   };
 }
 
-/** Mock /v1/auth/me to return a specific user. */
-function mockAuthAs(userId = 'gh:1', login = 'testuser') {
-  globalThis.fetch = vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id: userId, login, avatarUrl: null }), { status: 200 }),
-  );
-}
-
 /** UTC day key for "today", same way the route computes it. */
 function todayKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
-
-beforeEach(() => {
-  mockAuthAs('gh:1');
-});
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
 
 describe('POST /v1/usage/ping', () => {
   it('clamps deltaSeconds to 90 and returns the upserted totals', async () => {
@@ -66,7 +51,7 @@ describe('POST /v1/usage/ping', () => {
       '/v1/usage/ping',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ appId: 'meetup', deltaSeconds: 999 }),
       },
       makeEnv(db),
@@ -99,7 +84,7 @@ describe('POST /v1/usage/ping', () => {
       '/v1/usage/ping',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ appId: 'does-not-exist', deltaSeconds: 30 }),
       },
       makeEnv(db),
@@ -114,7 +99,7 @@ describe('POST /v1/usage/ping', () => {
       '/v1/usage/ping',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ appId: 'INVALID_App!', deltaSeconds: 30 }),
       },
       makeEnv(db),
@@ -133,7 +118,7 @@ describe('POST /v1/usage/ping', () => {
       '/v1/usage/ping',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ appId: 'meetup', deltaApiCalls: 99999 }),
       },
       makeEnv(db),
@@ -151,7 +136,7 @@ describe('GET /v1/apps/:id/usage', () => {
     const db = mockD1(owner);
     const res = await app.request(
       '/v1/apps/somebody-elses/usage',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(404);
@@ -167,7 +152,7 @@ describe('GET /v1/apps/:id/usage', () => {
 
     const res = await app.request(
       '/v1/apps/meetup/usage?days=9999',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);
@@ -184,7 +169,7 @@ describe('GET /v1/apps/:id/usage', () => {
 
     const res = await app.request(
       '/v1/apps/meetup/usage?days=0',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);
@@ -201,7 +186,7 @@ describe('GET /v1/apps/:id/usage', () => {
 
     const res = await app.request(
       '/v1/apps/meetup/usage',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);
@@ -241,7 +226,7 @@ describe('GET /v1/apps/:id/usage', () => {
 
     const res = await app.request(
       '/v1/apps/meetup/usage?days=7',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);
@@ -272,7 +257,7 @@ describe('GET /v1/usage/me', () => {
 
     const res = await app.request(
       '/v1/usage/me',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);
@@ -302,7 +287,7 @@ describe('GET /v1/usage/me', () => {
     const db = mockD1(me);
     const res = await app.request(
       '/v1/usage/me?days=14',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);
@@ -323,7 +308,7 @@ describe('GET /v1/usage/owner-summary', () => {
     const db = mockD1(ownedApps);
     const res = await app.request(
       '/v1/usage/owner-summary?days=30',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);
@@ -347,7 +332,7 @@ describe('GET /v1/usage/owner-summary', () => {
     const db = mockD1(ownedApps, summary);
     const res = await app.request(
       '/v1/usage/owner-summary?days=30',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);
@@ -381,7 +366,7 @@ describe('GET /v1/usage/owner-summary', () => {
     const db = mockD1(ownedApps, summary);
     const res = await app.request(
       '/v1/usage/owner-summary',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);
@@ -395,20 +380,18 @@ describe('GET /v1/usage/owner-summary', () => {
     const db = mockD1(ownedApps);
     const res = await app.request(
       '/v1/usage/owner-summary?days=1000',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(((await res.json()) as { days: number }).days).toBe(365);
   });
 
   it('clamps days malformed → default 30', async () => {
-    // Re-mock auth so each test gets a fresh Response (Body is single-use).
-    mockAuthAs('gh:1');
     const ownedApps = mockStmt({ all: { results: [] } });
     const db = mockD1(ownedApps);
     const res = await app.request(
       '/v1/usage/owner-summary?days=abc',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(((await res.json()) as { days: number }).days).toBe(30);

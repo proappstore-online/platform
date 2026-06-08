@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -35,22 +35,8 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
   };
 }
 
-function asUser(id = 'gh:1') {
-  return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id, login: 'tester', avatarUrl: null }), { status: 200 }),
-  );
-}
-
-beforeEach(() => {
-  globalThis.fetch = asUser();
-});
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
-
 describe('GET /v1/apps', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request(
       '/v1/apps',
       { headers: { Authorization: 'Bearer bad' } },
@@ -64,7 +50,7 @@ describe('GET /v1/apps', () => {
     const db = mockD1(appsStmt);
     const res = await app.request(
       '/v1/apps',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(200);
@@ -84,7 +70,7 @@ describe('GET /v1/apps', () => {
     const db = mockD1(appsStmt, subsStmt);
     const res = await app.request(
       '/v1/apps',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(200);
@@ -122,7 +108,7 @@ describe('GET /v1/apps', () => {
     const db = mockD1(appsStmt, subsStmt);
     const res = await app.request(
       '/v1/apps',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(200);
@@ -142,7 +128,7 @@ describe('GET /v1/apps', () => {
     const db = mockD1(appsStmt);
     await app.request(
       '/v1/apps',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     // prepare was called once for apps query; bind was called with creator id
@@ -153,12 +139,12 @@ describe('GET /v1/apps', () => {
   });
 
   it('admin with ?all=true fetches all apps without a creator filter', async () => {
-    globalThis.fetch = asUser('gh:99');
+    const TOK_ADMIN = await testToken('gh:99');
     const appsStmt = mockStmt({ all: { results: [] } });
     const db = mockD1(appsStmt);
     const res = await app.request(
       '/v1/apps?all=true',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK_ADMIN}` } },
       makeEnv({ ADMIN_GITHUB_IDS: 'gh:99' }, db),
     );
     expect(res.status).toBe(200);
@@ -173,7 +159,7 @@ describe('GET /v1/apps', () => {
     const db = mockD1(appsStmt);
     await app.request(
       '/v1/apps?all=true',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({ ADMIN_GITHUB_IDS: 'gh:other' }, db),
     );
     expect(db.prepare).toHaveBeenCalledWith(
@@ -184,7 +170,6 @@ describe('GET /v1/apps', () => {
 
 describe('DELETE /v1/apps/:id', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request(
       '/v1/apps/myapp',
       { method: 'DELETE', headers: { Authorization: 'Bearer bad' } },
@@ -198,7 +183,7 @@ describe('DELETE /v1/apps/:id', () => {
     const db = mockD1(lookupStmt);
     const res = await app.request(
       '/v1/apps/ghost-app',
-      { method: 'DELETE', headers: { Authorization: 'Bearer tok' } },
+      { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(404);
@@ -209,7 +194,7 @@ describe('DELETE /v1/apps/:id', () => {
     const db = mockD1(lookupStmt);
     const res = await app.request(
       '/v1/apps/someapp',
-      { method: 'DELETE', headers: { Authorization: 'Bearer tok' } },
+      { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(403);
@@ -221,7 +206,7 @@ describe('DELETE /v1/apps/:id', () => {
     const db = mockD1(lookupStmt, deleteStmt);
     const res = await app.request(
       '/v1/apps/myapp',
-      { method: 'DELETE', headers: { Authorization: 'Bearer tok' } },
+      { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(200);
@@ -229,13 +214,13 @@ describe('DELETE /v1/apps/:id', () => {
   });
 
   it('allows admin to delete any app', async () => {
-    globalThis.fetch = asUser('gh:admin');
+    const TOK_ADMIN = await testToken('gh:admin');
     const lookupStmt = mockStmt({ first: { creator_id: 'gh:other' } });
     const deleteStmt = mockStmt({ run: { meta: { changes: 1 } } });
     const db = mockD1(lookupStmt, deleteStmt);
     const res = await app.request(
       '/v1/apps/anyapp',
-      { method: 'DELETE', headers: { Authorization: 'Bearer tok' } },
+      { method: 'DELETE', headers: { Authorization: `Bearer ${TOK_ADMIN}` } },
       makeEnv({ ADMIN_GITHUB_IDS: 'gh:admin' }, db),
     );
     expect(res.status).toBe(200);

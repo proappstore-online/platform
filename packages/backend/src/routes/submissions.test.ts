@@ -1,8 +1,9 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -32,8 +33,7 @@ function makeEnv(db?: ReturnType<typeof mockD1>, overrides: EnvOverrides = {}) {
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -44,27 +44,15 @@ function makeEnv(db?: ReturnType<typeof mockD1>, overrides: EnvOverrides = {}) {
   };
 }
 
-/** Mock fetch to handle both FAS auth AND PAS provision calls.
- *  Creates fresh Response per call to avoid "Body is unusable" on reuse. */
-function mockAuthAs(userId: string, login = 'testuser') {
+const originalFetch = globalThis.fetch;
+/** Mock fetch for provision calls (auth is local). */
+function mockProvisionFetch() {
   globalThis.fetch = vi.fn().mockImplementation(
-    async (url: string | URL | Request) => {
-      const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
-      if (urlStr.includes('proappstore.online/v1/provision')) {
-        return new Response(JSON.stringify({ success: true, steps: [], appId: 'test' }), { status: 200 });
-      }
-      return new Response(JSON.stringify({ id: userId, login, avatarUrl: null }), { status: 200 });
-    },
+    async () => new Response(JSON.stringify({ success: true, steps: [], appId: 'test' }), { status: 200 }),
   );
 }
-
-beforeEach(() => {
-  mockAuthAs('gh:1');
-});
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
+beforeEach(() => { mockProvisionFetch(); });
+afterEach(() => { globalThis.fetch = originalFetch; });
 
 describe('POST /v1/submissions', () => {
   it('creates a pending submission for the authed user', async () => {
@@ -78,7 +66,7 @@ describe('POST /v1/submissions', () => {
       '/v1/submissions',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           appId: 'kanban',
           name: 'Kanban Board',
@@ -122,7 +110,7 @@ describe('POST /v1/submissions', () => {
       '/v1/submissions',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           appId: 'Bad Id!',
           name: 'x',
@@ -146,7 +134,7 @@ describe('POST /v1/submissions', () => {
       '/v1/submissions',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           appId: 'kanban',
           name: 'Kanban',
@@ -160,7 +148,6 @@ describe('POST /v1/submissions', () => {
   });
 
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request(
       '/v1/submissions',
       {
@@ -204,7 +191,7 @@ describe('GET /v1/submissions', () => {
 
     const res = await app.request(
       '/v1/submissions',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);
@@ -265,7 +252,7 @@ describe('GET /v1/submissions', () => {
 
     const res = await app.request(
       '/v1/submissions',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db, { ADMIN_GITHUB_IDS: 'gh:1' }),
     );
     expect(res.status).toBe(200);
@@ -285,7 +272,7 @@ describe('POST /v1/submissions/:id/approve', () => {
       '/v1/submissions/sub1/approve',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       },
       makeEnv(db, { ADMIN_GITHUB_IDS: 'gh:9999' }),
@@ -320,7 +307,7 @@ describe('POST /v1/submissions/:id/approve', () => {
       '/v1/submissions/sub1/approve',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       },
       makeEnv(db, { ADMIN_GITHUB_IDS: 'gh:1' }),
@@ -359,7 +346,7 @@ describe('POST /v1/submissions/:id/approve', () => {
       '/v1/submissions/sub1/approve',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       },
       makeEnv(db, { ADMIN_GITHUB_IDS: 'gh:1' }),
@@ -374,7 +361,7 @@ describe('GET /v1/me/is-admin', () => {
   it('returns { admin: true } when caller is in ADMIN_GITHUB_IDS', async () => {
     const res = await app.request(
       '/v1/me/is-admin',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(undefined, { ADMIN_GITHUB_IDS: 'gh:1' }),
     );
     expect(res.status).toBe(200);
@@ -384,7 +371,7 @@ describe('GET /v1/me/is-admin', () => {
   it('returns { admin: false } when caller is not an admin', async () => {
     const res = await app.request(
       '/v1/me/is-admin',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(undefined, { ADMIN_GITHUB_IDS: 'gh:9999' }),
     );
     expect(res.status).toBe(200);
@@ -399,7 +386,7 @@ describe('POST /v1/submissions/:id/reject', () => {
       '/v1/submissions/sub1/reject',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       },
       makeEnv(db, { ADMIN_GITHUB_IDS: 'gh:1' }),

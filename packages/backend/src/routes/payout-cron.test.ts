@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function env(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof moc
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -36,8 +36,6 @@ function env(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof moc
     ...overrides,
   };
 }
-
-afterEach(() => { globalThis.fetch = originalFetch; });
 
 describe('POST /v1/internal/payouts/run', () => {
   it('returns 403 without INTERNAL_TOKEN', async () => {

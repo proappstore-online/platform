@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function makeEnv(db?: ReturnType<typeof mockD1>, overrides: { stripeKey?: string
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: overrides.stripeKey === undefined ? 'sk_test' : (overrides.stripeKey ?? ''),
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'p',
@@ -34,36 +34,20 @@ function makeEnv(db?: ReturnType<typeof mockD1>, overrides: { stripeKey?: string
   };
 }
 
-/**
- * Two-stage fetch mock — the first call (or all matching `/v1/auth/me`)
- * resolves the auth check; subsequent calls hit Stripe. Each scenario
- * configures its own Stripe responses.
- */
-function mockAuthThen(stripeResponses: Response[]) {
-  let stripeIdx = 0;
-  globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-    if (typeof url === 'string' && url.includes('freeappstore.online')) {
-      return Promise.resolve(
-        new Response(JSON.stringify({ id: 'gh:1', login: 'testuser', avatarUrl: null }), { status: 200 }),
-      );
-    }
-    const next = stripeResponses[stripeIdx++];
+const originalFetch = globalThis.fetch;
+function mockStripe(stripeResponses: Response[]) {
+  let idx = 0;
+  globalThis.fetch = vi.fn().mockImplementation(() => {
+    const next = stripeResponses[idx++];
     if (!next) return Promise.resolve(new Response('{}', { status: 200 }));
     return Promise.resolve(next);
   }) as unknown as typeof fetch;
 }
-
-beforeEach(() => {
-  mockAuthThen([]);
-});
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
+afterEach(() => { globalThis.fetch = originalFetch; });
 
 describe('POST /v1/connect/onboard', () => {
   it('creates a Stripe Express account on first call and stores it', async () => {
-    mockAuthThen([
+    mockStripe([
       new Response(JSON.stringify({ id: 'acct_test_1', country: 'US' }), { status: 200 }),
       new Response(JSON.stringify({ url: 'https://connect.stripe.com/setup/x', expires_at: 1 }), { status: 200 }),
     ]);
@@ -75,7 +59,7 @@ describe('POST /v1/connect/onboard', () => {
       '/v1/connect/onboard',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           returnUrl: 'https://console.proappstore.online/?ret=ok',
           refreshUrl: 'https://console.proappstore.online/?retry=1',
@@ -90,7 +74,7 @@ describe('POST /v1/connect/onboard', () => {
   });
 
   it('reuses the existing Stripe account on subsequent calls', async () => {
-    mockAuthThen([
+    mockStripe([
       // No /v1/accounts call expected — reuses row. Only /v1/account_links.
       new Response(JSON.stringify({ url: 'https://connect.stripe.com/setup/y', expires_at: 1 }), { status: 200 }),
     ]);
@@ -112,7 +96,7 @@ describe('POST /v1/connect/onboard', () => {
       '/v1/connect/onboard',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           returnUrl: 'https://console.proappstore.online/?ret=ok',
           refreshUrl: 'https://console.proappstore.online/?retry=1',
@@ -131,7 +115,7 @@ describe('POST /v1/connect/onboard', () => {
       '/v1/connect/onboard',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       },
       makeEnv(db),
@@ -146,7 +130,7 @@ describe('POST /v1/connect/onboard', () => {
       '/v1/connect/onboard',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           returnUrl: 'https://x/',
           refreshUrl: 'https://x/',
@@ -164,7 +148,7 @@ describe('GET /v1/connect/status', () => {
     const db = mockD1(noRow);
     const res = await app.request(
       '/v1/connect/status',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);
@@ -172,7 +156,7 @@ describe('GET /v1/connect/status', () => {
   });
 
   it('refreshes the cached flags from Stripe and updates the row', async () => {
-    mockAuthThen([
+    mockStripe([
       // Stripe GET /v1/accounts/:id
       new Response(
         JSON.stringify({
@@ -202,7 +186,7 @@ describe('GET /v1/connect/status', () => {
 
     const res = await app.request(
       '/v1/connect/status',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);
@@ -221,7 +205,7 @@ describe('GET /v1/connect/status', () => {
   });
 
   it('falls back to cached row when Stripe call fails', async () => {
-    mockAuthThen([new Response('boom', { status: 500 })]);
+    mockStripe([new Response('boom', { status: 500 })]);
     const cached = mockStmt({
       first: {
         creator_id: 'gh:1',
@@ -237,7 +221,7 @@ describe('GET /v1/connect/status', () => {
     const db = mockD1(cached);
     const res = await app.request(
       '/v1/connect/status',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);

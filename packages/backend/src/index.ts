@@ -32,6 +32,10 @@ import { engagementRoutes } from './routes/engagements.js';
 import { payoutCronRoutes } from './routes/payout-cron.js';
 import { teamRoutes } from './routes/teams.js';
 import { inviteRoutes } from './routes/invites.js';
+import { rolesRoutes } from './routes/roles.js';
+import { kvRoutes } from './routes/kv.js';
+import { counterRoutes } from './routes/counters.js';
+import { roomRoutes } from './routes/rooms.js';
 
 export const app = new Hono<{ Bindings: Env }>();
 
@@ -111,9 +115,14 @@ v1.route('/', engagementRoutes);
 v1.route('/', payoutCronRoutes);
 v1.route('/', teamRoutes);
 v1.route('/', inviteRoutes);
+v1.route('/', rolesRoutes);
+v1.route('/', kvRoutes);
+v1.route('/', counterRoutes);
+v1.route('/', roomRoutes);
 app.route('/v1', v1);
 
 // Stripe webhook is outside /v1 — it's not user-facing API
 app.route('/', webhookRoutes);
 
+export { Room } from './do/room.js';
 export default app;

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1', { roles: ['user', 'admin'] });
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -35,35 +35,21 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
   };
 }
 
-// Mock fetch that handles both FAS auth AND CF API calls
+// Mock fetch for CF API calls (auth is local — no fetch needed)
 function multiFetch(cfResponses: Record<string, { status: number; body: unknown }> = {}) {
-  return vi.fn().mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+  return vi.fn().mockImplementation(async (url: string | URL | Request) => {
     const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
-
-    // FAS auth — any call to freeappstore.online returns a valid user
-    if (urlStr.includes('freeappstore.online')) {
-      return new Response(JSON.stringify({ id: 'gh:1', login: 'tester', avatarUrl: null, roles: ['admin'] }), { status: 200 });
-    }
-
-    // CF API — match by URL pattern
     for (const [pattern, resp] of Object.entries(cfResponses)) {
       if (urlStr.includes(pattern)) {
         return new Response(JSON.stringify(resp.body), { status: resp.status });
       }
     }
-
-    // Default: success for any unmatched CF API call
     return new Response(JSON.stringify({ success: true, result: { uuid: 'test-uuid' } }), { status: 200 });
   });
 }
 
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
-
 describe('POST /v1/provision', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request('/v1/provision', {
       method: 'POST',
       headers: { Authorization: 'Bearer bad', 'Content-Type': 'application/json' },
@@ -76,7 +62,7 @@ describe('POST /v1/provision', () => {
     globalThis.fetch = multiFetch();
     const res = await app.request('/v1/provision', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'INVALID', skipCompliance: true, skipPublish: true }),
     }, makeEnv());
     expect(res.status).toBe(400);
@@ -86,7 +72,7 @@ describe('POST /v1/provision', () => {
     globalThis.fetch = multiFetch();
     const res = await app.request('/v1/provision', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: '', skipCompliance: true }),
     }, makeEnv());
     expect(res.status).toBe(400);
@@ -96,7 +82,7 @@ describe('POST /v1/provision', () => {
     globalThis.fetch = multiFetch();
     const res = await app.request('/v1/provision', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'test-app', skipCompliance: true }),
     }, makeEnv({ CF_API_TOKEN: '', CF_ACCOUNT_ID: '' }));
     expect(res.status).toBe(503);
@@ -107,7 +93,7 @@ describe('POST /v1/provision', () => {
     globalThis.fetch = multiFetch();
     const res = await app.request('/v1/provision', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'test-app', skipCompliance: true, skipPublish: true }),
     }, makeEnv({}, db));
 
@@ -130,7 +116,7 @@ describe('POST /v1/provision', () => {
     });
     const res = await app.request('/v1/provision', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'myapp', skipCompliance: true }),
     }, makeEnv({}, db));
 
@@ -153,9 +139,6 @@ describe('POST /v1/provision', () => {
     globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
       const method = init?.method || 'GET';
-      if (urlStr.includes('freeappstore.online')) {
-        return new Response(JSON.stringify({ id: 'gh:1', login: 'tester', avatarUrl: null, roles: ['admin'] }), { status: 200 });
-      }
       if (urlStr.includes('d1/database') && method === 'POST') {
         return new Response(JSON.stringify({ success: false, errors: [{ message: 'already exists' }] }), { status: 200 });
       }
@@ -166,7 +149,7 @@ describe('POST /v1/provision', () => {
     });
     const res = await app.request('/v1/provision', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'myapp', skipCompliance: true, skipPublish: true }),
     }, makeEnv({}, db));
 
@@ -183,7 +166,7 @@ describe('POST /v1/provision', () => {
     });
     const res = await app.request('/v1/provision', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'fail-app', skipCompliance: true }),
     }, makeEnv({}, db));
 
@@ -196,7 +179,7 @@ describe('POST /v1/provision', () => {
     globalThis.fetch = multiFetch();
     const res = await app.request('/v1/provision', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'MyApp', skipCompliance: true }),
     }, makeEnv());
     expect(res.status).toBe(400);
@@ -206,7 +189,7 @@ describe('POST /v1/provision', () => {
     globalThis.fetch = multiFetch();
     const res = await app.request('/v1/provision', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'a'.repeat(59), skipCompliance: true }),
     }, makeEnv());
     expect(res.status).toBe(400);
@@ -221,7 +204,7 @@ describe('POST /v1/provision', () => {
 
     await app.request('/v1/provision', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'url-test', skipCompliance: true }),
     }, makeEnv({}, db));
 
@@ -246,7 +229,7 @@ describe('POST /v1/provision', () => {
 
     await app.request('/v1/provision', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'record-test', skipCompliance: true, skipPublish: true }),
     }, makeEnv({}, db));
 
@@ -273,7 +256,7 @@ describe('POST /v1/provision', () => {
 
     const res = await app.request('/v1/provision', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'full-check', skipCompliance: true }),
     }, makeEnv({}, db));
 

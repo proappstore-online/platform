@@ -1,8 +1,9 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
 import { sealSecret } from '../lib/encryption.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -24,27 +25,14 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
   return {
     DB: (db ?? mockD1()) as unknown as D1Database,
     STORAGE: {} as R2Bucket,
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     ...overrides,
   };
-}
-
-function asUser(id = 'gh:1') {
-  return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id, login: 'tester', avatarUrl: null }), { status: 200 }),
-  );
 }
 
 function randomKek(): string {
   return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
 }
-
-beforeEach(() => {
-  globalThis.fetch = asUser();
-});
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
 
 describe('GET /v1/keys/providers (public)', () => {
   it('returns the provider registry', async () => {
@@ -60,7 +48,6 @@ describe('GET /v1/keys/providers (public)', () => {
 
 describe('GET /v1/keys/resolve/:provider — internal auth', () => {
   it('401s with neither internal token nor user session', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request('/v1/keys/resolve/anthropic', {}, makeEnv({ INTERNAL_TOKEN: 'secret' }));
     expect(res.status).toBe(401);
   });
@@ -126,7 +113,7 @@ describe('PUT /v1/keys/:provider', () => {
       '/v1/keys/anthropic',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ value: 'wrong-prefix-key' }),
       },
       makeEnv({ APP_SECRET_KEK: randomKek() }, db),

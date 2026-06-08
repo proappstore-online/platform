@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function makeEnv(db?: ReturnType<typeof mockD1>) {
     STORAGE: { put: vi.fn() } as unknown as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'p',
@@ -34,22 +34,6 @@ function makeEnv(db?: ReturnType<typeof mockD1>) {
   };
 }
 
-/** Mock FAS user lookup + apps-table owner check. */
-function mockAuthAndOwner(opts: { user?: { id: string; login: string }; appOwner?: string | null } = {}) {
-  const user = opts.user ?? { id: 'gh:1', login: 'testuser' };
-  globalThis.fetch = vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id: user.id, login: user.login, avatarUrl: null }), { status: 200 }),
-  );
-  return user;
-}
-
-beforeEach(() => {
-  mockAuthAndOwner();
-});
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
 
 describe('GET /v1/apps/:id/listing', () => {
   it('returns empty DTO for an owned app with no listing row yet', async () => {
@@ -58,7 +42,7 @@ describe('GET /v1/apps/:id/listing', () => {
     const owner = mockStmt({ first: { creator_id: 'gh:1' } });
     const listing = mockStmt({ first: null });
     const db = mockD1(owner, listing);
-    const res = await app.request('/v1/apps/meetup/listing', { headers: { Authorization: 'Bearer t' } }, makeEnv(db));
+    const res = await app.request('/v1/apps/meetup/listing', { headers: { Authorization: `Bearer ${TOK}` } }, makeEnv(db));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { appId: string; tagline: string | null; screenshots: string[] };
     expect(body.appId).toBe('meetup');
@@ -70,7 +54,7 @@ describe('GET /v1/apps/:id/listing', () => {
     // requireAppOwner: SELECT returns null
     const owner = mockStmt({ first: null });
     const db = mockD1(owner);
-    const res = await app.request('/v1/apps/somebody-elses/listing', { headers: { Authorization: 'Bearer t' } }, makeEnv(db));
+    const res = await app.request('/v1/apps/somebody-elses/listing', { headers: { Authorization: `Bearer ${TOK}` } }, makeEnv(db));
     expect(res.status).toBe(404);
   });
 });
@@ -83,7 +67,7 @@ describe('PUT /v1/apps/:id/listing validation', () => {
       '/v1/apps/meetup/listing',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ tagline: 'x'.repeat(65) }),
       },
       makeEnv(db),
@@ -101,7 +85,7 @@ describe('PUT /v1/apps/:id/listing validation', () => {
       '/v1/apps/meetup/listing',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ longDescription: 'x'.repeat(5001) }),
       },
       makeEnv(db),
@@ -117,7 +101,7 @@ describe('PUT /v1/apps/:id/listing validation', () => {
       '/v1/apps/meetup/listing',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ themeColor: 'not-a-color' }),
       },
       makeEnv(db),
@@ -136,7 +120,7 @@ describe('PUT /v1/apps/:id/listing validation', () => {
       '/v1/apps/meetup/listing',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ websiteUrl: 'javascript:alert(1)' }),
       },
       makeEnv(db),
@@ -158,7 +142,7 @@ describe('PUT /v1/apps/:id/listing validation', () => {
       '/v1/apps/meetup/listing',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ terms_url: 'https://example.com/terms' }),
       },
       makeEnv(db),
@@ -198,7 +182,7 @@ describe('PUT /v1/apps/:id/listing validation', () => {
       '/v1/apps/meetup/listing',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ themeColor: '#7c3aed' }),
       },
       makeEnv(db),
@@ -216,7 +200,7 @@ describe('PUT /v1/apps/:id/listing-assets/:kind', () => {
       '/v1/apps/meetup/listing-assets/garbage',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'image/png' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'image/png' },
         body: new Uint8Array([1, 2, 3]),
       },
       makeEnv(db),
@@ -231,7 +215,7 @@ describe('PUT /v1/apps/:id/listing-assets/:kind', () => {
       '/v1/apps/meetup/listing-assets/privacy-policy',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'image/png' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'image/png' },
         body: new Uint8Array([1, 2, 3]),
       },
       makeEnv(db),
@@ -246,7 +230,7 @@ describe('PUT /v1/apps/:id/listing-assets/:kind', () => {
       '/v1/apps/meetup/listing-assets/icon',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'image/png' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'image/png' },
         body: new Uint8Array([]),
       },
       makeEnv(db),

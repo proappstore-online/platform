@@ -1,13 +1,10 @@
 /**
- * PAS session tokens — FAS-COMPATIBLE so one token works on both PAS and the
- * shared free-tier services (kv/rooms/counters/roles) that verify by signature.
+ * PAS session tokens — HMAC-SHA256 signed JWTs.
  *
- * Format matches fas/.../lib/session.ts exactly: a 2-part `body.sig` token where
- * body = base64url(JSON payload) and sig = HMAC-SHA256(body, SESSION_SIGNING_KEY).
- * PAS signs with the SAME key as FAS, so FAS's `verifySession` accepts PAS tokens
- * (it checks signature + exp only, ignores unknown fields). The payload carries
- * `uid` (e.g. "gh:1234", the same id FAS uses) plus PAS extras (login, avatarUrl)
- * that FAS ignores.
+ * Format: a 2-part `body.sig` token where body = base64url(JSON payload) and
+ * sig = HMAC-SHA256(body, SESSION_SIGNING_KEY). All PAS workers verify locally
+ * (no network round-trip). The payload carries `uid` (e.g. "gh:1234"),
+ * `login`, `avatarUrl`, platform `roles`, and per-app `appRoles`.
  */
 
 export interface SessionClaims {
@@ -77,8 +74,7 @@ export async function mintSession(claims: NewSession, signingKey: string, ttlSec
 
 /**
  * Verify a session token's signature + expiry. Returns the claims on success, or
- * null on any failure (bad shape, bad signature, expired). Never throws. Accepts
- * tokens minted by FAS too (same format + key) — FAS tokens just lack login/avatar.
+ * null on any failure (bad shape, bad signature, expired). Never throws.
  */
 export async function verifySession(token: string, signingKey: string): Promise<SessionClaims | null> {
   try {

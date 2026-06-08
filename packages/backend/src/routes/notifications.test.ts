@@ -9,8 +9,9 @@ vi.mock('web-push', () => ({
 
 import { app } from '../index.js';
 import webpush from 'web-push';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -27,8 +28,7 @@ function makeEnv(db?: ReturnType<typeof mockD1>) {
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -46,15 +46,8 @@ function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
 }
 
 beforeEach(() => {
-  globalThis.fetch = vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id: 'gh:1', login: 'testuser', avatarUrl: null }), { status: 200 }),
-  );
-  vi.mocked(webpush.sendNotification).mockReset().mockResolvedValue({} as any);
-  vi.mocked(webpush.setVapidDetails).mockReset();
-});
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
+  vi.mocked(webpush.sendNotification).mockClear();
+  vi.mocked(webpush.setVapidDetails).mockClear();
 });
 
 describe('GET /v1/notifications/vapid-key', () => {
@@ -71,7 +64,7 @@ describe('POST /v1/notifications/subscribe', () => {
     const db = mockD1(stmt);
     const res = await app.request('/v1/notifications/subscribe', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         appId: 'myapp',
         endpoint: 'https://push.example.com/sub1',
@@ -100,7 +93,7 @@ describe('POST /v1/notifications/subscribe', () => {
   it('returns 400 when fields are missing', async () => {
     const res = await app.request('/v1/notifications/subscribe', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'myapp', endpoint: '' }),
     }, makeEnv());
 
@@ -108,7 +101,6 @@ describe('POST /v1/notifications/subscribe', () => {
   });
 
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request('/v1/notifications/subscribe', {
       method: 'POST',
       headers: { Authorization: 'Bearer bad', 'Content-Type': 'application/json' },
@@ -130,7 +122,7 @@ describe('POST /v1/notifications/unsubscribe', () => {
     const db = mockD1(stmt);
     const res = await app.request('/v1/notifications/unsubscribe', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ endpoint: 'https://push.example.com/sub1' }),
     }, makeEnv(db));
 
@@ -144,7 +136,7 @@ describe('POST /v1/notifications/unsubscribe', () => {
   it('returns 400 when endpoint is missing', async () => {
     const res = await app.request('/v1/notifications/unsubscribe', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     }, makeEnv());
 
@@ -152,7 +144,6 @@ describe('POST /v1/notifications/unsubscribe', () => {
   });
 
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request('/v1/notifications/unsubscribe', {
       method: 'POST',
       headers: { Authorization: 'Bearer bad', 'Content-Type': 'application/json' },
@@ -177,7 +168,7 @@ describe('POST /v1/notifications/send', () => {
 
     const res = await app.request('/v1/notifications/send', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         appId: 'myapp',
         userId: 'u2',
@@ -219,7 +210,7 @@ describe('POST /v1/notifications/send', () => {
 
     const res = await app.request('/v1/notifications/send', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'myapp', title: 'News', body: 'Update' }),
     }, makeEnv(db));
 
@@ -252,7 +243,7 @@ describe('POST /v1/notifications/send', () => {
 
     const res = await app.request('/v1/notifications/send', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'myapp', title: 'T', body: 'B' }),
     }, makeEnv(db));
 
@@ -281,7 +272,7 @@ describe('POST /v1/notifications/send', () => {
 
     const res = await app.request('/v1/notifications/send', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'myapp', title: 'T', body: 'B' }),
     }, makeEnv(db));
 
@@ -303,7 +294,7 @@ describe('POST /v1/notifications/send', () => {
 
     const res = await app.request('/v1/notifications/send', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'myapp', title: 'T', body: 'B' }),
     }, makeEnv(db));
 
@@ -317,7 +308,7 @@ describe('POST /v1/notifications/send', () => {
 
     const res = await app.request('/v1/notifications/send', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'myapp', title: 'T', body: 'B' }),
     }, makeEnv(db));
 
@@ -330,7 +321,7 @@ describe('POST /v1/notifications/send', () => {
 
     const res = await app.request('/v1/notifications/send', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'noapp', title: 'T', body: 'B' }),
     }, makeEnv(db));
 
@@ -340,7 +331,7 @@ describe('POST /v1/notifications/send', () => {
   it('returns 400 when required fields are missing', async () => {
     const res = await app.request('/v1/notifications/send', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'myapp' }),
     }, makeEnv());
 
@@ -348,7 +339,6 @@ describe('POST /v1/notifications/send', () => {
   });
 
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request('/v1/notifications/send', {
       method: 'POST',
       headers: { Authorization: 'Bearer bad', 'Content-Type': 'application/json' },
@@ -365,7 +355,7 @@ describe('POST /v1/notifications/send', () => {
 
     const res = await app.request('/v1/notifications/send', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: 'myapp', title: 'T', body: 'B' }),
     }, makeEnv(db));
 
@@ -387,7 +377,7 @@ describe('POST /v1/notifications/send', () => {
 
     await app.request('/v1/notifications/send', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         appId: 'myapp',
         title: 'Event',

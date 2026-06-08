@@ -1,7 +1,8 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -34,19 +34,6 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
     ...overrides,
   };
 }
-
-function asUser(id = 'gh:1') {
-  return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id, login: 'tester', avatarUrl: null }), { status: 200 }),
-  );
-}
-
-beforeEach(() => {
-  globalThis.fetch = asUser();
-});
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
 
 describe('GET /v1/pricing', () => {
   it('returns null proMonthly when STRIPE_PRO_MONTHLY_PRICE_ID is not set', async () => {
@@ -76,7 +63,6 @@ describe('GET /v1/pricing', () => {
 
 describe('GET /v1/subscription', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request(
       '/v1/subscription',
       { headers: { Authorization: 'Bearer bad' } },
@@ -90,7 +76,7 @@ describe('GET /v1/subscription', () => {
     const db = mockD1(subStmt);
     const res = await app.request(
       '/v1/subscription',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(404);
@@ -113,7 +99,7 @@ describe('GET /v1/subscription', () => {
     const db = mockD1(subStmt);
     const res = await app.request(
       '/v1/subscription',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(404);
@@ -136,7 +122,7 @@ describe('GET /v1/subscription', () => {
     const db = mockD1(subStmt);
     const res = await app.request(
       '/v1/subscription',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(200);
@@ -164,7 +150,7 @@ describe('GET /v1/subscription', () => {
     const db = mockD1(subStmt);
     const res = await app.request(
       '/v1/subscription',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(200);
@@ -175,7 +161,6 @@ describe('GET /v1/subscription', () => {
 
 describe('POST /v1/checkout', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request(
       '/v1/checkout',
       {
@@ -197,7 +182,7 @@ describe('POST /v1/checkout', () => {
       '/v1/checkout',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ priceId: 'price_abc' }),
       },
       makeEnv(),
@@ -206,7 +191,6 @@ describe('POST /v1/checkout', () => {
   });
 
   it('creates checkout session using existing Stripe customer and returns url', async () => {
-    const fasMock = asUser('gh:1');
     const stripeMock = vi.fn().mockImplementation((url: string) => {
       if (url.includes('stripe.com/v1/checkout/sessions')) {
         return Promise.resolve(
@@ -215,10 +199,7 @@ describe('POST /v1/checkout', () => {
       }
       return Promise.resolve(new Response('{}', { status: 200 }));
     });
-    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-      if (url.includes('stripe.com')) return stripeMock(url);
-      return fasMock(url);
-    });
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => stripeMock(url));
 
     // Return existing customer row
     const subStmt = mockStmt({ first: { stripe_customer_id: 'cus_existing' } });
@@ -227,7 +208,7 @@ describe('POST /v1/checkout', () => {
       '/v1/checkout',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           priceId: 'price_abc',
           successUrl: 'https://proappstore.online/success',
@@ -242,7 +223,6 @@ describe('POST /v1/checkout', () => {
   });
 
   it('creates a new Stripe customer when no subscription row exists, then creates checkout session', async () => {
-    const fasMock = asUser('gh:1');
     const stripeMock = vi.fn().mockImplementation((url: string) => {
       if (url.includes('stripe.com/v1/customers')) {
         return Promise.resolve(
@@ -256,10 +236,7 @@ describe('POST /v1/checkout', () => {
       }
       return Promise.resolve(new Response('{}', { status: 200 }));
     });
-    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-      if (url.includes('stripe.com')) return stripeMock(url);
-      return fasMock(url);
-    });
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => stripeMock(url));
 
     // No existing customer
     const subStmt = mockStmt({ first: null });
@@ -269,7 +246,7 @@ describe('POST /v1/checkout', () => {
       '/v1/checkout',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           priceId: 'price_abc',
           successUrl: 'https://proappstore.online/success',
@@ -288,7 +265,6 @@ describe('POST /v1/checkout', () => {
 
 describe('POST /v1/portal', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request(
       '/v1/portal',
       {
@@ -306,7 +282,7 @@ describe('POST /v1/portal', () => {
       '/v1/portal',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       },
       makeEnv(),
@@ -321,7 +297,7 @@ describe('POST /v1/portal', () => {
       '/v1/portal',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ returnUrl: 'https://proappstore.online' }),
       },
       makeEnv({}, db),
@@ -330,17 +306,13 @@ describe('POST /v1/portal', () => {
   });
 
   it('returns billing portal url when customer exists', async () => {
-    const fasMock = asUser('gh:1');
     const stripeMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({ url: 'https://billing.stripe.com/session/bps_1' }),
         { status: 200 },
       ),
     );
-    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-      if (url.includes('stripe.com')) return stripeMock(url);
-      return fasMock(url);
-    });
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => stripeMock(url));
 
     const subStmt = mockStmt({ first: { stripe_customer_id: 'cus_abc' } });
     const db = mockD1(subStmt);
@@ -348,7 +320,7 @@ describe('POST /v1/portal', () => {
       '/v1/portal',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ returnUrl: 'https://proappstore.online/account' }),
       },
       makeEnv({}, db),

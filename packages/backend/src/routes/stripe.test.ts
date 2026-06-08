@@ -1,8 +1,9 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
 import { verifyWebhookSignature } from '../lib/stripe.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -26,8 +27,7 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -44,10 +44,6 @@ beforeEach(() => {
     ),
   );
 });
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
-
 /** Build a valid Stripe-style signature header for the given payload and secret. */
 async function buildStripeSignature(payload: string, secret: string, timestamp?: number): Promise<string> {
   const ts = timestamp ?? Math.floor(Date.now() / 1000);

@@ -1,8 +1,6 @@
 export interface ProInitOptions {
   appId: string;
-  /** Defaults to https://api.freeappstore.online (free-tier backend). */
-  fasApiBase?: string;
-  /** Defaults to https://api.proappstore.online (pro-tier backend). */
+  /** Defaults to https://api.proappstore.online. */
   proApiBase?: string;
   /** Defaults to https://data-{appId}.proappstore.online (per-app data worker). */
   dataApiBase?: string;

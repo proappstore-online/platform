@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -36,22 +36,6 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
     ...overrides,
   };
 }
-
-function asUser(id = 'gh:1', extra: Record<string, unknown> = {}) {
-  return vi.fn().mockResolvedValue(
-    new Response(
-      JSON.stringify({ id, login: 'tester', avatarUrl: null, roles: ['user'], appRoles: {}, ...extra }),
-      { status: 200 },
-    ),
-  );
-}
-
-beforeEach(() => {
-  globalThis.fetch = asUser();
-});
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
 
 const validBody = {
   appId: 'myapp',
@@ -67,7 +51,7 @@ describe('POST /v1/email/send', () => {
       '/v1/email/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(validBody),
       },
       makeEnv({ RESEND_API_KEY: undefined }, mockD1(appsStmt)),
@@ -80,7 +64,7 @@ describe('POST /v1/email/send', () => {
       '/v1/email/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...validBody, to: 'not-an-email' }),
       },
       makeEnv(),
@@ -94,7 +78,7 @@ describe('POST /v1/email/send', () => {
       '/v1/email/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...validBody, subject: 'x'.repeat(201) }),
       },
       makeEnv(),
@@ -108,7 +92,7 @@ describe('POST /v1/email/send', () => {
       '/v1/email/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...validBody, body: 'x'.repeat(50 * 1024 + 1) }),
       },
       makeEnv(),
@@ -122,7 +106,7 @@ describe('POST /v1/email/send', () => {
       '/v1/email/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...validBody, replyTo: 'not-an-email' }),
       },
       makeEnv(),
@@ -132,7 +116,6 @@ describe('POST /v1/email/send', () => {
   });
 
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request(
       '/v1/email/send',
       {
@@ -153,7 +136,7 @@ describe('POST /v1/email/send', () => {
       '/v1/email/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(validBody),
       },
       makeEnv({}, db),
@@ -170,7 +153,7 @@ describe('POST /v1/email/send', () => {
       '/v1/email/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(validBody),
       },
       makeEnv({}, db),
@@ -180,13 +163,12 @@ describe('POST /v1/email/send', () => {
   });
 
   it('returns 200 on success and calls Resend API', async () => {
-    const fasMock = asUser('gh:1');
     const resendMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ id: 'email_123' }), { status: 200 }),
     );
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       if (url.includes('resend.com')) return resendMock(url);
-      return fasMock(url);
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
     });
 
     const appsStmt = mockStmt({ first: { creator_id: 'gh:1' } });
@@ -200,7 +182,7 @@ describe('POST /v1/email/send', () => {
       '/v1/email/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(validBody),
       },
       makeEnv({}, db),
@@ -213,15 +195,6 @@ describe('POST /v1/email/send', () => {
 
   it('inserts usage row BEFORE calling Resend (race condition prevention)', async () => {
     const callOrder: string[] = [];
-
-    const fasMock = asUser('gh:1');
-    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-      if (url.includes('resend.com')) {
-        callOrder.push('resend');
-        return Promise.resolve(new Response(JSON.stringify({ id: 'x' }), { status: 200 }));
-      }
-      return fasMock(url);
-    });
 
     const appsStmt = mockStmt({ first: { creator_id: 'gh:1' } });
     const usageStmt = mockStmt({ first: { n: 0 } });
@@ -274,14 +247,14 @@ describe('POST /v1/email/send', () => {
         resendCalledBeforeInsert = !insertCalled;
         return Promise.resolve(new Response(JSON.stringify({ id: 'x' }), { status: 200 }));
       }
-      return asUser('gh:1')(url);
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
     });
 
     const res = await app.request(
       '/v1/email/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(validBody),
       },
       makeEnv({ DB: db as unknown as D1Database } as any),
@@ -293,28 +266,15 @@ describe('POST /v1/email/send', () => {
   });
 
   it('allows an editor role to send email for the app', async () => {
-    // gh:1 has appRoles { myapp: ['editor'] } but is NOT the owner
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          id: 'gh:1',
-          login: 'editor-user',
-          avatarUrl: null,
-          roles: ['user'],
-          appRoles: { myapp: ['editor'] },
-        }),
-        { status: 200 },
-      ),
-    );
+    // gh:1 has appRoles { myapp: ['editor'] } but is NOT the owner (gh:other)
+    const editorTok = await testToken('gh:1', { appRoles: { myapp: ['editor'] } });
 
     const resendMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ id: 'e1' }), { status: 200 }),
     );
-    const fasMockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
-    const originalImpl = fasMockFn.getMockImplementation()!;
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       if (url.includes('resend.com')) return resendMock(url);
-      return originalImpl(url);
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
     });
 
     const db = {
@@ -336,7 +296,7 @@ describe('POST /v1/email/send', () => {
       '/v1/email/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${editorTok}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(validBody),
       },
       makeEnv({ DB: db as unknown as D1Database } as any),

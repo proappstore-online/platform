@@ -80,8 +80,9 @@ authRoutes.get('/auth/:provider/start', (c) => {
 
   const returnTo = c.req.query('return_to') || '';
   if (!returnToAllowed(returnTo)) return c.text('invalid return_to', 400);
+  const responseMode = c.req.query('response_mode') === 'query' ? 'query' : 'fragment';
 
-  const state = btoa(JSON.stringify({ r: returnTo, n: crypto.randomUUID() }))
+  const state = btoa(JSON.stringify({ r: returnTo, m: responseMode, n: crypto.randomUUID() }))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   // Bind the state to this browser so the callback can reject forged/replayed
   // states (login CSRF). SameSite=Lax survives the top-level OAuth redirect back.
@@ -119,10 +120,13 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
   // later failure can bounce the user back to the app with a clean error
   // instead of a bare error page.
   let returnTo = '';
+  let responseMode: 'fragment' | 'query' = 'fragment';
   try {
     const b64 = stateRaw.replace(/-/g, '+').replace(/_/g, '/');
     const json = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
-    returnTo = (JSON.parse(json) as { r?: string }).r || '';
+    const parsed = JSON.parse(json) as { r?: string; m?: string };
+    returnTo = parsed.r || '';
+    if (parsed.m === 'query') responseMode = 'query';
   } catch { /* fall through to validation */ }
   if (!returnToAllowed(returnTo)) return c.text('invalid state', 400);
 
@@ -159,7 +163,11 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
     const token = await mintSession(claims, c.env.SESSION_SIGNING_KEY);
 
     const dest = new URL(returnTo);
-    dest.hash = `pas_session=${encodeURIComponent(token)}`;
+    if (responseMode === 'query') {
+      dest.searchParams.set('session', token);
+    } else {
+      dest.hash = `pas_session=${encodeURIComponent(token)}`;
+    }
     return c.redirect(dest.toString(), 302);
   } catch {
     return fail('server_error');
@@ -296,6 +304,37 @@ authRoutes.post('/auth/credentials/login', async (c) => {
   const session: NewSession = { uid: row.id, login: row.login, avatarUrl: null, roles: ['user'] };
   const token = await mintSession(session, c.env.SESSION_SIGNING_KEY);
   return c.json({ token });
+});
+
+// ── POST /v1/auth/exchange ────────────────────────────────
+// Swap a GitHub device-flow access token for a PAS session token.
+// Used by `pas login` (CLI). Verifies the token against GitHub /user,
+// upserts the user row, mints a PAS session.
+authRoutes.post('/auth/exchange', async (c) => {
+  let body: { githubToken?: string };
+  try { body = await c.req.json(); } catch { return c.text('invalid json', 400); }
+  const githubToken = body.githubToken;
+  if (!githubToken || typeof githubToken !== 'string') return c.text('missing githubToken', 400);
+
+  const userRes = await fetch('https://api.github.com/user', {
+    headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github+json', 'User-Agent': 'proappstore-api' },
+  });
+  if (userRes.status === 401) return c.text('invalid github token', 401);
+  if (!userRes.ok) return c.text(`github error: ${userRes.status}`, 502);
+  const ghUser = (await userRes.json()) as { id: number; login: string; avatar_url?: string; email?: string | null };
+
+  const userId = `gh:${ghUser.id}`;
+  const now = Date.now();
+  await c.env.DB.prepare(
+    `INSERT INTO users (id, provider, provider_id, login, email, avatar_url, created_at, last_login_at)
+     VALUES (?1, 'github', ?2, ?3, ?4, ?5, ?6, ?6)
+     ON CONFLICT(id) DO UPDATE SET login = excluded.login, email = excluded.email,
+       avatar_url = excluded.avatar_url, last_login_at = excluded.last_login_at`,
+  ).bind(userId, String(ghUser.id), ghUser.login, ghUser.email ?? null, ghUser.avatar_url ?? null, now).run();
+
+  const claims: NewSession = { uid: userId, login: ghUser.login, avatarUrl: ghUser.avatar_url ?? null, roles: rolesFor(userId, c.env) };
+  const sessionToken = await mintSession(claims, c.env.SESSION_SIGNING_KEY);
+  return c.json({ sessionToken, user: { id: userId, login: ghUser.login, avatarUrl: ghUser.avatar_url ?? null } });
 });
 
 // ── Provider profile fetchers ──────────────────────────────

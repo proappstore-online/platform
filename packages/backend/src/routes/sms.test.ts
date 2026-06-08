@@ -1,7 +1,8 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -38,20 +38,6 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
   };
 }
 
-// Pretends to be FAS auth (returns the signed-in user for any Bearer token).
-function asUser(id = 'gh:1') {
-  return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id, login: 'tester', avatarUrl: null }), { status: 200 }),
-  );
-}
-
-beforeEach(() => {
-  globalThis.fetch = asUser();
-});
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
-
 describe('POST /v1/sms/send', () => {
   it('returns 503 when Twilio is not configured', async () => {
     const appsStmt = mockStmt({ first: { creator_id: 'gh:1' } });
@@ -59,7 +45,7 @@ describe('POST /v1/sms/send', () => {
       '/v1/sms/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ appId: 'myapp', to: '+15551234567', message: 'hi' }),
       },
       makeEnv({ TWILIO_ACCOUNT_SID: undefined }, mockD1(appsStmt)),
@@ -72,7 +58,7 @@ describe('POST /v1/sms/send', () => {
       '/v1/sms/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ appId: 'myapp' }),
       },
       makeEnv(),
@@ -85,7 +71,7 @@ describe('POST /v1/sms/send', () => {
       '/v1/sms/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ appId: 'myapp', to: '555-1234', message: 'hi' }),
       },
       makeEnv(),
@@ -94,7 +80,6 @@ describe('POST /v1/sms/send', () => {
   });
 
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request(
       '/v1/sms/send',
       {
@@ -114,7 +99,7 @@ describe('POST /v1/sms/send', () => {
       '/v1/sms/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ appId: 'myapp', to: '+15551234567', message: 'hi' }),
       },
       makeEnv({}, db),
@@ -129,7 +114,7 @@ describe('POST /v1/sms/send', () => {
       '/v1/sms/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ appId: 'noapp', to: '+15551234567', message: 'hi' }),
       },
       makeEnv({}, db),
@@ -138,12 +123,8 @@ describe('POST /v1/sms/send', () => {
   });
 
   it('sends a single SMS via Twilio and returns {sent:1, failed:0}', async () => {
-    const fasMock = asUser('gh:1');
     const twilioMock = vi.fn().mockResolvedValue(new Response('{"sid":"SM1"}', { status: 201 }));
-    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-      if (url.includes('api.twilio.com')) return twilioMock(url);
-      return fasMock(url);
-    });
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => twilioMock(url));
 
     const rateLimitStmt = mockStmt({ first: { cnt: 0 } });
     const appsStmt = mockStmt({ first: { creator_id: 'gh:1' } });
@@ -153,7 +134,7 @@ describe('POST /v1/sms/send', () => {
       '/v1/sms/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ appId: 'myapp', to: '+15551234567', message: 'class in 1h' }),
       },
       makeEnv({}, db),
@@ -168,7 +149,6 @@ describe('POST /v1/sms/send', () => {
   });
 
   it('broadcasts to many numbers and aggregates results', async () => {
-    const fasMock = asUser('gh:1');
     let twilioCalls = 0;
     const twilioMock = vi.fn().mockImplementation(() => {
       twilioCalls++;
@@ -177,10 +157,7 @@ describe('POST /v1/sms/send', () => {
         ? Promise.resolve(new Response('', { status: 400 }))
         : Promise.resolve(new Response('{"sid":"SM1"}', { status: 201 }));
     });
-    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-      if (url.includes('api.twilio.com')) return twilioMock();
-      return fasMock(url);
-    });
+    globalThis.fetch = vi.fn().mockImplementation(() => twilioMock());
 
     const rateLimitStmt = mockStmt({ first: { cnt: 0 } });
     const appsStmt = mockStmt({ first: { creator_id: 'gh:1' } });
@@ -190,7 +167,7 @@ describe('POST /v1/sms/send', () => {
       '/v1/sms/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           appId: 'myapp',
           to: ['+15551111111', '+15552222222', '+15553333333'],
@@ -210,7 +187,7 @@ describe('POST /v1/sms/send', () => {
       '/v1/sms/send',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ appId: 'myapp', to: [], message: 'hi' }),
       },
       makeEnv(),

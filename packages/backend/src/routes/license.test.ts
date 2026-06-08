@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -35,22 +35,8 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
   };
 }
 
-function asUser(id = 'gh:1') {
-  return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id, login: 'tester', avatarUrl: null }), { status: 200 }),
-  );
-}
-
-beforeEach(() => {
-  globalThis.fetch = asUser();
-});
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
-
 describe('GET /v1/apps/:appId/license', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request(
       '/v1/apps/myapp/license',
       { headers: { Authorization: 'Bearer bad' } },
@@ -64,7 +50,7 @@ describe('GET /v1/apps/:appId/license', () => {
     const db = mockD1(licenseStmt);
     const res = await app.request(
       '/v1/apps/myapp/license',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(404);
@@ -83,7 +69,7 @@ describe('GET /v1/apps/:appId/license', () => {
     const db = mockD1(licenseStmt);
     const res = await app.request(
       '/v1/apps/myapp/license',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(404);
@@ -102,7 +88,7 @@ describe('GET /v1/apps/:appId/license', () => {
     const db = mockD1(licenseStmt);
     const res = await app.request(
       '/v1/apps/myapp/license',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(200);
@@ -126,7 +112,7 @@ describe('GET /v1/apps/:appId/license', () => {
     const db = mockD1(licenseStmt);
     const res = await app.request(
       '/v1/apps/myapp/license',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(200);

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function makeEnv(opts: { db?: ReturnType<typeof mockD1> } = {}) {
     STORAGE: { put: vi.fn() } as unknown as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'p',
@@ -34,7 +34,8 @@ function makeEnv(opts: { db?: ReturnType<typeof mockD1> } = {}) {
   };
 }
 
-/** Mock fetch that handles FAS auth AND CF Pages API calls. */
+const originalFetch = globalThis.fetch;
+/** Mock fetch for CF Pages API calls. */
 function mockFetchWithCf(cfResponses: Array<{ status: number; body: unknown }> = []) {
   const cfCalls: Array<{ method: string; url: string; body: unknown }> = [];
   const queue = [...cfResponses];
@@ -43,11 +44,6 @@ function mockFetchWithCf(cfResponses: Array<{ status: number; body: unknown }> =
     install: () => {
       globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
         const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
-        // FAS auth
-        if (urlStr.includes('freeappstore.online')) {
-          return new Response(JSON.stringify({ id: 'gh:1', login: 'testuser', avatarUrl: null }), { status: 200 });
-        }
-        // CF Pages API
         if (urlStr.includes('api.cloudflare.com')) {
           let body: unknown = null;
           if (init?.body) try { body = JSON.parse(init.body as string); } catch {}
@@ -99,7 +95,7 @@ describe('POST /v1/apps/:appId/domains', () => {
 
     const res = await app.request('/v1/apps/meetup/domains', {
       method: 'POST',
-      headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain: 'meetup.example.com' }),
     }, makeEnv({ db }));
 
@@ -121,7 +117,7 @@ describe('POST /v1/apps/:appId/domains', () => {
     mock.install();
     const res = await app.request('/v1/apps/meetup/domains', {
       method: 'POST',
-      headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain: 'evil.proappstore.online' }),
     }, makeEnv({ db }));
     expect(res.status).toBe(400);
@@ -135,7 +131,7 @@ describe('POST /v1/apps/:appId/domains', () => {
     mock.install();
     const res = await app.request('/v1/apps/meetup/domains', {
       method: 'POST',
-      headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain: 'not a domain!!' }),
     }, makeEnv({ db }));
     expect(res.status).toBe(400);
@@ -149,7 +145,7 @@ describe('POST /v1/apps/:appId/domains', () => {
     mock.install();
     const res = await app.request('/v1/apps/meetup/domains', {
       method: 'POST',
-      headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain: 123 }),
     }, makeEnv({ db }));
     expect(res.status).toBe(400);
@@ -162,7 +158,7 @@ describe('POST /v1/apps/:appId/domains', () => {
     for (const bad of ['foo.-bar.com', 'foo.bar-.com', '-foo.com', 'foo-.com']) {
       const res = await app.request('/v1/apps/meetup/domains', {
         method: 'POST',
-        headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ domain: bad }),
       }, makeEnv({ db: mockD1(mockStmt({ first: { creator_id: 'gh:1' } })) }));
       expect(res.status, `expected 400 for ${bad}`).toBe(400);
@@ -177,7 +173,7 @@ describe('POST /v1/apps/:appId/domains', () => {
     mock.install();
     const res = await app.request('/v1/apps/meetup/domains', {
       method: 'POST',
-      headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain: '203.0.113.7' }),
     }, makeEnv({ db }));
     expect(res.status).toBe(400);
@@ -191,7 +187,7 @@ describe('POST /v1/apps/:appId/domains', () => {
     mock.install();
     const res = await app.request('/v1/apps/meetup/domains', {
       method: 'POST',
-      headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain: 'meetup.example.com' }),
     }, makeEnv({ db }));
     expect(res.status).toBe(403);
@@ -208,7 +204,7 @@ describe('POST /v1/apps/:appId/domains', () => {
     mock.install();
     const res = await app.request('/v1/apps/meetup/domains', {
       method: 'POST',
-      headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain: 'taken.example.com' }),
     }, makeEnv({ db }));
     expect(res.status).toBe(409);
@@ -231,7 +227,7 @@ describe('GET /v1/apps/:appId/domains', () => {
     const db = mockD1(ownerCheck, list);
     const mock = mockFetchWithCf([]);
     mock.install();
-    const res = await app.request('/v1/apps/meetup/domains', { headers: { Authorization: 'Bearer t' } }, makeEnv({ db }));
+    const res = await app.request('/v1/apps/meetup/domains', { headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { domains: Array<{ domain: string; status: string }> };
     expect(body.domains).toHaveLength(2);
@@ -252,7 +248,7 @@ describe('POST /v1/apps/:appId/domains/:domain/verify', () => {
       { status: 200, body: { success: true, result: { name: 'meetup.example.com', status: 'active' } } },
     ]);
     mock.install();
-    const res = await app.request('/v1/apps/meetup/domains/meetup.example.com/verify', { method: 'POST', headers: { Authorization: 'Bearer t' } }, makeEnv({ db }));
+    const res = await app.request('/v1/apps/meetup/domains/meetup.example.com/verify', { method: 'POST', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { domain: { status: string } };
     expect(body.domain.status).toBe('active');
@@ -269,7 +265,7 @@ describe('POST /v1/apps/:appId/domains/:domain/verify', () => {
       { status: 200, body: { success: true, result: null } },
     ]);
     mock.install();
-    const res = await app.request('/v1/apps/meetup/domains/meetup.example.com/verify', { method: 'POST', headers: { Authorization: 'Bearer t' } }, makeEnv({ db }));
+    const res = await app.request('/v1/apps/meetup/domains/meetup.example.com/verify', { method: 'POST', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { domain: { status: string } };
     expect(body.domain.status).toBe('active');
@@ -287,7 +283,7 @@ describe('POST /v1/apps/:appId/domains/:domain/verify', () => {
       { status: 200, body: { success: true, result: { status: 'active' } } },
     ]);
     mock.install();
-    const res = await app.request('/v1/apps/meetup/domains/meetup.example.com/verify', { method: 'POST', headers: { Authorization: 'Bearer t' } }, makeEnv({ db }));
+    const res = await app.request('/v1/apps/meetup/domains/meetup.example.com/verify', { method: 'POST', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { domain: { status: string } };
     expect(body.domain.status).toBe('active');
@@ -301,7 +297,7 @@ describe('DELETE /v1/apps/:appId/domains/:domain', () => {
     const db = mockD1(ownerCheck, del);
     const mock = mockFetchWithCf([{ status: 200, body: { success: true } }]);
     mock.install();
-    const res = await app.request('/v1/apps/meetup/domains/meetup.example.com', { method: 'DELETE', headers: { Authorization: 'Bearer t' } }, makeEnv({ db }));
+    const res = await app.request('/v1/apps/meetup/domains/meetup.example.com', { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
     expect(res.status).toBe(200);
     expect(mock.cfCalls[0]?.method).toBe('DELETE');
     expect(mock.cfCalls[0]?.url).toContain('proappstore-meetup/domains/meetup.example.com');
@@ -315,7 +311,7 @@ describe('DELETE /v1/apps/:appId/domains/:domain', () => {
       { status: 403, body: { success: false, errors: [{ code: 0, message: 'Domain is locked' }] } },
     ]);
     mock.install();
-    const res = await app.request('/v1/apps/meetup/domains/meetup.example.com', { method: 'DELETE', headers: { Authorization: 'Bearer t' } }, makeEnv({ db }));
+    const res = await app.request('/v1/apps/meetup/domains/meetup.example.com', { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
     expect(res.status).toBe(403);
     expect(db.prepare).toHaveBeenCalledTimes(1);
   });
@@ -325,7 +321,7 @@ describe('DELETE /v1/apps/:appId/domains/:domain', () => {
     const db = mockD1(ownerCheck);
     const mock = mockFetchWithCf([]);
     mock.install();
-    const res = await app.request('/v1/apps/meetup/domains/not-a-domain', { method: 'DELETE', headers: { Authorization: 'Bearer t' } }, makeEnv({ db }));
+    const res = await app.request('/v1/apps/meetup/domains/not-a-domain', { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
     expect(res.status).toBe(400);
     expect(mock.cfCalls).toHaveLength(0);
   });

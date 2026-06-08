@@ -22,7 +22,7 @@ export interface CliConfig {
 
 const DEFAULT_CONFIG: CliConfig = {
   apiBase: process.env.PAS_API_BASE ?? 'https://api.proappstore.online',
-  authApiBase: process.env.PAS_AUTH_API_BASE ?? 'https://api.freeappstore.online',
+  authApiBase: process.env.PAS_AUTH_API_BASE ?? 'https://api.proappstore.online',
 };
 
 function normalizeApiBase(s: string): string {

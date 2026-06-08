@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,20 +26,13 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
     VAPID_PRIVATE_KEY: 'test-vapid-private',
     ...overrides,
   };
-}
-
-function asUser(id = 'gh:1') {
-  return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id, login: 'tester', avatarUrl: null }), { status: 200 }),
-  );
 }
 
 const validTool = {
@@ -52,13 +46,6 @@ const validTool = {
   },
 };
 
-beforeEach(() => {
-  globalThis.fetch = asUser();
-});
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
-
 describe('PUT /v1/apps/:appId/tools', () => {
   it('registers valid tools', async () => {
     // Mock: first call = requireAppOwner lookup, rest = batch
@@ -68,7 +55,7 @@ describe('PUT /v1/apps/:appId/tools', () => {
       '/v1/apps/test-app/tools',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ tools: [validTool] }),
       },
       makeEnv({}, db),
@@ -87,7 +74,7 @@ describe('PUT /v1/apps/:appId/tools', () => {
       '/v1/apps/test-app/tools',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tools: [{ ...validTool, sql: 'SELECT * FROM items; DROP TABLE items' }],
         }),
@@ -106,7 +93,7 @@ describe('PUT /v1/apps/:appId/tools', () => {
       '/v1/apps/test-app/tools',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tools: [{ ...validTool, sql: 'SELECT 1; DROP TABLE items' }],
         }),
@@ -125,7 +112,7 @@ describe('PUT /v1/apps/:appId/tools', () => {
       '/v1/apps/test-app/tools',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tools: [{
             ...validTool,
@@ -149,7 +136,7 @@ describe('PUT /v1/apps/:appId/tools', () => {
       '/v1/apps/test-app/tools',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tools: [{
             ...validTool,
@@ -172,7 +159,7 @@ describe('PUT /v1/apps/:appId/tools', () => {
       '/v1/apps/test-app/tools',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tools: [{
             name: 'save_item',
@@ -190,7 +177,6 @@ describe('PUT /v1/apps/:appId/tools', () => {
   });
 
   it('rejects without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request(
       '/v1/apps/test-app/tools',
       {
@@ -248,7 +234,7 @@ describe('PUT /v1/apps/:appId/tools — requires_auth enforcement', () => {
       '/v1/apps/test-app/tools',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tools: [{
             name: 'my_items',
@@ -274,7 +260,7 @@ describe('PUT /v1/apps/:appId/tools — requires_auth enforcement', () => {
       '/v1/apps/test-app/tools',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tools: [{
             name: 'my_items',
@@ -342,7 +328,7 @@ describe('DELETE /v1/apps/:appId/tools', () => {
       '/v1/apps/test-app/tools',
       {
         method: 'DELETE',
-        headers: { Authorization: 'Bearer tok' },
+        headers: { Authorization: `Bearer ${TOK}` },
       },
       makeEnv({}, db),
     );

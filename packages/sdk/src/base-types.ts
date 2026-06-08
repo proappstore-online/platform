@@ -15,7 +15,7 @@ export interface User {
 export interface FasInitOptions {
   /** The app's unique identifier (e.g. "tuner", "quicknotes"). */
   appId: string;
-  /** Override the API base URL (defaults to https://api.freeappstore.online). */
+  /** Override the API base URL (defaults to https://api.proappstore.online). */
   apiBase?: string;
 }
 

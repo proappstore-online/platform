@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -35,20 +35,10 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
   };
 }
 
-function asUser(id = 'gh:1') {
-  return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id, login: 'tester', avatarUrl: null, roles: ['user'], appRoles: {} }), { status: 200 }),
-  );
-}
-
-beforeEach(() => { globalThis.fetch = asUser(); });
-afterEach(() => { globalThis.fetch = originalFetch; });
-
 // GET /v1/apps/:appId/secrets
 
 describe('GET /v1/apps/:appId/secrets', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 401 }));
     const res = await app.request('/v1/apps/myapp/secrets', {
       headers: { Authorization: 'Bearer bad' },
     }, makeEnv());
@@ -58,7 +48,7 @@ describe('GET /v1/apps/:appId/secrets', () => {
   it('returns 404 when app does not exist', async () => {
     const db = mockD1(mockStmt({ first: null })); // apps table lookup returns null
     const res = await app.request('/v1/apps/myapp/secrets', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(404);
   });
@@ -66,7 +56,7 @@ describe('GET /v1/apps/:appId/secrets', () => {
   it('returns 403 when user is not the owner', async () => {
     const db = mockD1(mockStmt({ first: { creator_id: 'gh:99' } }));
     const res = await app.request('/v1/apps/myapp/secrets', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(403);
   });
@@ -77,7 +67,7 @@ describe('GET /v1/apps/:appId/secrets', () => {
       mockStmt({ all: { results: [] } }), // secrets query
     );
     const res = await app.request('/v1/apps/myapp/secrets', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ secrets: [] });
@@ -89,7 +79,7 @@ describe('GET /v1/apps/:appId/secrets', () => {
       mockStmt({ all: { results: [{ name: 'OPENWEATHER_KEY', created_at: 1000, last_used_at: null }] } }),
     );
     const res = await app.request('/v1/apps/myapp/secrets', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(200);
     const body = await res.json() as { secrets: { name: string }[] };
@@ -101,7 +91,6 @@ describe('GET /v1/apps/:appId/secrets', () => {
 
 describe('PUT /v1/apps/:appId/secrets/:name', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 401 }));
     const res = await app.request('/v1/apps/myapp/secrets/API_KEY', {
       method: 'PUT',
       headers: { Authorization: 'Bearer bad', 'Content-Type': 'application/json' },
@@ -113,7 +102,7 @@ describe('PUT /v1/apps/:appId/secrets/:name', () => {
   it('returns 400 for invalid secret name (lowercase)', async () => {
     const res = await app.request('/v1/apps/myapp/secrets/bad_name', {
       method: 'PUT',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ value: 'secret-value' }),
     }, makeEnv());
     expect(res.status).toBe(400);
@@ -124,7 +113,7 @@ describe('PUT /v1/apps/:appId/secrets/:name', () => {
   it('returns 400 for invalid secret name (starts with digit)', async () => {
     const res = await app.request('/v1/apps/myapp/secrets/1INVALID', {
       method: 'PUT',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ value: 'secret-value' }),
     }, makeEnv());
     expect(res.status).toBe(400);
@@ -137,7 +126,7 @@ describe('PUT /v1/apps/:appId/secrets/:name', () => {
     );
     const res = await app.request('/v1/apps/myapp/secrets/API_KEY', {
       method: 'PUT',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ value: '' }),
     }, makeEnv({ APP_SECRET_KEK: btoa('a'.repeat(32)) }, db));
     expect(res.status).toBe(400);
@@ -151,7 +140,7 @@ describe('PUT /v1/apps/:appId/secrets/:name', () => {
     );
     const res = await app.request('/v1/apps/myapp/secrets/API_KEY', {
       method: 'PUT',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ value: 'x'.repeat(4097) }),
     }, makeEnv({ APP_SECRET_KEK: btoa('a'.repeat(32)) }, db));
     expect(res.status).toBe(400);
@@ -165,7 +154,7 @@ describe('PUT /v1/apps/:appId/secrets/:name', () => {
     );
     const res = await app.request('/v1/apps/myapp/secrets/API_KEY', {
       method: 'PUT',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ value: 'some-value' }),
     }, makeEnv({}, db)); // no APP_SECRET_KEK
     expect(res.status).toBe(503);
@@ -179,7 +168,7 @@ describe('PUT /v1/apps/:appId/secrets/:name', () => {
     );
     const res = await app.request('/v1/apps/myapp/secrets/NEW_KEY', {
       method: 'PUT',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ value: 'value' }),
     }, makeEnv({ APP_SECRET_KEK: btoa('a'.repeat(32)) }, db));
     expect(res.status).toBe(409);
@@ -190,7 +179,6 @@ describe('PUT /v1/apps/:appId/secrets/:name', () => {
 
 describe('DELETE /v1/apps/:appId/secrets/:name', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 401 }));
     const res = await app.request('/v1/apps/myapp/secrets/API_KEY', {
       method: 'DELETE',
       headers: { Authorization: 'Bearer bad' },
@@ -205,7 +193,7 @@ describe('DELETE /v1/apps/:appId/secrets/:name', () => {
     );
     const res = await app.request('/v1/apps/myapp/secrets/MISSING_KEY', {
       method: 'DELETE',
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(404);
   });
@@ -217,7 +205,7 @@ describe('DELETE /v1/apps/:appId/secrets/:name', () => {
     );
     const res = await app.request('/v1/apps/myapp/secrets/OLD_KEY', {
       method: 'DELETE',
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(204);
   });
@@ -229,7 +217,7 @@ describe('GET /v1/apps/:appId/allowlist', () => {
   it('returns 403 when user is not the owner', async () => {
     const db = mockD1(mockStmt({ first: { creator_id: 'gh:99' } }));
     const res = await app.request('/v1/apps/myapp/allowlist', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(403);
   });
@@ -240,7 +228,7 @@ describe('GET /v1/apps/:appId/allowlist', () => {
       mockStmt({ all: { results: [] } }),
     );
     const res = await app.request('/v1/apps/myapp/allowlist', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ rules: [] });
@@ -254,7 +242,7 @@ describe('PUT /v1/apps/:appId/allowlist', () => {
     const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
     const res = await app.request('/v1/apps/myapp/allowlist', {
       method: 'PUT',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         pattern: 'http://api.example.com',
         injectKind: 'header',
@@ -272,7 +260,7 @@ describe('PUT /v1/apps/:appId/allowlist', () => {
     const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
     const res = await app.request('/v1/apps/myapp/allowlist', {
       method: 'PUT',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         pattern: 'https://api.example.com',
         injectKind: 'magic', // invalid
@@ -291,7 +279,7 @@ describe('PUT /v1/apps/:appId/allowlist', () => {
     );
     const res = await app.request('/v1/apps/myapp/allowlist', {
       method: 'PUT',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         pattern: 'https://api.example.com',
         injectKind: 'bearer',
@@ -309,7 +297,7 @@ describe('PUT /v1/apps/:appId/allowlist', () => {
     const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
     const res = await app.request('/v1/apps/myapp/allowlist', {
       method: 'PUT',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         pattern: 'https://api.example.com',
         injectKind: 'bearer',
@@ -329,7 +317,7 @@ describe('DELETE /v1/apps/:appId/allowlist', () => {
     const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
     const res = await app.request('/v1/apps/myapp/allowlist', {
       method: 'DELETE',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     }, makeEnv({}, db));
     expect(res.status).toBe(400);
@@ -344,7 +332,7 @@ describe('DELETE /v1/apps/:appId/allowlist', () => {
     );
     const res = await app.request('/v1/apps/myapp/allowlist', {
       method: 'DELETE',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ pattern: 'https://api.example.com' }),
     }, makeEnv({}, db));
     expect(res.status).toBe(404);
@@ -357,7 +345,7 @@ describe('DELETE /v1/apps/:appId/allowlist', () => {
     );
     const res = await app.request('/v1/apps/myapp/allowlist', {
       method: 'DELETE',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ pattern: 'https://api.example.com' }),
     }, makeEnv({}, db));
     expect(res.status).toBe(204);

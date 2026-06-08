@@ -10,8 +10,6 @@ APP_BASE = "https://api.proappstore.online"
 # PAS GitHub OAuth App client id (public — sent in the authorize URL). The secret
 # is a Worker secret (GITHUB_CLIENT_SECRET, from Doppler OAUTH_CLIENT_SECRET).
 GITHUB_CLIENT_ID = "Ov23ctEs8trbfizdBGfQ"
-# DEPRECATED: removed in the de-FAS cutover — PAS now owns auth (routes/auth.ts).
-FAS_API_BASE = "https://api.freeappstore.online"
 CF_ACCOUNT_ID = "c1089bfcc43c1c6c2aa89e584e86f0bc"
 VAPID_PUBLIC_KEY = "BPg6E92QAOhdcif_HckOEGY6mL03VKWNQ3CS1xQX5q59fXURI1xCGwwBr4Vsv7gn3TXIGSJquJwvHGYRbMcAQc0"
 # Comma-separated `gh:<id>` strings allowed to approve/reject submissions.
@@ -38,6 +36,16 @@ binding = "AI"
 [[analytics_engine_datasets]]
 binding = "ANALYTICS"
 dataset = "pas_analytics"
+
+# Realtime rooms — Durable Object for WebSocket fan-out.
+[durable_objects]
+bindings = [
+  { name = "ROOM", class_name = "Room" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["Room"]
 
 [[routes]]
 pattern = "api.proappstore.online/*"

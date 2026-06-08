@@ -1,5 +1,28 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import app from "./index.js";
+
+const TEST_SK = 'test-signing-key';
+
+/** Inline token minting (data-worker has no build-core dep). */
+async function mint(uid: string, sk: string): Promise<string> {
+  const enc = new TextEncoder();
+  const payload = JSON.stringify({
+    uid, login: 'testuser', roles: ['user'],
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + 86400,
+  });
+  let bin = '';
+  for (const b of enc.encode(payload)) bin += String.fromCharCode(b);
+  const body = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const key = await crypto.subtle.importKey('raw', enc.encode(sk), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(body));
+  let sigBin = '';
+  for (const b of new Uint8Array(sig)) sigBin += String.fromCharCode(b);
+  const sigB64 = btoa(sigBin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `${body}.${sigB64}`;
+}
+
+const TOK = await mint('gh:1', TEST_SK);
 
 function mockD1() {
   const rows: Record<string, unknown>[] = [];
@@ -19,22 +42,9 @@ function makeEnv(db = mockD1()) {
   return {
     DB: db as unknown as D1Database,
     APP_ID: "test-app",
-    FAS_API_BASE: "https://api.freeappstore.online",
+    SESSION_SIGNING_KEY: TEST_SK,
   };
 }
-
-// Mock fetch for FAS auth verification
-const originalFetch = globalThis.fetch;
-
-beforeEach(() => {
-  globalThis.fetch = vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id: "gh:1", login: "testuser" }), { status: 200 })
-  );
-});
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
 
 describe("GET /health", () => {
   it("returns ok", async () => {
@@ -51,7 +61,6 @@ describe("Auth", () => {
   });
 
   it("401 with invalid token", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response("", { status: 401 }));
     const res = await app.request("/tables", {
       headers: { Authorization: "Bearer invalid" },
     }, makeEnv());
@@ -60,7 +69,7 @@ describe("Auth", () => {
 
   it("passes with valid token", async () => {
     const res = await app.request("/tables", {
-      headers: { Authorization: "Bearer valid-token" },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv());
     expect(res.status).toBe(200);
   });
@@ -73,7 +82,7 @@ describe("GET /tables", () => {
       all: vi.fn().mockResolvedValue({ results: [{ name: "events" }, { name: "rsvps" }], meta: {} }),
     });
     const res = await app.request("/tables", {
-      headers: { Authorization: "Bearer tok" },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv(db));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual(["events", "rsvps"]);
@@ -90,7 +99,7 @@ describe("POST /query", () => {
     });
     const res = await app.request("/query", {
       method: "POST",
-      headers: { Authorization: "Bearer tok", "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${TOK}`, "Content-Type": "application/json" },
       body: JSON.stringify({ sql: "SELECT * FROM events WHERE city = ?", params: ["SF"] }),
     }, makeEnv(db));
     expect(res.status).toBe(200);
@@ -101,7 +110,7 @@ describe("POST /query", () => {
   it("rejects empty sql", async () => {
     const res = await app.request("/query", {
       method: "POST",
-      headers: { Authorization: "Bearer tok", "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${TOK}`, "Content-Type": "application/json" },
       body: JSON.stringify({ sql: "" }),
     }, makeEnv());
     expect(res.status).toBe(400);
@@ -110,7 +119,7 @@ describe("POST /query", () => {
   it("rejects non-array params", async () => {
     const res = await app.request("/query", {
       method: "POST",
-      headers: { Authorization: "Bearer tok", "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${TOK}`, "Content-Type": "application/json" },
       body: JSON.stringify({ sql: "SELECT 1", params: "not-array" }),
     }, makeEnv());
     expect(res.status).toBe(400);
@@ -121,7 +130,7 @@ describe("POST /execute", () => {
   it("returns meta with last_row_id", async () => {
     const res = await app.request("/execute", {
       method: "POST",
-      headers: { Authorization: "Bearer tok", "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${TOK}`, "Content-Type": "application/json" },
       body: JSON.stringify({ sql: "INSERT INTO events VALUES (?)", params: ["test"] }),
     }, makeEnv());
     expect(res.status).toBe(200);
@@ -134,7 +143,7 @@ describe("POST /batch", () => {
   it("runs multiple statements", async () => {
     const res = await app.request("/batch", {
       method: "POST",
-      headers: { Authorization: "Bearer tok", "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${TOK}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         statements: [
           { sql: "INSERT INTO events VALUES (?)", params: ["a"] },
@@ -149,7 +158,7 @@ describe("POST /batch", () => {
   it("rejects empty statements array", async () => {
     const res = await app.request("/batch", {
       method: "POST",
-      headers: { Authorization: "Bearer tok", "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${TOK}`, "Content-Type": "application/json" },
       body: JSON.stringify({ statements: [] }),
     }, makeEnv());
     expect(res.status).toBe(400);

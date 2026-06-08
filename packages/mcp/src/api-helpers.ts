@@ -1,5 +1,5 @@
 /**
- * Helpers for talking to GitHub + the PAS/FAS platform APIs, plus
+ * Helpers for talking to GitHub + the PAS platform API, plus
  * connection-token extraction/verification for the MCP transport.
  */
 
@@ -49,13 +49,11 @@ export function extractToken(props: Record<string, unknown>): string | null {
 }
 
 /**
- * Verify a session token against the FAS API. Returns user info or null.
+ * Verify a session token locally via HMAC. Returns user info or null.
  */
-export async function verifyToken(apiBase: string, token: string): Promise<{ id: string; login: string } | null> {
-  const fasBase = apiBase.replace('proappstore', 'freeappstore');
-  const res = await fetch(`${fasBase}/v1/auth/me`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) return null;
-  return (await res.json()) as { id: string; login: string };
+export async function verifyToken(signingKey: string, token: string): Promise<{ id: string; login: string } | null> {
+  const { verifySession } = await import("./session.js");
+  const payload = await verifySession(token, signingKey);
+  if (!payload) return null;
+  return { id: payload.uid, login: (payload as { login?: string }).login ?? payload.uid };
 }

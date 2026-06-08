@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function env(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof moc
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -36,18 +36,8 @@ function env(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof moc
   };
 }
 
-function asUser(id = 'gh:1') {
-  return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id, login: 'tester', avatarUrl: null, roles: ['user'], appRoles: {} }), { status: 200 }),
-  );
-}
-
-beforeEach(() => { globalThis.fetch = asUser(); });
-afterEach(() => { globalThis.fetch = originalFetch; });
-
 describe('POST /v1/services/engagements', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 401 }));
     const res = await app.request('/v1/services/engagements', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -59,7 +49,7 @@ describe('POST /v1/services/engagements', () => {
   it('rejects missing developerId', async () => {
     const res = await app.request('/v1/services/engagements', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     }, env());
     expect(res.status).toBe(400);
@@ -72,7 +62,7 @@ describe('POST /v1/services/engagements', () => {
     // User is gh:1, trying to hire gh:1
     const res = await app.request('/v1/services/engagements', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ developerId: 'gh:1' }),
     }, env({}, db));
     expect(res.status).toBe(400);
@@ -83,7 +73,6 @@ describe('POST /v1/services/engagements', () => {
 
 describe('GET /v1/services/engagements', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 401 }));
     const res = await app.request('/v1/services/engagements', {}, env());
     expect(res.status).toBe(401);
   });
@@ -91,7 +80,7 @@ describe('GET /v1/services/engagements', () => {
   it('returns empty list when no engagements', async () => {
     const db = mockD1(mockStmt({ all: { results: [] } }));
     const res = await app.request('/v1/services/engagements', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, env({}, db));
     expect(res.status).toBe(200);
     const body = await res.json() as { engagements: unknown[] };
@@ -103,7 +92,7 @@ describe('POST /v1/services/requests', () => {
   it('rejects empty title', async () => {
     const res = await app.request('/v1/services/requests', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: '', description: 'stuff' }),
     }, env());
     expect(res.status).toBe(400);
@@ -112,7 +101,7 @@ describe('POST /v1/services/requests', () => {
   it('rejects title too long', async () => {
     const res = await app.request('/v1/services/requests', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: 'x'.repeat(201), description: 'stuff' }),
     }, env());
     expect(res.status).toBe(400);
@@ -121,7 +110,7 @@ describe('POST /v1/services/requests', () => {
 
 describe('GET /v1/services/requests', () => {
   it('returns 200 without auth (public)', async () => {
-    globalThis.fetch = originalFetch;
+    // no fetch mock needed for public endpoint
     const db = mockD1(mockStmt({ all: { results: [] } }));
     globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 200 }));
     const res = await app.request('/v1/services/requests', {}, env({}, db));
@@ -136,7 +125,7 @@ describe('POST /v1/services/engagements/:id/messages', () => {
     );
     const res = await app.request('/v1/services/engagements/test-id/messages', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ body: '' }),
     }, env({}, db));
     expect(res.status).toBe(400);
@@ -145,7 +134,7 @@ describe('POST /v1/services/engagements/:id/messages', () => {
   it('rejects message too long', async () => {
     const res = await app.request('/v1/services/engagements/test-id/messages', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ body: 'x'.repeat(33000) }),
     }, env());
     // The engagement lookup will fail first, but the length check is after auth
@@ -160,7 +149,7 @@ describe('POST /v1/services/engagements/:id/rate', () => {
     );
     const res = await app.request('/v1/services/engagements/test-id/rate', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ score: 0 }),
     }, env({}, db));
     expect(res.status).toBe(400);
@@ -172,7 +161,7 @@ describe('POST /v1/services/engagements/:id/rate', () => {
     );
     const res = await app.request('/v1/services/engagements/test-id/rate', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ score: 6 }),
     }, env({}, db));
     expect(res.status).toBe(400);
@@ -186,7 +175,7 @@ describe('POST /v1/services/engagements/:id/rate', () => {
     );
     const res = await app.request('/v1/services/engagements/test-id/rate', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ score: 3.5 }),
     }, env({}, db));
     expect(res.status).toBe(400);
@@ -198,7 +187,7 @@ describe('POST /v1/services/engagements/:id/rate', () => {
     );
     const res = await app.request('/v1/services/engagements/test-id/rate', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ score: 5, comment: 'x'.repeat(2001) }),
     }, env({}, db));
     expect(res.status).toBe(400);
@@ -211,7 +200,7 @@ describe('POST /v1/services/engagements/:id/rate', () => {
     );
     const res = await app.request('/v1/services/engagements/test-id/rate', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ score: 5 }),
     }, env({}, db));
     expect(res.status).toBe(403);
@@ -223,7 +212,7 @@ describe('POST /v1/services/engagements/:id/rate', () => {
     );
     const res = await app.request('/v1/services/engagements/test-id/rate', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ score: 5 }),
     }, env({}, db));
     expect(res.status).toBe(400);
@@ -237,7 +226,7 @@ describe('PATCH /v1/services/engagements/:id', () => {
     );
     const res = await app.request('/v1/services/engagements/test-id', {
       method: 'PATCH',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'bogus' }),
     }, env({}, db));
     expect(res.status).toBe(400);
@@ -250,7 +239,7 @@ describe('PATCH /v1/services/engagements/:id', () => {
     );
     const res = await app.request('/v1/services/engagements/test-id', {
       method: 'PATCH',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'delivered' }),
     }, env({}, db));
     expect(res.status).toBe(403);
@@ -262,7 +251,7 @@ describe('PATCH /v1/services/engagements/:id', () => {
     );
     const res = await app.request('/v1/services/engagements/test-id', {
       method: 'PATCH',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'cancelled' }),
     }, env({}, db));
     expect(res.status).toBe(400);
@@ -273,7 +262,7 @@ describe('POST /v1/services/engagements/:id/refund', () => {
   it('rejects non-admin', async () => {
     const res = await app.request('/v1/services/engagements/test-id/refund', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ amountCents: 100 }),
     }, env({ ADMIN_GITHUB_IDS: 'gh:99' }));
     expect(res.status).toBe(403);
@@ -286,7 +275,7 @@ describe('POST /v1/services/engagements/:id/refund', () => {
     );
     const res = await app.request('/v1/services/engagements/test-id/refund', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ amountCents: 0 }),
     }, env({ ADMIN_GITHUB_IDS: 'gh:1' }, db));
     expect(res.status).toBe(400);
@@ -295,7 +284,6 @@ describe('POST /v1/services/engagements/:id/refund', () => {
 
 describe('DELETE /v1/services/requests/:id', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 401 }));
     const res = await app.request('/v1/services/requests/test-id', {
       method: 'DELETE',
     }, env());

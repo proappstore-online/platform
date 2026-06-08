@@ -1,7 +1,5 @@
-// Self-contained PAS SDK — no runtime dependency on @freeappstore/sdk. The free
-// primitives (auth, kv, counters, rooms, proxy, roles) are VENDORED here (copied
-// from the FAS SDK source, per the workspace "vendor, don't depend" rule), so a
-// published @proappstore/sdk stands alone and never lags a separate package.
+// Self-contained PAS SDK. All primitives (auth, kv, counters, rooms, roles,
+// proxy, db, etc.) hit the PAS backend — no FAS dependency at runtime.
 import { Auth } from './auth.js';
 import { Kv } from './kv.js';
 import { Counters } from './counters.js';
@@ -58,22 +56,15 @@ export { Webhooks } from './webhooks.js';
 export type { WebhookConfig, WebhookTestResult } from './webhooks.js';
 
 /**
- * Pro SDK instance — the free primitives (auth, kv, counters, rooms, proxy,
- * roles) PLUS the Pro features (db, storage, maps, notifications, sms, ai, usage,
- * email, webhooks, subscription, license). One import, one instance, all features.
- *
- * auth/kv/counters/rooms/roles are FAS-backed (shared identity + free tier);
- * proxy + every Pro feature hit the PAS backend.
+ * Pro SDK instance — all features hit the PAS backend.
  */
 export class ProAppStore {
-  // Free primitives (FAS-backed)
   readonly auth: Auth;
   readonly kv: Kv;
   readonly counters: Counters;
   readonly rooms: Rooms;
   readonly roles: Roles;
   readonly proxy: ApiProxy;
-  // Pro features (PAS-backed)
   readonly subscription: SubscriptionApi;
   readonly license: LicenseApi;
   readonly db: Database;
@@ -88,30 +79,25 @@ export class ProAppStore {
   readonly invites: Invites;
 
   constructor(opts: ProInitOptions) {
-    const fasApiBase = opts.fasApiBase ?? 'https://api.freeappstore.online';
-    const proApiBase = opts.proApiBase ?? 'https://api.proappstore.online';
-    // Identity is PAS-owned (its own OAuth + user store); tokens are signed with
-    // the shared key so the free-tier primitives (kv/counters/rooms/roles, which
-    // run on the free-tier backend) still accept them.
-    this.auth = new Auth(opts.appId, proApiBase);
-    this.kv = new Kv(opts.appId, fasApiBase, this.auth);
-    this.counters = new Counters(opts.appId, fasApiBase, this.auth);
-    this.rooms = new Rooms(opts.appId, fasApiBase, this.auth);
-    this.roles = new Roles(opts.appId, fasApiBase, this.auth);
-    // proxy + Pro features hit the PAS backend (its own proxy/secrets/allowlist).
-    this.proxy = new ApiProxy(opts.appId, proApiBase, this.auth);
-    this.subscription = new SubscriptionApi(opts.appId, proApiBase, this.auth);
-    this.license = new LicenseApi(opts.appId, proApiBase, this.auth);
+    const apiBase = opts.proApiBase ?? 'https://api.proappstore.online';
+    this.auth = new Auth(opts.appId, apiBase);
+    this.kv = new Kv(opts.appId, apiBase, this.auth);
+    this.counters = new Counters(opts.appId, apiBase, this.auth);
+    this.rooms = new Rooms(opts.appId, apiBase, this.auth);
+    this.roles = new Roles(opts.appId, apiBase, this.auth);
+    this.proxy = new ApiProxy(opts.appId, apiBase, this.auth);
+    this.subscription = new SubscriptionApi(opts.appId, apiBase, this.auth);
+    this.license = new LicenseApi(opts.appId, apiBase, this.auth);
     this.db = new Database(opts.appId, opts.dataApiBase ?? `https://data-${opts.appId}.proappstore.online`, this.auth);
-    this.storage = new Storage(opts.appId, proApiBase, this.auth);
-    this.maps = new Maps(proApiBase, this.auth);
-    this.notifications = new Notifications(opts.appId, proApiBase, this.auth);
-    this.sms = new SMS(opts.appId, proApiBase, this.auth);
-    this.ai = new AI(proApiBase, this.auth);
-    this.usage = new Usage(opts.appId, proApiBase, this.auth);
-    this.email = new Email(opts.appId, proApiBase, this.auth);
-    this.webhooks = new Webhooks(opts.appId, proApiBase, this.auth);
-    this.invites = new Invites(opts.appId, proApiBase, this.auth);
+    this.storage = new Storage(opts.appId, apiBase, this.auth);
+    this.maps = new Maps(apiBase, this.auth);
+    this.notifications = new Notifications(opts.appId, apiBase, this.auth);
+    this.sms = new SMS(opts.appId, apiBase, this.auth);
+    this.ai = new AI(apiBase, this.auth);
+    this.usage = new Usage(opts.appId, apiBase, this.auth);
+    this.email = new Email(opts.appId, apiBase, this.auth);
+    this.webhooks = new Webhooks(opts.appId, apiBase, this.auth);
+    this.invites = new Invites(opts.appId, apiBase, this.auth);
     // Auto-start telemetry unless the app opts out. Wrapped in try-catch
     // because localStorage can throw in incognito, sandboxed iframes, or
     // when storage quota is exceeded.

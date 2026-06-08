@@ -1,14 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const mockFetch = vi.fn();
-vi.stubGlobal('fetch', mockFetch);
-
-function authAs(id: string, roles: string[] = ['user']) {
-  mockFetch.mockResolvedValueOnce(
-    new Response(JSON.stringify({ id, login: 'testuser', avatarUrl: null, roles }), { status: 200 }),
-  );
-}
+const TOK = await testToken('gh:1');
 
 interface InviteRow {
   id: string; app_id: string; code: string; role: string; group_id: string | null;
@@ -54,8 +48,7 @@ function makeEnv(opts: {
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk',
     STRIPE_WEBHOOK_SECRET: 'wh',
-    SESSION_SIGNING_KEY: 'test-signing-key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf',
     CF_ACCOUNT_ID: 'acct',
     VAPID_PUBLIC_KEY: 'vk',
@@ -66,17 +59,15 @@ function makeEnv(opts: {
 function req(method: string, path: string, body?: unknown) {
   const init: RequestInit = {
     method,
-    headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
   };
   if (body) init.body = JSON.stringify(body);
   return new Request(`https://api.test.com${path}`, init);
 }
 
-beforeEach(() => mockFetch.mockReset());
 
 describe('POST /v1/apps/:appId/invites', () => {
   it('creates an invite with default values', async () => {
-    authAs('gh:1');
     const env = makeEnv({ creatorId: 'gh:1' });
     const res = await app.fetch(req('POST', '/v1/apps/chess/invites', { role: 'student' }), env);
     expect(res.status).toBe(200);
@@ -88,7 +79,6 @@ describe('POST /v1/apps/:appId/invites', () => {
   });
 
   it('rejects owner role', async () => {
-    authAs('gh:1');
     const env = makeEnv({ creatorId: 'gh:1' });
     const res = await app.fetch(req('POST', '/v1/apps/chess/invites', { role: 'owner' }), env);
     expect(res.status).toBe(400);
@@ -106,7 +96,6 @@ describe('POST /v1/apps/:appId/invites', () => {
 
 describe('GET /v1/apps/:appId/invites', () => {
   it('lists invites for app owner', async () => {
-    authAs('gh:1');
     const env = makeEnv({
       creatorId: 'gh:1',
       invites: [{
@@ -125,7 +114,6 @@ describe('GET /v1/apps/:appId/invites', () => {
 
 describe('DELETE /v1/apps/:appId/invites/:id', () => {
   it('revokes an invite', async () => {
-    authAs('gh:1');
     const env = makeEnv({ creatorId: 'gh:1' });
     const res = await app.fetch(req('DELETE', '/v1/apps/chess/invites/inv1'), env);
     expect(res.status).toBe(200);
@@ -136,10 +124,6 @@ describe('DELETE /v1/apps/:appId/invites/:id', () => {
 
 describe('POST /v1/invites/:code/redeem', () => {
   it('redeems a valid invite and assigns role', async () => {
-    authAs('gh:2');
-    // Mock the FAS service-assign call
-    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
-
     const env = makeEnv({
       invites: [{
         id: 'inv1', app_id: 'chess', code: 'HKWX3P', role: 'student',
@@ -157,7 +141,6 @@ describe('POST /v1/invites/:code/redeem', () => {
   });
 
   it('rejects expired invite', async () => {
-    authAs('gh:2');
     const env = makeEnv({
       invites: [{
         id: 'inv1', app_id: 'chess', code: 'EXPRD1', role: 'student',
@@ -170,7 +153,6 @@ describe('POST /v1/invites/:code/redeem', () => {
   });
 
   it('rejects fully used invite', async () => {
-    authAs('gh:2');
     const env = makeEnv({
       invites: [{
         id: 'inv1', app_id: 'chess', code: 'FULL01', role: 'student',
@@ -183,7 +165,6 @@ describe('POST /v1/invites/:code/redeem', () => {
   });
 
   it('rejects unknown code', async () => {
-    authAs('gh:2');
     const env = makeEnv({ invites: [] });
     const res = await app.fetch(req('POST', '/v1/invites/NOPE00/redeem'), env);
     expect(res.status).toBe(404);

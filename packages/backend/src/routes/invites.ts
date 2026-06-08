@@ -24,20 +24,6 @@ function parseDuration(s: string): number {
   return n * multipliers[unit]!;
 }
 
-async function generateProof(
-  appId: string, userId: string, role: string, signingKey: string,
-): Promise<string> {
-  const enc = new TextEncoder();
-  const message = `claim:${appId}:${userId}:${role}`;
-  const key = await crypto.subtle.importKey(
-    'raw', enc.encode(signingKey) as BufferSource,
-    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message) as BufferSource);
-  return btoa(String.fromCharCode(...new Uint8Array(sig)))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
 interface CreateBody {
   role?: string;
   group?: string;
@@ -176,30 +162,12 @@ inviteRoutes.post('/invites/:code/redeem', async (c) => {
 
     if (!upd.meta.changes) return c.json({ error: 'invite fully used' }, 410);
 
-    // Assign role via FAS service-assign endpoint
-    const fasBase = c.env.FAS_API_BASE || 'https://api.freeappstore.online';
-    const proof = await generateProof(
-      invite.app_id, user.id, invite.role, c.env.SESSION_SIGNING_KEY,
-    );
-
-    const roleRes = await fetch(`${fasBase}/v1/apps/${encodeURIComponent(invite.app_id)}/roles/service-assign`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId: user.id,
-        role: invite.role,
-        proof,
-        grantedBy: `invite:${invite.id}`,
-      }),
-    });
-
-    if (!roleRes.ok) {
-      // Roll back used_count on role assignment failure
-      await c.env.DB.prepare(
-        'UPDATE invites SET used_count = used_count - 1 WHERE id = ? AND used_count > 0',
-      ).bind(invite.id).run();
-      return c.json({ error: 'role assignment failed' }, 502);
-    }
+    // Assign role directly in PAS D1 (no FAS round-trip)
+    await c.env.DB.prepare(
+      `INSERT INTO app_roles (app_id, user_id, role_name, granted_by)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT DO NOTHING`,
+    ).bind(invite.app_id, user.id, invite.role, `invite:${invite.id}`).run();
 
     return c.json({
       ok: true,

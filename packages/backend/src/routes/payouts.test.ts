@@ -1,8 +1,9 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
 import { computeMonthPreview } from './payouts.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown } = {}) {
   return {
@@ -26,24 +27,13 @@ function makeEnv(db?: ReturnType<typeof mockD1>) {
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'p',
     VAPID_PRIVATE_KEY: 'q',
   };
 }
-
-beforeEach(() => {
-  globalThis.fetch = vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id: 'gh:1', login: 'testuser', avatarUrl: null }), { status: 200 }),
-  ) as unknown as typeof fetch;
-});
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
 
 // ── Pure-math unit tests on computeMonthPreview ─────────────────────────
 
@@ -151,7 +141,7 @@ describe('GET /v1/payouts/me/preview', () => {
     const db = mockD1(ownedApps);
     const res = await app.request(
       '/v1/payouts/me/preview?months=1',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);
@@ -171,7 +161,7 @@ describe('GET /v1/payouts/me/preview', () => {
     const db = mockD1(apps1, usage, usage, usage); // owned + N month queries
     const res = await app.request(
       '/v1/payouts/me/preview?months=100',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);
@@ -188,7 +178,7 @@ describe('GET /v1/payouts/me/preview', () => {
     const db = mockD1(ownedApps, usage);
     const res = await app.request(
       '/v1/payouts/me/preview?months=1',
-      { headers: { Authorization: 'Bearer t' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);

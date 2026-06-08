@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import { verifySession } from './verify-session.js';
+import { verifySession } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 
 export class HttpError extends Error {

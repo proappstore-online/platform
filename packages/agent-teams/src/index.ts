@@ -51,7 +51,7 @@ app.use('*', cors({
   maxAge: 600,
 }));
 
-// Auth middleware — all /v1/* routes require a valid FAS session OR internal token.
+// Auth middleware — all /v1/* routes require a valid PAS session OR internal token.
 // Internal token (X-Internal-Token) is for service-to-service calls (MCP server,
 // admin). It resolves the project owner from the D1 index so the DO sees a valid
 // user context. Read-only — no userToken is set, so autonomous agent dispatch

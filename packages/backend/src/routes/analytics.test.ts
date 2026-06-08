@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { buildLoaderJs } from './analytics.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
+
+const TOK = await testToken('gh:1');
 
 const empty = {
   cf_beacon_token: null,

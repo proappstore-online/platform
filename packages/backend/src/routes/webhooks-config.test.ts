@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -48,13 +48,8 @@ beforeEach(() => {
     ),
   );
 });
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
-
 describe('POST /v1/apps/:appId/webhooks — register', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request(
       '/v1/apps/myapp/webhooks',
       {
@@ -73,7 +68,7 @@ describe('POST /v1/apps/:appId/webhooks — register', () => {
       '/v1/apps/myapp/webhooks',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ event: 'storage.uploaded', url: 'https://example.com/hook' }),
       },
       makeEnv({}, db),
@@ -87,7 +82,7 @@ describe('POST /v1/apps/:appId/webhooks — register', () => {
       '/v1/apps/myapp/webhooks',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ event: 'storage.uploaded', url: 'http://example.com/hook' }),
       },
       makeEnv({}, db),
@@ -102,7 +97,7 @@ describe('POST /v1/apps/:appId/webhooks — register', () => {
       '/v1/apps/myapp/webhooks',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ event: 'storage.uploaded', url: 'https://localhost/hook' }),
       },
       makeEnv({}, db),
@@ -117,7 +112,7 @@ describe('POST /v1/apps/:appId/webhooks — register', () => {
       '/v1/apps/myapp/webhooks',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ event: 'storage.uploaded', url: 'https://127.0.0.1/hook' }),
       },
       makeEnv({}, db),
@@ -132,7 +127,7 @@ describe('POST /v1/apps/:appId/webhooks — register', () => {
       '/v1/apps/myapp/webhooks',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ event: 'storage.uploaded', url: 'https://10.0.0.1/hook' }),
       },
       makeEnv({}, db),
@@ -147,7 +142,7 @@ describe('POST /v1/apps/:appId/webhooks — register', () => {
       '/v1/apps/myapp/webhooks',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ event: 'storage.uploaded', url: 'https://192.168.1.100/hook' }),
       },
       makeEnv({}, db),
@@ -162,7 +157,7 @@ describe('POST /v1/apps/:appId/webhooks — register', () => {
       '/v1/apps/myapp/webhooks',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ event: 'storage.uploaded', url: 'https://169.254.169.254/latest/meta-data/' }),
       },
       makeEnv({}, db),
@@ -177,7 +172,7 @@ describe('POST /v1/apps/:appId/webhooks — register', () => {
       '/v1/apps/myapp/webhooks',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ event: 'user.deleted', url: 'https://example.com/hook' }),
       },
       makeEnv({}, db),
@@ -197,7 +192,7 @@ describe('POST /v1/apps/:appId/webhooks — register', () => {
       '/v1/apps/myapp/webhooks',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ event: 'storage.uploaded', url: 'https://example.com/hook' }),
       },
       makeEnv({}, db),
@@ -220,7 +215,7 @@ describe('POST /v1/apps/:appId/webhooks — register', () => {
       '/v1/apps/myapp/webhooks',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ event: 'notification.sent', url: 'https://hooks.example.com/pas' }),
       },
       makeEnv({}, db),
@@ -240,7 +235,7 @@ describe('DELETE /v1/apps/:appId/webhooks/:id — remove', () => {
       '/v1/apps/myapp/webhooks/nonexistent-id',
       {
         method: 'DELETE',
-        headers: { Authorization: 'Bearer tok' },
+        headers: { Authorization: `Bearer ${TOK}` },
       },
       makeEnv({}, db),
     );
@@ -257,7 +252,7 @@ describe('DELETE /v1/apps/:appId/webhooks/:id — remove', () => {
       '/v1/apps/myapp/webhooks/hook-uuid-123',
       {
         method: 'DELETE',
-        headers: { Authorization: 'Bearer tok' },
+        headers: { Authorization: `Bearer ${TOK}` },
       },
       makeEnv({}, db),
     );
@@ -271,7 +266,7 @@ describe('DELETE /v1/apps/:appId/webhooks/:id — remove', () => {
       '/v1/apps/myapp/webhooks/hook-uuid-123',
       {
         method: 'DELETE',
-        headers: { Authorization: 'Bearer tok' },
+        headers: { Authorization: `Bearer ${TOK}` },
       },
       makeEnv({}, db),
     );
@@ -293,7 +288,7 @@ describe('GET /v1/apps/:appId/webhooks — list', () => {
 
     const res = await app.request(
       '/v1/apps/myapp/webhooks',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(200);
@@ -305,7 +300,7 @@ describe('GET /v1/apps/:appId/webhooks — list', () => {
     const db = mockD1(mockStmt({ first: { creator_id: 'gh:other' } }));
     const res = await app.request(
       '/v1/apps/myapp/webhooks',
-      { headers: { Authorization: 'Bearer tok' } },
+      { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv({}, db),
     );
     expect(res.status).toBe(403);

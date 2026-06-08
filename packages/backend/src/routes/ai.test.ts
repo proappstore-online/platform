@@ -1,13 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
-
-function asUser(id = 'gh:1') {
-  return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id, login: 'tester', avatarUrl: null }), { status: 200 }),
-  );
-}
+const TOK = await testToken('gh:1');
 
 function makeEnv(aiRun?: (model: string, inputs: Record<string, unknown>) => Promise<unknown>) {
   return {
@@ -15,8 +10,7 @@ function makeEnv(aiRun?: (model: string, inputs: Record<string, unknown>) => Pro
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk',
     STRIPE_WEBHOOK_SECRET: 'whsec',
-    SESSION_SIGNING_KEY: 'sk',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'tok',
     CF_ACCOUNT_ID: 'acct',
     VAPID_PUBLIC_KEY: 'pub',
@@ -26,13 +20,6 @@ function makeEnv(aiRun?: (model: string, inputs: Record<string, unknown>) => Pro
     },
   };
 }
-
-beforeEach(() => {
-  globalThis.fetch = asUser();
-});
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
 
 describe('GET /v1/ai/models', () => {
   it('lists allowed text + embed model aliases (no auth required for discovery)', async () => {
@@ -50,7 +37,6 @@ describe('GET /v1/ai/models', () => {
 
 describe('POST /v1/ai/generate', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request(
       '/v1/ai/generate',
       {
@@ -68,7 +54,7 @@ describe('POST /v1/ai/generate', () => {
       '/v1/ai/generate',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       },
       makeEnv(),
@@ -82,7 +68,7 @@ describe('POST /v1/ai/generate', () => {
       '/v1/ai/generate',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: 'hi', messages: [{ role: 'user', content: 'hi' }] }),
       },
       makeEnv(),
@@ -95,7 +81,7 @@ describe('POST /v1/ai/generate', () => {
       '/v1/ai/generate',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: 'hi', model: 'definitely-not-a-model' }),
       },
       makeEnv(),
@@ -109,7 +95,7 @@ describe('POST /v1/ai/generate', () => {
       '/v1/ai/generate',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: 'x'.repeat(20_000) }),
       },
       makeEnv(),
@@ -124,7 +110,7 @@ describe('POST /v1/ai/generate', () => {
       '/v1/ai/generate',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: 'Write a haiku about yoga' }),
       },
       makeEnv(aiRun),
@@ -147,7 +133,7 @@ describe('POST /v1/ai/generate', () => {
       '/v1/ai/generate',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: 'hi', model: 'smart' }),
       },
       makeEnv(aiRun),
@@ -164,7 +150,7 @@ describe('POST /v1/ai/generate', () => {
       '/v1/ai/generate',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: [
             { role: 'system', content: 'You are a yoga teacher.' },
@@ -187,7 +173,7 @@ describe('POST /v1/ai/generate', () => {
       '/v1/ai/generate',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: [{ role: 'evil', content: 'hi' }] }),
       },
       makeEnv(),
@@ -202,7 +188,7 @@ describe('POST /v1/ai/generate', () => {
       '/v1/ai/generate',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: 'hi', maxTokens: 99_999 }),
       },
       makeEnv(aiRun),
@@ -219,7 +205,7 @@ describe('POST /v1/ai/generate', () => {
       '/v1/ai/generate',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: 'hi' }),
       },
       makeEnv(aiRun),
@@ -233,7 +219,6 @@ describe('POST /v1/ai/generate', () => {
 
 describe('POST /v1/ai/embed', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request(
       '/v1/ai/embed',
       {
@@ -253,7 +238,7 @@ describe('POST /v1/ai/embed', () => {
       '/v1/ai/embed',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: 'vinyasa flow' }),
       },
       makeEnv(aiRun),
@@ -275,7 +260,7 @@ describe('POST /v1/ai/embed', () => {
       '/v1/ai/embed',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: ['a', 'b', 'c'] }),
       },
       makeEnv(aiRun),
@@ -291,7 +276,7 @@ describe('POST /v1/ai/embed', () => {
       '/v1/ai/embed',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: [] }),
       },
       makeEnv(),
@@ -304,7 +289,7 @@ describe('POST /v1/ai/embed', () => {
       '/v1/ai/embed',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: Array.from({ length: 101 }, (_, i) => `item ${i}`) }),
       },
       makeEnv(),
@@ -319,7 +304,7 @@ describe('POST /v1/ai/embed', () => {
       '/v1/ai/embed',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: 'hi', model: 'base' }),
       },
       makeEnv(aiRun),

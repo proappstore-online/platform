@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -35,36 +35,17 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
   };
 }
 
-function asUser(id = 'gh:1') {
+/** Mock fetch for the upstream maps API (auth is local — no fetch needed). */
+function authThenUpstream(upstreamBody: unknown, upstreamStatus = 200) {
   return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id, login: 'tester', avatarUrl: null, roles: ['user'], appRoles: {} }), { status: 200 }),
+    new Response(JSON.stringify(upstreamBody), { status: upstreamStatus }),
   );
 }
-
-/**
- * Build a fetch mock that sequences responses: first call = auth (FAS),
- * second call = external maps API response.
- */
-function authThenUpstream(upstreamBody: unknown, upstreamStatus = 200) {
-  const mock = vi.fn();
-  mock
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({ id: 'gh:1', login: 'tester', avatarUrl: null, roles: ['user'], appRoles: {} }), { status: 200 }),
-    )
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify(upstreamBody), { status: upstreamStatus }),
-    );
-  return mock;
-}
-
-beforeEach(() => { globalThis.fetch = asUser(); });
-afterEach(() => { globalThis.fetch = originalFetch; });
 
 // GET /v1/maps/geocode
 
 describe('GET /v1/maps/geocode', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 401 }));
     const res = await app.request('/v1/maps/geocode?q=London', {
       headers: { Authorization: 'Bearer bad' },
     }, makeEnv());
@@ -75,7 +56,7 @@ describe('GET /v1/maps/geocode', () => {
     // DB: rate-limit query returns 0 usage, then usage insert — both succeed
     const db = mockD1(mockStmt({ first: { n: 0 } }), mockStmt());
     const res = await app.request('/v1/maps/geocode', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(400);
     const body = await res.json() as { error: string };
@@ -97,7 +78,7 @@ describe('GET /v1/maps/geocode', () => {
     globalThis.fetch = authThenUpstream(nominatimResponse);
 
     const res = await app.request('/v1/maps/geocode?q=London', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(200);
     const body = await res.json() as { results: { lat: number; lng: number; displayName: string }[] };
@@ -111,7 +92,7 @@ describe('GET /v1/maps/geocode', () => {
     // DB returns count = 100 (at the limit)
     const db = mockD1(mockStmt({ first: { n: 100 } }));
     const res = await app.request('/v1/maps/geocode?q=Paris', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(429);
     const body = await res.json() as { error: string };
@@ -123,7 +104,7 @@ describe('GET /v1/maps/geocode', () => {
     globalThis.fetch = authThenUpstream({}, 503);
 
     const res = await app.request('/v1/maps/geocode?q=broken', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(502);
   });
@@ -133,7 +114,6 @@ describe('GET /v1/maps/geocode', () => {
 
 describe('GET /v1/maps/route', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 401 }));
     const res = await app.request('/v1/maps/route?from=51.5,0&to=48.8,2.3', {
       headers: { Authorization: 'Bearer bad' },
     }, makeEnv());
@@ -143,7 +123,7 @@ describe('GET /v1/maps/route', () => {
   it('returns 400 when from parameter is missing', async () => {
     const db = mockD1(mockStmt({ first: { n: 0 } }), mockStmt());
     const res = await app.request('/v1/maps/route?to=48.8,2.3', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(400);
   });
@@ -151,7 +131,7 @@ describe('GET /v1/maps/route', () => {
   it('returns 400 for invalid coordinate format', async () => {
     const db = mockD1(mockStmt({ first: { n: 0 } }), mockStmt());
     const res = await app.request('/v1/maps/route?from=not-a-coord&to=48.8,2.3', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(400);
     const body = await res.json() as { error: string };
@@ -162,7 +142,7 @@ describe('GET /v1/maps/route', () => {
     const db = mockD1(mockStmt({ first: { n: 0 } }), mockStmt());
     // lat > 90 is invalid
     const res = await app.request('/v1/maps/route?from=99.0,0.0&to=48.8,2.3', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(400);
   });
@@ -182,7 +162,7 @@ describe('GET /v1/maps/route', () => {
     globalThis.fetch = authThenUpstream(osrmResponse);
 
     const res = await app.request('/v1/maps/route?from=51.5,0.0&to=48.8,2.3', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(200);
     const body = await res.json() as { distanceMeters: number; durationSeconds: number; geometry: unknown };
@@ -197,7 +177,7 @@ describe('GET /v1/maps/route', () => {
     globalThis.fetch = authThenUpstream(osrmResponse);
 
     const res = await app.request('/v1/maps/route?from=51.5,0.0&to=48.8,2.3', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(404);
   });
@@ -207,7 +187,6 @@ describe('GET /v1/maps/route', () => {
 
 describe('GET /v1/maps/reverse', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 401 }));
     const res = await app.request('/v1/maps/reverse?lat=51.5&lng=-0.1', {
       headers: { Authorization: 'Bearer bad' },
     }, makeEnv());
@@ -217,7 +196,7 @@ describe('GET /v1/maps/reverse', () => {
   it('returns 400 when lat or lng is missing', async () => {
     const db = mockD1(mockStmt({ first: { n: 0 } }), mockStmt());
     const res = await app.request('/v1/maps/reverse?lat=51.5', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(400);
     const body = await res.json() as { error: string };
@@ -235,7 +214,7 @@ describe('GET /v1/maps/reverse', () => {
     globalThis.fetch = authThenUpstream(nominatimResponse);
 
     const res = await app.request('/v1/maps/reverse?lat=51.5074&lng=-0.1278', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(200);
     const body = await res.json() as { lat: number; lng: number; displayName: string; address: unknown };

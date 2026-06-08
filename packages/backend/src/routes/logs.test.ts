@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -35,20 +35,10 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
   };
 }
 
-function asUser(id = 'gh:1') {
-  return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id, login: 'tester', avatarUrl: null, roles: ['user'], appRoles: {} }), { status: 200 }),
-  );
-}
-
-beforeEach(() => { globalThis.fetch = asUser(); });
-afterEach(() => { globalThis.fetch = originalFetch; });
-
 // POST /v1/apps/:appId/logs — any authenticated user can ingest logs for any app
 
 describe('POST /v1/apps/:appId/logs', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 401 }));
     const res = await app.request('/v1/apps/myapp/logs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -60,7 +50,7 @@ describe('POST /v1/apps/:appId/logs', () => {
   it('returns 400 when entries array is missing', async () => {
     const res = await app.request('/v1/apps/myapp/logs', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ notEntries: 'oops' }),
     }, makeEnv());
     expect(res.status).toBe(400);
@@ -69,7 +59,7 @@ describe('POST /v1/apps/:appId/logs', () => {
   it('returns 400 when entries is not an array', async () => {
     const res = await app.request('/v1/apps/myapp/logs', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ entries: 'a string' }),
     }, makeEnv());
     expect(res.status).toBe(400);
@@ -83,7 +73,7 @@ describe('POST /v1/apps/:appId/logs', () => {
     ];
     const res = await app.request('/v1/apps/myapp/logs', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ entries }),
     }, makeEnv({}, db));
     expect(res.status).toBe(200);
@@ -101,7 +91,7 @@ describe('POST /v1/apps/:appId/logs', () => {
     ];
     const res = await app.request('/v1/apps/myapp/logs', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ entries }),
     }, makeEnv({}, db));
     expect(res.status).toBe(200);
@@ -119,7 +109,7 @@ describe('POST /v1/apps/:appId/logs', () => {
     }));
     const res = await app.request('/v1/apps/myapp/logs', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ entries }),
     }, makeEnv({}, db));
     expect(res.status).toBe(200);
@@ -132,7 +122,6 @@ describe('POST /v1/apps/:appId/logs', () => {
 
 describe('GET /v1/apps/:appId/logs', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 401 }));
     const res = await app.request('/v1/apps/myapp/logs', {
       headers: { Authorization: 'Bearer bad' },
     }, makeEnv());
@@ -143,7 +132,7 @@ describe('GET /v1/apps/:appId/logs', () => {
     // requireAppOwner first queries apps table — return null to trigger 404
     const db = mockD1(mockStmt({ first: null }));
     const res = await app.request('/v1/apps/myapp/logs', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(404);
   });
@@ -152,7 +141,7 @@ describe('GET /v1/apps/:appId/logs', () => {
     // App exists but creator_id is a different user
     const db = mockD1(mockStmt({ first: { creator_id: 'gh:99' } }));
     const res = await app.request('/v1/apps/myapp/logs', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(403);
   });
@@ -165,7 +154,7 @@ describe('GET /v1/apps/:appId/logs', () => {
       ]}}),
     );
     const res = await app.request('/v1/apps/myapp/logs', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(200);
     const body = await res.json() as { logs: unknown[] };
@@ -180,7 +169,7 @@ describe('GET /v1/apps/:appId/logs', () => {
       ]}}),
     );
     const res = await app.request('/v1/apps/myapp/logs', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     const body = await res.json() as { logs: { data: unknown }[] };
     expect(body.logs[0]!.data).toEqual({ status: 500 });
@@ -193,7 +182,7 @@ describe('GET /v1/apps/:appId/logs/build', () => {
   it('returns 403 when user is not the owner', async () => {
     const db = mockD1(mockStmt({ first: { creator_id: 'gh:99' } }));
     const res = await app.request('/v1/apps/myapp/logs/build', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(403);
   });
@@ -204,7 +193,7 @@ describe('GET /v1/apps/:appId/logs/build', () => {
       mockStmt({ first: null }), // no build row
     );
     const res = await app.request('/v1/apps/myapp/logs/build', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ build: null });
@@ -217,7 +206,7 @@ describe('GET /v1/apps/:appId/logs/build', () => {
       mockStmt({ first: { build_meta: JSON.stringify(buildMeta), ts: 9999 } }),
     );
     const res = await app.request('/v1/apps/myapp/logs/build', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, makeEnv({}, db));
     expect(res.status).toBe(200);
     const body = await res.json() as { build: unknown; ts: number };

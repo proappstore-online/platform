@@ -22,7 +22,7 @@ describe('readConfig', () => {
   it('returns defaults when no config file exists', async () => {
     const config = await readConfig();
     expect(config.apiBase).toBe('https://api.proappstore.online');
-    expect(config.authApiBase).toBe('https://api.freeappstore.online');
+    expect(config.authApiBase).toBe('https://api.proappstore.online');
     expect(config.session).toBeUndefined();
   });
 
@@ -43,7 +43,7 @@ describe('writeConfig', () => {
   it('creates config dir with restricted permissions', async () => {
     await writeConfig({
       apiBase: 'https://api.proappstore.online',
-      authApiBase: 'https://api.freeappstore.online',
+      authApiBase: 'https://api.proappstore.online',
     });
     const raw = await readFile(join(testHome, '.proappstore', 'config.json'), 'utf8');
     const parsed = JSON.parse(raw);
@@ -53,7 +53,7 @@ describe('writeConfig', () => {
   it('round-trips session data', async () => {
     const config = {
       apiBase: 'https://api.proappstore.online',
-      authApiBase: 'https://api.freeappstore.online',
+      authApiBase: 'https://api.proappstore.online',
       session: { token: 'test-token', obtainedAt: Date.now() },
     };
     await writeConfig(config);
@@ -83,7 +83,7 @@ describe('resolveToken', () => {
     delete process.env.PAS_SESSION_TOKEN;
     await writeConfig({
       apiBase: 'https://api.proappstore.online',
-      authApiBase: 'https://api.freeappstore.online',
+      authApiBase: 'https://api.proappstore.online',
       session: { token: 'file-tok', obtainedAt: 1000 },
     });
     expect(resolveToken()).toBe('file-tok');

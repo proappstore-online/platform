@@ -26,8 +26,8 @@ export class PasMcpAgent extends McpAgent<Env> {
     // now see the user. (The agent-teams loop tools also accept an explicit
     // `token` arg, so they work even without this.)
     const token = extractToken(this.props as Record<string, unknown>);
-    if (token) {
-      const user = await verifyToken(this.env.API_BASE, token);
+    if (token && this.env.SESSION_SIGNING_KEY) {
+      const user = await verifyToken(this.env.SESSION_SIGNING_KEY, token);
       if (user) {
         this.userId = user.id;
         this.userToken = token;
@@ -78,7 +78,7 @@ export default {
     if (env.OAUTH_KV && env.SESSION_SIGNING_KEY) {
       const oauthRes = await handleOAuthRoute(request, {
         issuer: `${url.protocol}//${url.host}`,
-        fasAuthStart: env.FAS_AUTH_START ?? `${env.API_BASE.replace('proappstore', 'freeappstore')}/v1/auth/github/start`,
+        authStart: env.AUTH_START ?? `${env.API_BASE}/v1/auth/github/start`,
         kv: env.OAUTH_KV,
         sessionSigningKey: env.SESSION_SIGNING_KEY,
       });
@@ -92,12 +92,12 @@ export default {
       );
     }
 
-    // Resolve OAuth token → FAS session, then lift into ctx.props
+    // Resolve OAuth token → session, then lift into ctx.props
     const auth = request.headers.get("Authorization");
     let bearer = auth?.replace(/^Bearer\s+/i, "");
     if (bearer && env.OAUTH_KV) {
-      const fasSession = await resolveOAuthToken(bearer, env.OAUTH_KV);
-      if (fasSession) bearer = fasSession;
+      const session = await resolveOAuthToken(bearer, env.OAUTH_KV);
+      if (session) bearer = session;
     }
     if (bearer) {
       (ctx as unknown as { props?: Record<string, unknown> }).props = {

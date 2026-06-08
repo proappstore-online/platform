@@ -65,11 +65,9 @@ export function renderKeysPage(opts: { returnUrl: string; provider: string; appI
   var token = null;
   var highlightProvider = ${JSON.stringify(provider)};
 
-  // Get session token from localStorage. PAS identity rides on the FAS
-  // session token, so accept either key.
   function getToken() {
     try {
-      var stored = localStorage.getItem('pas_session') || localStorage.getItem('fas_session');
+      var stored = localStorage.getItem('pas_session');
       if (stored) { var p = JSON.parse(stored); if (p && p.token) return p.token; }
     } catch (_) {}
     return null;

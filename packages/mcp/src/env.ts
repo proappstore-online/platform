@@ -10,8 +10,8 @@ export interface Env {
   SESSION_SIGNING_KEY?: string;
   /** Workers KV namespace for OAuth 2.1 state. */
   OAUTH_KV?: KVNamespace;
-  /** FAS auth start URL for OAuth flow. */
-  FAS_AUTH_START?: string;
+  /** Auth start URL for OAuth flow (PAS-owned). */
+  AUTH_START?: string;
   /** R2 deploy secrets — set on new repos so the deploy workflow can upload to R2. */
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;

@@ -1,5 +1,5 @@
-// FAS session token verification — vendored from fas/mcp/src/session.ts.
-// Tokens are HMAC-SHA256 signed: base64url(payload) + "." + base64url(hmac).
+// Session token verification (HMAC-SHA256).
+// Tokens are: base64url(payload) + "." + base64url(hmac).
 
 export interface SessionPayload {
   uid: string;

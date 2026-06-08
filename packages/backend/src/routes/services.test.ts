@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -25,8 +26,7 @@ function env(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof moc
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -36,20 +36,9 @@ function env(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof moc
   };
 }
 
-function asUser(id = 'gh:1') {
-  return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id, login: 'tester', avatarUrl: null, roles: ['user'], appRoles: {} }), { status: 200 }),
-  );
-}
-
-beforeEach(() => { globalThis.fetch = asUser(); });
-afterEach(() => { globalThis.fetch = originalFetch; });
-
 describe('GET /v1/services/developers', () => {
   it('returns 200 with empty list (no auth needed)', async () => {
-    globalThis.fetch = originalFetch; // no mock needed, but we need D1 mock
     const db = mockD1(mockStmt({ all: { results: [] } }));
-    // Use the original fetch for the API call
     globalThis.fetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ results: [] }), { status: 200 }),
     );
@@ -62,7 +51,6 @@ describe('GET /v1/services/developers', () => {
 
 describe('GET /v1/services/profile', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 401 }));
     const res = await app.request('/v1/services/profile', {}, env());
     expect(res.status).toBe(401);
   });
@@ -70,7 +58,7 @@ describe('GET /v1/services/profile', () => {
   it('returns exists:false when no profile exists', async () => {
     const db = mockD1(mockStmt({ first: null }));
     const res = await app.request('/v1/services/profile', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, env({}, db));
     expect(res.status).toBe(200);
     const body = await res.json() as { exists: boolean };
@@ -82,7 +70,7 @@ describe('PUT /v1/services/profile', () => {
   it('validates rate range', async () => {
     const res = await app.request('/v1/services/profile', {
       method: 'PUT',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ promptRateCents: 5 }), // below min 10
     }, env());
     expect(res.status).toBe(400);
@@ -91,7 +79,7 @@ describe('PUT /v1/services/profile', () => {
   it('validates rate upper bound', async () => {
     const res = await app.request('/v1/services/profile', {
       method: 'PUT',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ promptRateCents: 10000 }), // above max 5000
     }, env());
     expect(res.status).toBe(400);
@@ -100,7 +88,7 @@ describe('PUT /v1/services/profile', () => {
   it('validates bio length', async () => {
     const res = await app.request('/v1/services/profile', {
       method: 'PUT',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ bioServices: 'x'.repeat(2001) }),
     }, env());
     expect(res.status).toBe(400);
@@ -109,7 +97,6 @@ describe('PUT /v1/services/profile', () => {
 
 describe('GET /v1/services/balance', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 401 }));
     const res = await app.request('/v1/services/balance', {}, env());
     expect(res.status).toBe(401);
   });
@@ -117,7 +104,7 @@ describe('GET /v1/services/balance', () => {
   it('returns 0 balance when no record exists', async () => {
     const db = mockD1(mockStmt({ first: null }));
     const res = await app.request('/v1/services/balance', {
-      headers: { Authorization: 'Bearer tok' },
+      headers: { Authorization: `Bearer ${TOK}` },
     }, env({}, db));
     expect(res.status).toBe(200);
     const body = await res.json() as { balanceCents: number };
@@ -129,7 +116,7 @@ describe('POST /v1/services/balance/deposit', () => {
   it('rejects amount below minimum', async () => {
     const res = await app.request('/v1/services/balance/deposit', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ amountCents: 500, successUrl: 'https://proappstore.online/app', cancelUrl: 'https://proappstore.online/app' }),
     }, env());
     expect(res.status).toBe(400);
@@ -138,7 +125,7 @@ describe('POST /v1/services/balance/deposit', () => {
   it('rejects amount above maximum', async () => {
     const res = await app.request('/v1/services/balance/deposit', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ amountCents: 200000, successUrl: 'https://proappstore.online/app', cancelUrl: 'https://proappstore.online/app' }),
     }, env());
     expect(res.status).toBe(400);
@@ -147,7 +134,7 @@ describe('POST /v1/services/balance/deposit', () => {
   it('rejects bad redirect URLs', async () => {
     const res = await app.request('/v1/services/balance/deposit', {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ amountCents: 1000, successUrl: 'https://evil.com', cancelUrl: 'https://proappstore.online/app' }),
     }, env());
     expect(res.status).toBe(400);

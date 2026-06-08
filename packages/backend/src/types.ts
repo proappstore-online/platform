@@ -2,6 +2,8 @@ export interface Env {
   DB: D1Database;
   /** Shared R2 bucket for file storage. Files keyed as {appId}/{userId}/{path}. */
   STORAGE: R2Bucket;
+  /** Durable Object namespace for realtime rooms. */
+  ROOM: DurableObjectNamespace;
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
   /** Stripe price ID for the $9/mo platform subscription. Read by GET /v1/pricing. */
@@ -15,11 +17,6 @@ export interface Env {
   GITHUB_CLIENT_SECRET?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
-  /**
-   * FAS API base — only used by invite redeem to call FAS service-assign
-   * (role assignment for invite codes). Auth verification is local.
-   */
-  FAS_API_BASE: string;
   /** CF credentials for provisioning (D1, Pages, Workers). */
   CF_API_TOKEN: string;
   CF_ACCOUNT_ID: string;

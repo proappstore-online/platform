@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
-const originalFetch = globalThis.fetch;
+const TOK = await testToken('gh:1');
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -38,8 +39,7 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
     STORAGE: makeStorage(),
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: 'sign_key',
-    FAS_API_BASE: 'https://api.freeappstore.online',
+    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
@@ -56,13 +56,8 @@ beforeEach(() => {
     ),
   );
 });
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
-
 describe('PUT /v1/apps/:appId/storage/* — upload', () => {
   it('returns 401 without auth', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 401 }));
     const res = await app.request(
       '/v1/apps/myapp/storage/photo.png',
       {
@@ -80,7 +75,7 @@ describe('PUT /v1/apps/:appId/storage/* — upload', () => {
       '/v1/apps/myapp/storage/page.html',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'text/html' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'text/html' },
         body: new Uint8Array([60, 104, 116, 109, 108, 62]),
       },
       makeEnv(),
@@ -94,7 +89,7 @@ describe('PUT /v1/apps/:appId/storage/* — upload', () => {
       '/v1/apps/myapp/storage/script.js',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/javascript' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/javascript' },
         body: new Uint8Array([97, 108, 101, 114, 116]),
       },
       makeEnv(),
@@ -108,7 +103,7 @@ describe('PUT /v1/apps/:appId/storage/* — upload', () => {
       '/v1/apps/myapp/storage/image.svg',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'image/svg+xml' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'image/svg+xml' },
         body: new Uint8Array([60, 115, 118, 103, 62]),
       },
       makeEnv(),
@@ -122,7 +117,7 @@ describe('PUT /v1/apps/:appId/storage/* — upload', () => {
       '/v1/apps/myapp/storage/code.js',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'text/javascript' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'text/javascript' },
         body: new Uint8Array([1]),
       },
       makeEnv(),
@@ -135,7 +130,7 @@ describe('PUT /v1/apps/:appId/storage/* — upload', () => {
       '/v1/apps/myapp/storage/doc.xhtml',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/xhtml+xml' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/xhtml+xml' },
         body: new Uint8Array([1]),
       },
       makeEnv(),
@@ -149,7 +144,7 @@ describe('PUT /v1/apps/:appId/storage/* — upload', () => {
       '/v1/apps/myapp/storage/photo.png',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'image/png' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'image/png' },
         body: new Uint8Array([137, 80, 78, 71]),
       },
       makeEnv({ STORAGE: storage }),
@@ -167,7 +162,7 @@ describe('PUT /v1/apps/:appId/storage/* — upload', () => {
       '/v1/apps/myapp/storage/doc.pdf',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/pdf' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/pdf' },
         body: new Uint8Array([37, 80, 68, 70]),
       },
       makeEnv({ STORAGE: storage }),
@@ -183,7 +178,7 @@ describe('PUT /v1/apps/:appId/storage/* — upload', () => {
       '/v1/apps/myapp/storage/data.json',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: new Uint8Array(Buffer.from('{"x":1}')),
       },
       makeEnv({ STORAGE: storage }),
@@ -199,7 +194,7 @@ describe('PUT /v1/apps/:appId/storage/* — upload', () => {
       '/v1/apps/myapp/storage/data.txt',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'text/plain; charset=utf-8' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'text/plain; charset=utf-8' },
         body: new Uint8Array(Buffer.from('hello')),
       },
       makeEnv({ STORAGE: storage }),
@@ -221,7 +216,7 @@ describe('PUT /v1/apps/:appId/storage/* — upload', () => {
       '/v1/apps/myapp/storage/img.png',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'image/png' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'image/png' },
         body: new Uint8Array([1, 2, 3]),
       },
       makeEnv({ STORAGE: storage }),
@@ -236,7 +231,7 @@ describe('PUT /v1/apps/:appId/storage/* — upload', () => {
       '/v1/apps/myapp/storage/empty.png',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'image/png' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'image/png' },
         body: new Uint8Array([]),
       },
       makeEnv(),
@@ -251,7 +246,7 @@ describe('PUT /v1/apps/:appId/storage/* — upload', () => {
       '/v1/apps/myapp/storage/notes/draft.txt',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'text/plain' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'text/plain' },
         body: new Uint8Array(Buffer.from('draft')),
       },
       makeEnv({ STORAGE: storage }),
@@ -270,7 +265,7 @@ describe('PUT /v1/apps/:appId/storage/* — upload', () => {
       '/v1/apps/myapp/storage/_public/logo.png',
       {
         method: 'PUT',
-        headers: { Authorization: 'Bearer tok', 'Content-Type': 'image/png' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'image/png' },
         body: new Uint8Array([1, 2, 3]),
       },
       makeEnv({ STORAGE: storage }, db),
