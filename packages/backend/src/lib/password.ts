@@ -12,8 +12,15 @@
 
 const enc = new TextEncoder();
 
-/** Cost factor. 210k matches OWASP's 2023 PBKDF2-SHA256 floor. */
-export const PBKDF2_ITERATIONS = 210_000;
+/**
+ * Cost factor. The Cloudflare Workers runtime hard-caps PBKDF2 at 100,000
+ * iterations (`deriveBits` throws NotSupportedError above that), so we run at
+ * the cap. That's below OWASP's 2023 ideal (210k) but acceptable here: these
+ * are low-value, no-PII child accounts (animal logins), and credentials/login
+ * is rate-limited. Hashes are self-describing (`pbkdf2$<iter>$...`), so this
+ * can be raised — or swapped for another KDF — later without breaking rows.
+ */
+export const PBKDF2_ITERATIONS = 100_000;
 const SALT_BYTES = 16;
 const HASH_BYTES = 32; // 256-bit derived key
 
