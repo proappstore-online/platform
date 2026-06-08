@@ -19,6 +19,7 @@ import { LicenseApi } from './license.js';
 import { Usage } from './usage.js';
 import { Email } from './email.js';
 import { Webhooks } from './webhooks.js';
+import { Invites } from './invites.js';
 import type { ProInitOptions } from './types.js';
 
 // Vendored base primitive types — one import for app authors.
@@ -27,6 +28,7 @@ export type { AuthProvider } from './auth.js';
 export type { ConnectionState, Room, RoomMessage, RoomPeer } from './rooms.js';
 export type { DefaultRole, RoleAssignment } from './roles.js';
 export { DEFAULT_ROLES } from './roles.js';
+export type { Invite, InviteListItem, CreateInviteOptions, RedeemResult } from './invites.js';
 
 export type {
   ProInitOptions,
@@ -83,6 +85,7 @@ export class ProAppStore {
   readonly usage: Usage;
   readonly email: Email;
   readonly webhooks: Webhooks;
+  readonly invites: Invites;
 
   constructor(opts: ProInitOptions) {
     const fasApiBase = opts.fasApiBase ?? 'https://api.freeappstore.online';
@@ -108,6 +111,7 @@ export class ProAppStore {
     this.usage = new Usage(opts.appId, proApiBase, this.auth);
     this.email = new Email(opts.appId, proApiBase, this.auth);
     this.webhooks = new Webhooks(opts.appId, proApiBase, this.auth);
+    this.invites = new Invites(opts.appId, proApiBase, this.auth);
     // Auto-start telemetry unless the app opts out. Wrapped in try-catch
     // because localStorage can throw in incognito, sandboxed iframes, or
     // when storage quota is exceeded.
