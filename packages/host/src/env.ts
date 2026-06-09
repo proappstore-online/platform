@@ -11,6 +11,6 @@ export interface Env {
   AGENTS: Fetcher;
   /** Service binding: mcp.proappstore.online → proappstore-mcp */
   MCP: Fetcher;
-  /** Service binding: kb.proappstore.online → proappstore-kb-host */
+  /** Service binding: kb.proappstore.online and docs.proappstore.online -> proappstore-kb-host */
   KB: Fetcher;
 }

@@ -3,6 +3,7 @@ import {
   contentType,
   etagsMatch,
   isUpdateSensitivePath,
+  RESERVED_SUBDOMAINS,
   type Route,
   r2KeyFor,
   securityHeaders,
@@ -40,6 +41,13 @@ describe("slugFromHostname", () => {
 
   it("is case-insensitive", () => {
     expect(slugFromHostname("MeetUp.ProAppStore.Online")).toBe("meetup");
+  });
+});
+
+describe("RESERVED_SUBDOMAINS", () => {
+  it("reserves docs for KB-host dispatch", () => {
+    expect(RESERVED_SUBDOMAINS.has("docs")).toBe(true);
+    expect(RESERVED_SUBDOMAINS.has("kb")).toBe(true);
   });
 });
 

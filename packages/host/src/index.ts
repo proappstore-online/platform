@@ -2,8 +2,8 @@
  * proappstore-host — serves every published Pro app from R2 via subdomain routing.
  *
  * Wildcard route `*.proappstore.online/*` catches all subdomains. Reserved
- * subdomains (api, admin, agents, mcp, kb, console, dashboard) are dispatched
- * via service bindings or proxied to CF Pages. Everything else is looked up
+ * subdomains (api, admin, agents, mcp, kb, docs, console, dashboard) are
+ * dispatched via service bindings or proxied to CF Pages. Everything else is looked up
  * in the D1 routes table and served from R2.
  *
  * data-* subdomains (per-app D1 Workers) are proxied via fetch since they're
@@ -45,6 +45,7 @@ export default {
     if (slug === "agents") return env.AGENTS.fetch(request);
     if (slug === "mcp") return env.MCP.fetch(request);
     if (slug === "kb") return env.KB.fetch(request);
+    if (slug === "docs") return env.KB.fetch(request);
 
     // www → redirect to apex
     if (slug === "www") {
