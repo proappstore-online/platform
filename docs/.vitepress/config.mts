@@ -41,6 +41,8 @@ const mainSidebar = [
       { text: "Getting Started", link: "/getting-started" },
       { text: "Tailored vs Ready", link: "/tailored-vs-ready" },
       { text: "Services Marketplace", link: "/services-marketplace" },
+      { text: "UI Components", link: "/ui" },
+      { text: "Recipes", link: "/recipes" },
     ],
   },
   {
@@ -62,6 +64,8 @@ const mainSidebar = [
     text: "Reference",
     items: [
       { text: "SDK Overview", link: "/sdk-overview" },
+      { text: "UI Components", link: "/ui" },
+      { text: "Recipes", link: "/recipes" },
       { text: "CLI Overview", link: "/cli-overview" },
     ],
   },
@@ -83,6 +87,7 @@ export default withMermaid(
         { text: "Architecture", link: "/architecture" },
         { text: "AI & Agents", link: "/mcp-app-tools" },
         { text: "SDK", link: "/sdk-overview" },
+        { text: "UI", link: "/ui" },
         { text: "ADRs", link: "/adr/001-cloudflare-workers-only" },
       ],
       sidebar: {

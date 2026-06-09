@@ -45,6 +45,8 @@ tools.
 
 - [Getting Started](./getting-started.md)
 - [SDK overview](./sdk-overview.md)
+- [UI components](./ui.md)
+- [Recipes](./recipes.md)
 - [CLI overview](./cli-overview.md)
 - [Publishing flow](./publishing-flow.md)
 - [MCP app tools and auth](./mcp-app-tools.md)

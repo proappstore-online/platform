@@ -32,6 +32,7 @@ jobs:
           mkdir -p zensical-src/assets zensical-src/stylesheets
           cp -r docs/. zensical-src/
           rm -rf zensical-src/.vitepress
+          rm -f zensical-src/SERVICES.md zensical-src/adr/000-template.md
           cat > zensical-src/assets/logo.svg <<'SVG'
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#7c3aed"/></linearGradient></defs><rect width="512" height="512" rx="96" fill="url(#bg)"/><text x="256" y="346" font-family="Manrope, -apple-system, BlinkMacSystemFont, sans-serif" font-weight="800" font-size="300" fill="white" text-anchor="middle">P</text></svg>
           SVG
@@ -81,6 +82,8 @@ jobs:
             - Home: index.md
             - Getting Started: getting-started.md
             - SDK: sdk-overview.md
+            - UI Components: ui.md
+            - Recipes: recipes.md
             - CLI: cli-overview.md
             - Publishing: publishing-flow.md
             - MCP App Tools: mcp-app-tools.md
