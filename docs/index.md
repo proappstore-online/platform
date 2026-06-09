@@ -33,3 +33,20 @@ features:
     details: A PO/BA/Dev/QA AI team builds and maintains an app from a founder's chat. One Durable Object per project; GitHub is the source of truth; agents run on the user's BYO key. Personas + project memory give each team real context.
     link: /agent-teams-runtime-and-billing
 ---
+
+# ProAppStore Platform Docs
+
+ProAppStore is the paid counterpart to FreeAppStore: the same Cloudflare
+Workers and D1 foundation, plus subscriptions, license keys, per-app SQL,
+storage, AI, maps, notifications, email, webhooks, agent teams, and MCP app
+tools.
+
+## Start here
+
+- [Getting Started](./getting-started.md)
+- [SDK overview](./sdk-overview.md)
+- [CLI overview](./cli-overview.md)
+- [Publishing flow](./publishing-flow.md)
+- [MCP app tools and auth](./mcp-app-tools.md)
+- [Agent customization](./agent-customization.md)
+- [Architecture](./architecture.md)

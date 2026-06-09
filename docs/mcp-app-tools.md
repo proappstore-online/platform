@@ -192,6 +192,26 @@ Then `discover_tools` lists what's registered, and `<app>/<tool>` calls it.
 Tools marked `requires_auth` need a session token on the connection (the call
 runs as that user, so `:__user_id` resolves and per-user scoping is enforced).
 
+## What is allowed without auth
+
+Unauthenticated MCP access is limited to public protocol and documentation
+surfaces:
+
+- Server health / landing text.
+- OAuth discovery, dynamic client registration, and OAuth login start.
+- Public platform reference tools, such as SDK docs and recipes.
+- `discover_tools`, only when it returns public tools plus redacted metadata for
+  private app tools.
+
+App-data tools are not anonymous by default. A tool may be callable without auth
+only when the app owner explicitly marks it public and its SQL does not reference
+`:__user_id` or private tenant data.
+
+Private app tools should not be fully discoverable anonymously. Anonymous
+discovery can show that an app has private tools and what auth is required, but
+it must not expose private schemas, sensitive descriptions, or parameters that
+would leak business data.
+
 ## Security model
 
 - **Authenticated by default.** App-data tools should require a PAS session.
