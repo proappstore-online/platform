@@ -6,7 +6,9 @@ name: Publish to npm
 # when local version == npm version and the package has changes in this push.
 #
 # Auth: OIDC trusted publishing — no stored NPM_TOKEN needed.
-# Each @proappstore/* package is linked to this repo on npmjs.com.
+# Each published @proappstore/* package is linked to this repo on npmjs.com.
+# packages/mcp-registry (@proappstore/mcp) is intentionally excluded until its
+# npm trusted-publishing settings are configured for this workflow.
 
 on:
   push:
@@ -15,7 +17,6 @@ on:
       - 'packages/cli/**'
       - 'packages/sdk/**'
       - 'packages/compliance/**'
-      - 'packages/mcp-registry/**'
       - '.github/workflows/publish.yml'
   workflow_dispatch: # manual trigger — publishes all packages
 
@@ -55,7 +56,7 @@ jobs:
           FAILED=""
           BEFORE="${{ github.event.before }}"
 
-          for PKG in cli sdk compliance mcp-registry; do
+          for PKG in cli sdk compliance; do
             PKG_NAME=$(node -p "require('./packages/$PKG/package.json').name")
             LOCAL_VER=$(node -p "require('./packages/$PKG/package.json').version")
             NPM_VER=$(npm view "$PKG_NAME" version 2>/dev/null || echo "0.0.0")
