@@ -1,4 +1,4 @@
-# MCP: expose your app's tools
+# MCP app tools and auth
 
 ProAppStore is **AI-first**: every app you publish can expose its own tools to
 the platform's remote MCP server, so an external AI (Claude Code, Cursor, the
@@ -8,7 +8,7 @@ create records, run a query — the same way the UI does.
 This is the per-app counterpart to the [agent-customization](./agent-customization)
 story: agents *build* your app, and MCP makes the finished app *callable*.
 
-## How it works
+## Current implementation
 
 ```
 your app repo                 platform backend            platform MCP server
@@ -27,6 +27,73 @@ your app repo                 platform backend            platform MCP server
 4. When called, the server runs the tool's SQL against your app's data worker
    (`data-<app>.proappstore.online`) using the caller's session — returning rows
    for a `query`, or a write result for an `execute`.
+
+Apps do **not** need to implement their own MCP server for normal D1-backed app
+actions. The app-owned surface is the `mcp.json` action manifest. A local MCP
+server can still be useful as a development bridge, but the platform MCP server
+is the canonical integration point.
+
+## Authentication model
+
+All app-data tools should be authenticated unless they are deliberately public.
+In the current production manifest format, auth is represented by:
+
+```json
+{ "requires_auth": true }
+```
+
+When an authenticated MCP connection calls a tool, the platform MCP server has
+the caller's PAS session token and user id. It injects magic placeholders such
+as `:__user_id`, `:__now`, and `:__uuid`, then sends the prepared SQL to the
+app's data worker with the caller's bearer token.
+
+For app tools, authentication answers "who is this user?" Authorization still
+belongs in the tool SQL or the app's data model. Scope reads and writes with
+`:__user_id` and app-specific permission checks, for example:
+
+```sql
+WHERE EXISTS (
+  SELECT 1 FROM memberships
+  WHERE org_id = :org_id
+    AND user_id = :__user_id
+    AND role = 'manager'
+)
+```
+
+This pattern prevents a caller from passing someone else's `org_id` and reading
+or mutating data they do not manage.
+
+## Roles and permissions
+
+PAS provides reusable roles through the SDK (`app.roles`). Those roles are the
+right abstraction for coarse permission gates such as owner, moderator, editor,
+viewer, manager, or custom app roles.
+
+The current `mcp.json` registration API does **not yet enforce role fields in
+the manifest**. Until role-gated manifest fields are implemented, enforce
+permissions in one of these ways:
+
+- Use `:__user_id` in SQL and check app-domain membership tables, such as an
+  `org_id` membership row.
+- Use app data that mirrors PAS roles if the tool needs role-specific access.
+- Keep all tools that touch user or app data marked with `requires_auth: true`.
+
+The intended manifest extension is to add explicit auth metadata, for example:
+
+```json
+{
+  "auth": {
+    "required": true,
+    "platform_roles": ["creator"],
+    "app_roles": ["manager"]
+  }
+}
+```
+
+That extension is not a substitute for row-level checks. A user can have a
+`manager` role somewhere and still not manage the specific organisation named
+by `:org_id`. Use role metadata for early rejection and better UX; use SQL
+scoping for the final data permission check.
 
 ## The `mcp.json` manifest
 
@@ -64,6 +131,10 @@ Each tool is **one parameterized SQL statement** against your app's own D1 table
 | `params` | declared inputs: `{ "name": { "type", "description?", "optional?", "default?", "max?" } }`. Types: `string`, `integer`, `number`, `boolean`. |
 | `requires_auth` | `true` ⇒ the call needs a session token. Auto-required when the SQL uses `:__user_id`. |
 
+Use `requires_auth: true` for every app-data tool unless the data is genuinely
+public. For user-scoped and organisation-scoped apps, that normally means every
+tool, including reads.
+
 ### Magic placeholders
 
 These are injected by the platform — **do not** declare them in `params`:
@@ -81,6 +152,7 @@ These are injected by the platform — **do not** declare them in `params`:
 - `UPDATE` and `DELETE` **must** have a `WHERE` clause.
 - `query` must use `SELECT`; `execute` must not.
 - Every `:param` in the SQL must be declared in `params` (or be a magic placeholder).
+- If SQL uses `:__user_id`, `requires_auth` must be `true`.
 - Max 50 tools per app.
 
 A manifest that violates any rule is rejected — the whole batch fails, so a bad
@@ -122,12 +194,16 @@ runs as that user, so `:__user_id` resolves and per-user scoping is enforced).
 
 ## Security model
 
+- **Authenticated by default.** App-data tools should require a PAS session.
+  Public tools should be intentional and rare.
 - **SQL-only.** A tool can only run the one parameterized statement in its
   manifest against the app's own D1 — no arbitrary code, no cross-app access.
 - **Parameterized.** All inputs bind as positional params; no string-built SQL.
-- **Per-user by default.** `:__user_id` + `requires_auth` keep a user's data
-  scoped to them. Anonymous (`requires_auth: false`) tools must not reference
+- **Per-user scoped.** `:__user_id` + `requires_auth` keep a user's data scoped
+  to them. Anonymous (`requires_auth: false`) tools cannot reference
   `:__user_id`.
+- **Role-aware in SQL today.** Until manifest role gates are implemented, check
+  app roles or membership tables in the SQL itself.
 - **Mutations are constrained** — `UPDATE`/`DELETE` require a `WHERE`; no DDL.
 
 ## Limits & roadmap
@@ -135,5 +211,6 @@ runs as that user, so `:__user_id` resolves and per-user scoping is enforced).
 - Tools are **SQL against the app's D1** — they can't (yet) call an external API
   or run business logic in a Worker route. That's a deliberate, safe surface.
 - Existing agent-built apps register on their **next** deploy (or a `pas publish`).
-- Coming next: richer (non-SQL) tool handlers and exposing per-app tools from the
-  Console UI alongside [agent customization](./agent-customization).
+- Coming next: role-gated manifest fields, richer (non-SQL) tool handlers, and
+  exposing per-app tools from the Console UI alongside
+  [agent customization](./agent-customization).
