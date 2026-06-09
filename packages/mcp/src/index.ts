@@ -7,7 +7,7 @@ import { fetchTools, registerAppTools } from "./tool-loader.js";
 import { registerProjectTools } from "./project-tools.js";
 import { registerLoopTools } from "./loop-tools.js";
 import { registerAgentsTools } from "./agents-tools.js";
-import { handleOAuthRoute, resolveOAuthToken } from "./oauth-provider.js";
+import { createAuthChallenge, handleOAuthRoute, resolveOAuthToken } from "./oauth-provider.js";
 
 export class PasMcpAgent extends McpAgent<Env> {
   server = new McpServer({
@@ -73,11 +73,12 @@ export class PasMcpAgent extends McpAgent<Env> {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
+    const issuer = `${url.protocol}//${url.host}`;
 
     // OAuth 2.1 routes (discovery, registration, authorize, token)
     if (env.OAUTH_KV && env.SESSION_SIGNING_KEY) {
       const oauthRes = await handleOAuthRoute(request, {
-        issuer: `${url.protocol}//${url.host}`,
+        issuer,
         authStart: env.AUTH_START ?? `${env.API_BASE}/v1/auth/github/start`,
         kv: env.OAUTH_KV,
         sessionSigningKey: env.SESSION_SIGNING_KEY,
@@ -92,14 +93,23 @@ export default {
       );
     }
 
-    // Resolve OAuth token → session, then lift into ctx.props
+    // Resolve OAuth token → PAS session, verify it, then lift into ctx.props.
     const auth = request.headers.get("Authorization");
     let bearer = auth?.replace(/^Bearer\s+/i, "");
     if (bearer && env.OAUTH_KV) {
       const session = await resolveOAuthToken(bearer, env.OAUTH_KV);
       if (session) bearer = session;
     }
-    if (bearer) {
+    const user = bearer && env.SESSION_SIGNING_KEY
+      ? await verifyToken(env.SESSION_SIGNING_KEY, bearer)
+      : null;
+
+    const isMcpTransport = url.pathname === "/mcp" || url.pathname.startsWith("/mcp/");
+    if (isMcpTransport && request.method !== "OPTIONS" && env.OAUTH_KV && env.SESSION_SIGNING_KEY && !user) {
+      return createAuthChallenge({ issuer }, bearer ? "invalid_token" : undefined);
+    }
+
+    if (bearer && user) {
       (ctx as unknown as { props?: Record<string, unknown> }).props = {
         ...((ctx as unknown as { props?: Record<string, unknown> }).props ?? {}),
         authToken: bearer,

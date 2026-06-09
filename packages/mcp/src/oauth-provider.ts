@@ -17,6 +17,19 @@ export interface OAuthConfig {
   sessionSigningKey: string;
 }
 
+export function createAuthChallenge(config: Pick<OAuthConfig, "issuer">, error?: "invalid_token"): Response {
+  const metadata = new URL("/.well-known/oauth-protected-resource/mcp", config.issuer);
+  const params = [`resource_metadata="${metadata.toString()}"`];
+  if (error) params.push(`error="${error}"`);
+  return new Response("Authentication required", {
+    status: 401,
+    headers: {
+      "WWW-Authenticate": `Bearer ${params.join(", ")}`,
+      "Access-Control-Allow-Origin": "*",
+    },
+  });
+}
+
 /** Try to handle an OAuth-related request. Returns null if not an OAuth path. */
 export async function handleOAuthRoute(
   request: Request,

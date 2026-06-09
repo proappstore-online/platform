@@ -59,7 +59,7 @@ async function executeToolCall(
   // Check auth requirement before building the query — prepareQuery throws
   // on __user_id when userId is null, so this must come first.
   if (tool.requires_auth && !userId) {
-    return 'Error: This tool requires authentication. Connect with a session token.';
+    return 'Error: This tool requires authentication. Authenticate the MCP connection or send a PAS session token.';
   }
 
   let sql: string;

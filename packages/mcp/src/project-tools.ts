@@ -36,7 +36,7 @@ export function registerProjectTools(
   /** Require a valid session token; return it or the error response. */
   function requireAuth(): { token: string } | Text {
     const { token } = getUserContext();
-    if (!token) return text("Error: authentication required. Connect with a session token.");
+    if (!token) return text("Error: authentication required. Authenticate the MCP connection or send a PAS session token.");
     return { token };
   }
 
