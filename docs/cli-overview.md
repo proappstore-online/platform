@@ -76,6 +76,27 @@ gh repo create my-org/flights --private --source . --remote origin --push
 pas publish
 ```
 
+## Check
+
+`pas check` runs the same platform compliance checks locally that PAS uses
+during app publishing and CI.
+
+The current baseline includes:
+
+- source safety checks, including no committed `.env.production` files and no
+  third-party tracking SDKs
+- PAS brand and viewport checks
+- PWA metadata, manifest, offline, maskable icon, and share-image checks
+- bundle-size checks after `pnpm build`
+- baseline accessibility checks for images, buttons, and form controls
+
+The accessibility rule is intentionally static so it can run quickly without a
+browser. It catches missing image `alt` text, buttons without accessible names,
+and unlabeled text-style form controls. Deeper audits such as color contrast,
+focus order, keyboard traps, and rendered ARIA state should run in app tests
+with Playwright and axe. PAS also runs the pinned VCQA code-health scanner in
+generated app workflows as report-only guidance.
+
 ## Publish
 
 `pas publish` reads `package.json` for the app ID, then provisions:
