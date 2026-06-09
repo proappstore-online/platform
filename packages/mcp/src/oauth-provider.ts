@@ -6,6 +6,8 @@
 
 import { verifySession } from "./session.js";
 
+const AUTH_IN_FLIGHT_COOKIE = "pas_mcp_oauth_inflight";
+
 export interface OAuthConfig {
   /** Base URL of this MCP server (e.g. "https://mcp.proappstore.online") */
   issuer: string;
@@ -116,6 +118,27 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
+function cookieValue(request: Request, name: string): string | null {
+  const raw = request.headers.get("Cookie") ?? "";
+  for (const part of raw.split(";")) {
+    const [k, ...v] = part.trim().split("=");
+    if (k === name) return v.join("=") || "";
+  }
+  return null;
+}
+
+function authAlreadyInProgress(): Response {
+  return new Response(
+    "<!doctype html><title>ProAppStore sign-in</title><p>ProAppStore MCP sign-in is already in progress in another tab. Complete that sign-in, then return to your MCP client.</p>",
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+      },
+    },
+  );
+}
+
 /** POST /register — dynamic client registration (required by mcp-remote) */
 async function register(request: Request, config: OAuthConfig): Promise<Response> {
   // Rate limit: 20 registrations/hour/IP
@@ -175,6 +198,9 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
   if (codeChallengeMethod && codeChallengeMethod !== "S256") {
     return new Response("only S256 is supported", { status: 400 });
   }
+  if (cookieValue(request, AUTH_IN_FLIGHT_COOKIE)) {
+    return authAlreadyInProgress();
+  }
 
   // Verify client registration
   const clientRaw = await config.kv.get(`client:${clientId}`);
@@ -202,7 +228,13 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
   callbackUrl.searchParams.set("nonce", nonce);
   authUrl.searchParams.set("return_to", callbackUrl.toString());
 
-  return Response.redirect(authUrl.toString(), 302);
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: authUrl.toString(),
+      "Set-Cookie": `${AUTH_IN_FLIGHT_COOKIE}=1; Max-Age=120; Path=/; Secure; HttpOnly; SameSite=Lax`,
+    },
+  });
 }
 
 /** GET /oauth/callback — receives session token from PAS auth, issues auth code */
@@ -254,7 +286,13 @@ async function oauthCallback(request: Request, config: OAuthConfig): Promise<Res
   if (authReq.state) {
     redirect.searchParams.set("state", authReq.state);
   }
-  return Response.redirect(redirect.toString(), 302);
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: redirect.toString(),
+      "Set-Cookie": `${AUTH_IN_FLIGHT_COOKIE}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax`,
+    },
+  });
 }
 
 /** POST /token — exchange auth code for access token (PKCE S256 verified) */
