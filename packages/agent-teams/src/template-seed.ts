@@ -173,7 +173,21 @@ export default defineConfig({
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="description" content="${slug} on ProAppStore" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="${slug}" />
+    <meta property="og:description" content="${slug} on ProAppStore" />
+    <meta property="og:url" content="https://${slug}.proappstore.online/" />
+    <meta property="og:image" content="https://${slug}.proappstore.online/icon-512.png" />
+    <meta property="og:image:width" content="512" />
+    <meta property="og:image:height" content="512" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="${slug}" />
+    <meta name="twitter:description" content="${slug} on ProAppStore" />
+    <meta name="twitter:image" content="https://${slug}.proappstore.online/icon-512.png" />
     <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" href="/icon-192.png" type="image/png" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
     <title>${slug}</title>
   </head>
   <body>

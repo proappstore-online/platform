@@ -91,6 +91,28 @@ pas publish
 
 Idempotent — re-running fills in only missing pieces.
 
+## App Icons And Link Previews
+
+The source of truth for an app's browser icon, installed PWA icon, and shared
+link preview image is the app repo, not Creator Console.
+
+Put the files in:
+
+```text
+web/public/icon-192.png
+web/public/icon-512.png
+```
+
+The template's `web/index.html` points Open Graph and Twitter metadata at:
+
+```text
+https://<app-id>.proappstore.online/icon-512.png
+```
+
+When you share `https://<app-id>.proappstore.online`, social clients use that
+deployed asset as the app logo. To change the shared-link logo, replace
+`web/public/icon-512.png` in GitHub and redeploy the app.
+
 ## Auth session
 
 `pas login` uses GitHub device auth, exchanges the GitHub token for a PAS
