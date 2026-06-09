@@ -80,6 +80,12 @@ rolesRoutes.post('/apps/:appId/roles', async (c) => {
 
   const target = await resolveRoleUser(c.env, body.userId);
 
+  if (target.login && target.login !== target.id) {
+    await c.env.DB.prepare('DELETE FROM app_roles WHERE app_id = ? AND user_id = ? AND role_name = ?')
+      .bind(appId, target.login, body.role)
+      .run();
+  }
+
   await c.env.DB.prepare(
     `INSERT INTO app_roles (app_id, user_id, role_name, granted_by)
      VALUES (?, ?, ?, ?)
@@ -128,9 +134,9 @@ rolesRoutes.get('/apps/:appId/roles/check/:role', async (c) => {
   }
 
   const row = await c.env.DB.prepare(
-    'SELECT 1 FROM app_roles WHERE app_id = ? AND user_id = ? AND role_name = ? LIMIT 1',
+    'SELECT 1 FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id = ?) AND role_name = ? LIMIT 1',
   )
-    .bind(appId, user.id, role)
+    .bind(appId, user.id, user.login, role)
     .first();
 
   return c.json({ has: row !== null, source: 'db' });
@@ -142,9 +148,9 @@ rolesRoutes.get('/apps/:appId/roles/me', async (c) => {
   const appId = c.req.param('appId');
 
   const { results } = await c.env.DB.prepare(
-    'SELECT role_name FROM app_roles WHERE app_id = ? AND user_id = ?',
+    'SELECT role_name FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id = ?)',
   )
-    .bind(appId, user.id)
+    .bind(appId, user.id, user.login)
     .all<{ role_name: string }>();
 
   return c.json({ roles: (results ?? []).map((r) => r.role_name) });
@@ -156,9 +162,9 @@ rolesRoutes.post('/apps/:appId/roles/ensure-member', async (c) => {
   const appId = c.req.param('appId');
 
   const existing = await c.env.DB.prepare(
-    'SELECT 1 FROM app_roles WHERE app_id = ? AND user_id = ? LIMIT 1',
+    'SELECT 1 FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id = ?) LIMIT 1',
   )
-    .bind(appId, user.id)
+    .bind(appId, user.id, user.login)
     .first();
 
   if (existing) return c.json({ ok: true, assigned: false });

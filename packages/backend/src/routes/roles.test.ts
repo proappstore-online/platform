@@ -76,8 +76,9 @@ describe('app roles', () => {
   it('resolves a GitHub login to a PAS UID when assigning a role', async () => {
     const lookupStmt = mockStmt({ first: null });
     const upsertStmt = mockStmt();
+    const deleteLegacyStmt = mockStmt();
     const insertRoleStmt = mockStmt();
-    const db = mockD1(lookupStmt, upsertStmt, insertRoleStmt);
+    const db = mockD1(lookupStmt, upsertStmt, deleteLegacyStmt, insertRoleStmt);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       id: 42,
       login: 'octocat',
@@ -102,6 +103,20 @@ describe('app roles', () => {
       userAvatarUrl: 'https://avatars.githubusercontent.com/u/42?v=4',
       role: 'moderator',
     });
+    expect(deleteLegacyStmt.bind).toHaveBeenCalledWith('service-exchange', 'octocat', 'moderator');
     expect(insertRoleStmt.bind).toHaveBeenCalledWith('service-exchange', 'gh:42', 'moderator', 'gh:1');
+  });
+
+  it('checks legacy raw-login role rows for signed-in users', async () => {
+    const token = await testToken('gh:42', { roles: ['user'], login: 'octocat' });
+    const roleStmt = mockStmt({ first: { 1: 1 } });
+
+    const res = await app.request('/v1/apps/service-exchange/roles/check/moderator', {
+      headers: { Authorization: `Bearer ${token}` },
+    }, makeEnv(mockD1(roleStmt)));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ has: true, source: 'db' });
+    expect(roleStmt.bind).toHaveBeenCalledWith('service-exchange', 'gh:42', 'octocat', 'moderator');
   });
 });
