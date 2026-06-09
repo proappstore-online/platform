@@ -5,6 +5,7 @@
  */
 import { useState, useCallback } from 'react';
 import type { ProAppStore } from './index.js';
+import type { AuthProvider } from './auth.js';
 import { useSubscription } from './hooks.js';
 import { resolveApp } from './provider.js';
 
@@ -15,13 +16,18 @@ import { resolveApp } from './provider.js';
 export interface SignInButtonProps {
   app?: ProAppStore;
   label?: string;
+  provider?: Exclude<AuthProvider, 'email'>;
 }
 
-export function SignInButton({ app: appProp, label = 'Sign in with GitHub' }: SignInButtonProps) {
+export function SignInButton({
+  app: appProp,
+  label = 'Sign in with GitHub',
+  provider = 'github',
+}: SignInButtonProps) {
   const app = resolveApp(appProp);
   return (
     <button
-      onClick={() => app.auth.signIn()}
+      onClick={() => app.auth.signIn(provider)}
       style={{
         background: 'var(--accent, #7c3aed)',
         color: '#fff',

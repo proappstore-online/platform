@@ -238,7 +238,22 @@ export class Auth {
       return;
     }
 
-    if (!hash.startsWith(SESSION_HASH)) return;
+    if (!hash.startsWith(SESSION_HASH)) {
+      // Cross-subdomain restoration may only have the token. Hydrate the user
+      // before auth listeners render the app as signed out.
+      if (this.session?.token && !this.session.user) {
+        try {
+          const user = await this.fetchUser(this.session.token);
+          this.session = { ...this.session, user };
+          this.writeStorage(this.session);
+          this.emit();
+          this.ensureMember();
+        } catch {
+          this.signOut();
+        }
+      }
+      return;
+    }
 
     // Always clear the hash before doing anything else — even on failure.
     // Otherwise a bad token gets re-tried on every reload and the user is

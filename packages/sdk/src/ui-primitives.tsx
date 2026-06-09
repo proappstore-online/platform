@@ -7,6 +7,7 @@
  */
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import type { ProAppStore } from './index.js';
+import type { AuthProvider } from './auth.js';
 import type { User } from './base-types.js';
 import { useAuth } from './hooks.js';
 import { useTheme } from './hooks.js';
@@ -52,12 +53,17 @@ export function Avatar({ user, size = 32 }: AvatarProps) {
 export interface SignInButtonProps {
   app: ProAppStore;
   label?: string;
+  provider?: Exclude<AuthProvider, 'email'>;
 }
 
-export function SignInButton({ app, label = 'Sign in with GitHub' }: SignInButtonProps) {
+export function SignInButton({
+  app,
+  label = 'Sign in with GitHub',
+  provider = 'github',
+}: SignInButtonProps) {
   return (
     <button
-      onClick={() => app.auth.signIn()}
+      onClick={() => app.auth.signIn(provider)}
       style={{
         background: 'var(--accent, #7c3aed)', color: '#fff',
         border: 'none', padding: '0.6rem 1.5rem',

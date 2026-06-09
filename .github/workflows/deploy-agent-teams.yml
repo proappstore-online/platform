@@ -5,7 +5,8 @@ name: Deploy Agent Teams Worker
 # package, which owns the migrations dir) so the agent_projects index table
 # exists before the new code queries it.
 #
-# Worker secrets (INTERNAL_TOKEN) persist across deploys; set via wrangler secret.
+# Worker secrets are synced from Doppler-backed GitHub secrets on every deploy
+# so the Agent Teams verifier cannot drift from the API session signer.
 
 on:
   push:
@@ -53,6 +54,18 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Sync shared auth secrets
+        working-directory: packages/agent-teams
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SESSION_SIGNING_KEY: ${{ secrets.SESSION_SIGNING_KEY }}
+          INTERNAL_TOKEN: ${{ secrets.INTERNAL_TOKEN }}
+        run: |
+          test -n "$SESSION_SIGNING_KEY"
+          test -n "$INTERNAL_TOKEN"
+          printf '%s' "$SESSION_SIGNING_KEY" | pnpm exec wrangler secret put SESSION_SIGNING_KEY
+          printf '%s' "$INTERNAL_TOKEN" | pnpm exec wrangler secret put INTERNAL_TOKEN
       - name: Smoke test
         run: |
           for i in 1 2 3 4 5; do
