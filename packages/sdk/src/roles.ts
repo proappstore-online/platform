@@ -8,6 +8,10 @@ export interface RoleAssignment {
   roleName: string;
   grantedBy: string | null;
   grantedAt: number;
+  userLogin?: string | null;
+  userAvatarUrl?: string | null;
+  grantedByLogin?: string | null;
+  grantedByAvatarUrl?: string | null;
 }
 
 /** Default roles provided by the platform. Devs can add custom roles. */

@@ -18,16 +18,36 @@ rolesRoutes.get('/apps/:appId/roles', async (c) => {
   await requireAppAccess(c, appId, 'admin');
 
   const { results } = await c.env.DB.prepare(
-    'SELECT user_id, role_name, granted_by, granted_at FROM app_roles WHERE app_id = ? ORDER BY granted_at',
+    `SELECT r.user_id, r.role_name, r.granted_by, r.granted_at,
+            target.login AS user_login, target.avatar_url AS user_avatar_url,
+            granter.login AS granted_by_login, granter.avatar_url AS granted_by_avatar_url
+       FROM app_roles r
+       LEFT JOIN users target ON target.id = r.user_id
+       LEFT JOIN users granter ON granter.id = r.granted_by
+      WHERE r.app_id = ?
+      ORDER BY r.granted_at`,
   )
     .bind(appId)
-    .all<{ user_id: string; role_name: string; granted_by: string | null; granted_at: number }>();
+    .all<{
+      user_id: string;
+      role_name: string;
+      granted_by: string | null;
+      granted_at: number;
+      user_login: string | null;
+      user_avatar_url: string | null;
+      granted_by_login: string | null;
+      granted_by_avatar_url: string | null;
+    }>();
 
   const roles = (results ?? []).map((r) => ({
     userId: r.user_id,
     roleName: r.role_name,
     grantedBy: r.granted_by,
     grantedAt: r.granted_at,
+    userLogin: r.user_login,
+    userAvatarUrl: r.user_avatar_url,
+    grantedByLogin: r.granted_by_login,
+    grantedByAvatarUrl: r.granted_by_avatar_url,
   }));
 
   return c.json({ roles });
@@ -36,7 +56,7 @@ rolesRoutes.get('/apps/:appId/roles', async (c) => {
 /** Assign a role to a user. Requires admin-level app access. */
 rolesRoutes.post('/apps/:appId/roles', async (c) => {
   const appId = c.req.param('appId');
-  await requireAppAccess(c, appId, 'admin');
+  const actor = await requireAppAccess(c, appId, 'admin');
 
   const body = (await c.req.json().catch(() => null)) as {
     userId?: string;
@@ -58,15 +78,17 @@ rolesRoutes.post('/apps/:appId/roles', async (c) => {
     return c.json({ error: "cannot assign 'owner' role — it is managed by the platform" }, 400);
   }
 
+  const target = await resolveRoleUser(c.env, body.userId);
+
   await c.env.DB.prepare(
     `INSERT INTO app_roles (app_id, user_id, role_name, granted_by)
      VALUES (?, ?, ?, ?)
      ON CONFLICT(app_id, user_id, role_name) DO NOTHING`,
   )
-    .bind(appId, body.userId, body.role, (await requireUser(c)).id)
+    .bind(appId, target.id, body.role, actor.id)
     .run();
 
-  return c.json({ ok: true, appId, userId: body.userId, role: body.role });
+  return c.json({ ok: true, appId, userId: target.id, userLogin: target.login, userAvatarUrl: target.avatarUrl, role: body.role });
 });
 
 /** Revoke a role from a user. Requires admin-level app access. */
@@ -151,3 +173,85 @@ rolesRoutes.post('/apps/:appId/roles/ensure-member', async (c) => {
 
   return c.json({ ok: true, assigned: true });
 });
+
+interface ResolvedRoleUser {
+  id: string;
+  login: string | null;
+  avatarUrl: string | null;
+}
+
+async function resolveRoleUser(env: Env, input: string): Promise<ResolvedRoleUser> {
+  const raw = input.trim();
+  if (!raw) throw new HttpError('userId is required', 400);
+
+  if (/^[a-z]+:.+/.test(raw) && !raw.startsWith('gh:')) {
+    return { id: raw, login: null, avatarUrl: null };
+  }
+
+  const githubId = raw.match(/^gh:(\d+)$/)?.[1] ?? (raw.match(/^\d+$/) ? raw : null);
+  if (githubId) {
+    const existing = await userById(env, `gh:${githubId}`);
+    if (existing) return existing;
+    const gh = await fetchGithubUser(`https://api.github.com/user/${encodeURIComponent(githubId)}`);
+    await upsertGithubUser(env, gh);
+    return { id: `gh:${gh.id}`, login: gh.login, avatarUrl: gh.avatar_url ?? null };
+  }
+
+  const login = raw.replace(/^@/, '');
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(login)) {
+    throw new HttpError('userId must be a PAS UID, GitHub login, or numeric GitHub ID', 400);
+  }
+
+  const existing = await userByGithubLogin(env, login);
+  if (existing) return existing;
+
+  const gh = await fetchGithubUser(`https://api.github.com/users/${encodeURIComponent(login)}`);
+  await upsertGithubUser(env, gh);
+  return { id: `gh:${gh.id}`, login: gh.login, avatarUrl: gh.avatar_url ?? null };
+}
+
+async function userById(env: Env, id: string): Promise<ResolvedRoleUser | null> {
+  const row = await env.DB.prepare('SELECT id, login, avatar_url FROM users WHERE id = ?')
+    .bind(id)
+    .first<{ id: string; login: string | null; avatar_url: string | null }>();
+  return row ? { id: row.id, login: row.login, avatarUrl: row.avatar_url } : null;
+}
+
+async function userByGithubLogin(env: Env, login: string): Promise<ResolvedRoleUser | null> {
+  const row = await env.DB.prepare(
+    'SELECT id, login, avatar_url FROM users WHERE provider = ? AND LOWER(login) = LOWER(?) LIMIT 1',
+  )
+    .bind('github', login)
+    .first<{ id: string; login: string | null; avatar_url: string | null }>();
+  return row ? { id: row.id, login: row.login, avatarUrl: row.avatar_url } : null;
+}
+
+interface GitHubUser {
+  id: number;
+  login: string;
+  avatar_url?: string | null;
+}
+
+async function fetchGithubUser(url: string): Promise<GitHubUser> {
+  const res = await fetch(url, {
+    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'proappstore-api' },
+  });
+  if (res.status === 404) throw new HttpError('GitHub user not found', 404);
+  if (!res.ok) throw new HttpError(`GitHub lookup failed (${res.status})`, 502);
+  const user = (await res.json()) as Partial<GitHubUser>;
+  if (!user.id || !user.login) throw new HttpError('GitHub lookup returned an invalid user', 502);
+  return { id: user.id, login: user.login, avatar_url: user.avatar_url ?? null };
+}
+
+async function upsertGithubUser(env: Env, user: GitHubUser): Promise<void> {
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO users (id, provider, provider_id, login, email, avatar_url, created_at, last_login_at)
+     VALUES (?1, 'github', ?2, ?3, NULL, ?4, ?5, ?5)
+     ON CONFLICT(id) DO UPDATE SET
+       login = excluded.login,
+       avatar_url = excluded.avatar_url`,
+  )
+    .bind(`gh:${user.id}`, String(user.id), user.login, user.avatar_url ?? null, now)
+    .run();
+}
