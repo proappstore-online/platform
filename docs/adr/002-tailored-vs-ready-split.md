@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted
+Superseded in part by the PAS-owned provisioning cleanup. The two-category
+decision still stands, but provisioning now happens through
+`api.proappstore.online` `POST /v1/provision`, not
+`fas/admin/POST /api/provision`. See [Tailored vs Ready](/tailored-vs-ready)
+and [Publishing flow](/publishing-flow).
 
 ## Date
 

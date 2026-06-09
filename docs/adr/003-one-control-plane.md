@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted
+Superseded by the PAS-owned control plane cleanup. The "one control plane"
+decision still stands, but the current implementation is PAS-owned auth and
+provisioning through `api.proappstore.online`, plus per-app data workers, MCP,
+and Agent Teams. It no longer uses `fas`/`fas-admin` as runtime control-plane
+dependencies. See [Architecture](/architecture).
 
 ## Date
 

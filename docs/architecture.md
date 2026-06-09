@@ -1,72 +1,59 @@
 # Architecture
 
-ProAppStore runs as a **single control plane composed of three Cloudflare
-Workers**. Apps published on the platform — Tailored or Ready — talk to
-the control plane the same way; the only difference is what `fas/admin`
-provisions on publish and which SDK helpers the publisher emphasizes.
+ProAppStore runs as a **single control plane composed of Cloudflare Workers**.
+Apps published on the platform — Tailored or Ready — talk to PAS-owned APIs;
+the only difference is which resources the publisher provisions and which SDK
+helpers the app uses.
 
 ## Components
 
 ```text
-Browser / app                ┌──────────────────────────────────────┐
-  ├── @freeappstore/sdk ───→ │  fas Worker (api.freeappstore.online)│
-  │                          │  identity, sessions, KV, rooms       │
-  │                          │  publish endpoint, registry, R2 backups
-  │                          │  service binding ──→ fas/admin       │
-  │                          └──────────┬───────────────────────────┘
-  │                                     │ service binding
-  │                                     ▼
-  │                          ┌──────────────────────────────────────┐
-  │                          │  fas/admin Worker                    │
-  │                          │  GitHub repo + Pages + DNS provision │
-  │                          │  (Tailored: also provisions D1)      │
-  │                          └──────────────────────────────────────┘
-  │
+Browser / app
   └── @proappstore/sdk ────→ ┌──────────────────────────────────────┐
                              │  pas Worker (api.proappstore.online) │
+                             │  auth, sessions, roles, KV, rooms    │
                              │  Stripe checkout + portal + webhook  │
-                             │  entitlements, license keys          │
-                             │  premium primitives                  │
+                             │  entitlements, license keys, proxy   │
+                             │  storage, maps, AI, app registry     │
+                             └──────────────────────────────────────┘
+
+Published app data
+  └── app.db ──────────────→ ┌──────────────────────────────────────┐
+                             │ data-<app>.proappstore.online        │
+                             │ per-app D1 query/execute/batch/tables│
+                             │ local PAS session verification       │
                              └──────────────────────────────────────┘
 ```
 
-### 1. `fas` Worker — identity & app primitives
-
-Lives at `api.freeappstore.online`. Source: `~/dev/stores/fas/platform/packages/backend`.
-
-- **Identity:** GitHub OAuth (device flow for CLI, web flow for browser).
-  HMAC-signed sessions with `SESSION_SIGNING_KEY`, 30-day TTL.
-- **Per-user KV:** namespaced storage every app can use.
-- **Rooms:** Durable Objects with WebSocket fan-out for cursors / presence
-  / lightweight multiplayer.
-- **Publish:** `POST /v1/publish` — validates the request, calls
-  `fas/admin` via service binding.
-- **Registry:** the storefront's source of truth; reads/writes the
-  `registry.json` in the storefront repo.
-- **Backups:** R2 bucket `fas-backups`, written daily by a cron at
-  04:00 UTC.
-- **Crons:** uptime checks every 15 min, daily backup, weekly
-  compliance audit (Sun 06:00 UTC).
-
-### 2. `pas` Worker — payments & entitlements
+### 1. `pas` Worker — platform API
 
 Lives at `api.proappstore.online`. Source:
 `~/dev/stores/pas/platform/packages/backend`.
 
-- **Stripe webhook receiver** — `subscription.created`, `updated`,
+- **Identity:** PAS-owned GitHub OAuth, Google OAuth, email magic links,
+  provisioned credential accounts, and signed PAS sessions.
+- **Per-user KV:** namespaced storage every app can use.
+- **Rooms:** Durable Objects with WebSocket fan-out for cursors / presence
+  / lightweight multiplayer.
+- **Roles:** app-level owner/moderator/editor/viewer roles plus app-defined
+  assignments.
+- **Publishing/provisioning:** validates publish requests and provisions Pages,
+  DNS, D1, data workers, and app metadata without a FAS admin proxy.
+- **Stripe webhook receiver:** `subscription.created`, `updated`,
   `deleted`, `invoice.paid`, `customer.subscription.trial_will_end`.
-- **Checkout & portal redirects** — open Stripe Checkout for a price,
+- **Checkout & portal redirects:** open Stripe Checkout for a price,
   open the customer portal for an existing subscription.
-- **Entitlements** — `subscriptions` table in PAS D1 keyed by
+- **Entitlements:** `subscriptions` table in PAS D1 keyed by
   `(appId, userId)`; the SDK reads `tier`, `priceId`, `currentPeriodEnd`.
-- **License keys** — for offline / non-subscription paid features.
-- **Session validation** — verifies the HMAC session minted by `fas`.
-  Same `SESSION_SIGNING_KEY`. No second login.
+- **License keys:** for offline / non-subscription paid features.
+- **Proxy, storage, maps, AI, notifications, SMS, email, webhooks:** platform
+  services exposed through the SDK.
+- **Session validation:** verifies PAS session JWTs locally with
+  `SESSION_SIGNING_KEY`.
 
-D1 binding: `pas` (not yet created). Migrations directory under
-`packages/backend/migrations`.
+D1 binding: `DB`. Migrations directory under `packages/backend/migrations`.
 
-### 3. PAS provisioning — self-contained
+### 2. PAS provisioning — self-contained
 
 > **Updated 2026-05-28 (PLAN-ARCH-CLEANUP Phase 4).** PAS no longer reuses
 > the FAS admin Worker for provisioning. The legacy `[[services]] ADMIN =
@@ -94,10 +81,10 @@ is a separate dashboard endpoint at `admin.proappstore.online` that
 exposes `/api/publish-app` for owner-driven catalog edits — it's not on
 the CLI publish path.
 
-Auth: PAS platform validates the HMAC session minted by FAS (same
-`SESSION_SIGNING_KEY`). No CF Access on `api.proappstore.online`.
+Auth: PAS platform validates its own signed PAS sessions with
+`SESSION_SIGNING_KEY`. No CF Access on `api.proappstore.online`.
 
-### 4. `agent-teams` Worker — AI build team
+### 3. `agent-teams` Worker — AI build team
 
 A team of AI agents (PO / BA / Dev / QA) that builds and maintains an app from a
 founder's chat. One Durable Object per project holds the backlog, the working-tree
@@ -119,23 +106,23 @@ SDK + CLI scaffolds, not in a separate backend. Adding a fourth Worker
 per category would be over-engineering. See
 [ADR-003](/adr/003-one-control-plane).
 
-## Service binding pattern
+## Worker-to-worker pattern
 
-The `fas` Worker holds a service binding (`env.ADMIN.fetch(...)`) to
-`fas/admin`. Worker-to-worker calls bypass the public edge — no CF
-Access prompt, no edge loop detection, no service token to rotate. Both
-Workers are trusted internal.
+PAS provisioning is self-contained in the platform backend. When a published app
+needs its own data plane, the backend creates the app D1 database and deploys a
+`data-<app>.proappstore.online` worker with that database bound as `DB` and the
+PAS `SESSION_SIGNING_KEY` injected as a secret. The data worker verifies caller
+sessions locally; it does not call a separate auth service for every request.
 
 ## Database
 
 | DB | Worker | Purpose |
 |---|---|---|
-| `fas` (D1) | `fas` | users, sessions, app primitives (KV, rooms metadata), registry mirror |
-| `pas` (D1) | `pas` | subscriptions, license keys, entitlement audit |
-| per-fork D1 | the forked Tailored app's Pages Functions | the app's own data |
+| PAS platform D1 (`DB`) | `api.proappstore.online` | users, apps, roles, sessions metadata, KV/counters, subscriptions, license keys, app-tool manifests, usage |
+| per-app D1 (`DB`) | `data-<app>.proappstore.online` | the app's own SQL data |
 
-No shared database between the Workers. They communicate over service
-bindings or HTTP.
+The platform database and app databases stay separate. App UI and MCP calls hit
+the app's data worker for app rows; platform APIs stay on the PAS backend.
 
 ## What this doesn't include
 

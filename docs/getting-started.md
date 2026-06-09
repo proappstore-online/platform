@@ -34,7 +34,7 @@ Your app is live at `https://my-app.proappstore.online` in under 2 minutes.
 - **TypeScript**, Node 22, pnpm workspaces
 - **Frontend:** React 19 + Vite 8 + Tailwind CSS 4 (template choice, not required)
 - **Backend:** Cloudflare Workers + D1 + Durable Objects
-- **Auth:** GitHub OAuth (shared with FAS), HMAC-signed sessions
+- **Auth:** PAS-owned GitHub OAuth, Google OAuth, email magic links, and signed PAS sessions
 - **Payments:** Stripe (Checkout + Portal + webhooks)
 - **Publishing:** OIDC trusted publishing (no stored npm tokens)
 
@@ -80,8 +80,10 @@ platform/
 
 ## Relationship to FreeAppStore
 
-Pro SDK extends the free SDK — `ProAppStore extends FreeAppStore`.
-One import gives you everything:
+ProAppStore is the paid counterpart to FreeAppStore, but Pro apps do not import
+or call the FreeAppStore SDK at runtime. `@proappstore/sdk` vendors the common
+browser primitives and points them at PAS-owned APIs. One import gives you
+everything:
 
 ```ts
 import { initPro } from '@proappstore/sdk'

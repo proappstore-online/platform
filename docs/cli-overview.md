@@ -15,7 +15,7 @@ Or run via `npx @proappstore/cli` for a one-off.
 
 ```bash
 # Auth
-pas login                           # GitHub OAuth sign-in (shared session with fas)
+pas login                           # GitHub device auth; writes a PAS session
 pas whoami                          # show current user
 pas logout                          # clear session
 
@@ -86,16 +86,23 @@ pas publish
 4. D1 database (`pas-data-<id>`)
 5. Data Worker (`data-<id>.proappstore.online`)
 6. App record in the platform database
-7. Cross-registration in FAS (enables proxy + secrets)
+7. PAS proxy/secrets metadata for the app
 8. Deploy secret on external-org repos (auto-sets `CLOUDFLARE_API_TOKEN`)
 
 Idempotent — re-running fills in only missing pieces.
 
-## Shared auth with FAS
+## Auth session
 
-`pas` shares auth with `fas`. Both CLIs read the session from
-`~/.config/freeappstore/session.json`. One `pas login` (or `fas login`)
-covers both.
+`pas login` uses GitHub device auth, exchanges the GitHub token for a PAS
+session, and writes it to:
+
+```text
+~/.proappstore/config.json
+```
+
+The active session token lives at `session.token`. Commands also accept
+`--token <token>` or `PAS_SESSION_TOKEN` when you need to run without the saved
+CLI config.
 
 ## Source
 

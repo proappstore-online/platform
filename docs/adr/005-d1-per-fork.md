@@ -1,8 +1,11 @@
-# ADR-005: D1 per Tailored fork (provisioned by fas/admin)
+# ADR-005: D1 per Tailored fork
 
 ## Status
 
-Accepted
+Superseded by the self-contained PAS provisioning path. The D1-per-fork decision
+still stands, but provisioning now happens through `api.proappstore.online`
+`POST /v1/provision`, not `fas/admin` or `POST /api/provision`. See
+[Architecture](/architecture) and [Publishing flow](/publishing-flow).
 
 ## Date
 

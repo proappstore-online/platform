@@ -90,12 +90,14 @@ import { SignInButton } from '@proappstore/sdk/ui'
 
 <SignInButton app={app} />
 <SignInButton app={app} label="Get started" />
+<SignInButton app={app} provider="google" label="Sign in with Google" />
 ```
 
 | Prop | Type | Default | Description |
 | --- | --- | --- | --- |
 | `app` | `ProAppStore` | - | SDK instance |
 | `label` | `string` | `"Sign in with GitHub"` | Button text |
+| `provider` | `'github' \| 'google'` | `'github'` | OAuth provider |
 
 ## ThemeToggle
 
@@ -274,7 +276,7 @@ const { user, loading, signIn, signOut, deleteAccount } = useProAuth(app)
 
 ### useTheme()
 
-Zero-provider theme hook. Shared with FreeAppStore (same localStorage key).
+Zero-provider theme hook. Uses the vendored platform theme localStorage key.
 
 ```
 import { useTheme } from '@proappstore/sdk/hooks'

@@ -25,7 +25,7 @@ are Ready.
 | Deployment | One per customer (forked repo, own subdomain, own D1) | One shared per publisher, multi-tenant |
 | Customization | Source code + AI | Settings UI |
 | Provisioned by `pas publish` | Repo + Pages + DNS + **D1** + registry | Repo + Pages + DNS + registry |
-| SDK emphasis | `@freeappstore/sdk` (identity, KV) + `@proappstore/sdk` (Stripe per fork) | `@proappstore/sdk` (Stripe Checkout for end users, multi-tenant entitlements) |
+| SDK emphasis | `@proappstore/sdk` (PAS auth, app data, roles, Stripe, platform services) | `@proappstore/sdk` (PAS auth, Stripe Checkout for end users, multi-tenant entitlements) |
 | Publisher revenue | License fee, hosting, customization, support | Subscription, usage, seat-based |
 | Platform cut | % on PAS-mediated Stripe transactions | Same |
 | Data tenancy | Per fork (each customer has their own DB) | Platform-provided (per-user KV, shared counters, rooms) |
@@ -72,9 +72,9 @@ SaaS platform, which isn't the bet — see
 
 ## Why the same SDK packages cover both
 
-`@freeappstore/sdk` provides identity + per-user KV + rooms — useful in
-either category. `@proappstore/sdk` provides Stripe entitlements + license
-keys — useful in either category. The difference is *who the customer is*:
+`@proappstore/sdk` provides auth, per-user KV, counters, rooms, roles, app data,
+Stripe entitlements, license keys, and platform services from PAS-owned APIs.
+The difference is *who the customer is*:
 
 - **Tailored:** the customer = the developer who forks. The publisher's
   Pro features sell to that developer (or to whomever the developer

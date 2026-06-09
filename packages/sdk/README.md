@@ -72,14 +72,15 @@ interface MigrateResult {
 
 ### Auth
 
-GitHub OAuth — shared identity across all ProAppStore apps.
+PAS-owned auth across all ProAppStore apps. GitHub is the default OAuth
+provider; Google OAuth and email magic links are also supported.
 
 ```ts
 await app.auth.init()
 app.auth.onChange((user) => console.log(user))
 app.auth.signIn()          // GitHub (default)
 app.auth.signIn('google')  // Google
-app.auth.signIn('apple')   // Apple
+app.auth.signInWithEmail('alice@example.com')
 app.auth.signOut()
 ```
 

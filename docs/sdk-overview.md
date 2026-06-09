@@ -1,8 +1,7 @@
 # SDK overview
 
 `@proappstore/sdk` is a browser-first ESM package that any Pro app imports
-to get the full platform feature set on top of `@freeappstore/sdk`'s
-identity layer.
+to get the full platform feature set from PAS-owned APIs.
 
 ## Init
 
@@ -22,7 +21,7 @@ first network call happens when you read auth state or call an API.
 ## Surfaces
 
 ```ts
-// Auth (inherited from @freeappstore/sdk)
+// Auth
 app.auth.init() / .signIn() / .signOut() / .onChange(cb)
 // Provisioned credential accounts (no email/OAuth — for kids/students):
 app.auth.provisionChild({ displayName }) // adult-only → { login, password } once

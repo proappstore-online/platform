@@ -13,17 +13,18 @@ import { initPro } from '@proappstore/sdk'
 
 const app = initPro({ appId: 'my-app' })
 
-app.auth          // GitHub OAuth (shared identity with FreeAppStore)
+app.auth          // PAS-owned auth: GitHub default, Google, email magic links
 app.kv            // Per-user key-value storage
 app.counters      // Shared atomic counters
 app.rooms         // Real-time WebSocket rooms
+app.roles         // App-level roles and permissions
 app.proxy         // Secret-injecting API proxy
 app.db            // Per-app SQL database (D1)
 app.subscription  // Stripe subscriptions (pro)
 app.license       // License key validation (pro)
 ```
 
-One import. All free + pro features in one SDK instance.
+One import. All platform features in one SDK instance.
 
 ## Packages
 
@@ -39,14 +40,14 @@ One import. All free + pro features in one SDK instance.
 ```
 Browser App
   └─ @proappstore/sdk
-       ├─ auth, kv, counters, rooms, proxy → api.freeappstore.online (FAS backend)
-       ├─ subscription, license            → api.proappstore.online (PAS backend)
+       ├─ auth, kv, counters, rooms, proxy → api.proappstore.online (PAS backend)
+       ├─ subscription, license            → api.proappstore.online
        └─ db                               → data-{appId}.proappstore.online (data-worker)
 ```
 
-- **Backend** (`packages/backend`): Cloudflare Workers + D1 — Stripe webhooks, subscription CRUD, license key management
-- **Data Worker** (`packages/data-worker`): Per-app Hono worker fronting a D1 database — query, execute, batch, tables. Auth validated against FAS.
-- **Auth**: Delegates to FAS (`api.freeappstore.online/v1/auth/me`) — shared GitHub OAuth identity
+- **Backend** (`packages/backend`): Cloudflare Workers + D1 — auth, app registry, roles, Stripe webhooks, subscription CRUD, license key management, proxy, storage, notifications, and platform services
+- **Data Worker** (`packages/data-worker`): Per-app Hono worker fronting a D1 database — query, execute, batch, tables. Auth validates PAS session JWTs locally.
+- **Auth**: PAS owns sessions and `/v1/auth/*`; GitHub is the default OAuth provider, with Google and email credential flows also supported by the SDK/API.
 - **Payments**: Stripe (checkout sessions, billing portal, webhook receiver)
 - **Publishing**: OIDC trusted publishing (no stored tokens)
 

@@ -19,7 +19,7 @@ export function registerPlatformTools(server: McpServer, env: Env) {
   server.tool(
     "list_apps",
     "List your published apps on ProAppStore. Requires a session token.",
-    { token: z.string().describe("FAS/PAS session token") },
+    { token: z.string().describe("PAS session token") },
     async ({ token }) => {
       const data = (await pasApi(env.API_BASE, "/v1/apps", token)) as {
         apps?: Array<{ id: string; name: string; category: string | null; description: string | null }>;

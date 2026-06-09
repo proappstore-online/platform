@@ -61,7 +61,7 @@ Visible on the storefront and developer directory:
 
 | Field | Source |
 |---|---|
-| Name, avatar, bio | GitHub profile (synced from FAS auth) |
+| Name, avatar, bio | PAS user profile (synced from connected GitHub account when available) |
 | Per-prompt rate | Set by dev in console |
 | Avg prompt length | Computed: mean character count of dev messages across engagements |
 | Quality score (0-10) | Computed: LLM-judged quality of dev's prompts (clarity, completeness, helpfulness) |
@@ -95,7 +95,7 @@ Cost: ~$0.01 per message judged (Haiku). Budget: judge 20 messages per dev per d
 ```sql
 -- Developer service profiles (extends the existing creator/developer identity)
 CREATE TABLE dev_profiles (
-  creator_id TEXT PRIMARY KEY,           -- FK to FAS users
+  creator_id TEXT PRIMARY KEY,           -- FK to PAS users
   prompt_rate_cents INTEGER NOT NULL DEFAULT 100,  -- cents per prompt
   bio_services TEXT,                     -- services-specific bio (optional, supplements main bio)
   available INTEGER NOT NULL DEFAULT 1,  -- 1 = accepting clients
@@ -111,7 +111,7 @@ CREATE TABLE dev_profiles (
 
 -- Client prepaid balances
 CREATE TABLE client_balances (
-  user_id TEXT PRIMARY KEY,              -- FK to FAS users
+  user_id TEXT PRIMARY KEY,              -- FK to PAS users
   balance_cents INTEGER NOT NULL DEFAULT 0,
   total_deposited_cents INTEGER NOT NULL DEFAULT 0,
   total_spent_cents INTEGER NOT NULL DEFAULT 0,

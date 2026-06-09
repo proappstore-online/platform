@@ -27,7 +27,7 @@ features:
     details: Publishers offer support, customization, and managed hosting on their own templates. The Salesforce-partner pattern, but with AI lowering the customization floor.
     link: /services-marketplace
   - title: One Control Plane
-    details: Three Workers (fas, pas, fas/admin) collaborating via service bindings. Identity, registry, billing, provisioning, entitlements — shared. Category is a flag, not a separate stack.
+    details: PAS-owned Workers for platform APIs, app data workers, MCP, and Agent Teams. Identity, roles, registry, billing, provisioning, entitlements — shared. Category is a flag, not a separate stack.
     link: /architecture
   - title: Agent Teams
     details: A PO/BA/Dev/QA AI team builds and maintains an app from a founder's chat. One Durable Object per project; GitHub is the source of truth; agents run on the user's BYO key. Personas + project memory give each team real context.

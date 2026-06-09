@@ -192,6 +192,28 @@ Then `discover_tools` lists what's registered, and `<app>/<tool>` calls it.
 Tools marked `requires_auth` need a session token on the connection (the call
 runs as that user, so `:__user_id` resolves and per-user scoping is enforced).
 
+### Current browser-auth limitation
+
+`npx mcp-remote https://mcp.proappstore.online/mcp` can connect without a
+token today. That unauthenticated connection is allowed to discover public
+platform tools and redacted app-tool metadata, but calling an app tool marked
+`requires_auth` returns:
+
+```text
+Error: This tool requires authentication. Connect with a session token.
+```
+
+It does **not** currently open a browser sign-in flow when the tool call needs
+auth. `mcp-remote` only starts browser auth when the remote server issues an
+OAuth challenge for the MCP connection; the production PAS MCP server currently
+accepts the anonymous connection and rejects the individual tool call instead.
+
+Until platform issue
+[#19](https://github.com/proappstore-online/platform/issues/19) is fixed, use a
+PAS session token from `pas login` (`~/.proappstore/config.json`,
+`session.token`) or a client configuration that sends an equivalent
+`Authorization: Bearer <token>` header.
+
 ## What is allowed without auth
 
 Unauthenticated MCP access is limited to public protocol and documentation
