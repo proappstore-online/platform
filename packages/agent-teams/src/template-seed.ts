@@ -178,13 +178,13 @@ export default defineConfig({
     <meta property="og:title" content="${slug}" />
     <meta property="og:description" content="${slug} on ProAppStore" />
     <meta property="og:url" content="https://${slug}.proappstore.online/" />
-    <meta property="og:image" content="https://${slug}.proappstore.online/icon-512.png" />
-    <meta property="og:image:width" content="512" />
-    <meta property="og:image:height" content="512" />
-    <meta name="twitter:card" content="summary" />
+    <meta property="og:image" content="https://${slug}.proappstore.online/og-image.svg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="${slug}" />
     <meta name="twitter:description" content="${slug} on ProAppStore" />
-    <meta name="twitter:image" content="https://${slug}.proappstore.online/icon-512.png" />
+    <meta name="twitter:image" content="https://${slug}.proappstore.online/og-image.svg" />
     <link rel="manifest" href="/manifest.json" />
     <link rel="icon" href="/icon-192.png" type="image/png" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
@@ -207,6 +207,21 @@ export default defineConfig({
       { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
     ],
   }, null, 2) + '\n');
+
+  files.set('public/og-image.svg', `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="${slug} on ProAppStore">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#312e81"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect x="80" y="80" width="1040" height="470" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.18)" stroke-width="2"/>
+  <rect x="80" y="80" width="12" height="470" fill="#7c3aed"/>
+  <text x="600" y="310" text-anchor="middle" fill="#ffffff" font-family="Inter, Manrope, Arial, sans-serif" font-size="76" font-weight="800">${slug}</text>
+  <text x="600" y="390" text-anchor="middle" fill="#c4b5fd" font-family="Inter, Manrope, Arial, sans-serif" font-size="34" font-weight="700" letter-spacing="8">PROAPPSTORE</text>
+</svg>
+`);
 
   // ── Source code ─────────────────────────────────────────────
 

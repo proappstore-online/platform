@@ -96,22 +96,30 @@ Idempotent — re-running fills in only missing pieces.
 The source of truth for an app's browser icon, installed PWA icon, and shared
 link preview image is the app repo, not Creator Console.
 
-Put the files in:
+Browser and install icons live in:
 
 ```text
 web/public/icon-192.png
 web/public/icon-512.png
 ```
 
+Shared-link previews use a dedicated 1200x630 image:
+
+```text
+web/public/og-image.png
+```
+
 The template's `web/index.html` points Open Graph and Twitter metadata at:
 
 ```text
-https://<app-id>.proappstore.online/icon-512.png
+https://<app-id>.proappstore.online/og-image.png
 ```
 
 When you share `https://<app-id>.proappstore.online`, social clients use that
-deployed asset as the app logo. To change the shared-link logo, replace
-`web/public/icon-512.png` in GitHub and redeploy the app.
+deployed asset as the preview image. To change the shared-link preview, replace
+`web/public/og-image.png` in GitHub and redeploy the app. New apps created with
+`pas create` get a generated default `og-image.png`; production apps should
+replace it with a branded preview image.
 
 ## Auth session
 

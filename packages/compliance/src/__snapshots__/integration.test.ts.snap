@@ -45,11 +45,11 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
-    "detail": "missing: lang attribute on <html>, viewport meta, non-empty <title>",
+    "detail": "missing: lang attribute on <html>, viewport meta, non-empty <title>, og:image, twitter:image",
     "name": "HTML meta tags",
     "status": "fail",
     "suggestions": [
-      "Restore the canonical <head>: \`<html lang="en">\`, \`<meta name="viewport" content="width=device-width, initial-scale=1" />\`, \`<title>App name</title>\`.",
+      "Restore the canonical <head>: \`<html lang="en">\`, viewport, title, and \`og:image\` / \`twitter:image\` pointing at \`/og-image.png\`.",
     ],
   },
   {

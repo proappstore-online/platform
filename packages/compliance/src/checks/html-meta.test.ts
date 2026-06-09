@@ -3,7 +3,7 @@ import { mapFileSource } from '../lib/file-source.js';
 import { checkHtmlMeta } from './html-meta.js';
 
 describe('checkHtmlMeta', () => {
-  it('passes with all three: lang, viewport, title', async () => {
+  it('passes with lang, viewport, title, and share images', async () => {
     const files = new Map([
       [
         'web/index.html',
@@ -11,6 +11,8 @@ describe('checkHtmlMeta', () => {
 <html lang="en">
   <head>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta property="og:image" content="https://example.com/og-image.png" />
+    <meta name="twitter:image" content="https://example.com/og-image.png" />
     <title>My App</title>
   </head>
 </html>`,
@@ -53,7 +55,7 @@ describe('checkHtmlMeta', () => {
     const files = new Map([
       [
         'web/index.html',
-        '<html lang="en"><head><meta name="viewport" content="x"/><title> My App</title></head></html>',
+        '<html lang="en"><head><meta name="viewport" content="x"/><meta property="og:image" content="/og-image.png"/><meta name="twitter:image" content="/og-image.png"/><title> My App</title></head></html>',
       ],
     ]);
     const r = await checkHtmlMeta(mapFileSource(files));
@@ -92,6 +94,8 @@ describe('checkHtmlMeta', () => {
         `<html lang="en">
 <head>
   <meta name="viewport" content="x" />
+  <meta property="og:image" content="https://example.com/og-image.png" />
+  <meta name="twitter:image" content="https://example.com/og-image.png" />
   <title>
     My App
   </title>
@@ -101,5 +105,18 @@ describe('checkHtmlMeta', () => {
     ]);
     const r = await checkHtmlMeta(mapFileSource(files));
     expect(r.status).toBe('pass');
+  });
+
+  it('fails when share preview images are missing', async () => {
+    const files = new Map([
+      [
+        'web/index.html',
+        '<html lang="en"><head><meta name="viewport" content="x"/><title>My App</title></head></html>',
+      ],
+    ]);
+    const r = await checkHtmlMeta(mapFileSource(files));
+    expect(r.status).toBe('fail');
+    expect(r.detail).toMatch(/og:image/);
+    expect(r.detail).toMatch(/twitter:image/);
   });
 });

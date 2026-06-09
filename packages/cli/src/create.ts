@@ -3,6 +3,7 @@ import { access, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import { resolveToken } from './lib/config.js';
+import { writeOgImage } from './og-image.js';
 
 const TEMPLATE_REPO = 'proappstore-online/template-app';
 const PAS_API = 'https://api.proappstore.online';
@@ -49,6 +50,7 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
   // Step 2: Replace APPNAME placeholders
   process.stdout.write(`  [2/4] Configuring for ${appId}...\n`);
   const substitutionCount = await substituteAppName(targetDir, appId, appName);
+  await writeOgImage(join(targetDir, 'web', 'public', 'og-image.png'), appName);
 
   // Step 3: Install
   if (!opts.skipInstall) {
