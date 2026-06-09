@@ -107,7 +107,7 @@ export function securityHeaders(isHtml: boolean, updateSensitive = false): Heade
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "font-src 'self' https://fonts.gstatic.com",
       "img-src 'self' data: blob: https:",
-      "connect-src 'self' https://api.proappstore.online https://*.proappstore.online https://fonts.googleapis.com https://fonts.gstatic.com https://cloudflareinsights.com",
+      "connect-src 'self' https://api.proappstore.online https://*.proappstore.online wss://api.proappstore.online wss://*.proappstore.online https://fonts.googleapis.com https://fonts.gstatic.com https://cloudflareinsights.com",
       "frame-ancestors 'self' https://proappstore.online https://*.proappstore.online",
       "base-uri 'self'",
       "form-action 'self'",
