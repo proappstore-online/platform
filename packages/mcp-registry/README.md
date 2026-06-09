@@ -46,5 +46,5 @@ https://mcp.proappstore.online/mcp
 ## Links
 
 - [Full setup guide](https://proappstore.online/build-with-ai#mcp)
-- [SDK docs](https://proappstore.online/docs)
+- [SDK docs](https://kb.proappstore.online/platform/)
 - [Platform source](https://github.com/proappstore-online/platform)

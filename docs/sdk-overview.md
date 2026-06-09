@@ -91,7 +91,28 @@ Import from `@proappstore/sdk/shell`:
 </ProShell>
 ```
 
-Handles sign-in gate, subscription wall, topbar with avatar + menu.
+Handles sign-in gate, subscription wall, provider context, topbar with avatar + menu, text size control, and footer.
+
+For simple apps, use the default shell. For apps with their own primary navigation, do not add a second navbar below ProShell. Replace the platform topbar while keeping auth/subscription gates:
+
+```tsx
+<ProShell
+  app={app}
+  appName="My App"
+  renderTopbar={({ appName, profileMenu, textSizeToggle }) => (
+    <header className="top-nav">
+      <a href="/">{appName}</a>
+      <nav>{/* app navigation */}</nav>
+      {textSizeToggle}
+      {profileMenu}
+    </header>
+  )}
+>
+  <MyAppContent />
+</ProShell>
+```
+
+Use `hideTopbar` and `hideFooter` when the app owns all chrome but still wants ProShell gates and provider context.
 
 ## Framework-agnostic on purpose
 

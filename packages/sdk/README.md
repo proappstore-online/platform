@@ -471,7 +471,7 @@ Pass `{ allowFree: true }` to skip the subscription check (lets free users throu
 
 ## ProShell Component
 
-A React component that handles auth gates, subscription checks, and renders a platform-level shell with topbar and user menu.
+A React component that handles auth gates, subscription checks, provider context, and optional platform chrome with topbar, user menu, text size control, and footer.
 
 ```tsx
 import { initPro } from '@proappstore/sdk'
@@ -495,12 +495,42 @@ Props:
 | `app` | `ProAppStore` | SDK instance from `initPro()` |
 | `children` | `ReactNode` | App content (rendered only when gates pass) |
 | `appName` | `string?` | Name shown in the topbar |
-| `allowFree` | `boolean?` | Skip subscription gate (default: `false`) |
+| `allowFree` | `boolean?` | Skip subscription gate (default: `true` until platform billing is live) |
+| `showThemeToggle` | `boolean?` | Show theme toggle in the profile menu |
+| `menuItems` | `{ label: string; onClick: () => void }[]` | Extra profile dropdown items |
+| `hideTopbar` | `boolean?` | Omit the default topbar |
+| `hideFooter` | `boolean?` | Omit the default footer |
+| `renderTopbar` | `(ctx) => ReactNode` | Replace the default topbar |
+| `renderFooter` | `(ctx) => ReactNode` | Replace the default footer |
 
 ProShell handles:
 - Auth initialization and sign-in gate
 - Subscription check and upgrade wall (unless `allowFree=true`)
 - Topbar with avatar, app name, text size toggle, and user menu (sign out, manage billing, delete account)
+
+Apps with their own primary navigation should not stack a second navbar under the default shell. Replace the topbar while keeping ProShell gates:
+
+```tsx
+<ProShell
+  app={app}
+  appName="Chess Academy"
+  renderTopbar={({ appName, profileMenu, textSizeToggle }) => (
+    <header className="top-nav">
+      <a href="/">{appName}</a>
+      <nav>
+        <a href="/students">Students</a>
+        <a href="/tournaments">Tournaments</a>
+      </nav>
+      {textSizeToggle}
+      {profileMenu}
+    </header>
+  )}
+>
+  <ChessAcademy />
+</ProShell>
+```
+
+For a fully custom layout, use `<ProShell app={app} hideTopbar hideFooter>` and compose `ProfileMenu`, `SignInButton`, `GateScreen`, and hooks from `@proappstore/sdk/ui` and `@proappstore/sdk/hooks`.
 
 ## UI Components
 
@@ -513,7 +543,7 @@ import { Avatar, SignInButton, ThemeToggle, TextSizeToggle, ProBadge, ProfileMen
 - **TextSizeToggle** -- A/A+/A- button, cycles default/large/small text size. No props. Persists to localStorage.
 - **ThemeToggle** -- Sun/moon button, cycles system/light/dark. No props.
 
-See the [UI Component Library](https://proappstore.online/docs/ui) for the full list.
+See the [UI Component Library](https://kb.proappstore.online/platform/ui/) for the full list.
 
 ## Per-app SQL Database
 

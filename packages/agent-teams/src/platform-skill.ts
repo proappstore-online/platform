@@ -42,9 +42,12 @@ Identity (free, platform-provided — the platform runs the OAuth; no client sec
 - Everything — hooks, components, \`initPro\`, types — imports from \`'@proappstore/sdk'\`:
   \`import { initPro, useProAuth, ProShell, Avatar } from '@proappstore/sdk'\`.
   Subpath imports (\`@proappstore/sdk/hooks\`, \`@proappstore/sdk/ui\`) also work but are not required.
-- ProShell wraps your entire app — handles auth gate, subscription gate, topbar, avatar menu, theme:
+- ProShell can wrap your entire app — handles auth gate, subscription gate, provider context, topbar, avatar menu, theme:
   \`<ProShell app={app} appName="My App" menuItems={[{label:'Profile', onClick}]}>{children}</ProShell>\`.
-- \`<SignInButton>\` props are \`{ app, label? }\`. For Google: \`<button onClick={() => app.auth.signIn('google')}>Google</button>\`.
+- If the app needs its own primary navigation, do NOT stack a second navbar under ProShell. Use
+  \`renderTopbar={({ profileMenu, textSizeToggle }) => <YourNav>{textSizeToggle}{profileMenu}</YourNav>}\`,
+  or \`hideTopbar hideFooter\` and compose SDK primitives directly.
+- \`<SignInButton>\` props are \`{ app, label?, provider? }\`, where provider is \`'github'\` (default) or \`'google'\`.
 
 Free primitives (capped): \`app.kv\` (per-user key/value), realtime \`app.rooms\`
 (WebSocket; peer/room caps), \`app.proxy.fetch(...)\` (call external APIs with the
@@ -77,10 +80,10 @@ SDK UI components (\`import { ... } from '@proappstore/sdk/ui'\`):
 - Avatar, ThemeToggle, TextSizeToggle, ProfileMenu, ProProfilePage
 - SignInButton (GitHub only); for Google: \`app.auth.signIn('google')\`
 - GateScreen, ProBadge, SubscriptionStatus, UpgradeCard, BillingButton
-- UI docs: https://proappstore.online/docs/ui
+- UI docs: https://kb.proappstore.online/platform/ui/
 Official docs (the SAME references users read — cite these links so the founder can learn the API):
 - Platform/SDK guide: https://proappstore.online/skills.md  (use the read_docs tool to read it live)
-- Docs site: https://proappstore.online/docs  · API base: https://api.proappstore.online
+- Docs site: https://kb.proappstore.online/platform/  · API base: https://api.proappstore.online
 When you explain a capability, include the relevant doc link so the founder can read more.
 
 Rules:
@@ -89,7 +92,7 @@ Rules:
 
 /** Canonical, user-facing docs the agents should read + cite. */
 export const DOCS_SKILLS_URL = 'https://proappstore.online/skills.md';
-export const DOCS_SITE_URL = 'https://proappstore.online/docs';
+export const DOCS_SITE_URL = 'https://kb.proappstore.online/platform/';
 
 /**
  * Return the doc section(s) relevant to `topic`, or the whole doc (capped) when

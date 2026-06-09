@@ -143,6 +143,27 @@ import { initPro, ProShell, Avatar, SignInButton, ProBadge, ProfileMenu, ProProf
   {children}
 </ProShell>
 
+// Custom app navigation with ProShell gates and platform account controls:
+<ProShell
+  app={app}
+  appName="My App"
+  renderTopbar={({ appName, profileMenu, textSizeToggle }) => (
+    <header className="top-nav">
+      <a href="/">{appName}</a>
+      <nav>{/* app navigation */}</nav>
+      {textSizeToggle}
+      {profileMenu}
+    </header>
+  )}
+>
+  {children}
+</ProShell>
+
+// Fully custom shell chrome, while keeping auth/subscription gates:
+<ProShell app={app} appName="My App" hideTopbar hideFooter>
+  {children}
+</ProShell>
+
 // Individual components:
 <Avatar user={user} size={32} />
 <ProBadge size="md" />
@@ -154,7 +175,7 @@ import { initPro, ProShell, Avatar, SignInButton, ProBadge, ProfileMenu, ProProf
 <GateScreen gate={gate} app={app} appName="My App" />
 <ProProfilePage app={app} />
 \`\`\`
-Full docs: https://proappstore.online/docs/ui`,
+Full docs: https://kb.proappstore.online/platform/ui/`,
     recipes: `## Recipes (pre-built code patterns)
 Available recipes — copy-paste-ready patterns using the PAS SDK, design system, and pre-installed libraries:
 

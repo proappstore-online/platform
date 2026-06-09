@@ -244,7 +244,7 @@ Shows: avatar + username with PRO badge, subscription status (active/free with u
 
 ## ProShell
 
-The original zero-config shell. Handles auth gates, subscription checks, topbar. Still available at `@proappstore/sdk/shell`.
+The zero-config shell. Handles auth gates, subscription checks, provider context, topbar, profile menu, text size control, and footer. Available at `@proappstore/sdk/shell`.
 
 ```
 import { ProShell } from '@proappstore/sdk/shell'
@@ -261,8 +261,46 @@ import { ProShell } from '@proappstore/sdk/shell'
 | `appName` | `string?` | - | Topbar name |
 | `allowFree` | `boolean` | `true` | Skip subscription gate |
 | `showThemeToggle` | `boolean` | `true` | Show theme toggle in profile menu |
+| `menuItems` | `{ label: string; onClick: () => void }[]` | - | Extra profile dropdown items |
+| `hideTopbar` | `boolean` | `false` | Omit the default topbar |
+| `hideFooter` | `boolean` | `false` | Omit the default footer |
+| `renderTopbar` | `(ctx) => ReactNode` | - | Replace the default topbar |
+| `renderFooter` | `(ctx) => ReactNode` | - | Replace the default footer |
 
-ProShell now uses CSS custom properties for theming, includes a footer, and uses the `./ui` components internally. For custom layouts, use the primitives directly.
+Do not add a second app navbar below the default ProShell topbar. If the app has its own primary navigation, keep the shell gates and replace the topbar:
+
+```tsx
+<ProShell
+  app={app}
+  appName="Chess Academy"
+  renderTopbar={({ appName, profileMenu, proBadge, textSizeToggle }) => (
+    <header className="top-nav">
+      <a href="/" className="brand">{appName}</a>
+      {proBadge}
+      <nav>
+        <a href="/students">Students</a>
+        <a href="/tournaments">Tournaments</a>
+      </nav>
+      <div className="account-controls">
+        {textSizeToggle}
+        {profileMenu}
+      </div>
+    </header>
+  )}
+>
+  <MyAppContent />
+</ProShell>
+```
+
+For a fully custom shell, hide the platform chrome and compose the UI primitives directly:
+
+```tsx
+<ProShell app={app} appName="My App" hideTopbar hideFooter>
+  <MyCustomLayout />
+</ProShell>
+```
+
+ProShell uses CSS custom properties for theming and uses the `./ui` components internally. Custom topbars should use the provided `profileMenu`, `textSizeToggle`, and `proBadge` nodes so account controls stay consistent.
 
 ## Hooks
 

@@ -96,7 +96,7 @@ export function seedFiles(slug: string): Map<string, string> {
     '## Deployment\n\n' +
     `Push to \`main\` → auto-deploys via GitHub Actions to \`${slug}.proappstore.online\`.\n\n` +
     '## Stack\n\n- React 19 + TypeScript + Vite + Tailwind CSS\n' +
-    '- [ProAppStore SDK](https://proappstore.online/docs) (auth, database, storage, rooms, AI)\n' +
+    '- [ProAppStore SDK](https://kb.proappstore.online/platform/) (auth, database, storage, rooms, AI)\n' +
     '- Vitest + Testing Library for tests\n');
 
   files.set('CLAUDE.md', `# ${slug} (Pro)\n\nA Pro app on ProAppStore.\n\n` +
