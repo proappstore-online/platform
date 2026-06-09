@@ -5,7 +5,10 @@ import { HTTPException } from 'hono/http-exception';
 interface Env {
   DB: D1Database;
   APP_ID: string;
+  /** PAS credential-account signing key. */
   SESSION_SIGNING_KEY: string;
+  /** FAS OAuth signing key — set when the app also accepts FAS sessions (teacher logins). */
+  FAS_SESSION_SIGNING_KEY?: string;
 }
 
 interface FasUser {
@@ -86,7 +89,11 @@ async function requireUser(c: { req: { header(name: string): string | undefined 
   if (!header?.startsWith('Bearer ')) {
     throw new HTTPException(401, { message: 'missing bearer token' });
   }
-  const claims = await verifySessionLocal(header.slice(7), c.env.SESSION_SIGNING_KEY);
+  const token = header.slice(7);
+  // Try PAS key first (credential accounts), then FAS key (OAuth teachers/admins).
+  const claims =
+    (await verifySessionLocal(token, c.env.SESSION_SIGNING_KEY)) ||
+    (c.env.FAS_SESSION_SIGNING_KEY ? await verifySessionLocal(token, c.env.FAS_SESSION_SIGNING_KEY) : null);
   if (!claims) {
     throw new HTTPException(401, { message: 'invalid session' });
   }
