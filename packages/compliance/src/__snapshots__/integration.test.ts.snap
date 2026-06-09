@@ -3,6 +3,11 @@
 exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
 [
   {
+    "detail": "images, buttons, and form controls have basic accessible names",
+    "name": "Accessibility static",
+    "status": "pass",
+  },
+  {
     "detail": "missing: Manrope, Fraunces",
     "name": "Brand fonts present",
     "status": "fail",

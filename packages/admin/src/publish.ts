@@ -82,7 +82,7 @@ jobs:
       - name: Code-health scan (VCQA, report-only)
         continue-on-error: true
         run: |
-          npx -y @vibecodeqa/cli@latest --skip-tests . || true
+          npx -y @vibecodeqa/cli@0.44.0 --skip-tests . || true
           if [ -f .vibe-check/report.json ]; then
             mkdir -p "\${{ steps.dist.outputs.dir }}/.vcqa"
             cp .vibe-check/report.json "\${{ steps.dist.outputs.dir }}/.vcqa/report.json"

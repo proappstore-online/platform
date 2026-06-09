@@ -1,9 +1,9 @@
-# @freeappstore/compliance
+# @proappstore/compliance
 
-Compliance checks for apps published on **freeappstore.online**. Same checks the CLI runs locally and the template's CI runs on every push.
+Compliance checks for apps published on **proappstore.online**. Same checks the CLI runs locally and the template's CI runs on every push.
 
 ```ts
-import { runChecks } from '@freeappstore/compliance';
+import { runChecks } from '@proappstore/compliance';
 
 const results = await runChecks(process.cwd());
 for (const r of results) {
@@ -12,10 +12,11 @@ for (const r of results) {
 }
 ```
 
-## Checks (v0.1.0)
+## Checks
 
 | Name | What it checks | Status on fail |
 |---|---|---|
+| `Accessibility static` | Source-level baseline: image alt text, accessible button names, form control labels | **fail** |
 | `No template placeholders` | No file still contains `APPNAME` | **fail** |
 | `No tracking SDKs` | No reference to google-analytics / gtag / amplitude / mixpanel / segment / hotjar / plausible / posthog | **fail** |
 | `Brand fonts present` | Manrope + Fraunces referenced in CSS or HTML | **fail** |

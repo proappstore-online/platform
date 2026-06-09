@@ -85,10 +85,11 @@ describe('failing-app fixture', () => {
       'Store link',
     ]);
     // Passing checks on a maximally-broken app:
+    // - 'Accessibility static' finds no source-level controls in the fixture.
     // - 'No scroll (games only)' skips because it's not a game project.
     // - 'PWA maskable icon' auto-passes when no manifest source is found
     //   to avoid double-reporting (PWA manifest check already fails).
-    expect(summary.pass.sort()).toEqual(['No scroll (games only)', 'PWA maskable icon']);
+    expect(summary.pass.sort()).toEqual(['Accessibility static', 'No scroll (games only)', 'PWA maskable icon']);
   });
 });
 

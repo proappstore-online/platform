@@ -1,3 +1,4 @@
+import { checkAccessibilityStatic } from './checks/accessibility-static.js';
 import { checkBrandFonts } from './checks/brand-fonts.js';
 import { checkBrandTokens } from './checks/brand-tokens.js';
 import { checkBundleSize } from './checks/bundle-size.js';
@@ -36,6 +37,7 @@ export {
 } from './live/index.js';
 export type { CheckResult, CheckStatus } from './types.js';
 export {
+  checkAccessibilityStatic,
   checkBrandFonts,
   checkBrandTokens,
   checkBundleSize,
@@ -89,6 +91,7 @@ async function runChecksOn(source: FileSource): Promise<CheckResult[]> {
     checkNoScroll(source),
     checkViewportSupport(source),
     checkUnsafeVh(source),
+    checkAccessibilityStatic(source),
     checkHtmlMeta(source),
     checkPwaMeta(source),
     checkPwaOffline(source),

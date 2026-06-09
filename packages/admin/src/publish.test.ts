@@ -178,7 +178,7 @@ describe("deploy-workflow injection (agent path)", () => {
     expect(wf).toContain("R2_ACCESS_KEY_ID"); // R2 credentials (secrets || vars)
     expect(wf).toContain("--no-frozen-lockfile"); // agents commit no lockfile
     expect(wf).toContain("npx playwright test"); // behavioural gate runs after deploy
-    expect(wf).toContain("@vibecodeqa/cli"); // code-health scan (report-only)
+    expect(wf).toContain("@vibecodeqa/cli@0.44.0"); // code-health scan (report-only)
     expect(wf).toContain(".vcqa/report.json"); // written into dist for the Dev Ops tab
     // KB publish workflow injected too (Zensical → R2 → kb.proappstore.online).
     expect(
