@@ -1,6 +1,6 @@
 {
   "name": "@proappstore/sdk",
-  "version": "1.16.17",
+  "version": "1.16.18",
   "description": "Browser SDK for paid apps on proappstore.online — subscriptions, license keys, premium modules.",
   "license": "MIT",
   "type": "module",
