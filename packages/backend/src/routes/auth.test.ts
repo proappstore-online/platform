@@ -5,7 +5,18 @@ import { mintSession } from '@proappstore/build-core';
 const b64url = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 const KEY = 'test-signing-key';
-const env = () => ({ DB: {} as D1Database, STORAGE: {} as R2Bucket, SESSION_SIGNING_KEY: KEY } as never);
+function env(userRow: Record<string, unknown> | null = null) {
+  return {
+    DB: {
+      prepare: vi.fn().mockReturnValue({
+        bind: vi.fn().mockReturnThis(),
+        first: vi.fn().mockResolvedValue(userRow),
+      }),
+    } as unknown as D1Database,
+    STORAGE: {} as R2Bucket,
+    SESSION_SIGNING_KEY: KEY,
+  } as never;
+}
 
 describe('GET /v1/auth/me (PAS-owned session verification)', () => {
   it('401s without a bearer token', async () => {
@@ -28,6 +39,24 @@ describe('GET /v1/auth/me (PAS-owned session verification)', () => {
     expect(body.login).toBe('octocat');
     expect(body.roles).toEqual(['user', 'creator']);
     expect(body.appRoles).toEqual({});
+  });
+
+  it('hydrates missing login claims from the users table', async () => {
+    const token = await mintSession({ uid: 'gh:1', roles: ['user'] }, KEY);
+    const res = await app.request(
+      '/v1/auth/me',
+      { headers: { Authorization: `Bearer ${token}` } },
+      env({ login: 'octocat', avatar_url: 'a.png', date_of_birth: '2000-01-02' }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as { id: string; name: string; login: string; avatarUrl: string; dateOfBirth: string };
+    expect(body).toMatchObject({
+      id: 'gh:1',
+      name: 'octocat',
+      login: 'octocat',
+      avatarUrl: 'a.png',
+      dateOfBirth: '2000-01-02',
+    });
   });
 });
 

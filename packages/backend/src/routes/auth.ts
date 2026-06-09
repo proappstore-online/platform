@@ -37,6 +37,23 @@ async function requireClaims(c: Context<{ Bindings: Env }>): Promise<SessionClai
   return claims;
 }
 
+async function authUserDto(env: Env, claims: SessionClaims) {
+  const row = await env.DB.prepare('SELECT login, avatar_url, date_of_birth FROM users WHERE id = ?')
+    .bind(claims.uid)
+    .first<{ login: string | null; avatar_url: string | null; date_of_birth: string | null }>();
+  const login = claims.login ?? row?.login ?? claims.uid;
+  const avatarUrl = claims.avatarUrl ?? row?.avatar_url ?? null;
+  return {
+    id: claims.uid,
+    name: login,
+    login,
+    avatarUrl,
+    dateOfBirth: row?.date_of_birth ?? null,
+    roles: claims.roles,
+    appRoles: claims.appRoles ?? {},
+  };
+}
+
 /** Cookie that binds the OAuth `state` to the initiating browser (CSRF guard). */
 const STATE_COOKIE = 'pas_oauth_state';
 
@@ -177,13 +194,7 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
 // ── GET /v1/auth/me ────────────────────────────────────────
 authRoutes.get('/auth/me', async (c) => {
   const claims = await requireClaims(c);
-  return c.json({
-    id: claims.uid,
-    login: claims.login,
-    avatarUrl: claims.avatarUrl ?? null,
-    roles: claims.roles,
-    appRoles: claims.appRoles ?? {},
-  });
+  return c.json(await authUserDto(c.env, claims));
 });
 
 // ── PATCH /v1/auth/me/date-of-birth ────────────────────────
@@ -199,7 +210,7 @@ authRoutes.patch('/auth/me/date-of-birth', async (c) => {
   const existing = await c.env.DB.prepare('SELECT date_of_birth FROM users WHERE id = ?').bind(claims.uid).first<{ date_of_birth: string | null }>();
   if (existing?.date_of_birth) throw new HttpError('date of birth already set', 409);
   await c.env.DB.prepare('UPDATE users SET date_of_birth = ? WHERE id = ?').bind(dob, claims.uid).run();
-  return c.json({ id: claims.uid, login: claims.login, avatarUrl: claims.avatarUrl ?? null, roles: claims.roles, appRoles: claims.appRoles ?? {} });
+  return c.json({ ...(await authUserDto(c.env, claims)), dateOfBirth: dob });
 });
 
 // ── POST /v1/auth/email/start ──────────────────────────────

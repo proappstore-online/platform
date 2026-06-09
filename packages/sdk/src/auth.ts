@@ -323,7 +323,8 @@ export class Auth {
     if (!response.ok) throw new Error(`Auth failed: ${response.status}`);
     const data = (await response.json()) as User;
     // Ensure `name` is always populated (API returns `login`)
-    if (!data.name) data.name = data.login;
+    if (!data.login) data.login = data.name || data.id;
+    if (!data.name) data.name = data.login || data.id;
     return data;
   }
 
