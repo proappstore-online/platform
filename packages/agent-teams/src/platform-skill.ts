@@ -78,12 +78,12 @@ Design system (CSS classes in src/index.css):
 
 SDK UI components (\`import { ... } from '@proappstore/sdk/ui'\`):
 - Avatar, ThemeToggle, TextSizeToggle, ProfileMenu, ProProfilePage
-- SignInButton (GitHub only); for Google: \`app.auth.signIn('google')\`
+- SignInButton supports \`provider="github"\` and \`provider="google"\`; hooks expose default GitHub sign-in
 - GateScreen, ProBadge, SubscriptionStatus, UpgradeCard, BillingButton
-- UI docs: https://kb.proappstore.online/platform/ui/
+- UI docs: https://docs.proappstore.online/ui/
 Official docs (the SAME references users read — cite these links so the founder can learn the API):
 - Platform/SDK guide: https://proappstore.online/skills.md  (use the read_docs tool to read it live)
-- Docs site: https://kb.proappstore.online/platform/  · API base: https://api.proappstore.online
+- Docs site: https://docs.proappstore.online/  · API base: https://api.proappstore.online
 When you explain a capability, include the relevant doc link so the founder can read more.
 
 Rules:
@@ -92,7 +92,7 @@ Rules:
 
 /** Canonical, user-facing docs the agents should read + cite. */
 export const DOCS_SKILLS_URL = 'https://proappstore.online/skills.md';
-export const DOCS_SITE_URL = 'https://kb.proappstore.online/platform/';
+export const DOCS_SITE_URL = 'https://docs.proappstore.online/';
 
 /**
  * Return the doc section(s) relevant to `topic`, or the whole doc (capped) when

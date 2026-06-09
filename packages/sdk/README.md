@@ -543,7 +543,7 @@ import { Avatar, SignInButton, ThemeToggle, TextSizeToggle, ProBadge, ProfileMen
 - **TextSizeToggle** -- A/A+/A- button, cycles default/large/small text size. No props. Persists to localStorage.
 - **ThemeToggle** -- Sun/moon button, cycles system/light/dark. No props.
 
-See the [UI Component Library](https://kb.proappstore.online/platform/ui/) for the full list.
+See the [UI Component Library](https://docs.proappstore.online/ui/) for the full list.
 
 ## Per-app SQL Database
 

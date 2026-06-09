@@ -143,7 +143,7 @@ ${hasRemote ? `
     3. git push -u origin main
     4. pas publish
 `}
-  Docs:    https://kb.proappstore.online/platform/
+  Docs:    https://docs.proappstore.online/
   Console: https://console.proappstore.online
 
 `);

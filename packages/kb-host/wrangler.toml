@@ -13,6 +13,10 @@ workers_dev = false
 pattern = "kb.proappstore.online"
 custom_domain = true
 
+[[routes]]
+pattern = "docs.proappstore.online"
+custom_domain = true
+
 # Shared KB bucket — CI uploads each app's built Zensical site to "<app>/*" here.
 # One bucket for every KB; no per-KB resource. (Created 2026-06-03.)
 [[r2_buckets]]

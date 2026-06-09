@@ -175,7 +175,7 @@ import { initPro, ProShell, Avatar, SignInButton, ProBadge, ProfileMenu, ProProf
 <GateScreen gate={gate} app={app} appName="My App" />
 <ProProfilePage app={app} />
 \`\`\`
-Full docs: https://kb.proappstore.online/platform/ui/`,
+Full docs: https://docs.proappstore.online/ui/`,
     recipes: `## Recipes (pre-built code patterns)
 Available recipes — copy-paste-ready patterns using the PAS SDK, design system, and pre-installed libraries:
 

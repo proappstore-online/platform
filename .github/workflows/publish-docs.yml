@@ -54,7 +54,7 @@ jobs:
           CSS
           cat > mkdocs.yml <<'YAML'
           site_name: ProAppStore Platform Docs
-          site_url: https://kb.proappstore.online/platform/
+          site_url: https://docs.proappstore.online/
           docs_dir: zensical-src
           copyright: Built on ProAppStore · proappstore.online
           theme:
@@ -109,4 +109,4 @@ jobs:
           find . -type f | while read -r f; do
             curl -fsS -X PUT "https://kb.proappstore.online/_ingest/platform/${f#./}" -H "x-internal-token: $INTERNAL_TOKEN" --data-binary "@$f" >/dev/null
           done
-          echo "Platform docs published → https://kb.proappstore.online/platform/"
+          echo "Platform docs published → https://docs.proappstore.online/"

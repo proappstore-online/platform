@@ -1,8 +1,9 @@
 name: Deploy KB Host Worker
 
-# proappstore-kb-host serves Knowledge Base sites from the shared pas-kb R2
-# bucket at kb.proappstore.online/<app>/. Dedicated subdomain (not a wildcard),
-# so it's safe to auto-deploy on change.
+# proappstore-kb-host serves generated app Knowledge Base sites from the shared
+# pas-kb R2 bucket at kb.proappstore.online/<app>/ and official platform docs at
+# docs.proappstore.online/. Dedicated subdomains (not wildcards), so it is safe
+# to auto-deploy on change.
 
 on:
   push:

@@ -2,12 +2,14 @@
  * proappstore-kb-host — serves every project's Knowledge Base site from ONE R2
  * bucket at kb.proappstore.online/<app>/…  (Path B: one Worker + one bucket, no
  * CF Pages project per KB). CI builds each KB to a Zensical static site and
- * uploads it to R2 under "<app>/*"; this Worker maps the request path straight
- * to that key.
+ * uploads it to R2 under "<app>/*"; this Worker maps the request path to that
+ * key. Official platform docs use the same generated site under the "platform"
+ * prefix, exposed publicly at docs.proappstore.online/.
  *
  *   GET kb.proappstore.online/myapp/            → R2  myapp/index.html
  *   GET kb.proappstore.online/myapp/setup/      → R2  myapp/setup/index.html
  *   GET kb.proappstore.online/myapp/assets/x.css→ R2  myapp/assets/x.css
+ *   GET docs.proappstore.online/ui/             → R2  platform/ui/index.html
  *
  * Dedicated subdomain, NOT a wildcard route — so it can't preempt sibling Worker
  * custom_domains on the zone.
@@ -46,13 +48,20 @@ function contentType(key: string): string {
   return CONTENT_TYPES[ext] ?? "application/octet-stream";
 }
 
-/** Map a request path to an R2 key. Directory / extensionless paths → index.html. */
-function keyForPath(pathname: string): string | null {
+const DOCS_HOSTS = new Set(["docs.proappstore.online"]);
+
+function isDocsHost(hostname: string): boolean {
+  return DOCS_HOSTS.has(hostname.toLowerCase());
+}
+
+/** Map a request path to an R2 key. Directory / extensionless paths -> index.html. */
+export function keyForPath(pathname: string, hostname = "kb.proappstore.online"): string | null {
   let key = decodeURIComponent(pathname.replace(/^\/+/, ""));
-  if (key === "") return null; // bare host — no KB selected
+  if (isDocsHost(hostname)) key = key ? `platform/${key}` : "platform/";
+  if (key === "") return null; // bare KB host — no KB selected
   if (key.includes("..")) return null; // path traversal guard
   if (key.endsWith("/")) key += "index.html";
-  else if (!key.split("/").pop()!.includes(".")) key += "/index.html"; // pretty URL → dir index
+  else if (!key.split("/").pop()!.includes(".")) key += "/index.html"; // pretty URL -> dir index
   return key;
 }
 
@@ -81,9 +90,14 @@ export default {
       return new Response("Method not allowed", { status: 405, headers: { allow: "GET, HEAD" } });
     }
 
-    const key = keyForPath(url.pathname);
+    if (isDocsHost(url.hostname) && (url.pathname === "/platform" || url.pathname.startsWith("/platform/"))) {
+      url.pathname = url.pathname.replace(/^\/platform/, "") || "/";
+      return Response.redirect(url.toString(), 301);
+    }
+
+    const key = keyForPath(url.pathname, url.hostname);
     if (key === null) {
-      return new Response("ProAppStore Knowledge Base host — visit kb.proappstore.online/<app>/", { status: 404 });
+      return new Response("ProAppStore Knowledge Base host - visit kb.proappstore.online/<app>/ or docs.proappstore.online", { status: 404 });
     }
 
     const obj = await env.KB_R2.get(key);
