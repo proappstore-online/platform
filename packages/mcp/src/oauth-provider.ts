@@ -46,6 +46,7 @@ export async function handleOAuthRoute(
       path.startsWith("/.well-known/") ||
       path === "/register" ||
       path === "/authorize" ||
+      path === "/authorize/continue" ||
       path === "/oauth/callback" ||
       path === "/token"
     ) {
@@ -85,6 +86,9 @@ export async function handleOAuthRoute(
   }
   if (path === "/authorize" && request.method === "GET") {
     return authorize(request, config);
+  }
+  if (path === "/authorize/continue" && request.method === "GET") {
+    return continueAuthorize(request, config);
   }
   if (path === "/oauth/callback" && request.method === "GET") {
     return oauthCallback(request, config);
@@ -134,6 +138,63 @@ function authAlreadyInProgress(): Response {
       status: 200,
       headers: {
         "Content-Type": "text/html; charset=utf-8",
+      },
+    },
+  );
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[ch]!);
+}
+
+function authStartUrl(config: OAuthConfig, nonce: string): string {
+  const authUrl = new URL(config.authStart);
+  authUrl.searchParams.set("response_mode", "query");
+  authUrl.searchParams.set("app_id", "mcp");
+  const callbackUrl = new URL("/oauth/callback", config.issuer);
+  callbackUrl.searchParams.set("nonce", nonce);
+  authUrl.searchParams.set("return_to", callbackUrl.toString());
+  return authUrl.toString();
+}
+
+function authConfirmPage(config: OAuthConfig, nonce: string, clientName: string | null): Response {
+  const continueUrl = new URL("/authorize/continue", config.issuer);
+  continueUrl.searchParams.set("nonce", nonce);
+  const name = clientName ? escapeHtml(clientName) : "your MCP client";
+  return new Response(
+    `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Connect ProAppStore MCP</title>
+  <style>
+    body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;min-height:100vh;display:grid;place-items:center;background:#f8fafc;color:#111827}
+    main{max-width:440px;padding:32px;border:1px solid #e5e7eb;border-radius:12px;background:white;box-shadow:0 12px 32px rgba(15,23,42,.08)}
+    h1{font-size:22px;margin:0 0 12px}
+    p{line-height:1.5;margin:0 0 20px;color:#374151}
+    a{display:inline-flex;align-items:center;justify-content:center;padding:10px 16px;border-radius:8px;background:#7c3aed;color:white;text-decoration:none;font-weight:700}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Connect ProAppStore MCP</h1>
+    <p>${name} wants to use ProAppStore MCP tools as your account. Continue to sign in with GitHub.</p>
+    <a href="${escapeHtml(continueUrl.toString())}" autofocus>Continue with GitHub</a>
+  </main>
+</body>
+</html>`,
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Set-Cookie": `${AUTH_IN_FLIGHT_COOKIE}=1; Max-Age=120; Path=/; Secure; HttpOnly; SameSite=Lax`,
       },
     },
   );
@@ -207,7 +268,7 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
   if (!clientRaw) {
     return new Response("invalid client_id", { status: 400 });
   }
-  const client = JSON.parse(clientRaw) as { redirect_uris: string[] };
+  const client = JSON.parse(clientRaw) as { redirect_uris: string[]; client_name?: string | null };
   if (!client.redirect_uris.includes(redirectUri)) {
     return new Response("redirect_uri not registered", { status: 400 });
   }
@@ -220,19 +281,22 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
     { expirationTtl: 600 },
   );
 
-  // Redirect to auth login with response_mode=query
-  const authUrl = new URL(config.authStart);
-  authUrl.searchParams.set("response_mode", "query");
-  authUrl.searchParams.set("app_id", "mcp");
-  const callbackUrl = new URL("/oauth/callback", config.issuer);
-  callbackUrl.searchParams.set("nonce", nonce);
-  authUrl.searchParams.set("return_to", callbackUrl.toString());
+  return authConfirmPage(config, nonce, client.client_name ?? null);
+}
 
+async function continueAuthorize(request: Request, config: OAuthConfig): Promise<Response> {
+  const url = new URL(request.url);
+  const nonce = url.searchParams.get("nonce");
+  if (!nonce) return new Response("missing nonce", { status: 400 });
+
+  const reqRaw = await config.kv.get(`authreq:${nonce}`);
+  if (!reqRaw) return new Response("invalid or expired nonce", { status: 400 });
+
+  const authUrl = authStartUrl(config, nonce);
   return new Response(null, {
     status: 302,
     headers: {
-      Location: authUrl.toString(),
-      "Set-Cookie": `${AUTH_IN_FLIGHT_COOKIE}=1; Max-Age=120; Path=/; Secure; HttpOnly; SameSite=Lax`,
+      Location: authUrl,
     },
   });
 }

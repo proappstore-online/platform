@@ -46,9 +46,12 @@ describe('handleOAuthRoute', () => {
     });
   });
 
-  it('sets an in-flight cookie on the first browser authorization redirect', async () => {
+  it('sets an in-flight cookie on the first browser authorization page', async () => {
     const kv = makeKv({
-      'client:client-1': JSON.stringify({ redirect_uris: ['http://127.0.0.1:9876/callback'] }),
+      'client:client-1': JSON.stringify({
+        redirect_uris: ['http://127.0.0.1:9876/callback'],
+        client_name: 'Codex',
+      }),
     });
 
     const res = await handleOAuthRoute(
@@ -61,9 +64,38 @@ describe('handleOAuthRoute', () => {
       },
     );
 
+    expect(res?.status).toBe(200);
+    expect(res?.headers.get('Location')).toBeNull();
+    expect(res?.headers.get('Set-Cookie')).toContain('pas_mcp_oauth_inflight=1');
+    const html = await res!.text();
+    expect(html).toContain('Connect ProAppStore MCP');
+    expect(html).toContain('Codex wants to use ProAppStore MCP tools');
+    expect(html).toContain('/authorize/continue?nonce=');
+  });
+
+  it('redirects to GitHub only after the user continues', async () => {
+    const kv = makeKv({
+      'authreq:nonce-1': JSON.stringify({
+        clientId: 'client-1',
+        redirectUri: 'http://127.0.0.1:9876/callback',
+        codeChallenge: 'abc',
+        state: null,
+      }),
+    });
+
+    const res = await handleOAuthRoute(
+      new Request('https://mcp.proappstore.online/authorize/continue?nonce=nonce-1'),
+      {
+        issuer: 'https://mcp.proappstore.online',
+        authStart: 'https://api.proappstore.online/v1/auth/github/start',
+        kv,
+        sessionSigningKey: 'test-key',
+      },
+    );
+
     expect(res?.status).toBe(302);
     expect(res?.headers.get('Location')).toContain('https://api.proappstore.online/v1/auth/github/start');
-    expect(res?.headers.get('Set-Cookie')).toContain('pas_mcp_oauth_inflight=1');
+    expect(res?.headers.get('Location')).toContain('response_mode=query');
   });
 
   it('does not redirect duplicate browser authorization tabs to GitHub', async () => {
