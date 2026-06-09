@@ -71,6 +71,8 @@ describe('handleOAuthRoute', () => {
     expect(html).toContain('Connect ProAppStore MCP');
     expect(html).toContain('Codex wants to use ProAppStore MCP tools');
     expect(html).toContain('/authorize/continue?nonce=');
+    expect(html).toContain('provider=github');
+    expect(html).toContain('provider=google');
   });
 
   it('redirects to GitHub only after the user continues', async () => {
@@ -84,7 +86,7 @@ describe('handleOAuthRoute', () => {
     });
 
     const res = await handleOAuthRoute(
-      new Request('https://mcp.proappstore.online/authorize/continue?nonce=nonce-1'),
+      new Request('https://mcp.proappstore.online/authorize/continue?nonce=nonce-1&provider=github'),
       {
         issuer: 'https://mcp.proappstore.online',
         authStart: 'https://api.proappstore.online/v1/auth/github/start',
@@ -95,6 +97,31 @@ describe('handleOAuthRoute', () => {
 
     expect(res?.status).toBe(302);
     expect(res?.headers.get('Location')).toContain('https://api.proappstore.online/v1/auth/github/start');
+    expect(res?.headers.get('Location')).toContain('response_mode=query');
+  });
+
+  it('can redirect to Google when selected on the confirmation page', async () => {
+    const kv = makeKv({
+      'authreq:nonce-1': JSON.stringify({
+        clientId: 'client-1',
+        redirectUri: 'http://127.0.0.1:9876/callback',
+        codeChallenge: 'abc',
+        state: null,
+      }),
+    });
+
+    const res = await handleOAuthRoute(
+      new Request('https://mcp.proappstore.online/authorize/continue?nonce=nonce-1&provider=google'),
+      {
+        issuer: 'https://mcp.proappstore.online',
+        authStart: 'https://api.proappstore.online/v1/auth/github/start',
+        kv,
+        sessionSigningKey: 'test-key',
+      },
+    );
+
+    expect(res?.status).toBe(302);
+    expect(res?.headers.get('Location')).toContain('https://api.proappstore.online/v1/auth/google/start');
     expect(res?.headers.get('Location')).toContain('response_mode=query');
   });
 

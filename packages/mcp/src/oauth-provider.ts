@@ -7,6 +7,8 @@
 import { verifySession } from "./session.js";
 
 const AUTH_IN_FLIGHT_COOKIE = "pas_mcp_oauth_inflight";
+const AUTH_PROVIDERS = ["github", "google"] as const;
+type AuthProvider = typeof AUTH_PROVIDERS[number];
 
 export interface OAuthConfig {
   /** Base URL of this MCP server (e.g. "https://mcp.proappstore.online") */
@@ -153,8 +155,15 @@ function escapeHtml(s: string): string {
   })[ch]!);
 }
 
-function authStartUrl(config: OAuthConfig, nonce: string): string {
+function authProvider(raw: string | null): AuthProvider | null {
+  return AUTH_PROVIDERS.includes(raw as AuthProvider) ? raw as AuthProvider : null;
+}
+
+function authStartUrl(config: OAuthConfig, nonce: string, provider: AuthProvider): string {
   const authUrl = new URL(config.authStart);
+  if (provider !== "github") {
+    authUrl.pathname = authUrl.pathname.replace("/auth/github/", `/auth/${provider}/`);
+  }
   authUrl.searchParams.set("response_mode", "query");
   authUrl.searchParams.set("app_id", "mcp");
   const callbackUrl = new URL("/oauth/callback", config.issuer);
@@ -164,8 +173,12 @@ function authStartUrl(config: OAuthConfig, nonce: string): string {
 }
 
 function authConfirmPage(config: OAuthConfig, nonce: string, clientName: string | null): Response {
-  const continueUrl = new URL("/authorize/continue", config.issuer);
-  continueUrl.searchParams.set("nonce", nonce);
+  const continueUrl = (provider: AuthProvider) => {
+    const url = new URL("/authorize/continue", config.issuer);
+    url.searchParams.set("nonce", nonce);
+    url.searchParams.set("provider", provider);
+    return url.toString();
+  };
   const name = clientName ? escapeHtml(clientName) : "your MCP client";
   return new Response(
     `<!doctype html>
@@ -179,14 +192,19 @@ function authConfirmPage(config: OAuthConfig, nonce: string, clientName: string 
     main{max-width:440px;padding:32px;border:1px solid #e5e7eb;border-radius:12px;background:white;box-shadow:0 12px 32px rgba(15,23,42,.08)}
     h1{font-size:22px;margin:0 0 12px}
     p{line-height:1.5;margin:0 0 20px;color:#374151}
+    .actions{display:flex;gap:10px;flex-wrap:wrap}
     a{display:inline-flex;align-items:center;justify-content:center;padding:10px 16px;border-radius:8px;background:#7c3aed;color:white;text-decoration:none;font-weight:700}
+    a.secondary{background:white;color:#374151;border:1px solid #d1d5db}
   </style>
 </head>
 <body>
   <main>
     <h1>Connect ProAppStore MCP</h1>
-    <p>${name} wants to use ProAppStore MCP tools as your account. Continue to sign in with GitHub.</p>
-    <a href="${escapeHtml(continueUrl.toString())}" autofocus>Continue with GitHub</a>
+    <p>${name} wants to use ProAppStore MCP tools as your account. Choose how to sign in.</p>
+    <div class="actions">
+      <a href="${escapeHtml(continueUrl("github"))}" autofocus>Continue with GitHub</a>
+      <a class="secondary" href="${escapeHtml(continueUrl("google"))}">Continue with Google</a>
+    </div>
   </main>
 </body>
 </html>`,
@@ -287,12 +305,13 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
 async function continueAuthorize(request: Request, config: OAuthConfig): Promise<Response> {
   const url = new URL(request.url);
   const nonce = url.searchParams.get("nonce");
+  const provider = authProvider(url.searchParams.get("provider")) ?? "github";
   if (!nonce) return new Response("missing nonce", { status: 400 });
 
   const reqRaw = await config.kv.get(`authreq:${nonce}`);
   if (!reqRaw) return new Response("invalid or expired nonce", { status: 400 });
 
-  const authUrl = authStartUrl(config, nonce);
+  const authUrl = authStartUrl(config, nonce, provider);
   return new Response(null, {
     status: 302,
     headers: {

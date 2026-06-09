@@ -189,11 +189,11 @@ Point any MCP client at the platform server:
 ```
 
 On first connection, auth-capable clients such as `mcp-remote` receive an MCP
-OAuth challenge and open a PAS browser confirmation page. The user explicitly
-continues to GitHub sign-in from that page. After the OAuth flow completes, the
-client retries with an OAuth access token. The MCP server maps that access
-token to a PAS session, so `discover_tools` and `<app>/<tool>` calls run as the
-connected user.
+OAuth challenge and open a PAS browser confirmation page. The user chooses
+GitHub or Google on that page, then completes sign-in in the browser. After the
+OAuth flow completes, the client retries with an OAuth access token. The MCP
+server maps that access token to a PAS session, so `discover_tools` and
+`<app>/<tool>` calls run as the connected user.
 
 Clients that cannot run the browser OAuth flow can still send an existing PAS
 session token as `Authorization: Bearer <token>`; `pas login` stores that token
