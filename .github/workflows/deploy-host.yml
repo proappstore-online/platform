@@ -1,14 +1,17 @@
 name: Deploy Host Worker
 
-# proappstore-host serves published apps from R2 via subdomain routing.
-# It is still v0.1 scaffolding — the wildcard `*.proappstore.online/*` route is
-# intentionally commented out in wrangler.toml (it preempts every sibling
-# Worker custom_domain on the zone; see the wildcard-worker-route-preemption
-# note). So this deploy is MANUAL-ONLY for now. Switch to a push trigger
-# (paths: packages/host/**) once the route + service-binding dispatch are wired
-# and tested in staging.
+# proappstore-host serves published apps from R2 via subdomain routing. Its
+# wildcard `*.proappstore.online/*` route preempts sibling Worker custom domains,
+# so reserved subdomains must be dispatched through service bindings. Host
+# routing changes deploy automatically because stale host code breaks live
+# subdomains even when sibling Workers deploy successfully.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/host/**'
+      - '.github/workflows/deploy-host.yml'
   workflow_dispatch:
 
 permissions:
