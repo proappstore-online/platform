@@ -14,6 +14,7 @@ import type { Env } from "./env.js";
 import {
   contentType,
   etagsMatch,
+  isUpdateSensitivePath,
   r2KeyFor,
   resolveRoute,
   securityHeaders,
@@ -78,7 +79,8 @@ export default {
 
     // Edge cache check — serve from cache if available (avoids R2 + D1 on every hit)
     const cache = (caches as unknown as { default: Cache }).default;
-    if (request.method === "GET") {
+    const skipEdgeCache = isUpdateSensitivePath(url.pathname);
+    if (request.method === "GET" && !skipEdgeCache) {
       const cached = await cache.match(request);
       if (cached) return cached;
     }
@@ -112,7 +114,8 @@ export default {
 
     // Serve the object
     const isHtml = key.endsWith(".html");
-    const headers = securityHeaders(isHtml);
+    const updateSensitive = isUpdateSensitivePath(key);
+    const headers = securityHeaders(isHtml, updateSensitive);
     headers.set("Content-Type", contentType(key));
     headers.set("ETag", etag);
     if (object.size !== undefined) headers.set("Content-Length", String(object.size));
@@ -121,7 +124,9 @@ export default {
     const response = new Response(body, { status: 200, headers });
 
     // Edge cache: store the response so next request skips R2 + D1
-    ctx.waitUntil(cache.put(request, response.clone()));
+    if (!skipEdgeCache && !updateSensitive) {
+      ctx.waitUntil(cache.put(request, response.clone()));
+    }
 
     return response;
   },

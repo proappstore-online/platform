@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   contentType,
   etagsMatch,
+  isUpdateSensitivePath,
   type Route,
   r2KeyFor,
   securityHeaders,
@@ -111,6 +112,18 @@ describe("contentType", () => {
   });
 });
 
+describe("isUpdateSensitivePath", () => {
+  it("marks stable PWA files as update-sensitive", () => {
+    expect(isUpdateSensitivePath("/sw.js")).toBe(true);
+    expect(isUpdateSensitivePath("apps/interns/registerSW.js")).toBe(true);
+    expect(isUpdateSensitivePath("/manifest.webmanifest")).toBe(true);
+  });
+
+  it("does not mark hashed assets as update-sensitive", () => {
+    expect(isUpdateSensitivePath("/assets/index-B8lC6GEu.js")).toBe(false);
+  });
+});
+
 describe("securityHeaders", () => {
   it("sets CSP, XCTO, XFO, referrer policy for HTML", () => {
     const h = securityHeaders(true);
@@ -122,10 +135,15 @@ describe("securityHeaders", () => {
   });
 
   it("sets short cache for HTML", () => {
-    expect(securityHeaders(true).get("Cache-Control")).toContain("max-age=60");
+    expect(securityHeaders(true).get("Cache-Control")).toContain("must-revalidate");
   });
 
   it("sets immutable cache for assets", () => {
     expect(securityHeaders(false).get("Cache-Control")).toContain("immutable");
+  });
+
+  it("does not set immutable cache for update-sensitive files", () => {
+    expect(securityHeaders(false, true).get("Cache-Control")).toContain("must-revalidate");
+    expect(securityHeaders(false, true).get("Cache-Control")).not.toContain("immutable");
   });
 });

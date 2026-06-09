@@ -86,8 +86,14 @@ export function contentType(path: string): string {
   return map[ext] ?? "application/octet-stream";
 }
 
-/** Security + cache headers. HTML gets short cache; hashed assets get immutable. */
-export function securityHeaders(isHtml: boolean): Headers {
+/** Files with stable names must remain updateable across app deploys. */
+export function isUpdateSensitivePath(pathname: string): boolean {
+  const name = pathname.split("/").pop()?.toLowerCase() ?? "";
+  return name === "sw.js" || name === "registersw.js" || name === "manifest.webmanifest";
+}
+
+/** Security + cache headers. HTML and update-sensitive files get short cache; hashed assets get immutable. */
+export function securityHeaders(isHtml: boolean, updateSensitive = false): Headers {
   const h = new Headers();
   h.set("X-Content-Type-Options", "nosniff");
   h.set("X-Frame-Options", "SAMEORIGIN");
@@ -97,11 +103,11 @@ export function securityHeaders(isHtml: boolean): Headers {
     "Content-Security-Policy",
     [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com",
+      "script-src 'self' 'unsafe-inline' https://api.proappstore.online https://static.cloudflareinsights.com",
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "font-src 'self' https://fonts.gstatic.com",
       "img-src 'self' data: blob: https:",
-      "connect-src 'self' https://api.proappstore.online https://*.proappstore.online https://cloudflareinsights.com",
+      "connect-src 'self' https://api.proappstore.online https://*.proappstore.online https://fonts.googleapis.com https://fonts.gstatic.com https://cloudflareinsights.com",
       "frame-ancestors 'self' https://proappstore.online https://*.proappstore.online",
       "base-uri 'self'",
       "form-action 'self'",
@@ -109,7 +115,9 @@ export function securityHeaders(isHtml: boolean): Headers {
   );
   h.set(
     "Cache-Control",
-    isHtml ? "public, max-age=60, s-maxage=60" : "public, max-age=31536000, immutable",
+    isHtml || updateSensitive
+      ? "public, max-age=0, s-maxage=60, must-revalidate"
+      : "public, max-age=31536000, immutable",
   );
   return h;
 }
