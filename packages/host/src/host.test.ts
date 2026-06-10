@@ -170,6 +170,11 @@ describe("isUpdateSensitivePath", () => {
     expect(isUpdateSensitivePath("/manifest.webmanifest")).toBe(true);
   });
 
+  it("marks deploy metadata as update-sensitive", () => {
+    expect(isUpdateSensitivePath("/.buildinfo.json")).toBe(true);
+    expect(isUpdateSensitivePath("apps/interns/.buildinfo.json")).toBe(true);
+  });
+
   it("does not mark hashed assets as update-sensitive", () => {
     expect(isUpdateSensitivePath("/assets/index-B8lC6GEu.js")).toBe(false);
   });

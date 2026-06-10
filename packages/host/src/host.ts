@@ -118,7 +118,7 @@ export function contentType(path: string): string {
 /** Files with stable names must remain updateable across app deploys. */
 export function isUpdateSensitivePath(pathname: string): boolean {
   const name = pathname.split("/").pop()?.toLowerCase() ?? "";
-  return name === "sw.js" || name === "registersw.js" || name === "manifest.webmanifest";
+  return name === "sw.js" || name === "registersw.js" || name === "manifest.webmanifest" || name === ".buildinfo.json";
 }
 
 /** Security + cache headers. HTML and update-sensitive files get short cache; hashed assets get immutable. */
