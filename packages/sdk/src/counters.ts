@@ -35,15 +35,13 @@ export class Counters {
 
   /** Increment (or decrement) a counter. Requires auth. Returns new value. */
   async increment(key: string, amount = 1): Promise<number> {
-    if (!this.auth.token) throw new Error('Not signed in.');
     const url = new URL(
       `/v1/apps/${encodeURIComponent(this.appId)}/counters/${encodeURIComponent(key)}`,
       this.apiBase,
     );
-    const response = await fetch(url, {
+    const response = await this.auth.authenticatedFetch(url, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.auth.token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ increment: amount }),

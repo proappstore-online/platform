@@ -1,5 +1,17 @@
 export interface ProInitOptions {
   appId: string;
+  /**
+   * Browser auth/session transport.
+   *
+   * - legacy-bearer: OAuth returns a bearer token to JS and the SDK caches it
+   *   under the PAS-owned pas:session key when storage is available.
+   * - platform-cookie: PAS-hosted apps use same-origin /.pas/auth/* routes and
+   *   a host-only HttpOnly cookie. Browser JS never receives the bearer token.
+   *
+   * Defaults to legacy-bearer for backwards compatibility until all SDK
+   * primitives support the platform-cookie mediation path.
+   */
+  authMode?: 'legacy-bearer' | 'platform-cookie';
   /** Defaults to https://api.proappstore.online. */
   proApiBase?: string;
   /** Defaults to https://data-{appId}.proappstore.online (per-app data worker). */

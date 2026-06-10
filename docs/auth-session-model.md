@@ -117,6 +117,8 @@ mediation is available.
 
 ### Phase 3: Same-Origin API Mediation
 
+Status: started.
+
 Add same-origin SDK API mediation for endpoints that currently require browser
 JavaScript to send `Authorization: Bearer <token>`.
 
@@ -127,18 +129,55 @@ The host/token-handler should:
 - call platform API and data-worker routes with internal bearer auth
 - preserve existing app/user/role enforcement
 
+Implemented foundation:
+
+- `/.pas/api/*` forwards to `api.proappstore.online/*`.
+- `/.pas/data/*` forwards to the current app's own data worker.
+- Both mediation paths require the host-only `__Host-pas_session` cookie.
+- Mutating mediated requests reject cross-site `Origin` / `Sec-Fetch-Site`
+  signals before reaching the upstream worker.
+- Caller-supplied `Authorization` and `Cookie` headers are stripped before the
+  host worker injects the internal bearer token.
+
+Remaining: WebSocket and beacon-style SDK paths need separate mediation because
+browser APIs do not support arbitrary Authorization headers in the same way as
+normal `fetch()`.
+
 ### Phase 4: SDK Migration
 
-Default hosted apps to token-handler mode when the same-origin endpoints are
-available.
+Status: started.
+
+Hosted apps can opt into token-handler mode:
+
+```ts
+const app = initPro({
+  appId: 'my-app',
+  authMode: 'platform-cookie',
+})
+```
+
+In `platform-cookie` mode:
+
+- `app.auth.signIn()` starts OAuth at `/.pas/auth/start`.
+- `app.auth.init()` reads the user from `/.pas/auth/me`.
+- `app.auth.signOut()` posts to `/.pas/auth/logout`.
+- Normal SDK HTTP modules use same-origin `/.pas/api/*` or `/.pas/data/*`
+  mediation instead of JavaScript-readable bearer tokens.
+
+The compatibility default remains `legacy-bearer` until all SDK paths are
+covered and real hosted apps have passed end-to-end verification.
 
 Keep explicit fallback modes for compatibility:
 
 - `platform-cookie`: same-origin token-handler mode
 - `legacy-bearer`: current localStorage-backed bearer mode
-- `memory`: no persistence after page refresh
 
-Automatic detection is acceptable, but the supported modes must be documented.
+Remaining SDK paths:
+
+- `app.rooms`: WebSocket connection auth still uses the legacy token path.
+- `app.usage`: unload/beacon telemetry still uses the legacy token path.
+- `app.maps`: optional signed map requests still use legacy auth, but map
+  lookup itself is not a session-critical app-data path.
 
 ### Phase 5: Security Gates
 

@@ -3,6 +3,7 @@ import type { LicenseInfo } from './types.js';
 interface AuthLike {
   token: string | null;
   handleUnauthorized(): void;
+  authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
 export class LicenseApi {
@@ -14,12 +15,12 @@ export class LicenseApi {
 
   /** Returns the license info for the signed-in user, or null. */
   async current(): Promise<LicenseInfo | null> {
-    const token = this.auth.token;
-    if (!token) return null;
-    const response = await fetch(
-      new URL(`/v1/apps/${encodeURIComponent(this.appId)}/license`, this.apiBase),
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
+    let response: Response;
+    try {
+      response = await this.auth.authenticatedFetch(new URL(`/v1/apps/${encodeURIComponent(this.appId)}/license`, this.apiBase));
+    } catch {
+      return null;
+    }
     if (response.status === 401) { this.auth.handleUnauthorized(); return null; }
     if (response.status === 404) return null;
     if (!response.ok) throw new Error(`license.current failed: ${response.status}`);

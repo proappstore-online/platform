@@ -1,6 +1,7 @@
 interface AuthLike {
   token: string | null;
   handleUnauthorized(): void;
+  authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
 export interface RoleAssignment {
@@ -55,12 +56,14 @@ export class Roles {
 
   /** Check if the current user has a specific role in this app. */
   async check(role: string): Promise<boolean> {
-    const token = this.auth.token;
-    if (!token) return false;
-    const res = await fetch(
+    let res: Response;
+    try {
+      res = await this.auth.authenticatedFetch(
       `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/roles/check/${encodeURIComponent(role)}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
+      );
+    } catch {
+      return false;
+    }
     if (!res.ok) return false;
     const data = (await res.json()) as { has: boolean };
     return data.has;
@@ -68,11 +71,7 @@ export class Roles {
 
   /** List all role assignments for this app. Caller must be app owner or admin. */
   async listAll(): Promise<RoleAssignment[]> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-    const res = await fetch(`${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/roles`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/roles`);
     if (res.status === 401) {
       this.auth.handleUnauthorized();
       throw new Error('Not signed in.');
@@ -90,22 +89,21 @@ export class Roles {
 
   /** Get the current user's roles in this app. */
   async myRoles(): Promise<string[]> {
-    const token = this.auth.token;
-    if (!token) return [];
-    const res = await fetch(`${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/roles/me`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    let res: Response;
+    try {
+      res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/roles/me`);
+    } catch {
+      return [];
+    }
     if (!res.ok) return [];
     const data = (await res.json()) as { roles: string[] };
     return data.roles;
   }
 
   private async post(path: string, body: unknown): Promise<void> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-    const res = await fetch(this.apiBase + path, {
+    const res = await this.auth.authenticatedFetch(this.apiBase + path, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
     if (res.status === 401) {
@@ -119,11 +117,9 @@ export class Roles {
   }
 
   private async del(path: string, body: unknown): Promise<void> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-    const res = await fetch(this.apiBase + path, {
+    const res = await this.auth.authenticatedFetch(this.apiBase + path, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
     if (res.status === 401) {

@@ -1,6 +1,7 @@
 interface AuthLike {
   token: string | null;
   handleUnauthorized(): void;
+  authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
 /**
@@ -23,13 +24,9 @@ export class Email {
     body: string,
     opts?: { replyTo?: string },
   ): Promise<void> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-
-    const res = await fetch(`${this.apiBase}/v1/email/send`, {
+    const res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/email/send`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({

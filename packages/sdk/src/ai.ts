@@ -1,6 +1,7 @@
 interface AuthLike {
   token: string | null;
   handleUnauthorized(): void;
+  authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
 export type TextModelAlias = 'fast' | 'smart';
@@ -82,12 +83,9 @@ export class AI {
   }
 
   private async post<T>(path: string, body: unknown): Promise<T> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-
-    const res = await fetch(this.apiBase + path, {
+    const res = await this.auth.authenticatedFetch(this.apiBase + path, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
 

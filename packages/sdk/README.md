@@ -23,6 +23,7 @@ Options:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `appId` | (required) | Your app's unique identifier |
+| `authMode` | `legacy-bearer` | Use `platform-cookie` for PAS-hosted HttpOnly cookie sessions |
 | `proApiBase` | `https://api.proappstore.online` | Platform API base URL |
 | `dataApiBase` | `https://data-{appId}.proappstore.online` | Per-app data worker URL |
 
@@ -84,13 +85,25 @@ app.auth.signInWithEmail('alice@example.com')
 app.auth.signOut()
 ```
 
-Apps should not store PAS session tokens themselves. The current SDK keeps the
-signed-in session in memory and, in legacy bearer mode, tries to cache it under
-the PAS-owned `pas:session` key. If browser storage is blocked or throws, the
-SDK falls back to memory-only state for the current page lifetime. Hosted PAS
-apps are planned to move to a same-origin token-handler model with host-only
-HttpOnly cookies so browser JavaScript does not receive persistent bearer
-tokens.
+Apps should not store PAS session tokens themselves. The default
+`legacy-bearer` mode keeps the signed-in session in memory and tries to cache it
+under the PAS-owned `pas:session` key. If browser storage is blocked or throws,
+the SDK falls back to memory-only state for the current page lifetime.
+
+PAS-hosted apps can opt into host-only HttpOnly cookie sessions:
+
+```ts
+const app = initPro({
+  appId: 'my-app',
+  authMode: 'platform-cookie',
+})
+```
+
+In `platform-cookie` mode, OAuth and normal SDK HTTP calls go through
+same-origin `/.pas/auth/*`, `/.pas/api/*`, and `/.pas/data/*` routes. Browser
+JavaScript does not receive the PAS bearer token. WebSocket rooms and usage
+beacon telemetry still use the legacy token path while those transports are
+migrated.
 
 ### KV (Per-user key-value storage)
 

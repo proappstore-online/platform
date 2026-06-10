@@ -91,9 +91,23 @@ mode, tries to cache it under the PAS-owned `pas:session` key. If browser
 storage is blocked or throws, the SDK falls back to memory-only state for the
 current page lifetime.
 
-PAS is moving hosted apps to a same-origin token-handler model with host-only
-HttpOnly cookies so browser JavaScript does not receive persistent bearer
-tokens. See [Browser auth session model](/auth-session-model).
+Hosted PAS apps can opt into the same-origin token-handler model:
+
+```ts
+const app = initPro({
+  appId: 'my-app',
+  authMode: 'platform-cookie',
+})
+```
+
+In `platform-cookie` mode, OAuth starts at `/.pas/auth/start`, the signed-in
+user is read from `/.pas/auth/me`, sign-out posts to `/.pas/auth/logout`, and
+normal SDK HTTP calls use `/.pas/api/*` or `/.pas/data/*` mediation. The bearer
+token stays in a host-only HttpOnly cookie and is injected server-side by PAS.
+
+The default remains `legacy-bearer` for compatibility while WebSocket rooms,
+usage beacon telemetry, and remaining edge paths are migrated. See
+[Browser auth session model](/auth-session-model).
 
 ## ProShell component
 

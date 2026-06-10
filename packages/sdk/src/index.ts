@@ -22,7 +22,7 @@ import type { ProInitOptions } from './types.js';
 
 // Vendored base primitive types — one import for app authors.
 export type { User, Unsubscribe } from './base-types.js';
-export type { AuthProvider } from './auth.js';
+export type { AuthMode, AuthProvider } from './auth.js';
 export type { ConnectionState, Room, RoomMessage, RoomPeer } from './rooms.js';
 export type { DefaultRole, RoleAssignment } from './roles.js';
 export { DEFAULT_ROLES } from './roles.js';
@@ -95,7 +95,9 @@ export class ProAppStore {
 
   constructor(opts: ProInitOptions) {
     const apiBase = opts.proApiBase ?? 'https://api.proappstore.online';
-    this.auth = new Auth(opts.appId, apiBase);
+    const authMode = opts.authMode ?? 'legacy-bearer';
+    this.auth = new Auth(opts.appId, apiBase, authMode);
+    const dataApiBase = opts.dataApiBase ?? (this.auth.usesPlatformCookie ? '/.pas/data' : `https://data-${opts.appId}.proappstore.online`);
     this.kv = new Kv(opts.appId, apiBase, this.auth);
     this.counters = new Counters(opts.appId, apiBase, this.auth);
     this.rooms = new Rooms(opts.appId, apiBase, this.auth);
@@ -103,7 +105,7 @@ export class ProAppStore {
     this.proxy = new ApiProxy(opts.appId, apiBase, this.auth);
     this.subscription = new SubscriptionApi(opts.appId, apiBase, this.auth);
     this.license = new LicenseApi(opts.appId, apiBase, this.auth);
-    this.db = new Database(opts.appId, opts.dataApiBase ?? `https://data-${opts.appId}.proappstore.online`, this.auth);
+    this.db = new Database(opts.appId, dataApiBase, this.auth);
     this.storage = new Storage(opts.appId, apiBase, this.auth);
     this.maps = new Maps(apiBase, this.auth);
     this.notifications = new Notifications(opts.appId, apiBase, this.auth);

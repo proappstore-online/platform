@@ -1,6 +1,7 @@
 interface AuthLike {
   token: string | null;
   handleUnauthorized(): void;
+  authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
 export interface WebhookConfig {
@@ -32,13 +33,8 @@ export class Webhooks {
 
   /** List all registered webhooks for this app. */
   async list(): Promise<WebhookConfig[]> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-
     const appId = encodeURIComponent(this.appId);
-    const res = await fetch(`${this.apiBase}/v1/apps/${appId}/webhooks`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/apps/${appId}/webhooks`);
 
     if (res.status === 401) {
       this.auth.handleUnauthorized();
@@ -51,14 +47,10 @@ export class Webhooks {
 
   /** Register a new webhook. Returns the ID and signing secret. */
   async register(event: string, url: string): Promise<{ id: string; secret: string }> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-
     const appId = encodeURIComponent(this.appId);
-    const res = await fetch(`${this.apiBase}/v1/apps/${appId}/webhooks`, {
+    const res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/apps/${appId}/webhooks`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ event, url }),
@@ -74,13 +66,9 @@ export class Webhooks {
 
   /** Remove a registered webhook. */
   async remove(id: string): Promise<void> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-
     const appId = encodeURIComponent(this.appId);
-    const res = await fetch(`${this.apiBase}/v1/apps/${appId}/webhooks/${id}`, {
+    const res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/apps/${appId}/webhooks/${id}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
     });
 
     if (res.status === 401) {
@@ -92,13 +80,9 @@ export class Webhooks {
 
   /** Fire a test event to a registered webhook and return the response. */
   async test(id: string): Promise<WebhookTestResult> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-
     const appId = encodeURIComponent(this.appId);
-    const res = await fetch(`${this.apiBase}/v1/apps/${appId}/webhooks/${id}/test`, {
+    const res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/apps/${appId}/webhooks/${id}/test`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
     });
 
     if (res.status === 401) {

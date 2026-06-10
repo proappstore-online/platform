@@ -1,8 +1,8 @@
 import type { Env } from "./env.js";
 import type { Route } from "./host.js";
 
-const AUTH_PREFIX = "/.pas/auth";
-const COOKIE_NAME = "__Host-pas_session";
+export const AUTH_PREFIX = "/.pas/auth";
+export const SESSION_COOKIE_NAME = "__Host-pas_session";
 const NONCE_COOKIE_NAME = "__Host-pas_auth_nonce";
 const API_BASE = "https://api.proappstore.online";
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
@@ -66,7 +66,7 @@ async function authCallback(request: Request, env: Env): Promise<Response> {
 
 async function authMe(request: Request, env: Env): Promise<Response> {
   if (request.method !== "GET") return methodNotAllowed("GET");
-  const token = readCookie(request.headers.get("Cookie"), COOKIE_NAME);
+  const token = readCookie(request.headers.get("Cookie"), SESSION_COOKIE_NAME);
   if (!token) return json({ error: "not signed in" }, 401);
 
   const upstream = await fetchMe(env, token);
@@ -90,7 +90,7 @@ function authLogout(request: Request): Response {
   });
 }
 
-function isSameOriginMutation(request: Request): boolean {
+export function isSameOriginMutation(request: Request): boolean {
   const url = new URL(request.url);
   const origin = request.headers.get("Origin");
   if (origin && origin !== url.origin) return false;
@@ -137,7 +137,7 @@ function nonceMatches(request: Request, url: URL): boolean {
   return readCookie(request.headers.get("Cookie"), NONCE_COOKIE_NAME) === nonce;
 }
 
-function readCookie(header: string | null, name: string): string | null {
+export function readCookie(header: string | null, name: string): string | null {
   if (!header) return null;
   for (const part of header.split(";")) {
     const [rawName, ...rawValue] = part.trim().split("=");
@@ -153,7 +153,7 @@ function readCookie(header: string | null, name: string): string | null {
 
 function sessionCookie(token: string): string {
   return [
-    `${COOKIE_NAME}=${encodeURIComponent(token)}`,
+    `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
     `Max-Age=${SESSION_TTL_SECONDS}`,
     "Path=/",
     "Secure",
@@ -177,8 +177,8 @@ function clearNonceCookie(): string {
   return `${NONCE_COOKIE_NAME}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax`;
 }
 
-function clearSessionCookie(): string {
-  return `${COOKIE_NAME}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax`;
+export function clearSessionCookie(): string {
+  return `${SESSION_COOKIE_NAME}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax`;
 }
 
 function methodNotAllowed(allow: string): Response {

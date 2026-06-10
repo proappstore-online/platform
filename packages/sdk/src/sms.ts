@@ -1,6 +1,7 @@
 interface AuthLike {
   token: string | null;
   handleUnauthorized(): void;
+  authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
 export interface SmsSendResult {
@@ -36,13 +37,9 @@ export class SMS {
   }
 
   private async _send(numbers: string[], message: string): Promise<SmsSendResult> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-
-    const res = await fetch(`${this.apiBase}/v1/sms/send`, {
+    const res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/sms/send`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ appId: this.appId, to: numbers, message }),

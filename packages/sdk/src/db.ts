@@ -3,6 +3,7 @@ import { TenantScope } from './tenant.js';
 interface AuthLike {
   token: string | null;
   handleUnauthorized(): void;
+  authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
 export interface QueryResult<T = Record<string, unknown>> {
@@ -82,11 +83,7 @@ export class Database {
 
   /** List all user-created tables in the database. */
   async tables(): Promise<string[]> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-    const response = await fetch(`${this.dataApiBase}/tables`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const response = await this.auth.authenticatedFetch(`${this.dataApiBase}/tables`);
     if (response.status === 401) {
       this.auth.handleUnauthorized();
       throw new Error('Not signed in.');
@@ -96,12 +93,9 @@ export class Database {
   }
 
   private async req<T>(path: string, body: unknown): Promise<T> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-    const response = await fetch(`${this.dataApiBase}${path}`, {
+    const response = await this.auth.authenticatedFetch(`${this.dataApiBase}${path}`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),

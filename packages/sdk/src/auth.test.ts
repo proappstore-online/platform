@@ -128,4 +128,122 @@ describe('Auth.init', () => {
     expect(auth.token).toBeNull();
     expect(localStorage.removeItem).toHaveBeenCalledOnce();
   });
+
+  it('starts OAuth through same-origin host auth routes in platform-cookie mode', () => {
+    const assign = vi.fn();
+    vi.stubGlobal('window', {
+      location: {
+        hash: '',
+        href: 'https://interns.proappstore.online/dashboard?tab=people#old',
+        origin: 'https://interns.proappstore.online',
+        pathname: '/dashboard',
+        search: '?tab=people',
+        assign,
+      },
+    });
+
+    const auth = new Auth('interns', 'https://api.proappstore.online', 'platform-cookie');
+    auth.signIn('google');
+
+    const url = new URL(assign.mock.calls[0][0]);
+    expect(url.origin).toBe('https://interns.proappstore.online');
+    expect(url.pathname).toBe('/.pas/auth/start');
+    expect(url.searchParams.get('provider')).toBe('google');
+    expect(url.searchParams.get('return_to')).toBe('/dashboard?tab=people');
+    expect(auth.token).toBeNull();
+  });
+
+  it('hydrates platform-cookie sessions from same-origin /me without localStorage', async () => {
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url === '/.pas/auth/me') {
+        return new Response(JSON.stringify({
+          id: 'gh:123',
+          login: 'creator',
+          avatarUrl: null,
+          roles: ['user'],
+          appRoles: {},
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url === '/.pas/api/v1/apps/interns/roles/ensure-member') {
+        return new Response(null, { status: 204 });
+      }
+      return new Response('unexpected', { status: 500 });
+    });
+    vi.stubGlobal('window', {
+      location: {
+        hash: '',
+        href: 'https://interns.proappstore.online/',
+        origin: 'https://interns.proappstore.online',
+        pathname: '/',
+        search: '',
+      },
+      localStorage: {
+        getItem: vi.fn(() => { throw new Error('should not read storage'); }),
+        setItem: vi.fn(() => { throw new Error('should not write storage'); }),
+        removeItem: vi.fn(() => { throw new Error('should not clear storage'); }),
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const auth = new Auth('interns', 'https://api.proappstore.online', 'platform-cookie');
+    await auth.init();
+
+    expect(auth.user?.login).toBe('creator');
+    expect(auth.token).toBeNull();
+    expect(fetchMock).toHaveBeenCalledWith('/.pas/auth/me', {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/.pas/api/v1/apps/interns/roles/ensure-member', expect.objectContaining({
+      method: 'POST',
+      credentials: 'same-origin',
+    }));
+  });
+
+  it('rewrites API requests through same-origin mediation in platform-cookie mode', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal('window', {
+      location: {
+        hash: '',
+        href: 'https://interns.proappstore.online/',
+        origin: 'https://interns.proappstore.online',
+        pathname: '/',
+        search: '',
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const auth = new Auth('interns', 'https://api.proappstore.online', 'platform-cookie');
+    await auth.init();
+    await auth.authenticatedFetch('https://api.proappstore.online/v1/apps/interns/roles/me');
+
+    expect(fetchMock).toHaveBeenLastCalledWith('/.pas/api/v1/apps/interns/roles/me', expect.objectContaining({
+      credentials: 'same-origin',
+    }));
+    const init = fetchMock.mock.calls.at(-1)?.[1] as RequestInit;
+    expect(new Headers(init.headers).get('Authorization')).toBeNull();
+  });
+
+  it('posts to same-origin logout in platform-cookie mode', () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal('window', {
+      location: {
+        hash: '',
+        href: 'https://interns.proappstore.online/',
+        origin: 'https://interns.proappstore.online',
+        pathname: '/',
+        search: '',
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const auth = new Auth('interns', 'https://api.proappstore.online', 'platform-cookie');
+    auth.signOut();
+
+    expect(fetchMock).toHaveBeenCalledWith('/.pas/auth/logout', {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+  });
 });

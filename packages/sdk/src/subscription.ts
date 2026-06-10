@@ -3,6 +3,7 @@ import type { CheckoutRequest, Subscription } from './types.js';
 interface AuthLike {
   token: string | null;
   handleUnauthorized(): void;
+  authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
 export class SubscriptionApi {
@@ -37,17 +38,14 @@ export class SubscriptionApi {
   }
 
   private async req(method: string, path: string, body?: unknown): Promise<Response> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
     const init: RequestInit = {
       method,
       headers: {
-        Authorization: `Bearer ${token}`,
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
     };
     if (body !== undefined) init.body = JSON.stringify(body);
-    const response = await fetch(new URL(path, this.apiBase), init);
+    const response = await this.auth.authenticatedFetch(new URL(path, this.apiBase), init);
     if (response.status === 401) {
       this.auth.handleUnauthorized();
       throw new Error('Not signed in.');

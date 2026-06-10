@@ -3,11 +3,23 @@ import { Notifications } from './notifications.js';
 
 interface AuthLike {
   token: string | null;
+  isSignedIn: boolean;
   handleUnauthorized: () => void;
+  authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
 function fakeAuth(token: string | null): AuthLike {
-  return { token, handleUnauthorized: vi.fn() };
+  const auth: AuthLike = {
+    token,
+    isSignedIn: token !== null,
+    handleUnauthorized: vi.fn(),
+    async authenticatedFetch(input: string | URL, init: RequestInit = {}) {
+      if (!auth.token) throw new Error('Not signed in.');
+      const headers = { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${auth.token}` };
+      return fetch(input, { ...init, headers });
+    },
+  };
+  return auth;
 }
 
 describe('Notifications', () => {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import worker from "./index.js";
 import type { Env } from "./env.js";
 import type { Route } from "./host.js";
@@ -9,6 +9,10 @@ const route: Route = {
   r2_prefix: "apps/meetup",
   store: "pas",
 };
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("host auth token-handler routes", () => {
   it("starts OAuth through the API with a same-origin callback", async () => {
@@ -205,6 +209,101 @@ describe("host auth token-handler routes", () => {
 
     expect(res.status).toBe(404);
     expect(env.APPS.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("host same-origin platform mediation routes", () => {
+  it("forwards API requests with the HttpOnly cookie token, not caller headers", async () => {
+    const apiFetch = vi.fn(async (request: Request) => {
+      expect(request.url).toBe("https://api.proappstore.online/v1/apps/meetup/roles/me");
+      expect(request.headers.get("Authorization")).toBe("Bearer cookie-token");
+      expect(request.headers.get("Cookie")).toBeNull();
+      return Response.json({ roles: ["owner"] });
+    });
+    const env = makeEnv({ apiFetch });
+
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/api/v1/apps/meetup/roles/me", {
+        headers: {
+          Cookie: "__Host-pas_session=cookie-token",
+          Authorization: "Bearer attacker-token",
+        },
+      }),
+      env,
+      ctx(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ roles: ["owner"] });
+    expect(apiFetch).toHaveBeenCalledOnce();
+  });
+
+  it("requires a hosted session cookie for mediated API requests", async () => {
+    const apiFetch = vi.fn(async () => Response.json({ ok: true }));
+    const env = makeEnv({ apiFetch });
+
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/api/v1/auth/me"),
+      env,
+      ctx(),
+    );
+
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "not signed in" });
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects cross-site mediated mutations before reaching the API", async () => {
+    const apiFetch = vi.fn(async () => Response.json({ ok: true }));
+    const env = makeEnv({ apiFetch });
+
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/api/v1/apps/meetup/kv/profile", {
+        method: "PUT",
+        headers: {
+          Cookie: "__Host-pas_session=cookie-token",
+          Origin: "https://evil.example",
+          "Sec-Fetch-Site": "cross-site",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ name: "bad" }),
+      }),
+      env,
+      ctx(),
+    );
+
+    expect(res.status).toBe(403);
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
+  it("forwards same-origin data requests to the current app data worker", async () => {
+    const dataFetch = vi.fn(async (request: Request) => {
+      expect(request.url).toBe("https://pas-data-meetup.serge-the-dev.workers.dev/query");
+      expect(request.headers.get("Authorization")).toBe("Bearer cookie-token");
+      expect(request.headers.get("Cookie")).toBeNull();
+      return Response.json({ rows: [{ id: 1 }], meta: { changes: 0, duration: 1 } });
+    });
+    vi.stubGlobal("fetch", dataFetch);
+    const env = makeEnv();
+
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/data/query", {
+        method: "POST",
+        headers: {
+          Cookie: "__Host-pas_session=cookie-token",
+          Origin: "https://meetup.proappstore.online",
+          "Sec-Fetch-Site": "same-origin",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ sql: "select 1" }),
+      }),
+      env,
+      ctx(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ rows: [{ id: 1 }], meta: { changes: 0, duration: 1 } });
+    expect(dataFetch).toHaveBeenCalledOnce();
   });
 });
 

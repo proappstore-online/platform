@@ -1,6 +1,7 @@
 import type { Unsubscribe, User } from './base-types.js';
 
 export type AuthProvider = 'github' | 'google' | 'email';
+export type AuthMode = 'legacy-bearer' | 'platform-cookie';
 
 /** PAS-owned localStorage key for the legacy cached session (per-origin). */
 const STORAGE_KEY = 'pas:session';
@@ -9,7 +10,7 @@ const STORAGE_KEY = 'pas:session';
 const SESSION_HASH = '#pas_session=';
 
 interface Session {
-  token: string;
+  token: string | null;
   user: User;
 }
 
@@ -22,14 +23,20 @@ export class Auth {
   constructor(
     private readonly appId: string,
     private readonly apiBase: string,
+    private readonly authMode: AuthMode = 'legacy-bearer',
   ) {
-    this.session = this.readStorage();
+    this.session = this.authMode === 'legacy-bearer' ? this.readStorage() : null;
     if (this.session) this.ensureMember();
   }
 
   /** Current signed-in user, or null if not authenticated. */
   get user(): User | null {
     return this.session?.user ?? null;
+  }
+
+  /** True when the SDK has a current authenticated user. */
+  get isSignedIn(): boolean {
+    return this.session !== null;
   }
 
   /**
@@ -42,7 +49,12 @@ export class Auth {
 
   /** Current session token, or null if not authenticated. */
   get token(): string | null {
-    return this.session?.token ?? null;
+    return this.authMode === 'legacy-bearer' ? this.session?.token ?? null : null;
+  }
+
+  /** True when this SDK instance uses PAS-hosted HttpOnly cookie sessions. */
+  get usesPlatformCookie(): boolean {
+    return this.authMode === 'platform-cookie';
   }
 
   /** Subscribe to auth state changes. Fires immediately with current user, then on every change. */
@@ -67,6 +79,13 @@ export class Auth {
     }
     const here = new URL(window.location.href);
     here.hash = '';
+    if (this.authMode === 'platform-cookie') {
+      const url = new URL('/.pas/auth/start', here.origin);
+      url.searchParams.set('provider', provider);
+      url.searchParams.set('return_to', `${here.pathname}${here.search}`);
+      window.location.assign(url.toString());
+      return;
+    }
     const url = new URL(`/v1/auth/${provider}/start`, this.apiBase);
     url.searchParams.set('app_id', this.appId);
     url.searchParams.set('return_to', here.toString());
@@ -87,6 +106,9 @@ export class Auth {
    */
   async signInWithEmail(email: string): Promise<void> {
     if (typeof window === 'undefined') return;
+    if (this.authMode === 'platform-cookie') {
+      throw new Error('Email magic-link sign-in is not available in platform-cookie mode yet.');
+    }
     const here = new URL(window.location.href);
     here.hash = '';
     const res = await fetch(new URL('/v1/auth/email/start', this.apiBase), {
@@ -110,6 +132,9 @@ export class Auth {
    * @throws if the credentials are invalid (401) or rate-limited (429).
    */
   async signInWithCredentials(login: string, password: string): Promise<User> {
+    if (this.authMode === 'platform-cookie') {
+      throw new Error('Credential sign-in is not available in platform-cookie mode yet.');
+    }
     const res = await fetch(new URL('/v1/auth/credentials/login', this.apiBase), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -147,11 +172,9 @@ export class Auth {
   async provisionChild(
     opts: { login?: string; displayName?: string; isChild?: boolean; password?: string } = {},
   ): Promise<{ uid: string; login: string; password: string; isChild: boolean }> {
-    if (!this.session) throw new Error('Not signed in.');
-    const res = await fetch(new URL('/v1/auth/credentials/provision', this.apiBase), {
+    const res = await this.authenticatedFetch(new URL('/v1/auth/credentials/provision', this.apiBase), {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.session.token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(opts),
@@ -175,11 +198,9 @@ export class Auth {
    * by a signed-in creator (teacher/admin). The old password is invalidated.
    */
   async resetPassword(targetUserId: string): Promise<{ password: string }> {
-    if (!this.session) throw new Error('Not signed in.');
-    const res = await fetch(new URL('/v1/auth/credentials/reset-password', this.apiBase), {
+    const res = await this.authenticatedFetch(new URL('/v1/auth/credentials/reset-password', this.apiBase), {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.session.token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ targetUserId }),
@@ -198,7 +219,13 @@ export class Auth {
   /** Clear the session and notify listeners. */
   signOut(): void {
     this.session = null;
-    this.clearStorage();
+    if (this.authMode === 'platform-cookie') {
+      if (typeof fetch !== 'undefined') {
+        fetch('/.pas/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+      }
+    } else {
+      this.clearStorage();
+    }
     this.emit();
   }
 
@@ -233,6 +260,14 @@ export class Auth {
     if (hash.startsWith('#auth_error=')) {
       try { this.lastAuthError = decodeURIComponent(hash.slice('#auth_error='.length)) || 'unknown'; } catch { this.lastAuthError = 'unknown'; }
       history.replaceState(null, '', window.location.pathname + window.location.search);
+      return;
+    }
+
+    if (this.authMode === 'platform-cookie') {
+      if (hash.startsWith(SESSION_HASH)) {
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+      await this.hydratePlatformCookieSession();
       return;
     }
 
@@ -287,11 +322,9 @@ export class Auth {
    * @param dateOfBirth ISO 'YYYY-MM-DD' string.
    */
   async setDateOfBirth(dateOfBirth: string): Promise<User> {
-    if (!this.session) throw new Error('Not signed in.');
-    const response = await fetch(new URL('/v1/auth/me/date-of-birth', this.apiBase), {
+    const response = await this.authenticatedFetch(new URL('/v1/auth/me/date-of-birth', this.apiBase), {
       method: 'PATCH',
       headers: {
-        Authorization: `Bearer ${this.session.token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ dateOfBirth }),
@@ -308,10 +341,62 @@ export class Auth {
       throw new Error(`setDateOfBirth failed (${response.status}): ${body}`);
     }
     const user = (await response.json()) as User;
-    this.session = { ...this.session, user };
-    this.writeStorage(this.session);
+    this.session = { token: this.authMode === 'legacy-bearer' ? this.session?.token ?? null : null, user };
+    if (this.authMode === 'legacy-bearer') this.writeStorage(this.session);
     this.emit();
     return user;
+  }
+
+  /** Authenticated platform request. In cookie mode this goes through same-origin PAS mediation. */
+  async authenticatedFetch(input: string | URL, init: RequestInit = {}): Promise<Response> {
+    if (!this.session) throw new Error('Not signed in.');
+    const target = this.authMode === 'platform-cookie' ? this.platformMediatedUrl(input) : input;
+    const headers = new Headers(init.headers);
+    if (this.authMode === 'legacy-bearer') {
+      const token = this.session.token;
+      if (!token) throw new Error('Not signed in.');
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+    const requestInit: RequestInit = {
+      ...init,
+      headers,
+    };
+    if (this.authMode === 'platform-cookie') requestInit.credentials = 'same-origin';
+    const response = await fetch(target, requestInit);
+    if (response.status === 401) this.handleUnauthorized();
+    return response;
+  }
+
+  private async hydratePlatformCookieSession(): Promise<void> {
+    try {
+      const response = await fetch('/.pas/auth/me', {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) {
+        this.session = null;
+        this.emit();
+        return;
+      }
+      const user = normalizeUser((await response.json()) as User);
+      this.session = { token: null, user };
+      this.lastAuthError = null;
+      this.emit();
+      this.ensureMember();
+    } catch {
+      this.session = null;
+      this.emit();
+    }
+  }
+
+  private platformMediatedUrl(input: string | URL): string {
+    const raw = input.toString();
+    const base = typeof window !== 'undefined' ? window.location.origin : 'https://app.local';
+    const target = new URL(raw, base);
+    const api = new URL(this.apiBase);
+    if (target.origin === api.origin) return `/.pas/api${target.pathname}${target.search}`;
+    if (target.origin === base) return `${target.pathname}${target.search}`;
+    return raw;
   }
 
   private async fetchUser(token: string): Promise<User> {
@@ -319,21 +404,15 @@ export class Auth {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!response.ok) throw new Error(`Auth failed: ${response.status}`);
-    const data = (await response.json()) as User;
-    // Ensure `name` is always populated (API returns `login`)
-    if (!data.login) data.login = data.name || data.id;
-    if (!data.name) data.name = data.login || data.id;
-    return data;
+    return normalizeUser((await response.json()) as User);
   }
 
   /** Fire-and-forget: ensure the user has at least 'member' role in this app. */
   private ensureMember(): void {
     if (typeof fetch === 'undefined') return; // SSR / test env
-    const t = this.session?.token;
-    if (!t) return;
-    fetch(`${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/roles/ensure-member`, {
+    if (!this.session) return;
+    this.authenticatedFetch(`${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/roles/ensure-member`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${t}` },
     }).catch(() => {}); // silent — non-blocking
   }
 
@@ -373,4 +452,10 @@ export class Auth {
   private emit(): void {
     for (const listener of this.listeners) listener(this.user);
   }
+}
+
+function normalizeUser(data: User): User {
+  if (!data.login) data.login = data.name || data.id;
+  if (!data.name) data.name = data.login || data.id;
+  return data;
 }

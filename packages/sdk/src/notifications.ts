@@ -1,6 +1,8 @@
 interface AuthLike {
   token: string | null;
+  isSignedIn: boolean;
   handleUnauthorized(): void;
+  authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
 export interface NotificationPayload {
@@ -41,8 +43,7 @@ export class Notifications {
 
   /** Request permission, register the service worker, and subscribe to push. */
   async subscribe(swPath = '/sw.js'): Promise<void> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
+    if (!this.auth.isSignedIn) throw new Error('Not signed in.');
 
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') throw new Error('Notification permission denied.');
@@ -57,10 +58,9 @@ export class Notifications {
     });
 
     const keys = subscription.toJSON().keys!;
-    const res = await fetch(`${this.apiBase}/v1/notifications/subscribe`, {
+    const res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/notifications/subscribe`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -84,8 +84,7 @@ export class Notifications {
 
   /** Unsubscribe from push notifications (browser + backend). */
   async unsubscribe(): Promise<void> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
+    if (!this.auth.isSignedIn) throw new Error('Not signed in.');
 
     const registration = await navigator.serviceWorker.getRegistration();
     const subscription = await registration?.pushManager.getSubscription();
@@ -94,10 +93,9 @@ export class Notifications {
       const endpoint = subscription.endpoint;
 
       // Backend first — if it fails, browser sub stays active so user can retry
-      await fetch(`${this.apiBase}/v1/notifications/unsubscribe`, {
+      await this.auth.authenticatedFetch(`${this.apiBase}/v1/notifications/unsubscribe`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ endpoint }),
@@ -136,13 +134,9 @@ export class Notifications {
    * Rate-limited: 30 per minute per app.
    */
   async notifyUser(userId: string, payload: NotificationPayload): Promise<SendResult> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-
-    const res = await fetch(`${this.apiBase}/v1/notifications/notify-user`, {
+    const res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/notifications/notify-user`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -167,13 +161,9 @@ export class Notifications {
   }
 
   private async _send(payload: NotificationPayload & { userId?: string }): Promise<SendResult> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-
-    const res = await fetch(`${this.apiBase}/v1/notifications/send`, {
+    const res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/notifications/send`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({

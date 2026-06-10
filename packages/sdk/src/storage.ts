@@ -1,6 +1,7 @@
 interface AuthLike {
   token: string | null;
   handleUnauthorized(): void;
+  authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
 interface UploadResult {
@@ -29,14 +30,10 @@ export class Storage {
 
   /** Upload a file. Returns the upload result with the file URL. */
   async upload(path: string, data: Blob | ArrayBuffer | Uint8Array, contentType?: string): Promise<UploadResult> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-
     const url = `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/storage/${path}`;
-    const response = await fetch(url, {
+    const response = await this.auth.authenticatedFetch(url, {
       method: 'PUT',
       headers: {
-        Authorization: `Bearer ${token}`,
         'Content-Type': contentType || (data instanceof Blob ? data.type : 'application/octet-stream'),
       },
       body: data as BodyInit,
@@ -56,13 +53,8 @@ export class Storage {
 
   /** Download a file. Returns the Response (use .blob(), .arrayBuffer(), etc.). */
   async download(path: string): Promise<Response> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-
     const url = `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/storage/${path}`;
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const response = await this.auth.authenticatedFetch(url);
 
     if (response.status === 401) {
       this.auth.handleUnauthorized();
@@ -94,13 +86,8 @@ export class Storage {
 
   /** List all files for the current user in this app. */
   async list(): Promise<FileInfo[]> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-
     const url = `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/files`;
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const response = await this.auth.authenticatedFetch(url);
 
     if (response.status === 401) {
       this.auth.handleUnauthorized();
@@ -114,13 +101,9 @@ export class Storage {
 
   /** Delete a file. */
   async delete(path: string): Promise<void> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-
     const url = `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/storage/${path}`;
-    const response = await fetch(url, {
+    const response = await this.auth.authenticatedFetch(url, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
     });
 
     if (response.status === 401) {

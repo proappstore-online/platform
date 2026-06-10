@@ -1,6 +1,7 @@
 interface AuthLike {
   token: string | null;
   handleUnauthorized(): void;
+  authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
 export interface Invite {
@@ -80,12 +81,7 @@ export class Invites {
 
   /** List all invites for this app. Caller must have developer-level app access. */
   async list(): Promise<InviteListItem[]> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-    const res = await fetch(
-      `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/invites`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
+    const res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/invites`);
     if (res.status === 401) { this.auth.handleUnauthorized(); throw new Error('Not signed in.'); }
     if (!res.ok) throw new Error(`invites.list failed: ${res.status}`);
     const data = (await res.json()) as { invites: InviteListItem[] };
@@ -94,11 +90,9 @@ export class Invites {
 
   /** Revoke an invite. Caller must have developer-level app access. */
   async revoke(inviteId: string): Promise<void> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-    const res = await fetch(
+    const res = await this.auth.authenticatedFetch(
       `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/invites/${encodeURIComponent(inviteId)}`,
-      { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+      { method: 'DELETE' },
     );
     if (res.status === 401) { this.auth.handleUnauthorized(); throw new Error('Not signed in.'); }
     if (!res.ok) {
@@ -117,11 +111,9 @@ export class Invites {
   }
 
   private async post(path: string, body: unknown): Promise<unknown> {
-    const token = this.auth.token;
-    if (!token) throw new Error('Not signed in.');
-    const res = await fetch(this.apiBase + path, {
+    const res = await this.auth.authenticatedFetch(this.apiBase + path, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
     if (res.status === 401) { this.auth.handleUnauthorized(); throw new Error('Not signed in.'); }

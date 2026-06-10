@@ -12,6 +12,7 @@
 
 import type { Env } from "./env.js";
 import { handleAuthRoute } from "./auth-handler.js";
+import { handlePlatformMediation } from "./platform-mediation.js";
 import {
   contentType,
   etagsMatch,
@@ -77,6 +78,9 @@ export default {
 
     const authResponse = await handleAuthRoute(request, env, route);
     if (authResponse) return authResponse;
+
+    const mediationResponse = await handlePlatformMediation(request, env, route);
+    if (mediationResponse) return mediationResponse;
 
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method not allowed", { status: 405 });
