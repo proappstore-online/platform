@@ -225,6 +225,35 @@ describe('Auth.init', () => {
     expect(new Headers(init.headers).get('Authorization')).toBeNull();
   });
 
+  it('rewrites canonical app data requests through same-origin mediation in platform-cookie mode', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal('window', {
+      location: {
+        hash: '',
+        href: 'https://custom.example.com/',
+        origin: 'https://custom.example.com',
+        pathname: '/',
+        search: '',
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const auth = new Auth('interns', 'https://api.proappstore.online', 'platform-cookie');
+    await auth.init();
+    await auth.authenticatedFetch('https://data-interns.proappstore.online/query?limit=10', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql: 'select 1' }),
+    });
+
+    expect(fetchMock).toHaveBeenLastCalledWith('/.pas/data/query?limit=10', expect.objectContaining({
+      method: 'POST',
+      credentials: 'same-origin',
+    }));
+    const init = fetchMock.mock.calls.at(-1)?.[1] as RequestInit;
+    expect(new Headers(init.headers).get('Authorization')).toBeNull();
+  });
+
   it('posts to same-origin logout in platform-cookie mode', () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
     vi.stubGlobal('window', {

@@ -395,6 +395,8 @@ export class Auth {
     const target = new URL(raw, base);
     const api = new URL(this.apiBase);
     if (target.origin === api.origin) return `/.pas/api${target.pathname}${target.search}`;
+    const appData = new URL(`https://data-${this.appId}.proappstore.online`);
+    if (target.origin === appData.origin) return `/.pas/data${target.pathname}${target.search}`;
     if (target.origin === base) return `${target.pathname}${target.search}`;
     return raw;
   }

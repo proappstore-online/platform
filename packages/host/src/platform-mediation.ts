@@ -26,7 +26,7 @@ function upstreamApiUrl(url: URL): string {
 
 function upstreamDataUrl(url: URL, route: Route): string {
   const suffix = url.pathname.slice(DATA_PREFIX.length) || "/";
-  const upstream = new URL(`https://pas-data-${route.slug}.serge-the-dev.workers.dev${suffix}`);
+  const upstream = new URL(`https://data-${route.slug}.proappstore.online${suffix}`);
   upstream.search = url.search;
   return upstream.toString();
 }

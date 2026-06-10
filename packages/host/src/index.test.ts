@@ -276,9 +276,9 @@ describe("host same-origin platform mediation routes", () => {
     expect(apiFetch).not.toHaveBeenCalled();
   });
 
-  it("forwards same-origin data requests to the current app data worker", async () => {
+  it("forwards same-origin data requests to the current app's canonical data worker", async () => {
     const dataFetch = vi.fn(async (request: Request) => {
-      expect(request.url).toBe("https://pas-data-meetup.serge-the-dev.workers.dev/query");
+      expect(request.url).toBe("https://data-meetup.proappstore.online/query");
       expect(request.headers.get("Authorization")).toBe("Bearer cookie-token");
       expect(request.headers.get("Cookie")).toBeNull();
       return Response.json({ rows: [{ id: 1 }], meta: { changes: 0, duration: 1 } });

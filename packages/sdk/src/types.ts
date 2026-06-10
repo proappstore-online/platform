@@ -14,7 +14,7 @@ export interface ProInitOptions {
   authMode?: 'legacy-bearer' | 'platform-cookie';
   /** Defaults to https://api.proappstore.online. */
   proApiBase?: string;
-  /** Defaults to https://data-{appId}.proappstore.online (per-app data worker). */
+  /** Defaults to https://data-{appId}.proappstore.online, or same-origin /.pas/data in platform-cookie mode. */
   dataApiBase?: string;
   /** Usage telemetry options. Auto-heartbeat is on by default. */
   usage?: {

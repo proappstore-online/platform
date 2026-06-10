@@ -25,7 +25,7 @@ Options:
 | `appId` | (required) | Your app's unique identifier |
 | `authMode` | `legacy-bearer` | Use `platform-cookie` for PAS-hosted HttpOnly cookie sessions |
 | `proApiBase` | `https://api.proappstore.online` | Platform API base URL |
-| `dataApiBase` | `https://data-{appId}.proappstore.online` | Per-app data worker URL |
+| `dataApiBase` | `https://data-{appId}.proappstore.online`, or `/.pas/data` in `platform-cookie` mode | Per-app data worker URL |
 
 ## Types
 
