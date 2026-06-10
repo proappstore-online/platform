@@ -18,9 +18,9 @@ Browser / app
                              └──────────────────────────────────────┘
 
 Published app data
-  └── app.db ──────────────→ ┌──────────────────────────────────────┐
+  └── app.actions / app.db ─→ ┌──────────────────────────────────────┐
                              │ data-<app>.proappstore.online        │
-                             │ per-app D1 query/execute/batch/tables│
+                             │ per-app D1 actions/query/execute     │
                              │ local PAS session verification       │
                              └──────────────────────────────────────┘
 ```
@@ -114,6 +114,14 @@ needs its own data plane, the backend creates the app D1 database and deploys a
 PAS `SESSION_SIGNING_KEY` injected as a secret. The data worker verifies caller
 sessions locally; it does not call a separate auth service for every request.
 
+Browser-facing app data should use registered app actions, not arbitrary raw SQL
+from the browser. Actions are declared in `mcp.json`, stored in the platform
+`app_tools` table, executed through `/v1/apps/:appId/actions/:name`, and then
+forwarded as prepared SQL to the app data worker. The action executor injects
+the verified PAS user id and enforces declared platform/app roles before any app
+SQL runs. The low-level `app.db` raw SQL API remains for legacy apps and
+controlled migration work, but it is not the target permission boundary.
+
 ## Database
 
 | DB | Worker | Purpose |
@@ -121,8 +129,9 @@ sessions locally; it does not call a separate auth service for every request.
 | PAS platform D1 (`DB`) | `api.proappstore.online` | users, apps, roles, sessions metadata, KV/counters, subscriptions, license keys, app-tool manifests, usage |
 | per-app D1 (`DB`) | `data-<app>.proappstore.online` | the app's own SQL data |
 
-The platform database and app databases stay separate. App UI and MCP calls hit
-the app's data worker for app rows; platform APIs stay on the PAS backend.
+The platform database and app databases stay separate. App UI should call
+registered actions for user/role-scoped app rows; MCP calls use the same
+registered manifest surface. Platform APIs stay on the PAS backend.
 
 ## What this doesn't include
 

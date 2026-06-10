@@ -67,6 +67,11 @@ interface ToolManifest {
   sql: string;
   params: Record<string, ToolParam>;
   requires_auth?: boolean;
+  auth?: {
+    required?: boolean;
+    platform_roles?: string[];
+    app_roles?: string[];
+  };
 }
 
 function validateManifest(tool: ToolManifest): string | null {
@@ -75,6 +80,7 @@ function validateManifest(tool: ToolManifest): string | null {
   if (!tool.description || typeof tool.description !== 'string') return 'description is required';
   if (!['query', 'execute'].includes(tool.operation)) return 'operation must be "query" or "execute"';
   if (!tool.sql || typeof tool.sql !== 'string') return 'sql is required';
+  if (tool.requires_auth !== true) return 'requires_auth must be true for app data tools';
 
   const sqlErr = validateSql(tool.sql, tool.operation);
   if (sqlErr) return sqlErr;
@@ -93,12 +99,26 @@ function validateManifest(tool: ToolManifest): string | null {
     if (!declaredParams.has(p)) return `SQL references :${p} but it is not declared in params`;
   }
 
-  // Auto-enforce: if SQL uses __user_id, requires_auth must be true
-  if (sqlParams.includes('__user_id') && !tool.requires_auth) {
-    return 'SQL uses :__user_id but requires_auth is not set to true';
+  if (tool.auth !== undefined) {
+    if (tool.auth === null || typeof tool.auth !== 'object' || Array.isArray(tool.auth)) {
+      return 'auth must be an object';
+    }
+    if (tool.auth.platform_roles !== undefined && !isStringArray(tool.auth.platform_roles)) {
+      return 'auth.platform_roles must be an array of strings';
+    }
+    if (tool.auth.app_roles !== undefined && !isStringArray(tool.auth.app_roles)) {
+      return 'auth.app_roles must be an array of strings';
+    }
+    if (tool.auth.required === false) {
+      return 'auth.required cannot be false for app data tools';
+    }
   }
 
   return null;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string' && item.trim() !== '');
 }
 
 /**

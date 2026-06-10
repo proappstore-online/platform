@@ -105,6 +105,22 @@ JavaScript does not receive the PAS bearer token. WebSocket rooms and usage
 beacon telemetry still use the legacy token path while those transports are
 migrated.
 
+### Actions
+
+Registered app actions are the preferred path for browser-callable app data.
+Actions are declared in the app's `mcp.json`, registered on publish, and run
+server-side by name:
+
+```ts
+const result = await app.actions.call('list_my_items', { limit: 20 })
+```
+
+The platform loads the registered statement, injects `:__user_id`, `:__now`,
+and `:__uuid`, enforces declared platform/app roles, then forwards the prepared
+statement to the app data worker. Apps should migrate user-specific and
+role-specific reads/writes to actions instead of sending raw SQL from browser
+code.
+
 ### KV (Per-user key-value storage)
 
 ```ts
@@ -568,9 +584,12 @@ See the [UI Component Library](https://docs.proappstore.online/ui/) for the full
 
 ## Per-app SQL Database
 
-Each Pro app is provisioned with a dedicated Cloudflare D1 database fronted by a data worker (`data-{appId}.proappstore.online`). The SDK's `db` module provides a typed client for this worker.
+Each Pro app is provisioned with a dedicated Cloudflare D1 database fronted by a data worker (`data-{appId}.proappstore.online`). The SDK's `db` module provides a low-level client for this worker.
 
-The database is per-user isolated at the auth layer — all requests require a valid Bearer token. The data worker validates the token against the platform auth API before executing queries.
+The data worker verifies the PAS session locally before executing queries, but
+raw SQL is not a row-level authorization boundary. Browser-facing app data
+should use registered actions (`app.actions.call`) so user ids and role checks
+are enforced by the platform before SQL reaches the data worker.
 
 Tables are user-defined (create them via `db.execute('CREATE TABLE IF NOT EXISTS ...')`). The schema is entirely up to the app developer.
 

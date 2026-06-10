@@ -18,6 +18,7 @@ import { Usage } from './usage.js';
 import { Email } from './email.js';
 import { Webhooks } from './webhooks.js';
 import { Invites } from './invites.js';
+import { Actions } from './actions.js';
 import type { ProInitOptions } from './types.js';
 
 // Vendored base primitive types — one import for app authors.
@@ -27,6 +28,7 @@ export type { ConnectionState, Room, RoomMessage, RoomPeer } from './rooms.js';
 export type { DefaultRole, RoleAssignment } from './roles.js';
 export { DEFAULT_ROLES } from './roles.js';
 export type { Invite, InviteListItem, CreateInviteOptions, RedeemResult } from './invites.js';
+export { Actions } from './actions.js';
 
 export type {
   ProInitOptions,
@@ -92,6 +94,7 @@ export class ProAppStore {
   readonly email: Email;
   readonly webhooks: Webhooks;
   readonly invites: Invites;
+  readonly actions: Actions;
 
   constructor(opts: ProInitOptions) {
     const apiBase = opts.proApiBase ?? 'https://api.proappstore.online';
@@ -115,6 +118,7 @@ export class ProAppStore {
     this.email = new Email(opts.appId, apiBase, this.auth);
     this.webhooks = new Webhooks(opts.appId, apiBase, this.auth);
     this.invites = new Invites(opts.appId, apiBase, this.auth);
+    this.actions = new Actions(opts.appId, apiBase, this.auth);
     // Auto-start telemetry unless the app opts out. Wrapped in try-catch
     // because localStorage can throw in incognito, sandboxed iframes, or
     // when storage quota is exceeded.

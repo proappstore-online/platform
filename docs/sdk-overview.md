@@ -42,6 +42,9 @@ app.proxy.fetch(url, opts)
 // Per-app SQL database (D1)
 app.db.query(sql, params) / .execute(sql, params) / .batch([...]) / .tables()
 
+// Registered app actions (recommended for user-facing app data)
+app.actions.call(name, params)
+
 // Multi-tenant helpers
 app.db.tenant(tenantId) → tx.find() / .findMany() / .insert() / .update() / .delete() / .count()
 
@@ -108,6 +111,26 @@ token stays in a host-only HttpOnly cookie and is injected server-side by PAS.
 The default remains `legacy-bearer` for compatibility while WebSocket rooms,
 usage beacon telemetry, and remaining edge paths are migrated. See
 [Browser auth session model](/auth-session-model).
+
+## App data access
+
+Use registered actions for user-facing app data:
+
+```ts
+const result = await app.actions.call<{ rows: Item[] }>('list_items', {
+  limit: 20,
+});
+```
+
+Actions are declared in `mcp.json`, registered on publish, authenticated by the
+platform, checked against declared role metadata, and forwarded as prepared SQL
+to the app's data worker. The same manifest also exposes the action through the
+platform MCP server.
+
+`app.db.query()` and `app.db.execute()` remain available as low-level legacy
+APIs for controlled migration and trusted tooling. They require a PAS session,
+but browser-supplied raw SQL is not the target authorization boundary. See
+[App actions and data access security](/app-actions-security).
 
 ## ProShell component
 

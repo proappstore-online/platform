@@ -44,6 +44,7 @@ const validTool = {
     status: { type: 'string', optional: true },
     limit: { type: 'integer', optional: true, default: 20, max: 100 },
   },
+  requires_auth: true,
 };
 
 describe('PUT /v1/apps/:appId/tools', () => {
@@ -176,6 +177,46 @@ describe('PUT /v1/apps/:appId/tools', () => {
     expect(res.status).toBe(200);
   });
 
+  it('accepts explicit auth role metadata', async () => {
+    const ownerStmt = mockStmt({ first: { creator_id: 'gh:1' } });
+    const db = mockD1(ownerStmt);
+    const res = await app.request(
+      '/v1/apps/test-app/tools',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tools: [{
+            ...validTool,
+            requires_auth: true,
+            auth: { required: true, platform_roles: ['creator'], app_roles: ['manager'] },
+          }],
+        }),
+      },
+      makeEnv({}, db),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects malformed auth role metadata', async () => {
+    const ownerStmt = mockStmt({ first: { creator_id: 'gh:1' } });
+    const db = mockD1(ownerStmt);
+    const res = await app.request(
+      '/v1/apps/test-app/tools',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tools: [{ ...validTool, auth: { app_roles: 'manager' } }],
+        }),
+      },
+      makeEnv({}, db),
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toContain('auth.app_roles');
+  });
+
   it('rejects without auth', async () => {
     const res = await app.request(
       '/v1/apps/test-app/tools',
@@ -227,6 +268,31 @@ describe('GET /v1/apps/:appId/tools', () => {
 });
 
 describe('PUT /v1/apps/:appId/tools — requires_auth enforcement', () => {
+  it('rejects app data tools without requires_auth', async () => {
+    const ownerStmt = mockStmt({ first: { creator_id: 'gh:1' } });
+    const db = mockD1(ownerStmt);
+    const res = await app.request(
+      '/v1/apps/test-app/tools',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tools: [{
+            name: 'public_items',
+            description: 'Public items',
+            operation: 'query',
+            sql: 'SELECT * FROM items',
+            params: {},
+          }],
+        }),
+      },
+      makeEnv({}, db),
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toContain('requires_auth');
+  });
+
   it('rejects __user_id in SQL without requires_auth', async () => {
     const ownerStmt = mockStmt({ first: { creator_id: 'gh:1' } });
     const db = mockD1(ownerStmt);

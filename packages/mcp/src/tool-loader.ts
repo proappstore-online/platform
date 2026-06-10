@@ -4,7 +4,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { type ToolManifest, prepareQuery } from './sql-engine.js';
+import { type ToolManifest } from './sql-engine.js';
 
 interface AppTool extends ToolManifest {
   app_id: string;
@@ -50,46 +50,33 @@ export function invalidateCache(): void {
 /**
  * Execute a tool call by proxying SQL to the app's data worker.
  */
-async function executeToolCall(
+export async function executeToolCall(
   tool: AppTool,
   args: Record<string, unknown>,
-  userId: string | null,
   userToken: string | null,
+  apiBase: string,
 ): Promise<string> {
-  // Check auth requirement before building the query — prepareQuery throws
-  // on __user_id when userId is null, so this must come first.
-  if (tool.requires_auth && !userId) {
+  if (!userToken) {
     return 'Error: This tool requires authentication. Authenticate the MCP connection or send a PAS session token.';
   }
 
-  let sql: string;
-  let params: unknown[];
-  try {
-    ({ sql, params } = prepareQuery(tool, args, userId));
-  } catch (err) {
-    return `Error: ${err instanceof Error ? err.message : String(err)}`;
-  }
-
-  const dataWorkerUrl = `https://data-${tool.app_id}.proappstore.online`;
-  const endpoint = tool.operation === 'query' ? '/query' : '/execute';
-
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (userToken) headers.Authorization = `Bearer ${userToken}`;
-
   let res: Response;
   try {
-    res = await fetch(`${dataWorkerUrl}${endpoint}`, {
+    res = await fetch(`${apiBase}/v1/apps/${encodeURIComponent(tool.app_id)}/actions/${encodeURIComponent(tool.name)}`, {
       method: 'POST',
-      headers,
-      body: JSON.stringify({ sql, params }),
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ params: args }),
     });
   } catch (err) {
-    return `Error: data worker unreachable (${err instanceof Error ? err.message : String(err)})`;
+    return `Error: platform action executor unreachable (${err instanceof Error ? err.message : String(err)})`;
   }
 
   if (!res.ok) {
     const text = await res.text();
-    return `Error from data worker (${res.status}): ${text}`;
+    return `Error from platform action executor (${res.status}): ${text}`;
   }
 
   const result = await res.json();
@@ -145,6 +132,7 @@ export function registerAppTools(
   server: McpServer,
   tools: AppTool[],
   getUserContext: () => { userId: string | null; token: string | null },
+  apiBase: string,
 ): string[] {
   const registered: string[] = [];
 
@@ -157,8 +145,8 @@ export function registerAppTools(
       `[${tool.app_id}] ${tool.description}`,
       zodSchema,
       async (args) => {
-        const { userId, token } = getUserContext();
-        const result = await executeToolCall(tool, args as Record<string, unknown>, userId, token);
+        const { token } = getUserContext();
+        const result = await executeToolCall(tool, args as Record<string, unknown>, token, apiBase);
         return { content: [{ type: 'text' as const, text: result }] };
       },
     );

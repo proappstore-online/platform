@@ -34,8 +34,8 @@ Firebase. No alternative cloud. Specifically:
 - **Realtime / multiplayer:** Durable Objects, sized for cursors /
   presence / lightweight rooms.
 - **Object storage:** R2 (daily backups).
-- **Identity:** GitHub OAuth, HMAC-signed sessions, shared
-  `SESSION_SIGNING_KEY` between `fas` and `pas`.
+- **Identity:** GitHub OAuth, Google OAuth, credential accounts, and
+  PAS-owned HMAC-signed sessions.
 - **Payments:** Stripe (Checkout + Portal + webhook).
 - **Hosting for apps:** Cloudflare Pages with custom subdomain.
 

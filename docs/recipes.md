@@ -8,7 +8,8 @@ AI agents: use the `recipe` MCP tool to fetch any recipe programmatically.
 
 **crud-list** — CRUD List + Detail
 
-Fetch rows from app.db, render a list with cards, click to view detail.
+Fetch rows through a registered app action, render a list with cards, click to
+view detail.
 
 ```
 // src/components/ItemList.tsx
@@ -23,7 +24,7 @@ export function ItemList({ onSelect }: { onSelect: (id: string) => void }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    app.db.query<Item>('SELECT * FROM items ORDER BY created_at DESC')
+    app.actions.call<{ rows: Item[] }>('list_items', { limit: 50 })
       .then(r => setItems(r.rows))
       .finally(() => setLoading(false))
   }, [])
@@ -53,7 +54,7 @@ export function ItemList({ onSelect }: { onSelect: (id: string) => void }) {
 
 **form-create** — Create Form with Validation
 
-Form to create a new DB row with inline validation.
+Form to create a row through a registered app action with inline validation.
 
 ```
 // src/components/CreateItemForm.tsx
@@ -71,10 +72,7 @@ export function CreateItemForm({ onDone }: { onDone: () => void }) {
     if (!title.trim()) { setError('Title is required'); return }
     setSaving(true); setError('')
     try {
-      await app.db.execute(
-        'INSERT INTO items (id, title, user_id, created_at) VALUES (:__uuid, ?, :__user_id, :__now)',
-        [title.trim()]
-      )
+      await app.actions.call('create_item', { title: title.trim() })
       onDone()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save')
@@ -100,6 +98,35 @@ export function CreateItemForm({ onDone }: { onDone: () => void }) {
       </div>
     </form>
   )
+}
+```
+
+Register those actions in the repo root `mcp.json`:
+
+```json
+{
+  "tools": [
+    {
+      "name": "list_items",
+      "description": "List the signed-in user's items",
+      "operation": "query",
+      "sql": "SELECT id, title, created_at FROM items WHERE user_id = :__user_id ORDER BY created_at DESC LIMIT :limit",
+      "params": {
+        "limit": { "type": "integer", "default": 50, "max": 100, "optional": true }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "create_item",
+      "description": "Create an item for the signed-in user",
+      "operation": "execute",
+      "sql": "INSERT INTO items (id, title, user_id, created_at) VALUES (:__uuid, :title, :__user_id, :__now)",
+      "params": {
+        "title": { "type": "string" }
+      },
+      "requires_auth": true
+    }
+  ]
 }
 ```
 

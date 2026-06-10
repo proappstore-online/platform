@@ -112,7 +112,7 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
           const configPath = join(targetDir, '.pas.json');
           writeFileSync(configPath, JSON.stringify({
             appId,
-            dataApiBase: `https://pas-data-${appId}.serge-the-dev.workers.dev`,
+            dataApiBase: `https://data-${appId}.proappstore.online`,
             d1DatabaseId: dbStep.detail.match(/\(([^)]+)\)/)?.[1] || '',
           }, null, 2));
           process.stdout.write(`    Config written to .pas.json\n`);

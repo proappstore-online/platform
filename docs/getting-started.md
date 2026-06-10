@@ -48,8 +48,8 @@ const app = initPro({ appId: 'my-app' })
 // Auth
 app.auth.signIn()
 
-// Database
-await app.db.query('SELECT * FROM items')
+// App data actions
+await app.actions.call('list_items', { limit: 20 })
 
 // File storage
 await app.storage.upload(file, 'photos/pic.jpg')
@@ -102,6 +102,7 @@ No need to import both SDKs. `initPro()` initializes everything.
 ## What to read next
 
 - [SDK overview](/sdk-overview) — all modules and their APIs
+- [App actions and data access security](/app-actions-security) — recommended app-data pattern
 - [CLI overview](/cli-overview) — every command explained
 - [Publishing flow](/publishing-flow) — what `pas publish` does under the hood
 - [Stripe & entitlements](/stripe-entitlements) — billing primitives

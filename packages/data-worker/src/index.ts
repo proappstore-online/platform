@@ -7,8 +7,6 @@ interface Env {
   APP_ID: string;
   /** PAS credential-account signing key. */
   SESSION_SIGNING_KEY: string;
-  /** FAS OAuth signing key — set when the app also accepts FAS sessions (teacher logins). */
-  FAS_SESSION_SIGNING_KEY?: string;
 }
 
 interface FasUser {
@@ -90,10 +88,7 @@ async function requireUser(c: { req: { header(name: string): string | undefined 
     throw new HTTPException(401, { message: 'missing bearer token' });
   }
   const token = header.slice(7);
-  // Try PAS key first (credential accounts), then FAS key (OAuth teachers/admins).
-  const claims =
-    (await verifySessionLocal(token, c.env.SESSION_SIGNING_KEY)) ||
-    (c.env.FAS_SESSION_SIGNING_KEY ? await verifySessionLocal(token, c.env.FAS_SESSION_SIGNING_KEY) : null);
+  const claims = await verifySessionLocal(token, c.env.SESSION_SIGNING_KEY);
   if (!claims) {
     throw new HTTPException(401, { message: 'invalid session' });
   }

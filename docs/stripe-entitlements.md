@@ -25,7 +25,7 @@ await pas.subscription.openPortal();
 Behind these calls:
 
 1. The browser calls `pas` Worker (`POST /v1/checkout`).
-2. `pas` validates the session signed by `fas` (same `SESSION_SIGNING_KEY`).
+2. `pas` validates the PAS session locally with its own `SESSION_SIGNING_KEY`.
 3. `pas` calls Stripe to create a Checkout session, returns the URL.
 4. After payment, Stripe fires `checkout.session.completed` →
    `pas` webhook → upserts `subscriptions` row.
@@ -138,7 +138,7 @@ Set via `wrangler secret put` in `packages/backend`:
 |---|---|
 | `STRIPE_SECRET_KEY` | server-side Stripe API |
 | `STRIPE_WEBHOOK_SECRET` | webhook signature verification |
-| `SESSION_SIGNING_KEY` | **must match `fas`** — same identity across both |
+| `SESSION_SIGNING_KEY` | PAS session signing key |
 
 ## What's not in v0 skeleton
 

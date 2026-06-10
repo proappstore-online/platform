@@ -62,6 +62,7 @@ export class PasMcpAgent extends McpAgent<Env> {
       this.server,
       appTools,
       () => ({ userId: this.userId, token: this.userToken }),
+      this.env.API_BASE,
     );
 
     if (registered.length > 0) {

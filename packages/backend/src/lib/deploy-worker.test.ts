@@ -51,7 +51,7 @@ describe('deployDataWorker', () => {
     expect(result.detail).toContain('quota exceeded');
   });
 
-  it('succeeds with workers.dev URL when custom domain fails', async () => {
+  it('fails when custom domain attachment fails', async () => {
     mockSequence(
       { ok: true, text: '// worker script' },  // bundle fetch
       { ok: true, body: { success: true } },    // upload
@@ -61,10 +61,26 @@ describe('deployDataWorker', () => {
     );
 
     const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk');
-    expect(result.ok).toBe(true);
-    expect(result.url).toContain('workers.dev');
+    expect(result.ok).toBe(false);
+    expect(result.url).toBe(result.workersDevUrl);
     expect(result.customDomain).toBeUndefined();
-    expect(result.detail).toContain('custom domain skipped');
+    expect(result.detail).toContain('custom domain required');
+    expect(result.detail).toContain('no permission');
+  });
+
+  it('fails when custom domain zone lookup fails', async () => {
+    mockSequence(
+      { ok: true, text: '// worker script' },  // bundle fetch
+      { ok: true, body: { success: true } },    // upload
+      { ok: true, body: {} },                    // subdomain enable
+      { ok: true, body: { success: false, errors: [{ message: 'missing zone scope' }] } },
+    );
+
+    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk');
+    expect(result.ok).toBe(false);
+    expect(result.customDomain).toBeUndefined();
+    expect(result.detail).toContain('zone lookup failed');
+    expect(result.detail).toContain('missing zone scope');
   });
 
   it('succeeds with custom domain when everything works', async () => {

@@ -81,6 +81,18 @@ describe("Auth", () => {
 
     expect(res.status).toBe(401);
   });
+
+  it("does not accept a token signed by a legacy FAS key", async () => {
+    const fasToken = await mint("gh:1", "legacy-fas-key");
+    const res = await app.request("/tables", {
+      headers: { Authorization: `Bearer ${fasToken}` },
+    }, {
+      ...makeEnv(),
+      FAS_SESSION_SIGNING_KEY: "legacy-fas-key",
+    } as unknown as ReturnType<typeof makeEnv>);
+
+    expect(res.status).toBe(401);
+  });
 });
 
 describe("GET /tables", () => {

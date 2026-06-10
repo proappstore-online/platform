@@ -14,12 +14,12 @@ const ZONE_NAME = 'proappstore.online';
 
 interface DeployResult {
   ok: boolean;
-  /** Primary URL apps should hit. Custom domain when attached, workers.dev otherwise. */
+  /** Primary URL apps should hit. Must be the canonical custom domain on success. */
   url: string;
   detail: string;
-  /** workers.dev URL — kept as a fallback for the response payload. */
+  /** workers.dev URL kept only for diagnostics; apps should not depend on it. */
   workersDevUrl: string;
-  /** Custom domain attached at data-<appId>.proappstore.online, if successful. */
+  /** Custom domain attached at data-<appId>.proappstore.online. */
   customDomain?: string;
 }
 
@@ -105,15 +105,9 @@ export async function deployDataWorker(
 
   // 5. Attach data-<appId>.proappstore.online as a Worker custom domain.
   // Worker custom domains create the DNS record + provision a TLS cert in
-  // one API call — no separate DNS:Edit token scope needed (Workers Routes
-  // Edit on the zone is sufficient). If this fails (e.g. the platform CF
-  // token lacks workers_routes:edit on the zone), the deploy still
-  // succeeds — apps continue to work via the workers.dev fallback. Apps
-  // currently override `dataApiBase` to the workers.dev URL precisely
-  // because this step did not exist before.
+  // one API call. This is required for the platform-cookie architecture:
+  // the host worker mediates `/.pas/data/*` to the canonical data domain.
   const hostname = `data-${appId}.${ZONE_NAME}`;
-  let customDomain: string | undefined;
-  let customDomainDetail = '';
   try {
     const zoneRes = await fetch(
       `https://api.cloudflare.com/client/v4/zones?name=${ZONE_NAME}`,
@@ -127,7 +121,12 @@ export async function deployDataWorker(
     const zoneId = zoneData.result?.[0]?.id;
     if (!zoneData.success || !zoneId) {
       const err = zoneData.errors?.[0]?.message || 'zone lookup returned no results';
-      customDomainDetail = ` (custom domain skipped: ${err})`;
+      return {
+        ok: false,
+        url: workersDevUrl,
+        workersDevUrl,
+        detail: `custom domain required but zone lookup failed: ${err}`,
+      };
     } else {
       const domainRes = await fetch(
         `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/workers/domains`,
@@ -147,23 +146,29 @@ export async function deployDataWorker(
         errors?: { message: string }[];
       };
       if (domainData.success) {
-        customDomain = hostname;
-        customDomainDetail = ` + ${hostname}`;
+        return {
+          ok: true,
+          url: `https://${hostname}`,
+          workersDevUrl,
+          customDomain: hostname,
+          detail: `Deployed ${workerName} with D1 ${dbId} + ${hostname}`,
+        };
       } else {
         const err = domainData.errors?.[0]?.message || `HTTP ${domainRes.status}`;
-        customDomainDetail = ` (custom domain skipped: ${err})`;
+        return {
+          ok: false,
+          url: workersDevUrl,
+          workersDevUrl,
+          detail: `custom domain required but attach failed: ${err}`,
+        };
       }
     }
   } catch (e) {
-    customDomainDetail = ` (custom domain skipped: ${e})`;
+    return {
+      ok: false,
+      url: workersDevUrl,
+      workersDevUrl,
+      detail: `custom domain required but attach threw: ${e}`,
+    };
   }
-
-  const result: DeployResult = {
-    ok: true,
-    url: customDomain ? `https://${customDomain}` : workersDevUrl,
-    workersDevUrl,
-    detail: `Deployed ${workerName} with D1 ${dbId}${customDomainDetail}`,
-  };
-  if (customDomain) result.customDomain = customDomain;
-  return result;
 }

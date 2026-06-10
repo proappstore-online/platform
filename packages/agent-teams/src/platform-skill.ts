@@ -54,7 +54,10 @@ Free primitives (capped): \`app.kv\` (per-user key/value), realtime \`app.rooms\
 user's keys from the vault — keys never touch client code).
 
 Pro primitives (read_docs has exact return shapes — check before assuming fields):
-- DB (per-app SQLite/D1): \`app.db.execute(sql, params?)\` → \`{ meta: { changes, duration, last_row_id } }\`
+- App actions (preferred for user-facing app data): define operations in root \`mcp.json\` and call
+  \`app.actions.call<T>(name, params?)\`. PAS authenticates the user, enforces declared role metadata,
+  injects \`:__user_id\`/\`:__now\`/\`:__uuid\`, and executes prepared SQL through the app data worker.
+- DB (per-app SQLite/D1, low-level/migrations/trusted tooling): \`app.db.execute(sql, params?)\` → \`{ meta: { changes, duration, last_row_id } }\`
   (snake_case \`last_row_id\`, and NO \`.rows\`); \`app.db.query<T>(sql, params?)\` → \`{ rows: T[]; meta }\`
   (pass \`<T>\` or rows are \`unknown\`); \`app.db.batch(stmts)\`, tenant scoping
   \`app.db.tenant(id).insert(table, row)\` / \`.findMany(table)\`.

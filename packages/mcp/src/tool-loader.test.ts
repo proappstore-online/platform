@@ -5,7 +5,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 // Focus on fetchTools caching and the executeToolCall flow.
 
 // Re-export internals for testing by importing the module and inspecting behavior.
-import { fetchTools, invalidateCache } from './tool-loader.js';
+import { executeToolCall, fetchTools, invalidateCache } from './tool-loader.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -90,5 +90,49 @@ describe('fetchTools', () => {
   it('does not throw on network exception', async () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error('DNS resolution failed'));
     await expect(fetchTools('https://api.test')).resolves.toEqual([]);
+  });
+});
+
+describe('executeToolCall', () => {
+  const tool = {
+    app_id: 'interns',
+    name: 'list_orgs',
+    description: 'List orgs',
+    operation: 'query' as const,
+    sql: 'SELECT * FROM orgs WHERE user_id = :__user_id',
+    params: {},
+    requires_auth: true,
+  };
+
+  it('uses the platform action executor instead of calling the data worker directly', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      Response.json({ rows: [{ id: 'org-1' }] }),
+    );
+
+    const result = await executeToolCall(
+      tool,
+      { limit: 5, __user_id: 'attacker' },
+      'session-token',
+      'https://api.proappstore.online',
+    );
+
+    expect(result).toContain('org-1');
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'https://api.proappstore.online/v1/apps/interns/actions/list_orgs',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer session-token' }),
+        body: JSON.stringify({ params: { limit: 5, __user_id: 'attacker' } }),
+      }),
+    );
+  });
+
+  it('requires a PAS session token before executing app tools', async () => {
+    globalThis.fetch = vi.fn();
+
+    const result = await executeToolCall(tool, {}, null, 'https://api.proappstore.online');
+
+    expect(result).toContain('requires authentication');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });

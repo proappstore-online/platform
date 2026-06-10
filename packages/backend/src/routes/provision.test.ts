@@ -44,6 +44,12 @@ function multiFetch(cfResponses: Record<string, { status: number; body: unknown 
         return new Response(JSON.stringify(resp.body), { status: resp.status });
       }
     }
+    if (urlStr.includes('/zones?name=proappstore.online')) {
+      return new Response(JSON.stringify({ success: true, result: [{ id: 'zone-1' }] }), { status: 200 });
+    }
+    if (urlStr.includes('/workers/domains')) {
+      return new Response(JSON.stringify({ success: true, result: {} }), { status: 200 });
+    }
     return new Response(JSON.stringify({ success: true, result: { uuid: 'test-uuid' } }), { status: 200 });
   });
 }

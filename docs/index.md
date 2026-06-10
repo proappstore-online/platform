@@ -51,5 +51,6 @@ tools.
 - [Publishing flow](./publishing-flow.md)
 - [Browser auth session model](./auth-session-model.md)
 - [MCP app tools and auth](./mcp-app-tools.md)
+- [App actions and data access security](./app-actions-security.md)
 - [Agent customization](./agent-customization.md)
 - [Architecture](./architecture.md)

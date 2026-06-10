@@ -24,19 +24,28 @@ your app repo                 platform backend            platform MCP server
 2. On publish, those tools are registered to the backend `app_tools` table.
 3. The platform MCP server loads them dynamically and exposes each as
    `<app_id>/<tool_name>`, discoverable via the `discover_tools` tool.
-4. When called, the server runs the tool's SQL against your app's data worker
-   (`data-<app>.proappstore.online`) using the caller's session — returning rows
-   for a `query`, or a write result for an `execute`.
+4. When called, the MCP server sends the request to the platform action
+   executor (`/v1/apps/:appId/actions/:name`) with the caller's session. The
+   platform validates auth, checks role metadata, injects magic params, and
+   forwards prepared SQL to your app's data worker
+   (`data-<app>.proappstore.online`).
 
 Apps do **not** need to implement their own MCP server for normal D1-backed app
 actions. The app-owned surface is the `mcp.json` action manifest. A local MCP
 server can still be useful as a development bridge, but the platform MCP server
 is the canonical integration point.
 
+The same registered manifest is also the migration target for browser app data:
+PAS exposes `POST /v1/apps/:appId/actions/:name`, and the SDK exposes
+`app.actions.call(name, params)`. Browser calls are authenticated, prepared by
+the platform, checked against declared roles, and then forwarded to the app data
+worker. That replaces ad hoc browser raw SQL for user-specific or role-specific
+reads and writes.
+
 ## Authentication model
 
 All app-data tools should be authenticated unless they are deliberately public.
-In the current production manifest format, auth is represented by:
+In the current production manifest format, app-data auth is represented by:
 
 ```json
 { "requires_auth": true }
@@ -69,9 +78,9 @@ PAS provides reusable roles through the SDK (`app.roles`). Those roles are the
 right abstraction for coarse permission gates such as owner, moderator, editor,
 viewer, manager, or custom app roles.
 
-The current `mcp.json` registration API does **not yet enforce role fields in
-the manifest**. Until role-gated manifest fields are implemented, enforce
-permissions in one of these ways:
+The `auth.platform_roles` and `auth.app_roles` fields are enforced by the
+shared platform action executor used by both browser SDK calls and MCP app
+tools. In all cases, keep row-level checks in SQL:
 
 - Use `:__user_id` in SQL and check app-domain membership tables, such as an
   `org_id` membership row.
@@ -90,7 +99,7 @@ The intended manifest extension is to add explicit auth metadata, for example:
 }
 ```
 
-That extension is not a substitute for row-level checks. A user can have a
+That metadata is not a substitute for row-level checks. A user can have a
 `manager` role somewhere and still not manage the specific organisation named
 by `:org_id`. Use role metadata for early rejection and better UX; use SQL
 scoping for the final data permission check.
@@ -132,8 +141,8 @@ Each tool is **one parameterized SQL statement** against your app's own D1 table
 | `requires_auth` | `true` ⇒ the call needs a session token. Auto-required when the SQL uses `:__user_id`. |
 
 Use `requires_auth: true` for every app-data tool unless the data is genuinely
-public. For user-scoped and organisation-scoped apps, that normally means every
-tool, including reads.
+public outside the app-data surface. Production app-data tool registration
+requires `requires_auth: true` for every tool, including reads.
 
 ### Magic placeholders
 
@@ -152,7 +161,7 @@ These are injected by the platform — **do not** declare them in `params`:
 - `UPDATE` and `DELETE` **must** have a `WHERE` clause.
 - `query` must use `SELECT`; `execute` must not.
 - Every `:param` in the SQL must be declared in `params` (or be a magic placeholder).
-- If SQL uses `:__user_id`, `requires_auth` must be `true`.
+- `requires_auth` must be `true` for every app-data tool.
 - Max 50 tools per app.
 
 A manifest that violates any rule is rejected — the whole batch fails, so a bad
@@ -219,10 +228,10 @@ so tool listing and tool calls are tied to a user.
   manifest against the app's own D1 — no arbitrary code, no cross-app access.
 - **Parameterized.** All inputs bind as positional params; no string-built SQL.
 - **Per-user scoped.** `:__user_id` + `requires_auth` keep a user's data scoped
-  to them. Anonymous (`requires_auth: false`) tools cannot reference
-  `:__user_id`.
-- **Role-aware in SQL today.** Until manifest role gates are implemented, check
-  app roles or membership tables in the SQL itself.
+  to them. App-data tools are registered with `requires_auth: true`.
+- **Role-aware before SQL.** Manifest `auth.platform_roles` and
+  `auth.app_roles` are checked by the platform action executor. Still check
+  domain-specific row permissions in SQL.
 - **Mutations are constrained** — `UPDATE`/`DELETE` require a `WHERE`; no DDL.
 
 ## Limits & roadmap
@@ -230,6 +239,6 @@ so tool listing and tool calls are tied to a user.
 - Tools are **SQL against the app's D1** — they can't (yet) call an external API
   or run business logic in a Worker route. That's a deliberate, safe surface.
 - Existing agent-built apps register on their **next** deploy (or a `pas publish`).
-- Coming next: role-gated manifest fields, richer (non-SQL) tool handlers, and
+- Coming next: richer (non-SQL) tool handlers, raw-SQL migration gates, and
   exposing per-app tools from the Console UI alongside
   [agent customization](./agent-customization).
