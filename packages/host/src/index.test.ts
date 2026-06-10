@@ -53,6 +53,19 @@ describe("host auth token-handler routes", () => {
     expect(callback.origin).toBe("https://app.example.com");
   });
 
+  it("sanitizes return_to values that target internal auth routes", async () => {
+    const env = makeEnv();
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/auth/start?return_to=/.pas/auth/logout"),
+      env,
+      ctx(),
+    );
+
+    const loc = new URL(res.headers.get("Location")!);
+    const callback = new URL(loc.searchParams.get("return_to")!);
+    expect(callback.searchParams.get("return_to")).toBe("/");
+  });
+
   it("sets a host-only HttpOnly cookie after verifying the callback session", async () => {
     const apiFetch = vi.fn(async (request: Request) => {
       expect(request.headers.get("Authorization")).toBe("Bearer good-token");
@@ -139,13 +152,46 @@ describe("host auth token-handler routes", () => {
     const env = makeEnv();
 
     const res = await worker.fetch(
-      new Request("https://meetup.proappstore.online/.pas/auth/logout", { method: "POST" }),
+      new Request("https://meetup.proappstore.online/.pas/auth/logout", {
+        method: "POST",
+        headers: {
+          Origin: "https://meetup.proappstore.online",
+          "Sec-Fetch-Site": "same-origin",
+        },
+      }),
       env,
       ctx(),
     );
 
     expect(res.status).toBe(204);
     expect(res.headers.get("Set-Cookie")).toContain("__Host-pas_session=; Max-Age=0");
+  });
+
+  it("does not allow cross-site or GET logout", async () => {
+    const env = makeEnv();
+
+    const getRes = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/auth/logout"),
+      env,
+      ctx(),
+    );
+    expect(getRes.status).toBe(405);
+    expect(getRes.headers.get("Allow")).toBe("POST");
+    expect(getRes.headers.get("Set-Cookie")).toBeNull();
+
+    const crossSiteRes = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/auth/logout", {
+        method: "POST",
+        headers: {
+          Origin: "https://evil.example",
+          "Sec-Fetch-Site": "cross-site",
+        },
+      }),
+      env,
+      ctx(),
+    );
+    expect(crossSiteRes.status).toBe(403);
+    expect(crossSiteRes.headers.get("Set-Cookie")).toBeNull();
   });
 
   it("does not allow app files to shadow reserved auth paths", async () => {

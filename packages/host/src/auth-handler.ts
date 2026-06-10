@@ -22,7 +22,7 @@ export async function handleAuthRoute(request: Request, env: Env, route: Route):
 }
 
 function authStart(request: Request, route: Route): Response {
-  if (request.method !== "GET") return methodNotAllowed();
+  if (request.method !== "GET") return methodNotAllowed("GET");
   const url = new URL(request.url);
   const provider = url.searchParams.get("provider") ?? "github";
   if (!PROVIDERS.has(provider)) return noStore(new Response("unknown provider", { status: 404 }));
@@ -42,7 +42,7 @@ function authStart(request: Request, route: Route): Response {
 }
 
 async function authCallback(request: Request, env: Env): Promise<Response> {
-  if (request.method !== "GET") return methodNotAllowed();
+  if (request.method !== "GET") return methodNotAllowed("GET");
   const url = new URL(request.url);
   const returnPath = sameOriginPath(url, url.searchParams.get("return_to"));
   if (!nonceMatches(request, url)) {
@@ -65,7 +65,7 @@ async function authCallback(request: Request, env: Env): Promise<Response> {
 }
 
 async function authMe(request: Request, env: Env): Promise<Response> {
-  if (request.method !== "GET") return methodNotAllowed();
+  if (request.method !== "GET") return methodNotAllowed("GET");
   const token = readCookie(request.headers.get("Cookie"), COOKIE_NAME);
   if (!token) return json({ error: "not signed in" }, 401);
 
@@ -79,7 +79,8 @@ async function authMe(request: Request, env: Env): Promise<Response> {
 }
 
 function authLogout(request: Request): Response {
-  if (request.method !== "POST" && request.method !== "GET") return methodNotAllowed();
+  if (request.method !== "POST") return methodNotAllowed("POST");
+  if (!isSameOriginMutation(request)) return noStore(new Response("Forbidden", { status: 403 }));
   return new Response(null, {
     status: 204,
     headers: {
@@ -87,6 +88,15 @@ function authLogout(request: Request): Response {
       "Set-Cookie": clearSessionCookie(),
     },
   });
+}
+
+function isSameOriginMutation(request: Request): boolean {
+  const url = new URL(request.url);
+  const origin = request.headers.get("Origin");
+  if (origin && origin !== url.origin) return false;
+  const fetchSite = request.headers.get("Sec-Fetch-Site");
+  if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") return false;
+  return true;
 }
 
 async function fetchMe(env: Env, token: string): Promise<{ ok: boolean; status: number; body: string; contentType: string | null }> {
@@ -171,8 +181,8 @@ function clearSessionCookie(): string {
   return `${COOKIE_NAME}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax`;
 }
 
-function methodNotAllowed(): Response {
-  return noStore(new Response("Method not allowed", { status: 405, headers: { Allow: "GET, POST" } }));
+function methodNotAllowed(allow: string): Response {
+  return noStore(new Response("Method not allowed", { status: 405, headers: { Allow: allow } }));
 }
 
 function json(body: unknown, status: number): Response {

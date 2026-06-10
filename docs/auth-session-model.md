@@ -105,7 +105,8 @@ Implemented foundation:
 - `/.pas/auth/callback` verifies the session with PAS API before setting the
   host-only `__Host-pas_session` cookie.
 - `/.pas/auth/me` reads the HttpOnly cookie server-side and returns the PAS user.
-- `/.pas/auth/logout` clears the session cookie.
+- `POST /.pas/auth/logout` clears the session cookie and rejects cross-site
+  mutation signals.
 - `/.pas/auth/*` is reserved before R2 static serving, so app files cannot
   shadow platform auth routes.
 - Active custom domains can resolve back to their app route when they are served
