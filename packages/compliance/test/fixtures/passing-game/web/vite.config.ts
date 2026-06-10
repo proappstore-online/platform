@@ -13,6 +13,7 @@ export default defineConfig({
       workbox: {
         globPatterns: ["**/*.{js,css,html,png,svg,ico,woff2,wasm,json}"],
         maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+        navigateFallbackDenylist: [/^\/\.pas\//],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,

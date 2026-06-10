@@ -178,6 +178,23 @@ export async function checkPwaOffline(source: FileSource): Promise<CheckResult> 
   const issues: string[] = [];
   const suggestions: string[] = [];
 
+  // Platform-owned same-origin routes are not app routes. If Workbox's
+  // navigation fallback handles them, OAuth callbacks can be served as the
+  // SPA instead of reaching the PAS host worker that sets HttpOnly cookies.
+  const hasPasNavigationDenylist =
+    /navigateFallbackDenylist\s*:\s*\[[\s\S]*\\\.pas/.test(workbox) ||
+    /navigateFallbackDenylist\s*:\s*\[[\s\S]*["']\/\.pas/.test(workbox);
+  if (!hasPasNavigationDenylist) {
+    return {
+      name: 'PWA offline correctness',
+      status: 'fail',
+      detail: 'workbox navigation fallback does not denylist PAS reserved routes (`/.pas/*`), so auth callbacks and platform mediation can be intercepted by the app service worker',
+      suggestions: [
+        'Add `navigateFallbackDenylist: [/^\\/\\.pas\\//]` to the VitePWA workbox config.',
+      ],
+    };
+  }
+
   // Issue 1: bundle-size cap. Default is 2 MiB; many real bundles exceed it.
   // Also catch the inverse footgun: a value *lower* than the default
   // (e.g. someone copy-pasted `1024` thinking it was MB), which silently

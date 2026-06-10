@@ -15,6 +15,7 @@ export default defineConfig({
       workbox: {
         globPatterns: ["**/*.{js,css,html,png,svg,ico,woff2,wasm,json}"],
         maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+        navigateFallbackDenylist: [/^\\/\\.pas\\//],
         runtimeCaching: [
           { urlPattern: /^https:\\/\\/fonts\\.googleapis\\.com\\/.*/i, handler: "CacheFirst" },
           { urlPattern: /^https:\\/\\/fonts\\.gstatic\\.com\\/.*/i, handler: "CacheFirst" },
@@ -138,6 +139,7 @@ describe('checkPwaOffline', () => {
       export default { plugins: [VitePWA({
         workbox: {
           globPatterns: ["**/*.{js,css,html,png,svg,ico,woff2,wasm,json}"],
+          navigateFallbackDenylist: [/^\\/\\.pas\\//],
           runtimeCaching: [
             { urlPattern: /^https:\\/\\/fonts\\.googleapis\\.com\\/.*/i },
             { urlPattern: /^https:\\/\\/fonts\\.gstatic\\.com\\/.*/i },
@@ -163,6 +165,7 @@ describe('checkPwaOffline', () => {
         workbox: {
           globPatterns: ["**/*.{js,css,html,png,svg,ico,woff2}"],
           maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+          navigateFallbackDenylist: [/^\\/\\.pas\\//],
         },
       })] };`;
     const r = await checkPwaOffline(
@@ -184,6 +187,7 @@ describe('checkPwaOffline', () => {
         workbox: {
           globPatterns: ["**/*.{js,css,html,png,svg,ico,woff2}"],
           maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+          navigateFallbackDenylist: [/^\\/\\.pas\\//],
         },
       })] };`;
     const r = await checkPwaOffline(
@@ -195,6 +199,28 @@ describe('checkPwaOffline', () => {
       ),
     );
     expect(r.status).toBe('pass');
+  });
+
+  it('fails when Workbox can intercept PAS reserved routes', async () => {
+    const config = `
+      import { VitePWA } from "vite-plugin-pwa";
+      export default { plugins: [VitePWA({
+        workbox: {
+          globPatterns: ["**/*.{js,css,html,png,svg,ico,woff2}"],
+          maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+        },
+      })] };`;
+    const r = await checkPwaOffline(
+      mapFileSource(
+        new Map([
+          [VITE_CONFIG, config],
+          [INDEX_HTML, HTML_NO_FONTS],
+        ]),
+      ),
+    );
+    expect(r.status).toBe('fail');
+    expect(r.detail).toMatch(/PAS reserved routes/i);
+    expect(r.suggestions?.[0]).toContain('navigateFallbackDenylist');
   });
 
   it('fails when index.html links a manifest and there is no vite.config.ts at all (B1 regression)', async () => {
@@ -247,6 +273,7 @@ describe('checkPwaOffline', () => {
         workbox: {
           globPatterns: ["**/*.{js,css,html,png,svg,ico,woff2}"],
           maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+          navigateFallbackDenylist: [/^\\/\\.pas\\//],
         },
       })] };`;
     const r = await checkPwaOffline(
@@ -297,6 +324,7 @@ describe('checkPwaOffline', () => {
         workbox: {
           globPatterns: ["**/*.{js,css,html,png,svg,ico,woff2}", "**/*.wasm"],
           maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+          navigateFallbackDenylist: [/^\\/\\.pas\\//],
           runtimeCaching: [
             { urlPattern: /^https:\\/\\/fonts\\.googleapis\\.com\\/.*/i },
             { urlPattern: /^https:\\/\\/fonts\\.gstatic\\.com\\/.*/i },
@@ -366,6 +394,7 @@ describe('checkPwaOffline', () => {
         workbox: {
           globPatterns: ["**/*.{js,css,html,png,svg,ico,woff2,wasm,json}"],
           maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+          navigateFallbackDenylist: [/^\\/\\.pas\\//],
           runtimeCaching: [{
             urlPattern: ({ request }) => request.destination === "font",
             handler: "CacheFirst",
@@ -392,6 +421,7 @@ describe('checkPwaOffline', () => {
         workbox: {
           globPatterns: ["**/*.{js,css,html,png,svg,ico,woff2,wasm,json}"],
           maximumFileSizeToCacheInBytes: 1024,
+          navigateFallbackDenylist: [/^\\/\\.pas\\//],
         },
       })] };`;
     const r = await checkPwaOffline(
@@ -413,6 +443,7 @@ describe('checkPwaOffline', () => {
         workbox: {
           globPatterns: ["**/*.{js,css,html,png,svg,ico,woff2,wasm,json}"],
           maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+          navigateFallbackDenylist: [/^\\/\\.pas\\//],
           runtimeCaching: [
             { urlPattern: /^https:\\/\\/fonts\\.googleapis\\.com\\/.*/i },
             { urlPattern: /^https:\\/\\/fonts\\.gstatic\\.com\\/.*/i },
@@ -438,6 +469,7 @@ describe('checkPwaOffline', () => {
         workbox: {
           globPatterns: ["**/*.{js,css,html,png,svg,ico,woff2,wasm,json}"],
           maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+          navigateFallbackDenylist: [/^\\/\\.pas\\//],
         },
       })] };`;
     const r = await checkPwaOffline(
@@ -460,6 +492,7 @@ describe('checkPwaOffline', () => {
         workbox: {
           globPatterns: ["**/*.{js,css,html,png,svg,ico,woff2,wasm,json}"],
           maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+          navigateFallbackDenylist: [/^\\/\\.pas\\//],
         },
       })] };`;
     const r = await checkPwaOffline(
@@ -482,6 +515,7 @@ describe('checkPwaOffline', () => {
         workbox: {
           globPatterns: ["**/[abc]/*.{js,css,html,png,svg,ico,woff2}", "**/*.wasm"],
           maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+          navigateFallbackDenylist: [/^\\/\\.pas\\//],
         },
       })] };`;
     const r = await checkPwaOffline(
@@ -506,6 +540,7 @@ describe('checkPwaOffline', () => {
         workbox: {
           globPatterns: ["**/*.{js,css,html,png,svg,ico,woff2,wasm,json}"],
           maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+          navigateFallbackDenylist: [/^\\/\\.pas\\//],
           runtimeCaching: [
             { urlPattern: /^https:\\/\\/fonts\\.googleapis\\.com\\/.*/i },
             { urlPattern: /^https:\\/\\/fonts\\.gstatic\\.com\\/.*/i },
