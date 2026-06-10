@@ -11,12 +11,13 @@
  */
 
 import type { Env } from "./env.js";
+import { handleAuthRoute } from "./auth-handler.js";
 import {
   contentType,
   etagsMatch,
   isUpdateSensitivePath,
   r2KeyFor,
-  resolveRoute,
+  resolveRouteForHostname,
   securityHeaders,
   slugFromHostname,
 } from "./host.js";
@@ -31,11 +32,6 @@ export default {
     }
 
     const slug = slugFromHostname(url.hostname);
-
-    // Apex or non-proappstore hostname
-    if (slug === null) {
-      return new Response("Not found", { status: 404 });
-    }
 
     // ── Reserved subdomain dispatch ──────────────────────────────
 
@@ -63,7 +59,7 @@ export default {
       );
 
     // data-* → proxy to per-app D1 Workers (dynamically created, no static binding)
-    if (slug.startsWith("data-")) {
+    if (slug?.startsWith("data-")) {
       return fetch(
         new Request(
           `https://pas-${slug}.serge-the-dev.workers.dev${url.pathname}${url.search}`,
@@ -73,6 +69,14 @@ export default {
     }
 
     // ── App serving from R2 ──────────────────────────────────────
+
+    const route = await resolveRouteForHostname(env.DB, url.hostname);
+    if (!route) {
+      return new Response("App not found", { status: 404 });
+    }
+
+    const authResponse = await handleAuthRoute(request, env, route);
+    if (authResponse) return authResponse;
 
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method not allowed", { status: 405 });
@@ -84,11 +88,6 @@ export default {
     if (request.method === "GET" && !skipEdgeCache) {
       const cached = await cache.match(request);
       if (cached) return cached;
-    }
-
-    const route = await resolveRoute(env.DB, slug);
-    if (!route) {
-      return new Response("App not found", { status: 404 });
     }
 
     // Compute the R2 key

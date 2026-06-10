@@ -85,6 +85,8 @@ Status: started.
 
 ### Phase 2: Host-Worker Token Handler
 
+Status: started.
+
 Add reserved same-origin routes before static app serving:
 
 - `/.pas/auth/start`
@@ -94,6 +96,23 @@ Add reserved same-origin routes before static app serving:
 
 The callback should set a host-only HttpOnly Secure SameSite cookie and then
 redirect to the clean app URL without `#pas_session` or `?session`.
+
+Implemented foundation:
+
+- `/.pas/auth/start` redirects through PAS OAuth with `response_mode=query`.
+- `/.pas/auth/start` sets a host-only HttpOnly nonce cookie.
+- `/.pas/auth/callback` requires the nonce cookie before accepting a session.
+- `/.pas/auth/callback` verifies the session with PAS API before setting the
+  host-only `__Host-pas_session` cookie.
+- `/.pas/auth/me` reads the HttpOnly cookie server-side and returns the PAS user.
+- `/.pas/auth/logout` clears the session cookie.
+- `/.pas/auth/*` is reserved before R2 static serving, so app files cannot
+  shadow platform auth routes.
+- Active custom domains can resolve back to their app route when they are served
+  through PAS-controlled hosting.
+
+Remaining: make the SDK use these endpoints by default once same-origin API
+mediation is available.
 
 ### Phase 3: Same-Origin API Mediation
 

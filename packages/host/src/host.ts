@@ -4,6 +4,7 @@
  */
 
 const ZONE = ".proappstore.online";
+const PLATFORM_ZONE = "proappstore.online";
 
 export interface Route {
   slug: string;
@@ -17,12 +18,16 @@ export interface Route {
  * Returns null for apex, multi-level subdomains, or non-proappstore hosts.
  */
 export function slugFromHostname(hostname: string): string | null {
-  const h = hostname.toLowerCase().split(":")[0]!;
+  const h = normalizeHostname(hostname);
   if (!h.endsWith(ZONE)) return null;
   const slug = h.slice(0, -ZONE.length);
   if (slug.length === 0) return null; // apex
   if (slug.includes(".")) return null; // multi-level
   return slug;
+}
+
+export function normalizeHostname(hostname: string): string {
+  return hostname.toLowerCase().split(":")[0]!;
 }
 
 /** Reserved subdomains dispatched via service bindings, not served from R2. */
@@ -42,7 +47,30 @@ export const RESERVED_SUBDOMAINS = new Set([
 export async function resolveRoute(db: D1Database, slug: string): Promise<Route | null> {
   return db
     .prepare("SELECT slug, zone, r2_prefix, store FROM routes WHERE slug = ?1 AND zone = ?2")
-    .bind(slug, "proappstore.online")
+    .bind(slug, PLATFORM_ZONE)
+    .first<Route>();
+}
+
+/**
+ * Resolve the app route for either a platform subdomain or an active BYO custom
+ * domain. Custom domains still serve the app through PAS-controlled hosting,
+ * which is required for same-origin platform auth cookies.
+ */
+export async function resolveRouteForHostname(db: D1Database, hostname: string): Promise<Route | null> {
+  const host = normalizeHostname(hostname);
+  const platformSlug = slugFromHostname(host);
+  if (platformSlug) return resolveRoute(db, platformSlug);
+
+  if (host === PLATFORM_ZONE || host.endsWith(ZONE)) return null;
+
+  return db
+    .prepare(
+      `SELECT r.slug, r.zone, r.r2_prefix, r.store
+       FROM app_custom_domains d
+       JOIN routes r ON r.slug = d.app_id AND r.zone = ?1
+       WHERE d.domain = ?2 AND d.status = 'active'`,
+    )
+    .bind(PLATFORM_ZONE, host)
     .first<Route>();
 }
 

@@ -5,6 +5,7 @@ import {
   isUpdateSensitivePath,
   RESERVED_SUBDOMAINS,
   type Route,
+  resolveRouteForHostname,
   r2KeyFor,
   securityHeaders,
   slugFromHostname,
@@ -69,6 +70,48 @@ describe("r2KeyFor", () => {
     expect(r2KeyFor(route, "///style.css")).toBe("apps/meetup/style.css");
   });
 });
+
+describe("resolveRouteForHostname", () => {
+  it("resolves platform app subdomains through the routes table", async () => {
+    const db = fakeRouteDb();
+
+    await expect(resolveRouteForHostname(db, "meetup.proappstore.online")).resolves.toEqual(route);
+  });
+
+  it("resolves active custom domains back to their app route", async () => {
+    const db = fakeRouteDb();
+
+    await expect(resolveRouteForHostname(db, "app.example.com")).resolves.toEqual(route);
+  });
+
+  it("does not treat arbitrary proappstore subdomains or inactive custom domains as apps", async () => {
+    const db = fakeRouteDb();
+
+    await expect(resolveRouteForHostname(db, "missing.proappstore.online")).resolves.toBeNull();
+    await expect(resolveRouteForHostname(db, "pending.example.com")).resolves.toBeNull();
+  });
+});
+
+function fakeRouteDb(): D1Database {
+  return {
+    prepare(sql: string) {
+      return {
+        bind(...args: unknown[]) {
+          return {
+            async first<T>() {
+              if (sql.includes("app_custom_domains")) {
+                const domain = args[1];
+                return (domain === "app.example.com" ? route : null) as T | null;
+              }
+              const [slug, zone] = args;
+              return (slug === route.slug && zone === route.zone ? route : null) as T | null;
+            },
+          };
+        },
+      };
+    },
+  } as unknown as D1Database;
+}
 
 describe("etagsMatch", () => {
   it("returns false for null header", () => {
