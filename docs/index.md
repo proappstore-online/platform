@@ -49,6 +49,7 @@ tools.
 - [Recipes](./recipes.md)
 - [CLI overview](./cli-overview.md)
 - [Publishing flow](./publishing-flow.md)
+- [Browser auth session model](./auth-session-model.md)
 - [MCP app tools and auth](./mcp-app-tools.md)
 - [Agent customization](./agent-customization.md)
 - [Architecture](./architecture.md)

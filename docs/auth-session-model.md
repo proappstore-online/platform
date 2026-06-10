@@ -1,0 +1,160 @@
+# Browser Auth Session Model
+
+PAS owns browser auth for apps. App code should use the SDK auth APIs and should
+not store, copy, or parse PAS session tokens itself.
+
+## Current State
+
+The current SDK still supports the legacy bearer-token browser flow:
+
+1. `app.auth.signIn()` sends the browser to `api.proappstore.online`.
+2. PAS completes GitHub or Google OAuth.
+3. The backend redirects to the app with `#pas_session=<token>`.
+4. `app.auth.init()` validates the token, stores the signed-in user in memory,
+   and tries to cache the session under `pas:session`.
+
+As of `@proappstore/sdk@1.16.23`, storage access is defensive. If
+`localStorage` is blocked, throws, or is unavailable, the SDK keeps the
+validated session in memory for the current page lifetime instead of failing the
+sign-in. This is a compatibility fix, not the final security model.
+
+The legacy persistent cache remains a bearer token that browser JavaScript can
+read. That is not the desired long-term model.
+
+## Target Model
+
+Hosted PAS apps should use a same-origin token-handler flow:
+
+```text
+Browser on app origin
+  |
+  | app.auth.signIn()
+  v
+/.pas/auth/start on the same app origin
+  |
+  | redirects through PAS OAuth
+  v
+/.pas/auth/callback on the same app origin
+  |
+  | sets host-only HttpOnly Secure SameSite cookie
+  v
+App calls SDK APIs through same-origin PAS mediation
+  |
+  | host/token-handler adds internal Authorization bearer
+  v
+api.proappstore.online and data-<app>.proappstore.online
+```
+
+Important constraints:
+
+- Do not set a broad `Domain=.proappstore.online` session cookie.
+- Use host-only `__Host-...` cookies on the actual app hostname.
+- Browser JavaScript should not receive or persist the PAS bearer token.
+- Backend and data workers can continue verifying PAS bearer tokens internally.
+- Cookie-authenticated write requests need CSRF and origin checks.
+
+## Custom Domains
+
+The same model must work for both platform subdomains and app-owned custom
+domains:
+
+- `https://<app>.proappstore.online`
+- `https://app.example.com`
+
+For a custom domain, the session cookie must be set on `app.example.com`
+itself. That only works if requests for the custom domain pass through a
+PAS-controlled Worker path that can set and read the host-only cookie.
+
+Before token-handler auth becomes the default, confirm the custom-domain serving
+path is aligned with the current R2 host-worker architecture. Any remaining
+Cloudflare Pages custom-domain path must be migrated or wrapped so authenticated
+apps are still served through `proappstore-host` or an equivalent PAS-controlled
+Worker.
+
+## Implementation Plan
+
+### Phase 1: SDK Storage Hardening
+
+Status: started.
+
+- Wrap session `localStorage` reads, writes, and removals in `try/catch`.
+- Keep validated sessions memory-only when storage fails.
+- Preserve legacy behavior when storage works.
+- Add regression tests for blocked storage during restore, callback, and
+  sign-out.
+
+### Phase 2: Host-Worker Token Handler
+
+Add reserved same-origin routes before static app serving:
+
+- `/.pas/auth/start`
+- `/.pas/auth/callback`
+- `/.pas/auth/me`
+- `/.pas/auth/logout`
+
+The callback should set a host-only HttpOnly Secure SameSite cookie and then
+redirect to the clean app URL without `#pas_session` or `?session`.
+
+### Phase 3: Same-Origin API Mediation
+
+Add same-origin SDK API mediation for endpoints that currently require browser
+JavaScript to send `Authorization: Bearer <token>`.
+
+The host/token-handler should:
+
+- read the app-origin HttpOnly cookie
+- verify or exchange it server-side
+- call platform API and data-worker routes with internal bearer auth
+- preserve existing app/user/role enforcement
+
+### Phase 4: SDK Migration
+
+Default hosted apps to token-handler mode when the same-origin endpoints are
+available.
+
+Keep explicit fallback modes for compatibility:
+
+- `platform-cookie`: same-origin token-handler mode
+- `legacy-bearer`: current localStorage-backed bearer mode
+- `memory`: no persistence after page refresh
+
+Automatic detection is acceptable, but the supported modes must be documented.
+
+### Phase 5: Security Gates
+
+Before cookie mode becomes default:
+
+- enforce same-origin `Origin` checks on mutating routes
+- use `Sec-Fetch-Site` where available
+- add CSRF protection where Origin/Fetch-Metadata is insufficient
+- avoid broad credentialed CORS across `*.proappstore.online`
+- add tests for cross-app and custom-domain cookie isolation
+
+## App Author Rules
+
+Apps should:
+
+- call `app.auth.signIn()`, `app.auth.signOut()`, and `useProAuth()`
+- use SDK primitives for database, storage, roles, proxy, and services
+- let PAS own OAuth callbacks and session persistence
+
+Apps should not:
+
+- store PAS tokens in `localStorage`, `sessionStorage`, IndexedDB, or cookies
+- parse `#pas_session` or `?session` in app code
+- create app-specific OAuth callback workarounds
+- pass PAS tokens to third-party services
+
+## Acceptance Criteria
+
+- Browser apps can sign in without storing PAS bearer/session tokens in
+  JavaScript-readable persistent storage.
+- Safari/private-storage GitHub and Google sign-in remain signed in after the
+  redirect.
+- `*.proappstore.online` apps use host-only HttpOnly Secure SameSite cookies or
+  equivalent token-handler storage.
+- BYO custom-domain apps get the same behavior on their own hostname.
+- No broad `Domain=.proappstore.online` session cookie is introduced.
+- Cookie-authenticated write paths have CSRF and origin protections.
+- SDK and public docs clearly state where session state lives in hosted apps,
+  custom-domain apps, local dev, and fallback modes.

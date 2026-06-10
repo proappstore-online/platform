@@ -81,6 +81,20 @@ Import from `@proappstore/sdk/hooks`:
 - `useProSubscription(app)` — subscription state + upgrade/manage
 - `useProGate(app, opts)` — combined auth + subscription gate
 
+## Auth session storage
+
+Apps should not store PAS session tokens themselves. Use `app.auth.signIn()`,
+`app.auth.signOut()`, `app.auth.init()`, and `useProAuth(app)`.
+
+The current SDK keeps the signed-in session in memory and, in legacy bearer
+mode, tries to cache it under the PAS-owned `pas:session` key. If browser
+storage is blocked or throws, the SDK falls back to memory-only state for the
+current page lifetime.
+
+PAS is moving hosted apps to a same-origin token-handler model with host-only
+HttpOnly cookies so browser JavaScript does not receive persistent bearer
+tokens. See [Browser auth session model](/auth-session-model).
+
 ## ProShell component
 
 Import from `@proappstore/sdk/shell`:

@@ -2,7 +2,7 @@ import type { Unsubscribe, User } from './base-types.js';
 
 export type AuthProvider = 'github' | 'google' | 'email';
 
-/** PAS-owned localStorage key for the cached session (per-origin). */
+/** PAS-owned localStorage key for the legacy cached session (per-origin). */
 const STORAGE_KEY = 'pas:session';
 
 /** Hash param the PAS auth service returns the session in (routes/auth.ts). */
@@ -198,9 +198,7 @@ export class Auth {
   /** Clear the session and notify listeners. */
   signOut(): void {
     this.session = null;
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(STORAGE_KEY);
-    }
+    this.clearStorage();
     this.emit();
   }
 
@@ -217,9 +215,9 @@ export class Auth {
    * Call this once at app start, before rendering anything that depends on
    * auth state. If the page was loaded via an auth callback (e.g. after
    * `signIn()` returned from GitHub), this captures the session from the
-   * URL hash, persists it to localStorage, and clears the hash. On a normal
-   * page load it's a no-op — the constructor already restored any cached
-   * session from localStorage.
+   * URL hash, persists it to browser storage when available, and clears the
+   * hash. On a normal page load it's a no-op — the constructor already
+   * restored any cached session from storage if the browser allowed it.
    *
    * @example
    *   const app = initPro({ appId: 'my-app' });
@@ -341,9 +339,9 @@ export class Auth {
 
   private readStorage(): Session | null {
     if (typeof window === 'undefined') return null;
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
     try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
       const session = JSON.parse(raw) as Session;
       // Backfill `name` for sessions cached before the field was added
       if (session.user && !session.user.name) session.user.name = session.user.login;
@@ -354,7 +352,22 @@ export class Auth {
   }
 
   private writeStorage(session: Session): void {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    } catch {
+      // Some browsers/privacy modes expose localStorage but throw on access.
+      // Keep the already-validated session in memory for this page lifetime.
+    }
+  }
+
+  private clearStorage(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // Sign-out must still clear the in-memory session even when storage is
+      // blocked or corrupted.
+    }
   }
 
   private emit(): void {

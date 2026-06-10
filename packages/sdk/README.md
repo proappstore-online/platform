@@ -84,6 +84,14 @@ app.auth.signInWithEmail('alice@example.com')
 app.auth.signOut()
 ```
 
+Apps should not store PAS session tokens themselves. The current SDK keeps the
+signed-in session in memory and, in legacy bearer mode, tries to cache it under
+the PAS-owned `pas:session` key. If browser storage is blocked or throws, the
+SDK falls back to memory-only state for the current page lifetime. Hosted PAS
+apps are planned to move to a same-origin token-handler model with host-only
+HttpOnly cookies so browser JavaScript does not receive persistent bearer
+tokens.
+
 ### KV (Per-user key-value storage)
 
 ```ts

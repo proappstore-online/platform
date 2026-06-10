@@ -49,6 +49,7 @@ const mainSidebar = [
     text: "Architecture",
     items: [
       { text: "System Overview", link: "/architecture" },
+      { text: "Browser Auth Sessions", link: "/auth-session-model" },
       { text: "Publishing Flow", link: "/publishing-flow" },
       { text: "Stripe & Entitlements", link: "/stripe-entitlements" },
     ],
