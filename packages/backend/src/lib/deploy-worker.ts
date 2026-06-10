@@ -28,10 +28,18 @@ export async function deployDataWorker(
   dbId: string,
   cfToken: string,
   cfAccount: string,
-  sessionSigningKey?: string,
+  sessionSigningKey: string,
 ): Promise<DeployResult> {
   const workerName = `pas-data-${appId}`;
   const workersDevUrl = `https://${workerName}.serge-the-dev.workers.dev`;
+  if (!sessionSigningKey) {
+    return {
+      ok: false,
+      url: workersDevUrl,
+      workersDevUrl,
+      detail: 'SESSION_SIGNING_KEY is required to deploy data workers',
+    };
+  }
 
   // 1. Fetch the bundled worker script
   const bundleRes = await fetch(BUNDLE_URL);
@@ -52,9 +60,7 @@ export async function deployDataWorker(
     compatibility_flags: ['nodejs_compat'],
     bindings: [
       { type: 'plain_text', name: 'APP_ID', text: appId },
-      ...(sessionSigningKey
-        ? [{ type: 'secret_text' as const, name: 'SESSION_SIGNING_KEY', text: sessionSigningKey }]
-        : []),
+      { type: 'secret_text' as const, name: 'SESSION_SIGNING_KEY', text: sessionSigningKey },
       { type: 'd1', name: 'DB', id: dbId },
     ],
   };

@@ -11,7 +11,7 @@ export interface ProvisionDataArgs {
   cfAccount: string;
   db: D1Database;
   /** SESSION_SIGNING_KEY — passed to the data-worker for local JWT verification. */
-  sessionSigningKey?: string;
+  sessionSigningKey: string;
 }
 
 /**

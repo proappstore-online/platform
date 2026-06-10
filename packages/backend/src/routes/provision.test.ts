@@ -306,6 +306,17 @@ describe('POST /v1/provision-data (internal)', () => {
     expect(res.status).toBe(400);
   });
 
+  it('503 when SESSION_SIGNING_KEY is missing', async () => {
+    globalThis.fetch = multiFetch();
+    const res = await app.request('/v1/provision-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': 'sekret' },
+      body: JSON.stringify({ appId: 'myapp', creatorId: 'gh:7' }),
+    }, makeEnv({ INTERNAL_TOKEN: 'sekret', SESSION_SIGNING_KEY: '' }));
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain('SESSION_SIGNING_KEY');
+  });
+
   it('provisions D1 + worker + app record (no Pages/DNS) and records the given creator', async () => {
     const appStmt = mockStmt();
     const db = mockD1(appStmt);

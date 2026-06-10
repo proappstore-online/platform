@@ -25,10 +25,17 @@ function mockSequence(...responses: Array<{ ok: boolean; status?: number; body?:
 }
 
 describe('deployDataWorker', () => {
+  it('returns failure before upload when SESSION_SIGNING_KEY is missing', async () => {
+    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', '');
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('SESSION_SIGNING_KEY is required');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('returns failure when bundle fetch fails', async () => {
     mockSequence({ ok: false, status: 404, text: 'Not Found' });
 
-    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1');
+    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk');
     expect(result.ok).toBe(false);
     expect(result.detail).toContain('Failed to fetch worker bundle');
   });
@@ -39,7 +46,7 @@ describe('deployDataWorker', () => {
       { ok: true, body: { success: false, errors: [{ message: 'quota exceeded' }] } },  // upload
     );
 
-    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1');
+    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk');
     expect(result.ok).toBe(false);
     expect(result.detail).toContain('quota exceeded');
   });
@@ -53,7 +60,7 @@ describe('deployDataWorker', () => {
       { ok: true, body: { success: false, errors: [{ message: 'no permission' }] } },  // domain attach fails
     );
 
-    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1');
+    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk');
     expect(result.ok).toBe(true);
     expect(result.url).toContain('workers.dev');
     expect(result.customDomain).toBeUndefined();
@@ -69,7 +76,7 @@ describe('deployDataWorker', () => {
       { ok: true, body: { success: true } },    // domain attach
     );
 
-    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1');
+    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk');
     expect(result.ok).toBe(true);
     expect(result.url).toBe('https://data-my-app.proappstore.online');
     expect(result.customDomain).toBe('data-my-app.proappstore.online');
@@ -85,7 +92,7 @@ describe('deployDataWorker', () => {
       { ok: true, body: { success: true } },
     );
 
-    await deployDataWorker('test-app', 'db-456', 'tok', 'acct');
+    await deployDataWorker('test-app', 'db-456', 'tok', 'acct', 'sk');
 
     // Check the upload call (2nd fetch)
     const [uploadUrl] = mockFetch.mock.calls[1] as [string, RequestInit];

@@ -6,11 +6,9 @@ interface Env {
   DB: D1Database;
   APP_ID: string;
   /** PAS credential-account signing key. */
-  SESSION_SIGNING_KEY?: string;
+  SESSION_SIGNING_KEY: string;
   /** FAS OAuth signing key — set when the app also accepts FAS sessions (teacher logins). */
   FAS_SESSION_SIGNING_KEY?: string;
-  /** PAS API origin used as a fallback session verifier when a per-app worker has stale local secrets. */
-  PAS_API_BASE?: string;
 }
 
 interface FasUser {
@@ -94,29 +92,12 @@ async function requireUser(c: { req: { header(name: string): string | undefined 
   const token = header.slice(7);
   // Try PAS key first (credential accounts), then FAS key (OAuth teachers/admins).
   const claims =
-    (c.env.SESSION_SIGNING_KEY ? await verifySessionLocal(token, c.env.SESSION_SIGNING_KEY) : null) ||
+    (await verifySessionLocal(token, c.env.SESSION_SIGNING_KEY)) ||
     (c.env.FAS_SESSION_SIGNING_KEY ? await verifySessionLocal(token, c.env.FAS_SESSION_SIGNING_KEY) : null);
-  const verified = claims
-    ? { id: claims.uid, login: claims.login }
-    : await verifySessionViaPasApi(token, c.env.PAS_API_BASE);
-  if (!verified) {
+  if (!claims) {
     throw new HTTPException(401, { message: 'invalid session' });
   }
-  return verified;
-}
-
-async function verifySessionViaPasApi(token: string, apiBase = 'https://api.proappstore.online'): Promise<FasUser | null> {
-  try {
-    const response = await fetch(new URL('/v1/auth/me', apiBase), {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) return null;
-    const user = (await response.json()) as { id?: string; login?: string; name?: string };
-    if (!user.id) return null;
-    return { id: user.id, login: user.login ?? user.name ?? user.id };
-  } catch {
-    return null;
-  }
+  return { id: claims.uid, login: claims.login };
 }
 
 // ---------------------------------------------------------------------------

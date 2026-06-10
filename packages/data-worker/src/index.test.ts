@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import app from "./index.js";
 
 const TEST_SK = 'test-signing-key';
@@ -46,10 +46,6 @@ function makeEnv(db = mockD1()) {
   };
 }
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
 describe("GET /health", () => {
   it("returns ok", async () => {
     const res = await app.request("/health", {}, makeEnv());
@@ -78,34 +74,12 @@ describe("Auth", () => {
     expect(res.status).toBe(200);
   });
 
-  it("falls back to PAS /auth/me when local verification cannot validate the token", async () => {
-    const fetchMock = vi.fn(async (request: Request | string | URL, init?: RequestInit) => {
-      const url = request instanceof Request ? request.url : String(request);
-      expect(url).toBe("https://api.proappstore.online/v1/auth/me");
-      const headers = request instanceof Request ? request.headers : new Headers(init?.headers);
-      expect(headers.get("Authorization")).toBe(`Bearer ${TOK}`);
-      return Response.json({ id: "gh:1", login: "octocat" });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const res = await app.request("/tables", {
-      headers: { Authorization: `Bearer ${TOK}` },
-    }, { ...makeEnv(), SESSION_SIGNING_KEY: "stale-key" });
-
-    expect(res.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledOnce();
-  });
-
-  it("401s when both local verification and PAS /auth/me reject the token", async () => {
-    const fetchMock = vi.fn(async () => Response.json({ error: "invalid" }, { status: 401 }));
-    vi.stubGlobal("fetch", fetchMock);
-
+  it("401s when local verification cannot validate the token", async () => {
     const res = await app.request("/tables", {
       headers: { Authorization: `Bearer ${TOK}` },
     }, { ...makeEnv(), SESSION_SIGNING_KEY: "stale-key" });
 
     expect(res.status).toBe(401);
-    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });
 

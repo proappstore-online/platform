@@ -38,7 +38,7 @@ beforeEach(() => {
 });
 
 describe('provisionData', () => {
-  const base = { appId: 'test-app', creatorId: 'u-1', cfToken: 'tok', cfAccount: 'acct' };
+  const base = { appId: 'test-app', creatorId: 'u-1', cfToken: 'tok', cfAccount: 'acct', sessionSigningKey: 'sk' };
 
   it('creates D1, deploys worker, records app on success', async () => {
     // D1 create succeeds
@@ -60,7 +60,7 @@ describe('provisionData', () => {
     expect(result.dbId).toBe('db-uuid-1');
     expect(result.dataWorkerUrl).toBe('https://data-test.proappstore.online');
 
-    expect(deployDataWorker).toHaveBeenCalledWith('test-app', 'db-uuid-1', 'tok', 'acct', undefined);
+    expect(deployDataWorker).toHaveBeenCalledWith('test-app', 'db-uuid-1', 'tok', 'acct', 'sk');
   });
 
   it('skips D1 creation when database already exists', async () => {

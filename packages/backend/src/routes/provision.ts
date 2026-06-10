@@ -158,6 +158,9 @@ provisionRoutes.post('/provision-data', async (c) => {
   if (!c.env.CF_API_TOKEN || !c.env.CF_ACCOUNT_ID) {
     return c.text('Platform provisioning not configured (missing CF credentials)', 503);
   }
+  if (!c.env.SESSION_SIGNING_KEY) {
+    return c.text('Platform provisioning not configured (missing SESSION_SIGNING_KEY)', 503);
+  }
   const data = await provisionData({
     appId: body.appId,
     creatorId: body.creatorId,
@@ -174,5 +177,4 @@ provisionRoutes.post('/provision-data', async (c) => {
 // to any app owner. With R2 hosting, deploy workflows use org-level R2_* secrets
 // (set via Doppler → GitHub org). Data-worker provisioning happens server-side
 // via /v1/provision — no client-side CF token needed.
-
 
