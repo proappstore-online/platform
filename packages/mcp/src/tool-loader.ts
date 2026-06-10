@@ -4,7 +4,28 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { type ToolManifest } from './sql-engine.js';
+
+interface ToolParam {
+  type: string;
+  description?: string;
+  optional?: boolean;
+  default?: unknown;
+  max?: number;
+}
+
+interface ToolManifest {
+  name: string;
+  description: string;
+  operation: 'query' | 'execute';
+  sql: string;
+  params: Record<string, ToolParam>;
+  requires_auth?: boolean;
+  auth?: {
+    required?: boolean;
+    platform_roles?: string[];
+    app_roles?: string[];
+  };
+}
 
 interface AppTool extends ToolManifest {
   app_id: string;
@@ -47,9 +68,7 @@ export function invalidateCache(): void {
   cacheTime = 0;
 }
 
-/**
- * Execute a tool call by proxying SQL to the app's data worker.
- */
+/** Execute an app tool through the shared platform action executor. */
 export async function executeToolCall(
   tool: AppTool,
   args: Record<string, unknown>,

@@ -155,8 +155,7 @@ export function registerPlatformTools(server: McpServer, env: Env) {
               return `${name}${opt}: ${p.type}${p.description ? ` — ${p.description}` : ''}`;
             })
             .join(', ');
-          const auth = t.requires_auth ? ' [auth required]' : '';
-          lines.push(`- **${appId}/${t.name}**${auth}: ${t.description}`);
+          lines.push(`- **${appId}/${t.name}** [auth required]: ${t.description}`);
           if (params) lines.push(`  Params: ${params}`);
         }
         lines.push('');

@@ -102,7 +102,7 @@ Split into focused modules with dependency injection:
 1. `project-do.ts` — DO class shell, init, HTTP dispatch (thin router)
 2. `project-orchestrator.ts` — watchdog, auto-advance, play/pause, dispatch
 3. `ticket-workflow.ts` — transition, fail, blockForInput, applyAgentOutcome
-4. `kb-manager.ts` — KB building, publishing, share links
+4. `project-docs-manager.ts` — project docs building, publishing, share links
 5. `github-sync.ts` — syncFromGitHub, file persistence
 6. Each module gets a `deps` interface → unit-testable without SqlStorage
 

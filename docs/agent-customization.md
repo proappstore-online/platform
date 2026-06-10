@@ -17,13 +17,13 @@ stays small and it does that job well):
 | Agent | Surface | Job | Skills (tools) |
 |-------|---------|-----|----------------|
 | **PO** | Build-tab chat | Turns the founder's intent into the smallest shippable tickets; answers from the real code. Owns the backlog. | `list_files`, `read_file`, `search_files`, `remember`, `create_ticket` |
-| **Architect** | Research-tab chat **+** build | Researches the app and authors the Knowledge Base (`KNOWLEDGE.md` + `docs/`) the whole team builds against. Designs the intended MCP tool surface. | `write_file`, `batch_write_files`, `read_file`, `list_files`, `search_files`, `read_docs`, `remember` |
+| **Architect** | Research-tab chat **+** build | Researches the app and authors the project docs (`KNOWLEDGE.md` + `docs/`) the whole team builds against. Designs the intended MCP tool surface. | `write_file`, `batch_write_files`, `read_file`, `list_files`, `search_files`, `read_docs`, `remember` |
 | **BA** | Build | Turns a ticket into a crisp, buildable spec with concrete acceptance criteria. | read-only + `read_docs` |
 | **Dev** | Build | Implements the approved spec with the PAS SDK; authors the app's `mcp.json`. | `write_file`, `batch_write_files`, `read_file`, `list_files`, `search_files`, `read_docs` |
 | **QA** | Build | Writes Playwright E2E specs that gate the deploy against the live app. | `write_file`, `read_file`, `list_files`, `search_files`, `read_docs` |
 
 The **PO** and **Architect-chat** are conversational; **BA/Dev/QA** (and the
-Architect's KB-build run) execute against the ticket pipeline. The Architect is
+Architect's project-docs build run) execute against the ticket pipeline. The Architect is
 **one identity** used in both its chat and its build run.
 
 ## What each agent receives
@@ -36,7 +36,7 @@ At run time, an agent's prompt is assembled in layers:
    (`systemPromptOverride`); templated per-turn for the chat agents.*
 3. **`PLATFORM_CAPABILITIES`** — shared PAS/SDK ground truth (not per-agent).
 4. **Task framing** — the per-ticket / per-message context (backlog, file list,
-   spec, KB) built dynamically.
+   spec, project docs) built dynamically.
 
 Customization targets layers **1 and 2** plus the **skills** and **model/runtime**.
 

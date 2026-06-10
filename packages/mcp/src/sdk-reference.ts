@@ -56,12 +56,13 @@ const res = await app.proxy.fetch('api.example.com/v1/data')
 \`\`\``,
     db: `## Per-app SQL Database (D1)
 \`\`\`tsx
-await app.db.execute('CREATE TABLE events (id TEXT PK, title TEXT)')
-const { rows } = await app.db.query('SELECT * FROM events WHERE city = ?', ['SF'])
-await app.db.execute('INSERT INTO events VALUES (?, ?)', [id, 'Meetup'])
-const results = await app.db.batch([...])
+// Low-level schema setup and trusted migration code:
 await app.db.migrate([{ name: '001', sql: '...' }])
 const tables = await app.db.tables()
+
+// User-facing reads/writes should use registered app actions:
+const { rows } = await app.actions.call<{ rows: Event[] }>('list_events', { city: 'SF' })
+await app.actions.call('create_event', { title: 'Meetup', city: 'SF' })
 \`\`\``,
     storage: `## File Storage (R2)
 \`\`\`tsx
@@ -179,12 +180,12 @@ Full docs: https://docs.proappstore.online/ui/`,
     recipes: `## Recipes (pre-built code patterns)
 Available recipes — copy-paste-ready patterns using the PAS SDK, design system, and pre-installed libraries:
 
-- **crud-list** — Fetch rows from app.db, render a list with cards, click to view detail
-- **form-create** — Form to create a new DB row with inline validation
+- **crud-list** — Fetch rows through a registered app action, render a list with cards, click to view detail
+- **form-create** — Form to create a row through a registered app action with inline validation
 - **search-filter** — Search bar with debounce, category filter, sort dropdown
 - **modal** — Accessible modal with backdrop, escape to close, focus trap
 - **file-upload** — Upload images/files to app.storage with drag-drop and preview
-- **data-table** — Sortable table with pagination for DB query results
+- **data-table** — Sortable table with pagination for action query results
 - **tabs** — Accessible tab switcher with active state
 - **i18n-setup** — Multi-language setup with react-i18next and language switcher
 - **icons** — Pre-installed lucide-react icon library reference

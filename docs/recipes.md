@@ -133,7 +133,7 @@ Register those actions in the repo root `mcp.json`:
 
 **data-table** — Data Table with Pagination
 
-Sortable table with pagination for DB query results.
+Sortable table with pagination for loaded rows.
 
 ```
 // src/components/DataTable.tsx

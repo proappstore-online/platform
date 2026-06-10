@@ -53,4 +53,5 @@ tools.
 - [MCP app tools and auth](./mcp-app-tools.md)
 - [App actions and data access security](./app-actions-security.md)
 - [Agent customization](./agent-customization.md)
+- [Project docs sharing](./project-docs-sharing.md)
 - [Architecture](./architecture.md)

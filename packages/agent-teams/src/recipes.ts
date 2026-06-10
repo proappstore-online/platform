@@ -12,7 +12,7 @@ export const RECIPES: Record<string, { title: string; description: string; code:
 
   'crud-list': {
     title: 'CRUD List + Detail',
-    description: 'Fetch rows from app.db, render a list with cards, click to view detail.',
+    description: 'Fetch rows through a registered app action, render a list with cards, click to view detail.',
     code: `// src/components/ItemList.tsx
 import { useState, useEffect } from 'react'
 import { app } from '../App'
@@ -25,7 +25,7 @@ export function ItemList({ onSelect }: { onSelect: (id: string) => void }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    app.db.query<Item>('SELECT * FROM items ORDER BY created_at DESC')
+    app.actions.call<{ rows: Item[] }>('list_items', { limit: 50 })
       .then(r => setItems(r.rows))
       .finally(() => setLoading(false))
   }, [])
@@ -54,7 +54,7 @@ export function ItemList({ onSelect }: { onSelect: (id: string) => void }) {
 
   'form-create': {
     title: 'Create Form with Validation',
-    description: 'Form to create a new DB row with inline validation.',
+    description: 'Form to create a row through a registered app action with inline validation.',
     code: `// src/components/CreateItemForm.tsx
 import { useState } from 'react'
 import { app } from '../App'
@@ -70,10 +70,7 @@ export function CreateItemForm({ onDone }: { onDone: () => void }) {
     if (!title.trim()) { setError('Title is required'); return }
     setSaving(true); setError('')
     try {
-      await app.db.execute(
-        'INSERT INTO items (id, title, user_id, created_at) VALUES (:__uuid, ?, :__user_id, :__now)',
-        [title.trim()]
-      )
+      await app.actions.call('create_item', { title: title.trim() })
       onDone()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save')
@@ -240,7 +237,7 @@ export function FileUpload({ onUploaded }: { onUploaded: (url: string) => void }
 
   'data-table': {
     title: 'Data Table with Pagination',
-    description: 'Sortable table with pagination for DB query results.',
+    description: 'Sortable table with pagination for loaded rows.',
     code: `// src/components/DataTable.tsx
 import { useState } from 'react'
 import { ChevronLeft, ChevronRight, ArrowUpDown } from 'lucide-react'
