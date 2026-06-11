@@ -68,7 +68,8 @@ function returnToAllowed(url: string): boolean {
     const u = new URL(url);
     if (u.protocol !== 'https:' && !(u.hostname === 'localhost' || u.hostname === '127.0.0.1')) return false;
     return u.hostname === 'localhost' || u.hostname === '127.0.0.1'
-      || u.hostname === 'proappstore.online' || u.hostname.endsWith('.proappstore.online');
+      || u.hostname === 'proappstore.online' || u.hostname.endsWith('.proappstore.online')
+      || u.hostname === 'proideastore.online' || u.hostname.endsWith('.proideastore.online');
   } catch {
     return false;
   }

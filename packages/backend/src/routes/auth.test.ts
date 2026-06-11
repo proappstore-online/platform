@@ -300,6 +300,16 @@ describe('auth provider start', () => {
     expect(loc.searchParams.get('state')).toBeTruthy();
   });
 
+  it('allows ProIdeaStore custom-domain callbacks', async () => {
+    const res = await app.request(
+      '/v1/auth/github/start?return_to=https://proideastore.online/.pis/auth/callback',
+      {},
+      { ...env(), GITHUB_CLIENT_ID: 'cid', APP_BASE: 'https://api.proappstore.online' } as never,
+    );
+
+    expect(res.status).toBe(302);
+  });
+
   it('rejects a return_to that is not a proappstore origin (open-redirect guard)', async () => {
     const res = await app.request(
       '/v1/auth/github/start?return_to=https://evil.com',
