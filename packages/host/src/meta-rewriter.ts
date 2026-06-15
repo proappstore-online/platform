@@ -63,13 +63,17 @@ class IconLinkRewriter implements HTMLRewriterElementContentHandlers {
   }
 }
 
-/** Inject any missing meta tags right before </head>. */
+/** Inject any missing meta tags right before </head> closes. */
 class HeadEndInjector implements HTMLRewriterElementContentHandlers {
   #tracker: MetaTagTracker;
   constructor(tracker: MetaTagTracker) { this.#tracker = tracker; }
   element(el: Element) {
-    const html = this.#tracker.missingTagsHtml();
-    if (html) el.prepend(html, { html: true });
+    // onEndTag fires when </head> is reached — by then all child meta
+    // elements have been processed and the tracker knows what exists.
+    el.onEndTag((end) => {
+      const html = this.#tracker.missingTagsHtml();
+      if (html) end.before(html, { html: true });
+    });
   }
 }
 
