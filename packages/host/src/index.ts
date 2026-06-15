@@ -16,12 +16,14 @@ import { handlePlatformMediation } from "./platform-mediation.js";
 import {
   contentType,
   etagsMatch,
+  getListingMeta,
   isUpdateSensitivePath,
   r2KeyFor,
   resolveRouteForHostname,
   securityHeaders,
   slugFromHostname,
 } from "./host.js";
+import { rewriteMetaTags } from "./meta-rewriter.js";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -122,10 +124,18 @@ export default {
     const headers = securityHeaders(isHtml, updateSensitive);
     headers.set("Content-Type", contentType(key));
     headers.set("ETag", etag);
-    if (object.size !== undefined) headers.set("Content-Length", String(object.size));
+    if (!isHtml && object.size !== undefined) headers.set("Content-Length", String(object.size));
 
     const body = request.method === "HEAD" ? null : object.body;
-    const response = new Response(body, { status: 200, headers });
+    let response = new Response(body, { status: 200, headers });
+
+    // Inject per-app meta tags from app_listings (og:image, og:description, favicon)
+    if (isHtml && request.method === "GET") {
+      const listing = await getListingMeta(env.DB, route.slug);
+      if (listing?.icon_url || listing?.tagline) {
+        response = rewriteMetaTags(response, listing);
+      }
+    }
 
     // Edge cache: store the response so next request skips R2 + D1
     if (!skipEdgeCache && !updateSensitive) {

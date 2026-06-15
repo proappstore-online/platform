@@ -13,6 +13,12 @@ export interface Route {
   store: string;
 }
 
+/** Listing metadata used by HTMLRewriter for social/SEO meta tag injection. */
+export interface ListingMeta {
+  icon_url: string | null;
+  tagline: string | null;
+}
+
 /**
  * Extract the subdomain slug from a hostname.
  * Returns null for apex, multi-level subdomains, or non-proappstore hosts.
@@ -72,6 +78,14 @@ export async function resolveRouteForHostname(db: D1Database, hostname: string):
     )
     .bind(PLATFORM_ZONE, host)
     .first<Route>();
+}
+
+/** Fetch listing metadata for meta tag injection. Returns null if no listing exists. */
+export async function getListingMeta(db: D1Database, appId: string): Promise<ListingMeta | null> {
+  return db
+    .prepare("SELECT icon_url, tagline FROM app_listings WHERE app_id = ?1")
+    .bind(appId)
+    .first<ListingMeta>();
 }
 
 /** Map a route + URL pathname to an R2 object key. */
