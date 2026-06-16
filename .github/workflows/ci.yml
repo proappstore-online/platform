@@ -29,3 +29,22 @@ jobs:
         run: bash scripts/check-design-system.sh .
       - run: pnpm -r typecheck
       - run: pnpm test
+
+  # Drift guard: the template-app repo's deploy workflow is cloned verbatim by
+  # `pas create` (CLI) and MCP `create_app` — that path has no strip-and-inject,
+  # so template-app's committed workflow IS what those apps run. It must stay
+  # byte-identical to the canonical generator (deployWorkflowYaml). This job
+  # fails if template-app drifts, so it can never silently fall behind.
+  # Source of truth: packages/admin/src/__fixtures__/canonical-deploy.yml
+  # (a unit test pins that golden == generator); this checks golden == template-app.
+  template-workflow-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: template-app deploy workflow is in sync with canonical
+        run: node scripts/sync-template-workflow.mjs --check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
