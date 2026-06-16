@@ -219,6 +219,36 @@ describe("deploy-workflow injection (agent path)", () => {
     expect(rec.blobs).toHaveLength(7);
   });
 
+  it("strips MULTIPLE agent-authored workflows but keeps the app's own KB workflow path", async () => {
+    // Defence in depth: an agent could scatter several workflow files under
+    // various names. ALL must be discarded so none can preempt our deploy or
+    // reintroduce a lockfile-coupled cache. kb.yml is ours and is (re)injected.
+    const rec = install();
+    await handleAgentDeploy(
+      {
+        id: "multi",
+        name: "Multi",
+        files: {
+          "index.html": "x",
+          ".github/workflows/ci.yml": "name: ci\n  cache: pnpm",
+          ".github/workflows/build.yaml": "name: build\n  cache: pnpm",
+          ".github/workflows/release.yml": "name: release",
+        },
+      },
+      ENV,
+    );
+    // None of the agent workflows survive...
+    expect(rec.blobs.some((b) => b.includes("name: ci"))).toBe(false);
+    expect(rec.blobs.some((b) => b.includes("name: build"))).toBe(false);
+    expect(rec.blobs.some((b) => b.includes("name: release"))).toBe(false);
+    expect(rec.blobs.some((b) => b.includes("cache: pnpm"))).toBe(false);
+    // ...and exactly our canonical deploy + KB workflows are present.
+    expect(rec.blobs.filter((b) => b.includes("name: Deploy to R2"))).toHaveLength(1);
+    expect(rec.blobs.filter((b) => b.includes("Publish Knowledge Base"))).toHaveLength(1);
+    // 1 surviving input + deploy.yml + kb.yml + 4 E2E harness files.
+    expect(rec.blobs).toHaveLength(7);
+  });
+
   it("does NOT clobber QA-authored e2e specs (skips the baseline smoke)", async () => {
     const rec = install();
     await handleAgentDeploy(
