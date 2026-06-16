@@ -99,6 +99,8 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
+  packages/builder: {}
+
   packages/cli:
     dependencies:
       '@proappstore/compliance':
@@ -194,6 +196,8 @@ importers:
       wrangler:
         specifier: ^4.0.0
         version: 4.87.0(@cloudflare/workers-types@4.20260505.1)
+
+  packages/mcp-registry: {}
 
   packages/sdk:
     devDependencies:
