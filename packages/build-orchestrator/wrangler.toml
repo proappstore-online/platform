@@ -3,12 +3,15 @@ main = "src/index.ts"
 compatibility_date = "2024-12-01"
 workers_dev = false
 
-# Receives the "PAS Builder" GitHub App push webhook. Point the App's webhook URL
-# at https://<this worker's domain>/webhook. A dedicated subdomain (NOT a
+# Receives the "PAS Builder" GitHub App push webhook at
+# https://build.proappstore.online/webhook. A dedicated subdomain (NOT a
 # wildcard) avoids the *.proappstore.online/* route-preemption hazard.
-# [[routes]]
-# pattern = "build.proappstore.online"
-# custom_domain = true
+# custom_domain auto-provisions the DNS + cert on deploy IF the deploy token has
+# Zone:DNS:Edit; the PAS CLOUDFLARE_API_TOKEN does NOT, so add the Custom Domain
+# once in the dashboard (Workers → proappstore-build-orchestrator → Domains).
+[[routes]]
+pattern = "build.proappstore.online"
+custom_domain = true
 
 # Secrets (wrangler secret put / Doppler pas/prd):
 #   GITHUB_WEBHOOK_SECRET   — HMAC secret for X-Hub-Signature-256
