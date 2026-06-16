@@ -1,0 +1,20 @@
+{
+  "name": "@proappstore/build-orchestrator",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PAS centralized build orchestrator Worker — GitHub App webhook → queue → build container (ADR-006).",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "tsc --noEmit && esbuild src/index.ts --bundle --format=esm --target=es2022 --outfile=dist/worker.js --minify",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "esbuild": "^0.28.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.9",
+    "wrangler": "^4.0.0"
+  }
+}

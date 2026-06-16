@@ -1,0 +1,31 @@
+name = "proappstore-build-orchestrator"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+workers_dev = false
+
+# Receives the "PAS Builder" GitHub App push webhook. Point the App's webhook URL
+# at https://<this worker's domain>/webhook. A dedicated subdomain (NOT a
+# wildcard) avoids the *.proappstore.online/* route-preemption hazard.
+# [[routes]]
+# pattern = "build.proappstore.online"
+# custom_domain = true
+
+# Secrets (wrangler secret put / Doppler pas/prd):
+#   GITHUB_WEBHOOK_SECRET   — HMAC secret for X-Hub-Signature-256
+#   GITHUB_APP_ID           — the PAS Builder App id
+#   GITHUB_APP_PRIVATE_KEY  — the App's PKCS8 PEM private key
+#   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY — passed to the build
+
+# Build jobs: webhook handler produces; the queue() consumer drains one at a
+# time and dispatches to the container.
+[[queues.producers]]
+queue = "pas-builds"
+binding = "BUILD_QUEUE"
+
+[[queues.consumers]]
+queue = "pas-builds"
+max_batch_size = 1
+max_retries = 3
+# Phase 3: add the Cloudflare Containers binding (BUILD_CONTAINER) here once the
+# account has Containers enabled; dispatchBuild() in src/index.ts is the wiring
+# point.
