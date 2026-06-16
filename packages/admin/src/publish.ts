@@ -41,7 +41,7 @@ const KB_WORKFLOW_PATH = ".github/workflows/kb.yml";
  * are org-level (set once on the publishers org). `\${{ }}` is escaped to
  * survive the template literal.
  */
-function deployWorkflowYaml(_env: Env): string {
+export function deployWorkflowYaml(_env: Env): string {
   return `name: Deploy to R2
 
 on:

@@ -7,56 +7,13 @@
  * security headers, testing setup, CI/CD, accessibility meta, and compliance.
  */
 
-// GitHub Actions ${{ }} conflicts with JS template literals.
-const GH = '$' + '{{';
-
-function ghWorkflow(slug: string): string {
-  return [
-    'name: Deploy to Cloudflare Pages', '',
-    'on:', '  push:', '    branches: [main]', '',
-    'permissions:', '  contents: read', '  deployments: write', '',
-    'concurrency:',
-    '  group: deploy-' + GH + ' github.repository }}',
-    '  cancel-in-progress: true', '',
-    'jobs:', '  deploy:', '    runs-on: ubuntu-latest', '    steps:',
-    '      - uses: actions/checkout@v4',
-    '      - uses: pnpm/action-setup@v4', '        with:', '          version: 9',
-    '      - uses: actions/setup-node@v4', '        with:', '          node-version: 22',
-    '      - run: pnpm install --no-frozen-lockfile',
-    '      - name: Build', '        env:',
-    '          VITE_COMMIT_SHA: ' + GH + ' github.sha }}',
-    '        run: pnpm build',
-    '      - name: Locate build output', '        id: dist', '        run: |',
-    '          if [ -d dist ]; then echo "dir=dist" >> "$GITHUB_OUTPUT"',
-    '          else echo "::error::No build output"; exit 1; fi',
-    '      - name: Code-health scan (VCQA)', '        continue-on-error: true', '        run: |',
-    '          npx -y @vibecodeqa/cli@0.44.0 --skip-tests . || true',
-    '          if [ -f .vibe-check/report.json ]; then',
-    '            mkdir -p "' + GH + ' steps.dist.outputs.dir }}/.vcqa"',
-    '            cp .vibe-check/report.json "' + GH + ' steps.dist.outputs.dir }}/.vcqa/report.json"',
-    '          fi',
-    '      - name: Deploy to Cloudflare Pages',
-    '        run: npx wrangler@3 pages deploy "' + GH + ' steps.dist.outputs.dir }}" --project-name=proappstore-' + slug + ' --branch=main',
-    '        env:',
-    '          CLOUDFLARE_API_TOKEN: ' + GH + ' secrets.CLOUDFLARE_API_TOKEN }}',
-    '          CLOUDFLARE_ACCOUNT_ID: c1089bfcc43c1c6c2aa89e584e86f0bc',
-  ].join('\n') + '\n';
-}
-
-function ciWorkflow(): string {
-  return [
-    'name: CI', '',
-    'on:', '  pull_request:', '    branches: [main]', '',
-    'permissions:', '  contents: read', '',
-    'jobs:', '  typecheck:', '    runs-on: ubuntu-latest', '    steps:',
-    '      - uses: actions/checkout@v4',
-    '      - uses: pnpm/action-setup@v4', '        with:', '          version: 9',
-    '      - uses: actions/setup-node@v4', '        with:', '          node-version: 22',
-    '      - run: pnpm install --no-frozen-lockfile',
-    '      - run: pnpm typecheck',
-    '      - run: pnpm test',
-  ].join('\n') + '\n';
-}
+// NOTE: No CI/CD workflow is generated here. The platform OWNS CI — at deploy
+// time handleAgentDeploy (admin/src/publish.ts) strips any .github/workflows/*
+// from the bundle and injects the single canonical deployWorkflowYaml(). The
+// workflow that used to live here was both dead (always stripped before it
+// reached GitHub) AND wrong (it deployed to Cloudflare Pages — the abandoned
+// Path-A model, not Path B R2). Do not re-add workflow seeding here; change the
+// one source of truth in admin/src/publish.ts instead.
 
 export function seedFiles(slug: string): Map<string, string> {
   const files = new Map<string, string>();
@@ -431,9 +388,10 @@ body {
   files.set('mcp.json', JSON.stringify({ tools: [] }, null, 2) + '\n');
 
   // ── CI/CD ───────────────────────────────────────────────────
-
-  files.set('.github/workflows/deploy.yml', ghWorkflow(slug));
-  files.set('.github/workflows/ci.yml', ciWorkflow());
+  // Intentionally none — the platform injects the canonical deploy workflow at
+  // deploy time (see the note at the top of this file). Seeding workflow files
+  // here is dead code: handleAgentDeploy strips every .github/workflows/* from
+  // the bundle before it reaches GitHub.
 
   return files;
 }

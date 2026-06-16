@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "./env.js";
-import { handleAgentDeploy, handlePublish } from "./publish.js";
+import { deployWorkflowYaml, handleAgentDeploy, handlePublish } from "./publish.js";
 
 /**
  * The two ways an app repo gets provisioned must yield the SAME hosting:
@@ -164,6 +165,26 @@ describe("provisioning: shared core", () => {
     expect(cfHosting(agentRec)).toEqual(cfHosting(pubRec));
     // the surface includes the analytics step (R2 route is via D1, not CF API)
     expect(cfHosting(pubRec)).toContain("POST /accounts/acct123/rum/site_info");
+  });
+});
+
+describe("canonical deploy workflow — single source of truth", () => {
+  // deployWorkflowYaml() is THE canonical deploy workflow. The committed golden
+  // (__fixtures__/canonical-deploy.yml) is what the sync script pushes to the
+  // template-app repo (the CLI/MCP clone source). This test ties them together:
+  // any change to the generator fails here until the golden is regenerated, so
+  // the change is intentional, reviewable in the diff, and re-syncable to
+  // template-app via `scripts/sync-template-workflow.mjs`. No silent drift.
+  it("generator output is byte-identical to the committed golden file", () => {
+    const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
+    expect(deployWorkflowYaml(ENV)).toBe(golden);
+  });
+
+  it("the golden never reintroduces the lockfile-coupled cache or CF Pages", () => {
+    const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
+    expect(golden).not.toContain("cache: pnpm");
+    expect(golden).not.toContain("pages deploy");
+    expect(golden).toContain("--no-frozen-lockfile");
   });
 });
 

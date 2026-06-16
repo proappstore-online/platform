@@ -1,0 +1,105 @@
+name: Deploy to R2
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: pnpm install --no-frozen-lockfile
+
+      - name: Build
+        env:
+          VITE_COMMIT_SHA: ${{ github.sha }}
+        run: pnpm build || (cd web 2>/dev/null || true; npx vite build)
+
+      - name: Locate build output
+        id: dist
+        run: |
+          if [ -d web/dist ]; then echo "dir=web/dist" >> "$GITHUB_OUTPUT"
+          elif [ -d dist ]; then echo "dir=dist" >> "$GITHUB_OUTPUT"
+          else echo "::error::No build output (looked for ./dist and ./web/dist)"; exit 1; fi
+
+      - name: Code-health scan (VCQA, report-only)
+        continue-on-error: true
+        run: |
+          npx -y @vibecodeqa/cli@0.44.0 --skip-tests . || true
+          if [ -f .vibe-check/report.json ]; then
+            mkdir -p "${{ steps.dist.outputs.dir }}/.vcqa"
+            cp .vibe-check/report.json "${{ steps.dist.outputs.dir }}/.vcqa/report.json"
+            [ -f .vibe-check/badge.svg ] && cp .vibe-check/badge.svg "${{ steps.dist.outputs.dir }}/.vcqa/badge.svg" || true
+          fi
+
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID || vars.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY || vars.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID || vars.R2_ACCOUNT_ID }}
+        run: |
+          aws s3 sync "${{ steps.dist.outputs.dir }}" "s3://pas-apps/apps/${{ github.event.repository.name }}/" \
+            --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" \
+            --delete --no-progress
+          echo "Deployed apps/${{ github.event.repository.name }} from ${{ github.sha }}"
+
+  # Behavioural gate: drive the LIVE app in a real browser (the thing tsc/build
+  # can't check). Runs after deploy; a failure fails the run, so the deploy
+  # gate routes the ticket back to Dev with the Playwright output. Auth uses a
+  # platform fixture session via the SDK's real sign-in path (no test bypass);
+  # auth-gated specs skip when PAS_E2E_SESSION_TOKEN is unset.
+  e2e:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install E2E deps
+        working-directory: e2e
+        run: npm install
+      - name: Install Playwright browser
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+      - name: Run E2E against the live app
+        id: e2e
+        continue-on-error: true
+        working-directory: e2e
+        env:
+          E2E_BASE_URL: https://${{ github.event.repository.name }}.proappstore.online
+          E2E_SESSION_TOKEN: ${{ secrets.PAS_E2E_SESSION_TOKEN }}
+        run: npx playwright test
+      - name: Publish test results (kb.proappstore.online/<app>/.e2e/summary.json)
+        if: always()
+        working-directory: e2e
+        env:
+          INTERNAL_TOKEN: ${{ secrets.INTERNAL_TOKEN }}
+          APP: ${{ github.event.repository.name }}
+        run: |
+          node -e '
+            const fs=require("fs");
+            let r={}; try{ r=JSON.parse(fs.readFileSync("results.json","utf8")); }catch{}
+            const s=r.stats||{}, specs=[];
+            const walk=(su=[])=>su.forEach(x=>{ (x.specs||[]).forEach(sp=>specs.push({title:[x.title,sp.title].filter(Boolean).join(" > "),ok:sp.ok!==false})); walk(x.suites||[]); });
+            walk(r.suites||[]);
+            fs.writeFileSync("summary.json", JSON.stringify({ ranAt:new Date().toISOString(), passed:s.expected||0, failed:s.unexpected||0, flaky:s.flaky||0, skipped:s.skipped||0, ok:(s.unexpected||0)===0, specs }));
+          '
+          [ -n "$INTERNAL_TOKEN" ] && curl -fsS -X PUT "https://kb.proappstore.online/_ingest/$APP/.e2e/summary.json" -H "x-internal-token: $INTERNAL_TOKEN" --data-binary @summary.json >/dev/null && echo "results → kb.proappstore.online/$APP/.e2e/summary.json" || echo "skipped results upload (no INTERNAL_TOKEN)"
+      - name: Fail the run if E2E failed (bounces the ticket to Dev)
+        if: steps.e2e.outcome != 'success'
+        run: echo "::error::E2E tests failed — see the results above" && exit 1
