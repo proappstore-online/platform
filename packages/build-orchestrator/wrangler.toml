@@ -3,15 +3,13 @@ main = "src/index.ts"
 compatibility_date = "2024-12-01"
 workers_dev = false
 
-# Receives the "PAS Builder" GitHub App push webhook at
-# https://build.proappstore.online/webhook. A dedicated subdomain (NOT a
-# wildcard) avoids the *.proappstore.online/* route-preemption hazard.
-# custom_domain auto-provisions the DNS + cert on deploy IF the deploy token has
-# Zone:DNS:Edit; the PAS CLOUDFLARE_API_TOKEN does NOT, so add the Custom Domain
-# once in the dashboard (Workers → proappstore-build-orchestrator → Domains).
-[[routes]]
-pattern = "build.proappstore.online"
-custom_domain = true
+# NO custom_domain here. proappstore-host owns the wildcard route
+# *.proappstore.online/* which preempts any sibling custom_domain (see
+# wildcard-route-preemption note in host/wrangler.toml). So build.proappstore.online
+# is dispatched to THIS worker via a host service binding (env.BUILD) — `build` is
+# in RESERVED_SUBDOMAINS + the dispatch branch in host/src/index.ts. This worker
+# needs no public route of its own; the host reaches it over the binding.
+# The GitHub App webhook URL stays https://build.proappstore.online/webhook.
 
 # Secrets (wrangler secret put / Doppler pas/prd):
 #   GITHUB_WEBHOOK_SECRET   — HMAC secret for X-Hub-Signature-256

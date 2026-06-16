@@ -49,6 +49,7 @@ describe("RESERVED_SUBDOMAINS", () => {
   it("reserves docs for KB-host dispatch", () => {
     expect(RESERVED_SUBDOMAINS.has("docs")).toBe(true);
     expect(RESERVED_SUBDOMAINS.has("kb")).toBe(true);
+    expect(RESERVED_SUBDOMAINS.has("build")).toBe(true);
   });
 });
 

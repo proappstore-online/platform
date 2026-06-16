@@ -44,6 +44,7 @@ export const RESERVED_SUBDOMAINS = new Set([
   "mcp",
   "kb",
   "docs",
+  "build",
   "www",
   "console",
   "dashboard",

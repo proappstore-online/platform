@@ -45,6 +45,7 @@ export default {
     if (slug === "mcp") return env.MCP.fetch(request);
     if (slug === "kb") return env.KB.fetch(request);
     if (slug === "docs") return env.KB.fetch(request);
+    if (slug === "build") return env.BUILD.fetch(request);
 
     // www → redirect to apex
     if (slug === "www") {

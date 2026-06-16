@@ -13,4 +13,6 @@ export interface Env {
   MCP: Fetcher;
   /** Service binding: kb.proappstore.online and docs.proappstore.online -> proappstore-kb-host */
   KB: Fetcher;
+  /** Service binding: build.proappstore.online → proappstore-build-orchestrator (GitHub App webhook → build queue) */
+  BUILD: Fetcher;
 }

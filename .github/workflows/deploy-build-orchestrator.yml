@@ -83,11 +83,17 @@ jobs:
           printf '%s' "$R2_ACCESS_KEY_ID"          | pnpm exec wrangler secret put R2_ACCESS_KEY_ID
           printf '%s' "$R2_SECRET_ACCESS_KEY"      | pnpm exec wrangler secret put R2_SECRET_ACCESS_KEY
 
-      - name: Smoke test /health
+      - name: Smoke test the webhook endpoint
+        # NB: /health on build.proappstore.online is answered by the host worker
+        # (it handles /health for any hostname before dispatch). The orchestrator
+        # is reached via the host's `build` service-binding dispatch, so we probe
+        # the real endpoint: POST /webhook with no signature must return 401
+        # (request reached the orchestrator and was correctly rejected). Requires
+        # proappstore-host to be deployed with the BUILD binding first.
         run: |
           for i in 1 2 3 4 5; do
-            CODE=$(curl -sS -o /dev/null -w "%{http_code}" https://build.proappstore.online/health)
-            if [ "$CODE" = "200" ]; then echo "✓ /health 200"; exit 0; fi
-            echo "attempt $i: $CODE"; sleep 5
+            CODE=$(curl -sS -o /dev/null -w "%{http_code}" -X POST https://build.proappstore.online/webhook -d '{}')
+            if [ "$CODE" = "401" ]; then echo "✓ /webhook reachable, rejects unsigned (401)"; exit 0; fi
+            echo "attempt $i: $CODE (expect 401; 404 = host not yet redeployed with BUILD binding)"; sleep 5
           done
-          echo "✗ /health never 200"; exit 1
+          echo "✗ /webhook never returned 401"; exit 1
