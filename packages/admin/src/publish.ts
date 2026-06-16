@@ -571,12 +571,23 @@ async function provisionApp(
   let commitSha: string | undefined;
   if (opts.files) {
     const files: Record<string, string> = { ...opts.files };
-    // Inject our deploy workflow unless the app already carries its OWN CI
-    // workflow (kb.yml below is ours, so it doesn't count as "the app's").
-    const hasOwnWorkflow = Object.keys(files).some(
-      (p) => /^\.github\/workflows\/.+\.ya?ml$/i.test(p) && p !== KB_WORKFLOW_PATH,
-    );
-    if (!hasOwnWorkflow) files[DEPLOY_WORKFLOW_PATH] = deployWorkflowYaml(env);
+    // The PLATFORM owns CI. Agent Teams authors only app source — never a
+    // workflow (see deployWorkflowYaml's contract). We used to honor an
+    // agent-authored workflow and skip ours, but that let a bundle ship a
+    // BROKEN workflow and silently suppress the known-good deploy: an agent
+    // hand-wrote `actions/setup-node` with `cache: pnpm` but no committed
+    // `pnpm-lock.yaml`, so setup-node hard-failed with "Dependencies lock file
+    // is not found" before install ever ran. The canonical deployWorkflowYaml
+    // deliberately omits `cache: pnpm` and installs with `--no-frozen-lockfile`,
+    // so it needs no lockfile. To kill that drift class for every PAS app:
+    // strip any agent-authored workflow and always inject our canonical one.
+    // (kb.yml below is ours and is re-added after; it's excluded here.)
+    for (const p of Object.keys(files)) {
+      if (/^\.github\/workflows\/.+\.ya?ml$/i.test(p) && p !== KB_WORKFLOW_PATH) {
+        delete files[p];
+      }
+    }
+    files[DEPLOY_WORKFLOW_PATH] = deployWorkflowYaml(env);
     // Publish the Knowledge Base as a Zensical site to R2 (kb.proappstore.online/<app>/).
     // Separate workflow so it only runs when the KB markdown changes.
     if (!(KB_WORKFLOW_PATH in files)) files[KB_WORKFLOW_PATH] = kbWorkflowYaml();

@@ -177,6 +177,7 @@ describe("deploy-workflow injection (agent path)", () => {
     expect(wf).toContain("if [ -d web/dist ]"); // adaptive: web/dist OR dist
     expect(wf).toContain("R2_ACCESS_KEY_ID"); // R2 credentials (secrets || vars)
     expect(wf).toContain("--no-frozen-lockfile"); // agents commit no lockfile
+    expect(wf).not.toContain("cache: pnpm"); // no lockfile committed → cache:pnpm would hard-fail setup-node
     expect(wf).toContain("npx playwright test"); // behavioural gate runs after deploy
     expect(wf).toContain("@vibecodeqa/cli@0.44.0"); // code-health scan (report-only)
     expect(wf).toContain(".vcqa/report.json"); // written into dist for the Dev Ops tab
@@ -192,20 +193,30 @@ describe("deploy-workflow injection (agent path)", () => {
     expect(rec.blobs.some((b) => b.includes("pas_session"))).toBe(true); // auth fixture
   });
 
-  it("does NOT inject a deploy workflow when the bundle already carries one", async () => {
+  it("STRIPS an agent-authored workflow and injects the canonical deploy.yml", async () => {
+    // The platform owns CI. An agent-authored workflow is drift (and has shipped
+    // broken — e.g. `cache: pnpm` with no committed lockfile), so it must be
+    // discarded and replaced with our known-good, lockfile-safe deploy.yml.
     const rec = install();
     await handleAgentDeploy(
       {
         id: "hasci",
         name: "Has CI",
-        files: { "index.html": "x", ".github/workflows/ci.yml": "name: ci" },
+        files: {
+          "index.html": "x",
+          ".github/workflows/ci.yml": "uses: actions/setup-node@v4\n  with:\n    cache: pnpm",
+        },
       },
       ENV,
     );
-    // No deploy.yml injected (bundle has its own workflow)...
-    expect(rec.blobs.some((b) => b.includes("pages deploy"))).toBe(false);
-    // ...but the E2E harness is still added: 2 input + 4 harness files.
-    expect(rec.blobs).toHaveLength(7); // +kb.yml
+    // The agent's broken workflow is NOT pushed...
+    expect(rec.blobs.some((b) => b.includes("cache: pnpm"))).toBe(false);
+    // ...and our canonical R2 deploy workflow IS injected instead.
+    const wf = rec.blobs.find((b) => b.includes("Deploy to R2") && b.includes("aws s3 sync"));
+    expect(wf, "the canonical deploy workflow should be injected").toBeTruthy();
+    expect(wf).toContain("--no-frozen-lockfile");
+    // 1 surviving input (ci.yml stripped) + deploy.yml + kb.yml + 4 E2E harness files.
+    expect(rec.blobs).toHaveLength(7);
   });
 
   it("does NOT clobber QA-authored e2e specs (skips the baseline smoke)", async () => {
