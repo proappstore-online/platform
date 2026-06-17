@@ -11,6 +11,14 @@ zone_name = "proappstore.online"
 PAS_API_BASE = "https://api.proappstore.online"
 # SESSION_SIGNING_KEY set as a secret:
 #   wrangler secret put SESSION_SIGNING_KEY
+#
+# AI Gateway routing (opt-in). Uncomment + fill to route agent provider calls
+# through Cloudflare AI Gateway (caching, fallback, token/cost observability).
+# BYO keys + Anthropic prompt-caching pass through unchanged. Leave unset to
+# call providers directly. Create the gateway in Dashboard → AI → AI Gateway.
+# AI_GATEWAY_ACCOUNT_ID = "<cf-account-id>"
+# AI_GATEWAY_ID = "<gateway-id>"
+# Authenticated gateway only: wrangler secret put AI_GATEWAY_TOKEN
 
 # Project Durable Object — one per PAS Agent Teams project.
 # Holds: backlog tickets, transitions, message log, role configs, cost ledger.

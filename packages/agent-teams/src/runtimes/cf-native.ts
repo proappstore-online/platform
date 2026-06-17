@@ -39,17 +39,22 @@ export class CFNativeRuntime implements AgentRuntime {
         ticketId: ctx.ticketId,
         userToken: ctx.userToken,
         dispatch: ctx.dispatch,
+        // AI Gateway routing (falls back to the Anthropic public API when unset).
+        baseUrl: ctx.gateway?.baseUrl ?? 'https://api.anthropic.com',
+        gatewayHeaders: ctx.gateway?.headers ?? {},
       },
     };
   }
 
   async *run(handle: RuntimeHandle, messages: Message[], signal?: AbortSignal): AsyncIterable<StreamEvent> {
-    const { apiKey, model, maxTokens, systemPrompt, spineTools } = handle.state as {
+    const { apiKey, model, maxTokens, systemPrompt, spineTools, baseUrl, gatewayHeaders } = handle.state as {
       apiKey: string;
       model: string;
       maxTokens: number;
       systemPrompt: string;
       spineTools: string[];
+      baseUrl: string;
+      gatewayHeaders: Record<string, string>;
     };
 
     // Convert message history to Anthropic format
@@ -108,9 +113,10 @@ export class CFNativeRuntime implements AgentRuntime {
       // Open the request, retrying transient failures (429, 5xx incl. CF 524).
       let res: Response | null = null;
       for (let attempt = 0; attempt < 3; attempt++) {
-        res = await fetch('https://api.anthropic.com/v1/messages', {
+        res = await fetch(`${baseUrl}/v1/messages`, {
           method: 'POST',
           headers: {
+            ...gatewayHeaders,
             'x-api-key': apiKey,
             'anthropic-version': '2023-06-01',
             'Content-Type': 'application/json',

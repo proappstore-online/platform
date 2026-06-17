@@ -11,6 +11,7 @@ import type { AgentRuntime, Role, TicketStatus, ToolCall, ToolResult } from './t
 import { rowToTicket, rowToRoleConfig, insertChatMessage } from './store.ts';
 import { MAX_RUN_MINUTES as DEFAULT_MAX_RUN_MINUTES, assigneeForStatus, isTerminal } from './ticket-machine.ts';
 import { runtimeToProvider, resolveByoKey } from './byo-key.ts';
+import { resolveGateway, type GatewayProvider } from './runtimes/ai-gateway.ts';
 import { CFNativeRuntime } from './runtimes/cf-native.ts';
 import { OpenAIResponsesRuntime } from './runtimes/openai-responses.ts';
 import { buildSeedMessages } from './prompts.ts';
@@ -126,6 +127,8 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
       byoKey,
       userToken: proj.owner_session_token ?? undefined,
       dispatch: deps.makeDispatch(files),
+      // Route this provider's calls through AI Gateway when configured (no-op otherwise).
+      gateway: resolveGateway(env, provider as GatewayProvider),
     });
 
     // Consume the stream, but cap wall-clock time so a hung model call can't

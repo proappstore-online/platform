@@ -101,6 +101,9 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
         ticketId: ctx.ticketId,
         userToken: ctx.userToken,
         dispatch: ctx.dispatch,
+        // AI Gateway routing (falls back to the OpenAI public API when unset).
+        baseUrl: ctx.gateway?.baseUrl ?? 'https://api.openai.com/v1',
+        gatewayHeaders: ctx.gateway?.headers ?? {},
       },
     };
   }
@@ -113,6 +116,8 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
       instructions: string;
       spineTools: string[];
       previousResponseId: string | null;
+      baseUrl: string;
+      gatewayHeaders: Record<string, string>;
     };
 
     const tools: OAIFunctionTool[] = s.spineTools.map(nameToOAITool);
@@ -149,9 +154,10 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
         body.previous_response_id = s.previousResponseId;
       }
 
-      const res = await fetch('https://api.openai.com/v1/responses', {
+      const res = await fetch(`${s.baseUrl}/responses`, {
         method: 'POST',
         headers: {
+          ...s.gatewayHeaders,
           'Content-Type': 'application/json',
           Authorization: `Bearer ${s.apiKey}`,
         },

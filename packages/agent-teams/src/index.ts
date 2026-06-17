@@ -29,6 +29,16 @@ export type Bindings = {
    * backend Worker. Set via `wrangler secret put INTERNAL_TOKEN`.
    */
   INTERNAL_TOKEN?: string;
+  /**
+   * Cloudflare AI Gateway routing (opt-in). When both are set, agent provider
+   * calls go through the gateway for caching, fallback, and token/cost
+   * observability; BYO keys + Anthropic prompt-caching pass through unchanged.
+   * Unset → calls go direct to the provider. See runtimes/ai-gateway.ts.
+   */
+  AI_GATEWAY_ACCOUNT_ID?: string;
+  AI_GATEWAY_ID?: string;
+  /** Optional — only for an authenticated gateway. `wrangler secret put AI_GATEWAY_TOKEN`. */
+  AI_GATEWAY_TOKEN?: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();

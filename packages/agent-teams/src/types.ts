@@ -143,6 +143,10 @@ export type PrepareContext = {
   // call here (file tools → in-memory map, infra tools → provisioning) instead
   // of the legacy MCP dispatch. Keeps stateful execution in the DO.
   dispatch?: ((call: ToolCall) => Promise<ToolResult>) | undefined
+  // Provider routing for this run. When the env has AI Gateway configured this
+  // points provider calls at the gateway (BYO key + prompt-caching preserved);
+  // when absent the runtime falls back to the provider's direct API.
+  gateway?: { baseUrl: string; headers: Record<string, string> } | undefined
 }
 
 export type RuntimeHandle = {
