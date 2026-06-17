@@ -15,7 +15,15 @@ workers_dev = false
 #   GITHUB_WEBHOOK_SECRET   — HMAC secret for X-Hub-Signature-256
 #   GITHUB_APP_ID           — the PAS Builder App id
 #   GITHUB_APP_PRIVATE_KEY  — the App's PKCS8 PEM private key
+#   INTERNAL_TOKEN          — guards GET /builds (shared platform internal token)
 #   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY — passed to the build
+
+# Shared pas D1 — the `builds` table (migration 0032). Migrations are applied
+# from packages/backend (which owns the migrations dir) in the deploy workflow.
+[[d1_databases]]
+binding = "DB"
+database_name = "pas"
+database_id = "585bbda3-0016-42ad-a53d-c089f1864fcb"
 
 # Build jobs: webhook handler produces; the queue() consumer drains one at a
 # time and dispatches to the container.
