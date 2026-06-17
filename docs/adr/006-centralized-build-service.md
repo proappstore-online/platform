@@ -61,9 +61,19 @@ Reasoning, evidence-based (see Research):
 | Multi-org | Workers Builds connects any GitHub/GitLab repo; no org-level secret sharing. |
 
 This is the documented Cloudflare platform pattern (Workers for Platforms +
-Workers Builds + Static Assets). It is a **significant migration from Path B**
-(workers-per-app instead of R2-per-app) and carries Workers-for-Platforms
-pricing, so it is only worth it once multi-tenant scale or cost actually bite.
+Workers Builds + Static Assets).
+
+**Cost is NOT the blocker.** Workers for Platforms is **~$25/mo flat, self-serve**
+(no Enterprise contract): 1,000 user Workers included (we have ~25 apps), 20M
+requests + 60M CPU-ms/mo included (pre-launch usage is far below this). So at PAS
+scale the cost is just the $25/mo base fee on top of the existing $5/mo Workers
+Paid. The real cost is the **migration**: moving from Path B (R2 + one host
+Worker serving all apps) to workers-per-app under a dispatch namespace — every
+app becomes its own Worker with static assets, the host Worker's R2-lookup
+routing becomes a dispatch Worker, and build/deploy moves to Workers Builds.
+That re-architecture (and the risk of migrating a working system) is why it is
+deferred until multi-tenant scale or private-repo Actions cost actually justifies
+the lift — not the price.
 
 ## Alternatives Considered
 
@@ -72,7 +82,7 @@ pricing, so it is only worth it once multi-tenant scale or cost actually bite.
 | **Per-repo GitHub Actions → R2 + host Worker (current)** | **Chosen (status quo).** Works; drift solved via guards; cost only on private repos at scale. |
 | **Reusable workflow (thin caller stub)** | Good drift-killer, ~free, batch-native runners. Still "CI in the repo," doesn't fix multi-org/cost. A valid low-effort improvement if we want to also retire the per-repo workflow file. |
 | **Hand-rolled CF Containers build service** (prototyped, Phases 1–3) | **Rejected.** Technically valid — CF Containers *do* support one-shot batch jobs (`container.start({entrypoint, envVars})`, `getState().exitCode`, `onStop()`); the queue→consumer→container pattern is sound. But it **reinvents Workers Builds**, and solves non-urgent problems. |
-| **Workers Builds + Static Assets + Workers for Platforms** | **The target if centralizing.** First-party, build-on-push, unlimited tenant Workers. Bigger migration from Path B + WfP pricing → defer until needed. |
+| **Workers Builds + Static Assets + Workers for Platforms** | **The target if centralizing.** First-party, build-on-push, unlimited tenant Workers. Cost is modest (~$25/mo flat at this scale); the blocker is the Path B → workers-per-app migration → defer until the lift is justified. |
 | **CF Pages git integration** | Rejected — reintroduces the 100-project cap Path B escaped. |
 | **Off-CF batch (Cloud Run Jobs / CodeBuild)** | Rejected — violates ADR-001 single-vendor (Cloudflare-only). |
 
