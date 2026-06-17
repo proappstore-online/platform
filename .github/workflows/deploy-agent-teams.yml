@@ -61,11 +61,20 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           SESSION_SIGNING_KEY: ${{ secrets.SESSION_SIGNING_KEY }}
           INTERNAL_TOKEN: ${{ secrets.INTERNAL_TOKEN }}
+          # cf-aig-authorization for the authenticated AI Gateway (Doppler pas).
+          AI_GATEWAY_TOKEN: ${{ secrets.AI_GATEWAY_TOKEN }}
         run: |
           test -n "$SESSION_SIGNING_KEY"
           test -n "$INTERNAL_TOKEN"
           printf '%s' "$SESSION_SIGNING_KEY" | pnpm exec wrangler secret put SESSION_SIGNING_KEY
           printf '%s' "$INTERNAL_TOKEN" | pnpm exec wrangler secret put INTERNAL_TOKEN
+          # Guarded: only set when the Doppler→GitHub sync has propagated, so a
+          # not-yet-synced secret can't overwrite the live token with an empty value.
+          if [ -n "$AI_GATEWAY_TOKEN" ]; then
+            printf '%s' "$AI_GATEWAY_TOKEN" | pnpm exec wrangler secret put AI_GATEWAY_TOKEN
+          else
+            echo "AI_GATEWAY_TOKEN not in GitHub secrets yet — leaving existing Worker secret intact"
+          fi
       - name: Smoke test
         run: |
           for i in 1 2 3 4 5; do
