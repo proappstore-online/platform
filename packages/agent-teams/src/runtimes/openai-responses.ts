@@ -169,10 +169,13 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
         // Extract the upstream error detail (OpenAI returns { error: { message } }).
         let detail = '';
         try { const b = await res.json() as { error?: { message?: string } }; detail = b?.error?.message ?? ''; } catch { /* body not JSON */ }
-        const safeError = res.status === 401 ? 'API key rejected — check your OpenAI API key in Profile → API Keys'
-          : res.status === 429 ? 'Rate limited by OpenAI — retry in a minute'
+        const viaGateway = s.baseUrl.includes('gateway.ai.cloudflare.com');
+        const safeError = res.status === 401 || res.status === 403 ? (viaGateway
+            ? `Auth rejected (${res.status}) via AI Gateway — check your OpenAI key in Profile → API Keys, or the gateway token if the gateway is authenticated${detail ? `: ${detail}` : ''}`
+            : 'API key rejected — check your OpenAI API key in Profile → API Keys')
+          : res.status === 429 ? `Rate limited (429)${viaGateway ? ' by AI Gateway/OpenAI' : ' by OpenAI'} — retry in a minute`
           : res.status === 400 ? `OpenAI error: ${detail || "bad request (400)"}`
-          : `OpenAI error ${res.status}${detail ? `: ${detail}` : ''}`;
+          : `${viaGateway ? 'AI Gateway/OpenAI' : 'OpenAI'} error ${res.status}${detail ? `: ${detail}` : ''}`;
         yield { type: 'error', message: safeError, retryable: res.status >= 500 };
         return;
       }

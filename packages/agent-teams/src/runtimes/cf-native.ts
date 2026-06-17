@@ -57,6 +57,11 @@ export class CFNativeRuntime implements AgentRuntime {
       gatewayHeaders: Record<string, string>;
     };
 
+    // True when this run is routed through Cloudflare AI Gateway (vs. the direct
+    // Anthropic API). Used to disambiguate auth errors below — a 401 through the
+    // gateway can be a bad BYO key OR a missing/invalid gateway token.
+    const viaGateway = baseUrl.includes('gateway.ai.cloudflare.com');
+
     // Convert message history to Anthropic format
     const anthropicMessages = messagesToAnthropic(messages);
 
@@ -131,11 +136,13 @@ export class CFNativeRuntime implements AgentRuntime {
           // Never log the raw body (may echo request with key); just the message field.
           let detail = "";
           try { const b = await res.json() as { error?: { message?: string } }; detail = b?.error?.message ?? ""; } catch { /* body not JSON */ }
-          const safeError = res.status === 401 ? "API key rejected - check your Anthropic API key in Profile > API Keys"
-            : res.status === 429 ? "Rate limited by Anthropic - retry in a minute"
+          const safeError = res.status === 401 || res.status === 403 ? (viaGateway
+              ? `Auth rejected (${res.status}) via AI Gateway - check your Anthropic key in Profile > API Keys, or the gateway token if the gateway is authenticated${detail ? ": " + detail : ""}`
+              : "API key rejected - check your Anthropic API key in Profile > API Keys")
+            : res.status === 429 ? `Rate limited (429)${viaGateway ? " by AI Gateway/Anthropic" : " by Anthropic"} - retry in a minute`
             : res.status === 400 ? `Anthropic error: ${detail || "bad request (400)"}`
             : res.status === 524 || res.status === 504 ? `Anthropic timed out (${res.status}) - try again or lower max tokens in Settings > Agents`
-            : `Anthropic error ${res.status}${detail ? ": " + detail : ""}`;
+            : `${viaGateway ? "AI Gateway/Anthropic" : "Anthropic"} error ${res.status}${detail ? ": " + detail : ""}`;
           yield { type: 'error', message: safeError, retryable: transient };
           return;
         }

@@ -54,9 +54,11 @@ type Resp = { content: { type: string; text?: string; id?: string; name?: string
 
 // Mock global fetch to stream a queue of Anthropic responses; returns a call counter.
 function mockAnthropic(responses: Resp[]) {
-  const calls = { count: 0, bodies: [] as unknown[] };
-  globalThis.fetch = (async (_url: string, init: { body: string }) => {
+  const calls = { count: 0, bodies: [] as unknown[], urls: [] as string[], headers: [] as Record<string, string>[] };
+  globalThis.fetch = (async (url: string, init: { body: string; headers: Record<string, string> }) => {
     calls.bodies.push(JSON.parse(init.body));
+    calls.urls.push(url);
+    calls.headers.push(init.headers);
     const r = responses[Math.min(calls.count, responses.length - 1)]!;
     calls.count += 1;
     return { ok: true, status: 200, body: sseFromResponse(r) };
@@ -64,7 +66,7 @@ function mockAnthropic(responses: Resp[]) {
   return calls;
 }
 
-async function prepareHandle(opts?: { dispatch?: (c: ToolCall) => Promise<ToolResult>; maxTokens?: number; persona?: string }) {
+async function prepareHandle(opts?: { dispatch?: (c: ToolCall) => Promise<ToolResult>; maxTokens?: number; persona?: string; gateway?: { baseUrl: string; headers: Record<string, string> } }) {
   const ctx: PrepareContext = {
     projectId: 'proj',
     ticketId: 'tick',
@@ -79,6 +81,7 @@ async function prepareHandle(opts?: { dispatch?: (c: ToolCall) => Promise<ToolRe
       vendorTools: [],
     },
     dispatch: opts?.dispatch,
+    ...(opts?.gateway ? { gateway: opts.gateway } : {}),
   };
   return new CFNativeRuntime().prepare(ctx);
 }
@@ -188,5 +191,29 @@ describe('CFNativeRuntime run loop', () => {
     const err = events.find((e) => e.type === 'error') as { type: 'error'; message: string } | undefined;
     expect(err).toBeDefined();
     expect(err!.message).toContain('API key rejected');
+  });
+
+  // AI Gateway routing — proves prepare→run actually honors the resolved base
+  // URL + gateway auth header, not just the helper in isolation.
+  it('calls the Anthropic public API directly when no gateway is configured', async () => {
+    const calls = mockAnthropic([textResp('done', 'end_turn')]);
+    await collect(await prepareHandle());
+    expect(calls.urls[0]).toBe('https://api.anthropic.com/v1/messages');
+    expect(calls.headers[0]!['cf-aig-authorization']).toBeUndefined();
+    expect(calls.headers[0]!['x-api-key']).toBe('sk-test');
+  });
+
+  it('routes through AI Gateway (URL + cf-aig auth) when configured', async () => {
+    const calls = mockAnthropic([textResp('done', 'end_turn')]);
+    await collect(await prepareHandle({
+      gateway: {
+        baseUrl: 'https://gateway.ai.cloudflare.com/v1/acct/gw/anthropic',
+        headers: { 'cf-aig-authorization': 'Bearer tok' },
+      },
+    }));
+    expect(calls.urls[0]).toBe('https://gateway.ai.cloudflare.com/v1/acct/gw/anthropic/v1/messages');
+    expect(calls.headers[0]!['cf-aig-authorization']).toBe('Bearer tok');
+    // BYO key still flows through unchanged.
+    expect(calls.headers[0]!['x-api-key']).toBe('sk-test');
   });
 });
