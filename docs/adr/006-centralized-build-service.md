@@ -1,146 +1,140 @@
-# ADR-006: Centralized build service (Cloudflare Containers), no per-repo CI
+# ADR-006: Build architecture — stay on per-repo GitHub Actions; if centralizing, use Cloudflare's first-party stack (NOT a hand-rolled container pipeline)
 
 ## Status
 
-Proposed
+**Deferred** (2026-06-17). A centralized build service was prototyped (Phases
+1–3, see below) and then **rejected as the path forward** after researching how
+platforms actually build on Cloudflare. The immediate problem it aimed to solve
+(per-repo workflow drift) is already solved by other means. This ADR records the
+evaluation, the research, and how to resume if/when centralized build is needed.
 
 ## Date
 
-2026-06-16
+2026-06-17
 
 ## Context
 
-Today every PAS app repo carries a full GitHub Actions deploy workflow
+Every PAS app repo carries a full GitHub Actions deploy workflow
 (`deployWorkflowYaml()` in `packages/admin/src/publish.ts`) that runs
-`pnpm install` + `vite build` and uploads `dist/` to the `pas-apps` R2 bucket.
-The workflow reaches each repo three ways:
+`pnpm install` + `vite build` and uploads `dist/` to the `pas-apps` R2 bucket,
+served by `proappstore-host` (Path B — R2 + one host Worker, chosen to escape the
+100-project CF Pages cap).
 
-- **vibecode** — `handleAgentDeploy` strips any agent-authored workflow and
-  injects the canonical one.
-- **CLI** (`pas create`/`pas publish`) — the repo is cloned from `template-app`,
-  which carries the canonical workflow; the user `git push`es it.
-- **MCP** (`create_app`) — `createRepoFromTemplate` clones `template-app`.
+A full CI workflow in every repo caused a cluster of problems:
+- **Drift** — agents hand-edited workflows (`cache: pnpm` with no committed
+  lockfile) that hard-failed CI; ~21 repos carried the landmine.
+- **Multi-org** — the deploy assumes the `proappstore-online` org + org-level R2
+  secrets; a creator's own-org repo isn't cleanly supported.
+- **Cost** — private repos (which Pro apps want) burn metered GitHub Actions
+  minutes.
 
-A full CI workflow living in every repo is the **root cause** of a cluster of
-problems we have repeatedly fixed by hand this cycle:
-
-- **Drift.** Agents hand-edited workflows (`cache: pnpm` with no committed
-  lockfile) that hard-failed CI; ~21 repos carried the landmine. We patched it
-  with strip-and-inject, a golden file, a sync script, and a CI drift check —
-  machinery whose only job is to keep N copies of a file identical.
-- **Multi-org.** The deploy depends on org-level R2 secrets and a workflow that
-  assumes `proappstore-online`. A creator who wants their proprietary code in
-  their own org/repo is not cleanly supported.
-- **Cost.** Private repos (which Pro apps want) burn metered GitHub Actions
-  minutes. Public repos leak proprietary source.
-
-This is the "bring your own CI" model. Every serious hosting platform
-(Vercel, Netlify, Cloudflare Pages, Render, Railway) instead uses
-**centralized build**: the app repo carries no CI, a connected app builds on the
-platform's own infra and deploys to the platform's hosting. That is the best
-practice for a hosting platform, and it dissolves drift, multi-org, and cost in
-one architecture.
-
-ADR-001 already constrains us to Cloudflare-only and explicitly notes that
-"Workers' wall-time and request limits cap some compute shapes." A Vite build
-(`pnpm install` + bundler, ~60–90s, real filesystem) is exactly such a shape —
-it cannot run inside a Worker. The Cloudflare-native primitive that *can* run it
-is **Cloudflare Containers**.
+The "best practice for a hosting platform" is **centralized build** (the platform
+builds; the app repo carries no CI) — Vercel/Netlify/Pages all do this. We
+prototyped that as a hand-rolled service on Cloudflare Containers.
 
 ## Decision
 
-Build a **centralized build service on Cloudflare Containers**. App repos carry
-**no CI workflow**. The platform owns build + deploy end to end:
+**Keep the current per-repo GitHub Actions solution.** Do **not** ship the
+hand-rolled container build service. If/when centralized build is genuinely
+needed, the target is **Cloudflare's first-party stack**, not a bespoke pipeline.
 
-1. **GitHub App ("PAS Builder")** installed on `proappstore-online` (and, later,
-   any creator org). Subscribes to `push` on the default branch. Replaces the
-   per-repo deploy workflow. Installation tokens give cross-org repo access
-   without org-level secrets — this is also the multi-org enabler.
-2. **Build-orchestrator Worker** (`packages/builder`): receives the GitHub App
-   webhook, verifies the HMAC signature, resolves repo → app id, and enqueues a
-   build job (Cloudflare Queues) carrying `{ repo, sha, appId, installationId }`.
-3. **Build Container** (CF Containers, Node 22 + pnpm image): per job, clones the
-   repo at the pushed SHA using an installation token, runs
-   `pnpm install --no-frozen-lockfile` + `pnpm build` (layout-adaptive:
-   `dist/` or `web/dist/`), and uploads the output to `pas-apps` under
-   `apps/<appId>/`. Reports status + logs back to the orchestrator.
-4. **Build records** in D1 (`builds` table) + surfaced in the console (status,
-   logs, duration) — replacing GitHub Actions run visibility.
+Reasoning, evidence-based (see Research):
 
-Per ADR-001, Containers is a Cloudflare product, not a new third-party
-dependency, so this **extends** ADR-001's stack (it does not supersede it). It
-directly answers the compute-limit caveat ADR-001 recorded.
+1. **The urgent problem (drift) is already solved** without centralizing — single
+   source of truth (`deployWorkflowYaml`) + a committed golden file
+   (`packages/admin/src/__fixtures__/canonical-deploy.yml`) + the
+   `scripts/sync-template-workflow.mjs` sync script + a CI drift-check job. Plus
+   `provisionApp` strip-and-injects the canonical workflow on agent deploys.
+2. **Multi-org and cost are not urgent** pre-launch (~25 apps, all in one org).
+3. **The hand-rolled container service reinvents Workers Builds.** Cloudflare
+   ships a first-party build-on-push CI/CD (Workers Builds) plus static-asset
+   serving (Workers Static Assets) plus unlimited multi-tenant Workers (Workers
+   for Platforms). Building our own queue→container pipeline duplicates that.
 
-Once live, per-repo workflows are removed and the drift machinery
-(golden file, sync script, CI drift check, strip-and-inject) is decommissioned —
-there is nothing left to drift.
+### If we DO centralize later — the target architecture (CF-native)
+
+| Concern | CF-native answer |
+|---|---|
+| Build on push | **Workers Builds** — connect each app repo; CF builds + deploys on commit. GA. 6,000 build-min/mo (paid) + $0.005/min, 6 concurrent, 20-min timeout, 4 vCPU/8 GB. |
+| Serve the built app | **Workers Static Assets** — serve from the Worker directly (no R2-upload step). 100k assets/version, 25 MiB/file (paid/WfP). |
+| Many apps / multi-tenant | **Workers for Platforms** — dispatch namespace holds **unlimited** tenant Workers (no per-account script cap); a dispatch Worker routes `<app>.proappstore.online` → the tenant Worker (replaces the host Worker's R2 lookup). |
+| Multi-org | Workers Builds connects any GitHub/GitLab repo; no org-level secret sharing. |
+
+This is the documented Cloudflare platform pattern (Workers for Platforms +
+Workers Builds + Static Assets). It is a **significant migration from Path B**
+(workers-per-app instead of R2-per-app) and carries Workers-for-Platforms
+pricing, so it is only worth it once multi-tenant scale or cost actually bite.
 
 ## Alternatives Considered
 
-| Alternative | Why Rejected |
+| Alternative | Verdict |
 |---|---|
-| **Keep per-repo workflow + drift guards** (current) | Works, but it is the "bring your own CI" model; it is the root cause of drift/multi-org/cost. The guards make it *safe*, not *right*. |
-| **Reusable workflow (thin caller stub)** | A real improvement over copy-paste, but still puts CI in the user's repo and still runs on the user's (metered, for private) Actions. A stepping stone, not the destination. Does not fix multi-org or cost. |
-| **CF Pages git integration** | Reintroduces the 100-project Pages cap that Path B was built to escape; contradicts the R2 + host-worker hosting model. |
-| **CF Workers Builds** | Designed to deploy a Worker per project; bending it into "build static → shared R2 bucket" reintroduces per-project setup and an awkward fit. |
-| **Self-hosted GitHub Actions runners** | Zeroes GitHub minutes while keeping the exact pipeline, but you operate runner infra AND still have a per-repo workflow (drift remains). Untrusted creator code needs ephemeral isolation. A cost lever, not an architecture fix. |
-| **Third-party CI (CircleCI, etc.)** | New third-party dependency → would need to justify against ADR-001's single-vendor posture; adds a billing + auth surface. |
+| **Per-repo GitHub Actions → R2 + host Worker (current)** | **Chosen (status quo).** Works; drift solved via guards; cost only on private repos at scale. |
+| **Reusable workflow (thin caller stub)** | Good drift-killer, ~free, batch-native runners. Still "CI in the repo," doesn't fix multi-org/cost. A valid low-effort improvement if we want to also retire the per-repo workflow file. |
+| **Hand-rolled CF Containers build service** (prototyped, Phases 1–3) | **Rejected.** Technically valid — CF Containers *do* support one-shot batch jobs (`container.start({entrypoint, envVars})`, `getState().exitCode`, `onStop()`); the queue→consumer→container pattern is sound. But it **reinvents Workers Builds**, and solves non-urgent problems. |
+| **Workers Builds + Static Assets + Workers for Platforms** | **The target if centralizing.** First-party, build-on-push, unlimited tenant Workers. Bigger migration from Path B + WfP pricing → defer until needed. |
+| **CF Pages git integration** | Rejected — reintroduces the 100-project cap Path B escaped. |
+| **Off-CF batch (Cloud Run Jobs / CodeBuild)** | Rejected — violates ADR-001 single-vendor (Cloudflare-only). |
 
 ## Consequences
 
 **Positive:**
-- **No drift, ever.** Repos carry no workflow; there is nothing to copy, rot, or
-  keep in sync. The golden file / sync script / CI drift check / strip-and-inject
-  all get deleted.
-- **Multi-org for free.** A GitHub App installs on any org; installation tokens
-  replace org-level R2 secrets. Creators can keep proprietary code in their own
-  private repo/org and the platform just builds + hosts it.
-- **Lower per-build cost than private Actions.** Container compute for a ~90s
-  build is sub-cent and runs on infra we control; it removes the metered
-  GitHub-Actions-minutes line for private repos. (Verify against current CF
-  Containers pricing before committing capacity.)
-- **Full build-environment control** — pin Node/pnpm, cache the pnpm store,
-  enforce build limits centrally, evolve the build once for every app.
+- No new infrastructure to build or operate; the working solution stays.
+- The real pain (drift) stays fixed by the lightweight guards.
+- The target architecture for "later" is now documented and evidence-based, so
+  the decision can be made deliberately rather than re-litigated.
 
 **Negative:**
-- **Real engineering + ops.** A webhook receiver, queue, container image, build
-  orchestration, R2 upload, log capture, status surfacing, retries, and
-  failure handling — a service we build and operate, not a config change.
-  Estimate: multi-week, multi-phase.
-- **New infra surface.** Containers + Queues + a GitHub App are new moving parts
-  with their own failure modes and security considerations (building untrusted
-  creator code → one-shot, network-egress-limited containers).
-- **Build observability must be rebuilt.** Today the GitHub Actions UI is the
-  build log. We must provide equivalent logs/status in the console.
+- Per-repo workflow + private-repo Actions cost remain (acceptable at current
+  scale).
+- The Phases 1–3 prototype is removed (see Teardown) — sunk effort, but the
+  knowledge is captured here.
 
 **Neutral:**
-- GitHub Actions is retained as a **fallback during migration**; apps cut over
-  incrementally, and the per-repo workflow is removed only after the build
-  service is proven on that app.
-- The behavioral e2e gate (Playwright) currently in the deploy workflow must
-  find a new home (a post-build step in the orchestrator, or a separate job).
+- ADR-001 (Cloudflare-only) is unaffected; all candidate paths stay on CF.
 
-## Prerequisites (require account-owner action — cannot be done from code)
+## The prototype that was built (Phases 1–3) and how to resurrect it
 
-1. **Create the "PAS Builder" GitHub App** (org settings → Developer settings):
-   `push` webhook + `contents:read`, `metadata:read` repo permissions; install on
-   `proappstore-online`. Store the App ID + private key + webhook secret in
-   Doppler (`pas/prd`).
-2. **Enable Cloudflare Containers** on the account and confirm the plan/limits.
-3. **R2 access for the container** — either an S3-API token scoped to `pas-apps`
-   (passed to the container) or upload via a service binding back to the
-   orchestrator Worker's R2 binding.
+Built 2026-06-16/17, then removed. Recoverable from git history:
 
-## Phased build plan
+- **Phase 1** — build container (`packages/builder`): `clone → pnpm install →
+  vite build → aws s3 sync` to `pas-apps/apps/<id>/`. Commit `ea7fe1a`.
+- **Phase 2** — orchestrator Worker (`packages/build-orchestrator`): GitHub App
+  webhook → HMAC verify → repo-scoped installation token → Cloudflare Queue.
+  Commits `56ac482`, `d726ebe`. Deployed live at `build.proappstore.online`,
+  verified end-to-end (signed webhook → 202 → queued).
+- **Phase 3** — build records in D1 (`migrations/0032_builds.sql`) + a `/builds`
+  read endpoint. Commit `ad9794a`. Verified end-to-end (record lifecycle +
+  real GitHub App token mint).
+- **Host wiring** — `build` reserved subdomain + `BUILD` service binding +
+  dispatch in `packages/host`. Commit `2899ad3`.
+- **Infra provisioned** — `PAS Builder` GitHub App (id 4072875, install 140775460),
+  `pas-builds` Queue, `builds` D1 table, `GH_BUILDER_*` Doppler secrets
+  (`pas/prd`).
 
-- **Phase 1 (this change): the build container, locally proven.** Dockerfile +
-  build script (`clone → install → build → upload to R2`), layout-adaptive,
-  with a local test of the build/upload logic. The riskiest unknown, validated
-  first, before any GitHub App or webhook exists.
-- **Phase 2:** orchestrator Worker — webhook receiver (signature verify) →
-  Queue → invoke the container. Wire the GitHub App.
-- **Phase 3:** build records (D1) + console build status/logs.
-- **Phase 4:** migrate apps off per-repo CI (stop injecting/seeding; remove
-  workflows) one cohort at a time, GitHub Actions as fallback.
-- **Phase 5:** decommission the drift machinery (golden, sync script, CI check,
-  strip-and-inject) — no longer needed once repos carry no workflow.
+To resurrect: `git revert`/cherry-pick those commits, re-create the queue, re-add
+the host `BUILD` binding, re-point the GitHub App webhook. **But prefer the
+CF-native target above over reviving this.**
+
+## Teardown (executed after this ADR)
+
+Remove the prototype since it reinvents Workers Builds:
+1. Revert host changes (`2899ad3`) + redeploy host (drops the `BUILD` binding).
+2. Delete `packages/builder`, `packages/build-orchestrator`,
+   `.github/workflows/deploy-build-orchestrator.yml`; add `0033_drop_builds.sql`.
+3. Delete the `proappstore-build-orchestrator` Worker + `pas-builds` Queue.
+4. Remove `GH_BUILDER_*` from Doppler.
+5. Delete (or disable the webhook on) the `PAS Builder` GitHub App.
+
+**Keep** (these were real fixes to the GH-Actions solution, independent of the
+experiment): the single-source-of-truth refactor, golden file, sync script + CI
+drift-check, `template-seed` workflow removal, and the `tt`/`dog-walking-app`/
+`template-app` canonicalization.
+
+## Sources (research, 2026-06-17)
+
+- Workers Builds (CI/CD): https://blog.cloudflare.com/workers-builds-integrated-ci-cd-built-on-the-workers-platform/ ; limits/pricing: https://developers.cloudflare.com/workers/ci-cd/builds/limits-and-pricing/
+- Containers batch jobs (`start()`/`getState()`/`onStop()`): https://developers.cloudflare.com/containers/container-class/
+- Workers for Platforms (unlimited tenant Workers, dispatch namespaces): https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/how-workers-for-platforms-works/
+- Static asset limits (100k/version): https://developers.cloudflare.com/changelog/2025-09-02-increased-static-asset-limits/
+- Reference architecture (programmable platforms): https://developers.cloudflare.com/reference-architecture/diagrams/serverless/programmable-platforms/
