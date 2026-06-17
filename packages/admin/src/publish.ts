@@ -570,44 +570,47 @@ async function provisionApp(
   //    gate times out with "CI never started".
   let commitSha: string | undefined;
   if (opts.files) {
-    const files: Record<string, string> = { ...opts.files };
-    // The PLATFORM owns CI. Agent Teams authors only app source — never a
-    // workflow (see deployWorkflowYaml's contract). We used to honor an
-    // agent-authored workflow and skip ours, but that let a bundle ship a
-    // BROKEN workflow and silently suppress the known-good deploy: an agent
-    // hand-wrote `actions/setup-node` with `cache: pnpm` but no committed
-    // `pnpm-lock.yaml`, so setup-node hard-failed with "Dependencies lock file
-    // is not found" before install ever ran. The canonical deployWorkflowYaml
-    // deliberately omits `cache: pnpm` and installs with `--no-frozen-lockfile`,
-    // so it needs no lockfile. To kill that drift class for every PAS app:
-    // strip any agent-authored workflow and always inject our canonical one.
-    // (kb.yml below is ours and is re-added after; it's excluded here.)
-    for (const p of Object.keys(files)) {
-      if (/^\.github\/workflows\/.+\.ya?ml$/i.test(p) && p !== KB_WORKFLOW_PATH) {
-        delete files[p];
-      }
-    }
-    files[DEPLOY_WORKFLOW_PATH] = deployWorkflowYaml(env);
-    // Publish the Knowledge Base as a Zensical site to R2 (kb.proappstore.online/<app>/).
-    // Separate workflow so it only runs when the KB markdown changes.
-    if (!(KB_WORKFLOW_PATH in files)) files[KB_WORKFLOW_PATH] = kbWorkflowYaml();
-    // Inject the Playwright E2E harness (config + fixtures + baseline smoke) so
-    // the CI e2e job has something to run. Each file is added only when absent
-    // (never clobber authored harness edits); the baseline smoke is skipped once
-    // the bundle carries QA-authored specs under e2e/specs/.
-    const hasAuthoredSpecs = Object.keys(files).some((p) => p.startsWith(E2E_SPEC_PREFIX));
-    for (const [path, content] of Object.entries(e2eHarnessFiles())) {
-      if (path in files) continue;
-      if (hasAuthoredSpecs && path.startsWith(E2E_SPEC_PREFIX)) continue;
-      files[path] = content;
-    }
-    const pushStep = await pushFilesToGitHub(env, req.id, files);
+    const pushStep = await pushFilesToGitHub(env, req.id, buildAgentBundle(opts.files, env));
     steps.push(pushStep);
     if (pushStep.status === "fail") return stop();
     commitSha = pushStep.commitSha;
   }
 
   return { steps, success: true, repoUrl, commitSha };
+}
+
+/**
+ * Prepare the agent-authored bundle for push: strip any agent-authored CI
+ * workflow and inject the canonical deploy.yml + kb.yml + Playwright E2E harness.
+ *
+ * The PLATFORM owns CI. Agent Teams authors only app source — never a workflow.
+ * Honoring an agent-authored workflow once let a bundle ship a BROKEN one and
+ * silently suppress the known-good deploy (an agent hand-wrote `cache: pnpm`
+ * with no committed lockfile, so setup-node hard-failed before install). The
+ * canonical deployWorkflowYaml omits `cache: pnpm` and installs with
+ * `--no-frozen-lockfile`, needing no lockfile. So: strip any authored workflow
+ * (except our kb.yml) and always inject ours. Pure — shared by the inline path
+ * and the durable workflow.
+ */
+export function buildAgentBundle(authored: Record<string, string>, env: Env): Record<string, string> {
+  const files: Record<string, string> = { ...authored };
+  for (const p of Object.keys(files)) {
+    if (/^\.github\/workflows\/.+\.ya?ml$/i.test(p) && p !== KB_WORKFLOW_PATH) {
+      delete files[p];
+    }
+  }
+  files[DEPLOY_WORKFLOW_PATH] = deployWorkflowYaml(env);
+  // Publish the Knowledge Base as a Zensical site to R2 (kb.proappstore.online/<app>/).
+  if (!(KB_WORKFLOW_PATH in files)) files[KB_WORKFLOW_PATH] = kbWorkflowYaml();
+  // Inject the Playwright E2E harness; never clobber authored files, and skip the
+  // baseline smoke once the bundle carries QA-authored specs.
+  const hasAuthoredSpecs = Object.keys(files).some((p) => p.startsWith(E2E_SPEC_PREFIX));
+  for (const [path, content] of Object.entries(e2eHarnessFiles())) {
+    if (path in files) continue;
+    if (hasAuthoredSpecs && path.startsWith(E2E_SPEC_PREFIX)) continue;
+    files[path] = content;
+  }
+  return files;
 }
 
 /**
@@ -744,6 +747,10 @@ export interface ProvisionParams {
   req: PublishRequest;
   /** Publish path adds the storefront registry entry; agent path omits it. */
   addRegistry?: boolean;
+  /** Agent path: authored bundle to push (with canonical CI injected). When set,
+   *  a push step runs and the registry step is skipped (apps iterate, then
+   *  publish explicitly). Mirrors provisionApp's `opts.files`. */
+  files?: Record<string, string>;
 }
 
 /** Thrown for a deterministic input error — the workflow shell maps this to a
@@ -754,23 +761,25 @@ export class ProvisionValidationError extends Error {}
  *  pass-through. Every step yields a {@link Step}. */
 export type StepRunner = (name: string, cb: () => Promise<Step>) => Promise<Step>;
 
-/** Await a fatal step's result; throw (→ retry) if it failed. */
-async function fatalStep(p: Promise<Step>): Promise<Step> {
+/** Await a fatal step's result; throw (→ retry) if it failed. Generic so a
+ *  step's extra fields (e.g. pushFilesToGitHub's commitSha) survive. */
+async function fatalStep<T extends Step>(p: Promise<T>): Promise<T> {
   const s = await p;
   if (s.status === "fail") throw new Error(`${s.name}: ${s.detail}`);
   return s;
 }
 
 /**
- * The PUBLISH provisioning sequence, factored out so both the durable Workflow
- * and the Node test runner can drive it. Mirrors provisionApp()'s publish path.
+ * The provisioning sequence, factored out so both the durable Workflow and the
+ * Node test runner can drive it. Mirrors provisionApp(): publish path adds the
+ * registry; agent path (params.files) pushes the bundle and skips the registry.
  */
 export async function runProvisionSteps(
   params: ProvisionParams,
   env: Env,
   doStep: StepRunner,
-): Promise<{ steps: Step[]; repoUrl: string }> {
-  const { req, addRegistry } = params;
+): Promise<{ steps: Step[]; repoUrl: string; commitSha?: string }> {
+  const { req, addRegistry, files } = params;
   const steps: Step[] = [];
 
   // Validation — deterministic; never worth retrying.
@@ -812,5 +821,17 @@ export async function runProvisionSteps(
   // 4. CF Web Analytics (non-fatal).
   steps.push(await doStep("analytics", () => ensureAnalytics(cfFor(env), req.id)));
 
-  return { steps, repoUrl: `https://github.com/${env.PUBLISHERS_ORG}/${req.id}` };
+  // 5. Agent path: push the bundle as one commit (fatal). Canonical CI is
+  //    injected by buildAgentBundle so the push actually triggers a deploy.
+  let commitSha: string | undefined;
+  if (files) {
+    const push = await doStep("push-files", () =>
+      fatalStep(pushFilesToGitHub(env, req.id, buildAgentBundle(files, env))),
+    );
+    steps.push(push);
+    // commitSha rides on the push Step object at runtime (pushFilesToGitHub).
+    commitSha = (push as Step & { commitSha?: string }).commitSha;
+  }
+
+  return { steps, repoUrl: `https://github.com/${env.PUBLISHERS_ORG}/${req.id}`, commitSha };
 }

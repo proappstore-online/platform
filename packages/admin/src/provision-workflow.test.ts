@@ -57,6 +57,13 @@ function install(opts: { failRepoCreate?: boolean } = {}) {
       if (method === "PUT") return ok({ commit: { sha: "rcommit" } });
       return ok({ sha: "rsha", content: Buffer.from('{"apps":[]}').toString("base64") });
     }
+    // pushFiles: ref → parent commit → blobs → tree → commit → ref update
+    if (url.endsWith("/git/ref/heads/main")) return ok({ object: { sha: "parent" } });
+    if (url.includes("/git/commits/parent")) return ok({ tree: { sha: "basetree" } });
+    if (url.endsWith("/git/blobs")) return ok({ sha: "blob1" });
+    if (url.endsWith("/git/trees")) return ok({ sha: "tree1" });
+    if (url.endsWith("/git/commits")) return ok({ sha: "commit-abc" });
+    if (url.endsWith("/git/refs/heads/main")) return ok({ ref: "refs/heads/main" });
     if (method === "GET" && /\/repos\/[^/]+\/[^/]+$/.test(url)) return ok({}, 404); // repoExists → no
     return ok({});
   }) as typeof fetch;
@@ -104,6 +111,18 @@ describe("runProvisionSteps (ProvisionWorkflow sequence)", () => {
     const { creatorGithub: _omit, ...noCreator } = REQ;
     await runProvisionSteps({ req: noCreator, addRegistry: true }, ENV, run);
     expect(ran).toEqual(["github-repo", "r2-route", "registry", "analytics"]);
+  });
+
+  it("runs the agent path (push, no registry) and returns a commit sha", async () => {
+    install();
+    const { ran, run } = recordingRunner();
+    const result = await runProvisionSteps(
+      { req: REQ, addRegistry: false, files: { "index.html": "<html></html>" } },
+      ENV,
+      run,
+    );
+    expect(ran).toEqual(["github-repo", "collaborator", "r2-route", "analytics", "push-files"]);
+    expect(result.commitSha).toBe("commit-abc");
   });
 
   it("throws (non-retryable) on a bad id before any step runs", async () => {

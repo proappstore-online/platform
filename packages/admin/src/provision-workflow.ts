@@ -21,7 +21,7 @@ export class ProvisionWorkflow extends WorkflowEntrypoint<Env, ProvisionParams> 
   async run(
     event: WorkflowEvent<ProvisionParams>,
     step: WorkflowStep,
-  ): Promise<{ steps: Step[]; repoUrl: string }> {
+  ): Promise<{ steps: Step[]; repoUrl: string; commitSha?: string }> {
     try {
       // Drive the shared sequence with the durable step runner: each step is
       // persisted + retried independently; completed steps are never re-run.
