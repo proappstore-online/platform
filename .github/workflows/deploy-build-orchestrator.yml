@@ -13,11 +13,11 @@ name: Deploy Build Orchestrator Worker
 
 on:
   workflow_dispatch:
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - 'packages/build-orchestrator/**'
-  #     - '.github/workflows/deploy-build-orchestrator.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'packages/build-orchestrator/**'
+      - '.github/workflows/deploy-build-orchestrator.yml'
 
 permissions:
   contents: read
