@@ -22,3 +22,11 @@ APPS_DOMAIN_BASE = "proappstore.online"
 binding = "DB"
 database_name = "pas"
 database_id = "585bbda3-0016-42ad-a53d-c089f1864fcb"
+
+# Durable publish provisioning (spike). ProvisionWorkflow re-runs the publish
+# path with per-step retry + persistence; triggered via /api/provision-workflow.
+# The inline provisionApp() path remains the default.
+[[workflows]]
+name = "pas-provision"
+binding = "PROVISION_WORKFLOW"
+class_name = "ProvisionWorkflow"

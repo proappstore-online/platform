@@ -1,3 +1,5 @@
+import type { ProvisionParams } from "./publish.js";
+
 export type Env = {
   // vars (wrangler.toml [vars])
   CF_ACCOUNT_ID: string;
@@ -7,6 +9,11 @@ export type Env = {
 
   /** D1 database — the platform's shared D1 (routes table for host Worker). */
   DB: D1Database;
+
+  /** Cloudflare Workflows binding — durable publish provisioning (spike).
+   *  See ProvisionWorkflow in publish.ts and the [[workflows]] block in
+   *  wrangler.toml. */
+  PROVISION_WORKFLOW: Workflow<ProvisionParams>;
 
   // secrets (wrangler secret put)
   CF_API_TOKEN: string;

@@ -712,3 +712,105 @@ export async function handlePublish(
   const { steps, success } = await provisionApp(req, env, { addRegistry: true });
   return { steps, success };
 }
+
+// ─── Cloudflare Workflows spike: durable publish provisioning ────────────────
+//
+// provisionApp() above is the live path: a single Worker invocation that runs
+// every step inline and aborts on the first fatal failure. A transient GitHub/CF
+// blip mid-sequence fails the whole call; the caller must retry from scratch
+// (safe only because every step is idempotent, but wasteful and opaque).
+//
+// runProvisionSteps() re-expresses the PUBLISH path as an ordered list of steps
+// driven by an injected `doStep` runner. The Cloudflare Workflow shell
+// (ProvisionWorkflow in provision-workflow.ts) passes `step.do`, so the engine
+// PERSISTS progress and retries only the failed step with backoff — completed
+// steps are memoized and never re-run. Keeping the orchestration here (free of
+// the workerd-only `cloudflare:workers` import) lets it run under the Node test
+// runner; the workflow shell stays a thin, workerd-only adapter.
+//
+// Fatal steps throw to engage retry; a bad id throws ProvisionValidationError
+// (the shell maps it to a NonRetryableError — no point retrying validation);
+// non-fatal steps (collaborator, analytics) return their skip/fail Step as data
+// and never abort the run.
+//
+// Spike: the inline path stays the default. The workflow is wired behind
+// /api/provision-workflow for evaluation before any cutover, and is the
+// foundation for the parts provisionApp can't do well — waiting on CI to go
+// green (step.waitForEvent) and human publish approval, both billed at $0 while
+// idle. Refs proappstore-online/platform#24.
+
+/** Serializable trigger payload for the provisioning workflow. */
+export interface ProvisionParams {
+  req: PublishRequest;
+  /** Publish path adds the storefront registry entry; agent path omits it. */
+  addRegistry?: boolean;
+}
+
+/** Thrown for a deterministic input error — the workflow shell maps this to a
+ *  NonRetryableError so the engine doesn't retry a bad id/name. */
+export class ProvisionValidationError extends Error {}
+
+/** Runs one provisioning step. The workflow passes `step.do`; tests pass a
+ *  pass-through. Every step yields a {@link Step}. */
+export type StepRunner = (name: string, cb: () => Promise<Step>) => Promise<Step>;
+
+/** Await a fatal step's result; throw (→ retry) if it failed. */
+async function fatalStep(p: Promise<Step>): Promise<Step> {
+  const s = await p;
+  if (s.status === "fail") throw new Error(`${s.name}: ${s.detail}`);
+  return s;
+}
+
+/**
+ * The PUBLISH provisioning sequence, factored out so both the durable Workflow
+ * and the Node test runner can drive it. Mirrors provisionApp()'s publish path.
+ */
+export async function runProvisionSteps(
+  params: ProvisionParams,
+  env: Env,
+  doStep: StepRunner,
+): Promise<{ steps: Step[]; repoUrl: string }> {
+  const { req, addRegistry } = params;
+  const steps: Step[] = [];
+
+  // Validation — deterministic; never worth retrying.
+  const idError = validateId(req.id);
+  if (idError) throw new ProvisionValidationError(`Validation: ${idError}`);
+  if (!req.name) throw new ProvisionValidationError("Validation: name is required");
+
+  // 1. GitHub repo (fatal, retryable).
+  steps.push(await doStep("github-repo", () => fatalStep(createRepo(env, req))));
+
+  // 1b. Grant the creator push access (non-fatal).
+  const creator = req.creatorGithub;
+  if (creator) {
+    steps.push(await doStep("collaborator", () => addCollaborator(env, req.id, creator)));
+  }
+
+  // 2. R2 route — register <id>.<base> → apps/<id>/ (fatal, retryable, idempotent).
+  steps.push(
+    await doStep("r2-route", async (): Promise<Step> => {
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO routes (slug, zone, r2_prefix, store, hosted_on, created_at, updated_at)
+           VALUES (?, ?, ?, 'pas', 'r2', ?, ?)`,
+      )
+        .bind(req.id, env.APPS_DOMAIN_BASE, `apps/${req.id}`, Date.now(), Date.now())
+        .run();
+      return {
+        name: "R2 route",
+        status: "ok",
+        detail: `${req.id}.${env.APPS_DOMAIN_BASE} → apps/${req.id}/`,
+      };
+    }),
+  );
+
+  // 3. Storefront listing (publish path only; fatal).
+  if (addRegistry) {
+    steps.push(await doStep("registry", () => fatalStep(addToRegistry(env, req))));
+  }
+
+  // 4. CF Web Analytics (non-fatal).
+  steps.push(await doStep("analytics", () => ensureAnalytics(cfFor(env), req.id)));
+
+  return { steps, repoUrl: `https://github.com/${env.PUBLISHERS_ORG}/${req.id}` };
+}

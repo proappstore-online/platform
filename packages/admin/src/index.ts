@@ -96,6 +96,37 @@ export default {
       return Response.json(await handleDeployStatus(body, env));
     }
 
+    // Internal (spike): kick off the durable publish-provisioning Workflow.
+    // Same payload + auth as /api/publish-app, but provisioning runs as a
+    // Cloudflare Workflow (per-step retry + persistence). Returns the instance
+    // id immediately; poll status at /api/provision-workflow/status?id=.
+    if (url.pathname === "/api/provision-workflow" && request.method === "POST") {
+      const authHeader = request.headers.get("Authorization");
+      if (!authHeader?.startsWith("Bearer ")) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      const login = await verifySession(authHeader.slice(7), env.SESSION_SIGNING_KEY);
+      if (!login) {
+        return Response.json({ error: "invalid or expired session" }, { status: 401 });
+      }
+      const body = await request.json<PublishRequest>();
+      const instance = await env.PROVISION_WORKFLOW.create({
+        params: { req: { ...body, creatorGithub: body.creatorGithub || login }, addRegistry: true },
+      });
+      return Response.json({ id: instance.id, status: await instance.status() }, { status: 202 });
+    }
+
+    // Internal (spike): poll a provisioning Workflow instance.
+    if (url.pathname === "/api/provision-workflow/status" && request.method === "GET") {
+      if (!internalTokenOk(request.headers.get("X-Internal-Token"), env.INTERNAL_TOKEN)) {
+        return Response.json({ error: "forbidden" }, { status: 403 });
+      }
+      const id = url.searchParams.get("id");
+      if (!id) return Response.json({ error: "id required" }, { status: 400 });
+      const instance = await env.PROVISION_WORKFLOW.get(id);
+      return Response.json({ id, status: await instance.status() });
+    }
+
     // Public read: list apps from registry
     if (url.pathname === "/api/apps" && request.method === "GET") {
       return Response.json({ error: "not_implemented" }, { status: 501 });
@@ -104,3 +135,7 @@ export default {
     return Response.json({ error: "not_found", route: url.pathname }, { status: 404 });
   },
 };
+
+// Cloudflare Workflows require the entrypoint class to be a named export of the
+// Worker's main module (referenced by class_name in wrangler.toml).
+export { ProvisionWorkflow } from "./provision-workflow.js";

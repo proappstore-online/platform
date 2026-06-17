@@ -31,6 +31,7 @@ const ENV: Env = {
   SESSION_SIGNING_KEY: "sk",
   INTERNAL_TOKEN: "it",
   DB: fakeDb,
+  PROVISION_WORKFLOW: undefined as unknown as Workflow,
 };
 
 const realFetch = globalThis.fetch;
