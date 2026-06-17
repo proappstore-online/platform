@@ -46,9 +46,5 @@ service = "proappstore-mcp"
 binding = "KB"
 service = "proappstore-kb-host"
 
-[[services]]
-binding = "BUILD"
-service = "proappstore-build-orchestrator"
-
 # Secrets (set via `wrangler secret put`):
 # (none — host is read-only, all secrets live on the Workers it dispatches to)
