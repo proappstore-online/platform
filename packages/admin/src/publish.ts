@@ -456,10 +456,40 @@ export async function handleDeployStatus(
 }> {
   const gh = ghFor(env);
   if (!(await gh.repoExists(req.id))) return { ok: false, error: "repo not found" };
-  return gh.deployResult(req.id, {
+  const result = await gh.deployResult(req.id, {
     waitMs: Math.min(req.waitMs ?? 0, 90_000),
     ...(req.sha ? { sha: req.sha } : {}),
   });
+  // If a provisioning workflow is waiting on this app's CI gate, hand it the
+  // verdict (server-side event delivery; best-effort, no-op if none is waiting).
+  if (result.conclusion) {
+    await notifyProvisionWorkflow(env, req.id, {
+      ok: result.ok,
+      ...(result.conclusion ? { conclusion: result.conclusion } : {}),
+      ...(result.url ? { url: result.url } : {}),
+    });
+  }
+  return result;
+}
+
+/**
+ * Deliver a CI verdict to a provisioning workflow instance waiting on this app's
+ * CI gate (see runProvisionSteps). The instance id is the app id (set when the
+ * agent-path workflow is created). Best-effort: if no instance is waiting (e.g.
+ * the publish path, or the inline provisioning path), this is a silent no-op.
+ */
+export async function notifyProvisionWorkflow(
+  env: Env,
+  appId: string,
+  ci: CiGateResult,
+): Promise<void> {
+  if (!env.PROVISION_WORKFLOW) return;
+  try {
+    const instance = await env.PROVISION_WORKFLOW.get(appId);
+    await instance.sendEvent({ type: "ci-result", payload: ci });
+  } catch {
+    // No instance with this id, or it already completed — nothing waiting.
+  }
 }
 
 // CONTRACT (agent-deploy): the request body sent by packages/agent-teams
@@ -761,6 +791,13 @@ export class ProvisionValidationError extends Error {}
  *  pass-through. Every step yields a {@link Step}. */
 export type StepRunner = (name: string, cb: () => Promise<Step>) => Promise<Step>;
 
+/** CI verdict delivered to a waiting provisioning workflow (agent path). */
+export type CiGateResult = { ok: boolean; conclusion?: string; url?: string };
+
+/** Blocks until the app's CI reports a verdict. The workflow passes a
+ *  `step.waitForEvent`-backed waiter ($0 while idle); tests pass a stub. */
+export type CiWaiter = () => Promise<CiGateResult>;
+
 /** Await a fatal step's result; throw (→ retry) if it failed. Generic so a
  *  step's extra fields (e.g. pushFilesToGitHub's commitSha) survive. */
 async function fatalStep<T extends Step>(p: Promise<T>): Promise<T> {
@@ -778,6 +815,7 @@ export async function runProvisionSteps(
   params: ProvisionParams,
   env: Env,
   doStep: StepRunner,
+  waitForCi?: CiWaiter,
 ): Promise<{ steps: Step[]; repoUrl: string; commitSha?: string }> {
   const { req, addRegistry, files } = params;
   const steps: Step[] = [];
@@ -831,6 +869,21 @@ export async function runProvisionSteps(
     steps.push(push);
     // commitSha rides on the push Step object at runtime (pushFilesToGitHub).
     commitSha = (push as Step & { commitSha?: string }).commitSha;
+
+    // 6. CI gate — block (billed $0) until the push's deploy CI reports a
+    //    verdict, delivered by handleDeployStatus → instance.sendEvent. A failed
+    //    build is fatal: the workflow errors so the ticket bounces back to Dev.
+    if (waitForCi) {
+      const ci = await waitForCi();
+      steps.push({
+        name: "CI gate",
+        status: ci.ok ? "ok" : "fail",
+        detail: ci.ok
+          ? `CI green${ci.url ? ` (${ci.url})` : ""}`
+          : `CI failed: ${ci.conclusion ?? "unknown"}${ci.url ? ` (${ci.url})` : ""}`,
+      });
+      if (!ci.ok) throw new Error(`CI gate: build ${ci.conclusion ?? "failed"}`);
+    }
   }
 
   return { steps, repoUrl: `https://github.com/${env.PUBLISHERS_ORG}/${req.id}`, commitSha };

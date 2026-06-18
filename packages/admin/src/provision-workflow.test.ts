@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "./env.js";
-import { ProvisionValidationError, runProvisionSteps, type StepRunner } from "./publish.js";
+import {
+  notifyProvisionWorkflow,
+  ProvisionValidationError,
+  runProvisionSteps,
+  type StepRunner,
+} from "./publish.js";
 
 /**
  * The provisioning step sequence that ProvisionWorkflow drives. We test it here
@@ -123,6 +128,37 @@ describe("runProvisionSteps (ProvisionWorkflow sequence)", () => {
     );
     expect(ran).toEqual(["github-repo", "collaborator", "r2-route", "analytics", "push-files"]);
     expect(result.commitSha).toBe("commit-abc");
+  });
+
+  it("agent path with a passing CI gate records ci-gate ok", async () => {
+    install();
+    const { ran, run } = recordingRunner();
+    const result = await runProvisionSteps(
+      { req: REQ, addRegistry: false, files: { "index.html": "<html></html>" } },
+      ENV,
+      run,
+      async () => ({ ok: true, conclusion: "success", url: "https://run" }),
+    );
+    expect(ran).toContain("push-files");
+    const gate = result.steps.find((s) => s.name === "CI gate");
+    expect(gate?.status).toBe("ok");
+  });
+
+  it("agent path with a failing CI gate throws (bounces the ticket)", async () => {
+    install();
+    const { run } = recordingRunner();
+    await expect(
+      runProvisionSteps(
+        { req: REQ, addRegistry: false, files: { "index.html": "<html></html>" } },
+        ENV,
+        run,
+        async () => ({ ok: false, conclusion: "failure" }),
+      ),
+    ).rejects.toThrow(/CI gate/);
+  });
+
+  it("notifyProvisionWorkflow no-ops when no workflow instance is waiting", async () => {
+    await expect(notifyProvisionWorkflow(ENV, "myapp", { ok: true })).resolves.toBeUndefined();
   });
 
   it("throws (non-retryable) on a bad id before any step runs", async () => {
