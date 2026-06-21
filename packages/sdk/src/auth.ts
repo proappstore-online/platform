@@ -234,9 +234,9 @@ export class Auth {
       throw new Error('Not signed in.');
     }
     if (!res.ok) {
-      if (res.status === 403) throw new Error('Current password is incorrect.');
       const body = await res.text().catch(() => '');
-      throw new Error(`Password change failed (${res.status}): ${body}`);
+      const msg = (() => { try { return JSON.parse(body).error; } catch { return ''; } })();
+      throw new Error(msg || `Password change failed (${res.status})`);
     }
   }
 
