@@ -231,9 +231,10 @@ export class Auth {
     });
     if (res.status === 401) {
       this.handleUnauthorized();
-      throw new Error('Not signed in or current password is incorrect.');
+      throw new Error('Not signed in.');
     }
     if (!res.ok) {
+      if (res.status === 403) throw new Error('Current password is incorrect.');
       const body = await res.text().catch(() => '');
       throw new Error(`Password change failed (${res.status}): ${body}`);
     }

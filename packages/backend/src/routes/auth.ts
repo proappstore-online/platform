@@ -369,7 +369,7 @@ authRoutes.post('/auth/credentials/change-password', async (c) => {
   if (!row?.password_hash) throw new HttpError('account not found', 404);
 
   const ok = await verifyPassword(currentPassword, row.password_hash);
-  if (!ok) throw new HttpError('current password is incorrect', 401);
+  if (!ok) throw new HttpError('current password is incorrect', 403);
 
   const passwordHash = await hashPassword(newPassword);
   await c.env.DB.prepare(
