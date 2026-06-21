@@ -216,6 +216,29 @@ export class Auth {
     return (await res.json()) as { password: string };
   }
 
+  /**
+   * Change the password for the currently signed-in credential account.
+   * Requires the current password for verification. Only callable by
+   * credential (child/student) accounts — OAuth users don't have passwords.
+   */
+  async changePassword(currentPassword: string, newPassword: string): Promise<void> {
+    const res = await this.authenticatedFetch(new URL('/v1/auth/credentials/change-password', this.apiBase), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    if (res.status === 401) {
+      this.handleUnauthorized();
+      throw new Error('Not signed in or current password is incorrect.');
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Password change failed (${res.status}): ${body}`);
+    }
+  }
+
   /** Clear the session and notify listeners. */
   signOut(): void {
     this.session = null;

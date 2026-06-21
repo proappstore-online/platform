@@ -348,6 +348,37 @@ authRoutes.post('/auth/credentials/reset-password', async (c) => {
   return c.json({ password });
 });
 
+// ── POST /v1/auth/credentials/change-password ──────────────
+// A signed-in credential (student) account changes their own password.
+// Requires the current password for verification.
+authRoutes.post('/auth/credentials/change-password', async (c) => {
+  const claims = await requireClaims(c);
+  if (!claims.uid.startsWith('cred:')) throw new HttpError('only credential accounts can change passwords', 403);
+
+  const body = await c.req
+    .json<{ currentPassword?: string; newPassword?: string }>()
+    .catch(() => ({} as { currentPassword?: string; newPassword?: string }));
+  const currentPassword = typeof body.currentPassword === 'string' ? body.currentPassword : '';
+  const newPassword = typeof body.newPassword === 'string' ? body.newPassword : '';
+  if (!currentPassword || !newPassword) throw new HttpError('currentPassword and newPassword are required', 400);
+  if (newPassword.length < 6) throw new HttpError('new password must be at least 6 characters', 400);
+
+  const row = await c.env.DB.prepare(
+    'SELECT id, password_hash FROM users WHERE id = ?',
+  ).bind(claims.uid).first<{ id: string; password_hash: string | null }>();
+  if (!row?.password_hash) throw new HttpError('account not found', 404);
+
+  const ok = await verifyPassword(currentPassword, row.password_hash);
+  if (!ok) throw new HttpError('current password is incorrect', 401);
+
+  const passwordHash = await hashPassword(newPassword);
+  await c.env.DB.prepare(
+    'UPDATE users SET password_hash = ? WHERE id = ?',
+  ).bind(passwordHash, claims.uid).run();
+
+  return c.json({ ok: true });
+});
+
 // ── POST /v1/auth/exchange ────────────────────────────────
 // Swap a GitHub device-flow access token for a PAS session token.
 // Used by `pas login` (CLI). Verifies the token against GitHub /user,
