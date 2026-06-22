@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "./env.js";
 import {
-  notifyProvisionWorkflow,
   ProvisionValidationError,
   runProvisionSteps,
   type StepRunner,
@@ -137,7 +136,10 @@ describe("runProvisionSteps (ProvisionWorkflow sequence)", () => {
       { req: REQ, addRegistry: false, files: { "index.html": "<html></html>" } },
       ENV,
       run,
-      async () => ({ ok: true, conclusion: "success", url: "https://run" }),
+      async (sha) => {
+        expect(sha).toBe("commit-abc"); // graded against the exact pushed commit
+        return { ok: true, conclusion: "success", url: "https://run" };
+      },
     );
     expect(ran).toContain("push-files");
     const gate = result.steps.find((s) => s.name === "CI gate");
@@ -152,13 +154,9 @@ describe("runProvisionSteps (ProvisionWorkflow sequence)", () => {
         { req: REQ, addRegistry: false, files: { "index.html": "<html></html>" } },
         ENV,
         run,
-        async () => ({ ok: false, conclusion: "failure" }),
+        async () => ({ ok: false, conclusion: "failure", errorTail: "TS2322: type error" }),
       ),
-    ).rejects.toThrow(/CI gate/);
-  });
-
-  it("notifyProvisionWorkflow no-ops when no workflow instance is waiting", async () => {
-    await expect(notifyProvisionWorkflow(ENV, "myapp", { ok: true })).resolves.toBeUndefined();
+    ).rejects.toThrow(/CI gate: build failure[\s\S]*TS2322/);
   });
 
   it("throws (non-retryable) on a bad id before any step runs", async () => {

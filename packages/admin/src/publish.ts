@@ -460,36 +460,7 @@ export async function handleDeployStatus(
     waitMs: Math.min(req.waitMs ?? 0, 90_000),
     ...(req.sha ? { sha: req.sha } : {}),
   });
-  // If a provisioning workflow is waiting on this app's CI gate, hand it the
-  // verdict (server-side event delivery; best-effort, no-op if none is waiting).
-  if (result.conclusion) {
-    await notifyProvisionWorkflow(env, req.id, {
-      ok: result.ok,
-      ...(result.conclusion ? { conclusion: result.conclusion } : {}),
-      ...(result.url ? { url: result.url } : {}),
-    });
-  }
   return result;
-}
-
-/**
- * Deliver a CI verdict to a provisioning workflow instance waiting on this app's
- * CI gate (see runProvisionSteps). The instance id is the app id (set when the
- * agent-path workflow is created). Best-effort: if no instance is waiting (e.g.
- * the publish path, or the inline provisioning path), this is a silent no-op.
- */
-export async function notifyProvisionWorkflow(
-  env: Env,
-  appId: string,
-  ci: CiGateResult,
-): Promise<void> {
-  if (!env.PROVISION_WORKFLOW) return;
-  try {
-    const instance = await env.PROVISION_WORKFLOW.get(appId);
-    await instance.sendEvent({ type: "ci-result", payload: ci });
-  } catch {
-    // No instance with this id, or it already completed — nothing waiting.
-  }
 }
 
 // CONTRACT (agent-deploy): the request body sent by packages/agent-teams
@@ -766,11 +737,11 @@ export async function handlePublish(
 // non-fatal steps (collaborator, analytics) return their skip/fail Step as data
 // and never abort the run.
 //
-// Spike: the inline path stays the default. The workflow is wired behind
-// /api/provision-workflow for evaluation before any cutover, and is the
-// foundation for the parts provisionApp can't do well — waiting on CI to go
-// green (step.waitForEvent) and human publish approval, both billed at $0 while
-// idle. Refs proappstore-online/platform#24.
+// The inline path stays the default; the workflow runs behind
+// /api/provision-workflow(/agent) and is opt-in per app (canary). Its edge over
+// provisionApp is the parts provisionApp can't do well — blocking on CI to go
+// green (the workflow self-polls, sleeping at $0 between checks) and, later,
+// human publish approval. Refs proappstore-online/platform#24.
 
 /** Serializable trigger payload for the provisioning workflow. */
 export interface ProvisionParams {
@@ -791,12 +762,17 @@ export class ProvisionValidationError extends Error {}
  *  pass-through. Every step yields a {@link Step}. */
 export type StepRunner = (name: string, cb: () => Promise<Step>) => Promise<Step>;
 
-/** CI verdict delivered to a waiting provisioning workflow (agent path). */
-export type CiGateResult = { ok: boolean; conclusion?: string; url?: string };
+/** CI verdict for an agent-path deploy. `errorTail` carries the failed job's log
+ *  tail so the consumer can route the real compiler error back to Dev. */
+export type CiGateResult = { ok: boolean; conclusion?: string; url?: string; errorTail?: string };
 
-/** Blocks until the app's CI reports a verdict. The workflow passes a
- *  `step.waitForEvent`-backed waiter ($0 while idle); tests pass a stub. */
-export type CiWaiter = () => Promise<CiGateResult>;
+/** Polls until the app's CI reports a TERMINAL verdict for the pushed commit.
+ *  The workflow passes a `step.do` + `step.sleep` poll loop (billed $0 while idle
+ *  between polls); tests pass a stub. Receives the pushed commit sha so it grades
+ *  the exact run for this deploy, never a stale one. Self-contained: no external
+ *  event sender, so the workflow instance id no longer has to equal the app slug
+ *  (which capped the agent path at one deploy per app — refs #24). */
+export type CiWaiter = (sha: string | undefined) => Promise<CiGateResult>;
 
 /** Await a fatal step's result; throw (→ retry) if it failed. Generic so a
  *  step's extra fields (e.g. pushFilesToGitHub's commitSha) survive. */
@@ -870,11 +846,11 @@ export async function runProvisionSteps(
     // commitSha rides on the push Step object at runtime (pushFilesToGitHub).
     commitSha = (push as Step & { commitSha?: string }).commitSha;
 
-    // 6. CI gate — block (billed $0) until the push's deploy CI reports a
-    //    verdict, delivered by handleDeployStatus → instance.sendEvent. A failed
-    //    build is fatal: the workflow errors so the ticket bounces back to Dev.
+    // 6. CI gate — block until this commit's CI reports a terminal verdict. The
+    //    waiter polls GitHub for `commitSha`, sleeping ($0) between checks. A
+    //    failed build is fatal: the workflow errors so the ticket bounces to Dev.
     if (waitForCi) {
-      const ci = await waitForCi();
+      const ci = await waitForCi(commitSha);
       steps.push({
         name: "CI gate",
         status: ci.ok ? "ok" : "fail",
@@ -882,7 +858,16 @@ export async function runProvisionSteps(
           ? `CI green${ci.url ? ` (${ci.url})` : ""}`
           : `CI failed: ${ci.conclusion ?? "unknown"}${ci.url ? ` (${ci.url})` : ""}`,
       });
-      if (!ci.ok) throw new Error(`CI gate: build ${ci.conclusion ?? "failed"}`);
+      // A failed build is fatal: throw so the workflow errors and the consumer
+      // bounces the ticket. Fold the compiler-log tail into the message so the
+      // workflow's `errored` status carries the real error back to Dev — not just
+      // a run URL it can't open.
+      if (!ci.ok)
+        throw new Error(
+          `CI gate: build ${ci.conclusion ?? "failed"}` +
+            (ci.url ? ` (${ci.url})` : "") +
+            (ci.errorTail ? `\n${ci.errorTail}` : ""),
+        );
     }
   }
 

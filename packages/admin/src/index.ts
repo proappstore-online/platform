@@ -116,39 +116,33 @@ export default {
       return Response.json({ id: instance.id, status: await instance.status() }, { status: 202 });
     }
 
-    // Internal (spike): run the AGENT-deploy path as a durable Workflow. The
-    // instance id IS the app id, so handleDeployStatus can deliver the CI verdict
-    // to this instance's CI gate (step.waitForEvent). Mirrors /api/agent-deploy.
+    // Internal: run the AGENT-deploy path as a durable Workflow. The instance id
+    // is CF-AUTO-GENERATED (unique per deploy) — NOT the app slug — so an app can
+    // deploy repeatedly without colliding (create({id: slug}) would 409 on the
+    // 2nd deploy within the retention window). The CI gate self-polls GitHub, so
+    // no slug-keyed event routing is needed. Caller stores the returned id and
+    // polls /api/provision-workflow/status?id=. Mirrors /api/agent-deploy.
     if (url.pathname === "/api/provision-workflow/agent" && request.method === "POST") {
       if (!internalTokenOk(request.headers.get("X-Internal-Token"), env.INTERNAL_TOKEN)) {
         return Response.json({ error: "forbidden" }, { status: 403 });
       }
       const body = await request.json<AgentDeployRequest>();
       if (!body.id || !body.name) return Response.json({ error: "id and name required" }, { status: 400 });
-      try {
-        const instance = await env.PROVISION_WORKFLOW.create({
-          id: body.id,
-          params: {
-            req: {
-              id: body.id,
-              name: body.name,
-              description: body.description ?? "",
-              category: body.category ?? "tools",
-              icon: body.icon ?? "📦",
-              iconBg: body.iconBg ?? "#000000",
-            },
-            files: body.files,
-            addRegistry: false,
+      const instance = await env.PROVISION_WORKFLOW.create({
+        params: {
+          req: {
+            id: body.id,
+            name: body.name,
+            description: body.description ?? "",
+            category: body.category ?? "tools",
+            icon: body.icon ?? "📦",
+            iconBg: body.iconBg ?? "#000000",
           },
-        });
-        return Response.json({ id: instance.id, status: await instance.status() }, { status: 202 });
-      } catch (e) {
-        // create() throws if an instance with this id already exists.
-        return Response.json(
-          { error: "instance exists or create failed", detail: (e as Error).message },
-          { status: 409 },
-        );
-      }
+          files: body.files,
+          addRegistry: false,
+        },
+      });
+      return Response.json({ id: instance.id, status: await instance.status() }, { status: 202 });
     }
 
     // Internal (spike): poll a provisioning Workflow instance.
