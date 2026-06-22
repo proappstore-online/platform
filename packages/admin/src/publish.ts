@@ -850,6 +850,13 @@ export async function runProvisionSteps(
     //    waiter polls GitHub for `commitSha`, sleeping ($0) between checks. A
     //    failed build is fatal: the workflow errors so the ticket bounces to Dev.
     if (waitForCi) {
+      // Never gate without the exact commit. A missing sha would make
+      // deployResult fall back to the LATEST run for any commit — possibly a
+      // stale previous build — and could report a false green for code whose CI
+      // never ran. A successful push always yields a sha, so this is a contract
+      // breach, not a normal path: fail loudly.
+      if (!commitSha)
+        throw new Error("CI gate: push returned no commit sha — refusing to grade an unknown commit");
       const ci = await waitForCi(commitSha);
       steps.push({
         name: "CI gate",
@@ -872,4 +879,63 @@ export async function runProvisionSteps(
   }
 
   return { steps, repoUrl: `https://github.com/${env.PUBLISHERS_ORG}/${req.id}`, commitSha };
+}
+
+// CI poll budget: each tick is one cheap GitHub check, then a durable sleep.
+// 40 × 20s ≈ 13 min of build time before declaring the deploy timed out — well
+// past a normal CI run, and the sleeps cost nothing.
+export const CI_POLL_MAX = 40;
+export const CI_POLL_INTERVAL = "20 seconds";
+
+/** Shape `pollCiToVerdict` reads from a CI check — a subset of gh.deployResult. */
+export interface CiCheck {
+  status?: string;
+  ok: boolean;
+  conclusion?: string;
+  url?: string;
+  errorTail?: string;
+}
+
+/** Injected primitives so the loop is Node-testable. The workflow passes
+ *  step.do / step.sleep (durable, $0 idle); tests pass plain stubs. Non-generic
+ *  (specialized to the poll's own return) so CF's stricter `Serializable<T>`
+ *  step typing accepts `(n,cb) => step.do(n,cb)` — same trick as StepRunner. */
+export interface CiPollDeps {
+  /** One CI status check for the target commit (e.g. gh.deployResult(id,{sha})). */
+  check: () => Promise<CiCheck>;
+  /** Run a named, persisted step (workflow: step.do). null = not yet terminal. */
+  doStep: (name: string, cb: () => Promise<CiGateResult | null>) => Promise<CiGateResult | null>;
+  /** Durable sleep between polls (workflow: step.sleep). */
+  sleep: (name: string, duration: string) => Promise<void>;
+  maxPolls?: number;
+  interval?: string;
+}
+
+/**
+ * Poll a commit's CI to a TERMINAL verdict, sleeping between checks. Each check
+ * is its own persisted step (so a mid-build eviction resumes the loop, not
+ * restarts it); a non-terminal check returns null → sleep → repoll. Returns a
+ * `timeout` verdict if CI never finishes within the budget (the caller treats a
+ * non-ok verdict as fatal). Extracted from the workerd-only shell so this exact
+ * loop — including the null→sleep→repoll and timeout paths — is unit-tested.
+ */
+export async function pollCiToVerdict(deps: CiPollDeps): Promise<CiGateResult> {
+  const max = deps.maxPolls ?? CI_POLL_MAX;
+  const interval = deps.interval ?? CI_POLL_INTERVAL;
+  for (let i = 0; i < max; i++) {
+    const verdict = await deps.doStep(`ci-poll-${i}`, async (): Promise<CiGateResult | null> => {
+      const r = await deps.check();
+      // 'pending' (no run yet) / 'in_progress' → not terminal; keep waiting.
+      if (r.status !== "completed") return null;
+      return {
+        ok: r.ok,
+        ...(r.conclusion ? { conclusion: r.conclusion } : {}),
+        ...(r.url ? { url: r.url } : {}),
+        ...(r.errorTail ? { errorTail: r.errorTail } : {}),
+      };
+    });
+    if (verdict) return verdict;
+    await deps.sleep(`ci-wait-${i}`, interval);
+  }
+  return { ok: false, conclusion: "timeout", errorTail: `CI did not finish within ${max} polls` };
 }

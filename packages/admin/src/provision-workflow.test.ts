@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "./env.js";
 import {
+  type CiCheck,
+  pollCiToVerdict,
   ProvisionValidationError,
   runProvisionSteps,
   type StepRunner,
@@ -159,6 +161,30 @@ describe("runProvisionSteps (ProvisionWorkflow sequence)", () => {
     ).rejects.toThrow(/CI gate: build failure[\s\S]*TS2322/);
   });
 
+  it("refuses to grade the CI gate when the push produced no commit sha", async () => {
+    install();
+    // A waiter that would (wrongly) pass — the guard must fire BEFORE it's called,
+    // so a missing sha can never grade a stale run as green.
+    let waiterCalled = false;
+    await expect(
+      runProvisionSteps(
+        // Force commitSha undefined: a push step that reports ok but no sha.
+        { req: REQ, addRegistry: false, files: { "index.html": "<html></html>" } },
+        { ...ENV, GITHUB_TOKEN: "gh-tok" },
+        async (name, cb) => {
+          const r = await cb();
+          if (name === "push-files") delete (r as { commitSha?: string }).commitSha;
+          return r;
+        },
+        async () => {
+          waiterCalled = true;
+          return { ok: true };
+        },
+      ),
+    ).rejects.toThrow(/no commit sha/);
+    expect(waiterCalled).toBe(false);
+  });
+
   it("throws (non-retryable) on a bad id before any step runs", async () => {
     install();
     const { ran, run } = recordingRunner();
@@ -175,5 +201,59 @@ describe("runProvisionSteps (ProvisionWorkflow sequence)", () => {
       runProvisionSteps({ req: REQ, addRegistry: true }, ENV, run),
     ).rejects.toThrow(/GitHub repo/);
     expect(ran).toEqual([]); // fatal step threw before being recorded
+  });
+});
+
+describe("pollCiToVerdict (CI gate poll loop)", () => {
+  /** Pass-through step.do + a sleep spy that records each durable wait. */
+  function harness(checks: CiCheck[]) {
+    const polls: string[] = [];
+    const sleeps: string[] = [];
+    let i = 0;
+    return {
+      polls,
+      sleeps,
+      deps: {
+        check: async () => checks[Math.min(i++, checks.length - 1)]!,
+        doStep: async <T>(name: string, cb: () => Promise<T>) => {
+          polls.push(name);
+          return cb();
+        },
+        sleep: async (name: string, _d: string) => {
+          sleeps.push(name);
+        },
+      },
+    };
+  }
+
+  it("returns on the first poll when CI is already terminal (no sleep)", async () => {
+    const { deps, polls, sleeps } = harness([
+      { status: "completed", ok: true, conclusion: "success", url: "https://run" },
+    ]);
+    const v = await pollCiToVerdict(deps);
+    expect(v).toEqual({ ok: true, conclusion: "success", url: "https://run" });
+    expect(polls).toEqual(["ci-poll-0"]);
+    expect(sleeps).toEqual([]); // terminal first time → never sleeps
+  });
+
+  it("sleeps and re-polls while CI is pending/in_progress, then grades it", async () => {
+    const { deps, polls, sleeps } = harness([
+      { status: "pending", ok: false }, // no run registered yet
+      { status: "in_progress", ok: false }, // building
+      { status: "completed", ok: false, conclusion: "failure", errorTail: "TS2322" },
+    ]);
+    const v = await pollCiToVerdict(deps);
+    expect(v).toEqual({ ok: false, conclusion: "failure", errorTail: "TS2322" });
+    expect(polls).toEqual(["ci-poll-0", "ci-poll-1", "ci-poll-2"]);
+    expect(sleeps).toEqual(["ci-wait-0", "ci-wait-1"]); // one sleep per non-terminal poll
+  });
+
+  it("returns a timeout verdict if CI never finishes within the budget", async () => {
+    const { deps, polls, sleeps } = harness([{ status: "in_progress", ok: false }]);
+    const v = await pollCiToVerdict({ ...deps, maxPolls: 3, interval: "1 second" });
+    expect(v.ok).toBe(false);
+    expect(v.conclusion).toBe("timeout");
+    expect(polls).toEqual(["ci-poll-0", "ci-poll-1", "ci-poll-2"]);
+    expect(sleeps).toEqual(["ci-wait-0", "ci-wait-1", "ci-wait-2"]);
   });
 });
