@@ -71,6 +71,21 @@ describe('OpenAIResponsesRuntime run loop', () => {
     expect(events.filter((e) => e.type === 'done')).toHaveLength(1);
   });
 
+  it('heartbeats carry the running cost so the live cost tile updates mid-run', async () => {
+    // A fn-call turn accrues tokens, then completes. agent-runner reads
+    // `ev.costUsd ?? 0` off each heartbeat — if the heartbeat omitted cost, an
+    // OpenAI agent would broadcast $0.00 every beat until 'done'. Mirrors cf-native.
+    mockOpenAI([fnResp('read_file', { app_id: 'x', path: 'p' }), msgResp('done', 'completed')]);
+    const events = await run({
+      dispatch: async (c) => ({ callId: c.id, ok: true, data: 'contents', durationMs: 0 }),
+    });
+    const heartbeats = events.filter((e) => e.type === 'heartbeat') as { costUsd?: number }[];
+    expect(heartbeats.length).toBeGreaterThanOrEqual(2);
+    expect(heartbeats.every((h) => typeof h.costUsd === 'number')).toBe(true);
+    // After the first response's tokens accrue, a later heartbeat reports real cost.
+    expect(heartbeats.some((h) => (h.costUsd ?? 0) > 0)).toBe(true);
+  });
+
   it('executes function calls then completes', async () => {
     const dispatched: ToolCall[] = [];
     const calls = mockOpenAI([fnResp('read_file', { app_id: 'x', path: 'p' }), msgResp('reviewed', 'completed')]);

@@ -140,7 +140,10 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
     let totalOut = 0;
 
     for (let i = 0; i < MAX_ITERATIONS; i++) {
-      yield { type: 'heartbeat' };
+      // Carry the running cost on the heartbeat so the console's live cost tile
+      // updates mid-run. Without this, agent-runner reads `ev.costUsd ?? 0` and
+      // broadcasts $0.00 every heartbeat until 'done' (mirrors cf-native).
+      yield { type: 'heartbeat', costUsd: estimateCost(s.model, totalIn, totalOut), tokensIn: totalIn, tokensOut: totalOut };
 
       const body: Record<string, unknown> = {
         model: s.model,
