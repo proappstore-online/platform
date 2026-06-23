@@ -2,12 +2,18 @@
 
 ## Status
 
-**Accepted, partially shipped** (2026-06-23). The admin-side engine is built,
-tested, and safe to deploy (no production consumer yet). The consumer cutover
-(agent-teams' deploy stage) is **not yet built** — it is gated on a live smoke of
-the engine first. Refs proappstore-online/platform#24. Builds on ADR-006 (build
-stays on per-repo GitHub Actions — the Workflow orchestrates *around* that CI, it
-does not replace it).
+**Accepted, shipped behind a canary flag** (2026-06-23). The admin-side engine is
+built, deployed, and live-smoke-verified (auto-id, no 409, self-poll → terminal,
+error tail propagated). The consumer cutover (agent-teams' `deploy-stage.ts`) is
+now also built — opt-in per app slug via `WORKFLOW_DEPLOY_SLUGS`, **off by
+default** (inline push+poll stays the path until a slug is listed). Refs
+proappstore-online/platform#24. Builds on ADR-006 (build stays on per-repo GitHub
+Actions — the Workflow orchestrates *around* that CI, it does not replace it).
+
+**To canary:** set `WORKFLOW_DEPLOY_SLUGS = "<slug>"` (a `[vars]` entry on the
+agent-teams Worker, or `'*'` for all), redeploy, and run one ticket through that
+project. Watch for `complete`→done and a red build routing back to Dev with the
+compiler error. Unset to roll back instantly.
 
 ## Date
 
