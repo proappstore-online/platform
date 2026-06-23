@@ -18,6 +18,12 @@ interface StripeEvent {
  * - customer.subscription.updated → sync status/period
  * - customer.subscription.deleted → mark canceled
  * - invoice.payment_failed → mark past_due
+ *
+ * Idempotent on retries (every handler SETs absolute state, never increments).
+ * `deleted` is terminal: `updated`/`payment_failed` guard on `status != 'canceled'`
+ * so a late/out-of-order event can't resurrect a canceled subscription (Stripe
+ * does not guarantee delivery order). A genuine re-subscribe is a NEW
+ * subscription id activated via checkout.session.completed.
  */
 webhookRoutes.post('/webhooks/stripe', async (c) => {
   const signature = c.req.header('stripe-signature');
@@ -67,7 +73,7 @@ webhookRoutes.post('/webhooks/stripe', async (c) => {
            current_period_end = ?,
            cancel_at_period_end = ?,
            updated_at = ?
-         WHERE stripe_subscription_id = ?`,
+         WHERE stripe_subscription_id = ? AND status != 'canceled'`,
       )
         .bind(status, priceId, currentPeriodEnd, cancelAtPeriodEnd ? 1 : 0, Date.now(), subscriptionId)
         .run();
@@ -88,7 +94,7 @@ webhookRoutes.post('/webhooks/stripe', async (c) => {
       const subscriptionId = obj.subscription as string;
       if (subscriptionId) {
         await c.env.DB.prepare(
-          `UPDATE subscriptions SET status = 'past_due', updated_at = ? WHERE stripe_subscription_id = ?`,
+          `UPDATE subscriptions SET status = 'past_due', updated_at = ? WHERE stripe_subscription_id = ? AND status != 'canceled'`,
         )
           .bind(Date.now(), subscriptionId)
           .run();

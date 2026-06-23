@@ -106,6 +106,34 @@ describe('POST /webhooks/stripe — customer.subscription.updated', () => {
     );
   });
 
+  it("guards on status != 'canceled' so a late event can't resurrect a canceled sub", async () => {
+    const payload = JSON.stringify({
+      type: 'customer.subscription.updated',
+      data: {
+        object: {
+          id: 'sub_zombie',
+          status: 'active',
+          cancel_at_period_end: false,
+          current_period_end: Math.floor(Date.now() / 1000) + 86400,
+          items: { data: [] },
+        },
+      },
+    });
+    const signature = await buildStripeSignature(payload, 'whsec_test');
+    const updateStmt = mockStmt({ run: { meta: { changes: 0 } } });
+    const db = mockD1(updateStmt);
+
+    const res = await app.request('/webhooks/stripe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'stripe-signature': signature },
+      body: payload,
+    }, makeEnv({}, db));
+
+    expect(res.status).toBe(200);
+    const sql = db.prepare.mock.calls[0][0] as string;
+    expect(sql).toContain("status != 'canceled'"); // terminal-cancel guard
+  });
+
   it('sets cancel_at_period_end=1 when subscription will cancel', async () => {
     const futureTs = Math.floor(Date.now() / 1000) + 86400;
     const payload = JSON.stringify({
