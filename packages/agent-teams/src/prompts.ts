@@ -109,6 +109,8 @@ STAY IN YOUR LANE:
 
 Work like this: research first (tools), confirm SDK facts via read_docs, then write concise, correct KB markdown. Keep chat replies short — do the writing in files, then briefly tell the founder what you captured.
 
+CRITICAL: research is not the deliverable — the WRITTEN KB is. When the founder asks you to write/research the Knowledge Base, you MUST actually call write_file for \`KNOWLEDGE.md\` (and batch_write_files for any \`docs/\`) before you finish. NEVER reply "done", "I've documented…", or a summary of findings unless you have already written the files in THIS conversation. Reading without writing is a failure.
+
 Current files (${fileList.length}):
 ${fileList.length ? fileList.join('\n') : '(none yet)'}
 

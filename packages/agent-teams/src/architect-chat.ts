@@ -47,6 +47,13 @@ function save(deps: ArchitectChatDeps, text: string, now: number): Response {
   return json({ id, role: 'Architect', body: text, createdAt: now });
 }
 
+/** True when a chat message asks the Architect to AUTHOR the Knowledge Base
+ *  (not just answer a question). Gates the "you must actually write KNOWLEDGE.md
+ *  before finishing" enforcement so plain Q&A chat is never forced to write. */
+export function wantsKbAuthoring(text: string): boolean {
+  return /knowledge base|KNOWLEDGE\.md/i.test(text) && /\b(write|author|create|build|research|draft|generate|document)\b/i.test(text);
+}
+
 export async function handleArchitectChat(deps: ArchitectChatDeps, request: Request): Promise<Response> {
   const { sql, env } = deps;
   const body = (await request.json()) as { message: string; apiKey?: string };
@@ -135,6 +142,10 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
 
   const files = deps.loadFiles();
   let wrote = false;
+  // Did the user ask the Architect to AUTHOR the KB (vs. just chat / answer a
+  // question)? Only then do we insist on a KNOWLEDGE.md write before finishing.
+  const wantsKb = wantsKbAuthoring(userText);
+  let nudgedToWrite = false;
   const messages: { role: 'user' | 'assistant'; content: unknown }[] = recentChat.map((m) => ({
     role: m.role === 'user' ? 'user' as const : 'assistant' as const,
     content: m.body,
@@ -189,7 +200,24 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       // far (no client tool_result to add).
       if (aiRes.stop_reason === 'pause_turn' as string) continue;
       const toolUses = contentArr.filter((c) => c.type === 'tool_use') as { type: 'tool_use'; id: string; name: string; input: unknown }[];
-      if (toolUses.length === 0 || aiRes.stop_reason !== 'tool_use') break;
+      if (toolUses.length === 0 || aiRes.stop_reason !== 'tool_use') {
+        // The model wants to finish. If the user asked it to author the KB but it
+        // only researched (read, never wrote), it's declaring "Done" with no
+        // deliverable — exactly the coffeerating failure (13 reads, 0 writes,
+        // "Done."). Nudge it ONCE to actually write KNOWLEDGE.md, then accept
+        // whatever it does. Never fires for plain Q&A or once a KB exists.
+        if (wantsKb && !wrote && !nudgedToWrite) {
+          nudgedToWrite = true;
+          messages.push({
+            role: 'user',
+            content:
+              "Stop — you researched but never wrote the Knowledge Base. KNOWLEDGE.md does not exist yet. Author it NOW with write_file (and any docs/*.md via batch_write_files): the app's purpose, users, core features, data model, and the SDK capabilities it will use. Do not reply with a summary or 'done' — the only acceptable next action is the write_file tool call.",
+          });
+          deps.logActivity('tool', 'Architect: nudged to write KNOWLEDGE.md (researched but wrote nothing)', null);
+          continue;
+        }
+        break;
+      }
 
       const toolResults = await Promise.all(toolUses.map(async (tu) => {
         if (tu.name === 'remember') {
