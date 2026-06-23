@@ -39,6 +39,13 @@ export type Bindings = {
   AI_GATEWAY_ID?: string;
   /** Optional — only for an authenticated gateway. `wrangler secret put AI_GATEWAY_TOKEN`. */
   AI_GATEWAY_TOKEN?: string;
+  /**
+   * Canary: route these projects' deploys through the durable provisioning
+   * Workflow (admin /api/provision-workflow/agent) instead of the inline
+   * push + poll. Comma-separated app slugs, or '*' for all. Unset → every deploy
+   * uses the inline path (default). See deploy-stage.ts. Refs #24.
+   */
+  WORKFLOW_DEPLOY_SLUGS?: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();

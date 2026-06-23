@@ -14,6 +14,19 @@ import { buildAppSummary } from './context-summary.ts';
  *  declaring the deploy dead (repo missing a push-triggered workflow, Actions off). */
 export const DEPLOY_CI_START_TIMEOUT_MS = 4 * 60_000;
 
+/** How long to wait for the provisioning Workflow to reach a terminal state
+ *  before declaring the deploy dead (canary path). The workflow's own CI gate
+ *  caps at ~13 min, so give it a little more headroom. */
+export const WORKFLOW_DEPLOY_TIMEOUT_MS = 15 * 60_000;
+
+/** Canary gate: route this project's deploy through the durable provisioning
+ *  Workflow instead of the inline push + poll. Opt-in per slug via
+ *  WORKFLOW_DEPLOY_SLUGS (comma-separated, or '*' for all). Refs #24. */
+function deployViaWorkflow(env: Bindings, slug: string): boolean {
+  const list = (env.WORKFLOW_DEPLOY_SLUGS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return list.includes("*") || list.includes(slug);
+}
+
 export interface DeployDeps {
   sql: SqlStorage;
   env: Bindings;
@@ -84,6 +97,21 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
     }
   };
 
+  // Canary: drive the deploy through the durable provisioning Workflow instead
+  // of the inline push + poll. Reuses the same infraFail/fail routing and the
+  // same green tail (finishGreenDeploy). Opt-in per slug; default off.
+  if (deployViaWorkflow(env, proj.slug)) {
+    const adminGet = (path: string) => env.ADMIN!.fetch(new Request(`https://admin.proappstore.online${path}`, {
+      headers: { 'X-Internal-Token': env.INTERNAL_TOKEN! },
+    }));
+    try {
+      await runDeployViaWorkflow({ deps, ticket, proj, files, ticketId, adminFetch, adminGet, infraFail, fail });
+    } catch (e) {
+      fail(`Deploy error: ${e instanceof Error ? e.message : 'unknown'}`);
+    }
+    return;
+  }
+
   try {
     // 1) Push the working tree ONCE per deploy attempt (idempotent: creates the
     //    repo if needed). Re-checks (watchdog ticks) skip straight to polling so
@@ -144,37 +172,129 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
     }
     if (!r.ok) return fail(`CI build ${r.conclusion}:\n${r.errorTail ?? r.url ?? ''}`);
 
-    // 3) Green → done. Record the verified commit as the ticket's final SHA.
-    sql.exec("UPDATE tickets SET status = 'done', final_commit_sha = ?, updated_at = ? WHERE id = ?", sha ?? null, now, ticketId);
-    deps.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'done', trigger: 'system' });
-    deps.logActivity('deploy', `Deployed live ✓ ${sha?.slice(0, 7) ?? ''} ${r.url ?? ''}`.trim(), ticketId);
-
-    // 4) Build + cache the deterministic app context summary so Dev/QA agents
-    //    can skip re-reading files on subsequent tickets.
-    try {
-      const summary = buildAppSummary(files);
-      if (summary) {
-        sql.exec('UPDATE project SET app_context_summary = ? WHERE slug = ?', summary, proj.slug);
-      }
-    } catch { /* best-effort */ }
-
-    // 5) Harvest CI test results (vitest) from the KB into the DO's test_runs
-    //    table so the Test tab has data. Best-effort: never fails a green deploy.
-    await harvestTestResults(deps, proj, ticketId, sha);
-
-    // 6) Ensure the data plane (D1 + data worker + app record) once per project,
-    //    so agent-built apps have a working `app.data` like CLI-published ones.
-    //    Best-effort: never fails the (already-green) frontend deploy.
-    await ensureDataInfra(deps, proj, ticketId);
-
-    // 7) Register the app's MCP tools from its mcp.json (if any), so the app is
-    //    callable from the platform MCP server the same way `pas publish` makes
-    //    CLI apps callable. Runs after the data plane exists (tools query its
-    //    D1). Best-effort — never fails the green deploy.
-    await registerMcpTools(deps, proj, ticketId, files);
+    // 3) Green → done + post-deploy steps (shared with the workflow canary path).
+    await finishGreenDeploy(deps, proj, ticketId, sha, files, r.url);
   } catch (e) {
     fail(`Deploy error: ${e instanceof Error ? e.message : 'unknown'}`);
   }
+}
+
+/**
+ * Args for the canary deploy path. Mirrors what runDeployStage already computed
+ * (ticket row, project, working tree) plus the admin fetchers and the shared
+ * infraFail/fail routing closures.
+ */
+export interface WorkflowDeployArgs {
+  deps: DeployDeps;
+  ticket: { iterations: number; deploy_pushed_at: number | null; deploy_pushed_sha: string | null };
+  proj: { slug: string; name: string; owner_id: string; data_provisioned_at: number | null };
+  files: Map<string, string>;
+  ticketId: string;
+  adminFetch: (path: string, body: unknown) => Promise<Response>;
+  adminGet: (path: string) => Promise<Response>;
+  infraFail: (reason: string) => void;
+  fail: (reason: string) => void;
+}
+
+/**
+ * Canary deploy: start the durable provisioning Workflow once, then poll it to a
+ * terminal state across watchdog ticks. The workflow does repo + r2 + analytics +
+ * push + the CI-green gate itself; we just map its outcome onto the ticket and
+ * run the same post-deploy tail on green.
+ *
+ * The workflow's auto-generated instance id is parked in `deploy_pushed_sha`
+ * (the canary path pushes INSIDE the workflow, so that column isn't holding a
+ * git sha here). infraFail/fail clear it, so a retry starts a fresh instance.
+ */
+export async function runDeployViaWorkflow(a: WorkflowDeployArgs): Promise<void> {
+  const { deps, ticket, proj, files, ticketId, adminFetch, adminGet, infraFail, fail } = a;
+  const { sql } = deps;
+  const now = Date.now();
+
+  // 1) Start the workflow ONCE per attempt (watchdog re-ticks skip to polling).
+  let instanceId = ticket.deploy_pushed_sha ?? undefined;
+  if (!ticket.deploy_pushed_at) {
+    const res = await adminFetch('/api/provision-workflow/agent', {
+      id: proj.slug, name: proj.name, files: Object.fromEntries(files),
+    });
+    const body = await res.json().catch(() => ({})) as { id?: string; error?: string };
+    if (!res.ok || !body.id) {
+      return infraFail(`Could not start deploy workflow: ${body.error || `admin ${res.status}`}`);
+    }
+    instanceId = body.id;
+    sql.exec('UPDATE tickets SET deploy_pushed_at = ?, deploy_pushed_sha = ? WHERE id = ?', now, instanceId, ticketId);
+    deps.logActivity('deploy', `Deploy workflow started (${instanceId.slice(0, 8)}) — provisioning + building…`, ticketId);
+    return; // poll on the next tick
+  }
+  if (!instanceId) return infraFail('Deploy workflow id missing — will restart the deploy.');
+
+  // 2) Poll the instance to a terminal state.
+  const res = await adminGet(`/api/provision-workflow/status?id=${encodeURIComponent(instanceId)}`);
+  const startedAt = ticket.deploy_pushed_at ?? now;
+  if (!res.ok) {
+    // Transient status-read failure — re-check next tick, bounded by the timeout.
+    if (Date.now() - startedAt > WORKFLOW_DEPLOY_TIMEOUT_MS) {
+      return infraFail(`Deploy workflow status unreadable (admin ${res.status}).`);
+    }
+    return;
+  }
+  const j = await res.json().catch(() => ({})) as {
+    status?: { status?: string; error?: string | { message?: string }; output?: { commitSha?: string; repoUrl?: string } };
+  };
+  const st = j.status?.status;
+
+  if (st === 'complete') {
+    const out = j.status?.output ?? {};
+    if (out.repoUrl) sql.exec('UPDATE project SET repo_url = ? WHERE repo_url IS NULL', out.repoUrl);
+    await finishGreenDeploy(deps, proj, ticketId, out.commitSha, files, out.repoUrl);
+    return;
+  }
+  if (st === 'errored' || st === 'terminated') {
+    const e = j.status?.error;
+    const msg = (typeof e === 'string' ? e : e?.message) ?? 'unknown error';
+    // A CI-gate failure is a CODE error → back to Dev with the compiler output.
+    // Anything else (repo create, push, infra) the agent can't fix → needs-input.
+    if (msg.startsWith('CI gate:')) return fail(msg);
+    return infraFail(`Deploy workflow failed: ${msg}`);
+  }
+
+  // queued / running / waiting / paused → still going; re-check, bounded.
+  if (Date.now() - startedAt > WORKFLOW_DEPLOY_TIMEOUT_MS) {
+    return infraFail('Deploy workflow did not reach a terminal state in time.');
+  }
+  deps.logActivity('deploy', `Deploy workflow ${st ?? 'running'} — will re-check`, ticketId);
+}
+
+/**
+ * The shared "green deploy" tail: mark the ticket done, then run the best-effort
+ * post-deploy steps (context summary, CI test harvest, data plane, MCP tools).
+ * Used by both the inline path and the workflow canary path.
+ */
+async function finishGreenDeploy(
+  deps: DeployDeps,
+  proj: { slug: string; owner_id: string; data_provisioned_at: number | null },
+  ticketId: string,
+  sha: string | undefined,
+  files: Map<string, string>,
+  url?: string,
+): Promise<void> {
+  const { sql } = deps;
+  sql.exec("UPDATE tickets SET status = 'done', final_commit_sha = ?, updated_at = ? WHERE id = ?", sha ?? null, Date.now(), ticketId);
+  deps.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'done', trigger: 'system' });
+  deps.logActivity('deploy', `Deployed live ✓ ${sha?.slice(0, 7) ?? ''} ${url ?? ''}`.trim(), ticketId);
+
+  // Build + cache the deterministic app context summary so Dev/QA agents can
+  // skip re-reading files on subsequent tickets.
+  try {
+    const summary = buildAppSummary(files);
+    if (summary) sql.exec('UPDATE project SET app_context_summary = ? WHERE slug = ?', summary, proj.slug);
+  } catch { /* best-effort */ }
+
+  // Harvest CI test results, ensure the data plane, register MCP tools. All
+  // best-effort: never fail an already-green deploy.
+  await harvestTestResults(deps, proj, ticketId, sha);
+  await ensureDataInfra(deps, proj, ticketId);
+  await registerMcpTools(deps, proj, ticketId, files);
 }
 
 /**
