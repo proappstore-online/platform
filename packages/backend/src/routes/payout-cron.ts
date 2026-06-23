@@ -107,6 +107,12 @@ payoutCronRoutes.post('/internal/payouts/run', async (c) => {
         currency: 'usd',
         destination: connect.stripe_connect_account_id,
         description: `PAS service payout ${payoutMonth}`,
+        // Idempotency at Stripe: the check at step 3 + the UNIQUE index only
+        // guard the DB record, not the money. Without this, two concurrent cron
+        // runs both pass step 3 and both transfer → the developer is paid twice.
+        // Keyed by developer + month, so a duplicate request returns the same
+        // transfer instead of creating a new one.
+        idempotencyKey: `payout:${row.developer_id}:${payoutMonth}`,
         metadata: {
           developer_id: row.developer_id,
           payout_month: payoutMonth,

@@ -170,6 +170,14 @@ describe('POST /v1/internal/payouts/run', () => {
 
     // Verify batch was called (payout record + engagement update)
     expect(db.batch).toHaveBeenCalledTimes(1);
+
+    // The transfer MUST carry a per-developer-per-month idempotency key, so two
+    // concurrent cron runs can't double-pay (the DB check is not atomic w/ Stripe).
+    const transferCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+      .find(([u]) => String(u).includes('/v1/transfers'));
+    expect(transferCall).toBeDefined();
+    const headers = (transferCall![1] as RequestInit).headers as Record<string, string>;
+    expect(headers['Idempotency-Key']).toMatch(/^payout:gh:10:\d{4}-\d{2}$/);
   });
 
   it('reports Stripe failures without crashing', async () => {

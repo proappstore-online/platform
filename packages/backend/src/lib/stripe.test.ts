@@ -144,6 +144,25 @@ describe('Stripe client', () => {
     expect(body).toContain('description=June+payout');
   });
 
+  it('createTransfer sends the Idempotency-Key header when given (double-pay guard)', async () => {
+    mockOk({ id: 'tr_1', amount: 1000, currency: 'usd', destination: 'acct_1' });
+    await stripe.createTransfer({
+      amountCents: 1000,
+      currency: 'usd',
+      destination: 'acct_1',
+      idempotencyKey: 'payout:gh:10:2026-06',
+    });
+    const headers = (mockFetch.mock.calls[0] as [string, RequestInit])[1].headers as Record<string, string>;
+    expect(headers['Idempotency-Key']).toBe('payout:gh:10:2026-06');
+  });
+
+  it('omits the Idempotency-Key header when not given', async () => {
+    mockOk({ id: 'tr_2', amount: 500, currency: 'usd', destination: 'acct_2' });
+    await stripe.createTransfer({ amountCents: 500, currency: 'usd', destination: 'acct_2' });
+    const headers = (mockFetch.mock.calls[0] as [string, RequestInit])[1].headers as Record<string, string>;
+    expect('Idempotency-Key' in headers).toBe(false);
+  });
+
   it('uses Basic auth with secret key', async () => {
     mockOk({ id: 'cs_1', url: 'https://checkout.stripe.com/c/pay/cs_1' });
     await stripe.createCheckoutSession({

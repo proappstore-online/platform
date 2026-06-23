@@ -154,6 +154,11 @@ export class Stripe {
     destination: string;
     description?: string;
     metadata?: Record<string, string>;
+    /** Stripe idempotency key. Re-sending the same key returns the ORIGINAL
+     *  transfer instead of creating a duplicate — the only safe guard against
+     *  double-paying when the cron runs concurrently or is retried after the
+     *  transfer succeeded but the DB record didn't. */
+    idempotencyKey?: string;
   }): Promise<StripeTransfer> {
     const body = new URLSearchParams();
     body.set('amount', String(params.amountCents));
@@ -165,15 +170,17 @@ export class Stripe {
         body.set(`metadata[${k}]`, v);
       }
     }
-    return this.post('/v1/transfers', body);
+    return this.post('/v1/transfers', body, params.idempotencyKey);
   }
 
-  private async post<T>(path: string, body: URLSearchParams): Promise<T> {
+  private async post<T>(path: string, body: URLSearchParams, idempotencyKey?: string): Promise<T> {
     const response = await fetch(`https://api.stripe.com${path}`, {
       method: 'POST',
       headers: {
         Authorization: `Basic ${btoa(`${this.secretKey}:`)}`,
         'Content-Type': 'application/x-www-form-urlencoded',
+        // Stripe deduplicates POSTs carrying the same Idempotency-Key for 24h.
+        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
       },
       body: body.toString(),
     });
