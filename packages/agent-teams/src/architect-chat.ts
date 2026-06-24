@@ -19,6 +19,18 @@ import { executeFileTool } from './spine.ts';
 import { toolActivityDetail } from './tool-activity.ts';
 import { sliceDocs } from './platform-skill.ts';
 import { isKbPath, KbIndex } from './kb-rag.ts';
+import { estimateCost } from './runtimes/cf-native-pricing.ts';
+
+/** The Architect's model — also used for spend estimation. */
+const ARCHITECT_MODEL = 'claude-sonnet-4-6';
+
+/** Record the run's spend (like the build agents' 'cost' activity) so the
+ *  Research tab shows what authoring the KB cost. No-op when nothing was spent. */
+function logArchitectCost(deps: ArchitectChatDeps, tokensIn: number, tokensOut: number): void {
+  if (tokensIn <= 0 && tokensOut <= 0) return;
+  const usd = estimateCost(ARCHITECT_MODEL, tokensIn, tokensOut);
+  deps.logActivity('cost', `Architect · $${usd.toFixed(4)} · ${tokensIn}+${tokensOut} tok`, null);
+}
 import { parseAnthropicStream } from './runtimes/cf-native-stream.ts';
 
 /** The Architect's chat thread (kept out of the PO/build transcript). */
@@ -73,10 +85,21 @@ export function decideArchitectTurn(opts: {
   wantsKb: boolean;
   wrote: boolean;
   alreadyNudged: boolean;
+  askedQuestion: boolean;
 }): ArchitectTurnAction {
   if (opts.toolUseCount > 0) return 'process';
+  // Don't force a write while the Architect is asking the founder a clarifying
+  // question — let the conversation continue. The nudge is only for the
+  // "declared done / summarized without writing" stall.
+  if (opts.askedQuestion) return 'finish';
   if (opts.wantsKb && !opts.wrote && !opts.alreadyNudged) return 'nudge';
   return 'finish';
+}
+
+/** True when the Architect's message ends by asking the founder something — used
+ *  to keep the "must write the KB" nudge/fallback from firing mid-conversation. */
+export function looksLikeQuestion(text: string): boolean {
+  return /\?\s*$/.test(text.trim());
 }
 
 /**
@@ -234,10 +257,13 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
   // releases architectChatBusy never runs and every future KB build 409s.
   const ac = new AbortController();
   const runTimeout = setTimeout(() => ac.abort(), ARCHITECT_RUN_TIMEOUT_MS);
+  // Track spend like the build agents, so the Research tab shows the KB cost.
+  let totalIn = 0;
+  let totalOut = 0;
+  let text = '';
   try {
-    let text = '';
     for (let turn = 0; turn < 25; turn++) { // room for reads + writes + follow-up tools
-      deps.broadcast({ type: 'agent-heartbeat', role: 'Architect' });
+      deps.broadcast({ type: 'agent-heartbeat', role: 'Architect', costUsd: estimateCost(ARCHITECT_MODEL, totalIn, totalOut), tokensIn: totalIn, tokensOut: totalOut });
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         signal: ac.signal,
@@ -247,7 +273,7 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
           'anthropic-beta': 'web-fetch-2025-09-10',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 8192, system: systemPrompt, tools, messages, stream: true }),
+        body: JSON.stringify({ model: ARCHITECT_MODEL, max_tokens: 8192, system: systemPrompt, tools, messages, stream: true }),
       });
       if (!res.ok) {
         let detail = '';
@@ -273,6 +299,8 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
         streamResult = await stream.next();
       }
       const aiRes = streamResult.value;
+      totalIn += aiRes.usage?.input_tokens ?? 0;
+      totalOut += aiRes.usage?.output_tokens ?? 0;
       const contentArr = aiRes.content;
       messages.push({ role: 'assistant', content: contentArr });
       text = (contentArr as { type: string; text?: string }[]).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('');
@@ -289,7 +317,7 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       // history → Anthropic 400 ("tool_use ids without tool_result"); (2) a
       // completed write_file in a max_tokens-truncated turn must still execute,
       // not be abandoned (that would silently lose the KB write).
-      const action = decideArchitectTurn({ toolUseCount: toolUses.length, wantsKb, wrote, alreadyNudged: nudgedToWrite });
+      const action = decideArchitectTurn({ toolUseCount: toolUses.length, wantsKb, wrote, alreadyNudged: nudgedToWrite, askedQuestion: looksLikeQuestion(text) });
       if (action === 'finish') break;
       if (action === 'nudge') {
         // No pending tool_use to orphan (toolUseCount === 0). One hard "write it
@@ -335,7 +363,9 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
     // never wrote a file (the coffeerating failure — refused, hit the 25-turn
     // cap, or finished early), synthesize a draft KNOWLEDGE.md from the facts it
     // gathered. Never overwrites a real KB (only runs when nothing was written).
-    if (wantsKb && !wrote) {
+    // Don't synthesize a draft if the Architect is mid-conversation asking the
+    // founder a question — only when it stalled (didn't write, isn't asking).
+    if (wantsKb && !wrote && !looksLikeQuestion(text)) {
       files.set('KNOWLEDGE.md', buildFallbackKnowledge(appName, appIdea, deps.recallMemory()));
       deps.saveFiles(files);
       wrote = true;
@@ -351,11 +381,12 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       await reindexChangedKb();
       deps.publishKb();
     }
+    logArchitectCost(deps, totalIn, totalOut);
     return save(deps, text || 'Done.', Date.now());
   } catch (err) {
     // On error/abort too, leave a draft KB if one was requested and nothing was
     // written — a timed-out research run shouldn't be a total loss.
-    if (wantsKb && !wrote) {
+    if (wantsKb && !wrote && !looksLikeQuestion(text)) {
       try {
         files.set('KNOWLEDGE.md', buildFallbackKnowledge(appName, appIdea, deps.recallMemory()));
         wrote = true;
@@ -367,6 +398,7 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       deps.broadcast({ type: 'files-synced', count: files.size });
       await reindexChangedKb().catch(() => {});
     }
+    logArchitectCost(deps, totalIn, totalOut);
     const aborted = err instanceof Error && err.name === 'AbortError';
     const msg = aborted
       ? `That took too long and I stopped at the ${Math.round(ARCHITECT_RUN_TIMEOUT_MS / 60_000)}-minute limit${wrote ? ' (a draft KB was saved from what I gathered)' : ''}. Try again.`

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFallbackKnowledge, decideArchitectTurn, wantsKbAuthoring, writtenKbPaths } from './architect-chat.ts';
+import { buildFallbackKnowledge, decideArchitectTurn, looksLikeQuestion, wantsKbAuthoring, writtenKbPaths } from './architect-chat.ts';
 
 /**
  * Intent gate for the "must write KNOWLEDGE.md before finishing" nudge (the fix
@@ -31,28 +31,45 @@ describe('wantsKbAuthoring', () => {
  * tool_use is an invalid history → Anthropic 400.
  */
 describe('decideArchitectTurn', () => {
+  const base = { askedQuestion: false } as const;
   it('ALWAYS processes pending tool calls — even when a KB nudge is otherwise due (orphan-400 fix)', () => {
     // This exact combo (tools pending + wantsKb + !wrote + !nudged) is what the
     // old `|| stop_reason !== 'tool_use'` branch turned into a nudge → 400.
-    expect(decideArchitectTurn({ toolUseCount: 1, wantsKb: true, wrote: false, alreadyNudged: false })).toBe('process');
-    expect(decideArchitectTurn({ toolUseCount: 3, wantsKb: true, wrote: false, alreadyNudged: true })).toBe('process');
-    expect(decideArchitectTurn({ toolUseCount: 2, wantsKb: false, wrote: true, alreadyNudged: false })).toBe('process');
+    expect(decideArchitectTurn({ ...base, toolUseCount: 1, wantsKb: true, wrote: false, alreadyNudged: false })).toBe('process');
+    expect(decideArchitectTurn({ ...base, toolUseCount: 3, wantsKb: true, wrote: false, alreadyNudged: true })).toBe('process');
+    expect(decideArchitectTurn({ ...base, toolUseCount: 2, wantsKb: false, wrote: true, alreadyNudged: false })).toBe('process');
   });
 
   it('nudges once when the KB was requested, nothing was written, and no tools are pending', () => {
-    expect(decideArchitectTurn({ toolUseCount: 0, wantsKb: true, wrote: false, alreadyNudged: false })).toBe('nudge');
+    expect(decideArchitectTurn({ ...base, toolUseCount: 0, wantsKb: true, wrote: false, alreadyNudged: false })).toBe('nudge');
+  });
+
+  it('does NOT nudge while the Architect is asking the founder a question', () => {
+    // One-at-a-time Q&A: a clarifying question must not be force-written over.
+    expect(decideArchitectTurn({ toolUseCount: 0, wantsKb: true, wrote: false, alreadyNudged: false, askedQuestion: true })).toBe('finish');
   });
 
   it('does not nudge twice (one-shot)', () => {
-    expect(decideArchitectTurn({ toolUseCount: 0, wantsKb: true, wrote: false, alreadyNudged: true })).toBe('finish');
+    expect(decideArchitectTurn({ ...base, toolUseCount: 0, wantsKb: true, wrote: false, alreadyNudged: true })).toBe('finish');
   });
 
   it('finishes once a KB file has been written', () => {
-    expect(decideArchitectTurn({ toolUseCount: 0, wantsKb: true, wrote: true, alreadyNudged: false })).toBe('finish');
+    expect(decideArchitectTurn({ ...base, toolUseCount: 0, wantsKb: true, wrote: true, alreadyNudged: false })).toBe('finish');
   });
 
   it('finishes plain Q&A without ever nudging', () => {
-    expect(decideArchitectTurn({ toolUseCount: 0, wantsKb: false, wrote: false, alreadyNudged: false })).toBe('finish');
+    expect(decideArchitectTurn({ ...base, toolUseCount: 0, wantsKb: false, wrote: false, alreadyNudged: false })).toBe('finish');
+  });
+});
+
+describe('looksLikeQuestion', () => {
+  it('detects a message that ends by asking the founder something', () => {
+    expect(looksLikeQuestion('Should ratings be on a map or a list?')).toBe(true);
+    expect(looksLikeQuestion('Got it. One thing — is the photo required?\n')).toBe(true);
+  });
+  it('is false for statements / completion', () => {
+    expect(looksLikeQuestion('Done. I wrote KNOWLEDGE.md.')).toBe(false);
+    expect(looksLikeQuestion('Here are 5 questions: 1) a? 2) b? Answer all.')).toBe(false); // not asking at the end
   });
 });
 
