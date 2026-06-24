@@ -1,0 +1,3487 @@
+openapi: 3.1.0
+info:
+  title: ProAppStore Platform API
+  version: 1.0.0
+  description: 'REST API for ProAppStore (PAS) — the Pro app marketplace platform.
+
+
+    Powers identity, app provisioning + deploy, the per-app backend services (KV, counters, storage, rooms,
+    secrets, AI, email/SMS, maps, push), the storefront + submissions review flow, the Agent Teams build
+    loop, billing, and creator payouts.
+
+
+    Auth: send `Authorization: Bearer <PAS session JWT>` (HS256, from `/v1/auth/exchange` or an OAuth
+    flow). A handful of service-to-service routes use the `X-Internal-Token` header instead. Public routes
+    need no auth.
+
+
+    This spec is generated from the backend route table; request/response bodies are typed for the core
+    resources and generic (object) elsewhere.'
+servers:
+- url: https://api.proappstore.online
+  description: Production
+security:
+- bearerAuth: []
+tags:
+- name: Health
+  description: ''
+- name: Auth
+  description: OAuth (GitHub/Google), credential, and session-exchange endpoints.
+- name: Billing
+  description: Pro subscription status, Stripe Checkout, and billing portal.
+- name: Apps
+  description: App listing and dashboard management.
+- name: Submissions
+  description: Pro app review flow (submit, list, approve/reject).
+- name: Provisioning
+  description: Provision app infrastructure (route + D1 + data worker).
+- name: Listings
+  description: Storefront publishing and the public storefront browse API.
+- name: Teams
+  description: App team membership and invites.
+- name: Invites
+  description: App invite links (create/list/redeem).
+- name: Roles
+  description: App-level custom roles and role checks.
+- name: Key Vault
+  description: Encrypted BYO API-key vault (AES-256-GCM) + proxy usage.
+- name: KV Storage
+  description: Per-app key-value storage.
+- name: Counters
+  description: Per-app integer counters.
+- name: Storage
+  description: R2-backed per-app file storage (private + public).
+- name: Tools
+  description: MCP tool registration per app (SQL-backed actions).
+- name: Actions
+  description: Execute custom per-app serverless actions.
+- name: Secrets
+  description: Per-app secret storage proxy.
+- name: Domains
+  description: Custom domain attach/verify/detach.
+- name: Stripe Connect
+  description: Creator payout onboarding via Stripe Connect.
+- name: Email
+  description: Transactional email delivery.
+- name: SMS
+  description: Twilio SMS delivery.
+- name: Notifications
+  description: Web Push subscriptions and delivery.
+- name: Analytics
+  description: Per-app usage analytics + the public instrumentation endpoints.
+- name: Usage
+  description: Per-user and per-app API usage tracking.
+- name: Payouts
+  description: Creator payout preview and the monthly payout cron.
+- name: Logs
+  description: Per-app build and runtime logs.
+- name: Maps
+  description: Geocoding, reverse-geocoding, and routing.
+- name: AI
+  description: Workers AI text generation, embeddings, and model listing.
+- name: App Webhooks
+  description: Per-app outbound webhook configuration.
+- name: Services
+  description: Creator services marketplace profiles, balance, earnings.
+- name: Engagements
+  description: Service engagements, messaging, and workspace.
+- name: Rooms
+  description: Realtime collaboration rooms (Durable Objects, WebSocket).
+- name: Webhooks
+  description: Inbound provider webhooks (Stripe). Signature-verified, not user-facing.
+- name: Licensing
+  description: Per-app license key issuance and validation.
+paths:
+  /:
+    get:
+      tags:
+      - Health
+      summary: Service health
+      operationId: get
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+  /health:
+    get:
+      tags:
+      - Health
+      summary: Health check
+      operationId: get_health
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+  /v1/ai/embed:
+    post:
+      tags:
+      - AI
+      summary: Create embed
+      operationId: post_v1_ai_embed
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/ai/generate:
+    post:
+      tags:
+      - AI
+      summary: Create generate
+      operationId: post_v1_ai_generate
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/ai/models:
+    get:
+      tags:
+      - AI
+      summary: List models
+      operationId: get_v1_ai_models
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/analytics.js:
+    get:
+      tags:
+      - Analytics
+      summary: List analytics script
+      operationId: get_v1_analytics_js
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+  /v1/analytics/admin/platform:
+    get:
+      tags:
+      - Analytics
+      summary: List platform
+      operationId: get_v1_analytics_admin_platform
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/analytics/event:
+    post:
+      tags:
+      - Analytics
+      summary: Event analytics
+      operationId: post_v1_analytics_event
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/apps:
+    get:
+      tags:
+      - Apps
+      summary: List apps
+      operationId: get_v1_apps
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/apps/{appId}/actions/{name}:
+    post:
+      tags:
+      - Actions
+      summary: Create actions
+      operationId: post_v1_apps_appId_actions_name
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/apps/{appId}/allowlist:
+    get:
+      tags:
+      - Secrets
+      summary: List allowlist
+      operationId: get_v1_apps_appId_allowlist
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags:
+      - Secrets
+      summary: Set allowlist
+      operationId: put_v1_apps_appId_allowlist
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+    delete:
+      tags:
+      - Secrets
+      summary: Delete allowlist
+      operationId: delete_v1_apps_appId_allowlist
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/analytics:
+    get:
+      tags:
+      - Analytics
+      summary: List analytics
+      operationId: get_v1_apps_appId_analytics
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags:
+      - Analytics
+      summary: Set analytics
+      operationId: put_v1_apps_appId_analytics
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/apps/{appId}/analytics/diagnostics:
+    get:
+      tags:
+      - Analytics
+      summary: List diagnostics
+      operationId: get_v1_apps_appId_analytics_diagnostics
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/analytics/events:
+    get:
+      tags:
+      - Analytics
+      summary: List events
+      operationId: get_v1_apps_appId_analytics_events
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/analytics/live:
+    get:
+      tags:
+      - Analytics
+      summary: List live
+      operationId: get_v1_apps_appId_analytics_live
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/analytics/stats:
+    get:
+      tags:
+      - Analytics
+      summary: List stats
+      operationId: get_v1_apps_appId_analytics_stats
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/counters:
+    get:
+      tags:
+      - Counters
+      summary: List counters
+      operationId: get_v1_apps_appId_counters
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/counters/{key}:
+    get:
+      tags:
+      - Counters
+      summary: Get counters
+      operationId: get_v1_apps_appId_counters_key
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags:
+      - Counters
+      summary: Create counters
+      operationId: post_v1_apps_appId_counters_key
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/apps/{appId}/domains:
+    post:
+      tags:
+      - Domains
+      summary: Create domains
+      operationId: post_v1_apps_appId_domains
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+    get:
+      tags:
+      - Domains
+      summary: List domains
+      operationId: get_v1_apps_appId_domains
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/domains/{domain}:
+    delete:
+      tags:
+      - Domains
+      summary: Delete domains
+      operationId: delete_v1_apps_appId_domains_domain
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/domains/{domain}/verify:
+    post:
+      tags:
+      - Domains
+      summary: Verify domains
+      operationId: post_v1_apps_appId_domains_domain_verify
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/apps/{appId}/files:
+    get:
+      tags:
+      - Storage
+      summary: List files
+      operationId: get_v1_apps_appId_files
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/invites:
+    post:
+      tags:
+      - Invites
+      summary: Create invites
+      operationId: post_v1_apps_appId_invites
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+    get:
+      tags:
+      - Invites
+      summary: List invites
+      operationId: get_v1_apps_appId_invites
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/invites/{inviteId}:
+    delete:
+      tags:
+      - Invites
+      summary: Delete invites
+      operationId: delete_v1_apps_appId_invites_inviteId
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: inviteId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/kv:
+    get:
+      tags:
+      - KV Storage
+      summary: List kv
+      operationId: get_v1_apps_appId_kv
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/kv/{key}:
+    get:
+      tags:
+      - KV Storage
+      summary: Get kv
+      operationId: get_v1_apps_appId_kv_key
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags:
+      - KV Storage
+      summary: Set kv
+      operationId: put_v1_apps_appId_kv_key
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+    delete:
+      tags:
+      - KV Storage
+      summary: Delete kv
+      operationId: delete_v1_apps_appId_kv_key
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/license:
+    get:
+      tags:
+      - Licensing
+      summary: List license
+      operationId: get_v1_apps_appId_license
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/logs:
+    post:
+      tags:
+      - Logs
+      summary: Create logs
+      operationId: post_v1_apps_appId_logs
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+    get:
+      tags:
+      - Logs
+      summary: List logs
+      operationId: get_v1_apps_appId_logs
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/logs/build:
+    get:
+      tags:
+      - Logs
+      summary: List build
+      operationId: get_v1_apps_appId_logs_build
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/public/{path}:
+    get:
+      tags:
+      - Storage
+      summary: Get public
+      operationId: get_v1_apps_appId_public_path
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Catch-all sub-path (may contain slashes).
+  /v1/apps/{appId}/roles:
+    get:
+      tags:
+      - Roles
+      summary: List roles
+      operationId: get_v1_apps_appId_roles
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags:
+      - Roles
+      summary: Create roles
+      operationId: post_v1_apps_appId_roles
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+    delete:
+      tags:
+      - Roles
+      summary: Delete roles
+      operationId: delete_v1_apps_appId_roles
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/roles/check/{role}:
+    get:
+      tags:
+      - Roles
+      summary: Get check
+      operationId: get_v1_apps_appId_roles_check_role
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: role
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/roles/ensure-member:
+    post:
+      tags:
+      - Roles
+      summary: Create ensure member
+      operationId: post_v1_apps_appId_roles_ensure_member
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/apps/{appId}/roles/me:
+    get:
+      tags:
+      - Roles
+      summary: List me
+      operationId: get_v1_apps_appId_roles_me
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/rooms/{roomId}:
+    get:
+      tags:
+      - Rooms
+      summary: Get rooms
+      operationId: get_v1_apps_appId_rooms_roomId
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: roomId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/secrets:
+    get:
+      tags:
+      - Secrets
+      summary: List secrets
+      operationId: get_v1_apps_appId_secrets
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/secrets/{name}:
+    put:
+      tags:
+      - Secrets
+      summary: Set secrets
+      operationId: put_v1_apps_appId_secrets_name
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+    delete:
+      tags:
+      - Secrets
+      summary: Delete secrets
+      operationId: delete_v1_apps_appId_secrets_name
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/storage/{path}:
+    put:
+      tags:
+      - Storage
+      summary: Set storage
+      operationId: put_v1_apps_appId_storage_path
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Catch-all sub-path (may contain slashes).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+    get:
+      tags:
+      - Storage
+      summary: Get storage
+      operationId: get_v1_apps_appId_storage_path
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Catch-all sub-path (may contain slashes).
+    delete:
+      tags:
+      - Storage
+      summary: Delete storage
+      operationId: delete_v1_apps_appId_storage_path
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Catch-all sub-path (may contain slashes).
+  /v1/apps/{appId}/team:
+    get:
+      tags:
+      - Teams
+      summary: List team
+      operationId: get_v1_apps_appId_team
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/team/invite:
+    post:
+      tags:
+      - Teams
+      summary: Create invite
+      operationId: post_v1_apps_appId_team_invite
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/apps/{appId}/team/{userRef}:
+    put:
+      tags:
+      - Teams
+      summary: Set team
+      operationId: put_v1_apps_appId_team_userRef
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: userRef
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+    delete:
+      tags:
+      - Teams
+      summary: Delete team
+      operationId: delete_v1_apps_appId_team_userRef
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: userRef
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/tools:
+    put:
+      tags:
+      - Tools
+      summary: Set tools
+      operationId: put_v1_apps_appId_tools
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+    get:
+      tags:
+      - Tools
+      summary: List tools
+      operationId: get_v1_apps_appId_tools
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags:
+      - Tools
+      summary: Delete tools
+      operationId: delete_v1_apps_appId_tools
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/tools/internal:
+    post:
+      tags:
+      - Tools
+      summary: Create internal
+      operationId: post_v1_apps_appId_tools_internal
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - internalToken: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/apps/{appId}/tools/{name}:
+    delete:
+      tags:
+      - Tools
+      summary: Delete tools
+      operationId: delete_v1_apps_appId_tools_name
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/webhooks:
+    get:
+      tags:
+      - App Webhooks
+      summary: List webhooks
+      operationId: get_v1_apps_appId_webhooks
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags:
+      - App Webhooks
+      summary: Create webhooks
+      operationId: post_v1_apps_appId_webhooks
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/apps/{appId}/webhooks/{id}:
+    delete:
+      tags:
+      - App Webhooks
+      summary: Delete webhooks
+      operationId: delete_v1_apps_appId_webhooks_id
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/webhooks/{id}/test:
+    post:
+      tags:
+      - App Webhooks
+      summary: Test webhooks
+      operationId: post_v1_apps_appId_webhooks_id_test
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/apps/{id}:
+    delete:
+      tags:
+      - Apps
+      summary: Delete apps
+      operationId: delete_v1_apps_id
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{id}/listing:
+    get:
+      tags:
+      - Listings
+      summary: List listing
+      operationId: get_v1_apps_id_listing
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags:
+      - Listings
+      summary: Set listing
+      operationId: put_v1_apps_id_listing
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/apps/{id}/listing-assets/{kind}:
+    put:
+      tags:
+      - Listings
+      summary: Set listing assets
+      operationId: put_v1_apps_id_listing_assets_kind
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: kind
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/apps/{id}/usage:
+    get:
+      tags:
+      - Usage
+      summary: List usage
+      operationId: get_v1_apps_id_usage
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/auth/credentials/change-password:
+    post:
+      tags:
+      - Auth
+      summary: Change Password credentials
+      operationId: post_v1_auth_credentials_change_password
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/auth/credentials/login:
+    post:
+      tags:
+      - Auth
+      summary: Create login
+      operationId: post_v1_auth_credentials_login
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/auth/credentials/provision:
+    post:
+      tags:
+      - Auth
+      summary: Provision credentials
+      operationId: post_v1_auth_credentials_provision
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/auth/credentials/reset-password:
+    post:
+      tags:
+      - Auth
+      summary: Reset Password credentials
+      operationId: post_v1_auth_credentials_reset_password
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/auth/email/start:
+    post:
+      tags:
+      - Auth
+      summary: Start email
+      operationId: post_v1_auth_email_start
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/auth/exchange:
+    post:
+      tags:
+      - Auth
+      summary: Create exchange
+      operationId: post_v1_auth_exchange
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/auth/me:
+    get:
+      tags:
+      - Auth
+      summary: List me
+      operationId: get_v1_auth_me
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/auth/me/date-of-birth:
+    patch:
+      tags:
+      - Auth
+      summary: Update date of birth
+      operationId: patch_v1_auth_me_date_of_birth
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/auth/{provider}/callback:
+    get:
+      tags:
+      - Auth
+      summary: List callback
+      operationId: get_v1_auth_provider_callback
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+      parameters:
+      - name: provider
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/auth/{provider}/start:
+    get:
+      tags:
+      - Auth
+      summary: List start
+      operationId: get_v1_auth_provider_start
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+      parameters:
+      - name: provider
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/checkout:
+    post:
+      tags:
+      - Billing
+      summary: Create checkout
+      operationId: post_v1_checkout
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/connect/onboard:
+    post:
+      tags:
+      - Stripe Connect
+      summary: Onboard connect
+      operationId: post_v1_connect_onboard
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/connect/status:
+    get:
+      tags:
+      - Stripe Connect
+      summary: List status
+      operationId: get_v1_connect_status
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/email/send:
+    post:
+      tags:
+      - Email
+      summary: Send email
+      operationId: post_v1_email_send
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/internal/apps/{appId}/analytics/cf-token:
+    put:
+      tags:
+      - Analytics
+      summary: Set cf token
+      operationId: put_v1_internal_apps_appId_analytics_cf_token
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - internalToken: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/internal/payouts/run:
+    post:
+      tags:
+      - Payouts
+      summary: Run payouts
+      operationId: post_v1_internal_payouts_run
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - internalToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/invites/{code}/redeem:
+    post:
+      tags:
+      - Invites
+      summary: Redeem invites
+      operationId: post_v1_invites_code_redeem
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: code
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/keys:
+    get:
+      tags:
+      - Key Vault
+      summary: List keys
+      operationId: get_v1_keys
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/keys/providers:
+    get:
+      tags:
+      - Key Vault
+      summary: List providers
+      operationId: get_v1_keys_providers
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+  /v1/keys/resolve/{provider}:
+    get:
+      tags:
+      - Key Vault
+      summary: Get resolve
+      operationId: get_v1_keys_resolve_provider
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      - internalToken: []
+      parameters:
+      - name: provider
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/keys/status:
+    get:
+      tags:
+      - Key Vault
+      summary: List status
+      operationId: get_v1_keys_status
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/keys/usage:
+    get:
+      tags:
+      - Key Vault
+      summary: List usage
+      operationId: get_v1_keys_usage
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/keys/{provider}:
+    put:
+      tags:
+      - Key Vault
+      summary: Set keys
+      operationId: put_v1_keys_provider
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: provider
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+    delete:
+      tags:
+      - Key Vault
+      summary: Delete keys
+      operationId: delete_v1_keys_provider
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: provider
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/license/validate:
+    post:
+      tags:
+      - Licensing
+      summary: Validate license
+      operationId: post_v1_license_validate
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/maps/geocode:
+    get:
+      tags:
+      - Maps
+      summary: List geocode
+      operationId: get_v1_maps_geocode
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/maps/reverse:
+    get:
+      tags:
+      - Maps
+      summary: List reverse
+      operationId: get_v1_maps_reverse
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/maps/route:
+    get:
+      tags:
+      - Maps
+      summary: List route
+      operationId: get_v1_maps_route
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/me/is-admin:
+    get:
+      tags:
+      - Submissions
+      summary: List is admin
+      operationId: get_v1_me_is_admin
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/notifications/notify-user:
+    post:
+      tags:
+      - Notifications
+      summary: Notify User notifications
+      operationId: post_v1_notifications_notify_user
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - internalToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/notifications/send:
+    post:
+      tags:
+      - Notifications
+      summary: Send notifications
+      operationId: post_v1_notifications_send
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/notifications/subscribe:
+    post:
+      tags:
+      - Notifications
+      summary: Subscribe notifications
+      operationId: post_v1_notifications_subscribe
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/notifications/unsubscribe:
+    post:
+      tags:
+      - Notifications
+      summary: Unsubscribe notifications
+      operationId: post_v1_notifications_unsubscribe
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/notifications/vapid-key:
+    get:
+      tags:
+      - Notifications
+      summary: List vapid key
+      operationId: get_v1_notifications_vapid_key
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+  /v1/payouts/me/preview:
+    get:
+      tags:
+      - Payouts
+      summary: List preview
+      operationId: get_v1_payouts_me_preview
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/portal:
+    post:
+      tags:
+      - Billing
+      summary: Create portal
+      operationId: post_v1_portal
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/pricing:
+    get:
+      tags:
+      - Billing
+      summary: List pricing
+      operationId: get_v1_pricing
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pricing'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+  /v1/provision:
+    post:
+      tags:
+      - Provisioning
+      summary: Provision
+      operationId: post_v1_provision
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/provision-data:
+    post:
+      tags:
+      - Provisioning
+      summary: Create provision data
+      operationId: post_v1_provision_data
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - internalToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/services/balance:
+    get:
+      tags:
+      - Services
+      summary: List balance
+      operationId: get_v1_services_balance
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/services/balance/confirm:
+    post:
+      tags:
+      - Services
+      summary: Confirm balance
+      operationId: post_v1_services_balance_confirm
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/services/balance/deposit:
+    post:
+      tags:
+      - Services
+      summary: Deposit balance
+      operationId: post_v1_services_balance_deposit
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/services/balance/transactions:
+    get:
+      tags:
+      - Services
+      summary: List transactions
+      operationId: get_v1_services_balance_transactions
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/services/developers:
+    get:
+      tags:
+      - Services
+      summary: List developers
+      operationId: get_v1_services_developers
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/services/developers/{id}:
+    get:
+      tags:
+      - Services
+      summary: Get developers
+      operationId: get_v1_services_developers_id
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/services/earnings:
+    get:
+      tags:
+      - Services
+      summary: List earnings
+      operationId: get_v1_services_earnings
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/services/engagements:
+    post:
+      tags:
+      - Engagements
+      summary: Create engagements
+      operationId: post_v1_services_engagements
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+    get:
+      tags:
+      - Engagements
+      summary: List engagements
+      operationId: get_v1_services_engagements
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/services/engagements/{id}:
+    get:
+      tags:
+      - Engagements
+      summary: Get engagements
+      operationId: get_v1_services_engagements_id
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      tags:
+      - Engagements
+      summary: Update engagements
+      operationId: patch_v1_services_engagements_id
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/services/engagements/{id}/messages:
+    get:
+      tags:
+      - Engagements
+      summary: List messages
+      operationId: get_v1_services_engagements_id_messages
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags:
+      - Engagements
+      summary: Create messages
+      operationId: post_v1_services_engagements_id_messages
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/services/engagements/{id}/rate:
+    post:
+      tags:
+      - Engagements
+      summary: Rate engagements
+      operationId: post_v1_services_engagements_id_rate
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/services/engagements/{id}/read:
+    post:
+      tags:
+      - Engagements
+      summary: Read engagements
+      operationId: post_v1_services_engagements_id_read
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/services/engagements/{id}/refund:
+    post:
+      tags:
+      - Engagements
+      summary: Refund engagements
+      operationId: post_v1_services_engagements_id_refund
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/services/engagements/{id}/workspace:
+    get:
+      tags:
+      - Engagements
+      summary: List workspace
+      operationId: get_v1_services_engagements_id_workspace
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags:
+      - Engagements
+      summary: Create workspace
+      operationId: post_v1_services_engagements_id_workspace
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/services/my-requests:
+    get:
+      tags:
+      - Services
+      summary: List my requests
+      operationId: get_v1_services_my_requests
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/services/profile:
+    get:
+      tags:
+      - Services
+      summary: List profile
+      operationId: get_v1_services_profile
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+    put:
+      tags:
+      - Services
+      summary: Set profile
+      operationId: put_v1_services_profile
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/services/profile/availability:
+    patch:
+      tags:
+      - Services
+      summary: Update availability
+      operationId: patch_v1_services_profile_availability
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/services/recompute-stats:
+    post:
+      tags:
+      - Services
+      summary: Recompute Stats services
+      operationId: post_v1_services_recompute_stats
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - internalToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/services/requests:
+    post:
+      tags:
+      - Engagements
+      summary: Create requests
+      operationId: post_v1_services_requests
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+    get:
+      tags:
+      - Engagements
+      summary: List requests
+      operationId: get_v1_services_requests
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/services/requests/{id}:
+    delete:
+      tags:
+      - Engagements
+      summary: Delete requests
+      operationId: delete_v1_services_requests_id
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/services/requests/{id}/accept:
+    post:
+      tags:
+      - Engagements
+      summary: Accept requests
+      operationId: post_v1_services_requests_id_accept
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/services/unread:
+    get:
+      tags:
+      - Engagements
+      summary: List unread
+      operationId: get_v1_services_unread
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/sms/send:
+    post:
+      tags:
+      - SMS
+      summary: Send sms
+      operationId: post_v1_sms_send
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/storefront/apps:
+    get:
+      tags:
+      - Listings
+      summary: List apps
+      operationId: get_v1_storefront_apps
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+  /v1/storefront/apps/{id}:
+    get:
+      tags:
+      - Listings
+      summary: Get apps
+      operationId: get_v1_storefront_apps_id
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/submissions:
+    post:
+      tags:
+      - Submissions
+      summary: Create submissions
+      operationId: post_v1_submissions
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+    get:
+      tags:
+      - Submissions
+      summary: List submissions
+      operationId: get_v1_submissions
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/submissions/{id}:
+    get:
+      tags:
+      - Submissions
+      summary: Get submissions
+      operationId: get_v1_submissions_id
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Submission'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags:
+      - Submissions
+      summary: Delete submissions
+      operationId: delete_v1_submissions_id
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/submissions/{id}/approve:
+    post:
+      tags:
+      - Submissions
+      summary: Approve submissions
+      operationId: post_v1_submissions_id_approve
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/submissions/{id}/reject:
+    post:
+      tags:
+      - Submissions
+      summary: Reject submissions
+      operationId: post_v1_submissions_id_reject
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/subscription:
+    get:
+      tags:
+      - Billing
+      summary: List subscription
+      operationId: get_v1_subscription
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/team/accept/{token}:
+    post:
+      tags:
+      - Teams
+      summary: Create accept
+      operationId: post_v1_team_accept_token
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+      parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /v1/tools:
+    get:
+      tags:
+      - Tools
+      summary: List tools
+      operationId: get_v1_tools
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/usage/me:
+    get:
+      tags:
+      - Usage
+      summary: List me
+      operationId: get_v1_usage_me
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/usage/owner-summary:
+    get:
+      tags:
+      - Usage
+      summary: List owner summary
+      operationId: get_v1_usage_owner_summary
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+  /v1/usage/ping:
+    post:
+      tags:
+      - Usage
+      summary: Ping usage
+      operationId: post_v1_usage_ping
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+  /webhooks/stripe:
+    post:
+      tags:
+      - Webhooks
+      summary: Create stripe
+      operationId: post_webhooks_stripe
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: PAS session JWT (HS256). uid/login/roles/appRoles claims.
+    internalToken:
+      type: apiKey
+      in: header
+      name: X-Internal-Token
+      description: Shared secret for service-to-service calls.
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or invalid token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+      - error
+    User:
+      type: object
+      properties:
+        uid:
+          type: string
+          description: e.g. gh:123 | google:123 | cred:uuid
+        login:
+          type: string
+        avatarUrl:
+          type: string
+        roles:
+          type: array
+          items:
+            type: string
+            enum:
+            - user
+            - creator
+            - admin
+        appRoles:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+    App:
+      type: object
+      properties:
+        id:
+          type: string
+        creator_id:
+          type: string
+        d1_database_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    Submission:
+      type: object
+      properties:
+        id:
+          type: string
+        app_id:
+          type: string
+        creator_id:
+          type: string
+        status:
+          type: string
+          enum:
+          - pending
+          - approved
+          - rejected
+        name:
+          type: string
+        category:
+          type: string
+        description:
+          type: string
+        suggested_monthly_price_cents:
+          type: integer
+        repo_url:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    Subscription:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - active
+          - trialing
+          - past_due
+          - canceled
+          - none
+        tier:
+          type: string
+        current_period_end:
+          type: integer
+        cancel_at_period_end:
+          type: boolean
+    Pricing:
+      type: object
+      properties:
+        price_cents:
+          type: integer
+          example: 900
+        currency:
+          type: string
+          example: usd
+        interval:
+          type: string
+          example: month

@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { HttpError } from './lib/auth.js';
 import type { Env } from './types.js';
+import { openapiSpec, openapiYaml } from './openapi-spec.js';
 import { subscriptionRoutes } from './routes/subscription.js';
 import { licenseRoutes } from './routes/license.js';
 import { storageRoutes } from './routes/storage.js';
@@ -86,6 +87,31 @@ app.onError((err, c) => {
 
 app.get('/', (c) => c.json({ ok: true, service: 'proappstore-api' }));
 app.get('/health', (c) => c.json({ ok: true }));
+
+// ── API documentation ──────────────────────────────────────────
+// OpenAPI 3.1 spec (generated from the route table) + a browsable Swagger UI.
+app.get('/openapi.json', (c) => c.json(openapiSpec));
+app.get('/openapi.yaml', (c) =>
+  c.body(openapiYaml, 200, { 'content-type': 'application/yaml; charset=utf-8' }),
+);
+app.get('/docs', (c) =>
+  c.html(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ProAppStore API</title>
+    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>
+    <script>
+      window.ui = SwaggerUIBundle({ url: '/openapi.json', dom_id: '#swagger-ui' });
+    </script>
+  </body>
+</html>`),
+);
 
 const v1 = new Hono<{ Bindings: Env }>();
 v1.route('/', authRoutes);
