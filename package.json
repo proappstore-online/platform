@@ -4,10 +4,20 @@
   "version": "0.0.0",
   "description": "Paid SDK + CLI + backend for apps published on proappstore.online",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/proappstore-online/platform.git"
+  },
   "engines": {
     "node": ">=22"
   },
   "packageManager": "pnpm@10.30.3",
+  "pnpm": {
+    "overrides": {
+      "ws@>=8.0.0 <8.21.0": ">=8.21.0",
+      "undici@>=7.23.0 <7.28.0": ">=7.28.0 <8"
+    }
+  },
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
