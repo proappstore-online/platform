@@ -103,6 +103,45 @@ export class ProjectDO implements DurableObject {
         ws.send(data);
       } catch { /* dead socket, DO will clean up */ }
     }
+    // Push a notification to the owner on attention-worthy transitions, so they
+    // don't have to watch the board while agents work. Fire-and-forget — the DO
+    // outlives the request, so the fetch can complete; never blocks the broadcast.
+    if (event.type === 'transition') void this.notifyOwnerOfTransition(event).catch(() => {});
+  }
+
+  /** Web Push to the project owner when a ticket reaches a state that wants their
+   *  attention (needs input) or is terminal (done / failed). Best-effort. */
+  private async notifyOwnerOfTransition(event: Record<string, unknown>): Promise<void> {
+    const NOTIFY: Record<string, string> = {
+      'needs-input': 'needs your input',
+      done: 'is done ✓',
+      failed: 'failed',
+    };
+    const what = NOTIFY[event.to as string];
+    if (!what || !this.env.PAS_BACKEND || !this.env.INTERNAL_TOKEN) return;
+    const proj = this.state.storage.sql
+      .exec('SELECT owner_id, slug, name FROM project LIMIT 1')
+      .toArray()[0] as { owner_id: string; slug: string; name: string } | undefined;
+    if (!proj) return;
+    const ticketId = typeof event.ticketId === 'string' ? event.ticketId : undefined;
+    let ticketTitle = '';
+    if (ticketId) {
+      const t = this.state.storage.sql.exec('SELECT title FROM tickets WHERE id = ?', ticketId).toArray()[0] as { title: string } | undefined;
+      ticketTitle = t?.title ?? '';
+    }
+    const appName = proj.name || proj.slug;
+    await this.env.PAS_BACKEND.fetch(new Request('https://api.proappstore.online/v1/notifications/send-internal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': this.env.INTERNAL_TOKEN },
+      body: JSON.stringify({
+        userId: proj.owner_id,
+        appId: 'console',
+        title: ticketTitle ? `${ticketTitle} ${what}` : `${appName} — a task ${what}`,
+        body: event.to === 'needs-input' ? `Tap to respond · ${appName}` : appName,
+        url: `https://console.proappstore.online/#/apps/${proj.slug}/build`,
+        tag: ticketId ?? proj.slug, // collapse repeated updates for the same ticket
+      }),
+    }));
   }
 
   // ── Activity log (persisted audit trail) ───────────────────

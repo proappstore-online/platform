@@ -394,3 +394,39 @@ describe('POST /v1/notifications/send', () => {
     expect(payload.tag).toBe('event-1');
   });
 });
+
+describe('POST /v1/notifications/send-internal', () => {
+  beforeEach(() => vi.mocked(webpush.sendNotification).mockClear());
+  const SUB = { endpoint: 'https://push/1', p256dh: 'p', auth_secret: 'a' };
+
+  it('403s without the internal token', async () => {
+    const res = await app.request('/v1/notifications/send-internal', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: 'gh:1', appId: 'console', title: 't', body: 'b' }),
+    }, { ...makeEnv(), INTERNAL_TOKEN: 'secret' });
+    expect(res.status).toBe(403);
+    expect(webpush.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it('sends to the target user’s subscriptions with a valid internal token', async () => {
+    const db = mockD1(mockStmt({ all: { results: [SUB] } })); // the SELECT subscriptions
+    const res = await app.request('/v1/notifications/send-internal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': 'secret' },
+      body: JSON.stringify({ userId: 'gh:1', appId: 'console', title: 'Photo flow needs your input', body: 'Tap to respond', url: 'https://console.proappstore.online/#/apps/x/build', tag: 't1' }),
+    }, { ...makeEnv(db), INTERNAL_TOKEN: 'secret' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ sent: 1, failed: 0 });
+    const payload = JSON.parse(vi.mocked(webpush.sendNotification).mock.calls[0][1] as string);
+    expect(payload.title).toContain('needs your input');
+    expect(payload.tag).toBe('t1');
+  });
+
+  it('400s on missing fields', async () => {
+    const res = await app.request('/v1/notifications/send-internal', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Internal-Token': 'secret' },
+      body: JSON.stringify({ userId: 'gh:1', appId: 'console' }),
+    }, { ...makeEnv(), INTERNAL_TOKEN: 'secret' });
+    expect(res.status).toBe(400);
+  });
+});

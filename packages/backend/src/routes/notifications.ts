@@ -1,11 +1,60 @@
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import webpush from 'web-push';
+import { internalTokenOk } from '@proappstore/build-core';
 import type { Env, PushSubscriptionRow } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
 import { dispatchWebhook } from '../lib/webhook-dispatch.js';
 
 export const notificationRoutes = new Hono<{ Bindings: Env }>();
+
+/** Send one payload to a set of subscriptions; prune dead endpoints. Shared by
+ *  the public + internal send paths. */
+async function sendPushToSubs(env: Env, subs: PushSubscriptionRow[], payload: string): Promise<{ sent: number; failed: number }> {
+  if (subs.length === 0) return { sent: 0, failed: 0 };
+  webpush.setVapidDetails('mailto:push@proappstore.online', env.VAPID_PUBLIC_KEY, env.VAPID_PRIVATE_KEY);
+  let sent = 0;
+  let failed = 0;
+  const dead: string[] = [];
+  await Promise.allSettled(
+    subs.map(async (sub) => {
+      try {
+        await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth_secret } }, payload);
+        sent++;
+      } catch (err: any) {
+        failed++;
+        if (err?.statusCode === 410 || err?.statusCode === 404) dead.push(sub.endpoint);
+      }
+    }),
+  );
+  if (dead.length > 0) {
+    const placeholders = dead.map((_, i) => `?${i + 1}`).join(',');
+    await env.DB.prepare(`DELETE FROM push_subscriptions WHERE endpoint IN (${placeholders})`).bind(...dead).run();
+  }
+  return { sent, failed };
+}
+
+/**
+ * Internal push send (X-Internal-Token) — for platform services like agent-teams
+ * to notify a specific user (e.g. "your task needs input"). Bypasses the public
+ * creator/peer checks; targets one user's subscriptions for an app.
+ */
+notificationRoutes.post('/notifications/send-internal', async (c) => {
+  if (!internalTokenOk(c.req.header('X-Internal-Token'), c.env.INTERNAL_TOKEN)) {
+    return c.text('forbidden', 403);
+  }
+  const { userId, appId, title, body, url, icon, tag } = await c.req.json<{
+    userId: string; appId: string; title: string; body: string; url?: string; icon?: string; tag?: string;
+  }>();
+  if (!userId || !appId || !title || !body) {
+    return c.text('missing required fields: userId, appId, title, body', 400);
+  }
+  const { results } = await c.env.DB.prepare(
+    'SELECT * FROM push_subscriptions WHERE app_id = ?1 AND user_id = ?2',
+  ).bind(appId, userId).all<PushSubscriptionRow>();
+  const out = await sendPushToSubs(c.env, results, JSON.stringify({ title, body, url, icon, tag }));
+  return c.json(out);
+});
 
 /** Public VAPID key — no auth needed. Apps fetch this to register push. */
 notificationRoutes.get('/notifications/vapid-key', (c) => {
