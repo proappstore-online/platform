@@ -40,7 +40,7 @@ import {
 } from './store.ts';
 import { runDeployStage } from './deploy-stage.ts';
 import { handlePOChat } from './po-chat.ts';
-import { handleArchitectChat, RESEARCH_THREAD } from './architect-chat.ts';
+import { handleArchitectChat, RESEARCH_THREAD, ARCHITECT_RUN_TIMEOUT_MS } from './architect-chat.ts';
 import { resolveByoKey } from './byo-key.ts';
 import { runAgentTurn } from './agent-runner.ts';
 import { validateRoleConfig } from './role-config.ts';
@@ -1541,8 +1541,10 @@ export class ProjectDO implements DurableObject {
     // Self-heal a leaked lock: if a prior run is "busy" but started longer ago
     // than its own hard timeout could allow (it hung, or the request died without
     // running `finally`), treat it as dead and take over — otherwise every KB
-    // build 409s forever. 5 min > the 4 min architect run timeout, with margin.
-    const STALE_LOCK_MS = 5 * 60_000;
+    // build 409s forever. MUST exceed the run timeout (derived, +2 min margin) so
+    // an in-progress run is never wrongly cleared → two concurrent Architects
+    // racing the same files. (Bug: this was a flat 5 min while the timeout grew to 6.)
+    const STALE_LOCK_MS = ARCHITECT_RUN_TIMEOUT_MS + 2 * 60_000;
     if (this.architectChatBusy && Date.now() - this.architectChatStartedAt < STALE_LOCK_MS) {
       return json({ error: 'The Architect is already writing the Knowledge Base — give it a moment.' }, 409);
     }

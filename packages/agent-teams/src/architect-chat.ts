@@ -153,7 +153,7 @@ const KB_WRITE_NUDGE =
  *  needs more than 4 min (8 web searches + fetches + writing several docs). The
  *  run is mostly I/O wait + streams live over WS, so the user sees progress; the
  *  write-early prompt means a real KB is saved well before this cap anyway. */
-const ARCHITECT_RUN_TIMEOUT_MS = 6 * 60_000;
+export const ARCHITECT_RUN_TIMEOUT_MS = 6 * 60_000;
 
 export async function handleArchitectChat(deps: ArchitectChatDeps, request: Request): Promise<Response> {
   const { sql, env } = deps;
