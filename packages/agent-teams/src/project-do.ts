@@ -67,6 +67,9 @@ export class ProjectDO implements DurableObject {
   /** True while a chat-driven Knowledge Base build is in flight (the Architect is
    *  writing in the Research thread). Prevents overlapping "Build KB" runs. */
   private architectChatBusy = false;
+  /** When the current Architect run started — used to self-heal a leaked lock
+   *  (a run that hung past the hard timeout) so KB builds aren't 409'd forever. */
+  private architectChatStartedAt = 0;
   /** Recent chat timestamps for the per-project throttle (in-memory). */
   private chatWindow: number[] = [];
   /** Cached official docs (skills.md), TTL'd, so read_docs doesn't refetch each call. */
@@ -1496,10 +1499,16 @@ export class ProjectDO implements DurableObject {
    * single-threaded model even across the awaits inside handleArchitectChat.
    */
   private async runArchitectChat(request: Request): Promise<Response> {
-    if (this.architectChatBusy) {
+    // Self-heal a leaked lock: if a prior run is "busy" but started longer ago
+    // than its own hard timeout could allow (it hung, or the request died without
+    // running `finally`), treat it as dead and take over — otherwise every KB
+    // build 409s forever. 5 min > the 4 min architect run timeout, with margin.
+    const STALE_LOCK_MS = 5 * 60_000;
+    if (this.architectChatBusy && Date.now() - this.architectChatStartedAt < STALE_LOCK_MS) {
       return json({ error: 'The Architect is already writing the Knowledge Base — give it a moment.' }, 409);
     }
     this.architectChatBusy = true;
+    this.architectChatStartedAt = Date.now();
     try {
       return await handleArchitectChat({
         sql: this.state.storage.sql,

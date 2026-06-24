@@ -54,6 +54,38 @@ export function wantsKbAuthoring(text: string): boolean {
   return /knowledge base|KNOWLEDGE\.md/i.test(text) && /\b(write|author|create|build|research|draft|generate|document)\b/i.test(text);
 }
 
+/** What to do after the model's turn. Extracted so the control flow that caused
+ *  the orphaned-tool_use 400 is unit-tested in isolation. */
+export type ArchitectTurnAction = 'process' | 'nudge' | 'finish';
+
+/**
+ * Decide the next step after a model turn:
+ * - 'process' — there are pending tool_use blocks; ALWAYS answer them (push
+ *   tool_results) regardless of stop_reason. Nudging/finishing here would leave a
+ *   tool_use unanswered → Anthropic 400 ("tool_use ids without tool_result").
+ * - 'nudge'   — no tool calls, but the user asked to author the KB and nothing
+ *   was written yet (and we haven't nudged) → push one hard "write it now" prompt.
+ * - 'finish'  — no tool calls and nothing left to insist on.
+ */
+export function decideArchitectTurn(opts: {
+  toolUseCount: number;
+  wantsKb: boolean;
+  wrote: boolean;
+  alreadyNudged: boolean;
+}): ArchitectTurnAction {
+  if (opts.toolUseCount > 0) return 'process';
+  if (opts.wantsKb && !opts.wrote && !opts.alreadyNudged) return 'nudge';
+  return 'finish';
+}
+
+const KB_WRITE_NUDGE =
+  "Stop — you researched but never wrote the Knowledge Base. KNOWLEDGE.md does not exist yet. Author it NOW with write_file (and any docs/*.md via batch_write_files): the app's purpose, users, core features, data model, and the SDK capabilities it will use. Do not reply with a summary or 'done' — the only acceptable next action is the write_file tool call.";
+
+/** Overall wall-clock budget for one Architect run. Past this we abort the
+ *  in-flight model fetch so the request can't hang forever and leak the DO's
+ *  architectChatBusy lock (which would 409 every future KB build). */
+const ARCHITECT_RUN_TIMEOUT_MS = 4 * 60_000;
+
 export async function handleArchitectChat(deps: ArchitectChatDeps, request: Request): Promise<Response> {
   const { sql, env } = deps;
   const body = (await request.json()) as { message: string; apiKey?: string };
@@ -151,12 +183,18 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
     content: m.body,
   }));
 
+  // Abort the in-flight model fetch if the whole run overruns its budget — a
+  // hung stream would otherwise never settle, so the caller's `finally` that
+  // releases architectChatBusy never runs and every future KB build 409s.
+  const ac = new AbortController();
+  const runTimeout = setTimeout(() => ac.abort(), ARCHITECT_RUN_TIMEOUT_MS);
   try {
     let text = '';
     for (let turn = 0; turn < 25; turn++) { // room for reads + writes + follow-up tools
       deps.broadcast({ type: 'agent-heartbeat', role: 'Architect' });
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
+        signal: ac.signal,
         headers: {
           'x-api-key': apiKey,
           'anthropic-version': '2023-06-01',
@@ -205,25 +243,17 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       // history → Anthropic 400 ("tool_use ids without tool_result"); (2) a
       // completed write_file in a max_tokens-truncated turn must still execute,
       // not be abandoned (that would silently lose the KB write).
-      if (toolUses.length === 0) {
-        // No tool calls — the model is finishing. If the user asked it to author
-        // the KB but it only researched (read/remembered, never wrote a file),
-        // it's declaring "Done" with no deliverable — the coffeerating failure
-        // (reads only, then "Done."). Nudge it ONCE to actually write
-        // KNOWLEDGE.md. Safe here: no pending tool_use to orphan. Never fires for
-        // plain Q&A or once a KB exists.
-        if (wantsKb && !wrote && !nudgedToWrite) {
-          nudgedToWrite = true;
-          messages.push({
-            role: 'user',
-            content:
-              "Stop — you researched but never wrote the Knowledge Base. KNOWLEDGE.md does not exist yet. Author it NOW with write_file (and any docs/*.md via batch_write_files): the app's purpose, users, core features, data model, and the SDK capabilities it will use. Do not reply with a summary or 'done' — the only acceptable next action is the write_file tool call.",
-          });
-          deps.logActivity('tool', 'Architect: nudged to write KNOWLEDGE.md (researched but wrote nothing)', null);
-          continue;
-        }
-        break;
+      const action = decideArchitectTurn({ toolUseCount: toolUses.length, wantsKb, wrote, alreadyNudged: nudgedToWrite });
+      if (action === 'finish') break;
+      if (action === 'nudge') {
+        // No pending tool_use to orphan (toolUseCount === 0). One hard "write it
+        // now" prompt — the coffeerating fix (researched, wrote nothing, "Done").
+        nudgedToWrite = true;
+        messages.push({ role: 'user', content: KB_WRITE_NUDGE });
+        deps.logActivity('tool', 'Architect: nudged to write KNOWLEDGE.md (researched but wrote nothing)', null);
+        continue;
       }
+      // action === 'process': fall through to answer every pending tool_use.
 
       const toolResults = await Promise.all(toolUses.map(async (tu) => {
         if (tu.name === 'remember') {
@@ -263,6 +293,12 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
     return save(deps, text || 'Done.', Date.now());
   } catch (err) {
     if (wrote) { deps.saveFiles(files); deps.broadcast({ type: 'files-synced', count: files.size }); }
-    return save(deps, `I had trouble with that. Error: ${err instanceof Error ? err.message : 'unknown'}`, Date.now());
+    const aborted = err instanceof Error && err.name === 'AbortError';
+    const msg = aborted
+      ? `That took too long and I stopped at the ${Math.round(ARCHITECT_RUN_TIMEOUT_MS / 60_000)}-minute limit${wrote ? ' (partial KB saved)' : ''}. Try again.`
+      : `I had trouble with that. Error: ${err instanceof Error ? err.message : 'unknown'}`;
+    return save(deps, msg, Date.now());
+  } finally {
+    clearTimeout(runTimeout);
   }
 }
