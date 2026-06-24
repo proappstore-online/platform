@@ -449,10 +449,15 @@ export class ProjectDO implements DurableObject {
 
     const now = Date.now();
 
-    // Idle timeout: auto-pause after 30 min of no user chat
+    // Idle timeout: auto-pause after 30 min of no activity. "Activity" must
+    // include an in-flight agent run — otherwise a single long run (maxRunMinutes
+    // can be up to 60) trips the 30-min idle check mid-run and strands its next
+    // step (e.g. QA after a long Dev) until manual Play, even with the user
+    // watching. Only pause when the pipeline is genuinely idle (nothing running);
+    // runaway spend is still bounded by the monthly cost cap below.
     const lastActivity = (proj.last_user_activity as number | null) ?? 0;
     const idleMs = lastActivity > 0 ? now - lastActivity : 0;
-    if (lastActivity > 0 && idleMs > 30 * 60 * 1000) {
+    if (lastActivity > 0 && idleMs > 30 * 60 * 1000 && this.running.size === 0) {
       this.state.storage.sql.exec("UPDATE project SET status = 'paused'");
       this.clearWatchdog();
       this.broadcast({ type: 'play-state', status: 'paused', reason: 'idle-timeout' });
