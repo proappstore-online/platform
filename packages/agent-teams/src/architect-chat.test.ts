@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideArchitectTurn, wantsKbAuthoring } from './architect-chat.ts';
+import { buildFallbackKnowledge, decideArchitectTurn, wantsKbAuthoring } from './architect-chat.ts';
 
 /**
  * Intent gate for the "must write KNOWLEDGE.md before finishing" nudge (the fix
@@ -53,5 +53,29 @@ describe('decideArchitectTurn', () => {
 
   it('finishes plain Q&A without ever nudging', () => {
     expect(decideArchitectTurn({ toolUseCount: 0, wantsKb: false, wrote: false, alreadyNudged: false })).toBe('finish');
+  });
+});
+
+/**
+ * Last-resort KB synthesis — guarantees the Research tab is never empty after a
+ * build, even if the model wrote nothing (the coffeerating symptom).
+ */
+describe('buildFallbackKnowledge', () => {
+  const mem = [
+    { id: '1', category: 'fact', key: 'app_purpose', value: 'Rate coffee by location, anonymously.', createdAt: 0, updatedAt: 0 },
+    { id: '2', category: 'fact', key: 'target_users', value: 'Coffee drinkers.', createdAt: 0, updatedAt: 0 },
+  ];
+  it('renders gathered facts under a titled draft KB', () => {
+    const md = buildFallbackKnowledge('Coffee Rating', 'Anonymous coffee ratings.', mem);
+    expect(md).toContain('# Coffee Rating');
+    expect(md).toContain('Anonymous coffee ratings.');
+    expect(md).toContain('Draft Knowledge Base');
+    expect(md).toContain('**app purpose**: Rate coffee by location, anonymously.'); // key humanized
+    expect(md).toContain('**target users**: Coffee drinkers.');
+  });
+  it('handles no captured facts gracefully', () => {
+    const md = buildFallbackKnowledge('My App', undefined, []);
+    expect(md).toContain('# My App');
+    expect(md).toContain('No durable facts');
   });
 });

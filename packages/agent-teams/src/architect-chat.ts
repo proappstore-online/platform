@@ -78,6 +78,31 @@ export function decideArchitectTurn(opts: {
   return 'finish';
 }
 
+/**
+ * Last-resort KNOWLEDGE.md when the user asked for a KB but the model never wrote
+ * one (refused, hit the turn cap, or the run aborted). Synthesizes a draft from
+ * the facts the Architect *did* gather (its `remember` calls) so the Research tab
+ * is never empty after a build — exactly the coffeerating symptom. Only used when
+ * nothing real was written, so it never overwrites a genuine KB.
+ */
+export function buildFallbackKnowledge(
+  appName: string,
+  appIdea: string | undefined,
+  memory: readonly MemoryEntry[],
+): string {
+  const facts = memory.length
+    ? memory.map((e) => `- **${e.key.replace(/_/g, ' ')}**: ${e.value}`).join('\n')
+    : '_No durable facts were captured during research._';
+  return `# ${appName}
+
+${appIdea ? `${appIdea.trim()}\n\n` : ''}> ⚠️ **Draft Knowledge Base.** The Architect researched this app but didn't finish writing the full KB. These are the facts it gathered — re-run "research & write the KB" to expand into a complete source of truth.
+
+## What we know
+
+${facts}
+`;
+}
+
 const KB_WRITE_NUDGE =
   "Stop — you researched but never wrote the Knowledge Base. KNOWLEDGE.md does not exist yet. Author it NOW with write_file (and any docs/*.md via batch_write_files): the app's purpose, users, core features, data model, and the SDK capabilities it will use. Do not reply with a summary or 'done' — the only acceptable next action is the write_file tool call.";
 
@@ -284,18 +309,38 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       messages.push({ role: 'user', content: toolResults });
     }
 
-    // Files are saved immediately after each write (line 214). Only broadcast
-    // the sync event and publish at the end (not after every individual write).
+    // Guarantee a KB exists when one was requested: if the model researched but
+    // never wrote a file (the coffeerating failure — refused, hit the 25-turn
+    // cap, or finished early), synthesize a draft KNOWLEDGE.md from the facts it
+    // gathered. Never overwrites a real KB (only runs when nothing was written).
+    if (wantsKb && !wrote) {
+      files.set('KNOWLEDGE.md', buildFallbackKnowledge(appName, appIdea, deps.recallMemory()));
+      deps.saveFiles(files);
+      wrote = true;
+      deps.logActivity('tool', 'Architect: wrote a fallback KNOWLEDGE.md from gathered facts (model wrote none)', null);
+      if (!text) text = "I've captured what I researched into a draft KNOWLEDGE.md. Ask me to expand any section.";
+    }
+
+    // Files are saved immediately after each write. Only broadcast the sync event
+    // and publish at the end (not after every individual write).
     if (wrote) {
       deps.broadcast({ type: 'files-synced', count: files.size });
       deps.publishKb();
     }
     return save(deps, text || 'Done.', Date.now());
   } catch (err) {
+    // On error/abort too, leave a draft KB if one was requested and nothing was
+    // written — a timed-out research run shouldn't be a total loss.
+    if (wantsKb && !wrote) {
+      try {
+        files.set('KNOWLEDGE.md', buildFallbackKnowledge(appName, appIdea, deps.recallMemory()));
+        wrote = true;
+      } catch { /* best-effort */ }
+    }
     if (wrote) { deps.saveFiles(files); deps.broadcast({ type: 'files-synced', count: files.size }); }
     const aborted = err instanceof Error && err.name === 'AbortError';
     const msg = aborted
-      ? `That took too long and I stopped at the ${Math.round(ARCHITECT_RUN_TIMEOUT_MS / 60_000)}-minute limit${wrote ? ' (partial KB saved)' : ''}. Try again.`
+      ? `That took too long and I stopped at the ${Math.round(ARCHITECT_RUN_TIMEOUT_MS / 60_000)}-minute limit${wrote ? ' (a draft KB was saved from what I gathered)' : ''}. Try again.`
       : `I had trouble with that. Error: ${err instanceof Error ? err.message : 'unknown'}`;
     return save(deps, msg, Date.now());
   } finally {
