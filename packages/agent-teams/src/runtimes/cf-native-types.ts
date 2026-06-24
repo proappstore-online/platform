@@ -22,6 +22,8 @@ export interface AnthropicResponse {
   id: string;
   content: AnthropicContent[];
   stop_reason: 'end_turn' | 'tool_use' | 'max_tokens' | null;
-  usage: { input_tokens: number; output_tokens: number };
+  // input_tokens is the TOTAL (incl. cache); cache_read/cache_creation break it
+  // down so the cost meter can price cached tokens at their real (lower) rate.
+  usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
   model: string;
 }

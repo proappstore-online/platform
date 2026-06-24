@@ -18,6 +18,8 @@ export async function* parseAnthropicStream(body: ReadableStream<Uint8Array>): A
   let stopReason: AnthropicResponse['stop_reason'] = null;
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheCreationTokens = 0;
   let buf = '';
 
   for (;;) {
@@ -39,7 +41,11 @@ export async function* parseAnthropicStream(body: ReadableStream<Uint8Array>): A
           const u = (ev.message as { usage?: { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } })?.usage;
           // Count cached reads + cache writes toward input so the cost meter
           // reflects total tokens processed (Anthropic reports them separately).
-          if (u) inputTokens = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+          if (u) {
+            cacheReadTokens = u.cache_read_input_tokens ?? 0;
+            cacheCreationTokens = u.cache_creation_input_tokens ?? 0;
+            inputTokens = (u.input_tokens ?? 0) + cacheReadTokens + cacheCreationTokens;
+          }
           break;
         }
         case 'content_block_start': {
@@ -88,7 +94,7 @@ export async function* parseAnthropicStream(body: ReadableStream<Uint8Array>): A
     id: 'stream',
     content: content.filter(Boolean),
     stop_reason: stopReason,
-    usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+    usage: { input_tokens: inputTokens, output_tokens: outputTokens, cache_read_input_tokens: cacheReadTokens, cache_creation_input_tokens: cacheCreationTokens },
     model: '',
   };
 }

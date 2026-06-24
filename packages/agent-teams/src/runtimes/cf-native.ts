@@ -16,7 +16,7 @@ import type {
 import { dispatchTool, isAllowedTool } from '../tool-dispatch.ts';
 import { PLATFORM_CAPABILITIES } from '../platform-skill.ts';
 import type { AnthropicContent, AnthropicMessage } from './cf-native-types.ts';
-import { estimateCost } from './cf-native-pricing.ts';
+import { estimateCostCached } from './cf-native-pricing.ts';
 import { buildDefaultPrompt } from './cf-native-prompt.ts';
 import { messagesToAnthropic, nameToToolDef, trimConversation } from './cf-native-helpers.ts';
 import { parseAnthropicStream } from './cf-native-stream.ts';
@@ -70,6 +70,8 @@ export class CFNativeRuntime implements AgentRuntime {
 
     let totalIn = 0;
     let totalOut = 0;
+    let totalCacheRead = 0;
+    let totalCacheWrite = 0;
 
     const cache = { type: 'ephemeral' as const };
     const reqBody = (msgs: AnthropicMessage[]) => {
@@ -107,7 +109,7 @@ export class CFNativeRuntime implements AgentRuntime {
     };
 
     for (let i = 0; i < MAX_ITERATIONS; i++) {
-      yield { type: 'heartbeat', costUsd: estimateCost(model, totalIn, totalOut), tokensIn: totalIn, tokensOut: totalOut };
+      yield { type: 'heartbeat', costUsd: estimateCostCached(model, totalIn, totalCacheRead, totalCacheWrite, totalOut), tokensIn: totalIn, tokensOut: totalOut };
 
       // Guard: trim old tool results if the conversation is too large for the
       // model's context window. Keep the last 2 turns intact; older tool_result
@@ -154,6 +156,8 @@ export class CFNativeRuntime implements AgentRuntime {
       const response = yield* parseAnthropicStream(res.body);
       totalIn += response.usage.input_tokens;
       totalOut += response.usage.output_tokens;
+      totalCacheRead += response.usage.cache_read_input_tokens ?? 0;
+      totalCacheWrite += response.usage.cache_creation_input_tokens ?? 0;
 
       // Append assistant response to conversation (text already emitted live).
       anthropicMessages.push({ role: 'assistant', content: response.content });
@@ -174,7 +178,7 @@ export class CFNativeRuntime implements AgentRuntime {
         // Genuine end_turn — the agent is finished.
         yield {
           type: 'done',
-          costUsd: estimateCost(model, totalIn, totalOut),
+          costUsd: estimateCostCached(model, totalIn, totalCacheRead, totalCacheWrite, totalOut),
           tokensIn: totalIn,
           tokensOut: totalOut,
         };
@@ -220,7 +224,7 @@ export class CFNativeRuntime implements AgentRuntime {
     }
 
     yield { type: 'error', message: `Max iterations (${MAX_ITERATIONS}) reached`, retryable: false };
-    yield { type: 'done', costUsd: estimateCost(model, totalIn, totalOut), tokensIn: totalIn, tokensOut: totalOut };
+    yield { type: 'done', costUsd: estimateCostCached(model, totalIn, totalCacheRead, totalCacheWrite, totalOut), tokensIn: totalIn, tokensOut: totalOut };
   }
 
   async invokeTool(handle: RuntimeHandle, toolCall: ToolCall): Promise<ToolResult> {
