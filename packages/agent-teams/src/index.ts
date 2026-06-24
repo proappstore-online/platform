@@ -46,6 +46,14 @@ export type Bindings = {
    * uses the inline path (default). See deploy-stage.ts. Refs #24.
    */
   WORKFLOW_DEPLOY_SLUGS?: string;
+  /**
+   * Workers AI + Vectorize for KB RAG (kb-rag.ts). The living KB is chunked +
+   * embedded into VECTORIZE (per-project, isolated by slug) on write; build
+   * agents retrieve only the relevant chunks per ticket. Optional — with either
+   * unset, grounding falls back to whole-file KNOWLEDGE.md injection.
+   */
+  AI?: import('@cloudflare/workers-types').Ai;
+  VECTORIZE?: import('@cloudflare/workers-types').VectorizeIndex;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFallbackKnowledge, decideArchitectTurn, wantsKbAuthoring } from './architect-chat.ts';
+import { buildFallbackKnowledge, decideArchitectTurn, wantsKbAuthoring, writtenKbPaths } from './architect-chat.ts';
 
 /**
  * Intent gate for the "must write KNOWLEDGE.md before finishing" nudge (the fix
@@ -77,5 +77,21 @@ describe('buildFallbackKnowledge', () => {
     const md = buildFallbackKnowledge('My App', undefined, []);
     expect(md).toContain('# My App');
     expect(md).toContain('No durable facts');
+  });
+});
+
+describe('writtenKbPaths', () => {
+  it('extracts KB paths from write_file and ignores non-KB files', () => {
+    expect(writtenKbPaths('write_file', { path: 'KNOWLEDGE.md', content: 'x' })).toEqual(['KNOWLEDGE.md']);
+    expect(writtenKbPaths('write_file', { path: 'docs/market.md' })).toEqual(['docs/market.md']);
+    expect(writtenKbPaths('write_file', { path: 'src/App.tsx' })).toEqual([]); // not KB
+  });
+  it('extracts KB paths from batch_write_files, filtering non-KB', () => {
+    const out = writtenKbPaths('batch_write_files', { files: [{ path: 'KNOWLEDGE.md' }, { path: 'docs/x.md' }, { path: 'README.md' }] });
+    expect(out).toEqual(['KNOWLEDGE.md', 'docs/x.md']);
+  });
+  it('is safe on malformed input', () => {
+    expect(writtenKbPaths('write_file', undefined)).toEqual([]);
+    expect(writtenKbPaths('batch_write_files', {})).toEqual([]);
   });
 });

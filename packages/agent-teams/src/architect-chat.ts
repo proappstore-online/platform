@@ -18,6 +18,7 @@ import { resolveByoKey } from './byo-key.ts';
 import { executeFileTool } from './spine.ts';
 import { toolActivityDetail } from './tool-activity.ts';
 import { sliceDocs } from './platform-skill.ts';
+import { isKbPath, KbIndex } from './kb-rag.ts';
 import { parseAnthropicStream } from './runtimes/cf-native-stream.ts';
 
 /** The Architect's chat thread (kept out of the PO/build transcript). */
@@ -101,6 +102,16 @@ ${appIdea ? `${appIdea.trim()}\n\n` : ''}> ⚠️ **Draft Knowledge Base.** The 
 
 ${facts}
 `;
+}
+
+/** KB file paths touched by a write tool call (for re-embedding into Vectorize).
+ *  Reads the same `path` / `files[].path` shape executeFileTool consumes. */
+export function writtenKbPaths(toolName: string, input: unknown): string[] {
+  const a = (input ?? {}) as { path?: string; files?: { path?: string }[] };
+  const paths = toolName === 'batch_write_files'
+    ? (a.files ?? []).map((f) => f.path)
+    : [a.path];
+  return paths.filter((p): p is string => typeof p === 'string' && isKbPath(p));
 }
 
 const KB_WRITE_NUDGE =
@@ -199,10 +210,20 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
 
   const files = deps.loadFiles();
   let wrote = false;
+  // KB files written this run — re-embedded into Vectorize at the end so build
+  // agents retrieve fresh knowledge (kb-rag.ts).
+  const changedKb = new Set<string>();
   // Did the user ask the Architect to AUTHOR the KB (vs. just chat / answer a
   // question)? Only then do we insist on a KNOWLEDGE.md write before finishing.
   const wantsKb = wantsKbAuthoring(userText);
   let nudgedToWrite = false;
+  // Re-embed the KB files written this run into Vectorize (best-effort; no-op
+  // when AI/Vectorize aren't bound). Called on every terminal path.
+  const reindexChangedKb = async (): Promise<void> => {
+    if (!env.AI || !env.VECTORIZE || !changedKb.size) return;
+    const idx = new KbIndex(env.AI, env.VECTORIZE, proj?.slug ?? 'app');
+    for (const p of changedKb) await idx.indexFile(p, files.get(p) ?? '').catch(() => {});
+  };
   const messages: { role: 'user' | 'assistant'; content: unknown }[] = recentChat.map((m) => ({
     role: m.role === 'user' ? 'user' as const : 'assistant' as const,
     content: m.body,
@@ -298,6 +319,7 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
         const r = executeFileTool({ id: tu.id!, name: tu.name!, args: tu.input }, files);
         if (r.ok && (tu.name === 'write_file' || tu.name === 'batch_write_files')) {
           wrote = true;
+          for (const p of writtenKbPaths(tu.name!, tu.input)) changedKb.add(p);
           // Save immediately after each write — don't wait for the loop to end.
           // This prevents data loss if the DO is evicted or the loop errors later.
           deps.saveFiles(files);
@@ -317,14 +339,16 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       files.set('KNOWLEDGE.md', buildFallbackKnowledge(appName, appIdea, deps.recallMemory()));
       deps.saveFiles(files);
       wrote = true;
+      changedKb.add('KNOWLEDGE.md');
       deps.logActivity('tool', 'Architect: wrote a fallback KNOWLEDGE.md from gathered facts (model wrote none)', null);
       if (!text) text = "I've captured what I researched into a draft KNOWLEDGE.md. Ask me to expand any section.";
     }
 
-    // Files are saved immediately after each write. Only broadcast the sync event
-    // and publish at the end (not after every individual write).
+    // Files are saved immediately after each write. Only broadcast the sync event,
+    // re-embed the KB into Vectorize, and publish at the end.
     if (wrote) {
       deps.broadcast({ type: 'files-synced', count: files.size });
+      await reindexChangedKb();
       deps.publishKb();
     }
     return save(deps, text || 'Done.', Date.now());
@@ -335,9 +359,14 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       try {
         files.set('KNOWLEDGE.md', buildFallbackKnowledge(appName, appIdea, deps.recallMemory()));
         wrote = true;
+        changedKb.add('KNOWLEDGE.md');
       } catch { /* best-effort */ }
     }
-    if (wrote) { deps.saveFiles(files); deps.broadcast({ type: 'files-synced', count: files.size }); }
+    if (wrote) {
+      deps.saveFiles(files);
+      deps.broadcast({ type: 'files-synced', count: files.size });
+      await reindexChangedKb().catch(() => {});
+    }
     const aborted = err instanceof Error && err.name === 'AbortError';
     const msg = aborted
       ? `That took too long and I stopped at the ${Math.round(ARCHITECT_RUN_TIMEOUT_MS / 60_000)}-minute limit${wrote ? ' (a draft KB was saved from what I gathered)' : ''}. Try again.`

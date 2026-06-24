@@ -15,6 +15,7 @@ import { resolveGateway, type GatewayProvider } from './runtimes/ai-gateway.ts';
 import { CFNativeRuntime } from './runtimes/cf-native.ts';
 import { OpenAIResponsesRuntime } from './runtimes/openai-responses.ts';
 import { buildSeedMessages } from './prompts.ts';
+import { buildKbContext, KbIndex } from './kb-rag.ts';
 import { formatMemory, type MemoryEntry } from './memory.ts';
 import { toolActivityDetail } from './tool-activity.ts';
 
@@ -105,8 +106,19 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
   // Pull the latest committed code before the agent reads/edits (GitHub = truth).
   await deps.syncFromGitHub(`before ${role} run`);
   const files = deps.loadFiles();
-  // The Architect's KB (KNOWLEDGE.md) grounds every build role — inject its content.
-  const kb = files.get('KNOWLEDGE.md') ?? '';
+  // The Architect's KB grounds every build role. The KB grows over a project's
+  // life, so instead of dumping the whole thing, retrieve only the chunks
+  // relevant to THIS ticket (Vectorize RAG) + the concise overview. Falls back
+  // to whole-file KNOWLEDGE.md when AI/Vectorize aren't bound or nothing matches.
+  const overview = files.get('KNOWLEDGE.md') ?? '';
+  let kb = overview;
+  if (env.AI && env.VECTORIZE) {
+    try {
+      const retrieved = await new KbIndex(env.AI, env.VECTORIZE, proj.slug)
+        .retrieve(`${ticket.title}\n${ticket.rawIdea ?? ''}`, 6);
+      if (retrieved.length) kb = buildKbContext(overview, retrieved);
+    } catch { /* fall back to the overview */ }
+  }
   // Cached app context summary (built at deploy) — compact structural snapshot
   // so Dev/QA don't need to re-read every file to understand the app.
   const appCtx = (sql.exec('SELECT app_context_summary FROM project LIMIT 1').toArray()[0] as { app_context_summary: string | null } | undefined)?.app_context_summary ?? '';

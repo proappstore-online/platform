@@ -44,6 +44,23 @@ binding = "DB"
 database_name = "pas"
 database_id = "585bbda3-0016-42ad-a53d-c089f1864fcb"
 
+# KB RAG (kb-rag.ts): Workers AI embeds the living Knowledge Base; Vectorize
+# stores the per-project vectors (isolated by `slug` metadata). Build agents
+# retrieve only the chunks relevant to a ticket instead of the whole KB.
+[ai]
+binding = "AI"
+
+# TO ACTIVATE RAG (one-time infra): create the index, then uncomment the binding
+# below and redeploy. wrangler deploy FAILS if the binding references a
+# non-existent index, so it stays commented until the index exists.
+#   wrangler vectorize create pas-kb --dimensions=768 --metric=cosine
+# (bge-base-en-v1.5 → 768-dim, cosine). Needs a token with Vectorize:Edit — the
+# env CLOUDFLARE_API_TOKEN lacks that scope, so create it via the CF dashboard or
+# a re-scoped token. Until then the code falls back to whole-file KNOWLEDGE.md.
+# [[vectorize]]
+# binding = "VECTORIZE"
+# index_name = "pas-kb"
+
 # Service binding to PAS backend — for BYO key vault read + publish trigger.
 [[services]]
 binding = "PAS_BACKEND"
