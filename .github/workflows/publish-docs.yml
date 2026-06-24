@@ -78,6 +78,12 @@ jobs:
                   name: Switch to light mode
           extra_css:
             - stylesheets/extra.css
+          markdown_extensions:
+            - pymdownx.superfences:
+                custom_fences:
+                  - name: mermaid
+                    class: mermaid
+                    format: !!python/name:pymdownx.superfences.fence_code_format
           nav:
             - Home: index.md
             - Getting Started: getting-started.md

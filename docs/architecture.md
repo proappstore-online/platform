@@ -5,24 +5,37 @@ Apps published on the platform — Tailored or Ready — talk to PAS-owned APIs;
 the only difference is which resources the publisher provisions and which SDK
 helpers the app uses.
 
-## Components
+## System at a glance
 
-```text
-Browser / app
-  └── @proappstore/sdk ────→ ┌──────────────────────────────────────┐
-                             │  pas Worker (api.proappstore.online) │
-                             │  auth, sessions, roles, KV, rooms    │
-                             │  Stripe checkout + portal + webhook  │
-                             │  entitlements, license keys, proxy   │
-                             │  storage, maps, AI, app registry     │
-                             └──────────────────────────────────────┘
+Three Workers, each with a clear job. The browser only talks to them through the
+SDK; everything else (D1, R2, Stripe, GitHub, Anthropic) sits behind a Worker.
 
-Published app data
-  └── app.actions / app.db ─→ ┌──────────────────────────────────────┐
-                             │ data-<app>.proappstore.online        │
-                             │ per-app D1 actions/query/execute     │
-                             │ local PAS session verification       │
-                             └──────────────────────────────────────┘
+```mermaid
+flowchart TB
+    Browser["Browser<br/>creator console + published apps"]
+    SDK["@proappstore/sdk"]
+    Browser --> SDK
+
+    subgraph CF["Cloudflare"]
+        PAS["pas Worker — api.proappstore.online<br/>auth · sessions · roles · KV · rooms<br/>Stripe · entitlements · provisioning<br/>storage · maps · AI · registry"]
+        AT["agent-teams Worker — agents.proappstore.online<br/>AI build team (Architect + PO/BA/Dev/QA)<br/>one Durable Object per project"]
+        DATA["data-app Worker<br/>the app's own SQL"]
+        DO[("ProjectDO<br/>backlog · working-tree<br/>memory · cost · WebSocket")]
+        AT --- DO
+    end
+
+    SDK -->|platform APIs| PAS
+    SDK -->|app data / actions| DATA
+    SDK -->|Agents tab + live stream| AT
+
+    PAS --> D1[("PAS D1")]
+    PAS --> R2[("R2 storage")]
+    PAS --> Stripe["Stripe"]
+    PAS -->|provision repo, DNS, D1| GH["GitHub — proappstore-online"]
+    DATA --> AppD1[("per-app D1")]
+    AT -->|BYO key via AI Gateway| Anthropic["Anthropic"]
+    AT -->|push code| GH
+    GH -->|CI deploy| Hosting["R2 + host Worker (Path B)"]
 ```
 
 ### 1. `pas` Worker — platform API
@@ -96,6 +109,51 @@ console's per-app **Agents** tab.
 
 Full detail: [`packages/agent-teams/README.md`](https://github.com/proappstore-online/platform/blob/main/packages/agent-teams/README.md)
 and [Agent Teams: runtime & billing](/agent-teams-runtime-and-billing).
+
+## How an agent build actually runs
+
+This is the part most people need to picture. **Each project is one Durable
+Object (the `ProjectDO`)** — think of it as a tiny always-on mini-server dedicated
+to that one app. It holds the backlog, the working-tree of files the agents are
+editing, project memory, the cost ledger, and the live WebSocket to the browser.
+
+When the creator presses **Play**, the DO dispatches an agent run *inside itself*
+and streams every token to the browser as it's generated.
+
+```mermaid
+sequenceDiagram
+    actor Creator
+    participant Console
+    participant DO as ProjectDO
+    participant LLM as Anthropic (via AI Gateway)
+    participant GH as GitHub + CI
+
+    Creator->>Console: Press Play
+    Console->>DO: start run (WebSocket open)
+    Note over DO: dispatchRun() — a detached<br/>background task inside the DO
+    loop tool loop (up to 25 turns / maxRunMinutes)
+        DO->>LLM: messages + tools (BYO key)
+        LLM-->>DO: stream tokens + tool calls
+        DO-->>Console: broadcast tokens (live)
+        DO->>DO: run tool (read/write file) + saveFiles()
+    end
+    DO->>GH: push code → CI deploy (Path B)
+    DO-->>Console: transition (done / needs-input / failed)
+    Note over DO: 60s watchdog alarm keeps the DO warm,<br/>re-dispatches a run dropped by eviction
+```
+
+**Why the watchdog + locks exist.** Cloudflare can put a DO to sleep when it
+looks idle. Because the run lives in the DO's memory, the system hand-builds a
+safety net so a long run survives: a **60-second watchdog alarm** restarts a
+dropped run, **in-memory locks** stop two copies running at once, **stale-lock
+self-heal** recovers a leaked lock, and **re-dispatch** resumes from the
+last-saved files. Files are saved after every write, so a crash loses at most the
+current step.
+
+This works, but it's effectively a **durable-execution engine built by hand** —
+which is why the long-run edges are the fragile part. The durable *deploy* step
+already moved to Cloudflare Workflows ([ADR-007](/adr/007-durable-provisioning-workflow));
+whether the *run* should follow is the open architectural question.
 
 ## Why one control plane
 
