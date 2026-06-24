@@ -51,7 +51,23 @@ jobs:
             --md-accent-fg-color: #a78bfa;
           }
           .md-header__title { font-weight: 700; letter-spacing: -0.01em; }
+          pre.mermaid { background: transparent; text-align: center; }
           CSS
+          mkdir -p zensical-src/javascripts
+          cat > zensical-src/javascripts/mermaid-init.js <<'JS'
+          // zensical emits ```mermaid as <pre class="mermaid"> but does not run
+          // mermaid.js. Load it from the CDN and render those blocks.
+          (function () {
+            function run() {
+              if (!window.mermaid) { return setTimeout(run, 50); }
+              var dark = document.documentElement.getAttribute('data-md-color-scheme') === 'slate';
+              window.mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default' });
+              window.mermaid.run({ querySelector: 'pre.mermaid, .mermaid' });
+            }
+            if (document.readyState !== 'loading') run();
+            else document.addEventListener('DOMContentLoaded', run);
+          })();
+          JS
           cat > mkdocs.yml <<'YAML'
           site_name: ProAppStore Platform Docs
           site_url: https://docs.proappstore.online/
@@ -78,6 +94,9 @@ jobs:
                   name: Switch to light mode
           extra_css:
             - stylesheets/extra.css
+          extra_javascript:
+            - https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js
+            - javascripts/mermaid-init.js
           markdown_extensions:
             - pymdownx.superfences:
                 custom_fences:
