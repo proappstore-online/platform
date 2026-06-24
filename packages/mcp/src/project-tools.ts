@@ -10,6 +10,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { makeGitHub, verifyAppOwnership } from "@proappstore/build-core";
+import { gateMutation } from "./safety.js";
 
 interface ProjectToolsEnv {
   GITHUB_ORG: string;
@@ -18,7 +19,14 @@ interface ProjectToolsEnv {
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;
   R2_ACCOUNT_ID?: string;
+  OAUTH_KV?: KVNamespace;
+  MCP_READ_ONLY?: string;
 }
+
+const CONFIRM = z
+  .boolean()
+  .optional()
+  .describe("Must be true to run this destructive action. Without it the call is rejected.");
 
 type Text = { content: { type: "text"; text: string }[] };
 const text = (s: string): Text => ({ content: [{ type: "text" as const, text: s }] });
@@ -32,6 +40,10 @@ export function registerProjectTools(
 ): void {
   const { GITHUB_ORG: org, GITHUB_TOKEN: ghToken, API_BASE: apiBase } = env;
   const gh = makeGitHub(ghToken, org);
+
+  /** Gate a mutating tool: read-only block (throws) + audit, attributed to the connection user. */
+  const gate = (tool: string, input?: Record<string, unknown>) =>
+    gateMutation({ env, subject: getUserContext().userId }, tool, input);
 
   /** Require a valid session token; return it or the error response. */
   function requireAuth(): { token: string } | Text {
@@ -93,10 +105,14 @@ export function registerProjectTools(
       app_id: APP_ID,
       name: z.string().describe("Display name (e.g. 'Chess Academy')"),
       description: z.string().describe("Short description of the app"),
+      confirm: CONFIRM,
     },
-    async ({ app_id, name, description }) => {
+    async ({ app_id, name, description, confirm }) => {
       const auth = requireAuth();
       if ('content' in auth) return auth;
+      if (confirm !== true)
+        return text(`Refused: scaffold_app creates a GitHub repo + deploy secrets + infra for "${app_id}". Re-call with confirm: true to proceed.`);
+      await gate("scaffold_app", { app_id, name });
 
       // 1. Create repo from template
       const createRes = await gh.createRepoFromTemplate(app_id, { description });
@@ -166,6 +182,7 @@ export function registerProjectTools(
     async ({ app_id, path, content, message }) => {
       const auth = await requireOwner(app_id);
       if ('content' in auth) return auth;
+      await gate("write_file", { app_id, path });
       const existing = await gh.getFile(app_id, path);
       const sha = existing.ok ? existing.sha : undefined;
       const put = await gh.putFile(app_id, path, content, message ?? `${sha ? "update" : "create"}: ${path}`, sha);
@@ -207,11 +224,14 @@ export function registerProjectTools(
   // ── delete_file ───────────────────────────────────────────
   server.tool(
     "delete_file",
-    "Delete a file from a PAS app's GitHub repo.",
-    { app_id: APP_ID, path: z.string().describe("File path to delete"), message: z.string().optional().describe("Commit message") },
-    async ({ app_id, path, message }) => {
+    "Delete a file from a PAS app's GitHub repo. Requires confirm: true.",
+    { app_id: APP_ID, path: z.string().describe("File path to delete"), message: z.string().optional().describe("Commit message"), confirm: CONFIRM },
+    async ({ app_id, path, message, confirm }) => {
       const auth = await requireOwner(app_id);
       if ('content' in auth) return auth;
+      if (confirm !== true)
+        return text(`Refused: delete_file permanently removes "${path}" from ${app_id}. Re-call with confirm: true to proceed.`);
+      await gate("delete_file", { app_id, path });
       const existing = await gh.getFile(app_id, path);
       if (!existing.ok || !existing.sha) return text(`File not found: ${path}`);
       const del = await gh.deleteFile(app_id, path, message ?? `delete: ${path}`, existing.sha);
@@ -263,6 +283,7 @@ export function registerProjectTools(
     async ({ app_id }) => {
       const auth = requireAuth();
       if ('content' in auth) return auth;
+      await gate("provision_app", { app_id });
       const result = await provision(app_id, auth.token);
       return text(result || "Provisioning complete (no steps reported).");
     },
@@ -280,10 +301,14 @@ export function registerProjectTools(
       icon: z.string().optional().describe("HTML entity for the icon (e.g. '&#9822;'). Defaults to '📦'."),
       icon_bg: z.string().regex(/^#([0-9a-fA-F]{3,8})$/).optional().describe("Hex background color for the icon (e.g. '#fef3c7')"),
       pro_features: z.array(z.string().max(60)).max(8).optional().describe("List of pro features (max 8, each max 60 chars)"),
+      confirm: CONFIRM,
     },
-    async ({ app_id, name, category, description, icon, icon_bg, pro_features }) => {
+    async ({ app_id, name, category, description, icon, icon_bg, pro_features, confirm }) => {
       const auth = requireAuth();
       if ('content' in auth) return auth;
+      if (confirm !== true)
+        return text(`Refused: publish_app lists "${app_id}" publicly on proappstore.online. Re-call with confirm: true to proceed.`);
+      await gate("publish_app", { app_id, name, category });
 
       // Call the admin Worker's publish endpoint — same path as `pas publish` CLI.
       // This provisions infra + adds to registry in one atomic flow.
@@ -348,6 +373,7 @@ export function registerProjectTools(
     async ({ app_id, files, message }) => {
       const auth = await requireOwner(app_id);
       if ('content' in auth) return auth;
+      await gate("batch_write_files", { app_id, count: files.length });
       const res = await gh.pushFiles(app_id, files, message, { initIfEmpty: true });
       if (!res.ok) return text(`Error committing files: ${res.error ?? "unknown"}`);
       return text(`Committed ${files.length} file(s): ${message}\n${files.map((f) => `  + ${f.path}`).join("\n")}`);

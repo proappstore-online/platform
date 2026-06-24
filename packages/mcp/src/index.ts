@@ -1,7 +1,9 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import type { Env } from "./env.js";
 import { extractToken, verifyToken } from "./api-helpers.js";
+import { listAuditEvents } from "./safety.js";
 import { registerPlatformTools } from "./platform-tools.js";
 import { fetchTools, registerAppTools } from "./tool-loader.js";
 import { registerProjectTools } from "./project-tools.js";
@@ -63,11 +65,26 @@ export class PasMcpAgent extends McpAgent<Env> {
       appTools,
       () => ({ userId: this.userId, token: this.userToken }),
       this.env.API_BASE,
+      this.env,
     );
 
     if (registered.length > 0) {
       console.log(`Registered ${registered.length} app tool(s): ${registered.join(', ')}`);
     }
+
+    // ── Safety: audit-log reader ───────────────────────────────
+    this.server.tool(
+      "mcp_audit_log",
+      "Read recent MCP audit events (mutating tool invocations + read-only denials) attributed to your authenticated account. Newest first.",
+      { limit: z.number().optional().describe("Max events to return (1-200, default 50).") },
+      async ({ limit }) => {
+        const events = await listAuditEvents({ env: this.env, subject: this.userId }, limit ?? 50);
+        if (events.length === 0) {
+          return { content: [{ type: "text" as const, text: "No audit events recorded for your account." }] };
+        }
+        return { content: [{ type: "text" as const, text: `${events.length} event(s):\n\n${JSON.stringify(events, null, 2)}` }] };
+      },
+    );
   }
 }
 
@@ -89,7 +106,7 @@ export default {
 
     if (url.pathname === "/" || url.pathname === "") {
       return new Response(
-        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools, recipe\nProject tools: scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running, set_project_budget, run_tests, set_model, add_ticket\nAgent introspection: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\n",
+        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools, recipe\nProject tools: scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running, set_project_budget, run_tests, set_model, add_ticket\nAgent introspection: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\nSafety: mcp_audit_log (per-account audit trail). Mutating tools are audited; destructive tools (scaffold_app, delete_file, publish_app) require confirm: true; set MCP_READ_ONLY=1 to block all writes.\n",
         { headers: { "content-type": "text/plain" } }
       );
     }

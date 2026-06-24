@@ -12,23 +12,51 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { verifyToken } from "./api-helpers.js";
+import { audit, isReadOnly } from "./safety.js";
 
 type Text = { content: { type: "text"; text: string }[] };
 const text = (s: string): Text => ({ content: [{ type: "text" as const, text: s }] });
 
-interface LoopEnv { AGENTS_BASE: string }
+interface LoopEnv {
+  AGENTS_BASE: string;
+  OAUTH_KV?: KVNamespace;
+  MCP_READ_ONLY?: string;
+  SESSION_SIGNING_KEY?: string;
+}
 
 export function registerLoopTools(server: McpServer, env: LoopEnv): void {
   const base = env.AGENTS_BASE;
 
-  /** Call the Agent Teams API with a bearer token; return parsed JSON or an error string. */
+  /**
+   * Call the Agent Teams API with a bearer token; return parsed JSON or an error
+   * string. This is the single chokepoint for all loop tools, so read-only
+   * enforcement + audit live here: every non-GET call is gated and recorded
+   * (attributed to the token's user). Read-only mode throws so a tool can't
+   * report success on a blocked write.
+   */
   async function call(
     path: string,
     token: string,
     init?: { method?: string; body?: unknown },
   ): Promise<{ ok: boolean; data: unknown }> {
+    const method = init?.method ?? "GET";
+    const mutating = method !== "GET";
+
+    if (mutating) {
+      const subject = env.SESSION_SIGNING_KEY
+        ? (await verifyToken(env.SESSION_SIGNING_KEY, token))?.id ?? null
+        : null;
+      const ctx = { env, subject };
+      if (isReadOnly(env)) {
+        await audit(ctx, { tool: `loop:${method} ${path}`, action: "denied", reason: "read_only" });
+        throw new Error(`MCP is in read-only mode (MCP_READ_ONLY); ${method} ${path} was blocked.`);
+      }
+      await audit(ctx, { tool: `loop:${method} ${path}`, action: "invoked", body: init?.body });
+    }
+
     const res = await fetch(`${base}${path}`, {
-      method: init?.method ?? "GET",
+      method,
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       ...(init?.body ? { body: JSON.stringify(init.body) } : {}),
     });

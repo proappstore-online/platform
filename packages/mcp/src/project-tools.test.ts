@@ -90,7 +90,8 @@ describe('scaffold_app', () => {
   afterEach(() => { vi.useRealTimers(); });
 
   async function runScaffold(args: Record<string, unknown>) {
-    const p = tools.get('scaffold_app')!(args);
+    // scaffold_app is a destructive tool — gated behind confirm: true.
+    const p = tools.get('scaffold_app')!({ confirm: true, ...args });
     await vi.advanceTimersByTimeAsync(5000);
     return p;
   }
@@ -196,7 +197,7 @@ describe('setR2Variables (via scaffold_app)', () => {
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
     mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ steps: [] }) });
 
-    const p = noR2Tools.get('scaffold_app')!({ app_id: 'no-r2', name: 'No R2', description: 'test' });
+    const p = noR2Tools.get('scaffold_app')!({ app_id: 'no-r2', name: 'No R2', description: 'test', confirm: true });
     await vi.advanceTimersByTimeAsync(5000);
     const result = await p;
     expect(getText(result)).toContain('R2 credentials not configured');
@@ -212,7 +213,7 @@ describe('setR2Variables (via scaffold_app)', () => {
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
     mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ steps: [] }) });
 
-    const p = partialTools.get('scaffold_app')!({ app_id: 'partial', name: 'P', description: 'test' });
+    const p = partialTools.get('scaffold_app')!({ app_id: 'partial', name: 'P', description: 'test', confirm: true });
     await vi.advanceTimersByTimeAsync(5000);
     const result = await p;
     expect(getText(result)).toContain('partially configured');
@@ -263,13 +264,13 @@ describe('delete_file', () => {
   it('deletes an existing file', async () => {
     mockGh.getFile.mockResolvedValue({ ok: true, status: 200, sha: 'sha1' });
     mockGh.deleteFile.mockResolvedValue({ ok: true, status: 200, data: {} });
-    const result = await tools.get('delete_file')!({ app_id: 'app', path: 'old.ts' });
+    const result = await tools.get('delete_file')!({ app_id: 'app', path: 'old.ts', confirm: true });
     expect(getText(result)).toBe('Deleted old.ts');
   });
 
   it('returns not found when file does not exist', async () => {
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
-    const result = await tools.get('delete_file')!({ app_id: 'app', path: 'gone.ts' });
+    const result = await tools.get('delete_file')!({ app_id: 'app', path: 'gone.ts', confirm: true });
     expect(getText(result)).toContain('File not found');
   });
 });
@@ -328,6 +329,7 @@ describe('publish_app', () => {
     name: 'Chess Academy',
     category: 'education',
     description: 'Online chess teaching platform.',
+    confirm: true, // publish_app is destructive (public listing) — gated behind confirm
   };
 
   it('publishes successfully and returns formatted steps', async () => {
@@ -504,5 +506,46 @@ describe('get_deploy_status', () => {
     mockGh.getDeployStatus.mockResolvedValue({ ok: true, status: 200, data: { workflow_runs: [] } });
     const result = await tools.get('get_deploy_status')!({ app_id: 'app' });
     expect(getText(result)).toContain('No workflow runs');
+  });
+});
+
+describe('safety: destructive confirm gate', () => {
+  it('delete_file refuses without confirm: true', async () => {
+    const result = await tools.get('delete_file')!({ app_id: 'app', path: 'old.ts' });
+    expect(getText(result)).toContain('Refused');
+    expect(mockGh.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('scaffold_app refuses without confirm: true', async () => {
+    const result = await tools.get('scaffold_app')!({ app_id: 'x', name: 'X', description: 't' });
+    expect(getText(result)).toContain('Refused');
+    expect(mockGh.createRepoFromTemplate).not.toHaveBeenCalled();
+  });
+
+  it('publish_app refuses without confirm: true', async () => {
+    const result = await tools.get('publish_app')!({ app_id: 'x', name: 'X', category: 'c', description: 'd' });
+    expect(getText(result)).toContain('Refused');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('safety: read-only mode', () => {
+  // Separate registration with MCP_READ_ONLY enabled.
+  const roTools = new Map<string, Handler>();
+  const roServer = { tool: (n: string, _d: string, _s: unknown, h: Handler) => { roTools.set(n, h); } };
+  registerProjectTools(roServer as any, { ...env, MCP_READ_ONLY: '1' }, () => ({ userId: 'u1', token: 'tok-1' }));
+
+  it('blocks a mutating tool (write_file) by throwing', async () => {
+    mockOwnership.mockResolvedValue(true);
+    await expect(roTools.get('write_file')!({ app_id: 'app', path: 'a.ts', content: 'x' }))
+      .rejects.toThrow(/read-only/i);
+    expect(mockGh.putFile).not.toHaveBeenCalled();
+  });
+
+  it('still allows a read tool (read_file)', async () => {
+    mockOwnership.mockResolvedValue(true);
+    mockGh.getFile.mockResolvedValue({ ok: true, status: 200, content: 'hello' });
+    const result = await roTools.get('read_file')!({ app_id: 'app', path: 'README.md' });
+    expect(getText(result)).toBe('hello');
   });
 });

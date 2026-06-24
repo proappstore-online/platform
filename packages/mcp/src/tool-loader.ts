@@ -4,6 +4,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gateMutation, type SafetyEnv } from './safety.js';
 
 interface ToolParam {
   type: string;
@@ -152,6 +153,7 @@ export function registerAppTools(
   tools: AppTool[],
   getUserContext: () => { userId: string | null; token: string | null },
   apiBase: string,
+  env: SafetyEnv,
 ): string[] {
   const registered: string[] = [];
 
@@ -164,7 +166,12 @@ export function registerAppTools(
       `[${tool.app_id}] ${tool.description}`,
       zodSchema,
       async (args) => {
-        const { token } = getUserContext();
+        const { userId, token } = getUserContext();
+        // `execute` actions mutate app data; `query` actions are read-only.
+        // Gate + audit the mutating ones (read-only mode throws here).
+        if (tool.operation === 'execute') {
+          await gateMutation({ env, subject: userId }, toolName, { app_id: tool.app_id });
+        }
         const result = await executeToolCall(tool, args as Record<string, unknown>, token, apiBase);
         return { content: [{ type: 'text' as const, text: result }] };
       },

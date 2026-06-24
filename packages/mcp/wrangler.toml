@@ -13,6 +13,10 @@ AUTH_START = "https://api.proappstore.online/v1/auth/github/start"
 #   SESSION_SIGNING_KEY
 #   GITHUB_TOKEN (org-level PAT for repo operations)
 #   INTERNAL_TOKEN (service-to-service auth for agents Worker)
+#
+# Optional read-only mode — set to "1" to block every mutating MCP tool and
+# audit the denial. Leave unset for normal read/write operation.
+#   MCP_READ_ONLY = "1"
 
 [[routes]]
 pattern = "mcp.proappstore.online/*"
