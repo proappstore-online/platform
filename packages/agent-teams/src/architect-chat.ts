@@ -86,12 +86,18 @@ export function decideArchitectTurn(opts: {
   wrote: boolean;
   alreadyNudged: boolean;
   askedQuestion: boolean;
+  kbExists: boolean;
 }): ArchitectTurnAction {
   if (opts.toolUseCount > 0) return 'process';
-  // Don't force a write while the Architect is asking the founder a clarifying
-  // question — let the conversation continue. The nudge is only for the
-  // "declared done / summarized without writing" stall.
-  if (opts.askedQuestion) return 'finish';
+  if (opts.askedQuestion) {
+    // Normally let a clarifying question continue the conversation. EXCEPT when a
+    // KB already exists and the user is in a KB session: they're answering to
+    // UPDATE the KB, so "another question, no write" is the "why aren't you
+    // updating it when I answer?" stall — nudge once to write first (alreadyNudged
+    // stops loops; on a brand-new KB we still let it gather the idea first).
+    if (opts.wantsKb && !opts.wrote && !opts.alreadyNudged && opts.kbExists) return 'nudge';
+    return 'finish';
+  }
   if (opts.wantsKb && !opts.wrote && !opts.alreadyNudged) return 'nudge';
   return 'finish';
 }
@@ -138,12 +144,16 @@ export function writtenKbPaths(toolName: string, input: unknown): string[] {
 }
 
 const KB_WRITE_NUDGE =
-  "Stop — you researched but never wrote the Knowledge Base. KNOWLEDGE.md does not exist yet. Author it NOW with write_file (and any docs/*.md via batch_write_files): the app's purpose, users, core features, data model, and the SDK capabilities it will use. Do not reply with a summary or 'done' — the only acceptable next action is the write_file tool call.";
+  "Stop — you haven't written to the Knowledge Base yet this turn. Before you ask anything else or reply, call write_file for KNOWLEDGE.md (and batch_write_files for any docs/*.md) to capture/update what you've gathered: the app's purpose, users, core features, data model, and the SDK capabilities it uses. If a KB already exists, read it and edit the sections that changed. The written KB is the only acceptable next action — not a summary, not 'done', not another question.";
 
 /** Overall wall-clock budget for one Architect run. Past this we abort the
  *  in-flight model fetch so the request can't hang forever and leak the DO's
- *  architectChatBusy lock (which would 409 every future KB build). */
-const ARCHITECT_RUN_TIMEOUT_MS = 4 * 60_000;
+ *  architectChatBusy lock (which would 409 every future KB build).
+ *  6 min (was 4) — a full "re-research + refresh the whole KB" pass legitimately
+ *  needs more than 4 min (8 web searches + fetches + writing several docs). The
+ *  run is mostly I/O wait + streams live over WS, so the user sees progress; the
+ *  write-early prompt means a real KB is saved well before this cap anyway. */
+const ARCHITECT_RUN_TIMEOUT_MS = 6 * 60_000;
 
 export async function handleArchitectChat(deps: ArchitectChatDeps, request: Request): Promise<Response> {
   const { sql, env } = deps;
@@ -237,8 +247,12 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
   // agents retrieve fresh knowledge (kb-rag.ts).
   const changedKb = new Set<string>();
   // Did the user ask the Architect to AUTHOR the KB (vs. just chat / answer a
-  // question)? Only then do we insist on a KNOWLEDGE.md write before finishing.
-  const wantsKb = wantsKbAuthoring(userText);
+  // question)? Sticky across the conversation: once they've asked to build/refresh
+  // the KB, their follow-up ANSWERS are still part of that KB work — so the
+  // "actually write it" enforcement keeps applying instead of letting answers turn
+  // into endless Q&A with no write (the "why aren't you updating the KB when I
+  // answer?" complaint).
+  const wantsKb = wantsKbAuthoring(userText) || recentChat.some((m) => m.role === 'user' && wantsKbAuthoring(m.body));
   let nudgedToWrite = false;
   // Re-embed the KB files written this run into Vectorize (best-effort; no-op
   // when AI/Vectorize aren't bound). Called on every terminal path.
@@ -317,7 +331,7 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       // history → Anthropic 400 ("tool_use ids without tool_result"); (2) a
       // completed write_file in a max_tokens-truncated turn must still execute,
       // not be abandoned (that would silently lose the KB write).
-      const action = decideArchitectTurn({ toolUseCount: toolUses.length, wantsKb, wrote, alreadyNudged: nudgedToWrite, askedQuestion: looksLikeQuestion(text) });
+      const action = decideArchitectTurn({ toolUseCount: toolUses.length, wantsKb, wrote, alreadyNudged: nudgedToWrite, askedQuestion: looksLikeQuestion(text), kbExists: files.has('KNOWLEDGE.md') });
       if (action === 'finish') break;
       if (action === 'nudge') {
         // No pending tool_use to orphan (toolUseCount === 0). One hard "write it

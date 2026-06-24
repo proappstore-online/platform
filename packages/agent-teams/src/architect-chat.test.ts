@@ -31,7 +31,7 @@ describe('wantsKbAuthoring', () => {
  * tool_use is an invalid history → Anthropic 400.
  */
 describe('decideArchitectTurn', () => {
-  const base = { askedQuestion: false } as const;
+  const base = { askedQuestion: false, kbExists: false } as const;
   it('ALWAYS processes pending tool calls — even when a KB nudge is otherwise due (orphan-400 fix)', () => {
     // This exact combo (tools pending + wantsKb + !wrote + !nudged) is what the
     // old `|| stop_reason !== 'tool_use'` branch turned into a nudge → 400.
@@ -44,9 +44,17 @@ describe('decideArchitectTurn', () => {
     expect(decideArchitectTurn({ ...base, toolUseCount: 0, wantsKb: true, wrote: false, alreadyNudged: false })).toBe('nudge');
   });
 
-  it('does NOT nudge while the Architect is asking the founder a question', () => {
-    // One-at-a-time Q&A: a clarifying question must not be force-written over.
-    expect(decideArchitectTurn({ toolUseCount: 0, wantsKb: true, wrote: false, alreadyNudged: false, askedQuestion: true })).toBe('finish');
+  it('lets a clarifying question continue while BUILDING a new KB (none exists yet)', () => {
+    // One-at-a-time Q&A on a fresh build: gather the idea before forcing a write.
+    expect(decideArchitectTurn({ toolUseCount: 0, wantsKb: true, wrote: false, alreadyNudged: false, askedQuestion: true, kbExists: false })).toBe('finish');
+  });
+
+  it('nudges to write when REFRESHING an existing KB but only asking, not writing', () => {
+    // The "why aren't you updating the KB when I answer?" stall: a KB exists, the
+    // user is answering to update it, but the model asked again without writing.
+    expect(decideArchitectTurn({ toolUseCount: 0, wantsKb: true, wrote: false, alreadyNudged: false, askedQuestion: true, kbExists: true })).toBe('nudge');
+    // …but only once — after nudging, don't loop.
+    expect(decideArchitectTurn({ toolUseCount: 0, wantsKb: true, wrote: false, alreadyNudged: true, askedQuestion: true, kbExists: true })).toBe('finish');
   });
 
   it('does not nudge twice (one-shot)', () => {
