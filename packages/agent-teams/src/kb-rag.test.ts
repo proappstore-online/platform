@@ -38,6 +38,25 @@ describe('chunkKb', () => {
     expect(chunks[0]!.text).toContain('just some prose');
   });
 
+  it('does NOT treat #-lines inside fenced code blocks as headings', () => {
+    const md = [
+      '## Setup',
+      'Run the installer:',
+      '```bash',
+      '# install deps   <-- a comment, not a heading',
+      'pnpm install',
+      '## also not a heading',
+      '```',
+      'Done.',
+    ].join('\n');
+    const chunks = chunkKb(md);
+    // One section ("Setup") — the code block must not split it.
+    expect(chunks.length).toBe(1);
+    expect(chunks[0]!.heading).toBe('Setup');
+    expect(chunks[0]!.text).toContain('# install deps');
+    expect(chunks[0]!.text).toContain('pnpm install');
+  });
+
   it('ignores empty input', () => {
     expect(chunkKb('')).toEqual([]);
     expect(chunkKb('\n\n   \n')).toEqual([]);
@@ -94,7 +113,10 @@ describe('KbIndex', () => {
       deleteByIds: vi.fn(async (ids: string[]) => { deletes.push(ids); return { count: ids.length }; }),
       query: vi.fn(async (_e: number[], opts: { topK?: number; filter?: unknown }) => {
         lastQuery = opts;
-        return { matches: [{ id: 'x', score: 0.9, metadata: { path: 'KNOWLEDGE.md', heading: 'Users', text: 'Coffee drinkers' } }] };
+        return { matches: [
+          { id: 'x', score: 0.9, metadata: { slug: 'coffeerating', path: 'KNOWLEDGE.md', heading: 'Users', text: 'Coffee drinkers' } },
+          { id: 'leak', score: 0.5, metadata: { slug: 'other-project', path: 'KNOWLEDGE.md', text: 'should be filtered out' } },
+        ] };
       }),
     } as unknown as VectorizeIndex;
     return { ai, vectorize, upserts, deletes, getQuery: () => lastQuery };
@@ -114,6 +136,7 @@ describe('KbIndex', () => {
     const kb = new KbIndex(f.ai, f.vectorize, 'coffeerating');
     const out = await kb.retrieve('how do users rate coffee', 4);
     expect(f.getQuery()).toMatchObject({ topK: 4, filter: { slug: 'coffeerating' } });
+    expect(out).toHaveLength(1); // the 'other-project' match is filtered out client-side
     expect(out[0]).toMatchObject({ path: 'KNOWLEDGE.md', heading: 'Users', text: 'Coffee drinkers', score: 0.9 });
   });
 

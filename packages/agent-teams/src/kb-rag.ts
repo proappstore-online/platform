@@ -41,8 +41,13 @@ export function chunkKb(content: string, maxChars = KB_MAX_CHUNK_CHARS): KbChunk
   const lines = content.split('\n');
   const sections: { heading: string; body: string[] }[] = [];
   let cur: { heading: string; body: string[] } = { heading: '', body: [] };
+  let inFence = false;
   for (const line of lines) {
-    const h = /^#{1,6}\s+(.*)$/.exec(line);
+    // Track fenced code blocks so `#` lines INSIDE them (bash comments, embedded
+    // markdown examples, etc.) aren't mistaken for headings and mis-split.
+    const t = line.trimStart();
+    if (t.startsWith('```') || t.startsWith('~~~')) inFence = !inFence;
+    const h = !inFence ? /^#{1,6}\s+(.*)$/.exec(line) : null;
     if (h) {
       if (cur.heading || cur.body.some((l) => l.trim())) sections.push(cur);
       cur = { heading: h[1]!.trim(), body: [] };
@@ -171,12 +176,16 @@ export class KbIndex {
     if (!embedding) return [];
     try {
       const res = await this.vectorize.query(embedding, { topK, filter: { slug: this.slug }, returnMetadata: 'all' });
-      return (res.matches ?? []).map((m) => ({
-        path: (m.metadata?.path as string) ?? '',
-        heading: (m.metadata?.heading as string) ?? '',
-        text: (m.metadata?.text as string) ?? '',
-        score: m.score ?? 0,
-      }));
+      return (res.matches ?? [])
+        // Defense-in-depth: re-check slug client-side so a missing/misconfigured
+        // metadata index can never bleed another project's KB into this one.
+        .filter((m) => m.metadata?.slug === this.slug)
+        .map((m) => ({
+          path: (m.metadata?.path as string) ?? '',
+          heading: (m.metadata?.heading as string) ?? '',
+          text: (m.metadata?.text as string) ?? '',
+          score: m.score ?? 0,
+        }));
     } catch {
       return [];
     }

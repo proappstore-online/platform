@@ -50,12 +50,15 @@ database_id = "585bbda3-0016-42ad-a53d-c089f1864fcb"
 [ai]
 binding = "AI"
 
-# TO ACTIVATE RAG (one-time infra): create the index, then uncomment the binding
-# below and redeploy. wrangler deploy FAILS if the binding references a
-# non-existent index, so it stays commented until the index exists.
+# TO ACTIVATE RAG (one-time infra): create the index AND a metadata index on
+# `slug`, then uncomment the binding below and redeploy. wrangler deploy FAILS if
+# the binding references a non-existent index, so it stays commented until then.
 #   wrangler vectorize create pas-kb --dimensions=768 --metric=cosine
-# (bge-base-en-v1.5 → 768-dim, cosine). Needs a token with Vectorize:Edit — the
-# env CLOUDFLARE_API_TOKEN lacks that scope, so create it via the CF dashboard or
+#   wrangler vectorize create-metadata-index pas-kb --property-name=slug --type=string
+# The metadata index is REQUIRED — retrieval filters by `slug` for per-project
+# isolation; without it the filter returns nothing (and risks cross-tenant
+# bleed). bge-base-en-v1.5 → 768-dim, cosine. Needs a token with Vectorize:Edit —
+# the env CLOUDFLARE_API_TOKEN lacks that scope, so create via the CF dashboard or
 # a re-scoped token. Until then the code falls back to whole-file KNOWLEDGE.md.
 # [[vectorize]]
 # binding = "VECTORIZE"
