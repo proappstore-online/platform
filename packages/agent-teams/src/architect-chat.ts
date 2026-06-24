@@ -200,12 +200,18 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       // far (no client tool_result to add).
       if (aiRes.stop_reason === 'pause_turn' as string) continue;
       const toolUses = contentArr.filter((c) => c.type === 'tool_use') as { type: 'tool_use'; id: string; name: string; input: unknown }[];
-      if (toolUses.length === 0 || aiRes.stop_reason !== 'tool_use') {
-        // The model wants to finish. If the user asked it to author the KB but it
-        // only researched (read, never wrote), it's declaring "Done" with no
-        // deliverable — exactly the coffeerating failure (13 reads, 0 writes,
-        // "Done."). Nudge it ONCE to actually write KNOWLEDGE.md, then accept
-        // whatever it does. Never fires for plain Q&A or once a KB exists.
+      // Pending tool calls are ALWAYS answered below — regardless of stop_reason.
+      // Two reasons: (1) a user message after an unanswered tool_use is an invalid
+      // history → Anthropic 400 ("tool_use ids without tool_result"); (2) a
+      // completed write_file in a max_tokens-truncated turn must still execute,
+      // not be abandoned (that would silently lose the KB write).
+      if (toolUses.length === 0) {
+        // No tool calls — the model is finishing. If the user asked it to author
+        // the KB but it only researched (read/remembered, never wrote a file),
+        // it's declaring "Done" with no deliverable — the coffeerating failure
+        // (reads only, then "Done."). Nudge it ONCE to actually write
+        // KNOWLEDGE.md. Safe here: no pending tool_use to orphan. Never fires for
+        // plain Q&A or once a KB exists.
         if (wantsKb && !wrote && !nudgedToWrite) {
           nudgedToWrite = true;
           messages.push({
