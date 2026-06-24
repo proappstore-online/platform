@@ -6,7 +6,7 @@
  * callbacks this needs). The explicit deps list is the honest coupling surface.
  */
 
-import type { Bindings } from './index.ts';
+import type { Bindings } from './bindings.ts';
 import { json, uuid, insertChatMessage } from './store.ts';
 import { slidingWindowAllow, CHAT_LIMIT, CHAT_WINDOW_MS } from './rate-limit.ts';
 import { formatMemory, type MemoryEntry } from './memory.ts';

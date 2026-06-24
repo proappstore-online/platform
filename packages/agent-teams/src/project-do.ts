@@ -4,7 +4,7 @@
  * WebSocket hibernation for streaming agent output to the browser.
  */
 
-import type { Bindings } from './index.ts';
+import type { Bindings } from './bindings.ts';
 import type {
   BaSpec,
   Project,

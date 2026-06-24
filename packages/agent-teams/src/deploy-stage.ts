@@ -7,7 +7,7 @@
  * small deps object (storage + the few callbacks this needs).
  */
 
-import type { Bindings } from './index.ts';
+import type { Bindings } from './bindings.ts';
 import { buildAppSummary } from './context-summary.ts';
 
 /** How long to wait for CI to register a run for a freshly pushed commit before

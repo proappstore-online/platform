@@ -8,7 +8,7 @@
  * refines the KB files. It does NOT create build tickets (that's the PO).
  */
 
-import type { Bindings } from './index.ts';
+import type { Bindings } from './bindings.ts';
 import { json, insertChatMessage } from './store.ts';
 import { slidingWindowAllow, CHAT_LIMIT, CHAT_WINDOW_MS } from './rate-limit.ts';
 import { formatMemory, type MemoryEntry } from './memory.ts';
@@ -20,6 +20,10 @@ import { toolActivityDetail } from './tool-activity.ts';
 import { sliceDocs } from './platform-skill.ts';
 import { isKbPath, KbIndex } from './kb-rag.ts';
 import { estimateCost } from './runtimes/cf-native-pricing.ts';
+import { parseAnthropicStream } from './runtimes/cf-native-stream.ts';
+
+/** The Architect's chat thread (kept out of the PO/build transcript). */
+export const RESEARCH_THREAD = 'research';
 
 /** The Architect's model — also used for spend estimation. */
 const ARCHITECT_MODEL = 'claude-sonnet-4-6';
@@ -31,10 +35,6 @@ function logArchitectCost(deps: ArchitectChatDeps, tokensIn: number, tokensOut: 
   const usd = estimateCost(ARCHITECT_MODEL, tokensIn, tokensOut);
   deps.logActivity('cost', `Architect · $${usd.toFixed(4)} · ${tokensIn}+${tokensOut} tok`, null);
 }
-import { parseAnthropicStream } from './runtimes/cf-native-stream.ts';
-
-/** The Architect's chat thread (kept out of the PO/build transcript). */
-export const RESEARCH_THREAD = 'research';
 
 export interface ArchitectChatDeps {
   sql: SqlStorage;

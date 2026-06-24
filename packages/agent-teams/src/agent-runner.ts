@@ -6,7 +6,7 @@
  * the orchestration callbacks). Behaviour-identical to the former method.
  */
 
-import type { Bindings } from './index.ts';
+import type { Bindings } from './bindings.ts';
 import type { AgentRuntime, Role, TicketStatus, ToolCall, ToolResult } from './types.ts';
 import { rowToTicket, rowToRoleConfig, insertChatMessage } from './store.ts';
 import { MAX_RUN_MINUTES as DEFAULT_MAX_RUN_MINUTES, assigneeForStatus, isTerminal } from './ticket-machine.ts';

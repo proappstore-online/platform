@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { resolveByoKey, runtimeToProvider } from './byo-key.ts';
-import type { Bindings } from './index.ts';
+import type { Bindings } from './bindings.ts';
 
 describe('runtimeToProvider', () => {
   it('maps cf-native to anthropic', () => {

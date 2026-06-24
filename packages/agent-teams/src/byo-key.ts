@@ -8,7 +8,7 @@
  * of a single agent run and is never logged or persisted.
  */
 
-import type { Bindings } from './index.ts';
+import type { Bindings } from './bindings.ts';
 import type { RuntimeKind } from './types.ts';
 
 /** Map a runtime adapter to its key-vault provider id. */
