@@ -56,6 +56,9 @@ own the project and have a BYO Anthropic key in the vault for agents to run.
 | `run_tests` | Trigger a Playwright E2E test run |
 | `set_model` | Set AI model per agent role (BA/Dev/QA) |
 | `add_ticket` | Add a ticket to the backlog directly (bypasses PO chat) |
+| `write_project_files` | **Direct/agent-free build** — write the working tree yourself (project must be paused). Pairs with `get_project_files` |
+| `delete_project_files` | Remove files from the working tree (project paused) |
+| `deploy_project` | Deploy the current working tree, no LLM (needs a provisioned repo) |
 
 ### Agent introspection tools
 
