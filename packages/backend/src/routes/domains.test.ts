@@ -35,7 +35,13 @@ function makeEnv(opts: { db?: ReturnType<typeof mockD1> } = {}) {
 }
 
 const originalFetch = globalThis.fetch;
-/** Mock fetch for CF Pages API calls. */
+/**
+ * Mock fetch for the Cloudflare API. Path B custom domains use two endpoints:
+ *   GET  /zones?name=<zone>           — find the in-account zone
+ *   PUT  /accounts/.../workers/domains — bind the hostname to the host worker
+ * (plus GET/DELETE on workers/domains for verify/detach). Responses are returned
+ * from the queue in call order.
+ */
 function mockFetchWithCf(cfResponses: Array<{ status: number; body: unknown }> = []) {
   const cfCalls: Array<{ method: string; url: string; body: unknown }> = [];
   const queue = [...cfResponses];
@@ -58,39 +64,36 @@ function mockFetchWithCf(cfResponses: Array<{ status: number; body: unknown }> =
   };
 }
 
+// Helpers for the common CF response shapes.
+const zoneFound = (id = 'zone1') => ({ status: 200, body: { success: true, result: [{ id, name: 'example.com' }] } });
+const zoneMissing = () => ({ status: 200, body: { success: true, result: [] } });
+const bindOk = (hostname: string) => ({
+  status: 200,
+  body: { success: true, result: { id: 'wd1', hostname, service: 'proappstore-host', zone_id: 'zone1', environment: 'production' } },
+});
+const bindingList = (hostname: string) => ({
+  status: 200,
+  body: { success: true, result: [{ id: 'wd1', hostname, service: 'proappstore-host', zone_id: 'zone1', environment: 'production' }] },
+});
+
 afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
 });
 
 describe('POST /v1/apps/:appId/domains', () => {
-  it('attaches a valid domain and persists pending state', async () => {
+  it('binds the host worker custom domain and persists active state', async () => {
     const ownerCheck = mockStmt({ first: { creator_id: 'gh:1' } });
     const upsert = mockStmt({ run: { meta: { changes: 1 } } });
     const readBack = mockStmt({
       first: {
-        app_id: 'meetup', domain: 'meetup.example.com', status: 'pending',
-        cf_status: 'pending',
-        cf_payload: JSON.stringify({
-          verification_data: { status: 'pending' },
-          validation_data: { method: 'txt', status: 'pending', txt_name: '_acme.meetup.example.com', txt_value: 'abc' },
-        }),
-        added_at: 1000, verified_at: null,
+        app_id: 'meetup', domain: 'meetup.example.com', status: 'active',
+        cf_status: 'active', cf_payload: '{}', added_at: 1000, verified_at: 1000,
       },
     });
     const db = mockD1(ownerCheck, upsert, readBack);
 
-    const mock = mockFetchWithCf([{
-      status: 200,
-      body: {
-        success: true,
-        result: {
-          name: 'meetup.example.com', status: 'pending',
-          verification_data: { status: 'pending' },
-          validation_data: { method: 'txt', status: 'pending', txt_name: '_acme.meetup.example.com', txt_value: 'abc' },
-        },
-      },
-    }]);
+    const mock = mockFetchWithCf([zoneFound(), bindOk('meetup.example.com')]);
     mock.install();
 
     const res = await app.request('/v1/apps/meetup/domains', {
@@ -100,14 +103,30 @@ describe('POST /v1/apps/:appId/domains', () => {
     }, makeEnv({ db }));
 
     expect(res.status).toBe(201);
-    const body = (await res.json()) as { domain: { domain: string; status: string; validationData: any } };
+    const body = (await res.json()) as { domain: { domain: string; status: string } };
     expect(body.domain.domain).toBe('meetup.example.com');
-    expect(body.domain.status).toBe('pending');
-    expect(body.domain.validationData?.txt_name).toBe('_acme.meetup.example.com');
-    // CF API was called with POST to pages/projects/proappstore-meetup/domains
-    expect(mock.cfCalls[0]?.method).toBe('POST');
-    expect(mock.cfCalls[0]?.url).toContain('proappstore-meetup/domains');
-    expect(mock.cfCalls[0]?.body).toEqual({ name: 'meetup.example.com' });
+    expect(body.domain.status).toBe('active');
+    // First a zone lookup, then a Worker Custom Domain bind to proappstore-host.
+    expect(mock.cfCalls[0]?.url).toContain('/zones?name=');
+    expect(mock.cfCalls[1]?.method).toBe('PUT');
+    expect(mock.cfCalls[1]?.url).toContain('/workers/domains');
+    expect(mock.cfCalls[1]?.body).toMatchObject({
+      hostname: 'meetup.example.com', service: 'proappstore-host', zone_id: 'zone1', environment: 'production',
+    });
+  });
+
+  it('409s when the domain is not on Cloudflare (no zone)', async () => {
+    const ownerCheck = mockStmt({ first: { creator_id: 'gh:1' } });
+    const db = mockD1(ownerCheck);
+    const mock = mockFetchWithCf([zoneMissing(), zoneMissing()]); // every suffix lookup misses
+    mock.install();
+    const res = await app.request('/v1/apps/meetup/domains', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: 'meetup.example.com' }),
+    }, makeEnv({ db }));
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain("isn't on Cloudflare");
   });
 
   it('rejects platform-managed domains', async () => {
@@ -194,13 +213,13 @@ describe('POST /v1/apps/:appId/domains', () => {
     expect(mock.cfCalls).toHaveLength(0);
   });
 
-  it('surfaces CF errors (e.g. domain already attached elsewhere)', async () => {
+  it('surfaces CF errors (e.g. hostname already bound elsewhere)', async () => {
     const ownerCheck = mockStmt({ first: { creator_id: 'gh:1' } });
     const db = mockD1(ownerCheck);
-    const mock = mockFetchWithCf([{
-      status: 409,
-      body: { success: false, errors: [{ code: 8000037, message: 'Domain is already attached to another project' }] },
-    }]);
+    const mock = mockFetchWithCf([
+      zoneFound(),
+      { status: 409, body: { success: false, errors: [{ code: 100117, message: 'workers.api.error.hostname_taken' }] } },
+    ]);
     mock.install();
     const res = await app.request('/v1/apps/meetup/domains', {
       method: 'POST',
@@ -208,8 +227,7 @@ describe('POST /v1/apps/:appId/domains', () => {
       body: JSON.stringify({ domain: 'taken.example.com' }),
     }, makeEnv({ db }));
     expect(res.status).toBe(409);
-    const text = await res.text();
-    expect(text).toContain('already attached');
+    expect(await res.text()).toContain('hostname_taken');
   });
 });
 
@@ -220,7 +238,7 @@ describe('GET /v1/apps/:appId/domains', () => {
       all: {
         results: [
           { app_id: 'meetup', domain: 'meetup.example.com', status: 'active', cf_status: 'active', cf_payload: '{}', added_at: 1000, verified_at: 2000 },
-          { app_id: 'meetup', domain: 'meetup.example.org', status: 'pending', cf_status: 'pending', cf_payload: '{"verification_data":{"txt_name":"_x","txt_value":"y"}}', added_at: 3000, verified_at: null },
+          { app_id: 'meetup', domain: 'meetup.example.org', status: 'pending', cf_status: 'pending', cf_payload: '{}', added_at: 3000, verified_at: null },
         ],
       },
     });
@@ -237,82 +255,65 @@ describe('GET /v1/apps/:appId/domains', () => {
 });
 
 describe('POST /v1/apps/:appId/domains/:domain/verify', () => {
-  it('re-checks CF and flips status to active', async () => {
+  it('reports active when the host worker binding exists', async () => {
     const ownerCheck = mockStmt({ first: { creator_id: 'gh:1' } });
     const update = mockStmt({ run: { meta: { changes: 1 } } });
     const readBack = mockStmt({
       first: { app_id: 'meetup', domain: 'meetup.example.com', status: 'active', cf_status: 'active', cf_payload: '{}', added_at: 1000, verified_at: 5000 },
     });
     const db = mockD1(ownerCheck, update, readBack);
-    const mock = mockFetchWithCf([
-      { status: 200, body: { success: true, result: { name: 'meetup.example.com', status: 'active' } } },
-    ]);
+    const mock = mockFetchWithCf([bindingList('meetup.example.com')]);
     mock.install();
     const res = await app.request('/v1/apps/meetup/domains/meetup.example.com/verify', { method: 'POST', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { domain: { status: string } };
     expect(body.domain.status).toBe('active');
-    expect(mock.cfCalls[0]?.method).toBe('PATCH');
+    expect(mock.cfCalls[0]?.method).toBe('GET');
+    expect(mock.cfCalls[0]?.url).toContain('/workers/domains');
   });
 
-  it('does NOT downgrade an active row when CF returns empty result', async () => {
-    const ownerCheck = mockStmt({ first: { creator_id: 'gh:1' } });
-    const readBack = mockStmt({
-      first: { app_id: 'meetup', domain: 'meetup.example.com', status: 'active', cf_status: 'active', cf_payload: '{}', added_at: 1000, verified_at: 5000 },
-    });
-    const db = mockD1(ownerCheck, readBack);
-    const mock = mockFetchWithCf([
-      { status: 200, body: { success: true, result: null } },
-    ]);
-    mock.install();
-    const res = await app.request('/v1/apps/meetup/domains/meetup.example.com/verify', { method: 'POST', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { domain: { status: string } };
-    expect(body.domain.status).toBe('active');
-    expect(db.prepare).toHaveBeenCalledTimes(2);
-  });
-
-  it('reads CF Domain.status (not verification_status)', async () => {
+  it('reports pending when the binding is not found yet', async () => {
     const ownerCheck = mockStmt({ first: { creator_id: 'gh:1' } });
     const update = mockStmt({ run: { meta: { changes: 1 } } });
     const readBack = mockStmt({
-      first: { app_id: 'meetup', domain: 'meetup.example.com', status: 'active', cf_status: 'active', cf_payload: '{}', added_at: 1000, verified_at: 5000 },
+      first: { app_id: 'meetup', domain: 'meetup.example.com', status: 'pending', cf_status: 'pending', cf_payload: '{}', added_at: 1000, verified_at: null },
     });
     const db = mockD1(ownerCheck, update, readBack);
-    const mock = mockFetchWithCf([
-      { status: 200, body: { success: true, result: { status: 'active' } } },
-    ]);
+    const mock = mockFetchWithCf([{ status: 200, body: { success: true, result: [] } }]);
     mock.install();
     const res = await app.request('/v1/apps/meetup/domains/meetup.example.com/verify', { method: 'POST', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { domain: { status: string } };
-    expect(body.domain.status).toBe('active');
+    expect(body.domain.status).toBe('pending');
   });
 });
 
 describe('DELETE /v1/apps/:appId/domains/:domain', () => {
-  it('removes the row and calls CF DELETE', async () => {
+  it('removes the binding by id and deletes the row', async () => {
     const ownerCheck = mockStmt({ first: { creator_id: 'gh:1' } });
     const del = mockStmt({ run: { meta: { changes: 1 } } });
     const db = mockD1(ownerCheck, del);
-    const mock = mockFetchWithCf([{ status: 200, body: { success: true } }]);
+    const mock = mockFetchWithCf([bindingList('meetup.example.com'), { status: 200, body: { success: true } }]);
     mock.install();
     const res = await app.request('/v1/apps/meetup/domains/meetup.example.com', { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
     expect(res.status).toBe(200);
-    expect(mock.cfCalls[0]?.method).toBe('DELETE');
-    expect(mock.cfCalls[0]?.url).toContain('proappstore-meetup/domains/meetup.example.com');
+    expect(mock.cfCalls[0]?.method).toBe('GET');
+    expect(mock.cfCalls[1]?.method).toBe('DELETE');
+    expect(mock.cfCalls[1]?.url).toContain('/workers/domains/wd1');
   });
 
-  it('does NOT delete the DB row when CF returns 4xx', async () => {
+  it('does NOT delete the DB row when CF delete returns 4xx', async () => {
     const ownerCheck = mockStmt({ first: { creator_id: 'gh:1' } });
     const del = mockStmt({ run: { meta: { changes: 1 } } });
     const db = mockD1(ownerCheck, del);
     const mock = mockFetchWithCf([
+      bindingList('meetup.example.com'),
       { status: 403, body: { success: false, errors: [{ code: 0, message: 'Domain is locked' }] } },
     ]);
     mock.install();
     const res = await app.request('/v1/apps/meetup/domains/meetup.example.com', { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
     expect(res.status).toBe(403);
+    // Only the owner check ran — the DB row delete was never reached.
     expect(db.prepare).toHaveBeenCalledTimes(1);
   });
 

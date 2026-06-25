@@ -20,25 +20,52 @@ export const domainRoutes = new Hono<{ Bindings: Env }>();
 
 type Ctx = Context<{ Bindings: Env }>;
 
-/** Direct CF Pages custom domains API call — no FAS admin proxy. */
-async function cfPagesDomain(
+// Path B serves every app from R2 via one shared host worker. A BYO custom domain
+// is a Worker Custom Domain bound to that worker; the host worker then resolves the
+// hostname → app via `app_custom_domains`. (The old per-app CF-Pages-project path
+// 404'd for Path B apps — they have no Pages project.)
+const HOST_WORKER = 'proappstore-host';
+
+/** Find the CF zone (in our account) that owns `domain`. The domain must be on
+ *  Cloudflare — its nameservers pointed at CF — for a Worker Custom Domain to bind. */
+async function cfZoneIdFor(c: Ctx, domain: string): Promise<string | null> {
+  const cfToken = c.env.CF_API_TOKEN;
+  if (!cfToken) throw new HttpError('CF credentials not configured', 503);
+  const labels = domain.split('.');
+  // app.ratemycup.online → try ratemycup.online first, then broader suffixes.
+  for (let i = 0; i < labels.length - 1; i++) {
+    const name = labels.slice(i).join('.');
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(name)}&status=active`,
+      { headers: { Authorization: `Bearer ${cfToken}` } },
+    );
+    const body = (await res.json().catch(() => null)) as { result?: { id?: string }[] } | null;
+    const id = body?.result?.[0]?.id;
+    if (id) return id;
+  }
+  return null;
+}
+
+/** Bind / list / remove the host worker's Custom Domain for a hostname. */
+async function workerDomain(
   c: Ctx,
-  proj: string,
-  opts: { method: string; domain?: string; body?: unknown },
-): Promise<{ status: number; body: unknown }> {
+  opts: { method: 'PUT' | 'GET' | 'DELETE'; domain: string; zoneId?: string; id?: string },
+): Promise<{ status: number; body: any }> {
   const cfToken = c.env.CF_API_TOKEN;
   const cfAccount = c.env.CF_ACCOUNT_ID;
   if (!cfToken || !cfAccount) throw new HttpError('CF credentials not configured', 503);
-
-  const path = opts.domain
-    ? `/accounts/${cfAccount}/pages/projects/${encodeURIComponent(proj)}/domains/${encodeURIComponent(opts.domain)}`
-    : `/accounts/${cfAccount}/pages/projects/${encodeURIComponent(proj)}/domains`;
+  const base = `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/workers/domains`;
+  let url = base;
   const init: RequestInit = { method: opts.method, headers: { Authorization: `Bearer ${cfToken}` } };
-  if (opts.body !== undefined) {
+  if (opts.method === 'PUT') {
     (init.headers as Record<string, string>)['Content-Type'] = 'application/json';
-    init.body = JSON.stringify(opts.body);
+    init.body = JSON.stringify({ environment: 'production', hostname: opts.domain, service: HOST_WORKER, zone_id: opts.zoneId });
+  } else if (opts.method === 'GET') {
+    url = `${base}?hostname=${encodeURIComponent(opts.domain)}`;
+  } else if (opts.method === 'DELETE') {
+    url = `${base}/${opts.id}`;
   }
-  const res = await fetch(`https://api.cloudflare.com/client/v4${path}`, init);
+  const res = await fetch(url, init);
   const body = await res.json().catch(() => null);
   return { status: res.status, body };
 }
@@ -105,25 +132,6 @@ function validateDomain(input: unknown): string {
   return domain;
 }
 
-function projectName(appId: string): string {
-  return `proappstore-${appId}`;
-}
-
-// CF Pages' Domain object top-level field is `status`, one of:
-//   'initializing' | 'pending' | 'active' | 'deactivated' | 'blocked' | 'error'
-// We collapse that to our coarser 'pending' | 'active' | 'failed'. (Older
-// `verification_status` is checked as a fallback in case a non-standard CF
-// proxy or future API revision uses that name.)
-function readCfStatus(result: any): string | null {
-  return result?.status ?? result?.verification_status ?? null;
-}
-
-function deriveStatus(cfStatus: string | null | undefined): 'pending' | 'active' | 'failed' {
-  if (cfStatus === 'active') return 'active';
-  if (cfStatus === 'pending' || cfStatus === 'initializing' || !cfStatus) return 'pending';
-  return 'failed';
-}
-
 function dtoFromRow(row: DomainRow): DomainDto {
   let payload: any = null;
   if (row.cf_payload) {
@@ -183,19 +191,26 @@ domainRoutes.post(
     }
     const domain = validateDomain(body.domain);
 
-    const cf = await cfPagesDomain(c, projectName(appId), {
-      method: 'POST',
-      body: { name: domain },
-    });
+    const zoneId = await cfZoneIdFor(c, domain);
+    if (!zoneId) {
+      const apex = domain.split('.').slice(-2).join('.');
+      throw new HttpError(
+        `${domain} isn't on Cloudflare yet. Add ${apex} to your Cloudflare account (point its nameservers at Cloudflare), then attach.`,
+        409,
+      );
+    }
+    const cf = await workerDomain(c, { method: 'PUT', domain, zoneId });
     const { ok, result, error } = extractCfResult(cf.body);
     if (!ok) {
-      // CF will say "Domain X is already attached to project Y" if it's
-      // taken by another app — pass that through so the owner sees why.
+      // e.g. the hostname is already bound to another worker — surface CF's reason.
       throw new HttpError(error || `CF returned ${cf.status}`, cf.status >= 400 && cf.status < 500 ? cf.status : 502);
     }
 
-    const cfStatus = readCfStatus(result);
-    const status = deriveStatus(cfStatus);
+    // A Worker Custom Domain on an in-account zone routes immediately; CF issues the
+    // TLS cert automatically (ready within ~a minute). The host worker gates serving
+    // on this row's status === 'active'.
+    const cfStatus = 'active';
+    const status: 'pending' | 'active' | 'failed' = 'active';
     const now = Date.now();
     await c.env.DB.prepare(
       `INSERT INTO app_custom_domains (app_id, domain, status, cf_status, cf_payload, added_at, verified_at)
@@ -249,30 +264,15 @@ domainRoutes.post(
     // param before auth would leak "not a domain" → 400 to anyone.
     await requireAppOwner(c, appId);
     const domain = validateDomain(c.req.param('domain')!);
-    const cf = await cfPagesDomain(c, projectName(appId), {
-      method: 'PATCH',
-      domain,
-    });
-    const { ok, result, error } = extractCfResult(cf.body);
-    if (!ok) throw new HttpError(error || `CF returned ${cf.status}`, cf.status >= 400 && cf.status < 500 ? cf.status : 502);
-
-    const cfStatus = readCfStatus(result);
-    // Defensive: if CF returned a positive ack but no usable status (malformed
-    // response, transient CF blip, schema drift), DO NOT persist — otherwise
-    // a previously-active row would silently demote to 'pending' because
-    // deriveStatus(null) === 'pending'. Return the existing row unchanged.
-    if (!result || cfStatus === null) {
-      const row = await c.env.DB.prepare(
-        `SELECT app_id, domain, status, cf_status, cf_payload, added_at, verified_at
-         FROM app_custom_domains WHERE app_id = ? AND domain = ?`,
-      )
-        .bind(appId, domain)
-        .first<DomainRow>();
-      if (!row) throw new HttpError('domain not attached to this app', 404);
-      return c.json({ domain: dtoFromRow(row) });
+    const cf = await workerDomain(c, { method: 'GET', domain });
+    if (cf.status >= 400 && cf.status !== 404) {
+      throw new HttpError(`CF returned ${cf.status}`, cf.status < 500 ? cf.status : 502);
     }
-
-    const status = deriveStatus(cfStatus);
+    const bindings = Array.isArray(cf.body?.result) ? cf.body.result : [];
+    const found = bindings.find((d: any) => d?.hostname === domain && d?.service === HOST_WORKER) ?? null;
+    const result = found ?? {};
+    const cfStatus = found ? 'active' : 'pending';
+    const status: 'pending' | 'active' | 'failed' = found ? 'active' : 'pending';
     const now = Date.now();
     const updated = await c.env.DB.prepare(
       `UPDATE app_custom_domains
@@ -305,20 +305,17 @@ domainRoutes.delete(
     // Auth first — see /verify route for rationale.
     await requireAppOwner(c, appId);
     const domain = validateDomain(c.req.param('domain')!);
-    const cf = await cfPagesDomain(c, projectName(appId), {
-      method: 'DELETE',
-      domain,
-    });
-    // Admin Worker collapses CF's 404 (already-not-attached) to 200, so any
-    // 4xx/5xx that reaches us is a real failure — domain locked, permission
-    // denied, etc. Surface it; do NOT delete the DB row, otherwise CF and
-    // our table diverge and the owner gets a fake "Detached" message.
-    if (cf.status >= 400) {
-      const { error } = extractCfResult(cf.body);
-      throw new HttpError(
-        error || `CF returned ${cf.status}`,
-        cf.status < 500 ? cf.status : 502,
-      );
+    // Find the binding id by hostname, then remove it. Idempotent: a missing
+    // binding is the desired end state, so a 404 on delete is treated as success.
+    const lookup = await workerDomain(c, { method: 'GET', domain });
+    const bindings = Array.isArray(lookup.body?.result) ? lookup.body.result : [];
+    const found = bindings.find((d: any) => d?.hostname === domain && d?.service === HOST_WORKER) ?? null;
+    if (found?.id) {
+      const del = await workerDomain(c, { method: 'DELETE', domain, id: found.id });
+      if (del.status >= 400 && del.status !== 404) {
+        const { error } = extractCfResult(del.body);
+        throw new HttpError(error || `CF returned ${del.status}`, del.status < 500 ? del.status : 502);
+      }
     }
     await c.env.DB.prepare(`DELETE FROM app_custom_domains WHERE app_id = ? AND domain = ?`)
       .bind(appId, domain)
