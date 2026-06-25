@@ -68,13 +68,16 @@ export function seedFiles(slug: string): Map<string, string> {
 
   files.set('package.json', JSON.stringify({
     name: slug, private: true, type: 'module',
+    // Pins pnpm for CI (pnpm/action-setup reads this) — without it the deploy
+    // fails with "No pnpm version is specified".
+    packageManager: 'pnpm@9.15.0',
     repository: { type: 'git', url: `https://github.com/proappstore-online/${slug}` },
     scripts: {
       dev: 'vite', build: 'tsc -b && vite build', preview: 'vite preview',
       test: 'vitest run', typecheck: 'tsc -b',
     },
     dependencies: {
-      '@proappstore/sdk': '^1.9.0', 'react': '^19.2.5', 'react-dom': '^19.2.5',
+      '@proappstore/sdk': '^1.16.0', 'react': '^19.2.5', 'react-dom': '^19.2.5',
       'lucide-react': '^0.460.0', 'date-fns': '^4.1.0',
       'react-i18next': '^15.4.0', 'i18next': '^24.2.0',
     },
@@ -83,7 +86,7 @@ export function seedFiles(slug: string): Map<string, string> {
       '@testing-library/jest-dom': '^6.6.0', '@types/react': '^19.2.14',
       '@types/react-dom': '^19.2.3', '@vitejs/plugin-react': '^6.0.1',
       'jsdom': '^26.0.0', 'tailwindcss': '^4.2.4', 'typescript': '~6.0.2',
-      'vite': '^8.0.10', 'vitest': '^4.1.0',
+      'vite': '^8.0.10', 'vite-plugin-pwa': '^0.21.1', 'vitest': '^4.1.0',
     },
   }, null, 2) + '\n');
 
@@ -100,9 +103,16 @@ export function seedFiles(slug: string): Map<string, string> {
   files.set('vite.config.ts', `import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    // Real PWA: auto-register + auto-update a service worker (offline + installable).
+    // manifest:false keeps the hand-tuned public manifest.json.
+    VitePWA({ registerType: 'autoUpdate', manifest: false }),
+  ],
 })
 `);
 
@@ -128,8 +138,7 @@ export default defineConfig({
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
-    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#7c3aed" />
     <meta name="description" content="${slug} on ProAppStore" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="${slug}" />
@@ -143,8 +152,8 @@ export default defineConfig({
     <meta name="twitter:description" content="${slug} on ProAppStore" />
     <meta name="twitter:image" content="https://${slug}.proappstore.online/og-image.svg" />
     <link rel="manifest" href="/manifest.json" />
-    <link rel="icon" href="/icon-192.png" type="image/png" />
-    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
     <title>${slug}</title>
   </head>
   <body>
@@ -156,14 +165,19 @@ export default defineConfig({
 
   files.set('manifest.json', JSON.stringify({
     name: slug, short_name: slug,
-    description: `A Pro app on ProAppStore`,
+    description: `${slug} on ProAppStore`,
     start_url: '/', display: 'standalone', orientation: 'any',
-    background_color: '#000000', theme_color: '#000000',
+    background_color: '#ffffff', theme_color: '#7c3aed',
+    // SVG icon (the template can't ship binary PNGs); Chrome/Android render it,
+    // and an app can swap in its own /icon.svg.
     icons: [
-      { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
-      { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+      { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' },
     ],
   }, null, 2) + '\n');
+
+  // A valid default icon so the PWA installs (the old /icon-192.png refs were
+  // 404s). Branded purple square + the app's initial; apps can overwrite it.
+  files.set('public/icon.svg', `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="104" fill="#7c3aed"/><text x="256" y="350" font-family="system-ui, -apple-system, sans-serif" font-size="300" font-weight="800" fill="#fff" text-anchor="middle">${(slug[0] ?? 'A').toUpperCase()}</text></svg>\n`);
 
   files.set('public/og-image.svg', `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="${slug} on ProAppStore">
   <defs>
