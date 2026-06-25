@@ -13,32 +13,22 @@ const red = ansi('31');
 const dim = (s: string) => (isTTY ? `\x1b[2m${s}\x1b[22m` : s);
 const bold = (s: string) => (isTTY ? `\x1b[1m${s}\x1b[22m` : s);
 
-// CF Pages Domain object shape:
-//   verification_data: { error_message?: string; status?: string }
-//   validation_data:   { error_message?: string; method?: 'http'|'txt'; status?: string;
-//                        txt_name?: string; txt_value?: string }
-// The TXT records owners actually need to add only appear in validation_data
-// when method is 'txt' (CF defaults to HTTP-01, falls back to TXT only if
-// HTTP-01 isn't possible).
-interface VerificationData {
-  status?: string;
-  error_message?: string;
-}
-interface ValidationData {
-  status?: string;
-  method?: string;
-  txt_name?: string;
-  txt_value?: string;
-  error_message?: string;
+// Adaptive attach: 'worker' = the domain's zone is already on Cloudflare (instant,
+// no DNS records for the owner); 'saas' = external DNS, so `instructions` carries the
+// CNAME + TXT records to add at the registrar.
+interface DomainInstructions {
+  apex: boolean;
+  cname: { name: string; value: string } | null;
+  cnameTarget: string;
+  txt: { name: string; value: string }[];
 }
 
 interface DomainDto {
   domain: string;
   status: 'pending' | 'active' | 'failed';
+  method: 'worker' | 'saas' | null;
   cfStatus: string | null;
-  verificationData: VerificationData | null;
-  validationData: ValidationData | null;
-  certificateAuthority: string | null;
+  instructions: DomainInstructions | null;
   addedAt: number;
   verifiedAt: number | null;
 }
@@ -109,7 +99,7 @@ function statusBadge(status: DomainDto['status']): string {
   return red('● failed');
 }
 
-function renderDomain(d: DomainDto, appId: string): void {
+function renderDomain(d: DomainDto): void {
   process.stdout.write(`\n  ${bold(d.domain)}  ${statusBadge(d.status)}\n`);
   if (d.cfStatus) process.stdout.write(`    ${dim(`CF: ${d.cfStatus}`)}\n`);
 
@@ -119,39 +109,43 @@ function renderDomain(d: DomainDto, appId: string): void {
     return;
   }
 
-  // Status is cached at the time it was last attached or verified. PAS does
-  // no background polling — the owner triggers a fresh check by running
-  // `pas domain verify <domain>`. Make that contract explicit here so the
-  // owner isn't surprised when nothing changes between `pas domain list`
-  // invocations.
+  // Status is cached — PAS does no background polling. The owner triggers a
+  // fresh check by running `pas domain verify <domain>`.
   process.stdout.write(
     `    ${dim(`status as of ${new Date(d.addedAt).toLocaleString()} — run \`pas domain verify ${d.domain}\` to refresh`)}\n`,
   );
 
-  const vd = d.verificationData || {};
-  const valid = d.validationData || {};
-  process.stdout.write(`\n    ${bold('Add this DNS record at your registrar:')}\n\n`);
-  process.stdout.write(`      Type:  CNAME\n`);
-  process.stdout.write(`      Name:  ${d.domain}\n`);
-  process.stdout.write(`      Value: ${bold(`${appId}.proappstore.online`)}\n`);
-  process.stdout.write(
-    `\n    ${dim('Apex domains (e.g. example.com without a subdomain) can\'t use a raw CNAME')}\n` +
-      `    ${dim('per RFC. Use ALIAS/ANAME if your registrar supports it, or set A/AAAA')}\n` +
-      `    ${dim('records pointing to Cloudflare anycast IPs (CF will tell you which).')}\n`,
-  );
-  // CF only emits TXT validation when HTTP-01 isn't possible — usually
-  // because DNS isn't yet pointing correctly. When method is 'txt', the
-  // owner needs this record too.
-  if (valid.method === 'txt' && valid.txt_name && valid.txt_value) {
-    process.stdout.write(`\n      ${dim('Plus this TXT record for SSL validation:')}\n`);
-    process.stdout.write(`      Type:  TXT\n`);
-    process.stdout.write(`      Name:  ${valid.txt_name}\n`);
-    process.stdout.write(`      Value: ${valid.txt_value}\n`);
+  const ins = d.instructions;
+  // Worker path: the domain's zone is already on Cloudflare — nothing to add.
+  if (d.method !== 'saas' || !ins) {
+    process.stdout.write(
+      `\n    ${dim("This domain's zone is on Cloudflare — no DNS records needed; the cert is provisioning.")}\n`,
+    );
+    process.stdout.write(`\n    Run ${bold(`pas domain verify ${d.domain}`)} in a moment.\n`);
+    return;
   }
-  if (vd.error_message) {
-    process.stdout.write(`\n    ${red('Last verification error:')} ${vd.error_message}\n`);
-  } else if (valid.error_message) {
-    process.stdout.write(`\n    ${red('Last validation error:')} ${valid.error_message}\n`);
+
+  // SaaS path: show the CNAME (or apex note) + TXT records.
+  if (ins.apex || !ins.cname) {
+    process.stdout.write(`\n    ${bold('Point your root (apex) domain at us:')}\n`);
+    process.stdout.write(`    ${dim(`${d.domain} is a root domain — most registrars can't CNAME it.`)}\n`);
+    process.stdout.write(`    ${dim(`Use CNAME flattening / ALIAS / ANAME → ${ins.cnameTarget}, or move the`)}\n`);
+    process.stdout.write(`    ${dim("domain's nameservers to Cloudflare and re-attach for an instant connect.")}\n`);
+  } else {
+    process.stdout.write(`\n    ${bold('Add this CNAME at your registrar:')}\n\n`);
+    process.stdout.write(`      Type:  CNAME\n`);
+    process.stdout.write(`      Name:  ${ins.cname.name}\n`);
+    process.stdout.write(`      Value: ${bold(ins.cname.value)}\n`);
+  }
+  if (ins.txt.length > 0) {
+    process.stdout.write(
+      `\n    ${dim(`Plus ${ins.txt.length === 1 ? 'this TXT record' : 'these TXT records'} for ownership + SSL:`)}\n`,
+    );
+    for (const t of ins.txt) {
+      process.stdout.write(`      Type:  TXT\n`);
+      process.stdout.write(`      Name:  ${t.name}\n`);
+      process.stdout.write(`      Value: ${t.value}\n`);
+    }
   }
   process.stdout.write(`\n    After adding the records, run: ${bold(`pas domain verify ${d.domain}`)}\n`);
 }
@@ -165,7 +159,7 @@ async function addDomain(domain: string, opts: { token?: string }): Promise<void
     process.stderr.write(`\n  ${red('Failed')} (${status}): ${data?.error || JSON.stringify(data)}\n\n`);
     process.exit(1);
   }
-  renderDomain(data.domain, appId);
+  renderDomain(data.domain);
   process.stdout.write('\n');
 }
 
@@ -183,7 +177,7 @@ async function listCmd(opts: { token?: string }): Promise<void> {
     process.stdout.write(`  Add one with: ${bold('pas domain add example.com')}\n\n`);
     return;
   }
-  for (const d of domains) renderDomain(d, appId);
+  for (const d of domains) renderDomain(d);
   process.stdout.write('\n');
 }
 
@@ -196,7 +190,7 @@ async function verifyCmd(domain: string, opts: { token?: string }): Promise<void
     process.stderr.write(`  ${red('Verify failed')} (${status}): ${data?.error || JSON.stringify(data)}\n`);
     process.exit(1);
   }
-  renderDomain(data.domain, appId);
+  renderDomain(data.domain);
   process.stdout.write('\n');
 }
 
