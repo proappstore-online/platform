@@ -276,4 +276,25 @@ describe('PUT /v1/apps/:appId/storage/* — upload', () => {
     expect(key).toBe('myapp/_public/logo.png');
     expect(key).not.toContain('gh:1');
   });
+
+  it('_userpub: any signed-in user (non-owner) uploads public content under their own id', async () => {
+    const storage = makeStorage();
+    // DB owner is someone else — proves this is NOT owner-gated (requireUser, not requireAppOwner).
+    const db = mockD1(mockStmt({ first: { creator_id: 'someone-else' } }));
+    const res = await app.request(
+      '/v1/apps/myapp/storage/_userpub/ratings/abc/photo.jpg',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'image/jpeg' },
+        body: new Uint8Array([1, 2, 3]),
+      },
+      makeEnv({ STORAGE: storage }, db),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { key: string };
+    // server namespaces by the caller's id (from the token), publicUrl-ready
+    expect(body.key).toBe('u/gh:1/ratings/abc/photo.jpg');
+    const putKey = vi.mocked(storage.put).mock.calls[0]![0] as string;
+    expect(putKey).toBe('myapp/_public/u/gh:1/ratings/abc/photo.jpg');
+  });
 });

@@ -29,12 +29,30 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
       return c.text('file path required', 400);
     }
 
-    // Auth check before reading body — _public/ requires app ownership
+    // Auth + key namespacing (checked before reading the body):
+    //   _userpub/<path> → ANY signed-in user. Stored public under their own id
+    //                     (user-generated content — rating photos, avatars…). The
+    //                     id comes from the token, so callers can't spoof or
+    //                     overwrite each other, and the file is publicly viewable.
+    //   _public/<path>  → app OWNER only (owner-curated public assets).
+    //   <path>          → any signed-in user; private, namespaced by their id.
     let user;
-    if (filePath.startsWith('_public/')) {
+    let storageKey: string;
+    let returnedKey: string;
+    if (filePath.startsWith('_userpub/')) {
+      user = await requireUser(c);
+      const rest = filePath.slice('_userpub/'.length);
+      if (!rest) return c.text('file path required', 400);
+      storageKey = `${appId}/_public/u/${user.id}/${rest}`;
+      returnedKey = `u/${user.id}/${rest}`;
+    } else if (filePath.startsWith('_public/')) {
       user = await requireAppOwner(c, appId);
+      storageKey = `${appId}/${filePath}`;
+      returnedKey = filePath;
     } else {
       user = await requireUser(c);
+      storageKey = `${appId}/${user.id}/${filePath}`;
+      returnedKey = filePath;
     }
 
     const body = await c.req.arrayBuffer();
@@ -52,11 +70,8 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
     if (blocked.includes(contentType)) {
       return c.text('content type not allowed for uploads', 400);
     }
-    const key = filePath.startsWith('_public/')
-      ? `${appId}/${filePath}`
-      : `${appId}/${user.id}/${filePath}`;
 
-    await c.env.STORAGE.put(key, body, {
+    await c.env.STORAGE.put(storageKey, body, {
       httpMetadata: { contentType },
       customMetadata: { uploadedBy: user.id, uploadedAt: Date.now().toString() },
     });
@@ -65,17 +80,17 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
     const webhookPromise = dispatchWebhook(c.env.DB, appId, 'storage.uploaded', {
       appId,
       userId: user.id,
-      key: filePath,
+      key: returnedKey,
       size: body.byteLength,
       contentType,
     });
     try { c.executionCtx.waitUntil(webhookPromise); } catch { /* no executionCtx in tests */ }
 
     return c.json({
-      key: filePath,
+      key: returnedKey,
       size: body.byteLength,
       contentType,
-      url: `/v1/apps/${appId}/storage/${filePath}`,
+      url: `/v1/apps/${appId}/storage/${returnedKey}`,
     });
   } catch (err) {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);

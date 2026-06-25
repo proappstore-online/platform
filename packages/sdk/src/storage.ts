@@ -74,6 +74,17 @@ export class Storage {
     return this.upload(`_public/${path}`, data, contentType);
   }
 
+  /**
+   * Upload a user-generated PUBLIC file (rating photos, user avatars, etc.).
+   * Unlike uploadPublic (owner-only), ANY signed-in user can call this — the file
+   * is stored publicly under the caller's own id, which the server assigns from the
+   * session, so users can't spoof or overwrite each other. The returned `key`
+   * (e.g. `u/<userId>/<path>`) is what you pass to publicUrl() + store in your DB.
+   */
+  async uploadUserPublic(path: string, data: Blob | ArrayBuffer | Uint8Array, contentType?: string): Promise<UploadResult> {
+    return this.upload(`_userpub/${path}`, data, contentType);
+  }
+
   /** Get a public URL for a file (no auth needed, usable in <img src>). File must have been uploaded with uploadPublic(). */
   publicUrl(path: string): string {
     return `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/public/${path}`;
