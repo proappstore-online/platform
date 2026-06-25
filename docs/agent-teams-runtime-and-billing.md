@@ -77,6 +77,53 @@ Both adapters run an in-Worker tool loop. Shipped hardening:
   across the loop. `cache_read`/`cache_creation` tokens are counted toward usage so
   the cost meter stays accurate (relevant to the metering note below).
 
+## Ticket lifecycle
+
+Every backlog item moves through this state machine (the authoritative edge table
+is `ticket-machine.ts`). The PO files tickets; the BA refines them into a spec;
+once approved, the Dev builds and the QA verifies; then it deploys. Any active
+state can **park in `needs-input`** (a system block or a question for the founder)
+and resume from where it left off on a chat reply or Play.
+
+```mermaid
+stateDiagram-v2
+    [*] --> inbox
+    state "ba-refining" as ba
+    state "awaiting-approval" as approval
+    state "dev-active" as dev
+    state "qa-active" as qa
+    state "qa-failed" as qafail
+    state "needs-input" as blocked
+
+    inbox --> ba: PO/BA picks up
+    ba --> approval: spec ready
+    approval --> ready: approved (auto)
+    approval --> ba: rework
+    ready --> dev: Dev builds
+    dev --> qa: Dev done
+    dev --> deploying: re-fix (specs exist)
+    qa --> deploying: QA pass
+    qa --> done: pass, nothing to deploy
+    qa --> qafail: QA found issues
+    qafail --> dev: back to Dev
+    deploying --> done: deployed ✓
+    deploying --> dev: deploy failed → retry
+    deploying --> failed: gave up
+
+    dev --> blocked: needs founder / system
+    blocked --> dev: resume (reply / Play)
+    note right of blocked
+        Any active state can park here.
+        Resumes the state it came from.
+    end note
+
+    done --> [*]
+    failed --> [*]
+```
+
+Concurrency is capped (max 3 active tickets: `ba-refining` + `dev-active` +
+`qa-active`), and the QA→Dev loop is bounded (5 iterations, then auto-fail).
+
 ## Billing options (pricing NOT yet decided)
 
 Anthropic won't do passthrough billing, but we can meter + charge ourselves. The

@@ -113,14 +113,19 @@ jobs:
             - Publishing: publishing-flow.md
             - MCP App Tools: mcp-app-tools.md
             - Agent Customization: agent-customization.md
-            - Agent Teams Runtime: agent-teams-runtime-and-billing.md
             - Architecture: architecture.md
+            - Agent Teams Runtime: agent-teams-runtime-and-billing.md
+            - Agent Reliability: agent-reliability-plan.md
+            - Build & Deploy: build-and-deploy.md
+            - Auth & Sessions: auth-session-model.md
             - ADRs:
                 - Cloudflare Workers Only: adr/001-cloudflare-workers-only.md
                 - Tailored vs Ready: adr/002-tailored-vs-ready-split.md
                 - One Control Plane: adr/003-one-control-plane.md
                 - Stripe via PAS: adr/004-stripe-via-pas.md
                 - D1 per Fork: adr/005-d1-per-fork.md
+                - Centralized Build (rejected): adr/006-centralized-build-service.md
+                - Durable Provisioning Workflow: adr/007-durable-provisioning-workflow.md
           YAML
           python -m zensical build
       - name: Publish to kb-host

@@ -21,6 +21,17 @@ goes if we ever centralize. Decision record: [ADR-006](./adr/006-centralized-bui
    - **CLI / MCP**: the repo is cloned from `template-app`, which carries the
      canonical workflow.
 
+```mermaid
+flowchart LR
+    Agent["Agent finishes ticket<br/>(or any push to main)"] --> Repo["App repo<br/>.github/workflows/deploy.yml"]
+    Repo --> CI["GitHub Actions<br/>pnpm install + vite build"]
+    CI --> Sync["aws s3 sync → R2<br/>pas-apps / apps/&lt;app&gt;/"]
+    Sync --> R2[("R2 bucket")]
+    Browser["Browser<br/>app.proappstore.online"] --> Host["proappstore-host Worker<br/>route *.proappstore.online/*"]
+    Host -->|serve by subdomain| R2
+    Host -->|reserved: api·admin·agents·mcp·kb·docs| Siblings["sibling Workers<br/>(service bindings)"]
+```
+
 ### Drift guards (the thing we're watching)
 
 A full workflow in every repo can drift (the `cache: pnpm`-without-lockfile

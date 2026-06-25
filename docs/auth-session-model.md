@@ -13,6 +13,29 @@ The current SDK still supports the legacy bearer-token browser flow:
 4. `app.auth.init()` validates the token, stores the signed-in user in memory,
    and tries to cache the session under `pas:session`.
 
+```mermaid
+sequenceDiagram
+    participant App as Browser / app
+    participant PAS as pas Worker (api)
+    participant IdP as GitHub / Google
+    participant Data as data-app Worker
+
+    App->>PAS: app.auth.signIn()
+    PAS->>IdP: OAuth
+    IdP-->>PAS: identity
+    Note over PAS: mint signed session JWT<br/>(SESSION_SIGNING_KEY)
+    PAS-->>App: redirect #pas_session=JWT
+    Note over App: app.auth.init() validates +<br/>caches (memory, localStorage)
+    App->>Data: request + Bearer JWT
+    Note over Data: verifies JWT LOCALLY with<br/>SESSION_SIGNING_KEY — no call back to PAS
+    Data-->>App: app data
+```
+
+> The key property: every worker (backend **and** each `data-<app>`) verifies the
+> JWT **locally** with the shared signing key — there is no per-request round-trip
+> to an auth service. The open work (below) is moving the browser-side token off
+> JS-readable storage into a host-only `__Host-` cookie.
+
 As of `@proappstore/sdk@1.16.23`, storage access is defensive. If
 `localStorage` is blocked, throws, or is unavailable, the SDK keeps the
 validated session in memory for the current page lifetime instead of failing the
