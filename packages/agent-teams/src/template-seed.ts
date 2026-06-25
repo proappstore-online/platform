@@ -155,6 +155,8 @@ export default defineConfig({
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icon.svg" />
     <title>${slug}</title>
+    <!-- Set the theme before first paint (no flash); mirrors useTheme's resolution. -->
+    <script>try{var p=localStorage.getItem('stores-theme');if(p==='dark'||((!p||p==='system')&&matchMedia('(prefers-color-scheme: dark)').matches))document.documentElement.dataset.theme='dark';}catch(e){}</script>
   </head>
   <body>
     <div id="root"></div>
@@ -313,23 +315,24 @@ export default function App() {
   color-scheme: light dark;
 }
 
-[data-theme="dark"], @media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #0a0a0a;
-    --paper-deep: #050505;
-    --ink: #e5e7eb;
-    --ink-strong: #f9fafb;
-    --muted: #9ca3af;
-    --accent: #a78bfa;
-    --accent-hover: #8b5cf6;
-    --accent-soft: rgba(167, 139, 250, 0.1);
-    --line: #2a2a3e;
-    --line-strong: #3a3a52;
-    --panel: rgba(20, 20, 35, 0.72);
-    --panel-hover: rgba(255, 255, 255, 0.04);
-    --shadow: 0 1px 3px rgba(0,0,0,0.3);
-    --shadow-lg: 0 4px 12px rgba(0,0,0,0.4);
-  }
+/* Dark theme: useTheme sets html[data-theme="dark"] (and resolves "system" in JS,
+   updating on OS change). NOT mixed with @media — combining a selector with an
+   at-rule is invalid CSS and made the toggle a no-op (theme just followed the OS). */
+[data-theme="dark"] {
+  --paper: #0a0a0a;
+  --paper-deep: #050505;
+  --ink: #e5e7eb;
+  --ink-strong: #f9fafb;
+  --muted: #9ca3af;
+  --accent: #a78bfa;
+  --accent-hover: #8b5cf6;
+  --accent-soft: rgba(167, 139, 250, 0.1);
+  --line: #2a2a3e;
+  --line-strong: #3a3a52;
+  --panel: rgba(20, 20, 35, 0.72);
+  --panel-hover: rgba(255, 255, 255, 0.04);
+  --shadow: 0 1px 3px rgba(0,0,0,0.3);
+  --shadow-lg: 0 4px 12px rgba(0,0,0,0.4);
 }
 
 /* Text size (set by useTheme hook) */
