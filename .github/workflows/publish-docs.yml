@@ -58,8 +58,12 @@ jobs:
           // zensical emits ```mermaid as <pre class="mermaid"> but does not run
           // mermaid.js. Load it from the CDN and render those blocks.
           (function () {
+            var tries = 0;
             function run() {
-              if (!window.mermaid) { return setTimeout(run, 50); }
+              if (!window.mermaid) {
+                if (++tries > 100) { return; } // give up after ~5s (CDN blocked/offline)
+                return setTimeout(run, 50);
+              }
               var dark = document.documentElement.getAttribute('data-md-color-scheme') === 'slate';
               window.mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default' });
               window.mermaid.run({ querySelector: 'pre.mermaid, .mermaid' });
