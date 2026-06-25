@@ -383,6 +383,12 @@ app.get('/v1/projects/:slug/files/content', async (c) => {
   return new Response(res.body, { status: res.status, headers: res.headers });
 });
 
+// Direct (agent-free) build: an external brain writes the working tree + deploys,
+// instead of paying the BYO-key agents. Project must be paused (DO enforces 409).
+app.post('/v1/projects/:slug/files', (c) => relay(c, '/files', { method: 'POST', forwardBody: true }));
+app.delete('/v1/projects/:slug/files', (c) => relay(c, '/files', { method: 'DELETE', forwardBody: true }));
+app.post('/v1/projects/:slug/deploy', (c) => relay(c, '/deploy', { method: 'POST' }));
+
 // ── KB share links (auth: project owner) ─────────────────────
 
 app.get('/v1/projects/:slug/shares', async (c) => {

@@ -287,6 +287,10 @@ export class ProjectDO implements DurableObject {
     if (path === '/files/content' && request.method === 'GET') {
       return this.getProjectFile(new URL(request.url).searchParams.get('path') ?? '');
     }
+    // Direct (agent-free) build: an external brain writes the working tree itself.
+    if (path === '/files' && request.method === 'POST') return this.writeProjectFiles(request);
+    if (path === '/files' && request.method === 'DELETE') return this.deleteProjectFiles(request);
+    if (path === '/deploy' && request.method === 'POST') return this.directDeploy();
 
     // KB share link management (owner only)
     if (path === '/shares' && request.method === 'GET') return this.listShares();
@@ -739,6 +743,72 @@ export class ProjectDO implements DurableObject {
     const MAX = 200_000;
     const truncated = row.content.length > MAX;
     return json({ path: row.path, content: truncated ? row.content.slice(0, MAX) : row.content, truncated });
+  }
+
+  // ── Direct build (agent-free) ────────────────────────────────
+  // An external brain (Claude Code, Cursor, …) writes the working tree itself via
+  // MCP/API instead of paying the BYO-key agents. Guarded: the project must be
+  // PAUSED so a direct edit never races an in-flight agent run.
+
+  private requireParked(): Response | null {
+    const proj = this.state.storage.sql.exec('SELECT status FROM project LIMIT 1').toArray()[0] as { status: string } | undefined;
+    if (proj?.status === 'running') {
+      return json({ error: 'Pause the project before editing files directly — agents and direct edits must not run concurrently.' }, 409);
+    }
+    return null;
+  }
+
+  private async writeProjectFiles(request: Request): Promise<Response> {
+    const blocked = this.requireParked();
+    if (blocked) return blocked;
+    const body = await request.json().catch(() => null) as { files?: { path?: string; content?: string }[] } | null;
+    const incoming = body?.files ?? [];
+    if (!Array.isArray(incoming) || incoming.length === 0) return json({ error: 'files: [{ path, content }] required' }, 400);
+    if (incoming.length > 200) return json({ error: 'too many files in one call (max 200)' }, 413);
+    for (const f of incoming) {
+      if (typeof f?.path !== 'string' || typeof f?.content !== 'string') return json({ error: 'each file needs string path + content' }, 400);
+      if (f.path.includes('..') || f.path.startsWith('/') || f.path.length > 512) return json({ error: `invalid path: ${f.path}` }, 400);
+    }
+    const files = this.loadFiles();
+    for (const f of incoming) files.set(f.path!, f.content!);
+    this.saveFiles(files);
+    const names = incoming.slice(0, 5).map((f) => f.path).join(', ');
+    this.logActivity('tool', `Direct write: ${incoming.length} file(s) — ${names}${incoming.length > 5 ? ' …' : ''}`, null);
+    this.broadcast({ type: 'files-synced', count: files.size });
+    return json({ ok: true, written: incoming.length, totalFiles: files.size });
+  }
+
+  private async deleteProjectFiles(request: Request): Promise<Response> {
+    const blocked = this.requireParked();
+    if (blocked) return blocked;
+    const body = await request.json().catch(() => null) as { paths?: string[] } | null;
+    const paths = body?.paths ?? [];
+    if (!Array.isArray(paths) || paths.length === 0) return json({ error: 'paths: string[] required' }, 400);
+    const files = this.loadFiles();
+    let deleted = 0;
+    for (const p of paths) { if (files.delete(p)) deleted++; }
+    this.saveFiles(files);
+    this.logActivity('tool', `Direct delete: ${deleted} file(s)`, null);
+    this.broadcast({ type: 'files-synced', count: files.size });
+    return json({ ok: true, deleted, totalFiles: files.size });
+  }
+
+  /** Deploy the current working tree without an agent — a synthetic 'deploying'
+   *  ticket runs the same (LLM-free) deploy stage as the agent path. */
+  private directDeploy(): Response {
+    const proj = this.state.storage.sql.exec('SELECT repo_url FROM project LIMIT 1').toArray()[0] as { repo_url: string | null } | undefined;
+    if (!proj?.repo_url) return json({ error: 'No repo provisioned yet — provision the app first, then deploy.' }, 409);
+    const seq = (this.state.storage.sql.exec('SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM tickets').toArray()[0] as { n: number }).n;
+    const id = crypto.randomUUID();
+    const now = Date.now();
+    this.state.storage.sql.exec(
+      `INSERT INTO tickets (id, seq, title, raw_idea, status, created_at, updated_at)
+       VALUES (?, ?, 'Direct deploy', 'Deploy the current working tree (direct build).', 'deploying', ?, ?)`,
+      id, seq, now, now,
+    );
+    this.broadcast({ type: 'transition', ticketId: id, from: 'inbox', to: 'deploying', trigger: 'system', reason: 'direct-deploy' });
+    this.dispatchDeploy(id);
+    return json({ ok: true, ticketId: id, status: 'deploying' });
   }
 
   // ── KB Share Links ──────────────────────────────────────────

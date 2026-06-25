@@ -261,4 +261,52 @@ export function registerLoopTools(server: McpServer, env: LoopEnv): void {
       return text(`Ticket created: #${d.ticket?.seq ?? '?'} "${title}"`);
     },
   );
+
+  // ── Direct (agent-free) build ──────────────────────────────────
+  // Write the project working tree yourself (any AI brain) instead of paying the
+  // BYO-key agents, then deploy. Pairs with get_project_files. The DO requires the
+  // project PAUSED so a direct edit never races an in-flight agent run.
+
+  server.tool(
+    "write_project_files",
+    "Directly write files into an Agent Teams project's working tree — agent-free build, for when YOUR client writes the code instead of the BYO-key agents (no repo clone needed). PAUSE the project first (set_project_running running:false). Read context with get_project_files (esp. KNOWLEDGE.md). Then deploy_project. NOTE: this is the agent-teams working tree; for a standalone scaffolded app use batch_write_files (commits to the repo) instead.",
+    {
+      token: TOKEN,
+      slug: SLUG,
+      files: z.array(z.object({
+        path: z.string().describe("repo-relative path, e.g. src/App.tsx"),
+        content: z.string().describe("full file contents"),
+      })).describe("Files to create/overwrite (max 200 per call)"),
+    },
+    async ({ token, slug, files }) => {
+      const r = await call(`/v1/projects/${slug}/files`, token, { method: "POST", body: { files } });
+      if (!r.ok) return text(String(r.data));
+      const d = r.data as { written?: number; totalFiles?: number };
+      return text(`Wrote ${d.written ?? files.length} file(s); working tree now has ${d.totalFiles ?? "?"} files. Call deploy_project to ship.`);
+    },
+  );
+
+  server.tool(
+    "delete_project_files",
+    "Delete files from an Agent Teams project's working tree (agent-free). The project must be paused.",
+    { token: TOKEN, slug: SLUG, paths: z.array(z.string()).describe("repo-relative paths to remove") },
+    async ({ token, slug, paths }) => {
+      const r = await call(`/v1/projects/${slug}/files`, token, { method: "DELETE", body: { paths } });
+      if (!r.ok) return text(String(r.data));
+      const d = r.data as { deleted?: number };
+      return text(`Deleted ${d.deleted ?? 0} file(s) from the working tree.`);
+    },
+  );
+
+  server.tool(
+    "deploy_project",
+    "Deploy the project's current working tree with NO agent/LLM — pushes to GitHub and runs CI. Use after write_project_files for a direct build. Requires a provisioned repo (provision the app first). Poll list_tickets / get_project for status.",
+    { token: TOKEN, slug: SLUG },
+    async ({ token, slug }) => {
+      const r = await call(`/v1/projects/${slug}/deploy`, token, { method: "POST" });
+      if (!r.ok) return text(String(r.data));
+      const d = r.data as { ticketId?: string };
+      return text(`Deploy started (ticket ${d.ticketId ?? "?"}). Poll list_tickets / get_project for status.`);
+    },
+  );
 }
