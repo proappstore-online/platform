@@ -796,8 +796,11 @@ export class ProjectDO implements DurableObject {
   /** Deploy the current working tree without an agent — a synthetic 'deploying'
    *  ticket runs the same (LLM-free) deploy stage as the agent path. */
   private directDeploy(): Response {
-    const proj = this.state.storage.sql.exec('SELECT repo_url FROM project LIMIT 1').toArray()[0] as { repo_url: string | null } | undefined;
-    if (!proj?.repo_url) return json({ error: 'No repo provisioned yet — provision the app first, then deploy.' }, 409);
+    // The deploy stage provisions the repo on first deploy (push → admin worker
+    // creates the repo + CF Pages + DNS), so no repo is required up front — just a
+    // non-empty working tree to ship.
+    const fileCount = (this.state.storage.sql.exec('SELECT COUNT(*) AS n FROM project_files').toArray()[0] as { n: number }).n;
+    if (fileCount === 0) return json({ error: 'Working tree is empty — write files before deploying.' }, 409);
     const seq = (this.state.storage.sql.exec('SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM tickets').toArray()[0] as { n: number }).n;
     const id = crypto.randomUUID();
     const now = Date.now();
