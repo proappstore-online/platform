@@ -301,7 +301,20 @@ domainRoutes.post(
       }
       const cf = await customHostname(c, saasZone, { method: 'POST', hostname: domain });
       const { ok, result, error } = extractCfResult(cf.body);
-      if (!ok) throw new HttpError(error || `CF returned ${cf.status}`, cf.status >= 400 && cf.status < 500 ? cf.status : 502);
+      if (!ok) {
+        // Until Cloudflare for SaaS is enabled (+ the token has SSL:Edit), CF returns
+        // an auth/entitlement error. Translate that into a clear message instead of a
+        // raw "Authentication error".
+        const notEnabled =
+          cf.status === 401 || cf.status === 403 || /authentication|not entitled|not allowed|requires|subscription|plan/i.test(error || '');
+        if (notEnabled) {
+          throw new HttpError(
+            'Connecting a domain whose DNS lives outside Cloudflare needs Cloudflare for SaaS, which the platform owner hasn’t enabled yet. For now, move the domain’s nameservers to Cloudflare to connect it instantly.',
+            503,
+          );
+        }
+        throw new HttpError(error || `CF returned ${cf.status}`, cf.status >= 400 && cf.status < 500 ? cf.status : 502);
+      }
       cfStatus = result?.ssl?.status ?? 'pending';
       status = 'pending';
       payloadObj = saasPayload(c, domain, result);

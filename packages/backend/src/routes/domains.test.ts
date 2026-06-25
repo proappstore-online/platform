@@ -153,6 +153,22 @@ describe('POST /v1/apps/:appId/domains — external DNS (Cloudflare for SaaS)', 
     expect(mock.cfCalls.at(-1)?.method).toBe('POST');
     expect(mock.cfCalls.at(-1)?.url).toContain('/custom_hostnames');
   });
+
+  it('returns a clear 503 when Cloudflare for SaaS is not enabled (auth error)', async () => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    const mock = mockFetchWithCf([
+      zoneMissing(), zoneMissing(), saasZone(),
+      { status: 403, body: { success: false, errors: [{ code: 10000, message: 'Authentication error' }] } },
+    ]);
+    mock.install();
+    const res = await app.request('/v1/apps/meetup/domains', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: 'shop.example.org' }),
+    }, makeEnv({ db }));
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain('Cloudflare for SaaS');
+  });
 });
 
 describe('POST /v1/apps/:appId/domains — validation', () => {
