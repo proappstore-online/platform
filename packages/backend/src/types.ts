@@ -20,6 +20,10 @@ export interface Env {
   /** CF credentials for provisioning (D1, Pages, Workers). */
   CF_API_TOKEN: string;
   CF_ACCOUNT_ID: string;
+  /** Proxied hostname on the SaaS zone that external custom domains CNAME to.
+   *  Optional — defaults to `cname.proappstore.online`. Set when Cloudflare for
+   *  SaaS is enabled. */
+  CF_SAAS_CNAME_TARGET?: string;
   // ADMIN service binding (was: freeappstore-admin) removed 2026-05-28
   // per PLAN-ARCH-CLEANUP Phase 4. PAS provisioning is fully self-contained
   // in routes/provision.ts; the binding was unused.
