@@ -31,3 +31,10 @@ export type { ProProfilePageProps } from './ui-profile-page.js';
 // GateScreen
 export { GateScreen } from './ui-gate.js';
 export type { GateScreenProps } from './ui-gate.js';
+
+// General-purpose primitives (Button, Card, Input, Modal, Spinner, Tabs, Toast, EmptyState)
+export { Button, Card, Input, Spinner, Modal, EmptyState, Tabs, Toast } from './ui-base.js';
+export type {
+  ButtonProps, ButtonVariant, CardProps, InputProps, SpinnerProps, ModalProps,
+  EmptyStateProps, TabItem, TabsProps, ToastProps, ToastVariant,
+} from './ui-base.js';
