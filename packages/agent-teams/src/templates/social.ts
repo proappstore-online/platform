@@ -28,6 +28,12 @@ export interface Connection {
   created_at: number
 }
 
+export interface ConnectionWithProfile extends Connection {
+  display_name: string
+  avatar_url: string
+  bio: string
+}
+
 export interface Message {
   id: string
   connection_a: string
@@ -117,7 +123,7 @@ export async function passUser(fromId: string, toId: string) {
 }
 
 export async function getConnections(userId: string) {
-  return (await app.db.query<Connection & { profile: never }>(
+  return (await app.db.query<ConnectionWithProfile>(
     'SELECT c.*, p.display_name, p.avatar_url, p.bio FROM connections c JOIN profiles p ON p.user_id = CASE WHEN c.a_id = ? THEN c.b_id ELSE c.a_id END WHERE c.a_id = ? OR c.b_id = ? ORDER BY c.created_at DESC',
     [userId, userId, userId]
   )).rows
@@ -264,13 +270,12 @@ export function Discover({ userId }: { userId: string }) {
 
   files.set('src/pages/Connections.tsx', `import { useState, useEffect } from 'react'
 import { getConnections } from '../lib/db'
-
-interface ConnRow { a_id: string; b_id: string; created_at: number; display_name: string; avatar_url: string; bio: string }
+import type { ConnectionWithProfile } from '../types'
 
 export function Connections({ userId, onOpenChat }: { userId: string; onOpenChat: (id: string) => void }) {
-  const [conns, setConns] = useState<ConnRow[]>([])
+  const [conns, setConns] = useState<ConnectionWithProfile[]>([])
 
-  useEffect(() => { getConnections(userId).then(setConns as never) }, [userId])
+  useEffect(() => { getConnections(userId).then(setConns) }, [userId])
 
   if (conns.length === 0) return <div className="empty-state"><h3>No connections yet</h3><p>Like profiles to make connections.</p></div>
 
@@ -306,6 +311,7 @@ export function Chat({ userId, otherId, onBack }: { userId: string; otherId: str
   const [messages, setMessages] = useState<Message[]>([])
   const [text, setText] = useState('')
   const endRef = useRef<HTMLDivElement>(null)
+  const roomRef = useRef<ReturnType<typeof app.rooms.join> | null>(null)
 
   const load = () => getMessages(userId, otherId).then(setMessages)
   useEffect(() => { load() }, [userId, otherId])
@@ -315,8 +321,9 @@ export function Chat({ userId, otherId, onBack }: { userId: string; otherId: str
     const a = userId < otherId ? userId : otherId
     const b = userId < otherId ? otherId : userId
     const room = app.rooms.join('chat:' + a + ':' + b)
-    room.on('message', () => load())
-    return () => { room.leave() }
+    roomRef.current = room
+    const unsub = room.onMessage(() => load())
+    return () => { unsub(); room.close(); roomRef.current = null }
   }, [userId, otherId])
 
   const send = async () => {
@@ -324,9 +331,7 @@ export function Chat({ userId, otherId, onBack }: { userId: string; otherId: str
     const body = text.trim()
     setText('')
     await sendMessage(userId, otherId, body)
-    const a = userId < otherId ? userId : otherId
-    const b = userId < otherId ? otherId : userId
-    try { app.rooms.send('chat:' + a + ':' + b, { kind: 'message' }) } catch {}
+    roomRef.current?.send({ kind: 'message' })
     load()
   }
 

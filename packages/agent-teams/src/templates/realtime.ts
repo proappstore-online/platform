@@ -169,25 +169,25 @@ export function useBoardRoom(boardId: string | null, userId: string, onPatch: (p
   const [peers, setPeers] = useState<Array<{ uid: string; login: string }>>([])
   const onPatchRef = useRef(onPatch)
   onPatchRef.current = onPatch
+  const roomRef = useRef<ReturnType<typeof app.rooms.join> | null>(null)
 
   useEffect(() => {
     if (!boardId) return
-    const roomId = 'board:' + boardId
-    const room = app.rooms.join(roomId)
+    const room = app.rooms.join('board:' + boardId)
+    roomRef.current = room
 
-    room.on('message', (msg: { from: { uid: string }; data: BoardPatch }) => {
+    const unsub1 = room.onMessage<BoardPatch>((msg) => {
       if (msg.from.uid === userId) return
       onPatchRef.current(msg.data)
     })
 
-    room.on('peers', (p: Array<{ uid: string; login: string }>) => setPeers(p))
+    const unsub2 = room.onPeers((p) => setPeers(p))
 
-    return () => { room.leave() }
+    return () => { unsub1(); unsub2(); room.close(); roomRef.current = null }
   }, [boardId, userId])
 
   const broadcast = (patch: BoardPatch) => {
-    if (!boardId) return
-    try { app.rooms.send('board:' + boardId, patch) } catch {}
+    roomRef.current?.send(patch)
   }
 
   return { peers, broadcast }

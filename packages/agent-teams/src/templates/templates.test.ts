@@ -230,11 +230,14 @@ describe('realtime template structure', () => {
     expect(db).toContain('cards');
   });
 
-  it('realtime hook uses app.rooms', () => {
+  it('realtime hook uses correct rooms API', () => {
     const rt = files.get('src/lib/realtime.ts')!;
-    expect(rt).toContain('app.rooms');
+    expect(rt).toContain('app.rooms.join');
+    expect(rt).toContain('room.onMessage');
+    expect(rt).toContain('room.onPeers');
+    expect(rt).toContain('room.close()');
     expect(rt).toContain('broadcast');
-    expect(rt).toContain('peers');
+    expect(rt).toContain('.send(patch)');
   });
 
   it('types has BoardPatch union', () => {
@@ -262,15 +265,27 @@ describe('social template structure', () => {
     expect(db).toContain('messages');
   });
 
+  it('types has ConnectionWithProfile (no type hacks in Connections)', () => {
+    const types = files.get('src/types.ts')!;
+    expect(types).toContain('interface ConnectionWithProfile');
+    const conns = files.get('src/pages/Connections.tsx')!;
+    expect(conns).toContain('ConnectionWithProfile');
+    expect(conns).not.toContain('as never');
+  });
+
   it('has mutual matching logic', () => {
     const db = files.get('src/lib/db.ts')!;
     expect(db).toContain('likeUser');
     expect(db).toContain('mutual');
   });
 
-  it('Chat uses rooms for real-time', () => {
+  it('Chat uses correct rooms API', () => {
     const chat = files.get('src/pages/Chat.tsx')!;
-    expect(chat).toContain('app.rooms');
+    expect(chat).toContain('app.rooms.join');
+    expect(chat).toContain('room.onMessage');
+    expect(chat).toContain('room.close()');
+    expect(chat).not.toContain('room.on(');
+    expect(chat).not.toContain('room.leave()');
   });
 
   it('App has bottom tab navigation', () => {
@@ -361,6 +376,56 @@ describe('dashboard template structure', () => {
     expect(form).toContain('createItem');
     expect(form).toContain('updateItem');
   });
+});
+
+// ── SDK rooms API correctness ──────────────────────────────────────
+
+describe('templates use correct rooms API', () => {
+  for (const tpl of TEMPLATES) {
+    const files = seedFiles('test', tpl);
+    const allSrc = [...files.entries()]
+      .filter(([p]) => p.startsWith('src/'))
+      .map(([, c]) => c)
+      .join('\n');
+
+    if (allSrc.includes('rooms')) {
+      describe(tpl, () => {
+        it('uses room.onMessage() not room.on("message")', () => {
+          expect(allSrc).not.toMatch(/room\.on\(['"]message/);
+          expect(allSrc).toContain('onMessage');
+        });
+
+        it('uses room.close() not room.leave()', () => {
+          expect(allSrc).not.toContain('.leave()');
+          expect(allSrc).toContain('.close()');
+        });
+
+        it('uses room.send() not app.rooms.send()', () => {
+          expect(allSrc).not.toContain('app.rooms.send');
+        });
+
+        it('unsubscribes listeners on cleanup', () => {
+          expect(allSrc).toMatch(/const unsub|unsub\(\)|unsub1\(\)/);
+        });
+      });
+    }
+  }
+});
+
+// ── No type hacks ─────────────────────────────────────────────────
+
+describe('templates avoid type hacks', () => {
+  for (const tpl of TEMPLATES) {
+    it(`${tpl}: no "as never" or "as any" casts`, () => {
+      const files = seedFiles('test', tpl);
+      for (const [path, content] of files) {
+        if (path.startsWith('src/')) {
+          expect(content, `${tpl}/${path} has "as never"`).not.toContain('as never');
+          expect(content, `${tpl}/${path} has "as any"`).not.toContain('as any');
+        }
+      }
+    });
+  }
 });
 
 // ── No template leaks across slugs ─────────────────────────────────
