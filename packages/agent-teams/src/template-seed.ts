@@ -136,9 +136,12 @@ export default defineConfig({
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="theme-color" content="#7c3aed" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#000000" id="theme-color" />
+    <meta name="darkreader-lock" />
     <meta name="description" content="${slug} on ProAppStore" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="${slug}" />
@@ -155,8 +158,11 @@ export default defineConfig({
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icon.svg" />
     <title>${slug}</title>
-    <!-- Set the theme before first paint (no flash); mirrors useTheme's resolution. -->
-    <script>try{var p=localStorage.getItem('stores-theme');if(p==='dark'||((!p||p==='system')&&matchMedia('(prefers-color-scheme: dark)').matches))document.documentElement.dataset.theme='dark';}catch(e){}</script>
+    <script>try{var p=localStorage.getItem('stores-theme');if(p==='dark'||((!p||p==='system')&&matchMedia('(prefers-color-scheme: dark)').matches))document.documentElement.dataset.theme='dark';var t=localStorage.getItem('stores-text-size');if(t)document.documentElement.dataset.text=t;}catch(e){}</script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <script src="https://api.proappstore.online/v1/analytics.js?app=${slug}" defer></script>
   </head>
   <body>
     <div id="root"></div>
