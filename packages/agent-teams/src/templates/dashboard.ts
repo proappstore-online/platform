@@ -135,7 +135,7 @@ export default function App() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [ready, setReady] = useState(false)
 
-  useEffect(() => { window.addEventListener('hashchange', () => setRoute(parseHash())) }, [])
+  useEffect(() => { const h = () => setRoute(parseHash()); window.addEventListener('hashchange', h); return () => window.removeEventListener('hashchange', h) }, [])
   useEffect(() => {
     if (!user) return
     migrate().then(() => getStats(user.id)).then((s) => { setStats(s); setReady(true) })
@@ -293,7 +293,7 @@ export function ItemDetail({ id, userId, onUpdate }: { id: string; userId: strin
   }
 
   const handleDelete = async () => {
-    await deleteItem(id); onUpdate(); location.hash = '#/list'
+    await deleteItem(id); onUpdate(); window.location.hash = '#/list'
   }
 
   return (
@@ -340,10 +340,10 @@ export function ItemForm({ userId, editId, onSave }: { userId: string; editId?: 
     setSaving(true)
     if (editId) {
       await updateItem(editId, { title, description, category, priority })
-      onSave(); location.hash = '#/item/' + editId
+      onSave(); window.location.hash = '#/item/' + editId
     } else {
-      const id = await createItem(userId, { title, description, category, priority })
-      onSave(); location.hash = '#/item/' + id
+      const newId = await createItem(userId, { title, description, category, priority })
+      onSave(); window.location.hash = '#/item/' + newId
     }
   }
 

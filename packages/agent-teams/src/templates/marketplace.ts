@@ -140,7 +140,7 @@ export default function App() {
   const [route, setRoute] = useState<Route>(parseHash)
   const [ready, setReady] = useState(false)
 
-  useEffect(() => { window.addEventListener('hashchange', () => setRoute(parseHash())); }, [])
+  useEffect(() => { const h = () => setRoute(parseHash()); window.addEventListener('hashchange', h); return () => window.removeEventListener('hashchange', h) }, [])
   useEffect(() => { if (user) migrate().then(() => setReady(true)) }, [user])
 
   if (loading) return <div className="min-h-[100dvh] flex items-center justify-center text-muted">Loading...</div>
@@ -303,7 +303,7 @@ export function Create({ userId }: { userId: string }) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [category, setCategory] = useState('')
-  const [location, setLocation] = useState('')
+  const [loc, setLoc] = useState('')
   const [price, setPrice] = useState(0)
   const [saving, setSaving] = useState(false)
 
@@ -311,8 +311,8 @@ export function Create({ userId }: { userId: string }) {
     e.preventDefault()
     if (!title.trim()) return
     setSaving(true)
-    const id = await createListing(userId, { title, description, category, location, price })
-    location.hash = '#/listing/' + id
+    const id = await createListing(userId, { title, description, category, location: loc, price })
+    window.location.hash = '#/listing/' + id
   }
 
   return (
@@ -343,7 +343,7 @@ export function Create({ userId }: { userId: string }) {
         </div>
         <div>
           <label className="text-sm font-medium text-[var(--ink)]">Location</label>
-          <input className="input mt-1" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Sydney, AU" />
+          <input className="input mt-1" value={loc} onChange={(e) => setLoc(e.target.value)} placeholder="e.g. Sydney, AU" />
         </div>
         <button type="submit" className="btn btn-primary w-full" disabled={saving || !title.trim()}>
           {saving ? 'Creating...' : 'Create Listing'}

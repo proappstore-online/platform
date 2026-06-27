@@ -154,7 +154,7 @@ export default function App() {
   const [ready, setReady] = useState(false)
   const [newName, setNewName] = useState('')
 
-  useEffect(() => { window.addEventListener('hashchange', () => setRoute(parseHash())) }, [])
+  useEffect(() => { const h = () => setRoute(parseHash()); window.addEventListener('hashchange', h); return () => window.removeEventListener('hashchange', h) }, [])
   useEffect(() => {
     if (!user) return
     migrate().then(() => Promise.all([getMyOrgs(user.id), getPublicOrgs()])).then(([my, pub]) => {

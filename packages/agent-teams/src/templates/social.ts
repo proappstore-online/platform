@@ -363,10 +363,10 @@ export function ProfileEdit({ profile, onSave }: { profile: Profile; onSave: (p:
   const [name, setName] = useState(profile.display_name)
   const [bio, setBio] = useState(profile.bio)
   const [interests, setInterests] = useState(profile.interests)
-  const [location, setLocation] = useState(profile.location)
+  const [loc, setLoc] = useState(profile.location)
 
   const handleSave = () => {
-    onSave({ ...profile, display_name: name, bio, interests, location, updated_at: Date.now() })
+    onSave({ ...profile, display_name: name, bio, interests, location: loc, updated_at: Date.now() })
   }
 
   return (
@@ -386,7 +386,7 @@ export function ProfileEdit({ profile, onSave }: { profile: Profile; onSave: (p:
       </div>
       <div>
         <label className="text-sm font-medium text-[var(--ink)]">Location</label>
-        <input className="input mt-1" value={location} onChange={(e) => setLocation(e.target.value)} />
+        <input className="input mt-1" value={loc} onChange={(e) => setLoc(e.target.value)} />
       </div>
       <button onClick={handleSave} className="btn btn-primary w-full">Save Profile</button>
     </div>
