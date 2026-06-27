@@ -211,7 +211,7 @@ function parseHash(): Route {
 }
 
 export default function App() {
-  const { user, loading, signOut } = useProAuth(app)
+  const { user, loading } = useProAuth(app)
   const { theme } = useTheme()
   const [route, setRoute] = useState<Route>(parseHash)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])

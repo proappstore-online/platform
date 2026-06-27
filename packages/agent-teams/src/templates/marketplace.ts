@@ -114,7 +114,7 @@ export async function getApplications(listingId: string) {
 }
 `);
 
-  files.set('src/App.tsx', `import { useState, useEffect, useCallback } from 'react'
+  files.set('src/App.tsx', `import { useState, useEffect } from 'react'
 import { useProAuth, useTheme } from '@proappstore/sdk/hooks'
 import { Avatar, ThemeToggle } from '@proappstore/sdk/ui'
 import { app } from './lib/app'
@@ -135,7 +135,7 @@ function parseHash(): Route {
 }
 
 export default function App() {
-  const { user, loading, signOut } = useProAuth(app)
+  const { user, loading } = useProAuth(app)
   const { theme } = useTheme()
   const [route, setRoute] = useState<Route>(parseHash)
   const [ready, setReady] = useState(false)
@@ -160,7 +160,7 @@ export default function App() {
     <div className="min-h-[100dvh] flex flex-col" data-theme={theme}>
       <header className="sticky top-0 z-50 border-b border-[var(--line)] bg-[var(--paper)]/90 backdrop-blur">
         <div className="max-w-5xl mx-auto px-4 h-12 flex items-center justify-between">
-          <button onClick={() => { location.hash = '#/' }} className="font-bold text-[var(--ink)] display-font">${slug}</button>
+          <button onClick={() => { window.location.hash = '#/' }} className="font-bold text-[var(--ink)] display-font">${slug}</button>
           <nav className="flex items-center gap-3 text-sm">
             <a href="#/" className="text-[var(--muted)] hover:text-[var(--ink)]">Browse</a>
             <a href="#/saved" className="text-[var(--muted)] hover:text-[var(--ink)]">Saved</a>

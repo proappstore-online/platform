@@ -428,6 +428,58 @@ describe('templates avoid type hacks', () => {
   }
 });
 
+// ── No unused imports ──────────────────────────────────────────────
+
+describe('templates have no unused imports', () => {
+  for (const tpl of TEMPLATES) {
+    const files = seedFiles('test', tpl);
+
+    it(`${tpl}: no unused useCallback import`, () => {
+      for (const [path, content] of files) {
+        if (path.startsWith('src/') && content.includes('useCallback') && !content.includes('useCallback(')) {
+          throw new Error(`${path} imports useCallback but never calls it`);
+        }
+      }
+    });
+
+    it(`${tpl}: no unused signOut destructure`, () => {
+      for (const [path, content] of files) {
+        if (!path.startsWith('src/')) continue;
+        if (!content.includes('signOut')) continue;
+        // Count uses outside the destructuring line
+        const lines = content.split('\n');
+        const uses = lines.filter((l) => l.includes('signOut') && !l.includes('useProAuth'));
+        if (uses.length === 0) {
+          throw new Error(`${path} destructures signOut but never uses it`);
+        }
+      }
+    });
+  }
+});
+
+// ── Explicit window.location in JSX ────────────────────────────────
+
+describe('templates use window.location.hash for writes in JSX', () => {
+  for (const tpl of TEMPLATES) {
+    it(`${tpl}: no bare location.hash = inside components`, () => {
+      const files = seedFiles('test', tpl);
+      for (const [path, content] of files) {
+        if (!path.startsWith('src/') || !path.endsWith('.tsx')) continue;
+        // Find location.hash assignments that aren't in parseHash (top-level function)
+        const lines = content.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (line.match(/[^.]location\.hash\s*=/) && !line.includes('window.location')) {
+            // Allow in parseHash-style top-level functions (reads, not writes)
+            if (line.includes('.slice') || line.includes('.match') || line.includes('.startsWith')) continue;
+            throw new Error(`${path}:${i + 1} uses bare location.hash = (should be window.location.hash)`);
+          }
+        }
+      }
+    });
+  }
+});
+
 // ── No template leaks across slugs ─────────────────────────────────
 
 describe('templates are slug-isolated', () => {

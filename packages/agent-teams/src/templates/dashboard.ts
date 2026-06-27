@@ -160,7 +160,7 @@ export default function App() {
     <div className="min-h-[100dvh] flex flex-col" data-theme={theme}>
       <header className="sticky top-0 z-50 border-b border-[var(--line)] bg-[var(--paper)]/90 backdrop-blur">
         <div className="max-w-5xl mx-auto px-4 h-12 flex items-center justify-between">
-          <button onClick={() => { location.hash = '#/' }} className="font-bold text-[var(--ink)] display-font">${slug}</button>
+          <button onClick={() => { window.location.hash = '#/' }} className="font-bold text-[var(--ink)] display-font">${slug}</button>
           <nav className="flex items-center gap-3 text-sm">
             <a href="#/" className="text-[var(--muted)] hover:text-[var(--ink)]">Dashboard</a>
             <a href="#/list" className="text-[var(--muted)] hover:text-[var(--ink)]">Items</a>
