@@ -5,7 +5,17 @@
  * Mirrors pas/templates/template-app/ — keep in sync.
  * Covers every VCQA check: structure, docs, PWA, dark mode, design tokens,
  * security headers, testing setup, CI/CD, accessibility meta, and compliance.
+ *
+ * Template types (optional second arg):
+ *   blank        — empty shell (default)
+ *   marketplace  — two-sided listings, search/filter, applications
+ *   realtime     — workspaces, boards, WebSocket rooms/presence
+ *   social       — profiles, discovery, matching, chat
+ *   organization — multi-tenant orgs, roles, memberships
+ *   dashboard    — generic CRUD, stats, list/detail/create
  */
+
+import { templateOverlay, type TemplateType } from './templates/index.ts';
 
 // NOTE: No CI/CD workflow is generated here. The platform OWNS CI — at deploy
 // time handleAgentDeploy (admin/src/publish.ts) strips any .github/workflows/*
@@ -15,7 +25,9 @@
 // Path-A model, not Path B R2). Do not re-add workflow seeding here; change the
 // one source of truth in admin/src/publish.ts instead.
 
-export function seedFiles(slug: string): Map<string, string> {
+export { type TemplateType } from './templates/index.ts';
+
+export function seedFiles(slug: string, template: TemplateType = 'blank'): Map<string, string> {
   const files = new Map<string, string>();
   const year = new Date().getFullYear();
 
@@ -415,6 +427,14 @@ body {
   // deploy time (see the note at the top of this file). Seeding workflow files
   // here is dead code: handleAgentDeploy strips every .github/workflows/* from
   // the bundle before it reaches GitHub.
+
+  // ── Template overlay ─────────────────────────────────────────
+  // Category-specific templates replace/add src/ files on top of the base
+  // scaffold. The base (configs, HTML, CSS, tests) stays the same.
+  const overlay = templateOverlay(slug, template);
+  for (const [path, content] of overlay) {
+    files.set(path, content);
+  }
 
   return files;
 }

@@ -98,3 +98,48 @@ describe('seedFiles — index.html matches template-app (drift detection)', () =
     expect(hasTag(seedHtml, 'api.proappstore.online/v1/analytics.js')).toBe(true);
   });
 });
+
+/**
+ * Template overlay tests: each category template must produce a valid seed
+ * with src/App.tsx, src/lib/app.ts, src/lib/db.ts, and src/types.ts.
+ * The base infrastructure (index.html, package.json, CSS) must survive.
+ */
+describe('seedFiles — category templates produce valid scaffolds', () => {
+  const TEMPLATES = ['marketplace', 'realtime', 'social', 'organization', 'dashboard'] as const;
+
+  for (const tpl of TEMPLATES) {
+    describe(tpl, () => {
+      const files = seedFiles('test-app', tpl);
+
+      it('keeps base infrastructure files', () => {
+        expect(files.has('index.html')).toBe(true);
+        expect(files.has('package.json')).toBe(true);
+        expect(files.has('src/index.css')).toBe(true);
+        expect(files.has('src/main.tsx')).toBe(true);
+      });
+
+      it('provides template-specific src files', () => {
+        expect(files.has('src/App.tsx')).toBe(true);
+        expect(files.has('src/lib/app.ts')).toBe(true);
+        expect(files.has('src/lib/db.ts')).toBe(true);
+        expect(files.has('src/types.ts')).toBe(true);
+      });
+
+      it('App.tsx imports from @proappstore/sdk', () => {
+        const app = files.get('src/App.tsx')!;
+        expect(app).toContain('@proappstore/sdk');
+      });
+
+      it('lib/app.ts initializes with correct slug', () => {
+        const appTs = files.get('src/lib/app.ts')!;
+        expect(appTs).toContain("appId: 'test-app'");
+      });
+
+      it('lib/db.ts has migrations', () => {
+        const db = files.get('src/lib/db.ts')!;
+        expect(db).toContain('CREATE TABLE');
+        expect(db).toContain('migrate');
+      });
+    });
+  }
+});
