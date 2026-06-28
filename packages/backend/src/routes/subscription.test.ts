@@ -185,9 +185,46 @@ describe('POST /v1/checkout', () => {
         headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ priceId: 'price_abc' }),
       },
-      makeEnv(),
+      makeEnv({ STRIPE_PRO_MONTHLY_PRICE_ID: 'price_abc' }),
     );
     expect(res.status).toBe(400);
+  });
+
+  it('rejects invalid priceId (price tampering)', async () => {
+    const subStmt = mockStmt({ first: { stripe_customer_id: 'cus_existing' } });
+    const db = mockD1(subStmt);
+    const res = await app.request(
+      '/v1/checkout',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          priceId: 'price_attacker_free',
+          successUrl: 'https://proappstore.online/success',
+          cancelUrl: 'https://proappstore.online/cancel',
+        }),
+      },
+      makeEnv({ STRIPE_PRO_MONTHLY_PRICE_ID: 'price_abc' }, db),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe('invalid price');
+  });
+
+  it('returns 503 when STRIPE_PRO_MONTHLY_PRICE_ID is not configured', async () => {
+    const res = await app.request(
+      '/v1/checkout',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          priceId: 'price_abc',
+          successUrl: 'https://proappstore.online/success',
+          cancelUrl: 'https://proappstore.online/cancel',
+        }),
+      },
+      makeEnv(),
+    );
+    expect(res.status).toBe(503);
   });
 
   it('creates checkout session using existing Stripe customer and returns url', async () => {
@@ -215,7 +252,7 @@ describe('POST /v1/checkout', () => {
           cancelUrl: 'https://proappstore.online/cancel',
         }),
       },
-      makeEnv({}, db),
+      makeEnv({ STRIPE_PRO_MONTHLY_PRICE_ID: 'price_abc' }, db),
     );
     expect(res.status).toBe(200);
     const body = await res.json() as { url: string };
@@ -253,7 +290,7 @@ describe('POST /v1/checkout', () => {
           cancelUrl: 'https://proappstore.online/cancel',
         }),
       },
-      makeEnv({}, db),
+      makeEnv({ STRIPE_PRO_MONTHLY_PRICE_ID: 'price_abc' }, db),
     );
     expect(res.status).toBe(200);
     const body = await res.json() as { url: string };

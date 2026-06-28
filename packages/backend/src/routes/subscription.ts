@@ -75,6 +75,16 @@ subscriptionRoutes.post('/checkout', async (c) => {
     if (!priceId || !successUrl || !cancelUrl) {
       return c.text('missing priceId, successUrl, or cancelUrl', 400);
     }
+    // Server-side price validation: only accept the platform's configured price.
+    // Without this, a client could pass an arbitrary Stripe price ID (e.g. a $0
+    // test price) and get a subscription for free.
+    const allowedPriceId = c.env.STRIPE_PRO_MONTHLY_PRICE_ID;
+    if (!allowedPriceId) {
+      return c.text('subscription not configured', 503);
+    }
+    if (priceId !== allowedPriceId) {
+      return c.text('invalid price', 400);
+    }
     if (!isAllowedRedirectUrl(successUrl) || !isAllowedRedirectUrl(cancelUrl)) {
       return c.text('redirect URLs must be on proappstore.online or localhost', 400);
     }
