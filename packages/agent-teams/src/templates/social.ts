@@ -92,10 +92,10 @@ export async function getProfile(userId: string) {
   return (await app.db.query<Profile>('SELECT * FROM profiles WHERE user_id = ?', [userId])).rows[0] ?? null
 }
 
-export async function saveProfile(p: Profile) {
+export async function saveProfile(authenticatedUserId: string, p: Omit<Profile, 'user_id'>) {
   await app.db.execute(
     'INSERT INTO profiles (user_id,display_name,bio,avatar_url,interests,location,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET display_name=?,bio=?,avatar_url=?,interests=?,location=?,updated_at=?',
-    [p.user_id, p.display_name, p.bio, p.avatar_url, p.interests, p.location, p.updated_at,
+    [authenticatedUserId, p.display_name, p.bio, p.avatar_url, p.interests, p.location, p.updated_at,
      p.display_name, p.bio, p.avatar_url, p.interests, p.location, p.updated_at]
   )
 }
@@ -172,8 +172,8 @@ export default function App() {
     migrate().then(() => getProfile(user.id)).then((p) => {
       if (p) { setProfile(p); setReady(true) }
       else {
-        const newP: Profile = { user_id: user.id, display_name: user.login, bio: '', avatar_url: user.avatarUrl, interests: '', location: '', updated_at: Date.now() }
-        saveProfile(newP).then(() => { setProfile(newP); setReady(true) })
+        const newP = { display_name: user.login, bio: '', avatar_url: user.avatarUrl, interests: '', location: '', updated_at: Date.now() }
+        saveProfile(user.id, newP).then(() => { setProfile({ user_id: user.id, ...newP }); setReady(true) })
       }
     })
   }, [user])
@@ -205,7 +205,7 @@ export default function App() {
         {view === 'discover' && <Discover userId={user.id} />}
         {view === 'connections' && <Connections userId={user.id} onOpenChat={openChat} />}
         {view === 'chat' && chatWith && <Chat userId={user.id} otherId={chatWith} onBack={() => setView('connections')} />}
-        {view === 'profile' && profile && <ProfileEdit profile={profile} onSave={(p) => { saveProfile(p); setProfile(p) }} />}
+        {view === 'profile' && profile && <ProfileEdit profile={profile} onSave={(p) => { saveProfile(user.id, p); setProfile({ user_id: user.id, ...p }) }} />}
       </main>
       <nav className="sticky bottom-0 border-t border-[var(--line)] bg-[var(--paper)]">
         <div className="max-w-lg mx-auto flex">
@@ -364,14 +364,14 @@ export function Chat({ userId, otherId, onBack }: { userId: string; otherId: str
   files.set('src/pages/ProfileEdit.tsx', `import { useState } from 'react'
 import type { Profile } from '../types'
 
-export function ProfileEdit({ profile, onSave }: { profile: Profile; onSave: (p: Profile) => void }) {
+export function ProfileEdit({ profile, onSave }: { profile: Profile; onSave: (p: Omit<Profile, 'user_id'>) => void }) {
   const [name, setName] = useState(profile.display_name)
   const [bio, setBio] = useState(profile.bio)
   const [interests, setInterests] = useState(profile.interests)
   const [loc, setLoc] = useState(profile.location)
 
   const handleSave = () => {
-    onSave({ ...profile, display_name: name, bio, interests, location: loc, updated_at: Date.now() })
+    onSave({ display_name: name, bio, avatar_url: profile.avatar_url, interests, location: loc, updated_at: Date.now() })
   }
 
   return (

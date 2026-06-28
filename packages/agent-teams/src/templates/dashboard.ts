@@ -88,7 +88,7 @@ export async function createItem(userId: string, data: Pick<Item, 'title' | 'des
   return id
 }
 
-export async function updateItem(id: string, data: Partial<Pick<Item, 'title' | 'description' | 'category' | 'priority' | 'status'>>) {
+export async function updateItem(userId: string, id: string, data: Partial<Pick<Item, 'title' | 'description' | 'category' | 'priority' | 'status'>>) {
   const sets: string[] = []
   const params: unknown[] = []
   if (data.title !== undefined) { sets.push('title=?'); params.push(data.title) }
@@ -97,12 +97,12 @@ export async function updateItem(id: string, data: Partial<Pick<Item, 'title' | 
   if (data.priority !== undefined) { sets.push('priority=?'); params.push(data.priority) }
   if (data.status !== undefined) { sets.push('status=?'); params.push(data.status) }
   sets.push('updated_at=?'); params.push(Date.now())
-  params.push(id)
-  await app.db.execute('UPDATE items SET ' + sets.join(',') + ' WHERE id=?', params)
+  params.push(id); params.push(userId)
+  await app.db.execute('UPDATE items SET ' + sets.join(',') + ' WHERE id=? AND user_id=?', params)
 }
 
-export async function deleteItem(id: string) {
-  await app.db.execute('DELETE FROM items WHERE id = ?', [id])
+export async function deleteItem(userId: string, id: string) {
+  await app.db.execute('DELETE FROM items WHERE id = ? AND user_id = ?', [id, userId])
 }
 `);
 
@@ -288,12 +288,12 @@ export function ItemDetail({ id, userId, onUpdate }: { id: string; userId: strin
   if (!item) return <p className="text-muted">Loading...</p>
 
   const handleArchive = async () => {
-    await updateItem(id, { status: item.status === 'active' ? 'archived' : 'active' })
+    await updateItem(userId, id, { status: item.status === 'active' ? 'archived' : 'active' })
     onUpdate(); setItem(await getItem(id))
   }
 
   const handleDelete = async () => {
-    await deleteItem(id); onUpdate(); window.location.hash = '#/list'
+    await deleteItem(userId, id); onUpdate(); window.location.hash = '#/list'
   }
 
   return (
@@ -339,7 +339,7 @@ export function ItemForm({ userId, editId, onSave }: { userId: string; editId?: 
     if (!title.trim()) return
     setSaving(true)
     if (editId) {
-      await updateItem(editId, { title, description, category, priority })
+      await updateItem(userId, editId, { title, description, category, priority })
       onSave(); window.location.hash = '#/item/' + editId
     } else {
       const newId = await createItem(userId, { title, description, category, priority })

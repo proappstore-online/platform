@@ -480,6 +480,78 @@ describe('templates use window.location.hash for writes in JSX', () => {
   }
 });
 
+// ── Authorization: mutations check ownership ───────────────────────
+
+describe('templates enforce authorization on mutations', () => {
+  it('dashboard: updateItem requires userId', () => {
+    const db = seedFiles('test', 'dashboard').get('src/lib/db.ts')!;
+    expect(db).toMatch(/updateItem\(userId.*id/);
+    expect(db).toContain('AND user_id=?');
+  });
+
+  it('dashboard: deleteItem requires userId', () => {
+    const db = seedFiles('test', 'dashboard').get('src/lib/db.ts')!;
+    expect(db).toMatch(/deleteItem\(userId.*id/);
+    expect(db).toContain('AND user_id = ?');
+  });
+
+  it('organization: updateOrg checks admin role', () => {
+    const db = seedFiles('test', 'organization').get('src/lib/db.ts')!;
+    expect(db).toMatch(/updateOrg\(userId/);
+    expect(db).toContain("role = 'admin'");
+    expect(db).toContain('Not authorized');
+  });
+
+  it('organization: removeMember checks admin role', () => {
+    const db = seedFiles('test', 'organization').get('src/lib/db.ts')!;
+    expect(db).toMatch(/removeMember\(actorId/);
+    expect(db).toContain("role = 'admin'");
+    expect(db).toContain('Not authorized');
+  });
+
+  it('realtime: moveCard checks workspace membership', () => {
+    const db = seedFiles('test', 'realtime').get('src/lib/db.ts')!;
+    expect(db).toMatch(/moveCard\(.*userId.*workspaceId/);
+    expect(db).toContain('Not a workspace member');
+  });
+
+  it('social: saveProfile uses authenticatedUserId, not client-supplied user_id', () => {
+    const db = seedFiles('test', 'social').get('src/lib/db.ts')!;
+    expect(db).toMatch(/saveProfile\(authenticatedUserId/);
+    expect(db).not.toContain("saveProfile(p: Profile)");
+  });
+});
+
+// ── Security: no injection vectors ─────────────────────────────────
+
+describe('templates have no SQL injection vectors', () => {
+  for (const tpl of TEMPLATES) {
+    it(`${tpl}: all SQL values use parameterized ? bindings`, () => {
+      const db = seedFiles('test', tpl).get('src/lib/db.ts')!;
+      // No string interpolation in SQL (template literals with ${} inside SQL strings)
+      const sqlStrings = db.match(/(?:query|execute|batch)\s*\(/g);
+      expect(sqlStrings!.length).toBeGreaterThan(0);
+      // Ensure no raw concatenation of user values into SQL
+      expect(db).not.toMatch(/execute\([^)]*\$\{/);
+      expect(db).not.toMatch(/query\([^)]*\$\{/);
+    });
+  }
+});
+
+describe('templates have no XSS vectors', () => {
+  for (const tpl of TEMPLATES) {
+    it(`${tpl}: no dangerouslySetInnerHTML or innerHTML`, () => {
+      const files = seedFiles('test', tpl);
+      for (const [path, content] of files) {
+        if (path.startsWith('src/')) {
+          expect(content, `${tpl}/${path}`).not.toContain('dangerouslySetInnerHTML');
+          expect(content, `${tpl}/${path}`).not.toContain('innerHTML');
+        }
+      }
+    });
+  }
+});
+
 // ── No template leaks across slugs ─────────────────────────────────
 
 describe('templates are slug-isolated', () => {

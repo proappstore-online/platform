@@ -90,7 +90,11 @@ export async function getOrg(orgId: string) {
   return (await app.db.query<Org>('SELECT * FROM orgs WHERE id = ?', [orgId])).rows[0] ?? null
 }
 
-export async function updateOrg(orgId: string, data: Pick<Org, 'name' | 'description' | 'website'>) {
+export async function updateOrg(userId: string, orgId: string, data: Pick<Org, 'name' | 'description' | 'website'>) {
+  const isAdmin = (await app.db.query<{ c: number }>(
+    "SELECT COUNT(*) as c FROM memberships WHERE org_id = ? AND user_id = ? AND role = 'admin'", [orgId, userId]
+  )).rows[0]?.c ?? 0
+  if (!isAdmin) throw new Error('Not authorized')
   await app.db.execute('UPDATE orgs SET name=?, description=?, website=? WHERE id=?', [data.name, data.description, data.website, orgId])
 }
 
@@ -109,8 +113,12 @@ export async function joinOrg(orgId: string, userId: string, displayName: string
   )
 }
 
-export async function removeMember(orgId: string, userId: string) {
-  await app.db.execute('DELETE FROM memberships WHERE org_id = ? AND user_id = ?', [orgId, userId])
+export async function removeMember(actorId: string, orgId: string, targetUserId: string) {
+  const isAdmin = (await app.db.query<{ c: number }>(
+    "SELECT COUNT(*) as c FROM memberships WHERE org_id = ? AND user_id = ? AND role = 'admin'", [orgId, actorId]
+  )).rows[0]?.c ?? 0
+  if (!isAdmin) throw new Error('Not authorized')
+  await app.db.execute('DELETE FROM memberships WHERE org_id = ? AND user_id = ?', [orgId, targetUserId])
 }
 
 export async function getRoleTracks(orgId: string) {
@@ -332,7 +340,7 @@ export function OrgView({ orgId, user, theme }: { orgId: string; user: User; the
               </div>
             )}
             {tab === 'settings' && isAdmin && (
-              <OrgSettings org={org} onSave={(data) => updateOrg(orgId, data).then(reload)} />
+              <OrgSettings org={org} onSave={(data) => updateOrg(user.id, orgId, data).then(reload)} />
             )}
           </>
         )}

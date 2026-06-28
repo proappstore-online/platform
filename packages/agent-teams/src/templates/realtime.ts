@@ -152,7 +152,11 @@ export async function createCard(boardId: string, listId: string, title: string,
   return id
 }
 
-export async function moveCard(cardId: string, toListId: string, position: number) {
+export async function moveCard(cardId: string, toListId: string, position: number, userId: string, workspaceId: string) {
+  const isMember = (await app.db.query<{ c: number }>(
+    'SELECT COUNT(*) as c FROM members WHERE workspace_id = ? AND user_id = ?', [workspaceId, userId]
+  )).rows[0]?.c ?? 0
+  if (!isMember) throw new Error('Not a workspace member')
   await app.db.execute('UPDATE cards SET list_id = ?, position = ? WHERE id = ?', [toListId, position, cardId])
 }
 
