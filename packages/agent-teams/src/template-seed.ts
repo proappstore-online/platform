@@ -121,9 +121,47 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
-    // Real PWA: auto-register + auto-update a service worker (offline + installable).
-    // manifest:false keeps the hand-tuned public manifest.json.
-    VitePWA({ registerType: 'autoUpdate', manifest: false }),
+    VitePWA({
+      registerType: 'autoUpdate',
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,png,svg,ico,woff2,json}'],
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\\/\\/fonts\\.googleapis\\.com\\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'google-fonts-stylesheets',
+              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            urlPattern: /^https:\\/\\/fonts\\.gstatic\\.com\\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'google-fonts-webfonts',
+              expiration: { maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
+      },
+      manifest: {
+        name: '${slug}',
+        short_name: '${slug}',
+        description: '${slug} on ProAppStore',
+        start_url: '/',
+        scope: '/',
+        display: 'standalone',
+        orientation: 'any',
+        background_color: '#ffffff',
+        theme_color: '#7c3aed',
+        icons: [
+          { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
+          { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
+        ],
+      },
+    }),
   ],
 })
 `);
@@ -166,7 +204,6 @@ export default defineConfig({
     <meta name="twitter:title" content="${slug}" />
     <meta name="twitter:description" content="${slug} on ProAppStore" />
     <meta name="twitter:image" content="https://${slug}.proappstore.online/og-image.svg" />
-    <link rel="manifest" href="/manifest.json" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icon.svg" />
     <title>${slug}</title>
@@ -183,20 +220,12 @@ export default defineConfig({
 </html>
 `);
 
-  files.set('manifest.json', JSON.stringify({
-    name: slug, short_name: slug,
-    description: `${slug} on ProAppStore`,
-    start_url: '/', display: 'standalone', orientation: 'any',
-    background_color: '#ffffff', theme_color: '#7c3aed',
-    // SVG icon (the template can't ship binary PNGs); Chrome/Android render it,
-    // and an app can swap in its own /icon.svg.
-    icons: [
-      { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' },
-    ],
-  }, null, 2) + '\n');
+  // No manual manifest.json — VitePWA generates it from vite.config.ts, content-
+  // hashes the filename, and injects the <link> into the built HTML automatically.
+  // This avoids the double-manifest bug (manual + generated) and ensures the
+  // manifest updates when config changes without stale caching.
 
-  // A valid default icon so the PWA installs (the old /icon-192.png refs were
-  // 404s). Branded purple square + the app's initial; apps can overwrite it.
+  // Default icon so the PWA installs. Branded purple square + the app's initial.
   files.set('public/icon.svg', `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="104" fill="#7c3aed"/><text x="256" y="350" font-family="system-ui, -apple-system, sans-serif" font-size="300" font-weight="800" fill="#fff" text-anchor="middle">${(slug[0] ?? 'A').toUpperCase()}</text></svg>\n`);
 
   files.set('public/og-image.svg', `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="${slug} on ProAppStore">

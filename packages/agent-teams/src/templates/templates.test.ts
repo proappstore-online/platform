@@ -27,7 +27,7 @@ describe('template registry', () => {
 describe('templates preserve base infrastructure', () => {
   const BASE_FILES = [
     'index.html', 'package.json', 'tsconfig.json', 'vite.config.ts', 'vitest.config.ts',
-    '.gitignore', 'LICENSE', 'README.md', 'CLAUDE.md', 'manifest.json', 'mcp.json',
+    '.gitignore', 'LICENSE', 'README.md', 'CLAUDE.md', 'mcp.json',
     'src/main.tsx', 'src/index.css', 'tests/setup.ts',
     'public/icon.svg', 'public/og-image.svg',
   ];
@@ -550,6 +550,60 @@ describe('templates have no XSS vectors', () => {
       }
     });
   }
+});
+
+// ── PWA correctness ────────────────────────────────────────────────
+
+describe('PWA setup is architecturally sound', () => {
+  const files = seedFiles('test-app', 'blank');
+
+  it('VitePWA manages the manifest (no manual manifest.json)', () => {
+    expect(files.has('manifest.json')).toBe(false);
+  });
+
+  it('index.html does not hardcode manifest link (VitePWA injects it)', () => {
+    const html = files.get('index.html')!;
+    expect(html).not.toContain('rel="manifest"');
+  });
+
+  it('vite.config has VitePWA with manifest config', () => {
+    const vite = files.get('vite.config.ts')!;
+    expect(vite).toContain('VitePWA');
+    expect(vite).toContain('manifest:');
+    expect(vite).toContain("display: 'standalone'");
+    expect(vite).toContain("start_url: '/'");
+    expect(vite).toContain("scope: '/'");
+  });
+
+  it('icon purpose is split (not combined "any maskable")', () => {
+    const vite = files.get('vite.config.ts')!;
+    expect(vite).not.toContain("purpose: 'any maskable'");
+    expect(vite).toContain("purpose: 'any'");
+    expect(vite).toContain("purpose: 'maskable'");
+  });
+
+  it('Workbox config caches fonts', () => {
+    const vite = files.get('vite.config.ts')!;
+    expect(vite).toContain('google-fonts-stylesheets');
+    expect(vite).toContain('google-fonts-webfonts');
+    expect(vite).toContain('CacheFirst');
+  });
+
+  it('Workbox config has globPatterns', () => {
+    const vite = files.get('vite.config.ts')!;
+    expect(vite).toContain('globPatterns');
+  });
+
+  it('registerType is autoUpdate', () => {
+    const vite = files.get('vite.config.ts')!;
+    expect(vite).toContain("registerType: 'autoUpdate'");
+  });
+
+  it('manifest has correct slug', () => {
+    const vite = files.get('vite.config.ts')!;
+    expect(vite).toContain("name: 'test-app'");
+    expect(vite).toContain("short_name: 'test-app'");
+  });
 });
 
 // ── No template leaks across slugs ─────────────────────────────────
