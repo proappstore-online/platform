@@ -26,7 +26,7 @@ import { executeFileTool, isFileTool } from './spine.ts';
 import { TOOL_SCHEMAS } from './tool-schemas.ts';
 import { toolActivityDetail } from './tool-activity.ts';
 import { parseAnthropicStream } from './runtimes/cf-native-stream.ts';
-import { seedFiles } from './template-seed.ts';
+import { seedFiles, type TemplateType } from './template-seed.ts';
 import { RECIPES, getRecipe } from './recipes.ts';
 import {
   SCHEMA,
@@ -1039,7 +1039,7 @@ export class ProjectDO implements DurableObject {
   }
 
   private async initProject(request: Request): Promise<Response> {
-    const body = (await request.json()) as Partial<Project> & { idea?: string };
+    const body = (await request.json()) as Partial<Project> & { idea?: string; template?: TemplateType };
     if (!body.name || !body.slug || !body.ownerId) {
       return json({ error: 'name, slug, ownerId required' }, 400);
     }
@@ -1092,7 +1092,7 @@ export class ProjectDO implements DurableObject {
     // the correct infrastructure files (.gitignore, LICENSE, package.json with test
     // script, vite.config.ts, tsconfig.json, etc.) so the Dev agent writes INTO a
     // proper scaffold — not from scratch. Matches pas/templates/template-app/.
-    const templateFiles = seedFiles(body.slug);
+    const templateFiles = seedFiles(body.slug, body.template ?? 'blank');
     this.saveFiles(templateFiles);
 
     this.broadcast({ type: 'project-created', projectId: id });

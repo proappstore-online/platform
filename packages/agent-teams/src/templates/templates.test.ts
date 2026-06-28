@@ -468,10 +468,9 @@ describe('templates use window.location.hash for writes in JSX', () => {
         // Find location.hash assignments that aren't in parseHash (top-level function)
         const lines = content.split('\n');
         for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          if (line.match(/[^.]location\.hash\s*=/) && !line.includes('window.location')) {
-            // Allow in parseHash-style top-level functions (reads, not writes)
-            if (line.includes('.slice') || line.includes('.match') || line.includes('.startsWith')) continue;
+          const l = lines[i]!;
+          if (l.match(/[^.]location\.hash\s*=/) && !l.includes('window.location')) {
+            if (l.includes('.slice') || l.includes('.match') || l.includes('.startsWith')) continue;
             throw new Error(`${path}:${i + 1} uses bare location.hash = (should be window.location.hash)`);
           }
         }

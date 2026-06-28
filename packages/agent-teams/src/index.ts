@@ -162,12 +162,16 @@ async function relay(
 // Create a new project
 app.post('/v1/projects', async (c) => {
   const user = c.get('user' as never) as { id: string };
-  const body = await c.req.json<{ name: string; slug: string; costCapMonthlyUsd?: number; idea?: string }>();
+  const body = await c.req.json<{ name: string; slug: string; costCapMonthlyUsd?: number; idea?: string; template?: string }>();
 
   if (!body.name || !body.slug) return c.json({ error: 'name and slug required' }, 400);
   if (!/^[a-z][a-z0-9-]{1,56}$/.test(body.slug)) return c.json({ error: 'slug must be 2-58 chars, lowercase alphanumeric with hyphens' }, 400);
   if (body.name.length > 100) return c.json({ error: 'name too long (max 100)' }, 400);
   if (body.idea && body.idea.length > 65536) return c.json({ error: 'idea too long (max 64KB)' }, 400);
+  const VALID_TEMPLATES = ['blank', 'marketplace', 'realtime', 'social', 'organization', 'dashboard'];
+  if (body.template && !VALID_TEMPLATES.includes(body.template)) {
+    return c.json({ error: 'template must be one of: ' + VALID_TEMPLATES.join(', ') }, 400);
+  }
 
   // Validate cost cap range
   const cap = body.costCapMonthlyUsd ?? 50.0;
@@ -194,7 +198,7 @@ app.post('/v1/projects', async (c) => {
   // → press play → agents start building.
   const res = await forwardToDO(stub, '/project', user.id, {
     method: 'PUT',
-    body: JSON.stringify({ name: body.name, slug: body.slug, ownerId: user.id, costCapMonthlyUsd: cap, idea: body.idea }),
+    body: JSON.stringify({ name: body.name, slug: body.slug, ownerId: user.id, costCapMonthlyUsd: cap, idea: body.idea, template: body.template }),
   });
   // Index the project so the creator console can list a user's projects (the DOs
   // are isolated and can't be enumerated). Best-effort — don't fail create on it.
