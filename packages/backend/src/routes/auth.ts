@@ -338,6 +338,14 @@ authRoutes.post('/auth/credentials/reset-password', async (c) => {
   ).bind(targetId, 'credential').first<{ id: string; credential_login: string; created_by: string | null }>();
   if (!target) throw new HttpError('account not found', 404);
 
+  // SECURITY: only the adult who created this credential account (or an admin)
+  // may reset its password. Without this, every 'creator' (which is every
+  // signed-in user) could reset ANY credential account and read the new
+  // password from the response — full cross-tenant account takeover.
+  if (target.created_by !== claims.uid && !claims.roles.includes('admin')) {
+    throw new HttpError('not your account', 403);
+  }
+
   const password = generatePassword();
   const passwordHash = await hashPassword(password);
 
