@@ -60,6 +60,10 @@ export async function deployDataWorker(
     compatibility_flags: ['nodejs_compat'],
     bindings: [
       { type: 'plain_text', name: 'APP_ID', text: appId },
+      // API_BASE lets the data-worker authorize callers against APP_ID via the
+      // platform /v1/apps endpoint (a valid session alone must NOT grant SQL
+      // access to another app's DB).
+      { type: 'plain_text', name: 'API_BASE', text: 'https://api.proappstore.online' },
       { type: 'secret_text' as const, name: 'SESSION_SIGNING_KEY', text: sessionSigningKey },
       { type: 'd1', name: 'DB', id: dbId },
     ],

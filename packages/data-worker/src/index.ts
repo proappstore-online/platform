@@ -7,6 +7,9 @@ interface Env {
   APP_ID: string;
   /** PAS credential-account signing key. */
   SESSION_SIGNING_KEY: string;
+  /** PAS platform API base (e.g. https://api.proappstore.online) — used to
+   *  authorize the caller against this worker's APP_ID. */
+  API_BASE: string;
 }
 
 interface FasUser {
@@ -92,6 +95,30 @@ async function requireUser(c: { req: { header(name: string): string | undefined 
   if (!claims) {
     throw new HTTPException(401, { message: 'invalid session' });
   }
+
+  // SECURITY: a valid platform session is NOT enough. This worker holds ONE
+  // app's D1 and runs caller-supplied SQL (/query, /execute, /batch, /migrate),
+  // so without an app-scoped authorization check any signed-in PAS user could
+  // read or DROP another app's database by calling that app's data-worker.
+  // The platform `apps`/`team_members` tables live in the main API (not here),
+  // so authorize against this worker's APP_ID via the user's own /v1/apps.
+  // Fail closed on any error.
+  let authorized = false;
+  try {
+    const res = await fetch(`${c.env.API_BASE}/v1/apps`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { apps?: Array<{ id: string }> };
+      authorized = (data.apps ?? []).some((a) => a.id === c.env.APP_ID);
+    }
+  } catch {
+    authorized = false;
+  }
+  if (!authorized) {
+    throw new HTTPException(403, { message: 'not authorized for this app' });
+  }
+
   return { id: claims.uid, login: claims.login };
 }
 

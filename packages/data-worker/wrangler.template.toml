@@ -6,6 +6,7 @@ workers_dev = true
 
 [vars]
 APP_ID = "__APP_ID__"
+API_BASE = "https://api.proappstore.online"
 # SESSION_SIGNING_KEY set as a secret binding at deploy time
 
 [[d1_databases]]
