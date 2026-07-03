@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import { seedFiles } from './template-seed.ts';
 
@@ -42,9 +42,15 @@ describe('seedFiles — platform owns CI, seed carries no workflow', () => {
  * truth. If this test fails, update template-seed.ts to match the template —
  * never the other way around.
  */
-describe('seedFiles — index.html matches template-app (drift detection)', () => {
-  const templatePath = resolve(__dirname, '../../../../templates/template-app/web/index.html');
-  const templateHtml = readFileSync(templatePath, 'utf8');
+// The template lives in the sibling `templates/` repo, checked out next to
+// `platform` locally but NOT in CI (which only clones this repo). Skip the
+// drift suite when it's absent rather than erroring the whole run.
+const templatePath = resolve(__dirname, '../../../../templates/template-app/web/index.html');
+const templateAvailable = existsSync(templatePath);
+
+describe.skipIf(!templateAvailable)('seedFiles — index.html matches template-app (drift detection)', () => {
+  // Guarded so collection doesn't throw when skipped (file absent in CI).
+  const templateHtml = templateAvailable ? readFileSync(templatePath, 'utf8') : '';
   const seedHtml = seedFiles('demo-app').get('index.html')!;
 
   /** Extract the content="" value of a <meta> tag by name or property. */

@@ -1,7 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./index.js";
 
 const TEST_SK = 'test-signing-key';
+const API_BASE = 'https://api.test';
+
+// requireUser authorizes the caller against APP_ID by calling GET {API_BASE}/v1/apps.
+// Mock it to return the set of app ids the caller owns; default authorizes "test-app".
+let ownedAppIds: string[] = ['test-app'];
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input) === `${API_BASE}/v1/apps`) {
+      return new Response(JSON.stringify({ apps: ownedAppIds.map((id) => ({ id })) }), { status: 200 });
+    }
+    return new Response('not found', { status: 404 });
+  }));
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+  ownedAppIds = ['test-app'];
+});
 
 /** Inline token minting (data-worker has no build-core dep). */
 async function mint(uid: string, sk: string): Promise<string> {
@@ -43,6 +60,7 @@ function makeEnv(db = mockD1()) {
     DB: db as unknown as D1Database,
     APP_ID: "test-app",
     SESSION_SIGNING_KEY: TEST_SK,
+    API_BASE,
   };
 }
 
@@ -80,6 +98,14 @@ describe("Auth", () => {
     }, { ...makeEnv(), SESSION_SIGNING_KEY: "stale-key" });
 
     expect(res.status).toBe(401);
+  });
+
+  it("403s when the caller does not own this worker's APP_ID (cross-tenant)", async () => {
+    ownedAppIds = ["some-other-app"]; // valid session, but not for test-app
+    const res = await app.request("/tables", {
+      headers: { Authorization: `Bearer ${TOK}` },
+    }, makeEnv());
+    expect(res.status).toBe(403);
   });
 
   it("does not accept a token signed by a legacy FAS key", async () => {
