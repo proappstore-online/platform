@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Env } from "./env.js";
 import { extractToken, verifyToken } from "./api-helpers.js";
+import { verifySession } from "./session.js";
 import { listAuditEvents } from "./safety.js";
 import { registerPlatformTools } from "./platform-tools.js";
 import { fetchTools, registerAppTools } from "./tool-loader.js";
@@ -72,6 +73,35 @@ export class PasMcpAgent extends McpAgent<Env> {
       console.log(`Registered ${registered.length} app tool(s): ${registered.join(', ')}`);
     }
 
+    // ── Identity: whoami ───────────────────────────────────────
+    this.server.tool(
+      "whoami",
+      "Show the identity this MCP connection is authenticated as — PAS user id, login, platform roles, per-app roles, and token expiry. Use to confirm which account you're acting as before running owner-scoped tools.",
+      {},
+      async () => {
+        if (!this.userToken || !this.env.SESSION_SIGNING_KEY) {
+          return { content: [{ type: "text" as const, text: "Not authenticated: this MCP connection has no valid PAS session. Owner-scoped tools will be denied." }] };
+        }
+        const payload = await verifySession(this.userToken, this.env.SESSION_SIGNING_KEY);
+        if (!payload) {
+          return { content: [{ type: "text" as const, text: "Session token present but invalid or expired. Re-authenticate the MCP connection." }] };
+        }
+        const login = (payload as { login?: string }).login;
+        const appRoles = payload.appRoles && Object.keys(payload.appRoles).length
+          ? Object.entries(payload.appRoles).map(([app, roles]) => `${app}=${roles.join("/")}`).join(", ")
+          : "(no per-app roles)";
+        const lines = [
+          "Authenticated as:",
+          `  uid:     ${payload.uid}`,
+          ...(login ? [`  login:   ${login}`] : []),
+          `  roles:   ${(payload.roles ?? []).join(", ") || "(none)"}`,
+          `  apps:    ${appRoles}`,
+          `  expires: ${new Date(payload.exp * 1000).toISOString()}`,
+        ];
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+      },
+    );
+
     // ── Safety: audit-log reader ───────────────────────────────
     this.server.tool(
       "mcp_audit_log",
@@ -106,7 +136,7 @@ export default {
 
     if (url.pathname === "/" || url.pathname === "") {
       return new Response(
-        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools, recipe\nProject tools: scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running, set_project_budget, run_tests, set_model, add_ticket\nAgent introspection: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\nSafety: mcp_audit_log (per-account audit trail). Mutating tools are audited; destructive tools (scaffold_app, delete_file, publish_app) require confirm: true; set MCP_READ_ONLY=1 to block all writes.\n",
+        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools, recipe\nProject tools: scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running, set_project_budget, run_tests, set_model, add_ticket\nAgent introspection: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\nIdentity: whoami (show the authenticated PAS account + roles).\nSafety: mcp_audit_log (per-account audit trail). Mutating tools are audited; destructive tools (scaffold_app, delete_file, publish_app) require confirm: true; set MCP_READ_ONLY=1 to block all writes.\n",
         { headers: { "content-type": "text/plain" } }
       );
     }
