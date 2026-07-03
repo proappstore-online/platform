@@ -92,7 +92,14 @@ export const test = base.extend<{ app: Page; pageErrors: string[] }>({
     page.on('pageerror', (e) => pageErrors.push(String(e)));
     const target = hasSession ? '/#pas_session=' + encodeURIComponent(SESSION_TOKEN) : '/';
     await gotoWithRetry(page, target);
-    await page.waitForLoadState('networkidle').catch(() => {});
+    // Wait for the SPA to actually mount (#root gets content), NOT for the
+    // network to go idle. A PWA service worker precaching its asset manifest —
+    // or any long-lived connection (rooms WS, analytics, web push) — can keep
+    // the network busy past the 45s test timeout, so a bare
+    // waitForLoadState('networkidle') hangs setup and aborts with "timeout while
+    // setting up app" even when the app booted fine. Bounded + best-effort: the
+    // specs assert real readiness (#root non-empty, no page errors).
+    await page.locator('#root > *').first().waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
     await use(page);
   },
 });
