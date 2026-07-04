@@ -164,6 +164,15 @@ describe('scaffold_app', () => {
     expect(getText(result)).toContain('Error creating repo');
   });
 
+  it('gives an actionable error on 404 (template repo not flagged as a template)', async () => {
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: false, status: 404, data: { message: 'Not Found' } });
+
+    const result = await runScaffold({ app_id: 'notmpl', name: 'NoTmpl', description: 'test' });
+    const txt = getText(result);
+    expect(txt).toContain('template');
+    expect(txt).toContain('is_template=true');
+  });
+
   it('reports R2 credential errors', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });

@@ -123,6 +123,14 @@ export function registerProjectTools(
         if (!(await gh.repoExists(app_id))) {
           return text(`Error creating repo: ${JSON.stringify(createRes.data)}`);
         }
+      } else if (createRes.status === 404) {
+        // GitHub's template-generate API 404s when the SOURCE repo isn't flagged
+        // as a template — a config drift that otherwise reads as a generic error.
+        return text(
+          `Error creating repo: GitHub returned 404 from the template-generate API. The source ` +
+          `template repo "${org}/template-app" must be marked as a GitHub template ` +
+          `(repo Settings → "Template repository", or PATCH /repos/${org}/template-app with is_template=true).`,
+        );
       } else {
         return text(`Error creating repo: ${JSON.stringify(createRes.data)}`);
       }
