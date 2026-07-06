@@ -2,7 +2,7 @@
 
 Status: **live** — agents are serving real users. Every fix must be backward-compatible (no migration-gated features that break unmigrated DOs).
 
-## The five failure modes (observed in production)
+## The failure modes (observed in production)
 
 | # | Failure | Root cause | Current fix | Remaining gap |
 |---|---------|-----------|-------------|---------------|
@@ -11,6 +11,7 @@ Status: **live** — agents are serving real users. Every fix must be backward-c
 | 3 | **Stuck loop** — agent retries same failing approach | No error feedback to next run | Error stored as ticket message, surfaced in Dev prompt | Works for timeout/API errors; doesn't cover "agent chose a bad approach" |
 | 4 | **Stale UI** — button shows Pause when agent is dead | No `agent-run-ended` event, staleness timer is 20s | Filed as issue #11 | Not yet implemented |
 | 5 | **Deploy race** — concurrent pushes cause non-fast-forward | Multiple tickets deploying simultaneously | Retry with sync on conflict | Mostly fixed; rare edge case remains with 3+ concurrent deploys |
+| 6 | **Deploy stuck forever** — tickets park in needs-input, never recover | Infra failure (missing R2 secrets / E2E fixture hang / no deploy.yml) → `infraFail` → 30-min idle auto-pause → waits for manual Play; the stuck message also mis-guessed the cause | **Self-healing recovery** (2026-07-06): bounded auto-retry against current state + backoff, honest diagnostic, escalate only when exhausted | LLM triage advisor (infra-vs-code) not yet built — see §"Deploy reliability & self-healing" |
 
 ## Plan: three phases
 
@@ -122,3 +123,93 @@ Split into focused modules with dependency injection:
 - [x] Model/runtime selector on board header
 - [x] Elapsed timer on active tickets
 - [x] Resilient `max_run_minutes` read (survives unmigrated DOs)
+
+---
+
+# Deploy reliability & self-healing (2026-07-06 session)
+
+A multi-day debugging cycle (interns app + a fresh `aipa-console`) exposed that
+**deploy-stage** failures — not agent-run failures — were silently stranding tickets.
+This section documents every finding and the plan, so the next person (or agent)
+doesn't repeat the chase.
+
+## Findings
+
+### 1. Why tickets got stuck (root causes, in order)
+1. **E2E fixture `networkidle` hang (platform bug).** The injected Playwright fixture
+   (`packages/admin/src/e2e-harness.ts`) waited on `waitForLoadState('networkidle')`
+   with no timeout. Apps are **PWAs** — the service worker precaches assets, so the
+   network never goes idle → Playwright's 45s test timeout fires "while setting up app"
+   → the `e2e` job fails → **Deploy to R2 red** → ticket bounced. Reproduced locally:
+   old fixture times out at 45s, fixed fixture passes in ~1s.
+2. **Missing per-repo R2 secrets (infra gap).** See §Secrets below — private app repos
+   can't inherit org secrets on the free plan, and nothing set them per-repo, so the
+   "Upload to R2" step got an empty `AWS_ACCESS_KEY_ID` → `Invalid endpoint:
+   https://.r2.cloudflarestorage.com`.
+3. **Provisioning race early on** — the first commits had no `deploy.yml` yet → no CI run.
+4. **Misleading diagnostic.** The stuck message asserted "the admin GitHub token must
+   have the `workflow` scope" — pure speculation, **wrong**, and it masked #1 and #2 for
+   days. (`deploy-stage.ts` — now an honest message.)
+5. **Human-gated recovery.** `infraFail` parked the ticket in `needs-input`; the DO
+   auto-paused after 30 min idle (`project-do.ts autoAdvance`) → tickets sat until a
+   human hit Play, even after the blocker was fixed out-of-band. This is the anti-pattern
+   2026 durable-execution guidance says to eliminate.
+
+### 2. Secrets architecture (the hard constraint)
+- Store GitHub orgs are on the **free plan**; **app repos are private**. On free,
+  **org-level Actions secrets do NOT reach private repos** (needs Team/Enterprise).
+  So deploy creds (`R2_*`) **must be repo-level** on each app repo — the per-repo copies
+  are the *required* mechanism, not drift.
+- **Infra repos are public** (`platform`, `proappstore`) → they *can* read org secrets.
+  This is why the fix (below) works: a workflow in the public `platform` repo reads the
+  org-level R2 "hub" secret and fans it out to the private app repos.
+- The org `R2_*` secret already held a valid value (set directly via `gh secret set --org`
+  long ago) — private repos just couldn't inherit it.
+
+### 3. Secrets tooling: OFF Doppler → SOPS
+`~/dev/secrets` migrated from Doppler to **SOPS** (age-encrypted `secrets.enc.yaml`;
+map = `inventory.yaml`, names only; master age key in Bitwarden + `~/.config/sops/age/`).
+**No auto-sync** — push to each `consumers:` entry by hand (`sops -d --extract … | gh
+secret set …`); **rotate-on-touch**. Never reference Doppler.
+
+### 4. Identity / MCP
+The proappstore MCP OAuth signed in as a **Google** account (`google:…`) distinct from
+the **GitHub owner** (`gh:2824906`, `serge-ivo`) that owns the apps → "you don't own app"
+errors. Added the **`whoami`** MCP tool so the authenticated identity is explicit.
+
+### 5. Coordination architecture (best-practice review)
+- Coordination is a **deterministic Durable Object** (tick/watchdog in `project-do.ts`),
+  **not** an LLM. PO/BA/Dev/QA are workers; the DO orchestrates. This matches 2026 best
+  practice (deterministic control flow + LLM judgment).
+- The **PO is intake-only** — tools are `['list_files','read_file','search_files',
+  'remember','create_ticket']` (`agents-catalog.ts`). It cannot see the board or act on
+  other agents' tickets. **Do NOT make the PO a coordinator** — that moves orchestration
+  into an LLM (anti-pattern). An LLM's right role in recovery is *diagnosis/advisor*, not
+  dispatch.
+
+## Shipped this session
+
+- [x] **whoami** MCP tool (`packages/mcp/src/index.ts`)
+- [x] CI-unblock: data-worker APP_ID authz tests + `template-seed` skip-when-absent
+- [x] **E2E fixture**: wait for `#root` mount, not `networkidle` (`e2e-harness.ts` + interns repo)
+- [x] `template-app` flagged `is_template=true`; `scaffold_app` 404 → actionable error
+- [x] **`reconcile-app-secrets` workflow** — fans org R2 "hub" secret out to private app
+      repos; admin `provisionApp` + `pas publish` dispatch it; hourly cron backstops
+- [x] **Honest deploy-stuck diagnostic** — dropped the false "workflow scope" guess
+- [x] **Self-healing deploy recovery** — bounded auto-retry (`MAX_DEPLOY_ATTEMPTS=3`) +
+      backoff (2m, 5m), escalate when exhausted; `tickets.deploy_attempts` column; Play
+      resets the budget (`deploy-stage.ts` + `project-do.ts reconcileStuck`)
+- [x] Docs: `inventory.yaml` R2 → repo-level + SOPS; session memory
+
+## Remaining implementation plan
+
+| # | Item | Why | Where | Effort |
+|---|------|-----|-------|--------|
+| D1 | **Verify end-to-end** — resume interns, watch a ticket build → deploy → done + self-heal | Confirms the whole pipeline post-fix | MCP `set_project_running` or dashboard Play | trivial |
+| D2 | **Guarantee the E2E harness exists** (or skip gracefully) | `aipa-console` had no `e2e/` dir → the `e2e` job hard-errors (`working directory '.../e2e': No such file or directory`) | provisioning always injects `e2eHarnessFiles`, **or** `deploy.yml` e2e job no-ops when `e2e/` absent | S |
+| D3 | **LLM triage advisor for stuck tickets** | The deterministic self-heal blind-retries; an advisor can classify infra-vs-code and propose the fix (retry / notify / back-to-Dev), which the state machine executes — LLM proposes, machine disposes | new `triageStuck()` step gated behind self-heal exhaustion; read-only diagnosis → structured action | M |
+| D4 | **Doppler → SOPS doc cleanup** | `pas/CLAUDE.md` (and maybe `stores/CLAUDE.md`) still say "Doppler is source of truth" | those `CLAUDE.md` files | S |
+| D5 | **`project-do.ts` refactor** (pre-existing P1 debt) | Now larger after `reconcileStuck`; still 0 storage tests → self-heal is untestable in-repo | split per the "Refactoring plan" above + a DO storage test harness | L |
+
+**Priority:** D1 now (validation) → D2 (prevents a whole class of born-broken apps) →
+D4 (cheap, avoids repeating the Doppler chase) → D3 (polish) → D5 (debt, unlocks tests).
