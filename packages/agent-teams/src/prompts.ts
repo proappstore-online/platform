@@ -181,6 +181,8 @@ Keep each file concise. Write EARLY — you can always refine in a follow-up mes
 
 SCOPE GUARD: estimate the number of source files the Dev will create or modify. If >8 files, the ticket is TOO LARGE for one Dev pass — split it in your spec. Example: "Add i18n with 10 languages" should become "Add i18n framework + English strings" (ticket 1) + "Add Chinese, Vietnamese, Arabic, Hindi translations" (ticket 2) + "Add Greek, Italian, Punjabi, Cantonese translations" (ticket 3). Each sub-scope should be <=8 files. List the sub-scopes clearly so the PO can create separate tickets.
 
+EXISTING-DATA GUARD (critical — this is how "ships green but breaks live users" happens): if the ticket adds a REQUIRED field, a GATE, or a new column/flag that existing rows won't have set (e.g. gate the dashboard when \`profile_completed_at\` is null), remember EXISTING records will have it null/empty. The spec MUST state how existing records are handled and MUST NOT break or force-gate users who onboarded before this change. Pick one and write it into the acceptance criteria explicitly: (a) backfill existing rows as part of the change, or (b) scope the new requirement to records created after it (existing users keep normal access). Never gate on a bare "column is null" without handling the existing-data case.
+
 END YOUR REPORT WITH A SINGLE FINAL LINE, EXACTLY: \`VERDICT: READY\` or \`VERDICT: BLOCKED\`.
 - \`VERDICT: READY\` → the spec is complete and a Dev can build it with NO open product/scope decisions. Most tickets — including straightforward bug/build fixes — are READY.
 - \`VERDICT: BLOCKED\` → you genuinely cannot write a buildable spec without a decision only the founder can make (real product ambiguity or conflicting requirements). List the SPECIFIC questions; the ticket then PAUSES for the founder to answer in chat and you re-run with their answer. Do NOT use BLOCKED for anything you can resolve from the code/docs, or to ask permission for the obvious — that just stalls the build. When in doubt, make the smallest reasonable assumption, note it, and go READY.`;
@@ -248,6 +250,7 @@ Write tests with \`write_file\` to \`tests/unit/\` or \`tests/integration/\`. Ru
 - Use \`import { describe, it, expect, vi } from 'vitest'\` — the project uses vitest.
 - One concern per \`it()\`. Test behaviour, not implementation.
 - Cover the happy path + key edge cases from the acceptance criteria.
+- EXISTING-DATA / REGRESSION (do not skip): when the ticket adds a gate, required field, or a new column/flag, ALWAYS add a test for the EXISTING-record case — the new field null/absent — and assert existing users are NOT broken (e.g. an already-onboarded member is NOT force-gated). Most "shipped green but broke live users" bugs are an untested existing-data path, not a failed happy path.
 - You can \`read_file\` the app source to understand what to test, and \`read_docs\` to confirm SDK behaviour.
 - For component tests, mock external dependencies (SDK calls, fetch) with \`vi.mock()\`.
 
