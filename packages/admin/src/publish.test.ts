@@ -90,14 +90,21 @@ function install(opts: { failDnsPost?: boolean } = {}): Recorder {
       if (method === "PUT") return ok({ commit: { sha: "rcommit" } });
       return ok({ sha: "rsha", content: Buffer.from('{"apps":[]}').toString("base64") });
     }
-    // pushFiles: ref → parent commit → blobs → tree → commit → ref update
+    // pushFiles: ref → parent commit → tree(inline content) → commit → ref update.
+    // Files are embedded as inline tree content now (not per-file blobs), so record
+    // each tree item's content as a "pushed file" for the content/count assertions.
     if (url.endsWith("/git/ref/heads/main")) return ok({ object: { sha: "parent" } });
     if (url.includes("/git/commits/parent")) return ok({ tree: { sha: "basetree" } });
     if (url.endsWith("/git/blobs")) {
       rec.blobs.push(String(body?.content ?? ""));
       return ok({ sha: `blob${rec.blobs.length}` });
     }
-    if (url.endsWith("/git/trees")) return ok({ sha: "tree1" });
+    if (url.endsWith("/git/trees")) {
+      for (const item of (body?.tree as { content?: string }[] | undefined) ?? []) {
+        if (typeof item.content === "string") rec.blobs.push(item.content);
+      }
+      return ok({ sha: "tree1" });
+    }
     if (url.endsWith("/git/commits")) return ok({ sha: "commit-abc" });
     if (url.endsWith("/git/refs/heads/main")) return ok({ ref: "refs/heads/main" });
     // repoExists (GET /repos/org/id) → not found so createRepo proceeds

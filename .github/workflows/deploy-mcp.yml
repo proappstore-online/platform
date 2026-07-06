@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - 'packages/mcp/**'
+      - 'packages/build-core/**' # mcp bundles build-core — redeploy when it changes
       - '.github/workflows/deploy-mcp.yml'
   workflow_dispatch:
 

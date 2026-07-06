@@ -20,6 +20,7 @@ on:
     branches: [main]
     paths:
       - 'packages/backend/**'
+      - 'packages/build-core/**' # backend bundles build-core — redeploy when it changes
       - 'migrations/**'
       - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
