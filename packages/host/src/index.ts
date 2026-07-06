@@ -126,6 +126,14 @@ export default {
     headers.set("ETag", etag);
     if (!isHtml && object.size !== undefined) headers.set("Content-Length", String(object.size));
 
+    // The console's Code Health panel fetches /.vcqa/report.json (+ badge.svg)
+    // cross-origin (console origin ≠ <app>.proappstore.online), so without CORS the
+    // browser blocks the read → "Failed to fetch". The report is already publicly
+    // served (no auth), so allowing cross-origin reads exposes nothing new.
+    if (url.pathname.startsWith("/.vcqa/")) {
+      headers.set("Access-Control-Allow-Origin", "*");
+    }
+
     const body = request.method === "HEAD" ? null : object.body;
     let response = new Response(body, { status: 200, headers });
 
