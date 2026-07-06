@@ -339,11 +339,12 @@ async function addCollaborator(env: Env, id: string, username: string): Promise<
 }
 
 // NOTE: the workflow's CLOUDFLARE_API_TOKEN is an ORG-level Actions secret,
-// managed in Doppler (project `pas`, auto-synced to the proappstore-online org —
-// see stores/SECRETS.md). It is deliberately NOT set per-repo here: the admin
-// Worker can't seal repo secrets (libsodium unavailable in Workers), and
-// SECRETS.md forbids repo-level secrets that duplicate an org-level one
-// (repo-level silently overrides). So there is no setRepoSecret step.
+// managed in SOPS (~/dev/secrets; pushed to the proappstore-online org secret by
+// hand — see ~/dev/secrets/README.md). Used by PUBLIC infra repos, which CAN read
+// org secrets. It is deliberately NOT set per-repo here (the admin Worker can't
+// seal repo secrets — libsodium unavailable in Workers). NOTE R2 deploy creds are
+// the opposite: app repos are PRIVATE on the free org and can't read org secrets,
+// so R2_* is set REPO-level, fanned out by the reconcile-app-secrets workflow.
 
 // Registry entry (storefront listing)
 async function addToRegistry(env: Env, req: PublishRequest): Promise<Step> {
