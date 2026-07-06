@@ -159,7 +159,7 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
     if (r.status === 'pending') {
       const pushedAt = ticket.deploy_pushed_at ?? now;
       if (Date.now() - pushedAt > DEPLOY_CI_START_TIMEOUT_MS) {
-        return infraFail('CI never started for this commit. The repo needs a push-triggered workflow under .github/workflows, Actions enabled, and the admin GitHub token must have the `workflow` scope to commit it.');
+        return infraFail(`No CI run registered for commit ${(sha ?? '').slice(0, 7)} after ${Math.round(DEPLOY_CI_START_TIMEOUT_MS / 60_000)} min — the deploy workflow didn't trigger. Check the repo's Actions tab: is .github/workflows/deploy.yml present, are Actions enabled, and did a run start but error before reporting? Infra, not code — the agents can't fix this by editing files.`);
       }
       deps.logActivity('deploy', 'Waiting for CI to start — will re-check', ticketId);
       return;
