@@ -38,7 +38,7 @@ import {
   uuid,
   insertChatMessage,
 } from './store.ts';
-import { runDeployStage } from './deploy-stage.ts';
+import { runDeployStage, MAX_DEPLOY_ATTEMPTS, DEPLOY_RETRY_BACKOFF_MS } from './deploy-stage.ts';
 import { handlePOChat } from './po-chat.ts';
 import { handleArchitectChat, RESEARCH_THREAD, ARCHITECT_RUN_TIMEOUT_MS } from './architect-chat.ts';
 import { resolveByoKey } from './byo-key.ts';
@@ -372,6 +372,9 @@ export class ProjectDO implements DurableObject {
           : t.assignee_role === 'BA' ? 'ba-refining'
           : 'deploying';
         this.state.storage.sql.exec('UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?', resume, now, t.id);
+        // Explicit Play = "I fixed the infra" → reset the self-heal retry budget so a
+        // ticket that had exhausted its auto-retries gets a fresh set.
+        if (resume === 'deploying') this.state.storage.sql.exec('UPDATE tickets SET deploy_attempts = 0 WHERE id = ?', t.id);
         this.logActivity('control', `Retrying blocked ${t.assignee_role ?? 'deploy'} ticket`, t.id);
         this.broadcast({ type: 'transition', ticketId: t.id, from: 'needs-input', to: resume, reason: 'retry-on-play' });
       }
@@ -438,6 +441,32 @@ export class ProjectDO implements DurableObject {
     } catch { /* column may not exist yet */ }
   }
 
+  /** Self-healing recovery (durable-execution best practice). Deploy failures are
+   *  often transient or fixed out-of-band (CDN warmup, a race, a just-provisioned
+   *  secret), so instead of stranding the ticket until a human hits Play, re-dispatch
+   *  the deploy against CURRENT state up to MAX_DEPLOY_ATTEMPTS with backoff. Only
+   *  deploy/infra parks (assignee_role NULL + stuck_reason) are eligible — agent-
+   *  asks-user blocks (assignee_role set) are left for the human. Returns true while
+   *  any parked ticket still has retry budget, so the caller keeps the watchdog alive
+   *  instead of idle-pausing. */
+  private reconcileStuck(now: number): boolean {
+    const parked = this.state.storage.sql
+      .exec("SELECT id, deploy_attempts, updated_at FROM tickets WHERE status = 'needs-input' AND assignee_role IS NULL AND stuck_reason IS NOT NULL")
+      .toArray() as { id: string; deploy_attempts: number | null; updated_at: number }[];
+    let pending = false;
+    for (const t of parked) {
+      const attempts = t.deploy_attempts ?? 0;
+      if (attempts >= MAX_DEPLOY_ATTEMPTS) continue; // budget spent → escalated to the human
+      pending = true;
+      const backoff = DEPLOY_RETRY_BACKOFF_MS[Math.min(attempts - 1, DEPLOY_RETRY_BACKOFF_MS.length - 1)] ?? 120_000;
+      if (now - t.updated_at < backoff) continue; // still waiting out the backoff
+      this.state.storage.sql.exec("UPDATE tickets SET status = 'deploying', updated_at = ? WHERE id = ?", now, t.id);
+      this.logActivity('control', `Self-heal: re-checking stuck deploy (retry ${attempts + 1}/${MAX_DEPLOY_ATTEMPTS})`, t.id);
+      this.broadcast({ type: 'transition', ticketId: t.id, from: 'needs-input', to: 'deploying', reason: 'self-heal' });
+    }
+    return pending;
+  }
+
   /** Auto-advance: move tickets through the pipeline when running.
    *  Safety rails:
    *  - Only runs when project status is 'running'
@@ -454,15 +483,22 @@ export class ProjectDO implements DurableObject {
 
     const now = Date.now();
 
+    // Self-heal: re-check deploy-parked tickets against CURRENT infra state and
+    // auto-resume those whose blocker may have cleared (bounded retry + backoff),
+    // escalating to the human only when the budget is spent. Returns true while any
+    // parked ticket still has retry budget — we keep the watchdog alive for those
+    // instead of idle-pausing, so recoverable work isn't stranded behind a manual Play.
+    const pendingSelfHeal = this.reconcileStuck(now);
+
     // Idle timeout: auto-pause after 30 min of no activity. "Activity" must
     // include an in-flight agent run — otherwise a single long run (maxRunMinutes
     // can be up to 60) trips the 30-min idle check mid-run and strands its next
     // step (e.g. QA after a long Dev) until manual Play, even with the user
-    // watching. Only pause when the pipeline is genuinely idle (nothing running);
-    // runaway spend is still bounded by the monthly cost cap below.
+    // watching. Only pause when the pipeline is genuinely idle (nothing running,
+    // no pending self-heal retries); runaway spend is still bounded by the cap below.
     const lastActivity = (proj.last_user_activity as number | null) ?? 0;
     const idleMs = lastActivity > 0 ? now - lastActivity : 0;
-    if (lastActivity > 0 && idleMs > 30 * 60 * 1000 && this.running.size === 0) {
+    if (lastActivity > 0 && idleMs > 30 * 60 * 1000 && this.running.size === 0 && !pendingSelfHeal) {
       this.state.storage.sql.exec("UPDATE project SET status = 'paused'");
       this.clearWatchdog();
       this.broadcast({ type: 'play-state', status: 'paused', reason: 'idle-timeout' });

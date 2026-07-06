@@ -19,6 +19,15 @@ export const DEPLOY_CI_START_TIMEOUT_MS = 4 * 60_000;
  *  caps at ~13 min, so give it a little more headroom. */
 export const WORKFLOW_DEPLOY_TIMEOUT_MS = 15 * 60_000;
 
+/** Self-healing recovery budget for infra-blocked deploys. An infra failure is
+ *  often transient or fixed out-of-band (CDN warmup, a race, a just-provisioned
+ *  secret), so the DO auto-retries the deploy against CURRENT state a bounded
+ *  number of times with backoff before escalating to the human. (Durable-execution
+ *  best practice: automatic recovery first, human escalation only when exhausted.) */
+export const MAX_DEPLOY_ATTEMPTS = 3;
+/** Backoff before each self-heal retry, indexed by attempts-so-far (1→[0], 2→[1]). */
+export const DEPLOY_RETRY_BACKOFF_MS = [2 * 60_000, 5 * 60_000];
+
 /** Canary gate: route this project's deploy through the durable provisioning
  *  Workflow instead of the inline push + poll. Opt-in per slug via
  *  WORKFLOW_DEPLOY_SLUGS (comma-separated, or '*' for all). Refs #24. */
@@ -68,17 +77,25 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
   // Infra/provisioning failure (push rejected, CI never registered, admin
   // unreachable). Agents CAN'T fix this by editing code, so do NOT loop through
   // Dev→QA — that burns iterations + cost and QA has nothing real to verify.
-  // Park the ticket in needs-input with the reason; fix the infra and press Play
-  // to retry the deploy directly (resume maps a null-assignee needs-input back to
-  // 'deploying'). Clears the push marker so the retry re-pushes.
+  // Park the ticket in needs-input with the reason, and count the attempt. The DO's
+  // self-heal pass auto-retries the deploy (against current infra state) up to
+  // MAX_DEPLOY_ATTEMPTS with backoff before this stays parked for the human — so a
+  // transient or out-of-band-fixed blocker recovers with no manual Play. Clears the
+  // push marker so each retry re-pushes.
   const infraFail = (reason: string) => {
-    deps.storeMessage({ ticketId, author: 'system', body: `Deploy blocked — this is an infrastructure problem, not your code. Fix it and press Play to retry:\n${reason}`.slice(0, 8000) }).catch(() => {});
+    const prior = (sql.exec('SELECT deploy_attempts FROM tickets WHERE id = ?', ticketId).toArray()[0] as { deploy_attempts?: number } | undefined)?.deploy_attempts ?? 0;
+    const attempts = prior + 1;
+    const exhausted = attempts >= MAX_DEPLOY_ATTEMPTS;
+    const body = exhausted
+      ? `Deploy blocked (infra, not code) — auto-retried ${attempts}× and still failing. This one needs you:\n${reason}`
+      : `Deploy blocked (infra, not code) — will auto-retry (attempt ${attempts}/${MAX_DEPLOY_ATTEMPTS}):\n${reason}`;
+    deps.storeMessage({ ticketId, author: 'system', body: body.slice(0, 8000) }).catch(() => {});
     sql.exec(
-      "UPDATE tickets SET status = 'needs-input', assignee_role = NULL, stuck_reason = ?, deploy_pushed_at = NULL, deploy_pushed_sha = NULL, updated_at = ? WHERE id = ?",
-      reason.slice(0, 500), now, ticketId,
+      "UPDATE tickets SET status = 'needs-input', assignee_role = NULL, stuck_reason = ?, deploy_attempts = ?, deploy_pushed_at = NULL, deploy_pushed_sha = NULL, updated_at = ? WHERE id = ?",
+      reason.slice(0, 500), attempts, now, ticketId,
     );
     deps.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'needs-input', trigger: 'system', reason: 'deploy-infra' });
-    deps.logActivity('deploy', `Deploy BLOCKED (infra, not code) → needs-input: ${reason.slice(0, 200)}`, ticketId);
+    deps.logActivity('deploy', `Deploy BLOCKED (infra, not code) attempt ${attempts}/${MAX_DEPLOY_ATTEMPTS} → needs-input: ${reason.slice(0, 200)}`, ticketId);
   };
 
   const fail = (reason: string) => {

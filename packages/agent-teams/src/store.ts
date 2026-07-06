@@ -138,6 +138,8 @@ export const MIGRATIONS: string[][] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_test_results_run ON test_results(run_id)`,
   `CREATE INDEX IF NOT EXISTS idx_test_results_spec ON test_results(spec_file, status)`],
+  // Self-heal bookkeeping: count deploy attempts so the DO can bound auto-retries.
+  [`ALTER TABLE tickets ADD COLUMN deploy_attempts INTEGER DEFAULT 0`],
 ];
 
 export function uuid(): string {
