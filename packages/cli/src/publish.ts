@@ -188,12 +188,14 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
 }
 
 /**
- * Check if an external-org repo needs R2 deploy secrets.
- * Repos in proappstore-online inherit org-level secrets automatically.
- * External repos need the secrets set manually (R2 tokens can't be
- * programmatically shared — they're created in the CF dashboard).
+ * Ensure an app repo has its R2 deploy secrets.
+ * proappstore-online app repos are PRIVATE on the free org plan and CANNOT inherit
+ * org-level secrets, so they need R2_* as REPO-level secrets. Trigger the reconcile
+ * workflow (runs in the public platform repo, reads the org R2 secrets, fans them
+ * out repo-level) rather than assuming inheritance. External-org repos can't use our
+ * org secrets at all, so we print manual instructions.
  */
-async function ensureDeploySecrets(_appId: string, _token: string): Promise<void> {
+async function ensureDeploySecrets(appId: string, _token: string): Promise<void> {
   let remoteUrl: string;
   try {
     remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], { encoding: 'utf8' }).trim();
@@ -205,7 +207,21 @@ async function ensureDeploySecrets(_appId: string, _token: string): Promise<void
   if (!match) return;
   const [, owner] = match;
 
-  if (owner === 'proappstore-online') return;
+  if (owner === 'proappstore-online') {
+    // Private-repo-on-free ⇒ no org inheritance. Dispatch the reconcile workflow to
+    // set R2_* repo-level (idempotent; the hourly cron also catches it).
+    try {
+      execFileSync(
+        'gh',
+        ['workflow', 'run', 'reconcile-app-secrets.yml', '-R', 'proappstore-online/platform', '-f', `repo=${appId}`],
+        { stdio: 'pipe' },
+      );
+      process.stdout.write(`  [+] R2 deploy secrets: reconcile dispatched for ${appId}\n`);
+    } catch {
+      process.stdout.write(`  [!] Could not dispatch secret reconcile (hourly cron will catch it, or run it manually)\n`);
+    }
+    return;
+  }
 
   // External repo — check if R2 secrets are set
   const fullRepo = `${owner}/${match[2]}`;

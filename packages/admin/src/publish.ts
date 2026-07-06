@@ -566,6 +566,26 @@ async function provisionApp(
   const cf = cfFor(env);
   steps.push(await ensureAnalytics(cf, req.id));
 
+  // 5. R2 deploy secrets. App repos are PRIVATE on the free org and CANNOT inherit
+  //    org-level secrets, so each needs R2_* as REPO-level secrets or it dies at
+  //    "Upload to R2". The admin Worker can't seal repo secrets itself, so trigger
+  //    the reconcile workflow (runs in the PUBLIC platform repo, which CAN read the
+  //    org R2 secrets) to set them repo-level BEFORE the first deploy. Non-fatal —
+  //    the hourly cron + re-runs backstop it. See .github/workflows/reconcile-app-secrets.yml.
+  try {
+    const dispatch = await ghFor(env).api(
+      `/repos/${env.PUBLISHERS_ORG}/platform/actions/workflows/reconcile-app-secrets.yml/dispatches`,
+      { method: "POST", body: { ref: "main", inputs: { repo: req.id } } },
+    );
+    steps.push(
+      dispatch.ok
+        ? { name: "Deploy secrets", status: "ok", detail: "reconcile-app-secrets dispatched (R2 creds → repo-level)" }
+        : { name: "Deploy secrets", status: "skip", detail: `reconcile dispatch ${dispatch.status} — hourly cron will catch it` },
+    );
+  } catch (e) {
+    steps.push({ name: "Deploy secrets", status: "skip", detail: `reconcile dispatch failed (cron backstops): ${(e as Error).message}` });
+  }
+
   // 6. Agent path: ensure a deploy workflow exists, then push the bundle as one
   //    commit. Without an injected workflow a push triggers no CI and the deploy
   //    gate times out with "CI never started".
