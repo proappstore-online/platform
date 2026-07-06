@@ -614,12 +614,16 @@ export class ProjectDO implements DurableObject {
 
     // Deterministic deploy stage (no LLM): push + verify the CI build, then route
     // done | back-to-dev. "done" is only reachable through a verified green build.
+    // SERIALIZE deploys: every ticket pushes to the SAME repo branch, so concurrent
+    // deploys race (ref non-fast-forward) and deploy.yml's `cancel-in-progress`
+    // cancels the losers' CI runs — stranding those tickets even though the app
+    // deployed fine. Dispatch ONE deploy at a time; the next tick picks up the next.
     const deploying = this.state.storage.sql
       .exec("SELECT id FROM tickets WHERE status = 'deploying' ORDER BY updated_at")
       .toArray() as { id: string }[];
-    for (const t of deploying) {
-      if (this.running.has(t.id)) continue;
-      this.dispatchDeploy(t.id);
+    if (!deploying.some((t) => this.running.has(t.id))) {
+      const next = deploying.find((t) => !this.running.has(t.id));
+      if (next) this.dispatchDeploy(next.id);
     }
   }
 
