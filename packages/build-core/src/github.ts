@@ -259,9 +259,15 @@ export function makeGitHub(token: string, org: string): GitHub {
       const matching = (runs: Record<string, unknown>[]) =>
         sha ? runs.filter((r) => (r.head_sha as string) === sha || (r.head_sha as string)?.startsWith(sha)) : runs.slice(0, 1);
 
+      // Filter by the exact commit SERVER-SIDE when we have a full SHA. Without
+      // this, a busy repo (many concurrent/retried deploys) pushes this commit's
+      // run out of the recent-runs window, so the lookup falsely reports "no CI
+      // run" for a build that actually succeeded — then the ticket re-pushes,
+      // making the churn worse. GitHub's ?head_sha filter finds it regardless.
+      const shaFilter = sha && sha.length >= 40 ? `&head_sha=${sha}` : '';
       let runs: Record<string, unknown>[] = [];
       for (;;) {
-        const r = await api(`/repos/${repo(id)}/actions/runs?per_page=20`);
+        const r = await api(`/repos/${repo(id)}/actions/runs?per_page=20${shaFilter}`);
         runs = matching((d(r).workflow_runs as Record<string, unknown>[]) ?? []);
         // No run for this commit yet — it may not have registered. Keep waiting
         // within budget; report 'pending' (not a failure) so the caller can

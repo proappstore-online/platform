@@ -300,6 +300,22 @@ async function finishGreenDeploy(
   deps.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'done', trigger: 'system' });
   deps.logActivity('deploy', `Deployed live ✓ ${sha?.slice(0, 7) ?? ''} ${url ?? ''}`.trim(), ticketId);
 
+  // Mark siblings done (issue #29). Every ticket shares ONE working tree, so this
+  // green deploy already shipped the code of any OTHER ticket that was queued to
+  // deploy (status 'deploying') or parked on a deploy-infra failure (their code is
+  // in the same tree that just went live). Completing them here stops N tickets
+  // from redundantly re-deploying the identical tree — the churn that raced the
+  // CI-run lookup and left tickets "deploying forever".
+  const siblings = sql.exec(
+    "SELECT id FROM tickets WHERE id != ? AND (status = 'deploying' OR (status = 'needs-input' AND assignee_role IS NULL AND stuck_reason IS NOT NULL))",
+    ticketId,
+  ).toArray() as { id: string }[];
+  for (const s of siblings) {
+    sql.exec("UPDATE tickets SET status = 'done', final_commit_sha = ?, deploy_pushed_at = NULL, deploy_pushed_sha = NULL, updated_at = ? WHERE id = ?", sha ?? null, Date.now(), s.id);
+    deps.broadcast({ type: 'transition', ticketId: s.id, to: 'done', trigger: 'system', reason: 'shipped-by-sibling' });
+    deps.logActivity('deploy', `Done — code shipped by this green deploy (shared tree)`, s.id);
+  }
+
   // Build + cache the deterministic app context summary so Dev/QA agents can
   // skip re-reading files on subsequent tickets.
   try {
