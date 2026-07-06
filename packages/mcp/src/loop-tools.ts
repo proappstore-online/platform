@@ -4,9 +4,9 @@
  * team, and inspect tickets/agents/files. A thin MCP frontend over the Agent
  * Teams REST API (AGENTS_BASE, e.g. agents.proappstore.online).
  *
- * Auth: like `list_apps`, every tool takes an explicit `token` argument (a PAS
- * session token) rather than relying on connection-level auth — so these work
- * regardless of the MCP transport's prop wiring. The token's user must own the
+ * Auth: each tool accepts an OPTIONAL `token` argument (a PAS session token); when
+ * omitted, the authenticated MCP connection's identity is used — so an owner-authed
+ * session drives the whole loop with no per-call token. The user must own the
  * project, and must have a BYO Anthropic key in the vault for the agents to run.
  */
 
@@ -25,7 +25,7 @@ interface LoopEnv {
   SESSION_SIGNING_KEY?: string;
 }
 
-export function registerLoopTools(server: McpServer, env: LoopEnv): void {
+export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken: () => string | null): void {
   const base = env.AGENTS_BASE;
 
   /**
@@ -34,12 +34,18 @@ export function registerLoopTools(server: McpServer, env: LoopEnv): void {
    * enforcement + audit live here: every non-GET call is gated and recorded
    * (attributed to the token's user). Read-only mode throws so a tool can't
    * report success on a blocked write.
+   *
+   * The explicit `tokenArg` is optional — when omitted, the authenticated MCP
+   * connection's session token is used, so an owner-authed session drives the
+   * loop with no per-call token.
    */
   async function call(
     path: string,
-    token: string,
+    tokenArg: string | undefined,
     init?: { method?: string; body?: unknown },
   ): Promise<{ ok: boolean; data: unknown }> {
+    const token = (tokenArg && tokenArg.length > 0 ? tokenArg : getConnToken()) ?? "";
+    if (!token) return { ok: false, data: "Not authenticated: authenticate the MCP connection as the owner, or pass a `token`." };
     const method = init?.method ?? "GET";
     const mutating = method !== "GET";
 
@@ -66,7 +72,7 @@ export function registerLoopTools(server: McpServer, env: LoopEnv): void {
     return { ok: res.ok, data: res.ok ? data : `API ${res.status}: ${typeof data === "string" ? data : JSON.stringify(data)}` };
   }
 
-  const TOKEN = z.string().describe("PAS session token (the owner's). The user must also have a BYO Anthropic key in the vault for agents to run.");
+  const TOKEN = z.string().optional().describe("PAS session token (the owner's). Optional — the authenticated MCP connection is used when omitted. The user must have a BYO Anthropic key in the vault for agents to run.");
   const SLUG = z.string().describe("Project slug / app id (lowercase)");
 
   // ── create_app ────────────────────────────────────────────

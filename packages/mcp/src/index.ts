@@ -49,7 +49,9 @@ export class PasMcpAgent extends McpAgent<Env> {
 
     // ── Agent Teams loop tools (create app, KB, chat PO/Architect, ─
     //    tickets, agents, play/pause) — drive the whole build over MCP ─
-    registerLoopTools(this.server, this.env);
+    //    The explicit `token` arg is optional; falls back to the authenticated
+    //    connection identity so an owner-authed MCP session can drive everything.
+    registerLoopTools(this.server, this.env, () => this.userToken);
 
     // ── Agent-team introspection tools ──────────────────────────
     registerAgentsTools(
