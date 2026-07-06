@@ -207,13 +207,14 @@ export function makeGitHub(token: string, org: string): GitHub {
       }
       const parentSha = refSha(ref);
 
-      const treeItems: { path: string; mode: string; type: string; sha: string }[] = [];
-      for (const f of files) {
-        const blob = await api(`/repos/${r}/git/blobs`, { method: 'POST', body: { content: f.content, encoding: 'utf-8' } });
-        const blobSha = (d(blob).sha as string | undefined);
-        if (!blobSha) return { ok: false, error: `blob failed for ${f.path}` };
-        treeItems.push({ path: f.path, mode: '100644', type: 'blob', sha: blobSha });
-      }
+      // Embed file content inline in the tree instead of creating one blob per
+      // file via POST /git/blobs. Dozens of rapid blob POSTs intermittently trip
+      // GitHub's SECONDARY rate limit (observed: "blob failed for <random file>"
+      // on ~30-file app pushes — a DIFFERENT file each attempt, so not a bad file),
+      // which stranded deploys. The create-tree API builds the blobs from inline
+      // utf-8 content in ONE request. App source is text (the blob path already
+      // assumed utf-8), so no behaviour change — just far fewer API calls.
+      const treeItems = files.map((f) => ({ path: f.path, mode: '100644', type: 'blob' as const, content: f.content }));
 
       let baseTree: string | undefined;
       if (parentSha) {

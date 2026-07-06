@@ -43,14 +43,14 @@ describe('makeGitHub', () => {
     expect(f.content).toBe('hello world');
   });
 
-  it('pushFiles runs blobs→tree→commit→ref on an existing repo', async () => {
+  it('pushFiles runs tree(inline content)→commit→ref on an existing repo', async () => {
     const calls: string[] = [];
+    let treeBody: unknown;
     mockFetch((url, init) => {
       calls.push(`${init?.method ?? 'GET'} ${url.replace('https://api.github.com', '')}`);
       if (url.endsWith('/git/ref/heads/main')) return { body: { object: { sha: 'parent' } } };
       if (url.endsWith('/git/commits/parent')) return { body: { tree: { sha: 'basetree' } } };
-      if (url.endsWith('/git/blobs')) return { body: { sha: 'blob1' } };
-      if (url.endsWith('/git/trees')) return { body: { sha: 'tree1' } };
+      if (url.endsWith('/git/trees')) { treeBody = init?.body ? JSON.parse(init.body as string) : undefined; return { body: { sha: 'tree1' } }; }
       if (url.endsWith('/git/commits')) return { body: { sha: 'commit1' } };
       if (url.endsWith('/git/refs/heads/main')) return { body: { ref: 'refs/heads/main' } };
       return { body: {} };
@@ -59,7 +59,10 @@ describe('makeGitHub', () => {
     const res = await gh.pushFiles('app', [{ path: 'a.ts', content: 'x' }], 'msg');
     expect(res.ok).toBe(true);
     expect(res.commitSha).toBe('commit1');
-    expect(calls.some((c) => c.startsWith('POST') && c.endsWith('/git/blobs'))).toBe(true);
+    // No per-file blob POSTs (they trip GitHub's secondary rate limit); content is
+    // embedded inline in the tree request instead.
+    expect(calls.some((c) => c.endsWith('/git/blobs'))).toBe(false);
+    expect((treeBody as { tree: { path: string; content: string }[] }).tree[0]).toMatchObject({ path: 'a.ts', content: 'x' });
     expect(calls.some((c) => c.startsWith('PATCH') && c.endsWith('/git/refs/heads/main'))).toBe(true);
   });
 
