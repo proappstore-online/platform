@@ -213,3 +213,57 @@ errors. Added the **`whoami`** MCP tool so the authenticated identity is explici
 
 **Priority:** D1 now (validation) → D2 (prevents a whole class of born-broken apps) →
 D4 (cheap, avoids repeating the Doppler chase) → D3 (polish) → D5 (debt, unlocks tests).
+
+---
+
+## Session 2 update (2026-07-06/07) — incident + deploy-churn deep dive
+
+### PRODUCTION INCIDENT: profile gate locked out 62 interns
+Tickets #3/#4/#7 gated the dashboard on a NEW `profile_completed_at` column that is null
+for every pre-existing member → **62 of 72 interns force-locked** onto the profile form
+(real user reports). It shipped **green** because QA writes only mocked-SDK vitest tests
+and the E2E smoke checks "#root mounts" — no feature test. **A green deploy is not a working
+feature.** Mitigated by backfilling `profile_completed_at`; the code fix was ticketed to the
+agents (#9). Guardrails added so it can't recur:
+- **BA prompt** — EXISTING-DATA GUARD: a spec that adds a gate/required field/new column
+  MUST say how existing rows are handled and must not force-gate onboarded users.
+- **QA prompt** — must add a test for the existing-record case (new field null), not just
+  the happy path.
+
+### Deploy churn root cause (why tickets sat in `deploying` forever)
+The deploys **succeeded**, but the platform couldn't match the green run to the ticket:
+1. **`deployResult` looked up the run in the 20 most-recent runs** → under churn the
+   ticket's run fell out of the window → "no CI run" → re-push → worse. **Fixed:** query
+   GitHub `?head_sha=<full-sha>` so the run is found regardless of recency.
+2. **N tickets share ONE working tree** yet each full-deploys it → competing commits +
+   `deploy.yml cancel-in-progress` cancels the losers. **Fixed:** `mark-siblings-done`
+   (issue #29) — one green deploy completes the other in-flight/parked tickets; plus
+   deploy **serialization** (one deploy at a time per project).
+
+### Still OPEN (filed) — the current reason interns won't fully drain
+- **#30 — deploy grader blocks on Platform Compliance.** `Deploy to R2` is green on every
+  commit but **Platform Compliance fails**, and `deployResult` grades ALL workflows → the
+  ticket never grades green. Decide: make Compliance advisory (grade only gating workflows)
+  and/or fix why Compliance fails on interns.
+- **#29 — batch/debounce deploys** (mark-siblings-done shipped as the first cut; the fuller
+  merge-queue/debounce remains).
+
+### Also shipped this session
+- [x] **`deployResult` finds the run by `?head_sha`** (was a 20-run recent window)
+- [x] **mark-siblings-done** — one green deploy completes sibling tickets sharing the tree
+- [x] **Deploy serialization** — one deploy at a time per project (`runPendingAgents`)
+- [x] **MCP connection-auth for loop tools** — `set_project_running`/`chat_agent`/etc. use
+      the authenticated connection identity (optional `token`), so an owner session drives
+      the whole loop over MCP with no pasted token
+- [x] **`whoami` MCP tool** — surfaces the authenticated PAS identity (caught a Google-vs-
+      GitHub account mismatch that blocked owner-scoped tools)
+- [x] **Host CORS on `/.vcqa/`** — the console Code Health panel fetches the report
+      cross-origin; the host served it without CORS → "Failed to fetch" platform-wide
+- [x] **BA/QA existing-data guardrails** (see incident above)
+- [x] Reconcile app secrets, inline-tree push (blob rate-limit), build-core deploy
+      path-filters — see the git log
+
+### Meta-lesson (do not forget)
+"**Green deploy ≠ working feature.**" Verify the actual user flow (load it as the affected
+user), not just HTTP 200 + a green CI run. The QA gate does not test features — that gap
+(D-items + #30) is the throughline behind "ships green but broken" and "stuck deploying".
