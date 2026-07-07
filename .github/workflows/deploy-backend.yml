@@ -77,11 +77,20 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           SESSION_SIGNING_KEY: ${{ secrets.SESSION_SIGNING_KEY }}
           INTERNAL_TOKEN: ${{ secrets.INTERNAL_TOKEN }}
+          # Parent pas-apps R2 access key id — used to mint keyless deploy
+          # credentials (routes/deploy.ts). Not a secret on its own; synced here
+          # so it isn't committed. Optional — mint returns 503 until it's set.
+          R2_PARENT_ACCESS_KEY_ID: ${{ secrets.R2_PARENT_ACCESS_KEY_ID }}
         run: |
           test -n "$SESSION_SIGNING_KEY"
           test -n "$INTERNAL_TOKEN"
           printf '%s' "$SESSION_SIGNING_KEY" | pnpm exec wrangler secret put SESSION_SIGNING_KEY
           printf '%s' "$INTERNAL_TOKEN" | pnpm exec wrangler secret put INTERNAL_TOKEN
+          if [ -n "$R2_PARENT_ACCESS_KEY_ID" ]; then
+            printf '%s' "$R2_PARENT_ACCESS_KEY_ID" | pnpm exec wrangler secret put R2_PARENT_ACCESS_KEY_ID
+          else
+            echo "note: R2_PARENT_ACCESS_KEY_ID not set — keyless deploy mint returns 503 until it is"
+          fi
 
       - name: Smoke test
         run: |
