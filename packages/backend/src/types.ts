@@ -20,6 +20,12 @@ export interface Env {
   /** CF credentials for provisioning (D1, Pages, Workers). */
   CF_API_TOKEN: string;
   CF_ACCOUNT_ID: string;
+  /** Access key id of the parent `pas-apps` R2 API token. Used to mint
+   *  short-lived, prefix-scoped deploy credentials (see routes/deploy.ts).
+   *  NOT a secret on its own — an access key id; minting also requires
+   *  CF_API_TOKEN (which must have R2 read/write). Set via:
+   *    wrangler secret put R2_PARENT_ACCESS_KEY_ID */
+  R2_PARENT_ACCESS_KEY_ID?: string;
   /** Proxied hostname on the SaaS zone that external custom domains CNAME to.
    *  Optional — defaults to `cname.proappstore.online`. Set when Cloudflare for
    *  SaaS is enabled. */
