@@ -37,11 +37,23 @@ async function signToken(repository = 'proappstore-online/aiuniversity', ref = '
   return `${header}.${payload}.${b64url(new Uint8Array(sig))}`;
 }
 
-const ENV = { CF_API_TOKEN: 'cf-token', CF_ACCOUNT_ID: ACCOUNT, R2_PARENT_ACCESS_KEY_ID: 'parent-key-id' } as never;
+let auditRows: unknown[][];
+const mockDB = {
+  prepare: (sql: string) => ({
+    bind: (...args: unknown[]) => ({
+      run: async () => {
+        if (sql.includes('deploy_audit')) auditRows.push(args);
+        return { success: true };
+      },
+    }),
+  }),
+};
+const ENV = { CF_API_TOKEN: 'cf-token', CF_ACCOUNT_ID: ACCOUNT, R2_PARENT_ACCESS_KEY_ID: 'parent-key-id', DB: mockDB } as never;
 
 describe('POST /apps/:appId/deploy-credentials', () => {
   beforeEach(async () => {
     _resetJwksCache();
+    auditRows = [];
     await makeKey();
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -74,6 +86,9 @@ describe('POST /apps/:appId/deploy-credentials', () => {
     const cfCall = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
       .find((c) => String(c[0]).includes('temp-access-credentials'));
     expect(JSON.parse((cfCall![1] as RequestInit).body as string).prefixes).toEqual(['apps/aiuniversity/']);
+    // the mint is audited: one row bound with (app_id, repository, ref, ...)
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0]!.slice(0, 3)).toEqual(['aiuniversity', 'proappstore-online/aiuniversity', 'refs/heads/main']);
   });
 
   it('401 when no token', async () => {

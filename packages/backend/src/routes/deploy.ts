@@ -97,6 +97,18 @@ deployRoutes.post('/apps/:appId/deploy-credentials', async (c) => {
     return c.json({ error: `R2 credential request failed: ${(e as Error).message}` }, 502);
   }
 
+  // Audit the mint (best-effort — an audit failure must never block a deploy).
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO deploy_audit (app_id, repository, ref, sha, prefix, minted_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(appId, claims.repository, claims.ref ?? '', claims.sha ?? null, prefix, Date.now())
+      .run();
+  } catch (e) {
+    console.error(`deploy_audit insert failed for ${appId}: ${(e as Error).message}`);
+  }
+
   return c.json({
     accessKeyId: result.accessKeyId,
     secretAccessKey: result.secretAccessKey,
