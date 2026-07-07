@@ -64,8 +64,8 @@ function b64urlToString(s: string): string {
   return new TextDecoder().decode(b64urlToBytes(s));
 }
 
-async function getKeys(fetchImpl: typeof fetch, now: number): Promise<Jwk[]> {
-  if (jwksCache && now - jwksCache.fetchedAt < JWKS_TTL_MS) return jwksCache.keys;
+async function getKeys(fetchImpl: typeof fetch, now: number, forceRefresh = false): Promise<Jwk[]> {
+  if (!forceRefresh && jwksCache && now - jwksCache.fetchedAt < JWKS_TTL_MS) return jwksCache.keys;
   const res = await fetchImpl(JWKS_URL);
   if (!res.ok) throw new Error(`JWKS fetch failed (${res.status})`);
   const body = (await res.json()) as { keys: Jwk[] };
@@ -91,8 +91,15 @@ export async function verifyGithubOidc(token: string, opts: VerifyOptions): Prom
   if (header.alg !== 'RS256') throw new Error(`unexpected alg: ${header.alg}`);
   if (!header.kid) throw new Error('missing kid');
 
-  const keys = await getKeys(fetchImpl, nowMs);
-  const jwk = keys.find((k) => k.kid === header.kid);
+  let keys = await getKeys(fetchImpl, nowMs);
+  let jwk = keys.find((k) => k.kid === header.kid);
+  if (!jwk) {
+    // The signing key may have rotated since we cached the JWKS — a valid token
+    // can carry a kid we haven't seen. Force one refetch before rejecting so a
+    // routine GitHub key rotation doesn't fail deploys for the cache lifetime.
+    keys = await getKeys(fetchImpl, nowMs, true);
+    jwk = keys.find((k) => k.kid === header.kid);
+  }
   if (!jwk) throw new Error('signing key not found in JWKS');
 
   const key = await crypto.subtle.importKey(

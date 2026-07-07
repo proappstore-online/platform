@@ -26,12 +26,12 @@ async function makeKey() {
   priv = pair.privateKey;
 }
 
-async function signToken(repository = 'proappstore-online/aiuniversity'): Promise<string> {
+async function signToken(repository = 'proappstore-online/aiuniversity', ref = 'refs/heads/main'): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const header = b64urlJson({ alg: 'RS256', typ: 'JWT', kid: KID });
   const payload = b64urlJson({
     iss: ISSUER, aud: AUD, repository, repository_owner: repository.split('/')[0],
-    sha: 'deadbeef', iat: now, nbf: now, exp: now + 300,
+    ref, sha: 'deadbeef', iat: now, nbf: now, exp: now + 300,
   });
   const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', priv, new TextEncoder().encode(`${header}.${payload}`));
   return `${header}.${payload}.${b64url(new Uint8Array(sig))}`;
@@ -91,6 +91,13 @@ describe('POST /apps/:appId/deploy-credentials', () => {
 
   it('403 when the repo is in a different owner', async () => {
     const res = await call('aiuniversity', { Authorization: `Bearer ${await signToken('attacker/aiuniversity')}` });
+    expect(res.status).toBe(403);
+  });
+
+  it('403 when the deploy is not from the main branch', async () => {
+    const res = await call('aiuniversity', {
+      Authorization: `Bearer ${await signToken('proappstore-online/aiuniversity', 'refs/heads/dev')}`,
+    });
     expect(res.status).toBe(403);
   });
 

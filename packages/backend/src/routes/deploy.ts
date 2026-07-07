@@ -20,6 +20,10 @@ const ORG = 'proappstore-online';
 const BUCKET = 'pas-apps';
 /** Audience the deploy workflow must request its OIDC token for. */
 const AUDIENCE = 'https://api.proappstore.online';
+/** Only the main branch may deploy — matches the workflow's `push: [main]`
+ *  trigger. Pinning the ref stops any other branch/workflow in the repo from
+ *  minting deploy credentials. */
+const DEPLOY_REF = 'refs/heads/main';
 const TTL_SECONDS = 900; // 15 min — long enough for a build+sync, short-lived.
 
 export const deployRoutes = new Hono<{ Bindings: Env }>();
@@ -49,6 +53,9 @@ deployRoutes.post('/apps/:appId/deploy-credentials', async (c) => {
   const expected = `${ORG}/${appId}`;
   if (claims.repository !== expected) {
     return c.json({ error: `repository ${claims.repository} is not authorized for app ${appId}` }, 403);
+  }
+  if (claims.ref !== DEPLOY_REF) {
+    return c.json({ error: `ref ${claims.ref ?? '(none)'} not authorized — deploys must run from ${DEPLOY_REF}` }, 403);
   }
 
   // 4. Mint short-lived, prefix-scoped R2 credentials via the R2 API.

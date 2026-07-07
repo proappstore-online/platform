@@ -83,6 +83,21 @@ describe('verifyGithubOidc', () => {
     await expect(verifyGithubOidc(token, { audience: AUD, fetchImpl })).rejects.toThrow(/signing key/);
   });
 
+  it('refetches JWKS once when the kid is missing (key rotation)', async () => {
+    // First fetch returns a stale JWKS without our key; the forced refetch has it.
+    let calls = 0;
+    const staleKey = { ...jwk, kid: 'old-rotated-key' };
+    const rotating = (async () => {
+      calls += 1;
+      const keys = calls === 1 ? [staleKey] : [jwk]; // stale JWKS lacks our kid
+      return new Response(JSON.stringify({ keys }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const token = await signToken(priv, {});
+    const claims = await verifyGithubOidc(token, { audience: AUD, fetchImpl: rotating });
+    expect(claims.repository).toBe('proappstore-online/aiuniversity');
+    expect(calls).toBe(2); // proves the refetch-on-miss happened
+  });
+
   it('rejects a non-RS256 alg', async () => {
     const header = b64urlJson({ alg: 'none', typ: 'JWT', kid: KID });
     const payload = b64urlJson({ iss: ISSUER, aud: AUD, repository: 'x/y', repository_owner: 'x', exp: 9999999999 });
