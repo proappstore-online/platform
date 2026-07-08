@@ -64,6 +64,10 @@ function forwardedHeaders(source: Headers, token: string): Headers {
   headers.delete("Host");
   headers.delete("Origin");
   headers.delete("Referer");
+  // Never let a browser-supplied internal token reach the data-worker's trusted
+  // path — this cookie-mediation route is the browser data plane, so the
+  // internal path must only ever be reachable from the backend actions-executor.
+  headers.delete("X-Internal-Token");
   headers.set("Authorization", `Bearer ${token}`);
   return headers;
 }

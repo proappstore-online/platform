@@ -10,6 +10,13 @@ interface Env {
   /** PAS platform API base (e.g. https://api.proappstore.online) — used to
    *  authorize the caller against this worker's APP_ID. */
   API_BASE: string;
+  /** Shared platform secret. A request bearing `X-Internal-Token` equal to this
+   *  value is the platform actions-executor — the SQL is already prepared and
+   *  the caller identity injected server-side (see backend routes/actions.ts),
+   *  so it bypasses the per-user ownership check. When unset the internal path
+   *  is inert and every request falls back to the session+ownership check
+   *  (fail-closed). */
+  INTERNAL_TOKEN?: string;
 }
 
 interface FasUser {
@@ -122,6 +129,29 @@ async function requireUser(c: { req: { header(name: string): string | undefined 
   return { id: claims.uid, login: claims.login };
 }
 
+/**
+ * True when the request carries the shared platform secret — i.e. it is the
+ * backend actions-executor forwarding prepared, role-checked SQL (identity
+ * already injected via `__user_id`). Unset INTERNAL_TOKEN ⇒ always false ⇒
+ * fail-closed. Constant secret comparison is sufficient here (the value never
+ * reaches a browser; the host strips any client-supplied X-Internal-Token).
+ */
+function isInternal(c: { req: { header(name: string): string | undefined }; env: Env }): boolean {
+  const provided = c.req.header('X-Internal-Token');
+  return !!c.env.INTERNAL_TOKEN && provided === c.env.INTERNAL_TOKEN;
+}
+
+/**
+ * Authorization gate for every SQL route.
+ *  - Trusted internal path (actions-executor): allowed — SQL is platform-prepared.
+ *  - Direct raw-SQL path (browser `app.db`): must be the app owner / developer
+ *    (session + `/v1/apps` ownership check). Ordinary end-users fail closed.
+ */
+async function authorize(c: { req: { header(name: string): string | undefined }; env: Env }): Promise<void> {
+  if (isInternal(c)) return;
+  await requireUser(c);
+}
+
 // ---------------------------------------------------------------------------
 // Validation helpers
 // ---------------------------------------------------------------------------
@@ -151,7 +181,7 @@ function validateSql(body: unknown): SqlPayload {
 app.get('/health', (c) => c.json({ ok: true }));
 
 app.get('/tables', async (c) => {
-  await requireUser(c);
+  await authorize(c);
   const result = await c.env.DB.prepare(
     "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name",
   ).all<{ name: string }>();
@@ -159,7 +189,7 @@ app.get('/tables', async (c) => {
 });
 
 app.post('/query', async (c) => {
-  await requireUser(c);
+  await authorize(c);
   const body = await c.req.json();
   const { sql, params } = validateSql(body);
   const start = Date.now();
@@ -172,7 +202,7 @@ app.post('/query', async (c) => {
 });
 
 app.post('/execute', async (c) => {
-  await requireUser(c);
+  await authorize(c);
   const body = await c.req.json();
   const { sql, params } = validateSql(body);
   const start = Date.now();
@@ -188,7 +218,7 @@ app.post('/execute', async (c) => {
 });
 
 app.post('/batch', async (c) => {
-  await requireUser(c);
+  await authorize(c);
   const body = await c.req.json<{ statements: unknown[] }>();
   if (!Array.isArray(body.statements) || body.statements.length === 0) {
     throw new HTTPException(400, { message: 'statements must be a non-empty array' });
@@ -211,7 +241,7 @@ app.post('/batch', async (c) => {
 // ---------------------------------------------------------------------------
 
 app.post('/migrate', async (c) => {
-  await requireUser(c);
+  await authorize(c);
   const body = await c.req.json<{ migrations: { name: string; sql: string }[] }>();
   if (!Array.isArray(body.migrations) || body.migrations.length === 0) {
     throw new HTTPException(400, { message: 'migrations must be a non-empty array of {name, sql}' });

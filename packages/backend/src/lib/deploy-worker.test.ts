@@ -108,10 +108,32 @@ describe('deployDataWorker', () => {
       { ok: true, body: { success: true } },
     );
 
-    await deployDataWorker('test-app', 'db-456', 'tok', 'acct', 'sk');
+    await deployDataWorker('test-app', 'db-456', 'tok', 'acct', 'sk', 'internal-secret');
 
     // Check the upload call (2nd fetch)
     const [uploadUrl] = mockFetch.mock.calls[1] as [string, RequestInit];
     expect(uploadUrl).toContain('workers/scripts/pas-data-test-app');
+  });
+
+  it('binds INTERNAL_TOKEN when provided, and omits it when empty', async () => {
+    const bindingsFromUpload = async (internalToken: string) => {
+      mockSequence(
+        { ok: true, text: '// script' },
+        { ok: true, body: { success: true } },
+        { ok: true, body: {} },
+        { ok: true, body: { success: true, result: [{ id: 'z1' }] } },
+        { ok: true, body: { success: true } },
+      );
+      await deployDataWorker('test-app', 'db-456', 'tok', 'acct', 'sk', internalToken);
+      const form = (mockFetch.mock.calls[1] as [string, RequestInit])[1].body as FormData;
+      const meta = JSON.parse(await (form.get('metadata') as Blob).text()) as {
+        bindings: { name: string; type: string }[];
+      };
+      return meta.bindings.map((b) => b.name);
+    };
+
+    expect(await bindingsFromUpload('internal-secret')).toContain('INTERNAL_TOKEN');
+    mockFetch.mockClear();
+    expect(await bindingsFromUpload('')).not.toContain('INTERNAL_TOKEN');
   });
 });

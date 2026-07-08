@@ -8,6 +8,8 @@ workers_dev = true
 APP_ID = "__APP_ID__"
 API_BASE = "https://api.proappstore.online"
 # SESSION_SIGNING_KEY set as a secret binding at deploy time
+# INTERNAL_TOKEN set as a secret binding at deploy time (trusts the platform
+#   actions-executor; when unset the internal path is inert / fail-closed)
 
 [[d1_databases]]
 binding = "DB"

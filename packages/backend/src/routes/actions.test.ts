@@ -33,6 +33,7 @@ function env(database: D1Database) {
     SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
+    INTERNAL_TOKEN: 'internal-secret',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
     VAPID_PRIVATE_KEY: 'test-vapid-private',
   };
@@ -75,12 +76,37 @@ describe('POST /v1/apps/:appId/actions/:name', () => {
       'https://data-interns.proappstore.online/query',
       expect.objectContaining({
         method: 'POST',
-        headers: expect.objectContaining({ Authorization: `Bearer ${TOK}` }),
+        headers: expect.objectContaining({
+          Authorization: `Bearer ${TOK}`,
+          'X-Internal-Token': 'internal-secret',
+        }),
       }),
     );
     const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as { sql: string; params: unknown[] };
     expect(body.sql).toBe('SELECT * FROM items WHERE user_id = ? LIMIT ?');
     expect(body.params).toEqual(['gh:1', 10]);
+  });
+
+  it('omits X-Internal-Token when INTERNAL_TOKEN is not configured', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ rows: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const e = env(db(stmt({ first: { manifest: manifest() } }))) as Record<string, unknown>;
+    delete e.INTERNAL_TOKEN;
+
+    const res = await app.request(
+      '/v1/apps/interns/actions/list_mine',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ params: { limit: 10 } }),
+      },
+      e,
+    );
+
+    expect(res.status).toBe(200);
+    const headers = fetchMock.mock.calls[0]![1].headers as Record<string, string>;
+    expect(headers['X-Internal-Token']).toBeUndefined();
   });
 
   it('requires a PAS session', async () => {

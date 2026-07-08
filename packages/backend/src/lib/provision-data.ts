@@ -12,6 +12,9 @@ export interface ProvisionDataArgs {
   db: D1Database;
   /** SESSION_SIGNING_KEY — passed to the data-worker for local JWT verification. */
   sessionSigningKey: string;
+  /** INTERNAL_TOKEN — bound on the data-worker so it trusts the platform
+   *  actions-executor. Empty string leaves the internal path inert (fail-closed). */
+  internalToken?: string;
 }
 
 /**
@@ -27,7 +30,7 @@ export interface ProvisionDataArgs {
 export async function provisionData(
   args: ProvisionDataArgs,
 ): Promise<{ steps: Step[]; dataWorkerUrl: string; dbId: string }> {
-  const { appId, creatorId, creatorLabel, cfToken, cfAccount, db, sessionSigningKey } = args;
+  const { appId, creatorId, creatorLabel, cfToken, cfAccount, db, sessionSigningKey, internalToken } = args;
   const steps: Step[] = [];
 
   // 1. Create D1 database (skip if it already exists)
@@ -70,7 +73,7 @@ export async function provisionData(
   let dataWorkerUrl = '';
   if (dbId) {
     try {
-      const result = await deployDataWorker(appId, dbId, cfToken, cfAccount, sessionSigningKey);
+      const result = await deployDataWorker(appId, dbId, cfToken, cfAccount, sessionSigningKey, internalToken ?? '');
       dataWorkerUrl = result.url;
       steps.push({ name: 'deploy_worker', status: result.ok ? 'ok' : 'fail', detail: result.detail });
     } catch (e) {

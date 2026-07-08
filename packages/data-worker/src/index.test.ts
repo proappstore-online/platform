@@ -55,12 +55,15 @@ function mockD1() {
   };
 }
 
-function makeEnv(db = mockD1()) {
+const INTERNAL_TOKEN = 'internal-secret';
+
+function makeEnv(db = mockD1(), internalToken?: string) {
   return {
     DB: db as unknown as D1Database,
     APP_ID: "test-app",
     SESSION_SIGNING_KEY: TEST_SK,
     API_BASE,
+    ...(internalToken ? { INTERNAL_TOKEN: internalToken } : {}),
   };
 }
 
@@ -118,6 +121,71 @@ describe("Auth", () => {
     } as unknown as ReturnType<typeof makeEnv>);
 
     expect(res.status).toBe(401);
+  });
+});
+
+describe("Internal token path (trusted actions-executor)", () => {
+  it("allows /query with a valid X-Internal-Token and no bearer, without an ownership check", async () => {
+    const db = mockD1();
+    db.prepare = vi.fn().mockReturnValue({
+      bind: vi.fn().mockReturnValue({
+        all: vi.fn().mockResolvedValue({ results: [{ id: "1" }], meta: { changes: 0 } }),
+      }),
+    });
+    const res = await app.request("/query", {
+      method: "POST",
+      headers: { "X-Internal-Token": INTERNAL_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({ sql: "SELECT * FROM t WHERE user_id = ?", params: ["gh:1"] }),
+    }, makeEnv(db, INTERNAL_TOKEN));
+    expect(res.status).toBe(200);
+    // the trusted path must NOT call the platform ownership endpoint
+    const calls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.some((c) => String(c[0]) === `${API_BASE}/v1/apps`)).toBe(false);
+  });
+
+  it("falls through to the session check when X-Internal-Token is wrong (401 without bearer)", async () => {
+    const res = await app.request("/query", {
+      method: "POST",
+      headers: { "X-Internal-Token": "wrong", "Content-Type": "application/json" },
+      body: JSON.stringify({ sql: "SELECT 1" }),
+    }, makeEnv(mockD1(), INTERNAL_TOKEN));
+    expect(res.status).toBe(401);
+  });
+
+  it("is inert when INTERNAL_TOKEN is unset (fail-closed — 401 without bearer)", async () => {
+    const res = await app.request("/query", {
+      method: "POST",
+      headers: { "X-Internal-Token": INTERNAL_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({ sql: "SELECT 1" }),
+    }, makeEnv()); // no INTERNAL_TOKEN bound
+    expect(res.status).toBe(401);
+  });
+
+  it("denies an end-user (owns another app) raw /query without the internal token", async () => {
+    ownedAppIds = ["some-other-app"]; // valid session, but not this app's owner/dev
+    const res = await app.request("/query", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOK}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ sql: "SELECT * FROM secrets" }),
+    }, makeEnv(mockD1(), INTERNAL_TOKEN));
+    expect(res.status).toBe(403);
+  });
+
+  it("/migrate is allowed via internal token and denied to a non-owner end-user", async () => {
+    const ok = await app.request("/migrate", {
+      method: "POST",
+      headers: { "X-Internal-Token": INTERNAL_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({ migrations: [{ name: "m1", sql: "CREATE TABLE t (id TEXT)" }] }),
+    }, makeEnv(mockD1(), INTERNAL_TOKEN));
+    expect(ok.status).toBe(200);
+
+    ownedAppIds = ["some-other-app"];
+    const denied = await app.request("/migrate", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOK}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ migrations: [{ name: "m1", sql: "CREATE TABLE t (id TEXT)" }] }),
+    }, makeEnv(mockD1(), INTERNAL_TOKEN));
+    expect(denied.status).toBe(403);
   });
 });
 

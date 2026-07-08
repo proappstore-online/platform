@@ -44,10 +44,16 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   }
 
   const endpoint = manifest.operation === 'query' ? 'query' : 'execute';
+  // Forward with the platform internal token so the data-worker trusts this as
+  // prepared, role-checked SQL (identity already injected via __user_id) and
+  // runs it for the end-user without requiring them to own the app. The caller
+  // bearer is still sent so an un-redeployed data-worker (which ignores the
+  // internal header) keeps working exactly as before during rollout.
   const upstream = await fetch(`https://data-${appId}.proappstore.online/${endpoint}`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
+      ...(c.env.INTERNAL_TOKEN ? { 'X-Internal-Token': c.env.INTERNAL_TOKEN } : {}),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(prepared),

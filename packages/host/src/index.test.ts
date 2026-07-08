@@ -305,6 +305,34 @@ describe("host same-origin platform mediation routes", () => {
     expect(await res.json()).toEqual({ rows: [{ id: 1 }], meta: { changes: 0, duration: 1 } });
     expect(dataFetch).toHaveBeenCalledOnce();
   });
+
+  it("strips a browser-supplied X-Internal-Token before forwarding to the data worker", async () => {
+    const dataFetch = vi.fn(async (request: Request) => {
+      // the trusted internal path must NOT be reachable from the browser
+      expect(request.headers.get("X-Internal-Token")).toBeNull();
+      return Response.json({ rows: [], meta: { changes: 0, duration: 1 } });
+    });
+    vi.stubGlobal("fetch", dataFetch);
+
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/data/query", {
+        method: "POST",
+        headers: {
+          Cookie: "__Host-pas_session=cookie-token",
+          Origin: "https://meetup.proappstore.online",
+          "Sec-Fetch-Site": "same-origin",
+          "Content-Type": "application/json",
+          "X-Internal-Token": "attacker-guess",
+        },
+        body: JSON.stringify({ sql: "select 1" }),
+      }),
+      makeEnv(),
+      ctx(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(dataFetch).toHaveBeenCalledOnce();
+  });
 });
 
 function makeEnv(opts: { apiFetch?: (request: Request) => Promise<Response> } = {}): Env {

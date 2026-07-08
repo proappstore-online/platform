@@ -29,6 +29,7 @@ export async function deployDataWorker(
   cfToken: string,
   cfAccount: string,
   sessionSigningKey: string,
+  internalToken = '',
 ): Promise<DeployResult> {
   const workerName = `pas-data-${appId}`;
   const workersDevUrl = `https://${workerName}.serge-the-dev.workers.dev`;
@@ -65,6 +66,12 @@ export async function deployDataWorker(
       // access to another app's DB).
       { type: 'plain_text', name: 'API_BASE', text: 'https://api.proappstore.online' },
       { type: 'secret_text' as const, name: 'SESSION_SIGNING_KEY', text: sessionSigningKey },
+      // Lets the data-worker trust the platform actions-executor (prepared,
+      // role-checked SQL). Omitted when empty so the worker still boots — the
+      // internal path stays inert (fail-closed) until the secret is present.
+      ...(internalToken
+        ? [{ type: 'secret_text' as const, name: 'INTERNAL_TOKEN', text: internalToken }]
+        : []),
       { type: 'd1', name: 'DB', id: dbId },
     ],
   };
