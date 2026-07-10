@@ -231,6 +231,64 @@ describe('PUT /v1/apps/:appId/tools', () => {
   });
 });
 
+describe('PUT /v1/apps/:appId/tools — batch tools', () => {
+  const batchTool = {
+    name: 'atomic_pair',
+    description: 'two atomic writes',
+    operation: 'batch',
+    statements: [
+      'INSERT INTO a (id, owner) VALUES (:id, :__user_id)',
+      'UPDATE b SET a_id = :id WHERE owner = :__user_id',
+    ],
+    params: { id: { type: 'string' } },
+    requires_auth: true,
+  };
+
+  const put = (tool: unknown) => {
+    const ownerStmt = mockStmt({ first: { creator_id: 'gh:1' } });
+    const db = mockD1(ownerStmt);
+    return app.request(
+      '/v1/apps/test-app/tools',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tools: [tool] }),
+      },
+      makeEnv({}, db),
+    );
+  };
+
+  it('accepts a valid batch tool', async () => {
+    const res = await put(batchTool);
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects batch tools that also declare sql', async () => {
+    const res = await put({ ...batchTool, sql: 'SELECT 1' });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects non-batch tools that declare statements', async () => {
+    const res = await put({ ...batchTool, operation: 'execute', sql: undefined });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects empty or oversized statements arrays', async () => {
+    expect((await put({ ...batchTool, statements: [] })).status).toBe(400);
+    expect((await put({ ...batchTool, statements: Array(26).fill(batchTool.statements[0]) })).status).toBe(400);
+  });
+
+  it('rejects DDL inside any batch member', async () => {
+    const res = await put({ ...batchTool, statements: [batchTool.statements[0], 'DROP TABLE a'] });
+    expect(res.status).toBe(400);
+  });
+
+  it('validates undeclared params across ALL statements', async () => {
+    const res = await put({ ...batchTool, statements: [batchTool.statements[0], 'UPDATE b SET x = :mystery'] });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('GET /v1/tools', () => {
   it('returns all tools across apps', async () => {
     const manifest = JSON.stringify(validTool);

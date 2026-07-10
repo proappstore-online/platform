@@ -63,8 +63,11 @@ interface ToolParam {
 interface ToolManifest {
   name: string;
   description: string;
-  operation: 'query' | 'execute';
-  sql: string;
+  operation: 'query' | 'execute' | 'batch';
+  sql?: string;
+  /** Batch tools: multiple statements, one shared params pool, executed
+   *  atomically in a single D1 transaction on the data-worker. */
+  statements?: string[];
   params: Record<string, ToolParam>;
   requires_auth?: boolean;
   auth?: {
@@ -78,12 +81,31 @@ function validateManifest(tool: ToolManifest): string | null {
   if (!tool.name || typeof tool.name !== 'string') return 'name is required';
   if (!/^[a-z][a-z0-9_]*$/.test(tool.name)) return 'name must be lowercase alphanumeric with underscores';
   if (!tool.description || typeof tool.description !== 'string') return 'description is required';
-  if (!['query', 'execute'].includes(tool.operation)) return 'operation must be "query" or "execute"';
-  if (!tool.sql || typeof tool.sql !== 'string') return 'sql is required';
+  if (!['query', 'execute', 'batch'].includes(tool.operation)) return 'operation must be "query", "execute" or "batch"';
   if (tool.requires_auth !== true) return 'requires_auth must be true for app data tools';
 
-  const sqlErr = validateSql(tool.sql, tool.operation);
-  if (sqlErr) return sqlErr;
+  let sqlStatements: string[];
+  if (tool.operation === 'batch') {
+    if (tool.sql !== undefined) return 'batch tools use statements, not sql';
+    if (!Array.isArray(tool.statements) || tool.statements.length === 0) {
+      return 'batch tools require a non-empty statements array';
+    }
+    if (tool.statements.length > 25) return 'max 25 statements per batch tool';
+    if (tool.statements.some((s) => !s || typeof s !== 'string')) {
+      return 'every statement must be a non-empty string';
+    }
+    sqlStatements = tool.statements;
+  } else {
+    if (tool.statements !== undefined) return 'only batch tools may declare statements';
+    if (!tool.sql || typeof tool.sql !== 'string') return 'sql is required';
+    sqlStatements = [tool.sql];
+  }
+
+  for (const stmt of sqlStatements) {
+    // Batch member statements are writes (queries have nowhere to return).
+    const sqlErr = validateSql(stmt, tool.operation === 'batch' ? 'execute' : tool.operation);
+    if (sqlErr) return sqlErr;
+  }
 
   // params must be an object (default to empty)
   if (tool.params !== undefined && tool.params !== null && typeof tool.params !== 'object') {
@@ -93,7 +115,9 @@ function validateManifest(tool: ToolManifest): string | null {
 
   // All :paramName in SQL must be declared in params (except magic params)
   const magicParams = new Set(['__user_id', '__now', '__uuid']);
-  const sqlParams = [...tool.sql.matchAll(/:([a-zA-Z_][a-zA-Z0-9_]*)/g)].map(m => m[1]!!);
+  const sqlParams = sqlStatements.flatMap((stmt) =>
+    [...stmt.matchAll(/:([a-zA-Z_][a-zA-Z0-9_]*)/g)].map(m => m[1]!!),
+  );
   const declaredParams = new Set([...Object.keys(params), ...magicParams]);
   for (const p of sqlParams) {
     if (!declaredParams.has(p)) return `SQL references :${p} but it is not declared in params`;

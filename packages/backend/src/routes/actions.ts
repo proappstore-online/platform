@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireUser, type FasUser } from '../lib/auth.js';
-import { prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
+import { prepareActionBatch, prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
 
 export const actionRoutes = new Hono<{ Bindings: Env }>();
 
@@ -36,14 +36,21 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
         ? body.params
         : null;
   if (!input) throw new HttpError('params must be an object', 400);
-  let prepared: { sql: string; params: unknown[] };
+  let endpoint: string;
+  let payload: unknown;
   try {
-    prepared = prepareActionQuery(manifest, input, user.id);
+    if (manifest.operation === 'batch') {
+      // Batch tools run all statements in ONE D1 transaction on the data
+      // worker — multi-step flows can't be left half-applied.
+      endpoint = 'batch';
+      payload = { statements: prepareActionBatch(manifest, input, user.id) };
+    } else {
+      endpoint = manifest.operation === 'query' ? 'query' : 'execute';
+      payload = prepareActionQuery(manifest, input, user.id);
+    }
   } catch (e) {
     throw new HttpError(e instanceof Error ? e.message : String(e), 400);
   }
-
-  const endpoint = manifest.operation === 'query' ? 'query' : 'execute';
   // Forward with the platform internal token so the data-worker trusts this as
   // prepared, role-checked SQL (identity already injected via __user_id) and
   // runs it for the end-user without requiring them to own the app. The caller
@@ -56,7 +63,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
       ...(c.env.INTERNAL_TOKEN ? { 'X-Internal-Token': c.env.INTERNAL_TOKEN } : {}),
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(prepared),
+    body: JSON.stringify(payload),
   });
 
   const text = await upstream.text();

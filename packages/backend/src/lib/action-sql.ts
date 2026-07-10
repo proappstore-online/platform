@@ -15,8 +15,14 @@ export interface ToolAuth {
 export interface ToolManifest {
   name: string;
   description: string;
-  operation: 'query' | 'execute';
-  sql: string;
+  operation: 'query' | 'execute' | 'batch';
+  /** Single statement — query/execute tools. */
+  sql?: string;
+  /** Multiple statements sharing one params pool — batch tools. Executed
+   *  ATOMICALLY (one D1 transaction via the data-worker /batch endpoint), so
+   *  multi-step flows (tournament round creation, org create+membership,
+   *  cascading deletes) can't be left half-applied by a mid-sequence failure. */
+  statements?: string[];
   params: Record<string, ToolParam>;
   requires_auth?: boolean;
   auth?: ToolAuth;
@@ -32,12 +38,60 @@ export function prepareActionQuery(
   input: Record<string, unknown>,
   userId: string,
 ): PreparedQuery {
+  if (typeof manifest.sql !== 'string') {
+    throw new Error(`tool ${manifest.name} has no sql`);
+  }
+  return bindStatement(manifest.sql, resolveParams(manifest, input), userId);
+}
+
+/**
+ * Prepare a batch tool: every statement binds against the SAME resolved param
+ * pool, so a shared :param (or :__user_id / :__now) is identical across all
+ * statements. :__uuid stays per-occurrence — ids that must correlate across
+ * statements are client-supplied params.
+ */
+export function prepareActionBatch(
+  manifest: ToolManifest,
+  input: Record<string, unknown>,
+  userId: string,
+): PreparedQuery[] {
+  if (!Array.isArray(manifest.statements) || manifest.statements.length === 0) {
+    throw new Error(`tool ${manifest.name} has no statements`);
+  }
+  const resolved = resolveParams(manifest, input);
+  return manifest.statements.map((sql) => bindStatement(sql, resolved, userId));
+}
+
+function bindStatement(
+  rawSql: string,
+  resolved: Record<string, unknown>,
+  userId: string,
+): PreparedQuery {
   const magicValues: Record<string, () => unknown> = {
     __user_id: () => userId,
     __now: () => Date.now(),
     __uuid: () => crypto.randomUUID(),
   };
 
+  const names: string[] = [];
+  const sql = rawSql.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (_match, name: string) => {
+    names.push(name);
+    return '?';
+  });
+
+  const params = names.map((name) => {
+    if (name in magicValues) return magicValues[name]!();
+    if (name in resolved) return resolved[name];
+    throw new Error(`Unresolved parameter: ${name}`);
+  });
+
+  return { sql, params };
+}
+
+function resolveParams(
+  manifest: ToolManifest,
+  input: Record<string, unknown>,
+): Record<string, unknown> {
   const resolved: Record<string, unknown> = {};
   for (const [name, schema] of Object.entries(manifest.params ?? {})) {
     let value = input[name];
@@ -79,17 +133,5 @@ export function prepareActionQuery(
     resolved[name] = value;
   }
 
-  const names: string[] = [];
-  const sql = manifest.sql.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (_match, name: string) => {
-    names.push(name);
-    return '?';
-  });
-
-  const params = names.map((name) => {
-    if (name in magicValues) return magicValues[name]!();
-    if (name in resolved) return resolved[name];
-    throw new Error(`Unresolved parameter: ${name}`);
-  });
-
-  return { sql, params };
+  return resolved;
 }
