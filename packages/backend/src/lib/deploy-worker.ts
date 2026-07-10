@@ -153,6 +153,10 @@ export async function deployDataWorker(
             hostname,
             service: workerName,
             zone_id: zoneId,
+            // Re-point the hostname when it is attached to a stale worker (e.g.
+            // the pre-rename `data-<app>` scripts) — without this, re-provision
+            // fails and traffic keeps hitting the old code.
+            override_existing_origin: true,
           }),
         },
       );
