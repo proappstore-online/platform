@@ -4,6 +4,13 @@
  *
  * Features: multi-tenant workspaces, boards with lists/cards,
  * WebSocket rooms for presence + patch fan-out.
+ *
+ * Data access: every user-facing read/write goes through registered actions
+ * (mcp.json → app.actions.call). Raw app.db SQL is restricted to the app's
+ * team by the platform, so seeding raw SQL would ship an app that 403s for
+ * every regular user. Identity comes from :__user_id server-side; privileged
+ * writes carry membership EXISTS guards in the SQL itself. Rooms (WebSocket
+ * presence + patch fan-out) are unchanged — only the D1 layer moved.
  */
 export function realtimeFiles(slug: string): Map<string, string> {
   const files = new Map<string, string>();
@@ -59,6 +66,128 @@ export type BoardPatch =
   | { kind: 'list.created' | 'list.renamed' | 'list.moved' | 'list.deleted' }
 `);
 
+  files.set('mcp.json', `{
+  "tools": [
+    {
+      "name": "list_my_workspaces",
+      "description": "Workspaces the caller belongs to, newest first",
+      "operation": "query",
+      "sql": "SELECT w.* FROM workspaces w JOIN members m ON m.workspace_id = w.id WHERE m.user_id = :__user_id ORDER BY w.created_at DESC",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "list_boards",
+      "description": "Boards in a workspace, newest first",
+      "operation": "query",
+      "sql": "SELECT * FROM boards WHERE workspace_id = :workspace_id ORDER BY created_at DESC",
+      "params": { "workspace_id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "list_lists",
+      "description": "Lists of a board, in position order",
+      "operation": "query",
+      "sql": "SELECT * FROM lists WHERE board_id = :board_id ORDER BY position",
+      "params": { "board_id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "list_cards",
+      "description": "Cards of a board, in position order",
+      "operation": "query",
+      "sql": "SELECT * FROM cards WHERE board_id = :board_id ORDER BY position",
+      "params": { "board_id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "list_members",
+      "description": "Members of a workspace",
+      "operation": "query",
+      "sql": "SELECT * FROM members WHERE workspace_id = :workspace_id",
+      "params": { "workspace_id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "create_workspace",
+      "description": "Create a workspace owned by the caller",
+      "operation": "execute",
+      "sql": "INSERT INTO workspaces (id, name, slug, owner_id, created_at) VALUES (:id, :name, :slug, :__user_id, :__now)",
+      "params": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "slug": { "type": "string" }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "add_self_owner_membership",
+      "description": "Add the caller as owner-member of a workspace they own",
+      "operation": "execute",
+      "sql": "INSERT INTO members (workspace_id, user_id, role, display_name, avatar_url, joined_at) SELECT :workspace_id, :__user_id, 'owner', :display_name, :avatar_url, :__now WHERE EXISTS (SELECT 1 FROM workspaces w WHERE w.id = :workspace_id AND w.owner_id = :__user_id)",
+      "params": {
+        "workspace_id": { "type": "string" },
+        "display_name": { "type": "string" },
+        "avatar_url": { "type": "string", "optional": true }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "create_board",
+      "description": "Create a board in a workspace",
+      "operation": "execute",
+      "sql": "INSERT INTO boards (id, workspace_id, name, created_at) VALUES (:id, :workspace_id, :name, :__now)",
+      "params": {
+        "id": { "type": "string" },
+        "workspace_id": { "type": "string" },
+        "name": { "type": "string" }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "create_list",
+      "description": "Add a list to a board",
+      "operation": "execute",
+      "sql": "INSERT INTO lists (id, board_id, title, position) VALUES (:id, :board_id, :title, :position)",
+      "params": {
+        "id": { "type": "string" },
+        "board_id": { "type": "string" },
+        "title": { "type": "string" },
+        "position": { "type": "number" }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "create_card",
+      "description": "Add a card to a list, created by the caller",
+      "operation": "execute",
+      "sql": "INSERT INTO cards (id, list_id, board_id, title, description, position, created_by, created_at) VALUES (:id, :list_id, :board_id, :title, '', :position, :__user_id, :__now)",
+      "params": {
+        "id": { "type": "string" },
+        "list_id": { "type": "string" },
+        "board_id": { "type": "string" },
+        "title": { "type": "string" },
+        "position": { "type": "number" }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "move_card",
+      "description": "Move a card to a list/position (workspace members only)",
+      "operation": "execute",
+      "sql": "UPDATE cards SET list_id = :to_list_id, position = :position WHERE id = :card_id AND EXISTS (SELECT 1 FROM members m WHERE m.workspace_id = :workspace_id AND m.user_id = :__user_id)",
+      "params": {
+        "card_id": { "type": "string" },
+        "to_list_id": { "type": "string" },
+        "position": { "type": "number" },
+        "workspace_id": { "type": "string" }
+      },
+      "requires_auth": true
+    }
+  ]
+}
+`);
+
   files.set('src/lib/db.ts', `import { app } from './app'
 import type { Workspace, Member, Board, BoardList, Card } from '../types'
 
@@ -95,73 +224,81 @@ const MIGRATIONS = [
   }
 ]
 
-export async function migrate() { await app.db.migrate(MIGRATIONS) }
+// Raw SQL (including migrate) is team-only on PAS. Regular users get a 403
+// here — that's fine: the schema is already applied, so swallow it and
+// continue. Every user-facing read/write below goes through registered
+// actions (mcp.json), never raw SQL.
+export async function migrate() {
+  try {
+    await app.db.migrate(MIGRATIONS)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (!message.includes('403')) throw err
+  }
+}
+
+async function q<T>(name: string, params: Record<string, unknown> = {}): Promise<T[]> {
+  const res = await app.actions.call<{ rows: T[] }>(name, params)
+  return res.rows
+}
+
+async function x(name: string, params: Record<string, unknown> = {}): Promise<void> {
+  await app.actions.call(name, params)
+}
 
 function makeSlug(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)
     + '-' + crypto.randomUUID().slice(0, 6)
 }
 
-export async function createWorkspace(userId: string, name: string, displayName: string, avatarUrl: string) {
+export async function createWorkspace(name: string, displayName: string, avatarUrl: string) {
   const id = crypto.randomUUID()
   const slug = makeSlug(name)
-  const now = Date.now()
-  await app.db.batch([
-    { sql: 'INSERT INTO workspaces (id,name,slug,owner_id,created_at) VALUES (?,?,?,?,?)', params: [id, name, slug, userId, now] },
-    { sql: 'INSERT INTO members (workspace_id,user_id,role,display_name,avatar_url,joined_at) VALUES (?,?,?,?,?,?)', params: [id, userId, 'owner', displayName, avatarUrl, now] },
-  ])
+  await x('create_workspace', { id, name, slug })
+  await x('add_self_owner_membership', { workspace_id: id, display_name: displayName, avatar_url: avatarUrl })
   return { id, slug }
 }
 
-export async function getMyWorkspaces(userId: string) {
-  return (await app.db.query<Workspace>(
-    'SELECT w.* FROM workspaces w JOIN members m ON m.workspace_id = w.id WHERE m.user_id = ? ORDER BY w.created_at DESC', [userId]
-  )).rows
+export async function getMyWorkspaces() {
+  return q<Workspace>('list_my_workspaces')
 }
 
 export async function getBoards(workspaceId: string) {
-  return (await app.db.query<Board>('SELECT * FROM boards WHERE workspace_id = ? ORDER BY created_at DESC', [workspaceId])).rows
+  return q<Board>('list_boards', { workspace_id: workspaceId })
 }
 
 export async function createBoard(workspaceId: string, name: string) {
   const id = crypto.randomUUID()
-  await app.db.execute('INSERT INTO boards (id,workspace_id,name,created_at) VALUES (?,?,?,?)', [id, workspaceId, name, Date.now()])
+  await x('create_board', { id, workspace_id: workspaceId, name })
   return id
 }
 
 export async function getLists(boardId: string) {
-  return (await app.db.query<BoardList>('SELECT * FROM lists WHERE board_id = ? ORDER BY position', [boardId])).rows
+  return q<BoardList>('list_lists', { board_id: boardId })
 }
 
 export async function getCards(boardId: string) {
-  return (await app.db.query<Card>('SELECT * FROM cards WHERE board_id = ? ORDER BY position', [boardId])).rows
+  return q<Card>('list_cards', { board_id: boardId })
 }
 
 export async function createList(boardId: string, title: string, position: number) {
   const id = crypto.randomUUID()
-  await app.db.execute('INSERT INTO lists (id,board_id,title,position) VALUES (?,?,?,?)', [id, boardId, title, position])
+  await x('create_list', { id, board_id: boardId, title, position })
   return id
 }
 
-export async function createCard(boardId: string, listId: string, title: string, position: number, userId: string) {
+export async function createCard(boardId: string, listId: string, title: string, position: number) {
   const id = crypto.randomUUID()
-  await app.db.execute(
-    'INSERT INTO cards (id,list_id,board_id,title,description,position,created_by,created_at) VALUES (?,?,?,?,?,?,?,?)',
-    [id, listId, boardId, title, '', position, userId, Date.now()]
-  )
+  await x('create_card', { id, list_id: listId, board_id: boardId, title, position })
   return id
 }
 
-export async function moveCard(cardId: string, toListId: string, position: number, userId: string, workspaceId: string) {
-  const isMember = (await app.db.query<{ c: number }>(
-    'SELECT COUNT(*) as c FROM members WHERE workspace_id = ? AND user_id = ?', [workspaceId, userId]
-  )).rows[0]?.c ?? 0
-  if (!isMember) throw new Error('Not a workspace member')
-  await app.db.execute('UPDATE cards SET list_id = ?, position = ? WHERE id = ?', [toListId, position, cardId])
+export async function moveCard(cardId: string, toListId: string, position: number, workspaceId: string) {
+  await x('move_card', { card_id: cardId, to_list_id: toListId, position, workspace_id: workspaceId })
 }
 
 export async function getMembers(workspaceId: string) {
-  return (await app.db.query<Member>('SELECT * FROM members WHERE workspace_id = ?', [workspaceId])).rows
+  return q<Member>('list_members', { workspace_id: workspaceId })
 }
 `);
 
@@ -225,7 +362,7 @@ export default function App() {
   useEffect(() => { const h = () => setRoute(parseHash()); window.addEventListener('hashchange', h); return () => window.removeEventListener('hashchange', h) }, [])
   useEffect(() => {
     if (!user) return
-    migrate().then(() => getMyWorkspaces(user.id)).then((ws) => { setWorkspaces(ws); setReady(true) })
+    migrate().then(() => getMyWorkspaces()).then((ws) => { setWorkspaces(ws); setReady(true) }).catch(() => setReady(true))
   }, [user])
 
   if (loading) return <div className="min-h-[100dvh] flex items-center justify-center text-muted">Loading...</div>
@@ -243,9 +380,9 @@ export default function App() {
 
   const handleCreate = async () => {
     if (!newName.trim()) return
-    const ws = await createWorkspace(user.id, newName.trim(), user.login, user.avatarUrl)
+    const ws = await createWorkspace(newName.trim(), user.login, user.avatarUrl)
     setNewName('')
-    const updated = await getMyWorkspaces(user.id)
+    const updated = await getMyWorkspaces()
     setWorkspaces(updated)
   }
 
@@ -336,7 +473,7 @@ export function BoardView({ wsId, boardId, user, theme }: { wsId: string; boardI
   const handleAddCard = async (listId: string) => {
     if (!newCardTitle.trim() || !activeBoardId) return
     const listCards = cards.filter((c) => c.list_id === listId)
-    await createCard(activeBoardId, listId, newCardTitle.trim(), listCards.length, user.id)
+    await createCard(activeBoardId, listId, newCardTitle.trim(), listCards.length)
     setNewCardTitle(''); setAddingToList(null)
     broadcast({ kind: 'card.created' })
     reload()

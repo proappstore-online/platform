@@ -4,6 +4,12 @@
  *
  * Features: org creation, member invites, role-based views (admin/member),
  * org settings, membership management.
+ *
+ * Data access: every user-facing read/write goes through registered actions
+ * (mcp.json → app.actions.call). Raw app.db SQL is restricted to the app's
+ * team by the platform, so seeding raw SQL would ship an app that 403s for
+ * every regular user. Identity comes from :__user_id server-side; privileged
+ * writes carry admin/owner EXISTS guards in the SQL itself.
  */
 export function organizationFiles(slug: string): Map<string, string> {
   const files = new Map<string, string>();
@@ -40,6 +46,127 @@ export interface RoleTrack {
 }
 `);
 
+  files.set('mcp.json', `{
+  "tools": [
+    {
+      "name": "list_my_orgs",
+      "description": "Orgs the caller belongs to, newest first",
+      "operation": "query",
+      "sql": "SELECT o.* FROM orgs o JOIN memberships m ON m.org_id = o.id WHERE m.user_id = :__user_id ORDER BY o.created_at DESC",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "list_public_orgs",
+      "description": "All orgs for discovery, newest first",
+      "operation": "query",
+      "sql": "SELECT * FROM orgs ORDER BY created_at DESC LIMIT 50",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "get_org",
+      "description": "One org by id",
+      "operation": "query",
+      "sql": "SELECT * FROM orgs WHERE id = :org_id",
+      "params": { "org_id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "list_members",
+      "description": "Members of an org, oldest first",
+      "operation": "query",
+      "sql": "SELECT * FROM memberships WHERE org_id = :org_id ORDER BY joined_at",
+      "params": { "org_id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "get_my_membership",
+      "description": "The caller's membership in an org",
+      "operation": "query",
+      "sql": "SELECT * FROM memberships WHERE org_id = :org_id AND user_id = :__user_id",
+      "params": { "org_id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "list_role_tracks",
+      "description": "Role tracks for an org, in position order",
+      "operation": "query",
+      "sql": "SELECT * FROM role_tracks WHERE org_id = :org_id ORDER BY position",
+      "params": { "org_id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "create_org",
+      "description": "Create an org owned by the caller",
+      "operation": "execute",
+      "sql": "INSERT INTO orgs (id, name, owner_id, description, logo_url, website, created_at) VALUES (:id, :name, :__user_id, '', '', '', :__now)",
+      "params": { "id": { "type": "string" }, "name": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "add_self_admin_membership",
+      "description": "Add the caller as admin of an org they own",
+      "operation": "execute",
+      "sql": "INSERT INTO memberships (org_id, user_id, role, display_name, avatar_url, joined_at) SELECT :org_id, :__user_id, 'admin', :display_name, :avatar_url, :__now WHERE EXISTS (SELECT 1 FROM orgs o WHERE o.id = :org_id AND o.owner_id = :__user_id)",
+      "params": {
+        "org_id": { "type": "string" },
+        "display_name": { "type": "string" },
+        "avatar_url": { "type": "string", "optional": true }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "update_org",
+      "description": "Update org settings (admins only)",
+      "operation": "execute",
+      "sql": "UPDATE orgs SET name = :name, description = :description, website = :website WHERE id = :org_id AND EXISTS (SELECT 1 FROM memberships gm WHERE gm.org_id = :org_id AND gm.user_id = :__user_id AND gm.role = 'admin')",
+      "params": {
+        "org_id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string", "optional": true },
+        "website": { "type": "string", "optional": true }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "join_org",
+      "description": "Join an org as a member (the caller)",
+      "operation": "execute",
+      "sql": "INSERT OR IGNORE INTO memberships (org_id, user_id, role, display_name, avatar_url, joined_at) VALUES (:org_id, :__user_id, 'member', :display_name, :avatar_url, :__now)",
+      "params": {
+        "org_id": { "type": "string" },
+        "display_name": { "type": "string" },
+        "avatar_url": { "type": "string", "optional": true }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "remove_member",
+      "description": "Remove a member from an org (admins only)",
+      "operation": "execute",
+      "sql": "DELETE FROM memberships WHERE org_id = :org_id AND user_id = :user_id AND EXISTS (SELECT 1 FROM memberships gm WHERE gm.org_id = :org_id AND gm.user_id = :__user_id AND gm.role = 'admin')",
+      "params": { "org_id": { "type": "string" }, "user_id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "create_role_track",
+      "description": "Add a role track (admins only)",
+      "operation": "execute",
+      "sql": "INSERT INTO role_tracks (id, org_id, title, description, position) SELECT :id, :org_id, :title, :description, :position WHERE EXISTS (SELECT 1 FROM memberships gm WHERE gm.org_id = :org_id AND gm.user_id = :__user_id AND gm.role = 'admin')",
+      "params": {
+        "id": { "type": "string" },
+        "org_id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string", "optional": true },
+        "position": { "type": "integer" }
+      },
+      "requires_auth": true
+    }
+  ]
+}
+`);
+
   files.set('src/lib/db.ts', `import { app } from './app'
 import type { Org, Membership, RoleTrack } from '../types'
 
@@ -68,72 +195,76 @@ const MIGRATIONS = [
   }
 ]
 
-export async function migrate() { await app.db.migrate(MIGRATIONS) }
+// Raw SQL (including migrate) is team-only on PAS. Regular users get a 403
+// here — that's fine: the schema is already applied, so swallow it and
+// continue. Every user-facing read/write below goes through registered
+// actions (mcp.json), never raw SQL.
+export async function migrate() {
+  try {
+    await app.db.migrate(MIGRATIONS)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (!message.includes('403')) throw err
+  }
+}
 
-export async function createOrg(userId: string, name: string, displayName: string, avatarUrl: string) {
+async function q<T>(name: string, params: Record<string, unknown> = {}): Promise<T[]> {
+  const res = await app.actions.call<{ rows: T[] }>(name, params)
+  return res.rows
+}
+
+async function x(name: string, params: Record<string, unknown> = {}): Promise<void> {
+  await app.actions.call(name, params)
+}
+
+export async function createOrg(name: string, displayName: string, avatarUrl: string) {
   const id = crypto.randomUUID()
-  const now = Date.now()
-  await app.db.batch([
-    { sql: 'INSERT INTO orgs (id,name,owner_id,description,logo_url,website,created_at) VALUES (?,?,?,?,?,?,?)', params: [id, name, userId, '', '', '', now] },
-    { sql: 'INSERT INTO memberships (org_id,user_id,role,display_name,avatar_url,joined_at) VALUES (?,?,?,?,?,?)', params: [id, userId, 'admin', displayName, avatarUrl, now] },
-  ])
+  await x('create_org', { id, name })
+  await x('add_self_admin_membership', { org_id: id, display_name: displayName, avatar_url: avatarUrl })
   return id
 }
 
-export async function getMyOrgs(userId: string) {
-  return (await app.db.query<Org>(
-    'SELECT o.* FROM orgs o JOIN memberships m ON m.org_id = o.id WHERE m.user_id = ? ORDER BY o.created_at DESC', [userId]
-  )).rows
+export async function getMyOrgs() {
+  return q<Org>('list_my_orgs')
 }
 
 export async function getOrg(orgId: string) {
-  return (await app.db.query<Org>('SELECT * FROM orgs WHERE id = ?', [orgId])).rows[0] ?? null
+  return (await q<Org>('get_org', { org_id: orgId }))[0] ?? null
 }
 
-export async function updateOrg(userId: string, orgId: string, data: Pick<Org, 'name' | 'description' | 'website'>) {
-  const isAdmin = (await app.db.query<{ c: number }>(
-    "SELECT COUNT(*) as c FROM memberships WHERE org_id = ? AND user_id = ? AND role = 'admin'", [orgId, userId]
-  )).rows[0]?.c ?? 0
-  if (!isAdmin) throw new Error('Not authorized')
-  await app.db.execute('UPDATE orgs SET name=?, description=?, website=? WHERE id=?', [data.name, data.description, data.website, orgId])
+export async function updateOrg(orgId: string, data: Pick<Org, 'name' | 'description' | 'website'>) {
+  await x('update_org', { org_id: orgId, name: data.name, description: data.description, website: data.website })
 }
 
 export async function getMembers(orgId: string) {
-  return (await app.db.query<Membership>('SELECT * FROM memberships WHERE org_id = ? ORDER BY joined_at', [orgId])).rows
+  return q<Membership>('list_members', { org_id: orgId })
 }
 
-export async function getMembership(orgId: string, userId: string) {
-  return (await app.db.query<Membership>('SELECT * FROM memberships WHERE org_id = ? AND user_id = ?', [orgId, userId])).rows[0] ?? null
+export async function getMyMembership(orgId: string) {
+  return (await q<Membership>('get_my_membership', { org_id: orgId }))[0] ?? null
 }
 
-export async function joinOrg(orgId: string, userId: string, displayName: string, avatarUrl: string) {
-  await app.db.execute(
-    'INSERT OR IGNORE INTO memberships (org_id,user_id,role,display_name,avatar_url,joined_at) VALUES (?,?,?,?,?,?)',
-    [orgId, userId, 'member', displayName, avatarUrl, Date.now()]
-  )
+export async function joinOrg(orgId: string, displayName: string, avatarUrl: string) {
+  await x('join_org', { org_id: orgId, display_name: displayName, avatar_url: avatarUrl })
 }
 
-export async function removeMember(actorId: string, orgId: string, targetUserId: string) {
-  const isAdmin = (await app.db.query<{ c: number }>(
-    "SELECT COUNT(*) as c FROM memberships WHERE org_id = ? AND user_id = ? AND role = 'admin'", [orgId, actorId]
-  )).rows[0]?.c ?? 0
-  if (!isAdmin) throw new Error('Not authorized')
-  await app.db.execute('DELETE FROM memberships WHERE org_id = ? AND user_id = ?', [orgId, targetUserId])
+export async function removeMember(orgId: string, targetUserId: string) {
+  await x('remove_member', { org_id: orgId, user_id: targetUserId })
 }
 
 export async function getRoleTracks(orgId: string) {
-  return (await app.db.query<RoleTrack>('SELECT * FROM role_tracks WHERE org_id = ? ORDER BY position', [orgId])).rows
+  return q<RoleTrack>('list_role_tracks', { org_id: orgId })
 }
 
 export async function createRoleTrack(orgId: string, title: string, description: string) {
   const id = crypto.randomUUID()
-  const count = (await app.db.query<{ c: number }>('SELECT COUNT(*) as c FROM role_tracks WHERE org_id = ?', [orgId])).rows[0]?.c ?? 0
-  await app.db.execute('INSERT INTO role_tracks (id,org_id,title,description,position) VALUES (?,?,?,?,?)', [id, orgId, title, description, count])
+  const position = (await getRoleTracks(orgId)).length
+  await x('create_role_track', { id, org_id: orgId, title, description, position })
   return id
 }
 
 export async function getPublicOrgs() {
-  return (await app.db.query<Org>('SELECT * FROM orgs ORDER BY created_at DESC LIMIT 50')).rows
+  return q<Org>('list_public_orgs')
 }
 `);
 
@@ -165,9 +296,9 @@ export default function App() {
   useEffect(() => { const h = () => setRoute(parseHash()); window.addEventListener('hashchange', h); return () => window.removeEventListener('hashchange', h) }, [])
   useEffect(() => {
     if (!user) return
-    migrate().then(() => Promise.all([getMyOrgs(user.id), getPublicOrgs()])).then(([my, pub]) => {
+    migrate().then(() => Promise.all([getMyOrgs(), getPublicOrgs()])).then(([my, pub]) => {
       setMyOrgs(my); setPublicOrgs(pub); setReady(true)
-    })
+    }).catch(() => setReady(true))
   }, [user])
 
   if (loading) return <div className="min-h-[100dvh] flex items-center justify-center text-muted">Loading...</div>
@@ -187,9 +318,9 @@ export default function App() {
 
   const handleCreate = async () => {
     if (!newName.trim()) return
-    await createOrg(user.id, newName.trim(), user.login, user.avatarUrl)
+    await createOrg(newName.trim(), user.login, user.avatarUrl)
     setNewName('')
-    setMyOrgs(await getMyOrgs(user.id))
+    setMyOrgs(await getMyOrgs())
   }
 
   return (
@@ -241,7 +372,7 @@ export default function App() {
   files.set('src/pages/OrgView.tsx', `import { useState, useEffect } from 'react'
 import type { User } from '@proappstore/sdk'
 import { ThemeToggle, Avatar } from '@proappstore/sdk/ui'
-import { getOrg, getMembers, getMembership, joinOrg, getRoleTracks, updateOrg, createRoleTrack } from '../lib/db'
+import { getOrg, getMembers, getMyMembership, joinOrg, getRoleTracks, updateOrg, createRoleTrack } from '../lib/db'
 import type { Org, Membership, RoleTrack } from '../types'
 
 export function OrgView({ orgId, user, theme }: { orgId: string; user: User; theme: string }) {
@@ -254,7 +385,7 @@ export function OrgView({ orgId, user, theme }: { orgId: string; user: User; the
 
   const reload = async () => {
     const [o, ms, me, ts] = await Promise.all([
-      getOrg(orgId), getMembers(orgId), getMembership(orgId, user.id), getRoleTracks(orgId)
+      getOrg(orgId), getMembers(orgId), getMyMembership(orgId), getRoleTracks(orgId)
     ])
     setOrg(o); setMembers(ms); setMembership(me); setTracks(ts)
   }
@@ -265,7 +396,7 @@ export function OrgView({ orgId, user, theme }: { orgId: string; user: User; the
   const isAdmin = membership?.role === 'admin'
 
   const handleJoin = async () => {
-    await joinOrg(orgId, user.id, user.login, user.avatarUrl)
+    await joinOrg(orgId, user.login, user.avatarUrl)
     reload()
   }
 
@@ -340,7 +471,7 @@ export function OrgView({ orgId, user, theme }: { orgId: string; user: User; the
               </div>
             )}
             {tab === 'settings' && isAdmin && (
-              <OrgSettings org={org} onSave={(data) => updateOrg(user.id, orgId, data).then(reload)} />
+              <OrgSettings org={org} onSave={(data) => updateOrg(orgId, data).then(reload)} />
             )}
           </>
         )}

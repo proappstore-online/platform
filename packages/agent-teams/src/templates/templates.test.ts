@@ -311,9 +311,10 @@ describe('organization template structure', () => {
     expect(db).toContain('role_tracks');
   });
 
-  it('has atomic org creation (batch insert)', () => {
+  it('creates the org then the admin membership via registered actions', () => {
     const db = files.get('src/lib/db.ts')!;
-    expect(db).toContain('app.db.batch');
+    expect(db).toContain("x('create_org'");
+    expect(db).toContain("x('add_self_admin_membership'");
   });
 
   it('has role-based access (admin/member)', () => {
@@ -481,43 +482,49 @@ describe('templates use window.location.hash for writes in JSX', () => {
 
 // ── Authorization: mutations check ownership ───────────────────────
 
-describe('templates enforce authorization on mutations', () => {
-  it('dashboard: updateItem requires userId', () => {
-    const db = seedFiles('test', 'dashboard').get('src/lib/db.ts')!;
-    expect(db).toMatch(/updateItem\(userId.*id/);
-    expect(db).toContain('AND user_id=?');
+describe('templates enforce authorization on mutations (in the registered-action SQL)', () => {
+  const toolSql = (tpl: string, name: string): string => {
+    const manifest = JSON.parse(seedFiles('test', tpl).get('mcp.json')!) as {
+      tools: { name: string; sql: string }[];
+    };
+    const tool = manifest.tools.find((t) => t.name === name);
+    expect(tool, `${tpl} mcp.json must define ${name}`).toBeTruthy();
+    return tool!.sql;
+  };
+
+  it('dashboard: update_item is scoped to the caller', () => {
+    expect(toolSql('dashboard', 'update_item')).toContain('user_id = :__user_id');
   });
 
-  it('dashboard: deleteItem requires userId', () => {
-    const db = seedFiles('test', 'dashboard').get('src/lib/db.ts')!;
-    expect(db).toMatch(/deleteItem\(userId.*id/);
-    expect(db).toContain('AND user_id = ?');
+  it('dashboard: delete_item is scoped to the caller', () => {
+    expect(toolSql('dashboard', 'delete_item')).toContain('user_id = :__user_id');
   });
 
-  it('organization: updateOrg checks admin role', () => {
-    const db = seedFiles('test', 'organization').get('src/lib/db.ts')!;
-    expect(db).toMatch(/updateOrg\(userId/);
-    expect(db).toContain("role = 'admin'");
-    expect(db).toContain('Not authorized');
+  it('organization: update_org carries an admin EXISTS guard', () => {
+    const sql = toolSql('organization', 'update_org');
+    expect(sql).toContain(':__user_id');
+    expect(sql).toContain("role = 'admin'");
+    expect(sql).toContain('EXISTS');
   });
 
-  it('organization: removeMember checks admin role', () => {
-    const db = seedFiles('test', 'organization').get('src/lib/db.ts')!;
-    expect(db).toMatch(/removeMember\(actorId/);
-    expect(db).toContain("role = 'admin'");
-    expect(db).toContain('Not authorized');
+  it('organization: remove_member carries an admin EXISTS guard', () => {
+    const sql = toolSql('organization', 'remove_member');
+    expect(sql).toContain(':__user_id');
+    expect(sql).toContain("role = 'admin'");
+    expect(sql).toContain('EXISTS');
   });
 
-  it('realtime: moveCard checks workspace membership', () => {
-    const db = seedFiles('test', 'realtime').get('src/lib/db.ts')!;
-    expect(db).toMatch(/moveCard\(.*userId.*workspaceId/);
-    expect(db).toContain('Not a workspace member');
+  it('realtime: move_card carries a workspace-membership EXISTS guard', () => {
+    const sql = toolSql('realtime', 'move_card');
+    expect(sql).toContain(':__user_id');
+    expect(sql).toContain('EXISTS');
   });
 
-  it('social: saveProfile uses authenticatedUserId, not client-supplied user_id', () => {
+  it('social: save_profile writes the caller identity server-side', () => {
+    expect(toolSql('social', 'save_profile')).toContain(':__user_id');
     const db = seedFiles('test', 'social').get('src/lib/db.ts')!;
-    expect(db).toMatch(/saveProfile\(authenticatedUserId/);
-    expect(db).not.toContain("saveProfile(p: Profile)");
+    // the client cannot supply an identity — the profile arg excludes user_id
+    expect(db).toContain("saveProfile(p: Omit<Profile, 'user_id'>)");
   });
 });
 
@@ -525,14 +532,22 @@ describe('templates enforce authorization on mutations', () => {
 
 describe('templates have no SQL injection vectors', () => {
   for (const tpl of TEMPLATES) {
-    it(`${tpl}: all SQL values use parameterized ? bindings`, () => {
+    it(`${tpl}: user data flows only through registered actions, never raw SQL`, () => {
       const db = seedFiles('test', tpl).get('src/lib/db.ts')!;
-      // No string interpolation in SQL (template literals with ${} inside SQL strings)
-      const sqlStrings = db.match(/(?:query|execute|batch)\s*\(/g);
-      expect(sqlStrings!.length).toBeGreaterThan(0);
-      // Ensure no raw concatenation of user values into SQL
-      expect(db).not.toMatch(/execute\([^)]*\$\{/);
-      expect(db).not.toMatch(/query\([^)]*\$\{/);
+      // Every tool's SQL is a fixed parameterized statement (:param bindings,
+      // no string interpolation), and the client data layer holds no raw SQL
+      // beyond the team-only migrate() call.
+      const manifest = JSON.parse(seedFiles('test', tpl).get('mcp.json')!) as {
+        tools: { name: string; sql: string }[];
+      };
+      expect(manifest.tools.length).toBeGreaterThan(0);
+      for (const tool of manifest.tools) {
+        expect(tool.sql, `${tpl}/${tool.name}`).not.toContain('\${');
+      }
+      expect(db).not.toContain('app.db.query');
+      expect(db).not.toContain('app.db.execute');
+      expect(db).not.toContain('app.db.batch');
+      expect(db).toContain('app.actions.call');
     });
   }
 });

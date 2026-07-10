@@ -4,6 +4,12 @@
  *
  * Features: stats overview, filterable item list, detail view,
  * create/edit forms, category-based organization.
+ *
+ * Data access: every user-facing read/write goes through registered actions
+ * (mcp.json → app.actions.call). Raw app.db SQL is restricted to the app's
+ * team by the platform, so seeding raw SQL would ship an app that 403s for
+ * every regular user. Identity comes from :__user_id server-side; every
+ * read and write is scoped to the caller's own rows in the SQL itself.
  */
 export function dashboardFiles(slug: string): Map<string, string> {
   const files = new Map<string, string>();
@@ -32,6 +38,85 @@ export interface Stats {
 }
 `);
 
+  files.set('mcp.json', `{
+  "tools": [
+    {
+      "name": "stats_by_status",
+      "description": "Item counts per status for the caller",
+      "operation": "query",
+      "sql": "SELECT status, COUNT(*) as c FROM items WHERE user_id = :__user_id GROUP BY status",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "stats_by_category",
+      "description": "Active item counts per category for the caller",
+      "operation": "query",
+      "sql": "SELECT category, COUNT(*) as count FROM items WHERE user_id = :__user_id AND status = 'active' GROUP BY category ORDER BY count DESC",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "list_items",
+      "description": "The caller's items, filtered by status/category/search, newest first",
+      "operation": "query",
+      "sql": "SELECT * FROM items WHERE user_id = :__user_id AND status = :status AND (:category IS NULL OR category = :category) AND (:search IS NULL OR title LIKE '%' || :search || '%' OR description LIKE '%' || :search || '%') ORDER BY created_at DESC LIMIT 100",
+      "params": {
+        "status": { "type": "string" },
+        "category": { "type": "string", "optional": true },
+        "search": { "type": "string", "optional": true }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "get_item",
+      "description": "One of the caller's items by id",
+      "operation": "query",
+      "sql": "SELECT * FROM items WHERE id = :id AND user_id = :__user_id",
+      "params": { "id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "create_item",
+      "description": "Create an item owned by the caller",
+      "operation": "execute",
+      "sql": "INSERT INTO items (id, user_id, title, description, category, priority, status, created_at, updated_at) VALUES (:id, :__user_id, :title, :description, :category, :priority, 'active', :__now, :__now)",
+      "params": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "priority": { "type": "string" }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "update_item",
+      "description": "Update fields on one of the caller's items (omitted fields keep their value)",
+      "operation": "execute",
+      "sql": "UPDATE items SET title = COALESCE(:title, title), description = COALESCE(:description, description), category = COALESCE(:category, category), priority = COALESCE(:priority, priority), status = COALESCE(:status, status), updated_at = :__now WHERE id = :id AND user_id = :__user_id",
+      "params": {
+        "id": { "type": "string" },
+        "title": { "type": "string", "optional": true },
+        "description": { "type": "string", "optional": true },
+        "category": { "type": "string", "optional": true },
+        "priority": { "type": "string", "optional": true },
+        "status": { "type": "string", "optional": true }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "delete_item",
+      "description": "Delete one of the caller's items",
+      "operation": "execute",
+      "sql": "DELETE FROM items WHERE id = :id AND user_id = :__user_id",
+      "params": { "id": { "type": "string" } },
+      "requires_auth": true
+    }
+  ]
+}
+`);
+
   files.set('src/lib/db.ts', `import { app } from './app'
 import type { Item, Stats } from '../types'
 
@@ -52,57 +137,71 @@ const MIGRATIONS = [
   }
 ]
 
-export async function migrate() { await app.db.migrate(MIGRATIONS) }
-
-export async function getStats(userId: string): Promise<Stats> {
-  const [totals, cats] = await Promise.all([
-    app.db.query<{ status: string; c: number }>('SELECT status, COUNT(*) as c FROM items WHERE user_id = ? GROUP BY status', [userId]),
-    app.db.query<{ category: string; count: number }>('SELECT category, COUNT(*) as count FROM items WHERE user_id = ? AND status = ? GROUP BY category ORDER BY count DESC', [userId, 'active']),
-  ])
-  const active = totals.rows.find((r) => r.status === 'active')?.c ?? 0
-  const archived = totals.rows.find((r) => r.status === 'archived')?.c ?? 0
-  return { total: active + archived, active, archived, byCategory: cats.rows }
+// Raw SQL (including migrate) is team-only on PAS. Regular users get a 403
+// here — that's fine: the schema is already applied, so swallow it and
+// continue. Every user-facing read/write below goes through registered
+// actions (mcp.json), never raw SQL.
+export async function migrate() {
+  try {
+    await app.db.migrate(MIGRATIONS)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (!message.includes('403')) throw err
+  }
 }
 
-export async function listItems(userId: string, opts?: { search?: string; category?: string; status?: string }) {
-  let sql = 'SELECT * FROM items WHERE user_id = ?'
-  const params: unknown[] = [userId]
-  if (opts?.status) { sql += ' AND status = ?'; params.push(opts.status) } else { sql += ' AND status = ?'; params.push('active') }
-  if (opts?.category) { sql += ' AND category = ?'; params.push(opts.category) }
-  if (opts?.search) { sql += ' AND (title LIKE ? OR description LIKE ?)'; params.push('%' + opts.search + '%', '%' + opts.search + '%') }
-  sql += ' ORDER BY created_at DESC LIMIT 100'
-  return (await app.db.query<Item>(sql, params)).rows
+async function q<T>(name: string, params: Record<string, unknown> = {}): Promise<T[]> {
+  const res = await app.actions.call<{ rows: T[] }>(name, params)
+  return res.rows
+}
+
+async function x(name: string, params: Record<string, unknown> = {}): Promise<void> {
+  await app.actions.call(name, params)
+}
+
+export async function getStats(): Promise<Stats> {
+  const [totals, cats] = await Promise.all([
+    q<{ status: string; c: number }>('stats_by_status'),
+    q<{ category: string; count: number }>('stats_by_category'),
+  ])
+  const active = totals.find((r) => r.status === 'active')?.c ?? 0
+  const archived = totals.find((r) => r.status === 'archived')?.c ?? 0
+  return { total: active + archived, active, archived, byCategory: cats }
+}
+
+export async function listItems(opts?: { search?: string; category?: string; status?: string }) {
+  return q<Item>('list_items', {
+    status: opts?.status ?? 'active',
+    category: opts?.category ?? null,
+    search: opts?.search ?? null,
+  })
 }
 
 export async function getItem(id: string) {
-  return (await app.db.query<Item>('SELECT * FROM items WHERE id = ?', [id])).rows[0] ?? null
+  return (await q<Item>('get_item', { id }))[0] ?? null
 }
 
-export async function createItem(userId: string, data: Pick<Item, 'title' | 'description' | 'category' | 'priority'>) {
+export async function createItem(data: Pick<Item, 'title' | 'description' | 'category' | 'priority'>) {
   const id = crypto.randomUUID()
-  const now = Date.now()
-  await app.db.execute(
-    'INSERT INTO items (id,user_id,title,description,category,priority,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
-    [id, userId, data.title, data.description, data.category, data.priority, 'active', now, now]
-  )
+  await x('create_item', {
+    id, title: data.title, description: data.description, category: data.category, priority: data.priority
+  })
   return id
 }
 
-export async function updateItem(userId: string, id: string, data: Partial<Pick<Item, 'title' | 'description' | 'category' | 'priority' | 'status'>>) {
-  const sets: string[] = []
-  const params: unknown[] = []
-  if (data.title !== undefined) { sets.push('title=?'); params.push(data.title) }
-  if (data.description !== undefined) { sets.push('description=?'); params.push(data.description) }
-  if (data.category !== undefined) { sets.push('category=?'); params.push(data.category) }
-  if (data.priority !== undefined) { sets.push('priority=?'); params.push(data.priority) }
-  if (data.status !== undefined) { sets.push('status=?'); params.push(data.status) }
-  sets.push('updated_at=?'); params.push(Date.now())
-  params.push(id); params.push(userId)
-  await app.db.execute('UPDATE items SET ' + sets.join(',') + ' WHERE id=? AND user_id=?', params)
+export async function updateItem(id: string, data: Partial<Pick<Item, 'title' | 'description' | 'category' | 'priority' | 'status'>>) {
+  await x('update_item', {
+    id,
+    title: data.title ?? null,
+    description: data.description ?? null,
+    category: data.category ?? null,
+    priority: data.priority ?? null,
+    status: data.status ?? null,
+  })
 }
 
-export async function deleteItem(userId: string, id: string) {
-  await app.db.execute('DELETE FROM items WHERE id = ? AND user_id = ?', [id, userId])
+export async function deleteItem(id: string) {
+  await x('delete_item', { id })
 }
 `);
 
@@ -138,7 +237,7 @@ export default function App() {
   useEffect(() => { const h = () => setRoute(parseHash()); window.addEventListener('hashchange', h); return () => window.removeEventListener('hashchange', h) }, [])
   useEffect(() => {
     if (!user) return
-    migrate().then(() => getStats(user.id)).then((s) => { setStats(s); setReady(true) })
+    migrate().then(() => getStats()).then((s) => { setStats(s); setReady(true) }).catch(() => setReady(true))
   }, [user])
 
   if (loading) return <div className="min-h-[100dvh] flex items-center justify-center text-muted">Loading...</div>
@@ -154,7 +253,7 @@ export default function App() {
   )
   if (!ready) return <div className="min-h-[100dvh] flex items-center justify-center text-muted">Setting up...</div>
 
-  const refreshStats = () => getStats(user.id).then(setStats)
+  const refreshStats = () => getStats().then(setStats)
 
   return (
     <div className="min-h-[100dvh] flex flex-col" data-theme={theme}>
@@ -233,7 +332,7 @@ export function ItemList({ userId }: { userId: string }) {
 
   useEffect(() => {
     setLoading(true)
-    listItems(userId, { search: search || undefined, category: category || undefined })
+    listItems({ search: search || undefined, category: category || undefined })
       .then(setItems).finally(() => setLoading(false))
   }, [search, category, userId])
 
@@ -288,12 +387,12 @@ export function ItemDetail({ id, userId, onUpdate }: { id: string; userId: strin
   if (!item) return <p className="text-muted">Loading...</p>
 
   const handleArchive = async () => {
-    await updateItem(userId, id, { status: item.status === 'active' ? 'archived' : 'active' })
+    await updateItem(id, { status: item.status === 'active' ? 'archived' : 'active' })
     onUpdate(); setItem(await getItem(id))
   }
 
   const handleDelete = async () => {
-    await deleteItem(userId, id); onUpdate(); window.location.hash = '#/list'
+    await deleteItem(id); onUpdate(); window.location.hash = '#/list'
   }
 
   return (
@@ -339,10 +438,10 @@ export function ItemForm({ userId, editId, onSave }: { userId: string; editId?: 
     if (!title.trim()) return
     setSaving(true)
     if (editId) {
-      await updateItem(userId, editId, { title, description, category, priority })
+      await updateItem(editId, { title, description, category, priority })
       onSave(); window.location.hash = '#/item/' + editId
     } else {
-      const newId = await createItem(userId, { title, description, category, priority })
+      const newId = await createItem({ title, description, category, priority })
       onSave(); window.location.hash = '#/item/' + newId
     }
   }

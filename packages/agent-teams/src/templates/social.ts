@@ -4,6 +4,12 @@
  *
  * Features: profile creation, discovery feed, mutual matching,
  * real-time chat via rooms, bottom tab navigation.
+ *
+ * Data access: every user-facing read/write goes through registered actions
+ * (mcp.json → app.actions.call). Raw app.db SQL is restricted to the app's
+ * team by the platform, so seeding raw SQL would ship an app that 403s for
+ * every regular user. Identity comes from :__user_id server-side; the
+ * connection-pair ordering (a_id < b_id) is computed in the SQL itself.
  */
 export function socialFiles(slug: string): Map<string, string> {
   const files = new Map<string, string>();
@@ -50,8 +56,96 @@ export type View =
   | 'profile'
 `);
 
+  files.set('mcp.json', `{
+  "tools": [
+    {
+      "name": "get_my_profile",
+      "description": "The caller's own profile",
+      "operation": "query",
+      "sql": "SELECT * FROM profiles WHERE user_id = :__user_id",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "save_profile",
+      "description": "Create or update the caller's profile",
+      "operation": "execute",
+      "sql": "INSERT INTO profiles (user_id, display_name, bio, avatar_url, interests, location, updated_at) VALUES (:__user_id, :display_name, :bio, :avatar_url, :interests, :location, :__now) ON CONFLICT(user_id) DO UPDATE SET display_name = :display_name, bio = :bio, avatar_url = :avatar_url, interests = :interests, location = :location, updated_at = :__now",
+      "params": {
+        "display_name": { "type": "string" },
+        "bio": { "type": "string", "optional": true },
+        "avatar_url": { "type": "string", "optional": true },
+        "interests": { "type": "string", "optional": true },
+        "location": { "type": "string", "optional": true }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_discover_profiles",
+      "description": "Profiles the caller hasn't swiped on yet, newest first",
+      "operation": "query",
+      "sql": "SELECT p.* FROM profiles p WHERE p.user_id != :__user_id AND p.user_id NOT IN (SELECT to_id FROM likes WHERE from_id = :__user_id) ORDER BY p.updated_at DESC LIMIT :limit",
+      "params": { "limit": { "type": "integer" } },
+      "requires_auth": true
+    },
+    {
+      "name": "like_user",
+      "description": "Record a swipe (like or pass) from the caller to another user",
+      "operation": "execute",
+      "sql": "INSERT OR IGNORE INTO likes (from_id, to_id, created_at) VALUES (:__user_id, :to_id, :__now)",
+      "params": { "to_id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "check_mutual_like",
+      "description": "Whether the target user has liked the caller back",
+      "operation": "query",
+      "sql": "SELECT from_id FROM likes WHERE from_id = :to_id AND to_id = :__user_id",
+      "params": { "to_id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "create_connection",
+      "description": "Connect the caller with another user (requires mutual likes)",
+      "operation": "execute",
+      "sql": "INSERT OR IGNORE INTO connections (a_id, b_id, created_at) SELECT CASE WHEN :__user_id < :other_id THEN :__user_id ELSE :other_id END, CASE WHEN :__user_id < :other_id THEN :other_id ELSE :__user_id END, :__now WHERE EXISTS (SELECT 1 FROM likes WHERE from_id = :__user_id AND to_id = :other_id) AND EXISTS (SELECT 1 FROM likes WHERE from_id = :other_id AND to_id = :__user_id)",
+      "params": { "other_id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "list_my_connections",
+      "description": "The caller's connections with the other party's profile, newest first",
+      "operation": "query",
+      "sql": "SELECT c.*, p.display_name, p.avatar_url, p.bio FROM connections c JOIN profiles p ON p.user_id = CASE WHEN c.a_id = :__user_id THEN c.b_id ELSE c.a_id END WHERE c.a_id = :__user_id OR c.b_id = :__user_id ORDER BY c.created_at DESC",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "list_messages",
+      "description": "Messages between the caller and another user, oldest first",
+      "operation": "query",
+      "sql": "SELECT * FROM messages WHERE connection_a = CASE WHEN :__user_id < :other_id THEN :__user_id ELSE :other_id END AND connection_b = CASE WHEN :__user_id < :other_id THEN :other_id ELSE :__user_id END ORDER BY created_at ASC LIMIT :limit",
+      "params": { "other_id": { "type": "string" }, "limit": { "type": "integer" } },
+      "requires_auth": true
+    },
+    {
+      "name": "send_message",
+      "description": "Send a message from the caller to another user",
+      "operation": "execute",
+      "sql": "INSERT INTO messages (id, connection_a, connection_b, sender_id, body, created_at) VALUES (:id, CASE WHEN :__user_id < :other_id THEN :__user_id ELSE :other_id END, CASE WHEN :__user_id < :other_id THEN :other_id ELSE :__user_id END, :__user_id, :body, :__now)",
+      "params": {
+        "id": { "type": "string" },
+        "other_id": { "type": "string" },
+        "body": { "type": "string" }
+      },
+      "requires_auth": true
+    }
+  ]
+}
+`);
+
   files.set('src/lib/db.ts', `import { app } from './app'
-import type { Profile, Connection, Message } from '../types'
+import type { Profile, ConnectionWithProfile, Message } from '../types'
 
 const MIGRATIONS = [
   {
@@ -82,68 +176,68 @@ const MIGRATIONS = [
   }
 ]
 
-export async function migrate() { await app.db.migrate(MIGRATIONS) }
-
-function sortIds(a: string, b: string): [string, string] {
-  return a < b ? [a, b] : [b, a]
+// Raw SQL (including migrate) is team-only on PAS. Regular users get a 403
+// here — that's fine: the schema is already applied, so swallow it and
+// continue. Every user-facing read/write below goes through registered
+// actions (mcp.json), never raw SQL.
+export async function migrate() {
+  try {
+    await app.db.migrate(MIGRATIONS)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (!message.includes('403')) throw err
+  }
 }
 
-export async function getProfile(userId: string) {
-  return (await app.db.query<Profile>('SELECT * FROM profiles WHERE user_id = ?', [userId])).rows[0] ?? null
+async function q<T>(name: string, params: Record<string, unknown> = {}): Promise<T[]> {
+  const res = await app.actions.call<{ rows: T[] }>(name, params)
+  return res.rows
 }
 
-export async function saveProfile(authenticatedUserId: string, p: Omit<Profile, 'user_id'>) {
-  await app.db.execute(
-    'INSERT INTO profiles (user_id,display_name,bio,avatar_url,interests,location,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET display_name=?,bio=?,avatar_url=?,interests=?,location=?,updated_at=?',
-    [authenticatedUserId, p.display_name, p.bio, p.avatar_url, p.interests, p.location, p.updated_at,
-     p.display_name, p.bio, p.avatar_url, p.interests, p.location, p.updated_at]
-  )
+async function x(name: string, params: Record<string, unknown> = {}): Promise<void> {
+  await app.actions.call(name, params)
 }
 
-export async function getDiscoverProfiles(userId: string, limit = 20) {
-  return (await app.db.query<Profile>(
-    'SELECT p.* FROM profiles p WHERE p.user_id != ? AND p.user_id NOT IN (SELECT to_id FROM likes WHERE from_id = ?) ORDER BY p.updated_at DESC LIMIT ?',
-    [userId, userId, limit]
-  )).rows
+export async function getMyProfile() {
+  return (await q<Profile>('get_my_profile'))[0] ?? null
 }
 
-export async function likeUser(fromId: string, toId: string): Promise<boolean> {
-  await app.db.execute('INSERT OR IGNORE INTO likes (from_id,to_id,created_at) VALUES (?,?,?)', [fromId, toId, Date.now()])
-  const mutual = (await app.db.query<{ from_id: string }>('SELECT from_id FROM likes WHERE from_id = ? AND to_id = ?', [toId, fromId])).rows
+export async function saveProfile(p: Omit<Profile, 'user_id'>) {
+  await x('save_profile', {
+    display_name: p.display_name, bio: p.bio, avatar_url: p.avatar_url,
+    interests: p.interests, location: p.location
+  })
+}
+
+export async function getDiscoverProfiles(limit = 20) {
+  return q<Profile>('list_discover_profiles', { limit })
+}
+
+export async function likeUser(toId: string): Promise<boolean> {
+  await x('like_user', { to_id: toId })
+  const mutual = await q<{ from_id: string }>('check_mutual_like', { to_id: toId })
   if (mutual.length > 0) {
-    const [a, b] = sortIds(fromId, toId)
-    await app.db.execute('INSERT OR IGNORE INTO connections (a_id,b_id,created_at) VALUES (?,?,?)', [a, b, Date.now()])
+    await x('create_connection', { other_id: toId })
     return true
   }
   return false
 }
 
-export async function passUser(fromId: string, toId: string) {
-  await app.db.execute('INSERT OR IGNORE INTO likes (from_id,to_id,created_at) VALUES (?,?,?)', [fromId, toId, Date.now()])
+export async function passUser(toId: string) {
+  await x('like_user', { to_id: toId })
 }
 
-export async function getConnections(userId: string) {
-  return (await app.db.query<ConnectionWithProfile>(
-    'SELECT c.*, p.display_name, p.avatar_url, p.bio FROM connections c JOIN profiles p ON p.user_id = CASE WHEN c.a_id = ? THEN c.b_id ELSE c.a_id END WHERE c.a_id = ? OR c.b_id = ? ORDER BY c.created_at DESC',
-    [userId, userId, userId]
-  )).rows
+export async function getConnections() {
+  return q<ConnectionWithProfile>('list_my_connections')
 }
 
-export async function getMessages(userId: string, otherId: string, limit = 100) {
-  const [a, b] = sortIds(userId, otherId)
-  return (await app.db.query<Message>(
-    'SELECT * FROM messages WHERE connection_a = ? AND connection_b = ? ORDER BY created_at ASC LIMIT ?',
-    [a, b, limit]
-  )).rows
+export async function getMessages(otherId: string, limit = 100) {
+  return q<Message>('list_messages', { other_id: otherId, limit })
 }
 
-export async function sendMessage(senderId: string, otherId: string, body: string) {
-  const [a, b] = sortIds(senderId, otherId)
+export async function sendMessage(otherId: string, body: string) {
   const id = crypto.randomUUID()
-  await app.db.execute(
-    'INSERT INTO messages (id,connection_a,connection_b,sender_id,body,created_at) VALUES (?,?,?,?,?,?)',
-    [id, a, b, senderId, body, Date.now()]
-  )
+  await x('send_message', { id, other_id: otherId, body })
   return id
 }
 `);
@@ -152,7 +246,7 @@ export async function sendMessage(senderId: string, otherId: string, body: strin
 import { useProAuth, useTheme } from '@proappstore/sdk/hooks'
 import { ThemeToggle } from '@proappstore/sdk/ui'
 import { app } from './lib/app'
-import { migrate, getProfile, saveProfile } from './lib/db'
+import { migrate, getMyProfile, saveProfile } from './lib/db'
 import { Discover } from './pages/Discover'
 import { Connections } from './pages/Connections'
 import { Chat } from './pages/Chat'
@@ -169,13 +263,13 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return
-    migrate().then(() => getProfile(user.id)).then((p) => {
+    migrate().then(() => getMyProfile()).then((p) => {
       if (p) { setProfile(p); setReady(true) }
       else {
         const newP = { display_name: user.login, bio: '', avatar_url: user.avatarUrl, interests: '', location: '', updated_at: Date.now() }
-        saveProfile(user.id, newP).then(() => { setProfile({ user_id: user.id, ...newP }); setReady(true) })
+        return saveProfile(newP).then(() => { setProfile({ user_id: user.id, ...newP }); setReady(true) })
       }
-    })
+    }).catch(() => setReady(true))
   }, [user])
 
   if (loading) return <div className="min-h-[100dvh] flex items-center justify-center text-muted">Loading...</div>
@@ -205,7 +299,7 @@ export default function App() {
         {view === 'discover' && <Discover userId={user.id} />}
         {view === 'connections' && <Connections userId={user.id} onOpenChat={openChat} />}
         {view === 'chat' && chatWith && <Chat userId={user.id} otherId={chatWith} onBack={() => setView('connections')} />}
-        {view === 'profile' && profile && <ProfileEdit profile={profile} onSave={(p) => { saveProfile(user.id, p); setProfile({ user_id: user.id, ...p }) }} />}
+        {view === 'profile' && profile && <ProfileEdit profile={profile} onSave={(p) => { saveProfile(p); setProfile({ user_id: user.id, ...p }) }} />}
       </main>
       <nav className="sticky bottom-0 border-t border-[var(--line)] bg-[var(--paper)]">
         <div className="max-w-lg mx-auto flex">
@@ -231,19 +325,19 @@ export function Discover({ userId }: { userId: string }) {
   const [idx, setIdx] = useState(0)
   const [matched, setMatched] = useState(false)
 
-  useEffect(() => { getDiscoverProfiles(userId).then(setProfiles) }, [userId])
+  useEffect(() => { getDiscoverProfiles().then(setProfiles) }, [userId])
 
   const current = profiles[idx]
   if (!current) return <div className="empty-state"><h3>No more profiles</h3><p>Check back later for new people.</p></div>
 
   const handleLike = async () => {
-    const isMatch = await likeUser(userId, current.user_id)
+    const isMatch = await likeUser(current.user_id)
     if (isMatch) { setMatched(true); setTimeout(() => setMatched(false), 2000) }
     setIdx(idx + 1)
   }
 
   const handlePass = async () => {
-    await passUser(userId, current.user_id)
+    await passUser(current.user_id)
     setIdx(idx + 1)
   }
 
@@ -275,7 +369,7 @@ import type { ConnectionWithProfile } from '../types'
 export function Connections({ userId, onOpenChat }: { userId: string; onOpenChat: (id: string) => void }) {
   const [conns, setConns] = useState<ConnectionWithProfile[]>([])
 
-  useEffect(() => { getConnections(userId).then(setConns) }, [userId])
+  useEffect(() => { getConnections().then(setConns) }, [userId])
 
   if (conns.length === 0) return <div className="empty-state"><h3>No connections yet</h3><p>Like profiles to make connections.</p></div>
 
@@ -313,7 +407,7 @@ export function Chat({ userId, otherId, onBack }: { userId: string; otherId: str
   const endRef = useRef<HTMLDivElement>(null)
   const roomRef = useRef<ReturnType<typeof app.rooms.join> | null>(null)
 
-  const load = () => getMessages(userId, otherId).then(setMessages)
+  const load = () => getMessages(otherId).then(setMessages)
   useEffect(() => { load() }, [userId, otherId])
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
@@ -330,7 +424,7 @@ export function Chat({ userId, otherId, onBack }: { userId: string; otherId: str
     if (!text.trim()) return
     const body = text.trim()
     setText('')
-    await sendMessage(userId, otherId, body)
+    await sendMessage(otherId, body)
     roomRef.current?.send({ kind: 'message' })
     load()
   }

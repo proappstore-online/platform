@@ -4,6 +4,12 @@
  *
  * Features: browse with search/filter, detail page, create listing,
  * saved listings, applications/bookings.
+ *
+ * Data access: every user-facing read/write goes through registered actions
+ * (mcp.json → app.actions.call). Raw app.db SQL is restricted to the app's
+ * team by the platform, so seeding raw SQL would ship an app that 403s for
+ * every regular user. Identity comes from :__user_id server-side; privileged
+ * reads (listing applications) carry owner EXISTS guards in the SQL itself.
  */
 export function marketplaceFiles(slug: string): Map<string, string> {
   const files = new Map<string, string>();
@@ -31,6 +37,98 @@ export interface Application {
   message: string
   status: 'pending' | 'accepted' | 'rejected'
   created_at: number
+}
+`);
+
+  files.set('mcp.json', `{
+  "tools": [
+    {
+      "name": "list_listings",
+      "description": "Active listings, newest first, with optional search and category filter",
+      "operation": "query",
+      "sql": "SELECT * FROM listings WHERE status = 'active' AND (:category IS NULL OR category = :category) AND (:search IS NULL OR title LIKE '%' || :search || '%' OR description LIKE '%' || :search || '%') ORDER BY created_at DESC LIMIT 50",
+      "params": {
+        "search": { "type": "string", "optional": true },
+        "category": { "type": "string", "optional": true }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "get_listing",
+      "description": "One listing by id",
+      "operation": "query",
+      "sql": "SELECT * FROM listings WHERE id = :id",
+      "params": { "id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "create_listing",
+      "description": "Create a listing owned by the caller",
+      "operation": "execute",
+      "sql": "INSERT INTO listings (id, user_id, title, description, category, location, price, status, created_at) VALUES (:id, :__user_id, :title, :description, :category, :location, :price, 'active', :__now)",
+      "params": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string", "optional": true },
+        "category": { "type": "string", "optional": true },
+        "location": { "type": "string", "optional": true },
+        "price": { "type": "integer" }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_my_listings",
+      "description": "The caller's own listings, newest first",
+      "operation": "query",
+      "sql": "SELECT * FROM listings WHERE user_id = :__user_id ORDER BY created_at DESC",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "save_listing",
+      "description": "Save a listing for the caller",
+      "operation": "execute",
+      "sql": "INSERT OR IGNORE INTO saved_listings (user_id, listing_id, saved_at) VALUES (:__user_id, :listing_id, :__now)",
+      "params": { "listing_id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "unsave_listing",
+      "description": "Remove a listing from the caller's saved list",
+      "operation": "execute",
+      "sql": "DELETE FROM saved_listings WHERE user_id = :__user_id AND listing_id = :listing_id",
+      "params": { "listing_id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "list_saved_listings",
+      "description": "Listings the caller has saved, most recently saved first",
+      "operation": "query",
+      "sql": "SELECT l.* FROM listings l JOIN saved_listings s ON s.listing_id = l.id WHERE s.user_id = :__user_id ORDER BY s.saved_at DESC",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "apply_to_listing",
+      "description": "Apply to a listing as the caller",
+      "operation": "execute",
+      "sql": "INSERT INTO applications (id, user_id, listing_id, message, status, created_at) VALUES (:id, :__user_id, :listing_id, :message, 'pending', :__now)",
+      "params": {
+        "id": { "type": "string" },
+        "listing_id": { "type": "string" },
+        "message": { "type": "string", "optional": true }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_applications",
+      "description": "Applications for a listing (listing owner only), newest first",
+      "operation": "query",
+      "sql": "SELECT a.* FROM applications a WHERE a.listing_id = :listing_id AND EXISTS (SELECT 1 FROM listings l WHERE l.id = :listing_id AND l.user_id = :__user_id) ORDER BY a.created_at DESC",
+      "params": { "listing_id": { "type": "string" } },
+      "requires_auth": true
+    }
+  ]
 }
 `);
 
@@ -63,54 +161,66 @@ const MIGRATIONS = [
   }
 ]
 
-export async function migrate() { await app.db.migrate(MIGRATIONS) }
+// Raw SQL (including migrate) is team-only on PAS. Regular users get a 403
+// here — that's fine: the schema is already applied, so swallow it and
+// continue. Every user-facing read/write below goes through registered
+// actions (mcp.json), never raw SQL.
+export async function migrate() {
+  try {
+    await app.db.migrate(MIGRATIONS)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (!message.includes('403')) throw err
+  }
+}
+
+async function q<T>(name: string, params: Record<string, unknown> = {}): Promise<T[]> {
+  const res = await app.actions.call<{ rows: T[] }>(name, params)
+  return res.rows
+}
+
+async function x(name: string, params: Record<string, unknown> = {}): Promise<void> {
+  await app.actions.call(name, params)
+}
 
 export async function listListings(opts?: { search?: string; category?: string }) {
-  let sql = 'SELECT * FROM listings WHERE status = ?'
-  const params: unknown[] = ['active']
-  if (opts?.category) { sql += ' AND category = ?'; params.push(opts.category) }
-  if (opts?.search) { sql += ' AND (title LIKE ? OR description LIKE ?)'; params.push('%' + opts.search + '%', '%' + opts.search + '%') }
-  sql += ' ORDER BY created_at DESC LIMIT 50'
-  return (await app.db.query<Listing>(sql, params)).rows
+  return q<Listing>('list_listings', { search: opts?.search ?? null, category: opts?.category ?? null })
 }
 
 export async function getListing(id: string) {
-  return (await app.db.query<Listing>('SELECT * FROM listings WHERE id = ?', [id])).rows[0] ?? null
+  return (await q<Listing>('get_listing', { id }))[0] ?? null
 }
 
-export async function createListing(userId: string, data: Pick<Listing, 'title' | 'description' | 'category' | 'location' | 'price'>) {
+export async function createListing(data: Pick<Listing, 'title' | 'description' | 'category' | 'location' | 'price'>) {
   const id = crypto.randomUUID()
-  await app.db.execute(
-    'INSERT INTO listings (id,user_id,title,description,category,location,price,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-    [id, userId, data.title, data.description, data.category, data.location, data.price, 'active', Date.now()]
-  )
+  await x('create_listing', { id, title: data.title, description: data.description, category: data.category, location: data.location, price: data.price })
   return id
 }
 
-export async function getMyListings(userId: string) {
-  return (await app.db.query<Listing>('SELECT * FROM listings WHERE user_id = ? ORDER BY created_at DESC', [userId])).rows
+export async function getMyListings() {
+  return q<Listing>('list_my_listings')
 }
 
-export async function saveListing(userId: string, listingId: string) {
-  await app.db.execute('INSERT OR IGNORE INTO saved_listings (user_id,listing_id,saved_at) VALUES (?,?,?)', [userId, listingId, Date.now()])
+export async function saveListing(listingId: string) {
+  await x('save_listing', { listing_id: listingId })
 }
 
-export async function unsaveListing(userId: string, listingId: string) {
-  await app.db.execute('DELETE FROM saved_listings WHERE user_id = ? AND listing_id = ?', [userId, listingId])
+export async function unsaveListing(listingId: string) {
+  await x('unsave_listing', { listing_id: listingId })
 }
 
-export async function getSavedListings(userId: string) {
-  return (await app.db.query<Listing>('SELECT l.* FROM listings l JOIN saved_listings s ON s.listing_id = l.id WHERE s.user_id = ? ORDER BY s.saved_at DESC', [userId])).rows
+export async function getSavedListings() {
+  return q<Listing>('list_saved_listings')
 }
 
-export async function applyToListing(userId: string, listingId: string, message: string) {
+export async function applyToListing(listingId: string, message: string) {
   const id = crypto.randomUUID()
-  await app.db.execute('INSERT INTO applications (id,user_id,listing_id,message,status,created_at) VALUES (?,?,?,?,?,?)', [id, userId, listingId, message, 'pending', Date.now()])
+  await x('apply_to_listing', { id, listing_id: listingId, message })
   return id
 }
 
 export async function getApplications(listingId: string) {
-  return (await app.db.query<Application>('SELECT * FROM applications WHERE listing_id = ? ORDER BY created_at DESC', [listingId])).rows
+  return q<Application>('list_applications', { listing_id: listingId })
 }
 `);
 
@@ -141,7 +251,7 @@ export default function App() {
   const [ready, setReady] = useState(false)
 
   useEffect(() => { const h = () => setRoute(parseHash()); window.addEventListener('hashchange', h); return () => window.removeEventListener('hashchange', h) }, [])
-  useEffect(() => { if (user) migrate().then(() => setReady(true)) }, [user])
+  useEffect(() => { if (user) migrate().then(() => setReady(true)).catch(() => setReady(true)) }, [user])
 
   if (loading) return <div className="min-h-[100dvh] flex items-center justify-center text-muted">Loading...</div>
   if (!user) return (
@@ -197,8 +307,8 @@ export function Browse({ userId, savedOnly, myOnly }: { userId: string; savedOnl
 
   useEffect(() => {
     setLoading(true)
-    const load = savedOnly ? () => getSavedListings(userId)
-      : myOnly ? () => getMyListings(userId)
+    const load = savedOnly ? () => getSavedListings()
+      : myOnly ? () => getMyListings()
       : () => listListings({ search: search || undefined, category: category || undefined })
     load().then(setItems).finally(() => setLoading(false))
   }, [search, category, savedOnly, myOnly, userId])
@@ -258,12 +368,12 @@ export function Detail({ id, userId }: { id: string; userId: string }) {
 
   const isOwner = listing.user_id === userId
   const toggleSave = async () => {
-    if (saved) { await unsaveListing(userId, id); setSaved(false) }
-    else { await saveListing(userId, id); setSaved(true) }
+    if (saved) { await unsaveListing(id); setSaved(false) }
+    else { await saveListing(id); setSaved(true) }
   }
 
   const handleApply = async () => {
-    await applyToListing(userId, id, message)
+    await applyToListing(id, message)
     setApplied(true)
   }
 
@@ -311,7 +421,7 @@ export function Create({ userId }: { userId: string }) {
     e.preventDefault()
     if (!title.trim()) return
     setSaving(true)
-    const id = await createListing(userId, { title, description, category, location: loc, price })
+    const id = await createListing({ title, description, category, location: loc, price })
     window.location.hash = '#/listing/' + id
   }
 
