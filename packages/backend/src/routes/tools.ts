@@ -135,8 +135,10 @@ export async function replaceAppTools(
   if (!tools || !Array.isArray(tools)) {
     return { status: 400, payload: { error: 'tools array required' } };
   }
-  if (tools.length > 50) {
-    return { status: 400, payload: { error: 'max 50 tools per app' } };
+  // Abuse bound, not a design target. Data-heavy apps register one tool per
+  // parameterized statement (chess-academy needs ~80), so 50 was too tight.
+  if (tools.length > 120) {
+    return { status: 400, payload: { error: 'max 120 tools per app' } };
   }
   for (const tool of tools as ToolManifest[]) {
     const err = validateManifest(tool);
