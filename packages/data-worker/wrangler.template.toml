@@ -15,3 +15,9 @@ API_BASE = "https://api.proappstore.online"
 binding = "DB"
 database_name = "pas-data-__APP_ID__"
 database_id = "__DB_ID__"
+
+# Auth calls to the platform API must use a service binding — same-zone
+# subrequests bypass the route-mapped API worker (see deploy-worker.ts).
+[[services]]
+binding = "API"
+service = "proappstore-api"

@@ -65,6 +65,10 @@ export async function deployDataWorker(
       // platform /v1/apps endpoint (a valid session alone must NOT grant SQL
       // access to another app's DB).
       { type: 'plain_text', name: 'API_BASE', text: 'https://api.proappstore.online' },
+      // The auth call MUST go over a service binding: api.proappstore.online is
+      // a route, and same-zone Worker subrequests bypass route-mapped Workers,
+      // so a plain fetch() fails and the fail-closed check 403s every caller.
+      { type: 'service', name: 'API', service: 'proappstore-api', environment: 'production' },
       { type: 'secret_text' as const, name: 'SESSION_SIGNING_KEY', text: sessionSigningKey },
       // Lets the data-worker trust the platform actions-executor (prepared,
       // role-checked SQL). Omitted when empty so the worker still boots — the

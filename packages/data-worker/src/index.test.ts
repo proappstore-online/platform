@@ -1,23 +1,22 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./index.js";
 
 const TEST_SK = 'test-signing-key';
 const API_BASE = 'https://api.test';
 
-// requireUser authorizes the caller against APP_ID by calling GET {API_BASE}/v1/apps.
-// Mock it to return the set of app ids the caller owns; default authorizes "test-app".
+// requireUser authorizes the caller against APP_ID by calling GET {API_BASE}/v1/apps
+// over the API service binding. Mock the binding to return the set of app ids the
+// caller owns; default authorizes "test-app".
 let ownedAppIds: string[] = ['test-app'];
-beforeEach(() => {
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-    if (String(input) === `${API_BASE}/v1/apps`) {
-      return new Response(JSON.stringify({ apps: ownedAppIds.map((id) => ({ id })) }), { status: 200 });
-    }
-    return new Response('not found', { status: 404 });
-  }));
+const apiFetch = vi.fn(async (input: RequestInfo | URL) => {
+  if (String(input) === `${API_BASE}/v1/apps`) {
+    return new Response(JSON.stringify({ apps: ownedAppIds.map((id) => ({ id })) }), { status: 200 });
+  }
+  return new Response('not found', { status: 404 });
 });
 afterEach(() => {
-  vi.unstubAllGlobals();
   ownedAppIds = ['test-app'];
+  apiFetch.mockClear();
 });
 
 /** Inline token minting (data-worker has no build-core dep). */
@@ -64,6 +63,7 @@ function makeEnv(db = mockD1(), internalToken?: string) {
     SESSION_SIGNING_KEY: TEST_SK,
     API_BASE,
     ...(internalToken ? { INTERNAL_TOKEN: internalToken } : {}),
+    API: { fetch: apiFetch } as unknown as Fetcher,
   };
 }
 
@@ -139,8 +139,7 @@ describe("Internal token path (trusted actions-executor)", () => {
     }, makeEnv(db, INTERNAL_TOKEN));
     expect(res.status).toBe(200);
     // the trusted path must NOT call the platform ownership endpoint
-    const calls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls.some((c) => String(c[0]) === `${API_BASE}/v1/apps`)).toBe(false);
+    expect(apiFetch.mock.calls.some((c) => String(c[0]) === `${API_BASE}/v1/apps`)).toBe(false);
   });
 
   it("falls through to the session check when X-Internal-Token is wrong (401 without bearer)", async () => {

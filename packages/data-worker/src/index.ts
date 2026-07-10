@@ -17,6 +17,11 @@ interface Env {
    *  is inert and every request falls back to the session+ownership check
    *  (fail-closed). */
   INTERNAL_TOKEN?: string;
+  /** Service binding to the platform API worker (proappstore-api). Required:
+   *  api.proappstore.online is a route-mapped hostname, and same-zone Worker
+   *  subrequests bypass route-mapped Workers entirely — a plain fetch() never
+   *  reaches the API and the fail-closed auth check 403s every caller. */
+  API: Fetcher;
 }
 
 interface FasUser {
@@ -112,7 +117,7 @@ async function requireUser(c: { req: { header(name: string): string | undefined 
   // Fail closed on any error.
   let authorized = false;
   try {
-    const res = await fetch(`${c.env.API_BASE}/v1/apps`, {
+    const res = await c.env.API.fetch(`${c.env.API_BASE}/v1/apps`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) {
