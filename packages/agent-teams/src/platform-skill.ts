@@ -54,10 +54,21 @@ Free primitives (capped): \`app.kv\` (per-user key/value), realtime \`app.rooms\
 user's keys from the vault — keys never touch client code).
 
 Pro primitives (read_docs has exact return shapes — check before assuming fields):
-- App actions (preferred for user-facing app data): define operations in root \`mcp.json\` and call
+- App actions (REQUIRED for user-facing app data — raw \`app.db\` SQL is restricted to the app's
+  team, so regular users get 403 on it): define operations in root \`mcp.json\` and call
   \`app.actions.call<T>(name, params?)\`. PAS authenticates the user, enforces declared role metadata,
   injects \`:__user_id\`/\`:__now\`/\`:__uuid\`, and executes prepared SQL through the app data worker.
-- DB (per-app SQLite/D1, low-level/migrations/trusted tooling): \`app.db.execute(sql, params?)\` → \`{ meta: { changes, duration, last_row_id } }\`
+  - The tool SQL IS the security boundary — every action is directly callable by any signed-in
+    user. Scope self-writes with \`user_id = :__user_id\`; guard privileged writes with an EXISTS
+    subquery on the app's own role table checking \`:__user_id\`; derive granted privileges from
+    server rows (INSERT...SELECT FROM the grant row), never from client params. One-shot grant
+    guards (e.g. "has an accepted invite") must be consumed/revoked, or they replay forever.
+  - Multi-step flows that must not be observable half-applied use \`"operation": "batch"\` with
+    \`"statements": [...]\` (max 25, one shared params pool) — executed as ONE atomic D1 transaction.
+  - Registration warns on write statements with no \`:__user_id\` — treat warnings as bugs unless
+    the statement is deliberately unscoped (e.g. consuming an unguessable one-time code).
+- DB (per-app SQLite/D1, migrations + team-only tooling — NOT for user-facing reads/writes):
+  \`app.db.execute(sql, params?)\` → \`{ meta: { changes, duration, last_row_id } }\`
   (snake_case \`last_row_id\`, and NO \`.rows\`); \`app.db.query<T>(sql, params?)\` → \`{ rows: T[]; meta }\`
   (pass \`<T>\` or rows are \`unknown\`); \`app.db.batch(stmts)\`, tenant scoping
   \`app.db.tenant(id).insert(table, row)\` / \`.findMany(table)\`.

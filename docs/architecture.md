@@ -172,13 +172,36 @@ needs its own data plane, the backend creates the app D1 database and deploys a
 PAS `SESSION_SIGNING_KEY` injected as a secret. The data worker verifies caller
 sessions locally; it does not call a separate auth service for every request.
 
-Browser-facing app data should use registered app actions, not arbitrary raw SQL
+Browser-facing app data uses registered app actions, not arbitrary raw SQL
 from the browser. Actions are declared in `mcp.json`, stored in the platform
 `app_tools` table, executed through `/v1/apps/:appId/actions/:name`, and then
 forwarded as prepared SQL to the app data worker. The action executor injects
 the verified PAS user id and enforces declared platform/app roles before any app
-SQL runs. The low-level `app.db` raw SQL API remains for legacy apps and
-controlled migration work, but it is not the target permission boundary.
+SQL runs. The low-level `app.db` raw SQL API is restricted by the data worker to
+the app's team (creator + team members) — it is the schema/admin escape hatch,
+not a user-facing permission boundary. See
+[app actions security](/app-actions-security) for the guard idioms and the
+atomic batch-tool form.
+
+### Same-zone subrequests: service bindings are MANDATORY
+
+Cloudflare does not route a Worker's `fetch()` to another Worker whose hostname
+is a **route** on the same zone — the request silently goes to the origin DNS
+record instead. On 2026-07-10 this took down every app's data plane: the data
+worker's authorization fetch to `api.proappstore.online` never arrived, and the
+fail-closed check returned 403 to every caller.
+
+Rules, enforced across the codebase:
+
+- Any worker→worker call within `proappstore.online` goes over a **service
+  binding** (`[[services]]` in wrangler.toml, `env.NAME.fetch(...)`). This
+  includes a worker calling its own route-mapped hostname (backend uses a
+  `SELF` binding for internal re-entry).
+- Workers **custom domains** (the `data-<app>` hostnames) ARE reachable by
+  subrequests — that asymmetry is why host→data works while data→api did not.
+- Pages origins (the storefront apex) are also reachable by subrequests.
+- Current bindings: host→API, data-workers→API, mcp→API/AGENTS/ADMIN/HOST,
+  agent-teams→PAS_BACKEND/ADMIN/KB, backend→SELF.
 
 ## Database
 

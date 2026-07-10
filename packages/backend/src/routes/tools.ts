@@ -169,6 +169,25 @@ export async function replaceAppTools(
     if (err) return { status: 400, payload: { error: `tool "${tool?.name}": ${err}` } };
   }
 
+  // Security lint (non-blocking): a write statement with no :__user_id has
+  // neither identity scoping nor a caller guard — any signed-in user can run
+  // it against arbitrary rows. Legitimate exceptions exist (e.g. consuming a
+  // join code by its unguessable id), so this warns rather than rejects; the
+  // deploy workflow surfaces the warnings in the run log.
+  const warnings: string[] = [];
+  for (const tool of tools as ToolManifest[]) {
+    const stmts = tool.operation === 'batch' ? (tool.statements ?? []) : [tool.sql ?? ''];
+    for (const stmt of stmts) {
+      const upper = stmt.trim().toUpperCase();
+      const isWrite = upper.startsWith('UPDATE') || upper.startsWith('DELETE') || upper.startsWith('INSERT');
+      if (isWrite && !stmt.includes(':__user_id')) {
+        warnings.push(
+          `${tool.name}: write statement has no :__user_id — no identity scoping or caller guard; any signed-in user can run it`,
+        );
+      }
+    }
+  }
+
   const now = Date.now();
   const stmts = [
     db.prepare('DELETE FROM app_tools WHERE app_id = ?').bind(appId),
@@ -179,7 +198,10 @@ export async function replaceAppTools(
     ),
   ];
   await db.batch(stmts);
-  return { status: 200, payload: { ok: true, registered: tools.length } };
+  return {
+    status: 200,
+    payload: { ok: true, registered: tools.length, ...(warnings.length ? { warnings } : {}) },
+  };
 }
 
 // ── PUT /v1/apps/:appId/tools — bulk register tools from mcp.json ──

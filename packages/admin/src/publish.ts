@@ -143,6 +143,7 @@ jobs:
             --data-binary @mcp.json)
           if echo "$RESP" | jq -e '.ok == true' >/dev/null; then
             echo "Registered $(echo "$RESP" | jq -r '.registered') app tool(s)"
+            echo "$RESP" | jq -r '.warnings[]? | "::warning::mcp.json: " + .'
           else
             echo "::error::tools registration failed: $(echo "$RESP" | jq -c '.error // .')"; exit 1
           fi
