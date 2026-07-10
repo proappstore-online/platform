@@ -59,14 +59,16 @@ export class PasMcpAgent extends McpAgent<Env> {
       () => ({ userId: this.userId, token: this.userToken }),
       this.env.INTERNAL_TOKEN ?? null,
       this.env.AGENTS_BASE,
+      this.env.AGENTS,
     );
 
     // ── Load and register app tools dynamically ────────────────
-    const appTools = await fetchTools(this.env.API_BASE);
+    const appTools = await fetchTools(this.env.API, this.env.API_BASE);
     const registered = registerAppTools(
       this.server,
       appTools,
       () => ({ userId: this.userId, token: this.userToken }),
+      this.env.API,
       this.env.API_BASE,
       this.env,
     );

@@ -48,10 +48,14 @@ const fakeServer = {
 // Import and register
 const { registerProjectTools } = await import('./project-tools.js');
 
+const svc = { fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) } as unknown as Fetcher;
+
 const env = {
   GITHUB_ORG: 'test-org',
   GITHUB_TOKEN: 'gh-tok',
   API_BASE: 'https://api.test.com',
+  API: svc,
+  ADMIN: svc,
   R2_ACCESS_KEY_ID: 'r2-ak',
   R2_SECRET_ACCESS_KEY: 'r2-sk',
   R2_ACCOUNT_ID: 'r2-acct',

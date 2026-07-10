@@ -2,6 +2,13 @@ export interface Env {
   API_BASE: string;
   /** Agent Teams API base (the autonomous build loop). e.g. https://agents.proappstore.online */
   AGENTS_BASE: string;
+  /** Service bindings to sibling Workers. Same-zone subrequests bypass
+   *  route-mapped Workers, so all api/agents/admin/host calls must go
+   *  through these instead of plain fetch(). */
+  API: Fetcher;
+  AGENTS: Fetcher;
+  ADMIN: Fetcher;
+  HOST: Fetcher;
   GITHUB_ORG: string;
   GITHUB_TOKEN: string;
   /** Shared secret for service-to-service calls to the agents Worker. */

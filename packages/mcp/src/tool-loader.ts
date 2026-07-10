@@ -41,13 +41,13 @@ let cachedTools: AppTool[] | null = null;
 let cacheTime = 0;
 const CACHE_TTL = 60_000;
 
-export async function fetchTools(apiBase: string): Promise<AppTool[]> {
+export async function fetchTools(api: Fetcher, apiBase: string): Promise<AppTool[]> {
   const now = Date.now();
   if (cachedTools && now - cacheTime < CACHE_TTL) return cachedTools;
 
   let res: Response;
   try {
-    res = await fetch(`${apiBase}/v1/tools`);
+    res = await api.fetch(`${apiBase}/v1/tools`);
   } catch (err) {
     console.error(`Failed to fetch tools (network):`, err);
     return cachedTools ?? [];
@@ -74,6 +74,7 @@ export async function executeToolCall(
   tool: AppTool,
   args: Record<string, unknown>,
   userToken: string | null,
+  api: Fetcher,
   apiBase: string,
 ): Promise<string> {
   if (!userToken) {
@@ -82,7 +83,7 @@ export async function executeToolCall(
 
   let res: Response;
   try {
-    res = await fetch(`${apiBase}/v1/apps/${encodeURIComponent(tool.app_id)}/actions/${encodeURIComponent(tool.name)}`, {
+    res = await api.fetch(`${apiBase}/v1/apps/${encodeURIComponent(tool.app_id)}/actions/${encodeURIComponent(tool.name)}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${userToken}`,
@@ -152,6 +153,7 @@ export function registerAppTools(
   server: McpServer,
   tools: AppTool[],
   getUserContext: () => { userId: string | null; token: string | null },
+  api: Fetcher,
   apiBase: string,
   env: SafetyEnv,
 ): string[] {
@@ -172,7 +174,7 @@ export function registerAppTools(
         if (tool.operation === 'execute') {
           await gateMutation({ env, subject: userId }, toolName, { app_id: tool.app_id });
         }
-        const result = await executeToolCall(tool, args as Record<string, unknown>, token, apiBase);
+        const result = await executeToolCall(tool, args as Record<string, unknown>, token, api, apiBase);
         return { content: [{ type: 'text' as const, text: result }] };
       },
     );

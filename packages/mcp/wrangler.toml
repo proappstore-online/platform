@@ -22,6 +22,25 @@ AUTH_START = "https://api.proappstore.online/v1/auth/github/start"
 pattern = "mcp.proappstore.online/*"
 zone_name = "proappstore.online"
 
+# Sibling Workers MUST be called over service bindings: same-zone subrequests
+# bypass route-mapped Workers (they go to the origin DNS record instead), so a
+# plain fetch("https://api.proappstore.online/…") never reaches the API worker.
+[[services]]
+binding = "API"
+service = "proappstore-api"
+
+[[services]]
+binding = "AGENTS"
+service = "proappstore-agent-teams"
+
+[[services]]
+binding = "ADMIN"
+service = "proappstore-admin"
+
+[[services]]
+binding = "HOST"
+service = "proappstore-host"
+
 [[kv_namespaces]]
 binding = "OAUTH_KV"
 id = "125418919bd640dcb3c45a7687b27162"

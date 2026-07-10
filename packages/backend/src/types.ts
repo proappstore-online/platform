@@ -1,5 +1,8 @@
 export interface Env {
   DB: D1Database;
+  /** Self service binding — internal re-entry into this worker's own routes
+   *  (same-zone subrequests bypass the api.proappstore.online route). */
+  SELF: Fetcher;
   /** Shared R2 bucket for file storage. Files keyed as {appId}/{userId}/{path}. */
   STORAGE: R2Bucket;
   /** Durable Object namespace for realtime rooms. */

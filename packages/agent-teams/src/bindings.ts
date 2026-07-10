@@ -14,6 +14,10 @@ export type Bindings = {
   /** Service binding to the PAS admin Worker — for the agent deploy flow
    *  (repo create + file push + registry). */
   ADMIN?: Fetcher;
+  /** Service binding to the KB host Worker (kb.proappstore.online is a route,
+   *  and same-zone subrequests bypass route-mapped Workers). Optional so local
+   *  dev without the binding degrades to skipping test-result harvest. */
+  KB?: Fetcher;
   SESSION_SIGNING_KEY: string;
   PAS_API_BASE: string;
   /**

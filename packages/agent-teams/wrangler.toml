@@ -81,3 +81,10 @@ service = "proappstore-api"
 [[services]]
 binding = "ADMIN"
 service = "proappstore-admin"
+
+# Service binding to the KB host — the deploy stage reads /.e2e/summary.json
+# from kb.proappstore.online, which is route-mapped (same-zone subrequests
+# bypass route-mapped Workers, so a plain fetch never reaches it).
+[[services]]
+binding = "KB"
+service = "proappstore-kb-host"

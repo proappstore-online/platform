@@ -7,6 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 async function agentsApi(
+  agents: Fetcher,
   agentsBase: string,
   path: string,
   userToken: string | null,
@@ -20,7 +21,7 @@ async function agentsApi(
   } else {
     return { ok: false, status: 401, data: { error: "no auth available" } };
   }
-  const res = await fetch(`${agentsBase}${path}`, { headers });
+  const res = await agents.fetch(`${agentsBase}${path}`, { headers });
   let data: unknown;
   try {
     data = await res.json();
@@ -39,6 +40,7 @@ export function registerAgentsTools(
   getUserContext: () => { userId: string | null; token: string | null },
   internalToken: string | null,
   agentsBase: string,
+  agents: Fetcher,
 ): void {
   server.tool(
     "agent_project_status",
@@ -46,7 +48,7 @@ export function registerAgentsTools(
     { app_id: z.string().describe("App ID (slug)") },
     async ({ app_id }) => {
       const { token } = getUserContext();
-      const r = await agentsApi(agentsBase, `/v1/projects/${app_id}`, token, internalToken);
+      const r = await agentsApi(agents, agentsBase, `/v1/projects/${app_id}`, token, internalToken);
       if (!r.ok) {
         if (r.status === 404) return txt(`No agent team found for "${app_id}".`);
         return txt(`Error: ${r.status} ${JSON.stringify(r.data)}`);
@@ -71,8 +73,8 @@ export function registerAgentsTools(
     async ({ app_id }) => {
       const { token } = getUserContext();
       const [projR, ticketsR] = await Promise.all([
-        agentsApi(agentsBase, `/v1/projects/${app_id}`, token, internalToken),
-        agentsApi(agentsBase, `/v1/projects/${app_id}/tickets`, token, internalToken),
+        agentsApi(agents, agentsBase, `/v1/projects/${app_id}`, token, internalToken),
+        agentsApi(agents, agentsBase, `/v1/projects/${app_id}/tickets`, token, internalToken),
       ]);
       if (!projR.ok) return txt(`Error fetching project: ${projR.status}`);
       if (!ticketsR.ok) return txt(`Error fetching tickets: ${ticketsR.status}`);
@@ -126,7 +128,7 @@ export function registerAgentsTools(
     },
     async ({ app_id, last }) => {
       const { token } = getUserContext();
-      const r = await agentsApi(agentsBase, `/v1/projects/${app_id}/activity`, token, internalToken);
+      const r = await agentsApi(agents, agentsBase, `/v1/projects/${app_id}/activity`, token, internalToken);
       if (!r.ok) return txt(`Error: ${r.status}`);
 
       let entries = ((r.data as { activity: unknown[] }).activity ?? []) as Array<{
@@ -152,7 +154,7 @@ export function registerAgentsTools(
     },
     async ({ app_id, ticket_seq }) => {
       const { token } = getUserContext();
-      const ticketsR = await agentsApi(agentsBase, `/v1/projects/${app_id}/tickets`, token, internalToken);
+      const ticketsR = await agentsApi(agents, agentsBase, `/v1/projects/${app_id}/tickets`, token, internalToken);
       if (!ticketsR.ok) return txt(`Error: ${ticketsR.status}`);
       const tickets = ((ticketsR.data as { tickets: unknown[] }).tickets ?? []) as Array<{
         id: string; seq: number; title: string; status: string;
@@ -162,7 +164,7 @@ export function registerAgentsTools(
       const ticket = tickets.find((t) => t.seq === ticket_seq);
       if (!ticket) return txt(`Ticket #${ticket_seq} not found.`);
 
-      const msgsR = await agentsApi(agentsBase, `/v1/projects/${app_id}/tickets/${ticket.id}/messages`, token, internalToken);
+      const msgsR = await agentsApi(agents, agentsBase, `/v1/projects/${app_id}/tickets/${ticket.id}/messages`, token, internalToken);
       const messages = msgsR.ok
         ? (((msgsR.data as { messages: unknown[] }).messages ?? []) as Array<{
             id: string; author: string; body: string; createdAt: number;
@@ -192,7 +194,7 @@ export function registerAgentsTools(
     { app_id: z.string().describe("App ID (slug)") },
     async ({ app_id }) => {
       const { token } = getUserContext();
-      const r = await agentsApi(agentsBase, `/v1/projects/${app_id}/cost`, token, internalToken);
+      const r = await agentsApi(agents, agentsBase, `/v1/projects/${app_id}/cost`, token, internalToken);
       if (!r.ok) return txt(`Error: ${r.status}`);
       return txt(JSON.stringify(r.data, null, 2));
     },

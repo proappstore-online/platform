@@ -20,6 +20,8 @@ const text = (s: string): Text => ({ content: [{ type: "text" as const, text: s 
 
 interface LoopEnv {
   AGENTS_BASE: string;
+  /** Service binding to the agents Worker — same-zone subrequests bypass its route. */
+  AGENTS: Fetcher;
   OAUTH_KV?: KVNamespace;
   MCP_READ_ONLY?: string;
   SESSION_SIGNING_KEY?: string;
@@ -61,7 +63,7 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
       await audit(ctx, { tool: `loop:${method} ${path}`, action: "invoked", body: init?.body });
     }
 
-    const res = await fetch(`${base}${path}`, {
+    const res = await env.AGENTS.fetch(`${base}${path}`, {
       method,
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       ...(init?.body ? { body: JSON.stringify(init.body) } : {}),

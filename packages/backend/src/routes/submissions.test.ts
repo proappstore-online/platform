@@ -41,6 +41,9 @@ function makeEnv(db?: ReturnType<typeof mockD1>, overrides: EnvOverrides = {}) {
     ADMIN_GITHUB_IDS: overrides.ADMIN_GITHUB_IDS,
     // Stub ADMIN binding — approve handler checks for it, mocked
     ADMIN: { fetch: vi.fn() } as unknown as Fetcher,
+    // SELF binding (internal /v1/provision re-entry) delegates to the
+    // globalThis.fetch stub so mockProvisionFetch keeps working.
+    SELF: { fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) } as unknown as Fetcher,
   };
 }
 

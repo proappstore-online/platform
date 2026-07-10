@@ -30,10 +30,10 @@ export async function getDeployStatus(org: string, appId: string, ghToken?: stri
   }));
 }
 
-export async function pasApi(apiBase: string, path: string, token?: string) {
+export async function pasApi(api: Fetcher, apiBase: string, path: string, token?: string) {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${apiBase}${path}`, { headers });
+  const res = await api.fetch(`${apiBase}${path}`, { headers });
   if (!res.ok) return { error: `API ${res.status}: ${await res.text()}` };
   return await res.json();
 }

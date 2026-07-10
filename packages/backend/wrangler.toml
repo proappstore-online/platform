@@ -51,6 +51,13 @@ new_classes = ["Room"]
 pattern = "api.proappstore.online/*"
 zone_name = "proappstore.online"
 
+# Self service binding — a Worker's fetch() to its own route-mapped hostname
+# never reaches it (same-zone subrequests bypass route-mapped Workers), so
+# internal re-entry (submissions-review → /v1/provision) goes through SELF.
+[[services]]
+binding = "SELF"
+service = "proappstore-api"
+
 # PAS provisioning is fully self-contained in packages/backend/src/routes/
 # provision.ts — see ADR notes there. The legacy [[services]] binding to
 # freeappstore-admin (binding name ADMIN) was removed 2026-05-28 per

@@ -21,7 +21,7 @@ export function registerPlatformTools(server: McpServer, env: Env) {
     "List your published apps on ProAppStore. Requires a session token.",
     { token: z.string().describe("PAS session token") },
     async ({ token }) => {
-      const data = (await pasApi(env.API_BASE, "/v1/apps", token)) as {
+      const data = (await pasApi(env.API, env.API_BASE, "/v1/apps", token)) as {
         apps?: Array<{ id: string; name: string; category: string | null; description: string | null }>;
         error?: string;
       };
@@ -67,7 +67,9 @@ export function registerPlatformTools(server: McpServer, env: Env) {
 
       let status: string;
       try {
-        const check = await fetch(liveUrl, { method: "HEAD" });
+        // App hostnames are served by the route-mapped host worker — a plain
+        // same-zone fetch would bypass it and report a false status.
+        const check = await env.HOST.fetch(liveUrl, { method: "HEAD" });
         status = check.ok ? "Live (200)" : `Down (${check.status})`;
       } catch {
         status = "Down (unreachable)";
@@ -131,7 +133,7 @@ export function registerPlatformTools(server: McpServer, env: Env) {
     "List all app data tools available on ProAppStore. Shows tools grouped by app with descriptions and parameters.",
     {},
     async () => {
-      const tools = await fetchTools(env.API_BASE);
+      const tools = await fetchTools(env.API, env.API_BASE);
       if (tools.length === 0) {
         return { content: [{ type: "text" as const, text: "No app tools registered yet. Apps can expose tools by adding an mcp.json manifest." }] };
       }

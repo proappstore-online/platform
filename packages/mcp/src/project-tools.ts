@@ -16,6 +16,9 @@ interface ProjectToolsEnv {
   GITHUB_ORG: string;
   GITHUB_TOKEN: string;
   API_BASE: string;
+  /** Service bindings — same-zone subrequests bypass route-mapped Workers. */
+  API: Fetcher;
+  ADMIN: Fetcher;
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;
   R2_ACCOUNT_ID?: string;
@@ -83,7 +86,7 @@ export function registerProjectTools(
   /** Call /v1/provision and format the step results. */
   async function provision(appId: string, token: string): Promise<string> {
     try {
-      const res = await fetch(`${apiBase}/v1/provision`, {
+      const res = await env.API.fetch(`${apiBase}/v1/provision`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ appId, skipCompliance: true, repoOwner: org, repoName: appId }),
@@ -328,7 +331,7 @@ export function registerProjectTools(
         error?: string;
       };
       try {
-        const res = await fetch(`${adminBase.origin}/api/publish-app`, {
+        const res = await env.ADMIN.fetch(`${adminBase.origin}/api/publish-app`, {
           method: "POST",
           headers: { Authorization: `Bearer ${auth.token}`, "Content-Type": "application/json" },
           body: JSON.stringify({

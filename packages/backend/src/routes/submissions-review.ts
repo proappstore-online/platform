@@ -89,7 +89,7 @@ export function registerReviewRoutes(
 
       let provisionResult: unknown = null;
       try {
-        const provRes = await fetch(`https://api.proappstore.online/v1/provision`, {
+        const provRes = await c.env.SELF.fetch(`https://api.proappstore.online/v1/provision`, {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${token}`,

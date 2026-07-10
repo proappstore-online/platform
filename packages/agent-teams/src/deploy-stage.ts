@@ -349,7 +349,10 @@ async function harvestTestResults(
   sha: string | undefined,
 ): Promise<void> {
   try {
-    const res = await fetch(`https://kb.proappstore.online/${proj.slug}/.e2e/summary.json`);
+    // kb.proappstore.online is route-mapped — a plain same-zone fetch bypasses
+    // the kb-host worker entirely, so this must go over the KB service binding.
+    if (!deps.env.KB) return;
+    const res = await deps.env.KB.fetch(`https://kb.proappstore.online/${proj.slug}/.e2e/summary.json`);
     if (!res.ok) return; // no summary published (e.g. no e2e tests yet)
 
     const summary = await res.json() as {
