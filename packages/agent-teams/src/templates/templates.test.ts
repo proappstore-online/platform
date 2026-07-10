@@ -483,7 +483,7 @@ describe('templates use window.location.hash for writes in JSX', () => {
 // ── Authorization: mutations check ownership ───────────────────────
 
 describe('templates enforce authorization on mutations (in the registered-action SQL)', () => {
-  const toolSql = (tpl: string, name: string): string => {
+  const toolSql = (tpl: TemplateType, name: string): string => {
     const manifest = JSON.parse(seedFiles('test', tpl).get('mcp.json')!) as {
       tools: { name: string; sql: string }[];
     };
