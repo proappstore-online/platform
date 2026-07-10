@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { verifyGithubOidc } from '../lib/github-oidc.js';
+import { replaceAppTools } from './tools.js';
 
 /**
  * Keyless deploy credentials.
@@ -120,4 +121,39 @@ deployRoutes.post('/apps/:appId/deploy-credentials', async (c) => {
     repository: claims.repository,
     sha: claims.sha ?? null,
   });
+});
+
+/**
+ * Keyless tools registration: the deploy workflow ships the repo's mcp.json
+ * here so registered actions never drift from the committed manifest. Same
+ * trust model as deploy-credentials — the VERIFIED `repository` claim must be
+ * this org's repo named exactly the app id, deploying from main.
+ */
+deployRoutes.put('/apps/:appId/tools/oidc', async (c) => {
+  const appId = c.req.param('appId');
+  if (!/^[a-z][a-z0-9-]*$/.test(appId) || appId.length > 58) {
+    return c.json({ error: 'invalid app id' }, 400);
+  }
+
+  const auth = c.req.header('Authorization') || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  if (!token) return c.json({ error: 'missing OIDC token' }, 401);
+
+  let claims;
+  try {
+    claims = await verifyGithubOidc(token, { audience: AUDIENCE });
+  } catch (e) {
+    return c.json({ error: `OIDC verification failed: ${(e as Error).message}` }, 401);
+  }
+
+  if (claims.repository !== `${ORG}/${appId}`) {
+    return c.json({ error: `repository ${claims.repository} is not authorized for app ${appId}` }, 403);
+  }
+  if (claims.ref !== DEPLOY_REF) {
+    return c.json({ error: `ref ${claims.ref ?? '(none)'} not authorized — deploys must run from ${DEPLOY_REF}` }, 403);
+  }
+
+  const body = await c.req.json<{ tools?: unknown }>().catch(() => null);
+  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools ?? []);
+  return c.json(payload, status as 200 | 400);
 });

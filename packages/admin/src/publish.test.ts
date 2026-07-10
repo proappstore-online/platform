@@ -204,7 +204,9 @@ describe("deploy-workflow injection (agent path)", () => {
     expect(wf, "an R2 deploy workflow blob should be pushed").toBeTruthy();
     expect(wf).toContain("s3://pas-apps/apps/");
     expect(wf).toContain("if [ -d web/dist ]"); // adaptive: web/dist OR dist
-    expect(wf).toContain("R2_ACCESS_KEY_ID"); // R2 credentials (secrets || vars)
+    expect(wf).toContain("deploy-credentials"); // keyless: OIDC → platform-minted R2 creds
+    expect(wf).toContain("id-token: write"); // OIDC permission for the keyless mint
+    expect(wf).toContain("tools/oidc"); // mcp.json re-registered on every deploy
     expect(wf).toContain("--no-frozen-lockfile"); // agents commit no lockfile
     expect(wf).not.toContain("cache: pnpm"); // no lockfile committed → cache:pnpm would hard-fail setup-node
     expect(wf).toContain("npx playwright test"); // behavioural gate runs after deploy

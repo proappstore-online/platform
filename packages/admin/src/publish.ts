@@ -48,8 +48,11 @@ on:
   push:
     branches: [main]
 
+# Keyless deploy: the runner mints a GitHub OIDC token (no stored secret) and
+# exchanges it at the platform for short-lived, prefix-scoped R2 credentials.
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: deploy-\${{ github.repository }}
@@ -89,17 +92,55 @@ jobs:
             [ -f .vibe-check/badge.svg ] && cp .vibe-check/badge.svg "\${{ steps.dist.outputs.dir }}/.vcqa/badge.svg" || true
           fi
 
+      - name: Mint deploy credentials (keyless — GitHub OIDC → platform)
+        run: |
+          # 1. Ask GitHub for an OIDC token scoped to the platform audience.
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \\
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.proappstore.online" | jq -r '.value')
+          if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then echo "::error::could not obtain OIDC token"; exit 1; fi
+          # 2. Exchange it for short-lived, prefix-scoped R2 credentials.
+          RESP=$(curl -sS -X POST \\
+            "https://api.proappstore.online/v1/apps/\${{ github.event.repository.name }}/deploy-credentials" \\
+            -H "Authorization: Bearer $OIDC")
+          AKID=$(echo "$RESP" | jq -r '.accessKeyId // empty')
+          if [ -z "$AKID" ]; then echo "::error::deploy-credentials failed: $(echo "$RESP" | jq -c '.error // .')"; exit 1; fi
+          # 3. Export masked, ephemeral creds for the upload step.
+          echo "::add-mask::$(echo "$RESP" | jq -r '.secretAccessKey')"
+          echo "::add-mask::$(echo "$RESP" | jq -r '.sessionToken')"
+          {
+            echo "AWS_ACCESS_KEY_ID=$AKID"
+            echo "AWS_SECRET_ACCESS_KEY=$(echo "$RESP" | jq -r '.secretAccessKey')"
+            echo "AWS_SESSION_TOKEN=$(echo "$RESP" | jq -r '.sessionToken')"
+            echo "R2_ENDPOINT=$(echo "$RESP" | jq -r '.endpoint')"
+          } >> "$GITHUB_ENV"
+
       - name: Upload to R2
         env:
-          AWS_ACCESS_KEY_ID: \${{ secrets.R2_ACCESS_KEY_ID || vars.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: \${{ secrets.R2_SECRET_ACCESS_KEY || vars.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
-          R2_ACCOUNT_ID: \${{ secrets.R2_ACCOUNT_ID || vars.R2_ACCOUNT_ID }}
         run: |
           aws s3 sync "\${{ steps.dist.outputs.dir }}" "s3://pas-apps/apps/\${{ github.event.repository.name }}/" \\
-            --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" \\
+            --endpoint-url "$R2_ENDPOINT" \\
             --delete --no-progress
           echo "Deployed apps/\${{ github.event.repository.name }} from \${{ github.sha }}"
+
+      - name: Register app tools (mcp.json -> platform, keyless)
+        if: hashFiles('mcp.json') != ''
+        run: |
+          # Registered actions must never drift from the committed manifest:
+          # re-register mcp.json on every deploy, authorized by the same
+          # verified GitHub OIDC claims as the deploy-credentials mint.
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \\
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.proappstore.online" | jq -r '.value')
+          if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then echo "::error::could not obtain OIDC token"; exit 1; fi
+          RESP=$(curl -sS -X PUT \\
+            "https://api.proappstore.online/v1/apps/\${{ github.event.repository.name }}/tools/oidc" \\
+            -H "Authorization: Bearer $OIDC" -H "Content-Type: application/json" \\
+            --data-binary @mcp.json)
+          if echo "$RESP" | jq -e '.ok == true' >/dev/null; then
+            echo "Registered $(echo "$RESP" | jq -r '.registered') app tool(s)"
+          else
+            echo "::error::tools registration failed: $(echo "$RESP" | jq -c '.error // .')"; exit 1
+          fi
 
   # Behavioural gate: drive the LIVE app in a real browser (the thing tsc/build
   # can't check). Runs after deploy; a failure fails the run, so the deploy

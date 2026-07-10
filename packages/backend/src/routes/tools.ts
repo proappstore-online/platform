@@ -127,7 +127,7 @@ function isStringArray(value: unknown): value is string[] {
  * internal POST (Agent Teams deploy stage). Returns a status + payload the
  * caller hands straight back as JSON.
  */
-async function replaceAppTools(
+export async function replaceAppTools(
   db: D1Database,
   appId: string,
   tools: unknown,
