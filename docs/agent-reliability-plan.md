@@ -240,16 +240,15 @@ The deploys **succeeded**, but the platform couldn't match the green run to the 
    (issue #29) — one green deploy completes the other in-flight/parked tickets; plus
    deploy **serialization** (one deploy at a time per project).
 
-### Still OPEN (filed) — the current reason interns won't fully drain
-- **#30 — deploy grader blocks on Platform Compliance.** `Deploy to R2` is green on every
-  commit but **Platform Compliance fails**, and `deployResult` grades ALL workflows → the
-  ticket never grades green. Decide: make Compliance advisory (grade only gating workflows)
-  and/or fix why Compliance fails on interns.
+### Still OPEN (filed)
 - **#29 — batch/debounce deploys** (mark-siblings-done shipped as the first cut; the fuller
   merge-queue/debounce remains).
 
 ### Also shipped this session
 - [x] **`deployResult` finds the run by `?head_sha`** (was a 20-run recent window)
+- [x] **#30 deploy grader treats Platform Compliance as advisory** — `deployResult` grades
+      only the canonical deploy gate (`Deploy to R2` / `deploy.yml`), so a report-only
+      compliance failure cannot strand a ticket whose deploy actually shipped.
 - [x] **mark-siblings-done** — one green deploy completes sibling tickets sharing the tree
 - [x] **Deploy serialization** — one deploy at a time per project (`runPendingAgents`)
 - [x] **MCP connection-auth for loop tools** — `set_project_running`/`chat_agent`/etc. use

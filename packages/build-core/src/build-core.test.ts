@@ -94,6 +94,110 @@ describe('makeGitHub', () => {
     expect(res.commitSha).toBe('c');
     expect(refReads).toBeGreaterThanOrEqual(2); // initial 404 + at least one poll
   });
+
+  it('deployResult ignores advisory compliance failures when the deploy gate is green', async () => {
+    const sha = 'a'.repeat(40);
+    mockFetch((url) => {
+      expect(url).toContain(`head_sha=${sha}`);
+      return {
+        body: {
+          workflow_runs: [
+            {
+              id: 1,
+              name: 'Platform Compliance',
+              path: '.github/workflows/compliance.yml',
+              status: 'completed',
+              conclusion: 'failure',
+              head_sha: sha,
+              html_url: 'https://runs/compliance',
+            },
+            {
+              id: 2,
+              name: 'Deploy to R2',
+              path: '.github/workflows/deploy.yml',
+              status: 'completed',
+              conclusion: 'success',
+              head_sha: sha,
+              html_url: 'https://runs/deploy',
+            },
+          ],
+        },
+      };
+    });
+    const gh = makeGitHub('t', 'org');
+    const res = await gh.deployResult('interns', { sha });
+    expect(res).toMatchObject({
+      ok: true,
+      status: 'completed',
+      conclusion: 'success',
+      sha: sha.slice(0, 7),
+      url: 'https://runs/deploy',
+    });
+  });
+
+  it('deployResult still blocks when the deploy gate fails', async () => {
+    const sha = 'b'.repeat(40);
+    mockFetch((url) => {
+      if (url.endsWith('/actions/runs/2/jobs')) return { body: { jobs: [] } };
+      return {
+        body: {
+          workflow_runs: [
+            {
+              id: 1,
+              name: 'Platform Compliance',
+              path: '.github/workflows/compliance.yml',
+              status: 'completed',
+              conclusion: 'success',
+              head_sha: sha,
+              html_url: 'https://runs/compliance',
+            },
+            {
+              id: 2,
+              name: 'Deploy to R2',
+              path: '.github/workflows/deploy.yml',
+              status: 'completed',
+              conclusion: 'failure',
+              head_sha: sha,
+              html_url: 'https://runs/deploy',
+            },
+          ],
+        },
+      };
+    });
+    const gh = makeGitHub('t', 'org');
+    const res = await gh.deployResult('interns', { sha });
+    expect(res).toMatchObject({
+      ok: false,
+      status: 'completed',
+      conclusion: 'failure',
+      sha: sha.slice(0, 7),
+      url: 'https://runs/deploy',
+    });
+  });
+
+  it('deployResult stays pending when only advisory workflows exist for a commit', async () => {
+    const sha = 'c'.repeat(40);
+    mockFetch(() => ({
+      body: {
+        workflow_runs: [
+          {
+            id: 1,
+            name: 'Platform Compliance',
+            path: '.github/workflows/compliance.yml',
+            status: 'completed',
+            conclusion: 'success',
+            head_sha: sha,
+            html_url: 'https://runs/compliance',
+          },
+        ],
+      },
+    }));
+    const gh = makeGitHub('t', 'org');
+    const res = await gh.deployResult('interns', { sha, waitMs: 0 });
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe('pending');
+    expect(res.errorTail).toContain('no deploy workflow run registered');
+  });
 });
 
 describe('verifyAppOwnership', () => {

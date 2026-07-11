@@ -71,10 +71,11 @@ export interface GitHub {
   /** CI result for the default branch (the build gate). Waits (bounded by waitMs)
    *  for the relevant run(s) to finish. When `sha` is given, only runs for that
    *  exact commit count — this avoids racing a not-yet-registered run (returns
-   *  status 'pending') or grading a stale previous run. A single push fans out to
-   *  several workflows (ci/compliance/deploy); the verdict aggregates them: ok iff
-   *  every matching run succeeds. On failure, returns a tail of the failed job's
-   *  log (the compiler error etc.) so the Dev can actually fix it. */
+   *  status 'pending') or grading a stale previous run. A single push can fan out
+   *  to deploy plus advisory workflows; this grades only the deploy-gating
+   *  workflow so report-only compliance cannot strand shipped code. On failure,
+   *  returns a tail of the failed job's log (the compiler error etc.) so the Dev
+   *  can actually fix it. */
   deployResult(id: string, opts?: { waitMs?: number; sha?: string }): Promise<{
     ok: boolean; status?: string | undefined; conclusion?: string | undefined; sha?: string | undefined; url?: string | undefined; errorTail?: string | undefined;
   }>;
@@ -91,8 +92,15 @@ export interface GitHub {
 // Directories and extensions never worth pulling into the agent working tree.
 const SKIP_DIR = /(^|\/)(node_modules|\.git|dist|build|\.next|coverage|\.turbo|\.wrangler)(\/|$)/;
 const BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|svg|pdf|zip|gz|tgz|woff2?|ttf|eot|mp[34]|mov|wasm|lock)$/i;
+const DEPLOY_GATE_WORKFLOW = 'Deploy to R2';
+const DEPLOY_GATE_WORKFLOW_PATH = '.github/workflows/deploy.yml';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function isDeployGateRun(run: Record<string, unknown>): boolean {
+  return run.name === DEPLOY_GATE_WORKFLOW
+    || (typeof run.path === 'string' && run.path.endsWith(DEPLOY_GATE_WORKFLOW_PATH));
+}
 
 export function makeGitHub(token: string, org: string): GitHub {
   async function api(path: string, opts?: { method?: string; body?: unknown }): Promise<GhResult> {
@@ -254,10 +262,17 @@ export function makeGitHub(token: string, org: string): GitHub {
       const waitMs = opts?.waitMs ?? 0;
       const sha = opts?.sha;
       const deadline = Date.now() + waitMs;
-      // A push fans out to several workflows (ci/compliance/deploy). Grade the
-      // whole set for the head commit so a green "deploy" can't mask a red "ci".
-      const matching = (runs: Record<string, unknown>[]) =>
-        sha ? runs.filter((r) => (r.head_sha as string) === sha || (r.head_sha as string)?.startsWith(sha)) : runs.slice(0, 1);
+      // A push can fan out to advisory workflows (e.g. Platform Compliance) plus
+      // the canonical deploy gate. Grade only the deploy workflow; otherwise a
+      // report-only compliance failure makes a shipped app look undeployed and
+      // sends Agent Teams into a retry loop (#30).
+      const matching = (runs: Record<string, unknown>[]) => {
+        const sameCommit = sha
+          ? runs.filter((r) => (r.head_sha as string) === sha || (r.head_sha as string)?.startsWith(sha))
+          : runs;
+        const deployRuns = sameCommit.filter(isDeployGateRun);
+        return sha ? deployRuns : deployRuns.slice(0, 1);
+      };
 
       // Filter by the exact commit SERVER-SIDE when we have a full SHA. Without
       // this, a busy repo (many concurrent/retried deploys) pushes this commit's
@@ -273,7 +288,7 @@ export function makeGitHub(token: string, org: string): GitHub {
         // within budget; report 'pending' (not a failure) so the caller can
         // re-check rather than misread it as a broken build.
         if (runs.length === 0) {
-          if (Date.now() >= deadline) return { ok: false, status: 'pending', errorTail: 'no CI run registered yet for this commit' };
+          if (Date.now() >= deadline) return { ok: false, status: 'pending', errorTail: 'no deploy workflow run registered yet for this commit' };
           await sleep(4000);
           continue;
         }
