@@ -357,7 +357,7 @@ describe('GET /apps/:appId/schema-status', () => {
 
 describe('GET /migrations/reconcile', () => {
   const SK = TEST_SK;
-  const STATUS_ENV = { DB: mockDB, SESSION_SIGNING_KEY: SK } as never;
+  const STATUS_ENV = { DB: mockDB, SESSION_SIGNING_KEY: SK, INTERNAL_TOKEN: 'internal-secret' } as never;
 
   afterEach(() => { selectResults = () => ({}); });
 
@@ -424,9 +424,25 @@ describe('GET /migrations/reconcile', () => {
     expect(body.apps[0]!.state).toBe('ok');
   });
 
+  it('allows the scheduled internal-token report path', async () => {
+    selectResults = (sql) => sql.includes('FROM apps a')
+      ? { all: { results: [{ app_id: 'broken-app', creator_id: 'gh:3', source: 'internal', status: 'failed', applied: JSON.stringify([]), already: null, detail: 'boom', ran_at: 200 }] } }
+      : {};
+    const res = await call({ 'X-Internal-Token': 'internal-secret' });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { counts: { failed: number }; apps: Array<{ appId: string }> };
+    expect(body.counts.failed).toBe(1);
+    expect(body.apps[0]!.appId).toBe('broken-app');
+  });
+
   it('rejects non-admin users', async () => {
     const res = await call({ Authorization: `Bearer ${await testToken('gh:5')}` });
     expect(res.status).toBe(403);
+  });
+
+  it('rejects missing auth even when internal token is configured', async () => {
+    const res = await call();
+    expect(res.status).toBe(401);
   });
 });
 

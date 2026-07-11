@@ -1,0 +1,81 @@
+name: Reconcile app migrations
+
+# Fleet signal for platform#35. The backend records every deploy-time migration
+# attempt in migration_audit; this scheduled job turns unresolved failures into
+# a visible Actions failure while leaving no-history apps as warnings.
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_ok:
+        description: "Include healthy apps in the uploaded JSON report."
+        required: false
+        default: "false"
+  schedule:
+    - cron: "43 * * * *" # hourly, offset from reconcile-app-secrets
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reconcile-migrations
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    env:
+      INTERNAL_TOKEN: ${{ secrets.INTERNAL_TOKEN }}
+      INCLUDE_OK: ${{ github.event.inputs.include_ok || 'false' }}
+    steps:
+      - name: Query migration reconcile report
+        run: |
+          set -euo pipefail
+
+          test -n "$INTERNAL_TOKEN" || { echo "::error::INTERNAL_TOKEN not set"; exit 1; }
+
+          url="https://api.proappstore.online/v1/migrations/reconcile"
+          if [ "$INCLUDE_OK" = "true" ]; then
+            url="${url}?includeOk=true"
+          fi
+
+          curl -fsS "$url" \
+            -H "X-Internal-Token: $INTERNAL_TOKEN" \
+            -H "Accept: application/json" \
+            -o migration-reconcile.json
+
+          failed="$(jq -r '.counts.failed' migration-reconcile.json)"
+          no_history="$(jq -r '.counts.noHistory' migration-reconcile.json)"
+          ok_included="$(jq -r '.counts.okIncluded' migration-reconcile.json)"
+
+          {
+            echo "## Migration reconcile"
+            echo
+            echo "| State | Count |"
+            echo "| --- | ---: |"
+            echo "| failed | ${failed} |"
+            echo "| no_history | ${no_history} |"
+            echo "| ok_included | ${ok_included} |"
+            echo
+            echo "Generated at: $(jq -r '.generatedAt' migration-reconcile.json)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$failed" -gt 0 ]; then
+            echo "::error::${failed} app(s) have unresolved migration failures."
+            echo "Failed apps:"
+            jq -r '.apps[] | select(.state=="failed") | "- \(.appId): \(.last.detail // "no detail")"' migration-reconcile.json
+            exit 1
+          fi
+
+          if [ "$no_history" -gt 0 ]; then
+            echo "::warning::${no_history} app(s) have no migration audit history."
+            echo "Apps with no migration history:"
+            jq -r '.apps[] | select(.state=="no_history") | "- \(.appId)"' migration-reconcile.json
+          fi
+
+      - name: Upload reconcile report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-reconcile
+          path: migration-reconcile.json

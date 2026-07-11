@@ -20,6 +20,12 @@ curl -H "Authorization: Bearer $PAS_ADMIN_SESSION" \
   https://api.proappstore.online/v1/migrations/reconcile
 ```
 
+The hourly `Reconcile app migrations` GitHub Actions workflow calls the same
+endpoint with `X-Internal-Token`, uploads `migration-reconcile.json`, and fails
+the run when any app's latest migration attempt is `failed`. `no_history` apps
+are reported as warnings because they may be old apps or apps without
+`migrations.json`.
+
 The fleet report returns:
 
 - `failed` — latest migration attempt failed; repair is actionable.

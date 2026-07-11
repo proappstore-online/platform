@@ -378,19 +378,22 @@ deployRoutes.get('/apps/:appId/schema-status', async (c) => {
 });
 
 /**
- * Fleet migration reconcile report (#35). Admin-only, read-only.
+ * Fleet migration reconcile report (#35). Admin/internal, read-only.
  *
  * This is the operator queue for migration repair: apps whose latest migrate
  * attempt failed are actionable, while apps with no audit history are unknown
  * (often pre-migrations.json or no DB usage) and should be checked before
- * assuming drift. A later cron can call this same query and alert on `failed`.
+ * assuming drift. The scheduled GitHub workflow calls this with INTERNAL_TOKEN
+ * and fails on `failed` so drift becomes visible in Actions.
  */
 deployRoutes.get('/migrations/reconcile', async (c) => {
-  try {
-    await requireAdmin(c);
-  } catch (e) {
-    if (e instanceof HttpError) return c.json({ error: e.message }, e.status as 401 | 403);
-    throw e;
+  if (!internalTokenOk(c.req.header('X-Internal-Token'), c.env.INTERNAL_TOKEN)) {
+    try {
+      await requireAdmin(c);
+    } catch (e) {
+      if (e instanceof HttpError) return c.json({ error: e.message }, e.status as 401 | 403);
+      throw e;
+    }
   }
   const includeOk = c.req.query('includeOk') === 'true';
   const rows = await c.env.DB.prepare(
