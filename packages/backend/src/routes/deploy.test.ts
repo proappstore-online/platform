@@ -219,6 +219,31 @@ describe('POST /apps/:appId/migrate/oidc', () => {
     }
   });
 
+  it('422 on ADD COLUMN NOT NULL without a non-null DEFAULT — never forwarded', async () => {
+    for (const sql of [
+      'ALTER TABLE t ADD COLUMN email TEXT NOT NULL;',
+      'ALTER TABLE t ADD COLUMN email TEXT NOT NULL DEFAULT NULL;',
+    ]) {
+      const res = await call('aiuniversity',
+        { migrations: [{ name: '0002_required', sql }] },
+        { Authorization: `Bearer ${await signToken()}` });
+      expect(res.status).toBe(422);
+      const body = await res.json() as Record<string, unknown>;
+      expect(String(body.error)).toContain('NOT NULL must include a non-null DEFAULT');
+    }
+    expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.some((c) => String(c[0]).includes('/migrate'))).toBe(false);
+  });
+
+  it('allows ADD COLUMN when the new column is nullable or defaulted', async () => {
+    for (const sql of [
+      'ALTER TABLE t ADD COLUMN nickname TEXT;',
+      "ALTER TABLE t ADD COLUMN status TEXT NOT NULL DEFAULT 'active';",
+    ]) {
+      const res = await call('aiuniversity', { migrations: [{ name: '0002_expand', sql }] }, { Authorization: `Bearer ${await signToken()}` });
+      expect(res.status).toBe(200);
+    }
+  });
+
   it('422 on a non-additive leading statement (SELECT)', async () => {
     const res = await call('aiuniversity',
       { migrations: [{ name: 'x', sql: 'SELECT 1;' }] },

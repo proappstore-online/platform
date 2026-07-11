@@ -174,12 +174,34 @@ deployRoutes.put('/apps/:appId/tools/oidc', async (c) => {
  */
 const MIGRATE_ALLOWED_START = /^(CREATE\s+(TABLE|(UNIQUE\s+)?INDEX|VIEW|TRIGGER)\b|ALTER\s+TABLE\b|INSERT\s+INTO\b)/i;
 const MIGRATE_FORBIDDEN = /\b(DROP|DELETE|UPDATE|RENAME|PRAGMA|ATTACH|DETACH|VACUUM|REINDEX|REPLACE)\b/i;
+const MIGRATE_ADD_COLUMN = /^ALTER\s+TABLE\s+(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|\S+)\s+ADD(?:\s+COLUMN)?\s+/i;
 
-/** Returns the first statement that is not additive-only DDL, or null if all pass. */
-function forbiddenMigrationStatement(sql: string): string | null {
-  const statements = sql.split(';').map((s) => s.trim()).filter((s) => s.length > 0);
+function stripSqlComments(sql: string): string {
+  return sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n\r]*/g, ' ');
+}
+
+function hasUnsafeNotNullAddColumn(statement: string): boolean {
+  const normalized = stripSqlComments(statement).trim();
+  if (!MIGRATE_ADD_COLUMN.test(normalized)) return false;
+  if (!/\bNOT\s+NULL\b/i.test(normalized)) return false;
+  return !/\bDEFAULT\b/i.test(normalized) || /\bDEFAULT\s*(?:\(\s*)?NULL\b/i.test(normalized);
+}
+
+type MigrationLintError = { statement: string; reason: string };
+
+/** Returns the first unsafe statement, or null if all pass. */
+function forbiddenMigrationStatement(sql: string): MigrationLintError | null {
+  const statements = stripSqlComments(sql).split(';').map((s) => s.trim()).filter((s) => s.length > 0);
   for (const stmt of statements) {
-    if (MIGRATE_FORBIDDEN.test(stmt) || !MIGRATE_ALLOWED_START.test(stmt)) return stmt.slice(0, 80);
+    if (MIGRATE_FORBIDDEN.test(stmt) || !MIGRATE_ALLOWED_START.test(stmt)) {
+      return { statement: stmt.slice(0, 80), reason: 'the deploy path allows CREATE / ALTER … ADD / INSERT only' };
+    }
+    if (hasUnsafeNotNullAddColumn(stmt)) {
+      return {
+        statement: stmt.slice(0, 80),
+        reason: 'ALTER TABLE … ADD COLUMN … NOT NULL must include a non-null DEFAULT so existing rows stay valid',
+      };
+    }
   }
   return null;
 }
@@ -210,7 +232,7 @@ async function applyMigrations(
       return {
         status: 422,
         body: {
-          error: `migration "${m.name}" has a non-additive statement — the deploy path allows CREATE / ALTER … ADD / INSERT only. Run destructive changes as the app owner in-browser: ${bad}`,
+          error: `migration "${m.name}" is not backward-compatible — ${bad.reason}. Use expand/contract: add nullable/defaulted schema first, deploy compatible code, then contract later if still needed: ${bad.statement}`,
         },
       };
     }

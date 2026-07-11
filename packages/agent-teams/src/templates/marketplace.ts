@@ -135,6 +135,9 @@ export interface Application {
   files.set('src/lib/db.ts', `import { app } from './app'
 import type { Listing, Application } from '../types'
 
+// Expand/contract rule for future migrations: in the same release as code,
+// add only nullable/defaulted columns or new tables/indexes. Never add a
+// NOT NULL column without DEFAULT; rename/drop/tighten in a later release.
 const MIGRATIONS = [
   {
     name: '0001_init',

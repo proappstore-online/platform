@@ -69,7 +69,9 @@ actions read/write MUST exist in migrations.json.
 Rules (enforced by the platform on deploy):
 - ADDITIVE ONLY — CREATE TABLE/INDEX, ALTER TABLE … ADD COLUMN, INSERT. DROP / RENAME /
   DELETE / UPDATE are rejected and fail the deploy. Evolve by adding, never dropping;
-  keep new columns nullable/defaulted so old rows and old code stay valid.
+  keep new columns nullable/defaulted so old rows and old code stay valid. In particular,
+  \`ALTER TABLE ... ADD COLUMN ... NOT NULL\` must include a non-null \`DEFAULT\`; otherwise split it:
+  add a nullable/defaulted column first, deploy compatible code, then tighten/contract later.
 - NEVER edit an applied migration — add a new one (0002_…, 0003_…). Applied names are
   tracked, so redeploys are idempotent.
 

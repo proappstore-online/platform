@@ -144,6 +144,15 @@ describe('templates have valid SQL migrations', () => {
       it('does not use DROP TABLE', () => {
         expect(dbTs).not.toContain('DROP TABLE');
       });
+
+      it('documents expand/contract for future schema changes', () => {
+        expect(dbTs).toContain('Expand/contract rule for future migrations');
+        expect(dbTs).toContain('nullable/defaulted columns');
+      });
+
+      it('does not add NOT NULL columns without DEFAULT', () => {
+        expect(dbTs).not.toMatch(/ALTER\s+TABLE[\s\S]*ADD(?:\s+COLUMN)?[\s\S]*NOT\s+NULL(?![\s\S]*DEFAULT)/i);
+      });
     });
   }
 });

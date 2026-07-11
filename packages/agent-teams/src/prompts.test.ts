@@ -58,6 +58,22 @@ describe('buildSeedMessages', () => {
     expect(body).toContain('VERDICT: READY');
   });
 
+  it('BA requires expand/contract specs for schema-changing tickets', () => {
+    const body = buildSeedMessages('BA', ticket({ rawIdea: 'add a profile column and action' }), 'myapp', [])[0]!.body;
+    expect(body).toContain('EXPAND/CONTRACT SCHEMA GUARD');
+    expect(body).toContain('nullable or have a DEFAULT');
+    expect(body).toContain('later contract ticket');
+    expect(body).toContain('previous deployed code continue to work');
+  });
+
+  it('QA requires existing-row regression tests for schema/action changes', () => {
+    const body = buildSeedMessages('QA', ticket(), 'myapp', [{ author: 'BA', body: 'spec changes migrations.json' }])[0]!.body;
+    expect(body).toContain('SCHEMA EXPAND/CONTRACT');
+    expect(body).toContain('old rows still work');
+    expect(body).toContain('ADD COLUMN ... NOT NULL');
+    expect(body).toContain('without DEFAULT');
+  });
+
   it('includes the approved spec summary when present', () => {
     const body = buildSeedMessages('Dev', ticket({ spec: { summary: 'SUMMARY', acceptanceCriteria: [], sdkPrimitives: [], filesToCreate: [], outOfScope: [], approvedBy: null, approvedAt: null, revisionOf: null } }), 'myapp', [])[0]!.body;
     expect(body).toContain('## Approved spec');
