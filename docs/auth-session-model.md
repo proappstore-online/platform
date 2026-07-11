@@ -162,9 +162,8 @@ Implemented foundation:
 - Caller-supplied `Authorization` and `Cookie` headers are stripped before the
   host worker injects the internal bearer token.
 
-Remaining: WebSocket and beacon-style SDK paths need separate mediation because
-browser APIs do not support arbitrary Authorization headers in the same way as
-normal `fetch()`.
+Remaining: WebSocket SDK paths need separate mediation because browsers do not
+support arbitrary Authorization headers during the WebSocket handshake.
 
 ### Phase 4: SDK Migration
 
@@ -186,6 +185,9 @@ In `platform-cookie` mode:
 - `app.auth.signOut()` posts to `/.pas/auth/logout`.
 - Normal SDK HTTP modules use same-origin `/.pas/api/*` or `/.pas/data/*`
   mediation instead of JavaScript-readable bearer tokens.
+- `app.usage` sends normal heartbeats and pagehide beacons through same-origin
+  `/.pas/api/v1/usage/ping` mediation, so unload telemetry can use the
+  HttpOnly app cookie without exposing a bearer token to JavaScript.
 
 The compatibility default remains `legacy-bearer` until all SDK paths are
 covered and real hosted apps have passed end-to-end verification.
@@ -198,7 +200,6 @@ Keep explicit fallback modes for compatibility:
 Remaining SDK paths:
 
 - `app.rooms`: WebSocket connection auth still uses the legacy token path.
-- `app.usage`: unload/beacon telemetry still uses the legacy token path.
 - `app.maps`: optional signed map requests still use legacy auth, but map
   lookup itself is not a session-critical app-data path.
 

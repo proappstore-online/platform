@@ -109,7 +109,7 @@ normal SDK HTTP calls use `/.pas/api/*` or `/.pas/data/*` mediation. The bearer
 token stays in a host-only HttpOnly cookie and is injected server-side by PAS.
 
 The default remains `legacy-bearer` for compatibility while WebSocket rooms,
-usage beacon telemetry, and remaining edge paths are migrated. See
+optional signed map requests, and remaining edge paths are migrated. See
 [Browser auth session model](/auth-session-model).
 
 ## App data access

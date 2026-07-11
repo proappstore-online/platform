@@ -7,6 +7,8 @@ import { Usage } from './usage.js';
 
 interface MockAuth {
   token: string | null;
+  isSignedIn?: boolean;
+  usesPlatformCookie?: boolean;
 }
 
 interface MockDoc {
@@ -145,6 +147,39 @@ describe('Usage', () => {
     expect(body.deltaSeconds).toBeLessThanOrEqual(90);
   });
 
+  it('platform-cookie signed-in sessions post through same-origin mediation without Authorization', async () => {
+    const u = makeUsage({ token: null, isSignedIn: true, usesPlatformCookie: true });
+    u.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+    u.stop();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/.pas/api/v1/usage/ping');
+    expect((init as RequestInit).credentials).toBe('same-origin');
+    const headers = new Headers((init as RequestInit).headers);
+    expect(headers.get('Authorization')).toBeNull();
+    expect(headers.get('Content-Type')).toBe('application/json');
+  });
+
+  it('platform-cookie signed-out sessions repocket accrual until /me hydrates', async () => {
+    const auth: MockAuth = { token: null, isSignedIn: false, usesPlatformCookie: true };
+    const u = makeUsage(auth);
+    u.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    auth.isSignedIn = true;
+    await vi.advanceTimersByTimeAsync(60_000);
+    u.stop();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/.pas/api/v1/usage/ping');
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.deltaSeconds).toBeGreaterThanOrEqual(60);
+    expect(body.deltaSeconds).toBeLessThanOrEqual(90);
+  });
+
   it('stop() unregisters the timer and listeners — no further ticks', async () => {
     const u = makeUsage();
     u.start();
@@ -166,6 +201,19 @@ describe('Usage', () => {
     const [url, blob] = beaconMock.mock.calls[0]!;
     expect(url).toBe('https://api.proappstore.online/v1/usage/ping');
     expect(blob).toBeInstanceOf(Blob);
+    u.stop();
+  });
+
+  it('flush() in platform-cookie mode beacons to same-origin mediation', () => {
+    const u = makeUsage({ token: null, isSignedIn: true, usesPlatformCookie: true });
+    u.start();
+    vi.advanceTimersByTime(45_000);
+    u.flush();
+    expect(beaconMock).toHaveBeenCalledTimes(1);
+    const [url, blob] = beaconMock.mock.calls[0]!;
+    expect(url).toBe('/.pas/api/v1/usage/ping');
+    expect(blob).toBeInstanceOf(Blob);
+    expect(fetchMock).not.toHaveBeenCalled();
     u.stop();
   });
 

@@ -21,6 +21,8 @@
 
 interface AuthLike {
   token: string | null;
+  isSignedIn?: boolean;
+  usesPlatformCookie?: boolean;
 }
 
 export interface UsageOptions {
@@ -159,7 +161,7 @@ export class Usage {
     const seconds = this.drainSeconds();
     const apiCalls = this.drainApiCalls();
     if (seconds === 0 && apiCalls === 0) return;
-    if (!this.auth.token) {
+    if (!this.isAuthenticated()) {
       // Re-pocket the work — the user may sign in later and we'd like the
       // accrued time to count from then. Note: a session-token signin BEFORE
       // any visible time was banked won't have anything to attribute, and
@@ -172,19 +174,18 @@ export class Usage {
   }
 
   private async send(seconds: number, apiCalls: number, keepalive: boolean): Promise<void> {
-    const token = this.auth.token;
-    if (!token) return;
+    if (!this.isAuthenticated()) return;
     const body = JSON.stringify({
       appId: this.appId,
       deltaSeconds: seconds,
       deltaApiCalls: apiCalls,
     });
-    const url = `${this.apiBase}/v1/usage/ping`;
+    const url = this.auth.usesPlatformCookie ? '/.pas/api/v1/usage/ping' : `${this.apiBase}/v1/usage/ping`;
 
     // Prefer sendBeacon for keepalive (unload survivor) paths. sendBeacon
-    // doesn't allow setting an Authorization header, so we encode the token
-    // into the URL only for keepalive — server accepts it as a fallback.
-    // (If your server doesn't support that, fall through to keepalive fetch.)
+    // doesn't allow setting custom Authorization headers. In platform-cookie
+    // mode the same-origin beacon carries the HttpOnly app cookie; in legacy
+    // mode this remains best-effort and falls back to bearer fetch when needed.
     if (keepalive && typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
       try {
         const blob = new Blob([body], { type: 'application/json' });
@@ -196,17 +197,29 @@ export class Usage {
     }
 
     try {
-      await fetch(url, {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const init: RequestInit = {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        headers,
         body,
         keepalive,
+      };
+      if (this.auth.usesPlatformCookie) {
+        init.credentials = 'same-origin';
+      } else {
+        const token = this.auth.token;
+        if (!token) return;
+        headers.Authorization = `Bearer ${token}`;
+      }
+      await fetch(url, {
+        ...init,
       });
     } catch {
       // Telemetry never breaks an app.
     }
+  }
+
+  private isAuthenticated(): boolean {
+    return this.auth.usesPlatformCookie ? this.auth.isSignedIn === true : !!this.auth.token;
   }
 }

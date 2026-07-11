@@ -39,7 +39,7 @@ const result = await app.actions.call<{ rows: Org[] }>('list_orgs', {
 ```
 
 After publish, the same action is available to authenticated MCP clients as
-`<app_id>/list_orgs`.
+`{app_id}/list_orgs`.
 
 ## Request flow
 
@@ -49,7 +49,7 @@ Browser SDK or MCP client
   -> validates PAS session
   -> enforces manifest platform/app role metadata
   -> injects :__user_id, :__now, :__uuid server-side
-  -> forwards prepared SQL to data-<app>.proappstore.online
+  -> forwards prepared SQL to data-{app}.proappstore.online
   -> app D1
 ```
 
@@ -176,7 +176,7 @@ when every step is independently idempotent and safe to observe alone.
 The manifest is registered from the committed `mcp.json` on every deploy: the
 app deploy workflow calls `PUT /v1/apps/:appId/tools/oidc`, authorized by the
 same verified GitHub OIDC claims as the keyless R2 credential mint
-(repository == org/<appId>, ref == main). `pas publish` and the Agent Teams
+(repository == org/{appId}, ref == main). `pas publish` and the Agent Teams
 deploy stage register through the same `replaceAppTools` path. Registered
 tools therefore cannot drift from the repo.
 
