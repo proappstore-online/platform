@@ -208,15 +208,16 @@ function forbiddenMigrationStatement(sql: string): MigrationLintError | null {
 
 /**
  * Validate the migrations are additive-only and forward them to the app's data
- * worker. Shared by the OIDC path (CLI/self-service deploys) and the internal
- * path (Agent Teams deploy stage) so the additive-only guarantee lives in ONE
- * place. Returns an HTTP status + JSON body for the caller to hand back.
+ * worker. Shared by the OIDC path (CLI/self-service deploys), internal path
+ * (Agent Teams deploy stage), and admin repair path so the additive-only
+ * guarantee lives in ONE place. Returns an HTTP status + JSON body for the
+ * caller to hand back.
  */
 async function applyMigrations(
   env: Env,
   appId: string,
   migrations: unknown,
-  source: 'oidc' | 'internal',
+  source: 'oidc' | 'internal' | 'admin',
 ): Promise<{ status: 200 | 400 | 422 | 502; body: Record<string, unknown> }> {
   if (!Array.isArray(migrations)) {
     return { status: 400, body: { error: 'migrations must be an array of {name, sql}' } };
@@ -273,7 +274,7 @@ async function applyMigrations(
 async function recordMigrationAudit(
   env: Env,
   appId: string,
-  source: 'oidc' | 'internal',
+  source: 'oidc' | 'internal' | 'admin',
   status: 'applied' | 'failed',
   applied: string[] | null,
   already: string[] | null,
@@ -336,6 +337,28 @@ deployRoutes.post('/apps/:appId/migrate/internal', async (c) => {
   }
   const body = await c.req.json<{ migrations?: unknown }>().catch(() => null);
   const { status, body: payload } = await applyMigrations(c.env, appId, body?.migrations, 'internal');
+  return c.json(payload, status);
+});
+
+/**
+ * Admin repair endpoint (#35). This is the human-operated recovery path for an
+ * app whose repo deploy is blocked or whose previous migration partially failed.
+ * It intentionally reuses applyMigrations so repair SQL stays additive-only and
+ * produces the same migration_audit visibility as normal deploys.
+ */
+deployRoutes.post('/apps/:appId/migrate/admin', async (c) => {
+  try {
+    await requireAdmin(c);
+  } catch (e) {
+    if (e instanceof HttpError) return c.json({ error: e.message }, e.status as 401 | 403);
+    throw e;
+  }
+  const appId = c.req.param('appId');
+  if (!/^[a-z][a-z0-9-]*$/.test(appId) || appId.length > 58) {
+    return c.json({ error: 'invalid app id' }, 400);
+  }
+  const body = await c.req.json<{ migrations?: unknown }>().catch(() => null);
+  const { status, body: payload } = await applyMigrations(c.env, appId, body?.migrations, 'admin');
   return c.json(payload, status);
 });
 

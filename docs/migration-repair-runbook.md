@@ -62,7 +62,17 @@ Default to forward-fix:
 4. Recheck `/v1/apps/<app-id>/schema-status`. The latest attempt should be
    `applied`, which clears the unresolved-failure signal.
 
-Use the internal repair path only when the app repo cannot deploy:
+Use the admin repair endpoint only when the app repo cannot deploy:
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer $PAS_ADMIN_SESSION" \
+  -H "Content-Type: application/json" \
+  https://api.proappstore.online/v1/apps/<app-id>/migrate/admin \
+  --data-binary @repair-migrations.json
+```
+
+Use the internal repair path only from trusted automation:
 
 ```bash
 curl -X POST \

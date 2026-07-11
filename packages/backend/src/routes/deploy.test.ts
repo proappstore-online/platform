@@ -501,3 +501,61 @@ describe('POST /apps/:appId/migrate/internal', () => {
     expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.some((c) => String(c[0]).includes('/migrate'))).toBe(false);
   });
 });
+
+describe('POST /apps/:appId/migrate/admin', () => {
+  let migrateBody: unknown;
+  let migrateHeaders: Record<string, string>;
+  const SK = TEST_SK;
+  const ADMIN_ENV = { DB: mockDB, SESSION_SIGNING_KEY: SK, INTERNAL_TOKEN: 'internal-secret' } as never;
+  const repair = { name: '0007_repair_missing_column', sql: "ALTER TABLE items ADD COLUMN priority TEXT DEFAULT 'normal';" };
+
+  beforeEach(() => {
+    migrationRows = [];
+    migrateBody = undefined;
+    migrateHeaders = {};
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/migrate')) {
+        migrateBody = JSON.parse((init!.body as string));
+        migrateHeaders = (init!.headers as Record<string, string>);
+        return new Response(JSON.stringify({ applied: ['0007_repair_missing_column'], already: ['0001_init'] }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${String(input)}`);
+    }));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const call = (headers: Record<string, string>, migrations: unknown = [repair]) =>
+    deployRoutes.request(
+      '/apps/aiuniversity/migrate/admin',
+      { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ migrations }) },
+      ADMIN_ENV,
+    );
+
+  it('lets platform admins run additive repair migrations', async () => {
+    const res = await call({ Authorization: `Bearer ${await testToken('gh:admin', { roles: ['user', 'admin'] })}` });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { applied: string[]; already: string[] };
+    expect(body.applied).toEqual(['0007_repair_missing_column']);
+    expect(body.already).toEqual(['0001_init']);
+    expect(migrateHeaders['X-Internal-Token']).toBe('internal-secret');
+    expect(migrateBody).toEqual({ migrations: [repair] });
+    expect(migrationRows[0]!.slice(0, 3)).toEqual(['aiuniversity', 'admin', 'applied']);
+  });
+
+  it('rejects non-admin users before forwarding', async () => {
+    const res = await call({ Authorization: `Bearer ${await testToken('gh:5')}` });
+    expect(res.status).toBe(403);
+    expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+  });
+
+  it('keeps repair migrations under the additive-only guard', async () => {
+    const res = await call(
+      { Authorization: `Bearer ${await testToken('gh:admin', { roles: ['user', 'admin'] })}` },
+      [{ name: 'bad', sql: 'ALTER TABLE items ADD COLUMN priority TEXT NOT NULL;' }],
+    );
+    expect(res.status).toBe(422);
+    const body = await res.json() as { error: string };
+    expect(body.error).toContain('NOT NULL must include a non-null DEFAULT');
+    expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+  });
+});
