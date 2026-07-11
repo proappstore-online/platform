@@ -653,6 +653,12 @@ export class ProjectDO implements DurableObject {
    * the next stage isn't skipped by a still-set run flag.
    */
   private dispatchRun(ticketId: string): void {
+    const startingStatus = (this.state.storage.sql
+      .exec('SELECT status FROM tickets WHERE id = ?', ticketId)
+      .toArray()[0] as { status: TicketStatus } | undefined)?.status;
+    const startingRole = startingStatus ? assigneeForStatus(startingStatus) : null;
+    let runError: string | undefined;
+
     this.running.add(ticketId);
     // Fire-and-forget. The DO stays alive while the promise has pending I/O; the
     // alarm watchdog re-dispatches active tickets if the DO is ever evicted
@@ -661,6 +667,7 @@ export class ProjectDO implements DurableObject {
       .catch((e) => {
         // Surface any uncaught run crash — full transparency, never silent.
         const msg = e instanceof Error ? e.message : String(e);
+        runError = msg;
         try {
           this.logActivity('error', `Run crashed: ${msg}`, ticketId);
           this.blockForInput(ticketId, assigneeForStatus(
@@ -670,6 +677,9 @@ export class ProjectDO implements DurableObject {
       })
       .finally(() => {
         this.running.delete(ticketId);
+        if (startingRole) {
+          this.broadcast({ type: 'agent-run-ended', ticketId, role: startingRole, ...(runError ? { error: runError } : {}) });
+        }
         // A completed run is pipeline progress — reset the idle timer so a long
         // autonomous build (no user chat) isn't auto-paused mid-flight.
         this.touchUserActivity();
