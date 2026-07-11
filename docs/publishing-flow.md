@@ -25,8 +25,16 @@ publisher                  PAS backend (api.proappstore.online)
   | <---- result + URL ---------------    |
   |
   +-- git push origin main
-     auto-deploys via CF Pages in ~30s
+     GitHub Actions deploy (keyless OIDC), in order:
+       build -> migrate (migrations.json) -> upload to R2 -> register mcp.json tools
 ```
+
+The deploy order matters: `migrations.json` is applied to D1 **before** the new
+frontend uploads and **before** `mcp.json` tools register, so a registered action
+never references a column that isn't there yet (§10; see
+`app-actions-security.md`). The migrate step is hard-gated — a migration failure
+fails the deploy. Additive-only (`CREATE`/`ALTER … ADD`/`INSERT`); destructive
+SQL is rejected with 422.
 
 ## Key properties
 
@@ -35,7 +43,8 @@ publisher                  PAS backend (api.proappstore.online)
   bindings.
 - **Idempotent.** Re-running on a partially-provisioned app fills in only missing pieces.
 - **CLI-driven.** `pas publish` is the intended entrypoint; it calls
-  `POST /v1/provision` and then registers `mcp.json` app tools when present.
+  `POST /v1/provision`. Each subsequent `git push` runs the keyless deploy, which
+  applies `migrations.json` then re-registers `mcp.json` app tools (both when present).
 
 ## Failure modes
 

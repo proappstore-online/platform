@@ -188,15 +188,18 @@ semicolons, no DDL, every `:param` declared) and caps apps at 120 tools.
 `app.db.query()` / `app.db.execute()` / `app.db.batch()` run caller-supplied
 SQL, so the data worker restricts them to the app's team (creator +
 `team_members`), verified against `/v1/apps` over a service binding. A regular
-signed-in user gets `403 not authorized for this app` — by design. Keep
-`app.db.migrate()` for schema setup, and make the startup call 403-tolerant so
-non-team users proceed (team visits apply new migrations):
+signed-in user gets `403 not authorized for this app` — by design.
 
-```ts
-try { await app.db.migrate(MIGRATIONS) } catch (err) {
-  if (!String(err).includes('403')) throw err
-}
-```
+**Schema belongs in `migrations.json`, applied at deploy time (§10, #32 Phase 1).**
+The committed `migrations.json` is applied to D1 by the deploy — BEFORE the
+frontend goes live and BEFORE this manifest re-registers — so an action here can
+never reference a column that isn't there yet. This replaces the old lazy
+"apply on the first team visit" pattern, which left schema behind the actions
+that depended on it and 500'd users (chess-academy, 2026-07-11). Every column an
+action reads/writes must exist in `migrations.json`; keep it additive-only
+(`CREATE`/`ALTER … ADD`/`INSERT` — the deploy rejects `DROP`/`RENAME`/destructive
+statements). `app.db.migrate()` still works for local iteration and mirrors
+`migrations.json`, but the committed file is authoritative.
 
 The action executor reaches the data worker with the platform `INTERNAL_TOKEN`
 (prepared, role-checked SQL — the trusted path), so end users never need raw
