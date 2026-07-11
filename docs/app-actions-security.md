@@ -183,6 +183,17 @@ tools therefore cannot drift from the repo.
 Registration validates every statement (SELECT/INSERT/UPDATE/DELETE only, no
 semicolons, no DDL, every `:param` declared) and caps apps at 120 tools.
 
+**Schema coherence (#33).** Registration also compiles every action's SQL against
+the app's LIVE schema (data worker `/validate` → `EXPLAIN`, no execution). An
+action that references a table/column that doesn't exist **blocks registration**
+(422) — the deploy fails, naming the tool + column, instead of users hitting
+`no such column` at runtime. Since Phase 1 migrates before registering, the
+schema checked here is current. The check hard-blocks only on a definitive
+missing table/column; if it can't reach the data worker it skips silently
+(defense-in-depth, not a new failure point). Migration attempts land in
+`migration_audit`, surfaced at `GET /v1/apps/:app/schema-status` and the
+`schema_status` MCP tool so pending/failed migrations are visible.
+
 ## Low-level raw SQL
 
 `app.db.query()` / `app.db.execute()` / `app.db.batch()` run caller-supplied

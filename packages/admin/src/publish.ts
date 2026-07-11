@@ -168,7 +168,10 @@ jobs:
             echo "Registered $(echo "$RESP" | jq -r '.registered') app tool(s)"
             echo "$RESP" | jq -r '.warnings[]? | "::warning::mcp.json: " + .'
           else
-            echo "::error::tools registration failed: $(echo "$RESP" | jq -c '.error // .')"; exit 1
+            echo "::error::tools registration failed: $(echo "$RESP" | jq -c '.error // .')"
+            # Schema coherence (#33): name each action + the missing column/table.
+            echo "$RESP" | jq -r '.details[]? | "::error::" + .'
+            exit 1
           fi
 
   # Behavioural gate: drive the LIVE app in a real browser (the thing tsc/build

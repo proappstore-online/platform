@@ -47,6 +47,24 @@ const validTool = {
   requires_auth: true,
 };
 
+// The schema-coherence check (#33) fetches the app's data worker /validate.
+// Stub it for every test: default = every statement compiles. Individual tests
+// override `validateResults` to simulate drift (missing column) or make the
+// stub throw to simulate an unreachable data worker (fail-open).
+type ValStmt = { id: string; sql: string; paramCount: number };
+let validateResults: (stmts: ValStmt[]) => { id: string; ok: boolean; error?: string }[];
+beforeEach(() => {
+  validateResults = (stmts) => stmts.map((s) => ({ id: s.id, ok: true }));
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes('/validate')) {
+      const body = JSON.parse((init!.body as string)) as { statements: ValStmt[] };
+      return new Response(JSON.stringify({ results: validateResults(body.statements) }), { status: 200 });
+    }
+    throw new Error(`unexpected fetch: ${String(input)}`);
+  }));
+});
+afterEach(() => vi.unstubAllGlobals());
+
 describe('PUT /v1/apps/:appId/tools', () => {
   it('registers valid tools', async () => {
     // Mock: first call = requireAppOwner lookup, rest = batch
@@ -228,6 +246,48 @@ describe('PUT /v1/apps/:appId/tools', () => {
       makeEnv(),
     );
     expect(res.status).toBe(401);
+  });
+
+  it('blocks registration when an action references a missing column (#33)', async () => {
+    // Data worker reports the SELECT fails to compile — column doesn't exist.
+    validateResults = (stmts) => stmts.map((s) => ({ id: s.id, ok: false, error: 'no such column: status' }));
+    const ownerStmt = mockStmt({ first: { creator_id: 'gh:1' } });
+    const db = mockD1(ownerStmt);
+    const res = await app.request(
+      '/v1/apps/test-app/tools',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tools: [validTool] }),
+      },
+      makeEnv({ INTERNAL_TOKEN: 'secret' }, db),
+    );
+    expect(res.status).toBe(422);
+    const body = await res.json() as { error: string; details: string[] };
+    expect(body.error).toContain('schema coherence');
+    expect(body.details.join('\n')).toContain('list_items');
+    expect(body.details.join('\n')).toContain('no such column: status');
+    // nothing persisted — the drift never reaches the app_tools table
+    expect(db.batch).not.toHaveBeenCalled();
+  });
+
+  it('fails open (registers) when the data worker is unreachable (#33)', async () => {
+    // Coherence check is defense-in-depth, not a new single point of failure.
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(async () => { throw new Error('ECONNREFUSED'); });
+    const ownerStmt = mockStmt({ first: { creator_id: 'gh:1' } });
+    const db = mockD1(ownerStmt);
+    const res = await app.request(
+      '/v1/apps/test-app/tools',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tools: [validTool] }),
+      },
+      makeEnv({ INTERNAL_TOKEN: 'secret' }, db),
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json() as { registered: number }).registered).toBe(1);
+    expect(db.batch).toHaveBeenCalledTimes(1);
   });
 });
 

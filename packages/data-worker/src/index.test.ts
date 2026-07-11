@@ -188,6 +188,50 @@ describe("Internal token path (trusted actions-executor)", () => {
   });
 });
 
+describe("POST /validate (schema coherence, #33)", () => {
+  it("is internal-only — 403 without the internal token", async () => {
+    const res = await app.request("/validate", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOK}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ statements: [{ id: "t#0", sql: "SELECT 1", paramCount: 0 }] }),
+    }, makeEnv(mockD1(), INTERNAL_TOKEN));
+    expect(res.status).toBe(403);
+  });
+
+  it("EXPLAINs each statement (no execution) and reports per-statement ok/error", async () => {
+    const db = mockD1();
+    // Compile succeeds unless the statement names the missing column 'nope'.
+    db.prepare = vi.fn().mockImplementation((sql: string) => ({
+      bind: vi.fn().mockReturnThis(),
+      all: vi.fn().mockImplementation(async () => {
+        if (sql.includes("nope")) throw new Error("no such column: nope");
+        return { results: [], meta: {} };
+      }),
+    }));
+    const res = await app.request("/validate", {
+      method: "POST",
+      headers: { "X-Internal-Token": INTERNAL_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        statements: [
+          { id: "good#0", sql: "SELECT * FROM items WHERE id = ?", paramCount: 1 },
+          { id: "bad#0", sql: "SELECT nope FROM items", paramCount: 0 },
+        ],
+      }),
+    }, makeEnv(db, INTERNAL_TOKEN));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      results: [
+        { id: "good#0", ok: true },
+        { id: "bad#0", ok: false, error: "no such column: nope" },
+      ],
+    });
+    // every compile went through EXPLAIN — the raw statement is never executed
+    expect(
+      (db.prepare as unknown as ReturnType<typeof vi.fn>).mock.calls.every((c) => String(c[0]).startsWith("EXPLAIN ")),
+    ).toBe(true);
+  });
+});
+
 describe("GET /tables", () => {
   it("lists user tables", async () => {
     const db = mockD1();

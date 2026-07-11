@@ -67,6 +67,10 @@ Pro primitives (read_docs has exact return shapes — check before assuming fiel
     \`"statements": [...]\` (max 25, one shared params pool) — executed as ONE atomic D1 transaction.
   - Registration warns on write statements with no \`:__user_id\` — treat warnings as bugs unless
     the statement is deliberately unscoped (e.g. consuming an unguessable one-time code).
+  - Registration also COMPILES each action against the live schema (#33): an action that
+    references a table/column not in \`migrations.json\` FAILS the deploy, naming the tool + column.
+    So keep \`migrations.json\` and \`mcp.json\` in lockstep — every column an action reads/writes
+    must be created by a migration.
 - DB (per-app SQLite/D1, migrations + team-only tooling — NOT for user-facing reads/writes):
   \`app.db.execute(sql, params?)\` → \`{ meta: { changes, duration, last_row_id } }\`
   (snake_case \`last_row_id\`, and NO \`.rows\`); \`app.db.query<T>(sql, params?)\` → \`{ rows: T[]; meta }\`

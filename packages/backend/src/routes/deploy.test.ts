@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { deployRoutes } from './deploy.js';
 import { _resetJwksCache } from '../lib/github-oidc.js';
+import { testToken, TEST_SK } from '../test-helpers.js';
 
 const ISSUER = 'https://token.actions.githubusercontent.com';
 const AUD = 'https://api.proappstore.online';
@@ -38,13 +39,19 @@ async function signToken(repository = 'proappstore-online/aiuniversity', ref = '
 }
 
 let auditRows: unknown[][];
+let migrationRows: unknown[][] = [];
+// schema-status test overrides this to serve migration_audit SELECT + ownership.
+let selectResults: (sql: string) => { first?: unknown; all?: unknown } = () => ({});
 const mockDB = {
   prepare: (sql: string) => ({
     bind: (...args: unknown[]) => ({
       run: async () => {
         if (sql.includes('deploy_audit')) auditRows.push(args);
+        if (sql.includes('migration_audit') && sql.includes('INSERT')) migrationRows.push(args);
         return { success: true };
       },
+      first: async () => selectResults(sql).first ?? null,
+      all: async () => selectResults(sql).all ?? { results: [] },
     }),
   }),
 };
@@ -141,6 +148,7 @@ describe('POST /apps/:appId/migrate/oidc', () => {
     await makeKey();
     migrateBody = undefined;
     migrateHeaders = {};
+    migrationRows = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes('/.well-known/jwks')) {
@@ -179,6 +187,9 @@ describe('POST /apps/:appId/migrate/oidc', () => {
     expect(String(call0![0])).toBe('https://data-aiuniversity.proappstore.online/migrate');
     expect(migrateHeaders['X-Internal-Token']).toBe('internal-secret');
     expect(migrateBody).toEqual({ migrations: [additive] });
+    // the attempt is audited as applied (#33 — pending/failed migrations visible)
+    expect(migrationRows).toHaveLength(1);
+    expect(migrationRows[0]!.slice(0, 3)).toEqual(['aiuniversity', 'oidc', 'applied']);
   });
 
   it('is idempotent — reports already-applied names back from the data worker', async () => {
@@ -251,6 +262,43 @@ describe('POST /apps/:appId/migrate/oidc', () => {
     });
     const res = await call('aiuniversity', { migrations: [additive] }, { Authorization: `Bearer ${await signToken()}` });
     expect(res.status).toBe(502);
+    // failure is audited too, so unresolved drift is visible in schema-status
+    expect(migrationRows).toHaveLength(1);
+    expect(migrationRows[0]!.slice(0, 3)).toEqual(['aiuniversity', 'oidc', 'failed']);
+  });
+});
+
+describe('GET /apps/:appId/schema-status', () => {
+  const SK = TEST_SK;
+  const STATUS_ENV = { DB: mockDB, SESSION_SIGNING_KEY: SK } as never;
+
+  afterEach(() => { selectResults = () => ({}); });
+
+  const call = (appId: string, headers: Record<string, string> = {}) =>
+    deployRoutes.request(`/apps/${appId}/schema-status`, { method: 'GET', headers }, STATUS_ENV);
+
+  it('returns migration history for the owner, flagging unresolved failure', async () => {
+    selectResults = (sql) => {
+      if (sql.includes('FROM apps')) return { first: { creator_id: 'gh:5' } };
+      if (sql.includes('migration_audit')) {
+        return { all: { results: [
+          { source: 'oidc', status: 'failed', applied: null, already: JSON.stringify(['0001_init']), detail: 'data worker /migrate failed (502)', ran_at: 200 },
+          { source: 'oidc', status: 'applied', applied: JSON.stringify(['0001_init']), already: null, detail: null, ran_at: 100 },
+        ] } };
+      }
+      return {};
+    };
+    const res = await call('aiuniversity', { Authorization: `Bearer ${await testToken('gh:5')}` });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { hasUnresolvedFailure: boolean; last: { status: string }; history: unknown[] };
+    expect(body.hasUnresolvedFailure).toBe(true);
+    expect(body.last.status).toBe('failed');
+    expect(body.history).toHaveLength(2);
+  });
+
+  it('400 on an invalid app id', async () => {
+    const res = await call('Bad_ID', { Authorization: `Bearer ${await testToken('gh:5')}` });
+    expect(res.status).toBe(400);
   });
 });
 

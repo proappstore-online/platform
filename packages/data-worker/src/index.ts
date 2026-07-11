@@ -281,6 +281,39 @@ app.post('/migrate', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// Schema coherence validation (#33 Phase 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compile each candidate statement against the LIVE schema WITHOUT executing it,
+ * so the platform can reject an app action whose SQL references a table/column
+ * that doesn't exist (the drift that surfaced to users as `no such column`).
+ * `EXPLAIN <sql>` runs SQLite's prepare step — full name resolution — then
+ * returns the opcode listing instead of running the query, so nothing mutates.
+ * Params are bound to NULL purely to satisfy the bind-count; their values are
+ * irrelevant to name resolution. Internal-only (raw SQL, no session path).
+ */
+app.post('/validate', async (c) => {
+  if (!isInternal(c)) throw new HTTPException(403, { message: 'forbidden' });
+  const body = await c.req.json<{ statements: { id: string; sql: string; paramCount?: number }[] }>();
+  if (!Array.isArray(body.statements)) {
+    throw new HTTPException(400, { message: 'statements must be an array of {id, sql, paramCount}' });
+  }
+  const results: { id: string; ok: boolean; error?: string }[] = [];
+  for (const s of body.statements) {
+    try {
+      const binds = Array(Math.max(0, s.paramCount ?? 0)).fill(null);
+      const stmt = c.env.DB.prepare(`EXPLAIN ${s.sql}`);
+      await (binds.length ? stmt.bind(...binds) : stmt).all();
+      results.push({ id: s.id, ok: true });
+    } catch (e) {
+      results.push({ id: s.id, ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return c.json({ results });
+});
+
+// ---------------------------------------------------------------------------
 // Error handler
 // ---------------------------------------------------------------------------
 

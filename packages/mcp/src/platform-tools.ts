@@ -52,6 +52,37 @@ export function registerPlatformTools(server: McpServer, env: Env) {
     }
   );
 
+  // ── schema_status ──────────────────────────────────────────
+  server.tool(
+    "schema_status",
+    "Show an app's D1 migration status (#33) — recent deploy-time migration attempts and whether the latest one applied or FAILED. Surfaces schema drift instead of it being silent. Owner-only (requires a session token).",
+    { app_id: z.string().describe("App ID (e.g. 'chess-academy')"), token: z.string().describe("PAS session token") },
+    async ({ app_id, token }) => {
+      const data = (await pasApi(env.API, env.API_BASE, `/v1/apps/${app_id}/schema-status`, token)) as {
+        hasUnresolvedFailure?: boolean;
+        last?: { source: string; status: string; applied: string[]; already: string[]; detail: string | null; ranAt: number } | null;
+        history?: Array<{ source: string; status: string; applied: string[]; ranAt: number; detail: string | null }>;
+        error?: string;
+      };
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+      const history = data.history ?? [];
+      if (history.length === 0) {
+        return { content: [{ type: "text" as const, text: `No migration attempts recorded for **${app_id}** yet (app may predate migrations.json or have no database).` }] };
+      }
+      const header = data.hasUnresolvedFailure
+        ? `⚠️ **${app_id}** has an UNRESOLVED migration failure — the latest deploy's schema did not apply:\n   ${data.last?.detail ?? ""}`
+        : `✅ **${app_id}** schema is current (latest migration applied).`;
+      const lines = history.map((h) => {
+        const when = new Date(h.ranAt).toISOString();
+        const icon = h.status === "applied" ? "✅" : "❌";
+        const applied = h.applied.length ? ` applied [${h.applied.join(", ")}]` : "";
+        const detail = h.detail ? ` — ${h.detail}` : "";
+        return `- ${icon} ${when} (${h.source})${applied}${detail}`;
+      });
+      return { content: [{ type: "text" as const, text: `${header}\n\n${lines.join("\n")}` }] };
+    }
+  );
+
   // ── app_info ───────────────────────────────────────────────
   server.tool(
     "app_info",

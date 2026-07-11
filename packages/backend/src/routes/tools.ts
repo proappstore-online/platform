@@ -146,15 +146,80 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 /**
+ * Schema coherence (#33 Phase 2): compile every action's SQL against the app's
+ * LIVE schema (data worker `/validate` → `EXPLAIN`, no execution) so an action
+ * that references a table/column that doesn't exist is caught at registration —
+ * the deploy fails loud, naming the tool + column, instead of users hitting
+ * `no such column` at runtime. Phase 1 applies migrations before this runs, so
+ * the schema checked here is current.
+ *
+ * Hard-blocks ONLY on a definitive `no such column` / `no such table`. Any other
+ * outcome — data worker unreachable, unexpected EXPLAIN error — SKIPS silently
+ * and lets registration proceed, so transient infra never bricks a deploy
+ * (defense-in-depth, not a new single point of failure).
+ */
+async function checkSchemaCoherence(
+  env: Env,
+  appId: string,
+  tools: ToolManifest[],
+): Promise<string[]> {
+  // Flatten to individually-compilable statements, id'd back to their tool.
+  const statements: { id: string; tool: string; sql: string; paramCount: number }[] = [];
+  for (const tool of tools) {
+    const raws = tool.operation === 'batch' ? (tool.statements ?? []) : [tool.sql ?? ''];
+    raws.forEach((raw, i) => {
+      let paramCount = 0;
+      const sql = raw.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, () => { paramCount += 1; return '?'; });
+      statements.push({ id: `${tool.name}#${i}`, tool: tool.name, sql, paramCount });
+    });
+  }
+  if (statements.length === 0) return [];
+
+  let results: { id: string; ok: boolean; error?: string }[];
+  try {
+    const res = await fetch(`https://data-${appId}.proappstore.online/validate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(env.INTERNAL_TOKEN ? { 'X-Internal-Token': env.INTERNAL_TOKEN } : {}),
+      },
+      body: JSON.stringify({ statements: statements.map(({ id, sql, paramCount }) => ({ id, sql, paramCount })) }),
+    });
+    if (!res.ok) return []; // couldn't validate — skip silently, don't block
+    const data = await res.json() as { results?: typeof results };
+    results = data.results ?? [];
+  } catch {
+    return []; // unreachable — skip silently
+  }
+
+  const toolById = new Map(statements.map((s) => [s.id, s.tool]));
+  const errors: string[] = [];
+  for (const r of results) {
+    if (r.ok) continue;
+    const err = r.error ?? '';
+    // Only a definitive schema-existence failure blocks; anything else (custom
+    // function, EXPLAIN quirk) is not proof of drift, so leave it to runtime.
+    const m = /no such (column|table):?\s*([^\s]+)?/i.exec(err);
+    if (m) {
+      const tool = toolById.get(r.id) ?? r.id;
+      errors.push(`tool "${tool}": ${m[0]}`);
+    }
+  }
+  return errors;
+}
+
+/**
  * Validate a tools[] manifest and replace the app's registered tools (atomic
  * DELETE + INSERT). Shared by the owner-auth PUT (CLI `pas publish`) and the
- * internal POST (Agent Teams deploy stage). Returns a status + payload the
- * caller hands straight back as JSON.
+ * internal POST (Agent Teams deploy stage). When `env` is supplied, also runs a
+ * schema-coherence check (#33) that blocks registration if an action references
+ * a missing table/column. Returns a status + payload the caller hands back as JSON.
  */
 export async function replaceAppTools(
   db: D1Database,
   appId: string,
   tools: unknown,
+  env?: Env,
 ): Promise<{ status: number; payload: Record<string, unknown> }> {
   if (!tools || !Array.isArray(tools)) {
     return { status: 400, payload: { error: 'tools array required' } };
@@ -188,6 +253,24 @@ export async function replaceAppTools(
     }
   }
 
+  // Schema coherence (#33): reject actions whose SQL references a missing
+  // table/column, before we persist them. Runs against the just-migrated schema
+  // (Phase 1 migrates before register). Skipped when env is absent (direct unit
+  // tests of this fn) or when the check can't reach the data worker.
+  if (env) {
+    const coherenceErrors = await checkSchemaCoherence(env, appId, tools as ToolManifest[]);
+    if (coherenceErrors.length > 0) {
+      return {
+        status: 422,
+        payload: {
+          error: `schema coherence: ${coherenceErrors.length} action(s) reference schema that doesn't exist`,
+          details: coherenceErrors,
+          ...(warnings.length ? { warnings } : {}),
+        },
+      };
+    }
+  }
+
   const now = Date.now();
   const stmts = [
     db.prepare('DELETE FROM app_tools WHERE app_id = ?').bind(appId),
@@ -210,8 +293,8 @@ toolsRoutes.put('/apps/:appId/tools', async (c) => {
   await requireAppOwner(c, appId);
 
   const body = await c.req.json<{ tools?: ToolManifest[] }>().catch(() => null);
-  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools);
-  return c.json(payload, status as 200 | 400);
+  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools, c.env);
+  return c.json(payload, status as 200 | 400 | 422);
 });
 
 // ── POST /v1/apps/:appId/tools/internal — register tools service-to-service ──
@@ -228,8 +311,8 @@ toolsRoutes.post('/apps/:appId/tools/internal', async (c) => {
     return c.json({ error: 'invalid app id' }, 400);
   }
   const body = await c.req.json<{ tools?: ToolManifest[] }>().catch(() => null);
-  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools ?? []);
-  return c.json(payload, status as 200 | 400);
+  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools ?? [], c.env);
+  return c.json(payload, status as 200 | 400 | 422);
 });
 
 // ── GET /v1/apps/:appId/tools — list tools for one app ──────────

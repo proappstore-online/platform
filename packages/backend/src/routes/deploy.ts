@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { verifyGithubOidc } from '../lib/github-oidc.js';
+import { requireAppOwner } from '../lib/auth.js';
 import { replaceAppTools } from './tools.js';
 
 /**
@@ -155,8 +156,8 @@ deployRoutes.put('/apps/:appId/tools/oidc', async (c) => {
   }
 
   const body = await c.req.json<{ tools?: unknown }>().catch(() => null);
-  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools ?? []);
-  return c.json(payload, status as 200 | 400);
+  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools ?? [], c.env);
+  return c.json(payload, status as 200 | 400 | 422);
 });
 
 /**
@@ -193,6 +194,7 @@ async function applyMigrations(
   env: Env,
   appId: string,
   migrations: unknown,
+  source: 'oidc' | 'internal',
 ): Promise<{ status: 200 | 400 | 422 | 502; body: Record<string, unknown> }> {
   if (!Array.isArray(migrations)) {
     return { status: 400, body: { error: 'migrations must be an array of {name, sql}' } };
@@ -228,15 +230,42 @@ async function applyMigrations(
       body: JSON.stringify({ migrations }),
     });
   } catch (e) {
+    await recordMigrationAudit(env, appId, source, 'failed', null, null, `migrate forward failed: ${(e as Error).message}`);
     return { status: 502, body: { error: `migrate forward failed: ${(e as Error).message}` } };
   }
   const raw = await res.text();
   let data: unknown = raw;
   try { data = raw ? JSON.parse(raw) : {}; } catch { /* keep text */ }
   if (!res.ok) {
+    await recordMigrationAudit(env, appId, source, 'failed', null, null, `data worker /migrate failed (${res.status}): ${raw.slice(0, 500)}`);
     return { status: 502, body: { error: `data worker /migrate failed (${res.status})`, detail: data } };
   }
-  return { status: 200, body: { ok: true, ...(data && typeof data === 'object' ? (data as Record<string, unknown>) : { data }) } };
+  const result = (data && typeof data === 'object' ? data : {}) as { applied?: string[]; already?: string[] };
+  await recordMigrationAudit(env, appId, source, 'applied', result.applied ?? null, result.already ?? null, null);
+  return { status: 200, body: { ok: true, ...result } };
+}
+
+/** Record one migrate attempt so pending/failed migrations are visible (#33).
+ *  Best-effort — an audit write must never change the migrate outcome. */
+async function recordMigrationAudit(
+  env: Env,
+  appId: string,
+  source: 'oidc' | 'internal',
+  status: 'applied' | 'failed',
+  applied: string[] | null,
+  already: string[] | null,
+  detail: string | null,
+): Promise<void> {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO migration_audit (app_id, source, status, applied, already, detail, ran_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(appId, source, status, applied ? JSON.stringify(applied) : null, already ? JSON.stringify(already) : null, detail, Date.now())
+      .run();
+  } catch (e) {
+    console.error(`migration_audit insert failed for ${appId}: ${(e as Error).message}`);
+  }
 }
 
 deployRoutes.post('/apps/:appId/migrate/oidc', async (c) => {
@@ -263,7 +292,7 @@ deployRoutes.post('/apps/:appId/migrate/oidc', async (c) => {
   }
 
   const body = await c.req.json<{ migrations?: unknown }>().catch(() => null);
-  const { status, body: payload } = await applyMigrations(c.env, appId, body?.migrations);
+  const { status, body: payload } = await applyMigrations(c.env, appId, body?.migrations, 'oidc');
   return c.json(payload, status);
 });
 
@@ -283,6 +312,44 @@ deployRoutes.post('/apps/:appId/migrate/internal', async (c) => {
     return c.json({ error: 'invalid app id' }, 400);
   }
   const body = await c.req.json<{ migrations?: unknown }>().catch(() => null);
-  const { status, body: payload } = await applyMigrations(c.env, appId, body?.migrations);
+  const { status, body: payload } = await applyMigrations(c.env, appId, body?.migrations, 'internal');
   return c.json(payload, status);
+});
+
+/**
+ * Schema/migration status for an app (#33 Phase 2 — console visibility).
+ * Owner-only. Returns the recent migrate attempts from migration_audit so the
+ * console (or `curl`) can show "last migration: applied/failed at T, ran [..]"
+ * instead of drift being silent. `lastFailed` is the surfacing signal.
+ */
+deployRoutes.get('/apps/:appId/schema-status', async (c) => {
+  const appId = c.req.param('appId');
+  if (!/^[a-z][a-z0-9-]*$/.test(appId) || appId.length > 58) {
+    return c.json({ error: 'invalid app id' }, 400);
+  }
+  await requireAppOwner(c, appId);
+
+  const rows = await c.env.DB.prepare(
+    `SELECT source, status, applied, already, detail, ran_at
+       FROM migration_audit WHERE app_id = ? ORDER BY ran_at DESC LIMIT 20`,
+  ).bind(appId).all<{ source: string; status: string; applied: string | null; already: string | null; detail: string | null; ran_at: number }>();
+
+  const history = (rows.results ?? []).map((r) => ({
+    source: r.source,
+    status: r.status,
+    applied: r.applied ? JSON.parse(r.applied) as string[] : [],
+    already: r.already ? JSON.parse(r.already) as string[] : [],
+    detail: r.detail,
+    ranAt: r.ran_at,
+  }));
+
+  const last = history[0] ?? null;
+  return c.json({
+    appId,
+    last,
+    // The surfacing signal: unresolved drift = the most recent attempt failed.
+    // Null once a later attempt succeeds past it (drift resolved).
+    hasUnresolvedFailure: last?.status === 'failed',
+    history,
+  });
 });
