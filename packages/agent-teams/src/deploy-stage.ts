@@ -327,7 +327,12 @@ async function finishGreenDeploy(
   // best-effort: never fail an already-green deploy.
   await harvestTestResults(deps, proj, ticketId, sha);
   await ensureDataInfra(deps, proj, ticketId);
-  await registerMcpTools(deps, proj, ticketId, files);
+  // Schema before actions: apply migrations.json, and only register mcp.json
+  // actions if it succeeded — an action that references a column the migration
+  // failed to create is exactly the drift that 500'd users (#32).
+  const migrated = await applyMigrations(deps, proj, ticketId, files);
+  if (migrated) await registerMcpTools(deps, proj, ticketId, files);
+  else deps.logActivity('deploy', 'Skipped MCP tool registration — migrations.json did not apply cleanly', ticketId);
 }
 
 /**
@@ -484,5 +489,58 @@ async function registerMcpTools(
     }
   } catch (e) {
     deps.logActivity('deploy', `MCP tool registration error (will retry next deploy): ${e instanceof Error ? e.message : 'unknown'}`, ticketId);
+  }
+}
+
+/**
+ * Apply the working tree's `migrations.json` to the app's D1 BEFORE registering
+ * its mcp.json actions, so no registered action ever references a column that
+ * isn't there yet (#32). The agent flow has no OIDC token, so this goes over the
+ * PAS_BACKEND binding with the shared INTERNAL_TOKEN — the internal twin of the
+ * deploy workflow's keyless migrate step. The platform enforces additive-only
+ * (CREATE / ALTER … ADD / INSERT); a destructive migration is rejected there.
+ * Idempotent via the data worker's _migrations table.
+ *
+ * Returns true when there is nothing to apply or the apply succeeded; false when
+ * a present migrations.json failed to apply — the caller then skips registering
+ * actions rather than shipping schema/action drift.
+ */
+async function applyMigrations(
+  deps: DeployDeps,
+  proj: { slug: string },
+  ticketId: string,
+  files: Map<string, string>,
+): Promise<boolean> {
+  const { env } = deps;
+  const raw = files.get('migrations.json');
+  if (!raw) return true; // no migrations declared — nothing to apply
+  if (!env.PAS_BACKEND || !env.INTERNAL_TOKEN) return true; // no backend binding (dev)
+
+  let migrations: unknown;
+  try {
+    const parsed = JSON.parse(raw) as { migrations?: unknown };
+    migrations = Array.isArray(parsed?.migrations) ? parsed.migrations : [];
+  } catch {
+    deps.logActivity('deploy', 'migrations.json is not valid JSON — skipped migrations', ticketId);
+    return false;
+  }
+  if (!Array.isArray(migrations) || migrations.length === 0) return true;
+
+  try {
+    const res = await env.PAS_BACKEND.fetch(new Request(`https://api.proappstore.online/v1/apps/${proj.slug}/migrate/internal`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': env.INTERNAL_TOKEN },
+      body: JSON.stringify({ migrations }),
+    }));
+    const r = await res.json().catch(() => ({})) as { ok?: boolean; applied?: string[]; already?: string[]; error?: string };
+    if (res.ok && r.ok) {
+      deps.logActivity('deploy', `D1 migrations applied: ${(r.applied ?? []).length} new, ${(r.already ?? []).length} already`, ticketId);
+      return true;
+    }
+    deps.logActivity('deploy', `D1 migrations FAILED (actions will not register this deploy): ${r.error ?? `backend ${res.status}`}`, ticketId);
+    return false;
+  } catch (e) {
+    deps.logActivity('deploy', `D1 migration error (actions will not register this deploy): ${e instanceof Error ? e.message : 'unknown'}`, ticketId);
+    return false;
   }
 }

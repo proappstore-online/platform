@@ -72,9 +72,20 @@ Pro primitives (read_docs has exact return shapes — check before assuming fiel
   (snake_case \`last_row_id\`, and NO \`.rows\`); \`app.db.query<T>(sql, params?)\` → \`{ rows: T[]; meta }\`
   (pass \`<T>\` or rows are \`unknown\`); \`app.db.batch(stmts)\`, tenant scoping
   \`app.db.tenant(id).insert(table, row)\` / \`.findMany(table)\`.
-  - \`app.db.migrate(migrations)\` — \`migrations\` is \`{ name: string; sql: string }[]\` (the ONLY two
-    fields — there is NO \`id\`/\`version\`/\`up\`/\`down\`). Each runs once, in array order; idempotent.
-    Example: \`await app.db.migrate([{ name: '0001_init', sql: 'CREATE TABLE events (id TEXT PRIMARY KEY, title TEXT)' }, { name: '0002_photos', sql: 'ALTER TABLE events ADD COLUMN photo_url TEXT' }])\`.
+  - SCHEMA lives in \`migrations.json\` at the repo root — this is CANONICAL and REQUIRED whenever
+    the app has a database. The deploy applies it to D1 BEFORE the frontend goes live and BEFORE
+    mcp.json actions register, so an action can never reference a column that isn't there yet
+    (the drift that 500'd users). Every column your mcp.json actions read/write MUST exist in
+    migrations.json. Shape: \`{ "migrations": [ { "name": "0001_init", "sql": "CREATE TABLE ..." } ] }\`
+    — \`name\`+\`sql\` are the ONLY fields (no \`id\`/\`version\`/\`up\`/\`down\`). Each runs once, in array
+    order, idempotent.
+    - ADDITIVE ONLY (enforced — a violating deploy FAILS): \`CREATE TABLE/INDEX\`, \`ALTER TABLE … ADD
+      COLUMN\`, \`INSERT\`. \`DROP\`/\`RENAME\`/\`DELETE\`/\`UPDATE\` are rejected. Evolve by adding; keep new
+      columns nullable/defaulted so old rows and old code stay valid. NEVER edit an applied
+      migration — add a new one (\`0002_…\`).
+    Example migrations.json: \`{ "migrations": [ { "name": "0001_init", "sql": "CREATE TABLE events (id TEXT PRIMARY KEY, user_id TEXT, title TEXT, created_at INTEGER)" }, { "name": "0002_photos", "sql": "ALTER TABLE events ADD COLUMN photo_url TEXT" } ] }\`.
+  - \`app.db.migrate(migrations)\` — same \`{ name, sql }[]\` shape; mirrors migrations.json for local
+    iteration, but migrations.json is authoritative (it runs on every deploy, before dependent code).
 - Storage (R2): \`app.storage.upload(path, data, contentType?)\`, \`app.storage.download(path)\`.
 - Server AI: \`app.ai.generate(prompt, opts?)\`, \`app.ai.chat(messages, opts?)\`, \`app.ai.embed(text, opts?)\`.
 - Subscriptions/payments: \`app.subscription.status()\`, \`openCheckout(req)\`, \`openPortal(url)\`; \`app.license.current()\`, \`validate(key)\`.

@@ -97,6 +97,29 @@ jobs:
             [ -f .vibe-check/badge.svg ] && cp .vibe-check/badge.svg "\${{ steps.dist.outputs.dir }}/.vcqa/badge.svg" || true
           fi
 
+      - name: Apply D1 migrations (migrations.json -> platform, keyless)
+        if: hashFiles('migrations.json') != ''
+        run: |
+          # Schema before code: apply the committed, additive-only migrations to
+          # this app's D1 BEFORE the new frontend uploads and BEFORE mcp.json
+          # actions register — so no action SQL ever references a column that
+          # isn't there yet. Authorized by the same verified GitHub OIDC claims
+          # as the deploy-credentials mint; the platform rejects any non-additive
+          # (DROP/RENAME/DELETE/UPDATE) statement. Idempotent via _migrations.
+          # HARD GATE: a migration failure fails the deploy — nothing ships.
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \\
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.proappstore.online" | jq -r '.value')
+          if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then echo "::error::could not obtain OIDC token"; exit 1; fi
+          RESP=$(curl -sS -X POST \\
+            "https://api.proappstore.online/v1/apps/\${{ github.event.repository.name }}/migrate/oidc" \\
+            -H "Authorization: Bearer $OIDC" -H "Content-Type: application/json" \\
+            --data-binary @migrations.json)
+          if echo "$RESP" | jq -e '.ok == true' >/dev/null; then
+            echo "Applied migration(s): $(echo "$RESP" | jq -c '.applied // []'); already: $(echo "$RESP" | jq -c '.already // []')"
+          else
+            echo "::error::migration failed: $(echo "$RESP" | jq -c '.error // .')"; exit 1
+          fi
+
       - name: Mint deploy credentials (keyless — GitHub OIDC → platform)
         run: |
           # 1. Ask GitHub for an OIDC token scoped to the platform audience.

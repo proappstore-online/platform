@@ -130,3 +130,182 @@ describe('POST /apps/:appId/deploy-credentials', () => {
     expect(res.status).toBe(503);
   });
 });
+
+describe('POST /apps/:appId/migrate/oidc', () => {
+  let migrateBody: unknown;
+  let migrateHeaders: Record<string, string>;
+  const MIGRATE_ENV = { DB: mockDB, INTERNAL_TOKEN: 'internal-secret' } as never;
+
+  beforeEach(async () => {
+    _resetJwksCache();
+    await makeKey();
+    migrateBody = undefined;
+    migrateHeaders = {};
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/.well-known/jwks')) {
+        return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
+      }
+      if (url.includes('/migrate')) {
+        migrateBody = JSON.parse((init!.body as string));
+        migrateHeaders = (init!.headers as Record<string, string>);
+        return new Response(JSON.stringify({ applied: ['0001_init'], already: [] }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const call = (appId: string, body: unknown, headers: Record<string, string> = {}) =>
+    deployRoutes.request(
+      `/apps/${appId}/migrate/oidc`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) },
+      MIGRATE_ENV,
+    );
+
+  const additive = { name: '0001_init', sql: 'CREATE TABLE t (id TEXT PRIMARY KEY);\nALTER TABLE t ADD COLUMN note TEXT;' };
+
+  it('forwards additive migrations to the data worker with the internal token', async () => {
+    const res = await call('aiuniversity',
+      { migrations: [additive] },
+      { Authorization: `Bearer ${await signToken()}` });
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.applied).toEqual(['0001_init']);
+    // it hit the app's data worker over its custom domain, with the internal token
+    const call0 = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .find((c) => String(c[0]).includes('/migrate'));
+    expect(String(call0![0])).toBe('https://data-aiuniversity.proappstore.online/migrate');
+    expect(migrateHeaders['X-Internal-Token']).toBe('internal-secret');
+    expect(migrateBody).toEqual({ migrations: [additive] });
+  });
+
+  it('is idempotent — reports already-applied names back from the data worker', async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/.well-known/jwks')) return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
+      if (url.includes('/migrate')) return new Response(JSON.stringify({ applied: [], already: ['0001_init'] }), { status: 200 });
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const res = await call('aiuniversity', { migrations: [additive] }, { Authorization: `Bearer ${await signToken()}` });
+    expect(res.status).toBe(200);
+    expect((await res.json() as Record<string, unknown>).already).toEqual(['0001_init']);
+  });
+
+  it('422 on a destructive statement (DROP) — never forwarded', async () => {
+    const res = await call('aiuniversity',
+      { migrations: [{ name: 'x', sql: 'DROP TABLE t;' }] },
+      { Authorization: `Bearer ${await signToken()}` });
+    expect(res.status).toBe(422);
+    expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.some((c) => String(c[0]).includes('/migrate'))).toBe(false);
+  });
+
+  it('422 on ALTER … RENAME and on DELETE/UPDATE', async () => {
+    for (const sql of ['ALTER TABLE t RENAME TO u;', 'DELETE FROM t;', 'UPDATE t SET x=1;']) {
+      const res = await call('aiuniversity', { migrations: [{ name: 'x', sql }] }, { Authorization: `Bearer ${await signToken()}` });
+      expect(res.status).toBe(422);
+    }
+  });
+
+  it('422 on a non-additive leading statement (SELECT)', async () => {
+    const res = await call('aiuniversity',
+      { migrations: [{ name: 'x', sql: 'SELECT 1;' }] },
+      { Authorization: `Bearer ${await signToken()}` });
+    expect(res.status).toBe(422);
+  });
+
+  it('200 with a no-op note when migrations is empty', async () => {
+    const res = await call('aiuniversity', { migrations: [] }, { Authorization: `Bearer ${await signToken()}` });
+    expect(res.status).toBe(200);
+    expect((await res.json() as Record<string, unknown>).note).toBe('no migrations');
+  });
+
+  it('400 when migrations is not an array', async () => {
+    const res = await call('aiuniversity', { migrations: 'nope' }, { Authorization: `Bearer ${await signToken()}` });
+    expect(res.status).toBe(400);
+  });
+
+  it('401 when no token', async () => {
+    expect((await call('aiuniversity', { migrations: [additive] })).status).toBe(401);
+  });
+
+  it('403 when the OIDC repo does not match the app id', async () => {
+    const res = await call('aiuniversity', { migrations: [additive] },
+      { Authorization: `Bearer ${await signToken('proappstore-online/other-app')}` });
+    expect(res.status).toBe(403);
+  });
+
+  it('403 when the deploy is not from main', async () => {
+    const res = await call('aiuniversity', { migrations: [additive] },
+      { Authorization: `Bearer ${await signToken('proappstore-online/aiuniversity', 'refs/heads/dev')}` });
+    expect(res.status).toBe(403);
+  });
+
+  it('502 when the data worker rejects the migration', async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/.well-known/jwks')) return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
+      if (url.includes('/migrate')) return new Response(JSON.stringify({ error: 'boom' }), { status: 500 });
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const res = await call('aiuniversity', { migrations: [additive] }, { Authorization: `Bearer ${await signToken()}` });
+    expect(res.status).toBe(502);
+  });
+});
+
+describe('POST /apps/:appId/migrate/internal', () => {
+  let migrateBody: unknown;
+  let migrateHeaders: Record<string, string>;
+  const INTERNAL_ENV = { DB: mockDB, INTERNAL_TOKEN: 'internal-secret' } as never;
+  const additive = { name: '0001_init', sql: 'CREATE TABLE t (id TEXT PRIMARY KEY);' };
+
+  beforeEach(() => {
+    migrateBody = undefined;
+    migrateHeaders = {};
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/migrate')) {
+        migrateBody = JSON.parse((init!.body as string));
+        migrateHeaders = (init!.headers as Record<string, string>);
+        return new Response(JSON.stringify({ applied: ['0001_init'], already: [] }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${String(input)}`);
+    }));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const call = (headers: Record<string, string>) =>
+    deployRoutes.request(
+      '/apps/aiuniversity/migrate/internal',
+      { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ migrations: [additive] }) },
+      INTERNAL_ENV,
+    );
+
+  it('forwards to the data worker with a valid internal token', async () => {
+    const res = await call({ 'X-Internal-Token': 'internal-secret' });
+    expect(res.status).toBe(200);
+    expect((await res.json() as Record<string, unknown>).applied).toEqual(['0001_init']);
+    expect(migrateHeaders['X-Internal-Token']).toBe('internal-secret');
+    expect(migrateBody).toEqual({ migrations: [additive] });
+  });
+
+  it('403 with a wrong internal token — never forwarded', async () => {
+    const res = await call({ 'X-Internal-Token': 'nope' });
+    expect(res.status).toBe(403);
+    expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+  });
+
+  it('403 with no token', async () => {
+    expect((await call({})).status).toBe(403);
+  });
+
+  it('422 on a destructive statement even over the internal path', async () => {
+    const res = await deployRoutes.request(
+      '/apps/aiuniversity/migrate/internal',
+      { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Internal-Token': 'internal-secret' }, body: JSON.stringify({ migrations: [{ name: 'x', sql: 'DROP TABLE t;' }] }) },
+      INTERNAL_ENV,
+    );
+    expect(res.status).toBe(422);
+    expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.some((c) => String(c[0]).includes('/migrate'))).toBe(false);
+  });
+});

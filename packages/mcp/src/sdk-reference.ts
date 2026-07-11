@@ -55,9 +55,27 @@ Uncapped on Pro (32 peers/room, 64 rooms/app on Free).`,
 const res = await app.proxy.fetch('api.example.com/v1/data')
 \`\`\``,
     db: `## Per-app SQL Database (D1)
+
+### Schema lives in migrations.json (canonical — applied on every deploy)
+Put the app's schema in a \`migrations.json\` file at the repo root. The deploy applies
+it to D1 BEFORE the frontend goes live and BEFORE mcp.json actions register, so an
+action can never reference a column that isn't there yet. Every column your mcp.json
+actions read/write MUST exist in migrations.json.
+\`\`\`json
+{ "migrations": [
+  { "name": "0001_init", "sql": "CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, user_id TEXT, title TEXT NOT NULL, city TEXT, created_at INTEGER NOT NULL)" }
+] }
+\`\`\`
+Rules (enforced by the platform on deploy):
+- ADDITIVE ONLY — CREATE TABLE/INDEX, ALTER TABLE … ADD COLUMN, INSERT. DROP / RENAME /
+  DELETE / UPDATE are rejected and fail the deploy. Evolve by adding, never dropping;
+  keep new columns nullable/defaulted so old rows and old code stay valid.
+- NEVER edit an applied migration — add a new one (0002_…, 0003_…). Applied names are
+  tracked, so redeploys are idempotent.
+
 \`\`\`tsx
-// Low-level schema setup and trusted migration code:
-await app.db.migrate([{ name: '001', sql: '...' }])
+// migrations.json is authoritative; app.db.migrate mirrors it for local iteration:
+await app.db.migrate([{ name: '0001_init', sql: '...' }])
 const tables = await app.db.tables()
 
 // User-facing reads/writes should use registered app actions:
