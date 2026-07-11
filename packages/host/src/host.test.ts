@@ -75,13 +75,37 @@ describe("resolveRouteForHostname", () => {
   it("resolves platform app subdomains through the routes table", async () => {
     const db = fakeRouteDb();
 
-    await expect(resolveRouteForHostname(db, "meetup.proappstore.online")).resolves.toEqual(route);
+    await expect(resolveRouteForHostname(db, "meetup.proappstore.online")).resolves.toEqual({ ...route, matched: "platform" });
   });
 
   it("resolves active custom domains back to their app route", async () => {
     const db = fakeRouteDb();
 
-    await expect(resolveRouteForHostname(db, "app.example.com")).resolves.toEqual(route);
+    await expect(resolveRouteForHostname(db, "app.example.com")).resolves.toEqual({ ...route, matched: "exact" });
+  });
+
+  it("resolves a single-label tenant under an active wildcard base", async () => {
+    const db = fakeRouteDb();
+
+    await expect(resolveRouteForHostname(db, "chessideas.chessclubs.online")).resolves.toEqual({
+      ...route,
+      matched: "wildcard",
+      tenant: "chessideas",
+      base: "chessclubs.online",
+    });
+  });
+
+  it("prefers exact domains over wildcard base matches", async () => {
+    const db = fakeRouteDb();
+
+    await expect(resolveRouteForHostname(db, "club.chessclubs.online")).resolves.toEqual({ ...route, matched: "exact" });
+  });
+
+  it("does not match wildcard bases for apex or multi-level tenant hosts", async () => {
+    const db = fakeRouteDb();
+
+    await expect(resolveRouteForHostname(db, "chessclubs.online")).resolves.toBeNull();
+    await expect(resolveRouteForHostname(db, "a.b.chessclubs.online")).resolves.toBeNull();
   });
 
   it("does not treat arbitrary proappstore subdomains or inactive custom domains as apps", async () => {
@@ -101,7 +125,14 @@ function fakeRouteDb(): D1Database {
             async first<T>() {
               if (sql.includes("app_custom_domains")) {
                 const domain = args[1];
-                return (domain === "app.example.com" ? route : null) as T | null;
+                const wildcardBase = args[2];
+                if (domain === "app.example.com" || domain === "club.chessclubs.online") {
+                  return { ...route, kind: "exact", matched_domain: domain } as T;
+                }
+                if (wildcardBase === "chessclubs.online") {
+                  return { ...route, kind: "wildcard", matched_domain: "chessclubs.online" } as T;
+                }
+                return null as T | null;
               }
               const [slug, zone] = args;
               return (slug === route.slug && zone === route.zone ? route : null) as T | null;

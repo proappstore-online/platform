@@ -78,6 +78,10 @@ export default {
       return new Response("App not found", { status: 404 });
     }
 
+    if (route.matched === "wildcard" && route.tenant === "www" && route.base) {
+      return Response.redirect(`https://${route.base}${url.pathname}${url.search}`, 301);
+    }
+
     const authResponse = await handleAuthRoute(request, env, route);
     if (authResponse) return authResponse;
 

@@ -63,7 +63,7 @@ function mockFetchWithCf(cfResponses: Array<{ status: number; body: unknown }> =
   };
 }
 
-const zoneFound = (id = 'zone1') => ({ status: 200, body: { success: true, result: [{ id, name: 'example.com' }] } });
+const zoneFound = (id = 'zone1', name = 'example.com') => ({ status: 200, body: { success: true, result: [{ id, name }] } });
 const zoneMissing = () => ({ status: 200, body: { success: true, result: [] } });
 const saasZone = () => ({ status: 200, body: { success: true, result: [{ id: 'saaszone', name: 'proappstore.online' }] } });
 const bindOk = (hostname: string) => ({
@@ -85,6 +85,22 @@ const customHostnamePending = (hostname: string) => ({
     },
   },
 });
+const wildcardDnsList = (domain: string, id?: string) => ({
+  status: 200,
+  body: { success: true, result: id ? [{ id, type: 'AAAA', name: `*.${domain}`, content: '100::', proxied: true }] : [] },
+});
+const wildcardDnsCreated = (domain: string, id = 'dns1') => ({
+  status: 200,
+  body: { success: true, result: { id, type: 'AAAA', name: `*.${domain}`, content: '100::', proxied: true } },
+});
+const wildcardRouteList = (domain: string, id?: string, script = 'proappstore-host') => ({
+  status: 200,
+  body: { success: true, result: id ? [{ id, pattern: `*.${domain}/*`, script }] : [] },
+});
+const wildcardRouteCreated = (domain: string, id = 'route1') => ({
+  status: 200,
+  body: { success: true, result: { id, pattern: `*.${domain}/*`, script: 'proappstore-host' } },
+});
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -95,8 +111,9 @@ describe('POST /v1/apps/:appId/domains — in-account zone (Worker Custom Domain
   it('binds the host worker and persists active state', async () => {
     const db = mockD1(
       mockStmt({ first: { creator_id: 'gh:1' } }),
+      mockStmt({ first: null }),
       mockStmt({ run: { meta: { changes: 1 } } }),
-      mockStmt({ first: { app_id: 'meetup', domain: 'meetup.example.com', status: 'active', cf_status: 'active', cf_payload: '{"kind":"worker"}', added_at: 1000, verified_at: 1000 } }),
+      mockStmt({ first: { app_id: 'meetup', domain: 'meetup.example.com', kind: 'exact', status: 'active', cf_status: 'active', cf_payload: '{"kind":"worker"}', added_at: 1000, verified_at: 1000 } }),
     );
     const mock = mockFetchWithCf([zoneFound(), bindOk('meetup.example.com')]);
     mock.install();
@@ -120,10 +137,11 @@ describe('POST /v1/apps/:appId/domains — external DNS (Cloudflare for SaaS)', 
   it('creates a custom hostname and returns CNAME + TXT instructions', async () => {
     const db = mockD1(
       mockStmt({ first: { creator_id: 'gh:1' } }),
+      mockStmt({ first: null }),
       mockStmt({ run: { meta: { changes: 1 } } }),
       mockStmt({
         first: {
-          app_id: 'meetup', domain: 'shop.example.org', status: 'pending', cf_status: 'pending_validation',
+          app_id: 'meetup', domain: 'shop.example.org', kind: 'exact', status: 'pending', cf_status: 'pending_validation',
           cf_payload: JSON.stringify({
             kind: 'saas', hostnameId: 'ch1', apex: false,
             cname: { name: 'shop.example.org', value: 'cname.proappstore.online' },
@@ -155,7 +173,7 @@ describe('POST /v1/apps/:appId/domains — external DNS (Cloudflare for SaaS)', 
   });
 
   it('returns a clear 503 when Cloudflare for SaaS is not enabled (auth error)', async () => {
-    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ first: null }));
     const mock = mockFetchWithCf([
       zoneMissing(), zoneMissing(), saasZone(),
       { status: 403, body: { success: false, errors: [{ code: 10000, message: 'Authentication error' }] } },
@@ -207,7 +225,7 @@ describe('POST /v1/apps/:appId/domains — validation', () => {
   });
 
   it('surfaces CF errors (e.g. hostname already bound elsewhere)', async () => {
-    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ first: null }));
     const mock = mockFetchWithCf([
       zoneFound(),
       { status: 409, body: { success: false, errors: [{ code: 100117, message: 'workers.api.error.hostname_taken' }] } },
@@ -223,6 +241,134 @@ describe('POST /v1/apps/:appId/domains — validation', () => {
   });
 });
 
+describe('POST /v1/apps/:appId/domains — wildcard base domains', () => {
+  it('creates wildcard DNS + Workers route and persists active wildcard state', async () => {
+    const payload = JSON.stringify({
+      kind: 'wildcard-route',
+      zoneId: 'zone-clubs',
+      routeId: 'route1',
+      dnsRecordId: 'dns1',
+      pattern: '*.chessclubs.online/*',
+    });
+    const db = mockD1(
+      mockStmt({ first: { creator_id: 'gh:1' } }),
+      mockStmt({ first: null }),
+      mockStmt({ run: { meta: { changes: 1 } } }),
+      mockStmt({ first: { app_id: 'meetup', domain: 'chessclubs.online', kind: 'wildcard', status: 'active', cf_status: 'active', cf_payload: payload, added_at: 1000, verified_at: 1000 } }),
+    );
+    const mock = mockFetchWithCf([
+      zoneFound('zone-clubs', 'chessclubs.online'),
+      wildcardDnsList('chessclubs.online'),
+      wildcardDnsCreated('chessclubs.online', 'dns1'),
+      wildcardRouteList('chessclubs.online'),
+      wildcardRouteCreated('chessclubs.online', 'route1'),
+    ]);
+    mock.install();
+
+    const res = await app.request('/v1/apps/meetup/domains', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: 'chessclubs.online', wildcard: true }),
+    }, makeEnv({ db }));
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { domain: { domain: string; kind: string; method: string; status: string } };
+    expect(body.domain).toMatchObject({ domain: 'chessclubs.online', kind: 'wildcard', method: 'wildcard-route', status: 'active' });
+    expect(mock.cfCalls.map((c) => c.method)).toEqual(['GET', 'GET', 'POST', 'GET', 'POST']);
+    expect(mock.cfCalls[2]?.body).toEqual({ type: 'AAAA', name: '*', content: '100::', proxied: true, ttl: 1 });
+    expect(mock.cfCalls[4]?.body).toEqual({ pattern: '*.chessclubs.online/*', script: 'proappstore-host' });
+  });
+
+  it('is idempotent when wildcard DNS + route already exist', async () => {
+    const db = mockD1(
+      mockStmt({ first: { creator_id: 'gh:1' } }),
+      mockStmt({ first: null }),
+      mockStmt({ run: { meta: { changes: 1 } } }),
+      mockStmt({ first: { app_id: 'meetup', domain: 'chessclubs.online', kind: 'wildcard', status: 'active', cf_status: 'active', cf_payload: '{"kind":"wildcard-route"}', added_at: 1000, verified_at: 1000 } }),
+    );
+    const mock = mockFetchWithCf([
+      zoneFound('zone-clubs', 'chessclubs.online'),
+      wildcardDnsList('chessclubs.online', 'dns1'),
+      wildcardRouteList('chessclubs.online', 'route1'),
+    ]);
+    mock.install();
+
+    const res = await app.request('/v1/apps/meetup/domains', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: 'chessclubs.online', wildcard: true }),
+    }, makeEnv({ db }));
+
+    expect(res.status).toBe(201);
+    expect(mock.cfCalls.map((c) => c.method)).toEqual(['GET', 'GET', 'GET']);
+  });
+
+  it('rejects wildcard bases that are not exact zones in the platform account', async () => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ first: null }));
+    const mock = mockFetchWithCf([zoneMissing()]);
+    mock.install();
+
+    const res = await app.request('/v1/apps/meetup/domains', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: 'clubs.example.net', wildcard: true }),
+    }, makeEnv({ db }));
+
+    expect(res.status).toBe(422);
+    expect(await res.text()).toContain('zone apex');
+    expect(mock.cfCalls).toHaveLength(1);
+  });
+
+  it('rejects wildcard routes that already point at another worker script', async () => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ first: null }));
+    const mock = mockFetchWithCf([
+      zoneFound('zone-clubs', 'chessclubs.online'),
+      wildcardDnsList('chessclubs.online', 'dns1'),
+      wildcardRouteList('chessclubs.online', 'route-other', 'foreign-worker'),
+    ]);
+    mock.install();
+
+    const res = await app.request('/v1/apps/meetup/domains', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: 'chessclubs.online', wildcard: true }),
+    }, makeEnv({ db }));
+
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain('already points at foreign-worker');
+  });
+
+  it('rejects cross-app wildcard base ownership before calling Cloudflare', async () => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ first: { app_id: 'other' } }));
+    const mock = mockFetchWithCf([]);
+    mock.install();
+
+    const res = await app.request('/v1/apps/meetup/domains', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: 'chessclubs.online', wildcard: true }),
+    }, makeEnv({ db }));
+
+    expect(res.status).toBe(409);
+    expect(mock.cfCalls).toHaveLength(0);
+  });
+
+  it('rejects exact domains under another app wildcard base before calling Cloudflare', async () => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ first: { app_id: 'other' } }));
+    const mock = mockFetchWithCf([]);
+    mock.install();
+
+    const res = await app.request('/v1/apps/meetup/domains', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: 'club.chessclubs.online' }),
+    }, makeEnv({ db }));
+
+    expect(res.status).toBe(409);
+    expect(mock.cfCalls).toHaveLength(0);
+  });
+});
+
 describe('GET /v1/apps/:appId/domains', () => {
   it('returns all attached domains', async () => {
     const db = mockD1(
@@ -230,8 +376,9 @@ describe('GET /v1/apps/:appId/domains', () => {
       mockStmt({
         all: {
           results: [
-            { app_id: 'meetup', domain: 'meetup.example.com', status: 'active', cf_status: 'active', cf_payload: '{"kind":"worker"}', added_at: 1000, verified_at: 2000 },
-            { app_id: 'meetup', domain: 'shop.example.org', status: 'pending', cf_status: 'pending_validation', cf_payload: '{"kind":"saas","cname":{"name":"shop.example.org","value":"cname.proappstore.online"},"cnameTarget":"cname.proappstore.online","txt":[],"apex":false}', added_at: 3000, verified_at: null },
+            { app_id: 'meetup', domain: 'meetup.example.com', kind: 'exact', status: 'active', cf_status: 'active', cf_payload: '{"kind":"worker"}', added_at: 1000, verified_at: 2000 },
+            { app_id: 'meetup', domain: 'shop.example.org', kind: 'exact', status: 'pending', cf_status: 'pending_validation', cf_payload: '{"kind":"saas","cname":{"name":"shop.example.org","value":"cname.proappstore.online"},"cnameTarget":"cname.proappstore.online","txt":[],"apex":false}', added_at: 3000, verified_at: null },
+            { app_id: 'meetup', domain: 'chessclubs.online', kind: 'wildcard', status: 'active', cf_status: 'active', cf_payload: '{"kind":"wildcard-route"}', added_at: 4000, verified_at: 5000 },
           ],
         },
       }),
@@ -240,11 +387,12 @@ describe('GET /v1/apps/:appId/domains', () => {
     mock.install();
     const res = await app.request('/v1/apps/meetup/domains', { headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { domains: Array<{ status: string; method: string; instructions: any }> };
-    expect(body.domains).toHaveLength(2);
+    const body = (await res.json()) as { domains: Array<{ status: string; kind: string; method: string; instructions: any }> };
+    expect(body.domains).toHaveLength(3);
     expect(body.domains[0]?.method).toBe('worker');
     expect(body.domains[1]?.method).toBe('saas');
     expect(body.domains[1]?.instructions?.cname?.value).toBe('cname.proappstore.online');
+    expect(body.domains[2]).toMatchObject({ kind: 'wildcard', method: 'wildcard-route' });
   });
 });
 
@@ -289,6 +437,23 @@ describe('POST /v1/apps/:appId/domains/:domain/verify', () => {
     const res = await app.request('/v1/apps/meetup/domains/meetup.example.com/verify', { method: 'POST', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
     expect(res.status).toBe(404);
   });
+
+  it('wildcard path: active when route and DNS record still exist', async () => {
+    const payload = JSON.stringify({ kind: 'wildcard-route', zoneId: 'zone-clubs', routeId: 'route1', dnsRecordId: 'dns1', pattern: '*.chessclubs.online/*' });
+    const db = mockD1(
+      mockStmt({ first: { creator_id: 'gh:1' } }),
+      mockStmt({ first: { cf_payload: payload } }),
+      mockStmt({ run: { meta: { changes: 1 } } }),
+      mockStmt({ first: { app_id: 'meetup', domain: 'chessclubs.online', kind: 'wildcard', status: 'active', cf_status: 'active', cf_payload: payload, added_at: 1000, verified_at: 5000 } }),
+    );
+    const mock = mockFetchWithCf([wildcardRouteList('chessclubs.online', 'route1'), wildcardDnsList('chessclubs.online', 'dns1')]);
+    mock.install();
+
+    const res = await app.request('/v1/apps/meetup/domains/chessclubs.online/verify', { method: 'POST', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
+
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { domain: { status: string; method: string } }).domain).toMatchObject({ status: 'active', method: 'wildcard-route' });
+  });
 });
 
 describe('DELETE /v1/apps/:appId/domains/:domain', () => {
@@ -329,5 +494,44 @@ describe('DELETE /v1/apps/:appId/domains/:domain', () => {
     const res = await app.request('/v1/apps/meetup/domains/not-a-domain', { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
     expect(res.status).toBe(400);
     expect(mock.cfCalls).toHaveLength(0);
+  });
+
+  it('wildcard path: removes the route and DNS record, then deletes the row', async () => {
+    const payload = JSON.stringify({ kind: 'wildcard-route', zoneId: 'zone-clubs', routeId: 'route1', dnsRecordId: 'dns1', pattern: '*.chessclubs.online/*' });
+    const db = mockD1(
+      mockStmt({ first: { creator_id: 'gh:1' } }),
+      mockStmt({ first: { cf_payload: payload } }),
+      mockStmt({ run: { meta: { changes: 1 } } }),
+    );
+    const mock = mockFetchWithCf([
+      { status: 200, body: { success: true, result: null } },
+      { status: 200, body: { success: true, result: null } },
+    ]);
+    mock.install();
+
+    const res = await app.request('/v1/apps/meetup/domains/chessclubs.online', { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
+
+    expect(res.status).toBe(200);
+    expect(mock.cfCalls.map((c) => c.method)).toEqual(['DELETE', 'DELETE']);
+    expect(mock.cfCalls[0]?.url).toContain('/workers/routes/route1');
+    expect(mock.cfCalls[1]?.url).toContain('/dns_records/dns1');
+  });
+
+  it('wildcard path: keeps the row when route cleanup fails', async () => {
+    const payload = JSON.stringify({ kind: 'wildcard-route', zoneId: 'zone-clubs', routeId: 'route1', dnsRecordId: 'dns1', pattern: '*.chessclubs.online/*' });
+    const db = mockD1(
+      mockStmt({ first: { creator_id: 'gh:1' } }),
+      mockStmt({ first: { cf_payload: payload } }),
+    );
+    const mock = mockFetchWithCf([
+      { status: 403, body: { success: false, errors: [{ code: 0, message: 'Route is locked' }] } },
+    ]);
+    mock.install();
+
+    const res = await app.request('/v1/apps/meetup/domains/chessclubs.online', { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({ db }));
+
+    expect(res.status).toBe(403);
+    expect(await res.text()).toContain('Route is locked');
+    expect(db.prepare).toHaveBeenCalledTimes(2);
   });
 });

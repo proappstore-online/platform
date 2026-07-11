@@ -1,6 +1,6 @@
 // BYO custom domains for Pro apps.
 //
-//   POST   /v1/apps/:appId/domains            { domain }        — attach
+//   POST   /v1/apps/:appId/domains            { domain, wildcard? } — attach
 //   GET    /v1/apps/:appId/domains                              — list + state
 //   POST   /v1/apps/:appId/domains/:domain/verify              — re-check CF status
 //   DELETE /v1/apps/:appId/domains/:domain                     — detach
@@ -46,6 +46,18 @@ async function cfZoneIdFor(c: Ctx, domain: string): Promise<string | null> {
   return null;
 }
 
+async function cfExactZoneIdFor(c: Ctx, domain: string): Promise<string | null> {
+  const cfToken = c.env.CF_API_TOKEN;
+  if (!cfToken) throw new HttpError('CF credentials not configured', 503);
+  const res = await fetch(
+    `https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(domain)}&status=active`,
+    { headers: { Authorization: `Bearer ${cfToken}` } },
+  );
+  const body = (await res.json().catch(() => null)) as { result?: { id?: string; name?: string }[] } | null;
+  const found = (body?.result ?? []).find((z) => z.name === domain && z.id);
+  return found?.id ?? null;
+}
+
 /** Bind / list / remove the host worker's Custom Domain for a hostname. */
 async function workerDomain(
   c: Ctx,
@@ -68,6 +80,81 @@ async function workerDomain(
   const res = await fetch(url, init);
   const body = await res.json().catch(() => null);
   return { status: res.status, body };
+}
+
+async function wildcardDnsRecord(
+  c: Ctx,
+  zoneId: string,
+  opts: { method: 'GET' | 'POST' | 'DELETE'; domain: string; id?: string },
+): Promise<{ status: number; body: any }> {
+  const cfToken = c.env.CF_API_TOKEN;
+  if (!cfToken) throw new HttpError('CF credentials not configured', 503);
+  const base = `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`;
+  let url = base;
+  const init: RequestInit = { method: opts.method, headers: { Authorization: `Bearer ${cfToken}` } };
+  if (opts.method === 'GET') {
+    url = `${base}?type=AAAA&name=${encodeURIComponent(`*.${opts.domain}`)}`;
+  } else if (opts.method === 'POST') {
+    (init.headers as Record<string, string>)['Content-Type'] = 'application/json';
+    init.body = JSON.stringify({ type: 'AAAA', name: '*', content: '100::', proxied: true, ttl: 1 });
+  } else if (opts.method === 'DELETE') {
+    url = `${base}/${opts.id}`;
+  }
+  const res = await fetch(url, init);
+  const body = await res.json().catch(() => null);
+  return { status: res.status, body };
+}
+
+async function wildcardWorkerRoute(
+  c: Ctx,
+  zoneId: string,
+  opts: { method: 'GET' | 'POST' | 'DELETE'; pattern: string; id?: string },
+): Promise<{ status: number; body: any }> {
+  const cfToken = c.env.CF_API_TOKEN;
+  if (!cfToken) throw new HttpError('CF credentials not configured', 503);
+  const base = `https://api.cloudflare.com/client/v4/zones/${zoneId}/workers/routes`;
+  let url = base;
+  const init: RequestInit = { method: opts.method, headers: { Authorization: `Bearer ${cfToken}` } };
+  if (opts.method === 'GET') {
+    url = `${base}?pattern=${encodeURIComponent(opts.pattern)}`;
+  } else if (opts.method === 'POST') {
+    (init.headers as Record<string, string>)['Content-Type'] = 'application/json';
+    init.body = JSON.stringify({ pattern: opts.pattern, script: HOST_WORKER });
+  } else if (opts.method === 'DELETE') {
+    url = `${base}/${opts.id}`;
+  }
+  const res = await fetch(url, init);
+  const body = await res.json().catch(() => null);
+  return { status: res.status, body };
+}
+
+async function ensureWildcardDnsRecord(c: Ctx, zoneId: string, domain: string): Promise<any> {
+  const list = await wildcardDnsRecord(c, zoneId, { method: 'GET', domain });
+  if (list.status >= 400) throw new HttpError(`CF returned ${list.status}`, list.status < 500 ? list.status : 502);
+  const records = Array.isArray(list.body?.result) ? list.body.result : [];
+  const existing = records.find((r: any) => r?.type === 'AAAA' && r?.name === `*.${domain}`);
+  if (existing) return existing;
+  const create = await wildcardDnsRecord(c, zoneId, { method: 'POST', domain });
+  const { ok, result, error } = extractCfResult(create.body);
+  if (!ok) throw new HttpError(error || `CF returned ${create.status}`, create.status >= 400 && create.status < 500 ? create.status : 502);
+  return result;
+}
+
+async function ensureWildcardWorkerRoute(c: Ctx, zoneId: string, pattern: string): Promise<any> {
+  const list = await wildcardWorkerRoute(c, zoneId, { method: 'GET', pattern });
+  if (list.status >= 400) throw new HttpError(`CF returned ${list.status}`, list.status < 500 ? list.status : 502);
+  const routes = Array.isArray(list.body?.result) ? list.body.result : [];
+  const existing = routes.find((r: any) => r?.pattern === pattern);
+  if (existing) {
+    if (existing.script && existing.script !== HOST_WORKER) {
+      throw new HttpError(`Workers route ${pattern} already points at ${existing.script}`, 409);
+    }
+    return existing;
+  }
+  const create = await wildcardWorkerRoute(c, zoneId, { method: 'POST', pattern });
+  const { ok, result, error } = extractCfResult(create.body);
+  if (!ok) throw new HttpError(error || `CF returned ${create.status}`, create.status >= 400 && create.status < 500 ? create.status : 502);
+  return result;
 }
 
 // ── Cloudflare for SaaS (custom hostnames) ───────────────────────────────────
@@ -141,6 +228,7 @@ function saasPayload(c: Ctx, domain: string, result: any): Record<string, unknow
 interface DomainRow {
   app_id: string;
   domain: string;
+  kind?: string | null;
   status: string;
   cf_status: string | null;
   cf_payload: string | null;
@@ -150,10 +238,11 @@ interface DomainRow {
 
 interface DomainDto {
   domain: string;
+  kind: 'exact' | 'wildcard';
   status: 'pending' | 'active' | 'failed';
   /** How the domain is wired: 'worker' = zone on CF (instant); 'saas' = external
    *  DNS, needs CNAME+TXT. */
-  method: 'worker' | 'saas' | null;
+  method: 'worker' | 'saas' | 'wildcard-route' | null;
   cfStatus: string | null;
   /** DNS records the owner must add (only for the 'saas' method while pending). */
   instructions: {
@@ -216,7 +305,12 @@ function dtoFromRow(row: DomainRow): DomainDto {
       payload = null;
     }
   }
-  const kind: 'worker' | 'saas' | null = payload?.kind === 'saas' ? 'saas' : payload?.kind === 'worker' ? 'worker' : null;
+  const rowKind: 'exact' | 'wildcard' = row.kind === 'wildcard' ? 'wildcard' : 'exact';
+  const kind: DomainDto['method'] =
+    payload?.kind === 'saas' ? 'saas'
+      : payload?.kind === 'worker' ? 'worker'
+      : payload?.kind === 'wildcard-route' ? 'wildcard-route'
+      : null;
   const instructions =
     kind === 'saas'
       ? {
@@ -228,6 +322,7 @@ function dtoFromRow(row: DomainRow): DomainDto {
       : null;
   return {
     domain: row.domain,
+    kind: rowKind,
     status: row.status as DomainDto['status'],
     method: kind,
     cfStatus: row.cf_status,
@@ -247,6 +342,28 @@ function extractCfResult(body: unknown): { ok: boolean; result: any; error: stri
   if (b.success === true) return { ok: true, result: b.result ?? null, error: null };
   const msg = b.errors?.[0]?.message || b.error || b.detail || 'CF API call failed';
   return { ok: false, result: null, error: String(msg) };
+}
+
+async function assertNoCrossAppDomainConflict(db: D1Database, appId: string, domain: string, wildcard: boolean): Promise<void> {
+  if (wildcard) {
+    const existing = await db.prepare(
+      `SELECT app_id FROM app_custom_domains
+       WHERE domain = ? AND COALESCE(kind, 'exact') = 'wildcard' AND app_id <> ?
+       LIMIT 1`,
+    ).bind(domain, appId).first<{ app_id: string }>();
+    if (existing) throw new HttpError(`${domain} is already attached as a wildcard base`, 409);
+    return;
+  }
+
+  const labels = domain.split('.');
+  if (labels.length <= 2) return;
+  const parent = labels.slice(1).join('.');
+  const wildcardOwner = await db.prepare(
+    `SELECT app_id FROM app_custom_domains
+     WHERE domain = ? AND COALESCE(kind, 'exact') = 'wildcard' AND app_id <> ?
+     LIMIT 1`,
+  ).bind(parent, appId).first<{ app_id: string }>();
+  if (wildcardOwner) throw new HttpError(`${domain} is under a wildcard base owned by another app`, 409);
 }
 
 function wrap(handler: (c: Ctx) => Promise<Response>) {
@@ -269,72 +386,89 @@ domainRoutes.post(
   wrap(async (c) => {
     const appId = c.req.param('appId')!;
     await requireAppOwner(c, appId);
-    const body = (await c.req.json().catch(() => ({}))) as { domain?: unknown };
+    const body = (await c.req.json().catch(() => ({}))) as { domain?: unknown; wildcard?: unknown };
     if (body.domain === undefined || body.domain === null) {
       throw new HttpError('domain required', 400);
     }
     const domain = validateDomain(body.domain);
+    const wildcard = body.wildcard === true;
+    await assertNoCrossAppDomainConflict(c.env.DB, appId, domain, wildcard);
 
-    // Adaptive: if the domain's zone is already on Cloudflare (in our account) we
-    // bind a Worker Custom Domain (instant, no DNS records for the owner to add).
-    // Otherwise the DNS lives elsewhere → Cloudflare for SaaS custom hostname, and
-    // we hand back the CNAME + TXT records for the owner to paste at their registrar.
-    const zoneId = await cfZoneIdFor(c, domain);
+    // Exact attach is adaptive: if the domain's zone is already on Cloudflare (in
+    // our account), bind a Worker Custom Domain; otherwise use CF-for-SaaS.
+    // Wildcard attach is intentionally narrower: the base must be an exact zone
+    // apex in our Cloudflare account so a zone Workers route can own *.base.
     let cfStatus: string;
     let status: 'pending' | 'active' | 'failed';
     let payloadObj: Record<string, unknown>;
+    const kind = wildcard ? 'wildcard' : 'exact';
 
-    if (zoneId) {
-      const cf = await workerDomain(c, { method: 'PUT', domain, zoneId });
-      const { ok, error } = extractCfResult(cf.body);
-      if (!ok) throw new HttpError(error || `CF returned ${cf.status}`, cf.status >= 400 && cf.status < 500 ? cf.status : 502);
+    if (wildcard) {
+      const exactZoneId = await cfExactZoneIdFor(c, domain);
+      if (!exactZoneId) {
+        throw new HttpError('Wildcard base domains must be a Cloudflare zone apex in the platform account. Move nameservers to Cloudflare, then retry.', 422);
+      }
+      const pattern = `*.${domain}/*`;
+      const dns = await ensureWildcardDnsRecord(c, exactZoneId, domain);
+      const route = await ensureWildcardWorkerRoute(c, exactZoneId, pattern);
       cfStatus = 'active';
       status = 'active';
-      payloadObj = { kind: 'worker' };
+      payloadObj = { kind: 'wildcard-route', zoneId: exactZoneId, routeId: route?.id ?? null, dnsRecordId: dns?.id ?? null, pattern };
     } else {
-      const saasZone = await saasZoneId(c);
-      if (!saasZone) {
-        throw new HttpError(
-          'Custom domains for external DNS need Cloudflare for SaaS, which is not enabled yet. Move the domain to Cloudflare, or ask the platform owner to enable SaaS custom hostnames.',
-          503,
-        );
-      }
-      const cf = await customHostname(c, saasZone, { method: 'POST', hostname: domain });
-      const { ok, result, error } = extractCfResult(cf.body);
-      if (!ok) {
-        // Until Cloudflare for SaaS is enabled (+ the token has SSL:Edit), CF returns
-        // an auth/entitlement error. Translate that into a clear message instead of a
-        // raw "Authentication error".
-        const notEnabled =
-          cf.status === 401 || cf.status === 403 || /authentication|not entitled|not allowed|requires|subscription|plan/i.test(error || '');
-        if (notEnabled) {
+      const zoneId = await cfZoneIdFor(c, domain);
+      if (!zoneId) {
+        const saasZone = await saasZoneId(c);
+        if (!saasZone) {
           throw new HttpError(
-            'Connecting a domain whose DNS lives outside Cloudflare needs Cloudflare for SaaS, which the platform owner hasn’t enabled yet. For now, move the domain’s nameservers to Cloudflare to connect it instantly.',
+            'Custom domains for external DNS need Cloudflare for SaaS, which is not enabled yet. Move the domain to Cloudflare, or ask the platform owner to enable SaaS custom hostnames.',
             503,
           );
         }
-        throw new HttpError(error || `CF returned ${cf.status}`, cf.status >= 400 && cf.status < 500 ? cf.status : 502);
+        const cf = await customHostname(c, saasZone, { method: 'POST', hostname: domain });
+        const { ok, result, error } = extractCfResult(cf.body);
+        if (!ok) {
+          // Until Cloudflare for SaaS is enabled (+ the token has SSL:Edit), CF returns
+          // an auth/entitlement error. Translate that into a clear message instead of a
+          // raw "Authentication error".
+          const notEnabled =
+            cf.status === 401 || cf.status === 403 || /authentication|not entitled|not allowed|requires|subscription|plan/i.test(error || '');
+          if (notEnabled) {
+            throw new HttpError(
+              'Connecting a domain whose DNS lives outside Cloudflare needs Cloudflare for SaaS, which the platform owner hasn’t enabled yet. For now, move the domain’s nameservers to Cloudflare to connect it instantly.',
+              503,
+            );
+          }
+          throw new HttpError(error || `CF returned ${cf.status}`, cf.status >= 400 && cf.status < 500 ? cf.status : 502);
+        }
+        cfStatus = result?.ssl?.status ?? 'pending';
+        status = 'pending';
+        payloadObj = saasPayload(c, domain, result);
+      } else {
+        const cf = await workerDomain(c, { method: 'PUT', domain, zoneId });
+        const { ok, error } = extractCfResult(cf.body);
+        if (!ok) throw new HttpError(error || `CF returned ${cf.status}`, cf.status >= 400 && cf.status < 500 ? cf.status : 502);
+        cfStatus = 'active';
+        status = 'active';
+        payloadObj = { kind: 'worker' };
       }
-      cfStatus = result?.ssl?.status ?? 'pending';
-      status = 'pending';
-      payloadObj = saasPayload(c, domain, result);
     }
 
     const now = Date.now();
     await c.env.DB.prepare(
-      `INSERT INTO app_custom_domains (app_id, domain, status, cf_status, cf_payload, added_at, verified_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO app_custom_domains (app_id, domain, kind, status, cf_status, cf_payload, added_at, verified_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(app_id, domain) DO UPDATE SET
+         kind = excluded.kind,
          status = excluded.status,
          cf_status = excluded.cf_status,
          cf_payload = excluded.cf_payload,
          verified_at = CASE WHEN excluded.status = 'active' THEN excluded.verified_at ELSE app_custom_domains.verified_at END`,
     )
-      .bind(appId, domain, status, cfStatus, JSON.stringify(payloadObj), now, status === 'active' ? now : null)
+      .bind(appId, domain, kind, status, cfStatus, JSON.stringify(payloadObj), now, status === 'active' ? now : null)
       .run();
 
     const row = await c.env.DB.prepare(
-      `SELECT app_id, domain, status, cf_status, cf_payload, added_at, verified_at
+      `SELECT app_id, domain, kind, status, cf_status, cf_payload, added_at, verified_at
        FROM app_custom_domains WHERE app_id = ? AND domain = ?`,
     )
       .bind(appId, domain)
@@ -352,7 +486,7 @@ domainRoutes.get(
     const appId = c.req.param('appId')!;
     await requireAppOwner(c, appId);
     const rows = await c.env.DB.prepare(
-      `SELECT app_id, domain, status, cf_status, cf_payload, added_at, verified_at
+      `SELECT app_id, domain, kind, status, cf_status, cf_payload, added_at, verified_at
        FROM app_custom_domains WHERE app_id = ? ORDER BY added_at ASC`,
     )
       .bind(appId)
@@ -375,7 +509,7 @@ domainRoutes.post(
     const domain = validateDomain(c.req.param('domain')!);
     // Look up which path this domain uses, then re-check the right CF resource.
     const existing = await c.env.DB.prepare(
-      `SELECT cf_payload FROM app_custom_domains WHERE app_id = ? AND domain = ?`,
+      `SELECT kind, cf_payload FROM app_custom_domains WHERE app_id = ? AND domain = ?`,
     ).bind(appId, domain).first<{ cf_payload: string | null }>();
     if (!existing) throw new HttpError('domain not attached to this app', 404);
     let kind: string | null = null;
@@ -385,7 +519,29 @@ domainRoutes.post(
     let status: 'pending' | 'active' | 'failed';
     let payloadJson: string;
 
-    if (kind === 'saas') {
+    if (kind === 'wildcard-route') {
+      const payload = existing.cf_payload ? JSON.parse(existing.cf_payload) : {};
+      const zoneId = payload.zoneId as string | undefined;
+      const pattern = (payload.pattern as string | undefined) ?? `*.${domain}/*`;
+      if (!zoneId) throw new HttpError('wildcard route payload is missing zoneId', 500);
+      const routeCf = await wildcardWorkerRoute(c, zoneId, { method: 'GET', pattern });
+      if (routeCf.status >= 400) throw new HttpError(`CF returned ${routeCf.status}`, routeCf.status < 500 ? routeCf.status : 502);
+      const dnsCf = await wildcardDnsRecord(c, zoneId, { method: 'GET', domain });
+      if (dnsCf.status >= 400) throw new HttpError(`CF returned ${dnsCf.status}`, dnsCf.status < 500 ? dnsCf.status : 502);
+      const routes = Array.isArray(routeCf.body?.result) ? routeCf.body.result : [];
+      const records = Array.isArray(dnsCf.body?.result) ? dnsCf.body.result : [];
+      const route = routes.find((r: any) => r?.pattern === pattern && r?.script === HOST_WORKER) ?? null;
+      const dns = records.find((r: any) => r?.type === 'AAAA' && r?.name === `*.${domain}` && r?.proxied === true) ?? null;
+      cfStatus = route && dns ? 'active' : 'pending';
+      status = route && dns ? 'active' : 'pending';
+      payloadJson = JSON.stringify({
+        kind: 'wildcard-route',
+        zoneId,
+        routeId: route?.id ?? payload.routeId ?? null,
+        dnsRecordId: dns?.id ?? payload.dnsRecordId ?? null,
+        pattern,
+      });
+    } else if (kind === 'saas') {
       const saasZone = await saasZoneId(c);
       const cf = saasZone
         ? await customHostname(c, saasZone, { method: 'GET', hostname: domain })
@@ -418,7 +574,7 @@ domainRoutes.post(
       throw new HttpError('domain not attached to this app', 404);
     }
     const row = await c.env.DB.prepare(
-      `SELECT app_id, domain, status, cf_status, cf_payload, added_at, verified_at
+      `SELECT app_id, domain, kind, status, cf_status, cf_payload, added_at, verified_at
        FROM app_custom_domains WHERE app_id = ? AND domain = ?`,
     )
       .bind(appId, domain)
@@ -445,7 +601,23 @@ domainRoutes.delete(
     let payload: any = null;
     try { payload = existing?.cf_payload ? JSON.parse(existing.cf_payload) : null; } catch { payload = null; }
 
-    if (payload?.kind === 'saas') {
+    if (payload?.kind === 'wildcard-route') {
+      const zoneId = payload.zoneId as string | undefined;
+      if (zoneId && payload.routeId) {
+        const del = await wildcardWorkerRoute(c, zoneId, { method: 'DELETE', pattern: payload.pattern ?? `*.${domain}/*`, id: payload.routeId });
+        if (del.status >= 400 && del.status !== 404) {
+          const { error } = extractCfResult(del.body);
+          throw new HttpError(error || `CF returned ${del.status}`, del.status < 500 ? del.status : 502);
+        }
+      }
+      if (zoneId && payload.dnsRecordId) {
+        const del = await wildcardDnsRecord(c, zoneId, { method: 'DELETE', domain, id: payload.dnsRecordId });
+        if (del.status >= 400 && del.status !== 404) {
+          const { error } = extractCfResult(del.body);
+          throw new HttpError(error || `CF returned ${del.status}`, del.status < 500 ? del.status : 502);
+        }
+      }
+    } else if (payload?.kind === 'saas') {
       const saasZone = await saasZoneId(c);
       if (saasZone && payload.hostnameId) {
         const del = await customHostname(c, saasZone, { method: 'DELETE', id: payload.hostnameId });

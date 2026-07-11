@@ -25,8 +25,9 @@ interface DomainInstructions {
 
 interface DomainDto {
   domain: string;
+  kind?: 'exact' | 'wildcard';
   status: 'pending' | 'active' | 'failed';
-  method: 'worker' | 'saas' | null;
+  method: 'worker' | 'saas' | 'wildcard-route' | null;
   cfStatus: string | null;
   instructions: DomainInstructions | null;
   addedAt: number;
@@ -100,12 +101,18 @@ function statusBadge(status: DomainDto['status']): string {
 }
 
 function renderDomain(d: DomainDto): void {
-  process.stdout.write(`\n  ${bold(d.domain)}  ${statusBadge(d.status)}\n`);
+  const label = d.kind === 'wildcard' ? `*.${d.domain}` : d.domain;
+  process.stdout.write(`\n  ${bold(label)}  ${statusBadge(d.status)}\n`);
   if (d.cfStatus) process.stdout.write(`    ${dim(`CF: ${d.cfStatus}`)}\n`);
 
   if (d.status === 'active') {
     process.stdout.write(`    ${dim(`verified ${new Date(d.verifiedAt || d.addedAt).toLocaleString()}`)}\n`);
-    process.stdout.write(`    Live at: https://${d.domain}\n`);
+    if (d.kind === 'wildcard') {
+      process.stdout.write(`    Live at: https://<tenant>.${d.domain}\n`);
+      process.stdout.write(`    ${dim(`Attach ${d.domain} separately if you also want the apex to serve the app.`)}\n`);
+    } else {
+      process.stdout.write(`    Live at: https://${d.domain}\n`);
+    }
     return;
   }
 
@@ -116,6 +123,13 @@ function renderDomain(d: DomainDto): void {
   );
 
   const ins = d.instructions;
+  if (d.method === 'wildcard-route') {
+    process.stdout.write(
+      `\n    ${dim("This wildcard base uses a Cloudflare zone route. No registrar DNS records are needed.")}\n`,
+    );
+    process.stdout.write(`\n    Run ${bold(`pas domain verify ${d.domain}`)} in a moment.\n`);
+    return;
+  }
   // Worker path: the domain's zone is already on Cloudflare — nothing to add.
   if (d.method !== 'saas' || !ins) {
     process.stdout.write(
@@ -150,11 +164,12 @@ function renderDomain(d: DomainDto): void {
   process.stdout.write(`\n    After adding the records, run: ${bold(`pas domain verify ${d.domain}`)}\n`);
 }
 
-async function addDomain(domain: string, opts: { token?: string }): Promise<void> {
+async function addDomain(domain: string, opts: { token?: string; wildcard?: boolean }): Promise<void> {
   const appId = getAppId();
   const token = getToken(opts);
-  process.stdout.write(`\n  Attaching ${bold(domain)} to ${appId}...\n`);
-  const { status, data } = await api('POST', `/v1/apps/${appId}/domains`, token, { domain });
+  const label = opts.wildcard ? `*.${domain}` : domain;
+  process.stdout.write(`\n  Attaching ${bold(label)} to ${appId}...\n`);
+  const { status, data } = await api('POST', `/v1/apps/${appId}/domains`, token, { domain, wildcard: opts.wildcard === true });
   if (status !== 201) {
     process.stderr.write(`\n  ${red('Failed')} (${status}): ${data?.error || JSON.stringify(data)}\n\n`);
     process.exit(1);
@@ -216,8 +231,9 @@ export const domainCommand = new Command('domain').description('Manage BYO custo
 
 domainCommand
   .command('add <domain>')
-  .description('Attach a custom domain (apex or subdomain) to the current app')
+  .description('Attach a custom domain (apex, subdomain, or wildcard base) to the current app')
   .option('--token <token>', 'Session token (or set PAS_SESSION_TOKEN)')
+  .option('--wildcard', 'Attach this domain as a wildcard base (*.domain)')
   .action(addDomain);
 
 domainCommand

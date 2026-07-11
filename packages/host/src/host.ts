@@ -13,6 +13,12 @@ export interface Route {
   store: string;
 }
 
+export interface ResolvedRoute extends Route {
+  matched: "platform" | "exact" | "wildcard";
+  tenant?: string;
+  base?: string;
+}
+
 /** Listing metadata used by HTMLRewriter for social/SEO meta tag injection. */
 export interface ListingMeta {
   icon_url: string | null;
@@ -62,22 +68,38 @@ export async function resolveRoute(db: D1Database, slug: string): Promise<Route 
  * domain. Custom domains still serve the app through PAS-controlled hosting,
  * which is required for same-origin platform auth cookies.
  */
-export async function resolveRouteForHostname(db: D1Database, hostname: string): Promise<Route | null> {
+export async function resolveRouteForHostname(db: D1Database, hostname: string): Promise<ResolvedRoute | null> {
   const host = normalizeHostname(hostname);
   const platformSlug = slugFromHostname(host);
-  if (platformSlug) return resolveRoute(db, platformSlug);
+  if (platformSlug) {
+    const route = await resolveRoute(db, platformSlug);
+    return route ? { ...route, matched: "platform" } : null;
+  }
 
   if (host === PLATFORM_ZONE || host.endsWith(ZONE)) return null;
 
-  return db
+  const parts = host.split(".");
+  const tenant = parts.length > 2 ? parts[0] : null;
+  const wildcardBase = parts.length > 2 ? parts.slice(1).join(".") : null;
+  const row = await db
     .prepare(
-      `SELECT r.slug, r.zone, r.r2_prefix, r.store
+      `SELECT r.slug, r.zone, r.r2_prefix, r.store, d.kind, d.domain AS matched_domain
        FROM app_custom_domains d
        JOIN routes r ON r.slug = d.app_id AND r.zone = ?1
-       WHERE d.domain = ?2 AND d.status = 'active'`,
+       WHERE d.status = 'active'
+         AND ((COALESCE(d.kind, 'exact') = 'exact' AND d.domain = ?2)
+           OR (COALESCE(d.kind, 'exact') = 'wildcard' AND d.domain = ?3))
+       ORDER BY CASE COALESCE(d.kind, 'exact') WHEN 'exact' THEN 0 ELSE 1 END
+       LIMIT 1`,
     )
-    .bind(PLATFORM_ZONE, host)
-    .first<Route>();
+    .bind(PLATFORM_ZONE, host, wildcardBase)
+    .first<Route & { kind?: string | null; matched_domain?: string | null }>();
+
+  if (!row) return null;
+  if (row.kind === "wildcard") {
+    return { slug: row.slug, zone: row.zone, r2_prefix: row.r2_prefix, store: row.store, matched: "wildcard", tenant: tenant ?? undefined, base: row.matched_domain ?? wildcardBase ?? undefined };
+  }
+  return { slug: row.slug, zone: row.zone, r2_prefix: row.r2_prefix, store: row.store, matched: "exact" };
 }
 
 /** Fetch listing metadata for meta tag injection. Returns null if no listing exists. */

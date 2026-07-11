@@ -57,6 +57,19 @@ describe("host auth token-handler routes", () => {
     expect(callback.origin).toBe("https://app.example.com");
   });
 
+  it("redirects wildcard www base-domain requests to the apex", async () => {
+    const env = makeEnv();
+    const res = await worker.fetch(
+      new Request("https://www.chessclubs.online/club-signup?ref=nav"),
+      env,
+      ctx(),
+    );
+
+    expect(res.status).toBe(301);
+    expect(res.headers.get("Location")).toBe("https://chessclubs.online/club-signup?ref=nav");
+    expect(env.APPS.get).not.toHaveBeenCalled();
+  });
+
   it("sanitizes return_to values that target internal auth routes", async () => {
     const env = makeEnv();
     const res = await worker.fetch(
@@ -357,7 +370,14 @@ function fakeRouteDb(): D1Database {
             async first<T>() {
               if (sql.includes("app_custom_domains")) {
                 const domain = args[1];
-                return (domain === "app.example.com" ? route : null) as T | null;
+                const wildcardBase = args[2];
+                if (domain === "app.example.com") {
+                  return { ...route, kind: "exact", matched_domain: domain } as T;
+                }
+                if (wildcardBase === "chessclubs.online") {
+                  return { ...route, kind: "wildcard", matched_domain: "chessclubs.online" } as T;
+                }
+                return null as T | null;
               }
               const [slug, zone] = args;
               return (slug === route.slug && zone === route.zone ? route : null) as T | null;
