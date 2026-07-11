@@ -194,6 +194,12 @@ describe("canonical deploy workflow — single source of truth", () => {
     expect(golden).not.toContain("pages deploy");
     expect(golden).toContain("--no-frozen-lockfile");
   });
+
+  it("skips schema/action registration only in the canonical template source repo", () => {
+    const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
+    expect(golden).toContain("hashFiles('migrations.json') != '' && github.event.repository.name != 'template-app'");
+    expect(golden).toContain("hashFiles('mcp.json') != '' && github.event.repository.name != 'template-app'");
+  });
 });
 
 describe("deploy-workflow injection (agent path)", () => {

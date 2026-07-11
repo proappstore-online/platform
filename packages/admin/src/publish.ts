@@ -98,7 +98,7 @@ jobs:
           fi
 
       - name: Apply D1 migrations (migrations.json -> platform, keyless)
-        if: hashFiles('migrations.json') != ''
+        if: hashFiles('migrations.json') != '' && github.event.repository.name != 'template-app'
         run: |
           # Schema before code: apply the committed, additive-only migrations to
           # this app's D1 BEFORE the new frontend uploads and BEFORE mcp.json
@@ -152,7 +152,7 @@ jobs:
           echo "Deployed apps/\${{ github.event.repository.name }} from \${{ github.sha }}"
 
       - name: Register app tools (mcp.json -> platform, keyless)
-        if: hashFiles('mcp.json') != ''
+        if: hashFiles('mcp.json') != '' && github.event.repository.name != 'template-app'
         run: |
           # Registered actions must never drift from the committed manifest:
           # re-register mcp.json on every deploy, authorized by the same
