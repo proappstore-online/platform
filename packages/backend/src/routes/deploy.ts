@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { verifyGithubOidc } from '../lib/github-oidc.js';
-import { requireAppOwner } from '../lib/auth.js';
+import { HttpError, requireAdmin, requireAppOwner } from '../lib/auth.js';
 import { replaceAppTools } from './tools.js';
 
 /**
@@ -260,7 +260,8 @@ async function applyMigrations(
   try { data = raw ? JSON.parse(raw) : {}; } catch { /* keep text */ }
   if (!res.ok) {
     await recordMigrationAudit(env, appId, source, 'failed', null, null, `data worker /migrate failed (${res.status}): ${raw.slice(0, 500)}`);
-    return { status: 502, body: { error: `data worker /migrate failed (${res.status})`, detail: data } };
+    const status = res.status === 422 ? 422 : 502;
+    return { status, body: { error: `data worker /migrate failed (${res.status})`, detail: data } };
   }
   const result = (data && typeof data === 'object' ? data : {}) as { applied?: string[]; already?: string[] };
   await recordMigrationAudit(env, appId, source, 'applied', result.applied ?? null, result.already ?? null, null);
@@ -373,5 +374,65 @@ deployRoutes.get('/apps/:appId/schema-status', async (c) => {
     // Null once a later attempt succeeds past it (drift resolved).
     hasUnresolvedFailure: last?.status === 'failed',
     history,
+  });
+});
+
+/**
+ * Fleet migration reconcile report (#35). Admin-only, read-only.
+ *
+ * This is the operator queue for migration repair: apps whose latest migrate
+ * attempt failed are actionable, while apps with no audit history are unknown
+ * (often pre-migrations.json or no DB usage) and should be checked before
+ * assuming drift. A later cron can call this same query and alert on `failed`.
+ */
+deployRoutes.get('/migrations/reconcile', async (c) => {
+  try {
+    await requireAdmin(c);
+  } catch (e) {
+    if (e instanceof HttpError) return c.json({ error: e.message }, e.status as 401 | 403);
+    throw e;
+  }
+  const includeOk = c.req.query('includeOk') === 'true';
+  const rows = await c.env.DB.prepare(
+    `SELECT a.id AS app_id, a.creator_id,
+            ma.source, ma.status, ma.applied, ma.already, ma.detail, ma.ran_at
+       FROM apps a
+       LEFT JOIN migration_audit ma
+         ON ma.app_id = a.id
+        AND ma.ran_at = (SELECT MAX(m2.ran_at) FROM migration_audit m2 WHERE m2.app_id = a.id)
+      ORDER BY a.id`,
+  ).all<{
+    app_id: string;
+    creator_id: string;
+    source: string | null;
+    status: string | null;
+    applied: string | null;
+    already: string | null;
+    detail: string | null;
+    ran_at: number | null;
+  }>();
+
+  const apps = (rows.results ?? []).map((r) => ({
+    appId: r.app_id,
+    creatorId: r.creator_id,
+    state: r.status === 'failed' ? 'failed' : r.status ? 'ok' : 'no_history',
+    last: r.status ? {
+      source: r.source,
+      status: r.status,
+      applied: r.applied ? JSON.parse(r.applied) as string[] : [],
+      already: r.already ? JSON.parse(r.already) as string[] : [],
+      detail: r.detail,
+      ranAt: r.ran_at,
+    } : null,
+  })).filter((r) => includeOk || r.state !== 'ok');
+
+  return c.json({
+    generatedAt: Date.now(),
+    counts: {
+      failed: apps.filter((a) => a.state === 'failed').length,
+      noHistory: apps.filter((a) => a.state === 'no_history').length,
+      okIncluded: apps.filter((a) => a.state === 'ok').length,
+    },
+    apps,
   });
 });

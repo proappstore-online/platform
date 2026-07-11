@@ -52,6 +52,7 @@ tools.
 - [Browser auth session model](./auth-session-model.md)
 - [MCP app tools and auth](./mcp-app-tools.md)
 - [App actions and data access security](./app-actions-security.md)
+- [Migration repair runbook](./migration-repair-runbook.md)
 - [Agent customization](./agent-customization.md)
 - [Project docs sharing](./project-docs-sharing.md)
 - [Architecture](./architecture.md)

@@ -232,6 +232,90 @@ describe("POST /validate (schema coherence, #33)", () => {
   });
 });
 
+describe("POST /migrate failure isolation (#35)", () => {
+  it("reports the exact failed statement and does not mark that migration applied", async () => {
+    const runCalls: string[] = [];
+    const insertedMigrations: string[] = [];
+    const db = {
+      prepare: vi.fn().mockImplementation((sql: string) => {
+        const stmt = {
+          bind: vi.fn((...args: unknown[]) => ({
+            run: vi.fn(async () => {
+              runCalls.push(sql);
+              if (sql.includes("INSERT INTO _migrations")) insertedMigrations.push(String(args[0]));
+              return { meta: { changes: 1, last_row_id: 1 } };
+            }),
+          })),
+          all: vi.fn(async () => ({ results: [], meta: { changes: 0 } })),
+          run: vi.fn(async () => {
+            runCalls.push(sql);
+            if (sql.includes("BROKEN")) throw new Error("no such table: missing_parent");
+            return { meta: { changes: 1, last_row_id: 1 } };
+          }),
+        };
+        return stmt;
+      }),
+      batch: vi.fn(),
+    };
+
+    const res = await app.request("/migrate", {
+      method: "POST",
+      headers: { "X-Internal-Token": INTERNAL_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        migrations: [
+          { name: "0001_init", sql: "CREATE TABLE ok (id TEXT)" },
+          { name: "0002_partial", sql: "CREATE TABLE before_failure (id TEXT); BROKEN STATEMENT; CREATE TABLE after_failure (id TEXT)" },
+        ],
+      }),
+    }, makeEnv(db as unknown as ReturnType<typeof mockD1>, INTERNAL_TOKEN));
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({
+      error: "migration statement failed",
+      migration: "0002_partial",
+      statementIndex: 1,
+      statement: "BROKEN STATEMENT",
+      detail: "no such table: missing_parent",
+      applied: ["0001_init"],
+      already: [],
+    });
+    expect(insertedMigrations).toEqual(["0001_init"]);
+    expect(runCalls).toContain("CREATE TABLE before_failure (id TEXT)");
+    expect(runCalls).not.toContain("CREATE TABLE after_failure (id TEXT)");
+  });
+
+  it("does not report success when _migrations cannot record an applied migration", async () => {
+    const db = {
+      prepare: vi.fn().mockImplementation((sql: string) => ({
+        bind: vi.fn((...args: unknown[]) => ({
+          run: vi.fn(async () => {
+            if (sql.includes("INSERT INTO _migrations")) throw new Error(`constraint failed for ${String(args[0])}`);
+            return { meta: { changes: 1, last_row_id: 1 } };
+          }),
+        })),
+        all: vi.fn(async () => ({ results: [], meta: { changes: 0 } })),
+        run: vi.fn(async () => ({ meta: { changes: 1, last_row_id: 1 } })),
+      })),
+      batch: vi.fn(),
+    };
+
+    const res = await app.request("/migrate", {
+      method: "POST",
+      headers: { "X-Internal-Token": INTERNAL_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({ migrations: [{ name: "0001_init", sql: "CREATE TABLE ok (id TEXT)" }] }),
+    }, makeEnv(db as unknown as ReturnType<typeof mockD1>, INTERNAL_TOKEN));
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: "migration tracking insert failed",
+      migration: "0001_init",
+      detail: "constraint failed for 0001_init",
+      applied: [],
+      already: [],
+    });
+  });
+});
+
 describe("GET /tables", () => {
   it("lists user tables", async () => {
     const db = mockD1();

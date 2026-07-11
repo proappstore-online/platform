@@ -192,7 +192,8 @@ schema checked here is current. The check hard-blocks only on a definitive
 missing table/column; if it can't reach the data worker it skips silently
 (defense-in-depth, not a new failure point). Migration attempts land in
 `migration_audit`, surfaced at `GET /v1/apps/:app/schema-status` and the
-`schema_status` MCP tool so pending/failed migrations are visible.
+`schema_status` MCP tool so pending/failed migrations are visible. Repair and
+fleet checks are documented in [Migration Repair Runbook](./migration-repair-runbook.md).
 
 ## Low-level raw SQL
 

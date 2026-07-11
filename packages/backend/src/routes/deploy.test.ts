@@ -44,6 +44,7 @@ let migrationRows: unknown[][] = [];
 let selectResults: (sql: string) => { first?: unknown; all?: unknown } = () => ({});
 const mockDB = {
   prepare: (sql: string) => ({
+    all: async () => selectResults(sql).all ?? { results: [] },
     bind: (...args: unknown[]) => ({
       run: async () => {
         if (sql.includes('deploy_audit')) auditRows.push(args);
@@ -291,6 +292,33 @@ describe('POST /apps/:appId/migrate/oidc', () => {
     expect(migrationRows).toHaveLength(1);
     expect(migrationRows[0]!.slice(0, 3)).toEqual(['aiuniversity', 'oidc', 'failed']);
   });
+
+  it('preserves structured data-worker 422 migration failures for repair diagnostics', async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/.well-known/jwks')) return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
+      if (url.includes('/migrate')) {
+        return new Response(JSON.stringify({
+          error: 'migration statement failed',
+          migration: '0002_partial',
+          statementIndex: 1,
+          statement: 'BROKEN STATEMENT',
+          detail: 'no such table: missing_parent',
+          applied: ['0001_init'],
+          already: [],
+        }), { status: 422 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const res = await call('aiuniversity', { migrations: [additive] }, { Authorization: `Bearer ${await signToken()}` });
+    expect(res.status).toBe(422);
+    const body = await res.json() as { detail: { migration: string; statementIndex: number; statement: string } };
+    expect(body.detail).toMatchObject({
+      migration: '0002_partial',
+      statementIndex: 1,
+      statement: 'BROKEN STATEMENT',
+    });
+  });
 });
 
 describe('GET /apps/:appId/schema-status', () => {
@@ -324,6 +352,81 @@ describe('GET /apps/:appId/schema-status', () => {
   it('400 on an invalid app id', async () => {
     const res = await call('Bad_ID', { Authorization: `Bearer ${await testToken('gh:5')}` });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /migrations/reconcile', () => {
+  const SK = TEST_SK;
+  const STATUS_ENV = { DB: mockDB, SESSION_SIGNING_KEY: SK } as never;
+
+  afterEach(() => { selectResults = () => ({}); });
+
+  const call = (headers: Record<string, string> = {}, query = '') =>
+    deployRoutes.request(`/migrations/reconcile${query}`, { method: 'GET', headers }, STATUS_ENV);
+
+  it('returns failed and no-history apps for platform admins', async () => {
+    selectResults = (sql) => {
+      if (sql.includes('FROM apps a')) {
+        return { all: { results: [
+          {
+            app_id: 'broken-app',
+            creator_id: 'gh:1',
+            source: 'oidc',
+            status: 'failed',
+            applied: JSON.stringify(['0001_init']),
+            already: JSON.stringify([]),
+            detail: 'migration statement failed: 0002_partial#1',
+            ran_at: 300,
+          },
+          {
+            app_id: 'old-app',
+            creator_id: 'gh:2',
+            source: null,
+            status: null,
+            applied: null,
+            already: null,
+            detail: null,
+            ran_at: null,
+          },
+          {
+            app_id: 'healthy-app',
+            creator_id: 'gh:3',
+            source: 'oidc',
+            status: 'applied',
+            applied: JSON.stringify(['0001_init']),
+            already: JSON.stringify([]),
+            detail: null,
+            ran_at: 200,
+          },
+        ] } };
+      }
+      return {};
+    };
+    const res = await call({ Authorization: `Bearer ${await testToken('gh:admin', { roles: ['user', 'admin'] })}` });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { counts: { failed: number; noHistory: number; okIncluded: number }; apps: Array<{ appId: string; state: string; last: { detail: string } | null }> };
+    expect(body.counts).toEqual({ failed: 1, noHistory: 1, okIncluded: 0 });
+    expect(body.apps.map((a) => [a.appId, a.state])).toEqual([
+      ['broken-app', 'failed'],
+      ['old-app', 'no_history'],
+    ]);
+    expect(body.apps[0]!.last?.detail).toContain('0002_partial#1');
+  });
+
+  it('can include healthy apps when requested', async () => {
+    selectResults = (sql) => sql.includes('FROM apps a')
+      ? { all: { results: [{ app_id: 'healthy-app', creator_id: 'gh:3', source: 'oidc', status: 'applied', applied: JSON.stringify(['0001_init']), already: null, detail: null, ran_at: 200 }] } }
+      : {};
+    const res = await call({ Authorization: `Bearer ${await testToken('gh:admin', { roles: ['user', 'admin'] })}` }, '?includeOk=true');
+    expect(res.status).toBe(200);
+    const body = await res.json() as { counts: { okIncluded: number }; apps: Array<{ state: string }> };
+    expect(body.counts.okIncluded).toBe(1);
+    expect(body.apps[0]!.state).toBe('ok');
+  });
+
+  it('rejects non-admin users', async () => {
+    const res = await call({ Authorization: `Bearer ${await testToken('gh:5')}` });
+    expect(res.status).toBe(403);
   });
 });
 

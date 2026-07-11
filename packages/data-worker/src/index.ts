@@ -270,10 +270,33 @@ app.post('/migrate', async (c) => {
     if (appliedSet.has(m.name)) continue;
     // Split on semicolons to handle multi-statement migrations
     const statements = m.sql.split(';').map((s) => s.trim()).filter((s) => s.length > 0);
-    for (const stmt of statements) {
-      await c.env.DB.prepare(stmt).run();
+    for (let i = 0; i < statements.length; i++) {
+      const stmt = statements[i]!;
+      try {
+        await c.env.DB.prepare(stmt).run();
+      } catch (e) {
+        return c.json({
+          error: 'migration statement failed',
+          migration: m.name,
+          statementIndex: i,
+          statement: stmt.slice(0, 500),
+          detail: e instanceof Error ? e.message : String(e),
+          applied: ran,
+          already: [...appliedSet],
+        }, 422);
+      }
     }
-    await c.env.DB.prepare('INSERT INTO _migrations (name, applied_at) VALUES (?, ?)').bind(m.name, Date.now()).run();
+    try {
+      await c.env.DB.prepare('INSERT INTO _migrations (name, applied_at) VALUES (?, ?)').bind(m.name, Date.now()).run();
+    } catch (e) {
+      return c.json({
+        error: 'migration tracking insert failed',
+        migration: m.name,
+        detail: e instanceof Error ? e.message : String(e),
+        applied: ran,
+        already: [...appliedSet],
+      }, 500);
+    }
     ran.push(m.name);
   }
 
