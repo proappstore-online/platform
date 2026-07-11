@@ -22,6 +22,7 @@ function harness(opts: {
   ticket?: Partial<WorkflowDeployArgs['ticket']>;
   agentDeploy?: Response;
   status?: Response;
+  siblings?: { id: string }[];
 }) {
   const exec: { sql: string; args: unknown[] }[] = [];
   const events: unknown[] = [];
@@ -31,7 +32,14 @@ function harness(opts: {
   const adminGet = vi.fn(async (_path: string) => opts.status ?? resp(true, { status: { status: 'running' } }));
 
   const deps = {
-    sql: { exec: (sql: string, ...args: unknown[]) => { exec.push({ sql, args }); return { toArray: () => [] }; } },
+    sql: {
+      exec: (sql: string, ...args: unknown[]) => {
+        exec.push({ sql, args });
+        return {
+          toArray: () => sql.includes('SELECT id FROM tickets WHERE id != ?') ? (opts.siblings ?? []) : [],
+        };
+      },
+    },
     env: {}, // no PAS_BACKEND → post-deploy steps no-op
     broadcast: (e: unknown) => events.push(e),
     logActivity: () => 'log',
@@ -89,6 +97,27 @@ describe('runDeployViaWorkflow', () => {
     expect(done?.args).toContain('deadbeef');
     expect(h.fail).not.toHaveBeenCalled();
     expect(h.infraFail).not.toHaveBeenCalled();
+  });
+
+  it('green deploy marks sibling deploying tickets done from the shared tree', async () => {
+    globalThis.fetch = vi.fn(async () => resp(false, {}, 404)); // harvest summary no-op
+    const h = harness({
+      ticket: { deploy_pushed_at: Date.now(), deploy_pushed_sha: 'wf-abc' },
+      status: resp(true, { status: { status: 'complete', output: { commitSha: 'deadbeef', repoUrl: 'https://gh/x' } } }),
+      siblings: [{ id: 't2' }, { id: 't3' }],
+    });
+    await runDeployViaWorkflow(h.args);
+
+    const siblingUpdates = h.exec.filter((e) =>
+      e.sql.includes('UPDATE tickets SET status =') &&
+      e.sql.includes('deploy_pushed_at = NULL') &&
+      (e.args.includes('t2') || e.args.includes('t3')),
+    );
+    expect(siblingUpdates).toHaveLength(2);
+    expect(siblingUpdates[0]?.args).toContain('deadbeef');
+    expect(h.events).toContainEqual(expect.objectContaining({ ticketId: 't2', to: 'done', reason: 'shipped-by-sibling' }));
+    expect(h.events).toContainEqual(expect.objectContaining({ ticketId: 't3', to: 'done', reason: 'shipped-by-sibling' }));
+    expect(h.adminFetch).not.toHaveBeenCalled();
   });
 
   it('errored with a CI-gate failure → back to Dev (fail), with the message', async () => {

@@ -240,9 +240,10 @@ The deploys **succeeded**, but the platform couldn't match the green run to the 
    (issue #29) — one green deploy completes the other in-flight/parked tickets; plus
    deploy **serialization** (one deploy at a time per project).
 
-### Still OPEN (filed)
-- **#29 — batch/debounce deploys** (mark-siblings-done shipped as the first cut; the fuller
-  merge-queue/debounce remains).
+### Closed follow-up
+- **#29 — batch/debounce deploys**: mark-siblings-done is the chosen cheap fix. A green
+  deploy of the shared tree completes sibling `deploying` / deploy-infra parked tickets,
+  so queued tickets do not redundantly full-deploy the same accumulated files.
 
 ### Also shipped this session
 - [x] **`deployResult` finds the run by `?head_sha`** (was a 20-run recent window)
