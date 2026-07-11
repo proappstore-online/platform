@@ -460,6 +460,125 @@ describe('PUT /v1/apps/:appId/tools — requires_auth enforcement', () => {
     );
     expect(res.status).toBe(200);
   });
+
+  it('accepts a public read-only query with a literal LIMIT', async () => {
+    const ownerStmt = mockStmt({ first: { creator_id: 'gh:1' } });
+    const db = mockD1(ownerStmt);
+    const res = await app.request(
+      '/v1/apps/test-app/tools',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tools: [{
+            name: 'get_org_by_slug',
+            description: 'Read public org branding',
+            operation: 'query',
+            sql: 'SELECT id, name, logo_url FROM orgs WHERE slug = :slug LIMIT 1',
+            params: { slug: { type: 'string' } },
+            requires_auth: false,
+            auth: { required: false },
+          }],
+        }),
+      },
+      makeEnv({}, db),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects public execute and batch tools', async () => {
+    const ownerStmt = mockStmt({ first: { creator_id: 'gh:1' } });
+    const db = mockD1(ownerStmt);
+    const executeRes = await app.request(
+      '/v1/apps/test-app/tools',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tools: [{
+            name: 'touch_org',
+            description: 'Write public org',
+            operation: 'execute',
+            sql: 'UPDATE orgs SET touched_at = :__now WHERE id = :id',
+            params: { id: { type: 'string' } },
+            requires_auth: false,
+          }],
+        }),
+      },
+      makeEnv({}, db),
+    );
+    expect(executeRes.status).toBe(400);
+
+    const batchRes = await app.request(
+      '/v1/apps/test-app/tools',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tools: [{
+            name: 'batch_public',
+            description: 'Batch public',
+            operation: 'batch',
+            statements: ['INSERT INTO audit (id) VALUES (:__uuid)'],
+            params: {},
+            requires_auth: false,
+          }],
+        }),
+      },
+      makeEnv({}, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }))),
+    );
+    expect(batchRes.status).toBe(400);
+  });
+
+  it('rejects public queries that reference identity or auth roles', async () => {
+    const put = (tool: Record<string, unknown>) => app.request(
+      '/v1/apps/test-app/tools',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tools: [tool] }),
+      },
+      makeEnv({}, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }))),
+    );
+    const base = {
+      name: 'public_orgs',
+      description: 'Public orgs',
+      operation: 'query',
+      sql: 'SELECT * FROM orgs LIMIT 10',
+      params: {},
+      requires_auth: false,
+    };
+
+    expect((await put({ ...base, sql: 'SELECT * FROM orgs WHERE user_id = :__user_id LIMIT 10' })).status).toBe(400);
+    expect((await put({ ...base, auth: { platform_roles: ['admin'] } })).status).toBe(400);
+    expect((await put({ ...base, auth: { app_roles: ['manager'] } })).status).toBe(400);
+  });
+
+  it('rejects public queries without a literal LIMIT of 500 or less', async () => {
+    const put = (sql: string) => app.request(
+      '/v1/apps/test-app/tools',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tools: [{
+            name: 'public_orgs',
+            description: 'Public orgs',
+            operation: 'query',
+            sql,
+            params: { limit: { type: 'integer' } },
+            requires_auth: false,
+          }],
+        }),
+      },
+      makeEnv({}, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }))),
+    );
+
+    expect((await put('SELECT * FROM orgs')).status).toBe(400);
+    expect((await put('SELECT * FROM orgs LIMIT :limit')).status).toBe(400);
+    expect((await put('SELECT * FROM orgs LIMIT 10000')).status).toBe(400);
+    expect((await put('SELECT * FROM orgs LIMIT 10, 20')).status).toBe(400);
+  });
 });
 
 describe('GET /v1/tools — JSON.parse safety', () => {

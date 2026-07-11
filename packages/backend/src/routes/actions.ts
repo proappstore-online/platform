@@ -10,10 +10,6 @@ interface ActionBody {
 }
 
 actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
-  const token = bearerToken(c.req.header('Authorization'));
-  if (!token) throw new HttpError('missing bearer token', 401);
-
-  const user = await requireUser(c);
   const appId = c.req.param('appId')!;
   const name = c.req.param('name')!;
   if (!/^[a-z][a-z0-9-]*$/.test(appId) || appId.length > 58) {
@@ -24,7 +20,20 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   }
 
   const manifest = await loadManifest(c.env.DB, appId, name);
-  await enforceActionAuth(c.env.DB, appId, manifest, user);
+  const publicAction = manifest.requires_auth === false;
+  let token: string | null = null;
+  let userId = '';
+
+  if (publicAction) {
+    const stalePublicError = validatePublicManifestForExecution(manifest);
+    if (stalePublicError) throw new HttpError(`public action manifest is invalid: ${stalePublicError}`, 500);
+  } else {
+    token = bearerToken(c.req.header('Authorization'));
+    if (!token) throw new HttpError('missing bearer token', 401);
+    const user = await requireUser(c);
+    userId = user.id;
+    await enforceActionAuth(c.env.DB, appId, manifest, user);
+  }
 
   const body = await c.req.json<ActionBody>().catch(() => {
     throw new HttpError('invalid JSON body', 400);
@@ -43,23 +52,23 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
       // Batch tools run all statements in ONE D1 transaction on the data
       // worker — multi-step flows can't be left half-applied.
       endpoint = 'batch';
-      payload = { statements: prepareActionBatch(manifest, input, user.id) };
+      payload = { statements: prepareActionBatch(manifest, input, userId) };
     } else {
       endpoint = manifest.operation === 'query' ? 'query' : 'execute';
-      payload = prepareActionQuery(manifest, input, user.id);
+      payload = prepareActionQuery(manifest, input, userId);
     }
   } catch (e) {
     throw new HttpError(e instanceof Error ? e.message : String(e), 400);
   }
   // Forward with the platform internal token so the data-worker trusts this as
   // prepared, role-checked SQL (identity already injected via __user_id) and
-  // runs it for the end-user without requiring them to own the app. The caller
-  // bearer is still sent so an un-redeployed data-worker (which ignores the
-  // internal header) keeps working exactly as before during rollout.
+  // runs it for the end-user without requiring them to own the app. Public
+  // read-only actions deliberately omit Authorization; authenticated actions
+  // still forward it for compatibility with un-redeployed data workers.
   const upstream = await fetch(`https://data-${appId}.proappstore.online/${endpoint}`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(c.env.INTERNAL_TOKEN ? { 'X-Internal-Token': c.env.INTERNAL_TOKEN } : {}),
       'Content-Type': 'application/json',
     },
@@ -80,6 +89,26 @@ function bearerToken(header: string | undefined): string | null {
   if (!header?.startsWith('Bearer ')) return null;
   const token = header.slice(7).trim();
   return token || null;
+}
+
+function validatePublicManifestForExecution(manifest: ToolManifest): string | null {
+  if (manifest.operation !== 'query') return 'operation must be query';
+  const sql = manifest.sql ?? '';
+  if (/:__user_id\b/.test(sql)) return 'must not reference :__user_id';
+  if ((manifest.auth?.platform_roles?.length ?? 0) > 0 || (manifest.auth?.app_roles?.length ?? 0) > 0) {
+    return 'must not declare auth roles';
+  }
+  if (manifest.auth?.required === true) return 'must not require auth';
+  const withoutComments = sql
+    .replace(/--.*$/gm, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ');
+  const match = /\bLIMIT\s+(\d+)\b/i.exec(withoutComments);
+  if (!match) return 'must include a literal LIMIT';
+  if (withoutComments.slice(match.index + match[0].length).trim().startsWith(',')) {
+    return 'must not use comma LIMIT syntax';
+  }
+  if (Number(match[1]) > 500) return 'LIMIT must be 500 or less';
+  return null;
 }
 
 async function loadManifest(db: D1Database, appId: string, name: string): Promise<ToolManifest> {

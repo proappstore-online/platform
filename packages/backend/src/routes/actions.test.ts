@@ -113,10 +113,74 @@ describe('POST /v1/apps/:appId/actions/:name', () => {
     const res = await app.request(
       '/v1/apps/interns/actions/list_mine',
       { method: 'POST', headers: { 'Content-Type': 'application/json' } },
-      env(db()),
+      env(db(stmt({ first: { manifest: manifest() } }))),
     );
 
     expect(res.status).toBe(401);
+  });
+
+  it('executes a public registered action without a bearer token', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ rows: [{ id: 'org-1' }] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const publicManifest = manifest({
+      name: 'get_org_by_slug',
+      sql: 'SELECT id, name, logo_url FROM orgs WHERE slug = :slug LIMIT 1',
+      params: { slug: { type: 'string' } },
+      requires_auth: false,
+    });
+
+    const res = await app.request(
+      '/v1/apps/interns/actions/get_org_by_slug',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ params: { slug: 'chessideas' } }),
+      },
+      env(db(stmt({ first: { manifest: publicManifest } }))),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ rows: [{ id: 'org-1' }] });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://data-interns.proappstore.online/query',
+      expect.objectContaining({
+        method: 'POST',
+        headers: {
+          'X-Internal-Token': 'internal-secret',
+          'Content-Type': 'application/json',
+        },
+      }),
+    );
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as { sql: string; params: unknown[] };
+    expect(body.sql).toBe('SELECT id, name, logo_url FROM orgs WHERE slug = ? LIMIT 1');
+    expect(body.params).toEqual(['chessideas']);
+  });
+
+  it('returns 500 for a stale public manifest that references user identity', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await app.request(
+      '/v1/apps/interns/actions/stale_public',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ params: {} }),
+      },
+      env(db(stmt({
+        first: {
+          manifest: manifest({
+            name: 'stale_public',
+            requires_auth: false,
+            sql: 'SELECT * FROM items WHERE user_id = :__user_id LIMIT 1',
+          }),
+        },
+      }))),
+    );
+
+    expect(res.status).toBe(500);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('rejects malformed params instead of silently dropping them', async () => {

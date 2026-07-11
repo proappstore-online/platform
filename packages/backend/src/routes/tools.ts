@@ -52,6 +52,17 @@ function validateSql(sql: string, operation: string): string | null {
   return null; // valid
 }
 
+function literalLimit(sql: string): number | null {
+  const withoutComments = sql
+    .replace(/--.*$/gm, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ');
+  const match = /\bLIMIT\s+(\d+)\b/i.exec(withoutComments);
+  if (!match) return null;
+  const tail = withoutComments.slice(match.index + match[0].length).trim();
+  if (tail.startsWith(',')) return null;
+  return Number(match[1]);
+}
+
 interface ToolParam {
   type: string;
   description?: string;
@@ -82,7 +93,7 @@ function validateManifest(tool: ToolManifest): string | null {
   if (!/^[a-z][a-z0-9_]*$/.test(tool.name)) return 'name must be lowercase alphanumeric with underscores';
   if (!tool.description || typeof tool.description !== 'string') return 'description is required';
   if (!['query', 'execute', 'batch'].includes(tool.operation)) return 'operation must be "query", "execute" or "batch"';
-  if (tool.requires_auth !== true) return 'requires_auth must be true for app data tools';
+  if (tool.requires_auth !== true && tool.requires_auth !== false) return 'requires_auth must be explicitly true or false';
 
   let sqlStatements: string[];
   if (tool.operation === 'batch') {
@@ -105,6 +116,15 @@ function validateManifest(tool: ToolManifest): string | null {
     // Batch member statements are writes (queries have nowhere to return).
     const sqlErr = validateSql(stmt, tool.operation === 'batch' ? 'execute' : tool.operation);
     if (sqlErr) return sqlErr;
+  }
+
+  if (tool.requires_auth === false) {
+    if (tool.operation !== 'query') return 'requires_auth false is only allowed for query tools';
+    const sql = sqlStatements[0] ?? '';
+    if (/:__user_id\b/.test(sql)) return 'public query tools must not reference :__user_id';
+    const limit = literalLimit(sql);
+    if (limit === null) return 'public query tools must include a literal LIMIT of 500 or less';
+    if (limit > 500) return 'public query tools must use LIMIT 500 or less';
   }
 
   // params must be an object (default to empty)
@@ -133,7 +153,13 @@ function validateManifest(tool: ToolManifest): string | null {
     if (tool.auth.app_roles !== undefined && !isStringArray(tool.auth.app_roles)) {
       return 'auth.app_roles must be an array of strings';
     }
-    if (tool.auth.required === false) {
+    if (tool.requires_auth === false && (tool.auth.platform_roles?.length || tool.auth.app_roles?.length)) {
+      return 'public query tools cannot declare auth roles';
+    }
+    if (tool.requires_auth === false && tool.auth.required === true) {
+      return 'public query tools cannot require auth';
+    }
+    if (tool.auth.required === false && tool.requires_auth !== false) {
       return 'auth.required cannot be false for app data tools';
     }
   }
