@@ -35,6 +35,7 @@ type Text = { content: { type: "text"; text: string }[] };
 const text = (s: string): Text => ({ content: [{ type: "text" as const, text: s }] });
 
 const APP_ID = z.string().regex(/^[a-z][a-z0-9-]*$/).describe("App ID (lowercase, e.g. 'chess-academy')");
+const OWNERSHIP_CACHE_TTL_MS = 60_000;
 
 export function registerProjectTools(
   server: McpServer,
@@ -43,6 +44,7 @@ export function registerProjectTools(
 ): void {
   const { GITHUB_ORG: org, GITHUB_TOKEN: ghToken, API_BASE: apiBase } = env;
   const gh = makeGitHub(ghToken, org);
+  const ownershipCache = new Map<string, { ok: boolean; expiresAt: number }>();
 
   /** Gate a mutating tool: read-only block (throws) + audit, attributed to the connection user. */
   const gate = (tool: string, input?: Record<string, unknown>) =>
@@ -59,7 +61,16 @@ export function registerProjectTools(
   async function requireOwner(appId: string): Promise<{ token: string } | Text> {
     const auth = requireAuth();
     if ('content' in auth) return auth;
-    if (!await verifyAppOwnership(apiBase, auth.token, appId)) {
+    const { userId } = getUserContext();
+    const cacheKey = `${userId ?? auth.token}:${appId}`;
+    const now = Date.now();
+    const cached = ownershipCache.get(cacheKey);
+    let ok = cached && cached.expiresAt > now ? cached.ok : undefined;
+    if (ok === undefined) {
+      ok = await verifyAppOwnership(apiBase, auth.token, appId);
+      ownershipCache.set(cacheKey, { ok, expiresAt: now + OWNERSHIP_CACHE_TTL_MS });
+    }
+    if (!ok) {
       return text(`Error: you don't own app "${appId}". Only the app owner can use project tools on it.`);
     }
     return auth;

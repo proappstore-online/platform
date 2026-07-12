@@ -17,7 +17,7 @@ your app repo                 platform backend            platform MCP server
 │  (manifest)   │  registers  │  (D1 table)  │            │ .online/mcp      │
 └───────────────┘             └──────────────┘            └────────┬─────────┘
                                                                     │ <app>/<tool>
-                                          data-<app>.proappstore ◄──┘  (SQL → D1)
+                                          data-<app>.proappstore ◄──┘  (actions → D1)
 ```
 
 1. Your app declares tools in an **`mcp.json`** manifest at the repo root.
@@ -44,8 +44,8 @@ reads and writes.
 
 ## Authentication model
 
-All app-data tools should be authenticated unless they are deliberately public.
-In the current production manifest format, app-data auth is represented by:
+Most app-data tools should be authenticated. In the current production manifest
+format, authenticated app-data auth is represented by:
 
 ```json
 { "requires_auth": true }
@@ -124,25 +124,39 @@ scoping for the final data permission check.
       "sql": "INSERT INTO items (id, user_id, title, created_at) VALUES (:__uuid, :__user_id, :title, :__now)",
       "params": { "title": { "type": "string" } },
       "requires_auth": true
+    },
+    {
+      "name": "create_project_with_membership",
+      "description": "Create a project and add the signed-in user as owner",
+      "operation": "batch",
+      "statements": [
+        "INSERT INTO projects (id, name, owner_id, created_at) VALUES (:id, :name, :__user_id, :__now)",
+        "INSERT INTO project_members (project_id, user_id, role, created_at) VALUES (:id, :__user_id, 'owner', :__now)"
+      ],
+      "params": { "id": { "type": "string" }, "name": { "type": "string" } },
+      "requires_auth": true
     }
   ]
 }
 ```
 
-Each tool is **one parameterized SQL statement** against your app's own D1 tables.
+Each tool is either one parameterized SQL statement or an atomic write batch
+against your app's own D1 tables.
 
 | Field | Meaning |
 |-------|---------|
 | `name` | lowercase `a-z0-9_`. Exposed as `<app_id>/<name>`. |
 | `description` | what the tool does (the model reads this to decide when to call it). |
-| `operation` | `query` → a single `SELECT` (returns rows). `execute` → a single `INSERT`/`UPDATE`/`DELETE`. |
-| `sql` | the statement. Bind values with `:name` placeholders; **no semicolons**, one statement only. |
+| `operation` | `query` → a single `SELECT` (returns rows). `execute` → a single `INSERT`/`UPDATE`/`DELETE`. `batch` → multiple write statements in one D1 transaction. |
+| `sql` | required for `query` and `execute`. Bind values with `:name` placeholders; **no semicolons**, one statement only. |
+| `statements` | required for `batch`, max 25 statements. Batch tools use `statements`, not `sql`; each member is validated like an `execute` statement. |
 | `params` | declared inputs: `{ "name": { "type", "description?", "optional?", "default?", "max?" } }`. Types: `string`, `integer`, `number`, `boolean`. |
-| `requires_auth` | `true` ⇒ the call needs a session token. Auto-required when the SQL uses `:__user_id`. |
+| `requires_auth` | explicit `true` or `false`. `true` requires a session token. `false` is allowed only for constrained public `query` tools. SQL using `:__user_id` must require auth. |
 
-Use `requires_auth: true` for every app-data tool unless the data is genuinely
-public outside the app-data surface. Production app-data tool registration
-requires `requires_auth: true` for every tool, including reads.
+Use `requires_auth: true` for writes and user-scoped reads. Deliberately public
+read-only queries can use `requires_auth: false`, but registration constrains
+them: they must be `query` tools, must not reference `:__user_id`, must not
+declare roles, and must include a literal `LIMIT 500` or lower.
 
 ### Magic placeholders
 
@@ -156,13 +170,16 @@ These are injected by the platform — **do not** declare them in `params`:
 
 ## Validation rules (enforced at register time)
 
+- `query` / `execute` tools use `sql`; `batch` tools use `statements`.
 - SQL must start with `SELECT` / `INSERT` / `UPDATE` / `DELETE`.
-- No DDL (`CREATE`, `DROP`, `ALTER`, `PRAGMA`, …) and no semicolons / multi-statement.
+- No DDL (`CREATE`, `DROP`, `ALTER`, `PRAGMA`, ...) and no semicolons.
 - `UPDATE` and `DELETE` **must** have a `WHERE` clause.
-- `query` must use `SELECT`; `execute` must not.
+- `query` must use `SELECT`; `execute` and each `batch` member must not.
 - Every `:param` in the SQL must be declared in `params` (or be a magic placeholder).
-- `requires_auth` must be `true` for every app-data tool.
-- Max 50 tools per app.
+- `requires_auth` must be explicitly `true` or `false`.
+- `requires_auth: false` is only allowed for public `query` tools with no
+  `:__user_id`, no roles, and a literal `LIMIT 500` or lower.
+- Max 120 tools per app.
 
 A manifest that violates any rule is rejected — the whole batch fails, so a bad
 tool never half-registers.
@@ -221,14 +238,14 @@ so tool listing and tool calls are tied to a user.
 
 ## Security model
 
-- **Authenticated by default.** App-data tools should require a PAS session.
-  Public unauthenticated MCP tools are not exposed through the production MCP
-  transport.
-- **SQL-only.** A tool can only run the one parameterized statement in its
-  manifest against the app's own D1 — no arbitrary code, no cross-app access.
+- **Authenticated by default.** App-data tools should require a PAS session
+  unless they are deliberately public read-only queries.
+- **SQL-only.** A tool can only run the parameterized statement, or declared
+  batch of write statements, in its manifest against the app's own D1 — no
+  arbitrary code, no cross-app access.
 - **Parameterized.** All inputs bind as positional params; no string-built SQL.
 - **Per-user scoped.** `:__user_id` + `requires_auth` keep a user's data scoped
-  to them. App-data tools are registered with `requires_auth: true`.
+  to them. Public tools cannot reference `:__user_id`.
 - **Role-aware before SQL.** Manifest `auth.platform_roles` and
   `auth.app_roles` are checked by the platform action executor. Still check
   domain-specific row permissions in SQL.
@@ -238,6 +255,7 @@ so tool listing and tool calls are tied to a user.
 
 - Tools are **SQL against the app's D1** — they can't (yet) call an external API
   or run business logic in a Worker route. That's a deliberate, safe surface.
+  Use `operation: "batch"` for atomic multi-statement writes.
 - Existing agent-built apps register on their **next** deploy (or a `pas publish`).
 - Coming next: richer (non-SQL) tool handlers, raw-SQL migration gates, and
   exposing per-app tools from the Console UI alongside

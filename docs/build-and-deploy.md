@@ -14,6 +14,9 @@ goes if we ever centralize. Decision record: [ADR-006](./adr/006-centralized-bui
 2. **`proappstore-host`** (one Worker, route `*.proappstore.online/*`) serves every
    app from R2 by subdomain, and dispatches reserved subdomains (`api`, `admin`,
    `agents`, `mcp`, `kb`, `docs`) to sibling Workers via service bindings.
+   `www` redirects to the apex; `console` and `dashboard` point to the
+   Pages-hosted control surfaces; `data-*` is reserved for generated app data
+   workers.
 3. **Where the workflow comes from:**
    - **Vibecode** (agent-teams): `provisionApp` strips any agent-authored
      workflow and injects the canonical `deployWorkflowYaml()` — the platform
@@ -30,6 +33,7 @@ flowchart LR
     Browser["Browser<br/>app.proappstore.online"] --> Host["proappstore-host Worker<br/>route *.proappstore.online/*"]
     Host -->|serve by subdomain| R2
     Host -->|reserved: api·admin·agents·mcp·kb·docs| Siblings["sibling Workers<br/>(service bindings)"]
+    Host -->|reserved: www·console·dashboard·data-*| Reserved["redirect / Pages / data workers"]
 ```
 
 ### Drift guards (the thing we're watching)

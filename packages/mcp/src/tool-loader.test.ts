@@ -5,7 +5,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 // Focus on fetchTools caching and the executeToolCall flow.
 
 // Re-export internals for testing by importing the module and inspecting behavior.
-import { executeToolCall, fetchTools, invalidateCache } from './tool-loader.js';
+import { executeToolCall, fetchTools, invalidateCache, registerAppTools } from './tool-loader.js';
 
 // The loader now calls the API over a service binding (Fetcher). Delegate to
 // globalThis.fetch so each test's stub keeps working unchanged.
@@ -139,5 +139,74 @@ describe('executeToolCall', () => {
 
     expect(result).toContain('requires authentication');
     expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('passes batch tools through the shared action executor', async () => {
+    const batchTool = {
+      app_id: 'interns',
+      name: 'create_org_with_member',
+      description: 'Create org and first membership',
+      operation: 'batch' as const,
+      statements: [
+        'INSERT INTO orgs (id, name) VALUES (:org_id, :name)',
+        'INSERT INTO memberships (org_id, user_id) VALUES (:org_id, :__user_id)',
+      ],
+      params: { org_id: { type: 'string' }, name: { type: 'string' } },
+      requires_auth: true,
+    };
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      Response.json({ results: [{ success: true }, { success: true }], meta: { duration: 4 } }),
+    );
+
+    const result = await executeToolCall(
+      batchTool,
+      { org_id: 'org-1', name: 'Team' },
+      'session-token',
+      api,
+      'https://api.proappstore.online',
+    );
+
+    expect(result).toContain('results');
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'https://api.proappstore.online/v1/apps/interns/actions/create_org_with_member',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer session-token' }),
+        body: JSON.stringify({ params: { org_id: 'org-1', name: 'Team' } }),
+      }),
+    );
+  });
+});
+
+describe('registerAppTools', () => {
+  it('treats batch tools as mutating for read-only mode', async () => {
+    const handlers = new Map<string, (args: Record<string, unknown>) => Promise<unknown>>();
+    const fakeServer = {
+      tool: (name: string, _desc: string, _schema: unknown, handler: (args: Record<string, unknown>) => Promise<unknown>) => {
+        handlers.set(name, handler);
+      },
+    };
+    registerAppTools(
+      fakeServer as never,
+      [{
+        app_id: 'interns',
+        name: 'create_org_with_member',
+        description: 'Create org and first membership',
+        operation: 'batch',
+        statements: [
+          'INSERT INTO orgs (id, name) VALUES (:org_id, :name)',
+          'INSERT INTO memberships (org_id, user_id) VALUES (:org_id, :__user_id)',
+        ],
+        params: {},
+        requires_auth: true,
+      }],
+      () => ({ userId: 'u1', token: 'tok-1' }),
+      api,
+      'https://api.proappstore.online',
+      { MCP_READ_ONLY: '1' },
+    );
+
+    await expect(handlers.get('interns/create_org_with_member')!({ org_id: 'org-1' }))
+      .rejects.toThrow(/read-only/i);
   });
 });

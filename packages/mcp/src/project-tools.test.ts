@@ -87,6 +87,18 @@ describe('auth helpers', () => {
     expect(getText(result)).toContain("don't own");
     expect(getText(result)).toContain('not-mine');
   });
+
+  it('caches ownership checks per user/app for 60 seconds', async () => {
+    const cachedTools = new Map<string, Handler>();
+    const cachedServer = { tool: (n: string, _d: string, _s: unknown, h: Handler) => { cachedTools.set(n, h); } };
+    registerProjectTools(cachedServer as any, env, () => userCtx);
+    mockGh.getFile.mockResolvedValue({ ok: true, status: 200, content: 'file body', sha: 'abc' });
+
+    await cachedTools.get('read_file')!({ app_id: 'cached-app', path: 'README.md' });
+    await cachedTools.get('read_file')!({ app_id: 'cached-app', path: 'README.md' });
+
+    expect(mockOwnership).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('scaffold_app', () => {

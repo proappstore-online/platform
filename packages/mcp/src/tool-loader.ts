@@ -17,8 +17,9 @@ interface ToolParam {
 interface ToolManifest {
   name: string;
   description: string;
-  operation: 'query' | 'execute';
-  sql: string;
+  operation: 'query' | 'execute' | 'batch';
+  sql?: string;
+  statements?: string[];
   params: Record<string, ToolParam>;
   requires_auth?: boolean;
   auth?: {
@@ -110,7 +111,7 @@ export async function executeToolCall(
     return JSON.stringify(rows, null, 2);
   }
 
-  // execute: return meta
+  // execute/batch: return metadata from the data worker.
   return JSON.stringify(result, null, 2);
 }
 
@@ -169,9 +170,9 @@ export function registerAppTools(
       zodSchema,
       async (args) => {
         const { userId, token } = getUserContext();
-        // `execute` actions mutate app data; `query` actions are read-only.
+        // `execute` and `batch` actions mutate app data; `query` actions are read-only.
         // Gate + audit the mutating ones (read-only mode throws here).
-        if (tool.operation === 'execute') {
+        if (tool.operation !== 'query') {
           await gateMutation({ env, subject: userId }, toolName, { app_id: tool.app_id });
         }
         const result = await executeToolCall(tool, args as Record<string, unknown>, token, api, apiBase);

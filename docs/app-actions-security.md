@@ -59,15 +59,17 @@ platform executor.
 
 ## Auth rules
 
-All browser and MCP app-data actions require a PAS session. Public unauthenticated
-database actions are not part of the production app-data surface.
+Browser and MCP app-data actions require a PAS session by default. Deliberately
+public database actions are allowed only for constrained read-only query tools:
+`requires_auth: false`, `operation: "query"`, no `:__user_id`, no role metadata,
+and a literal `LIMIT 500` or lower.
 
 Use manifest metadata for coarse permission gates:
 
 | Field | Meaning |
 |-------|---------|
-| `requires_auth` | Must be `true` for app-data actions. |
-| `auth.required` | Optional explicit marker. `false` is rejected for app-data actions. |
+| `requires_auth` | Must be explicit. Use `true` for writes and user-scoped reads; `false` is only for constrained public queries. |
+| `auth.required` | Optional explicit marker. `false` is allowed only when `requires_auth` is also `false`. |
 | `auth.platform_roles` | Any listed PAS platform role may call the action, such as `creator` or `admin`. |
 | `auth.app_roles` | Any listed app role may call the action, such as `member`, `manager`, `editor`, or a custom role. |
 

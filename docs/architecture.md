@@ -7,8 +7,9 @@ helpers the app uses.
 
 ## System at a glance
 
-Three Workers, each with a clear job. The browser only talks to them through the
-SDK; everything else (D1, R2, Stripe, GitHub, Anthropic) sits behind a Worker.
+The control plane is a small set of sibling Workers plus generated per-app data
+workers. The browser only talks to them through the SDK or hosted app URLs;
+everything else (D1, R2, Stripe, GitHub, Anthropic) sits behind a Worker.
 
 ```mermaid
 flowchart TB
@@ -18,24 +19,37 @@ flowchart TB
 
     subgraph CF["Cloudflare"]
         PAS["pas Worker — api.proappstore.online<br/>auth · sessions · roles · KV · rooms<br/>Stripe · entitlements · provisioning<br/>storage · maps · AI · registry"]
+        HOST["host Worker — *.proappstore.online<br/>reserved-subdomain dispatch<br/>R2 app hosting"]
+        ADMIN["admin Worker — admin.proappstore.online<br/>catalog operations · publish endpoint"]
+        MCP["mcp Worker — mcp.proappstore.online<br/>platform tools · app action tools"]
+        KB["kb-host Worker — kb.proappstore.online<br/>project knowledge sharing"]
         AT["agent-teams Worker — agents.proappstore.online<br/>AI build team (Architect + PO/BA/Dev/QA)<br/>one Durable Object per project"]
         DATA["data-app Worker<br/>the app's own SQL"]
         DO[("ProjectDO<br/>backlog · working-tree<br/>memory · cost · WebSocket")]
         AT --- DO
     end
 
+    Browser -->|hosted apps / console routes| HOST
     SDK -->|platform APIs| PAS
-    SDK -->|app data / actions| DATA
+    SDK -->|app data / actions| PAS
     SDK -->|Agents tab + live stream| AT
+    MCP -->|registered app actions| PAS
 
     PAS --> D1[("PAS D1")]
     PAS --> R2[("R2 storage")]
     PAS --> Stripe["Stripe"]
     PAS -->|provision repo, DNS, D1| GH["GitHub — proappstore-online"]
+    PAS -->|prepared SQL| DATA
+    HOST -->|serve app assets| R2
+    HOST -->|reserved subdomains| PAS
+    HOST --> ADMIN
+    HOST --> AT
+    HOST --> MCP
+    HOST --> KB
     DATA --> AppD1[("per-app D1")]
     AT -->|BYO key via AI Gateway| Anthropic["Anthropic"]
-    AT -->|push code| GH
-    GH -->|CI deploy| Hosting["R2 + host Worker (Path B)"]
+    AT -->|push code via admin/backend bindings| GH
+    GH -->|CI deploy| HOST
 ```
 
 ### 1. `pas` Worker — platform API
@@ -97,15 +111,31 @@ the CLI publish path.
 Auth: PAS platform validates its own signed PAS sessions with
 `SESSION_SIGNING_KEY`. No CF Access on `api.proappstore.online`.
 
-### 3. `agent-teams` Worker — AI build team
+### 3. `host` Worker — app hosting and sibling dispatch
+
+The `proappstore-host` Worker owns the wildcard route
+`*.proappstore.online/*`. For ordinary app subdomains it serves static build
+assets from the shared R2 bucket under `apps/<app>/`. For reserved subdomains it
+dispatches to sibling Workers through service bindings: `api`, `admin`,
+`agents`, `mcp`, `kb`, and `docs`; `www` redirects to the apex, while `console`
+and `dashboard` are routed to the Pages storefront/admin surfaces.
+
+### 4. `mcp` Worker — platform and app tools
+
+The MCP Worker exposes platform tools, project/repo tools, and dynamically
+registered app tools at `mcp.proappstore.online`. App tools are loaded from the
+backend `app_tools` table and execute through the same
+`/v1/apps/:appId/actions/:name` path used by the browser SDK.
+
+### 5. `agent-teams` Worker — AI build team
 
 A team of AI agents (PO / BA / Dev / QA) that builds and maintains an app from a
 founder's chat. One Durable Object per project holds the backlog, the working-tree
 cache, project memory, cost ledger, and the live WebSocket. GitHub is the source
-of truth — the DO syncs from it before each run and pushes back via the `admin`
-Worker. Agents run on the user's **BYO key** (our own in-Worker loop, streamed,
-with prompt caching). Deployed at `agents.proappstore.online`; UI in the creator
-console's per-app **Agents** tab.
+of truth — the DO syncs from it before each run and pushes code through
+platform service bindings. Agents run on the user's **BYO key** (our own
+in-Worker loop, streamed, with prompt caching). Deployed at
+`agents.proappstore.online`; UI in the creator console's per-app **Agents** tab.
 
 Full detail: [`packages/agent-teams/README.md`](https://github.com/proappstore-online/platform/blob/main/packages/agent-teams/README.md)
 and [Agent Teams: runtime & billing](/agent-teams-runtime-and-billing).
