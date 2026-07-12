@@ -1,7 +1,7 @@
 {
   "name": "@proappstore/backend",
   "version": "0.0.0",
-  "description": "Cloudflare Worker — Stripe webhooks, subscriptions, license keys, app + listing CRUD, analytics, BYO custom domains.",
+  "description": "Cloudflare Worker \u2014 Stripe webhooks, subscriptions, license keys, app + listing CRUD, analytics, BYO custom domains.",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -16,7 +16,8 @@
     "@proappstore/compliance": "workspace:*",
     "hono": "^4.12.27",
     "web-push": "^3.6.0",
-    "@proappstore/build-core": "workspace:*"
+    "@proappstore/build-core": "workspace:*",
+    "@proappstore/qa-spec": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",

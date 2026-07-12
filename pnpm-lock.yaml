@@ -80,6 +80,9 @@ importers:
       '@proappstore/compliance':
         specifier: workspace:*
         version: link:../compliance
+      '@proappstore/qa-spec':
+        specifier: workspace:*
+        version: link:../qa-spec
       hono:
         specifier: ^4.12.27
         version: 4.12.27

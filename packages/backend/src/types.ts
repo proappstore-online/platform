@@ -5,6 +5,8 @@ export interface Env {
   SELF: Fetcher;
   /** Shared R2 bucket for file storage. Files keyed as {appId}/{userId}/{path}. */
   STORAGE: R2Bucket;
+  /** Optional service binding to the headless QA executor (packages/qa-worker). */
+  QA_WORKER?: Fetcher;
   /** Durable Object namespace for realtime rooms. */
   ROOM: DurableObjectNamespace;
   STRIPE_SECRET_KEY: string;
