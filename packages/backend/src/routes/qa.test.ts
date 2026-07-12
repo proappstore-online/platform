@@ -1,8 +1,72 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
+import { _resetJwksCache, type OidcClaims } from '../lib/github-oidc.js';
 import { testToken, TEST_SK } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1');
+const ISSUER = 'https://token.actions.githubusercontent.com';
+const AUD = 'https://api.proappstore.online';
+const KID = 'test-key-1';
+
+function b64url(bytes: Uint8Array): string {
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function b64urlJson(value: unknown): string {
+  return b64url(new TextEncoder().encode(JSON.stringify(value)));
+}
+
+async function makeOidcKey() {
+  const pair = await crypto.subtle.generateKey(
+    { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
+    true,
+    ['sign', 'verify'],
+  );
+  const jwk = (await crypto.subtle.exportKey('jwk', pair.publicKey)) as JsonWebKey;
+  return { privateKey: pair.privateKey, jwk: { ...jwk, kid: KID, alg: 'RS256', use: 'sig' } };
+}
+
+async function signOidcToken(
+  privateKey: CryptoKey,
+  claims: Partial<OidcClaims> = {},
+): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64urlJson({ alg: 'RS256', typ: 'JWT', kid: KID });
+  const payload = b64urlJson({
+    iss: ISSUER,
+    aud: AUD,
+    sub: 'repo:proappstore-online/chess-academy:ref:refs/heads/main',
+    repository: 'proappstore-online/chess-academy',
+    repository_owner: 'proappstore-online',
+    ref: 'refs/heads/main',
+    sha: 'deadbeef',
+    iat: now,
+    nbf: now,
+    exp: now + 300,
+    ...claims,
+  });
+  const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', privateKey, new TextEncoder().encode(`${header}.${payload}`));
+  return `${header}.${payload}.${b64url(new Uint8Array(sig))}`;
+}
+
+async function stubGithubOidc() {
+  _resetJwksCache();
+  const key = await makeOidcKey();
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/.well-known/jwks')) {
+      return new Response(JSON.stringify({ keys: [key.jwk] }), { status: 200 });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  }));
+  return key;
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -154,6 +218,76 @@ describe('runs', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { runs: Array<{ flowId: string }> };
     expect(body.runs.map((r) => r.flowId)).toEqual(['a', 'b']);
+  });
+
+  it('queues deploy-triggered runs from a verified app-repo GitHub OIDC token', async () => {
+    const { privateKey } = await stubGithubOidc();
+    const insert = mockStmt({ run: { meta: { changes: 1 } } });
+    const db = mockD1(
+      mockStmt({ all: { results: [{ flow_id: 'smoke' }] } }),
+      insert,
+    );
+    const res = await app.request(
+      req(
+        '/v1/apps/chess-academy/qa/runs',
+        { method: 'POST', body: JSON.stringify({ trigger: 'deploy' }) },
+        { Authorization: `Bearer ${await signOidcToken(privateKey)}` },
+      ),
+      undefined,
+      makeEnv(db) as never,
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { runs: Array<{ flowId: string }> };
+    expect(body.runs).toEqual([{ runId: expect.any(String), flowId: 'smoke' }]);
+    expect(insert.bind).toHaveBeenCalledWith(expect.any(String), 'chess-academy', 'smoke', 'deploy', expect.any(Number));
+  });
+
+  it('rejects GitHub OIDC run triggers from the wrong repo or ref', async () => {
+    const { privateKey } = await stubGithubOidc();
+    const db = mockD1(mockStmt({ all: { results: [{ flow_id: 'smoke' }] } }));
+
+    const wrongRepo = await app.request(
+      req(
+        '/v1/apps/chess-academy/qa/runs',
+        { method: 'POST', body: JSON.stringify({ trigger: 'deploy' }) },
+        { Authorization: `Bearer ${await signOidcToken(privateKey, { repository: 'proappstore-online/other-app' })}` },
+      ),
+      undefined,
+      makeEnv(db) as never,
+    );
+    expect(wrongRepo.status).toBe(403);
+
+    const wrongRef = await app.request(
+      req(
+        '/v1/apps/chess-academy/qa/runs',
+        { method: 'POST', body: JSON.stringify({ trigger: 'deploy' }) },
+        { Authorization: `Bearer ${await signOidcToken(privateKey, { ref: 'refs/heads/feature' })}` },
+      ),
+      undefined,
+      makeEnv(db) as never,
+    );
+    expect(wrongRef.status).toBe(403);
+  });
+
+  it('fails closed on invalid GitHub OIDC instead of falling through to session auth', async () => {
+    const { privateKey } = await stubGithubOidc();
+    const db = mockD1(
+      ownerStmt(),
+      mockStmt({ all: { results: [{ flow_id: 'smoke' }] } }),
+    );
+    const res = await app.request(
+      req(
+        '/v1/apps/chess-academy/qa/runs',
+        { method: 'POST', body: JSON.stringify({ trigger: 'deploy' }) },
+        { Authorization: `Bearer ${await signOidcToken(privateKey, { aud: 'https://wrong.example' })}` },
+      ),
+      undefined,
+      makeEnv(db) as never,
+    );
+
+    expect(res.status).toBe(401);
+    expect(await res.text()).toContain('OIDC verification failed');
   });
 
   it('404s when no flows match', async () => {

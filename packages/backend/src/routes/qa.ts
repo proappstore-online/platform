@@ -19,7 +19,17 @@ import { type Context, Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { MAX_FLOWS_PER_APP, toPlaywright, validateFlow, type TestFlow } from '@proappstore/qa-spec';
 import { HttpError, requireAppOwner } from '../lib/auth.js';
+import { verifyGithubOidc } from '../lib/github-oidc.js';
 import type { Env } from '../types.js';
+
+// Same trust model as deploy-credentials (routes/deploy.ts): the VERIFIED
+// GitHub OIDC `repository` claim must be this org's repo named exactly the
+// app id, from main. Lets the deploy workflow trigger post-deploy QA runs
+// with no stored secret.
+const OIDC_ORG = 'proappstore-online';
+const OIDC_AUDIENCE = 'https://api.proappstore.online';
+const OIDC_REF = 'refs/heads/main';
+const GITHUB_OIDC_ISSUER = 'https://token.actions.githubusercontent.com';
 
 export const qaRoutes = new Hono<{ Bindings: Env }>();
 
@@ -44,6 +54,25 @@ async function sha256Hex(value: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+function b64urlJsonPart(part: string): Record<string, unknown> | null {
+  try {
+    let padded = part.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = padded.length % 4;
+    if (pad) padded += '='.repeat(4 - pad);
+    return JSON.parse(atob(padded)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function looksLikeGithubOidcToken(token: string): boolean {
+  const parts = token.split('.');
+  if (parts.length !== 3) return false;
+  const header = b64urlJsonPart(parts[0]!);
+  const payload = b64urlJsonPart(parts[1]!);
+  return header?.alg === 'RS256' && payload?.iss === GITHUB_OIDC_ISSUER;
+}
+
 /**
  * Owner bearer OR scoped QA key for this app. Returns the acting identity
  * (user id for owners, `qa-key:<prefix>` for keys) for audit columns.
@@ -60,6 +89,34 @@ async function requireQaAccess(c: Ctx, appId: string): Promise<string> {
   }
   const user = await requireAppOwner(c, appId);
   return user.id;
+}
+
+/**
+ * Run-triggering additionally accepts a GitHub Actions OIDC token from the
+ * app's own repo (post-deploy trigger, no stored secret). Flow/key management
+ * stays owner/QA-key only.
+ */
+async function requireRunAccess(c: Ctx, appId: string): Promise<string> {
+  const auth = c.req.header('Authorization') ?? '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  // GitHub OIDC tokens are JWTs issued by GitHub; PAS session JWTs verify via
+  // requireQaAccess below. Only verified GitHub-looking tokens use the OIDC
+  // path; invalid GitHub OIDC must fail closed rather than falling through to
+  // session auth.
+  if (token && !c.req.header('X-QA-Key') && looksLikeGithubOidcToken(token)) {
+    try {
+      const claims = await verifyGithubOidc(token, { audience: OIDC_AUDIENCE });
+      if (claims.repository !== `${OIDC_ORG}/${appId}`) {
+        throw new HttpError(`repository ${claims.repository} is not authorized for app ${appId}`, 403);
+      }
+      if (claims.ref !== OIDC_REF) throw new HttpError('runs may only be triggered from main', 403);
+      return `oidc:${claims.repository}`;
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 403) throw err;
+      throw new HttpError(`OIDC verification failed: ${err instanceof Error ? err.message : 'unknown'}`, 401);
+    }
+  }
+  return requireQaAccess(c, appId);
 }
 
 // ── flows ────────────────────────────────────────────────────────────────────
@@ -141,7 +198,7 @@ qaRoutes.post(
   '/apps/:appId/qa/runs',
   wrap(async (c) => {
     const appId = c.req.param('appId')!;
-    await requireQaAccess(c, appId);
+    await requireRunAccess(c, appId);
     const body = (await c.req.json().catch(() => ({}))) as { flowId?: string; trigger?: string };
     const trigger = body.trigger && RUN_TRIGGERS.has(body.trigger) ? body.trigger : 'manual';
 

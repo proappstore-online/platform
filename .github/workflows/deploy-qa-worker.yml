@@ -1,0 +1,46 @@
+name: Deploy QA Worker
+
+# Headless QA executor (#38): runs queued app_test_runs against live apps in
+# Cloudflare Browser Rendering. Also redeploys when qa-spec changes (the DOM
+# runner bundle is baked in at build time).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/qa-worker/**'
+      - 'packages/qa-spec/**'
+      - '.github/workflows/deploy-qa-worker.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-qa-worker
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm -r --filter './packages/*' build
+      - name: Typecheck
+        run: pnpm -r typecheck
+      - name: Tests
+        run: pnpm test
+      - name: Deploy Worker
+        working-directory: packages/qa-worker
+        run: pnpm exec wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

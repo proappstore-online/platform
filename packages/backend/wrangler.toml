@@ -80,3 +80,8 @@ service = "proappstore-api"
 #   APP_SECRET_KEK                  (32-byte base64 key for envelope encryption
 #                                    of app proxy secrets; without this, proxy/
 #                                    secrets/allowlist endpoints return 503)
+
+# Headless QA executor (#38) — nudged after POST /v1/apps/:appId/qa/runs.
+[[services]]
+binding = "QA_WORKER"
+service = "proappstore-qa-worker"

@@ -1,0 +1,24 @@
+# Headless QA executor (#38). Runs queued app_test_runs against the LIVE app
+# in Cloudflare Browser Rendering (headless Chromium at the edge) — the
+# platform runs the tests itself; no GitHub in the loop. No public route:
+# invoked via the backend's QA_WORKER service binding and by cron.
+name = "proappstore-qa-worker"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+browser = { binding = "BROWSER" }
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pas"
+database_id = "585bbda3-0016-42ad-a53d-c089f1864fcb"
+
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "pas-storage"
+
+[triggers]
+# Safety net for queued runs that missed their nudge, every 15 minutes.
+crons = ["*/15 * * * *"]

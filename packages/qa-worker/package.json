@@ -1,0 +1,22 @@
+{
+  "name": "@proappstore/qa-worker",
+  "version": "0.1.0",
+  "description": "Headless QA executor — runs platform test flows against live apps via Cloudflare Browser Rendering.",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/puppeteer": "^1.0.4",
+    "@proappstore/qa-spec": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241205.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.42.0"
+  }
+}
