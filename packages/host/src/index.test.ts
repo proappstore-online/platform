@@ -266,6 +266,33 @@ describe("host same-origin platform mediation routes", () => {
     expect(apiFetch).not.toHaveBeenCalled();
   });
 
+  it("forwards mediated API WebSocket upgrades with the HttpOnly cookie token", async () => {
+    const apiFetch = vi.fn(async (request: Request) => {
+      expect(request.url).toBe("https://api.proappstore.online/v1/apps/meetup/rooms/lobby");
+      expect(request.method).toBe("GET");
+      expect(request.headers.get("Upgrade")).toBe("websocket");
+      expect(request.headers.get("Authorization")).toBe("Bearer cookie-token");
+      expect(request.headers.get("Cookie")).toBeNull();
+      return new Response("upgraded");
+    });
+    const env = makeEnv({ apiFetch });
+
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/api/v1/apps/meetup/rooms/lobby", {
+        headers: {
+          Cookie: "__Host-pas_session=cookie-token",
+          Upgrade: "websocket",
+        },
+      }),
+      env,
+      ctx(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("upgraded");
+    expect(apiFetch).toHaveBeenCalledOnce();
+  });
+
   it("rejects cross-site mediated mutations before reaching the API", async () => {
     const apiFetch = vi.fn(async () => Response.json({ ok: true }));
     const env = makeEnv({ apiFetch });

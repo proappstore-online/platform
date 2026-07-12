@@ -104,13 +104,14 @@ const app = initPro({
 ```
 
 In `platform-cookie` mode, OAuth starts at `/.pas/auth/start`, the signed-in
-user is read from `/.pas/auth/me`, sign-out posts to `/.pas/auth/logout`, and
-normal SDK HTTP calls use `/.pas/api/*` or `/.pas/data/*` mediation. The bearer
-token stays in a host-only HttpOnly cookie and is injected server-side by PAS.
+user is read from `/.pas/auth/me`, sign-out posts to `/.pas/auth/logout`, normal
+SDK HTTP calls use `/.pas/api/*` or `/.pas/data/*` mediation, and rooms use
+same-origin `/.pas/api/*` WebSocket mediation. The bearer token stays in a
+host-only HttpOnly cookie and is injected server-side by PAS.
 
-The default remains `legacy-bearer` for compatibility while WebSocket rooms,
-optional signed map requests, and remaining edge paths are migrated. See
-[Browser auth session model](/auth-session-model).
+The default remains `legacy-bearer` for compatibility while hosted-app
+end-to-end verification is completed. See [Browser auth session
+model](/auth-session-model).
 
 ## App data access
 

@@ -128,20 +128,14 @@ export class Room {
   }
 
   private connect(): void {
-    const token = this.auth.token;
-    if (!token) {
+    if (!this.isAuthenticated()) {
       // Auth state may have changed (sign-out). Stop trying.
       this.setState('closed');
       return;
     }
     this.setState('connecting');
 
-    const url = new URL(
-      `/v1/apps/${encodeURIComponent(this.appId)}/rooms/${encodeURIComponent(this.roomId)}`,
-      this.apiBase,
-    );
-    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    url.searchParams.set('token', token);
+    const url = this.auth.usesPlatformCookie ? this.platformCookieUrl() : this.legacyBearerUrl();
     const socket = new WebSocket(url.toString());
     this.socket = socket;
 
@@ -201,6 +195,32 @@ export class Room {
       if (this.explicitlyClosed) return;
       this.connect();
     }, backoff + jitter);
+  }
+
+  private isAuthenticated(): boolean {
+    return this.auth.usesPlatformCookie ? this.auth.isSignedIn : !!this.auth.token;
+  }
+
+  private legacyBearerUrl(): URL {
+    const token = this.auth.token;
+    if (!token) throw new Error('Not signed in.');
+    const url = new URL(
+      `/v1/apps/${encodeURIComponent(this.appId)}/rooms/${encodeURIComponent(this.roomId)}`,
+      this.apiBase,
+    );
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.searchParams.set('token', token);
+    return url;
+  }
+
+  private platformCookieUrl(): URL {
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://app.local';
+    const url = new URL(
+      `/.pas/api/v1/apps/${encodeURIComponent(this.appId)}/rooms/${encodeURIComponent(this.roomId)}`,
+      origin,
+    );
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    return url;
   }
 
   private setState(state: ConnectionState): void {

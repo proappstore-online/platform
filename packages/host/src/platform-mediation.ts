@@ -45,7 +45,7 @@ async function forwardWithSession(request: Request, binding: Fetcher | null, ups
     headers,
     redirect: "manual",
   };
-  if (request.method !== "GET" && request.method !== "HEAD") {
+  if (request.method !== "GET" && request.method !== "HEAD" && request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
     init.body = request.body;
     (init as RequestInit & { duplex: "half" }).duplex = "half";
   }

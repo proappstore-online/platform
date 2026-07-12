@@ -161,9 +161,9 @@ Implemented foundation:
   signals before reaching the upstream worker.
 - Caller-supplied `Authorization` and `Cookie` headers are stripped before the
   host worker injects the internal bearer token.
-
-Remaining: WebSocket SDK paths need separate mediation because browsers do not
-support arbitrary Authorization headers during the WebSocket handshake.
+- WebSocket room upgrades use `/.pas/api/v1/apps/:appId/rooms/:roomId`
+  mediation; the host worker reads the HttpOnly cookie and forwards the upgrade
+  to the API binding with an injected bearer token.
 
 ### Phase 4: SDK Migration
 
@@ -188,6 +188,11 @@ In `platform-cookie` mode:
 - `app.usage` sends normal heartbeats and pagehide beacons through same-origin
   `/.pas/api/v1/usage/ping` mediation, so unload telemetry can use the
   HttpOnly app cookie without exposing a bearer token to JavaScript.
+- `app.rooms` connects through same-origin `/.pas/api/*` WebSocket mediation
+  instead of putting the session token in the URL query string.
+- `app.maps.geocode()`, `app.maps.route()`, and `app.maps.reverseGeocode()`
+  use authenticated same-origin API mediation in cookie mode. `embedUrl()` and
+  `staticUrl()` remain public OpenStreetMap URL helpers.
 
 The compatibility default remains `legacy-bearer` until all SDK paths are
 covered and real hosted apps have passed end-to-end verification.
@@ -197,11 +202,9 @@ Keep explicit fallback modes for compatibility:
 - `platform-cookie`: same-origin token-handler mode
 - `legacy-bearer`: current localStorage-backed bearer mode
 
-Remaining SDK paths:
-
-- `app.rooms`: WebSocket connection auth still uses the legacy token path.
-- `app.maps`: optional signed map requests still use legacy auth, but map
-  lookup itself is not a session-critical app-data path.
+Remaining before defaulting hosted apps to cookie mode: real hosted-app
+end-to-end verification across sign-in, `auth/me`, app data, rooms, usage,
+maps, and sign-out.
 
 ### Phase 5: Security Gates
 
