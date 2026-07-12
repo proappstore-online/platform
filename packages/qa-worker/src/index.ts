@@ -199,11 +199,30 @@ async function gotoApp(page: Page, appId: string, path: string): Promise<void> {
 
 async function screenshotToR2(env: Env, page: Page, key: string): Promise<void> {
   try {
-    const shot = (await page.screenshot({ type: 'png' })) as Buffer;
-    await env.STORAGE.put(key, shot, { httpMetadata: { contentType: 'image/png' } });
-  } catch {
-    // Screenshots are best-effort — never fail a run over one.
+    const shot = (await page.screenshot({ type: 'png' })) as unknown;
+    // @cloudflare/puppeteer's return type varies by version (Buffer | Uint8Array
+    // | base64 string). Normalize to bytes so R2 never stores an empty/garbled
+    // object. A raw string is treated as base64 (its screenshot encoding).
+    const body =
+      typeof shot === 'string'
+        ? decodeBase64(shot)
+        : shot instanceof ArrayBuffer
+          ? new Uint8Array(shot)
+          : (shot as Uint8Array);
+    await env.STORAGE.put(key, body, { httpMetadata: { contentType: 'image/png' } });
+  } catch (err) {
+    // Best-effort — never fail a run over a screenshot. Persist the reason to R2
+    // (a sibling .error.txt) so a silent regression is diagnosable without tail.
+    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    await env.STORAGE.put(`${key}.error.txt`, msg).catch(() => {});
   }
+}
+
+function decodeBase64(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 async function finishRun(
