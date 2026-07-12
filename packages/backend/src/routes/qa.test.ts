@@ -84,10 +84,10 @@ function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
   return { prepare };
 }
 
-function makeEnv(db: ReturnType<typeof mockD1>) {
+function makeEnv(db: ReturnType<typeof mockD1>, storage: Record<string, unknown> = {}) {
   return {
     DB: db as unknown as D1Database,
-    STORAGE: { put: vi.fn() } as unknown as R2Bucket,
+    STORAGE: { put: vi.fn(), get: vi.fn(), list: vi.fn(), ...storage } as unknown as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
     SESSION_SIGNING_KEY: TEST_SK,
@@ -328,5 +328,95 @@ describe('playwright transpile endpoint', () => {
     );
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("@playwright/test");
+  });
+});
+
+describe('run artifacts', () => {
+  const prefixStmt = () => mockStmt({ first: { artifacts_prefix: 'qa/chess-academy/r1' } });
+
+  it("lists a run's png artifacts (owner), stripping the prefix and non-png keys", async () => {
+    const db = mockD1(ownerStmt(), prefixStmt());
+    const list = vi.fn().mockResolvedValue({
+      objects: [
+        { key: 'qa/chess-academy/r1/final.png', size: 100, uploaded: new Date(0) },
+        { key: 'qa/chess-academy/r1/signed-in.png', size: 200, uploaded: new Date(0) },
+        { key: 'qa/chess-academy/r1/notes.txt', size: 5, uploaded: new Date(0) },
+      ],
+    });
+    const res = await app.request(
+      req('/v1/apps/chess-academy/qa/runs/r1/artifacts'),
+      undefined, makeEnv(db, { list }) as never,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { artifacts: Array<{ name: string; size: number }> };
+    expect(body.artifacts).toEqual([
+      { name: 'final.png', size: 100, uploaded: '1970-01-01T00:00:00.000Z' },
+      { name: 'signed-in.png', size: 200, uploaded: '1970-01-01T00:00:00.000Z' },
+    ]);
+    expect(list).toHaveBeenCalledWith({ prefix: 'qa/chess-academy/r1/', limit: 100 });
+  });
+
+  it('returns an empty list when the run has no artifacts_prefix', async () => {
+    const db = mockD1(ownerStmt(), mockStmt({ first: { artifacts_prefix: null } }));
+    const res = await app.request(
+      req('/v1/apps/chess-academy/qa/runs/r1/artifacts'),
+      undefined, makeEnv(db) as never,
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json() as { artifacts: unknown[] }).artifacts).toEqual([]);
+  });
+
+  it('streams a png artifact with its content-type and etag', async () => {
+    const db = mockD1(ownerStmt(), prefixStmt());
+    const get = vi.fn().mockResolvedValue({
+      body: 'PNGBYTES',
+      writeHttpMetadata: (h: Headers) => h.set('content-type', 'image/png'),
+      httpEtag: '"abc"',
+    });
+    const res = await app.request(
+      req('/v1/apps/chess-academy/qa/runs/r1/artifacts/final.png'),
+      undefined, makeEnv(db, { get }) as never,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/png');
+    expect(res.headers.get('etag')).toBe('"abc"');
+    expect(await res.text()).toBe('PNGBYTES');
+    expect(get).toHaveBeenCalledWith('qa/chess-academy/r1/final.png');
+  });
+
+  it('rejects non-png / traversal-shaped artifact names with 400', async () => {
+    for (const name of ['final.txt', 'passwd', '.png', 'evil.php']) {
+      const db = mockD1(ownerStmt(), prefixStmt());
+      const res = await app.request(
+        req(`/v1/apps/chess-academy/qa/runs/r1/artifacts/${name}`),
+        undefined, makeEnv(db) as never,
+      );
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it('404s when the run has no prefix or the object is missing', async () => {
+    const noPrefix = mockD1(ownerStmt(), mockStmt({ first: { artifacts_prefix: null } }));
+    const r1 = await app.request(
+      req('/v1/apps/chess-academy/qa/runs/r1/artifacts/final.png'),
+      undefined, makeEnv(noPrefix) as never,
+    );
+    expect(r1.status).toBe(404);
+
+    const db = mockD1(ownerStmt(), prefixStmt());
+    const r2 = await app.request(
+      req('/v1/apps/chess-academy/qa/runs/r1/artifacts/final.png'),
+      undefined, makeEnv(db, { get: vi.fn().mockResolvedValue(null) }) as never,
+    );
+    expect(r2.status).toBe(404);
+  });
+
+  it('403s for a non-owner listing artifacts', async () => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:someone-else' } }), mockStmt({ first: null }));
+    const res = await app.request(
+      req('/v1/apps/chess-academy/qa/runs/r1/artifacts'),
+      undefined, makeEnv(db) as never,
+    );
+    expect(res.status).toBe(403);
   });
 });
