@@ -29,6 +29,11 @@ interface RunRow {
 const APP_BASE = (appId: string) => `https://${appId}.proappstore.online`;
 const STEP_TIMEOUT_MS = 10_000;
 const MAX_RUNS_PER_INVOCATION = 10;
+// A run is claimed queued→running, then finished within ~a minute. If an
+// executor invocation dies mid-run (edge eviction, cancellation), the row is
+// left 'running' forever — processQueued only picks 'queued', so it never
+// recovers. Reclaim runs stuck 'running' well past any realistic batch.
+const STALE_RUN_MS = 600_000; // 10 min
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -47,6 +52,12 @@ export default {
 };
 
 async function processQueued(env: Env, appId: string | null): Promise<void> {
+  // Recover runs abandoned in 'running' by a dead executor invocation.
+  await env.DB.prepare(
+    `UPDATE app_test_runs SET status = 'error', error = 'executor did not finish (timed out)', finished_at = ?1
+     WHERE status = 'running' AND started_at < ?2`,
+  ).bind(Date.now(), Date.now() - STALE_RUN_MS).run();
+
   const queued = appId
     ? await env.DB.prepare(
         "SELECT run_id, app_id, flow_id FROM app_test_runs WHERE status = 'queued' AND trigger_kind != 'browser' AND app_id = ?1 ORDER BY started_at LIMIT ?2",
