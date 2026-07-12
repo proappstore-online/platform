@@ -1,0 +1,33 @@
+{
+  "name": "@proappstore/qa-spec",
+  "version": "0.1.0",
+  "description": "Platform test-flow spec: step types, validation, the in-page DOM executor, and the Playwright transpiler. One definition, three executors (observable runner page, headless qa-worker, CI).",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./browser-bundle": {
+      "types": "./dist/browser-bundle.d.ts",
+      "import": "./dist/browser-bundle.js"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc && node scripts/bundle-browser.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  },
+  "sideEffects": false
+}
