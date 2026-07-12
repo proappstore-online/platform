@@ -10,6 +10,7 @@ import { fetchTools, registerAppTools } from "./tool-loader.js";
 import { registerProjectTools } from "./project-tools.js";
 import { registerLoopTools } from "./loop-tools.js";
 import { registerAgentsTools } from "./agents-tools.js";
+import { registerQaTools } from "./qa-tools.js";
 import { createAuthChallenge, handleOAuthRoute, resolveOAuthToken } from "./oauth-provider.js";
 
 export class PasMcpAgent extends McpAgent<Env> {
@@ -61,6 +62,12 @@ export class PasMcpAgent extends McpAgent<Env> {
       this.env.AGENTS_BASE,
       this.env.AGENTS,
     );
+
+    // ── QA automation tools (connect + write/run browser e2e tests) ─
+    registerQaTools(this.server, this.env, () => ({
+      userId: this.userId,
+      token: this.userToken,
+    }));
 
     // ── Load and register app tools dynamically ────────────────
     const appTools = await fetchTools(this.env.API, this.env.API_BASE);
