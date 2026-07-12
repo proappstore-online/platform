@@ -8,6 +8,8 @@
 //   POST   /v1/apps/:appId/qa/runs                     { flowId? } — queue run(s)
 //   GET    /v1/apps/:appId/qa/runs[?flowId]            — list runs (latest first)
 //   POST   /v1/apps/:appId/qa/runs/:runId/report       — runner page reports results
+//   GET    /v1/apps/:appId/qa/runs/:runId/artifacts     — list a run's screenshots
+//   GET    /v1/apps/:appId/qa/runs/:runId/artifacts/:name — stream one screenshot (PNG)
 //   POST   /v1/apps/:appId/qa/keys                     — mint a scoped QA API key (owner only)
 //   DELETE /v1/apps/:appId/qa/keys/:keyId              — revoke
 //
@@ -242,6 +244,58 @@ qaRoutes.get(
           'SELECT * FROM app_test_runs WHERE app_id = ?1 ORDER BY started_at DESC LIMIT 50',
         ).bind(appId).all();
     return c.json({ runs: rows.results });
+  }),
+);
+
+// ── run artifacts (screenshots) ────────────────────────────────────────────────
+// The headless executor writes PNGs under qa/<appId>/<runId>/ in the shared
+// STORAGE bucket. These list/serve them (same owner/QA-key auth as everything
+// else). The run row must belong to this app — the artifact key is derived from
+// the DB-stored artifacts_prefix, never from client input, so there is no path
+// traversal surface.
+
+async function runArtifactsPrefix(c: Ctx, appId: string, runId: string): Promise<string | null> {
+  const row = await c.env.DB.prepare(
+    'SELECT artifacts_prefix FROM app_test_runs WHERE app_id = ?1 AND run_id = ?2',
+  ).bind(appId, runId).first<{ artifacts_prefix: string | null }>();
+  return row?.artifacts_prefix ?? null;
+}
+
+qaRoutes.get(
+  '/apps/:appId/qa/runs/:runId/artifacts',
+  wrap(async (c) => {
+    const appId = c.req.param('appId')!;
+    const runId = c.req.param('runId')!;
+    await requireQaAccess(c, appId);
+    const prefix = await runArtifactsPrefix(c, appId, runId);
+    if (!prefix) return c.json({ artifacts: [] });
+    const listed = await c.env.STORAGE.list({ prefix: `${prefix}/`, limit: 100 });
+    const artifacts = listed.objects
+      .filter((o) => o.key.endsWith('.png'))
+      .map((o) => ({ name: o.key.slice(prefix.length + 1), size: o.size, uploaded: o.uploaded.toISOString() }));
+    return c.json({ artifacts });
+  }),
+);
+
+qaRoutes.get(
+  '/apps/:appId/qa/runs/:runId/artifacts/:name',
+  wrap(async (c) => {
+    const appId = c.req.param('appId')!;
+    const runId = c.req.param('runId')!;
+    const name = c.req.param('name')!;
+    // Names come from R2 listing (e.g. final.png, signed-in.png); constrain to a
+    // safe single filename regardless, so ':name' can never escape the prefix.
+    if (!/^[a-z0-9][a-z0-9._-]{0,79}\.png$/i.test(name)) throw new HttpError('invalid artifact name', 400);
+    await requireQaAccess(c, appId);
+    const prefix = await runArtifactsPrefix(c, appId, runId);
+    if (!prefix) throw new HttpError('run has no artifacts', 404);
+    const object = await c.env.STORAGE.get(`${prefix}/${name}`);
+    if (!object) throw new HttpError('artifact not found', 404);
+    const headers = new Headers();
+    object.writeHttpMetadata(headers);
+    headers.set('etag', object.httpEtag);
+    headers.set('Cache-Control', 'private, max-age=86400');
+    return new Response(object.body, { headers });
   }),
 );
 
