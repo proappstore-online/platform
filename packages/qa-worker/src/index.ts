@@ -10,7 +10,7 @@
  * 15-minute cron as the safety net. Runs execute serially (Browser Rendering
  * concurrency is a scarce resource).
  */
-import puppeteer, { type Browser, type Page } from '@cloudflare/puppeteer';
+import puppeteer, { type Browser, type BrowserContext, type Page } from '@cloudflare/puppeteer';
 import { DOM_RUNNER_BUNDLE } from '@proappstore/qa-spec/browser-bundle';
 import { PW_VIEWPORT, type Step, type StepResult, type TestFlow } from '@proappstore/qa-spec';
 
@@ -85,6 +85,7 @@ async function processQueued(env: Env, appId: string | null): Promise<void> {
 
 async function executeRun(env: Env, browser: Browser, run: RunRow): Promise<void> {
   const artifactsPrefix = `qa/${run.app_id}/${run.run_id}`;
+  let context: BrowserContext | null = null;
   let page: Page | null = null;
   try {
     const flowRow = await env.DB.prepare(
@@ -96,7 +97,12 @@ async function executeRun(env: Env, browser: Browser, run: RunRow): Promise<void
     }
     const flow = JSON.parse(flowRow.spec) as TestFlow;
 
-    page = await browser.newPage();
+    // Isolated storage per run: a sign-in flow writes a session to the app's
+    // localStorage — a shared browser context would leak it into the next
+    // flow's page, so a "signed-out" flow would load already signed in (flaky
+    // "sign-in button not found"). Each run gets its own incognito context.
+    context = await browser.createBrowserContext();
+    page = await context.newPage();
     await page.setViewport(PW_VIEWPORT);
     // Cache-bust: post-deploy runs race the host worker's 60s edge cache.
     await gotoApp(page, run.app_id, flow.startPath ?? '/');
@@ -141,6 +147,7 @@ async function executeRun(env: Env, browser: Browser, run: RunRow): Promise<void
     });
   } finally {
     await page?.close().catch(() => {});
+    await context?.close().catch(() => {});
   }
 }
 
