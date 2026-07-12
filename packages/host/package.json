@@ -16,5 +16,8 @@
     "@cloudflare/workers-types": "^4.20251130.0",
     "typescript": "^5.7.0",
     "wrangler": "^4.0.0"
+  },
+  "dependencies": {
+    "@proappstore/qa-spec": "workspace:*"
   }
 }

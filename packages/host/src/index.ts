@@ -13,6 +13,7 @@
 import type { Env } from "./env.js";
 import { handleAuthRoute } from "./auth-handler.js";
 import { handlePlatformMediation } from "./platform-mediation.js";
+import { handleQaRunner } from "./qa-runner.js";
 import {
   contentType,
   etagsMatch,
@@ -87,6 +88,11 @@ export default {
 
     const mediationResponse = await handlePlatformMediation(request, env, route);
     if (mediationResponse) return mediationResponse;
+
+    // Observable QA runner (#38) — platform page on the app's own origin;
+    // data access is enforced by the /.pas/api cookie mediation.
+    const qaResponse = handleQaRunner(request, route);
+    if (qaResponse) return qaResponse;
 
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method not allowed", { status: 405 });

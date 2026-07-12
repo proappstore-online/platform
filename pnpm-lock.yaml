@@ -151,6 +151,10 @@ importers:
         version: 5.9.3
 
   packages/host:
+    dependencies:
+      '@proappstore/qa-spec':
+        specifier: workspace:*
+        version: link:../qa-spec
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.4.15
