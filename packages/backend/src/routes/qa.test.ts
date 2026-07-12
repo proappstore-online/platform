@@ -172,7 +172,7 @@ describe('QA key auth', () => {
   it('accepts a valid, unrevoked QA key without a bearer token', async () => {
     // stmts: qa key lookup, flows list
     const db = mockD1(
-      mockStmt({ first: { app_id: 'chess-academy' } }),
+      mockStmt({ first: { app_id: 'chess-academy', expires_at: Date.now() + 60_000 } }),
       mockStmt({ all: { results: [{ flow_id: 'sign-in', name: 'n', spec: JSON.stringify(validFlow), updated_by: 'x', updated_at: 1 }] } }),
     );
     const res = await app.request(
@@ -193,6 +193,16 @@ describe('QA key auth', () => {
     expect(res.status).toBe(403);
   });
 
+  it('rejects an expired QA key', async () => {
+    const db = mockD1(mockStmt({ first: { app_id: 'chess-academy', expires_at: Date.now() - 1 } }));
+    const res = await app.request(
+      new Request('https://api.test/v1/apps/chess-academy/qa/flows', { headers: { 'X-QA-Key': 'qak_old' } }),
+      undefined, makeEnv(db) as never,
+    );
+    expect(res.status).toBe(403);
+    expect(await res.text()).toContain('expired');
+  });
+
   it('never allows a QA key to mint keys', async () => {
     const db = mockD1();
     const res = await app.request(
@@ -200,6 +210,25 @@ describe('QA key auth', () => {
       undefined, makeEnv(db) as never,
     );
     expect(res.status).toBe(401); // no bearer → requireAppOwner fails
+  });
+
+  it('mints QA keys with a 30-day expiry returned to the caller', async () => {
+    const insert = mockStmt({ run: { meta: { changes: 1 } } });
+    const db = mockD1(ownerStmt(), insert);
+    const before = Date.now();
+    const res = await app.request(
+      req('/v1/apps/chess-academy/qa/keys', { method: 'POST' }),
+      undefined, makeEnv(db) as never,
+    );
+    const after = Date.now();
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { key: string; keyId: string; expiresAt: number };
+    expect(body.key).toMatch(/^qak_[a-f0-9]{32}$/);
+    expect(body.keyId).toHaveLength(8);
+    expect(body.expiresAt).toBeGreaterThanOrEqual(before + 30 * 24 * 60 * 60 * 1000);
+    expect(body.expiresAt).toBeLessThanOrEqual(after + 30 * 24 * 60 * 60 * 1000);
+    expect(insert.bind).toHaveBeenCalledWith(expect.any(String), 'chess-academy', 'gh:1', expect.any(Number), body.expiresAt);
   });
 });
 
@@ -299,8 +328,8 @@ describe('runs', () => {
     expect(res.status).toBe(404);
   });
 
-  it('report updates the run and 404s for unknown runs', async () => {
-    const db = mockD1(ownerStmt(), mockStmt({ run: { meta: { changes: 1 } } }));
+  it('report updates browser-triggered runs and 404s for unknown runs', async () => {
+    const db = mockD1(ownerStmt(), mockStmt({ first: { trigger_kind: 'browser' } }), mockStmt({ run: { meta: { changes: 1 } } }));
     const ok = await app.request(
       req('/v1/apps/chess-academy/qa/runs/r1/report', {
         method: 'POST',
@@ -310,12 +339,28 @@ describe('runs', () => {
     );
     expect(ok.status).toBe(200);
 
-    const db2 = mockD1(ownerStmt(), mockStmt({ run: { meta: { changes: 0 } } }));
+    const db2 = mockD1(ownerStmt(), mockStmt({ first: null }));
     const missing = await app.request(
       req('/v1/apps/chess-academy/qa/runs/rX/report', { method: 'POST', body: JSON.stringify({ status: 'failed' }) }),
       undefined, makeEnv(db2) as never,
     );
     expect(missing.status).toBe(404);
+  });
+
+  it('rejects reports for non-browser runs without mutating the row', async () => {
+    const update = mockStmt({ run: { meta: { changes: 1 } } });
+    const db = mockD1(ownerStmt(), mockStmt({ first: { trigger_kind: 'deploy' } }), update);
+    const res = await app.request(
+      req('/v1/apps/chess-academy/qa/runs/r1/report', {
+        method: 'POST',
+        body: JSON.stringify({ status: 'passed', stepsTotal: 3, stepsPassed: 3 }),
+      }),
+      undefined, makeEnv(db) as never,
+    );
+
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain('only browser-triggered');
+    expect(update.run).not.toHaveBeenCalled();
   });
 });
 

@@ -39,6 +39,7 @@ type Ctx = Context<{ Bindings: Env }>;
 
 const FLOW_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const RUN_TRIGGERS = new Set(['manual', 'deploy', 'cron', 'browser']);
+const QA_KEY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 function wrap(handler: (c: Ctx) => Promise<Response>) {
   return async (c: Ctx) => {
@@ -84,9 +85,10 @@ async function requireQaAccess(c: Ctx, appId: string): Promise<string> {
   if (qaKey) {
     const hash = await sha256Hex(qaKey);
     const row = await c.env.DB.prepare(
-      'SELECT app_id FROM qa_api_keys WHERE key_hash = ?1 AND app_id = ?2 AND revoked_at IS NULL',
-    ).bind(hash, appId).first<{ app_id: string }>();
+      'SELECT app_id, expires_at FROM qa_api_keys WHERE key_hash = ?1 AND app_id = ?2 AND revoked_at IS NULL',
+    ).bind(hash, appId).first<{ app_id: string; expires_at: number | null }>();
     if (!row) throw new HttpError('invalid QA key for this app', 403);
+    if (row.expires_at !== null && row.expires_at <= Date.now()) throw new HttpError('QA key expired', 403);
     return `qa-key:${hash.slice(0, 8)}`;
   }
   const user = await requireAppOwner(c, appId);
@@ -315,12 +317,19 @@ qaRoutes.post(
     if (!body || !['passed', 'failed', 'error', 'running'].includes(body.status ?? '')) {
       throw new HttpError('status must be running | passed | failed | error', 400);
     }
+    const run = await c.env.DB.prepare(
+      'SELECT trigger_kind FROM app_test_runs WHERE run_id = ?1 AND app_id = ?2',
+    ).bind(runId, appId).first<{ trigger_kind: string }>();
+    if (!run) throw new HttpError('run not found', 404);
+    if (run.trigger_kind !== 'browser') {
+      throw new HttpError('only browser-triggered runs can report through this endpoint', 409);
+    }
     const done = body.status !== 'running';
     const result = await c.env.DB.prepare(
       `UPDATE app_test_runs
        SET status = ?3, steps_total = ?4, steps_passed = ?5, failed_step = ?6, error = ?7,
            finished_at = CASE WHEN ?8 THEN ?9 ELSE finished_at END
-       WHERE run_id = ?1 AND app_id = ?2`,
+       WHERE run_id = ?1 AND app_id = ?2 AND trigger_kind = 'browser'`,
     ).bind(
       runId, appId, body.status, body.stepsTotal ?? null, body.stepsPassed ?? null,
       body.failedStep ?? null, body.error ?? null, done ? 1 : 0, Date.now(),
@@ -339,11 +348,13 @@ qaRoutes.post(
     const user = await requireAppOwner(c, appId);
     const key = `qak_${crypto.randomUUID().replaceAll('-', '')}`;
     const hash = await sha256Hex(key);
+    const now = Date.now();
+    const expiresAt = now + QA_KEY_TTL_MS;
     await c.env.DB.prepare(
-      'INSERT INTO qa_api_keys (key_hash, app_id, created_by, created_at) VALUES (?1, ?2, ?3, ?4)',
-    ).bind(hash, appId, user.id, Date.now()).run();
+      'INSERT INTO qa_api_keys (key_hash, app_id, created_by, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)',
+    ).bind(hash, appId, user.id, now, expiresAt).run();
     // The key is returned ONCE; only its hash is stored.
-    return c.json({ ok: true, key, keyId: hash.slice(0, 8) });
+    return c.json({ ok: true, key, keyId: hash.slice(0, 8), expiresAt });
   }),
 );
 

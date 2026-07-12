@@ -12,9 +12,11 @@ describe('validateFlow', () => {
   it('accepts every step shape', () => {
     expect(validateFlow({
       ...base,
-      startPath: '/puzzles',
+      startPath: '/events/123?tab=players',
       steps: [
+        { op: 'goto', path: '/' },
         { op: 'goto', path: '/puzzles' },
+        { op: 'goto', path: '/events/123?tab=players' },
         { op: 'click', target: { text: 'Sign in' } },
         { op: 'click', target: { label: 'Login' } },
         { op: 'click', target: { selector: '#go' } },
@@ -46,5 +48,12 @@ describe('validateFlow', () => {
     expect(validateFlow({ ...base, steps: [{ op: 'clickPoint', xPct: 120, yPct: 5 }] })).toContain('0–100');
     expect(validateFlow({ ...base, steps: [{ op: 'goto', path: 'no-slash' }] })).toContain('goto.path');
     expect(validateFlow({ ...base, steps: [{ op: 'waitFor' }] })).toContain('ms or target');
+  });
+
+  it('rejects unsafe app navigation paths', () => {
+    for (const path of ['//evil.example/path', '/\\evil', '/foo\\bar', '/foo%5Cbar', '/foo%5cbar', '/foo\nbar', '/foo%0Abar', '/foo%7Fbar', '/foo%']) {
+      expect(validateFlow({ ...base, startPath: path }), `startPath ${path}`).not.toBeNull();
+      expect(validateFlow({ ...base, steps: [{ op: 'goto', path }] }), `goto ${path}`).not.toBeNull();
+    }
   });
 });

@@ -62,14 +62,49 @@ const PROVIDERS = new Set<Provider>(['github', 'google']);
 
 interface Profile { providerId: string; login: string; email: string | null; avatarUrl: string | null }
 
+type OAuthState = {
+  r?: string;
+  m?: string;
+  n?: string;
+  a?: string;
+};
+
+function platformReturnToAllowed(u: URL): boolean {
+  return u.hostname === 'localhost' || u.hostname === '127.0.0.1'
+    || u.hostname === 'proappstore.online' || u.hostname.endsWith('.proappstore.online')
+    || u.hostname === 'proideastore.online' || u.hostname.endsWith('.proideastore.online');
+}
+
+async function activeCustomDomainAllowed(env: Env, appId: string | undefined, hostname: string): Promise<boolean> {
+  if (!appId) return false;
+  const host = hostname.toLowerCase().replace(/\.$/, '');
+  const firstDot = host.indexOf('.');
+  const wildcardBase = firstDot > 0 ? host.slice(firstDot + 1) : '';
+
+  const exactOrWildcardBase = await env.DB.prepare(
+    `SELECT 1 FROM app_custom_domains
+     WHERE app_id = ?1 AND domain = ?2 AND status = 'active'
+     LIMIT 1`,
+  ).bind(appId, host).first();
+  if (exactOrWildcardBase) return true;
+  if (!wildcardBase) return false;
+
+  const wildcard = await env.DB.prepare(
+    `SELECT 1 FROM app_custom_domains
+     WHERE app_id = ?1 AND domain = ?2 AND COALESCE(kind, 'exact') = 'wildcard' AND status = 'active'
+     LIMIT 1`,
+  ).bind(appId, wildcardBase).first();
+  return Boolean(wildcard);
+}
+
 /** return_to must be one of our own origins — prevents the callback becoming an open redirect. */
-function returnToAllowed(url: string): boolean {
+async function returnToAllowed(env: Env, url: string, appId?: string): Promise<boolean> {
   try {
     const u = new URL(url);
     if (u.protocol !== 'https:' && !(u.hostname === 'localhost' || u.hostname === '127.0.0.1')) return false;
-    return u.hostname === 'localhost' || u.hostname === '127.0.0.1'
-      || u.hostname === 'proappstore.online' || u.hostname.endsWith('.proappstore.online')
-      || u.hostname === 'proideastore.online' || u.hostname.endsWith('.proideastore.online');
+    if (platformReturnToAllowed(u)) return true;
+    if (u.protocol !== 'https:') return false;
+    return activeCustomDomainAllowed(env, appId, u.hostname);
   } catch {
     return false;
   }
@@ -89,7 +124,7 @@ function rolesFor(userId: string, env: Env): string[] {
 }
 
 // ── GET /v1/auth/:provider/start ───────────────────────────
-authRoutes.get('/auth/:provider/start', (c) => {
+authRoutes.get('/auth/:provider/start', async (c) => {
   const provider = c.req.param('provider') as Provider;
   if (!PROVIDERS.has(provider)) return c.text('unknown provider', 404);
 
@@ -97,10 +132,11 @@ authRoutes.get('/auth/:provider/start', (c) => {
   if (!clientId) return c.text(`${provider} sign-in is not configured`, 503);
 
   const returnTo = c.req.query('return_to') || '';
-  if (!returnToAllowed(returnTo)) return c.text('invalid return_to', 400);
+  const appId = c.req.query('app_id') || undefined;
+  if (!(await returnToAllowed(c.env, returnTo, appId))) return c.text('invalid return_to', 400);
   const responseMode = c.req.query('response_mode') === 'query' ? 'query' : 'fragment';
 
-  const state = btoa(JSON.stringify({ r: returnTo, m: responseMode, n: crypto.randomUUID() }))
+  const state = btoa(JSON.stringify({ r: returnTo, m: responseMode, n: crypto.randomUUID(), a: appId }))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   // Bind the state to this browser so the callback can reject forged/replayed
   // states (login CSRF). SameSite=Lax survives the top-level OAuth redirect back.
@@ -138,15 +174,17 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
   // later failure can bounce the user back to the app with a clean error
   // instead of a bare error page.
   let returnTo = '';
+  let appId: string | undefined;
   let responseMode: 'fragment' | 'query' = 'fragment';
   try {
     const b64 = stateRaw.replace(/-/g, '+').replace(/_/g, '/');
     const json = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
-    const parsed = JSON.parse(json) as { r?: string; m?: string };
+    const parsed = JSON.parse(json) as OAuthState;
     returnTo = parsed.r || '';
+    appId = parsed.a || undefined;
     if (parsed.m === 'query') responseMode = 'query';
   } catch { /* fall through to validation */ }
-  if (!returnToAllowed(returnTo)) return c.text('invalid state', 400);
+  if (!(await returnToAllowed(c.env, returnTo, appId))) return c.text('invalid state', 400);
 
   /** Bounce back to the app with `#auth_error=<reason>` (the SDK clears the hash). */
   const fail = (reason: string) => {
