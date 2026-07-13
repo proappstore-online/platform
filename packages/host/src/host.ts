@@ -25,6 +25,12 @@ export interface ListingMeta {
   tagline: string | null;
 }
 
+/** Public tenant branding used for wildcard custom-domain subdomains. */
+export interface TenantMeta {
+  title: string;
+  icon_url: string | null;
+}
+
 /**
  * Extract the subdomain slug from a hostname.
  * Returns null for apex, multi-level subdomains, or non-proappstore hosts.
@@ -111,6 +117,35 @@ export async function getListingMeta(db: D1Database, appId: string): Promise<Lis
     .first<ListingMeta>();
 }
 
+/**
+ * Fetch public tenant branding from an app's registered public action. The host
+ * must fail open here: metadata should improve previews, never block serving.
+ */
+export async function getTenantMeta(api: Fetcher, appId: string, tenant: string | undefined): Promise<TenantMeta | null> {
+  if (!tenant) return null;
+  try {
+    const res = await api.fetch(new Request(
+      `https://api.proappstore.online/v1/apps/${encodeURIComponent(appId)}/actions/get_org_by_slug`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ params: { slug: tenant } }),
+      },
+    ));
+    if (!res.ok) return null;
+    const data = await res.json() as { rows?: Array<{ name?: unknown; logo_url?: unknown }> };
+    const row = data.rows?.[0];
+    const title = typeof row?.name === "string" ? row.name.trim() : "";
+    if (!title) return null;
+    return {
+      title,
+      icon_url: typeof row?.logo_url === "string" && row.logo_url.trim() ? row.logo_url.trim() : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Map a route + URL pathname to an R2 object key. */
 export function r2KeyFor(route: Route, pathname: string): string {
   let p = pathname;
@@ -155,7 +190,17 @@ export function contentType(path: string): string {
 /** Files with stable names must remain updateable across app deploys. */
 export function isUpdateSensitivePath(pathname: string): boolean {
   const name = pathname.split("/").pop()?.toLowerCase() ?? "";
-  return name === "sw.js" || name === "registersw.js" || name === "manifest.webmanifest" || name === ".buildinfo.json";
+  return (
+    name === "sw.js" ||
+    name === "registersw.js" ||
+    name === "manifest.json" ||
+    name === "manifest.webmanifest" ||
+    name === "favicon.ico" ||
+    name === "favicon.svg" ||
+    name === "apple-touch-icon.png" ||
+    /^icon-\d+x?\d*\.png$/.test(name) ||
+    name === ".buildinfo.json"
+  );
 }
 
 /** Security + cache headers. HTML and update-sensitive files get short cache; hashed assets get immutable. */
