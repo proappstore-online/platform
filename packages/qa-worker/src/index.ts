@@ -217,7 +217,12 @@ async function gotoApp(page: Page, appId: string, path: string): Promise<void> {
   const url = new URL(path, base);
   if (url.origin !== base.origin) throw new Error('path resolved outside app origin');
   url.searchParams.set('__qa_bust', String(Date.now()));
-  await page.goto(url.toString(), { waitUntil: 'networkidle0', timeout: 30_000 });
+  // Wait for `load`, NOT networkidle0. Pro apps legitimately hold a long-lived
+  // connection (WebSocket / SSE / data subscription) that never lets the network
+  // go idle, so networkidle0 would hit the 30s timeout and falsely mark the run
+  // 'error' even though the page rendered. `load` also matches the observable
+  // runner's iframe-load wait, keeping the two executors' verdicts consistent.
+  await page.goto(url.toString(), { waitUntil: 'load', timeout: 30_000 });
   await page.evaluate(DOM_RUNNER_BUNDLE);
 }
 

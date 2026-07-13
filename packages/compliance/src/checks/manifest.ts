@@ -53,10 +53,12 @@ function validateStaticManifest(raw: string): CheckResult {
   const required = ['name', 'short_name', 'start_url', 'display'] as const;
   const missing = required.filter((k) => typeof parsed[k] !== 'string' || parsed[k] === '');
   if (missing.length > 0) {
+    // These four fields are REQUIRED for an installable PWA — a manifest that
+    // exists but lacks them is broken, so fail (not warn) to block publish.
     return {
       name: 'PWA manifest',
-      status: 'warn',
-      detail: `missing fields in ${STATIC_MANIFEST_PATH}: ${missing.join(', ')}`,
+      status: 'fail',
+      detail: `missing required fields in ${STATIC_MANIFEST_PATH}: ${missing.join(', ')}`,
       suggestions: [`Add the ${missing.join(', ')} field(s) to manifest.json so installs work.`],
     };
   }
@@ -79,10 +81,11 @@ function validateInlineManifest(viteConfig: string): CheckResult {
   const required: (keyof typeof inline)[] = ['name', 'short_name', 'start_url', 'display'];
   const missing = required.filter((k) => typeof inline[k] !== 'string' || inline[k] === '');
   if (missing.length > 0) {
+    // Required-for-install fields — fail (not warn) to block publish.
     return {
       name: 'PWA manifest',
-      status: 'warn',
-      detail: `missing fields in inline manifest (${VITE_CONFIG_PATH}): ${missing.join(', ')}`,
+      status: 'fail',
+      detail: `missing required fields in inline manifest (${VITE_CONFIG_PATH}): ${missing.join(', ')}`,
       suggestions: [`Add ${missing.join(', ')} to the manifest:{...} inside VitePWA({...}).`],
     };
   }

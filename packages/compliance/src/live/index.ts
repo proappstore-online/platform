@@ -19,19 +19,8 @@
  */
 
 import { gzipByteLength } from '../lib/gzip.js';
+import { matchedTrackers } from '../checks/no-tracking.js';
 import type { CheckResult } from '../types.js';
-
-const TRACKER_PATTERNS = [
-  /google-analytics\.com/i,
-  /gtag\(/i,
-  /googletagmanager\.com/i,
-  /\bamplitude\b/i,
-  /\bmixpanel\b/i,
-  /\bsegment\.com\b/i,
-  /\bhotjar\.com\b/i,
-  /plausible\.io/i,
-  /posthog\.com/i,
-];
 
 export interface LiveAuditInput {
   appId: string;
@@ -133,14 +122,17 @@ export async function auditLive(input: LiveAuditInput): Promise<LiveAuditReport>
 }
 
 export function checkNoTrackingLive(html: string): CheckResult {
-  const found = TRACKER_PATTERNS.filter((re) => re.test(html));
+  // Uses the SAME hardened SDK-context patterns as the source-side check, so a
+  // compliant synth/audio/physics app whose HTML merely contains the word
+  // "amplitude" (or a locally-defined gtag) is no longer falsely flagged.
+  const found = matchedTrackers(html);
   if (found.length === 0) {
     return { name: 'No tracking SDKs (live)', status: 'pass', detail: 'no known trackers in HTML' };
   }
   return {
     name: 'No tracking SDKs (live)',
     status: 'fail',
-    detail: `${found.length} pattern${found.length === 1 ? '' : 's'} matched`,
+    detail: `tracker SDK detected: ${found.join(', ')}`,
     suggestions: [
       'Tracking was injected after publish — remove the script tag or third-party loader.',
     ],

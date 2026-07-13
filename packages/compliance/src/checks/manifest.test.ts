@@ -33,10 +33,10 @@ describe('checkManifest', () => {
     expect(r.detail).toMatch(/JSON/i);
   });
 
-  it('warns when required fields are missing', async () => {
+  it('fails when required fields are missing (an uninstallable manifest must block publish)', async () => {
     await withManifest(JSON.stringify({ name: 'My App' }));
     const r = await checkManifest(fsFileSource(dir));
-    expect(r.status).toBe('warn');
+    expect(r.status).toBe('fail');
     expect(r.detail).toMatch(/short_name/);
     expect(r.detail).toMatch(/start_url/);
   });
@@ -59,7 +59,7 @@ describe('checkManifest', () => {
       JSON.stringify({ name: '', short_name: 'X', start_url: '/', display: 'standalone' }),
     );
     const r = await checkManifest(fsFileSource(dir));
-    expect(r.status).toBe('warn');
+    expect(r.status).toBe('fail');
     expect(r.detail).toMatch(/name/);
   });
 });

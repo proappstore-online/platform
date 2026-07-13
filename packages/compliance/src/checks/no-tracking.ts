@@ -19,7 +19,7 @@ function wb(name: string): RegExp {
   return new RegExp(`(?:^|[^a-zA-Z0-9_])${escapeForRegExp(name)}(?:$|[^a-zA-Z0-9_])`, 'i');
 }
 
-const TRACKERS: TrackerSpec[] = [
+export const TRACKERS: TrackerSpec[] = [
   { name: 'google-analytics', patterns: [/google-analytics/i, /googletagmanager\.com/i] },
   // `gtag` as a bare token would catch nothing real, but the GA install snippet
   // always calls it like `gtag('config', ...)` or `gtag('event', ...)` or
@@ -59,6 +59,16 @@ const TRACKERS: TrackerSpec[] = [
 ];
 
 const SCAN_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.html', '.json']);
+
+/**
+ * Names of any trackers whose SDK-context patterns match `text`. Shared with the
+ * live-URL audit so both the source-side check and the post-publish check use
+ * the SAME hardened patterns — a bare English word like "amplitude" must never
+ * be a hit in either place. Returns [] when clean.
+ */
+export function matchedTrackers(text: string): string[] {
+  return TRACKERS.filter((t) => t.patterns.some((re) => re.test(text))).map((t) => t.name);
+}
 
 function escapeForRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

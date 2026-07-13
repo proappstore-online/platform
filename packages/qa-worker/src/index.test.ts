@@ -110,7 +110,8 @@ describe('qa-worker run claiming', () => {
     expect(claim.bind).toHaveBeenCalledWith('run-1', Date.parse('2026-07-13T00:00:00Z'));
     expect(browser.page.goto).toHaveBeenCalledWith(
       expect.stringContaining('https://chess-academy.proappstore.online/?__qa_bust='),
-      { waitUntil: 'networkidle0', timeout: 30_000 },
+      // `load`, not networkidle0 — apps with a long-lived WS/SSE never idle.
+      { waitUntil: 'load', timeout: 30_000 },
     );
   });
 });

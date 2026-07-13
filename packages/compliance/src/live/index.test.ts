@@ -32,7 +32,6 @@ describe('checkNoTrackingLive', () => {
     expect(checkNoTrackingLive('<script src="https://plausible.io/script.js">').status).toBe(
       'fail',
     );
-    expect(checkNoTrackingLive('<div>amplitude tracker</div>').status).toBe('fail');
     expect(checkNoTrackingLive('<script>gtag("event")</script>').status).toBe('fail');
     expect(
       checkNoTrackingLive('<script src="https://www.googletagmanager.com/gtm.js">').status,
@@ -42,6 +41,16 @@ describe('checkNoTrackingLive', () => {
       'fail',
     );
     expect(checkNoTrackingLive('<script src="https://posthog.com/array.js">').status).toBe('fail');
+  });
+
+  it('does NOT flag plain-English words that merely contain a tracker name', () => {
+    // "amplitude" is a math/audio term; the bare word must not be a tracker hit
+    // (matches the hardened source-side check). Only real SDK usage should fail.
+    expect(checkNoTrackingLive('<div>Set the amplitude of the waveform</div>').status).toBe('pass');
+    expect(checkNoTrackingLive('<p>drag the segment to the drop target</p>').status).toBe('pass');
+    // ...but a real Amplitude SDK reference still fails.
+    expect(checkNoTrackingLive('<script>amplitude.init("KEY")</script>').status).toBe('fail');
+    expect(checkNoTrackingLive('<script src="https://cdn.amplitude.com/libs/x.js">').status).toBe('fail');
   });
 });
 
