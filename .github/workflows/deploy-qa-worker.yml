@@ -10,6 +10,10 @@ on:
     paths:
       - 'packages/qa-worker/**'
       - 'packages/qa-spec/**'
+      # The worker install/build is resolved through the root workspace.
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
       - '.github/workflows/deploy-qa-worker.yml'
   workflow_dispatch:
 

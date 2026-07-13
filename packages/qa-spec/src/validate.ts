@@ -2,6 +2,20 @@ import { MAX_STEPS, MAX_WAIT_MS, type Step, type Target, type TestFlow } from '.
 
 const FLOW_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const OPS = new Set(['goto', 'click', 'clickPoint', 'fill', 'press', 'expectVisible', 'expectText', 'waitFor', 'screenshot']);
+const CONTROL_OR_BACKSLASH_RE = /[\u0000-\u001f\u007f\\]/;
+
+export function validateAppPath(path: unknown, field: string): string | null {
+  if (typeof path !== 'string' || !path.startsWith('/')) return `${field} must start with "/"`;
+  if (path.startsWith('//')) return `${field} must be a same-origin app path, not a protocol-relative URL`;
+  if (CONTROL_OR_BACKSLASH_RE.test(path)) return `${field} must not contain backslashes or control characters`;
+  try {
+    const decoded = decodeURIComponent(path);
+    if (CONTROL_OR_BACKSLASH_RE.test(decoded)) return `${field} must not contain encoded backslashes or control characters`;
+  } catch {
+    return `${field} must contain valid percent-encoding`;
+  }
+  return null;
+}
 
 /** Validate an untrusted flow object. Returns null when valid, else the problem. */
 export function validateFlow(raw: unknown): string | null {
@@ -13,8 +27,9 @@ export function validateFlow(raw: unknown): string | null {
   if (typeof flow.name !== 'string' || flow.name.trim().length === 0 || flow.name.length > 120) {
     return 'flow.name must be a non-empty string ≤120 chars';
   }
-  if (flow.startPath !== undefined && (typeof flow.startPath !== 'string' || !flow.startPath.startsWith('/'))) {
-    return 'flow.startPath must start with "/"';
+  if (flow.startPath !== undefined) {
+    const err = validateAppPath(flow.startPath, 'flow.startPath');
+    if (err) return err;
   }
   if (!Array.isArray(flow.steps) || flow.steps.length === 0) return 'flow.steps must be a non-empty array';
   if (flow.steps.length > MAX_STEPS) return `flow.steps must have at most ${MAX_STEPS} steps`;
@@ -31,8 +46,7 @@ function validateStep(raw: unknown): string | null {
   if (typeof step.op !== 'string' || !OPS.has(step.op)) return `unknown op "${String(step.op)}"`;
   switch (step.op as Step['op']) {
     case 'goto':
-      if (typeof step.path !== 'string' || !step.path.startsWith('/')) return 'goto.path must start with "/"';
-      return null;
+      return validateAppPath(step.path, 'goto.path');
     case 'click':
     case 'expectVisible':
       return validateTarget(step.target);

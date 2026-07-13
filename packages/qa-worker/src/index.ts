@@ -12,7 +12,7 @@
  */
 import puppeteer, { type Browser, type BrowserContext, type Page } from '@cloudflare/puppeteer';
 import { DOM_RUNNER_BUNDLE } from '@proappstore/qa-spec/browser-bundle';
-import { PW_VIEWPORT, type Step, type StepResult, type TestFlow } from '@proappstore/qa-spec';
+import { PW_VIEWPORT, validateAppPath, type Step, type StepResult, type TestFlow } from '@proappstore/qa-spec';
 
 interface Env {
   BROWSER: Fetcher;
@@ -32,7 +32,8 @@ const MAX_RUNS_PER_INVOCATION = 10;
 // A run is claimed queued→running, then finished within ~a minute. If an
 // executor invocation dies mid-run (edge eviction, cancellation), the row is
 // left 'running' forever — processQueued only picks 'queued', so it never
-// recovers. Reclaim runs stuck 'running' well past any realistic batch.
+// recovers. Reclaim runs stuck 'running' well past any realistic batch, based
+// on claim time rather than queue time.
 const STALE_RUN_MS = 600_000; // 10 min
 
 export default {
@@ -55,7 +56,7 @@ async function processQueued(env: Env, appId: string | null): Promise<void> {
   // Recover runs abandoned in 'running' by a dead executor invocation.
   await env.DB.prepare(
     `UPDATE app_test_runs SET status = 'error', error = 'executor did not finish (timed out)', finished_at = ?1
-     WHERE status = 'running' AND started_at < ?2`,
+     WHERE status = 'running' AND COALESCE(claimed_at, started_at) < ?2`,
   ).bind(Date.now(), Date.now() - STALE_RUN_MS).run();
 
   const queued = appId
@@ -72,9 +73,10 @@ async function processQueued(env: Env, appId: string | null): Promise<void> {
     browser = await puppeteer.launch(env.BROWSER);
     for (const run of queued.results) {
       // Claim: queued → running (skip if another invocation grabbed it).
+      const claimedAt = Date.now();
       const claim = await env.DB.prepare(
-        "UPDATE app_test_runs SET status = 'running' WHERE run_id = ?1 AND status = 'queued'",
-      ).bind(run.run_id).run();
+        "UPDATE app_test_runs SET status = 'running', claimed_at = ?2 WHERE run_id = ?1 AND status = 'queued'",
+      ).bind(run.run_id, claimedAt).run();
       if (claim.meta.changes === 0) continue;
       await executeRun(env, browser, run);
     }
@@ -209,7 +211,11 @@ async function executeStep(
 }
 
 async function gotoApp(page: Page, appId: string, path: string): Promise<void> {
-  const url = new URL(path, APP_BASE(appId));
+  const pathError = validateAppPath(path, 'path');
+  if (pathError) throw new Error(pathError);
+  const base = new URL(APP_BASE(appId));
+  const url = new URL(path, base);
+  if (url.origin !== base.origin) throw new Error('path resolved outside app origin');
   url.searchParams.set('__qa_bust', String(Date.now()));
   await page.goto(url.toString(), { waitUntil: 'networkidle0', timeout: 30_000 });
   await page.evaluate(DOM_RUNNER_BUNDLE);

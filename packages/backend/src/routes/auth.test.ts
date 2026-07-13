@@ -5,12 +5,35 @@ import { mintSession } from '@proappstore/build-core';
 const b64url = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 const KEY = 'test-signing-key';
-function env(userRow: Record<string, unknown> | null = null) {
+type CustomDomain = {
+  app_id: string;
+  domain: string;
+  kind?: 'exact' | 'wildcard';
+  status?: 'pending' | 'active' | 'failed';
+};
+
+function env(userRow: Record<string, unknown> | null = null, customDomains: CustomDomain[] = []) {
   return {
     DB: {
-      prepare: vi.fn().mockReturnValue({
-        bind: vi.fn().mockReturnThis(),
-        first: vi.fn().mockResolvedValue(userRow),
+      prepare: vi.fn((sql: string) => {
+        const stmt: { _args: unknown[]; bind: (...a: unknown[]) => typeof stmt; first: <T>() => Promise<T | null> } = {
+          _args: [],
+          bind(...a: unknown[]) { stmt._args = a; return stmt; },
+          async first<T>() {
+            if (/FROM app_custom_domains/i.test(sql)) {
+              const [appId, domain] = stmt._args as [string, string];
+              const wildcardOnly = /COALESCE\(kind, 'exact'\) = 'wildcard'/i.test(sql);
+              const found = customDomains.find((row) =>
+                row.app_id === appId
+                && row.domain === domain
+                && (row.status ?? 'active') === 'active'
+                && (!wildcardOnly || (row.kind ?? 'exact') === 'wildcard'));
+              return (found ? { ok: 1 } : null) as T | null;
+            }
+            return userRow as T | null;
+          },
+        };
+        return stmt;
       }),
     } as unknown as D1Database,
     STORAGE: {} as R2Bucket,
@@ -310,11 +333,69 @@ describe('auth provider start', () => {
     expect(res.status).toBe(302);
   });
 
+  it('accepts return_to on an app active exact custom domain', async () => {
+    const res = await app.request(
+      '/v1/auth/google/start?app_id=chess-academy&return_to=https%3A%2F%2Fchessclubs.online%2F',
+      {},
+      {
+        ...env(null, [{ app_id: 'chess-academy', domain: 'chessclubs.online', kind: 'exact', status: 'active' }]),
+        GOOGLE_CLIENT_ID: 'google-cid',
+        APP_BASE: 'https://api.proappstore.online',
+      } as never,
+    );
+
+    expect(res.status).toBe(302);
+    const loc = new URL(res.headers.get('location')!);
+    expect(loc.host).toBe('accounts.google.com');
+    const state = loc.searchParams.get('state')!;
+    const json = atob(state.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (state.length % 4)) % 4));
+    expect(JSON.parse(json)).toMatchObject({ a: 'chess-academy', r: 'https://chessclubs.online/' });
+  });
+
+  it('accepts return_to on a subdomain of an app active wildcard custom domain', async () => {
+    const res = await app.request(
+      '/v1/auth/github/start?app_id=chess-academy&return_to=https%3A%2F%2Fmelbourne.chessclubs.online%2F',
+      {},
+      {
+        ...env(null, [{ app_id: 'chess-academy', domain: 'chessclubs.online', kind: 'wildcard', status: 'active' }]),
+        GITHUB_CLIENT_ID: 'github-cid',
+        APP_BASE: 'https://api.proappstore.online',
+      } as never,
+    );
+
+    expect(res.status).toBe(302);
+  });
+
+  it('accepts return_to on a wildcard custom-domain base host', async () => {
+    const res = await app.request(
+      '/v1/auth/github/start?app_id=chess-academy&return_to=https%3A%2F%2Fchessclubs.online%2F',
+      {},
+      {
+        ...env(null, [{ app_id: 'chess-academy', domain: 'chessclubs.online', kind: 'wildcard', status: 'active' }]),
+        GITHUB_CLIENT_ID: 'github-cid',
+      } as never,
+    );
+
+    expect(res.status).toBe(302);
+  });
+
   it('rejects a return_to that is not a proappstore origin (open-redirect guard)', async () => {
     const res = await app.request(
       '/v1/auth/github/start?return_to=https://evil.com',
       {},
       { ...env(), GITHUB_CLIENT_ID: 'cid' } as never,
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a custom-domain return_to that is not attached to that app', async () => {
+    const res = await app.request(
+      '/v1/auth/github/start?app_id=chess-academy&return_to=https%3A%2F%2Fclubs.example.com%2F',
+      {},
+      {
+        ...env(null, [{ app_id: 'other-app', domain: 'clubs.example.com', kind: 'exact', status: 'active' }]),
+        GITHUB_CLIENT_ID: 'github-cid',
+      } as never,
     );
     expect(res.status).toBe(400);
   });
@@ -385,5 +466,21 @@ describe('auth callback — state decoding (base64url padding regression)', () =
       env(),
     );
     expect(res.status).toBe(400);
+  });
+
+  it('accepts a custom-domain return_to using app_id recovered from state', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 400 }));
+    const ret = 'https://melbourne.chessclubs.online/';
+    const state = b64url(JSON.stringify({ r: ret, n: 'x', a: 'chess-academy' }));
+    const res = await app.request(
+      `/v1/auth/google/callback?code=x&state=${state}`,
+      { headers: { Cookie: `pas_oauth_state=${state}` } },
+      env(null, [{ app_id: 'chess-academy', domain: 'chessclubs.online', kind: 'wildcard', status: 'active' }]),
+    );
+
+    expect(res.status).toBe(302);
+    const loc = res.headers.get('location')!;
+    expect(loc.startsWith(ret)).toBe(true);
+    expect(loc).toContain('auth_error=profile_fetch_failed');
   });
 });
