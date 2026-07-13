@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest';
-import { fillElement, resolveTarget, runFlow, type RunnerHost } from './dom-runner.js';
+import { clickAtPoint, fillElement, resolveTarget, runFlow, type RunnerHost } from './dom-runner.js';
 import type { TestFlow } from './types.js';
 
 function docWith(html: string): Document {
@@ -98,5 +98,64 @@ describe('runFlow', () => {
     );
     expect(res.ok).toBe(true);
     expect(visited).toEqual(['/a', '/b']);
+  });
+});
+
+describe('clickAtPoint (coordinate UIs / Chessground click-to-move)', () => {
+  // Minimal Chessground-like board: it selects a square on a *real* primary
+  // pointerdown and only accepts a fresh tap after the previous one released
+  // (pointerup). Both conditions were exactly what the old MouseEvent-only,
+  // no-pointerup sequence failed to satisfy (issue #54).
+  function board(squareAt: (x: number, y: number) => string) {
+    const el = docWith('<div id="board"></div>').getElementById('board')!;
+    let held = false;
+    let selected: string | null = null;
+    const moves: string[] = [];
+    const isRealTap = (e: Event) =>
+      typeof PointerEvent !== 'undefined' && e instanceof PointerEvent && (e as PointerEvent).isPrimary;
+    el.addEventListener('pointerdown', (e) => {
+      if (held || !isRealTap(e)) return; // stuck-down or synthetic MouseEvent -> ignored
+      held = true;
+      const sq = squareAt((e as PointerEvent).clientX, (e as PointerEvent).clientY);
+      if (selected && selected !== sq) { moves.push(`${selected}${sq}`); selected = null; }
+      else selected = sq;
+    });
+    el.addEventListener('pointerup', () => { held = false; });
+    return { el, moves };
+  }
+
+  it('drives a two-tap click-to-move on a Chessground-style board', () => {
+    // top half of the viewport => g3, bottom half => g2
+    const { el, moves } = board((_x, y) => (y < document.defaultView!.innerHeight / 2 ? 'g3' : 'g2'));
+    const orig = document.elementFromPoint.bind(document);
+    document.elementFromPoint = () => el;
+    try {
+      clickAtPoint(document, 50, 80); // select g2 (bottom)
+      clickAtPoint(document, 50, 20); // move to g3 (top)
+    } finally {
+      document.elementFromPoint = orig;
+    }
+    expect(moves).toEqual(['g2g3']);
+  });
+
+  it('emits a real primary PointerEvent for pointerdown/pointerup', () => {
+    const el = docWith('<div id="t"></div>').getElementById('t')!;
+    const seen: Array<{ type: string; isPointer: boolean; buttons: number }> = [];
+    for (const type of ['pointerdown', 'pointerup']) {
+      el.addEventListener(type, (e) =>
+        seen.push({ type, isPointer: e instanceof PointerEvent, buttons: (e as PointerEvent).buttons }),
+      );
+    }
+    const orig = document.elementFromPoint.bind(document);
+    document.elementFromPoint = () => el;
+    try {
+      clickAtPoint(document, 50, 50);
+    } finally {
+      document.elementFromPoint = orig;
+    }
+    expect(seen).toEqual([
+      { type: 'pointerdown', isPointer: true, buttons: 1 },
+      { type: 'pointerup', isPointer: true, buttons: 0 },
+    ]);
   });
 });

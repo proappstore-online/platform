@@ -177,14 +177,43 @@ function mouseInit(doc: Document, x?: number, y?: number): MouseEventInit {
   return { bubbles: true, cancelable: true, view: doc.defaultView, clientX: x ?? 0, clientY: y ?? 0 };
 }
 
+/**
+ * Pointer-shaped init. `buttons` is 1 while the primary button is held
+ * (pointerdown) and 0 once released (pointerup) — Chessground reads these.
+ */
+function pointerInit(doc: Document, x: number, y: number, buttons: 0 | 1): PointerEventInit {
+  return {
+    ...mouseInit(doc, x, y),
+    pointerId: 1,
+    pointerType: 'mouse',
+    isPrimary: true,
+    button: 0,
+    buttons,
+  };
+}
+
+/**
+ * Dispatch a real `PointerEvent` when the environment provides one (browsers,
+ * happy-dom). Chessground's select/move handlers read pointer fields
+ * (`pointerId`, `isPrimary`, `button`) that a `MouseEvent` typed 'pointerdown'
+ * never carries. Fall back to a pointer-shaped `MouseEvent` where the
+ * constructor is missing so older runtimes still fire the listener.
+ */
+function dispatchPointer(target: EventTarget, type: string, doc: Document, x: number, y: number, buttons: 0 | 1): void {
+  const view = doc.defaultView as (Window & typeof globalThis) | null;
+  const PE = view?.PointerEvent ?? (typeof PointerEvent !== 'undefined' ? PointerEvent : undefined);
+  const init = pointerInit(doc, x, y, buttons);
+  target.dispatchEvent(PE ? new PE(type, init) : new MouseEvent(type, init));
+}
+
 export function clickElement(el: Element): void {
   const doc = el.ownerDocument;
   const rect = (el as HTMLElement).getBoundingClientRect?.();
   const x = rect ? rect.left + rect.width / 2 : 0;
   const y = rect ? rect.top + rect.height / 2 : 0;
-  el.dispatchEvent(new MouseEvent('pointerdown', mouseInit(doc, x, y)));
+  dispatchPointer(el, 'pointerdown', doc, x, y, 1);
   el.dispatchEvent(new MouseEvent('mousedown', mouseInit(doc, x, y)));
-  el.dispatchEvent(new MouseEvent('pointerup', mouseInit(doc, x, y)));
+  dispatchPointer(el, 'pointerup', doc, x, y, 0);
   el.dispatchEvent(new MouseEvent('mouseup', mouseInit(doc, x, y)));
   (el as HTMLElement).click?.();
 }
@@ -197,9 +226,14 @@ export function clickAtPoint(doc: Document, xPct: number, yPct: number): void {
   const x = (w * xPct) / 100;
   const y = (h * yPct) / 100;
   const el = doc.elementFromPoint(x, y) ?? doc.body;
-  el.dispatchEvent(new MouseEvent('pointerdown', mouseInit(doc, x, y)));
+  // Full pointer+mouse tap sequence. Chessground selects on pointerdown and
+  // finalizes the click-move on pointerup; without a real pointerup the pointer
+  // stays "down" and a second clickPoint never registers as a fresh tap.
+  dispatchPointer(el, 'pointerdown', doc, x, y, 1);
   el.dispatchEvent(new MouseEvent('mousedown', mouseInit(doc, x, y)));
-  // Libraries like chessground complete interactions on document-level mouseup.
+  dispatchPointer(el, 'pointerup', doc, x, y, 0);
+  // Libraries like Chessground bind pointerup/mouseup on document to finalize.
+  dispatchPointer(doc, 'pointerup', doc, x, y, 0);
   doc.dispatchEvent(new MouseEvent('mouseup', mouseInit(doc, x, y)));
   el.dispatchEvent(new MouseEvent('click', mouseInit(doc, x, y)));
 }
