@@ -95,8 +95,8 @@ jobs:
               '{kind: "wildcard-route", zoneId: $zoneId, routeId: $routeId, dnsRecordId: null, pattern: $pattern}')
             sql=$(node -e '
               const [payload, domain] = process.argv.slice(1);
-              const esc = (s) => s.replaceAll("'", "''");
               const q = String.fromCharCode(39);
+              const esc = (s) => s.split(q).join(q + q);
               process.stdout.write("UPDATE app_custom_domains SET cf_payload = " + q + esc(payload) + q + " WHERE kind = " + q + "wildcard" + q + " AND domain = " + q + esc(domain) + q);
             ' "$payload" "$domain")
             pnpm exec wrangler d1 execute pas --remote --command "$sql"
