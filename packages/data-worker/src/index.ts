@@ -35,21 +35,32 @@ const app = new Hono<{ Bindings: Env }>();
 // CORS
 // ---------------------------------------------------------------------------
 
+function corsOrigin(origin: string | undefined): string | null {
+  if (!origin) return null;
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    return origin;
+  } catch {
+    return null;
+  }
+}
+
+function setCorsHeaders(res: Response, origin: string | null): void {
+  if (!origin) return;
+  res.headers.set('Access-Control-Allow-Origin', origin);
+  res.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+}
+
 app.use(
   '*',
   cors({
-    origin: (origin) => {
-      if (!origin) return null;
-      try {
-        const host = new URL(origin).hostname.toLowerCase();
-        if (host === 'localhost' || host === '127.0.0.1') return origin;
-        if (host.endsWith('.proappstore.online') || host === 'proappstore.online') return origin;
-        if (host.endsWith('.pages.dev')) return origin;
-        return null;
-      } catch {
-        return null;
-      }
-    },
+    // The data worker is app-authorized by bearer session or X-Internal-Token
+    // on every SQL route. CORS only decides which browser origins can receive
+    // those authorized responses; custom BYO app domains are not knowable from
+    // this per-app worker without adding a platform round trip to preflight.
+    origin: corsOrigin,
     allowMethods: ['GET', 'POST', 'OPTIONS'],
     allowHeaders: ['Authorization', 'Content-Type'],
     maxAge: 600,
@@ -341,11 +352,16 @@ app.post('/validate', async (c) => {
 // ---------------------------------------------------------------------------
 
 app.onError((err, c) => {
+  const origin = corsOrigin(c.req.header('Origin'));
   if (err instanceof HTTPException) {
-    return c.json({ error: err.message }, err.status);
+    const res = c.json({ error: err.message }, err.status);
+    setCorsHeaders(res, origin);
+    return res;
   }
   console.error('Unhandled error:', err);
-  return c.json({ error: 'internal server error' }, 500);
+  const res = c.json({ error: 'internal server error' }, 500);
+  setCorsHeaders(res, origin);
+  return res;
 });
 
 export default app;

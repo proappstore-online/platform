@@ -75,6 +75,38 @@ describe("GET /health", () => {
   });
 });
 
+describe("CORS", () => {
+  it("allows custom-domain browser preflight requests to /migrate", async () => {
+    const res = await app.request("/migrate", {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://chessclubs.online",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization,content-type",
+      },
+    }, makeEnv());
+
+    expect(res.status).toBe(204);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://chessclubs.online");
+    expect(res.headers.get("Access-Control-Allow-Methods")).toContain("POST");
+    expect(res.headers.get("Access-Control-Allow-Headers")).toContain("Authorization");
+  });
+
+  it("adds CORS headers to auth failures for custom-domain origins", async () => {
+    const res = await app.request("/migrate", {
+      method: "POST",
+      headers: {
+        Origin: "https://chessclubs.online",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ migrations: [{ name: "m1", sql: "CREATE TABLE t (id TEXT)" }] }),
+    }, makeEnv());
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://chessclubs.online");
+  });
+});
+
 describe("Auth", () => {
   it("401 without Authorization header", async () => {
     const res = await app.request("/tables", {}, makeEnv());
