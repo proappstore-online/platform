@@ -95,16 +95,25 @@ describe("resolveRouteForHostname", () => {
     });
   });
 
+  it("resolves an active wildcard base host back to its app route", async () => {
+    const db = fakeRouteDb();
+
+    await expect(resolveRouteForHostname(db, "chessclubs.online")).resolves.toEqual({
+      ...route,
+      matched: "wildcard",
+      base: "chessclubs.online",
+    });
+  });
+
   it("prefers exact domains over wildcard base matches", async () => {
     const db = fakeRouteDb();
 
     await expect(resolveRouteForHostname(db, "club.chessclubs.online")).resolves.toEqual({ ...route, matched: "exact" });
   });
 
-  it("does not match wildcard bases for apex or multi-level tenant hosts", async () => {
+  it("does not match wildcard bases for multi-level tenant hosts", async () => {
     const db = fakeRouteDb();
 
-    await expect(resolveRouteForHostname(db, "chessclubs.online")).resolves.toBeNull();
     await expect(resolveRouteForHostname(db, "a.b.chessclubs.online")).resolves.toBeNull();
   });
 
@@ -129,7 +138,7 @@ function fakeRouteDb(): D1Database {
                 if (domain === "app.example.com" || domain === "club.chessclubs.online") {
                   return { ...route, kind: "exact", matched_domain: domain } as T;
                 }
-                if (wildcardBase === "chessclubs.online") {
+                if (domain === "chessclubs.online" || wildcardBase === "chessclubs.online") {
                   return { ...route, kind: "wildcard", matched_domain: "chessclubs.online" } as T;
                 }
                 return null as T | null;

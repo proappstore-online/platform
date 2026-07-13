@@ -43,8 +43,9 @@ import { roomRoutes } from './routes/rooms.js';
 
 export const app = new Hono<{ Bindings: Env }>();
 
-// CORS origin check — shared between middleware and onError handler
-function corsOrigin(origin: string | undefined): string | null {
+// CORS origin check — shared between middleware and onError handler.
+// Active BYO domains are trusted browser origins for legacy-bearer SDK calls.
+async function corsOrigin(env: Env, origin: string | undefined): Promise<string | null> {
   if (!origin) return null;
   try {
     const host = new URL(origin).hostname.toLowerCase();
@@ -52,23 +53,45 @@ function corsOrigin(origin: string | undefined): string | null {
     if (host.endsWith('.proappstore.online') || host === 'proappstore.online') return origin;
     if (host.endsWith('.freeappstore.online') || host === 'freeappstore.online') return origin;
     if (host.endsWith('.pages.dev') && host.includes('proappstore')) return origin;
+    if (await customDomainOriginAllowed(env.DB, host)) return origin;
     return null;
   } catch {
     return null;
   }
 }
 
+async function customDomainOriginAllowed(db: D1Database, hostname: string): Promise<boolean> {
+  const host = hostname.replace(/\.$/, '');
+  const firstDot = host.indexOf('.');
+  const wildcardBase = firstDot > 0 ? host.slice(firstDot + 1) : '';
+
+  const exactOrWildcardBase = await db.prepare(
+    `SELECT 1 FROM app_custom_domains
+     WHERE domain = ?1 AND status = 'active'
+     LIMIT 1`,
+  ).bind(host).first();
+  if (exactOrWildcardBase) return true;
+  if (!wildcardBase) return false;
+
+  const wildcard = await db.prepare(
+    `SELECT 1 FROM app_custom_domains
+     WHERE domain = ?1 AND COALESCE(kind, 'exact') = 'wildcard' AND status = 'active'
+     LIMIT 1`,
+  ).bind(wildcardBase).first();
+  return Boolean(wildcard);
+}
+
 app.use(
   '*',
   cors({
-    origin: corsOrigin,
+    origin: (origin, c) => corsOrigin(c.env, origin),
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Authorization', 'Content-Type'],
     maxAge: 600,
   }),
 );
 
-app.onError((err, c) => {
+app.onError(async (err, c) => {
   const status = err instanceof HttpError ? err.status as ContentfulStatusCode : 500;
   const body = err instanceof HttpError
     ? { error: err.message }
@@ -77,7 +100,7 @@ app.onError((err, c) => {
   if (!(err instanceof HttpError)) console.error('Unhandled error:', err);
 
   // CORS middleware doesn't run on error responses, so set headers here
-  const origin = corsOrigin(c.req.header('Origin'));
+  const origin = await corsOrigin(c.env, c.req.header('Origin'));
   const res = c.json(body, status);
   if (origin) {
     res.headers.set('Access-Control-Allow-Origin', origin);
