@@ -8,9 +8,13 @@
  * Runtime-agnostic: pass the header string from a raw `Request`
  * (`request.headers.get('X-Internal-Token')`) or Hono (`c.req.header(...)`).
  */
+import { timingSafeEqual } from './session-jwt.js';
+
 export function internalTokenOk(
   provided: string | null | undefined,
   expected: string | undefined,
 ): boolean {
-  return !!expected && provided === expected;
+  // Constant-time compare on the shared secret (matches the session-signature
+  // check); a plain === leaks a byte-by-byte timing oracle on the token.
+  return !!expected && typeof provided === 'string' && timingSafeEqual(provided, expected);
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import app from "./index.js";
+import app, { splitSqlStatements } from "./index.js";
 
 const TEST_SK = 'test-signing-key';
 const API_BASE = 'https://api.test';
@@ -435,5 +435,53 @@ describe("POST /batch", () => {
       body: JSON.stringify({ statements: [] }),
     }, makeEnv());
     expect(res.status).toBe(400);
+  });
+});
+
+describe("splitSqlStatements", () => {
+  it("splits simple multi-statement SQL on top-level semicolons", () => {
+    expect(splitSqlStatements("CREATE TABLE a (id); CREATE TABLE b (id);")).toEqual([
+      "CREATE TABLE a (id)",
+      "CREATE TABLE b (id)",
+    ]);
+  });
+
+  it("does NOT split on a semicolon inside a string literal", () => {
+    const sql = "INSERT INTO t (v) VALUES ('a;b'); SELECT 1;";
+    expect(splitSqlStatements(sql)).toEqual([
+      "INSERT INTO t (v) VALUES ('a;b')",
+      "SELECT 1",
+    ]);
+  });
+
+  it("keeps a CREATE TRIGGER ... BEGIN ...; ...; END body as one statement", () => {
+    const trigger =
+      "CREATE TRIGGER t AFTER INSERT ON x BEGIN UPDATE y SET n = n + 1; DELETE FROM z WHERE q = 'a;b'; END";
+    expect(splitSqlStatements(`${trigger}; SELECT 2;`)).toEqual([trigger, "SELECT 2"]);
+  });
+
+  it("handles doubled-quote escapes inside string literals", () => {
+    const sql = "INSERT INTO t (v) VALUES ('it''s; fine'); SELECT 1;";
+    expect(splitSqlStatements(sql)).toEqual([
+      "INSERT INTO t (v) VALUES ('it''s; fine')",
+      "SELECT 1",
+    ]);
+  });
+
+  it("does not split on a semicolon inside a line or block comment", () => {
+    const sql = "SELECT 1; -- a; b\nSELECT 2; /* c; d */ SELECT 3;";
+    expect(splitSqlStatements(sql)).toEqual([
+      "SELECT 1",
+      "-- a; b\nSELECT 2",
+      "/* c; d */ SELECT 3",
+    ]);
+  });
+
+  it("tolerates a CASE ... END expression (no BEGIN) without corrupting split", () => {
+    const sql = "SELECT CASE WHEN a THEN 1 ELSE 2 END AS x; SELECT 9;";
+    expect(splitSqlStatements(sql)).toEqual([
+      "SELECT CASE WHEN a THEN 1 ELSE 2 END AS x",
+      "SELECT 9",
+    ]);
   });
 });

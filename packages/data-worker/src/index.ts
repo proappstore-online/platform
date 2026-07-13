@@ -149,12 +149,21 @@ async function requireUser(c: { req: { header(name: string): string | undefined 
  * True when the request carries the shared platform secret — i.e. it is the
  * backend actions-executor forwarding prepared, role-checked SQL (identity
  * already injected via `__user_id`). Unset INTERNAL_TOKEN ⇒ always false ⇒
- * fail-closed. Constant secret comparison is sufficient here (the value never
- * reaches a browser; the host strips any client-supplied X-Internal-Token).
+ * fail-closed. Uses a constant-time compare so the token isn't recoverable via
+ * a response-timing oracle (the data-worker is reachable directly at its
+ * data-<app>.proappstore.online custom domain).
  */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
 function isInternal(c: { req: { header(name: string): string | undefined }; env: Env }): boolean {
   const provided = c.req.header('X-Internal-Token');
-  return !!c.env.INTERNAL_TOKEN && provided === c.env.INTERNAL_TOKEN;
+  return !!c.env.INTERNAL_TOKEN && typeof provided === 'string'
+    && timingSafeEqualStr(provided, c.env.INTERNAL_TOKEN);
 }
 
 /**
@@ -256,6 +265,88 @@ app.post('/batch', async (c) => {
 // Migrations
 // ---------------------------------------------------------------------------
 
+/**
+ * Split a migration body into statements on TOP-LEVEL semicolons only. A naive
+ * split(';') corrupts any statement with a semicolon inside a string literal
+ * (`'a;b'`) or inside a CREATE TRIGGER ... BEGIN ...; ...; END body. This
+ * respects '…' "…" `…` [ … ] quoting, -- line + /* *\/ block comments, and
+ * BEGIN/END nesting (trigger/compound bodies).
+ */
+export function splitSqlStatements(sql: string): string[] {
+  const out: string[] = [];
+  let buf = '';
+  let i = 0;
+  let beginDepth = 0;
+  const n = sql.length;
+  while (i < n) {
+    const ch = sql[i]!;
+    // -- line comment
+    if (ch === '-' && sql[i + 1] === '-') {
+      const nl = sql.indexOf('\n', i);
+      const end = nl === -1 ? n : nl;
+      buf += sql.slice(i, end);
+      i = end;
+      continue;
+    }
+    // /* block comment */
+    if (ch === '/' && sql[i + 1] === '*') {
+      const close = sql.indexOf('*/', i + 2);
+      const end = close === -1 ? n : close + 2;
+      buf += sql.slice(i, end);
+      i = end;
+      continue;
+    }
+    // quoted string / quoted identifier — copy verbatim, honoring '' escaping
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch;
+      buf += ch;
+      i++;
+      while (i < n) {
+        const c = sql[i]!;
+        buf += c;
+        if (c === quote) {
+          if (sql[i + 1] === quote) { buf += quote; i += 2; continue; } // escaped
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    // [bracket identifier]
+    if (ch === '[') {
+      const close = sql.indexOf(']', i + 1);
+      const end = close === -1 ? n : close + 1;
+      buf += sql.slice(i, end);
+      i = end;
+      continue;
+    }
+    // BEGIN / END keyword nesting (only at a word boundary, outside quotes)
+    if (ch === 'b' || ch === 'B' || ch === 'e' || ch === 'E') {
+      const prev = buf.length ? buf[buf.length - 1]! : ' ';
+      if (/[^a-zA-Z0-9_]/.test(prev)) {
+        const rest = sql.slice(i);
+        const beginM = /^begin\b/i.exec(rest);
+        if (beginM) { beginDepth++; buf += beginM[0]; i += beginM[0].length; continue; }
+        const endM = /^end\b/i.exec(rest);
+        if (endM) { if (beginDepth > 0) beginDepth--; buf += endM[0]; i += endM[0].length; continue; }
+      }
+    }
+    if (ch === ';' && beginDepth === 0) {
+      const trimmed = buf.trim();
+      if (trimmed) out.push(trimmed);
+      buf = '';
+      i++;
+      continue;
+    }
+    buf += ch;
+    i++;
+  }
+  const tail = buf.trim();
+  if (tail) out.push(tail);
+  return out;
+}
+
 app.post('/migrate', async (c) => {
   await authorize(c);
   const body = await c.req.json<{ migrations: { name: string; sql: string }[] }>();
@@ -279,8 +370,9 @@ app.post('/migrate', async (c) => {
   const ran: string[] = [];
   for (const m of body.migrations) {
     if (appliedSet.has(m.name)) continue;
-    // Split on semicolons to handle multi-statement migrations
-    const statements = m.sql.split(';').map((s) => s.trim()).filter((s) => s.length > 0);
+    // Split into statements on top-level semicolons only (safe for triggers +
+    // string literals containing ';').
+    const statements = splitSqlStatements(m.sql);
     for (let i = 0; i < statements.length; i++) {
       const stmt = statements[i]!;
       try {
