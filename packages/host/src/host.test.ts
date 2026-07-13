@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   contentType,
   etagsMatch,
+  getTenantMeta,
   isUpdateSensitivePath,
   RESERVED_SUBDOMAINS,
   type Route,
@@ -125,6 +126,30 @@ describe("resolveRouteForHostname", () => {
   });
 });
 
+describe("getTenantMeta", () => {
+  it("returns public organization branding for a tenant slug", async () => {
+    const fetch = vi.fn(async (req: Request) => {
+      expect(req.method).toBe("POST");
+      expect(req.url).toBe("https://api.proappstore.online/v1/apps/chess-academy/actions/get_org_by_slug");
+      await expect(req.json()).resolves.toEqual({ params: { slug: "chess-ideas" } });
+      return Response.json({ rows: [{ name: " Chess Ideas ", logo_url: " https://cdn.example/logo.png " }] });
+    });
+    const api = { fetch } as unknown as Fetcher;
+
+    await expect(getTenantMeta(api, "chess-academy", "chess-ideas")).resolves.toEqual({
+      title: "Chess Ideas",
+      icon_url: "https://cdn.example/logo.png",
+    });
+  });
+
+  it("fails open when tenant metadata is unavailable", async () => {
+    const api = { fetch: vi.fn(async () => new Response("nope", { status: 500 })) } as unknown as Fetcher;
+
+    await expect(getTenantMeta(api, "chess-academy", "chess-ideas")).resolves.toBeNull();
+    await expect(getTenantMeta(api, "chess-academy", undefined)).resolves.toBeNull();
+  });
+});
+
 function fakeRouteDb(): D1Database {
   return {
     prepare(sql: string) {
@@ -207,7 +232,13 @@ describe("isUpdateSensitivePath", () => {
   it("marks stable PWA files as update-sensitive", () => {
     expect(isUpdateSensitivePath("/sw.js")).toBe(true);
     expect(isUpdateSensitivePath("apps/interns/registerSW.js")).toBe(true);
+    expect(isUpdateSensitivePath("/manifest.json")).toBe(true);
     expect(isUpdateSensitivePath("/manifest.webmanifest")).toBe(true);
+    expect(isUpdateSensitivePath("/favicon.svg")).toBe(true);
+    expect(isUpdateSensitivePath("/favicon.ico")).toBe(true);
+    expect(isUpdateSensitivePath("/apple-touch-icon.png")).toBe(true);
+    expect(isUpdateSensitivePath("/icon-192.png")).toBe(true);
+    expect(isUpdateSensitivePath("/icon-512.png")).toBe(true);
   });
 
   it("marks deploy metadata as update-sensitive", () => {

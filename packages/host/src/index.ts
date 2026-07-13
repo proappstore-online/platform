@@ -18,6 +18,7 @@ import {
   contentType,
   etagsMatch,
   getListingMeta,
+  getTenantMeta,
   isUpdateSensitivePath,
   r2KeyFor,
   resolveRouteForHostname,
@@ -147,12 +148,17 @@ export default {
     const body = request.method === "HEAD" ? null : object.body;
     let response = new Response(body, { status: 200, headers });
 
-    // Inject per-app meta tags from app_listings (og:image, og:description, favicon)
+    // Inject crawler-visible metadata. App HTML remains the title source by
+    // default; app listing metadata supplies fallback image/description, and
+    // wildcard tenant hosts can override title/image from public org branding.
     if (isHtml && request.method === "GET") {
       const listing = await getListingMeta(env.DB, route.slug);
-      if (listing?.icon_url || listing?.tagline) {
-        response = rewriteMetaTags(response, listing);
-      }
+      const tenant = await getTenantMeta(env.API, route.slug, route.tenant);
+      response = rewriteMetaTags(response, {
+        title: tenant?.title ?? null,
+        tagline: listing?.tagline ?? null,
+        icon_url: tenant?.icon_url ?? listing?.icon_url ?? null,
+      }, `${url.origin}${url.pathname}`);
     }
 
     // Edge cache: store the response so next request skips R2 + D1
