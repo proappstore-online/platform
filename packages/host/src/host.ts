@@ -121,17 +121,20 @@ export async function getListingMeta(db: D1Database, appId: string): Promise<Lis
  * Fetch public tenant branding from an app's registered public action. The host
  * must fail open here: metadata should improve previews, never block serving.
  */
-export async function getTenantMeta(api: Fetcher, appId: string, tenant: string | undefined): Promise<TenantMeta | null> {
+export async function getTenantMeta(
+  api: Fetcher,
+  appId: string,
+  tenant: string | undefined,
+  fallbackFetch: typeof fetch = fetch,
+): Promise<TenantMeta | null> {
   if (!tenant) return null;
-  try {
-    const res = await api.fetch(new Request(
-      `https://api.proappstore.online/v1/apps/${encodeURIComponent(appId)}/actions/get_org_by_slug`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ params: { slug: tenant } }),
-      },
-    ));
+  const url = `https://api.proappstore.online/v1/apps/${encodeURIComponent(appId)}/actions/get_org_by_slug`;
+  const init: RequestInit = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ params: { slug: tenant } }),
+  };
+  const readMeta = async (res: Response): Promise<TenantMeta | null> => {
     if (!res.ok) return null;
     const data = await res.json() as { rows?: Array<{ name?: unknown; logo_url?: unknown }> };
     const row = data.rows?.[0];
@@ -141,6 +144,15 @@ export async function getTenantMeta(api: Fetcher, appId: string, tenant: string 
       title,
       icon_url: typeof row?.logo_url === "string" && row.logo_url.trim() ? row.logo_url.trim() : null,
     };
+  };
+  try {
+    const meta = await readMeta(await api.fetch(new Request(url, init)));
+    if (meta) return meta;
+  } catch {
+    // Fall through to public fetch below.
+  }
+  try {
+    return await readMeta(await fallbackFetch(url, init));
   } catch {
     return null;
   }

@@ -144,9 +144,21 @@ describe("getTenantMeta", () => {
 
   it("fails open when tenant metadata is unavailable", async () => {
     const api = { fetch: vi.fn(async () => new Response("nope", { status: 500 })) } as unknown as Fetcher;
+    const fallbackFetch = vi.fn(async () => new Response("nope", { status: 500 }));
 
-    await expect(getTenantMeta(api, "chess-academy", "chess-ideas")).resolves.toBeNull();
-    await expect(getTenantMeta(api, "chess-academy", undefined)).resolves.toBeNull();
+    await expect(getTenantMeta(api, "chess-academy", "chess-ideas", fallbackFetch as typeof fetch)).resolves.toBeNull();
+    await expect(getTenantMeta(api, "chess-academy", undefined, fallbackFetch as typeof fetch)).resolves.toBeNull();
+  });
+
+  it("falls back to public API fetch when the service binding has no metadata", async () => {
+    const api = { fetch: vi.fn(async () => Response.json({ rows: [] })) } as unknown as Fetcher;
+    const fallbackFetch = vi.fn(async () => Response.json({ rows: [{ name: "Chess Ideas", logo_url: null }] }));
+
+    await expect(getTenantMeta(api, "chess-academy", "chess-ideas", fallbackFetch as typeof fetch)).resolves.toEqual({
+      title: "Chess Ideas",
+      icon_url: null,
+    });
+    expect(fallbackFetch).toHaveBeenCalledOnce();
   });
 });
 
