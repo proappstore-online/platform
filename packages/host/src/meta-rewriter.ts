@@ -52,8 +52,10 @@ class MetaTagTracker {
     }
     if (!this.found.has("og:url"))
       parts.push(`<meta property="og:url" content="${esc(this.canonicalUrl)}">`);
-    if (!this.found.has("twitter:card"))
-      parts.push(`<meta name="twitter:card" content="${icon ? "summary_large_image" : "summary"}">`);
+    if (!this.found.has("twitter:card")) {
+      const hasShareImage = Boolean(icon) || this.found.has("twitter:image") || this.found.has("og:image");
+      parts.push(`<meta name="twitter:card" content="${hasShareImage ? "summary_large_image" : "summary"}">`);
+    }
     return parts.join("\n");
   }
 }
@@ -214,10 +216,11 @@ export function rewriteMetaTags(response: Response, meta: SocialMeta, canonicalU
       .on('link[rel="apple-touch-icon"]', new IconLinkRewriter(null, "apple-touch-icon", canonicalUrl, tracker));
   }
 
-  rewriter = rewriter
-    .on('meta[property="og:url"]', new MetaContentRewriter(canonicalUrl, "og:url", tracker))
-    .on('meta[name="twitter:card"]', new MetaContentRewriter(icon ? "summary_large_image" : "summary", "twitter:card", tracker))
-    .on("head", new HeadEndInjector(tracker));
+  rewriter = rewriter.on('meta[property="og:url"]', new MetaContentRewriter(canonicalUrl, "og:url", tracker));
+  rewriter = icon
+    ? rewriter.on('meta[name="twitter:card"]', new MetaContentRewriter("summary_large_image", "twitter:card", tracker))
+    : rewriter.on('meta[name="twitter:card"]', new FoundTagMarker("twitter:card", tracker));
+  rewriter = rewriter.on("head", new HeadEndInjector(tracker));
 
   return rewriter.transform(response);
 }
