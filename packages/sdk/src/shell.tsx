@@ -37,8 +37,8 @@ export interface ProShellProps {
   /**
    * If true, allow free users to see the app (no subscription gate).
    *
-   * Default: true while the platform has no payments wired up — every PAS app
-   * is free to use. Flip the default back to false once Stripe billing is live.
+   * Default: true preserves backwards compatibility for existing apps. Apps that
+   * should require a paid PAS subscription must pass allowFree={false}.
    */
   allowFree?: boolean;
   /** Show theme toggle in the profile menu. Default: true. */
