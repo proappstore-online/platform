@@ -21,10 +21,12 @@ function env(userRow: Record<string, unknown> | null = null, customDomains: Cust
           bind(...a: unknown[]) { stmt._args = a; return stmt; },
           async first<T>() {
             if (/FROM app_custom_domains/i.test(sql)) {
-              const [appId, domain] = stmt._args as [string, string];
+              const [first, second] = stmt._args as [string, string | undefined];
+              const appId = second ? first : undefined;
+              const domain = second ?? first;
               const wildcardOnly = /COALESCE\(kind, 'exact'\) = 'wildcard'/i.test(sql);
               const found = customDomains.find((row) =>
-                row.app_id === appId
+                (!appId || row.app_id === appId)
                 && row.domain === domain
                 && (row.status ?? 'active') === 'active'
                 && (!wildcardOnly || (row.kind ?? 'exact') === 'wildcard'));
@@ -80,6 +82,60 @@ describe('GET /v1/auth/me (PAS-owned session verification)', () => {
       avatarUrl: 'a.png',
       dateOfBirth: '2000-01-02',
     });
+  });
+});
+
+describe('CORS for app custom domains', () => {
+  const preflight = (origin: string, customDomains: CustomDomain[]) =>
+    app.request(
+      '/v1/auth/me',
+      {
+        method: 'OPTIONS',
+        headers: {
+          Origin: origin,
+          'Access-Control-Request-Method': 'GET',
+          'Access-Control-Request-Headers': 'authorization',
+        },
+      },
+      env(null, customDomains),
+    );
+
+  it('allows preflight requests from active exact custom domains', async () => {
+    const res = await preflight('https://chessclubs.online', [
+      { app_id: 'chess-academy', domain: 'chessclubs.online', kind: 'exact', status: 'active' },
+    ]);
+
+    expect(res.status).toBe(204);
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://chessclubs.online');
+  });
+
+  it('allows preflight requests from active wildcard custom-domain subdomains', async () => {
+    const res = await preflight('https://melbourne.chessclubs.online', [
+      { app_id: 'chess-academy', domain: 'chessclubs.online', kind: 'wildcard', status: 'active' },
+    ]);
+
+    expect(res.status).toBe(204);
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://melbourne.chessclubs.online');
+  });
+
+  it('does not allow preflight requests from unattached origins', async () => {
+    const res = await preflight('https://evil.example', [
+      { app_id: 'chess-academy', domain: 'chessclubs.online', kind: 'wildcard', status: 'active' },
+    ]);
+
+    expect(res.status).toBe(204);
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
+  });
+
+  it('adds CORS headers to auth error responses for active custom domains', async () => {
+    const res = await app.request(
+      '/v1/auth/me',
+      { headers: { Origin: 'https://chessclubs.online' } },
+      env(null, [{ app_id: 'chess-academy', domain: 'chessclubs.online', kind: 'exact', status: 'active' }]),
+    );
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://chessclubs.online');
   });
 });
 

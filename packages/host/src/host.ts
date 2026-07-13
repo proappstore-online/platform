@@ -88,6 +88,7 @@ export async function resolveRouteForHostname(db: D1Database, hostname: string):
        JOIN routes r ON r.slug = d.app_id AND r.zone = ?1
        WHERE d.status = 'active'
          AND ((COALESCE(d.kind, 'exact') = 'exact' AND d.domain = ?2)
+           OR (COALESCE(d.kind, 'exact') = 'wildcard' AND d.domain = ?2)
            OR (COALESCE(d.kind, 'exact') = 'wildcard' AND d.domain = ?3))
        ORDER BY CASE COALESCE(d.kind, 'exact') WHEN 'exact' THEN 0 ELSE 1 END
        LIMIT 1`,
@@ -97,7 +98,7 @@ export async function resolveRouteForHostname(db: D1Database, hostname: string):
 
   if (!row) return null;
   if (row.kind === "wildcard") {
-    return { slug: row.slug, zone: row.zone, r2_prefix: row.r2_prefix, store: row.store, matched: "wildcard", tenant: tenant ?? undefined, base: row.matched_domain ?? wildcardBase ?? undefined };
+    return { slug: row.slug, zone: row.zone, r2_prefix: row.r2_prefix, store: row.store, matched: "wildcard", tenant: row.matched_domain === host ? undefined : tenant ?? undefined, base: row.matched_domain ?? wildcardBase ?? undefined };
   }
   return { slug: row.slug, zone: row.zone, r2_prefix: row.r2_prefix, store: row.store, matched: "exact" };
 }
