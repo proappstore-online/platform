@@ -155,8 +155,10 @@ export function useSubscription(app?: ProAppStore) {
   const isPro = subscription?.status === 'active';
 
   const upgrade = useCallback(async (priceId?: string) => {
+    const checkoutPriceId = priceId ?? (await app.subscription.pricing()).proMonthly?.priceId;
+    if (!checkoutPriceId) throw new Error('Subscription billing is not configured.');
     await app.subscription.openCheckout({
-      priceId: priceId || 'price_pro_monthly',
+      priceId: checkoutPriceId,
       successUrl: window.location.href + (window.location.href.includes('?') ? '&' : '?') + 'upgraded=1',
       cancelUrl: window.location.href,
     });

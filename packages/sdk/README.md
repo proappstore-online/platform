@@ -205,9 +205,14 @@ const tables = await app.db.tables()
 const sub = await app.subscription.status()
 // Returns: { status, tier, priceId, currentPeriodEnd, cancelAtPeriodEnd } | null
 
+// Read the live platform price config
+const pricing = await app.subscription.pricing()
+const priceId = pricing.proMonthly?.priceId
+if (!priceId) throw new Error('Subscription billing is not configured')
+
 // Open Stripe checkout (navigates away)
 await app.subscription.openCheckout({
-  priceId: 'price_pro_monthly',
+  priceId,
   successUrl: 'https://my-app.proappstore.online/success',
   cancelUrl: 'https://my-app.proappstore.online/',
 })

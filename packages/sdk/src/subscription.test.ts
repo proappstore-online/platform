@@ -33,6 +33,36 @@ describe('SubscriptionApi', () => {
     globalThis.fetch = originalFetch;
   });
 
+  describe('pricing', () => {
+    it('returns public pricing config without auth', async () => {
+      const auth = fakeAuth(null);
+      const api = new SubscriptionApi('myapp', 'https://api.proappstore.online', auth);
+      const pricing = {
+        proMonthly: {
+          priceId: 'price_real',
+          currency: 'usd',
+          dollars: 9,
+        },
+      };
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify(pricing), { status: 200 }));
+
+      const result = await api.pricing();
+
+      expect(result).toEqual(pricing);
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url.toString()).toContain('/v1/pricing');
+      expect(init).toBeUndefined();
+    });
+
+    it('throws on pricing errors', async () => {
+      const auth = fakeAuth(null);
+      const api = new SubscriptionApi('myapp', 'https://api.proappstore.online', auth);
+      mockFetch.mockResolvedValueOnce(new Response('', { status: 500 }));
+
+      await expect(api.pricing()).rejects.toThrow('subscription.pricing failed: 500');
+    });
+  });
+
   describe('status', () => {
     it('returns Subscription on 200', async () => {
       const auth = fakeAuth('tok_sub');
@@ -87,7 +117,7 @@ describe('SubscriptionApi', () => {
       (globalThis as any).window = { location: { assign: assignMock } };
 
       await api.openCheckout({
-        priceId: 'price_pro_monthly',
+        priceId: 'price_real',
         successUrl: 'https://myapp.proappstore.online/success',
         cancelUrl: 'https://myapp.proappstore.online/',
       });
@@ -96,7 +126,7 @@ describe('SubscriptionApi', () => {
       expect(url.toString()).toContain('/v1/checkout');
       expect(init.method).toBe('POST');
       expect(JSON.parse(init.body)).toEqual({
-        priceId: 'price_pro_monthly',
+        priceId: 'price_real',
         successUrl: 'https://myapp.proappstore.online/success',
         cancelUrl: 'https://myapp.proappstore.online/',
       });

@@ -1,4 +1,4 @@
-import type { CheckoutRequest, Subscription } from './types.js';
+import type { CheckoutRequest, Subscription, SubscriptionPricing } from './types.js';
 
 interface AuthLike {
   token: string | null;
@@ -12,6 +12,13 @@ export class SubscriptionApi {
     private readonly apiBase: string,
     private readonly auth: AuthLike,
   ) {}
+
+  /** Returns public pricing config for platform-managed subscriptions. */
+  async pricing(): Promise<SubscriptionPricing> {
+    const response = await fetch(new URL('/v1/pricing', this.apiBase));
+    if (!response.ok) throw new Error(`subscription.pricing failed: ${response.status}`);
+    return (await response.json()) as SubscriptionPricing;
+  }
 
   /** Returns the user's current subscription, or null if they have none. */
   async status(): Promise<Subscription | null> {

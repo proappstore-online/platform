@@ -36,6 +36,14 @@ export interface Subscription {
   cancelAtPeriodEnd: boolean;
 }
 
+export interface SubscriptionPricing {
+  proMonthly: {
+    priceId: string;
+    currency: string;
+    dollars: number;
+  } | null;
+}
+
 export interface CheckoutRequest {
   priceId: string;
   /** Where to send the user after success. Must be on an allowlisted origin. */
