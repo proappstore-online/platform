@@ -526,9 +526,35 @@ engagementRoutes.post('/services/engagements/:id/refund', async (c) => {
 
     const id = c.req.param('id');
     const eng = await c.env.DB.prepare('SELECT * FROM engagements WHERE id = ?')
-      .bind(id).first<{ client_id: string; developer_id: string; total_charged_cents: number }>();
+      .bind(id).first<{
+        client_id: string;
+        developer_id: string;
+        total_charged_cents: number;
+        total_dev_earned_cents: number;
+        total_platform_fee_cents: number;
+        total_refunded_cents: number;
+        payout_month: string | null;
+      }>();
     if (!eng) return c.json({ error: 'engagement not found' }, 404);
-    if (body.amountCents > eng.total_charged_cents) return c.json({ error: 'refund cannot exceed total charged' }, 400);
+    // Cap against what is *still* refundable — total_charged_cents never changes,
+    // so without netting cumulative refunds the same engagement could be refunded
+    // in full repeatedly (a double-submit would over-credit the client).
+    const alreadyRefunded = eng.total_refunded_cents ?? 0;
+    const refundable = eng.total_charged_cents - alreadyRefunded;
+    if (body.amountCents > refundable) {
+      return c.json(
+        { error: `refund cannot exceed remaining refundable ($${(refundable / 100).toFixed(2)})` },
+        400,
+      );
+    }
+
+    // Claw back the developer's proportional share of the refunded amount so the
+    // payout cron doesn't pay them for work the client no longer paid for. The
+    // dev earned (100% - fee) of each charge, so reverse that fraction here.
+    const devClawback = Math.round((body.amountCents * (10000 - PLATFORM_FEE_BPS)) / 10000);
+    // Never drive earned/fee negative (guards odd states + already-clawed refunds).
+    const devClawbackApplied = Math.min(devClawback, eng.total_dev_earned_cents);
+    const feeClawback = Math.min(body.amountCents - devClawbackApplied, eng.total_platform_fee_cents);
 
     const now = Date.now();
     const txId = crypto.randomUUID();
@@ -543,9 +569,27 @@ engagementRoutes.post('/services/engagements/:id/refund', async (c) => {
         `INSERT INTO balance_transactions (id, user_id, type, amount_cents, engagement_id, description, created_at)
          VALUES (?, ?, 'refund', ?, ?, ?, ?)`,
       ).bind(txId, eng.client_id, body.amountCents, id, body.reason ?? `Admin refund — $${(body.amountCents / 100).toFixed(2)}`, now),
+      // Net the refund + reverse the dev/platform split on the engagement itself.
+      c.env.DB.prepare(
+        `UPDATE engagements
+            SET total_refunded_cents = total_refunded_cents + ?,
+                total_dev_earned_cents = total_dev_earned_cents - ?,
+                total_platform_fee_cents = total_platform_fee_cents - ?
+          WHERE id = ?`,
+      ).bind(body.amountCents, devClawbackApplied, feeClawback, id),
     ]);
 
-    return c.json({ ok: true, refundedCents: body.amountCents, transactionId: txId });
+    // If the engagement was already paid out (payout_month set), the dev's share
+    // was already transferred via Stripe; the cron can't recover it. Surface that
+    // so the admin knows a manual clawback/reversal is still required.
+    const clawbackAlreadyPaid = eng.payout_month != null && devClawbackApplied > 0;
+    return c.json({
+      ok: true,
+      refundedCents: body.amountCents,
+      transactionId: txId,
+      devClawbackCents: devClawbackApplied,
+      clawbackAlreadyPaid,
+    });
   } catch (err) {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;

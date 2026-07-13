@@ -19,6 +19,7 @@ interface UnpaidRow {
   developer_id: string;
   total_cents: number;
   eng_count: number;
+  eng_ids: string;
 }
 
 interface CreatorPayoutRow {
@@ -55,10 +56,15 @@ payoutCronRoutes.post('/internal/payouts/run', async (c) => {
 
   // 1. Find all developers with unpaid earnings from delivered engagements.
   //    "Unpaid" = status='delivered' AND payout_month IS NULL.
+  //    eng_ids pins the exact engagements whose earnings are in this sum, so the
+  //    mark-paid UPDATE can't stamp an engagement that flipped to 'delivered'
+  //    mid-run (whose earnings were NOT transferred) — that would underpay the
+  //    dev and permanently mark the engagement paid. Ids are UUIDs (no commas).
   const { results: unpaid } = await c.env.DB.prepare(
     `SELECT developer_id,
             SUM(total_dev_earned_cents) AS total_cents,
-            COUNT(*) AS eng_count
+            COUNT(*) AS eng_count,
+            GROUP_CONCAT(id) AS eng_ids
        FROM engagements
       WHERE status = 'delivered'
         AND payout_month IS NULL
@@ -129,6 +135,11 @@ payoutCronRoutes.post('/internal/payouts/run', async (c) => {
     // 5. Record payout + mark engagements as paid (atomic batch).
     const payoutId = crypto.randomUUID();
     const now = Date.now();
+    // Mark exactly the engagements captured in the snapshot sum — not a fresh
+    // "all delivered + unpaid" scan, which could sweep in engagements delivered
+    // after the snapshot whose earnings weren't in this transfer.
+    const engIds = (row.eng_ids ?? '').split(',').filter(Boolean);
+    const idPlaceholders = engIds.map(() => '?').join(',');
     try {
       await c.env.DB.batch([
         c.env.DB.prepare(
@@ -138,11 +149,9 @@ payoutCronRoutes.post('/internal/payouts/run', async (c) => {
         c.env.DB.prepare(
           `UPDATE engagements
               SET payout_month = ?
-            WHERE developer_id = ?
-              AND status = 'delivered'
-              AND payout_month IS NULL
-              AND total_dev_earned_cents > 0`,
-        ).bind(payoutMonth, row.developer_id),
+            WHERE id IN (${idPlaceholders})
+              AND payout_month IS NULL`,
+        ).bind(payoutMonth, ...engIds),
       ]);
     } catch (dbErr) {
       // If the DB write fails after Stripe succeeded, the transfer is already

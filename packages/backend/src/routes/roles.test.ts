@@ -107,6 +107,39 @@ describe('app roles', () => {
     expect(insertRoleStmt.bind).toHaveBeenCalledWith('service-exchange', 'gh:42', 'moderator', 'gh:1');
   });
 
+  it('resolves a login to the canonical id when revoking (and reports what was removed)', async () => {
+    const lookupStmt = mockStmt({
+      first: { id: 'gh:42', login: 'octocat', avatar_url: null },
+    });
+    const deleteStmt = mockStmt({ run: { meta: { changes: 1 } } });
+    const db = mockD1(lookupStmt, deleteStmt);
+
+    const res = await app.request('/v1/apps/service-exchange/roles', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: 'octocat', role: 'moderator' }),
+    }, makeEnv(db));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, revoked: true, userId: 'gh:42', role: 'moderator' });
+    // Was previously binding the raw login 'octocat' -> matched nothing since the
+    // grant is stored under gh:42. Now matches id OR login.
+    expect(deleteStmt.bind).toHaveBeenCalledWith('service-exchange', 'gh:42', 'octocat', 'moderator');
+  });
+
+  it('reports revoked:false when no assignment matched', async () => {
+    const lookupStmt = mockStmt({ first: { id: 'gh:42', login: 'octocat', avatar_url: null } });
+    const deleteStmt = mockStmt({ run: { meta: { changes: 0 } } });
+    const res = await app.request('/v1/apps/service-exchange/roles', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: 'octocat', role: 'moderator' }),
+    }, makeEnv(mockD1(lookupStmt, deleteStmt)));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, revoked: false, userId: 'gh:42', role: 'moderator' });
+  });
+
   it('checks legacy raw-login role rows for signed-in users', async () => {
     const token = await testToken('gh:42', { roles: ['user'], login: 'octocat' });
     const roleStmt = mockStmt({ first: { 1: 1 } });

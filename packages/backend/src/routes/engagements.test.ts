@@ -280,6 +280,72 @@ describe('POST /v1/services/engagements/:id/refund', () => {
     }, env({ ADMIN_GITHUB_IDS: 'gh:1' }, db));
     expect(res.status).toBe(400);
   });
+
+  it('reverses the developer earnings + platform fee so the payout cron does not pay refunded work', async () => {
+    const select = mockStmt({
+      first: {
+        client_id: 'gh:2', developer_id: 'gh:3',
+        total_charged_cents: 1000, total_dev_earned_cents: 900,
+        total_platform_fee_cents: 100, total_refunded_cents: 0, payout_month: null,
+      },
+    });
+    const creditClient = mockStmt();
+    const insertTxn = mockStmt();
+    const updateEng = mockStmt();
+    const db = mockD1(select, creditClient, insertTxn, updateEng);
+
+    const res = await app.request('/v1/services/engagements/test-id/refund', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amountCents: 1000 }),
+    }, env({ ADMIN_GITHUB_IDS: 'gh:1' }, db));
+
+    expect(res.status).toBe(200);
+    const json = await res.json() as { devClawbackCents: number; clawbackAlreadyPaid: boolean };
+    expect(json.devClawbackCents).toBe(900); // 90% of the $10 refund
+    expect(json.clawbackAlreadyPaid).toBe(false);
+    // UPDATE engagements binds (refund, devClawback, feeClawback, id)
+    expect(updateEng.bind).toHaveBeenCalledWith(1000, 900, 100, 'test-id');
+  });
+
+  it('caps refunds against the remaining refundable, not the (never-decremented) total charged', async () => {
+    const db = mockD1(
+      mockStmt({
+        first: {
+          client_id: 'gh:2', developer_id: 'gh:3',
+          total_charged_cents: 1000, total_dev_earned_cents: 900,
+          total_platform_fee_cents: 100, total_refunded_cents: 800, payout_month: null,
+        },
+      }),
+    );
+    // Only $2 remains refundable (1000 - 800); asking for $4 must be rejected.
+    const res = await app.request('/v1/services/engagements/test-id/refund', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amountCents: 400 }),
+    }, env({ ADMIN_GITHUB_IDS: 'gh:1' }, db));
+    expect(res.status).toBe(400);
+  });
+
+  it('flags clawbackAlreadyPaid when the engagement was already paid out', async () => {
+    const db = mockD1(
+      mockStmt({
+        first: {
+          client_id: 'gh:2', developer_id: 'gh:3',
+          total_charged_cents: 1000, total_dev_earned_cents: 900,
+          total_platform_fee_cents: 100, total_refunded_cents: 0, payout_month: '2026-07',
+        },
+      }),
+    );
+    const res = await app.request('/v1/services/engagements/test-id/refund', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amountCents: 500 }),
+    }, env({ ADMIN_GITHUB_IDS: 'gh:1' }, db));
+    expect(res.status).toBe(200);
+    const json = await res.json() as { clawbackAlreadyPaid: boolean };
+    expect(json.clawbackAlreadyPaid).toBe(true);
+  });
 });
 
 describe('DELETE /v1/services/requests/:id', () => {

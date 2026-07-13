@@ -115,11 +115,19 @@ rolesRoutes.delete('/apps/:appId/roles', async (c) => {
     return c.json({ error: "cannot revoke 'owner' role — transfer ownership instead" }, 400);
   }
 
-  await c.env.DB.prepare('DELETE FROM app_roles WHERE app_id = ? AND user_id = ? AND role_name = ?')
-    .bind(appId, body.userId, body.role)
+  // Assignments are stored under the canonical id (e.g. gh:12345), so revoking
+  // by login must resolve first — otherwise DELETE ... WHERE user_id = 'octocat'
+  // matches nothing and the role silently survives. Match id OR login to also
+  // clear any legacy login-keyed rows.
+  const target = await resolveRoleUser(c.env, body.userId);
+  const result = await c.env.DB.prepare(
+    'DELETE FROM app_roles WHERE app_id = ? AND user_id IN (?, ?) AND role_name = ?',
+  )
+    .bind(appId, target.id, target.login ?? target.id, body.role)
     .run();
 
-  return c.json({ ok: true });
+  const revoked = (result.meta.changes ?? 0) > 0;
+  return c.json({ ok: true, revoked, userId: target.id, role: body.role });
 });
 
 /** Check if the caller has a specific role in an app. */

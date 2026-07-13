@@ -180,6 +180,34 @@ describe('POST /v1/internal/payouts/run', () => {
     expect(headers['Idempotency-Key']).toMatch(/^payout:gh:10:\d{4}-\d{2}$/);
   });
 
+  it('marks only the engagements captured in the snapshot as paid (not a fresh scan)', async () => {
+    const insertPayout = mockStmt();
+    const updateEng = mockStmt();
+    const db = mockD1(
+      mockStmt({ all: { results: [{ developer_id: 'gh:10', total_cents: 4500, eng_count: 2, eng_ids: 'eng-a,eng-b' }] } }),
+      mockStmt({ first: { stripe_connect_account_id: 'acct_abc', payouts_enabled: 1 } }),
+      mockStmt({ first: null }), // idempotency check
+      insertPayout, // batch[0]: INSERT service_payouts
+      updateEng,    // batch[1]: UPDATE engagements
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 'tr_x', amount: 4500, currency: 'usd', destination: 'acct_abc' }), { status: 200 }),
+    );
+
+    const res = await app.request('/v1/internal/payouts/run', {
+      method: 'POST',
+      headers: { 'X-Internal-Token': 'secret-cron-token' },
+    }, env({}, db));
+    expect(res.status).toBe(200);
+    // The UPDATE is scoped to the exact snapshot ids + payout_month, so an
+    // engagement that flips to 'delivered' mid-run isn't swept in and underpaid.
+    const bindArgs = updateEng.bind.mock.calls[0];
+    expect(bindArgs).toContain('eng-a');
+    expect(bindArgs).toContain('eng-b');
+    // month + 2 ids
+    expect(bindArgs).toHaveLength(3);
+  });
+
   it('reports Stripe failures without crashing', async () => {
     const db = mockD1(
       mockStmt({ all: { results: [{ developer_id: 'gh:10', total_cents: 2000, eng_count: 1 }] } }),
