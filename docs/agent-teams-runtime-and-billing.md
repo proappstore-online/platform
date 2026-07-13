@@ -147,7 +147,7 @@ If we do metered billing, two things must harden first:
   `cost_cap` enforcement hook already exists).
 
 Note: Agent Teams is *creator/build tooling*, arguably a separate product from the
-consumer app-marketplace ($9/mo flat). Metered "compute to build your app" can
+consumer app-marketplace ($5/mo flat). Metered "compute to build your app" can
 coexist with the flat marketplace sub. **This is an open pricing decision.**
 
 ## ToS

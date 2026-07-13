@@ -11,7 +11,7 @@ export interface Env {
   ROOM: DurableObjectNamespace;
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
-  /** Stripe price ID for the $9/mo platform subscription. Read by GET /v1/pricing. */
+  /** Stripe price ID for the $5/mo platform subscription. Read by GET /v1/pricing. */
   STRIPE_PRO_MONTHLY_PRICE_ID?: string;
   /** Signs + verifies PAS session JWTs (build-core/session-jwt). */
   SESSION_SIGNING_KEY: string;

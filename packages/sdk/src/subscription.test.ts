@@ -41,7 +41,7 @@ describe('SubscriptionApi', () => {
         proMonthly: {
           priceId: 'price_real',
           currency: 'usd',
-          dollars: 9,
+          dollars: 5,
         },
       };
       mockFetch.mockResolvedValueOnce(new Response(JSON.stringify(pricing), { status: 200 }));

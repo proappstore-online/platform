@@ -303,7 +303,7 @@ Developer sends message →
 
 ## What this doesn't change
 
-- The existing $9/mo subscription model for app users is untouched
+- The existing $5/mo subscription model for app users is untouched
 - App usage-based creator payouts continue as-is
 - Agent-teams (AI agents) remain separate — a dev can use them as tools
 - A developer can be both an app creator (subscription revenue) AND a service provider (prompt revenue)

@@ -50,7 +50,7 @@ describe('GET /v1/pricing', () => {
     );
     expect(res.status).toBe(200);
     const body = await res.json() as { proMonthly: Record<string, unknown> | null };
-    expect(body.proMonthly).toEqual({ priceId: 'price_abc123', currency: 'usd', dollars: 9 });
+    expect(body.proMonthly).toEqual({ priceId: 'price_abc123', currency: 'usd', dollars: 5 });
   });
 
   it('is publicly accessible without auth', async () => {

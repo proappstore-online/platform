@@ -32,7 +32,7 @@ subscriptionRoutes.get('/pricing', (c) => {
   const proPriceId = c.env.STRIPE_PRO_MONTHLY_PRICE_ID ?? null;
   return c.json({
     proMonthly: proPriceId
-      ? { priceId: proPriceId, currency: 'usd', dollars: 9 }
+      ? { priceId: proPriceId, currency: 'usd', dollars: 5 }
       : null,
   });
 });

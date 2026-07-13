@@ -174,7 +174,7 @@ import { UpgradeCard } from '@proappstore/sdk/ui'
   app={app}
   title="Go Pro"
   description="Get unlimited storage and AI features."
-  priceLabel="$9/month"
+  priceLabel="$5/month"
   features={['Cloud sync', 'AI assistant', 'Priority support']}
 />
 ```
@@ -184,7 +184,7 @@ import { UpgradeCard } from '@proappstore/sdk/ui'
 | `app` | `ProAppStore` | - | SDK instance |
 | `title` | `string` | `"Upgrade to Pro"` | Card heading |
 | `description` | `string` | (default text) | Card description |
-| `priceLabel` | `string` | `"$9/month"` | Price shown on button |
+| `priceLabel` | `string` | `"$5/month"` | Price shown on button |
 | `features` | `string[]` | (4 defaults) | Feature list |
 
 ## BillingButton

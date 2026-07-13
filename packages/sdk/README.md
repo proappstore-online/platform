@@ -282,7 +282,7 @@ await app.storage.delete('docs/resume.pdf')
 
 ### Usage tracking (auto-on; drives creator payouts)
 
-ProAppStore is a single $9/mo subscription that unlocks every Pro app. Creators are paid monthly from the pool (minus the 10% platform fee) in proportion to their app's share of total usage. To compute that, the SDK heartbeats `POST /v1/usage/ping` every 60 seconds while the tab is visible and the user is signed in.
+ProAppStore is a single $5/mo subscription that unlocks every Pro app. Creators are paid monthly from the pool (minus the 10% platform fee) in proportion to their app's share of total usage. To compute that, the SDK heartbeats `POST /v1/usage/ping` every 60 seconds while the tab is visible and the user is signed in.
 
 **Auto-started by `initPro()`** — you don't need to do anything for your app's usage to count toward your payout. Hidden tabs don't accrue time; closed tabs flush a final ping via `navigator.sendBeacon`.
 

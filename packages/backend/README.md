@@ -19,7 +19,7 @@ Handles Stripe webhooks, subscriptions, license keys, app/listing CRUD, analytic
 | File | Endpoints | Description |
 |------|-----------|-------------|
 | `auth.ts` | GitHub OAuth (login, callback, me, logout) | Session management |
-| `subscription.ts` | Stripe checkout, billing portal, status | $9/mo platform subscription |
+| `subscription.ts` | Stripe checkout, billing portal, status | $5/mo platform subscription |
 | `webhook.ts` | `POST /webhook` | Stripe webhook handler |
 | `license.ts` | License key CRUD + validation | Per-app license keys |
 | `apps.ts` | App CRUD | Create, list, update apps |

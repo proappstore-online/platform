@@ -97,7 +97,7 @@ export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePagePr
                 fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
               }}
             >
-              Upgrade to Pro — $9/mo
+              Upgrade to Pro — $5/mo
             </button>
           </div>
         )}

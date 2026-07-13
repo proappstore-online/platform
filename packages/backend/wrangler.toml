@@ -68,7 +68,7 @@ service = "proappstore-api"
 #   CF_API_TOKEN                    (for provisioning D1/Pages/Workers)
 #   STRIPE_SECRET_KEY
 #   STRIPE_WEBHOOK_SECRET
-#   STRIPE_PRO_MONTHLY_PRICE_ID     (the live Stripe price for $9/mo Pro;
+#   STRIPE_PRO_MONTHLY_PRICE_ID     (the live Stripe price for $5/mo Pro;
 #                                    until set, GET /v1/pricing returns null
 #                                    and the Console hides the Upgrade button)
 #   SESSION_SIGNING_KEY             (signs PAS session JWTs — routes/auth.ts)

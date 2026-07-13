@@ -151,7 +151,7 @@ export function UpgradeCard({
   app,
   title = 'Upgrade to Pro',
   description = 'Unlock all premium features with a Pro subscription.',
-  priceLabel = '$9/month',
+  priceLabel = '$5/month',
   features = ['Cloud sync across devices', 'AI-powered features', 'Unlimited storage', 'Priority support'],
 }: UpgradeCardProps) {
   const { upgrade } = useSubscription(app);
