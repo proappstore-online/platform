@@ -62,8 +62,8 @@ describe('computeMonthPreview', () => {
       [{ user_id: 'gh:42', app_id: 'meetup', sec: 1000 }],
     );
     expect(r.activeUsers).toBe(1);
-    expect(r.estimatedCents).toBe(810); // full $8.10 / 810c
-    expect(r.perApp).toEqual([{ appId: 'meetup', estimatedCents: 810 }]);
+    expect(r.estimatedCents).toBe(450); // full $4.50 / 450c
+    expect(r.perApp).toEqual([{ appId: 'meetup', estimatedCents: 450 }]);
   });
 
   it('splits proportionally when a user spends time across multiple apps', () => {
@@ -76,9 +76,9 @@ describe('computeMonthPreview', () => {
         { user_id: 'gh:42', app_id: 'dating', sec: 200 },
       ],
     );
-    // 0.8 * 810 = 648
-    expect(r.estimatedCents).toBe(648);
-    expect(r.perApp).toEqual([{ appId: 'meetup', estimatedCents: 648 }]);
+    // 0.8 * 450 = 360
+    expect(r.estimatedCents).toBe(360);
+    expect(r.perApp).toEqual([{ appId: 'meetup', estimatedCents: 360 }]);
   });
 
   it('aggregates across multiple subscribers and multiple owned apps', () => {
@@ -95,15 +95,15 @@ describe('computeMonthPreview', () => {
         { user_id: 'gh:3', app_id: 'other-app', sec: 999 },
       ],
     );
-    // gh:1: 810 → meetup
-    // gh:2: 405 → meetup, 405 → dating
+    // gh:1: 450 → meetup
+    // gh:2: 225 → meetup, 225 → dating
     // gh:3: 0 (not in owned set)
     expect(r.activeUsers).toBe(3); // active in any app (the third is counted but doesn't contribute)
-    expect(r.estimatedCents).toBe(810 + 405 + 405);
+    expect(r.estimatedCents).toBe(450 + 225 + 225);
     const meetup = r.perApp.find((p) => p.appId === 'meetup')!;
     const dating = r.perApp.find((p) => p.appId === 'dating')!;
-    expect(meetup.estimatedCents).toBe(810 + 405);
-    expect(dating.estimatedCents).toBe(405);
+    expect(meetup.estimatedCents).toBe(450 + 225);
+    expect(dating.estimatedCents).toBe(225);
   });
 
   it('ignores users whose only usage is on apps the creator doesn’t own', () => {
@@ -149,7 +149,7 @@ describe('GET /v1/payouts/me/preview', () => {
       months: { estimatedCents: number; activeUsers: number }[];
       subscriberPriceCents: number;
     };
-    expect(body.subscriberPriceCents).toBe(900);
+    expect(body.subscriberPriceCents).toBe(500);
     expect(body.months.length).toBe(1);
     expect(body.months[0]!.estimatedCents).toBe(0);
     expect(body.months[0]!.activeUsers).toBe(0);
@@ -183,7 +183,7 @@ describe('GET /v1/payouts/me/preview', () => {
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { months: { estimatedCents: number; perApp: { appId: string; estimatedCents: number }[] }[] };
-    expect(body.months[0]!.estimatedCents).toBe(810);
-    expect(body.months[0]!.perApp).toEqual([{ appId: 'meetup', estimatedCents: 810 }]);
+    expect(body.months[0]!.estimatedCents).toBe(450);
+    expect(body.months[0]!.perApp).toEqual([{ appId: 'meetup', estimatedCents: 450 }]);
   });
 });
