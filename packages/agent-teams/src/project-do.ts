@@ -607,9 +607,16 @@ export class ProjectDO implements DurableObject {
       .exec("SELECT id FROM tickets WHERE status IN ('ba-refining','dev-active','qa-active') ORDER BY updated_at")
       .toArray() as { id: string }[];
 
-    for (const t of active) {
-      if (this.running.has(t.id)) continue;
-      this.dispatchRun(t.id);
+    // SERIALIZE agent runs. Every run does loadFiles → LLM → saveFiles, and
+    // saveFiles rewrites the WHOLE shared project_files tree (DELETE + re-INSERT).
+    // Two concurrent runs each load a snapshot, then the later save clobbers the
+    // earlier run's writes → silent code loss. This is the same shared-tree
+    // hazard the deploy stage below is serialized for. Dispatch ONE run at a
+    // time; dispatchRun's finally re-enters autoAdvance → runPendingAgents, so
+    // the next active ticket is picked up as soon as this one settles.
+    if (!active.some((t) => this.running.has(t.id))) {
+      const next = active.find((t) => !this.running.has(t.id));
+      if (next) this.dispatchRun(next.id);
     }
 
     // Deterministic deploy stage (no LLM): push + verify the CI build, then route
@@ -698,8 +705,12 @@ export class ProjectDO implements DurableObject {
           // Transition out of 'deploying' to prevent infinite crash-redispatch
           // via the watchdog alarm. Match the pattern in dispatchRun's catch.
           const now = Date.now();
+          // Bump deploy_attempts here too — the infra-fail path counts attempts,
+          // but a crash outside runDeployStage's try parked without counting, so
+          // reconcileStuck saw attempts=0 < MAX and re-dispatched forever. Consume
+          // the retry budget so a persistently-crashing deploy escalates to a human.
           this.state.storage.sql.exec(
-            "UPDATE tickets SET status = 'needs-input', assignee_role = NULL, stuck_reason = ?, deploy_pushed_at = NULL, deploy_pushed_sha = NULL, updated_at = ? WHERE id = ?",
+            "UPDATE tickets SET status = 'needs-input', assignee_role = NULL, stuck_reason = ?, deploy_attempts = COALESCE(deploy_attempts, 0) + 1, deploy_pushed_at = NULL, deploy_pushed_sha = NULL, updated_at = ? WHERE id = ?",
             `Deploy crashed: ${msg}`.slice(0, 500), now, ticketId,
           );
           this.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'needs-input', trigger: 'system', reason: 'deploy-crash' });

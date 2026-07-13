@@ -100,9 +100,22 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
     ? new OpenAIResponsesRuntime()
     : new CFNativeRuntime();
 
-  const prior = sql
-    .exec('SELECT author, body FROM messages WHERE ticket_id = ? ORDER BY created_at', ticket.id)
-    .toArray() as { author: string; body: string }[];
+  const priorRows = sql
+    .exec('SELECT author, body, body_offload_key FROM messages WHERE ticket_id = ? ORDER BY created_at', ticket.id)
+    .toArray() as { author: string; body: string; body_offload_key: string | null }[];
+  // Rehydrate bodies offloaded to R2 (storeMessage offloads >8KB and keeps only
+  // a 200-char inline stub). Without this the next role (e.g. QA reading Dev's
+  // output) sees only the stub — the bulk of the prior reasoning is silently
+  // lost. Offloaded messages are rare, so a per-message fetch is fine.
+  const prior: { author: string; body: string }[] = [];
+  for (const r of priorRows) {
+    if (r.body_offload_key) {
+      const obj = await env.AGENT_STORAGE.get(r.body_offload_key);
+      prior.push({ author: r.author, body: obj ? await obj.text() : r.body });
+    } else {
+      prior.push({ author: r.author, body: r.body });
+    }
+  }
   // Pull the latest committed code before the agent reads/edits (GitHub = truth).
   await deps.syncFromGitHub(`before ${role} run`);
   const files = deps.loadFiles();
@@ -130,6 +143,11 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
   let tokensIn = 0;
   let tokensOut = 0;
   let errorMessage: string | null = null;
+  // Latest per-turn cost from heartbeats. Declared out here (not just inside the
+  // consume loop) so a timeout / mid-run provider error — where the terminal
+  // `done` event never fires — can still fall back to the real accrued spend
+  // instead of persisting $0 and letting BYO spend escape the monthly cap.
+  let liveCost = { costUsd: 0, tokensIn: 0, tokensOut: 0 };
 
   try {
     const handle = await runtime.prepare({
@@ -155,7 +173,6 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
     const toolActivityIds = new Map<string, string>(); // callId → activity row id
     // Track the latest cost from heartbeats so every WS event carries it
     // (the console needs it for real-time cost display on ticket tiles).
-    let liveCost = { costUsd: 0, tokensIn: 0, tokensOut: 0 };
     const consume = (async () => {
      try {
       for await (const ev of runtime.run(handle, messages, ac.signal)) {
@@ -222,6 +239,16 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
     }
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : 'agent run failed';
+  }
+
+  // If the run ended without a terminal `done` event (timeout or provider
+  // error mid-loop), costUsd stays 0 even though tokens were really spent.
+  // Fall back to the last heartbeat so the spend is recorded and the monthly
+  // cost cap actually accounts for it.
+  if (costUsd === 0 && liveCost.costUsd > 0) {
+    costUsd = liveCost.costUsd;
+    tokensIn = liveCost.tokensIn;
+    tokensOut = liveCost.tokensOut;
   }
 
   // Persist the working tree — Dev's files must survive into the QA run.
