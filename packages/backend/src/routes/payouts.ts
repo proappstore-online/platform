@@ -16,21 +16,21 @@ import { requireUser, HttpError } from '../lib/auth.js';
  *     usage_daily are dogfood/test accounts and a strict join would render
  *     $0 for everyone. The Console explains the caveat alongside the number.
  *
- *   - We hard-code the $9 subscriber price + 10% platform fee. When the
+ *   - We hard-code the $5 subscriber price + 10% platform fee. When the
  *     pricing endpoint is configurable, this will read from there.
  *
  *   - Per-subscriber weighting: a user who spends 80% of their session time
- *     in app A contributes 80% × $8.10 = $6.48 to app A. Sum across
+ *     in app A contributes 80% × $4.50 = $3.60 to app A. Sum across
  *     subscribers gives the app's pool share; sum across the creator's
  *     owned apps gives their payout.
  */
 export const payoutsRoutes = new Hono<{ Bindings: Env }>();
 
-const SUBSCRIBER_PRICE_CENTS = 900;
+const SUBSCRIBER_PRICE_CENTS = 500;
 const PLATFORM_FEE_BPS = 1000; // 10%
 const PER_SUBSCRIBER_POOL_CENTS = Math.round(
   (SUBSCRIBER_PRICE_CENTS * (10000 - PLATFORM_FEE_BPS)) / 10000,
-); // 810
+); // 450
 
 interface UsageRow {
   user_id: string;
