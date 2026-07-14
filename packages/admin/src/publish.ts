@@ -569,6 +569,29 @@ interface ProvisionOptions {
 }
 
 /**
+ * Register `<id>.<base> → apps/<id>/` in the host Worker's routes table.
+ * Idempotent (INSERT OR IGNORE). The one provisioning step that was inlined
+ * verbatim in BOTH the inline path (provisionApp) and the durable-workflow path
+ * (runProvisionSteps) — extracted so the routes-table columns can't drift
+ * between them. Returns the ok Step; the insert throwing is left to each caller
+ * (provisionApp maps it to a fail Step + abort; runProvisionSteps lets it throw
+ * inside its doStep wrapper to engage retry).
+ */
+async function insertR2Route(env: Env, req: PublishRequest): Promise<Step> {
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO routes (slug, zone, r2_prefix, store, hosted_on, created_at, updated_at)
+       VALUES (?, ?, ?, 'pas', 'r2', ?, ?)`,
+  )
+    .bind(req.id, env.APPS_DOMAIN_BASE, `apps/${req.id}`, Date.now(), Date.now())
+    .run();
+  return {
+    name: "R2 route",
+    status: "ok",
+    detail: `${req.id}.${env.APPS_DOMAIN_BASE} → apps/${req.id}/`,
+  };
+}
+
+/**
  * The single provisioning core both entry points share, so a repo provisioned by
  * `pas publish` and one provisioned by the Agent Teams deploy stage are identical
  * (same R2 route, analytics). Every step is idempotent — it
@@ -610,17 +633,7 @@ async function provisionApp(
   // 2. R2 route — register the app in the host Worker's routes table so
   //    <id>.proappstore.online resolves to R2. Idempotent (INSERT OR IGNORE).
   try {
-    await env.DB.prepare(
-      `INSERT OR IGNORE INTO routes (slug, zone, r2_prefix, store, hosted_on, created_at, updated_at)
-         VALUES (?, ?, ?, 'pas', 'r2', ?, ?)`,
-    )
-      .bind(req.id, env.APPS_DOMAIN_BASE, `apps/${req.id}`, Date.now(), Date.now())
-      .run();
-    steps.push({
-      name: "R2 route",
-      status: "ok",
-      detail: `${req.id}.${env.APPS_DOMAIN_BASE} → apps/${req.id}/`,
-    });
+    steps.push(await insertR2Route(env, req));
   } catch (e) {
     steps.push({
       name: "R2 route",
@@ -906,21 +919,7 @@ export async function runProvisionSteps(
   }
 
   // 2. R2 route — register <id>.<base> → apps/<id>/ (fatal, retryable, idempotent).
-  steps.push(
-    await doStep("r2-route", async (): Promise<Step> => {
-      await env.DB.prepare(
-        `INSERT OR IGNORE INTO routes (slug, zone, r2_prefix, store, hosted_on, created_at, updated_at)
-           VALUES (?, ?, ?, 'pas', 'r2', ?, ?)`,
-      )
-        .bind(req.id, env.APPS_DOMAIN_BASE, `apps/${req.id}`, Date.now(), Date.now())
-        .run();
-      return {
-        name: "R2 route",
-        status: "ok",
-        detail: `${req.id}.${env.APPS_DOMAIN_BASE} → apps/${req.id}/`,
-      };
-    }),
-  );
+  steps.push(await doStep("r2-route", () => insertR2Route(env, req)));
 
   // 3. Storefront listing (publish path only; fatal).
   if (addRegistry) {
