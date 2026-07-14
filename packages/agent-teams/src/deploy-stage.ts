@@ -165,8 +165,16 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
       deps.logActivity('deploy', `Pushed ${files.size} file(s) @ ${sha?.slice(0, 7) ?? '?'} → building…`, ticketId);
     }
 
+    // We can only grade the CI run for a KNOWN commit. Without a sha,
+    // /api/deploy-status falls back to the LATEST workflow run — possibly a
+    // previous commit's already-green build — and would mark this ticket done
+    // without verifying THIS push. Fail closed instead of trusting the last run.
+    if (!sha) {
+      return infraFail('Deploy pushed but the commit SHA is unknown, so the CI build for this commit cannot be verified (grading the latest run risks a false "done"). Infra/admin anomaly — re-run the deploy.');
+    }
+
     // 2) Verify the CI build for THIS commit (waits, bounded, for it to finish).
-    const statusRes = await adminFetch('/api/deploy-status', { id: proj.slug, waitMs: 85_000, ...(sha ? { sha } : {}) });
+    const statusRes = await adminFetch('/api/deploy-status', { id: proj.slug, waitMs: 85_000, sha });
     const r = await statusRes.json() as { ok: boolean; status?: string; conclusion?: string; url?: string; errorTail?: string; error?: string };
     if (r.error) return infraFail(`Could not verify build: ${r.error}`);
 

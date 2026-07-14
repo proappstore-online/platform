@@ -90,25 +90,33 @@ export type View =
     },
     {
       "name": "like_user",
-      "description": "Record a swipe (like or pass) from the caller to another user",
+      "description": "Record a LIKE from the caller to another user (upserts over a prior pass)",
       "operation": "execute",
-      "sql": "INSERT OR IGNORE INTO likes (from_id, to_id, created_at) VALUES (:__user_id, :to_id, :__now)",
+      "sql": "INSERT INTO likes (from_id, to_id, kind, created_at) VALUES (:__user_id, :to_id, 'like', :__now) ON CONFLICT(from_id, to_id) DO UPDATE SET kind = 'like', created_at = :__now",
+      "params": { "to_id": { "type": "string" } },
+      "requires_auth": true
+    },
+    {
+      "name": "pass_user",
+      "description": "Record a PASS from the caller to another user (upserts over a prior like)",
+      "operation": "execute",
+      "sql": "INSERT INTO likes (from_id, to_id, kind, created_at) VALUES (:__user_id, :to_id, 'pass', :__now) ON CONFLICT(from_id, to_id) DO UPDATE SET kind = 'pass', created_at = :__now",
       "params": { "to_id": { "type": "string" } },
       "requires_auth": true
     },
     {
       "name": "check_mutual_like",
-      "description": "Whether the target user has liked the caller back",
+      "description": "Whether the target user has LIKED the caller back (passes do not count)",
       "operation": "query",
-      "sql": "SELECT from_id FROM likes WHERE from_id = :to_id AND to_id = :__user_id",
+      "sql": "SELECT from_id FROM likes WHERE from_id = :to_id AND to_id = :__user_id AND kind = 'like'",
       "params": { "to_id": { "type": "string" } },
       "requires_auth": true
     },
     {
       "name": "create_connection",
-      "description": "Connect the caller with another user (requires mutual likes)",
+      "description": "Connect the caller with another user (requires mutual LIKES, not passes)",
       "operation": "execute",
-      "sql": "INSERT OR IGNORE INTO connections (a_id, b_id, created_at) SELECT CASE WHEN :__user_id < :other_id THEN :__user_id ELSE :other_id END, CASE WHEN :__user_id < :other_id THEN :other_id ELSE :__user_id END, :__now WHERE EXISTS (SELECT 1 FROM likes WHERE from_id = :__user_id AND to_id = :other_id) AND EXISTS (SELECT 1 FROM likes WHERE from_id = :other_id AND to_id = :__user_id)",
+      "sql": "INSERT OR IGNORE INTO connections (a_id, b_id, created_at) SELECT CASE WHEN :__user_id < :other_id THEN :__user_id ELSE :other_id END, CASE WHEN :__user_id < :other_id THEN :other_id ELSE :__user_id END, :__now WHERE EXISTS (SELECT 1 FROM likes WHERE from_id = :__user_id AND to_id = :other_id AND kind = 'like') AND EXISTS (SELECT 1 FROM likes WHERE from_id = :other_id AND to_id = :__user_id AND kind = 'like')",
       "params": { "other_id": { "type": "string" } },
       "requires_auth": true
     },
@@ -160,7 +168,9 @@ const MIGRATIONS = [
         updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS likes (
-        from_id TEXT NOT NULL, to_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+        from_id TEXT NOT NULL, to_id TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'like',  -- 'like' | 'pass'; only 'like' forms a match
+        created_at INTEGER NOT NULL,
         PRIMARY KEY (from_id, to_id)
       );
       CREATE INDEX IF NOT EXISTS idx_likes_to ON likes(to_id);
@@ -227,7 +237,9 @@ export async function likeUser(toId: string): Promise<boolean> {
 }
 
 export async function passUser(toId: string) {
-  await x('like_user', { to_id: toId })
+  // Record a PASS — must NOT go through like_user, or a later "like" from the
+  // other person would falsely match against a row we only meant as a rejection.
+  await x('pass_user', { to_id: toId })
 }
 
 export async function getConnections() {

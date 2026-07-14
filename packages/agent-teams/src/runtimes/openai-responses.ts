@@ -226,10 +226,20 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
       // Execute tool calls and build new input
       const newInput: OAIInputItem[] = [];
       for (const fc of functionCalls) {
+        // Parse defensively: the model can emit a zero-arg call as arguments:""
+        // or truncated/invalid JSON. An unguarded JSON.parse throws out of this
+        // generator, aborting the whole run mid-loop (no terminal 'done' event,
+        // cost lost) — cf-native tolerates the same case. Default to no args.
+        let args: Record<string, unknown> = {};
+        try {
+          if (fc.arguments && fc.arguments.trim()) args = JSON.parse(fc.arguments);
+        } catch {
+          args = {};
+        }
         const call: ToolCall = {
           id: fc.id,
           name: fc.name,
-          args: JSON.parse(fc.arguments),
+          args,
         };
         yield { type: 'tool-call', call };
 
