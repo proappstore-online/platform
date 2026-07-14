@@ -78,6 +78,26 @@ describe('POST /v1/apps/:appId/invites', () => {
     expect(data.role).toBe('student');
   });
 
+  it('rejects a developer inviting a role above their own (no privilege escalation)', async () => {
+    // gh:1 is a developer (not the owner gh:99). Inviting 'admin' would grant a
+    // privileged, action-gating role the developer cannot assign directly.
+    const env = makeEnv({ creatorId: 'gh:99', teamMembers: [{ user_id: 'gh:1', role: 'developer' }] });
+    const res = await app.fetch(req('POST', '/v1/apps/chess/invites', { role: 'admin' }), env);
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects a malformed role string', async () => {
+    const env = makeEnv({ creatorId: 'gh:1' });
+    const res = await app.fetch(req('POST', '/v1/apps/chess/invites', { role: 'Admin Role!' }), env);
+    expect(res.status).toBe(400);
+  });
+
+  it('lets an owner invite a privileged role', async () => {
+    const env = makeEnv({ creatorId: 'gh:1' }); // gh:1 is owner
+    const res = await app.fetch(req('POST', '/v1/apps/chess/invites', { role: 'admin' }), env);
+    expect(res.status).toBe(200);
+  });
+
   it('rejects owner role', async () => {
     const env = makeEnv({ creatorId: 'gh:1' });
     const res = await app.fetch(req('POST', '/v1/apps/chess/invites', { role: 'owner' }), env);

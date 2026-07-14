@@ -63,8 +63,14 @@ webhookRoutes.post('/webhooks/stripe', async (c) => {
       const subscriptionId = obj.id as string;
       const status = obj.status as string;
       const cancelAtPeriodEnd = obj.cancel_at_period_end as boolean;
-      const currentPeriodEnd = ((obj.current_period_end as number) ?? 0) * 1000;
-      const priceId = ((obj.items as { data?: { price?: { id?: string } }[] })?.data?.[0]?.price?.id) ?? null;
+      // Stripe API 2025-03-31+ moved current_period_end off the Subscription
+      // object onto each subscription item. Read the item first, fall back to
+      // the legacy top-level field so both API versions persist a real renewal
+      // date (not epoch 0).
+      const items = obj.items as { data?: { current_period_end?: number; price?: { id?: string } }[] };
+      const periodEndSec = items?.data?.[0]?.current_period_end ?? (obj.current_period_end as number) ?? 0;
+      const currentPeriodEnd = periodEndSec * 1000;
+      const priceId = items?.data?.[0]?.price?.id ?? null;
 
       await c.env.DB.prepare(
         `UPDATE subscriptions SET

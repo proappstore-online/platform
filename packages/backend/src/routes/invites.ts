@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
-import { requireUser, requireAppAccess, HttpError } from '../lib/auth.js';
+import { requireUser, requireAppAccess, HttpError, TEAM_ROLES } from '../lib/auth.js';
 import { generateQrSvg } from '../lib/qr.js';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
@@ -50,8 +50,23 @@ inviteRoutes.post('/apps/:appId/invites', async (c) => {
     if (maxUses < 1 || maxUses > 10000) {
       return c.json({ error: 'uses must be between 1 and 10000' }, 400);
     }
+    // Same role-name shape the direct-assignment endpoint enforces.
+    if (!/^[a-z][a-z0-9_-]{0,49}$/.test(role)) {
+      return c.json(
+        { error: 'role must be lowercase alphanumeric with hyphens/underscores, 1-50 chars' },
+        400,
+      );
+    }
     if (role === 'owner') {
       return c.json({ error: "cannot invite with 'owner' role" }, 400);
+    }
+    // Prevent privilege escalation: an invite must not grant a platform team
+    // role above the creator's own. Without this a 'developer' (who cannot
+    // assign roles directly — that path requires 'admin') could mint an invite
+    // granting 'admin' and hand out privileged, action-gating app roles.
+    const invitedRank = TEAM_ROLES.indexOf(role as (typeof TEAM_ROLES)[number]);
+    if (invitedRank > TEAM_ROLES.indexOf(user.teamRole)) {
+      return c.json({ error: `cannot invite with a role above your own (${user.teamRole})` }, 403);
     }
 
     const id = crypto.randomUUID();
@@ -154,6 +169,17 @@ inviteRoutes.post('/invites/:code/redeem', async (c) => {
     if (!invite) return c.json({ error: 'invite not found' }, 404);
     if (invite.expires_at < Date.now()) return c.json({ error: 'invite expired' }, 410);
     if (invite.used_count >= invite.max_uses) return c.json({ error: 'invite fully used' }, 410);
+
+    // Idempotency: if this user already redeemed THIS invite (role grant is
+    // recorded with granted_by = invite:<id>), return success without burning
+    // another use. Otherwise a single user calling redeem N times would exhaust
+    // an N-use invite while gaining nothing after the first.
+    const alreadyRedeemed = await c.env.DB.prepare(
+      'SELECT 1 FROM app_roles WHERE app_id = ? AND user_id = ? AND role_name = ? AND granted_by = ? LIMIT 1',
+    ).bind(invite.app_id, user.id, invite.role, `invite:${invite.id}`).first();
+    if (alreadyRedeemed) {
+      return c.json({ ok: true, role: invite.role, group: invite.group_id, alreadyRedeemed: true });
+    }
 
     // Increment used_count atomically (only if still under limit)
     const upd = await c.env.DB.prepare(
