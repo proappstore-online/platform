@@ -26,35 +26,48 @@ type Ctx = Context<{ Bindings: Env }>;
 // 404'd for Path B apps — they have no Pages project.)
 const HOST_WORKER = 'proappstore-host';
 
+/**
+ * Authenticated call to the Cloudflare API. Centralizes the CF_API_TOKEN check +
+ * Bearer header + Content-Type + JSON parse that every domains helper repeated
+ * verbatim. `path` is appended to the v4 base; `json` (when set) is sent as the
+ * body with the JSON content-type. Throws HttpError(503) when the token is unset.
+ */
+async function cfApi(
+  c: Ctx,
+  path: string,
+  init: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; json?: unknown } = {},
+): Promise<{ status: number; body: any }> {
+  const cfToken = c.env.CF_API_TOKEN;
+  if (!cfToken) throw new HttpError('CF credentials not configured', 503);
+  const headers: Record<string, string> = { Authorization: `Bearer ${cfToken}` };
+  const reqInit: RequestInit = { method: init.method ?? 'GET', headers };
+  if (init.json !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    reqInit.body = JSON.stringify(init.json);
+  }
+  const res = await fetch(`https://api.cloudflare.com/client/v4${path}`, reqInit);
+  const body = await res.json().catch(() => null);
+  return { status: res.status, body };
+}
+
 /** Find the CF zone (in our account) that owns `domain`. The domain must be on
  *  Cloudflare — its nameservers pointed at CF — for a Worker Custom Domain to bind. */
 async function cfZoneIdFor(c: Ctx, domain: string): Promise<string | null> {
-  const cfToken = c.env.CF_API_TOKEN;
-  if (!cfToken) throw new HttpError('CF credentials not configured', 503);
   const labels = domain.split('.');
   // app.ratemycup.online → try ratemycup.online first, then broader suffixes.
   for (let i = 0; i < labels.length - 1; i++) {
     const name = labels.slice(i).join('.');
-    const res = await fetch(
-      `https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(name)}&status=active`,
-      { headers: { Authorization: `Bearer ${cfToken}` } },
-    );
-    const body = (await res.json().catch(() => null)) as { result?: { id?: string }[] } | null;
-    const id = body?.result?.[0]?.id;
+    const { body } = await cfApi(c, `/zones?name=${encodeURIComponent(name)}&status=active`);
+    const id = (body as { result?: { id?: string }[] } | null)?.result?.[0]?.id;
     if (id) return id;
   }
   return null;
 }
 
 async function cfExactZoneIdFor(c: Ctx, domain: string): Promise<string | null> {
-  const cfToken = c.env.CF_API_TOKEN;
-  if (!cfToken) throw new HttpError('CF credentials not configured', 503);
-  const res = await fetch(
-    `https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(domain)}&status=active`,
-    { headers: { Authorization: `Bearer ${cfToken}` } },
-  );
-  const body = (await res.json().catch(() => null)) as { result?: { id?: string; name?: string }[] } | null;
-  const found = (body?.result ?? []).find((z) => z.name === domain && z.id);
+  const { body } = await cfApi(c, `/zones?name=${encodeURIComponent(domain)}&status=active`);
+  const result = (body as { result?: { id?: string; name?: string }[] } | null)?.result ?? [];
+  const found = result.find((z) => z.name === domain && z.id);
   return found?.id ?? null;
 }
 
@@ -63,23 +76,18 @@ async function workerDomain(
   c: Ctx,
   opts: { method: 'PUT' | 'GET' | 'DELETE'; domain: string; zoneId?: string; id?: string },
 ): Promise<{ status: number; body: any }> {
-  const cfToken = c.env.CF_API_TOKEN;
-  const cfAccount = c.env.CF_ACCOUNT_ID;
-  if (!cfToken || !cfAccount) throw new HttpError('CF credentials not configured', 503);
-  const base = `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/workers/domains`;
-  let url = base;
-  const init: RequestInit = { method: opts.method, headers: { Authorization: `Bearer ${cfToken}` } };
+  if (!c.env.CF_ACCOUNT_ID) throw new HttpError('CF credentials not configured', 503);
+  const base = `/accounts/${c.env.CF_ACCOUNT_ID}/workers/domains`;
   if (opts.method === 'PUT') {
-    (init.headers as Record<string, string>)['Content-Type'] = 'application/json';
-    init.body = JSON.stringify({ environment: 'production', hostname: opts.domain, service: HOST_WORKER, zone_id: opts.zoneId });
-  } else if (opts.method === 'GET') {
-    url = `${base}?hostname=${encodeURIComponent(opts.domain)}`;
-  } else if (opts.method === 'DELETE') {
-    url = `${base}/${opts.id}`;
+    return cfApi(c, base, {
+      method: 'PUT',
+      json: { environment: 'production', hostname: opts.domain, service: HOST_WORKER, zone_id: opts.zoneId },
+    });
   }
-  const res = await fetch(url, init);
-  const body = await res.json().catch(() => null);
-  return { status: res.status, body };
+  if (opts.method === 'GET') {
+    return cfApi(c, `${base}?hostname=${encodeURIComponent(opts.domain)}`);
+  }
+  return cfApi(c, `${base}/${opts.id}`, { method: 'DELETE' });
 }
 
 async function wildcardDnsRecord(
@@ -87,22 +95,14 @@ async function wildcardDnsRecord(
   zoneId: string,
   opts: { method: 'GET' | 'POST' | 'DELETE'; domain: string; id?: string },
 ): Promise<{ status: number; body: any }> {
-  const cfToken = c.env.CF_API_TOKEN;
-  if (!cfToken) throw new HttpError('CF credentials not configured', 503);
-  const base = `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`;
-  let url = base;
-  const init: RequestInit = { method: opts.method, headers: { Authorization: `Bearer ${cfToken}` } };
+  const base = `/zones/${zoneId}/dns_records`;
   if (opts.method === 'GET') {
-    url = `${base}?type=AAAA&name=${encodeURIComponent(`*.${opts.domain}`)}`;
-  } else if (opts.method === 'POST') {
-    (init.headers as Record<string, string>)['Content-Type'] = 'application/json';
-    init.body = JSON.stringify({ type: 'AAAA', name: '*', content: '100::', proxied: true, ttl: 1 });
-  } else if (opts.method === 'DELETE') {
-    url = `${base}/${opts.id}`;
+    return cfApi(c, `${base}?type=AAAA&name=${encodeURIComponent(`*.${opts.domain}`)}`);
   }
-  const res = await fetch(url, init);
-  const body = await res.json().catch(() => null);
-  return { status: res.status, body };
+  if (opts.method === 'POST') {
+    return cfApi(c, base, { method: 'POST', json: { type: 'AAAA', name: '*', content: '100::', proxied: true, ttl: 1 } });
+  }
+  return cfApi(c, `${base}/${opts.id}`, { method: 'DELETE' });
 }
 
 async function wildcardWorkerRoute(
@@ -110,22 +110,14 @@ async function wildcardWorkerRoute(
   zoneId: string,
   opts: { method: 'GET' | 'POST' | 'DELETE'; pattern: string; id?: string },
 ): Promise<{ status: number; body: any }> {
-  const cfToken = c.env.CF_API_TOKEN;
-  if (!cfToken) throw new HttpError('CF credentials not configured', 503);
-  const base = `https://api.cloudflare.com/client/v4/zones/${zoneId}/workers/routes`;
-  let url = base;
-  const init: RequestInit = { method: opts.method, headers: { Authorization: `Bearer ${cfToken}` } };
+  const base = `/zones/${zoneId}/workers/routes`;
   if (opts.method === 'GET') {
-    url = `${base}?pattern=${encodeURIComponent(opts.pattern)}`;
-  } else if (opts.method === 'POST') {
-    (init.headers as Record<string, string>)['Content-Type'] = 'application/json';
-    init.body = JSON.stringify({ pattern: opts.pattern, script: HOST_WORKER });
-  } else if (opts.method === 'DELETE') {
-    url = `${base}/${opts.id}`;
+    return cfApi(c, `${base}?pattern=${encodeURIComponent(opts.pattern)}`);
   }
-  const res = await fetch(url, init);
-  const body = await res.json().catch(() => null);
-  return { status: res.status, body };
+  if (opts.method === 'POST') {
+    return cfApi(c, base, { method: 'POST', json: { pattern: opts.pattern, script: HOST_WORKER } });
+  }
+  return cfApi(c, `${base}/${opts.id}`, { method: 'DELETE' });
 }
 
 async function ensureWildcardDnsRecord(c: Ctx, zoneId: string, domain: string): Promise<any> {
@@ -187,22 +179,17 @@ async function customHostname(
   zoneId: string,
   opts: { method: 'POST' | 'GET' | 'DELETE'; hostname?: string; id?: string },
 ): Promise<{ status: number; body: any }> {
-  const cfToken = c.env.CF_API_TOKEN;
-  if (!cfToken) throw new HttpError('CF credentials not configured', 503);
-  const base = `https://api.cloudflare.com/client/v4/zones/${zoneId}/custom_hostnames`;
-  let url = base;
-  const init: RequestInit = { method: opts.method, headers: { Authorization: `Bearer ${cfToken}` } };
+  const base = `/zones/${zoneId}/custom_hostnames`;
   if (opts.method === 'POST') {
-    (init.headers as Record<string, string>)['Content-Type'] = 'application/json';
-    init.body = JSON.stringify({ hostname: opts.hostname, ssl: { method: 'txt', type: 'dv', settings: { min_tls_version: '1.2' } } });
-  } else if (opts.method === 'GET') {
-    url = opts.id ? `${base}/${opts.id}` : `${base}?hostname=${encodeURIComponent(opts.hostname!)}`;
-  } else if (opts.method === 'DELETE') {
-    url = `${base}/${opts.id}`;
+    return cfApi(c, base, {
+      method: 'POST',
+      json: { hostname: opts.hostname, ssl: { method: 'txt', type: 'dv', settings: { min_tls_version: '1.2' } } },
+    });
   }
-  const res = await fetch(url, init);
-  const body = await res.json().catch(() => null);
-  return { status: res.status, body };
+  if (opts.method === 'GET') {
+    return cfApi(c, opts.id ? `${base}/${opts.id}` : `${base}?hostname=${encodeURIComponent(opts.hostname!)}`);
+  }
+  return cfApi(c, `${base}/${opts.id}`, { method: 'DELETE' });
 }
 
 /** From a CF custom-hostname result, build the DNS records the owner must add. */
