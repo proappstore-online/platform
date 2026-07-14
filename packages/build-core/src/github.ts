@@ -297,13 +297,28 @@ export function makeGitHub(token: string, org: string): GitHub {
       }
 
       const allDone = runs.every((x) => x.status === 'completed');
-      const failed = runs.find((x) => x.conclusion && x.conclusion !== 'success');
+      // Superseded runs are NOT build failures: cancel-in-progress cancels the
+      // older run when a concurrent re-deploy starts; skipped/stale/neutral are
+      // non-verdicts. Grade the NEWEST decisive run (highest run id) so a failed
+      // first attempt followed by a green workflow_dispatch re-run for the same
+      // commit reads as success — not as a failure that bounces the ticket.
+      const IGNORABLE = new Set(['cancelled', 'skipped', 'stale', 'neutral']);
+      const graded = [...runs]
+        .sort((a, b) => (b.id as number) - (a.id as number))
+        .find((x) => x.status === 'completed' && !IGNORABLE.has((x.conclusion as string) ?? ''));
+      // All runs for this commit were cancelled/skipped (this push was superseded
+      // by a newer deploy). Report 'pending' so the caller re-checks/escalates
+      // rather than misreading a supersession as a broken build.
+      if (allDone && !graded) {
+        return { ok: false, status: 'pending', sha: (runs[0]!.head_sha as string)?.slice(0, 7), errorTail: 'deploy run(s) for this commit were superseded/cancelled' };
+      }
+      const failed = graded && graded.conclusion !== 'success' ? graded : undefined;
       const result: { ok: boolean; status: string; conclusion?: string | undefined; sha?: string | undefined; url?: string | undefined; errorTail?: string | undefined } = {
-        ok: allDone && !failed,
+        ok: !!graded && !failed,
         status: allDone ? 'completed' : 'in_progress',
-        conclusion: failed ? (failed.conclusion as string) : allDone ? 'success' : undefined,
+        conclusion: failed ? (failed.conclusion as string) : graded ? 'success' : undefined,
         sha: (runs[0]!.head_sha as string)?.slice(0, 7),
-        url: (failed ?? runs[0]!).html_url as string,
+        url: (failed ?? graded ?? runs[0]!).html_url as string,
       };
       // On failure, pull the failed job's plaintext log tail (the actual error)
       // so the Dev sees the real compiler output, not just a URL it can't open.

@@ -198,6 +198,37 @@ describe('makeGitHub', () => {
     expect(res.status).toBe('pending');
     expect(res.errorTail).toContain('no deploy workflow run registered');
   });
+
+  it('grades the NEWEST deploy run — a green re-run overrides an earlier failed attempt', async () => {
+    const sha = 'd'.repeat(40);
+    mockFetch(() => ({
+      body: {
+        workflow_runs: [
+          { id: 1, name: 'Deploy to R2', path: '.github/workflows/deploy.yml', status: 'completed', conclusion: 'failure', head_sha: sha, html_url: 'https://runs/deploy-1' },
+          { id: 5, name: 'Deploy to R2', path: '.github/workflows/deploy.yml', status: 'completed', conclusion: 'success', head_sha: sha, html_url: 'https://runs/deploy-5' },
+        ],
+      },
+    }));
+    const gh = makeGitHub('t', 'org');
+    const res = await gh.deployResult('interns', { sha });
+    expect(res).toMatchObject({ ok: true, status: 'completed', conclusion: 'success', url: 'https://runs/deploy-5' });
+  });
+
+  it('does not fail a commit whose only deploy run was cancelled (superseded → pending)', async () => {
+    const sha = 'e'.repeat(40);
+    mockFetch(() => ({
+      body: {
+        workflow_runs: [
+          { id: 1, name: 'Deploy to R2', path: '.github/workflows/deploy.yml', status: 'completed', conclusion: 'cancelled', head_sha: sha, html_url: 'https://runs/deploy-1' },
+        ],
+      },
+    }));
+    const gh = makeGitHub('t', 'org');
+    const res = await gh.deployResult('interns', { sha });
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe('pending');
+    expect(res.conclusion).toBeUndefined();
+  });
 });
 
 describe('verifyAppOwnership', () => {

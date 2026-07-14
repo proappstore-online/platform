@@ -48,11 +48,25 @@ async function cfApi(cfg: CfConfig, path: string, method = "GET", body?: unknown
   try { return JSON.parse(text) as CfResponse; } catch { return { success: false, errors: [{ message: text }] }; }
 }
 
-/** True when a CF error means the resource is already provisioned (idempotent). */
+/**
+ * True when a CF error means the resource is already provisioned AT THE SAME
+ * TARGET (idempotent → safe to skip). A bare /already|exists/ match is unsafe:
+ * "already in use by a different project" / "record already exists" (with a
+ * different content) also contain those words, and skipping them leaves the
+ * custom domain bound to the wrong/dead project or DNS pointing at a stale
+ * origin while provisioning reports green. Exclude the wrong-target phrasings.
+ */
 function alreadyExists(r: CfResponse): boolean {
-  return (r.errors ?? []).some(
-    (e) => /already|exists/i.test(e.message ?? "") || e.code === 81057,
-  );
+  return (r.errors ?? []).some((e) => {
+    if (e.code === 81057) return true; // CF: an identical DNS record already exists
+    const msg = (e.message ?? "").toLowerCase();
+    if (!/\balready\b|\bexists\b|\bduplicate\b/.test(msg)) return false;
+    // NOT idempotent — the resource points somewhere else and must FAIL, not skip.
+    if (/different|another|other (account|project|zone|domain)|belongs to|in use by|already in use/.test(msg)) {
+      return false;
+    }
+    return true;
+  });
 }
 
 const firstErr = (r: CfResponse) => r.errors?.[0]?.message || "unknown error";
