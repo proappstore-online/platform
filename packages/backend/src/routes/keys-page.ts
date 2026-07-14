@@ -63,7 +63,7 @@ export function renderKeysPage(opts: { returnUrl: string; provider: string; appI
 (function() {
   var API = '/v1';
   var token = null;
-  var highlightProvider = ${JSON.stringify(provider)};
+  var highlightProvider = ${JSON.stringify(provider).replace(/</g, '\\u003c')};
 
   function getToken() {
     try {

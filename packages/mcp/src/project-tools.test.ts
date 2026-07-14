@@ -346,6 +346,14 @@ describe('provision_app', () => {
     expect(getText(result)).toContain('provision error');
     expect(getText(result)).toContain('network down');
   });
+
+  it('refuses to provision an app the caller does not own', async () => {
+    mockOwnership.mockResolvedValue(false);
+    // Unique app id — requireOwner caches per user/app for 60s across tests.
+    const result = await tools.get('provision_app')!({ app_id: 'notown-prov' });
+    expect(getText(result)).toContain("don't own");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
 });
 
 describe('publish_app', () => {
@@ -356,6 +364,15 @@ describe('publish_app', () => {
     description: 'Online chess teaching platform.',
     confirm: true, // publish_app is destructive (public listing) — gated behind confirm
   };
+
+  it('refuses to publish an app the caller does not own (no listing takeover)', async () => {
+    mockOwnership.mockResolvedValue(false);
+    // Unique app id — requireOwner caches per user/app for 60s, so reusing
+    // chess-academy here would poison the other publish_app tests.
+    const result = await tools.get('publish_app')!({ ...publishArgs, app_id: 'notown-pub' });
+    expect(getText(result)).toContain("don't own");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
 
   it('publishes successfully and returns formatted steps', async () => {
     mockFetch.mockResolvedValue({

@@ -174,6 +174,11 @@ export function registerProjectTools(
         }
       } else {
         steps.push("~ Repo already existed");
+        // The repo already existed and wasn't created by this call — require the
+        // caller to own it before re-provisioning its infra. A freshly created
+        // repo (repoCreated) is owned by the caller and provisions ownership below.
+        const owner = await requireOwner(app_id);
+        if ('content' in owner) return owner;
       }
 
       // 4. Provision (route + D1 + data worker)
@@ -303,7 +308,9 @@ export function registerProjectTools(
     "Provision platform resources for a PAS app (R2 route, D1 database, data worker). Idempotent — safe to call on already-provisioned apps.",
     { app_id: APP_ID },
     async ({ app_id }) => {
-      const auth = requireAuth();
+      // Ownership-gated: re-provisioning an app rebinds its route/D1/data-worker,
+      // so a bare requireAuth would let any authed user target another owner's app.
+      const auth = await requireOwner(app_id);
       if ('content' in auth) return auth;
       await gate("provision_app", { app_id });
       const result = await provision(app_id, auth.token);
@@ -326,7 +333,12 @@ export function registerProjectTools(
       confirm: CONFIRM,
     },
     async ({ app_id, name, category, description, icon, icon_bg, pro_features, confirm }) => {
-      const auth = requireAuth();
+      // Ownership-gated: publish overwrites the public storefront listing and
+      // invites the creator as a repo push-collaborator, so a bare requireAuth
+      // would let any authed user deface another owner's listing / gain repo
+      // access. The normal flow scaffolds (which provisions → sets ownership)
+      // before publishing, so the owner passes.
+      const auth = await requireOwner(app_id);
       if ('content' in auth) return auth;
       if (confirm !== true)
         return text(`Refused: publish_app lists "${app_id}" publicly on proappstore.online. Re-call with confirm: true to proceed.`);

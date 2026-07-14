@@ -45,7 +45,7 @@ export function registerAgentsTools(
   server.tool(
     "agent_project_status",
     "Get the agent team's project status for an app — running/paused, monthly cost, budget cap.",
-    { app_id: z.string().describe("App ID (slug)") },
+    { app_id: z.string().regex(/^[a-z][a-z0-9-]*$/).describe("App ID (slug)") },
     async ({ app_id }) => {
       const { token } = getUserContext();
       const r = await agentsApi(agents, agentsBase, `/v1/projects/${app_id}`, token, internalToken);
@@ -69,7 +69,7 @@ export function registerAgentsTools(
   server.tool(
     "agent_board",
     "Full Kanban board — all tickets with status, assignee, iteration count, cost.",
-    { app_id: z.string().describe("App ID (slug)") },
+    { app_id: z.string().regex(/^[a-z][a-z0-9-]*$/).describe("App ID (slug)") },
     async ({ app_id }) => {
       const { token } = getUserContext();
       const [projR, ticketsR] = await Promise.all([
@@ -123,7 +123,7 @@ export function registerAgentsTools(
     "agent_activity",
     "Activity log (audit trail) for an app's agent team.",
     {
-      app_id: z.string().describe("App ID (slug)"),
+      app_id: z.string().regex(/^[a-z][a-z0-9-]*$/).describe("App ID (slug)"),
       last: z.number().optional().describe("Show only the last N entries"),
     },
     async ({ app_id, last }) => {
@@ -149,7 +149,7 @@ export function registerAgentsTools(
     "agent_ticket_detail",
     "One ticket's full conversation — all agent messages.",
     {
-      app_id: z.string().describe("App ID (slug)"),
+      app_id: z.string().regex(/^[a-z][a-z0-9-]*$/).describe("App ID (slug)"),
       ticket_seq: z.number().describe("Ticket number (e.g. 1)"),
     },
     async ({ app_id, ticket_seq }) => {
@@ -191,7 +191,7 @@ export function registerAgentsTools(
   server.tool(
     "agent_cost",
     "Cost breakdown for an app's agent team — per-role spend, token counts.",
-    { app_id: z.string().describe("App ID (slug)") },
+    { app_id: z.string().regex(/^[a-z][a-z0-9-]*$/).describe("App ID (slug)") },
     async ({ app_id }) => {
       const { token } = getUserContext();
       const r = await agentsApi(agents, agentsBase, `/v1/projects/${app_id}/cost`, token, internalToken);

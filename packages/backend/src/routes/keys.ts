@@ -239,7 +239,12 @@ keysRoutes.get('/keys', async (c) => {
   }
 
   const returnUrl = c.req.query('return') ?? '';
-  const provider = c.req.query('provider') ?? '';
+  // Provider is a known slug (openai/anthropic/…). This page is UNAUTHENTICATED
+  // and embeds `provider` inside an inline <script> via JSON.stringify, which
+  // does NOT escape '/', so an unvalidated value like `</script><img onerror=…>`
+  // breaks out and can steal the localStorage session token. Strip to a safe
+  // slug charset so nothing HTML/script-significant can survive.
+  const provider = (c.req.query('provider') ?? '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
   const appId = c.req.query('app') ?? '';
   return c.html(renderKeysPage({ returnUrl, provider, appId }));
 });

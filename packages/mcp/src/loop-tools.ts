@@ -75,7 +75,10 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
   }
 
   const TOKEN = z.string().optional().describe("PAS session token (the owner's). Optional — the authenticated MCP connection is used when omitted. The user must have a BYO Anthropic key in the vault for agents to run.");
-  const SLUG = z.string().describe("Project slug / app id (lowercase)");
+  // Validated: this value is interpolated into internal API subrequest paths
+  // (/v1/projects/${slug}/…) that run over a service binding, so an unvalidated
+  // value containing '/', '?', '#' or '..' could reach an unintended endpoint.
+  const SLUG = z.string().regex(/^[a-z][a-z0-9-]*$/).describe("Project slug / app id (lowercase)");
 
   // ── create_app ────────────────────────────────────────────
   server.tool(
