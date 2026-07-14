@@ -15,6 +15,14 @@
  * custom_domains on the zone.
  */
 
+/** Constant-time string compare for the shared secret (avoids a timing oracle). */
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
 export interface Env {
   KB_R2: R2Bucket;
   /** Shared internal token (Doppler INTERNAL_TOKEN) — auth for the CI ingest. */
@@ -77,7 +85,8 @@ export default {
     //    binding (no R2 API token needed → no token-scope 403). Authed by the
     //    shared INTERNAL_TOKEN. PUT /_ingest/<app>/<path> with the file as body.
     if (request.method === "PUT" && url.pathname.startsWith("/_ingest/")) {
-      if (!env.INTERNAL_TOKEN || request.headers.get("x-internal-token") !== env.INTERNAL_TOKEN) {
+      const provided = request.headers.get("x-internal-token");
+      if (!env.INTERNAL_TOKEN || !provided || !constantTimeEqual(provided, env.INTERNAL_TOKEN)) {
         return new Response("forbidden", { status: 403 });
       }
       const key = decodeURIComponent(url.pathname.slice("/_ingest/".length));

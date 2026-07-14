@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { Stripe } from '../lib/stripe.js';
+import { internalTokenOk } from '@proappstore/build-core';
 
 /**
  * Monthly payout cron for the services marketplace.
@@ -42,9 +43,8 @@ function currentPayoutMonth(): string {
 }
 
 payoutCronRoutes.post('/internal/payouts/run', async (c) => {
-  // Auth: require INTERNAL_TOKEN header
-  const token = c.req.header('X-Internal-Token');
-  if (!c.env.INTERNAL_TOKEN || token !== c.env.INTERNAL_TOKEN) {
+  // Auth: require INTERNAL_TOKEN header (constant-time compare)
+  if (!internalTokenOk(c.req.header('X-Internal-Token'), c.env.INTERNAL_TOKEN)) {
     return c.json({ error: 'forbidden' }, 403);
   }
   if (!c.env.STRIPE_SECRET_KEY) {

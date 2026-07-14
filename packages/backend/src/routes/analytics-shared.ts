@@ -12,7 +12,7 @@ export type Ctx = Context<{ Bindings: Env }>;
 export const GA4_RE = /^G-[A-Z0-9]{6,12}$/i;
 export const DOMAIN_RE = /^[a-z0-9][a-z0-9.-]{0,253}\.[a-z]{2,}$/i;
 export const CF_TOKEN_RE = /^[a-f0-9]{32,}$/i;
-export const APP_ID_RE = /^[a-z][a-z0-9-]{1,30}$/;
+export { APP_ID_RE } from './validation.js';
 export const CUSTOM_HEAD_MAX = 4096;
 
 export const EVENT_KIND_RE = /^[a-z][a-z0-9_]{0,31}$/;

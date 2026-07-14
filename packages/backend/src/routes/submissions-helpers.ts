@@ -33,4 +33,4 @@ export function rowToSubmission(row: Record<string, unknown>): SubmissionRow {
   };
 }
 
-export const APP_ID_RE = /^[a-z][a-z0-9-]*$/;
+export { APP_ID_RE } from './validation.js';

@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, requireAppOwner, HttpError } from '../lib/auth.js';
+import { APP_ID_RE } from './validation.js';
 
 /**
  * Usage telemetry — powers usage-proportional creator payouts.
@@ -29,7 +30,6 @@ import { requireUser, requireAppOwner, HttpError } from '../lib/auth.js';
 
 export const usageRoutes = new Hono<{ Bindings: Env }>();
 
-const APP_ID_RE = /^[a-z][a-z0-9-]*$/;
 const APP_ID_MAX_LEN = 58;
 
 /** Per-ping clamps. Caps a misbehaving SDK to roughly one heartbeat's worth. */

@@ -8,7 +8,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { cors } from 'hono/cors';
 import type { Project, Ticket } from './types.ts';
-import { verifyToken, extractToken } from './auth.ts';
+import { verifyToken, extractToken, constantTimeEqual } from './auth.ts';
 import { MAX_PROJECTS_PER_USER } from './rate-limit.ts';
 import type { Bindings } from './bindings.ts';
 export { ProjectDO } from './project-do.ts';
@@ -44,7 +44,7 @@ app.use('*', cors({
 app.use('/v1/*', async (c, next) => {
   // Internal token bypass — for MCP server and admin service calls
   const internalToken = c.req.header('X-Internal-Token');
-  if (internalToken && c.env.INTERNAL_TOKEN && internalToken === c.env.INTERNAL_TOKEN) {
+  if (internalToken && c.env.INTERNAL_TOKEN && constantTimeEqual(internalToken, c.env.INTERNAL_TOKEN)) {
     // Resolve the project owner from the slug in the URL so the DO sees
     // a valid X-User-Id. Falls back to a synthetic admin id for non-project routes.
     const slugMatch = c.req.path.match(/^\/v1\/projects\/([a-z][a-z0-9-]+)/);

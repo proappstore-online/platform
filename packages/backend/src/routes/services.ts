@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
+import { internalTokenOk } from '@proappstore/build-core';
 import { Stripe } from '../lib/stripe.js';
 
 /**
@@ -301,9 +302,8 @@ servicesRoutes.get('/services/my-requests', async (c) => {
 // Recompute avg_prompt_length and median_response_time_ms for all developers
 // from service_messages. Called periodically or on-demand.
 servicesRoutes.post('/services/recompute-stats', async (c) => {
-  // Internal only — require INTERNAL_TOKEN
-  const token = c.req.header('X-Internal-Token');
-  if (!c.env.INTERNAL_TOKEN || token !== c.env.INTERNAL_TOKEN) {
+  // Internal only — require INTERNAL_TOKEN (constant-time compare)
+  if (!internalTokenOk(c.req.header('X-Internal-Token'), c.env.INTERNAL_TOKEN)) {
     return c.json({ error: 'forbidden' }, 403);
   }
 

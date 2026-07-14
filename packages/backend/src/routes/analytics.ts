@@ -16,6 +16,7 @@
 
 import { Hono } from 'hono';
 import { HttpError, requireAppOwner } from '../lib/auth.js';
+import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { registerEventIngestRoute } from './analytics-ingest.js';
 import { buildLoaderJs } from './analytics-loader.js';
@@ -100,9 +101,8 @@ analyticsRoutes.put(
 analyticsRoutes.put('/internal/apps/:appId/analytics/cf-token', async (c) => {
   const appId = c.req.param('appId')!;
   if (!APP_ID_RE.test(appId)) return c.text('invalid app id', 400);
-  const provided = c.req.header('X-Internal-Token');
   const expected = (c.env as Env & { INTERNAL_TOKEN?: string }).INTERNAL_TOKEN;
-  if (!expected || provided !== expected) return c.text('forbidden', 403);
+  if (!internalTokenOk(c.req.header('X-Internal-Token'), expected)) return c.text('forbidden', 403);
 
   let body: { cf_beacon_token?: string };
   try {
