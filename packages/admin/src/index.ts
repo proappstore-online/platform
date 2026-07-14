@@ -41,11 +41,12 @@ export default {
         return Response.json({ error: "invalid or expired session" }, { status: 401 });
       }
       const body = await request.json<PublishRequest>();
-      // Inject the verified creator login (can't be spoofed by the client) so
-      // publish grants them push access to their app repo. Without this the
-      // creator gets 403 on `git push` to proappstore-online/<id>.
+      // Force the creator to the verified session login — NEVER trust a
+      // client-supplied creatorGithub. Otherwise any authenticated user could
+      // POST {creatorGithub:"victim"} to forge app ownership in the registry AND
+      // invite an arbitrary GitHub account as a push collaborator on the repo.
       const result = await handlePublish(
-        { ...body, creatorGithub: body.creatorGithub || login },
+        { ...body, creatorGithub: login },
         env,
       );
       return Response.json(result, { status: result.success ? 200 : 422 });
@@ -111,7 +112,9 @@ export default {
       }
       const body = await request.json<PublishRequest>();
       const instance = await env.PROVISION_WORKFLOW.create({
-        params: { req: { ...body, creatorGithub: body.creatorGithub || login }, addRegistry: true },
+        // Force the verified session login — see /api/publish-app above. A
+        // client-supplied creatorGithub would forge ownership + collaborator invites.
+        params: { req: { ...body, creatorGithub: login }, addRegistry: true },
       });
       return Response.json({ id: instance.id, status: await instance.status() }, { status: 202 });
     }

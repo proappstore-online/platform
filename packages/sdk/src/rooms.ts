@@ -151,13 +151,16 @@ export class Room {
         const parsed = JSON.parse(ev.data as string) as
           | { kind: 'msg'; from: RoomPeer; data: unknown; at: number }
           | { kind: 'peers'; peers: RoomPeer[] };
-        if (parsed.kind === 'msg') {
+        if (parsed.kind === 'msg' && parsed.from) {
           if (this.debug)
             console.log(`[rooms] msg from ${parsed.from.login}, ${this.listeners.size} listeners`);
           for (const l of this.listeners) {
             l({ from: parsed.from, data: parsed.data, at: parsed.at });
           }
-        } else if (parsed.kind === 'peers') {
+        } else if (parsed.kind === 'peers' && Array.isArray(parsed.peers)) {
+          // Guard the shape — a malformed frame ({"kind":"peers"} with no array)
+          // must not set _peers to undefined and hand undefined to every
+          // onPeers subscriber (they call .length/.map on it).
           this._peers = parsed.peers;
           if (this.debug) console.log(`[rooms] peers: ${this._peers.length}`);
           for (const l of this.peerListeners) l(this._peers);

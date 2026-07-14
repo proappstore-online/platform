@@ -96,7 +96,16 @@ export async function resolveRouteForHostname(db: D1Database, hostname: string):
          AND ((COALESCE(d.kind, 'exact') = 'exact' AND d.domain = ?2)
            OR (COALESCE(d.kind, 'exact') = 'wildcard' AND d.domain = ?2)
            OR (COALESCE(d.kind, 'exact') = 'wildcard' AND d.domain = ?3))
-       ORDER BY CASE COALESCE(d.kind, 'exact') WHEN 'exact' THEN 0 ELSE 1 END
+       -- Deterministic, specificity-first ordering. Without the extra keys two
+       -- overlapping wildcard rows (a sub-zone owned by app B vs its parent zone
+       -- owned by app A) tie and LIMIT 1 picks one arbitrarily → the wrong app's
+       -- r2_prefix/tenant is served nondeterministically. Prefer: exact domain,
+       -- then a wildcard matching the full host (own apex) over one matching only
+       -- the parent base, then the longer (more specific) base, then a stable id.
+       ORDER BY CASE COALESCE(d.kind, 'exact') WHEN 'exact' THEN 0 ELSE 1 END,
+         CASE WHEN d.domain = ?2 THEN 0 ELSE 1 END,
+         LENGTH(d.domain) DESC,
+         d.app_id
        LIMIT 1`,
     )
     .bind(PLATFORM_ZONE, host, wildcardBase)
