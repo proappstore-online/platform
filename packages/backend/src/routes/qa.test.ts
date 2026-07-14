@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
 import { _resetJwksCache, type OidcClaims } from '../lib/github-oidc.js';
-import { testToken, TEST_SK } from '../test-helpers.js';
+import { testToken, TEST_SK, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1');
 const ISSUER = 'https://token.actions.githubusercontent.com';
@@ -85,17 +85,14 @@ function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
 }
 
 function makeEnv(db: ReturnType<typeof mockD1>, storage: Record<string, unknown> = {}) {
-  return {
-    DB: db as unknown as D1Database,
-    STORAGE: { put: vi.fn(), get: vi.fn(), list: vi.fn(), ...storage } as unknown as R2Bucket,
-    STRIPE_SECRET_KEY: 'sk_test',
-    STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: TEST_SK,
-    CF_API_TOKEN: 'cf_tok',
-    CF_ACCOUNT_ID: 'cf_acct',
-    VAPID_PUBLIC_KEY: 'p',
-    VAPID_PRIVATE_KEY: 'q',
-  };
+  return sharedMakeEnv(
+    {
+      STORAGE: { put: vi.fn(), get: vi.fn(), list: vi.fn(), ...storage } as unknown as R2Bucket,
+      VAPID_PUBLIC_KEY: 'p',
+      VAPID_PRIVATE_KEY: 'q',
+    },
+    db,
+  );
 }
 
 const ownerStmt = () => mockStmt({ first: { creator_id: 'gh:1' } });

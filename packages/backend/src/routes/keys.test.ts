@@ -1,34 +1,9 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
 import { sealSecret } from '../lib/encryption.js';
-import { testToken, TEST_SK } from '../test-helpers.js';
+import { testToken, TEST_SK, mockStmt, mockD1, makeEnv } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1');
-
-function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
-  return {
-    bind: vi.fn().mockReturnThis(),
-    first: vi.fn().mockResolvedValue(opts.first ?? null),
-    all: vi.fn().mockResolvedValue(opts.all ?? { results: [] }),
-    run: vi.fn().mockResolvedValue(opts.run ?? { meta: { changes: 0 } }),
-  };
-}
-
-function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
-  const prepare = vi.fn();
-  for (const stmt of stmts) prepare.mockReturnValueOnce(stmt);
-  prepare.mockReturnValue(mockStmt());
-  return { prepare };
-}
-
-function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof mockD1>) {
-  return {
-    DB: (db ?? mockD1()) as unknown as D1Database,
-    STORAGE: {} as R2Bucket,
-    SESSION_SIGNING_KEY: TEST_SK,
-    ...overrides,
-  };
-}
 
 function randomKek(): string {
   return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));

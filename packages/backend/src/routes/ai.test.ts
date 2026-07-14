@@ -1,16 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
-import { testToken, TEST_SK } from '../test-helpers.js';
+import { testToken, TEST_SK, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1');
 
 function makeEnv(aiRun?: (model: string, inputs: Record<string, unknown>) => Promise<unknown>) {
-  return {
+  return sharedMakeEnv({
     DB: { prepare: vi.fn() } as unknown as D1Database,
-    STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk',
     STRIPE_WEBHOOK_SECRET: 'whsec',
-    SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'tok',
     CF_ACCOUNT_ID: 'acct',
     VAPID_PUBLIC_KEY: 'pub',
@@ -18,7 +16,7 @@ function makeEnv(aiRun?: (model: string, inputs: Record<string, unknown>) => Pro
     AI: {
       run: aiRun ?? (async () => ({ response: 'default mock response' })),
     },
-  };
+  });
 }
 
 describe('GET /v1/ai/models', () => {

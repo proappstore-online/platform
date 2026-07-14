@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
-import { testToken, TEST_SK } from '../test-helpers.js';
+import { testToken, TEST_SK, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1', { roles: ['user', 'admin'] });
 
@@ -21,18 +21,7 @@ function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
 }
 
 function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof mockD1>) {
-  return {
-    DB: (db ?? mockD1()) as unknown as D1Database,
-    STORAGE: {} as R2Bucket,
-    STRIPE_SECRET_KEY: 'sk_test',
-    STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: TEST_SK,
-    CF_API_TOKEN: 'cf_tok',
-    CF_ACCOUNT_ID: 'cf_acct',
-    VAPID_PUBLIC_KEY: 'test-vapid-public',
-    VAPID_PRIVATE_KEY: 'test-vapid-private',
-    ...overrides,
-  };
+  return sharedMakeEnv(overrides, db ?? mockD1());
 }
 
 // Mock fetch for CF API calls (auth is local — no fetch needed)

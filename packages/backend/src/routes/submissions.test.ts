@@ -1,50 +1,26 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import { app } from '../index.js';
-import { testToken, TEST_SK } from '../test-helpers.js';
+import { testToken, TEST_SK, mockStmt, mockD1, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1');
-
-function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
-  return {
-    bind: vi.fn().mockReturnThis(),
-    first: vi.fn().mockResolvedValue(opts.first ?? null),
-    all: vi.fn().mockResolvedValue(opts.all ?? { results: [] }),
-    run: vi.fn().mockResolvedValue(opts.run ?? { meta: { changes: 0 } }),
-  };
-}
-
-function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
-  const prepare = vi.fn();
-  for (const stmt of stmts) {
-    prepare.mockReturnValueOnce(stmt);
-  }
-  prepare.mockReturnValue(mockStmt());
-  return { prepare };
-}
 
 interface EnvOverrides {
   ADMIN_GITHUB_IDS?: string;
 }
 
 function makeEnv(db?: ReturnType<typeof mockD1>, overrides: EnvOverrides = {}) {
-  return {
-    DB: (db ?? mockD1()) as unknown as D1Database,
-    STORAGE: {} as R2Bucket,
-    STRIPE_SECRET_KEY: 'sk_test',
-    STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: TEST_SK,
-    CF_API_TOKEN: 'cf_tok',
-    CF_ACCOUNT_ID: 'cf_acct',
-    VAPID_PUBLIC_KEY: 'test-vapid-public',
-    VAPID_PRIVATE_KEY: 'test-vapid-private',
-    ADMIN_GITHUB_IDS: overrides.ADMIN_GITHUB_IDS,
-    // Stub ADMIN binding — approve handler checks for it, mocked
-    ADMIN: { fetch: vi.fn() } as unknown as Fetcher,
-    // SELF binding (internal /v1/provision re-entry) delegates to the
-    // globalThis.fetch stub so mockProvisionFetch keeps working.
-    SELF: { fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) } as unknown as Fetcher,
-  };
+  return sharedMakeEnv(
+    {
+      ADMIN_GITHUB_IDS: overrides.ADMIN_GITHUB_IDS,
+      // Stub ADMIN binding — approve handler checks for it, mocked
+      ADMIN: { fetch: vi.fn() } as unknown as Fetcher,
+      // SELF binding (internal /v1/provision re-entry) delegates to the
+      // globalThis.fetch stub so mockProvisionFetch keeps working.
+      SELF: { fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) } as unknown as Fetcher,
+    },
+    db,
+  );
 }
 
 const originalFetch = globalThis.fetch;

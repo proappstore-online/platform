@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
-import { TEST_SK, testToken } from '../test-helpers.js';
+import { TEST_SK, testToken, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 import type { Env } from '../types.js';
 
 const TOK = await testToken('gh:room-user');
@@ -11,23 +11,17 @@ function makeEnv(fetchRoom: (request: Request) => Response | Promise<Response>):
       fetchRoom(input instanceof Request ? input : new Request(input, init)),
     ),
   };
-  return {
+  return sharedMakeEnv({
     DB: {} as D1Database,
     SELF: {} as Fetcher,
-    STORAGE: {} as R2Bucket,
     ROOM: {
       idFromName: vi.fn((name: string) => ({ name })),
       get: vi.fn(() => stub),
     } as unknown as DurableObjectNamespace,
-    STRIPE_SECRET_KEY: 'sk_test',
-    STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: TEST_SK,
-    CF_API_TOKEN: 'cf_tok',
-    CF_ACCOUNT_ID: 'cf_acct',
     VAPID_PUBLIC_KEY: 'p',
     VAPID_PRIVATE_KEY: 'q',
     AI: { run: vi.fn() },
-  } as unknown as Env;
+  }) as unknown as Env;
 }
 
 describe('GET /v1/apps/:appId/rooms/:roomId', () => {

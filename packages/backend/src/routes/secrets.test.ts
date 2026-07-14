@@ -1,17 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
-import { testToken, TEST_SK } from '../test-helpers.js';
+import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1');
-
-function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
-  return {
-    bind: vi.fn().mockReturnThis(),
-    first: vi.fn().mockResolvedValue(opts.first ?? null),
-    all: vi.fn().mockResolvedValue(opts.all ?? { results: [] }),
-    run: vi.fn().mockResolvedValue(opts.run ?? { meta: { changes: 0 } }),
-  };
-}
 
 function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
   const prepare = vi.fn();
@@ -21,18 +12,7 @@ function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
 }
 
 function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof mockD1>) {
-  return {
-    DB: (db ?? mockD1()) as unknown as D1Database,
-    STORAGE: {} as R2Bucket,
-    STRIPE_SECRET_KEY: 'sk_test',
-    STRIPE_WEBHOOK_SECRET: 'whsec_test',
-    SESSION_SIGNING_KEY: TEST_SK,
-    CF_API_TOKEN: 'cf_tok',
-    CF_ACCOUNT_ID: 'cf_acct',
-    VAPID_PUBLIC_KEY: 'test-vapid-public',
-    VAPID_PRIVATE_KEY: 'test-vapid-private',
-    ...overrides,
-  };
+  return sharedMakeEnv(overrides, db ?? mockD1());
 }
 
 // GET /v1/apps/:appId/secrets
