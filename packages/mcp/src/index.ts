@@ -22,6 +22,7 @@ export class PasMcpAgent extends McpAgent<Env> {
   // User context — set during init if a token is provided
   private userId: string | null = null;
   private userToken: string | null = null;
+  private userRoles: string[] = [];
 
   async init() {
     // Connection-level auth: the `fetch` handler below copies the request's
@@ -35,6 +36,10 @@ export class PasMcpAgent extends McpAgent<Env> {
       if (user) {
         this.userId = user.id;
         this.userToken = token;
+        // Platform roles (global, always current in the session) power the
+        // app-tool pre-flight role check in tool-loader.
+        const claims = await verifySession(token, this.env.SESSION_SIGNING_KEY);
+        this.userRoles = claims?.roles ?? [];
       }
     }
 
@@ -74,7 +79,7 @@ export class PasMcpAgent extends McpAgent<Env> {
     const registered = registerAppTools(
       this.server,
       appTools,
-      () => ({ userId: this.userId, token: this.userToken }),
+      () => ({ userId: this.userId, token: this.userToken, roles: this.userRoles }),
       this.env.API,
       this.env.API_BASE,
       this.env,
@@ -147,7 +152,7 @@ export default {
 
     if (url.pathname === "/" || url.pathname === "") {
       return new Response(
-        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools, recipe\nProject tools: scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running, set_project_budget, run_tests, set_model, add_ticket\nAgent introspection: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\nIdentity: whoami (show the authenticated PAS account + roles).\nSafety: mcp_audit_log (per-account audit trail). Mutating tools are audited; destructive tools (scaffold_app, delete_file, publish_app) require confirm: true; set MCP_READ_ONLY=1 to block all writes.\n",
+        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools, recipe\nProject tools: scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running, set_project_budget, run_tests, set_model, add_ticket\nAgent introspection: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\nIdentity: whoami (show the authenticated PAS account + roles).\nSafety: mcp_audit_log (per-account audit trail). Mutating tools are audited; destructive tools (scaffold_app, delete_file, publish_app) require confirm: true; expensive/irreversible tools accept dry_run: true to preview; set MCP_READ_ONLY=1 to block all writes.\n",
         { headers: { "content-type": "text/plain" } }
       );
     }

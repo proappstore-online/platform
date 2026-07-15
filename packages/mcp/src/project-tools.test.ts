@@ -571,6 +571,39 @@ describe('safety: destructive confirm gate', () => {
   });
 });
 
+describe('safety: dry-run', () => {
+  it('scaffold_app dry_run previews without creating a repo or requiring confirm', async () => {
+    const result = await tools.get('scaffold_app')!({ app_id: 'preview-app', name: 'Preview', description: 't', dry_run: true });
+    const out = getText(result);
+    expect(out).toContain('DRY RUN');
+    expect(out).toContain('preview-app');
+    expect(out).toContain('No changes were made');
+    expect(mockGh.createRepoFromTemplate).not.toHaveBeenCalled();
+  });
+
+  it('delete_file dry_run previews without deleting', async () => {
+    const result = await tools.get('delete_file')!({ app_id: 'app', path: 'old.ts', dry_run: true });
+    const out = getText(result);
+    expect(out).toContain('DRY RUN');
+    expect(out).toContain('old.ts');
+    expect(mockGh.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('provision_app dry_run previews without calling the provision API', async () => {
+    const result = await tools.get('provision_app')!({ app_id: 'app', dry_run: true });
+    expect(getText(result)).toContain('DRY RUN');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('publish_app dry_run previews without calling the admin API', async () => {
+    const result = await tools.get('publish_app')!({ app_id: 'chess-academy', name: 'Chess Academy', category: 'education', description: 'd', dry_run: true });
+    const out = getText(result);
+    expect(out).toContain('DRY RUN');
+    expect(out).toContain('storefront registry');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
 describe('safety: read-only mode', () => {
   // Separate registration with MCP_READ_ONLY enabled.
   const roTools = new Map<string, Handler>();

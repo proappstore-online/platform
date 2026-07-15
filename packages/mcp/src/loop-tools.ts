@@ -74,6 +74,22 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
     return { ok: res.ok, data: res.ok ? data : `API ${res.status}: ${typeof data === "string" ? data : JSON.stringify(data)}` };
   }
 
+  /**
+   * Dry-run preview for a loop tool: resolve the subject (same way `call` does),
+   * audit a `dry_run` row, and return the plan. The tool returns this and makes
+   * no API call. A preview changes nothing, so it's allowed in read-only mode.
+   */
+  async function dryPreview(tokenArg: string | undefined, tool: string, plan: string): Promise<string> {
+    const token = (tokenArg && tokenArg.length > 0 ? tokenArg : getConnToken()) ?? "";
+    const subject = token && env.SESSION_SIGNING_KEY
+      ? (await verifyToken(env.SESSION_SIGNING_KEY, token))?.id ?? null
+      : null;
+    await audit({ env, subject }, { tool, action: "dry_run", plan });
+    return `DRY RUN — ${tool} would:\n${plan}\n\nNo changes were made. Re-call without dry_run (or dry_run: false) to execute.`;
+  }
+
+  const DRY_RUN = z.boolean().optional().describe("Preview what this tool would do without making any changes. Omit or set false to execute.");
+
   const TOKEN = z.string().optional().describe("PAS session token (the owner's). Optional — the authenticated MCP connection is used when omitted. The user must have a BYO Anthropic key in the vault for agents to run.");
   // Validated: this value is interpolated into internal API subrequest paths
   // (/v1/projects/${slug}/…) that run over a service binding, so an unvalidated
@@ -300,8 +316,9 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
   server.tool(
     "delete_project_files",
     "Delete files from an Agent Teams project's working tree (agent-free). The project must be paused.",
-    { token: TOKEN, slug: SLUG, paths: z.array(z.string()).describe("repo-relative paths to remove") },
-    async ({ token, slug, paths }) => {
+    { token: TOKEN, slug: SLUG, paths: z.array(z.string()).describe("repo-relative paths to remove"), dry_run: DRY_RUN },
+    async ({ token, slug, paths, dry_run }) => {
+      if (dry_run) return text(await dryPreview(token, "delete_project_files", `- delete ${paths.length} file(s) from ${slug}'s working tree: ${paths.join(", ")}`));
       const r = await call(`/v1/projects/${slug}/files`, token, { method: "DELETE", body: { paths } });
       if (!r.ok) return text(String(r.data));
       const d = r.data as { deleted?: number };
@@ -312,8 +329,9 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
   server.tool(
     "deploy_project",
     "Deploy the project's current working tree with NO agent/LLM — pushes to GitHub and runs CI. Use after write_project_files for a direct build. Requires a provisioned repo (provision the app first). Poll list_tickets / get_project for status.",
-    { token: TOKEN, slug: SLUG },
-    async ({ token, slug }) => {
+    { token: TOKEN, slug: SLUG, dry_run: DRY_RUN },
+    async ({ token, slug, dry_run }) => {
+      if (dry_run) return text(await dryPreview(token, "deploy_project", `- push ${slug}'s current working tree to GitHub and run CI (deploy)`));
       const r = await call(`/v1/projects/${slug}/deploy`, token, { method: "POST" });
       if (!r.ok) return text(String(r.data));
       const d = r.data as { ticketId?: string };

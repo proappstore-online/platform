@@ -33,6 +33,25 @@ interface AppTool extends ToolManifest {
   app_id: string;
 }
 
+/**
+ * Pre-flight platform-role check for an app tool. The backend action executor
+ * (enforceActionAuth in backend/routes/actions.ts) is the REAL authority; this
+ * mirrors only the manifest's PLATFORM-role requirement at the MCP edge so a
+ * caller lacking it gets a fast, clear error instead of an opaque backend 403.
+ *
+ * app_roles are deliberately NOT enforced here: the session token's per-app
+ * roles are minted at login and can lag a just-granted role in the app_roles D1
+ * table, so pre-rejecting on them would risk a false denial. The backend checks
+ * those live against D1. Platform roles are global and always current in the
+ * session claims, so they're safe to short-circuit on.
+ */
+export function checkPlatformRoles(tool: AppTool, roles: string[]): string | null {
+  const required = tool.auth?.platform_roles ?? [];
+  if (required.length === 0) return null;
+  if (roles.some((r) => required.includes(r))) return null;
+  return `Error: ${tool.app_id}/${tool.name} requires platform role(s): ${required.join(', ')}. Your session has: ${roles.join(', ') || '(none)'}. Ask the app owner to grant one.`;
+}
+
 interface ToolsResponse {
   tools: AppTool[];
 }
@@ -153,7 +172,7 @@ function buildZodSchema(params: Record<string, { type: string; description?: str
 export function registerAppTools(
   server: McpServer,
   tools: AppTool[],
-  getUserContext: () => { userId: string | null; token: string | null },
+  getUserContext: () => { userId: string | null; token: string | null; roles: string[] },
   api: Fetcher,
   apiBase: string,
   env: SafetyEnv,
@@ -169,7 +188,12 @@ export function registerAppTools(
       `[${tool.app_id}] ${tool.description}`,
       zodSchema,
       async (args) => {
-        const { userId, token } = getUserContext();
+        const { userId, token, roles } = getUserContext();
+        // Pre-flight platform-role check: reject fast (clear error) when the
+        // manifest requires a platform role this session lacks. Backend
+        // enforceActionAuth remains the authority (esp. for app_roles).
+        const roleErr = checkPlatformRoles(tool, roles);
+        if (roleErr) return { content: [{ type: 'text' as const, text: roleErr }] };
         // `execute` and `batch` actions mutate app data; `query` actions are read-only.
         // Gate + audit the mutating ones (read-only mode throws here).
         if (tool.operation !== 'query') {

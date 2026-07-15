@@ -5,7 +5,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 // Focus on fetchTools caching and the executeToolCall flow.
 
 // Re-export internals for testing by importing the module and inspecting behavior.
-import { executeToolCall, fetchTools, invalidateCache, registerAppTools } from './tool-loader.js';
+import { checkPlatformRoles, executeToolCall, fetchTools, invalidateCache, registerAppTools } from './tool-loader.js';
 
 // The loader now calls the API over a service binding (Fetcher). Delegate to
 // globalThis.fetch so each test's stub keeps working unchanged.
@@ -200,7 +200,7 @@ describe('registerAppTools', () => {
         params: {},
         requires_auth: true,
       }],
-      () => ({ userId: 'u1', token: 'tok-1' }),
+      () => ({ userId: 'u1', token: 'tok-1', roles: [] }),
       api,
       'https://api.proappstore.online',
       { MCP_READ_ONLY: '1' },
@@ -208,5 +208,85 @@ describe('registerAppTools', () => {
 
     await expect(handlers.get('interns/create_org_with_member')!({ org_id: 'org-1' }))
       .rejects.toThrow(/read-only/i);
+  });
+
+  it('rejects a mutating tool that requires a platform role the caller lacks (before hitting the backend)', async () => {
+    const handlers = new Map<string, (args: Record<string, unknown>) => Promise<{ content: { text: string }[] }>>();
+    const fakeServer = {
+      tool: (name: string, _desc: string, _schema: unknown, handler: (args: Record<string, unknown>) => Promise<{ content: { text: string }[] }>) => {
+        handlers.set(name, handler);
+      },
+    };
+    globalThis.fetch = vi.fn(); // must NOT be called — pre-flight short-circuits
+    registerAppTools(
+      fakeServer as never,
+      [{
+        app_id: 'interns',
+        name: 'admin_purge',
+        description: 'admin only',
+        operation: 'execute',
+        sql: 'DELETE FROM orgs',
+        params: {},
+        requires_auth: true,
+        auth: { platform_roles: ['admin'] },
+      }],
+      () => ({ userId: 'u1', token: 'tok-1', roles: ['user'] }),
+      api,
+      'https://api.proappstore.online',
+      {},
+    );
+
+    const res = await handlers.get('interns/admin_purge')!({});
+    expect(res.content[0].text).toMatch(/requires platform role/i);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('allows a tool when the caller has one of the required platform roles', async () => {
+    const handlers = new Map<string, (args: Record<string, unknown>) => Promise<unknown>>();
+    const fakeServer = {
+      tool: (name: string, _desc: string, _schema: unknown, handler: (args: Record<string, unknown>) => Promise<unknown>) => {
+        handlers.set(name, handler);
+      },
+    };
+    globalThis.fetch = vi.fn().mockResolvedValue(Response.json({ rows: [] }));
+    registerAppTools(
+      fakeServer as never,
+      [{
+        app_id: 'interns', name: 'admin_list', description: 'admin only',
+        operation: 'query', sql: 'SELECT 1', params: {}, requires_auth: true,
+        auth: { platform_roles: ['admin'] },
+      }],
+      () => ({ userId: 'u1', token: 'tok-1', roles: ['user', 'admin'] }),
+      api,
+      'https://api.proappstore.online',
+      {},
+    );
+
+    await handlers.get('interns/admin_list')!({});
+    expect(globalThis.fetch).toHaveBeenCalled();
+  });
+});
+
+describe('checkPlatformRoles', () => {
+  const base = { app_id: 'a', name: 't', description: '', operation: 'query' as const, params: {} };
+
+  it('passes when no platform roles are required', () => {
+    expect(checkPlatformRoles({ ...base }, [])).toBeNull();
+    expect(checkPlatformRoles({ ...base, auth: { platform_roles: [] } }, [])).toBeNull();
+  });
+
+  it('passes when the caller has one of the required roles', () => {
+    expect(checkPlatformRoles({ ...base, auth: { platform_roles: ['admin', 'creator'] } }, ['user', 'creator'])).toBeNull();
+  });
+
+  it('returns an error when the caller lacks all required roles', () => {
+    const err = checkPlatformRoles({ ...base, auth: { platform_roles: ['admin'] } }, ['user']);
+    expect(err).toMatch(/requires platform role/i);
+    expect(err).toContain('admin');
+  });
+
+  it('does NOT enforce app_roles (left to the backend — session roles can be stale)', () => {
+    // Only app_roles required, none in the session: still passes at the MCP edge.
+    expect(checkPlatformRoles({ ...base, auth: { app_roles: ['owner'] } }, [])).toBeNull();
   });
 });

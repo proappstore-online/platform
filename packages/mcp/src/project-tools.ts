@@ -10,7 +10,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { makeGitHub, verifyAppOwnership } from "@proappstore/build-core";
-import { gateMutation } from "./safety.js";
+import { gateMutation, dryRun } from "./safety.js";
 
 interface ProjectToolsEnv {
   GITHUB_ORG: string;
@@ -31,6 +31,11 @@ const CONFIRM = z
   .optional()
   .describe("Must be true to run this destructive action. Without it the call is rejected.");
 
+const DRY_RUN = z
+  .boolean()
+  .optional()
+  .describe("Preview what this tool would do without making any changes (no confirm needed). Omit or set false to execute.");
+
 type Text = { content: { type: "text"; text: string }[] };
 const text = (s: string): Text => ({ content: [{ type: "text" as const, text: s }] });
 
@@ -49,6 +54,10 @@ export function registerProjectTools(
   /** Gate a mutating tool: read-only block (throws) + audit, attributed to the connection user. */
   const gate = (tool: string, input?: Record<string, unknown>) =>
     gateMutation({ env, subject: getUserContext().userId }, tool, input);
+
+  /** Dry-run preview: when active, audit + return the plan string (else null). */
+  const dry = (tool: string, active: boolean | undefined, plan: string, input?: Record<string, unknown>) =>
+    dryRun({ env, subject: getUserContext().userId }, tool, active, plan, input);
 
   /** Require a valid session token; return it or the error response. */
   function requireAuth(): { token: string } | Text {
@@ -120,10 +129,16 @@ export function registerProjectTools(
       name: z.string().describe("Display name (e.g. 'Chess Academy')"),
       description: z.string().describe("Short description of the app"),
       confirm: CONFIRM,
+      dry_run: DRY_RUN,
     },
-    async ({ app_id, name, description, confirm }) => {
+    async ({ app_id, name, description, confirm, dry_run }) => {
       const auth = requireAuth();
       if ('content' in auth) return auth;
+      const preview = await dry("scaffold_app",
+        dry_run,
+        `- create GitHub repo ${org}/${app_id} from template-app\n- set R2 deploy credentials on the repo\n- provision R2 route + D1 database + data worker (data-${app_id})`,
+        { app_id, name });
+      if (preview) return text(preview);
       if (confirm !== true)
         return text(`Refused: scaffold_app creates a GitHub repo + deploy secrets + infra for "${app_id}". Re-call with confirm: true to proceed.`);
       await gate("scaffold_app", { app_id, name });
@@ -252,10 +267,12 @@ export function registerProjectTools(
   server.tool(
     "delete_file",
     "Delete a file from a PAS app's GitHub repo. Requires confirm: true.",
-    { app_id: APP_ID, path: z.string().describe("File path to delete"), message: z.string().optional().describe("Commit message"), confirm: CONFIRM },
-    async ({ app_id, path, message, confirm }) => {
+    { app_id: APP_ID, path: z.string().describe("File path to delete"), message: z.string().optional().describe("Commit message"), confirm: CONFIRM, dry_run: DRY_RUN },
+    async ({ app_id, path, message, confirm, dry_run }) => {
       const auth = await requireOwner(app_id);
       if ('content' in auth) return auth;
+      const preview = await dry("delete_file", dry_run, `- delete "${path}" from ${org}/${app_id} (commit to main)`, { app_id, path });
+      if (preview) return text(preview);
       if (confirm !== true)
         return text(`Refused: delete_file permanently removes "${path}" from ${app_id}. Re-call with confirm: true to proceed.`);
       await gate("delete_file", { app_id, path });
@@ -306,12 +323,14 @@ export function registerProjectTools(
   server.tool(
     "provision_app",
     "Provision platform resources for a PAS app (R2 route, D1 database, data worker). Idempotent — safe to call on already-provisioned apps.",
-    { app_id: APP_ID },
-    async ({ app_id }) => {
+    { app_id: APP_ID, dry_run: DRY_RUN },
+    async ({ app_id, dry_run }) => {
       // Ownership-gated: re-provisioning an app rebinds its route/D1/data-worker,
       // so a bare requireAuth would let any authed user target another owner's app.
       const auth = await requireOwner(app_id);
       if ('content' in auth) return auth;
+      const preview = await dry("provision_app", dry_run, `- provision R2 route + D1 database + data worker for ${app_id} (idempotent; skips existing resources)`, { app_id });
+      if (preview) return text(preview);
       await gate("provision_app", { app_id });
       const result = await provision(app_id, auth.token);
       return text(result || "Provisioning complete (no steps reported).");
@@ -331,8 +350,9 @@ export function registerProjectTools(
       icon_bg: z.string().regex(/^#([0-9a-fA-F]{3,8})$/).optional().describe("Hex background color for the icon (e.g. '#fef3c7')"),
       pro_features: z.array(z.string().max(60)).max(8).optional().describe("List of pro features (max 8, each max 60 chars)"),
       confirm: CONFIRM,
+      dry_run: DRY_RUN,
     },
-    async ({ app_id, name, category, description, icon, icon_bg, pro_features, confirm }) => {
+    async ({ app_id, name, category, description, icon, icon_bg, pro_features, confirm, dry_run }) => {
       // Ownership-gated: publish overwrites the public storefront listing and
       // invites the creator as a repo push-collaborator, so a bare requireAuth
       // would let any authed user deface another owner's listing / gain repo
@@ -340,6 +360,11 @@ export function registerProjectTools(
       // before publishing, so the owner passes.
       const auth = await requireOwner(app_id);
       if ('content' in auth) return auth;
+      const preview = await dry("publish_app",
+        dry_run,
+        `- provision infra for ${app_id} (route + D1 + data worker, idempotent)\n- add "${name}" to the public storefront registry (category: ${category})\n- invite you as a push-collaborator on ${org}/${app_id}`,
+        { app_id, name, category });
+      if (preview) return text(preview);
       if (confirm !== true)
         return text(`Refused: publish_app lists "${app_id}" publicly on proappstore.online. Re-call with confirm: true to proceed.`);
       await gate("publish_app", { app_id, name, category });

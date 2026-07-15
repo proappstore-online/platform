@@ -7,6 +7,7 @@
 //   2. read-only: MCP_READ_ONLY=1 blocks all mutating tools (server-wide).
 //   3. confirm:   destructive tools require an explicit confirm: true.
 //   4. redaction: tokens/secrets stripped before they hit the log.
+//   5. dry-run:   expensive/irreversible tools accept dry_run to preview.
 //
 // Audit rows live in OAUTH_KV (already bound) keyed by the verified PAS user id,
 // with 90-day retention. No user id (unauthenticated) or no KV → audit() no-ops,
@@ -46,6 +47,27 @@ export async function gateMutation(
     );
   }
   await audit(ctx, { tool, action: "invoked", input });
+}
+
+/**
+ * Dry-run affordance. When `active` is true, record a `dry_run` audit row and
+ * return the human-readable `plan` — the caller wraps it in its own tool-result
+ * shape and returns immediately WITHOUT performing the action. When false/unset,
+ * returns null and the tool proceeds normally. A preview makes no changes, so it
+ * is allowed even in read-only mode and never requires `confirm: true`. Mirrors
+ * the PAGS dry-run affordance so an agent can inspect an expensive or
+ * irreversible tool before committing.
+ */
+export async function dryRun(
+  ctx: SafetyContext,
+  tool: string,
+  active: boolean | undefined,
+  plan: string,
+  input?: Record<string, unknown>,
+): Promise<string | null> {
+  if (!active) return null;
+  await audit(ctx, { tool, action: "dry_run", input });
+  return `DRY RUN — ${tool} would:\n${plan}\n\nNo changes were made. Re-call without dry_run (or dry_run: false) to execute.`;
 }
 
 export async function audit(
