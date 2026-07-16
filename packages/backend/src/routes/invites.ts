@@ -151,7 +151,7 @@ inviteRoutes.delete('/apps/:appId/invites/:inviteId', async (c) => {
 
 /**
  * Redeem an invite code. Any authenticated user.
- * Validates the code, increments used_count, assigns the role via FAS.
+ * Validates the code, increments used_count, assigns the role in PAS D1.
  */
 inviteRoutes.post('/invites/:code/redeem', async (c) => {
   try {

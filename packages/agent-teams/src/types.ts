@@ -9,7 +9,7 @@
 
 export type Project = {
   id: string                  // [v1] uuid
-  ownerId: string             // [v1] PAS subscriber id (FAS GitHub OAuth)
+  ownerId: string             // [v1] PAS user id (PAS GitHub/Google OAuth)
   name: string                // [v1]
   slug: string                // [v1] becomes <slug>.proappstore.online
   createdAt: number           // [v1]

@@ -12,9 +12,9 @@ import { registerReviewRoutes } from './submissions-review.js';
  *   1. Dev POSTs a submission with the desired app id + metadata.
  *   2. Submission lands in `submissions` with status='pending'.
  *   3. Admin lists pending submissions and either:
- *        a. POST /v1/submissions/:id/approve — runs the existing FAS-admin
- *           provisioner (GitHub repo, CF Pages, DNS, custom domain, storefront
- *           registry) and the PAS-local steps from /v1/provision. Submission
+ *        a. POST /v1/submissions/:id/approve — runs the PAS admin worker's
+ *           publish provisioner (GitHub repo, R2 host route, storefront
+ *           registry — Path B) and the PAS-local steps from /v1/provision. Submission
  *           moves to status='approved' before the call and 'published' after.
  *        b. POST /v1/submissions/:id/reject — with required reason.
  *   4. Dev may DELETE their own submission while it's still pending.
