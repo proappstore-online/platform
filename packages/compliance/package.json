@@ -1,6 +1,6 @@
 {
   "name": "@proappstore/compliance",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Compliance checks for apps published on proappstore.online — used by the CLI for local feedback and by CI for gating.",
   "license": "MIT",
   "type": "module",
