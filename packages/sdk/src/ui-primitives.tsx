@@ -265,7 +265,7 @@ export function ProfileMenu({ app, showThemeToggle = true, children }: ProfileMe
           )}
           {children}
           <button onClick={handleSignOut} style={menuItemStyle}>Sign out</button>
-          <button onClick={handleDelete} style={{ ...menuItemStyle, color: '#dc2626' }}>Delete account</button>
+          <button onClick={handleDelete} style={{ ...menuItemStyle, color: 'var(--danger, #dc2626)' }}>Delete account</button>
         </div>
       )}
     </div>
@@ -373,7 +373,7 @@ export function ProfilePage({ app, showThemeToggle = true }: ProfilePageProps) {
       </button>
 
       <div style={{ border: '1px solid #fecaca', borderRadius: 'var(--radius, 0.75rem)', padding: '1.25rem' }}>
-        <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#dc2626', marginBottom: '0.5rem' }}>Danger zone</div>
+        <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--danger, #dc2626)', marginBottom: '0.5rem' }}>Danger zone</div>
         <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '0.75rem' }}>
           Permanently delete your account and all data across all apps.
         </p>
@@ -382,8 +382,8 @@ export function ProfilePage({ app, showThemeToggle = true }: ProfilePageProps) {
           style={{
             padding: '0.5rem 1rem',
             borderRadius: 'var(--radius-sm, 0.5rem)',
-            border: '1px solid #dc2626', background: 'transparent',
-            color: '#dc2626', fontSize: '0.85rem', fontWeight: 600,
+            border: '1px solid var(--danger, #dc2626)', background: 'transparent',
+            color: 'var(--danger, #dc2626)', fontSize: '0.85rem', fontWeight: 600,
             cursor: 'pointer', fontFamily: 'inherit',
           }}
         >

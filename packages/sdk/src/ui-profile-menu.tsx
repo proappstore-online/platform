@@ -97,7 +97,7 @@ export function ProfileMenu({ app, showThemeToggle = true, showBilling = true, c
           {/* Extra items */}
           {children}
           <button onClick={handleSignOut} style={menuItemStyle}>Sign out</button>
-          <button onClick={handleDelete} style={{ ...menuItemStyle, color: '#dc2626' }}>Delete account</button>
+          <button onClick={handleDelete} style={{ ...menuItemStyle, color: 'var(--danger, #dc2626)' }}>Delete account</button>
         </div>
       )}
     </div>
