@@ -37,7 +37,7 @@ export function Avatar({ user, size = 32 }: AvatarProps) {
   return (
     <div style={{
       width: size, height: size, borderRadius: '50%',
-      background: 'var(--accent, #7c3aed)', color: '#fff',
+      background: 'var(--accent)', color: '#fff',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       fontSize: size * 0.45, fontWeight: 700,
     }}>
@@ -65,7 +65,7 @@ export function SignInButton({
     <button
       onClick={() => app.auth.signIn(provider)}
       style={{
-        background: 'var(--accent, #7c3aed)', color: '#fff',
+        background: 'var(--accent)', color: '#fff',
         border: 'none', padding: '0.6rem 1.5rem',
         borderRadius: 'var(--radius, 0.75rem)',
         fontSize: '0.9rem', fontWeight: 700,
@@ -111,9 +111,9 @@ export function ThemeToggle() {
       style={{
         width: 36, height: 36,
         borderRadius: 'var(--radius, 0.75rem)',
-        border: '1px solid var(--border, #e2e8f0)',
-        background: 'var(--surface, #ffffff)',
-        color: 'var(--ink, #1e293b)',
+        border: '1px solid var(--line)',
+        background: 'var(--panel)',
+        color: 'var(--ink)',
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         cursor: 'pointer', padding: 0, fontFamily: 'inherit',
       }}
@@ -176,9 +176,9 @@ export function TextSizeToggle() {
         width: 36,
         height: 36,
         borderRadius: 'var(--radius, 0.75rem)',
-        border: '1px solid var(--line, var(--border, #e2e8f0))',
-        background: 'var(--panel, var(--surface, #ffffff))',
-        color: 'var(--ink, #1e293b)',
+        border: '1px solid var(--line)',
+        background: 'var(--panel)',
+        color: 'var(--ink)',
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -233,7 +233,7 @@ export function ProfileMenu({ app, showThemeToggle = true, children }: ProfileMe
       <button
         onClick={() => setOpen(!open)}
         style={{
-          background: 'none', border: '2px solid var(--border, #e2e8f0)',
+          background: 'none', border: '2px solid var(--line)',
           borderRadius: '50%', padding: 0, cursor: 'pointer',
           width: 32, height: 32, overflow: 'hidden', display: 'block',
         }}
@@ -243,23 +243,23 @@ export function ProfileMenu({ app, showThemeToggle = true, children }: ProfileMe
       {open && (
         <div style={{
           position: 'absolute', top: 40, right: 0,
-          background: 'var(--surface, #ffffff)',
-          border: '1px solid var(--border, #e2e8f0)',
+          background: 'var(--panel)',
+          border: '1px solid var(--line)',
           borderRadius: 'var(--radius, 0.75rem)',
           boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
           minWidth: 200, padding: '0.5rem 0', zIndex: 100,
         }}>
           <div style={{
             padding: '0.5rem 1rem',
-            borderBottom: '1px solid var(--border, #e2e8f0)',
+            borderBottom: '1px solid var(--line)',
             fontSize: '0.85rem', fontWeight: 700,
-            color: 'var(--ink, #1e293b)',
+            color: 'var(--ink)',
           }}>
             {user.login}
           </div>
           {showThemeToggle && (
-            <div style={{ padding: '0.5rem 1rem', borderBottom: '1px solid var(--border, #e2e8f0)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: '0.85rem', color: 'var(--muted, #64748b)' }}>Theme</span>
+            <div style={{ padding: '0.5rem 1rem', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>Theme</span>
               <ThemeToggle />
             </div>
           )}
@@ -276,7 +276,7 @@ const menuItemStyle: React.CSSProperties = {
   display: 'block', width: '100%', padding: '0.5rem 1rem',
   background: 'none', border: 'none', textAlign: 'left',
   fontSize: '0.85rem', cursor: 'pointer',
-  color: 'var(--ink, #1e293b)', fontFamily: 'inherit',
+  color: 'var(--ink)', fontFamily: 'inherit',
 };
 
 // ---------------------------------------------------------------------------
@@ -293,13 +293,13 @@ export function ProfilePage({ app, showThemeToggle = true }: ProfilePageProps) {
   const { preference, setPreference } = useTheme();
 
   if (loading) {
-    return <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--muted, #64748b)' }}>Loading...</div>;
+    return <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--muted)' }}>Loading...</div>;
   }
 
   if (!user) {
     return (
       <div style={{ padding: '2rem', textAlign: 'center' }}>
-        <p style={{ color: 'var(--muted, #64748b)', marginBottom: '1rem' }}>Sign in to view your profile.</p>
+        <p style={{ color: 'var(--muted)', marginBottom: '1rem' }}>Sign in to view your profile.</p>
         <SignInButton app={app} />
       </div>
     );
@@ -322,19 +322,19 @@ export function ProfilePage({ app, showThemeToggle = true }: ProfilePageProps) {
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
         <Avatar user={user} size={64} />
         <div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--ink-strong, var(--ink, #0f172a))' }}>{user.login}</div>
-          <div style={{ fontSize: '0.85rem', color: 'var(--muted, #64748b)' }}>ProAppStore account</div>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--ink-strong)' }}>{user.login}</div>
+          <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>ProAppStore account</div>
         </div>
       </div>
 
       {showThemeToggle && (
         <div style={{
-          background: 'var(--surface, #ffffff)',
-          border: '1px solid var(--border, #e2e8f0)',
+          background: 'var(--panel)',
+          border: '1px solid var(--line)',
           borderRadius: 'var(--radius, 0.75rem)',
           padding: '1.25rem', marginBottom: '1rem',
         }}>
-          <div style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '0.75rem', color: 'var(--ink, #1e293b)' }}>Appearance</div>
+          <div style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '0.75rem', color: 'var(--ink)' }}>Appearance</div>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             {themeOptions.map((opt) => (
               <button
@@ -343,9 +343,9 @@ export function ProfilePage({ app, showThemeToggle = true }: ProfilePageProps) {
                 style={{
                   flex: 1, padding: '0.5rem',
                   borderRadius: 'var(--radius-sm, 0.5rem)',
-                  border: preference === opt.value ? '2px solid var(--accent, #7c3aed)' : '1px solid var(--border, #e2e8f0)',
-                  background: preference === opt.value ? 'var(--accent-soft, #f5f3ff)' : 'transparent',
-                  color: preference === opt.value ? 'var(--accent, #7c3aed)' : 'var(--muted, #64748b)',
+                  border: preference === opt.value ? '2px solid var(--accent)' : '1px solid var(--line)',
+                  background: preference === opt.value ? 'var(--accent-soft)' : 'transparent',
+                  color: preference === opt.value ? 'var(--accent)' : 'var(--muted)',
                   fontWeight: preference === opt.value ? 700 : 500,
                   fontSize: '0.85rem', cursor: 'pointer', fontFamily: 'inherit',
                 }}
@@ -362,9 +362,9 @@ export function ProfilePage({ app, showThemeToggle = true }: ProfilePageProps) {
         style={{
           width: '100%', padding: '0.75rem',
           borderRadius: 'var(--radius, 0.75rem)',
-          border: '1px solid var(--border, #e2e8f0)',
-          background: 'var(--surface, #ffffff)',
-          color: 'var(--ink, #1e293b)',
+          border: '1px solid var(--line)',
+          background: 'var(--panel)',
+          color: 'var(--ink)',
           fontSize: '0.9rem', fontWeight: 600,
           cursor: 'pointer', marginBottom: '1.5rem', fontFamily: 'inherit',
         }}
@@ -374,7 +374,7 @@ export function ProfilePage({ app, showThemeToggle = true }: ProfilePageProps) {
 
       <div style={{ border: '1px solid #fecaca', borderRadius: 'var(--radius, 0.75rem)', padding: '1.25rem' }}>
         <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#dc2626', marginBottom: '0.5rem' }}>Danger zone</div>
-        <p style={{ fontSize: '0.85rem', color: 'var(--muted, #64748b)', marginBottom: '0.75rem' }}>
+        <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '0.75rem' }}>
           Permanently delete your account and all data across all apps.
         </p>
         <button

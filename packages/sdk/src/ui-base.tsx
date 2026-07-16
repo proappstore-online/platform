@@ -7,20 +7,20 @@
  *
  * Convention (matches the existing Pro components): inline `style` with CSS-var
  * fallbacks — NO Tailwind dependency, works in any app. Theme by overriding the
- * vars: --accent, --accent-soft, --ink, --muted, --surface, --border, --radius.
+ * vars: --accent, --accent-soft, --ink, --muted, --panel, --line, --radius.
  */
 
 import { useEffect, useState, forwardRef, type ReactNode, type CSSProperties, type ButtonHTMLAttributes, type InputHTMLAttributes } from 'react';
 
 const T = {
-  accent: 'var(--accent, #7c3aed)',
-  accentSoft: 'var(--accent-soft, #f5f3ff)',
-  ink: 'var(--ink, #0f172a)',
-  muted: 'var(--muted, #64748b)',
-  surface: 'var(--surface, #ffffff)',
-  border: 'var(--border, #e2e8f0)',
+  accent: 'var(--accent)',
+  accentSoft: 'var(--accent-soft)',
+  ink: 'var(--ink)',
+  muted: 'var(--muted)',
+  surface: 'var(--panel)',
+  border: 'var(--line)',
   radius: 'var(--radius, 0.75rem)',
-  danger: 'var(--danger, #dc2626)',
+  danger: 'var(--danger)',
 };
 
 // ── Button ───────────────────────────────────────────────────
@@ -209,7 +209,7 @@ export function Toast({ open, message, variant = 'info', onClose, duration = 400
     return () => clearTimeout(t);
   }, [open, duration, onClose]);
   if (!open) return null;
-  const accentByVariant: Record<ToastVariant, string> = { info: T.accent, success: 'var(--success, #16a34a)', error: T.danger };
+  const accentByVariant: Record<ToastVariant, string> = { info: T.accent, success: 'var(--success)', error: T.danger };
   return (
     <div role="status" aria-live="polite" style={{
       position: 'fixed', bottom: '1.25rem', left: '50%', transform: 'translateX(-50%)', zIndex: 1100,

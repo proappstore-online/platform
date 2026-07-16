@@ -29,7 +29,7 @@ export function SignInButton({
     <button
       onClick={() => app.auth.signIn(provider)}
       style={{
-        background: 'var(--accent, #7c3aed)',
+        background: 'var(--accent)',
         color: '#fff',
         border: 'none',
         padding: '0.6rem 1.5rem',
@@ -64,7 +64,7 @@ export function ProBadge({ size = 'sm' }: ProBadgeProps) {
     <span style={{
       ...sizes[size],
       fontWeight: 700,
-      background: 'var(--accent, #7c3aed)',
+      background: 'var(--accent)',
       color: '#fff',
       borderRadius: '0.25rem',
       textTransform: 'uppercase',
@@ -92,7 +92,7 @@ export function SubscriptionStatus({ app, showUpgrade = true }: SubscriptionStat
   const { subscription, isPro, loading, upgrade } = useSubscription(app);
 
   if (loading) {
-    return <span style={{ fontSize: '0.85rem', color: 'var(--muted, #64748b)' }}>...</span>;
+    return <span style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>...</span>;
   }
 
   if (isPro) {
@@ -104,21 +104,21 @@ export function SubscriptionStatus({ app, showUpgrade = true }: SubscriptionStat
     return (
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
         <ProBadge size="md" />
-        {renewal && <span style={{ fontSize: '0.75rem', color: 'var(--muted, #64748b)' }}>{renewal}</span>}
+        {renewal && <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{renewal}</span>}
       </span>
     );
   }
 
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
-      <span style={{ fontSize: '0.85rem', color: 'var(--muted, #64748b)' }}>Free plan</span>
+      <span style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>Free plan</span>
       {showUpgrade && (
         <button
           onClick={() => upgrade()}
           style={{
             background: 'none',
-            border: '1px solid var(--accent, #7c3aed)',
-            color: 'var(--accent, #7c3aed)',
+            border: '1px solid var(--accent)',
+            color: 'var(--accent)',
             padding: '0.2rem 0.6rem',
             borderRadius: 'var(--radius-sm, 0.5rem)',
             fontSize: '0.75rem',
@@ -158,32 +158,32 @@ export function UpgradeCard({
 
   return (
     <div style={{
-      background: 'var(--surface, #ffffff)',
-      border: '1px solid var(--accent, #7c3aed)',
+      background: 'var(--panel)',
+      border: '1px solid var(--accent)',
       borderRadius: 'var(--radius, 0.75rem)',
       padding: '1.75rem',
       maxWidth: 400,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-        <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--ink-strong, var(--ink, #0f172a))', margin: 0 }}>
+        <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--ink-strong)', margin: 0 }}>
           {title}
         </h3>
         <ProBadge size="md" />
       </div>
-      <p style={{ fontSize: '0.9rem', color: 'var(--muted, #64748b)', marginBottom: '1rem' }}>{description}</p>
+      <p style={{ fontSize: '0.9rem', color: 'var(--muted)', marginBottom: '1rem' }}>{description}</p>
       {features.length > 0 && (
         <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 1.25rem' }}>
           {features.map((f, i) => (
             <li key={i} style={{
               padding: '0.35rem 0',
               fontSize: '0.85rem',
-              color: 'var(--ink, #1e293b)',
-              borderBottom: '1px solid var(--border, #e2e8f0)',
+              color: 'var(--ink)',
+              borderBottom: '1px solid var(--line)',
               display: 'flex',
               alignItems: 'center',
               gap: '0.5rem',
             }}>
-              <span style={{ color: 'var(--accent, #7c3aed)', fontWeight: 700 }}>+</span>
+              <span style={{ color: 'var(--accent)', fontWeight: 700 }}>+</span>
               {f}
             </li>
           ))}
@@ -193,7 +193,7 @@ export function UpgradeCard({
         onClick={() => upgrade()}
         style={{
           width: '100%',
-          background: 'var(--accent, #7c3aed)',
+          background: 'var(--accent)',
           color: '#fff',
           border: 'none',
           padding: '0.75rem',
@@ -245,9 +245,9 @@ export function BillingButton({ app: appProp, label = 'Manage billing', variant 
   };
 
   const variants: Record<string, React.CSSProperties> = {
-    primary: { ...baseStyle, background: 'var(--accent, #7c3aed)', color: '#fff', border: 'none' },
-    secondary: { ...baseStyle, background: 'transparent', color: 'var(--ink, #1e293b)', border: '1px solid var(--border, #e2e8f0)' },
-    ghost: { ...baseStyle, background: 'none', color: 'var(--accent, #7c3aed)', border: 'none', padding: '0.4rem 0.75rem' },
+    primary: { ...baseStyle, background: 'var(--accent)', color: '#fff', border: 'none' },
+    secondary: { ...baseStyle, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)' },
+    ghost: { ...baseStyle, background: 'none', color: 'var(--accent)', border: 'none', padding: '0.4rem 0.75rem' },
   };
 
   return (

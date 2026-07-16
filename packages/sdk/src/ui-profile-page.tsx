@@ -22,13 +22,13 @@ export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePagePr
   const { preference, setPreference } = useTheme();
 
   if (loading) {
-    return <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--muted, #64748b)' }}>Loading...</div>;
+    return <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--muted)' }}>Loading...</div>;
   }
 
   if (!user) {
     return (
       <div style={{ padding: '2rem', textAlign: 'center' }}>
-        <p style={{ color: 'var(--muted, #64748b)', marginBottom: '1rem' }}>Sign in to view your profile.</p>
+        <p style={{ color: 'var(--muted)', marginBottom: '1rem' }}>Sign in to view your profile.</p>
         <SignInButton {...(app ? { app } : {})} />
       </div>
     );
@@ -54,31 +54,31 @@ export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePagePr
         {user.avatarUrl ? (
           <img src={user.avatarUrl} alt={user.login} width={64} height={64} style={{ borderRadius: '50%' }} />
         ) : (
-          <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'var(--accent, #7c3aed)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, fontWeight: 700 }}>
+          <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, fontWeight: 700 }}>
             {user.login.charAt(0).toUpperCase()}
           </div>
         )}
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--ink-strong, var(--ink, #0f172a))' }}>{user.login}</span>
+            <span style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--ink-strong)' }}>{user.login}</span>
             {isPro && <ProBadge size="md" />}
           </div>
-          <div style={{ fontSize: '0.85rem', color: 'var(--muted, #64748b)' }}>ProAppStore account</div>
+          <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>ProAppStore account</div>
         </div>
       </div>
 
       {/* Subscription section */}
       <Section title="Subscription">
         {subLoading ? (
-          <p style={{ fontSize: '0.85rem', color: 'var(--muted, #64748b)' }}>Loading...</p>
+          <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>Loading...</p>
         ) : isPro ? (
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
               <ProBadge size="lg" />
-              <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--ink, #1e293b)' }}>Active</span>
+              <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--ink)' }}>Active</span>
             </div>
             {subscription?.currentPeriodEnd && (
-              <p style={{ fontSize: '0.82rem', color: 'var(--muted, #64748b)', marginBottom: '0.75rem' }}>
+              <p style={{ fontSize: '0.82rem', color: 'var(--muted)', marginBottom: '0.75rem' }}>
                 {subscription.cancelAtPeriodEnd ? 'Cancels' : 'Renews'} on {new Date(subscription.currentPeriodEnd).toLocaleDateString()}
               </p>
             )}
@@ -86,13 +86,13 @@ export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePagePr
           </div>
         ) : (
           <div>
-            <p style={{ fontSize: '0.85rem', color: 'var(--muted, #64748b)', marginBottom: '0.75rem' }}>
+            <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '0.75rem' }}>
               You're on the free plan. Upgrade to unlock all premium features.
             </p>
             <button
               onClick={() => upgrade()}
               style={{
-                background: 'var(--accent, #7c3aed)', color: '#fff', border: 'none',
+                background: 'var(--accent)', color: '#fff', border: 'none',
                 padding: '0.6rem 1.25rem', borderRadius: 'var(--radius, 0.75rem)',
                 fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
               }}
@@ -114,9 +114,9 @@ export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePagePr
                 style={{
                   flex: 1, padding: '0.5rem',
                   borderRadius: 'var(--radius-sm, 0.5rem)',
-                  border: preference === opt.value ? '2px solid var(--accent, #7c3aed)' : '1px solid var(--border, #e2e8f0)',
-                  background: preference === opt.value ? 'var(--accent-soft, #f5f3ff)' : 'transparent',
-                  color: preference === opt.value ? 'var(--accent, #7c3aed)' : 'var(--muted, #64748b)',
+                  border: preference === opt.value ? '2px solid var(--accent)' : '1px solid var(--line)',
+                  background: preference === opt.value ? 'var(--accent-soft)' : 'transparent',
+                  color: preference === opt.value ? 'var(--accent)' : 'var(--muted)',
                   fontWeight: preference === opt.value ? 700 : 500,
                   fontSize: '0.85rem', cursor: 'pointer', fontFamily: 'inherit',
                 }}
@@ -134,9 +134,9 @@ export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePagePr
         style={{
           width: '100%', padding: '0.75rem',
           borderRadius: 'var(--radius, 0.75rem)',
-          border: '1px solid var(--border, #e2e8f0)',
-          background: 'var(--surface, #ffffff)',
-          color: 'var(--ink, #1e293b)',
+          border: '1px solid var(--line)',
+          background: 'var(--panel)',
+          color: 'var(--ink)',
           fontSize: '0.9rem', fontWeight: 600,
           cursor: 'pointer', marginBottom: '1.5rem', fontFamily: 'inherit',
         }}
@@ -147,7 +147,7 @@ export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePagePr
       {/* Danger zone */}
       <div style={{ border: '1px solid #fecaca', borderRadius: 'var(--radius, 0.75rem)', padding: '1.25rem' }}>
         <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#dc2626', marginBottom: '0.5rem' }}>Danger zone</div>
-        <p style={{ fontSize: '0.85rem', color: 'var(--muted, #64748b)', marginBottom: '0.75rem' }}>
+        <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '0.75rem' }}>
           Permanently delete your account and all data across all apps.
           {isPro && ' Your subscription will be cancelled.'}
         </p>
@@ -174,13 +174,13 @@ export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePagePr
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div style={{
-      background: 'var(--surface, #ffffff)',
-      border: '1px solid var(--border, #e2e8f0)',
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
       borderRadius: 'var(--radius, 0.75rem)',
       padding: '1.25rem',
       marginBottom: '1rem',
     }}>
-      <div style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '0.75rem', color: 'var(--ink, #1e293b)' }}>{title}</div>
+      <div style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '0.75rem', color: 'var(--ink)' }}>{title}</div>
       {children}
     </div>
   );

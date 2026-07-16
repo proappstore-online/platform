@@ -172,7 +172,7 @@ export function ProShell({
   const footer = renderFooter ? renderFooter(shellContext) : hideFooter ? null : (
     <footer style={styles.footer}>
       Part of{' '}
-      <a href="https://proappstore.online" style={{ color: 'var(--accent, #7c3aed)', fontWeight: 600, textDecoration: 'none' }}>
+      <a href="https://proappstore.online" style={{ color: 'var(--accent)', fontWeight: 600, textDecoration: 'none' }}>
         ProAppStore
       </a>
     </footer>
@@ -198,7 +198,7 @@ const menuItemStyle: React.CSSProperties = {
   display: 'block', width: '100%', padding: '0.5rem 1rem',
   background: 'none', border: 'none', textAlign: 'left',
   fontSize: '0.85rem', cursor: 'pointer',
-  color: 'var(--ink, #1e293b)', fontFamily: 'inherit',
+  color: 'var(--ink)', fontFamily: 'inherit',
 };
 
 const styles: Record<string, React.CSSProperties> = {
@@ -206,17 +206,17 @@ const styles: Record<string, React.CSSProperties> = {
   topbar: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '0.5rem 1rem',
-    borderBottom: '1px solid var(--border, #e2e8f0)',
-    background: 'var(--surface, #ffffff)',
+    borderBottom: '1px solid var(--line)',
+    background: 'var(--panel)',
     position: 'sticky', top: 0, zIndex: 50,
   },
   topbarLeft: { display: 'flex', alignItems: 'center', gap: '0.75rem' },
-  logoLink: { fontWeight: 800, fontSize: '1rem', color: 'var(--accent, #7c3aed)', textDecoration: 'none' },
-  appName: { fontSize: '0.85rem', fontWeight: 600, color: 'var(--muted, #64748b)' },
+  logoLink: { fontWeight: 800, fontSize: '1rem', color: 'var(--accent)', textDecoration: 'none' },
+  appName: { fontSize: '0.85rem', fontWeight: 600, color: 'var(--muted)' },
   main: { flex: 1, display: 'flex', flexDirection: 'column' },
   footer: {
     padding: '1rem', textAlign: 'center', fontSize: '0.75rem',
-    color: 'var(--muted, #64748b)',
-    borderTop: '1px solid var(--border, #e2e8f0)',
+    color: 'var(--muted)',
+    borderTop: '1px solid var(--line)',
   },
 };

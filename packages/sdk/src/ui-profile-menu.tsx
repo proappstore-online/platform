@@ -51,7 +51,7 @@ export function ProfileMenu({ app, showThemeToggle = true, showBilling = true, c
         onClick={() => setOpen(!open)}
         style={{
           background: 'none',
-          border: '2px solid var(--border, #e2e8f0)',
+          border: '2px solid var(--line)',
           borderRadius: '50%',
           padding: 0,
           cursor: 'pointer',
@@ -64,7 +64,7 @@ export function ProfileMenu({ app, showThemeToggle = true, showBilling = true, c
         {user.avatarUrl ? (
           <img src={user.avatarUrl} alt={user.login} width={28} height={28} style={{ borderRadius: '50%', display: 'block' }} />
         ) : (
-          <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'var(--accent, #7c3aed)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700 }}>
+          <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700 }}>
             {user.login.charAt(0).toUpperCase()}
           </div>
         )}
@@ -72,21 +72,21 @@ export function ProfileMenu({ app, showThemeToggle = true, showBilling = true, c
       {open && (
         <div style={{
           position: 'absolute', top: 40, right: 0,
-          background: 'var(--surface, #ffffff)',
-          border: '1px solid var(--border, #e2e8f0)',
+          background: 'var(--panel)',
+          border: '1px solid var(--line)',
           borderRadius: 'var(--radius, 0.75rem)',
           boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
           minWidth: 220, padding: '0.5rem 0', zIndex: 100,
         }}>
           {/* Header with name + badge */}
-          <div style={{ padding: '0.5rem 1rem', borderBottom: '1px solid var(--border, #e2e8f0)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <strong style={{ fontSize: '0.85rem', color: 'var(--ink, #1e293b)' }}>{user.login}</strong>
+          <div style={{ padding: '0.5rem 1rem', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <strong style={{ fontSize: '0.85rem', color: 'var(--ink)' }}>{user.login}</strong>
             {isPro && <ProBadge />}
           </div>
           {/* Theme toggle */}
           {showThemeToggle && (
-            <div style={{ padding: '0.5rem 1rem', borderBottom: '1px solid var(--border, #e2e8f0)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: '0.85rem', color: 'var(--muted, #64748b)' }}>Theme</span>
+            <div style={{ padding: '0.5rem 1rem', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>Theme</span>
               <ThemeToggleInline />
             </div>
           )}
@@ -129,8 +129,8 @@ function ThemeToggleInline() {
   return (
     <button onClick={cycle} aria-label={`Theme: ${preference}`} style={{
       width: 32, height: 32, borderRadius: 'var(--radius-sm, 0.5rem)',
-      border: '1px solid var(--border, #e2e8f0)', background: 'var(--surface, #ffffff)',
-      color: 'var(--ink, #1e293b)', display: 'inline-flex', alignItems: 'center',
+      border: '1px solid var(--line)', background: 'var(--panel)',
+      color: 'var(--ink)', display: 'inline-flex', alignItems: 'center',
       justifyContent: 'center', cursor: 'pointer', padding: 0, fontFamily: 'inherit',
     }}>
       {icon}
@@ -142,5 +142,5 @@ const menuItemStyle: React.CSSProperties = {
   display: 'block', width: '100%', padding: '0.5rem 1rem',
   background: 'none', border: 'none', textAlign: 'left',
   fontSize: '0.85rem', cursor: 'pointer',
-  color: 'var(--ink, #1e293b)', fontFamily: 'inherit',
+  color: 'var(--ink)', fontFamily: 'inherit',
 };

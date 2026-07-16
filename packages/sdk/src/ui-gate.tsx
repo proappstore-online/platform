@@ -19,7 +19,7 @@ export function GateScreen({ gate, app, appName }: GateScreenProps) {
   if (gate === 'loading') {
     return (
       <div style={{ minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <p style={{ color: 'var(--muted, #64748b)' }}>Loading...</p>
+        <p style={{ color: 'var(--muted)' }}>Loading...</p>
       </div>
     );
   }
@@ -28,14 +28,14 @@ export function GateScreen({ gate, app, appName }: GateScreenProps) {
     return (
       <div style={{ minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
         <div style={{ maxWidth: 400, textAlign: 'center' }}>
-          <h1 style={{ fontSize: '1.5rem', fontWeight: 800, marginBottom: '0.5rem', color: 'var(--ink, #1e293b)' }}>
+          <h1 style={{ fontSize: '1.5rem', fontWeight: 800, marginBottom: '0.5rem', color: 'var(--ink)' }}>
             {appName || 'ProAppStore'}
           </h1>
-          <p style={{ color: 'var(--muted, #64748b)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+          <p style={{ color: 'var(--muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
             Sign in to your ProAppStore account to continue.
           </p>
           <SignInButton {...(app ? { app } : {})} />
-          <p style={{ color: 'var(--muted, #64748b)', fontSize: '0.75rem', marginTop: '0.75rem' }}>
+          <p style={{ color: 'var(--muted)', fontSize: '0.75rem', marginTop: '0.75rem' }}>
             One account for all Pro apps.
           </p>
         </div>
