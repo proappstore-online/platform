@@ -51,7 +51,9 @@ async function corsOrigin(env: Env, origin: string | undefined): Promise<string 
     const host = new URL(origin).hostname.toLowerCase();
     if (host === 'localhost' || host === '127.0.0.1') return origin;
     if (host.endsWith('.proappstore.online') || host === 'proappstore.online') return origin;
-    if (host.endsWith('.freeappstore.online') || host === 'freeappstore.online') return origin;
+    // NOTE: freeappstore.online origins are intentionally NOT trusted — PAS's API
+    // is separate from FreeAppStore (identity-separation, #61). A FAS-hosted page
+    // cannot make credentialed cross-origin calls to the PAS API.
     if (host.endsWith('.pages.dev') && host.includes('proappstore')) return origin;
     if (await customDomainOriginAllowed(env.DB, host)) return origin;
     return null;
