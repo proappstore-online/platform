@@ -71,7 +71,7 @@ Both adapters run an in-Worker tool loop. Shipped hardening:
 - **Truncation recovery**: a `max_tokens`-truncated turn with no tool calls is
   continued ("Continue."), not treated as done — fixed agents "going in circles".
 - **Per-role `max_tokens`** is configurable (`role_configs.max_tokens`); defaults
-  Dev 16384 / BA·QA 8192.
+  Architect·Dev·QA 16384 / BA 8192.
 - **Prompt caching**: system + tools + the rolling last message are marked
   `cache_control: ephemeral` (≤4 breakpoints) — cuts input-token cost ~90% on hits
   across the loop. `cache_read`/`cache_creation` tokens are counted toward usage so

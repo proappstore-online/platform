@@ -20,7 +20,7 @@ stays small and it does that job well):
 | **Architect** | Research-tab chat **+** build | Researches the app and authors the project docs (`KNOWLEDGE.md` + `docs/`) the whole team builds against. Designs the intended MCP tool surface. | `write_file`, `batch_write_files`, `read_file`, `list_files`, `search_files`, `read_docs`, `remember` |
 | **BA** | Build | Turns a ticket into a crisp, buildable spec with concrete acceptance criteria. | read-only + `read_docs` |
 | **Dev** | Build | Implements the approved spec with the PAS SDK; authors the app's `mcp.json`. | `write_file`, `batch_write_files`, `read_file`, `list_files`, `search_files`, `read_docs` |
-| **QA** | Build | Writes Playwright E2E specs that gate the deploy against the live app. | `write_file`, `read_file`, `list_files`, `search_files`, `read_docs` |
+| **QA** | Build | Writes vitest unit + integration tests from the acceptance criteria; these run in CI and gate the deploy. (Playwright E2E is a separate on-demand Test-tab surface — see the README.) | `write_file`, `read_file`, `list_files`, `search_files`, `read_docs` |
 
 The **PO** and **Architect-chat** are conversational; **BA/Dev/QA** (and the
 Architect's project-docs build run) execute against the ticket pipeline. The Architect is

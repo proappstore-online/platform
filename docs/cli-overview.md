@@ -27,7 +27,7 @@ pas create <app-id> --repo org/name # scaffold + create GitHub repo + push
 pas check                           # run platform compliance checks locally
 
 # Publish
-pas publish                         # provision CF Pages + DNS + D1 + Data Worker
+pas publish                         # provision R2 route + D1 + Data Worker
 pas publish --name "My App"         # with display name
 pas publish --category productivity # with store category
 
@@ -99,16 +99,24 @@ generated app workflows as report-only guidance.
 
 ## Publish
 
-`pas publish` reads `package.json` for the app ID, then provisions:
+`pas publish` reads `package.json` for the app ID, then calls `/v1/provision`
+on the PAS backend, which provisions:
 
-1. CF Pages project (`proappstore-<id>`)
-2. DNS CNAME (`<id>.proappstore.online`)
-3. Custom domain on the Pages project
-4. D1 database (`pas-data-<id>`)
-5. Data Worker (`data-<id>.proappstore.online`)
-6. App record in the platform database
-7. PAS proxy/secrets metadata for the app
-8. Deploy secret on external-org repos (auto-sets `CLOUDFLARE_API_TOKEN`)
+1. Compliance check (fetches the repo from GitHub, runs platform checks)
+2. R2 route in the host Worker (`<id>.proappstore.online` → `apps/<id>/`)
+3. D1 database (`pas-data-<id>`)
+4. Data Worker (`data-<id>.proappstore.online`)
+5. App record in the platform database (auto-seeds a developer profile)
+
+Hosting is Path B: a single host Worker serves `*.proappstore.online` from R2 —
+there is no per-app CF Pages project or per-app DNS record. Apps deploy via
+GitHub Actions → R2 upload.
+
+After a successful provision the CLI also registers MCP tools from `mcp.json`
+(if present) and ensures the app repo's R2 deploy secrets (`R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`) — for `proappstore-online` repos it
+dispatches the secret-reconcile workflow; external-org repos get printed
+instructions.
 
 Idempotent — re-running fills in only missing pieces.
 

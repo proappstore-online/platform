@@ -102,21 +102,25 @@ CREATE TABLE entitlement_audit (
 );
 ```
 
-Migrations land in `packages/backend/migrations/000N_*.sql`.
+Migrations land in the repo-root `migrations/000N_*.sql` (wired to the backend
+via `migrations_dir = "../../migrations"` in `packages/backend/wrangler.toml`).
 
 ## Webhook events handled
 
 | Event | Action |
 |---|---|
-| `checkout.session.completed` | upsert subscription, set tier, current_period_end |
-| `customer.subscription.updated` | update tier / period / cancel flag |
-| `customer.subscription.deleted` | mark inactive |
-| `invoice.paid` | extend current_period_end |
-| `invoice.payment_failed` | flag past_due, optionally email customer |
-| `customer.subscription.trial_will_end` | optional notification |
+| `checkout.session.completed` | upsert subscription, set `status='active'`, `tier='pro'` |
+| `customer.subscription.updated` | update status / price_id / period / cancel flag (reads `current_period_end` from `items.data[0]` first, falls back to the legacy top-level field) |
+| `customer.subscription.deleted` | mark `status='canceled'`, `tier='free'` (terminal) |
+| `invoice.payment_failed` | mark `status='past_due'` |
 
-Webhook signature verification uses `STRIPE_WEBHOOK_SECRET`. Idempotency
-keys prevent duplicate processing.
+`invoice.paid` and `customer.subscription.trial_will_end` are **not** handled
+yet.
+
+Webhook signature verification uses `STRIPE_WEBHOOK_SECRET`. Every handler SETs
+absolute state (never increments), so retries are idempotent; `updated` /
+`payment_failed` guard on `status != 'canceled'` so an out-of-order event can't
+resurrect a canceled subscription.
 
 ## Differences between Tailored and Ready
 

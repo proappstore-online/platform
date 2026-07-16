@@ -9,23 +9,30 @@ ProAppStore admin Worker: automated app provisioning.
 
 ## What it does
 
-`POST /api/publish-app` provisions a new PAS app end-to-end:
+`POST /api/publish-app` provisions a new PAS app end-to-end. This is **Path B**
+hosting — a single host Worker + R2, no per-app CF Pages project:
 
 1. Create GitHub repo in `proappstore-online` org
-2. Create CF Pages project `proappstore-{id}`
-3. Add custom domain `{id}.proappstore.online` to Pages
-4. Create DNS CNAME → `proappstore-{id}.pages.dev`
-5. Add entry to storefront `registry.json`
-6. Provision CF Web Analytics RUM site
+2. Grant the creator push access to their repo (non-fatal)
+3. Insert an R2 route (`<id>.proappstore.online → apps/<id>/`) into the host
+   Worker's `routes` table in D1
+4. Add entry to storefront `registry.json`
+5. Provision CF Web Analytics RUM site (non-fatal)
+6. Dispatch the `reconcile-app-secrets` workflow so the new repo gets R2 deploy
+   creds as repo-level secrets before its first deploy
 
 Idempotent — re-running on a partially-provisioned app fills in only missing pieces.
+The same provisioning core also backs `/api/agent-deploy` (Agent Teams deploy)
+and a durable Cloudflare Workflow variant (`/api/provision-workflow`).
 
 ## Secrets (already set)
 
-| Secret | Purpose | Token name in CF dashboard |
-|---|---|---|
-| `CF_API_TOKEN` | Pages:Edit + DNS:Edit on `proappstore.online` | `ProAppStore Admin Worker` |
-| `GITHUB_TOKEN` | Fine-grained PAT for `proappstore-online` org (Contents + Admin R/W) | `ProAppStore Admin Worker` |
+| Secret | Purpose |
+|---|---|
+| `CF_API_TOKEN` | CF API token — provisions the CF Web Analytics RUM site (Path B needs no per-app Pages/DNS) |
+| `GITHUB_TOKEN` | Fine-grained PAT for `proappstore-online` org (Contents + Admin R/W) |
+| `SESSION_SIGNING_KEY` | HS256 key (shared with FAS auth) — verifies the Bearer session token on `/api/publish-app` |
+| `INTERNAL_TOKEN` | Shared secret for internal service-to-service calls (e.g. agent-teams → `/api/agent-deploy`) |
 
 ## Usage
 
@@ -42,16 +49,22 @@ curl -X POST https://proappstore-admin.serge-the-dev.workers.dev/api/publish-app
   }'
 ```
 
-**Note:** No auth on the endpoint yet. Add CF Access or bearer token before exposing publicly.
+**Auth:** `/api/publish-app` requires a verified Bearer session token (validated
+against `SESSION_SIGNING_KEY`); internal endpoints use `INTERNAL_TOKEN`.
 
 ## Layout
 
 ```
 admin/
 ├── src/
-│   ├── index.ts     ← router: /health, /api/publish-app
-│   ├── publish.ts   ← 7-step publish handler
-│   └── env.ts       ← binding types
+│   ├── index.ts              ← router: /health, /v1/auth/*, /api/publish-app,
+│   │                            /api/agent-deploy, /api/publish-kb, /api/repo-pull,
+│   │                            /api/deploy-status, /api/provision-workflow*, /api/apps
+│   ├── publish.ts            ← Path B provision core (repo + R2 route + registry + analytics)
+│   ├── provision-workflow.ts ← durable Cloudflare Workflow variant
+│   ├── auth.ts               ← session-token verification
+│   ├── e2e-harness.ts        ← injected Playwright E2E workflow
+│   └── env.ts                ← binding types
 ├── wrangler.toml
 └── package.json
 ```

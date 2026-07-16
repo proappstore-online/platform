@@ -64,10 +64,12 @@ Lives at `api.proappstore.online`. Source:
   / lightweight multiplayer.
 - **Roles:** app-level owner/moderator/editor/viewer roles plus app-defined
   assignments.
-- **Publishing/provisioning:** validates publish requests and provisions Pages,
-  DNS, D1, data workers, and app metadata without a FAS admin proxy.
-- **Stripe webhook receiver:** `subscription.created`, `updated`,
-  `deleted`, `invoice.paid`, `customer.subscription.trial_will_end`.
+- **Publishing/provisioning:** validates publish requests and provisions R2 host
+  routes (D1 routes table, Path B), D1, data workers, and app metadata without a
+  FAS admin proxy.
+- **Stripe webhook receiver:** `checkout.session.completed`,
+  `customer.subscription.updated`, `customer.subscription.deleted`,
+  `invoice.payment_failed`.
 - **Checkout & portal redirects:** open Stripe Checkout for a price,
   open the customer portal for an existing subscription.
 - **Entitlements:** `subscriptions` table in PAS D1 keyed by
@@ -78,7 +80,8 @@ Lives at `api.proappstore.online`. Source:
 - **Session validation:** verifies PAS session JWTs locally with
   `SESSION_SIGNING_KEY`.
 
-D1 binding: `DB`. Migrations directory under `packages/backend/migrations`.
+D1 binding: `DB`. Migrations live at the repo-root `migrations/`, wired via
+`migrations_dir = "../../migrations"` in `packages/backend/wrangler.toml`.
 
 ### 2. PAS provisioning — self-contained
 
@@ -103,7 +106,7 @@ all the CF API + GitHub calls happen from the PAS Worker directly:
 Step 4 is the meaningful branch and the work item that unblocks any
 non-toy Tailored template. See [publishing flow](/publishing-flow).
 
-The standalone `proappstore-admin` Worker (source: `~/dev/stores/pas/admin`)
+The `proappstore-admin` Worker (source: `packages/admin` in this monorepo)
 is a separate dashboard endpoint at `admin.proappstore.online` that
 exposes `/api/publish-app` for owner-driven catalog edits — it's not on
 the CLI publish path.

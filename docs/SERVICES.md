@@ -115,6 +115,7 @@ CREATE TABLE client_balances (
   balance_cents INTEGER NOT NULL DEFAULT 0,
   total_deposited_cents INTEGER NOT NULL DEFAULT 0,
   total_spent_cents INTEGER NOT NULL DEFAULT 0,
+  stripe_customer_id TEXT,               -- created lazily on first deposit
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -160,6 +161,8 @@ CREATE TABLE engagements (
   total_charged_cents INTEGER NOT NULL DEFAULT 0,
   total_dev_earned_cents INTEGER NOT NULL DEFAULT 0,
   total_platform_fee_cents INTEGER NOT NULL DEFAULT 0,
+  total_refunded_cents INTEGER NOT NULL DEFAULT 0,  -- migration 0040; caps refunds + drives clawback
+  payout_month TEXT,                     -- YYYY-MM once the payout cron has paid this engagement
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -190,6 +193,21 @@ CREATE TABLE engagement_ratings (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX idx_ratings_dev ON engagement_ratings(developer_id);
+
+-- Monthly developer payout records (one per developer per month)
+CREATE TABLE service_payouts (
+  id TEXT PRIMARY KEY,
+  developer_id TEXT NOT NULL,
+  payout_month TEXT NOT NULL,            -- YYYY-MM
+  amount_cents INTEGER NOT NULL,
+  engagement_count INTEGER NOT NULL,
+  stripe_transfer_id TEXT NOT NULL,
+  stripe_connect_account_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+-- Idempotency: one payout per developer per month.
+CREATE UNIQUE INDEX idx_service_payouts_dev_month ON service_payouts(developer_id, payout_month);
+CREATE INDEX idx_service_payouts_month ON service_payouts(payout_month);
 ```
 
 ## API routes
@@ -227,12 +245,15 @@ GET    /services/engagements            -- list own engagements (client or dev)
 GET    /services/engagements/:id        -- single engagement
 PATCH  /services/engagements/:id        -- update status (deliver, cancel)
 POST   /services/engagements/:id/rate   -- client rates the dev
+POST   /services/engagements/:id/refund -- admin-only: refund the client (partial or full)
 ```
 
 ### Service chat
 ```
 GET    /services/engagements/:id/messages       -- message history
 POST   /services/engagements/:id/messages       -- send message (charges if dev)
+GET    /services/engagements/:id/workspace      -- workspace link (read-only for client)
+POST   /services/engagements/:id/workspace      -- dev links an agent-teams project
 ```
 
 ## Charging flow (per dev message)
@@ -250,6 +271,21 @@ Developer sends message →
   7. Store the message with charged=1, charge_cents=prompt_rate_cents
   8. At month end: transfer total_dev_earned_cents to dev's Stripe Connect
 ```
+
+## Refund flow (admin only)
+
+`POST /services/engagements/:id/refund` (guarded by `ADMIN_GITHUB_IDS`) credits
+the client and, in the same atomic batch, reverses the split so the payout cron
+doesn't pay the developer for refunded work:
+
+- Cap: a refund can't exceed `total_charged_cents - total_refunded_cents`
+  (netting cumulative refunds so a double-submit can't over-credit the client).
+- Clawback: `total_refunded_cents += amount`, and the developer's proportional
+  share (90%) plus the platform fee (10%) are clawed back out of
+  `total_dev_earned_cents` / `total_platform_fee_cents` (never driven negative).
+- If the engagement was already paid out (`payout_month` set), the dev's share
+  is already gone via Stripe; the response flags `clawbackAlreadyPaid` so an
+  admin knows a manual reversal is still needed.
 
 ## Console UI
 
@@ -297,8 +333,10 @@ Developer sends message →
 
 ### Remaining
 - [ ] Quality score cron job (scheduled Worker that calls /services/recompute-stats + LLM judge)
-- [ ] Dev payout cron (transfer total_dev_earned_cents to Stripe Connect at month end)
-- [ ] Wire engagement to agent-teams project (needs service binding or API call)
+- [~] Dev payout — logic + endpoint built (`POST /v1/internal/payouts/run`,
+  transfers `total_dev_earned_cents` to Stripe Connect, records `service_payouts`,
+  stamps `payout_month`); the scheduled cron trigger isn't wired yet (no cron in `wrangler.toml`)
+- [ ] Wire engagement to agent-teams project (workspace link endpoints exist; no auto-provision service binding)
 - [ ] Push notifications for new messages (WebPush via existing infrastructure)
 
 ## What this doesn't change

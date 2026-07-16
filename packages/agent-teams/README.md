@@ -77,9 +77,11 @@ BYO API keys ◄─ PAS backend key vault (/keys/resolve, INTERNAL_TOKEN)
 ```
 
 The DO class is a thin orchestrator; cohesive logic lives in sibling modules:
-`deploy-stage.ts` (push + CI-verify), `po-chat.ts` (PO chat handler),
+`deploy-stage.ts` (push + CI-verify), the three chat handlers — `po-chat.ts`
+(Build/PO), `architect-chat.ts` (Research/KB), `qa-chat.ts` (Test-tab QA) —
 `agent-runner.ts` (one agent turn), `prompts.ts` (seed + PO system prompts),
-`store.ts` (`SCHEMA` + append-only `MIGRATIONS`).
+`store.ts` (`SCHEMA` + append-only `MIGRATIONS`). `handleChat` dispatches by
+thread: `research` → Architect, `test` → QA, else → PO.
 
 ### GitHub is the source of truth
 `project_files` in the DO is a **cache**, not a second authority. Before every run

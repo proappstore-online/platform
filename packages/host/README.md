@@ -4,7 +4,8 @@ ProAppStore host Worker: serves every published app from R2 via subdomain
 routing at `<slug>.proappstore.online`. Path B canonical implementation
 for PAS.
 
-**Status:** v0.1 scaffolding. Not deployed. No GitHub remote yet.
+**Status:** live (v1.0.0). Wildcard route `*.proappstore.online/*` enabled;
+serves apps from R2 and dispatches reserved subdomains.
 
 ## Origin
 
@@ -30,30 +31,33 @@ Per the `wildcard-worker-route-preemption` memory:
 > + CF Pages binding on that zone; enumerate every subdomain before
 > deploying any such wildcard
 
-The `*.proappstore.online/*` route on this Worker preempts:
-- `admin.proappstore.online` (pas/admin Worker)
-- `api.proappstore.online` (pas/platform/packages/backend)
-- `data-*.proappstore.online` (pas/platform/packages/data-worker, per-app D1)
-- any future subdomain Worker on this zone
+The `*.proappstore.online/*` route on this Worker preempts every sibling
+subdomain on the zone. The Worker dispatches the reserved subdomains
+(`RESERVED_SUBDOMAINS` in `src/host.ts`): `api`, `admin`, `agents`, `mcp`,
+`kb`, `docs`, `www`, `console`, `dashboard` — plus `data-*.proappstore.online`
+(per-app D1 Workers, proxied via fetch since they're created dynamically).
+`api`/`admin`/`agents`/`mcp`/`kb` go over zero-hop service bindings; `console`
+and `dashboard` are proxied to their CF Pages projects. See the dispatch
+branches at the top of `src/index.ts`.
 
-So this Worker MUST dispatch reserved subdomains via service bindings.
-See `RESERVED_SUBDOMAINS` in `src/host.ts` and the dispatch branches in
-`src/index.ts` (stage-0 work).
-
-## v0.1 Layout
+## Layout
 
 ```
 host/
-├── package.json     ← @proappstore/host (private)
+├── package.json          ← @proappstore/host (private)
 ├── tsconfig.json
-├── wrangler.toml    ← scaffolded; route NOT enabled (wildcard caution)
+├── wrangler.toml         ← wildcard route *.proappstore.online/* ENABLED
 ├── biome.json
 ├── .gitignore
 ├── README.md
 └── src/
-    ├── index.ts     ← Wildcard dispatch + R2 serve (stub in v0.1)
-    ├── env.ts       ← binding types
-    └── host.ts      ← slugFromHostname + RESERVED_SUBDOMAINS
+    ├── index.ts          ← reserved-subdomain dispatch + R2 serve
+    ├── env.ts            ← binding types
+    ├── host.ts           ← slugFromHostname + RESERVED_SUBDOMAINS + route lookup
+    ├── auth-handler.ts   ← same-origin platform auth routes
+    ├── platform-mediation.ts ← platform SDK mediation
+    ├── meta-rewriter.ts  ← injects listing/tenant meta tags into served HTML
+    └── qa-runner.ts      ← observable QA runner served at /__qa/
 ```
 
 ## Pre-deploy checklist (stage 0)

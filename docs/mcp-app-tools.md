@@ -51,10 +51,15 @@ format, authenticated app-data auth is represented by:
 { "requires_auth": true }
 ```
 
-When an authenticated MCP connection calls a tool, the platform MCP server has
-the caller's PAS session token and user id. It injects magic placeholders such
-as `:__user_id`, `:__now`, and `:__uuid`, then sends the prepared SQL to the
-app's data worker with the caller's bearer token.
+When an authenticated MCP connection calls a tool, the platform MCP server
+forwards the call to the platform action executor
+(`/v1/apps/:appId/actions/:name`) with the caller's PAS session token and user
+id. The executor injects magic placeholders such as `:__user_id`, `:__now`, and
+`:__uuid`, then forwards the prepared, role-checked SQL to the app's data worker
+over the trusted `X-Internal-Token` path — so the call runs for any
+authenticated user, not just the app's owner. (The caller's bearer token is
+forwarded too, for compatibility with un-redeployed data workers, but the data
+worker authorizes the executor via the internal token.)
 
 For app tools, authentication answers "who is this user?" Authorization still
 belongs in the tool SQL or the app's data model. Scope reads and writes with
@@ -87,7 +92,7 @@ tools. In all cases, keep row-level checks in SQL:
 - Use app data that mirrors PAS roles if the tool needs role-specific access.
 - Keep all tools that touch user or app data marked with `requires_auth: true`.
 
-The intended manifest extension is to add explicit auth metadata, for example:
+Add explicit auth metadata to gate a tool by role, for example:
 
 ```json
 {
@@ -247,8 +252,12 @@ so tool listing and tool calls are tied to a user.
 - **Per-user scoped.** `:__user_id` + `requires_auth` keep a user's data scoped
   to them. Public tools cannot reference `:__user_id`.
 - **Role-aware before SQL.** Manifest `auth.platform_roles` and
-  `auth.app_roles` are checked by the platform action executor. Still check
-  domain-specific row permissions in SQL.
+  `auth.app_roles` are checked by the platform action executor (the live
+  authority). The MCP server additionally pre-flights `auth.platform_roles` at
+  the edge for a fast, clear rejection; `auth.app_roles` are *not* pre-checked
+  there, because a session's per-app roles can lag a just-granted role, so the
+  executor verifies those live against D1. Still check domain-specific row
+  permissions in SQL.
 - **Mutations are constrained** — `UPDATE`/`DELETE` require a `WHERE`; no DDL.
 
 ## Limits & roadmap

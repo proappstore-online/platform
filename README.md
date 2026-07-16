@@ -35,6 +35,7 @@ One import. All platform features in one SDK instance.
 | `packages/backend` | private | CF Worker — auth, registry, roles, Stripe, storage, **QA flows/runs** |
 | `packages/host` | private | R2 host Worker — serves apps at `*.proappstore.online`, mediation, **`/__qa/` runner** |
 | `packages/mcp` | private | MCP server — app tools + **QA tools** (`qa_list_flows`, `qa_run`, …) |
+| `packages/mcp-registry` | `@proappstore/mcp` | npm-published MCP Registry entry — thin `mcp-remote` wrapper → `mcp.proappstore.online/mcp` |
 | `packages/admin` | private | Provisioning worker |
 | `packages/compliance` | private | Compliance checks |
 | `packages/data-worker` | private | Per-app D1 database worker (`data-{appId}.proappstore.online`) |

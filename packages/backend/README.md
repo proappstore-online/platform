@@ -44,6 +44,12 @@ Handles Stripe webhooks, subscriptions, license keys, app/listing CRUD, analytic
 | `services.ts` | Services marketplace | Consultant listings |
 | `tools.ts` | MCP tool registry | Per-app tool manifests |
 | `engagements.ts` | Engagement tracking | User interaction metrics |
+| `kv.ts` | Per-user key-value store | `app.kv` SDK primitive |
+| `counters.ts` | Shared atomic counters | `app.counters` SDK primitive |
+| `rooms.ts` | Real-time WebSocket rooms | `app.rooms` SDK primitive |
+| `roles.ts` | App-level roles + permissions | `app.roles` SDK primitive |
+| `invites.ts` | App invites (create/list/revoke/redeem) | Link + QR invites |
+| `qa.ts` | QA flows + runs + artifacts | `POST/GET /v1/apps/:appId/qa/runs`, `/qa/keys` |
 
 ## Dev
 

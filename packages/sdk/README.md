@@ -136,7 +136,7 @@ Cross-user counters for votes, views, leaderboards.
 
 ```ts
 await app.counters.increment('views')
-await app.counters.decrement('likes')
+await app.counters.increment('likes', -1)   // decrement — pass a negative amount
 const all = await app.counters.list()
 ```
 
@@ -147,7 +147,7 @@ const room = app.rooms.join('lobby')
 room.send({ text: 'hello' })
 room.onMessage((msg) => console.log(msg))
 room.onPeers((peers) => console.log(peers))
-room.leave()
+room.close()
 ```
 
 ### Proxy (Secret-injecting API proxy)

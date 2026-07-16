@@ -34,7 +34,7 @@ app.kv.set(key, value) / .get(key) / .list() / .delete(key)
 app.counters.increment(name) / .get(name) / .list()
 
 // Real-time WebSocket rooms
-app.rooms.join(roomId) → room.send() / .onMessage() / .onPeers() / .leave()
+app.rooms.join(roomId) → room.send() / .onMessage() / .onPeers() / .close()
 
 // Secret-injecting API proxy
 app.proxy.fetch(url, opts)
