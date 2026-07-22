@@ -238,7 +238,14 @@ keysRoutes.get('/keys', async (c) => {
     return c.json({ keys: rows.results });
   }
 
-  const returnUrl = c.req.query('return') ?? '';
+  // SECURITY: `return` is rendered into an <a href>. escapeAttr stops attribute
+  // breakout but NOT a `javascript:`/`data:` scheme, which would execute on click
+  // (reflected XSS → session-token theft). Allow only http(s) or a root-relative
+  // path; otherwise drop it.
+  const rawReturn = c.req.query('return') ?? '';
+  const returnUrl = /^https?:\/\//i.test(rawReturn) || (rawReturn.startsWith('/') && !rawReturn.startsWith('//'))
+    ? rawReturn
+    : '';
   // Provider is a known slug (openai/anthropic/…). This page is UNAUTHENTICATED
   // and embeds `provider` inside an inline <script> via JSON.stringify, which
   // does NOT escape '/', so an unvalidated value like `</script><img onerror=…>`

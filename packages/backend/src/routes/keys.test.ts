@@ -96,3 +96,24 @@ describe('PUT /v1/keys/:provider', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('GET /v1/keys (HTML page) — return= scheme sanitization (reflected XSS)', () => {
+  it('drops a javascript: return URL — no executable href', async () => {
+    const res = await app.request('/v1/keys?return=javascript:alert(document.cookie)&app=meetup', {}, makeEnv({}, mockD1()));
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).not.toMatch(/href="javascript/i);
+  });
+
+  it('drops a protocol-relative //evil.com return URL', async () => {
+    const res = await app.request('/v1/keys?return=//evil.com/x', {}, makeEnv({}, mockD1()));
+    const html = await res.text();
+    expect(html).not.toContain('//evil.com');
+  });
+
+  it('keeps a valid https return URL', async () => {
+    const res = await app.request('/v1/keys?return=https://meetup.proappstore.online/settings', {}, makeEnv({}, mockD1()));
+    const html = await res.text();
+    expect(html).toContain('href="https://meetup.proappstore.online/settings"');
+  });
+});

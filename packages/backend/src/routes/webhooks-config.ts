@@ -47,10 +47,16 @@ webhookConfigRoutes.post('/apps/:appId/webhooks', async (c) => {
     }
     if (parsed.protocol !== 'https:') return c.text('webhook URL must use HTTPS', 400);
     const host = parsed.hostname.toLowerCase();
-    if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' ||
-        host === '[::1]' || host.endsWith('.local') ||
-        host.startsWith('10.') || host.startsWith('192.168.') ||
-        /^172\.(1[6-9]|2\d|3[01])\./.test(host) || host === '169.254.169.254') {
+    // SSRF guard. Block private/loopback/link-local ranges comprehensively, plus
+    // IP-literal encodings that dodge dotted-quad prefix checks: ALL IPv6
+    // literals, bare-decimal IPs (e.g. https://2130706433/ = 127.0.0.1), and
+    // hex/octal IPs. Covers the whole 127/8 and 169.254/16, not just one address.
+    const isIpv6Literal = host.startsWith('[');
+    const isEncodedIp = /^\d+$/.test(host) || /^0x[0-9a-f]+$/i.test(host);
+    if (isIpv6Literal || isEncodedIp ||
+        host === 'localhost' || host === '0.0.0.0' || host.endsWith('.local') ||
+        host.startsWith('127.') || host.startsWith('10.') || host.startsWith('192.168.') ||
+        host.startsWith('169.254.') || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) {
       return c.text('webhook URL must not point to private/internal addresses', 400);
     }
 

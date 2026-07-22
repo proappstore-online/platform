@@ -64,13 +64,29 @@ function findImageIssues(path: string, content: string): Issue[] {
   return issues;
 }
 
+/** A button's accessible label lives right at the open tag; only this much body is inspected. */
+const BUTTON_BODY_WINDOW = 2048;
+/** Hard cap on buttons scanned per file — a real component has dozens; stops any DoS dead. */
+const MAX_BUTTONS_PER_FILE = 2000;
+
 function findButtonIssues(path: string, content: string): Issue[] {
   const issues: Issue[] = [];
-  for (const match of content.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/gi)) {
+  let seen = 0;
+  // SECURITY: scan `<button …>` OPEN tags with a LINEAR regex, then inspect only
+  // a bounded window of body for each. A paired-tag regex (`<button>…</button>`)
+  // is O(n²) on a file full of unclosed `<button>` tags — every open position
+  // re-scans the whole tail for a close that never comes (ReDoS → provision
+  // Worker DoS). This bounded scan is O(n).
+  const open = /<button\b([^>]*)>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = open.exec(content)) !== null) {
+    if (++seen > MAX_BUTTONS_PER_FILE) break;
     const attrs = match[1] ?? '';
-    const body = match[2] ?? '';
+    const win = content.slice(open.lastIndex, open.lastIndex + BUTTON_BODY_WINDOW);
+    const closeIdx = win.indexOf('</button>');
+    const body = closeIdx >= 0 ? win.slice(0, closeIdx) : win;
     if (hasAnyAccessibleName(attrs, body)) continue;
-    issues.push({ path, line: lineFor(content, match.index ?? 0), message: '<button> has no accessible name' });
+    issues.push({ path, line: lineFor(content, match.index), message: '<button> has no accessible name' });
   }
   return issues;
 }

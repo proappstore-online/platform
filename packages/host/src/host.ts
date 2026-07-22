@@ -240,7 +240,10 @@ export function securityHeaders(isHtml: boolean, updateSensitive = false): Heade
       "font-src 'self' https://fonts.gstatic.com",
       "img-src 'self' data: blob: https:",
       "connect-src 'self' https://api.proappstore.online https://*.proappstore.online wss://api.proappstore.online wss://*.proappstore.online https://fonts.googleapis.com https://fonts.gstatic.com https://cloudflareinsights.com",
-      "frame-ancestors 'self' https://proappstore.online https://*.proappstore.online",
+      // SECURITY: do NOT allow the `*.proappstore.online` wildcard here — it let
+      // any published app frame any other app (cross-app clickjacking). Allow
+      // only self + first-party surfaces that legitimately embed app previews.
+      "frame-ancestors 'self' https://proappstore.online https://console.proappstore.online https://dashboard.proappstore.online https://admin.proappstore.online https://agents.proappstore.online",
       "base-uri 'self'",
       "form-action 'self'",
     ].join("; "),
