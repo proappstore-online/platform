@@ -93,10 +93,15 @@ function authLogout(request: Request): Response {
 export function isSameOriginMutation(request: Request): boolean {
   const url = new URL(request.url);
   const origin = request.headers.get("Origin");
-  if (origin && origin !== url.origin) return false;
   const fetchSite = request.headers.get("Sec-Fetch-Site");
-  if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") return false;
-  return true;
+  // Fail CLOSED: require a POSITIVE same-origin signal for state-changing
+  // mediated requests. Browsers always send Origin on a mutating fetch and/or
+  // Sec-Fetch-Site; accepting a request with neither (or Sec-Fetch-Site: none,
+  // which is a user-initiated top-level nav, not an app fetch) would rest CSRF
+  // defence entirely on the cookie's SameSite/__Host- scoping.
+  if (origin) return origin === url.origin;
+  if (fetchSite) return fetchSite === "same-origin";
+  return false;
 }
 
 async function fetchMe(env: Env, token: string): Promise<{ ok: boolean; status: number; body: string; contentType: string | null }> {
