@@ -126,6 +126,7 @@ jobs:
             - Agent Reliability: agent-reliability-plan.md
             - Build & Deploy: build-and-deploy.md
             - Auth & Sessions: auth-session-model.md
+            - Authorization Model: authorization-model.md
             - ADRs:
                 - Cloudflare Workers Only: adr/001-cloudflare-workers-only.md
                 - Tailored vs Ready: adr/002-tailored-vs-ready-split.md
