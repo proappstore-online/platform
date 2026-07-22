@@ -232,12 +232,20 @@ describe('makeGitHub', () => {
 });
 
 describe('verifyAppOwnership', () => {
-  it('true when the app is in the user\'s apps', async () => {
-    mockFetch(() => ({ body: { apps: [{ id: 'mine' }, { id: 'other' }] } }));
+  it('true only when the caller is the OWNER of the app', async () => {
+    mockFetch(() => ({ body: { apps: [{ id: 'mine', team_role: 'owner' }, { id: 'other', team_role: 'owner' }] } }));
     expect(await verifyAppOwnership('https://api', 'tok', 'mine')).toBe(true);
   });
-  it('false when not owned', async () => {
-    mockFetch(() => ({ body: { apps: [{ id: 'other' }] } }));
+  it('false for a non-owner team member (membership is NOT ownership) — #78/#79 class', async () => {
+    for (const role of ['viewer', 'po', 'developer', 'admin']) {
+      mockFetch(() => ({ body: { apps: [{ id: 'mine', team_role: role }] } }));
+      expect(await verifyAppOwnership('https://api', 'tok', 'mine'), role).toBe(false);
+    }
+  });
+  it('false when the app is absent, or team_role is missing (fail closed)', async () => {
+    mockFetch(() => ({ body: { apps: [{ id: 'other', team_role: 'owner' }] } }));
+    expect(await verifyAppOwnership('https://api', 'tok', 'mine')).toBe(false);
+    mockFetch(() => ({ body: { apps: [{ id: 'mine' }] } }));
     expect(await verifyAppOwnership('https://api', 'tok', 'mine')).toBe(false);
   });
   it('false on API error', async () => {
