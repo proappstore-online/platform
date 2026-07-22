@@ -50,3 +50,14 @@ describe('checkAccessibilityStatic', () => {
     expect(r.status).toBe('pass');
   });
 });
+
+  it('handles pathological unclosed-<button> input without catastrophic backtracking (ReDoS guard)', async () => {
+    // Before the linear rewrite, N unclosed `<button>` open tags drove O(N^2)
+    // backtracking (0.8MB → ~40s). This must now complete near-instantly.
+    const content = '<button>'.repeat(50_000); // ~0.4MB of open tags, none closed
+    const start = Date.now();
+    const r = await checkAccessibilityStatic(mapFileSource(new Map([['web/src/App.tsx', content]])));
+    const elapsed = Date.now() - start;
+    expect(r.status).toBeDefined();
+    expect(elapsed).toBeLessThan(2000); // linear: milliseconds, not tens of seconds
+  });

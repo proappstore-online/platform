@@ -9,6 +9,8 @@
  */
 
 const GH_API = 'https://api.github.com';
+/** Max bytes of any single repo file fetched for compliance scanning (DoS guard). */
+export const MAX_COMPLIANCE_FILE_BYTES = 256 * 1024;
 
 interface TreeNode {
   path: string;
@@ -117,7 +119,13 @@ export async function fetchRepoFiles(loc: RepoLocation, token?: string): Promise
   }
 
   const blobs = tree.tree.filter((n) => n.type === 'blob');
-  const wanted = blobs.filter((b) => isRelevant(b.path));
+  // SECURITY: cap the size of any file we fetch + scan. Compliance checks run
+  // untrusted repo content through regexes inside the provisioning Worker; an
+  // oversized file could drive quadratic/ReDoS behaviour and exhaust the Worker
+  // CPU budget (DoS). Real source is far below this; skip anything larger.
+  const wanted = blobs.filter(
+    (b) => isRelevant(b.path) && (b.size == null || b.size <= MAX_COMPLIANCE_FILE_BYTES),
+  );
   const skipped = blobs.length - wanted.length;
 
   // Fetch contents in parallel. ~20 files × ~100ms each = ~2s on first call;
@@ -137,7 +145,8 @@ export async function fetchRepoFiles(loc: RepoLocation, token?: string): Promise
       if (body.encoding !== 'base64') return null;
       // GitHub adds newlines in the base64 payload; atob handles those fine.
       const decoded = atob(body.content);
-      return [node.path, decoded] as const;
+      // Belt-and-suspenders in case the tree node lacked a `size`.
+      return [node.path, decoded.length > MAX_COMPLIANCE_FILE_BYTES ? decoded.slice(0, MAX_COMPLIANCE_FILE_BYTES) : decoded] as const;
     }),
   );
 
