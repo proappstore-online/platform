@@ -75,6 +75,30 @@ function platformReturnToAllowed(u: URL): boolean {
     || u.hostname === 'proideastore.online' || u.hostname.endsWith('.proideastore.online');
 }
 
+/** Apex domains of first-party PAS surfaces. */
+const FIRST_PARTY_APEXES = new Set(['proappstore.online', 'proideastore.online']);
+/** Reserved subdomains that are first-party platform SPAs (NOT creator-controlled apps). */
+const FIRST_PARTY_SUBDOMAINS = new Set(['console', 'dashboard', 'admin', 'agents']);
+
+/**
+ * SECURITY (#56): true only for trusted first-party PAS surfaces — the apex
+ * store, console/dashboard/admin/agents, and localhost. Every `<app>.proappstore.online`
+ * app subdomain and BYO custom domain is creator-controlled and returns FALSE,
+ * so those origins never receive a token carrying platform `creator`/`admin`.
+ */
+export function isFirstPartyHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/\.$/, '');
+  if (h === 'localhost' || h === '127.0.0.1') return true;
+  if (FIRST_PARTY_APEXES.has(h)) return true;
+  const dot = h.indexOf('.');
+  if (dot > 0) {
+    const sub = h.slice(0, dot);
+    const apex = h.slice(dot + 1);
+    if (FIRST_PARTY_APEXES.has(apex) && FIRST_PARTY_SUBDOMAINS.has(sub)) return true;
+  }
+  return false;
+}
+
 async function activeCustomDomainAllowed(env: Env, appId: string | undefined, hostname: string): Promise<boolean> {
   if (!appId) return false;
   const host = hostname.toLowerCase().replace(/\.$/, '');
@@ -215,10 +239,19 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
          avatar_url = excluded.avatar_url, last_login_at = excluded.last_login_at`,
     ).bind(userId, provider, profile.providerId, profile.login, profile.email, profile.avatarUrl, now).run();
 
-    const claims: NewSession = { uid: userId, login: profile.login, avatarUrl: profile.avatarUrl, roles: rolesFor(userId, c.env) };
+    const dest = new URL(returnTo);
+    // SECURITY (#56): a session delivered to an app origin (any app subdomain or
+    // BYO custom domain — JS the creator controls) must NOT carry platform
+    // `creator`/`admin`. Otherwise a creator could phish a victim through the
+    // legitimate API and capture (or drive, via cookie mediation) a
+    // platform-privileged token. App + team access is derived server-side from
+    // the DB (team_members / app_roles), NOT from these platform roles, so apps
+    // keep working with a plain `user` token. Only first-party PAS surfaces
+    // (console/dashboard/admin/agents/apex/localhost) receive elevated roles.
+    const roles = isFirstPartyHost(dest.hostname) ? rolesFor(userId, c.env) : ['user'];
+    const claims: NewSession = { uid: userId, login: profile.login, avatarUrl: profile.avatarUrl, roles };
     const token = await mintSession(claims, c.env.SESSION_SIGNING_KEY);
 
-    const dest = new URL(returnTo);
     if (responseMode === 'query') {
       dest.searchParams.set('session', token);
     } else {
