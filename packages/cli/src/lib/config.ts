@@ -46,6 +46,9 @@ export async function readConfig(): Promise<CliConfig> {
 
 export async function writeConfig(config: CliConfig): Promise<void> {
   await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  // mkdir's mode is umask-masked and NOT applied to an already-existing dir, so
+  // re-assert 0o700 — the config holds the session token; keep the dir private.
+  await chmod(CONFIG_DIR, 0o700).catch(() => {});
   await writeFile(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
   await chmod(CONFIG_FILE, 0o600);
 }
