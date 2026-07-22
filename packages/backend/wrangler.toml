@@ -4,6 +4,12 @@ compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
+# Embed the data-worker bundle before bundling this worker, so deployDataWorker
+# uploads a script that ships with the backend (no runtime GitHub fetch). Runs
+# on `wrangler deploy` and `wrangler dev`. See scripts/embed-data-worker.mjs.
+[build]
+command = "node scripts/embed-data-worker.mjs"
+
 [vars]
 # Public base URL of this API — used to build OAuth callback URLs (routes/auth.ts).
 APP_BASE = "https://api.proappstore.online"

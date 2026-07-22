@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# Generated at build time by scripts/embed-data-worker.mjs (never commit).
+packages/backend/src/generated/
 .wrangler/
 *.log
 .DS_Store

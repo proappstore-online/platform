@@ -1,5 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+// The data-worker bundle is embedded at build time (scripts/embed-data-worker.mjs)
+// and gitignored, so it doesn't exist during tests — mock it to a non-empty
+// script. The empty-bundle fail-closed path is covered by its own test below.
+vi.mock('../generated/data-worker-bundle.js', () => ({ DATA_WORKER_BUNDLE: '// embedded worker' }));
+
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
@@ -7,20 +12,13 @@ const { deployDataWorker } = await import('./deploy-worker.js');
 
 beforeEach(() => mockFetch.mockReset());
 
-function mockSequence(...responses: Array<{ ok: boolean; status?: number; body?: unknown; text?: string }>) {
+function mockSequence(...responses: Array<{ ok: boolean; status?: number; body?: unknown }>) {
   for (const r of responses) {
-    if (r.text !== undefined) {
-      mockFetch.mockResolvedValueOnce({
-        ok: r.ok, status: r.status ?? (r.ok ? 200 : 500),
-        text: () => Promise.resolve(r.text),
-      } as Response);
-    } else {
-      mockFetch.mockResolvedValueOnce({
-        ok: r.ok, status: r.status ?? (r.ok ? 200 : 500),
-        json: () => Promise.resolve(r.body ?? {}),
-        text: () => Promise.resolve(typeof r.body === 'string' ? r.body : JSON.stringify(r.body ?? {})),
-      } as Response);
-    }
+    mockFetch.mockResolvedValueOnce({
+      ok: r.ok, status: r.status ?? (r.ok ? 200 : 500),
+      json: () => Promise.resolve(r.body ?? {}),
+      text: () => Promise.resolve(typeof r.body === 'string' ? r.body : JSON.stringify(r.body ?? {})),
+    } as Response);
   }
 }
 
@@ -32,17 +30,22 @@ describe('deployDataWorker', () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it('returns failure when bundle fetch fails', async () => {
-    mockSequence({ ok: false, status: 404, text: 'Not Found' });
+  it('fails closed (no upload) when the embedded bundle is empty', async () => {
+    vi.resetModules();
+    vi.doMock('../generated/data-worker-bundle.js', () => ({ DATA_WORKER_BUNDLE: '' }));
+    const { deployDataWorker: fn } = await import('./deploy-worker.js');
 
-    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk');
+    const result = await fn('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk');
     expect(result.ok).toBe(false);
-    expect(result.detail).toContain('Failed to fetch worker bundle');
+    expect(result.detail).toContain('Embedded data-worker bundle is empty');
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    vi.doUnmock('../generated/data-worker-bundle.js');
+    vi.resetModules();
   });
 
   it('returns failure when worker upload fails', async () => {
     mockSequence(
-      { ok: true, text: '// worker script' },  // bundle fetch
       { ok: true, body: { success: false, errors: [{ message: 'quota exceeded' }] } },  // upload
     );
 
@@ -53,7 +56,6 @@ describe('deployDataWorker', () => {
 
   it('fails when custom domain attachment fails', async () => {
     mockSequence(
-      { ok: true, text: '// worker script' },  // bundle fetch
       { ok: true, body: { success: true } },    // upload
       { ok: true, body: {} },                    // subdomain enable
       { ok: true, body: { success: true, result: [{ id: 'zone-1' }] } },  // zone lookup
@@ -70,7 +72,6 @@ describe('deployDataWorker', () => {
 
   it('fails when custom domain zone lookup fails', async () => {
     mockSequence(
-      { ok: true, text: '// worker script' },  // bundle fetch
       { ok: true, body: { success: true } },    // upload
       { ok: true, body: {} },                    // subdomain enable
       { ok: true, body: { success: false, errors: [{ message: 'missing zone scope' }] } },
@@ -85,7 +86,6 @@ describe('deployDataWorker', () => {
 
   it('succeeds with custom domain when everything works', async () => {
     mockSequence(
-      { ok: true, text: '// worker script' },  // bundle fetch
       { ok: true, body: { success: true } },    // upload
       { ok: true, body: {} },                    // subdomain enable
       { ok: true, body: { success: true, result: [{ id: 'zone-1' }] } },  // zone lookup
@@ -99,9 +99,8 @@ describe('deployDataWorker', () => {
     expect(result.workersDevUrl).toContain('pas-data-my-app');
   });
 
-  it('uses correct worker name and bindings', async () => {
+  it('uploads the embedded bundle to the correct worker name', async () => {
     mockSequence(
-      { ok: true, text: '// script' },
       { ok: true, body: { success: true } },
       { ok: true, body: {} },
       { ok: true, body: { success: true, result: [{ id: 'z1' }] } },
@@ -110,22 +109,23 @@ describe('deployDataWorker', () => {
 
     await deployDataWorker('test-app', 'db-456', 'tok', 'acct', 'sk', 'internal-secret');
 
-    // Check the upload call (2nd fetch)
-    const [uploadUrl] = mockFetch.mock.calls[1] as [string, RequestInit];
+    // Upload is the first fetch now (no bundle fetch precedes it).
+    const [uploadUrl, uploadInit] = mockFetch.mock.calls[0] as [string, RequestInit];
     expect(uploadUrl).toContain('workers/scripts/pas-data-test-app');
+    const form = uploadInit.body as FormData;
+    expect(await (form.get('worker.js') as Blob).text()).toBe('// embedded worker');
   });
 
   it('binds INTERNAL_TOKEN when provided, and omits it when empty', async () => {
     const bindingsFromUpload = async (internalToken: string) => {
       mockSequence(
-        { ok: true, text: '// script' },
         { ok: true, body: { success: true } },
         { ok: true, body: {} },
         { ok: true, body: { success: true, result: [{ id: 'z1' }] } },
         { ok: true, body: { success: true } },
       );
       await deployDataWorker('test-app', 'db-456', 'tok', 'acct', 'sk', internalToken);
-      const form = (mockFetch.mock.calls[1] as [string, RequestInit])[1].body as FormData;
+      const form = (mockFetch.mock.calls[0] as [string, RequestInit])[1].body as FormData;
       const meta = JSON.parse(await (form.get('metadata') as Blob).text()) as {
         bindings: { name: string; type: string }[];
       };

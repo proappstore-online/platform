@@ -373,6 +373,43 @@ describe("host same-origin platform mediation routes", () => {
     expect(res.status).toBe(200);
     expect(dataFetch).toHaveBeenCalledOnce();
   });
+
+  it("does NOT clear the session cookie when the data worker returns 401 (signing-key drift must not sign the user out)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("invalid session", { status: 401 })));
+
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/data/query", {
+        method: "POST",
+        headers: {
+          Cookie: "__Host-pas_session=cookie-token",
+          Origin: "https://meetup.proappstore.online",
+          "Sec-Fetch-Site": "same-origin",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ sql: "select 1" }),
+      }),
+      makeEnv(),
+      ctx(),
+    );
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("Set-Cookie")).toBeNull();
+  });
+
+  it("DOES clear the session cookie when the API plane returns 401 (backend is the session authority)", async () => {
+    const env = makeEnv({ apiFetch: async () => new Response("invalid", { status: 401 }) });
+
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/api/v1/apps/meetup/roles/me", {
+        headers: { Cookie: "__Host-pas_session=cookie-token" },
+      }),
+      env,
+      ctx(),
+    );
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("Set-Cookie")).toContain("__Host-pas_session=; Max-Age=0");
+  });
 });
 
 function makeEnv(opts: { apiFetch?: (request: Request) => Promise<Response> } = {}): Env {

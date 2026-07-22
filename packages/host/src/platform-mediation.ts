@@ -9,10 +9,16 @@ const API_BASE = "https://api.proappstore.online";
 export async function handlePlatformMediation(request: Request, env: Env, route: Route): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname === API_PREFIX || url.pathname.startsWith(`${API_PREFIX}/`)) {
-    return forwardWithSession(request, env.API, upstreamApiUrl(url));
+    // API/auth plane: the backend mints + verifies sessions with the same key,
+    // so a 401 here is authoritative — the session really is invalid → clear it.
+    return forwardWithSession(request, env.API, upstreamApiUrl(url), true);
   }
   if (url.pathname === DATA_PREFIX || url.pathname.startsWith(`${DATA_PREFIX}/`)) {
-    return forwardWithSession(request, null, upstreamDataUrl(url, route));
+    // Data plane: each data-worker holds its own SESSION_SIGNING_KEY, which can
+    // drift from the backend's (e.g. before a reconcile) and 401 a perfectly
+    // valid session. Never let that sign the user out — surface it as a data
+    // error and keep the cookie. See #65/#66.
+    return forwardWithSession(request, null, upstreamDataUrl(url, route), false);
   }
   return null;
 }
@@ -31,7 +37,7 @@ function upstreamDataUrl(url: URL, route: Route): string {
   return upstream.toString();
 }
 
-async function forwardWithSession(request: Request, binding: Fetcher | null, upstreamUrl: string): Promise<Response> {
+async function forwardWithSession(request: Request, binding: Fetcher | null, upstreamUrl: string, clearCookieOn401: boolean): Promise<Response> {
   const token = readCookie(request.headers.get("Cookie"), SESSION_COOKIE_NAME);
   if (!token) return noStore(Response.json({ error: "not signed in" }, { status: 401 }));
 
@@ -53,7 +59,7 @@ async function forwardWithSession(request: Request, binding: Fetcher | null, ups
   const upstreamRequest = new Request(upstreamUrl, init);
   const upstream = binding ? await binding.fetch(upstreamRequest) : await fetch(upstreamRequest);
   const response = noStore(upstream);
-  if (upstream.status === 401) response.headers.append("Set-Cookie", clearSessionCookie());
+  if (clearCookieOn401 && upstream.status === 401) response.headers.append("Set-Cookie", clearSessionCookie());
   return response;
 }
 

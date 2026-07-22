@@ -2,11 +2,12 @@
  * Deploy a data worker via Cloudflare API.
  *
  * Uses the Workers Script Upload API with ES modules format.
- * The bundled worker script is fetched from the platform's GitHub repo.
+ * The bundled worker script is embedded at backend build time (see
+ * scripts/embed-data-worker.mjs) so it ships versioned with the backend — no
+ * runtime GitHub fetch.
  */
 
-const BUNDLE_URL =
-  'https://raw.githubusercontent.com/proappstore-online/platform/main/packages/data-worker/dist/worker.js';
+import { DATA_WORKER_BUNDLE } from '../generated/data-worker-bundle.js';
 
 // PAS Worker custom domains all live under proappstore.online. The platform
 // is single-zone; if that ever changes, lift this to env.
@@ -42,17 +43,16 @@ export async function deployDataWorker(
     };
   }
 
-  // 1. Fetch the bundled worker script
-  const bundleRes = await fetch(BUNDLE_URL);
-  if (!bundleRes.ok) {
+  // 1. Use the embedded worker script (built into the backend at deploy time).
+  const workerScript = DATA_WORKER_BUNDLE;
+  if (!workerScript) {
     return {
       ok: false,
       url: workersDevUrl,
       workersDevUrl,
-      detail: `Failed to fetch worker bundle: ${bundleRes.status}`,
+      detail: 'Embedded data-worker bundle is empty — build codegen did not run',
     };
   }
-  const workerScript = await bundleRes.text();
 
   // 2. Build the metadata (bindings, compatibility settings)
   const metadata = {
