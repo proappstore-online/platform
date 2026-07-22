@@ -119,7 +119,7 @@ describe('GET /v1/apps', () => {
     expect(res.status).toBe(200);
     // The admin path uses a query without WHERE creator_id
     expect(db.prepare).toHaveBeenCalledWith(
-      expect.stringContaining('SELECT * FROM apps ORDER BY created_at DESC'),
+      expect.stringContaining('FROM apps ORDER BY created_at DESC'),
     );
   });
 

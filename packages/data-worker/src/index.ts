@@ -108,7 +108,15 @@ async function verifySessionLocal(
   }
 }
 
-async function requireUser(c: { req: { header(name: string): string | undefined }; env: Env }): Promise<FasUser> {
+// Team role ladder (mirrors the backend's TEAM_ROLES; vendored — data-worker
+// depends on no other package at runtime). Index = privilege rank.
+const TEAM_ROLES = ['viewer', 'po', 'developer', 'admin', 'owner'] as const;
+function roleRank(role: string | null | undefined): number {
+  const i = TEAM_ROLES.indexOf(role as (typeof TEAM_ROLES)[number]);
+  return i === -1 ? 0 : i; // unknown/absent → least privilege
+}
+
+async function requireUser(c: { req: { header(name: string): string | undefined }; env: Env }): Promise<FasUser & { teamRole: string }> {
   const header = c.req.header('Authorization');
   if (!header?.startsWith('Bearer ')) {
     throw new HTTPException(401, { message: 'missing bearer token' });
@@ -124,25 +132,28 @@ async function requireUser(c: { req: { header(name: string): string | undefined 
   // so without an app-scoped authorization check any signed-in PAS user could
   // read or DROP another app's database by calling that app's data-worker.
   // The platform `apps`/`team_members` tables live in the main API (not here),
-  // so authorize against this worker's APP_ID via the user's own /v1/apps.
-  // Fail closed on any error.
-  let authorized = false;
+  // so authorize against this worker's APP_ID via the user's own /v1/apps —
+  // which now also carries the caller's effective team role, so callers can be
+  // gated by role (viewer < po < developer < admin < owner), not just
+  // membership. Fail closed on any error.
+  let teamRole: string | null = null;
   try {
     const res = await c.env.API.fetch(`${c.env.API_BASE}/v1/apps`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) {
-      const data = (await res.json()) as { apps?: Array<{ id: string }> };
-      authorized = (data.apps ?? []).some((a) => a.id === c.env.APP_ID);
+      const data = (await res.json()) as { apps?: Array<{ id: string; team_role?: string }> };
+      const app = (data.apps ?? []).find((a) => a.id === c.env.APP_ID);
+      teamRole = app ? (app.team_role ?? 'viewer') : null;
     }
   } catch {
-    authorized = false;
+    teamRole = null;
   }
-  if (!authorized) {
+  if (!teamRole) {
     throw new HTTPException(403, { message: 'not authorized for this app' });
   }
 
-  return { id: claims.uid, login: claims.login };
+  return { id: claims.uid, login: claims.login, teamRole };
 }
 
 /**
@@ -168,13 +179,24 @@ function isInternal(c: { req: { header(name: string): string | undefined }; env:
 
 /**
  * Authorization gate for every SQL route.
- *  - Trusted internal path (actions-executor): allowed — SQL is platform-prepared.
- *  - Direct raw-SQL path (browser `app.db`): must be the app owner / developer
- *    (session + `/v1/apps` ownership check). Ordinary end-users fail closed.
+ *  - Trusted internal path (actions-executor): allowed — SQL is platform-prepared
+ *    and already role-checked by the backend.
+ *  - Direct raw-SQL path (browser `app.db`): the caller's team role must meet
+ *    `minRole`. Raw SQL can mutate regardless of endpoint, so reads and writes
+ *    require `developer`; schema migrations require `owner`. Ordinary end-users
+ *    (viewer/po) fail closed and must go through registered actions instead.
  */
-async function authorize(c: { req: { header(name: string): string | undefined }; env: Env }): Promise<void> {
+async function authorize(
+  c: { req: { header(name: string): string | undefined }; env: Env },
+  minRole: 'developer' | 'owner',
+): Promise<void> {
   if (isInternal(c)) return;
-  await requireUser(c);
+  const user = await requireUser(c);
+  if (roleRank(user.teamRole) < roleRank(minRole)) {
+    throw new HTTPException(403, {
+      message: `raw SQL requires the '${minRole}' role (you have '${user.teamRole}') — use registered actions instead`,
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +228,7 @@ function validateSql(body: unknown): SqlPayload {
 app.get('/health', (c) => c.json({ ok: true }));
 
 app.get('/tables', async (c) => {
-  await authorize(c);
+  await authorize(c, 'developer');
   const result = await c.env.DB.prepare(
     "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name",
   ).all<{ name: string }>();
@@ -214,7 +236,7 @@ app.get('/tables', async (c) => {
 });
 
 app.post('/query', async (c) => {
-  await authorize(c);
+  await authorize(c, 'developer');
   const body = await c.req.json();
   const { sql, params } = validateSql(body);
   const start = Date.now();
@@ -227,7 +249,7 @@ app.post('/query', async (c) => {
 });
 
 app.post('/execute', async (c) => {
-  await authorize(c);
+  await authorize(c, 'developer');
   const body = await c.req.json();
   const { sql, params } = validateSql(body);
   const start = Date.now();
@@ -243,7 +265,7 @@ app.post('/execute', async (c) => {
 });
 
 app.post('/batch', async (c) => {
-  await authorize(c);
+  await authorize(c, 'developer');
   const body = await c.req.json<{ statements: unknown[] }>();
   if (!Array.isArray(body.statements) || body.statements.length === 0) {
     throw new HTTPException(400, { message: 'statements must be a non-empty array' });
@@ -348,7 +370,7 @@ export function splitSqlStatements(sql: string): string[] {
 }
 
 app.post('/migrate', async (c) => {
-  await authorize(c);
+  await authorize(c, 'owner');
   const body = await c.req.json<{ migrations: { name: string; sql: string }[] }>();
   if (!Array.isArray(body.migrations) || body.migrations.length === 0) {
     throw new HTTPException(400, { message: 'migrations must be a non-empty array of {name, sql}' });
