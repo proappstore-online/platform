@@ -200,9 +200,12 @@ fleet checks are documented in [Migration Repair Runbook](./migration-repair-run
 ## Low-level raw SQL
 
 `app.db.query()` / `app.db.execute()` / `app.db.batch()` run caller-supplied
-SQL, so the data worker restricts them to the app's team (creator +
-`team_members`), verified against `/v1/apps` over a service binding. A regular
-signed-in user gets `403 not authorized for this app` — by design.
+SQL, so the data worker gates them **by team role, not just membership** (#78):
+raw reads and writes require `developer`, and `/migrate` requires `owner`. The
+role comes from the `team_role` field `/v1/apps` returns, verified over a service
+binding. A regular signed-in user — or a read-only `viewer`/`po` team member —
+gets `403` and must use registered actions instead. See the
+[Authorization Model](./authorization-model.md) for which check to use where.
 
 **Schema belongs in `migrations.json`, applied at deploy time (§10, #32 Phase 1).**
 The committed `migrations.json` is applied to D1 by the deploy — BEFORE the
@@ -223,7 +226,8 @@ SQL access.
 
 This model is FULLY ENFORCED as of 2026-07-10, not aspirational:
 
-- Data workers restrict raw SQL to the app team (fleet redeployed 29/29).
+- Data workers gate raw SQL by team role — `developer` for reads/writes, `owner`
+  for `/migrate` (#78, 2026-07). Membership alone is not sufficient.
 - interns and chess-academy (all real-user apps) run entirely on registered
   actions with the guard idioms above.
 - All five agent-teams seed templates ship an actions-based data layer +
