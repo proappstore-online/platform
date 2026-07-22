@@ -18,7 +18,7 @@ import { mintSession, verifySession, type NewSession, type SessionClaims } from 
 import type { Context } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError } from '../lib/auth.js';
-import { hashPassword, verifyPassword } from '../lib/password.js';
+import { hashPassword, verifyPassword, dummyPasswordHash } from '../lib/password.js';
 import { generateLogin, generatePassword, normalizeLogin, isValidLogin } from '../lib/credential-gen.js';
 import { d1AttemptStore, isBlocked, recordFailure, recordSuccess } from '../lib/credential-rate-limit.js';
 
@@ -340,7 +340,11 @@ authRoutes.post('/auth/credentials/login', async (c) => {
     'SELECT id, login, password_hash FROM users WHERE credential_login = ?',
   ).bind(login).first<{ id: string; login: string; password_hash: string | null }>();
 
-  const ok = !!row?.password_hash && (await verifyPassword(password, row.password_hash));
+  // Always run one PBKDF2 pass — against a fixed dummy hash when the login (or
+  // its hash) is absent — so response timing doesn't reveal whether the account
+  // exists (user enumeration). `ok` still requires a real matching row.
+  const passwordMatches = await verifyPassword(password, row?.password_hash ?? (await dummyPasswordHash()));
+  const ok = !!row?.password_hash && passwordMatches;
   if (!ok || !row) {
     await recordFailure(store, login, now);
     // Same message whether the login exists or not — no account enumeration.

@@ -40,10 +40,15 @@ export function registerStatsRoutes(analyticsRoutes: Hono<{ Bindings: Env }>) {
       const kindParam = (c.req.query('kind') ?? 'pageview').trim().toLowerCase();
       if (!EVENT_KIND_RE.test(kindParam)) throw new HttpError('invalid kind', 400);
       // `?path=` narrows the dashboard to a single page path (drill-down).
-      // Length-capped at 256; single quotes doubled before embedding in SQL.
+      // Length-capped at 256. SECURITY: ClickHouse string literals honour
+      // backslash escapes, so doubling quotes alone is not enough (a trailing
+      // `\` turns the doubled `''` into an escaped quote and breaks out of the
+      // literal → SQL injection / cross-tenant read). Escape backslashes FIRST,
+      // then quotes.
       const pathParamRaw = c.req.query('path');
       const pathParam = pathParamRaw ? pathParamRaw.slice(0, 256) : '';
-      const pathClause = pathParam ? ` AND blob3 = '${pathParam.replace(/'/g, "''")}'` : '';
+      const pathEscaped = pathParam.replace(/\\/g, '\\\\').replace(/'/g, "''");
+      const pathClause = pathParam ? ` AND blob3 = '${pathEscaped}'` : '';
       // `?bucket=hour|day` controls series granularity. Auto-picks 'hour' when
       // days==1 (24-point chart for spike investigation), 'day' otherwise.
       const bucketParam = (c.req.query('bucket') ?? '').trim().toLowerCase();

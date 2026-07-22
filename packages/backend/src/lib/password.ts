@@ -61,6 +61,18 @@ function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
   return diff === 0;
 }
 
+/**
+ * A fixed dummy hash, computed once, used to spend an equal PBKDF2 pass when a
+ * login doesn't exist — so `credentials/login` response timing can't be used to
+ * enumerate which logins are provisioned (the KDF must run on every attempt,
+ * present or not). See routes/auth.ts.
+ */
+let dummyHashPromise: Promise<string> | null = null;
+export function dummyPasswordHash(): Promise<string> {
+  if (!dummyHashPromise) dummyHashPromise = hashPassword('timing-safe-dummy-password');
+  return dummyHashPromise;
+}
+
 /** Verify a password against a stored `pbkdf2$...` hash. Never throws. */
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   try {
