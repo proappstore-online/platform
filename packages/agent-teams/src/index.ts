@@ -144,13 +144,16 @@ async function relay(
   if (opts?.method) init.method = opts.method;
   if (opts?.forwardBody) init.body = JSON.stringify(await c.req.json());
 
-  // Check team membership for non-owner access
+  // Look up the caller's team role so the DO can gate by role (#79). On a DB
+  // error we leave teamRole unset: the DO then treats a non-owner as having no
+  // role and denies privileged routes (fail-closed for the privilege that
+  // matters; the owner is still authorized via owner_id inside the DO).
   try {
     const teamRow = await c.env.DB.prepare(
       'SELECT role FROM team_members WHERE app_id = ? AND user_id = ?',
     ).bind(slug, user.id).first<{ role: string }>();
     if (teamRow) init.teamRole = teamRow.role;
-  } catch { /* fail open — owner check in DO is the backstop */ }
+  } catch { /* leave teamRole unset → DO denies non-owner privileged routes */ }
 
   const search = new URL(c.req.url).search;
   const res = await forwardToDO(stub, path + search, user.id, init);

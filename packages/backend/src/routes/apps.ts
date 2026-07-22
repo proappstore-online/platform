@@ -23,6 +23,8 @@ interface AppRow {
   creator_id: string;
   d1_database_id: string;
   created_at: number;
+  /** Caller's effective team role for this app ('owner' for the creator). */
+  team_role?: string | null;
 }
 
 interface SubmissionMetaRow {
@@ -53,6 +55,13 @@ interface AppDto {
   has_submission: boolean;
   /** Status of the most recent submission, if any. */
   submission_status: string | null;
+  /**
+   * Caller's effective team role for this app: 'owner' for the creator, else
+   * the team_members role (viewer|po|developer|admin|owner). Consumed by the
+   * data-worker to gate raw SQL by role, not just membership. Fail-safe
+   * defaults to 'viewer' (least privilege).
+   */
+  team_role: string;
 }
 
 function toTitleCase(id: string): string {
@@ -80,12 +89,13 @@ appsRoutes.get('/apps', async (c) => {
     // Pull apps: owned by this user OR where they're a team member (or all if admin).
     const appsQuery = creatorFilter
       ? c.env.DB.prepare(
-          `SELECT DISTINCT a.* FROM apps a
+          `SELECT DISTINCT a.*, CASE WHEN a.creator_id = ?1 THEN 'owner' ELSE tm.role END AS team_role
+           FROM apps a
            LEFT JOIN team_members tm ON tm.app_id = a.id AND tm.user_id = ?1
            WHERE a.creator_id = ?1 OR tm.user_id IS NOT NULL
            ORDER BY a.created_at DESC`,
         ).bind(creatorFilter)
-      : c.env.DB.prepare('SELECT * FROM apps ORDER BY created_at DESC');
+      : c.env.DB.prepare("SELECT *, 'owner' AS team_role FROM apps ORDER BY created_at DESC");
     const appsResult = await appsQuery.all<AppRow>();
     const apps = appsResult.results ?? [];
 
@@ -133,6 +143,7 @@ appsRoutes.get('/apps', async (c) => {
         pro_features: proFeatures,
         has_submission: !!sub,
         submission_status: sub?.status ?? null,
+        team_role: a.team_role ?? 'viewer',
       };
     });
 

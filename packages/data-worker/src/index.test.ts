@@ -8,14 +8,19 @@ const API_BASE = 'https://api.test';
 // over the API service binding. Mock the binding to return the set of app ids the
 // caller owns; default authorizes "test-app".
 let ownedAppIds: string[] = ['test-app'];
+let callerRole = 'owner'; // default: owner passes every role gate
 const apiFetch = vi.fn(async (input: RequestInfo | URL) => {
   if (String(input) === `${API_BASE}/v1/apps`) {
-    return new Response(JSON.stringify({ apps: ownedAppIds.map((id) => ({ id })) }), { status: 200 });
+    return new Response(
+      JSON.stringify({ apps: ownedAppIds.map((id) => ({ id, team_role: callerRole })) }),
+      { status: 200 },
+    );
   }
   return new Response('not found', { status: 404 });
 });
 afterEach(() => {
   ownedAppIds = ['test-app'];
+  callerRole = 'owner';
   apiFetch.mockClear();
 });
 
@@ -483,5 +488,45 @@ describe("splitSqlStatements", () => {
       "SELECT CASE WHEN a THEN 1 ELSE 2 END AS x",
       "SELECT 9",
     ]);
+  });
+});
+
+describe("team-role gating on raw SQL (#78)", () => {
+  const post = (path: string, env: ReturnType<typeof makeEnv>, body: unknown = { sql: "SELECT 1" }) =>
+    app.request(path, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOK}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }, env);
+
+  it("viewer is denied raw reads and writes (must use registered actions)", async () => {
+    callerRole = "viewer";
+    expect((await post("/query", makeEnv())).status).toBe(403);
+    expect((await post("/execute", makeEnv())).status).toBe(403);
+    expect((await post("/batch", makeEnv(), { statements: [{ sql: "DELETE FROM t" }] })).status).toBe(403);
+  });
+
+  it("po is still below developer — denied raw SQL", async () => {
+    callerRole = "po";
+    expect((await post("/execute", makeEnv())).status).toBe(403);
+  });
+
+  it("developer may run raw query/execute/batch but NOT migrate", async () => {
+    callerRole = "developer";
+    expect((await post("/query", makeEnv())).status).toBe(200);
+    expect((await post("/execute", makeEnv())).status).toBe(200);
+    const migrate = await post("/migrate", makeEnv(), { migrations: [{ name: "m1", sql: "CREATE TABLE t(a)" }] });
+    expect(migrate.status).toBe(403);
+  });
+
+  it("owner may migrate", async () => {
+    callerRole = "owner";
+    const migrate = await post("/migrate", makeEnv(), { migrations: [{ name: "m1", sql: "CREATE TABLE t(a)" }] });
+    expect(migrate.status).toBe(200);
+  });
+
+  it("an unknown/absent role defaults to least privilege (denied)", async () => {
+    callerRole = "banana";
+    expect((await post("/execute", makeEnv())).status).toBe(403);
   });
 });
