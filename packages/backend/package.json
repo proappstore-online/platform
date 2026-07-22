@@ -7,6 +7,9 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
+    "embed-data-worker": "node scripts/embed-data-worker.mjs",
+    "prebuild": "node scripts/embed-data-worker.mjs",
+    "pretypecheck": "node scripts/embed-data-worker.mjs",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "dev": "wrangler dev",
