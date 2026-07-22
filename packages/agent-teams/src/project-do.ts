@@ -60,6 +60,33 @@ import { DOCS_SKILLS_URL, sliceDocs } from './platform-skill.ts';
  */
 const WATCHDOG_MS = 60_000;
 
+// Team role ladder (mirrors the backend's TEAM_ROLES). Index = privilege rank.
+const TEAM_ROLES = ['viewer', 'po', 'developer', 'admin', 'owner'] as const;
+type TeamRole = (typeof TEAM_ROLES)[number];
+
+/**
+ * Minimum team role required for a DO route. Destructive, spend-config, and
+ * deploy routes require `owner`; other mutations require `developer`; reads
+ * allow any member (`viewer`). Keep in sync with the fetch() dispatch table.
+ */
+export function minRoleFor(path: string, method: string): TeamRole {
+  const ownerRoutes: ReadonlyArray<readonly [string, string]> = [
+    ['/project/play', 'POST'], ['/project/pause', 'POST'],
+    ['/roles', 'PUT'], ['/budget', 'PUT'],
+    ['/files', 'POST'], ['/files', 'DELETE'],
+    ['/deploy', 'POST'],
+    ['/chat/history', 'DELETE'], ['/activity', 'DELETE'],
+    ['/shares', 'POST'], ['/generate-listing', 'POST'],
+  ];
+  if (ownerRoutes.some(([p, m]) => p === path && m === method)) return 'owner';
+  // Destructive ticket/memory sub-routes.
+  if (method === 'DELETE' && (/^\/tickets\/[a-f0-9-]+$/.test(path) || /^\/memory\/[a-f0-9-]+$/.test(path))) {
+    return 'owner';
+  }
+  if (method === 'GET') return 'viewer';
+  return 'developer';
+}
+
 export class ProjectDO implements DurableObject {
   private state: DurableObjectState;
   private env: Bindings;
@@ -189,8 +216,41 @@ export class ProjectDO implements DurableObject {
     if (row.owner_id === userId) return null;
     // Team member access: the router sets X-Team-Role after checking D1
     const teamRole = request.headers.get('X-Team-Role');
-    if (teamRole) return null; // any team role = access granted
+    if (teamRole) return null; // membership established; role checked by assertRole
     return json({ error: 'not_found' }, 404);
+  }
+
+  /**
+   * The caller's effective role for this project: 'owner' if they own it, else
+   * the team_members role the router looked up in D1 (X-Team-Role), else
+   * least-privilege 'viewer'. Runs AFTER assertAccess, so the caller is already
+   * known to be the owner or a member.
+   */
+  private callerRole(request: Request): TeamRole {
+    const userId = request.headers.get('X-User-Id');
+    const row = this.state.storage.sql
+      .exec('SELECT owner_id FROM project LIMIT 1')
+      .toArray()[0] as { owner_id: string } | undefined;
+    if (row && row.owner_id === userId) return 'owner';
+    const forwarded = request.headers.get('X-Team-Role');
+    return TEAM_ROLES.includes(forwarded as TeamRole) ? (forwarded as TeamRole) : 'viewer';
+  }
+
+  /**
+   * SECURITY (#79): gate privileged routes by role, not just membership. Before
+   * this, `if (teamRole) return null` granted a read-only `viewer` full access —
+   * writing files, deploying to production, draining the owner's LLM budget, and
+   * rewriting budget/model config. Destructive + spend-config + deploy routes now
+   * require `owner`; other mutations require `developer`; reads allow any member.
+   */
+  private assertRole(request: Request, path: string): Response | null {
+    const min = minRoleFor(path, request.method);
+    if (min === 'viewer') return null;
+    const role = this.callerRole(request);
+    if (TEAM_ROLES.indexOf(role) < TEAM_ROLES.indexOf(min)) {
+      return json({ error: 'forbidden', detail: `requires '${min}' role (you have '${role}')` }, 403);
+    }
+    return null;
   }
 
   // ── HTTP + WebSocket handler ──────────────────────────────
@@ -220,9 +280,12 @@ export class ProjectDO implements DurableObject {
     const shareFileMatch = path.match(/^\/kb\/share\/([a-zA-Z0-9_-]+)\/file$/);
     if (shareFileMatch) return this.accessKbFileViaShare(shareFileMatch[1]!, new URL(request.url).searchParams.get('path') ?? '');
 
-    // All other routes require ownership
+    // All other routes require membership…
     const ownerErr = this.assertAccess(request);
     if (ownerErr) return ownerErr;
+    // …and privileged routes require a sufficient role (#79).
+    const roleErr = this.assertRole(request, path);
+    if (roleErr) return roleErr;
 
     // REST routes
     if (path === '/project' && request.method === 'GET') return this.getProject();
