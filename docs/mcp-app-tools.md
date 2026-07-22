@@ -83,6 +83,12 @@ PAS provides reusable roles through the SDK (`app.roles`). Those roles are the
 right abstraction for coarse permission gates such as owner, moderator, editor,
 viewer, manager, or custom app roles.
 
+> These are **app roles** — one of PAS's three distinct role scopes (platform /
+> team / app). App roles govern *your app's own users*; they are separate from
+> team roles (who may build/deploy the app) and platform roles (ProAppStore
+> standing). Understand why — and which check to use — in the
+> [Authorization Model](./authorization-model.md).
+
 The `auth.platform_roles` and `auth.app_roles` fields are enforced by the
 shared platform action executor used by both browser SDK calls and MCP app
 tools. In all cases, keep row-level checks in SQL:

@@ -48,7 +48,8 @@ app.actions.call(name, params)
 // Multi-tenant helpers
 app.db.tenant(tenantId) → tx.find() / .findMany() / .insert() / .update() / .delete() / .count()
 
-// Roles (app-level RBAC)
+// Roles (app-level RBAC — your app's OWN users; one of 3 role scopes,
+// separate from team + platform roles. See docs/authorization-model.md)
 app.roles.assign(userId, role) / .revoke(userId, role) / .check(role) / .myRoles() / .listAll()
 
 // File storage (R2)
