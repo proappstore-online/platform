@@ -32,9 +32,22 @@ sequenceDiagram
 ```
 
 > The key property: every worker (backend **and** each `data-<app>`) verifies the
-> JWT **locally** with the shared signing key — there is no per-request round-trip
-> to an auth service. The open work (below) is moving the browser-side token off
-> JS-readable storage into a host-only `__Host-` cookie.
+> JWT **locally** with the same PAS signing key (`SESSION_SIGNING_KEY`) — there is
+> no per-request round-trip to an auth service, and **no dependency on FAS**: PAS
+> mints and verifies its own sessions with its own key + OAuth apps. The open work
+> (below) is moving the browser-side token off JS-readable storage into a
+> host-only `__Host-` cookie.
+
+> **Operational invariant (learned the hard way — see #65/#66):** every
+> `data-<app>` worker must hold the **current** `SESSION_SIGNING_KEY`. The backend
+> pushes it at provision time; if a data worker's key drifts from the backend's
+> (e.g. after a key rotation or a broken provision), it will `401` a perfectly
+> valid session. Reconcile the fleet with the **Redeploy data workers** workflow
+> (`redeploy-data-workers.yml`, whole-fleet `workflow_dispatch`), which re-pushes
+> the key to every worker. Correspondingly, the host mediation only clears the
+> `__Host-pas_session` cookie on an **API-plane** 401 (the backend is the session
+> authority) — a **data-plane** 401 surfaces as a data error and never signs the
+> user out, so key drift can't cascade into a forced sign-out.
 
 As of `@proappstore/sdk@1.16.23`, storage access is defensive. If
 `localStorage` is blocked, throws, or is unavailable, the SDK keeps the
@@ -202,9 +215,16 @@ Keep explicit fallback modes for compatibility:
 - `platform-cookie`: same-origin token-handler mode
 - `legacy-bearer`: current localStorage-backed bearer mode
 
-Remaining before defaulting hosted apps to cookie mode: real hosted-app
-end-to-end verification across sign-in, `auth/me`, app data, rooms, usage,
-maps, and sign-out.
+**Verified so far:** `platform-cookie` sign-in + `/.pas/auth/me` are confirmed
+working end-to-end on hosted apps (`interns`, `chess-academy`) for **both GitHub
+and Google**, once the signing-key drift blocker (#65/#66) was resolved. Only
+`interns` currently ships in `platform-cookie` mode; the rest of the fleet is
+still on `legacy-bearer`.
+
+Remaining before defaulting hosted apps to cookie mode: end-to-end verification
+of the remaining mediated paths (app **data**, **rooms**, **usage**, **maps**,
+**sign-out**) in cookie mode, then migrating the rest of the fleet off
+`legacy-bearer` (#20).
 
 ### Phase 5: Security Gates
 
