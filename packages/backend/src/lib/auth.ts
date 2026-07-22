@@ -43,9 +43,36 @@ export async function requireUser(c: Context<{ Bindings: Env }>): Promise<FasUse
   };
 }
 
+// ---------------------------------------------------------------------------
+// Role systems — PAS has THREE distinct role scopes. They are intentionally
+// separate (like GitHub: account type vs repo-collaborator role vs your app's
+// own users). Some words collide across scopes (`admin`, `owner`, `viewer` each
+// appear in two) — so always use the scope-specific type + check, never mix
+// them. Full guide: docs/authorization-model.md.
+//
+//   1. PlatformRole — the identity's relationship to ProAppStore itself
+//      (publish, platform admin). From the session JWT. Check: requireRole().
+//   2. TeamRole     — who may BUILD/operate an app (repo, data, deploy). From
+//      team_members. Check: requireAppAccess()/requireAppOwner().
+//   3. AppRole      — roles within an app's OWN user base (the app author's
+//      RBAC; custom strings allowed). From app_roles. Check: enforceActionAuth
+//      (backend/routes/actions.ts) + the tool SQL guards.
+// ---------------------------------------------------------------------------
+
+/** Platform-level roles from the session token, ordered by privilege. */
+export const PLATFORM_ROLES = ['user', 'creator', 'admin'] as const;
+export type PlatformRole = (typeof PLATFORM_ROLES)[number];
+
 /** Team roles ordered by privilege level (higher index = more access). */
 export const TEAM_ROLES = ['viewer', 'po', 'developer', 'admin', 'owner'] as const;
 export type TeamRole = (typeof TEAM_ROLES)[number];
+
+/**
+ * Conventional app roles (the app author may also assign any custom string), so
+ * the type is a widened string. Listed for documentation + tooling.
+ */
+export const APP_ROLE_CONVENTIONS = ['owner', 'member', 'moderator', 'editor', 'viewer'] as const;
+export type AppRole = string;
 
 /**
  * Verify the signed-in user has access to the given app. Checks (in order):
@@ -123,9 +150,12 @@ export async function requireAdmin(c: Context<{ Bindings: Env }>): Promise<FasUs
 }
 
 /**
- * Require a specific platform role. Reads from session token claims.
+ * Require a specific PLATFORM role (not a team or app role). Reads from session
+ * token claims. Typed to `PlatformRole` so a team/app role literal (e.g.
+ * 'developer', 'moderator', 'owner') won't compile here — that was the class of
+ * scope-confusion behind #78/#79/#95.
  */
-export async function requireRole(c: Context<{ Bindings: Env }>, role: string): Promise<FasUser> {
+export async function requireRole(c: Context<{ Bindings: Env }>, role: PlatformRole): Promise<FasUser> {
   const user = await requireUser(c);
   if (!user.roles.includes(role)) throw new HttpError(`requires role: ${role}`, 403);
   return user;
