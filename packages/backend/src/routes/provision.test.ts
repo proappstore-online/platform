@@ -16,7 +16,10 @@ function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) 
 function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
   const prepare = vi.fn();
   for (const stmt of stmts) prepare.mockReturnValueOnce(stmt);
-  prepare.mockReturnValue(mockStmt());
+  // Default: the creator-existence guard (#81) expects a real user → return a
+  // row for that lookup, null otherwise.
+  prepare.mockImplementation((sql: string) =>
+    /FROM users\b/i.test(sql) ? mockStmt({ first: { 1: 1 } }) : mockStmt());
   return { prepare };
 }
 
@@ -219,7 +222,9 @@ describe('POST /v1/provision', () => {
 
   it('inserts app record with correct creator ID', async () => {
     const appStmt = mockStmt();
-    const db = mockD1(appStmt);
+    // First DB op in provisionData is the creator-existence guard (#81); it
+    // consumes the first sequenced stmt, so put a users-row stmt ahead of appStmt.
+    const db = mockD1(mockStmt({ first: { 1: 1 } }), appStmt);
     globalThis.fetch = multiFetch();
 
     await app.request('/v1/provision', {
@@ -314,7 +319,9 @@ describe('POST /v1/provision-data (internal)', () => {
 
   it('provisions D1 + worker + app record (no Pages/DNS) and records the given creator', async () => {
     const appStmt = mockStmt();
-    const db = mockD1(appStmt);
+    // First DB op in provisionData is the creator-existence guard (#81); it
+    // consumes the first sequenced stmt, so put a users-row stmt ahead of appStmt.
+    const db = mockD1(mockStmt({ first: { 1: 1 } }), appStmt);
     globalThis.fetch = multiFetch({
       'd1/database': { status: 200, body: { success: true, result: { uuid: 'db-9' } } },
     });

@@ -566,3 +566,43 @@ describe('auth callback — state decoding (base64url padding regression)', () =
     expect(loc).toContain('auth_error=profile_fetch_failed');
   });
 });
+
+describe('POST /v1/auth/exchange — token audience (#84)', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+  const exEnv = () => ({
+    ...env(),
+    // exchange does an INSERT…run(); give it a run-supporting DB.
+    DB: { prepare: () => ({ bind: () => ({ run: async () => ({}) }) }) },
+    GITHUB_CLIENT_ID: 'cid',
+    GITHUB_CLIENT_SECRET: 'csec',
+  } as never);
+  const post = (envObj: never) => app.request('/v1/auth/exchange', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ githubToken: 'ghp_x' }),
+  }, envObj);
+
+  it('rejects a token NOT issued to our OAuth app (introspection 404)', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 404 }));
+    const res = await post(exEnv());
+    expect(res.status).toBe(401);
+    // Must have called the app-authenticated check-token endpoint, not /user.
+    expect(String((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain('/applications/cid/token');
+  });
+
+  it('accepts a token issued to our app and mints a session', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ user: { id: 42, login: 'octocat' } }), { status: 200 }),
+    );
+    const res = await post(exEnv());
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sessionToken: string; user: { login: string } };
+    expect(body.sessionToken).toBeTruthy();
+    expect(body.user.login).toBe('octocat');
+  });
+
+  it('503 when client credentials are not configured', async () => {
+    const res = await post(env() as never);
+    expect(res.status).toBe(503);
+  });
+});

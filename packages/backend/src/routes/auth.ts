@@ -472,12 +472,31 @@ authRoutes.post('/auth/exchange', async (c) => {
   const githubToken = body.githubToken;
   if (!githubToken || typeof githubToken !== 'string') return c.text('missing githubToken', 400);
 
-  const userRes = await fetch('https://api.github.com/user', {
-    headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github+json', 'User-Agent': 'proappstore-api' },
+  // SECURITY (#84): verify the token was issued to OUR OAuth app, not merely
+  // that it's a valid GitHub token. Otherwise a token minted for any other
+  // OAuth app — or a leaked PAT — could be exchanged for a full PAS session
+  // (confused-deputy / audience confusion). GitHub's app-authenticated
+  // check-token endpoint returns 200 + the token's user only when the token
+  // belongs to `client_id`, else 404.
+  if (!c.env.GITHUB_CLIENT_ID || !c.env.GITHUB_CLIENT_SECRET) {
+    return c.text('token exchange is not configured', 503);
+  }
+  const introRes = await fetch(`https://api.github.com/applications/${c.env.GITHUB_CLIENT_ID}/token`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${btoa(`${c.env.GITHUB_CLIENT_ID}:${c.env.GITHUB_CLIENT_SECRET}`)}`,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'proappstore-api',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ access_token: githubToken }),
   });
-  if (userRes.status === 401) return c.text('invalid github token', 401);
-  if (!userRes.ok) return c.text(`github error: ${userRes.status}`, 502);
-  const ghUser = (await userRes.json()) as { id: number; login: string; avatar_url?: string; email?: string | null };
+  if (introRes.status !== 200) return c.text('github token was not issued to this application', 401);
+  const intro = (await introRes.json()) as {
+    user?: { id: number; login: string; avatar_url?: string; email?: string | null };
+  };
+  const ghUser = intro.user;
+  if (!ghUser) return c.text('invalid github token', 401);
 
   const userId = `gh:${ghUser.id}`;
   const now = Date.now();
