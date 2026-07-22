@@ -185,10 +185,17 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
         forwardBody = buf;
       }
 
+      // SECURITY: never auto-follow redirects. The allowlist is evaluated only
+      // against the initial URL, and the injected app secret rides on this
+      // request's headers. A 3xx from the (allowlisted) upstream to an
+      // attacker-controlled or internal host would otherwise re-send the secret
+      // off-allowlist (SSRF + secret exfiltration). `manual` returns the 3xx to
+      // the caller instead of following it.
       const upstreamRes = await fetch(injectedUrl, {
         method: c.req.method,
         headers: injectedHeaders,
         body: forwardBody,
+        redirect: 'manual',
       });
 
       // Cap response size by reading bytes ourselves; a streaming passthrough

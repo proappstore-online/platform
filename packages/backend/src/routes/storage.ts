@@ -112,6 +112,9 @@ storageRoutes.get('/apps/:appId/public/*', async (c) => {
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
   headers.set('cache-control', 'public, max-age=31536000, immutable');
+  // Never let the browser sniff a user-uploaded blob into an executable type
+  // (e.g. HTML/JS) on the API origin.
+  headers.set('x-content-type-options', 'nosniff');
   return new Response(object.body, { headers });
 });
 
@@ -133,6 +136,7 @@ storageRoutes.get('/apps/:appId/storage/*', async (c) => {
     object.writeHttpMetadata(headers);
     headers.set('etag', object.httpEtag);
     headers.set('cache-control', 'public, max-age=31536000, immutable');
+    headers.set('x-content-type-options', 'nosniff');
 
     return new Response(object.body, { headers });
   } catch (err) {

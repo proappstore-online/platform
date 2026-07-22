@@ -66,10 +66,21 @@ provisionRoutes.post('/provision', async (c) => {
     // 0. Compliance check — skipCompliance is admin-only (used by `pas create` bootstrap)
     const canSkipCompliance = body.skipCompliance && user.roles.includes('admin');
     if (!canSkipCompliance) {
+      // SECURITY: repoOwner/repoName/ref are read with the platform GITHUB_TOKEN,
+      // which can read private org repos. A non-admin must not point compliance
+      // at an arbitrary repo (confused-deputy private-repo read) or inject path
+      // segments via `ref`. Non-admins are pinned to the org + their own appId;
+      // only admins may override owner/repo (used by tooling). `ref` is always
+      // format-validated and must not contain path traversal.
+      const isAdmin = user.roles.includes('admin');
+      const refCandidate = body.ref || 'main';
+      if (!/^[a-zA-Z0-9._/-]+$/.test(refCandidate) || refCandidate.includes('..')) {
+        return c.text('Invalid ref', 400);
+      }
       const loc: RepoLocation = {
-        owner: body.repoOwner || ORG,
-        repo: body.repoName || appId,
-        ref: body.ref || 'main',
+        owner: isAdmin && body.repoOwner ? body.repoOwner : ORG,
+        repo: isAdmin && body.repoName ? body.repoName : appId,
+        ref: refCandidate,
       };
       try {
         const fetched = await fetchRepoFiles(loc, c.env.GITHUB_TOKEN);
