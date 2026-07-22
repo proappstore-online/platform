@@ -18,8 +18,9 @@ export type Env = {
   // secrets (wrangler secret put)
   CF_API_TOKEN: string;
   GITHUB_TOKEN: string;
-  /** Shared with FAS auth flow — HS256 key used to mint + verify
-   *  Bearer session tokens. Required for /api/publish-app auth. */
+  /** PAS's own HS256 key used to mint + verify Bearer session tokens (see
+   *  auth.ts — no FAS dependency, per the admin-worker-per-store principle).
+   *  Required for /api/publish-app auth. */
   SESSION_SIGNING_KEY: string;
   /** Shared secret for internal service-to-service calls (e.g. the agent-teams
    *  Worker calling /api/agent-deploy). Mirrors INTERNAL_TOKEN on agent-teams +
