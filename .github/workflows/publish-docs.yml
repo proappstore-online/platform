@@ -12,6 +12,10 @@ on:
 
 permissions:
   contents: read
+  # Keyless KB ingest: mint a GitHub OIDC token so kb-host can verify this is
+  # the platform docs repo (only proappstore-online/platform may write the
+  # reserved `platform/` prefix). See packages/kb-host (#57).
+  id-token: write
 
 concurrency:
   group: publish-platform-docs
@@ -133,14 +137,16 @@ jobs:
           YAML
           python -m zensical build
       - name: Publish to kb-host
-        env:
-          INTERNAL_TOKEN: ${{ secrets.INTERNAL_TOKEN }}
         run: |
-          if [ -z "$INTERNAL_TOKEN" ]; then echo "INTERNAL_TOKEN missing — cannot publish docs"; exit 1; fi
+          # Keyless: mint a GitHub OIDC token; kb-host authorizes the reserved
+          # `platform/` prefix only for this repo's `repository` claim (#57).
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=proappstore-kb-host" | jq -r '.value')
+          if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then echo "::error::could not obtain OIDC token"; exit 1; fi
           out=site
           [ -d "$out" ] || out=public
           cd "$out"
           find . -type f | while read -r f; do
-            curl -fsS -X PUT "https://kb.proappstore.online/_ingest/platform/${f#./}" -H "x-internal-token: $INTERNAL_TOKEN" --data-binary "@$f" >/dev/null
+            curl -fsS -X PUT "https://kb.proappstore.online/_ingest/platform/${f#./}" -H "Authorization: Bearer $OIDC" --data-binary "@$f" >/dev/null
           done
           echo "Platform docs published → https://docs.proappstore.online/"

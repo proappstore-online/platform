@@ -15,6 +15,8 @@
  * custom_domains on the zone.
  */
 
+import { verifyGithubOidc } from "./github-oidc.js";
+
 /** Constant-time string compare for the shared secret (avoids a timing oracle). */
 function constantTimeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -23,10 +25,62 @@ function constantTimeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+const ORG = "proappstore-online";
+/** Audience the KB-ingest OIDC token must request (set in the workflow). */
+const OIDC_AUDIENCE = "proappstore-kb-host";
+/** Only this repo's CI may write the reserved `platform/` docs prefix. */
+const DOCS_REPO = `${ORG}/platform`;
+
 export interface Env {
   KB_R2: R2Bucket;
-  /** Shared internal token (Doppler INTERNAL_TOKEN) — auth for the CI ingest. */
+  /** Shared internal token (Doppler INTERNAL_TOKEN) — legacy CI ingest auth.
+   *  DEPRECATED: cannot prove which app the caller is, so it is app-scoped only
+   *  by convention and is forbidden from the `platform/` prefix. New app CI uses
+   *  keyless OIDC (below) which binds the write to the caller's own repo. */
   INTERNAL_TOKEN: string;
+}
+
+/**
+ * Authorize a KB ingest write to `<prefix>/…` (#57). Two paths:
+ *  - **OIDC (preferred, app-scoped):** the caller's GitHub Actions OIDC token
+ *    carries `repository = proappstore-online/<app>`; it may only write its own
+ *    app prefix. The reserved `platform/` prefix requires the docs repo.
+ *  - **INTERNAL_TOKEN (legacy):** allowed for app prefixes but NEVER `platform/`,
+ *    so no shared-token holder can overwrite the official docs (which are served
+ *    as HTML on docs.proappstore.online → defacement / stored XSS).
+ */
+async function authorizeIngest(
+  request: Request,
+  env: Env,
+  prefix: string,
+): Promise<{ ok: true } | { ok: false; status: number; msg: string }> {
+  const authz = request.headers.get("authorization");
+  if (authz?.startsWith("Bearer ")) {
+    let repo: string;
+    try {
+      const claims = await verifyGithubOidc(authz.slice(7), { audience: OIDC_AUDIENCE });
+      repo = claims.repository;
+    } catch (e) {
+      return { ok: false, status: 403, msg: `invalid OIDC token: ${(e as Error).message}` };
+    }
+    if (prefix === "platform") {
+      return repo === DOCS_REPO
+        ? { ok: true }
+        : { ok: false, status: 403, msg: `repository ${repo} may not write platform/` };
+    }
+    return repo === `${ORG}/${prefix}`
+      ? { ok: true }
+      : { ok: false, status: 403, msg: `repository ${repo} may not write ${prefix}/` };
+  }
+
+  const provided = request.headers.get("x-internal-token");
+  if (env.INTERNAL_TOKEN && provided && constantTimeEqual(provided, env.INTERNAL_TOKEN)) {
+    if (prefix === "platform") {
+      return { ok: false, status: 403, msg: "platform/ requires OIDC from the docs repo" };
+    }
+    return { ok: true };
+  }
+  return { ok: false, status: 403, msg: "forbidden" };
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -85,12 +139,14 @@ export default {
     //    binding (no R2 API token needed → no token-scope 403). Authed by the
     //    shared INTERNAL_TOKEN. PUT /_ingest/<app>/<path> with the file as body.
     if (request.method === "PUT" && url.pathname.startsWith("/_ingest/")) {
-      const provided = request.headers.get("x-internal-token");
-      if (!env.INTERNAL_TOKEN || !provided || !constantTimeEqual(provided, env.INTERNAL_TOKEN)) {
-        return new Response("forbidden", { status: 403 });
-      }
       const key = decodeURIComponent(url.pathname.slice("/_ingest/".length));
       if (!key || key.includes("..") || key.endsWith("/")) return new Response("bad key", { status: 400 });
+      // SECURITY (#57): authorize the write against the app prefix, not just a
+      // shared token — otherwise any INTERNAL_TOKEN holder could overwrite any
+      // app's KB or the official docs.
+      const prefix = key.split("/")[0]!;
+      const authz = await authorizeIngest(request, env, prefix);
+      if (!authz.ok) return new Response(authz.msg, { status: authz.status });
       await env.KB_R2.put(key, request.body);
       return new Response("ok\n");
     }
