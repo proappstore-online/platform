@@ -98,16 +98,24 @@ app.get('/kb/:slug/s/:shareId/:path{.+}', async (c) => {
 
 // ── Helper: forward to DO with user ID header ───────────────
 
-function forwardToDO(
+export function forwardToDO(
   stub: DurableObjectStub,
   path: string,
   userId: string,
   opts?: { method?: string; body?: string; raw?: Request; userToken?: string | undefined; teamRole?: string },
 ): Promise<Response> {
   if (opts?.raw) {
-    // For WebSocket upgrades, clone the request with the user ID header
+    // For WebSocket upgrades, clone the request. SECURITY: strip any
+    // caller-supplied trust headers first — only the router may set these, from
+    // verified data. Otherwise a raw WS upgrade could smuggle `X-Team-Role:
+    // owner` straight to the DO and read another tenant's private agent stream.
     const headers = new Headers(opts.raw.headers);
+    headers.delete('X-User-Id');
+    headers.delete('X-Team-Role');
+    headers.delete('X-User-Token');
     headers.set('X-User-Id', userId);
+    if (opts.teamRole) headers.set('X-Team-Role', opts.teamRole);
+    if (opts.userToken) headers.set('X-User-Token', opts.userToken);
     return stub.fetch(new Request(opts.raw.url, { headers, method: opts.raw.method }));
   }
   const headers: Record<string, string> = {
@@ -428,8 +436,18 @@ app.get('/v1/projects/:slug/ws', async (c) => {
     return c.json({ error: 'websocket upgrade required' }, 426);
   }
   const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  return forwardToDO(stub, '/ws', user.id, { raw: c.req.raw });
+  const slug = c.req.param('slug');
+  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(slug));
+  // Look up the caller's real team role from D1 (a non-member gets none, so the
+  // DO denies). Never trust an X-Team-Role from the upgrade request itself.
+  const init: { raw: Request; teamRole?: string } = { raw: c.req.raw };
+  try {
+    const teamRow = await c.env.DB.prepare(
+      'SELECT role FROM team_members WHERE app_id = ? AND user_id = ?',
+    ).bind(slug, user.id).first<{ role: string }>();
+    if (teamRow) init.teamRole = teamRow.role;
+  } catch { /* no role → DO grants only the owner (via owner_id) */ }
+  return forwardToDO(stub, '/ws', user.id, init);
 });
 
 export default app;

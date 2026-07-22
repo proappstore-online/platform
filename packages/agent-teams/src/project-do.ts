@@ -214,9 +214,12 @@ export class ProjectDO implements DurableObject {
     if (!row) return null;
     // Owner always has access
     if (row.owner_id === userId) return null;
-    // Team member access: the router sets X-Team-Role after checking D1
+    // Team member access: the router sets X-Team-Role ONLY after verifying
+    // membership in D1. Require a KNOWN role value (not mere header presence) as
+    // defence-in-depth against a smuggled/garbage header. Fine-grained
+    // per-route checks happen in assertRole.
     const teamRole = request.headers.get('X-Team-Role');
-    if (teamRole) return null; // membership established; role checked by assertRole
+    if (teamRole && TEAM_ROLES.includes(teamRole as TeamRole)) return null;
     return json({ error: 'not_found' }, 404);
   }
 
