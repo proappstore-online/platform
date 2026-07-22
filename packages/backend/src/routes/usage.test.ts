@@ -14,12 +14,14 @@ function todayKey(): string {
 }
 
 describe('POST /v1/usage/ping', () => {
+  const active = () => mockStmt({ first: { 1: 1 } }); // active subscription
+
   it('clamps deltaSeconds to 90 and returns the upserted totals', async () => {
-    // app exists -> upsert -> read-back row
+    // app exists -> active subscription -> prior row (none) -> upsert
     const appLookup = mockStmt({ first: { id: 'meetup' } });
+    const prior = mockStmt({ first: null });
     const upsert = mockStmt();
-    const readback = mockStmt({ first: { session_seconds: 90, api_calls: 0 } });
-    const db = mockD1(appLookup, upsert, readback);
+    const db = mockD1(appLookup, active(), prior, upsert);
 
     const res = await app.request(
       '/v1/usage/ping',
@@ -31,23 +33,62 @@ describe('POST /v1/usage/ping', () => {
       makeEnv(db),
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      ok: boolean;
-      day: string;
-      sessionSeconds: number;
-      apiCalls: number;
-    };
+    const body = (await res.json()) as { ok: boolean; recorded: boolean; day: string; sessionSeconds: number };
     expect(body.ok).toBe(true);
+    expect(body.recorded).toBe(true);
     expect(body.sessionSeconds).toBeLessThanOrEqual(90);
     expect(body.day).toBe(todayKey());
 
-    // The upsert call must have bound the clamped value (90), not 999.
-    const upsertBindCalls = (upsert.bind as ReturnType<typeof vi.fn>).mock.calls;
-    expect(upsertBindCalls.length).toBeGreaterThan(0);
-    const boundArgs = upsertBindCalls[0] as unknown[];
-    // bind(appId, userId, day, deltaSeconds, deltaApiCalls, now)
-    expect(boundArgs[3]).toBe(90);
-    expect(boundArgs[4]).toBe(0);
+    // First ping of the day → clamped to the per-ping cap (90), not 999.
+    const boundArgs = (upsert.bind as ReturnType<typeof vi.fn>).mock.calls[0] as unknown[];
+    expect(boundArgs[3]).toBe(90); // deltaSeconds
+    expect(boundArgs[4]).toBe(0); // deltaApiCalls
+  });
+
+  it('does NOT record usage for a non-subscriber (Sybil defence, #58)', async () => {
+    const appLookup = mockStmt({ first: { id: 'meetup' } });
+    const noSub = mockStmt({ first: null }); // no active subscription
+    const db = mockD1(appLookup, noSub);
+
+    const res = await app.request(
+      '/v1/usage/ping',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId: 'meetup', deltaSeconds: 90 }),
+      },
+      makeEnv(db),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; recorded: boolean; sessionSeconds: number };
+    expect(body.ok).toBe(true);
+    expect(body.recorded).toBe(false);
+    expect(body.sessionSeconds).toBe(0);
+    // Only apps + subscription queries ran — no prior-read, no upsert.
+    expect((db.prepare as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+  });
+
+  it('binds recorded session time to REAL elapsed wall-clock (#58)', async () => {
+    const appLookup = mockStmt({ first: { id: 'meetup' } });
+    // Prior ping was ~2s ago — even though the client claims 90s, only ~2s of
+    // real time elapsed, so at most ~2s may be recorded.
+    const prior = mockStmt({ first: { session_seconds: 100, api_calls: 0, last_seen: Date.now() - 2000 } });
+    const upsert = mockStmt();
+    const db = mockD1(appLookup, active(), prior, upsert);
+
+    const res = await app.request(
+      '/v1/usage/ping',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId: 'meetup', deltaSeconds: 90 }),
+      },
+      makeEnv(db),
+    );
+    expect(res.status).toBe(200);
+    const boundArgs = (upsert.bind as ReturnType<typeof vi.fn>).mock.calls[0] as unknown[];
+    expect(boundArgs[3] as number).toBeGreaterThanOrEqual(2);
+    expect(boundArgs[3] as number).toBeLessThanOrEqual(4); // ~2s, never the claimed 90
   });
 
   it('rejects an unknown app with 400 "unknown app"', async () => {
@@ -84,9 +125,9 @@ describe('POST /v1/usage/ping', () => {
 
   it('clamps deltaApiCalls to 1000', async () => {
     const appLookup = mockStmt({ first: { id: 'meetup' } });
+    const prior = mockStmt({ first: null });
     const upsert = mockStmt();
-    const readback = mockStmt({ first: { session_seconds: 0, api_calls: 1000 } });
-    const db = mockD1(appLookup, upsert, readback);
+    const db = mockD1(appLookup, active(), prior, upsert);
 
     const res = await app.request(
       '/v1/usage/ping',

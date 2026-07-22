@@ -102,11 +102,37 @@ usageRoutes.post('/usage/ping', async (c) => {
       .first<{ id: string }>();
     if (!appRow) return c.text('unknown app', 400);
 
-    const deltaSeconds = clampDelta(body.deltaSeconds, MAX_DELTA_SECONDS);
-    const deltaApiCalls = clampDelta(body.deltaApiCalls, MAX_DELTA_API_CALLS);
-
     const now = Date.now();
     const day = utcDayKey(now);
+
+    // SECURITY (#58): usage drives creator payouts from the subscription pool,
+    // so only an ACTIVE PAID subscriber's usage may be recorded — otherwise
+    // anyone (incl. cheaply-created throwaway accounts) could Sybil-inflate an
+    // app's pool share or dilute a rival's. Non-subscribers get a benign ok
+    // without a write, so the SDK heartbeat doesn't error-spam.
+    const sub = await c.env.DB.prepare(
+      "SELECT 1 FROM subscriptions WHERE user_id = ? AND status = 'active'",
+    )
+      .bind(user.id)
+      .first<{ 1: number }>();
+    if (!sub) {
+      return c.json({ ok: true, recorded: false, day, sessionSeconds: 0, apiCalls: 0 });
+    }
+
+    // Read the prior row up front so we can bind recorded session time to REAL
+    // elapsed wall-clock: a caller can't accrue more seconds than have actually
+    // passed since their last ping (defeats "send MAX_DELTA every request").
+    // First ping of the day (no prior row) allows up to the per-ping clamp.
+    const prior = await c.env.DB.prepare(
+      'SELECT session_seconds, api_calls, last_seen FROM usage_daily WHERE app_id = ? AND user_id = ? AND day = ?',
+    )
+      .bind(appId, user.id, day)
+      .first<{ session_seconds: number; api_calls: number; last_seen: number }>();
+
+    const requestedSeconds = clampDelta(body.deltaSeconds, MAX_DELTA_SECONDS);
+    const elapsedSeconds = prior ? Math.max(0, Math.ceil((now - Number(prior.last_seen)) / 1000)) : MAX_DELTA_SECONDS;
+    const deltaSeconds = Math.min(requestedSeconds, elapsedSeconds);
+    const deltaApiCalls = clampDelta(body.deltaApiCalls, MAX_DELTA_API_CALLS);
 
     // Upsert: insert a fresh row if this is the first ping for this
     // (app, user, day), otherwise add to the existing totals.
@@ -121,19 +147,12 @@ usageRoutes.post('/usage/ping', async (c) => {
       .bind(appId, user.id, day, deltaSeconds, deltaApiCalls, now)
       .run();
 
-    // Read back the totals so the SDK sees the authoritative current state
-    // (including the clamped deltas) without a follow-up query.
-    const row = await c.env.DB.prepare(
-      'SELECT session_seconds, api_calls FROM usage_daily WHERE app_id = ? AND user_id = ? AND day = ?',
-    )
-      .bind(appId, user.id, day)
-      .first<{ session_seconds: number; api_calls: number }>();
-
     return c.json({
       ok: true,
+      recorded: true,
       day,
-      sessionSeconds: row ? Number(row.session_seconds) : deltaSeconds,
-      apiCalls: row ? Number(row.api_calls) : deltaApiCalls,
+      sessionSeconds: prior ? Number(prior.session_seconds) + deltaSeconds : deltaSeconds,
+      apiCalls: prior ? Number(prior.api_calls) + deltaApiCalls : deltaApiCalls,
     });
   } catch (err) {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
