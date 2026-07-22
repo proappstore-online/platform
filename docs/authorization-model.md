@@ -7,6 +7,45 @@ wrong one — or checking mere *membership* when a *role* is required — is wha
 produced the 2026-07 privilege-escalation bugs (#78, #79, #95). Read this before
 adding any authorization check.
 
+## Why three systems (and why we deliberately do NOT merge them)
+
+The obvious instinct — "collapse everything into one role system" — is **wrong
+here**, and it's worth understanding why, because the three answer three
+genuinely different questions about three (often disjoint) sets of people.
+
+It is the same separation every mature platform makes. Compare **GitHub**:
+
+| GitHub | PAS equivalent | Governs |
+|---|---|---|
+| Your **account** (free / pro / staff) | **Platform role** (`user`/`creator`/`admin`) | Your standing with the platform company itself |
+| Your **role on a repo** (read/triage/write/maintain/admin) | **Team role** (`viewer`…`owner`) | Whether you may build/operate *this app* |
+| The **users of the app you built** (roles *your* app defines) | **App role** (`owner`/`member`/`moderator`/… + custom) | Roles *inside your app's* own product |
+
+Concretely, for the **chess-academy** app:
+
+- **Platform role** — is this person a ProAppStore admin? (Almost always just
+  `user`/`creator`.) Nothing to do with chess.
+- **Team role** — the *developers building chess-academy*: the creator
+  (`owner`), a hired `developer`, a read-only `viewer` reviewer. They touch the
+  repo, D1, and deploys.
+- **App role** — the *coaches and students using chess-academy*: a coach is a
+  `moderator`, a student is a `member`. They never see the repo; they exist only
+  inside the app's own domain, and **the app author invents these roles** (custom
+  strings are allowed).
+
+These are usually **three different sets of people**. A student using the app
+(app `member`) must never gain deploy rights (team `developer`); a hired
+contractor who can deploy (team `developer`) is not automatically a platform
+`admin`. Merging any two would force one of those wrong grants — you'd be
+fighting the conflation forever. So we keep them separate, make the *names*
+unmixable (typed `PlatformRole`/`TeamRole`/`AppRole`), and enforce the right one
+per scope.
+
+**What actually went wrong** in 2026-07 was never "three systems exist" — it was
+(1) the three reuse the words `admin`/`owner`/`viewer`, and (2) some code checked
+*membership* ("are you on the team?") where it needed a *role* ("are you an
+owner?"). Both are fixed; the three scopes stay.
+
 ## The three systems
 
 | System | Values (low → high) | Stored in | Answers |
