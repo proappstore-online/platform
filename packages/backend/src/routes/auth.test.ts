@@ -1,6 +1,32 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { app } from '../index.js';
 import { mintSession } from '@proappstore/build-core';
+import { isFirstPartyHost } from './auth.js';
+
+// #56: only first-party PAS surfaces may receive a session carrying platform
+// creator/admin; every creator-controlled app origin must be de-privileged.
+describe('isFirstPartyHost (#56 platform-role gate)', () => {
+  it('accepts first-party PAS surfaces', () => {
+    for (const h of [
+      'proappstore.online', 'console.proappstore.online', 'dashboard.proappstore.online',
+      'admin.proappstore.online', 'agents.proappstore.online',
+      'proideastore.online', 'console.proideastore.online',
+      'localhost', '127.0.0.1',
+    ]) {
+      expect(isFirstPartyHost(h), h).toBe(true);
+    }
+  });
+
+  it('rejects app subdomains and BYO custom domains (creator-controlled)', () => {
+    for (const h of [
+      'chess-academy.proappstore.online', 'interns.proappstore.online', 'evil.proappstore.online',
+      'chessclubs.online', 'evil.com', 'attacker.co.uk',
+      'proappstore.online.evil.com', 'notconsole.proappstore.online',
+    ]) {
+      expect(isFirstPartyHost(h), h).toBe(false);
+    }
+  });
+});
 
 const b64url = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
