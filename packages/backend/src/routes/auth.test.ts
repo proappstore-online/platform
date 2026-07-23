@@ -403,6 +403,12 @@ describe('auth provider start', () => {
     expect(loc.searchParams.get('client_id')).toBe('cid');
     expect(loc.searchParams.get('redirect_uri')).toBe('https://api.proappstore.online/v1/auth/github/callback');
     expect(loc.searchParams.get('state')).toBeTruthy();
+    // #88: the CSRF state cookie is __Host- prefixed (Secure, Path=/, no Domain)
+    // so a sibling *.proappstore.online app can't overwrite it.
+    const setCookie = res.headers.get('set-cookie') ?? '';
+    expect(setCookie).toContain('__Host-pas_oauth_state=');
+    expect(setCookie.toLowerCase()).toContain('secure');
+    expect(setCookie.toLowerCase()).toContain('path=/');
   });
 
   it('allows ProIdeaStore custom-domain callbacks', async () => {
@@ -502,7 +508,7 @@ describe('auth callback — state decoding (base64url padding regression)', () =
       const state = b64url(JSON.stringify({ r: ret, n: 'fixed-nonce' }));
       const res = await app.request(
         `/v1/auth/github/callback?code=x&state=${state}`,
-        { headers: { Cookie: `pas_oauth_state=${state}` } }, // CSRF cookie matches
+        { headers: { Cookie: `__Host-pas_oauth_state=${state}` } }, // CSRF cookie matches
         env(),
       );
       expect(res.status, `path ${path} (state len ${state.length})`).toBe(302);
@@ -517,7 +523,7 @@ describe('auth callback — state decoding (base64url padding regression)', () =
     const state = b64url(JSON.stringify({ r: ret, n: 'x' }));
     const res = await app.request(
       `/v1/auth/github/callback?error=access_denied&state=${state}`,
-      { headers: { Cookie: `pas_oauth_state=${state}` } },
+      { headers: { Cookie: `__Host-pas_oauth_state=${state}` } },
       env(),
     );
     expect(res.status).toBe(302);
@@ -528,7 +534,7 @@ describe('auth callback — state decoding (base64url padding regression)', () =
     const state = b64url(JSON.stringify({ r: 'https://console.proappstore.online/', n: 'a' }));
     const res = await app.request(
       `/v1/auth/github/callback?code=x&state=${state}`,
-      { headers: { Cookie: `pas_oauth_state=DIFFERENT` } },
+      { headers: { Cookie: `__Host-pas_oauth_state=DIFFERENT` } },
       env(),
     );
     expect(res.status).toBe(400);
@@ -544,7 +550,7 @@ describe('auth callback — state decoding (base64url padding regression)', () =
     const state = b64url(JSON.stringify({ r: 'https://evil.com', n: 'x' }));
     const res = await app.request(
       `/v1/auth/github/callback?code=x&state=${state}`,
-      { headers: { Cookie: `pas_oauth_state=${state}` } },
+      { headers: { Cookie: `__Host-pas_oauth_state=${state}` } },
       env(),
     );
     expect(res.status).toBe(400);
@@ -556,7 +562,7 @@ describe('auth callback — state decoding (base64url padding regression)', () =
     const state = b64url(JSON.stringify({ r: ret, n: 'x', a: 'chess-academy' }));
     const res = await app.request(
       `/v1/auth/google/callback?code=x&state=${state}`,
-      { headers: { Cookie: `pas_oauth_state=${state}` } },
+      { headers: { Cookie: `__Host-pas_oauth_state=${state}` } },
       env(null, [{ app_id: 'chess-academy', domain: 'chessclubs.online', kind: 'wildcard', status: 'active' }]),
     );
 

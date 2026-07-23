@@ -55,7 +55,9 @@ async function authUserDto(env: Env, claims: SessionClaims) {
 }
 
 /** Cookie that binds the OAuth `state` to the initiating browser (CSRF guard). */
-const STATE_COOKIE = 'pas_oauth_state';
+// __Host- prefix (#88): forces Secure + Path=/ + no Domain, so a sibling
+// *.proappstore.online app can't overwrite it (cookie-tossing the CSRF state).
+const STATE_COOKIE = '__Host-pas_oauth_state';
 
 type Provider = 'github' | 'google';
 const PROVIDERS = new Set<Provider>(['github', 'google']);
@@ -164,7 +166,7 @@ authRoutes.get('/auth/:provider/start', async (c) => {
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   // Bind the state to this browser so the callback can reject forged/replayed
   // states (login CSRF). SameSite=Lax survives the top-level OAuth redirect back.
-  setCookie(c, STATE_COOKIE, state, { httpOnly: true, secure: true, sameSite: 'Lax', path: '/v1/auth', maxAge: 600 });
+  setCookie(c, STATE_COOKIE, state, { httpOnly: true, secure: true, sameSite: 'Lax', path: '/', maxAge: 600 });
   const redirectUri = callbackUrl(c.env, provider);
 
   const authorize = new URL(
@@ -191,7 +193,7 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
 
   // CSRF: the state must match the cookie we set at /start (same browser).
   const cookieState = getCookie(c, STATE_COOKIE);
-  deleteCookie(c, STATE_COOKIE, { path: '/v1/auth' });
+  deleteCookie(c, STATE_COOKIE, { path: '/', secure: true });
   if (!cookieState || cookieState !== stateRaw) return c.text('invalid state', 400);
 
   // Recover the (own-origin) return_to from the verified state first, so any
