@@ -25,7 +25,9 @@ function fakeDb() {
         runs.push({ sql, args });
         return {
           run: async () => {},
-          first: async () => null,
+          // The creator-existence guard (#81) expects a real user; return a row
+          // for that lookup, null otherwise.
+          first: async () => (/FROM users\b/i.test(sql) ? { 1: 1 } : null),
         };
       },
     }),

@@ -92,6 +92,11 @@ export async function provisionData(
   //    while a good id (and the original creator_id) is preserved.
   if (!dbId) {
     steps.push({ name: 'record_app', status: 'skip', detail: 'no D1 id yet — record deferred to retry' });
+  } else if (!(await db.prepare('SELECT 1 FROM users WHERE id = ?').bind(creatorId).first())) {
+    // SECURITY (#81): this internal endpoint writes creatorId as the app owner
+    // AND the payout target (dev_profiles). Refuse an unknown creator so a
+    // leaked INTERNAL_TOKEN can't forge ownership/payouts for an arbitrary id.
+    steps.push({ name: 'record_app', status: 'fail', detail: `unknown creator: ${creatorId}` });
   } else {
     try {
       await db
