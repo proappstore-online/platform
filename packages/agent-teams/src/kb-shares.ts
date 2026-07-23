@@ -28,8 +28,13 @@ export function listShares(sql: SqlStorage): Response {
 
 export function createShare(sql: SqlStorage, body: CreateShareInput): Response {
   const accessType = body.accessType ?? 'open';
-  if (!['open', 'google', 'github', 'password'].includes(accessType)) {
-    return json({ error: 'accessType must be open, google, github, or password' }, 400);
+  // SECURITY (#90): only 'open' is actually enforced today — google/github/
+  // password auth is unimplemented (access returns 403). Reject creating those
+  // types so an owner can't be misled into thinking a link is access-protected
+  // when it would 403 everyone (and so a future "Phase 2" can't silently ship
+  // without the auth check). Re-allow each type as its check lands.
+  if (accessType !== 'open') {
+    return json({ error: `accessType '${accessType}' is not yet supported — only 'open' is available` }, 400);
   }
 
   const id = crypto.randomUUID().replace(/-/g, '').slice(0, 16); // short URL-safe ID

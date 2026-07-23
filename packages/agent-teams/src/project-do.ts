@@ -87,6 +87,26 @@ export function minRoleFor(path: string, method: string): TeamRole {
   return 'developer';
 }
 
+/** Store-listing categories (must match the storefront allow-list). */
+const LISTING_CATEGORIES = [
+  'productivity', 'social', 'marketplace', 'transport', 'finance',
+  'health', 'education', 'entertainment', 'tools', 'other',
+] as const;
+
+/**
+ * Coerce untrusted model output (#91) into a safe listing: only the known
+ * fields, category validated against the allow-list (else 'other'), lengths
+ * clamped. Prevents prompt-injected repo content from poisoning the public card.
+ */
+export function sanitizeListing(raw: unknown): { tagline: string; longDescription: string; category: string } {
+  const l = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {};
+  const str = (v: unknown, max: number) => (typeof v === 'string' ? v : '').slice(0, max);
+  const category = typeof l.category === 'string' && (LISTING_CATEGORIES as readonly string[]).includes(l.category)
+    ? l.category
+    : 'other';
+  return { tagline: str(l.tagline, 120), longDescription: str(l.longDescription, 4000), category };
+}
+
 export class ProjectDO implements DurableObject {
   private state: DurableObjectState;
   private env: Bindings;
@@ -1841,11 +1861,14 @@ Respond with ONLY the JSON object, no markdown fences, no explanation.`;
       }
       const aiRes = (await res.json()) as { content?: { type: string; text?: string }[] };
       const text = aiRes.content?.find(c => c.type === 'text')?.text ?? '';
+      // SECURITY (#91): the model was fed untrusted repo content (README/App.tsx
+      // written by agents or any team member), so treat its output as untrusted:
+      // whitelist the fields, validate category against the allow-list, and clamp
+      // lengths. Don't pass arbitrary model-emitted keys through to the listing.
       try {
-        const listing = JSON.parse(text);
-        return json({ listing, tokensUsed: true });
+        return json({ listing: sanitizeListing(JSON.parse(text)), tokensUsed: true });
       } catch {
-        return json({ listing: { tagline: '', longDescription: text, category: 'other' }, tokensUsed: true });
+        return json({ listing: sanitizeListing({ longDescription: text }), tokensUsed: true });
       }
     } catch (e) {
       return json({ error: `AI generation failed: ${e instanceof Error ? e.message : 'unknown'}` }, 500);

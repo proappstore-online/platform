@@ -8,6 +8,15 @@
  * (not IP): provisioning is gated behind an adult, so the realistic threat is
  * guessing one known login, not spraying many.
  *
+ * ACCEPTED TRADE-OFF (#89): because the block is per-login, someone who knows a
+ * login can deliberately fail 10 times to lock that student out for the window
+ * (an availability nuisance). We keep it this way on purpose — adding a per-IP
+ * dimension would weaken brute-force resistance (these passwords are low-entropy)
+ * against a multi-IP attacker, which is the worse risk for these low-value
+ * accounts. If class-time availability ever matters more than brute-force
+ * hardening, switch to a (login, ip) composite key + CAPTCHA rather than raising
+ * MAX_ATTEMPTS. Global/IP flood protection is layered separately at the edge.
+ *
  * Store is injected so the limiter logic is unit-testable without D1.
  */
 
