@@ -275,4 +275,76 @@ describe('Auth.init', () => {
       credentials: 'same-origin',
     });
   });
+
+  it('sends app, org, and school context when provisioning credentials', async () => {
+    const storage = new Map<string, string>([
+      ['pas:session', JSON.stringify({ token: 'staff-token', user: { id: 'google:1', login: 'staff', roles: ['user'], appRoles: {} } })],
+    ]);
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith('/v1/apps/chess-academy/roles/ensure-member')) return new Response(null, { status: 204 });
+      if (url.endsWith('/v1/auth/credentials/provision')) {
+        return new Response(JSON.stringify({ uid: 'cred:1', login: 'kid-login', password: 'secretpw', isChild: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('unexpected', { status: 500 });
+    });
+    vi.stubGlobal('window', {
+      location: { hash: '', href: 'https://chess-academy.proappstore.online/' },
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value),
+        removeItem: (key: string) => storage.delete(key),
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const auth = new Auth('chess-academy', 'https://api.proappstore.online');
+    await auth.provisionChild({ orgId: 'org-1', schoolId: 'school-1', login: 'kid-login' });
+
+    const provisionInit = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/v1/auth/credentials/provision'))?.[1] as RequestInit;
+    expect(JSON.parse(String(provisionInit.body))).toMatchObject({
+      appId: 'chess-academy',
+      orgId: 'org-1',
+      schoolId: 'school-1',
+      login: 'kid-login',
+    });
+  });
+
+  it('sends app context when resetting credential passwords', async () => {
+    const storage = new Map<string, string>([
+      ['pas:session', JSON.stringify({ token: 'staff-token', user: { id: 'google:1', login: 'staff', roles: ['user'], appRoles: {} } })],
+    ]);
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith('/v1/apps/chess-academy/roles/ensure-member')) return new Response(null, { status: 204 });
+      if (url.endsWith('/v1/auth/credentials/reset-password')) {
+        return new Response(JSON.stringify({ password: 'newsecret' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('unexpected', { status: 500 });
+    });
+    vi.stubGlobal('window', {
+      location: { hash: '', href: 'https://chess-academy.proappstore.online/' },
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value),
+        removeItem: (key: string) => storage.delete(key),
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const auth = new Auth('chess-academy', 'https://api.proappstore.online');
+    await auth.resetPassword('cred:student');
+
+    const resetInit = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/v1/auth/credentials/reset-password'))?.[1] as RequestInit;
+    expect(JSON.parse(String(resetInit.body))).toEqual({
+      appId: 'chess-academy',
+      targetUserId: 'cred:student',
+    });
+  });
 });

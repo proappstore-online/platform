@@ -167,9 +167,10 @@ describe('CORS for app custom domains', () => {
 
 // Minimal in-memory D1 fake covering just the statements the credential
 // endpoints + rate limiter issue. Enforces the unique credential_login.
-function fakeDb() {
+function fakeDb(opts: { tools?: Record<string, unknown> } = {}) {
   const users: Array<Record<string, unknown>> = [];
   const attempts = new Map<string, { window_start: number; count: number }>();
+  const tools = opts.tools ?? {};
   return {
     _users: users,
     _attempts: attempts,
@@ -210,6 +211,10 @@ function fakeDb() {
           return { meta: { changes: 0 } };
         },
         async first<T>() {
+          if (/SELECT manifest FROM app_tools/i.test(sql)) {
+            const [, name] = stmt._args as [string, string];
+            return (tools[name] ? { manifest: JSON.stringify(tools[name]) } : null) as T | null;
+          }
           if (/FROM users WHERE credential_login/i.test(sql)) {
             const u = users.find((x) => x.credential_login === (stmt._args[0] as string));
             return (u ? { id: u.id, login: u.login, password_hash: u.password_hash } : null) as T | null;
@@ -232,6 +237,14 @@ function fakeDb() {
 
 const creatorToken = () => mintSession({ uid: 'gh:adult', login: 'teacher', roles: ['user', 'creator'] }, KEY);
 const userToken = () => mintSession({ uid: 'gh:kid', login: 'plainuser', roles: ['user'] }, KEY);
+const allowTool = (name: string, params: Record<string, { type: string; optional?: boolean }> = {}) => ({
+  name,
+  description: 'test permission probe',
+  operation: 'query',
+  sql: 'SELECT 1 AS ok WHERE :__user_id IS NOT NULL',
+  params,
+  requires_auth: true,
+});
 
 describe('POST /v1/auth/credentials/provision', () => {
   const post = (body: unknown, headers: Record<string, string>, db: ReturnType<typeof fakeDb>) =>
@@ -247,6 +260,30 @@ describe('POST /v1/auth/credentials/provision', () => {
   it('403s for a non-creator (e.g. a provisioned child)', async () => {
     const res = await post({}, { Authorization: `Bearer ${await userToken()}` }, fakeDb());
     expect(res.status).toBe(403);
+  });
+
+  it('allows an app-authorized non-creator to provision a child', async () => {
+    const db = fakeDb({
+      tools: {
+        can_provision_student_credentials: allowTool('can_provision_student_credentials', {
+          org_id: { type: 'string' },
+          school_id: { type: 'string', optional: true },
+        }),
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ rows: [{ ok: 1 }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+
+    const res = await post(
+      { appId: 'chess-academy', orgId: 'org-1', schoolId: 'school-1' },
+      { Authorization: `Bearer ${await userToken()}` },
+      db,
+    );
+
+    expect(res.status).toBe(200);
+    expect(db._users[0]!.created_by).toBe('gh:kid');
   });
 
   it('provisions a child: returns login+password once, records created_by', async () => {
@@ -333,9 +370,9 @@ describe('POST /v1/auth/credentials/reset-password', () => {
     app.request('/v1/auth/credentials/login', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     }, { DB: db, SESSION_SIGNING_KEY: KEY } as never);
-  const resetPw = async (body: unknown, db: ReturnType<typeof fakeDb>) =>
+  const resetPw = async (body: unknown, db: ReturnType<typeof fakeDb>, token = creatorToken()) =>
     app.request('/v1/auth/credentials/reset-password', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await creatorToken()}` }, body: JSON.stringify(body),
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await token}` }, body: JSON.stringify(body),
     }, { DB: db, SESSION_SIGNING_KEY: KEY } as never);
 
   it('resets password and old password stops working', async () => {
@@ -365,6 +402,28 @@ describe('POST /v1/auth/credentials/reset-password', () => {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer badtoken' }, body: '{}',
     }, { DB: db, SESSION_SIGNING_KEY: KEY } as never);
     expect(res.status).toBe(401);
+  });
+
+  it('allows an app-authorized non-creator to reset another creator-created credential account', async () => {
+    const db = fakeDb({
+      tools: {
+        can_reset_student_credential_password: allowTool('can_reset_student_credential_password', {
+          target_user_id: { type: 'string' },
+        }),
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ rows: [{ ok: 1 }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+    const prov = await (await provision({ login: 'reset-by-staff' }, db)).json() as { uid: string; password: string };
+
+    const resetRes = await resetPw({ targetUserId: prov.uid, appId: 'chess-academy' }, db, userToken());
+
+    expect(resetRes.status).toBe(200);
+    const { password: newPw } = await resetRes.json() as { password: string };
+    expect(newPw).toBeTruthy();
+    expect(newPw).not.toBe(prov.password);
   });
 
   it('400s for non-credential accounts', async () => {

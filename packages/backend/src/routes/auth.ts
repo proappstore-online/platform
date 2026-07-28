@@ -19,6 +19,7 @@ import type { Context } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError } from '../lib/auth.js';
 import { hashPassword, verifyPassword, dummyPasswordHash } from '../lib/password.js';
+import { prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
 import { generateLogin, generatePassword, normalizeLogin, isValidLogin } from '../lib/credential-gen.js';
 import { d1AttemptStore, isBlocked, recordFailure, recordSuccess } from '../lib/credential-rate-limit.js';
 
@@ -35,6 +36,59 @@ async function requireClaims(c: Context<{ Bindings: Env }>): Promise<SessionClai
   const claims = await verifySession(header.slice(7), c.env.SESSION_SIGNING_KEY);
   if (!claims) throw new HttpError('invalid or expired session', 401);
   return claims;
+}
+
+function validAppId(appId: string): boolean {
+  return /^[a-z][a-z0-9-]*$/.test(appId) && appId.length <= 58;
+}
+
+function appIdFromBody(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const appId = value.trim();
+  return validAppId(appId) ? appId : null;
+}
+
+async function appActionAllows(
+  c: Context<{ Bindings: Env }>,
+  appId: string,
+  actionName: string,
+  params: Record<string, unknown>,
+  userId: string,
+): Promise<boolean> {
+  if (!validAppId(appId)) return false;
+
+  const row = await c.env.DB.prepare('SELECT manifest FROM app_tools WHERE app_id = ? AND name = ?')
+    .bind(appId, actionName)
+    .first<{ manifest: string }>();
+  if (!row) return false;
+
+  let manifest: ToolManifest;
+  try {
+    manifest = JSON.parse(row.manifest) as ToolManifest;
+  } catch {
+    return false;
+  }
+  if (manifest.operation !== 'query') return false;
+
+  let payload: { sql: string; params: unknown[] };
+  try {
+    payload = prepareActionQuery(manifest, params, userId);
+  } catch {
+    return false;
+  }
+
+  const upstream = await fetch(`https://data-${appId}.proappstore.online/query`, {
+    method: 'POST',
+    headers: {
+      ...(c.env.INTERNAL_TOKEN ? { 'X-Internal-Token': c.env.INTERNAL_TOKEN } : {}),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  }).catch(() => null);
+  if (!upstream?.ok) return false;
+
+  const data = await upstream.json().catch(() => null) as { rows?: unknown[] } | null;
+  return Array.isArray(data?.rows) && data.rows.length > 0;
 }
 
 async function authUserDto(env: Env, claims: SessionClaims) {
@@ -293,20 +347,29 @@ authRoutes.patch('/auth/me/date-of-birth', async (c) => {
 authRoutes.post('/auth/email/start', (c) => c.json({ error: 'email sign-in is not enabled yet — use GitHub or Google' }, 501));
 
 // ── POST /v1/auth/credentials/provision ────────────────────
-// An authenticated adult (creator) provisions a child/student account that
+// An authenticated adult (creator) or app-authorized staff member provisions a
+// child/student account that
 // signs in with a username + password — no email, no OAuth. Returns the
 // login + password ONCE (the password is never retrievable again). Built for
 // kids who don't have email (chess-academy); generalizes to any education
 // product. This is NOT public self-registration — provisioning is gated.
 authRoutes.post('/auth/credentials/provision', async (c) => {
   const claims = await requireClaims(c);
-  // Only creators provision accounts. Credential (child) accounts get only the
-  // 'user' role, so this also prevents a provisioned child provisioning others.
-  if (!claims.roles.includes('creator')) throw new HttpError('only creators can provision accounts', 403);
-
   const body = await c.req
-    .json<{ login?: string; displayName?: string; isChild?: boolean; password?: string }>()
-    .catch(() => ({} as { login?: string; displayName?: string; isChild?: boolean; password?: string }));
+    .json<{ login?: string; displayName?: string; isChild?: boolean; password?: string; appId?: string; orgId?: string; schoolId?: string | null }>()
+    .catch(() => ({} as { login?: string; displayName?: string; isChild?: boolean; password?: string; appId?: string; orgId?: string; schoolId?: string | null }));
+
+  const platformAllowed = claims.roles.includes('creator') || claims.roles.includes('admin');
+  if (!platformAllowed) {
+    const appId = appIdFromBody(body.appId);
+    const appAllowed = appId
+      ? await appActionAllows(c, appId, 'can_provision_student_credentials', {
+        org_id: body.orgId,
+        school_id: body.schoolId ?? null,
+      }, claims.uid)
+      : false;
+    if (!appAllowed) throw new HttpError('not allowed to provision credential accounts', 403);
+  }
 
   // A supplied login is used as-is (and a collision is a hard 409); otherwise we
   // generate animal triples and retry past the rare collision.
@@ -396,18 +459,27 @@ authRoutes.post('/auth/credentials/login', async (c) => {
 });
 
 // ── POST /v1/auth/credentials/reset-password ───────────────
-// An authenticated adult resets the password of a credential (child) account.
-// Returns the new random password ONCE — the adult shows it to the child.
+// An authenticated adult or app-authorized staff member resets the password of
+// a credential (child) account. Returns the new random password ONCE — the
+// adult shows it to the child.
 authRoutes.post('/auth/credentials/reset-password', async (c) => {
   const claims = await requireClaims(c);
-  if (!claims.roles.includes('creator')) throw new HttpError('only creators can reset passwords', 403);
-
   const body = await c.req
-    .json<{ targetUserId?: string }>()
-    .catch(() => ({} as { targetUserId?: string }));
+    .json<{ targetUserId?: string; appId?: string }>()
+    .catch(() => ({} as { targetUserId?: string; appId?: string }));
   const targetId = body.targetUserId;
   if (!targetId || typeof targetId !== 'string') throw new HttpError('targetUserId is required', 400);
   if (!targetId.startsWith('cred:')) throw new HttpError('can only reset credential accounts', 400);
+
+  const appId = appIdFromBody(body.appId);
+  const appAllowed = appId
+    ? await appActionAllows(c, appId, 'can_reset_student_credential_password', {
+      target_user_id: targetId,
+    }, claims.uid)
+    : false;
+  if (!appAllowed && !claims.roles.includes('creator') && !claims.roles.includes('admin')) {
+    throw new HttpError('not allowed to reset credential passwords', 403);
+  }
 
   // Verify the target exists and is a credential account
   const target = await c.env.DB.prepare(
@@ -419,7 +491,7 @@ authRoutes.post('/auth/credentials/reset-password', async (c) => {
   // may reset its password. Without this, every 'creator' (which is every
   // signed-in user) could reset ANY credential account and read the new
   // password from the response — full cross-tenant account takeover.
-  if (target.created_by !== claims.uid && !claims.roles.includes('admin')) {
+  if (!appAllowed && target.created_by !== claims.uid && !claims.roles.includes('admin')) {
     throw new HttpError('not your account', 403);
   }
 

@@ -158,26 +158,27 @@ export class Auth {
 
   /**
    * Provision a child/student credential account. Requires the *current* user
-   * to be signed in as a creator (adult). Returns the generated `login` and
-   * `password` ONCE — the password is never retrievable again, so surface it
-   * to the adult immediately (copy/print) and let them re-provision if lost.
+   * to be signed in as a creator (adult) or be authorized by this app's
+   * `can_provision_student_credentials` action. Returns the generated `login`
+   * and `password` ONCE — the password is never retrievable again, so surface
+   * it to the adult immediately (copy/print) and let them reset it if lost.
    *
    * Pass `login` to choose the username (else an `animal-animal-animal` triple
    * is generated), `displayName` for a friendly display handle, and `isChild`
    * (defaults to true). The provisioned account does NOT replace the current
    * session — the adult stays signed in.
    *
-   * @throws if not signed in as a creator (403) or the login is taken (409).
+   * @throws if not authorized (403) or the login is taken (409).
    */
   async provisionChild(
-    opts: { login?: string; displayName?: string; isChild?: boolean; password?: string } = {},
+    opts: { login?: string; displayName?: string; isChild?: boolean; password?: string; orgId?: string; schoolId?: string | null } = {},
   ): Promise<{ uid: string; login: string; password: string; isChild: boolean }> {
     const res = await this.authenticatedFetch(new URL('/v1/auth/credentials/provision', this.apiBase), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(opts),
+      body: JSON.stringify({ ...opts, appId: this.appId }),
     });
     if (res.status === 401) {
       this.handleUnauthorized();
@@ -185,7 +186,7 @@ export class Auth {
     }
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      if (res.status === 403) throw new Error('Only creators can provision accounts.');
+      if (res.status === 403) throw new Error('You are not allowed to provision accounts.');
       if (res.status === 409) throw new Error('That login is already taken.');
       throw new Error(`Provision failed (${res.status}): ${body}`);
     }
@@ -195,7 +196,8 @@ export class Auth {
   /**
    * Reset the password for a credential (child) account. Returns the new
    * random password ONCE — show it to the student immediately. Only callable
-   * by a signed-in creator (teacher/admin). The old password is invalidated.
+   * by a signed-in creator or app-authorized staff member. The old password is
+   * invalidated.
    */
   async resetPassword(targetUserId: string): Promise<{ password: string }> {
     const res = await this.authenticatedFetch(new URL('/v1/auth/credentials/reset-password', this.apiBase), {
@@ -203,7 +205,7 @@ export class Auth {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ targetUserId }),
+      body: JSON.stringify({ targetUserId, appId: this.appId }),
     });
     if (res.status === 401) {
       this.handleUnauthorized();
