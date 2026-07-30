@@ -279,9 +279,22 @@ dependencies:
    now depends on an external scheduler, so the endpoint reports a backlog and
    the workflow escalates it to a failure instead of exiting clean.
 3. **Server-side action/auth failure logging** — the majority of #106's value.
-   The backend already sees action name, status, user, app, and role on every
-   `/v1/apps/:appId/actions/:name` call; unspoofable, no SDK release, covers
-   already-deployed app versions.
+   **Done.** Implemented as a single hook in `app.onError` rather than per-route
+   instrumentation: every app-scoped failure already passes through there with
+   the route pattern, status and `:appId` resolved, so one hook covers actions,
+   db, rooms, invites, roles and storage at once and does not drift as routes are
+   added. Credential flows are instrumented explicitly, since their `appId`
+   arrives in the body rather than the path.
+
+   Two constraints discovered while building it, both now enforced in code:
+   - **Rows require an authenticated caller; counts do not.** `source = 'server'`
+     is the tier an owner trusts most, so it must not be mintable — otherwise any
+     caller could POST junk to `/v1/apps/<victim>/actions/x`, take the 400, and
+     write a row into that app's log, reintroducing #108's cross-app spoofing
+     through the trusted path.
+   - **The log endpoints are excluded from operation logging.** A failed log
+     upload writing a log row is circular, and it would let malformed bodies
+     generate rows.
 4. **SDK logger (#105)** reusing `usage.ts`'s transport (batch, `pagehide`,
    `sendBeacon`, mediated-URL and auth-mode handling at usage.ts:176-220) rather
    than a second implementation of it.
