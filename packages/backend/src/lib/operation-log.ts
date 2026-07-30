@@ -71,7 +71,7 @@ export function classifyOperation(ctx: OperationContext): { category: string; op
   const match = ctx.routePath.match(/\/apps\/:appId\/([^/]+)(?:\/(.*))?$/);
   if (!match) return { category: 'app', operation: `${ctx.method} ${ctx.routePath}` };
 
-  const segment = match[1];
+  const segment = match[1] ?? '';
   const category = CATEGORY_BY_SEGMENT[segment] ?? segment;
 
   // Prefer a concrete name (the action, the flow) over the pattern — an owner

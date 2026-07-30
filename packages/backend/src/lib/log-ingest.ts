@@ -81,7 +81,7 @@ export function traceIdFromTraceparent(header: string | null | undefined): strin
   if (!header) return null;
   const parts = header.trim().split('-');
   if (parts.length < 4) return null;
-  const traceId = parts[1];
+  const traceId = parts[1] ?? '';
   if (!/^[0-9a-f]{32}$/i.test(traceId) || /^0+$/.test(traceId)) return null;
   return traceId.toLowerCase();
 }
