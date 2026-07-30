@@ -295,9 +295,17 @@ dependencies:
    - **The log endpoints are excluded from operation logging.** A failed log
      upload writing a log row is circular, and it would let malformed bodies
      generate rows.
-4. **SDK logger (#105)** reusing `usage.ts`'s transport (batch, `pagehide`,
-   `sendBeacon`, mediated-URL and auth-mode handling at usage.ts:176-220) rather
-   than a second implementation of it.
+4. **SDK logger (#105)** — **Done.** `app.logs` on `initPro()`, auto-capturing
+   `window.onerror` and `unhandledrejection`, started during construction so a
+   crash in the app's own first render is still recorded. The transport was
+   *extracted* from usage.ts into `telemetry-transport.ts` and is now shared;
+   usage behaviour is unchanged (its 13 tests pass untouched).
+
+   Backpressure is the part worth remembering: a 202 (app over budget) puts the
+   SDK quiet for a minute and a 404 (unknown `appId`) disables it permanently.
+   Retrying either would turn an app's error loop into a flood — which is the
+   failure mode the whole quota exists to prevent, so the client must not defeat
+   it. Anonymous uploads carry a rotating per-install `clientId`.
 5. **#106 client residue** — failures that never reach the API.
 6. **#107 alerting** off AE metrics, **rendered in the console only** — no
    external delivery (decision 6). Gate the QA-failure signal behind #62 (tail

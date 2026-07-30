@@ -18,8 +18,13 @@ const TOK = await testToken('gh:7');
  * Worker, a floating promise when Hono is dispatched without an ExecutionContext
  * (as `app.request` does). So a test must let it settle before asserting; a
  * response alone proves nothing either way.
+ *
+ * Positive assertions poll via `vi.waitFor` rather than sleeping a fixed interval:
+ * a fixed sleep passed in isolation and failed under full-suite load, which is a
+ * flaky test rather than a real signal. Negative assertions have nothing to poll
+ * for, so they wait a bounded interval and then assert absence.
  */
-const settle = () => new Promise((r) => setTimeout(r, 5));
+const settle = (ms = 50) => new Promise((r) => setTimeout(r, ms));
 
 /** A D1 mock that answers by SQL shape and records every app_logs insert. */
 function recordingDb() {
@@ -63,9 +68,8 @@ describe('failed app operations are logged server-side', () => {
     const db = recordingDb();
     const res = await callAction(TOK, db);
     expect(res.status).toBeGreaterThanOrEqual(400);
-    await settle();
+    await vi.waitFor(() => expect(db.inserts).toHaveLength(1));
 
-    expect(db.inserts).toHaveLength(1);
     const row = db.inserts[0];
     expect(row[0]).toBe('chess-academy');
     expect(row[1]).toBe('gh:7');

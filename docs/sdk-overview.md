@@ -172,6 +172,27 @@ Use `hideTopbar` and `hideFooter` when the app owns all chrome but still wants P
 What the platform records when an app operation fails, and what apps must not
 put into a log. Design rationale: [ADR-008](./adr/008-error-observability.md).
 
+### Client-side capture (`app.logs`)
+
+On by default. `initPro()` starts it during construction — before app code runs —
+so a crash in the app's own first render is still recorded, which is the
+white-screen case this exists for.
+
+```ts
+const app = initPro({ appId: 'my-app', monitoring: { build: { sha } } })
+app.logs.error('checkout failed', { step: 'confirm' })   // deliberate
+// window.onerror + unhandledrejection are captured automatically
+```
+
+Uploads work **signed out** — a failure before sign-in has no session, and that is
+the report most worth keeping. Anonymous entries carry a rotating per-install
+`clientId` instead of a user id. Opt out with `monitoring: { auto: false }`.
+
+Transport is shared with `app.usage` (`telemetry-transport.ts`): batched, flushed
+every 10s, `sendBeacon` on `pagehide` in platform-cookie mode, keepalive fetch
+otherwise. On a 202 (app over budget) the SDK goes quiet for a minute rather than
+retrying; on a 404 (unknown `appId`) it stops permanently.
+
 ### Recorded for you, with no SDK code
 
 Every failed app-scoped API operation is logged **server-side** — `app.actions`,
