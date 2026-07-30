@@ -11,14 +11,14 @@ export async function handlePlatformMediation(request: Request, env: Env, route:
   if (url.pathname === API_PREFIX || url.pathname.startsWith(`${API_PREFIX}/`)) {
     // API/auth plane: the backend mints + verifies sessions with the same key,
     // so a 401 here is authoritative — the session really is invalid → clear it.
-    return forwardWithSession(request, env.API, upstreamApiUrl(url), true);
+    return forwardWithSession(request, env.API, upstreamApiUrl(url), true, route);
   }
   if (url.pathname === DATA_PREFIX || url.pathname.startsWith(`${DATA_PREFIX}/`)) {
     // Data plane: each data-worker holds its own SESSION_SIGNING_KEY, which can
     // drift from the backend's (e.g. before a reconcile) and 401 a perfectly
     // valid session. Never let that sign the user out — surface it as a data
     // error and keep the cookie. See #65/#66.
-    return forwardWithSession(request, null, upstreamDataUrl(url, route), false);
+    return forwardWithSession(request, null, upstreamDataUrl(url, route), false, route);
   }
   return null;
 }
@@ -37,7 +37,7 @@ function upstreamDataUrl(url: URL, route: Route): string {
   return upstream.toString();
 }
 
-async function forwardWithSession(request: Request, binding: Fetcher | null, upstreamUrl: string, clearCookieOn401: boolean): Promise<Response> {
+async function forwardWithSession(request: Request, binding: Fetcher | null, upstreamUrl: string, clearCookieOn401: boolean, route: Route): Promise<Response> {
   const token = readCookie(request.headers.get("Cookie"), SESSION_COOKIE_NAME);
   if (!token) return noStore(Response.json({ error: "not signed in" }, { status: 401 }));
 
@@ -45,7 +45,7 @@ async function forwardWithSession(request: Request, binding: Fetcher | null, ups
     return noStore(new Response("Forbidden", { status: 403 }));
   }
 
-  const headers = forwardedHeaders(request.headers, token);
+  const headers = forwardedHeaders(request.headers, token, route);
   const init: RequestInit = {
     method: request.method,
     headers,
@@ -63,13 +63,23 @@ async function forwardWithSession(request: Request, binding: Fetcher | null, ups
   return response;
 }
 
-function forwardedHeaders(source: Headers, token: string): Headers {
+function forwardedHeaders(source: Headers, token: string, route: Route): Headers {
   const headers = new Headers(source);
   headers.delete("Authorization");
   headers.delete("Cookie");
   headers.delete("Host");
   headers.delete("Origin");
   headers.delete("Referer");
+  // App context, asserted by the host from the resolved route rather than taken
+  // from the URL the page chose. Delete-then-set, in that order: page JS can send
+  // this header itself, and without the delete a page on app A could claim app B
+  // through the *trusted* path. This is the whole value of the binding — upstream
+  // treats its presence as our word (see backend routes/logs.ts).
+  //
+  // Deliberately narrow: it names the app, it does not authorize anything. Auth
+  // stays the session below.
+  headers.delete("X-PAS-App");
+  headers.set("X-PAS-App", route.slug);
   // Never let a browser-supplied internal token reach the data-worker's trusted
   // path — this cookie-mediation route is the browser data plane, so the
   // internal path must only ever be reachable from the backend actions-executor.

@@ -43,6 +43,27 @@ export async function requireUser(c: Context<{ Bindings: Env }>): Promise<FasUse
   };
 }
 
+/**
+ * Resolve the caller if they have a valid session, else null. Never throws for
+ * missing or bad credentials.
+ *
+ * For endpoints where being signed out is a legitimate state rather than an
+ * error — app log ingestion above all (ADR-008 §2): a white screen on load or a
+ * failed credential sign-in has no session *by definition*, and those are
+ * exactly the failures worth capturing. `requireUser` would 401 away the most
+ * valuable reports.
+ *
+ * Callers must not treat a null user as "trusted anonymous": pair this with a
+ * quota and, where available, the trusted app-context binding.
+ */
+export async function optionalUser(c: Context<{ Bindings: Env }>): Promise<FasUser | null> {
+  try {
+    return await requireUser(c);
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Role systems — PAS has THREE distinct role scopes. They are intentionally
 // separate (like GitHub: account type vs repo-collaborator role vs your app's

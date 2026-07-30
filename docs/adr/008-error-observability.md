@@ -129,8 +129,18 @@ writing D1 rows) needs a small D1/DO rollup on top. The in-isolate sampling
 bucket at analytics-ingest.ts:66-80 is the cheapest interim pattern and is
 already proven in this codebase.
 
-The same primitive is what platform#83 (provisioning abuse controls) needs. Build
-it once, in `packages/backend/src/lib/`, use it twice.
+**Correction to an earlier draft of this ADR:** it claimed the backend had no
+rate-limiting primitive. It has three — `lib/rate-limit.ts` (in-isolate,
+per-second), `lib/proxy-rate-limit.ts` (durable per-app/day, probabilistic
+writes), and `lib/credential-rate-limit.ts`. The gap is narrower than stated: a
+*durable per-app/day counter for logs*, which `lib/log-quota.ts` now builds by
+composing the first two rather than inventing a third. Any future work here
+should extend those, and platform#83 (provisioning abuse controls) should do the
+same.
+
+One invariant, learned the hard way: **the burst ceiling must stay at or above
+`MAX_BATCH_SIZE`.** Set below it, a single legal full batch is throttled on
+arrival and no app can ever flush one. There is a test asserting the ordering.
 
 **App-context binding is real work, not a URL change.** #108 proposes preferring
 the mediated `/.pas/api/.../logs` route "so the host can bind the log to the app
@@ -260,9 +270,14 @@ dependencies:
 1. **Config-only, no dependencies:** `[observability]`, Tail Worker,
    `upload_source_maps`, one AE data point in `app.onError`. Plus #107's runbook,
    which is doc-only and needs nothing else.
-2. **#108 + shared rate-limit lib** (with #83), mediation `X-PAS-App` binding,
-   server-side scrubbing, `app_logs` schema migration, pruning cron (the backend
-   has no cron trigger yet — add one).
+2. **#108** — mediation `X-PAS-App` binding, server-side scrubbing, `app_logs`
+   schema migration, quota, and retention. **Done.** Retention follows the
+   existing payout-cron convention (internal endpoint + scheduled workflow)
+   rather than a Worker cron trigger: the backend's default export is a plain
+   Hono app that service-binding callers and every route test depend on, and
+   adding `[triggers]` would mean restructuring it. Trade-off accepted: pruning
+   now depends on an external scheduler, so the endpoint reports a backlog and
+   the workflow escalates it to a failure instead of exiting clean.
 3. **Server-side action/auth failure logging** — the majority of #106's value.
    The backend already sees action name, status, user, app, and role on every
    `/v1/apps/:appId/actions/:name` call; unspoofable, no SDK release, covers

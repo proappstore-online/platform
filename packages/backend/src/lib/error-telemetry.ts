@@ -124,8 +124,16 @@ export async function fingerprint(
   normalizedStack: string,
   routePath: string,
 ): Promise<string> {
-  const basis = `${errorType}\n${normalizedStack}\n${routePath}`;
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(basis));
+  return hash16([errorType, normalizedStack, routePath]);
+}
+
+/**
+ * 16 hex chars of SHA-256 over newline-joined parts. The shared grouping-key
+ * primitive — client log ingestion (lib/log-ingest.ts) fingerprints on different
+ * parts but must produce the same *kind* of key, so both sides share this.
+ */
+export async function hash16(parts: string[]): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(parts.join('\n')));
   return Array.from(new Uint8Array(digest).slice(0, 8))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
