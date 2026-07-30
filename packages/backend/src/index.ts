@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { HttpError } from './lib/auth.js';
+import { recordServerError } from './lib/error-telemetry.js';
 import type { Env } from './types.js';
 import { openapiSpec, openapiYaml } from './openapi-spec.js';
 import { subscriptionRoutes } from './routes/subscription.js';
@@ -100,6 +101,35 @@ app.onError(async (err, c) => {
     : { error: 'Internal server error' };
 
   if (!(err instanceof HttpError)) console.error('Unhandled error:', err);
+
+  // Make server failures countable, not just greppable (ADR-008 §1). Only 5xx:
+  // a 4xx is an expected outcome, and indexing those would bury real faults.
+  // Never awaited on the response path and never throws — see recordServerError.
+  if (status >= 500) {
+    const written = recordServerError(c.env, {
+      appId: c.req.param('appId') ?? null,
+      service: 'backend',
+      method: c.req.method,
+      // Route pattern, not concrete path: `/v1/apps/:appId/logs` groups, while
+      // `/v1/apps/chess-academy/logs` mints one error group per app.
+      routePath: c.req.routePath ?? c.req.path,
+      status,
+      errorType: err instanceof Error ? err.name : typeof err,
+      message: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack ?? null : null,
+      traceId: c.req.header('traceparent')?.split('-')[1] ?? null,
+      cfRay: c.req.header('cf-ray') ?? null,
+    });
+    try {
+      c.executionCtx.waitUntil(written);
+    } catch {
+      // No ExecutionContext — `app.fetch(req, env)` without a ctx, as tests and
+      // service-binding callers do. Accessing executionCtx *throws* there, so it
+      // must be guarded: leaving it unguarded turns any 5xx into a telemetry
+      // crash that replaces the real response. The promise is left to settle on
+      // its own; recordServerError never rejects.
+    }
+  }
 
   // CORS middleware doesn't run on error responses, so set headers here
   const origin = await corsOrigin(c.env, c.req.header('Origin'));
