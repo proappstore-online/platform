@@ -19,6 +19,7 @@ import { Email } from './email.js';
 import { Webhooks } from './webhooks.js';
 import { Invites } from './invites.js';
 import { Actions } from './actions.js';
+import { Logs } from './logs.js';
 import type { ProInitOptions } from './types.js';
 
 // Vendored base primitive types — one import for app authors.
@@ -95,6 +96,7 @@ export class ProAppStore {
   readonly webhooks: Webhooks;
   readonly invites: Invites;
   readonly actions: Actions;
+  readonly logs: Logs;
 
   constructor(opts: ProInitOptions) {
     const apiBase = opts.proApiBase ?? 'https://api.proappstore.online';
@@ -119,11 +121,19 @@ export class ProAppStore {
     this.webhooks = new Webhooks(opts.appId, apiBase, this.auth);
     this.invites = new Invites(opts.appId, apiBase, this.auth);
     this.actions = new Actions(opts.appId, apiBase, this.auth);
+    this.logs = new Logs(opts.appId, apiBase, this.auth, opts.monitoring ?? {});
     // Auto-start telemetry unless the app opts out. Wrapped in try-catch
     // because localStorage can throw in incognito, sandboxed iframes, or
     // when storage quota is exceeded.
     if (opts.usage?.auto !== false) {
       try { this.usage.start(); } catch { /* non-fatal — app runs without usage tracking */ }
+    }
+    // Runtime error capture. Started here rather than lazily so a crash during the
+    // app's own first render is still recorded — the white-screen case is exactly
+    // what platform#105 exists for, and it happens before any app code could call
+    // start() itself.
+    if (opts.monitoring?.auto !== false) {
+      try { this.logs.start(); } catch { /* non-fatal — app runs without monitoring */ }
     }
   }
 }

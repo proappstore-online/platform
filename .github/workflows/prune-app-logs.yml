@@ -1,0 +1,65 @@
+name: Prune app logs
+
+# Retention for app_logs (ADR-008). The table had no retention and nothing that
+# deleted from it — harmless while unused, a growth problem in the shared `pas`
+# D1 once automatic SDK capture is on.
+#
+# Follows the payout-cron convention: an internal endpoint driven by a scheduled
+# workflow rather than a Worker cron trigger. The trade-off is that retention now
+# depends on this workflow running — so a backlog is escalated to a failure below
+# rather than logged and forgotten.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "29 3 * * *" # daily, off-peak, offset from the hourly reconcile jobs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prune-app-logs
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    env:
+      INTERNAL_TOKEN: ${{ secrets.INTERNAL_TOKEN }}
+    steps:
+      - name: Prune expired app log rows
+        run: |
+          set -euo pipefail
+
+          test -n "$INTERNAL_TOKEN" || { echo "::error::INTERNAL_TOKEN not set"; exit 1; }
+
+          # The endpoint is batch-limited, so drain in a bounded loop rather than
+          # assuming one call clears the backlog.
+          for attempt in $(seq 1 20); do
+            body="$(curl -sS -X POST \
+              -H "X-Internal-Token: $INTERNAL_TOKEN" \
+              -H "User-Agent: gh-actions/prune-app-logs" \
+              "https://api.proappstore.online/v1/internal/logs/prune")"
+
+            echo "$body" | jq -c .
+
+            overdue="$(echo "$body" | jq -r '.stillOverdue // 0')"
+            deleted="$(echo "$body" | jq -r '.deleted // 0')"
+
+            if [ "$overdue" = "0" ]; then
+              echo "Retention up to date after $attempt call(s)."
+              exit 0
+            fi
+
+            # No progress but work remains — retrying will not help, and silently
+            # succeeding here is how retention stops working unnoticed.
+            if [ "$deleted" = "0" ]; then
+              echo "::error::prune made no progress with $overdue rows still overdue"
+              exit 1
+            fi
+
+            echo "$overdue rows still overdue; continuing."
+          done
+
+          echo "::error::prune did not drain the backlog in 20 calls"
+          exit 1

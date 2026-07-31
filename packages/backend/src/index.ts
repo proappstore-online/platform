@@ -1,7 +1,10 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { HttpError } from './lib/auth.js';
+import type { Context } from 'hono';
+import { HttpError, optionalUser } from './lib/auth.js';
+import { recordServerError } from './lib/error-telemetry.js';
+import { recordOperationFailure, shouldLogOperationFailure } from './lib/operation-log.js';
 import type { Env } from './types.js';
 import { openapiSpec, openapiYaml } from './openapi-spec.js';
 import { subscriptionRoutes } from './routes/subscription.js';
@@ -25,6 +28,7 @@ import { domainRoutes } from './routes/domains.js';
 import { emailRoutes } from './routes/email.js';
 import { webhookConfigRoutes } from './routes/webhooks-config.js';
 import { logsRoutes } from './routes/logs.js';
+import { logsPruneRoutes } from './routes/logs-prune.js';
 import { toolsRoutes } from './routes/tools.js';
 import { actionRoutes } from './routes/actions.js';
 import { secretsRoutes } from './routes/secrets.js';
@@ -93,6 +97,30 @@ app.use(
   }),
 );
 
+/**
+ * Run telemetry outside the response path.
+ *
+ * `c.executionCtx` *throws* when Hono is dispatched without a context —
+ * `app.fetch(req, env)`, as tests and service-binding callers do — so it must be
+ * guarded. Unguarded, any failure became a telemetry crash that replaced the real
+ * response. The promise is left to settle on its own; every recorder here is
+ * documented never to reject.
+ */
+function background(c: Context<{ Bindings: Env }>, work: Promise<unknown>): void {
+  try {
+    c.executionCtx.waitUntil(work);
+  } catch {
+    void work;
+  }
+}
+
+/** Caller id for an operation log, or null when unauthenticated. Must not throw:
+ *  we are already on the error path. */
+async function userIdForLog(c: Context<{ Bindings: Env }>): Promise<string | null> {
+  const user = await optionalUser(c).catch(() => null);
+  return user?.id ?? null;
+}
+
 app.onError(async (err, c) => {
   const status = err instanceof HttpError ? err.status as ContentfulStatusCode : 500;
   const body = err instanceof HttpError
@@ -100,6 +128,51 @@ app.onError(async (err, c) => {
     : { error: 'Internal server error' };
 
   if (!(err instanceof HttpError)) console.error('Unhandled error:', err);
+
+  // Make server failures countable, not just greppable (ADR-008 §1). Only 5xx:
+  // a 4xx is an expected outcome, and indexing those would bury real faults.
+  // Never awaited on the response path and never throws — see recordServerError.
+  if (status >= 500) {
+    const written = recordServerError(c.env, {
+      appId: c.req.param('appId') ?? null,
+      service: 'backend',
+      method: c.req.method,
+      // Route pattern, not concrete path: `/v1/apps/:appId/logs` groups, while
+      // `/v1/apps/chess-academy/logs` mints one error group per app.
+      routePath: c.req.routePath ?? c.req.path,
+      status,
+      errorType: err instanceof Error ? err.name : typeof err,
+      message: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack ?? null : null,
+      traceId: c.req.header('traceparent')?.split('-')[1] ?? null,
+      cfRay: c.req.header('cf-ray') ?? null,
+    });
+    background(c, written);
+  }
+
+  // Failed app *operations* — the majority of platform#106's value, recorded
+  // server-side. Every app-scoped failure is a thrown HttpError passing through
+  // here with the route pattern, status, and :appId already resolved, so one hook
+  // covers actions, db, rooms, invites, roles and storage at once. Instrumenting
+  // each route would be more code and would drift as routes are added.
+  const appId = c.req.param('appId');
+  if (appId && shouldLogOperationFailure(c.req.method, status, c.req.routePath)) {
+    background(
+      c,
+      recordOperationFailure(c.env, {
+        appId,
+        userId: await userIdForLog(c),
+        method: c.req.method,
+        routePath: c.req.routePath ?? c.req.path,
+        params: c.req.param() as Record<string, string | undefined>,
+        status,
+        message: err instanceof Error ? err.message : String(err),
+        traceId: c.req.header('traceparent')?.split('-')[1] ?? null,
+        cfRay: c.req.header('cf-ray') ?? null,
+        mediated: Boolean(c.req.header('X-PAS-App')),
+      }),
+    );
+  }
 
   // CORS middleware doesn't run on error responses, so set headers here
   const origin = await corsOrigin(c.env, c.req.header('Origin'));
@@ -162,6 +235,7 @@ v1.route('/', domainRoutes);
 v1.route('/', emailRoutes);
 v1.route('/', webhookConfigRoutes);
 v1.route('/', logsRoutes);
+v1.route('/', logsPruneRoutes);
 v1.route('/', toolsRoutes);
 v1.route('/', actionRoutes);
 v1.route('/', secretsRoutes);

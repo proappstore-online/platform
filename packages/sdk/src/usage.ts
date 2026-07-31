@@ -19,6 +19,8 @@
  *   falling back to `fetch(..., { keepalive: true })`.
  */
 
+import { postTelemetry } from './telemetry-transport.js';
+
 interface AuthLike {
   token: string | null;
   isSignedIn?: boolean;
@@ -180,43 +182,15 @@ export class Usage {
       deltaSeconds: seconds,
       deltaApiCalls: apiCalls,
     });
-    const url = this.auth.usesPlatformCookie ? '/.pas/api/v1/usage/ping' : `${this.apiBase}/v1/usage/ping`;
-
-    // Prefer sendBeacon for keepalive (unload survivor) paths. sendBeacon
-    // doesn't allow setting custom Authorization headers. In platform-cookie
-    // mode the same-origin beacon carries the HttpOnly app cookie; in legacy
-    // mode this remains best-effort and falls back to bearer fetch when needed.
-    if (keepalive && typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
-      try {
-        const blob = new Blob([body], { type: 'application/json' });
-        const ok = navigator.sendBeacon(url, blob);
-        if (ok) return;
-      } catch {
-        // fall through
-      }
-    }
-
-    try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      const init: RequestInit = {
-        method: 'POST',
-        headers,
-        body,
-        keepalive,
-      };
-      if (this.auth.usesPlatformCookie) {
-        init.credentials = 'same-origin';
-      } else {
-        const token = this.auth.token;
-        if (!token) return;
-        headers.Authorization = `Bearer ${token}`;
-      }
-      await fetch(url, {
-        ...init,
-      });
-    } catch {
-      // Telemetry never breaks an app.
-    }
+    // Transport lives in telemetry-transport.ts, shared with the app logger
+    // (mediated URL, bearer-vs-cookie, sendBeacon on unload). Behaviour here is
+    // unchanged: beacon is still attempted in both auth modes on the unload path,
+    // which stays best-effort in legacy-bearer mode because a beacon cannot carry
+    // the token.
+    await postTelemetry(this.auth, this.apiBase, '/v1/usage/ping', body, {
+      keepalive,
+      beacon: true,
+    });
   }
 
   private isAuthenticated(): boolean {

@@ -22,6 +22,7 @@ import { hashPassword, verifyPassword, dummyPasswordHash } from '../lib/password
 import { prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
 import { generateLogin, generatePassword, normalizeLogin, isValidLogin } from '../lib/credential-gen.js';
 import { d1AttemptStore, isBlocked, recordFailure, recordSuccess } from '../lib/credential-rate-limit.js';
+import { recordAuthFailure, recordOperationFailure } from '../lib/operation-log.js';
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
 
@@ -368,7 +369,30 @@ authRoutes.post('/auth/credentials/provision', async (c) => {
         school_id: body.schoolId ?? null,
       }, claims.uid)
       : false;
-    if (!appAllowed) throw new HttpError('not allowed to provision credential accounts', 403);
+    if (!appAllowed) {
+      // Instrumented explicitly rather than via the central onError hook: appId
+      // arrives in the *body* here, not the path, so the hook cannot see it.
+      //
+      // This is the Chess Academy failure — staff hit "Only creators..." during a
+      // student credential flow and nothing anywhere recorded it, so it had to be
+      // diagnosed by reading source. With this row, the console answers it:
+      // which app, which user, which operation, which status.
+      if (appId) {
+        await recordOperationFailure(c.env, {
+          appId,
+          userId: claims.uid,
+          method: 'POST',
+          routePath: '/v1/auth/credentials/provision',
+          params: { name: 'provisionChild' },
+          status: 403,
+          message: 'not allowed to provision credential accounts',
+          traceId: c.req.header('traceparent')?.split('-')[1] ?? null,
+          cfRay: c.req.header('cf-ray') ?? null,
+          mediated: Boolean(c.req.header('X-PAS-App')),
+        });
+      }
+      throw new HttpError('not allowed to provision credential accounts', 403);
+    }
   }
 
   // A supplied login is used as-is (and a collision is a hard 409); otherwise we
@@ -431,6 +455,17 @@ authRoutes.post('/auth/credentials/login', async (c) => {
   const store = d1AttemptStore(c.env.DB);
   const now = Date.now();
   if (await isBlocked(store, login, now)) {
+    // Counted, never stored: a credential sign-in is not app-scoped and
+    // `app_logs.app_id` is NOT NULL, so this lands in Analytics Engine under the
+    // `platform` index. It is the only visibility we have into platform#89 —
+    // lockout is per-login, so a known login can be locked out by a third party
+    // and today nothing records the pattern. No login or password material is
+    // included, only the reason.
+    await recordAuthFailure(c.env, {
+      reason: 'lockout',
+      status: 429,
+      cfRay: c.req.header('cf-ray') ?? null,
+    });
     throw new HttpError('too many sign-in attempts — please try again later', 429);
   }
 
@@ -445,6 +480,15 @@ authRoutes.post('/auth/credentials/login', async (c) => {
   const ok = !!row?.password_hash && passwordMatches;
   if (!ok || !row) {
     await recordFailure(store, login, now);
+    // One reason for both branches, matching the response: distinguishing
+    // "no such login" from "wrong password" in telemetry would reintroduce the
+    // account enumeration the constant-time path above exists to prevent, for
+    // anyone who can read the metrics.
+    await recordAuthFailure(c.env, {
+      reason: 'invalid_credentials',
+      status: 401,
+      cfRay: c.req.header('cf-ray') ?? null,
+    });
     // Same message whether the login exists or not — no account enumeration.
     throw new HttpError('invalid login or password', 401);
   }
