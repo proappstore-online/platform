@@ -7,7 +7,12 @@ const TOK = await testToken('gh:1');
 function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
   const prepare = vi.fn();
   for (const stmt of stmts) prepare.mockReturnValueOnce(stmt);
-  prepare.mockReturnValue(mockStmt());
+  // Defaults for the #108 ingest guards: app exists, and 0 logs used today.
+  prepare.mockImplementation((sql: string) => {
+    if (/FROM apps\b/i.test(sql)) return mockStmt({ first: { id: 'myapp' } });
+    if (/COUNT\(/i.test(sql)) return mockStmt({ first: { n: 0 } });
+    return mockStmt();
+  });
   return { prepare, batch: vi.fn().mockResolvedValue([{ meta: { changes: 1 } }]) };
 }
 
@@ -15,9 +20,37 @@ function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof
   return sharedMakeEnv(overrides, db ?? mockD1());
 }
 
-// POST /v1/apps/:appId/logs — any authenticated user can ingest logs for any app
+// POST /v1/apps/:appId/logs — signed-in ingest, hardened by #108 (app must
+// exist + per-(app,user) daily quota); read stays owner-only.
 
 describe('POST /v1/apps/:appId/logs', () => {
+  it('rejects logs for an app that does not exist (#108)', async () => {
+    const db = mockD1();
+    db.prepare.mockImplementation((sql: string) =>
+      /FROM apps\b/i.test(sql) ? mockStmt({ first: null }) : mockStmt({ first: { n: 0 } }));
+    const res = await app.request('/v1/apps/ghost/logs', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: [{ ts: Date.now(), level: 'info', message: 'x' }] }),
+    }, makeEnv({}, db));
+    expect(res.status).toBe(400);
+  });
+
+  it('429s when the per-(app,user) daily quota is exhausted (#108)', async () => {
+    const db = mockD1();
+    db.prepare.mockImplementation((sql: string) => {
+      if (/FROM apps\b/i.test(sql)) return mockStmt({ first: { id: 'myapp' } });
+      if (/COUNT\(/i.test(sql)) return mockStmt({ first: { n: 5000 } }); // at cap
+      return mockStmt();
+    });
+    const res = await app.request('/v1/apps/myapp/logs', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: [{ ts: Date.now(), level: 'info', message: 'x' }] }),
+    }, makeEnv({}, db));
+    expect(res.status).toBe(429);
+  });
+
   it('returns 401 without auth', async () => {
     const res = await app.request('/v1/apps/myapp/logs', {
       method: 'POST',

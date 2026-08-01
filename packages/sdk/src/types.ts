@@ -21,6 +21,13 @@ export interface ProInitOptions {
     /** Default true. Set false to disable the auto-heartbeat in this app. */
     auto?: boolean;
   };
+  /** Runtime monitoring. Auto error-capture → app_logs is on by default. */
+  monitoring?: {
+    /** Default true. Set false to disable auto error-capture + auto-flush. */
+    auto?: boolean;
+    /** Build metadata (commit, version, …) attached to every log entry. */
+    build?: Record<string, unknown>;
+  };
 }
 
 export type SubscriptionStatus = 'active' | 'past_due' | 'canceled' | 'incomplete';
