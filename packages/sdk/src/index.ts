@@ -19,6 +19,7 @@ import { Email } from './email.js';
 import { Webhooks } from './webhooks.js';
 import { Invites } from './invites.js';
 import { Actions } from './actions.js';
+import { Monitoring } from './monitoring.js';
 import type { ProInitOptions } from './types.js';
 
 // Vendored base primitive types — one import for app authors.
@@ -95,6 +96,8 @@ export class ProAppStore {
   readonly webhooks: Webhooks;
   readonly invites: Invites;
   readonly actions: Actions;
+  /** Runtime monitoring — auto-captures errors + records failed ops to app_logs. */
+  readonly logs: Monitoring;
 
   constructor(opts: ProInitOptions) {
     const apiBase = opts.proApiBase ?? 'https://api.proappstore.online';
@@ -118,12 +121,18 @@ export class ProAppStore {
     this.email = new Email(opts.appId, apiBase, this.auth);
     this.webhooks = new Webhooks(opts.appId, apiBase, this.auth);
     this.invites = new Invites(opts.appId, apiBase, this.auth);
-    this.actions = new Actions(opts.appId, apiBase, this.auth);
+    this.logs = new Monitoring(opts.appId, apiBase, this.auth, opts.monitoring?.build);
+    // Actions reports failed calls to the logger (#106).
+    this.actions = new Actions(opts.appId, apiBase, this.auth, this.logs);
     // Auto-start telemetry unless the app opts out. Wrapped in try-catch
     // because localStorage can throw in incognito, sandboxed iframes, or
     // when storage quota is exceeded.
     if (opts.usage?.auto !== false) {
       try { this.usage.start(); } catch { /* non-fatal — app runs without usage tracking */ }
+    }
+    // Auto-capture runtime errors → app_logs unless the app opts out (#105).
+    if (opts.monitoring?.auto !== false) {
+      try { this.logs.start(); } catch { /* non-fatal — app runs without monitoring */ }
     }
   }
 }

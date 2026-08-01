@@ -11,6 +11,12 @@ export const logsRoutes = new Hono<{ Bindings: Env }>();
 
 const MAX_BATCH_SIZE = 100;
 const MAX_ENTRY_SIZE = 4096;
+/** Per-(app, user) ingestion cap per UTC day — abuse/flood + cost guard (#108). */
+const DAILY_INGEST_CAP = 5000;
+
+function startOfUtcDay(nowMs: number): number {
+  return nowMs - (nowMs % 86_400_000);
+}
 
 interface LogEntry {
   ts: number;
@@ -29,8 +35,30 @@ logsRoutes.post('/apps/:appId/logs', async (c) => {
     throw new HttpError('entries array required', 400);
   }
 
-  const entries = body.entries.slice(0, MAX_BATCH_SIZE);
+  // SECURITY (#108): before automatic SDK monitoring makes this endpoint
+  // high-volume, harden write ingestion (read stays owner-only).
+  // (1) The app must exist — don't let a typo'd/spoofed appId accumulate logs
+  //     no owner can ever see.
+  const appRow = await c.env.DB.prepare('SELECT id FROM apps WHERE id = ?').bind(appId).first<{ id: string }>();
+  if (!appRow) throw new HttpError('unknown app', 400);
+
   const now = Date.now();
+
+  // (2) Per-(app, user) daily quota so one caller can't flood an app's logs
+  //     (noise + D1 cost). Real app users still upload their own runtime logs;
+  //     membership isn't required (end-users aren't team members) — the quota +
+  //     payload caps are the abuse control.
+  const dayStart = startOfUtcDay(now);
+  const usedRow = await c.env.DB.prepare(
+    'SELECT COUNT(*) AS n FROM app_logs WHERE app_id = ? AND user_id = ? AND ingested_at >= ?',
+  ).bind(appId, user.id, dayStart).first<{ n: number }>();
+  const used = Number(usedRow?.n ?? 0);
+  if (used >= DAILY_INGEST_CAP) {
+    throw new HttpError('daily log quota exceeded', 429);
+  }
+
+  const remaining = DAILY_INGEST_CAP - used;
+  const entries = body.entries.slice(0, Math.min(MAX_BATCH_SIZE, remaining));
 
   const stmt = c.env.DB.prepare(
     `INSERT INTO app_logs (app_id, user_id, ts, level, category, message, data, build_meta, ingested_at)
