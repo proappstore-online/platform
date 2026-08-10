@@ -151,6 +151,7 @@ export default {
     }
 
     if (url.pathname === "/" || url.pathname === "") {
+      if (isProtocolClient(request)) return wrongEndpoint();
       return new Response(
         "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools, recipe\nProject tools: scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running, set_project_budget, run_tests, set_model, add_ticket\nAgent introspection: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\nIdentity: whoami (show the authenticated PAS account + roles).\nSafety: mcp_audit_log (per-account audit trail). Mutating tools are audited; destructive tools (scaffold_app, delete_file, publish_app) require confirm: true; expensive/irreversible tools accept dry_run: true to preview; set MCP_READ_ONLY=1 to block all writes.\n",
         { headers: { "content-type": "text/plain" } }
@@ -173,6 +174,16 @@ export default {
       return createAuthChallenge({ issuer }, bearer ? "invalid_token" : undefined);
     }
 
+    // Anything that isn't /mcp 404s here rather than being handed to serve().
+    // Today serve()'s default streamable-http handler gates on its own
+    // basePattern and 404s a non-matching path, so the fallthrough was
+    // harmless — but that is library internals, not a contract: `transport:
+    // "auto"` in agents>=0.14 dispatches a bare GET to the legacy SSE handler
+    // without re-checking the base path. Own the routing here instead.
+    if (!isMcpTransport) {
+      return new Response("Not found — the MCP endpoint is /mcp", { status: 404 });
+    }
+
     if (bearer && user) {
       (ctx as unknown as { props?: Record<string, unknown> }).props = {
         ...((ctx as unknown as { props?: Record<string, unknown> }).props ?? {}),
@@ -183,3 +194,38 @@ export default {
     return PasMcpAgent.serve("/mcp").fetch(request, env, ctx);
   },
 };
+
+/**
+ * Is this an MCP protocol client rather than a person in a browser?
+ *
+ * A client pointed at the origin instead of `/mcp` asks for the event stream
+ * with `GET / Accept: text/event-stream` (the legacy SSE transport), or POSTs
+ * JSON-RPC. Answering either with 200 and a short non-stream body tells the
+ * client "stream opened" and then drops it — and the spec-correct response to a
+ * dropped stream is to reconnect, so it redials ~1/sec, forever. The flood is
+ * invisible to everything we watch: every response is a 200, nothing throws, no
+ * AI tokens are spent, nothing reaches the audit log, and the safety layer only
+ * sees `tools/call` traffic carrying a verified uid, which a bare GET has
+ * neither of.
+ *
+ * OPTIONS and HEAD deliberately return false so CORS preflight is unaffected.
+ */
+function isProtocolClient(request: Request): boolean {
+  if (request.method === "POST") return true;
+  return (request.headers.get("accept") ?? "").includes("text/event-stream");
+}
+
+/** The JSON-RPC 405 the MCP spec requires from an endpoint with no stream to offer. */
+function wrongEndpoint(): Response {
+  return new Response(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: null,
+      error: {
+        code: -32000,
+        message: "Method Not Allowed — the MCP endpoint is https://mcp.proappstore.online/mcp",
+      },
+    }),
+    { status: 405, headers: { "content-type": "application/json", allow: "GET, HEAD" } }
+  );
+}

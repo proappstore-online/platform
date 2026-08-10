@@ -8,7 +8,12 @@ const TOK = await testToken('gh:1');
 function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
   const prepare = vi.fn();
   for (const stmt of stmts) prepare.mockReturnValueOnce(stmt);
-  prepare.mockReturnValue(mockStmt());
+  // Defaults for the #108 ingest guards: app exists, and 0 logs used today.
+  prepare.mockImplementation((sql: string) => {
+    if (/FROM apps\b/i.test(sql)) return mockStmt({ first: { id: 'myapp' } });
+    if (/COUNT\(/i.test(sql)) return mockStmt({ first: { n: 0 } });
+    return mockStmt();
+  });
   return { prepare, batch: vi.fn().mockResolvedValue([{ meta: { changes: 1 } }]) };
 }
 

@@ -75,7 +75,33 @@ app.license.current() / .validate(key)
 
 // Usage tracking (auto-on, drives creator payouts)
 app.usage.start() / .stop() / .flush()
+
+// Runtime monitoring (auto-on — captures errors + failed ops into app_logs)
+app.logs.error(category, message, data?) / .warn(...) / .info(...) / .capture(err) / .flush()
 ```
+
+## Monitoring
+
+`app.logs` batches client log entries to `POST /v1/apps/:appId/logs`, so when a
+user hits a failure the owner can inspect it after the fact (owner-only read via
+the dashboard / `GET /v1/apps/:appId/logs`).
+
+Auto-on by default: it captures uncaught `error` and `unhandledrejection` events,
+and the SDK records failed `app.actions.call()` (action name + status — never the
+params). Add your own entries with `app.logs.error('billing', 'checkout failed', { code })`.
+Entries carry route, auth mode, and any `monitoring.build` metadata; the SDK never
+logs tokens, credentials, SQL params, or request bodies.
+
+```ts
+const app = initPro({
+  appId: 'my-app',
+  monitoring: { auto: false },            // opt out of auto-capture
+  // monitoring: { build: { commit: __COMMIT__ } },  // stamp entries with a build id
+});
+```
+
+Ingestion is hardened: the app must exist and each (app, user) has a daily
+ingest quota, so logs can't be spoofed for other apps or flooded.
 
 ## React hooks
 

@@ -3,11 +3,17 @@ interface AuthLike {
   authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
+/** Minimal logger surface (satisfied by Logs) — failures only, never params. */
+interface LoggerLike {
+  capture(level: 'error', category: string, message: string, data?: Record<string, unknown>): void;
+}
+
 export class Actions {
   constructor(
     private readonly appId: string,
     private readonly apiBase: string,
     private readonly auth: AuthLike,
+    private readonly logger?: LoggerLike,
   ) {}
 
   async call<T = unknown>(name: string, params: Record<string, unknown> = {}): Promise<T> {
@@ -20,11 +26,14 @@ export class Actions {
       },
     );
     if (response.status === 401) {
+      // #106: record the failure (action name + status only — never the params).
+      this.logger?.capture('error', 'action', `action ${name} unauthorized`, { action: name, status: 401 });
       this.auth.handleUnauthorized();
       throw new Error('Not signed in.');
     }
     if (!response.ok) {
       const text = await response.text().catch(() => '');
+      this.logger?.capture('error', 'action', `action ${name} failed`, { action: name, status: response.status });
       throw new Error(`actions.${name} failed: ${response.status} ${text}`);
     }
     return (await response.json()) as T;

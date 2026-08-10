@@ -37,6 +37,38 @@ describe('Actions', () => {
     expect(a.handleUnauthorized).toHaveBeenCalledOnce();
   });
 
+  // #106 client half: a failed action leaves a record via the logger Actions was
+  // constructed with. The logger surface is `capture` (Logs), not `log` — an
+  // optional param means a mismatch here fails silently rather than at compile time.
+  it('reports failed actions to the logger without leaking params', async () => {
+    const logger = { capture: vi.fn() };
+    const a = auth(new Response('boom', { status: 500 }));
+    const actions = new Actions('interns', 'https://api.proappstore.online', a, logger);
+
+    await expect(actions.call('list_orgs', { secret: 'hunter2' })).rejects.toThrow('failed');
+    expect(logger.capture).toHaveBeenCalledWith(
+      'error',
+      'action',
+      'action list_orgs failed',
+      { action: 'list_orgs', status: 500 },
+    );
+    expect(JSON.stringify(logger.capture.mock.calls)).not.toContain('hunter2');
+  });
+
+  it('reports an unauthorized action to the logger', async () => {
+    const logger = { capture: vi.fn() };
+    const a = auth(new Response('nope', { status: 401 }));
+    const actions = new Actions('interns', 'https://api.proappstore.online', a, logger);
+
+    await expect(actions.call('list_orgs')).rejects.toThrow('Not signed in');
+    expect(logger.capture).toHaveBeenCalledWith(
+      'error',
+      'action',
+      'action list_orgs unauthorized',
+      { action: 'list_orgs', status: 401 },
+    );
+  });
+
   it('calls a public action without using authenticated fetch', async () => {
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ rows: [{ id: 'org-1' }] }));
     vi.stubGlobal('fetch', fetchMock);

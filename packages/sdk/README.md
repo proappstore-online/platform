@@ -656,6 +656,26 @@ are enforced by the platform before SQL reaches the data worker.
 
 Tables are user-defined (create them via `db.execute('CREATE TABLE IF NOT EXISTS ...')`). The schema is entirely up to the app developer.
 
+## Monitoring (`app.logs`)
+
+Runtime monitoring is **on by default**. `initPro()` captures uncaught `error` /
+`unhandledrejection` events and records failed `app.actions.call()` (action name +
+HTTP status only), batching them to `POST /v1/apps/:appId/logs`. Owners read them
+back (owner-only) via `GET /v1/apps/:appId/logs` / the dashboard.
+
+```ts
+app.logs.error('billing', 'checkout failed', { code });  // your own entries
+app.logs.capture(err, 'payments');                       // a caught exception
+```
+
+Entries include route, auth mode, and any `monitoring.build` metadata. The SDK
+**never** logs tokens, credentials, SQL params, or request bodies. Works in both
+`legacy-bearer` and `platform-cookie` modes; flushes on an interval and on
+`pagehide`. Opt out with `initPro({ monitoring: { auto: false } })`.
+
+Ingestion is hardened (issue #108): the app must exist and each (app, user) has a
+daily ingest quota, so logs can't be spoofed onto other apps or flooded.
+
 ## License
 
 MIT.
