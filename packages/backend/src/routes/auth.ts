@@ -20,8 +20,12 @@ import type { Env } from '../types.js';
 import { HttpError } from '../lib/auth.js';
 import { hashPassword, verifyPassword, dummyPasswordHash } from '../lib/password.js';
 import { prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
-import { generateLogin, generatePassword, normalizeLogin, isValidLogin } from '../lib/credential-gen.js';
+import {
+  generateLogin, generatePassword, normalizeLogin, isValidLogin,
+  normalizeEmail, isValidEmail, looksLikeEmail,
+} from '../lib/credential-gen.js';
 import { d1AttemptStore, isBlocked, recordFailure, recordSuccess } from '../lib/credential-rate-limit.js';
+import { recordAuthFailure, recordOperationFailure } from '../lib/operation-log.js';
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
 
@@ -356,8 +360,8 @@ authRoutes.post('/auth/email/start', (c) => c.json({ error: 'email sign-in is no
 authRoutes.post('/auth/credentials/provision', async (c) => {
   const claims = await requireClaims(c);
   const body = await c.req
-    .json<{ login?: string; displayName?: string; isChild?: boolean; password?: string; appId?: string; orgId?: string; schoolId?: string | null }>()
-    .catch(() => ({} as { login?: string; displayName?: string; isChild?: boolean; password?: string; appId?: string; orgId?: string; schoolId?: string | null }));
+    .json<{ login?: string; email?: string; displayName?: string; isChild?: boolean; password?: string; appId?: string; orgId?: string; schoolId?: string | null }>()
+    .catch(() => ({} as { login?: string; email?: string; displayName?: string; isChild?: boolean; password?: string; appId?: string; orgId?: string; schoolId?: string | null }));
 
   const platformAllowed = claims.roles.includes('creator') || claims.roles.includes('admin');
   if (!platformAllowed) {
@@ -368,7 +372,30 @@ authRoutes.post('/auth/credentials/provision', async (c) => {
         school_id: body.schoolId ?? null,
       }, claims.uid)
       : false;
-    if (!appAllowed) throw new HttpError('not allowed to provision credential accounts', 403);
+    if (!appAllowed) {
+      // Instrumented explicitly rather than via the central onError hook: appId
+      // arrives in the *body* here, not the path, so the hook cannot see it.
+      //
+      // This is the Chess Academy failure — staff hit "Only creators..." during a
+      // student credential flow and nothing anywhere recorded it, so it had to be
+      // diagnosed by reading source. With this row, the console answers it:
+      // which app, which user, which operation, which status.
+      if (appId) {
+        await recordOperationFailure(c.env, {
+          appId,
+          userId: claims.uid,
+          method: 'POST',
+          routePath: '/v1/auth/credentials/provision',
+          params: { name: 'provisionChild' },
+          status: 403,
+          message: 'not allowed to provision credential accounts',
+          traceId: c.req.header('traceparent')?.split('-')[1] ?? null,
+          cfRay: c.req.header('cf-ray') ?? null,
+          mediated: Boolean(c.req.header('X-PAS-App')),
+        });
+      }
+      throw new HttpError('not allowed to provision credential accounts', 403);
+    }
   }
 
   // A supplied login is used as-is (and a collision is a hard 409); otherwise we
@@ -389,6 +416,23 @@ authRoutes.post('/auth/credentials/provision', async (c) => {
   const passwordHash = await hashPassword(password);
 
   const isChild = body.isChild !== false; // default true — the primary use case
+
+  // Optional second sign-in identifier, for adults provisioned without OAuth
+  // (0042). Never verified — we send nothing to it — so it identifies the row
+  // and the password still does all the proving.
+  let credentialEmail: string | null = null;
+  const emailSupplied = body.email !== undefined && body.email !== null && String(body.email).trim() !== '';
+  if (emailSupplied) {
+    if (typeof body.email !== 'string') throw new HttpError('email must be a string', 400);
+    // `isChild` defaults to true, so attaching an email is opt-in twice over:
+    // the caller must pass both `email` and `isChild: false`. That is the point
+    // — 0029 makes "no email, no real name" the COPPA privacy feature for child
+    // accounts, and silently storing a child's address would undo it.
+    if (isChild) throw new HttpError('email is not allowed on a child account — pass isChild: false', 400);
+    credentialEmail = normalizeEmail(body.email);
+    if (!isValidEmail(credentialEmail)) throw new HttpError('email must be a valid address', 400);
+  }
+
   const now = Date.now();
 
   const attempts = supplied ? 1 : 6;
@@ -397,17 +441,28 @@ authRoutes.post('/auth/credentials/provision', async (c) => {
     const uid = `cred:${crypto.randomUUID()}`;
     const display = (body.displayName ?? '').trim() || login;
     try {
+      // `email` (the OAuth column, 0021) stays NULL on purpose: it means "an
+      // identity provider vouched for this address", which is never true here.
+      // A provisioned address goes in credential_email and nowhere else.
       await c.env.DB.prepare(
         `INSERT INTO users (id, provider, provider_id, login, email, avatar_url, is_child,
-           credential_login, password_hash, created_by, created_at, last_login_at)
-         VALUES (?1, 'credential', ?1, ?2, NULL, NULL, ?3, ?4, ?5, ?6, ?7, ?7)`,
-      ).bind(uid, display, isChild ? 1 : 0, login, passwordHash, claims.uid, now).run();
+           credential_login, credential_email, password_hash, created_by, created_at, last_login_at)
+         VALUES (?1, 'credential', ?1, ?2, NULL, NULL, ?3, ?4, ?8, ?5, ?6, ?7, ?7)`,
+      ).bind(uid, display, isChild ? 1 : 0, login, passwordHash, claims.uid, now, credentialEmail).run();
 
       // Returned ONCE — the password is not stored in plaintext and can't be
       // fetched again. If lost, the adult re-provisions / resets.
-      return c.json({ uid, login, password, isChild });
+      return c.json({ uid, login, email: credentialEmail, password, isChild });
     } catch (err) {
-      const isUnique = err instanceof Error && /UNIQUE constraint failed/i.test(err.message);
+      const message = err instanceof Error ? err.message : '';
+      const isUnique = /UNIQUE constraint failed/i.test(message);
+      // An email collision must NOT fall through to the retry below: the loop
+      // only re-rolls the login, so the same email would collide all six times
+      // and surface a 503 ("could not generate a unique login") for what is
+      // really a 409 the caller can act on.
+      if (isUnique && /credential_email/i.test(message)) {
+        throw new HttpError('that email is already taken', 409);
+      }
       if (isUnique && supplied) throw new HttpError('that login is already taken', 409);
       if (isUnique) continue; // generated collision — try a fresh triple
       throw err;
@@ -420,22 +475,67 @@ authRoutes.post('/auth/credentials/provision', async (c) => {
 // No auth. Verify login + password, mint a standard PAS session JWT — identical
 // shape to the OAuth path, so every downstream verifier is unchanged. Failed
 // attempts are rate-limited per login (lib/credential-rate-limit).
+//
+// The `login` field takes either an animal-triple username or, for an adult
+// account provisioned with one, an email (0042). Both resolve to the same row
+// and the same session; the password check is unchanged.
 authRoutes.post('/auth/credentials/login', async (c) => {
   const body = await c.req
     .json<{ login?: string; password?: string }>()
     .catch(() => ({} as { login?: string; password?: string }));
-  const login = typeof body.login === 'string' ? normalizeLogin(body.login) : '';
+  const raw = typeof body.login === 'string' ? body.login : '';
   const password = typeof body.password === 'string' ? body.password : '';
-  if (!login || !password) throw new HttpError('login and password are required', 400);
+  if (!raw.trim() || !password) throw new HttpError('login and password are required', 400);
+
+  // One request field, two identifier spaces (0042). '@' decides, and it can't
+  // be ambiguous: isValidLogin rejects '@' and isValidEmail requires one, so
+  // the spaces are disjoint by construction.
+  const byEmail = looksLikeEmail(raw);
+  const login = byEmail ? normalizeEmail(raw) : normalizeLogin(raw);
+
+  // Reject a malformed identifier before touching D1. Two reasons: the format
+  // rules are public, so this reveals nothing about which accounts exist; and
+  // `credential_login_attempts.login` is the PRIMARY KEY, so without this an
+  // unauthenticated caller can insert an unbounded number of junk rows by
+  // failing once against each of a million made-up identifiers. Every stored
+  // credential_login passed isValidLogin at provision time and every
+  // credential_email passed isValidEmail, so no real account is shut out.
+  // Same 401 and same message as a wrong password — one failure surface.
+  if (byEmail ? !isValidEmail(login) : !isValidLogin(login)) {
+    throw new HttpError('invalid login or password', 401);
+  }
 
   const store = d1AttemptStore(c.env.DB);
   const now = Date.now();
+  // Keyed on the identifier as typed, so an account with both a username and
+  // an email has two independent counters and tolerates 2 × MAX_ATTEMPTS
+  // guesses overall. Accepted: only adults (isChild: false) can hold an email,
+  // and provisioning an adult account is where a caller-chosen password is
+  // realistic, so the doubled budget applies to the accounts least likely to
+  // carry a low-entropy animal password. Key on the resolved user id instead
+  // if that stops being true.
   if (await isBlocked(store, login, now)) {
+    // Counted, never stored: a credential sign-in is not app-scoped and
+    // `app_logs.app_id` is NOT NULL, so this lands in Analytics Engine under the
+    // `platform` index. It is the only visibility we have into platform#89 —
+    // lockout is per-login, so a known login can be locked out by a third party
+    // and today nothing records the pattern. No login or password material is
+    // included, only the reason.
+    await recordAuthFailure(c.env, {
+      reason: 'lockout',
+      status: 429,
+      cfRay: c.req.header('cf-ray') ?? null,
+    });
     throw new HttpError('too many sign-in attempts — please try again later', 429);
   }
 
+  // Two statements rather than `WHERE credential_login = ?1 OR credential_email = ?1`:
+  // each hits its own partial unique index, and neither can cross-match into
+  // the other column.
   const row = await c.env.DB.prepare(
-    'SELECT id, login, password_hash FROM users WHERE credential_login = ?',
+    byEmail
+      ? 'SELECT id, login, password_hash FROM users WHERE credential_email = ?'
+      : 'SELECT id, login, password_hash FROM users WHERE credential_login = ?',
   ).bind(login).first<{ id: string; login: string; password_hash: string | null }>();
 
   // Always run one PBKDF2 pass — against a fixed dummy hash when the login (or
@@ -445,6 +545,15 @@ authRoutes.post('/auth/credentials/login', async (c) => {
   const ok = !!row?.password_hash && passwordMatches;
   if (!ok || !row) {
     await recordFailure(store, login, now);
+    // One reason for both branches, matching the response: distinguishing
+    // "no such login" from "wrong password" in telemetry would reintroduce the
+    // account enumeration the constant-time path above exists to prevent, for
+    // anyone who can read the metrics.
+    await recordAuthFailure(c.env, {
+      reason: 'invalid_credentials',
+      status: 401,
+      cfRay: c.req.header('cf-ray') ?? null,
+    });
     // Same message whether the login exists or not — no account enumeration.
     throw new HttpError('invalid login or password', 401);
   }

@@ -3,9 +3,9 @@ interface AuthLike {
   authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
-/** Minimal logger surface (satisfied by Monitoring) — failures only, never params. */
+/** Minimal logger surface (satisfied by Logs) — failures only, never params. */
 interface LoggerLike {
-  log(level: 'error', category: string, message: string, data?: Record<string, unknown>): void;
+  capture(level: 'error', category: string, message: string, data?: Record<string, unknown>): void;
 }
 
 export class Actions {
@@ -27,13 +27,13 @@ export class Actions {
     );
     if (response.status === 401) {
       // #106: record the failure (action name + status only — never the params).
-      this.logger?.log('error', 'action', `action ${name} unauthorized`, { action: name, status: 401 });
+      this.logger?.capture('error', 'action', `action ${name} unauthorized`, { action: name, status: 401 });
       this.auth.handleUnauthorized();
       throw new Error('Not signed in.');
     }
     if (!response.ok) {
       const text = await response.text().catch(() => '');
-      this.logger?.log('error', 'action', `action ${name} failed`, { action: name, status: response.status });
+      this.logger?.capture('error', 'action', `action ${name} failed`, { action: name, status: response.status });
       throw new Error(`actions.${name} failed: ${response.status} ${text}`);
     }
     return (await response.json()) as T;

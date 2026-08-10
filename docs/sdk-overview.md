@@ -193,6 +193,81 @@ For simple apps, use the default shell. For apps with their own primary navigati
 
 Use `hideTopbar` and `hideFooter` when the app owns all chrome but still wants ProShell gates and provider context.
 
+## Error observability
+
+What the platform records when an app operation fails, and what apps must not
+put into a log. Design rationale: [ADR-008](./adr/008-error-observability.md).
+
+### Client-side capture (`app.logs`)
+
+On by default. `initPro()` starts it during construction — before app code runs —
+so a crash in the app's own first render is still recorded, which is the
+white-screen case this exists for.
+
+```ts
+const app = initPro({ appId: 'my-app', monitoring: { build: { sha } } })
+app.logs.error('checkout failed', { step: 'confirm' })   // deliberate
+// window.onerror + unhandledrejection are captured automatically
+```
+
+Uploads work **signed out** — a failure before sign-in has no session, and that is
+the report most worth keeping. Anonymous entries carry a rotating per-install
+`clientId` instead of a user id. Opt out with `monitoring: { auto: false }`.
+
+Transport is shared with `app.usage` (`telemetry-transport.ts`): batched, flushed
+every 10s, `sendBeacon` on `pagehide` in platform-cookie mode, keepalive fetch
+otherwise. On a 202 (app over budget) the SDK goes quiet for a minute rather than
+retrying; on a 404 (unknown `appId`) it stops permanently.
+
+### Recorded for you, with no SDK code
+
+Every failed app-scoped API operation is logged **server-side** — `app.actions`,
+`app.db`, `app.rooms`, `app.invites`, `app.roles`, `app.storage`, and credential
+provisioning. Nothing to opt into, and it covers apps already deployed.
+
+Each record carries the operation name, HTTP status, category, auth mode, route,
+and a **fingerprint** that groups repeat occurrences into one issue. Owners read
+them at:
+
+```
+GET /v1/apps/:appId/logs          # rows, filterable by level/category/fingerprint/source
+GET /v1/apps/:appId/logs/groups   # occurrences, affected clients, first + last seen
+```
+
+`source` tells you how far to trust a row:
+
+| `source` | Meaning |
+|---|---|
+| `server` | Recorded by the backend. Unspoofable, and requires a signed-in caller. |
+| `mediated` | Uploaded by an app page whose app identity the host verified. |
+| `direct` | Uploaded via a direct API call, which cannot prove which app it is. |
+
+Failures with no session are **counted** but not stored as rows, so an
+unauthenticated caller cannot write into another app's log.
+
+### What is deliberately never recorded
+
+Params, request bodies, SQL parameters, credential logins, passwords, tokens, and
+cookies. Messages are scrubbed again at the sink, because a deployed app version
+cannot be patched on demand — but that is a backstop, not a licence:
+
+> Never put a password, token, student identifier, or raw request body into a log
+> message or its `data` payload.
+
+Credential sign-in failures are counted platform-wide with a reason only — no
+login, ever, since distinguishing "no such login" from "wrong password" in
+telemetry would reintroduce the account enumeration the login path prevents.
+
+### Limits
+
+- 100 entries per upload, 4 KB per entry, 512 KB per request.
+- A per-app daily budget shared by client uploads and server records. Over
+  budget, uploads return **202** and entries are counted but not stored — the
+  spike stays visible while detail stops.
+- Detail rows are pruned after 30 days (metrics keep 90).
+- Client stack traces are **not** symbolicated yet; grouping still works, and
+  `build_meta` identifies the deploy.
+
 ## Framework-agnostic on purpose
 
 `@proappstore/sdk` does not pin React, Vue, Svelte, or any UI framework.

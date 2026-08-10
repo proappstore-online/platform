@@ -19,7 +19,7 @@ import { Email } from './email.js';
 import { Webhooks } from './webhooks.js';
 import { Invites } from './invites.js';
 import { Actions } from './actions.js';
-import { Monitoring } from './monitoring.js';
+import { Logs } from './logs.js';
 import type { ProInitOptions } from './types.js';
 
 // Vendored base primitive types — one import for app authors.
@@ -96,8 +96,8 @@ export class ProAppStore {
   readonly webhooks: Webhooks;
   readonly invites: Invites;
   readonly actions: Actions;
-  /** Runtime monitoring — auto-captures errors + records failed ops to app_logs. */
-  readonly logs: Monitoring;
+  /** Runtime error capture — auto-captures errors + records failed ops to app_logs. */
+  readonly logs: Logs;
 
   constructor(opts: ProInitOptions) {
     const apiBase = opts.proApiBase ?? 'https://api.proappstore.online';
@@ -121,8 +121,8 @@ export class ProAppStore {
     this.email = new Email(opts.appId, apiBase, this.auth);
     this.webhooks = new Webhooks(opts.appId, apiBase, this.auth);
     this.invites = new Invites(opts.appId, apiBase, this.auth);
-    this.logs = new Monitoring(opts.appId, apiBase, this.auth, opts.monitoring?.build);
-    // Actions reports failed calls to the logger (#106).
+    // Constructed before Actions: Actions reports failed calls to the logger (#106).
+    this.logs = new Logs(opts.appId, apiBase, this.auth, opts.monitoring ?? {});
     this.actions = new Actions(opts.appId, apiBase, this.auth, this.logs);
     // Auto-start telemetry unless the app opts out. Wrapped in try-catch
     // because localStorage can throw in incognito, sandboxed iframes, or
@@ -130,7 +130,10 @@ export class ProAppStore {
     if (opts.usage?.auto !== false) {
       try { this.usage.start(); } catch { /* non-fatal — app runs without usage tracking */ }
     }
-    // Auto-capture runtime errors → app_logs unless the app opts out (#105).
+    // Runtime error capture. Started here rather than lazily so a crash during the
+    // app's own first render is still recorded — the white-screen case is exactly
+    // what platform#105 exists for, and it happens before any app code could call
+    // start() itself.
     if (opts.monitoring?.auto !== false) {
       try { this.logs.start(); } catch { /* non-fatal — app runs without monitoring */ }
     }

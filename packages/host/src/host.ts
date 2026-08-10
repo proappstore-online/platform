@@ -167,6 +167,29 @@ export async function getTenantMeta(
   }
 }
 
+/**
+ * Paths never served from an app's R2 prefix, whatever was uploaded.
+ *
+ * Source maps de-minify an app back to its original source. PAS explicitly allows
+ * **proprietary** source on Pro (it is a headline paid feature), and the serving
+ * path maps any request 1:1 onto the app's prefix with no filtering — so a single
+ * `build.sourcemap: true` in an app's Vite config would publish that app's source
+ * at `/assets/index-abc.js.map` with nothing to stop it.
+ *
+ * No app sets `sourcemap` today and Vite's default is off, so this closes a latent
+ * hole rather than an active leak. It is also a precondition for read-time
+ * symbolication (ADR-008), which needs maps uploaded to a *private* prefix —
+ * without this block, "upload the maps" and "keep the source private" are
+ * contradictory.
+ *
+ * FAS requires MIT so public maps would be harmless there; blocking by default is
+ * the right side to err on for PAS. An open-source Pro app that *wants* public
+ * maps would need a per-app opt-in, which does not exist yet.
+ */
+export function isBlockedAssetPath(pathname: string): boolean {
+  return /\.map$/i.test(pathname.split("?")[0] ?? "");
+}
+
 /** Map a route + URL pathname to an R2 object key. */
 export function r2KeyFor(route: Route, pathname: string): string {
   let p = pathname;

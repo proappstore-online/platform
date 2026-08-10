@@ -302,6 +302,64 @@ app.usage.flush()              // final ping (called automatically on pagehide)
 
 What we record (also documented at <https://proappstore.online/privacy#usage-analytics>): per `(app, user, day)` rollups of session-seconds and API calls. No event-by-event logs, no IP, nothing while the tab is hidden or the user is signed out.
 
+### Error monitoring (`app.logs`)
+
+**Auto-started by `initPro()`** — uncaught errors and unhandled promise rejections
+are captured and uploaded, so a user-visible failure leaves a platform record you
+can read afterwards instead of relying on "it said something about permissions".
+
+```ts
+// Default — monitoring on, no code required
+const app = initPro({ appId: 'my-app' })
+
+// Attach build metadata so a report names the deploy it came from
+const app = initPro({
+  appId: 'my-app',
+  monitoring: { build: { sha: __COMMIT_SHA__, version: '1.4.2' } },
+})
+
+// Opt out
+const app = initPro({ appId: 'my-app', monitoring: { auto: false } })
+
+// Log deliberately
+app.logs.error('checkout failed', { step: 'confirm' })
+app.logs.warn('slow board render')
+app.logs.info('tournament joined')
+app.logs.capture('warn', 'checkout', 'card declined')  // your own category
+
+// Manual controls (rarely needed)
+app.logs.flush()            // fire-and-forget; also runs on pagehide
+await app.logs.flushAsync() // await the upload
+app.logs.stop()
+```
+
+Read them back as the app owner — the console's per-app view, or directly:
+
+```
+GET /v1/apps/:appId/logs          # rows: level, category, fingerprint, source
+GET /v1/apps/:appId/logs/groups   # occurrences, affected clients, first/last seen
+```
+
+**Works signed out.** A crash before sign-in is the report most worth having, so
+entries upload anonymously, tagged with a rotating per-install `clientId` (browser
+storage only, clears with site data, never correlated across apps).
+
+**Never log secrets.** Messages and payloads are scrubbed on both sides for
+password/token/bearer/JWT/email-shaped content, but that is a backstop:
+
+> Do not put passwords, tokens, student identifiers, or raw request bodies into a
+> log message or its `data`.
+
+Limits: `debug` is dropped unless you set `monitoring: { level: 'debug' }`; 100
+entries per upload, 4 KB per entry; each app has a daily budget, and past it
+entries are still *counted* (so spikes stay visible) while detail stops and the
+SDK goes quiet for a minute rather than retrying. Detail rows are pruned after 30
+days. Stack traces are not symbolicated yet — grouping still works, and `build`
+identifies the deploy.
+
+`app.logs` is independent of `app.usage`: usage measures engagement, logs record
+faults.
+
 ### Notifications (Web Push)
 
 Push notifications to your users. Subscribe from the browser, send targeted or broadcast pushes from your app (creator-only).

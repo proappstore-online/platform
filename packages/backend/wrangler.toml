@@ -4,6 +4,18 @@ compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
+# De-minify Worker stack traces. Worker code only — app assets ship via each
+# app's own CI, so browser symbolication is a separate follow-up (ADR-008).
+# Top-level key: must stay above the first table or TOML nests it under one.
+upload_source_maps = true
+
+# Workers Logs — queryable structured logs + uncaught exceptions, retained
+# server-side. ADR-008 §1: this is the platform-native answer to ADR-003's
+# "cross-Worker observability is split across three log streams", and it is
+# configuration rather than per-route instrumentation.
+[observability]
+enabled = true
+
 # Embed the data-worker bundle before bundling this worker, so deployDataWorker
 # uploads a script that ships with the backend (no runtime GitHub fetch). Runs
 # on `wrangler deploy` and `wrangler dev`. See scripts/embed-data-worker.mjs.
@@ -39,9 +51,22 @@ binding = "AI"
 # Workers Analytics Engine — first-party cookieless analytics for Pro apps.
 # Events written by analytics-ingest.ts, queried by analytics-stats-routes.ts
 # via the CF SQL API (CF_ANALYTICS_API_TOKEN secret).
+#
+# The `dataset` values below MUST match src/lib/telemetry-datasets.ts — the read
+# side names the dataset in SQL and nothing links the two. They drifted once
+# (queries read `pas_app_analytics` while writes went here), which reads as
+# "analytics never worked" rather than as a config error.
 [[analytics_engine_datasets]]
 binding = "ANALYTICS"
 dataset = "pas_analytics"
+
+# Error telemetry — 5xx and unhandled exceptions (ADR-008). Separate dataset, not
+# a new event `kind` on ANALYTICS: the analytics diagnostics verdict counts every
+# row for an app, so errors sharing that dataset would report an app as healthy
+# on the strength of its own failures.
+[[analytics_engine_datasets]]
+binding = "ERRORS"
+dataset = "pas_app_errors"
 
 # Realtime rooms — Durable Object for WebSocket fan-out.
 [durable_objects]

@@ -3,6 +3,18 @@ main = "src/index.ts"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
 
+# De-minify Worker stack traces. Worker code only — app assets ship via each
+# app's own CI, so browser symbolication is a separate follow-up (ADR-008).
+# Top-level key: must stay above the first table or TOML nests it under one.
+upload_source_maps = true
+
+# Workers Logs — queryable structured logs + uncaught exceptions, retained
+# server-side. ADR-008 §1: this is the platform-native answer to ADR-003's
+# "cross-Worker observability is split across three log streams", and it is
+# configuration rather than per-route instrumentation.
+[observability]
+enabled = true
+
 [vars]
 API_BASE = "https://api.proappstore.online"
 AGENTS_BASE = "https://agents.proappstore.online"

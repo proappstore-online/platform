@@ -12,6 +12,18 @@ workers_dev = true
 # Custom domain: admin.proappstore.online
 # Set via CF dashboard: Workers & Pages > proappstore-admin > Settings > Domains & Routes
 
+# De-minify Worker stack traces. Worker code only — app assets ship via each
+# app's own CI, so browser symbolication is a separate follow-up (ADR-008).
+# Top-level key: must stay above the first table or TOML nests it under one.
+upload_source_maps = true
+
+# Workers Logs — queryable structured logs + uncaught exceptions, retained
+# server-side. ADR-008 §1: this is the platform-native answer to ADR-003's
+# "cross-Worker observability is split across three log streams", and it is
+# configuration rather than per-route instrumentation.
+[observability]
+enabled = true
+
 [vars]
 CF_ACCOUNT_ID = "c1089bfcc43c1c6c2aa89e584e86f0bc"
 PAS_ZONE_ID = "14928daaff60902cc89003a2ebeb99fe"

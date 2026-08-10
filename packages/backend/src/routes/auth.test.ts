@@ -180,11 +180,15 @@ function fakeDb(opts: { tools?: Record<string, unknown> } = {}) {
         bind(...a: unknown[]) { stmt._args = a; return stmt; },
         async run() {
           if (/INSERT INTO users/i.test(sql)) {
-            const [uid, display, isChild, login, hash, createdBy, now] = stmt._args as [string, string, number, string, string, string, number];
+            const [uid, display, isChild, login, hash, createdBy, now, credentialEmail] = stmt._args as [string, string, number, string, string, string, number, string | null];
             if (users.some((u) => u.credential_login === login)) {
               throw new Error('D1_ERROR: UNIQUE constraint failed: users.credential_login');
             }
-            users.push({ id: uid, login: display, is_child: isChild, credential_login: login, password_hash: hash, created_by: createdBy, last_login_at: now });
+            // Mirrors idx_users_credential_email: partial, so NULLs don't collide.
+            if (credentialEmail !== null && users.some((u) => u.credential_email === credentialEmail)) {
+              throw new Error('D1_ERROR: UNIQUE constraint failed: users.credential_email');
+            }
+            users.push({ id: uid, login: display, is_child: isChild, credential_login: login, credential_email: credentialEmail, password_hash: hash, created_by: createdBy, last_login_at: now });
             return { meta: { changes: 1 } };
           }
           if (/UPDATE users SET password_hash/i.test(sql)) {
@@ -217,6 +221,10 @@ function fakeDb(opts: { tools?: Record<string, unknown> } = {}) {
           }
           if (/FROM users WHERE credential_login/i.test(sql)) {
             const u = users.find((x) => x.credential_login === (stmt._args[0] as string));
+            return (u ? { id: u.id, login: u.login, password_hash: u.password_hash } : null) as T | null;
+          }
+          if (/FROM users WHERE credential_email/i.test(sql)) {
+            const u = users.find((x) => x.credential_email === (stmt._args[0] as string));
             return (u ? { id: u.id, login: u.login, password_hash: u.password_hash } : null) as T | null;
           }
           if (/FROM users WHERE id = .* AND provider/i.test(sql)) {
@@ -311,6 +319,41 @@ describe('POST /v1/auth/credentials/provision', () => {
     const res = await post({ login: 'Has Spaces!' }, { Authorization: `Bearer ${await creatorToken()}` }, fakeDb());
     expect(res.status).toBe(400);
   });
+
+  it('stores a normalized credential_email for an adult account', async () => {
+    const db = fakeDb();
+    const res = await post(
+      { email: '  Teacher@School.EDU  ', isChild: false },
+      { Authorization: `Bearer ${await creatorToken()}` },
+      db,
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json() as { email: string }).email).toBe('teacher@school.edu');
+    expect(db._users[0]!.credential_email).toBe('teacher@school.edu');
+    // The OAuth-verified column stays empty — nothing vouched for this address.
+    expect(db._users[0]!.email).toBeUndefined();
+  });
+
+  it('409s on a duplicate email instead of exhausting login retries', async () => {
+    const db = fakeDb();
+    const body = { email: 'dup@school.edu', isChild: false };
+    expect((await post(body, { Authorization: `Bearer ${await creatorToken()}` }, db)).status).toBe(200);
+    // No `login` supplied, so the retry loop is live; an email collision must
+    // still surface as 409, not the 503 that six re-rolled triples would give.
+    const dup = await post(body, { Authorization: `Bearer ${await creatorToken()}` }, db);
+    expect(dup.status).toBe(409);
+    expect((await dup.json() as { error: string }).error).toMatch(/email/i);
+    expect(db._users).toHaveLength(1);
+  });
+
+  it('rejects an email on a child account, and a malformed one on an adult', async () => {
+    const auth = { Authorization: `Bearer ${await creatorToken()}` };
+    // isChild defaults to true, so a bare email is refused.
+    expect((await post({ email: 'kid@school.edu' }, auth, fakeDb())).status).toBe(400);
+    expect((await post({ email: 'kid@school.edu', isChild: true }, auth, fakeDb())).status).toBe(400);
+    expect((await post({ email: 'not-an-email', isChild: false }, auth, fakeDb())).status).toBe(400);
+    expect((await post({ email: 'two@@at.com', isChild: false }, auth, fakeDb())).status).toBe(400);
+  });
 });
 
 describe('POST /v1/auth/credentials/login', () => {
@@ -358,6 +401,47 @@ describe('POST /v1/auth/credentials/login', () => {
     }
     const blocked = await login({ login: 'fox-fox-fox', password: 'wrong' }, db);
     expect(blocked.status).toBe(429);
+  });
+
+  it('signs in by email, case-insensitively, on the same account as the username', async () => {
+    const db = fakeDb();
+    const prov = await (await provision(
+      { login: 'owl-owl-owl', email: 'teacher@school.edu', isChild: false }, db,
+    )).json() as { uid: string; password: string };
+
+    for (const identifier of ['teacher@school.edu', '  Teacher@School.EDU  ', 'owl-owl-owl']) {
+      const res = await login({ login: identifier, password: prov.password }, db);
+      expect(res.status).toBe(200);
+      const { token } = await res.json() as { token: string };
+      const me = await app.request('/v1/auth/me', { headers: { Authorization: `Bearer ${token}` } }, { DB: db, SESSION_SIGNING_KEY: KEY } as never);
+      expect((await me.json() as { id: string }).id).toBe(prov.uid);
+    }
+  });
+
+  it('401s on an unknown email without recording a rate-limit row for junk', async () => {
+    const db = fakeDb();
+    await provision({ login: 'swan-swan-swan', email: 'real@school.edu', isChild: false }, db);
+
+    // Well-formed but unknown: a normal failure, counted.
+    expect((await login({ login: 'nobody@school.edu', password: 'x' }, db)).status).toBe(401);
+    expect(db._attempts.has('nobody@school.edu')).toBe(true);
+
+    // Malformed: rejected before D1, so it can't be used to fill the
+    // credential_login_attempts table with unbounded junk keys.
+    for (const junk of ['not an email @@', 'Has Spaces', 'x'.repeat(300), '@nolocal.com']) {
+      expect((await login({ login: junk, password: 'x' }, db)).status).toBe(401);
+      expect(db._attempts.has(junk.trim().toLowerCase())).toBe(false);
+    }
+  });
+
+  it('does not let an email match a username column or vice versa', async () => {
+    const db = fakeDb();
+    const prov = await (await provision(
+      { login: 'lynx-lynx-lynx', email: 'lynx@school.edu', isChild: false }, db,
+    )).json() as { password: string };
+    // The username is not an address, and the address is not a username.
+    expect((await login({ login: 'lynx-lynx-lynx@', password: prov.password }, db)).status).toBe(401);
+    expect((await login({ login: 'lynx', password: prov.password }, db)).status).toBe(401);
   });
 });
 

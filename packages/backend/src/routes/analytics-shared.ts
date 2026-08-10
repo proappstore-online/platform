@@ -5,6 +5,7 @@
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { HttpError } from '../lib/auth.js';
+import { ANALYTICS_DATASET } from '../lib/telemetry-datasets.js';
 import type { Env } from '../types.js';
 
 export type Ctx = Context<{ Bindings: Env }>;
@@ -74,7 +75,11 @@ export function wrap(handler: (c: Ctx) => Promise<Response>) {
 
 export const STATS_DAYS_DEFAULT = 7;
 export const STATS_DAYS_MAX = 90;
-export const STATS_DATASET = 'pas_app_analytics';
+/** The dataset stats queries read. Must match the wrangler.toml `ANALYTICS`
+ *  binding's dataset — hence the shared constant. Was hardcoded to
+ *  `pas_app_analytics` while writes went to `pas_analytics`, so every stats
+ *  query read an empty table. See lib/telemetry-datasets.ts. */
+export const STATS_DATASET = ANALYTICS_DATASET;
 
 export interface StatsRow {
   total_views: number;

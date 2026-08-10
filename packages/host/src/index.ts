@@ -19,6 +19,7 @@ import {
   etagsMatch,
   getListingMeta,
   getTenantMeta,
+  isBlockedAssetPath,
   isUpdateSensitivePath,
   r2KeyFor,
   resolveRouteForHostname,
@@ -97,6 +98,14 @@ export default {
 
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method not allowed", { status: 405 });
+    }
+
+    // Never serve source maps, whatever an app uploaded (see isBlockedAssetPath).
+    // Checked before the edge cache so a previously-cached map cannot keep being
+    // served after this deploy, and answered as 404 rather than 403 so the
+    // response does not confirm the file exists.
+    if (isBlockedAssetPath(url.pathname)) {
+      return new Response("Not found", { status: 404 });
     }
 
     // Edge cache check — serve from cache if available (avoids R2 + D1 on every hit)

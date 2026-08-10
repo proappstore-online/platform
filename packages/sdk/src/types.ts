@@ -21,12 +21,20 @@ export interface ProInitOptions {
     /** Default true. Set false to disable the auto-heartbeat in this app. */
     auto?: boolean;
   };
-  /** Runtime monitoring. Auto error-capture → app_logs is on by default. */
+  /**
+   * Runtime error capture (`app.logs`). On by default: `window.onerror` and
+   * `unhandledrejection` are recorded so a user-visible failure leaves a platform
+   * record, readable by the app owner in the console.
+   *
+   * Independent of `usage` above — that measures engagement, this records faults.
+   */
   monitoring?: {
-    /** Default true. Set false to disable auto error-capture + auto-flush. */
+    /** Default true. Set false to disable auto-capture and the flush timer. */
     auto?: boolean;
-    /** Build metadata (commit, version, …) attached to every log entry. */
+    /** Build metadata attached to every entry (commit sha, version, built-at). */
     build?: Record<string, unknown>;
+    /** Minimum level sent. Default 'info', so `app.logs.debug()` is dropped. */
+    level?: 'debug' | 'info' | 'warn' | 'error';
   };
 }
 

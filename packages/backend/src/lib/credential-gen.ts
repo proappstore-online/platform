@@ -57,3 +57,51 @@ export function normalizeLogin(login: string): string {
 export function isValidLogin(login: string): boolean {
   return /^[a-z0-9]+(-[a-z0-9]+)*$/.test(login) && login.length >= 3 && login.length <= 64;
 }
+
+/**
+ * Normalize an email for storage/lookup: trim + lowercase.
+ *
+ * Lowercasing the local part is technically lossy — RFC 5321 lets `A@x.com`
+ * and `a@x.com` be different mailboxes — but no provider anyone signs in with
+ * treats them that way, and the unique index in 0042 is byte-wise, so the
+ * alternative is two separately-loginable rows for one human's address.
+ */
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+// Applied to an already-normalized (lowercased) address, so no case classes.
+// Deliberately stricter than RFC 5322: no quoted local parts, no bare-hostname
+// or IP-literal domains. Those are valid on paper and never appear on an
+// address a teacher types into a provisioning form, and every one of them is a
+// parsing edge case we would rather not own.
+const EMAIL_RE =
+  /^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/;
+
+/**
+ * True if `email` (normalized) is a plausible address we will store.
+ *
+ * Bounds are RFC 5321 §4.5.3.1: 64 octets for the local part, 254 for the
+ * whole address as it appears in a path.
+ */
+export function isValidEmail(email: string): boolean {
+  if (email.length > 254) return false;
+  const at = email.indexOf('@');
+  if (at < 1 || at > 64) return false;
+  return EMAIL_RE.test(email);
+}
+
+/**
+ * Which identifier space a sign-in value belongs to.
+ *
+ * '@' is the discriminator, and it is unambiguous in both directions:
+ * `isValidLogin` rejects '@', so no stored username can look like an email,
+ * and `isValidEmail` requires one, so no email can be read as a username. That
+ * disjointness is what lets the login endpoint take a single field, and what
+ * keeps the two rate-limit keyspaces from colliding. If either predicate ever
+ * loosens, this routing breaks first — the test asserting disjointness is the
+ * guard.
+ */
+export function looksLikeEmail(identifier: string): boolean {
+  return identifier.includes('@');
+}

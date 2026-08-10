@@ -89,6 +89,13 @@ export interface Env {
    */
   ANALYTICS?: AnalyticsEngineDataset;
   /**
+   * Analytics Engine dataset for error telemetry — 5xx and unhandled exceptions,
+   * written by lib/error-telemetry.ts (ADR-008). Kept separate from ANALYTICS so
+   * error events cannot inflate visitor stats or skew the analytics diagnostics
+   * verdict, which counts every row for an app.
+   */
+  ERRORS?: AnalyticsEngineDataset;
+  /**
    * CF API token with 'Account Analytics:Read' permission. Used by the
    * /stats endpoint to query Analytics Engine via the SQL API.
    */
