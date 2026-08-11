@@ -3,11 +3,9 @@ import { app } from '../index.js';
 import { testToken, TEST_SK } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1', { login: 'creator', roles: ['user', 'creator'] });
-const MANAGER_TOK = await testToken('gh:2', {
-  login: 'manager',
-  roles: ['user'],
-  appRoles: { interns: ['manager'] },
-});
+// #121: no forged appRoles claim — the grant is read from `app_roles`, so the
+// test seeds that table instead of a token shape no mint site produces.
+const MANAGER_TOK = await testToken('gh:2', { login: 'manager', roles: ['user'] });
 
 function stmt(opts: { first?: unknown; all?: unknown } = {}) {
   return {
@@ -222,7 +220,7 @@ describe('POST /v1/apps/:appId/actions/:name', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('accepts manifest app roles from signed session claims', async () => {
+  it('accepts a manifest app role granted in the app_roles table', async () => {
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ rows: [] }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -233,7 +231,10 @@ describe('POST /v1/apps/:appId/actions/:name', () => {
         headers: { Authorization: `Bearer ${MANAGER_TOK}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ params: { limit: 5 } }),
       },
-      env(db(stmt({ first: { manifest: manifest({ name: 'manager_only', auth: { app_roles: ['manager'] } }) } }))),
+      env(db(
+        stmt({ first: { manifest: manifest({ name: 'manager_only', auth: { app_roles: ['manager'] } }) } }),
+        stmt({ all: { results: [{ role_name: 'manager' }] } }),
+      )),
     );
 
     expect(res.status).toBe(200);

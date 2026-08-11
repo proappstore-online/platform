@@ -136,11 +136,10 @@ rolesRoutes.get('/apps/:appId/roles/check/:role', async (c) => {
   const appId = c.req.param('appId');
   const role = c.req.param('role');
 
-  const tokenRoles = user.appRoles?.[appId] ?? [];
-  if (tokenRoles.includes(role)) {
-    return c.json({ has: true, source: 'token' });
-  }
-
+  // #121: `source: 'token'` used to short-circuit here on a claim that was
+  // never populated, so it never fired. The DB is the only authority now — the
+  // `source` field is kept in the response for compatibility and always reads
+  // 'db'.
   const row = await c.env.DB.prepare(
     'SELECT 1 FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id = ?) AND role_name = ? LIMIT 1',
   )

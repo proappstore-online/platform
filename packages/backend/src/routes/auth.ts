@@ -109,7 +109,6 @@ async function authUserDto(env: Env, claims: SessionClaims) {
     avatarUrl,
     dateOfBirth: row?.date_of_birth ?? null,
     roles: claims.roles,
-    appRoles: claims.appRoles ?? {},
   };
 }
 

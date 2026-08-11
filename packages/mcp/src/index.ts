@@ -103,15 +103,16 @@ export class PasMcpAgent extends McpAgent<Env> {
           return { content: [{ type: "text" as const, text: "Session token present but invalid or expired. Re-authenticate the MCP connection." }] };
         }
         const login = (payload as { login?: string }).login;
-        const appRoles = payload.appRoles && Object.keys(payload.appRoles).length
-          ? Object.entries(payload.appRoles).map(([app, roles]) => `${app}=${roles.join("/")}`).join(", ")
-          : "(no per-app roles)";
+        // #121: the per-app roles line is gone with the `appRoles` claim. It
+        // always printed "(no per-app roles)" — nothing ever populated it — and
+        // app roles now live only in the `app_roles` table, read at the point of
+        // use so a revocation takes effect immediately. tool-loader.ts already
+        // declined to enforce them here for the same staleness reason.
         const lines = [
           "Authenticated as:",
           `  uid:     ${payload.uid}`,
           ...(login ? [`  login:   ${login}`] : []),
           `  roles:   ${(payload.roles ?? []).join(", ") || "(none)"}`,
-          `  apps:    ${appRoles}`,
           `  expires: ${new Date(payload.exp * 1000).toISOString()}`,
         ];
         return { content: [{ type: "text" as const, text: lines.join("\n") }] };

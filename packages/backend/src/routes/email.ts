@@ -43,7 +43,25 @@ emailRoutes.post('/email/send', async (c) => {
     if (!app) return c.text('app not found', 404);
     const isOwner = app.creator_id === user.id;
     const isAdmin = user.roles.includes('admin');
-    const isEditor = user.appRoles[appId]?.includes('editor');
+
+    // #121: this used to read `user.appRoles[appId]`, a session claim nothing
+    // ever populated — so the editor branch was dead and a user granted
+    // `editor` (via /apps/:appId/roles or an invite) got a 403 here while
+    // showing as an editor everywhere else.
+    //
+    // The grant lives in `app_roles`, so read it there. Only when the cheaper
+    // checks miss, and note the (user_id = ? OR user_id = ?) shape: rows may be
+    // keyed by user id OR login, so matching on id alone still misses grants.
+    let isEditor = false;
+    if (!isOwner && !isAdmin) {
+      const row = await c.env.DB.prepare(
+        `SELECT 1 FROM app_roles
+          WHERE app_id = ? AND (user_id = ? OR user_id = ?) AND role_name = 'editor'
+          LIMIT 1`,
+      ).bind(appId, user.id, user.login).first();
+      isEditor = row !== null;
+    }
+
     if (!isOwner && !isAdmin && !isEditor) {
       return c.text('not authorized to send email for this app', 403);
     }

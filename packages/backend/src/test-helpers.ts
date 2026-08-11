@@ -50,16 +50,20 @@ export function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType
   };
 }
 
-/** Mint a valid PAS session token for tests. */
+/** Mint a valid PAS session token for tests.
+ *
+ * No `appRoles` option (#121). It used to accept one, which let tests forge a
+ * token no mint site could actually produce — and two tests did exactly that,
+ * passing while the feature they covered was broken in production. App roles
+ * are read from the `app_roles` table now; tests seed that instead. */
 export async function testToken(
   uid: string,
-  opts?: { roles?: string[]; login?: string; appRoles?: Record<string, string[]> },
+  opts?: { roles?: string[]; login?: string },
 ): Promise<string> {
   const claims: NewSession = {
     uid,
     login: opts?.login ?? 'testuser',
     roles: opts?.roles ?? ['user'],
-    ...(opts?.appRoles ? { appRoles: opts.appRoles } : {}),
   };
   return mintSession(claims, TEST_SK);
 }

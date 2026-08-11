@@ -260,8 +260,10 @@ describe('POST /v1/email/send', () => {
   });
 
   it('allows an editor role to send email for the app', async () => {
-    // gh:1 has appRoles { myapp: ['editor'] } but is NOT the owner (gh:other)
-    const editorTok = await testToken('gh:1', { appRoles: { myapp: ['editor'] } });
+    // #121: the grant lives in `app_roles`, not in the session. This test used
+    // to forge a token carrying appRoles — a shape no mint site produces — so
+    // it passed while real editors were getting a 403.
+    const editorTok = await testToken('gh:1');
 
     const resendMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ id: 'e1' }), { status: 200 }),
@@ -275,6 +277,9 @@ describe('POST /v1/email/send', () => {
       prepare: vi.fn().mockImplementation((sql: string) => {
         if (sql.includes('SELECT creator_id')) {
           return { bind: vi.fn().mockReturnThis(), first: vi.fn().mockResolvedValue({ creator_id: 'gh:other' }) };
+        }
+        if (sql.includes('FROM app_roles')) {
+          return { bind: vi.fn().mockReturnThis(), first: vi.fn().mockResolvedValue({ 1: 1 }) };
         }
         if (sql.includes('SELECT COUNT(*)')) {
           return { bind: vi.fn().mockReturnThis(), first: vi.fn().mockResolvedValue({ n: 0 }) };

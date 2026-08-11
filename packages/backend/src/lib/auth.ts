@@ -18,7 +18,6 @@ export interface FasUser {
   /** Platform-level roles from session token: 'user', 'creator', 'admin'. */
   roles: string[];
   /** Per-app roles: { appId: ['moderator', ...] }. */
-  appRoles: Record<string, string[]>;
 }
 
 /**
@@ -39,7 +38,6 @@ export async function requireUser(c: Context<{ Bindings: Env }>): Promise<FasUse
     login: claims.login ?? claims.uid,
     avatarUrl: claims.avatarUrl ?? null,
     roles: claims.roles ?? ['user'],
-    appRoles: claims.appRoles ?? {},
   };
 }
 

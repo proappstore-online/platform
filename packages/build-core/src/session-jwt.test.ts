@@ -63,9 +63,8 @@ describe('session-jwt', () => {
     expect(await verifySession('', KEY)).toBeNull();
   });
 
-  it('defaults roles/appRoles', async () => {
+  it('defaults roles', async () => {
     const claims = await verifySession(await mintSession({ uid: 'x', roles: [] }, KEY), KEY);
     expect(claims!.roles).toEqual([]);
-    expect(claims!.appRoles).toEqual({});
   });
 });

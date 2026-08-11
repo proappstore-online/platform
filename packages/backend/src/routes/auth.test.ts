@@ -86,11 +86,12 @@ describe('GET /v1/auth/me (PAS-owned session verification)', () => {
     const token = await mintSession({ uid: 'gh:1', login: 'octocat', avatarUrl: 'a.png', roles: ['user', 'creator'] }, KEY);
     const res = await app.request('/v1/auth/me', { headers: { Authorization: `Bearer ${token}` } }, env());
     expect(res.status).toBe(200);
-    const body = await res.json() as { id: string; login: string; roles: string[]; appRoles: Record<string, unknown> };
+    const body = await res.json() as { id: string; login: string; roles: string[] };
     expect(body.id).toBe('gh:1');
     expect(body.login).toBe('octocat');
     expect(body.roles).toEqual(['user', 'creator']);
-    expect(body.appRoles).toEqual({});
+    // #121: appRoles is gone from the response — it was always {}.
+    expect('appRoles' in body).toBe(false);
   });
 
   it('hydrates missing login claims from the users table', async () => {

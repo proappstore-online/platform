@@ -49,11 +49,6 @@ describe('requireUser — role propagation', () => {
     expect(user.roles).toEqual(['user']);
   });
 
-  it('defaults appRoles to {} when token has none', async () => {
-    const t = await tok('gh:42');
-    const user = await requireUser(makeContext(t));
-    expect(user.appRoles).toEqual({});
-  });
 
   it('throws 401 when no bearer token', async () => {
     await expect(requireUser(makeContext(null))).rejects.toThrow('missing bearer token');

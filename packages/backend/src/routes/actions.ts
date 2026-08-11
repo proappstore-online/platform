@@ -138,11 +138,11 @@ async function enforceActionAuth(
   const appRoles = manifest.auth?.app_roles ?? [];
   if (appRoles.length === 0) return;
 
-  const tokenRoles = new Set(user.appRoles?.[appId] ?? []);
-  if (appRoles.some((role) => tokenRoles.has(role))) {
-    return;
-  }
-
+  // #121: the session-claim fast path that used to sit here read `appRoles`,
+  // which was never populated — so it never hit, and the DB query below was
+  // always the real check. Removed with the claim: authorization reads the
+  // table, where a revoked role takes effect immediately rather than lingering
+  // for the life of a 30-day token.
   const rows = await db.prepare('SELECT role_name FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id = ?)')
     .bind(appId, user.id, user.login)
     .all<{ role_name: string }>();

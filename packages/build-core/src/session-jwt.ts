@@ -4,7 +4,16 @@
  * Format: a 2-part `body.sig` token where body = base64url(JSON payload) and
  * sig = HMAC-SHA256(body, SESSION_SIGNING_KEY). All PAS workers verify locally
  * (no network round-trip). The payload carries `uid` (e.g. "gh:1234"),
- * `login`, `avatarUrl`, platform `roles`, and per-app `appRoles`.
+ * `login`, `avatarUrl` and platform `roles`.
+ *
+ * NO PER-APP ROLES (#121). An `appRoles` claim used to be declared here and was
+ * never populated by any mint site, so every reader saw `{}` and every
+ * fast-path built on it was dead code — one of them, email.ts, silently denied
+ * app editors. Populating it was the other option and is the worse one: role
+ * state baked into a 30-day token means a REVOKED role keeps working until the
+ * token expires. App roles are authorization, so they are read from the
+ * `app_roles` table at the point of use, where a revocation takes effect at
+ * once.
  */
 
 export interface SessionClaims {
@@ -16,8 +25,6 @@ export interface SessionClaims {
   avatarUrl?: string | null;
   /** Platform roles: 'user' | 'creator' | 'admin'. */
   roles: string[];
-  /** Per-app roles: { appId: ['moderator', ...] }. */
-  appRoles?: Record<string, string[]>;
   iat: number;
   exp: number;
 }
@@ -88,7 +95,6 @@ export async function verifySession(token: string, signingKey: string): Promise<
     if (!claims.uid) return null;
     if (typeof claims.exp !== 'number' || claims.exp < Math.floor(Date.now() / 1000)) return null;
     claims.roles = claims.roles ?? ['user'];
-    claims.appRoles = claims.appRoles ?? {};
     return claims;
   } catch {
     return null;
