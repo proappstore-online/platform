@@ -206,7 +206,6 @@ jobs:
         if: always()
         working-directory: e2e
         env:
-          INTERNAL_TOKEN: \${{ secrets.INTERNAL_TOKEN }}
           APP: \${{ github.event.repository.name }}
         run: |
           node -e '
@@ -217,7 +216,19 @@ jobs:
             walk(r.suites||[]);
             fs.writeFileSync("summary.json", JSON.stringify({ ranAt:new Date().toISOString(), passed:s.expected||0, failed:s.unexpected||0, flaky:s.flaky||0, skipped:s.skipped||0, ok:(s.unexpected||0)===0, specs }));
           '
-          [ -n "$INTERNAL_TOKEN" ] && curl -fsS -X PUT "https://kb.proappstore.online/_ingest/$APP/.e2e/summary.json" -H "x-internal-token: $INTERNAL_TOKEN" --data-binary @summary.json >/dev/null && echo "results → kb.proappstore.online/$APP/.e2e/summary.json" || echo "skipped results upload (no INTERNAL_TOKEN)"
+          # Keyless (#57): mint an OIDC token bound to this repo instead of the
+          # shared INTERNAL_TOKEN. kb-host derives the app prefix from the
+          # \`repository\` claim, so this run can only write its own app's prefix.
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \\
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=proappstore-kb-host" | jq -r '.value')
+          # Non-fatal: test results are diagnostics, not a deploy gate.
+          if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then
+            echo "skipped results upload (could not obtain OIDC token)"
+          elif curl -fsS -X PUT "https://kb.proappstore.online/_ingest/$APP/.e2e/summary.json" -H "Authorization: Bearer $OIDC" --data-binary @summary.json >/dev/null; then
+            echo "results → kb.proappstore.online/$APP/.e2e/summary.json"
+          else
+            echo "skipped results upload (ingest rejected the write)"
+          fi
       - name: Fail the run if E2E failed (bounces the ticket to Dev)
         if: steps.e2e.outcome != 'success'
         run: echo "::error::E2E tests failed — see the results above" && exit 1
@@ -229,9 +240,11 @@ jobs:
  * static site and publish it to the shared `pas-kb` R2 bucket under `<app>/`,
  * served by proappstore-kb-host at kb.proappstore.online/<app>/. ONE bucket for
  * every KB — no CF Pages project per KB. Uploads each built file to the kb-host
- * Worker's `/_ingest` endpoint (which writes R2 via its binding) authed with the
- * shared INTERNAL_TOKEN — no R2 API-token scope needed. Injected at deploy;
- * triggers only when the KB markdown changes. `\${{ }}` escaped for the literal.
+ * Worker's `/_ingest` endpoint (which writes R2 via its binding), authed with a
+ * keyless GitHub OIDC token — kb-host binds the writable prefix to the caller's
+ * `repository` claim, so an app's CI can only write its own KB (#57). No R2
+ * API-token scope and no shared secret. Injected at deploy; triggers only when
+ * the KB markdown changes. `\${{ }}` escaped for the literal.
  */
 function kbWorkflowYaml(): string {
   return `name: Publish Knowledge Base
@@ -246,8 +259,12 @@ on:
     paths: ['KNOWLEDGE.md', 'docs/**', '.github/workflows/kb.yml']
   workflow_dispatch:
 
+# Keyless KB ingest (#57): the runner mints a GitHub OIDC token instead of
+# carrying the shared INTERNAL_TOKEN, so kb-host can bind the write to this
+# repo's own app prefix.
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: kb-\${{ github.repository }}
@@ -332,15 +349,19 @@ jobs:
       - name: Publish to kb-host (R2 via Worker binding)
         if: steps.gate.outputs.go == '1'
         env:
-          INTERNAL_TOKEN: \${{ secrets.INTERNAL_TOKEN }}
           APP: \${{ github.event.repository.name }}
         run: |
-          if [ -z "$INTERNAL_TOKEN" ]; then echo "INTERNAL_TOKEN missing — cannot publish KB"; exit 1; fi
+          # Keyless (#57): mint an OIDC token bound to this repo. kb-host derives
+          # the writable prefix from the \`repository\` claim, so this run cannot
+          # write another app's KB or the reserved \`platform/\` docs prefix.
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \\
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=proappstore-kb-host" | jq -r '.value')
+          if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then echo "::error::could not obtain OIDC token — cannot publish KB"; exit 1; fi
           out=site
           [ -d "$out" ] || out=public
           cd "$out"
           find . -type f | while read -r f; do
-            curl -fsS -X PUT "https://kb.proappstore.online/_ingest/$APP/\${f#./}" -H "x-internal-token: $INTERNAL_TOKEN" --data-binary "@$f" >/dev/null
+            curl -fsS -X PUT "https://kb.proappstore.online/_ingest/$APP/\${f#./}" -H "Authorization: Bearer $OIDC" --data-binary "@$f" >/dev/null
           done
           echo "Knowledge Base published → https://kb.proappstore.online/$APP/"
 `;

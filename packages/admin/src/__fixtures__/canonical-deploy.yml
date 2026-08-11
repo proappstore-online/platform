@@ -162,7 +162,6 @@ jobs:
         if: always()
         working-directory: e2e
         env:
-          INTERNAL_TOKEN: ${{ secrets.INTERNAL_TOKEN }}
           APP: ${{ github.event.repository.name }}
         run: |
           node -e '
@@ -173,7 +172,19 @@ jobs:
             walk(r.suites||[]);
             fs.writeFileSync("summary.json", JSON.stringify({ ranAt:new Date().toISOString(), passed:s.expected||0, failed:s.unexpected||0, flaky:s.flaky||0, skipped:s.skipped||0, ok:(s.unexpected||0)===0, specs }));
           '
-          [ -n "$INTERNAL_TOKEN" ] && curl -fsS -X PUT "https://kb.proappstore.online/_ingest/$APP/.e2e/summary.json" -H "x-internal-token: $INTERNAL_TOKEN" --data-binary @summary.json >/dev/null && echo "results → kb.proappstore.online/$APP/.e2e/summary.json" || echo "skipped results upload (no INTERNAL_TOKEN)"
+          # Keyless (#57): mint an OIDC token bound to this repo instead of the
+          # shared INTERNAL_TOKEN. kb-host derives the app prefix from the
+          # `repository` claim, so this run can only write its own app's prefix.
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=proappstore-kb-host" | jq -r '.value')
+          # Non-fatal: test results are diagnostics, not a deploy gate.
+          if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then
+            echo "skipped results upload (could not obtain OIDC token)"
+          elif curl -fsS -X PUT "https://kb.proappstore.online/_ingest/$APP/.e2e/summary.json" -H "Authorization: Bearer $OIDC" --data-binary @summary.json >/dev/null; then
+            echo "results → kb.proappstore.online/$APP/.e2e/summary.json"
+          else
+            echo "skipped results upload (ingest rejected the write)"
+          fi
       - name: Fail the run if E2E failed (bounces the ticket to Dev)
         if: steps.e2e.outcome != 'success'
         run: echo "::error::E2E tests failed — see the results above" && exit 1

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "./env.js";
-import { deployWorkflowYaml, handleAgentDeploy, handlePublish } from "./publish.js";
+import { buildAgentBundle, deployWorkflowYaml, handleAgentDeploy, handlePublish } from "./publish.js";
 
 /**
  * The two ways an app repo gets provisioned must yield the SAME hosting:
@@ -199,6 +199,46 @@ describe("canonical deploy workflow — single source of truth", () => {
     const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
     expect(golden).toContain("hashFiles('migrations.json') != '' && github.event.repository.name != 'template-app'");
     expect(golden).toContain("hashFiles('mcp.json') != '' && github.event.repository.name != 'template-app'");
+  });
+});
+
+describe("KB ingest is keyless OIDC, never the shared INTERNAL_TOKEN (#57)", () => {
+  // The shared INTERNAL_TOKEN is a repo-level secret handed to EVERY app's CI,
+  // so kb-host cannot tell which app is calling: any holder could exfiltrate it
+  // from the Actions context and overwrite another tenant's KB. OIDC binds the
+  // write to the caller's own `repository` claim. These assertions target the
+  // functional markers (secret reference + request header), not prose — the
+  // generated comments mention INTERNAL_TOKEN to explain what was replaced.
+  const KB_YAML = ".github/workflows/kb.yml";
+
+  it("the generated KB workflow authenticates ingest with an OIDC token", () => {
+    const kb = buildAgentBundle({}, ENV)[KB_YAML]!;
+    expect(kb).not.toContain("secrets.INTERNAL_TOKEN");
+    expect(kb).not.toContain("x-internal-token");
+    expect(kb).toContain("Authorization: Bearer $OIDC");
+    expect(kb).toContain("audience=proappstore-kb-host");
+  });
+
+  it("the generated KB workflow requests the id-token permission it needs", () => {
+    // Without `id-token: write` the mint returns empty and every KB publish
+    // fails — the permission and the OIDC call have to land together.
+    const kb = buildAgentBundle({}, ENV)[KB_YAML]!;
+    expect(kb).toContain("id-token: write");
+  });
+
+  it("the canonical deploy workflow uploads E2E results with OIDC too", () => {
+    const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
+    expect(golden).not.toContain("secrets.INTERNAL_TOKEN");
+    expect(golden).not.toContain("x-internal-token");
+    expect(golden).toContain("audience=proappstore-kb-host");
+  });
+
+  it("keeps the E2E results upload non-fatal", () => {
+    // Diagnostics, not a deploy gate: a failed mint or a rejected write must not
+    // fail a run whose tests actually passed.
+    const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
+    expect(golden).toContain("skipped results upload (could not obtain OIDC token)");
+    expect(golden).toContain("skipped results upload (ingest rejected the write)");
   });
 });
 
