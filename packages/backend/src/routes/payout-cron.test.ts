@@ -4,11 +4,33 @@ import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-
 
 const TOK = await testToken('gh:1');
 
+/**
+ * Positional statement mock, with one exception: the developer_clawbacks debt
+ * lookup (#85) is answered out-of-band rather than consuming a slot. These tests
+ * describe a sequence of payout queries, and threading a "no debt" row through
+ * every one of them would obscure what each case is actually about. Pass
+ * `debtCents` to opt a test into having outstanding debt.
+ */
 function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
+  return mockD1WithDebt(0, ...stmts);
+}
+
+function mockD1WithDebt(debtCents: number, ...stmts: ReturnType<typeof mockStmt>[]) {
   const prepare = vi.fn();
-  for (const stmt of stmts) prepare.mockReturnValueOnce(stmt);
-  prepare.mockReturnValue(mockStmt());
-  return { prepare, batch: vi.fn().mockResolvedValue([{ meta: { changes: 1 } }]) };
+  const queue = [...stmts];
+  const sqlSeen: string[] = [];
+  prepare.mockImplementation((sql: string) => {
+    sqlSeen.push(sql);
+    if (/developer_clawbacks/i.test(sql)) {
+      return mockStmt({ first: debtCents > 0 ? { pending_clawback_cents: debtCents } : null });
+    }
+    return queue.length ? queue.shift()! : mockStmt();
+  });
+  return {
+    prepare,
+    sqlSeen,
+    batch: vi.fn().mockResolvedValue([{ meta: { changes: 1 } }]),
+  };
 }
 
 function env(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof mockD1>) {
@@ -61,6 +83,8 @@ describe('POST /v1/internal/payouts/run', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as Record<string, unknown>;
     expect(body.summary).toEqual({
+      totalClawbackRecoveredCents: 0,
+      totalClawbackOutstandingCents: 0,
       totalTransferred: 0,
       totalAmountCents: 0,
       totalSkipped: 0,
@@ -255,5 +279,137 @@ describe('POST /v1/internal/payouts/run', () => {
     expect(body.succeeded).toHaveLength(2);
     expect(body.summary.totalTransferred).toBe(2);
     expect(body.summary.totalAmountCents).toBe(10500);
+  });
+});
+
+// #85: a refund on an already-settled engagement can't be recovered by
+// decrementing that engagement — this cron never reads settled rows again — so
+// the shortfall is banked against the developer and netted here.
+describe('POST /v1/internal/payouts/run — clawback netting (#85)', () => {
+  const okTransfer = () =>
+    vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 'tr_net', amount: 1, currency: 'usd', destination: 'acct_abc' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+  it('nets debt off the transfer when earnings exceed it', async () => {
+    const db = mockD1WithDebt(
+      1500,
+      mockStmt({ all: { results: [{ developer_id: 'gh:10', total_cents: 4500, eng_count: 3, eng_ids: 'e1,e2,e3' }] } }),
+      mockStmt({ first: { stripe_connect_account_id: 'acct_abc', payouts_enabled: 1 } }),
+      mockStmt({ first: null }),
+    );
+    globalThis.fetch = okTransfer();
+
+    const res = await app.request('/v1/internal/payouts/run', {
+      method: 'POST', headers: { 'X-Internal-Token': 'secret-cron-token' },
+    }, env({}, db));
+
+    const body = await res.json() as {
+      succeeded: { amountCents: number; clawbackAppliedCents?: number }[];
+      summary: Record<string, number>;
+    };
+    expect(body.succeeded[0].amountCents).toBe(3000); // 4500 earned − 1500 debt
+    expect(body.succeeded[0].clawbackAppliedCents).toBe(1500);
+    expect(body.summary.totalClawbackRecoveredCents).toBe(1500);
+  });
+
+  it('transfers the NET amount to Stripe, not the gross earnings', async () => {
+    // The whole point: the developer must not receive money already refunded.
+    const db = mockD1WithDebt(
+      1500,
+      mockStmt({ all: { results: [{ developer_id: 'gh:10', total_cents: 4500, eng_count: 3, eng_ids: 'e1' }] } }),
+      mockStmt({ first: { stripe_connect_account_id: 'acct_abc', payouts_enabled: 1 } }),
+      mockStmt({ first: null }),
+    );
+    globalThis.fetch = okTransfer();
+
+    await app.request('/v1/internal/payouts/run', {
+      method: 'POST', headers: { 'X-Internal-Token': 'secret-cron-token' },
+    }, env({}, db));
+
+    const transferCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+      .find(([u]) => String(u).includes('/v1/transfers'));
+    expect(String((transferCall![1] as RequestInit).body)).toContain('amount=3000');
+  });
+
+  it('makes no transfer when debt swallows the whole month, and carries the rest forward', async () => {
+    const db = mockD1WithDebt(
+      7000,
+      mockStmt({ all: { results: [{ developer_id: 'gh:10', total_cents: 4500, eng_count: 2, eng_ids: 'e1,e2' }] } }),
+    );
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('no transfer should be attempted'));
+
+    const res = await app.request('/v1/internal/payouts/run', {
+      method: 'POST', headers: { 'X-Internal-Token': 'secret-cron-token' },
+    }, env({}, db));
+
+    const body = await res.json() as {
+      succeeded: unknown[];
+      clawbackSettlements: { developerId: string; remainingClawbackCents: number; clawbackAppliedCents: number }[];
+      summary: Record<string, number>;
+    };
+    expect(body.succeeded).toHaveLength(0);
+    expect(body.clawbackSettlements).toHaveLength(1);
+    expect(body.clawbackSettlements[0].clawbackAppliedCents).toBe(4500);
+    expect(body.clawbackSettlements[0].remainingClawbackCents).toBe(2500); // 7000 − 4500
+    expect(body.summary.totalClawbackOutstandingCents).toBe(2500);
+  });
+
+  it('still settles the engagements when debt swallows the month', async () => {
+    // Leaving them unpaid would re-count them next month against a debt those
+    // same earnings had already reduced — paying twice for refunded work.
+    const db = mockD1WithDebt(
+      7000,
+      mockStmt({ all: { results: [{ developer_id: 'gh:10', total_cents: 4500, eng_count: 2, eng_ids: 'e1,e2' }] } }),
+    );
+    await app.request('/v1/internal/payouts/run', {
+      method: 'POST', headers: { 'X-Internal-Token': 'secret-cron-token' },
+    }, env({}, db));
+
+    expect(db.batch).toHaveBeenCalledTimes(1);
+    const stamped = db.sqlSeen.some((s) => /UPDATE engagements/i.test(s) && /payout_month/i.test(s));
+    expect(stamped).toBe(true);
+  });
+
+  it('guards the debt write on the value it netted against', async () => {
+    // Compare-and-swap: two concurrent runs must not both subtract the same
+    // earnings from the same debt. Stripe idempotency guards the money; this
+    // guards the ledger.
+    const db = mockD1WithDebt(
+      7000,
+      mockStmt({ all: { results: [{ developer_id: 'gh:10', total_cents: 4500, eng_count: 1, eng_ids: 'e1' }] } }),
+    );
+    await app.request('/v1/internal/payouts/run', {
+      method: 'POST', headers: { 'X-Internal-Token': 'secret-cron-token' },
+    }, env({}, db));
+
+    const debtUpdate = db.sqlSeen.find((s) => /UPDATE developer_clawbacks/i.test(s));
+    expect(debtUpdate).toBeDefined();
+    expect(debtUpdate).toMatch(/WHERE\s+developer_id\s*=\s*\?\s+AND\s+pending_clawback_cents\s*=\s*\?/i);
+  });
+
+  it('leaves a debt-free developer completely unaffected', async () => {
+    const db = mockD1(
+      mockStmt({ all: { results: [{ developer_id: 'gh:10', total_cents: 4500, eng_count: 3, eng_ids: 'e1' }] } }),
+      mockStmt({ first: { stripe_connect_account_id: 'acct_abc', payouts_enabled: 1 } }),
+      mockStmt({ first: null }),
+    );
+    globalThis.fetch = okTransfer();
+
+    const res = await app.request('/v1/internal/payouts/run', {
+      method: 'POST', headers: { 'X-Internal-Token': 'secret-cron-token' },
+    }, env({}, db));
+
+    const body = await res.json() as {
+      succeeded: { amountCents: number; clawbackAppliedCents?: number }[];
+      summary: Record<string, number>;
+    };
+    expect(body.succeeded[0].amountCents).toBe(4500);
+    expect(body.succeeded[0].clawbackAppliedCents).toBeUndefined();
+    expect(body.summary.totalClawbackRecoveredCents).toBe(0);
+    expect(db.sqlSeen.some((s) => /UPDATE developer_clawbacks/i.test(s))).toBe(false);
   });
 });

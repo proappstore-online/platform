@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
+import { PLATFORM_FEE_BPS, developerShareCents } from '../lib/platform-fee.js';
 import { sendEmail } from '../lib/email.js';
 
 /**
@@ -27,7 +28,6 @@ import { sendEmail } from '../lib/email.js';
 
 export const engagementRoutes = new Hono<{ Bindings: Env }>();
 
-const PLATFORM_FEE_BPS = 1000; // 10%
 
 function escHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -323,7 +323,7 @@ engagementRoutes.post('/services/engagements/:id/messages', async (c) => {
       // The batch is a D1 transaction — if any statement fails, all roll back.
       // The conditional WHERE on the deduct prevents overdraft under concurrency.
       chargeCents = eng.prompt_rate_cents;
-      const devEarned = Math.round(chargeCents * (10000 - PLATFORM_FEE_BPS) / 10000);
+      const devEarned = developerShareCents(chargeCents);
       const platformFee = chargeCents - devEarned;
 
       // Pre-check balance (fast reject without touching the DB in a write path)
@@ -551,15 +551,33 @@ engagementRoutes.post('/services/engagements/:id/refund', async (c) => {
     // Claw back the developer's proportional share of the refunded amount so the
     // payout cron doesn't pay them for work the client no longer paid for. The
     // dev earned (100% - fee) of each charge, so reverse that fraction here.
-    const devClawback = Math.round((body.amountCents * (10000 - PLATFORM_FEE_BPS)) / 10000);
+    const devClawback = developerShareCents(body.amountCents);
     // Never drive earned/fee negative (guards odd states + already-clawed refunds).
     const devClawbackApplied = Math.min(devClawback, eng.total_dev_earned_cents);
     const feeClawback = Math.min(body.amountCents - devClawbackApplied, eng.total_platform_fee_cents);
 
+    // How much of the clawback the decrement below will NOT actually recover
+    // (#85). Two distinct ways money escapes:
+    //
+    //  1. The engagement was already paid out. The cron sums
+    //     `WHERE payout_month IS NULL`, so once a row is settled it is never
+    //     read again and decrementing total_dev_earned_cents recovers nothing —
+    //     the whole clawback is unrecovered, however much the decrement "applied".
+    //  2. The engagement is unpaid but the decrement clamps (a prior partial
+    //     refund already reduced the balance). Only the clamped-off remainder
+    //     escapes; the rest genuinely reduces the next payout.
+    //
+    // Case 1 is the bug this issue is about, and it is exactly the case where
+    // the naive "remainder" is zero — so keying off the remainder alone would
+    // record nothing. The unrecovered amount becomes debt against the DEVELOPER,
+    // netted from their next payout by the cron.
+    const alreadyPaid = eng.payout_month != null;
+    const unrecoveredClawback = alreadyPaid ? devClawback : devClawback - devClawbackApplied;
+
     const now = Date.now();
     const txId = crypto.randomUUID();
 
-    await c.env.DB.batch([
+    const statements = [
       // Credit the client
       c.env.DB.prepare(
         'UPDATE client_balances SET balance_cents = balance_cents + ?, updated_at = ? WHERE user_id = ?',
@@ -577,18 +595,38 @@ engagementRoutes.post('/services/engagements/:id/refund', async (c) => {
                 total_platform_fee_cents = total_platform_fee_cents - ?
           WHERE id = ?`,
       ).bind(body.amountCents, devClawbackApplied, feeClawback, id),
-    ]);
+    ];
 
-    // If the engagement was already paid out (payout_month set), the dev's share
-    // was already transferred via Stripe; the cron can't recover it. Surface that
-    // so the admin knows a manual clawback/reversal is still required.
-    const clawbackAlreadyPaid = eng.payout_month != null && devClawbackApplied > 0;
+    // Record what the decrement could not recover, in the SAME batch as the
+    // client credit — the ledger entry and the refund it offsets must both land
+    // or neither, or the platform credits the client and forgets the debt.
+    if (unrecoveredClawback > 0) {
+      statements.push(
+        c.env.DB.prepare(
+          `INSERT INTO developer_clawbacks (developer_id, pending_clawback_cents, updated_at)
+           VALUES (?1, ?2, ?3)
+           ON CONFLICT(developer_id) DO UPDATE SET
+             pending_clawback_cents = pending_clawback_cents + ?2,
+             updated_at = ?3`,
+        ).bind(eng.developer_id, unrecoveredClawback, now),
+      );
+    }
+
+    await c.env.DB.batch(statements);
+
+    // `clawbackAlreadyPaid` no longer means "a human must go chase this" — the
+    // ledger does. Kept because it is the one flag that says the money had
+    // already left, which is worth surfacing in the admin UI even though
+    // recovery is now automatic.
+    const clawbackAlreadyPaid = alreadyPaid && devClawback > 0;
     return c.json({
       ok: true,
       refundedCents: body.amountCents,
       transactionId: txId,
       devClawbackCents: devClawbackApplied,
       clawbackAlreadyPaid,
+      /** Cents added to the developer's debt ledger, netted from their next payout. */
+      pendingClawbackCents: unrecoveredClawback,
     });
   } catch (err) {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);

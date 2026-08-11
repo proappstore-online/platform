@@ -12,6 +12,12 @@ import { internalTokenOk } from '@proappstore/build-core';
  * the money to each developer's Stripe Connect account, records the payout,
  * and marks the engagements as paid. Idempotent: running twice in the same
  * month is a safe no-op (keyed by developer_id + payout_month UNIQUE index).
+ *
+ * CLAWBACK NETTING (#85): a refund on an already-settled engagement cannot be
+ * recovered by decrementing that engagement — this query never looks at settled
+ * rows again — so the shortfall is banked in `developer_clawbacks` and netted
+ * here against the developer's next earnings. Debt larger than the month's
+ * earnings carries forward rather than being written off.
  */
 
 export const payoutCronRoutes = new Hono<{ Bindings: Env }>();
@@ -33,6 +39,22 @@ interface PayoutResult {
   amountCents: number;
   engagementCount: number;
   stripeTransferId: string;
+  /** Debt netted off this payout, if any (#85). */
+  clawbackAppliedCents?: number;
+}
+
+/**
+ * A developer whose outstanding debt swallowed the whole month's earnings (#85).
+ * No money moved, but the engagements ARE settled — they were consumed offsetting
+ * the debt, and leaving them unpaid would re-count them next month against a
+ * debt that had already been reduced.
+ */
+interface ClawbackSettlement {
+  developerId: string;
+  earnedCents: number;
+  clawbackAppliedCents: number;
+  remainingClawbackCents: number;
+  engagementCount: number;
 }
 
 function currentPayoutMonth(): string {
@@ -75,10 +97,62 @@ payoutCronRoutes.post('/internal/payouts/run', async (c) => {
   const succeeded: PayoutResult[] = [];
   const skipped: { developerId: string; reason: string }[] = [];
   const failed: { developerId: string; error: string }[] = [];
+  const clawbackSettlements: ClawbackSettlement[] = [];
 
   for (const row of unpaid ?? []) {
-    const amountCents = Number(row.total_cents);
-    if (amountCents <= 0) continue;
+    const earnedCents = Number(row.total_cents);
+    if (earnedCents <= 0) continue;
+
+    const engIdsAll = (row.eng_ids ?? '').split(',').filter(Boolean);
+
+    // 1b. Net any outstanding refund debt (#85) BEFORE deciding what to pay.
+    //     Read the observed value so the write below can compare-and-swap on it:
+    //     two concurrent runs must not both subtract the same earnings from the
+    //     same debt. Stripe's idempotency key guards the money; this guards the
+    //     ledger.
+    const debtRow = await c.env.DB.prepare(
+      'SELECT pending_clawback_cents FROM developer_clawbacks WHERE developer_id = ?',
+    ).bind(row.developer_id).first<{ pending_clawback_cents: number }>();
+    const debtCents = Math.max(0, Number(debtRow?.pending_clawback_cents ?? 0));
+
+    if (debtCents >= earnedCents) {
+      // Debt swallows the month. No transfer, but the engagements ARE settled —
+      // they have been consumed offsetting the debt. Leaving them unpaid would
+      // re-count them next month against a debt already reduced by them, paying
+      // the developer for work the client was refunded for a second time.
+      const remaining = debtCents - earnedCents;
+      const idPlaceholders = engIdsAll.map(() => '?').join(',');
+      const settledAt = Date.now();
+      try {
+        await c.env.DB.batch([
+          c.env.DB.prepare(
+            `UPDATE developer_clawbacks
+                SET pending_clawback_cents = ?, updated_at = ?
+              WHERE developer_id = ? AND pending_clawback_cents = ?`,
+          ).bind(remaining, settledAt, row.developer_id, debtCents),
+          c.env.DB.prepare(
+            `UPDATE engagements SET payout_month = ?
+              WHERE id IN (${idPlaceholders}) AND payout_month IS NULL`,
+          ).bind(payoutMonth, ...engIdsAll),
+        ]);
+        clawbackSettlements.push({
+          developerId: row.developer_id,
+          earnedCents,
+          clawbackAppliedCents: earnedCents,
+          remainingClawbackCents: remaining,
+          engagementCount: Number(row.eng_count),
+        });
+      } catch (dbErr) {
+        failed.push({
+          developerId: row.developer_id,
+          error: `clawback settlement failed: ${dbErr instanceof Error ? dbErr.message : String(dbErr)}`,
+        });
+      }
+      continue;
+    }
+
+    // Debt (if any) is smaller than the month's earnings: pay the difference.
+    const amountCents = earnedCents - debtCents;
 
     // 2. Look up Stripe Connect account
     const connect = await c.env.DB.prepare(
@@ -140,19 +214,31 @@ payoutCronRoutes.post('/internal/payouts/run', async (c) => {
     // after the snapshot whose earnings weren't in this transfer.
     const engIds = (row.eng_ids ?? '').split(',').filter(Boolean);
     const idPlaceholders = engIds.map(() => '?').join(',');
+    const settlementStatements = [
+      c.env.DB.prepare(
+        `INSERT INTO service_payouts (id, developer_id, payout_month, amount_cents, engagement_count, stripe_transfer_id, stripe_connect_account_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(payoutId, row.developer_id, payoutMonth, amountCents, row.eng_count, transferId, connect.stripe_connect_account_id, now),
+      c.env.DB.prepare(
+        `UPDATE engagements
+            SET payout_month = ?
+          WHERE id IN (${idPlaceholders})
+            AND payout_month IS NULL`,
+      ).bind(payoutMonth, ...engIds),
+    ];
+    // Debt was fully absorbed by this payout — clear it in the same batch, and
+    // only if it still holds the value we netted against (#85).
+    if (debtCents > 0) {
+      settlementStatements.push(
+        c.env.DB.prepare(
+          `UPDATE developer_clawbacks
+              SET pending_clawback_cents = 0, updated_at = ?
+            WHERE developer_id = ? AND pending_clawback_cents = ?`,
+        ).bind(now, row.developer_id, debtCents),
+      );
+    }
     try {
-      await c.env.DB.batch([
-        c.env.DB.prepare(
-          `INSERT INTO service_payouts (id, developer_id, payout_month, amount_cents, engagement_count, stripe_transfer_id, stripe_connect_account_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).bind(payoutId, row.developer_id, payoutMonth, amountCents, row.eng_count, transferId, connect.stripe_connect_account_id, now),
-        c.env.DB.prepare(
-          `UPDATE engagements
-              SET payout_month = ?
-            WHERE id IN (${idPlaceholders})
-              AND payout_month IS NULL`,
-        ).bind(payoutMonth, ...engIds),
-      ]);
+      await c.env.DB.batch(settlementStatements);
     } catch (dbErr) {
       // If the DB write fails after Stripe succeeded, the transfer is already
       // done but unrecorded. The next cron run will see the UNIQUE index and
@@ -173,6 +259,7 @@ payoutCronRoutes.post('/internal/payouts/run', async (c) => {
       amountCents,
       engagementCount: Number(row.eng_count),
       stripeTransferId: transferId,
+      ...(debtCents > 0 ? { clawbackAppliedCents: debtCents } : {}),
     });
   }
 
@@ -181,11 +268,22 @@ payoutCronRoutes.post('/internal/payouts/run', async (c) => {
     succeeded,
     skipped,
     failed,
+    /** Developers whose refund debt consumed the whole month — no transfer (#85). */
+    clawbackSettlements,
     summary: {
       totalTransferred: succeeded.length,
       totalAmountCents: succeeded.reduce((sum, p) => sum + p.amountCents, 0),
       totalSkipped: skipped.length,
       totalFailed: failed.length,
+      // Debt recovered this run, across both paths: netted off a transfer, and
+      // absorbed entirely by a settlement that moved no money.
+      totalClawbackRecoveredCents:
+        succeeded.reduce((sum, p) => sum + (p.clawbackAppliedCents ?? 0), 0)
+        + clawbackSettlements.reduce((sum, s) => sum + s.clawbackAppliedCents, 0),
+      totalClawbackOutstandingCents: clawbackSettlements.reduce(
+        (sum, s) => sum + s.remainingClawbackCents,
+        0,
+      ),
     },
   });
 });

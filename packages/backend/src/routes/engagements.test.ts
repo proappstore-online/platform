@@ -6,9 +6,16 @@ const TOK = await testToken('gh:1');
 
 function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
   const prepare = vi.fn();
-  for (const stmt of stmts) prepare.mockReturnValueOnce(stmt);
-  prepare.mockReturnValue(mockStmt());
-  return { prepare, batch: vi.fn().mockResolvedValue([{ meta: { changes: 1 } }]) };
+  const queue = [...stmts];
+  // Record the SQL so tests can assert on which statements a handler built —
+  // the clawback ledger write (#85) is conditional, and its absence is as much
+  // the behaviour under test as its presence.
+  const sqlSeen: string[] = [];
+  prepare.mockImplementation((sql: string) => {
+    sqlSeen.push(sql);
+    return queue.length ? queue.shift()! : mockStmt();
+  });
+  return { prepare, sqlSeen, batch: vi.fn().mockResolvedValue([{ meta: { changes: 1 } }]) };
 }
 
 function env(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof mockD1>) {
@@ -324,6 +331,78 @@ describe('POST /v1/services/engagements/:id/refund', () => {
     expect(res.status).toBe(200);
     const json = await res.json() as { clawbackAlreadyPaid: boolean };
     expect(json.clawbackAlreadyPaid).toBe(true);
+  });
+
+  // #85: decrementing total_dev_earned_cents only recovers money while the
+  // engagement is still unpaid — the payout cron sums `WHERE payout_month IS
+  // NULL` and never reads a settled row again. What the decrement cannot
+  // recover is banked against the developer instead of being lost.
+  it('banks the FULL clawback as debt when the engagement was already paid', async () => {
+    const db = mockD1(
+      mockStmt({
+        first: {
+          client_id: 'gh:2', developer_id: 'gh:3',
+          total_charged_cents: 1000, total_dev_earned_cents: 900,
+          total_platform_fee_cents: 100, total_refunded_cents: 0, payout_month: '2026-07',
+        },
+      }),
+    );
+    const res = await app.request('/v1/services/engagements/test-id/refund', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amountCents: 1000 }),
+    }, env({ ADMIN_GITHUB_IDS: 'gh:1' }, db));
+
+    const json = await res.json() as { pendingClawbackCents: number };
+    // The decrement "applies" 900, but recovers nothing — the row is settled.
+    // Keying off the un-applied remainder would bank 0 and lose the money.
+    expect(json.pendingClawbackCents).toBe(900);
+    const ledgerWrite = db.sqlSeen.find((q) => /developer_clawbacks/i.test(q));
+    expect(ledgerWrite).toBeDefined();
+  });
+
+  it('banks nothing when the engagement is unpaid — the decrement does the work', async () => {
+    const db = mockD1(
+      mockStmt({
+        first: {
+          client_id: 'gh:2', developer_id: 'gh:3',
+          total_charged_cents: 1000, total_dev_earned_cents: 900,
+          total_platform_fee_cents: 100, total_refunded_cents: 0, payout_month: null,
+        },
+      }),
+    );
+    const res = await app.request('/v1/services/engagements/test-id/refund', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amountCents: 1000 }),
+    }, env({ ADMIN_GITHUB_IDS: 'gh:1' }, db));
+
+    const json = await res.json() as { pendingClawbackCents: number };
+    expect(json.pendingClawbackCents).toBe(0);
+    expect(db.sqlSeen.some((q) => /developer_clawbacks/i.test(q))).toBe(false);
+  });
+
+  it('banks the clamped-off remainder on an unpaid engagement', async () => {
+    // A prior partial refund already pulled the balance down, so the decrement
+    // clamps. The old code dropped the difference silently.
+    const db = mockD1(
+      mockStmt({
+        first: {
+          client_id: 'gh:2', developer_id: 'gh:3',
+          total_charged_cents: 1000, total_dev_earned_cents: 200,
+          total_platform_fee_cents: 100, total_refunded_cents: 0, payout_month: null,
+        },
+      }),
+    );
+    const res = await app.request('/v1/services/engagements/test-id/refund', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amountCents: 1000 }),
+    }, env({ ADMIN_GITHUB_IDS: 'gh:1' }, db));
+
+    const json = await res.json() as { devClawbackCents: number; pendingClawbackCents: number };
+    expect(json.devClawbackCents).toBe(200);      // all the row had left
+    expect(json.pendingClawbackCents).toBe(700);  // 900 owed − 200 recovered
   });
 });
 

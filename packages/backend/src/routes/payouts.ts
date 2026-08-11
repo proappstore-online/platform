@@ -1,3 +1,4 @@
+import { PLATFORM_FEE_BPS } from '../lib/platform-fee.js';
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
@@ -29,7 +30,6 @@ import { requireUser, HttpError } from '../lib/auth.js';
 export const payoutsRoutes = new Hono<{ Bindings: Env }>();
 
 const SUBSCRIBER_PRICE_CENTS = 500;
-const PLATFORM_FEE_BPS = 1000; // 10%
 const PER_SUBSCRIBER_POOL_CENTS = Math.round(
   (SUBSCRIBER_PRICE_CENTS * (10000 - PLATFORM_FEE_BPS)) / 10000,
 ); // 450

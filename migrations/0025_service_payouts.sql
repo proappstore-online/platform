@@ -21,6 +21,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_service_payouts_dev_month
 CREATE INDEX IF NOT EXISTS idx_service_payouts_month
   ON service_payouts(payout_month);
 
--- The payout_month column on engagements was added via a separate migration
--- (applied manually before this migration file was created). If running fresh,
--- add it manually: ALTER TABLE engagements ADD COLUMN payout_month TEXT;
+-- NOTE (#85): engagements.payout_month is now declared in 0023_engagements.sql
+-- itself. It used to be a manual step described here, which meant a database
+-- rebuilt from migrations/ had no such column and every payout query failed.
+-- Do NOT add it by hand — production already has it, and a fresh database gets
+-- it from 0023.
