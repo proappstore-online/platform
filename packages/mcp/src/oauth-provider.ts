@@ -321,10 +321,52 @@ async function continueAuthorize(request: Request, config: OAuthConfig): Promise
 }
 
 /** GET /oauth/callback — receives session token from PAS auth, issues auth code */
+/**
+ * Redeem a one-time login code for a PAS session token, server-to-server (#110).
+ *
+ * Derives the exchange URL from `authStart` rather than taking a new config
+ * field, so every vendored copy of this file keeps working without a config
+ * change in each MCP worker.
+ *
+ * Returns null on any failure; the caller then reports the same
+ * "missing nonce or session" 400 an absent credential produces.
+ */
+async function exchangeLoginCode(config: OAuthConfig, code: string): Promise<string | null> {
+  try {
+    const exchangeUrl = new URL("/v1/auth/code/exchange", config.authStart);
+    const response = await fetch(exchangeUrl.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { token?: unknown };
+    return typeof body.token === "string" && body.token ? body.token : null;
+  } catch {
+    return null;
+  }
+}
+
 async function oauthCallback(request: Request, config: OAuthConfig): Promise<Response> {
   const url = new URL(request.url);
   const nonce = url.searchParams.get("nonce");
-  const session = url.searchParams.get("session");
+
+  // SECURITY (#110): prefer a one-time code redeemed server-to-server over a
+  // session token in the query string. A query parameter — unlike the fragment
+  // the browser flow uses — reaches servers: Cloudflare request logs, Referer
+  // headers, browser history. And `?session=` was a directly reusable Bearer
+  // for the life of the session, which is exactly why OAuth returns a
+  // short-lived single-use code in a redirect and why the implicit flow was
+  // deprecated in OAuth 2.1.
+  //
+  // `?session=` stays accepted for now so this Worker can deploy BEFORE the
+  // backend starts sending codes. Reversed, the backend would hand a code to a
+  // Worker that only understands the old parameter and every login would break
+  // in that window. Phase 3 removes the fallback.
+  const codeParam = url.searchParams.get("code");
+  const session = codeParam
+    ? await exchangeLoginCode(config, codeParam)
+    : url.searchParams.get("session");
 
   if (!nonce || !session) {
     return new Response("missing nonce or session", { status: 400 });

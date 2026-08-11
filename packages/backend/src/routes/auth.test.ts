@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { app } from '../index.js';
-import { mintSession } from '@proappstore/build-core';
+import { mintSession, verifySession } from '@proappstore/build-core';
+import { TEST_SK, makeEnv } from '../test-helpers.js';
 import { isFirstPartyHost } from './auth.js';
 
 // #56: only first-party PAS surfaces may receive a session carrying platform
@@ -753,5 +754,117 @@ describe('POST /v1/auth/exchange — token audience (#84)', () => {
   it('503 when client credentials are not configured', async () => {
     const res = await post(env() as never);
     expect(res.status).toBe(503);
+  });
+});
+
+// #87/#110: a session JWT handed back as `?session=` reaches servers — CDN
+// logs, Referer, browser history — and is a directly reusable Bearer. These
+// codes replace it with a value the browser carries but cannot use.
+describe('POST /v1/auth/code/exchange', () => {
+  const CLAIMS = { uid: 'gh:1', login: 'alice', avatarUrl: null, roles: ['user'] };
+
+  /** D1 stub holding one code row keyed by hash, with a delete recorder. */
+  function codeDb(row: { claims: string; expires_at: number } | null) {
+    const deletes: unknown[][] = [];
+    const prepare = vi.fn((sql: string) => ({
+      bind: (...args: unknown[]) => ({
+        async first() {
+          if (!/SELECT claims/i.test(sql)) return null;
+          if (!row) return null;
+          // Mirror the endpoint's `expires_at > ?` predicate.
+          const now = Number(args[1]);
+          return row.expires_at > now ? { claims: row.claims } : null;
+        },
+        async run() {
+          if (/DELETE FROM auth_exchange_codes/i.test(sql)) deletes.push(args);
+          return { meta: { changes: 1 } };
+        },
+      }),
+    }));
+    return { prepare, deletes };
+  }
+
+  const post = (body: unknown, db?: ReturnType<typeof codeDb>) =>
+    app.request(
+      '/v1/auth/code/exchange',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+      makeEnv({}, (db ?? codeDb(null)) as never),
+    );
+
+  it('returns a session token for a valid unexpired code', async () => {
+    const db = codeDb({ claims: JSON.stringify(CLAIMS), expires_at: Date.now() + 60_000 });
+    const res = await post({ code: 'a-code' }, db);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { token?: string };
+    expect(typeof body.token).toBe('string');
+    // A real session: verifiable, and carrying the stored claims.
+    const claims = await verifySession(body.token!, TEST_SK);
+    expect(claims?.uid).toBe('gh:1');
+    expect(claims?.roles).toEqual(['user']);
+  });
+
+  it('preserves the stored roles rather than recomputing them', async () => {
+    // #56 de-privileges sessions bound for an app origin, and that decision is
+    // made at REDIRECT time from the destination host. The exchange endpoint
+    // cannot see the destination, so it must sign what was stored — recomputing
+    // here would silently re-privilege app-origin sessions.
+    const elevated = { ...CLAIMS, roles: ['user', 'creator', 'admin'] };
+    const db = codeDb({ claims: JSON.stringify(elevated), expires_at: Date.now() + 60_000 });
+    const res = await post({ code: 'a-code' }, db);
+
+    const body = await res.json() as { token: string };
+    expect((await verifySession(body.token, TEST_SK))?.roles).toEqual(['user', 'creator', 'admin']);
+  });
+
+  it('consumes the code even when it was invalid, so a guess cannot be retried', async () => {
+    const db = codeDb(null);
+    await post({ code: 'guess' }, db);
+    expect(db.deletes).toHaveLength(1);
+  });
+
+  it('consumes the code on success, so it cannot be replayed', async () => {
+    const db = codeDb({ claims: JSON.stringify(CLAIMS), expires_at: Date.now() + 60_000 });
+    await post({ code: 'a-code' }, db);
+    expect(db.deletes).toHaveLength(1);
+  });
+
+  it('rejects an expired code', async () => {
+    const db = codeDb({ claims: JSON.stringify(CLAIMS), expires_at: Date.now() - 1 });
+    const res = await post({ code: 'stale' }, db);
+    expect(res.status).toBe(400);
+  });
+
+  it('answers uniformly for missing, malformed and unknown codes', async () => {
+    // No detail is leaked: every failure mode looks the same to a caller.
+    const missing = await post({});
+    const wrongType = await post({ code: 42 });
+    const unknown = await post({ code: 'nope' }, codeDb(null));
+
+    for (const res of [missing, wrongType, unknown]) {
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid code' });
+    }
+  });
+
+  it('rejects a row whose claims are unparseable', async () => {
+    const db = codeDb({ claims: 'not json', expires_at: Date.now() + 60_000 });
+    expect((await post({ code: 'a-code' }, db)).status).toBe(400);
+  });
+
+  it('rejects claims with no uid', async () => {
+    const db = codeDb({ claims: JSON.stringify({ login: 'x' }), expires_at: Date.now() + 60_000 });
+    expect((await post({ code: 'a-code' }, db)).status).toBe(400);
+  });
+
+  it('does not shadow the device-token exchange at /v1/auth/exchange', async () => {
+    // That path is the GitHub device-token flow hardened for #84; a second
+    // handler there would have broken it, which is why this one is nested.
+    const res = await app.request(
+      '/v1/auth/exchange',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) },
+      makeEnv(),
+    );
+    expect(await res.text()).toMatch(/missing githubToken/i);
   });
 });

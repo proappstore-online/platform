@@ -456,3 +456,87 @@ function fakeRouteDb(): D1Database {
 function ctx(): ExecutionContext {
   return { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext;
 }
+
+// #87: `?session=` put a reusable Bearer in the query string, where it reaches
+// CDN/edge access logs and browser history. The callback now prefers a one-time
+// code redeemed server-to-server. Moving it to the fragment is not an option —
+// this callback IS the server, and fragments never reach it.
+describe("host auth callback — one-time code (#87)", () => {
+  const CALLBACK = "https://meetup.proappstore.online/.pas/auth/callback";
+  const withNonce = { headers: { Cookie: "__Host-pas_auth_nonce=nonce-1" } };
+
+  /** Stub global fetch for the code-exchange POST only. */
+  function stubExchange(impl: (body: { code?: string }) => Response) {
+    const spy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("/v1/auth/code/exchange")) {
+        return impl(JSON.parse(String(init?.body ?? "{}")));
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", spy);
+    return spy;
+  }
+
+  it("redeems ?code= and sets the session cookie from the response", async () => {
+    const spy = stubExchange(() => Response.json({ token: "exchanged-token" }));
+    const res = await worker.fetch(
+      new Request(`${CALLBACK}?code=abc123&return_to=/dashboard&nonce=nonce-1`, withNonce),
+      makeEnv(),
+      ctx(),
+    );
+
+    expect(res.status).toBe(303);
+    expect(res.headers.getSetCookie().join(" ")).toContain("__Host-pas_session=exchanged-token");
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls[0]![1]).toMatchObject({ method: "POST" });
+  });
+
+  it("never puts the code or token in the redirect Location", async () => {
+    stubExchange(() => Response.json({ token: "exchanged-token" }));
+    const res = await worker.fetch(
+      new Request(`${CALLBACK}?code=abc123&return_to=/dashboard&nonce=nonce-1`, withNonce),
+      makeEnv(),
+      ctx(),
+    );
+
+    const location = res.headers.get("Location") ?? "";
+    expect(location).not.toContain("abc123");
+    expect(location).not.toContain("exchanged-token");
+  });
+
+  it("prefers ?code= when both are present", async () => {
+    stubExchange(() => Response.json({ token: "exchanged-token" }));
+    const res = await worker.fetch(
+      new Request(`${CALLBACK}?code=abc123&session=raw-token&return_to=/dashboard&nonce=nonce-1`, withNonce),
+      makeEnv(),
+      ctx(),
+    );
+    expect(res.headers.getSetCookie().join(" ")).toContain("exchanged-token");
+    expect(res.headers.getSetCookie().join(" ")).not.toContain("raw-token");
+  });
+
+  it("fails like an absent credential when the exchange is refused", async () => {
+    stubExchange(() => new Response("nope", { status: 400 }));
+    const res = await worker.fetch(
+      new Request(`${CALLBACK}?code=bad&return_to=/dashboard&nonce=nonce-1`, withNonce),
+      makeEnv(),
+      ctx(),
+    );
+
+    expect(res.status).toBe(303);
+    expect(res.headers.get("Location")).toContain("auth_error=missing_session");
+  });
+
+  it("still accepts ?session= so this can deploy before the backend sends codes", async () => {
+    // Phase 3 removes this; until then the old path must keep working or every
+    // login breaks in the deploy window.
+    const res = await worker.fetch(
+      new Request(`${CALLBACK}?session=good-token&return_to=/dashboard&nonce=nonce-1`, withNonce),
+      makeEnv(),
+      ctx(),
+    );
+    expect(res.status).toBe(303);
+    expect(res.headers.getSetCookie().join(" ")).toContain("__Host-pas_session=good-token");
+  });
+});

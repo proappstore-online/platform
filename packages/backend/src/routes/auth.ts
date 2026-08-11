@@ -208,6 +208,84 @@ function rolesFor(userId: string, env: Env): string[] {
   return roles;
 }
 
+// ── One-time login codes (#87, #110) ──────────────────────────────────────
+//
+// A session JWT handed back as `?session=` reaches servers: CDN logs, Referer
+// headers, browser history — and it is a directly reusable Bearer. These codes
+// replace that with a value the browser carries but cannot use, redeemed
+// server-to-server at POST /v1/auth/code/exchange.
+
+/** Codes live just long enough to survive a redirect and a POST. */
+const EXCHANGE_CODE_TTL_MS = 10 * 60 * 1000;
+
+// PHASE 3 will add `issueExchangeCode(db, claims, nowMs)` here and switch the
+// callback from `?session=` to `?code=`. It is deliberately NOT in this commit:
+// nothing calls it yet, and untested dead code in an auth path is worse than a
+// slightly larger phase 3. Note when adding it that claims must be computed at
+// REDIRECT time — the #56 role decision depends on the destination host, which
+// the exchange endpoint cannot see.
+
+/** SHA-256, base64url. Codes are stored hashed so the table holds nothing usable. */
+async function hashExchangeCode(code: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code));
+  let binary = '';
+  for (const byte of new Uint8Array(digest)) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * POST /v1/auth/code/exchange — redeem a one-time login code for a session.
+ *
+ * NOT on `/v1/auth/exchange`: that path is already the GitHub device-token
+ * exchange (hardened for #84), and a second handler there would shadow it.
+ *
+ * Fail-closed and uniform: missing, malformed, unknown, expired and
+ * already-used all return the same bare 400. A presented code is consumed
+ * whether or not it was valid, so a guess cannot be retried, and the row is
+ * deleted before the session is minted so a race cannot yield two sessions
+ * from one code.
+ */
+authRoutes.post('/auth/code/exchange', async (c) => {
+  let code = '';
+  try {
+    const body = await c.req.json<{ code?: unknown }>();
+    if (typeof body?.code === 'string') code = body.code;
+  } catch {
+    /* handled by the empty check */
+  }
+  if (!code) return c.json({ error: 'invalid code' }, 400);
+
+  const codeHash = await hashExchangeCode(code);
+  const now = Date.now();
+
+  const row = await c.env.DB.prepare(
+    'SELECT claims FROM auth_exchange_codes WHERE code_hash = ? AND expires_at > ?',
+  )
+    .bind(codeHash, now)
+    .first<{ claims: string }>();
+
+  // Consume unconditionally — before validating, and whether or not anything
+  // was found. A wrong guess must not be retryable, and an expired row must not
+  // linger.
+  await c.env.DB.prepare('DELETE FROM auth_exchange_codes WHERE code_hash = ?')
+    .bind(codeHash)
+    .run()
+    .catch(() => { /* the read already decided the outcome */ });
+
+  if (!row) return c.json({ error: 'invalid code' }, 400);
+
+  let claims: NewSession;
+  try {
+    claims = JSON.parse(row.claims) as NewSession;
+  } catch {
+    return c.json({ error: 'invalid code' }, 400);
+  }
+  if (!claims?.uid) return c.json({ error: 'invalid code' }, 400);
+
+  const token = await mintSession(claims, c.env.SESSION_SIGNING_KEY);
+  return c.json({ token });
+});
+
 // ── GET /v1/auth/:provider/start ───────────────────────────
 authRoutes.get('/auth/:provider/start', async (c) => {
   const provider = c.req.param('provider') as Provider;

@@ -48,7 +48,23 @@ async function authCallback(request: Request, env: Env): Promise<Response> {
   if (!nonceMatches(request, url)) {
     return redirectWithAuthError(url, returnPath, "invalid_state", [clearNonceCookie()]);
   }
-  const session = url.searchParams.get("session");
+  // SECURITY (#87): prefer a one-time code redeemed server-to-server over a
+  // session JWT sitting in the query string. A query parameter reaches servers
+  // — CDN and edge access logs, browser history — and `?session=` was a
+  // directly reusable Bearer for the life of the session.
+  //
+  // The obvious alternative, moving it to the fragment, cannot work here: this
+  // callback IS the server, and fragments are never sent to it. Reading the
+  // fragment would need page JS, which puts the token back in JS and defeats
+  // the HttpOnly cookie this endpoint exists to set.
+  //
+  // `?session=` stays accepted for now so this can deploy before the backend
+  // starts sending codes (#110's ordering note). Phase 3 removes it — until
+  // then the vulnerable path is still live.
+  const code = url.searchParams.get("code");
+  const session = code
+    ? await exchangeCode(code)
+    : url.searchParams.get("session");
   if (!session) return redirectWithAuthError(url, returnPath, "missing_session", [clearNonceCookie()]);
 
   const user = await fetchMe(env, session);
@@ -62,6 +78,28 @@ async function authCallback(request: Request, env: Env): Promise<Response> {
   headers.append("Set-Cookie", sessionCookie(session));
   headers.append("Set-Cookie", clearNonceCookie());
   return new Response(null, { status: 303, headers });
+}
+
+/**
+ * Redeem a one-time login code for a session token, server-to-server (#87).
+ *
+ * Returns null on any failure — the caller turns that into the same
+ * `missing_session` redirect a bad `?session=` produced, so a failed exchange
+ * is indistinguishable from an absent credential.
+ */
+async function exchangeCode(code: string): Promise<string | null> {
+  try {
+    const response = await fetch(`${API_BASE}/v1/auth/code/exchange`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { token?: unknown };
+    return typeof body.token === "string" && body.token ? body.token : null;
+  } catch {
+    return null;
+  }
 }
 
 async function authMe(request: Request, env: Env): Promise<Response> {
