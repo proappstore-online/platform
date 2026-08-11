@@ -59,6 +59,7 @@ describe('deployDataWorker', () => {
       { ok: true, body: { success: true } },    // upload
       { ok: true, body: {} },                    // subdomain enable
       { ok: true, body: { success: true, result: [{ id: 'zone-1' }] } },  // zone lookup
+      { ok: true, body: { success: true, result: [] } },  // #82 hostname owner lookup — unbound
       { ok: true, body: { success: false, errors: [{ message: 'no permission' }] } },  // domain attach fails
     );
 
@@ -89,6 +90,7 @@ describe('deployDataWorker', () => {
       { ok: true, body: { success: true } },    // upload
       { ok: true, body: {} },                    // subdomain enable
       { ok: true, body: { success: true, result: [{ id: 'zone-1' }] } },  // zone lookup
+      { ok: true, body: { success: true, result: [] } },  // #82 hostname owner lookup — unbound
       { ok: true, body: { success: true } },    // domain attach
     );
 
@@ -104,6 +106,7 @@ describe('deployDataWorker', () => {
       { ok: true, body: { success: true } },
       { ok: true, body: {} },
       { ok: true, body: { success: true, result: [{ id: 'z1' }] } },
+      { ok: true, body: { success: true, result: [] } },  // #82 hostname owner lookup — unbound
       { ok: true, body: { success: true } },
     );
 
@@ -122,6 +125,7 @@ describe('deployDataWorker', () => {
         { ok: true, body: { success: true } },
         { ok: true, body: {} },
         { ok: true, body: { success: true, result: [{ id: 'z1' }] } },
+        { ok: true, body: { success: true, result: [] } },  // #82 hostname owner lookup — unbound
         { ok: true, body: { success: true } },
       );
       await deployDataWorker('test-app', 'db-456', 'tok', 'acct', 'sk', internalToken);
@@ -135,5 +139,104 @@ describe('deployDataWorker', () => {
     expect(await bindingsFromUpload('internal-secret')).toContain('INTERNAL_TOKEN');
     mockFetch.mockClear();
     expect(await bindingsFromUpload('')).not.toContain('INTERNAL_TOKEN');
+  });
+});
+
+// #82: `override_existing_origin: true` used to be unconditional, so a provision
+// for <app> would seize data-<app>.proappstore.online from whatever already held
+// it — bypassing the fail-safe the Pages path has in alreadyExists().
+describe('deployDataWorker — custom domain ownership (#82)', () => {
+  const upToZone = () => mockSequence(
+    { ok: true, body: { success: true } },   // upload
+    { ok: true, body: {} },                   // subdomain enable
+    { ok: true, body: { success: true, result: [{ id: 'zone-1' }] } }, // zone lookup
+  );
+
+  it('refuses when the hostname belongs to a different worker', async () => {
+    upToZone();
+    mockSequence({ ok: true, body: { success: true, result: [
+      { hostname: 'data-my-app.proappstore.online', service: 'pas-data-someone-else' },
+    ] } });
+
+    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk');
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('pas-data-someone-else');
+    expect(result.detail).toContain('refusing to re-point');
+    expect(result.customDomain).toBeUndefined();
+  });
+
+  it('never sends override_existing_origin on the default path', async () => {
+    upToZone();
+    mockSequence(
+      { ok: true, body: { success: true, result: [] } },  // unbound
+      { ok: true, body: { success: true } },              // attach
+    );
+
+    await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk');
+    const attach = mockFetch.mock.calls.find(([u, i]) =>
+      String(u).includes('/workers/domains') && (i as RequestInit)?.method === 'PUT');
+    expect(attach).toBeDefined();
+    expect(String((attach![1] as RequestInit).body)).not.toContain('override_existing_origin');
+  });
+
+  it('does not even attempt the attach when the hostname is taken', async () => {
+    upToZone();
+    mockSequence({ ok: true, body: { success: true, result: [
+      { hostname: 'data-my-app.proappstore.online', service: 'pas-data-other' },
+    ] } });
+
+    await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk');
+    const attach = mockFetch.mock.calls.find(([u, i]) =>
+      String(u).includes('/workers/domains') && (i as RequestInit)?.method === 'PUT');
+    expect(attach).toBeUndefined();
+  });
+
+  it('re-points a conflicting hostname only when forceRepoint is set', async () => {
+    upToZone();
+    mockSequence(
+      { ok: true, body: { success: true, result: [
+        { hostname: 'data-my-app.proappstore.online', service: 'data-my-app' }, // pre-rename script
+      ] } },
+      { ok: true, body: { success: true } },
+    );
+
+    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk', '', { forceRepoint: true });
+    expect(result.ok).toBe(true);
+    const attach = mockFetch.mock.calls.find(([u, i]) =>
+      String(u).includes('/workers/domains') && (i as RequestInit)?.method === 'PUT');
+    expect(String((attach![1] as RequestInit).body)).toContain('override_existing_origin');
+  });
+
+  it('is idempotent when the hostname already points at this worker', async () => {
+    upToZone();
+    mockSequence(
+      { ok: true, body: { success: true, result: [
+        { hostname: 'data-my-app.proappstore.online', service: 'pas-data-my-app' },
+      ] } },
+      // CF may reject a no-op re-attach; the hostname is already where we want it.
+      { ok: true, body: { success: false, errors: [{ message: 'already attached' }] } },
+    );
+
+    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk');
+    expect(result.ok).toBe(true);
+    expect(result.customDomain).toBe('data-my-app.proappstore.online');
+    expect(result.detail).toContain('already attached');
+  });
+
+  it('fails closed when the owner lookup is unreadable', async () => {
+    // An unparseable answer must not become a silent seizure: we fall through to
+    // an attach WITHOUT the override, so CF rejects it if the host is taken.
+    upToZone();
+    mockSequence(
+      { ok: true, body: { success: false, errors: [{ message: 'token lacks scope' }] } },
+      { ok: true, body: { success: false, errors: [{ message: 'workers.domain already in use' }] } },
+    );
+
+    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk');
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('already in use');
+    const attach = mockFetch.mock.calls.find(([u, i]) =>
+      String(u).includes('/workers/domains') && (i as RequestInit)?.method === 'PUT');
+    expect(String((attach![1] as RequestInit).body)).not.toContain('override_existing_origin');
   });
 });

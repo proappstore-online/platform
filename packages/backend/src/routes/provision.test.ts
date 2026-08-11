@@ -3,6 +3,9 @@ import { app } from '../index.js';
 import { testToken, TEST_SK, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1', { roles: ['user', 'admin'] });
+/** #82: the ownership guard lets platform admins through, so the cross-tenant
+ *  cases need a caller who is NOT one. */
+const NON_ADMIN_TOK = await testToken('gh:2', { roles: ['user'] });
 
 function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) {
   return {
@@ -14,12 +17,27 @@ function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) 
 }
 
 function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
+  return mockD1Claimed(null, ...stmts);
+}
+
+/**
+ * @param claimedBy creator_id already holding the appId, or null for unclaimed.
+ *
+ * The ownership guard (#82) and the creator-existence guard (#81) are answered
+ * by SQL shape rather than by consuming a positional slot: they run before the
+ * statements these tests actually describe, and threading them through every
+ * sequence would bury what each case is about.
+ */
+function mockD1Claimed(claimedBy: string | null, ...stmts: ReturnType<typeof mockStmt>[]) {
   const prepare = vi.fn();
-  for (const stmt of stmts) prepare.mockReturnValueOnce(stmt);
-  // Default: the creator-existence guard (#81) expects a real user → return a
-  // row for that lookup, null otherwise.
-  prepare.mockImplementation((sql: string) =>
-    /FROM users\b/i.test(sql) ? mockStmt({ first: { 1: 1 } }) : mockStmt());
+  const queue = [...stmts];
+  prepare.mockImplementation((sql: string) => {
+    if (/SELECT creator_id FROM apps\b/i.test(sql)) {
+      return mockStmt({ first: claimedBy ? { creator_id: claimedBy } : null });
+    }
+    if (/FROM users\b/i.test(sql)) return mockStmt({ first: { 1: 1 } });
+    return queue.length ? queue.shift()! : mockStmt();
+  });
   return { prepare };
 }
 
@@ -222,9 +240,9 @@ describe('POST /v1/provision', () => {
 
   it('inserts app record with correct creator ID', async () => {
     const appStmt = mockStmt();
-    // First DB op in provisionData is the creator-existence guard (#81); it
-    // consumes the first sequenced stmt, so put a users-row stmt ahead of appStmt.
-    const db = mockD1(mockStmt({ first: { 1: 1 } }), appStmt);
+    // The #81 creator-existence guard and the #82 ownership guard are answered
+    // by SQL shape now, so appStmt is the first statement the sequence hands out.
+    const db = mockD1(appStmt);
     globalThis.fetch = multiFetch();
 
     await app.request('/v1/provision', {
@@ -319,9 +337,9 @@ describe('POST /v1/provision-data (internal)', () => {
 
   it('provisions D1 + worker + app record (no Pages/DNS) and records the given creator', async () => {
     const appStmt = mockStmt();
-    // First DB op in provisionData is the creator-existence guard (#81); it
-    // consumes the first sequenced stmt, so put a users-row stmt ahead of appStmt.
-    const db = mockD1(mockStmt({ first: { 1: 1 } }), appStmt);
+    // The #81 creator-existence guard and the #82 ownership guard are answered
+    // by SQL shape now, so appStmt is the first statement the sequence hands out.
+    const db = mockD1(appStmt);
     globalThis.fetch = multiFetch({
       'd1/database': { status: 200, body: { success: true, result: { uuid: 'db-9' } } },
     });
@@ -365,5 +383,82 @@ describe('POST /v1/provision-data (internal)', () => {
     // critically: the apps table was never written with an empty d1_database_id
     const wroteApps = db.prepare.mock.calls.some((c: any[]) => /INTO apps/i.test(c[0]));
     expect(wroteApps).toBe(false);
+  });
+});
+
+// #82: appId arrives in the request body. Before this guard, any signed-in user
+// could name a live app and drive its whole data-plane provision — and the
+// compliance gate did not help, because for a non-admin it pins the repo to
+// <ORG>/<appId>, i.e. the victim's own (published, compliant) repo.
+describe('POST /v1/provision — appId ownership (#82)', () => {
+  it('403s when the appId is already claimed by someone else', async () => {
+    const db = mockD1Claimed('gh:99');
+    globalThis.fetch = multiFetch();
+    const res = await app.request('/v1/provision', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${NON_ADMIN_TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'victimapp', skipCompliance: true, skipPublish: true }),
+    }, makeEnv({}, db));
+
+    expect(res.status).toBe(403);
+    expect(await res.text()).toMatch(/already claimed/i);
+  });
+
+  it('touches no Cloudflare API when the appId is claimed', async () => {
+    // The guard has to run before provisioning, not alongside it — a 403 that
+    // still redeployed the victim's worker would be no fix at all.
+    const db = mockD1Claimed('gh:99');
+    const fetchSpy = multiFetch();
+    globalThis.fetch = fetchSpy;
+    await app.request('/v1/provision', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${NON_ADMIN_TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'victimapp', skipCompliance: true, skipPublish: true }),
+    }, makeEnv({}, db));
+
+    const cfCalls = fetchSpy.mock.calls.filter(([u]: [unknown]) => String(u).includes('api.cloudflare.com'));
+    expect(cfCalls).toHaveLength(0);
+  });
+
+  it('allows the owner to re-provision their own app', async () => {
+    const db = mockD1Claimed('gh:2'); // same id as NON_ADMIN_TOK
+    globalThis.fetch = multiFetch();
+    const res = await app.request('/v1/provision', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${NON_ADMIN_TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'myapp', skipCompliance: true, skipPublish: true }),
+    }, makeEnv({}, db));
+
+    // Past the ownership guard. `skipCompliance` is admin-only, so a non-admin
+    // still runs compliance and lands on 412 here — what matters is that it is
+    // not the 403 a claimed appId would produce.
+    expect(res.status).not.toBe(403);
+  });
+
+  it('allows a brand-new (unclaimed) appId', async () => {
+    const db = mockD1Claimed(null);
+    globalThis.fetch = multiFetch();
+    const res = await app.request('/v1/provision', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${NON_ADMIN_TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'brand-new', skipCompliance: true, skipPublish: true }),
+    }, makeEnv({}, db));
+
+    // Past the ownership guard. `skipCompliance` is admin-only, so a non-admin
+    // still runs compliance and lands on 412 here — what matters is that it is
+    // not the 403 a claimed appId would produce.
+    expect(res.status).not.toBe(403);
+  });
+
+  it('lets a platform admin re-provision someone else app (support path)', async () => {
+    const db = mockD1Claimed('gh:99');
+    globalThis.fetch = multiFetch();
+    const res = await app.request('/v1/provision', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, // TOK has admin
+      body: JSON.stringify({ appId: 'victimapp', skipCompliance: true, skipPublish: true }),
+    }, makeEnv({}, db));
+
+    expect(res.status).toBe(200);
   });
 });

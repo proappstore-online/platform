@@ -55,6 +55,29 @@ provisionRoutes.post('/provision', async (c) => {
     }
 
     const appId = body.appId;
+
+    // SECURITY (#82): appId arrives in the body and used to be format-checked
+    // only — nothing tied it to the caller. Any signed-in user could name a live
+    // app and drive its whole data-plane provision: D1 lookup, worker redeploy,
+    // and (before the fix in lib/deploy-worker.ts) seizure of the app's
+    // `data-<appId>` custom domain.
+    //
+    // The compliance gate did not stop this. For a non-admin it pins the repo to
+    // `<ORG>/<appId>` — the VICTIM's own repo — which, being a published app, is
+    // exactly the repo that passes. The guard that stops a caller pointing
+    // compliance at an arbitrary repo is what made the victim's repo the one
+    // checked.
+    //
+    // An unclaimed appId still provisions normally: this is a "not yours" check,
+    // not a "must exist" one. Platform admins pass for support/re-provision,
+    // matching requireAppAccess.
+    const claimed = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?')
+      .bind(appId)
+      .first<{ creator_id: string }>();
+    if (claimed && claimed.creator_id !== user.id && !user.roles.includes('admin')) {
+      return c.text('appId already claimed by another user', 403);
+    }
+
     const cfToken = c.env.CF_API_TOKEN;
     const cfAccount = c.env.CF_ACCOUNT_ID;
     const steps: Step[] = [];

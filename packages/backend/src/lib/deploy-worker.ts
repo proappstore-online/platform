@@ -24,6 +24,19 @@ interface DeployResult {
   customDomain?: string;
 }
 
+export interface DeployDataWorkerOptions {
+  /**
+   * Re-point `data-<appId>.proappstore.online` even when it is currently bound
+   * to a DIFFERENT worker (#82).
+   *
+   * Off by default, and it should stay off for anything a user can reach. This
+   * exists for admin re-provision — notably migrating a hostname off the
+   * pre-rename `data-<app>` scripts, which is what the unconditional override
+   * was originally added for.
+   */
+  forceRepoint?: boolean;
+}
+
 export async function deployDataWorker(
   appId: string,
   dbId: string,
@@ -31,6 +44,7 @@ export async function deployDataWorker(
   cfAccount: string,
   sessionSigningKey: string,
   internalToken = '',
+  opts: DeployDataWorkerOptions = {},
 ): Promise<DeployResult> {
   const workerName = `pas-data-${appId}`;
   const workersDevUrl = `https://${workerName}.serge-the-dev.workers.dev`;
@@ -143,6 +157,52 @@ export async function deployDataWorker(
         detail: `custom domain required but zone lookup failed: ${err}`,
       };
     } else {
+      // SECURITY (#82): find out who owns this hostname BEFORE attaching.
+      //
+      // This used to send `override_existing_origin: true` unconditionally,
+      // which re-points the hostname no matter what it is currently bound to.
+      // That bypassed the fail-safe the Pages path has in `alreadyExists()`
+      // (build-core/src/cloudflare.ts), which deliberately refuses to treat
+      // "belongs to / in use by another" as idempotent. The result was that a
+      // provision for `victimapp` would silently seize
+      // `data-victimapp.proappstore.online` from whatever already held it.
+      //
+      // Ask Cloudflare which service holds the hostname rather than parsing an
+      // error string: the answer is unambiguous, and a wrong guess here means
+      // either a broken re-provision or a cross-tenant seizure.
+      const ownerRes = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/workers/domains`
+          + `?zone_id=${encodeURIComponent(zoneId)}&hostname=${encodeURIComponent(hostname)}`,
+        { headers: { Authorization: `Bearer ${cfToken}` } },
+      );
+      const ownerData = (await ownerRes.json()) as {
+        success: boolean;
+        result?: { hostname: string; service: string }[];
+        errors?: { message: string }[];
+      };
+      // Filter client-side too: the hostname query param is a filter, not a
+      // guarantee, and acting on a near-match would re-point the wrong host.
+      //
+      // If the lookup fails or answers in a shape we don't recognise, `bound`
+      // stays undefined and we fall through to an attach WITHOUT the override.
+      // That fails closed: Cloudflare rejects the attach if the hostname is
+      // taken, so an unreadable answer costs a failed provision, never a
+      // silent seizure.
+      const bound = Array.isArray(ownerData.result)
+        ? ownerData.result.find((d) => d.hostname === hostname)
+        : undefined;
+
+      if (bound && bound.service !== workerName && !opts.forceRepoint) {
+        return {
+          ok: false,
+          url: workersDevUrl,
+          workersDevUrl,
+          detail:
+            `custom domain ${hostname} is already bound to worker "${bound.service}", not "${workerName}" — `
+            + 'refusing to re-point. Re-provision with forceRepoint if this is an intentional admin migration.',
+        };
+      }
+
       const domainRes = await fetch(
         `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/workers/domains`,
         {
@@ -153,10 +213,10 @@ export async function deployDataWorker(
             hostname,
             service: workerName,
             zone_id: zoneId,
-            // Re-point the hostname when it is attached to a stale worker (e.g.
-            // the pre-rename `data-<app>` scripts) — without this, re-provision
-            // fails and traffic keeps hitting the old code.
-            override_existing_origin: true,
+            // Only ever set for an explicit admin re-provision. Re-pointing a
+            // hostname off a stale worker (e.g. the pre-rename `data-<app>`
+            // scripts) is the legitimate case this exists for.
+            ...(opts.forceRepoint ? { override_existing_origin: true } : {}),
           }),
         },
       );
@@ -164,6 +224,18 @@ export async function deployDataWorker(
         success: boolean;
         errors?: { message: string }[];
       };
+      // Already ours: Cloudflare may answer either way for a no-op re-attach,
+      // and a hostname already pointing at this exact worker is the outcome we
+      // wanted. Treat it as success so re-provision stays idempotent.
+      if (!domainData.success && bound && bound.service === workerName) {
+        return {
+          ok: true,
+          url: `https://${hostname}`,
+          workersDevUrl,
+          customDomain: hostname,
+          detail: `Deployed ${workerName} with D1 ${dbId} + ${hostname} (already attached)`,
+        };
+      }
       if (domainData.success) {
         return {
           ok: true,
