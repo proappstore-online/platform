@@ -12,10 +12,13 @@
  *     missing == fail or missing == not-applicable.
  *   - `list()` already excludes noise dirs (.git, node_modules, dist,
  *     etc.). Implementations are responsible for that filtering.
+ *   - `fsFileSource` additionally honours `.gitignore`; `mapFileSource`
+ *     deliberately does not. See the note on `mapFileSource` for why (#122).
  */
 
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
+import { type IgnoreLayer, isIgnored, parseGitignore } from './gitignore.js';
 
 export interface FileSource {
   /** Yield every relevant file path. Implementations skip noise dirs. */
@@ -30,6 +33,19 @@ export interface FileSource {
   listDir?(dir: string): Promise<string[] | null>;
 }
 
+/**
+ * Directories never worth scanning, regardless of `.gitignore` (#122).
+ *
+ * This is the floor, not the policy. `fsFileSource` also honours `.gitignore`,
+ * which is the general answer; this list still matters for two cases that file
+ * cannot cover: a repo with no `.gitignore` at all, and `mapFileSource`, which
+ * deliberately does not consult one.
+ *
+ * The generated-report directories are here because their output is HTML with
+ * inline CSS custom properties and webfonts — precisely what `no-brand-overrides`
+ * and `brand-fonts` match on — so a developer who merely ran a QA tool locally
+ * would fail checks on a file they never wrote.
+ */
 const SKIP_DIRS = new Set([
   '.git',
   'node_modules',
@@ -38,6 +54,13 @@ const SKIP_DIRS = new Set([
   '.cache',
   '.wrangler',
   '.turbo',
+  // Generated reports and caches (#122).
+  '.vibe-check',
+  'playwright-report',
+  'test-results',
+  'coverage',
+  '.vite',
+  'graphify-out',
 ]);
 
 /**
@@ -90,22 +113,49 @@ function hasTraversal(path: string): boolean {
   return path.split(/[/\\]/).some((seg) => seg === '..');
 }
 
-async function* walk(dir: string, root: string): AsyncGenerator<string> {
+/** POSIX path of `full` relative to `root` — the form checks and rules expect. */
+function toRelPosix(full: string, root: string): string {
+  return relative(root, full).split(sep).join('/');
+}
+
+async function* walk(
+  dir: string,
+  root: string,
+  layers: IgnoreLayer[] = [],
+): AsyncGenerator<string> {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch {
     return;
   }
+
+  // Pick up this directory's .gitignore before deciding anything in it, so its
+  // rules govern its own siblings. Deeper files are appended, and `isIgnored`
+  // evaluates last-match-wins, which is how they come to override shallower ones.
+  let active = layers;
+  const hasGitignore = entries.some((e) => e.isFile() && e.name === '.gitignore');
+  if (hasGitignore) {
+    const text = await readFile(join(dir, '.gitignore'), 'utf8').catch(() => null);
+    if (text !== null) {
+      active = [...layers, { base: toRelPosix(dir, root), rules: parseGitignore(text) }];
+    }
+  }
+
   for (const entry of entries) {
     const full = join(dir, entry.name);
+    const rel = toRelPosix(full, root);
+
     if (entry.isDirectory()) {
+      // `.git` is not negotiable and never appears in a .gitignore.
       if (SKIP_DIRS.has(entry.name)) continue;
-      yield* walk(full, root);
+      if (isIgnored(active, rel, true)) continue;
+      yield* walk(full, root, active);
     } else if (entry.isFile()) {
+      if (isIgnored(active, rel, false)) continue;
       // Always emit POSIX-style paths so checks can rely on consistent
       // separators across platforms.
-      yield relative(root, full).split(sep).join('/');
+      yield rel;
     }
   }
 }
@@ -120,6 +170,21 @@ async function* walk(dir: string, root: string): AsyncGenerator<string> {
  * deploy), so bundle-size will return its "not built yet" warn anyway.
  *
  * `listDir` synthesises directory listings from the Map keys.
+ *
+ * DELIBERATELY DOES NOT HONOUR `.gitignore` (#122), unlike `fsFileSource`.
+ * The asymmetry is the point, not an oversight:
+ *
+ *  - This source is fed by `fetchRepoFiles`, i.e. files that are actually IN the
+ *    repository. Git ignore rules only ever applied to untracked files, so a
+ *    tracked file listed in `.gitignore` still ships — skipping it here would
+ *    teach the publish gate to overlook real source.
+ *  - Ignored artefacts never reach this Map in the first place; they are not in
+ *    the repo to fetch. There is nothing for `.gitignore` to exclude.
+ *  - `fsFileSource` scans a working directory, where generated output sits
+ *    beside source, so there the ignore file is genuinely informative.
+ *
+ * Net effect: honouring `.gitignore` can only weaken local feedback, never the
+ * gate that blocks publishing. SKIP_DIRS still applies here as the floor.
  */
 export function mapFileSource(files: Map<string, string>): FileSource {
   return {

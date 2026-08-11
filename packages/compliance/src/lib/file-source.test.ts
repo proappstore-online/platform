@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { checkBrandFonts } from '../checks/brand-fonts.js';
 import { checkNoTracking } from '../checks/no-tracking.js';
@@ -134,5 +134,138 @@ describe('mapFileSource', () => {
     expect(names).toContain('HTML meta tags');
     expect(names).toContain('Brand tokens defined');
     expect(names).toContain('CLAUDE.md is slim (no platform boilerplate)');
+  });
+});
+
+// ── .gitignore handling (#122) ───────────────────────────────────────────────
+
+/** Materialise a tree from a {path: contents} map and return its root. */
+async function tree(files: Record<string, string>): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'compliance-walk-'));
+  gitignoreRoots.push(root);
+  for (const [rel, contents] of Object.entries(files)) {
+    const full = join(root, rel);
+    await mkdir(dirname(full), { recursive: true });
+    await writeFile(full, contents, 'utf8');
+  }
+  return root;
+}
+
+const gitignoreRoots: string[] = [];
+
+async function listed(root: string): Promise<string[]> {
+  const out: string[] = [];
+  for await (const p of fsFileSource(root).list()) out.push(p);
+  return out.sort();
+}
+
+describe('fsFileSource — honours .gitignore (#122)', () => {
+  afterEach(async () => {
+    await Promise.all(
+      gitignoreRoots.splice(0).map((r) => rm(r, { recursive: true, force: true })),
+    );
+  });
+
+  it('skips a git-ignored generated report but keeps real source', async () => {
+    // The chess-academy failure exactly: a VCQA report whose inline CSS
+    // redefines --muted/--accent and pulls in Inter. It is git-ignored, nobody
+    // wrote it, and it failed `no-brand-overrides` for every developer who had
+    // run the QA tool locally.
+    const root = await tree({
+      '.gitignore': 'node_modules\n.vibe-check/\n',
+      '.vibe-check/report/actions.html':
+        '<style>:root{--muted:#111;--accent:#f0f;font-family:inter}</style>',
+      'src/app.css': ':root{--brand:#000}',
+      'index.html': '<!doctype html>',
+    });
+
+    const files = await listed(root);
+    expect(files).not.toContain('.vibe-check/report/actions.html');
+    expect(files).toContain('src/app.css');
+    expect(files).toContain('index.html');
+  });
+
+  it('honours negation, so an explicitly re-included file is still scanned', async () => {
+    const root = await tree({
+      '.gitignore': '*.log\n!keep.log\n',
+      'debug.log': 'x',
+      'keep.log': 'x',
+    });
+    const files = await listed(root);
+    expect(files).not.toContain('debug.log');
+    expect(files).toContain('keep.log');
+  });
+
+  it('applies a nested .gitignore to its own subtree only', async () => {
+    const root = await tree({
+      '.gitignore': '# root has no rules of its own\n',
+      'web/.gitignore': 'out.txt\n',
+      'web/out.txt': 'generated',
+      'web/src.txt': 'source',
+      'api/out.txt': 'not covered by web/.gitignore',
+    });
+    const files = await listed(root);
+    expect(files).not.toContain('web/out.txt');
+    expect(files).toContain('web/src.txt');
+    expect(files).toContain('api/out.txt');
+  });
+
+  it('lets a deeper .gitignore re-include what the root excluded', async () => {
+    const root = await tree({
+      '.gitignore': '*.snap\n',
+      'web/.gitignore': '!golden.snap\n',
+      'web/golden.snap': 'kept',
+      'api/other.snap': 'dropped',
+    });
+    const files = await listed(root);
+    expect(files).toContain('web/golden.snap');
+    expect(files).not.toContain('api/other.snap');
+  });
+
+  it('scans everything when there is no .gitignore at all', async () => {
+    const root = await tree({ 'src/app.css': ':root{}', 'README.md': '# hi' });
+    expect(await listed(root)).toEqual(['README.md', 'src/app.css']);
+  });
+
+  it('skips generated report dirs even without a .gitignore (SKIP_DIRS floor)', async () => {
+    const root = await tree({
+      '.vibe-check/report/quality.html': '<style>:root{--accent:#f0f}</style>',
+      'playwright-report/index.html': '<style>:root{--muted:#111}</style>',
+      'test-results/run.html': '<html>',
+      'coverage/lcov-report/index.html': '<style>body{font-family:inter}</style>',
+      '.vite/deps/chunk.js': 'export{}',
+      'graphify-out/graph.html': '<html>',
+      'src/real.css': ':root{}',
+    });
+    expect(await listed(root)).toEqual(['src/real.css']);
+  });
+});
+
+describe('mapFileSource — deliberately ignores .gitignore (#122)', () => {
+  it('scans a tracked file even when a .gitignore in the map names it', async () => {
+    // Files reach this source via fetchRepoFiles, i.e. they are IN the repo.
+    // Git ignore rules only ever applied to untracked files, so a tracked file
+    // listed in .gitignore still ships — skipping it would teach the publish
+    // gate to overlook real source.
+    const files = new Map([
+      ['.gitignore', 'analytics.js\n'],
+      ['analytics.js', 'navigator.sendBeacon("https://tracker.example")'],
+      ['src/app.css', ':root{}'],
+    ]);
+    const out: string[] = [];
+    for await (const p of mapFileSource(files).list()) out.push(p);
+    expect(out).toContain('analytics.js');
+    expect(out).toContain('src/app.css');
+  });
+
+  it('still applies the SKIP_DIRS floor', async () => {
+    const files = new Map([
+      ['.vibe-check/report/actions.html', '<style>:root{--accent:#f0f}</style>'],
+      ['node_modules/pkg/index.js', 'x'],
+      ['src/app.css', ':root{}'],
+    ]);
+    const out: string[] = [];
+    for await (const p of mapFileSource(files).list()) out.push(p);
+    expect(out).toEqual(['src/app.css']);
   });
 });
