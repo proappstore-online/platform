@@ -1,6 +1,7 @@
 import { internalTokenOk } from "@proappstore/build-core";
 import { handleAuthExchange, handleAuthMe, verifySession } from "./auth.js";
 import type { Env } from "./env.js";
+import { guardProvisionRequest } from "./provision-guard.js";
 import {
   type AgentDeployRequest,
   handleAgentDeploy,
@@ -12,9 +13,35 @@ import {
   type PublishRequest,
 } from "./publish.js";
 
+/**
+ * Cloudflare Access is expected in front of `admin.proappstore.online` (#83).
+ *
+ * This worker mints org repos and Cloudflare resources, so the session check on
+ * each route should not be the only thing between the internet and that
+ * machinery. Access terminates at the edge and stamps `Cf-Access-Jwt-Assertion`
+ * on requests it forwards.
+ *
+ * Observed, NOT enforced, on purpose. A Worker cannot make Access exist, and
+ * hard-blocking on a missing header would take publishing down in any
+ * environment where Access is not configured — including local `wrangler dev`
+ * and any preview deployment. The warning makes an unprotected deployment
+ * visible in logs instead of silent; enforcement is a deploy-time decision.
+ *
+ * Only sampled on mutating routes: a warning per health check would be noise.
+ */
+function observeAccessEdge(request: Request, pathname: string): void {
+  if (request.method === "GET" || pathname === "/health") return;
+  if (request.headers.get("Cf-Access-Jwt-Assertion")) return;
+  console.warn(
+    `[#83] ${pathname} reached without Cf-Access-Jwt-Assertion — `
+      + "Cloudflare Access does not appear to be in front of this worker",
+  );
+}
+
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    observeAccessEdge(request, url.pathname);
 
     if (url.pathname === "/health") {
       return Response.json({ ok: true, worker: "proappstore-admin", version: "0.3.0" });
@@ -41,6 +68,23 @@ export default {
         return Response.json({ error: "invalid or expired session" }, { status: 401 });
       }
       const body = await request.json<PublishRequest>();
+
+      // SECURITY (#83): publishing is self-service — any signed-in GitHub
+      // account may publish — so a session alone is not enough. Refuse an appId
+      // someone else already claimed, and bound how fast one caller can drive a
+      // loop that creates org repos, D1 databases, Workers and DNS.
+      const guard = await guardProvisionRequest({
+        db: env.DB,
+        appId: body.id,
+        login,
+        ip: request.headers.get("CF-Connecting-IP") ?? undefined,
+      });
+      if (!guard.ok) {
+        const headers: Record<string, string> = {};
+        if (guard.retryAfterSeconds) headers["Retry-After"] = String(guard.retryAfterSeconds);
+        return Response.json({ error: guard.error }, { status: guard.status ?? 403, headers });
+      }
+
       // Force the creator to the verified session login — NEVER trust a
       // client-supplied creatorGithub. Otherwise any authenticated user could
       // POST {creatorGithub:"victim"} to forge app ownership in the registry AND

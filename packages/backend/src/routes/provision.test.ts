@@ -36,6 +36,11 @@ function mockD1Claimed(claimedBy: string | null, ...stmts: ReturnType<typeof moc
       return mockStmt({ first: claimedBy ? { creator_id: claimedBy } : null });
     }
     if (/FROM users\b/i.test(sql)) return mockStmt({ first: { 1: 1 } });
+    // #83 provisioning rate limit — answered out-of-band as "no attempts yet",
+    // for the same reason as the guards above: it runs before the statements
+    // these tests describe, and threading it through each sequence would bury
+    // what they are about. Rate-limit behaviour is covered in build-core.
+    if (/provision_attempts/i.test(sql)) return mockStmt({ first: null });
     return queue.length ? queue.shift()! : mockStmt();
   });
   return { prepare };
@@ -460,5 +465,76 @@ describe('POST /v1/provision — appId ownership (#82)', () => {
     }, makeEnv({}, db));
 
     expect(res.status).toBe(200);
+  });
+});
+
+// #83: publishing is self-service, so a session is not a scarcity signal. One
+// caller must not be able to drive a loop that creates org repos, D1 databases,
+// Workers and DNS.
+describe('POST /v1/provision — rate limit (#83)', () => {
+  const NOW = 1_800_000_000_000;
+
+  /** Like mockD1, but with an exhausted hourly bucket for gh:1. */
+  function rateLimitedDb() {
+    const prepare = vi.fn((sql: string) => {
+      if (/SELECT creator_id FROM apps\b/i.test(sql)) return mockStmt({ first: null });
+      if (/FROM users\b/i.test(sql)) return mockStmt({ first: { 1: 1 } });
+      if (/provision_attempts/i.test(sql)) {
+        return mockStmt({ first: { window_start: Date.now(), count: 10 } });
+      }
+      return mockStmt();
+    });
+    return { prepare };
+  }
+
+  it('429s once the caller has spent their provisioning budget', async () => {
+    globalThis.fetch = multiFetch();
+    const res = await app.request('/v1/provision', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'flood-1', skipCompliance: true, skipPublish: true }),
+    }, makeEnv({}, rateLimitedDb() as never));
+
+    expect(res.status).toBe(429);
+    expect(await res.text()).toMatch(/rate limit/i);
+    expect(res.headers.get('Retry-After')).toBeTruthy();
+  });
+
+  it('creates no Cloudflare resources when rate limited', async () => {
+    // A 429 that still provisioned would defeat the point.
+    const fetchSpy = multiFetch();
+    globalThis.fetch = fetchSpy;
+    await app.request('/v1/provision', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'flood-2', skipCompliance: true, skipPublish: true }),
+    }, makeEnv({}, rateLimitedDb() as never));
+
+    const cfCalls = fetchSpy.mock.calls.filter(([u]: [unknown]) => String(u).includes('api.cloudflare.com'));
+    expect(cfCalls).toHaveLength(0);
+  });
+
+  it('lets an ordinary provision through', async () => {
+    globalThis.fetch = multiFetch();
+    const res = await app.request('/v1/provision', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'normal', skipCompliance: true, skipPublish: true }),
+    }, makeEnv({}, mockD1()));
+
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects a claimed appId before spending rate budget (#82 before #83)', async () => {
+    const d = mockD1Claimed('gh:99');
+    globalThis.fetch = multiFetch();
+    const res = await app.request('/v1/provision', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${NON_ADMIN_TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'victimapp', skipCompliance: true, skipPublish: true }),
+    }, makeEnv({}, d));
+
+    expect(res.status).toBe(403);
+    expect(d.prepare.mock.calls.some((c: unknown[]) => /provision_attempts/i.test(String(c[0])))).toBe(false);
   });
 });

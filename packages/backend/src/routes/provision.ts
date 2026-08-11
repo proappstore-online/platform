@@ -4,6 +4,8 @@ import { runChecksFromFiles } from '@proappstore/compliance';
 import {
   internalTokenOk,
   type Step,
+  checkProvisionQuota,
+  d1ProvisionAttemptStore,
 } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
@@ -76,6 +78,33 @@ provisionRoutes.post('/provision', async (c) => {
       .first<{ creator_id: string }>();
     if (claimed && claimed.creator_id !== user.id && !user.roles.includes('admin')) {
       return c.text('appId already claimed by another user', 403);
+    }
+
+    // SECURITY (#83): publishing is self-service, so a session is not a scarcity
+    // signal. Bound how fast one caller can drive a loop that creates org repos,
+    // D1 databases, Workers and DNS. Keyed on the platform user id so the budget
+    // is shared with the admin worker's /api/publish-app rather than doubled.
+    //
+    // Checked after ownership so a squatting attempt does not spend the
+    // squatter's budget, and a legitimate owner gets "not yours" over a 429.
+    try {
+      const quota = await checkProvisionQuota(d1ProvisionAttemptStore(c.env.DB), {
+        userKey: user.id,
+        ip: c.req.header('CF-Connecting-IP'),
+        nowMs: Date.now(),
+      });
+      if (!quota.allowed) {
+        return c.text(
+          `provisioning rate limit reached (${quota.scope}) — retry later`,
+          429,
+          quota.retryAfterSeconds ? { 'Retry-After': String(quota.retryAfterSeconds) } : undefined,
+        );
+      }
+    } catch (e) {
+      // Fail OPEN: the ownership check above is the security boundary; this is
+      // an abuse ceiling, and a limiter that cannot read its own table must not
+      // take publishing down.
+      console.warn(`provision rate limit unavailable, allowing: ${(e as Error).message}`);
     }
 
     const cfToken = c.env.CF_API_TOKEN;
