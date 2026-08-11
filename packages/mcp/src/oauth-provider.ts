@@ -359,14 +359,10 @@ async function oauthCallback(request: Request, config: OAuthConfig): Promise<Res
   // short-lived single-use code in a redirect and why the implicit flow was
   // deprecated in OAuth 2.1.
   //
-  // `?session=` stays accepted for now so this Worker can deploy BEFORE the
-  // backend starts sending codes. Reversed, the backend would hand a code to a
-  // Worker that only understands the old parameter and every login would break
-  // in that window. Phase 3 removes the fallback.
+  // The `?session=` fallback is gone as of phase 3; a stale link carrying one
+  // now fails rather than being honoured.
   const codeParam = url.searchParams.get("code");
-  const session = codeParam
-    ? await exchangeLoginCode(config, codeParam)
-    : url.searchParams.get("session");
+  const session = codeParam ? await exchangeLoginCode(config, codeParam) : null;
 
   if (!nonce || !session) {
     return new Response("missing nonce or session", { status: 400 });

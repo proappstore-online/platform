@@ -221,15 +221,13 @@ describe('oauth callback — one-time code (#110)', () => {
     expect(res?.status).toBe(400);
   });
 
-  it('still accepts ?session= so this Worker can deploy before the backend', async () => {
-    // #110's ordering note: reversed, the backend would hand a code to a Worker
-    // that only understands the old parameter and every login would break.
+  it('refuses a stale ?session= link now that the fallback is gone', async () => {
     const session = await mintTestSession();
     const res = await handleOAuthRoute(
       new Request(`https://mcp.proappstore.online/oauth/callback?nonce=n1&session=${session}`),
       config(makeKv({ 'authreq:n1': authReq })),
     );
-    expect(res?.status).toBe(302);
+    expect(res?.status).toBe(400);
   });
 });
 

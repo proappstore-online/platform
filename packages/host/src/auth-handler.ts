@@ -48,23 +48,21 @@ async function authCallback(request: Request, env: Env): Promise<Response> {
   if (!nonceMatches(request, url)) {
     return redirectWithAuthError(url, returnPath, "invalid_state", [clearNonceCookie()]);
   }
-  // SECURITY (#87): prefer a one-time code redeemed server-to-server over a
-  // session JWT sitting in the query string. A query parameter reaches servers
-  // — CDN and edge access logs, browser history — and `?session=` was a
-  // directly reusable Bearer for the life of the session.
+  // SECURITY (#87): the backend hands back a one-time code, redeemed
+  // server-to-server. It never puts a session token in the query string, where
+  // it would reach CDN and edge access logs and browser history as a directly
+  // reusable Bearer.
   //
-  // The obvious alternative, moving it to the fragment, cannot work here: this
-  // callback IS the server, and fragments are never sent to it. Reading the
-  // fragment would need page JS, which puts the token back in JS and defeats
-  // the HttpOnly cookie this endpoint exists to set.
+  // Moving it to the fragment was never an option here: this callback IS the
+  // server, and fragments are never sent to it. Reading one would need page JS,
+  // which puts the token back in JS and defeats the HttpOnly cookie this
+  // endpoint exists to set.
   //
-  // `?session=` stays accepted for now so this can deploy before the backend
-  // starts sending codes (#110's ordering note). Phase 3 removes it — until
-  // then the vulnerable path is still live.
+  // The `?session=` fallback is gone as of phase 3. A stale link carrying one
+  // now fails as a missing credential rather than being honoured.
   const code = url.searchParams.get("code");
-  const session = code
-    ? await exchangeCode(code)
-    : url.searchParams.get("session");
+  if (!code) return redirectWithAuthError(url, returnPath, "missing_session", [clearNonceCookie()]);
+  const session = await exchangeCode(code);
   if (!session) return redirectWithAuthError(url, returnPath, "missing_session", [clearNonceCookie()]);
 
   const user = await fetchMe(env, session);

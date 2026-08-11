@@ -868,3 +868,115 @@ describe('POST /v1/auth/code/exchange', () => {
     expect(await res.text()).toMatch(/missing githubToken/i);
   });
 });
+
+// #87/#110 phase 3: the callback issues a one-time code instead of putting the
+// session token in the query string.
+describe('OAuth callback — issues a code, never a token in the query (#87, #110)', () => {
+  /** Stub the GitHub token + profile calls so the callback reaches its redirect. */
+  function stubGithub() {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes('login/oauth/access_token')) return Response.json({ access_token: 'gho_x' });
+      if (url.endsWith('api.github.com/user')) {
+        return Response.json({ id: 4242, login: 'alice', avatar_url: 'https://a', email: 'a@b.c' });
+      }
+      if (url.includes('api.github.com/user/emails')) return Response.json([]);
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+  }
+
+  /** D1 stub that records what the callback inserts into auth_exchange_codes. */
+  function codeIssuingDb() {
+    const inserts: unknown[][] = [];
+    const prepare = vi.fn((sql: string) => ({
+      bind: (...args: unknown[]) => ({
+        async first() { return null; },
+        async run() {
+          if (/INSERT INTO auth_exchange_codes/i.test(sql)) inserts.push(args);
+          return { meta: { changes: 1 } };
+        },
+      }),
+    }));
+    return { prepare, inserts };
+  }
+
+  function stateFor(returnTo: string, mode: 'query' | 'fragment'): string {
+    return btoa(JSON.stringify({ r: returnTo, m: mode, n: 'nonce-1' }))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  async function callback(returnTo: string, mode: 'query' | 'fragment', db: ReturnType<typeof codeIssuingDb>) {
+    const state = stateFor(returnTo, mode);
+    return app.request(
+      `/v1/auth/github/callback?code=gh-code&state=${state}`,
+      { headers: { Cookie: `__Host-pas_oauth_state=${state}` } },
+      makeEnv({ GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'sec', APP_BASE: 'https://api.proappstore.online' }, db as never),
+    );
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('redirects with ?code= and never with ?session=', async () => {
+    stubGithub();
+    const db = codeIssuingDb();
+    const res = await callback('https://console.proappstore.online/cb', 'query', db);
+
+    expect(res.status).toBe(302);
+    const loc = new URL(res.headers.get('location')!);
+    expect(loc.searchParams.get('session')).toBeNull();
+    // 32 random bytes, hex — inert on its own, and 256 bits against guessing.
+    expect(loc.searchParams.get('code')).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('stores the code hash, not the code', async () => {
+    // Read access to auth_exchange_codes must yield nothing presentable.
+    stubGithub();
+    const db = codeIssuingDb();
+    const res = await callback('https://console.proappstore.online/cb', 'query', db);
+
+    const code = new URL(res.headers.get('location')!).searchParams.get('code')!;
+    expect(db.inserts).toHaveLength(1);
+    const [storedHash] = db.inserts[0]! as [string, string, number, number];
+    expect(storedHash).not.toBe(code);
+    expect(storedHash).toHaveLength(43); // base64url SHA-256
+  });
+
+  it('stores claims, not a minted token — nothing usable at rest', async () => {
+    stubGithub();
+    const db = codeIssuingDb();
+    await callback('https://console.proappstore.online/cb', 'query', db);
+
+    const [, claimsJson] = db.inserts[0]! as [string, string, number, number];
+    const claims = JSON.parse(claimsJson) as { uid: string; roles: string[] };
+    expect(claims.uid).toBe('gh:4242');
+    // An unexchanged code creates no session at all: this is not a token.
+    expect(await verifySession(claimsJson, TEST_SK)).toBeNull();
+  });
+
+  it('applies #56 role scoping at redirect time, where the destination is known', async () => {
+    // The exchange endpoint cannot see the destination, so roles MUST be decided
+    // here. An app origin gets a plain ['user'] token; a first-party surface does
+    // not. Deciding later would silently re-privilege app-origin sessions.
+    stubGithub();
+    const appOrigin = codeIssuingDb();
+    await callback('https://someapp.proappstore.online/cb', 'query', appOrigin);
+    const appClaims = JSON.parse((appOrigin.inserts[0] as string[])[1]!) as { roles: string[] };
+    expect(appClaims.roles).toEqual(['user']);
+
+    const firstParty = codeIssuingDb();
+    await callback('https://console.proappstore.online/cb', 'query', firstParty);
+    const consoleClaims = JSON.parse((firstParty.inserts[0] as string[])[1]!) as { roles: string[] };
+    expect(consoleClaims.roles).toContain('creator');
+  });
+
+  it('leaves the fragment flow alone — it was never the leak', async () => {
+    // Fragments are not sent to servers, so browser SPAs keep receiving the
+    // token directly and no code is issued.
+    stubGithub();
+    const db = codeIssuingDb();
+    const res = await callback('https://console.proappstore.online/cb', 'fragment', db);
+
+    expect(res.headers.get('location')).toContain('#pas_session=');
+    expect(db.inserts).toHaveLength(0);
+  });
+});

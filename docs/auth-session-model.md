@@ -135,7 +135,11 @@ redirect to the clean app URL without `#pas_session` or `?session`.
 
 Implemented foundation:
 
-- `/.pas/auth/start` redirects through PAS OAuth with `response_mode=query`.
+- `/.pas/auth/start` redirects through PAS OAuth with `response_mode=query`, which
+  returns a short-lived **one-time code** (`?code=`), not a session token (#87/#110).
+  The host redeems it server-to-server at `POST /v1/auth/code/exchange` and sets the
+  HttpOnly cookie from the response, so no token ever appears in a URL. Browser SPAs
+  keep using the fragment (`#pas_session=`), which is never sent to servers.
 - `/.pas/auth/start` sets a host-only HttpOnly nonce cookie.
 - `/.pas/auth/callback` requires the nonce cookie before accepting a session.
 - `/.pas/auth/callback` verifies the session with PAS API before setting the

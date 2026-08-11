@@ -84,6 +84,9 @@ describe("host auth token-handler routes", () => {
   });
 
   it("sets a host-only HttpOnly cookie after verifying the callback session", async () => {
+    // #87 phase 3: the callback receives a one-time code, not a token. The
+    // cookie is set from what the exchange returns.
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ token: "good-token" })));
     const apiFetch = vi.fn(async (request: Request) => {
       expect(request.headers.get("Authorization")).toBe("Bearer good-token");
       return Response.json({ id: "gh:1", login: "creator", roles: ["user"], appRoles: {} });
@@ -91,7 +94,7 @@ describe("host auth token-handler routes", () => {
     const env = makeEnv({ apiFetch });
 
     const res = await worker.fetch(
-      new Request("https://meetup.proappstore.online/.pas/auth/callback?session=good-token&return_to=/dashboard&nonce=nonce-1", {
+      new Request("https://meetup.proappstore.online/.pas/auth/callback?code=one-time&return_to=/dashboard&nonce=nonce-1", {
         headers: { Cookie: "__Host-pas_auth_nonce=nonce-1" },
       }),
       env,
@@ -117,7 +120,7 @@ describe("host auth token-handler routes", () => {
     const env = makeEnv({ apiFetch });
 
     const res = await worker.fetch(
-      new Request("https://meetup.proappstore.online/.pas/auth/callback?session=good-token&return_to=/dashboard&nonce=nonce-1"),
+      new Request("https://meetup.proappstore.online/.pas/auth/callback?code=one-time&return_to=/dashboard&nonce=nonce-1"),
       env,
       ctx(),
     );
@@ -129,12 +132,14 @@ describe("host auth token-handler routes", () => {
   });
 
   it("redirects with an auth error and no cookie when callback verification fails", async () => {
+    // The exchange succeeds but the resulting token fails /auth/me.
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ token: "bad-token" })));
     const env = makeEnv({
       apiFetch: vi.fn(async () => new Response("invalid", { status: 401 })),
     });
 
     const res = await worker.fetch(
-      new Request("https://meetup.proappstore.online/.pas/auth/callback?session=bad-token&return_to=/dashboard&nonce=nonce-1", {
+      new Request("https://meetup.proappstore.online/.pas/auth/callback?code=one-time&return_to=/dashboard&nonce=nonce-1", {
         headers: { Cookie: "__Host-pas_auth_nonce=nonce-1" },
       }),
       env,
@@ -528,15 +533,4 @@ describe("host auth callback — one-time code (#87)", () => {
     expect(res.headers.get("Location")).toContain("auth_error=missing_session");
   });
 
-  it("still accepts ?session= so this can deploy before the backend sends codes", async () => {
-    // Phase 3 removes this; until then the old path must keep working or every
-    // login breaks in the deploy window.
-    const res = await worker.fetch(
-      new Request(`${CALLBACK}?session=good-token&return_to=/dashboard&nonce=nonce-1`, withNonce),
-      makeEnv(),
-      ctx(),
-    );
-    expect(res.status).toBe(303);
-    expect(res.headers.getSetCookie().join(" ")).toContain("__Host-pas_session=good-token");
-  });
 });

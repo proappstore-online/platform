@@ -218,12 +218,41 @@ function rolesFor(userId: string, env: Env): string[] {
 /** Codes live just long enough to survive a redirect and a POST. */
 const EXCHANGE_CODE_TTL_MS = 10 * 60 * 1000;
 
-// PHASE 3 will add `issueExchangeCode(db, claims, nowMs)` here and switch the
-// callback from `?session=` to `?code=`. It is deliberately NOT in this commit:
-// nothing calls it yet, and untested dead code in an auth path is worse than a
-// slightly larger phase 3. Note when adding it that claims must be computed at
-// REDIRECT time — the #56 role decision depends on the destination host, which
-// the exchange endpoint cannot see.
+/**
+ * Mint a one-time login code for `claims` and store only its hash.
+ *
+ * 32 random bytes, hex — 256 bits, well past guessing, and the value is
+ * meaningless without the row it unlocks. (UUIDv4 would be 122 bits and carries
+ * version/variant structure; there is no reason to be that close to the line
+ * for a credential that appears in a URL.)
+ *
+ * Claims are decided HERE, at redirect time, not at exchange time. The #56 role
+ * decision depends on the destination host — an app origin gets a plain
+ * ['user'] token — and the exchange endpoint cannot see where the browser was
+ * headed. Deciding roles later would silently re-privilege app-origin sessions
+ * and undo that fix.
+ *
+ * Stores claims rather than a minted token, so nothing signable-into-a-session
+ * exists at rest and an unexchanged code produces no session at all.
+ */
+async function issueExchangeCode(
+  db: D1Database,
+  claims: NewSession,
+  nowMs: number,
+): Promise<string> {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  let code = '';
+  for (const byte of bytes) code += byte.toString(16).padStart(2, '0');
+
+  await db
+    .prepare(
+      'INSERT INTO auth_exchange_codes (code_hash, claims, expires_at, created_at) VALUES (?, ?, ?, ?)',
+    )
+    .bind(await hashExchangeCode(code), JSON.stringify(claims), nowMs + EXCHANGE_CODE_TTL_MS, nowMs)
+    .run();
+
+  return code;
+}
 
 /** SHA-256, base64url. Codes are stored hashed so the table holds nothing usable. */
 async function hashExchangeCode(code: string): Promise<string> {
@@ -389,11 +418,26 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
     // (console/dashboard/admin/agents/apex/localhost) receive elevated roles.
     const roles = isFirstPartyHost(dest.hostname) ? rolesFor(userId, c.env) : ['user'];
     const claims: NewSession = { uid: userId, login: profile.login, avatarUrl: profile.avatarUrl, roles };
-    const token = await mintSession(claims, c.env.SESSION_SIGNING_KEY);
 
+    // SECURITY (#87, #110): `query` no longer means "the token, in the query
+    // string". It means "a one-time code, redeemed server-to-server". A query
+    // parameter reaches servers — CDN and edge access logs, Referer headers,
+    // browser history — and the old `?session=` value was a directly reusable
+    // Bearer for the life of the session.
+    //
+    // The parameter itself has to stay. It is the only signal separating a
+    // server-side callback (the host worker and the MCP provider, which can
+    // redeem a code over HTTP) from a browser SPA (which reads the fragment in
+    // JS). Removing it would either break those two flows or force every app's
+    // SDK onto a fragment-based code exchange — a contract change for the whole
+    // fleet, not a security fix.
+    //
+    // The fragment branch is unchanged: fragments are never sent to servers, so
+    // they were never the leak this addresses.
     if (responseMode === 'query') {
-      dest.searchParams.set('session', token);
+      dest.searchParams.set('code', await issueExchangeCode(c.env.DB, claims, Date.now()));
     } else {
+      const token = await mintSession(claims, c.env.SESSION_SIGNING_KEY);
       dest.hash = `pas_session=${encodeURIComponent(token)}`;
     }
     return c.redirect(dest.toString(), 302);
