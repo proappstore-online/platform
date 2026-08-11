@@ -35,6 +35,17 @@ const APP_ID_MAX_LEN = 58;
 /** Per-ping clamps. Caps a misbehaving SDK to roughly one heartbeat's worth. */
 const MAX_DELTA_SECONDS = 90;
 const MAX_DELTA_API_CALLS = 1000;
+/**
+ * Ceiling on api_calls per second of REAL elapsed time (#58).
+ *
+ * The per-ping clamp above bounds one request; without a rate bound a caller
+ * could still send MAX_DELTA_API_CALLS on every ping and inflate the total by
+ * pinging faster. The SDK heartbeat is 60s, so a normal ping reports at most
+ * 1000 calls over ~60s elapsed — 20/s leaves that untouched (60 × 20 = 1200,
+ * above the per-ping clamp) and only bites when pings arrive faster than the
+ * heartbeat, which is precisely the inflation case.
+ */
+const MAX_API_CALLS_PER_SECOND = 20;
 
 /** Window clamps for the read endpoints. */
 const DEFAULT_DAYS = 30;
@@ -132,7 +143,14 @@ usageRoutes.post('/usage/ping', async (c) => {
     const requestedSeconds = clampDelta(body.deltaSeconds, MAX_DELTA_SECONDS);
     const elapsedSeconds = prior ? Math.max(0, Math.ceil((now - Number(prior.last_seen)) / 1000)) : MAX_DELTA_SECONDS;
     const deltaSeconds = Math.min(requestedSeconds, elapsedSeconds);
-    const deltaApiCalls = clampDelta(body.deltaApiCalls, MAX_DELTA_API_CALLS);
+
+    // api_calls gets the same wall-clock treatment as session time (#58): bound
+    // the reported count by what the elapsed interval could plausibly carry, so
+    // ping volume can't inflate the total. First ping of the day (no prior row)
+    // allows the per-ping clamp, mirroring deltaSeconds above.
+    const requestedApiCalls = clampDelta(body.deltaApiCalls, MAX_DELTA_API_CALLS);
+    const allowedApiCalls = prior ? elapsedSeconds * MAX_API_CALLS_PER_SECOND : MAX_DELTA_API_CALLS;
+    const deltaApiCalls = Math.min(requestedApiCalls, allowedApiCalls);
 
     // Upsert: insert a fresh row if this is the first ping for this
     // (app, user, day), otherwise add to the existing totals.

@@ -160,4 +160,28 @@ describe('GET /v1/payouts/me/preview', () => {
     expect(body.months[0]!.estimatedCents).toBe(450);
     expect(body.months[0]!.perApp).toEqual([{ appId: 'meetup', estimatedCents: 450 }]);
   });
+
+  it('counts only active subscribers usage in the preview query (#58)', async () => {
+    // The pool is funded by subscriptions, so a non-subscriber's usage must not
+    // earn a share. /usage/ping gates writes the same way, but rows written
+    // before that gate — and rows whose subscription has since lapsed — are
+    // still in the table, so the read has to filter too. Asserted on the SQL
+    // because the D1 mock returns canned rows regardless of the query.
+    const ownedApps = mockStmt({ all: { results: [{ id: 'meetup' }] } });
+    const usage = mockStmt({ all: { results: [] } });
+    const db = mockD1(ownedApps, usage);
+
+    await app.request(
+      '/v1/payouts/me/preview?months=1',
+      { headers: { Authorization: `Bearer ${TOK}` } },
+      makeEnv(db),
+    );
+
+    const sql = (db.prepare as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => String(call[0]))
+      .find((s) => /FROM usage_daily/i.test(s));
+    expect(sql, 'preview must query usage_daily').toBeDefined();
+    expect(sql).toMatch(/subscriptions/i);
+    expect(sql).toMatch(/status\s*=\s*'active'/i);
+  });
 });

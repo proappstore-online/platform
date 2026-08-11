@@ -11,10 +11,12 @@ import { requireUser, HttpError } from '../lib/auth.js';
  * math from usage_daily so creators get a credible preview. Important
  * caveats:
  *
- *   - We assume every active user is a paid subscriber. In reality you'd
- *     join with the `subscriptions` table; for now most "users" in
- *     usage_daily are dogfood/test accounts and a strict join would render
- *     $0 for everyone. The Console explains the caveat alongside the number.
+ *   - Only ACTIVE SUBSCRIBERS' usage counts (#58). The pool is funded by
+ *     subscriptions, so usage from a non-subscriber — a dogfood/test account,
+ *     or a user whose subscription has since lapsed — must not earn a share.
+ *     Note this can legitimately read $0 while the active-subscriber count is
+ *     low; that is the true number, not a bug. The Console should say so
+ *     rather than fall back to counting everyone.
  *
  *   - We hard-code the $5 subscriber price + 10% platform fee. When the
  *     pricing endpoint is configurable, this will read from there.
@@ -179,9 +181,20 @@ payoutsRoutes.get('/payouts/me/preview', async (c) => {
     } else {
       for (const bucket of buckets) {
         const { results } = await c.env.DB.prepare(
+          // Only ACTIVE SUBSCRIBERS' usage funds the pool (#58). /usage/ping
+          // gates writes the same way, but that gate is newer than the table:
+          // rows written before it exist for non-subscribers, and rows persist
+          // after a subscription lapses. Filtering at read time makes the
+          // preview correct for both. EXISTS rather than a JOIN so the row
+          // count can't fan out (subscriptions.user_id is the PK today, but a
+          // filter is what is meant here, not a join).
           `SELECT user_id, app_id, SUM(session_seconds) AS sec
              FROM usage_daily
             WHERE day >= ? AND day <= ?
+              AND EXISTS (
+                SELECT 1 FROM subscriptions s
+                 WHERE s.user_id = usage_daily.user_id AND s.status = 'active'
+              )
             GROUP BY user_id, app_id`,
         )
           .bind(bucket.startDay, bucket.endDay)

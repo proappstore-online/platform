@@ -142,6 +142,52 @@ describe('POST /v1/usage/ping', () => {
     const boundArgs = (upsert.bind as ReturnType<typeof vi.fn>).mock.calls[0] as unknown[];
     expect(boundArgs[4]).toBe(1000);
   });
+
+  it('binds deltaApiCalls to REAL elapsed wall-clock too (#58)', async () => {
+    // The per-ping clamp bounds one request; without a rate bound a caller could
+    // send 1000 on every ping and inflate the total purely by ping volume.
+    const appLookup = mockStmt({ first: { id: 'meetup' } });
+    const prior = mockStmt({ first: { session_seconds: 0, api_calls: 0, last_seen: Date.now() - 2000 } });
+    const upsert = mockStmt();
+    const db = mockD1(appLookup, active(), prior, upsert);
+
+    const res = await app.request(
+      '/v1/usage/ping',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId: 'meetup', deltaApiCalls: 1000 }),
+      },
+      makeEnv(db),
+    );
+    expect(res.status).toBe(200);
+    const boundArgs = (upsert.bind as ReturnType<typeof vi.fn>).mock.calls[0] as unknown[];
+    // ~2s elapsed × 20/s ceiling → ~40, never the claimed 1000.
+    expect(boundArgs[4] as number).toBeGreaterThan(0);
+    expect(boundArgs[4] as number).toBeLessThanOrEqual(80);
+  });
+
+  it('leaves a normal 60s heartbeat unthrottled (#58 rate bound is headroom, not a tax)', async () => {
+    // 60s × 20/s = 1200, above the per-ping clamp, so an honest heartbeat
+    // reporting the full 1000 is recorded intact.
+    const appLookup = mockStmt({ first: { id: 'meetup' } });
+    const prior = mockStmt({ first: { session_seconds: 0, api_calls: 0, last_seen: Date.now() - 60_000 } });
+    const upsert = mockStmt();
+    const db = mockD1(appLookup, active(), prior, upsert);
+
+    const res = await app.request(
+      '/v1/usage/ping',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId: 'meetup', deltaApiCalls: 1000 }),
+      },
+      makeEnv(db),
+    );
+    expect(res.status).toBe(200);
+    const boundArgs = (upsert.bind as ReturnType<typeof vi.fn>).mock.calls[0] as unknown[];
+    expect(boundArgs[4]).toBe(1000);
+  });
 });
 
 describe('GET /v1/apps/:id/usage', () => {
