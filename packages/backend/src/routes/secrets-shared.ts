@@ -14,6 +14,21 @@ import type { Env } from '../types.js';
 export const MAX_SECRETS_PER_APP = 5;
 export const MAX_ALLOWLIST_PER_APP = 5;
 export const DAILY_PROXY_REQUESTS = 10_000;
+/**
+ * Per-caller share of an app's daily proxy budget (#80).
+ *
+ * The proxy is deliberately callable by any signed-in platform user — an app's
+ * end users are not team members, and the platform has no record of "user U is
+ * a user of app A" to check against. Until a call can be bound to the app's own
+ * origin (blocked on the platform-cookie migration, #20), this is what stops a
+ * single unrelated account from spending the whole budget: draining an app now
+ * needs ~10 accounts rather than one script.
+ *
+ * Derived from the app cap so the two cannot drift apart. 10% is chosen to sit
+ * well above plausible single-user traffic — a heavy user of a proxy-backed app
+ * makes tens to low hundreds of calls a day, not a thousand.
+ */
+export const DAILY_PROXY_REQUESTS_PER_USER = DAILY_PROXY_REQUESTS / 10;
 export const MAX_REQUEST_BODY_BYTES = 100 * 1024;
 export const MAX_RESPONSE_BODY_BYTES = 100 * 1024;
 export const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/; // uppercase + underscore convention

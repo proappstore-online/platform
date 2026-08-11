@@ -12,6 +12,7 @@
  * GOOGLE_CLIENT_ID/SECRET) + APP_BASE; until they're set, `start` returns 503.
  */
 
+import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { Hono } from 'hono';
 import { setCookie, getCookie, deleteCookie } from 'hono/cookie';
 import { mintSession, verifySession, type NewSession, type SessionClaims } from '@proappstore/build-core';
@@ -391,7 +392,7 @@ authRoutes.post('/auth/credentials/provision', async (c) => {
           message: 'not allowed to provision credential accounts',
           traceId: c.req.header('traceparent')?.split('-')[1] ?? null,
           cfRay: c.req.header('cf-ray') ?? null,
-          mediated: Boolean(c.req.header('X-PAS-App')),
+          mediated: Boolean(c.req.header(APP_CONTEXT_HEADER)),
         });
       }
       throw new HttpError('not allowed to provision credential accounts', 403);

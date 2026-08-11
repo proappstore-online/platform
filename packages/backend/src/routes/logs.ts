@@ -21,6 +21,7 @@
  */
 
 import { Hono } from 'hono';
+import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { HttpError, optionalUser, requireAppOwner } from '../lib/auth.js';
 import {
   MAX_BODY_BYTES,
@@ -34,10 +35,6 @@ import { checkLogQuota, d1LogUsageStore } from '../lib/log-quota.js';
 import type { Env } from '../types.js';
 
 export const logsRoutes = new Hono<{ Bindings: Env }>();
-
-/** Header the host's platform mediation injects from the resolved app route.
- *  Client-supplied copies are stripped there, so its presence is a host claim. */
-const APP_CONTEXT_HEADER = 'X-PAS-App';
 
 logsRoutes.post('/apps/:appId/logs', async (c) => {
   const appId = c.req.param('appId')!;

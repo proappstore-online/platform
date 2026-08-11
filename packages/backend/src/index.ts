@@ -1,3 +1,4 @@
+import { APP_CONTEXT_HEADER } from './lib/app-context.js';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
@@ -169,7 +170,7 @@ app.onError(async (err, c) => {
         message: err instanceof Error ? err.message : String(err),
         traceId: c.req.header('traceparent')?.split('-')[1] ?? null,
         cfRay: c.req.header('cf-ray') ?? null,
-        mediated: Boolean(c.req.header('X-PAS-App')),
+        mediated: Boolean(c.req.header(APP_CONTEXT_HEADER)),
       }),
     );
   }

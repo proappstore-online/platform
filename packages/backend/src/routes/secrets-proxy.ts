@@ -2,6 +2,7 @@
  * The proxy itself. Extracted verbatim from secrets.ts.
  */
 import type { Hono } from 'hono';
+import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { HttpError, requireUser } from '../lib/auth.js';
 import { openSecret, type SealedSecret } from '../lib/encryption.js';
 import { AllowlistError, injectSecret, pickRule } from '../lib/proxy-allowlist.js';
@@ -11,6 +12,7 @@ import type { Env } from '../types.js';
 import { type AllowlistRow, rowToRule } from './secrets-allowlist-row.js';
 import {
   DAILY_PROXY_REQUESTS,
+  DAILY_PROXY_REQUESTS_PER_USER,
   MAX_REQUEST_BODY_BYTES,
   MAX_RESPONSE_BODY_BYTES,
   requireKek,
@@ -65,10 +67,30 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
     try {
       // Auth: any valid platform session can call the proxy. The app's owner
       // pays the quota, not the caller. (See spec: free tier, per-app quota.)
-      await requireUser(c);
-      const kek = requireKek(c);
+      const user = await requireUser(c);
       const appId = c.req.param('appId')!;
       const host = c.req.param('host')!;
+
+      // SECURITY (#80): a request arriving through same-origin mediation carries
+      // X-PAS-App, injected by the host from the resolved route and stripped of
+      // any client-supplied copy — so its presence is the host's word, not the
+      // page's. A mismatch means a page on app A is driving app B's proxy, which
+      // spends B's secrets and B's quota. Reject it.
+      //
+      // Checked before requireKek deliberately: a cross-app request should be
+      // turned away before the handler touches key material at all.
+      //
+      // Absence is NOT proof of anything: a direct (legacy-bearer) caller has no
+      // such header, and an attacker simply omits it. Binding every call to an
+      // app origin needs the mediated path to be the only path — blocked on the
+      // platform-cookie migration (#20). Until then the per-user sub-cap below
+      // is what bounds an unmediated caller.
+      const mediatedApp = c.req.header(APP_CONTEXT_HEADER);
+      if (mediatedApp && mediatedApp !== appId) {
+        return c.json({ error: 'app context mismatch' }, 403);
+      }
+
+      const kek = requireKek(c);
 
       // Reconstruct upstream URL: /v1/apps/:appId/proxy/<host>/<rest...>
       const prefix = `/v1/apps/${appId}/proxy/${host}/`;
@@ -98,15 +120,24 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
       }
 
       {
-        // Daily cap (only for app-level secrets, not user keys).
+        // Daily cap (only for app-level secrets, not user keys). Two ceilings:
+        // the app's budget, and this caller's share of it (#80) so one account
+        // can't drain an app it has no relationship with.
         const usage = await checkAndBump(d1UsageStore(c.env.DB), {
           appId,
           dailyLimit: DAILY_PROXY_REQUESTS,
+          userId: user.id,
+          perUserLimit: DAILY_PROXY_REQUESTS_PER_USER,
           nowMs: Date.now(),
         });
         if (!usage.allowed) {
           return c.json(
-            { error: `app daily quota exceeded (${DAILY_PROXY_REQUESTS} requests/day)` },
+            {
+              error:
+                usage.deniedBy === 'user'
+                  ? `per-user daily quota exceeded (${DAILY_PROXY_REQUESTS_PER_USER} requests/day)`
+                  : `app daily quota exceeded (${DAILY_PROXY_REQUESTS} requests/day)`,
+            },
             429,
           );
         }
