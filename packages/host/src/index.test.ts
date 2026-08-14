@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import worker from "./index.js";
 import type { Env } from "./env.js";
 import type { Route } from "./host.js";
+import worker from "./index.js";
 
 const route: Route = {
   slug: "meetup",
@@ -18,7 +18,9 @@ describe("host auth token-handler routes", () => {
   it("starts OAuth through the API with a same-origin callback", async () => {
     const env = makeEnv();
     const res = await worker.fetch(
-      new Request("https://meetup.proappstore.online/.pas/auth/start?provider=google&return_to=/dashboard?tab=1"),
+      new Request(
+        "https://meetup.proappstore.online/.pas/auth/start?provider=google&return_to=/dashboard?tab=1",
+      ),
       env,
       ctx(),
     );
@@ -86,17 +88,23 @@ describe("host auth token-handler routes", () => {
   it("sets a host-only HttpOnly cookie after verifying the callback session", async () => {
     // #87 phase 3: the callback receives a one-time code, not a token. The
     // cookie is set from what the exchange returns.
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ token: "good-token" })));
     const apiFetch = vi.fn(async (request: Request) => {
+      if (new URL(request.url).pathname === "/v1/auth/code/exchange") {
+        expect(JSON.parse(await request.text())).toEqual({ code: "one-time" });
+        return Response.json({ token: "good-token" });
+      }
       expect(request.headers.get("Authorization")).toBe("Bearer good-token");
       return Response.json({ id: "gh:1", login: "creator", roles: ["user"], appRoles: {} });
     });
     const env = makeEnv({ apiFetch });
 
     const res = await worker.fetch(
-      new Request("https://meetup.proappstore.online/.pas/auth/callback?code=one-time&return_to=/dashboard&nonce=nonce-1", {
-        headers: { Cookie: "__Host-pas_auth_nonce=nonce-1" },
-      }),
+      new Request(
+        "https://meetup.proappstore.online/.pas/auth/callback?code=one-time&return_to=/dashboard&nonce=nonce-1",
+        {
+          headers: { Cookie: "__Host-pas_auth_nonce=nonce-1" },
+        },
+      ),
       env,
       ctx(),
     );
@@ -112,7 +120,9 @@ describe("host auth token-handler routes", () => {
     expect(cookie).toContain("Path=/");
     expect(cookie).not.toContain("Domain=");
     expect(env.APPS.get).not.toHaveBeenCalled();
-    expect(apiFetch).toHaveBeenCalledOnce();
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+    expect(apiFetch.mock.calls[0]?.[0].url).toContain("/v1/auth/code/exchange");
+    expect(apiFetch.mock.calls[1]?.[0].url).toContain("/v1/auth/me");
   });
 
   it("rejects direct callback links that do not have the host auth nonce", async () => {
@@ -120,34 +130,47 @@ describe("host auth token-handler routes", () => {
     const env = makeEnv({ apiFetch });
 
     const res = await worker.fetch(
-      new Request("https://meetup.proappstore.online/.pas/auth/callback?code=one-time&return_to=/dashboard&nonce=nonce-1"),
+      new Request(
+        "https://meetup.proappstore.online/.pas/auth/callback?code=one-time&return_to=/dashboard&nonce=nonce-1",
+      ),
       env,
       ctx(),
     );
 
     expect(res.status).toBe(303);
-    expect(res.headers.get("Location")).toBe("https://meetup.proappstore.online/dashboard#auth_error=invalid_state");
+    expect(res.headers.get("Location")).toBe(
+      "https://meetup.proappstore.online/dashboard#auth_error=invalid_state",
+    );
     expect(res.headers.get("Set-Cookie")).toContain("__Host-pas_auth_nonce=; Max-Age=0");
     expect(apiFetch).not.toHaveBeenCalled();
   });
 
   it("redirects with an auth error and no cookie when callback verification fails", async () => {
     // The exchange succeeds but the resulting token fails /auth/me.
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ token: "bad-token" })));
     const env = makeEnv({
-      apiFetch: vi.fn(async () => new Response("invalid", { status: 401 })),
+      apiFetch: vi.fn(async (request: Request) => {
+        if (new URL(request.url).pathname === "/v1/auth/code/exchange") {
+          return Response.json({ token: "bad-token" });
+        }
+        return new Response("invalid", { status: 401 });
+      }),
     });
 
     const res = await worker.fetch(
-      new Request("https://meetup.proappstore.online/.pas/auth/callback?code=one-time&return_to=/dashboard&nonce=nonce-1", {
-        headers: { Cookie: "__Host-pas_auth_nonce=nonce-1" },
-      }),
+      new Request(
+        "https://meetup.proappstore.online/.pas/auth/callback?code=one-time&return_to=/dashboard&nonce=nonce-1",
+        {
+          headers: { Cookie: "__Host-pas_auth_nonce=nonce-1" },
+        },
+      ),
       env,
       ctx(),
     );
 
     expect(res.status).toBe(303);
-    expect(res.headers.get("Location")).toBe("https://meetup.proappstore.online/dashboard#auth_error=invalid_session");
+    expect(res.headers.get("Location")).toBe(
+      "https://meetup.proappstore.online/dashboard#auth_error=invalid_session",
+    );
     expect(res.headers.get("Set-Cookie")).toContain("__Host-pas_auth_nonce=; Max-Age=0");
   });
 
@@ -167,7 +190,12 @@ describe("host auth token-handler routes", () => {
     );
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ id: "gh:1", login: "creator", roles: ["user"], appRoles: {} });
+    expect(await res.json()).toEqual({
+      id: "gh:1",
+      login: "creator",
+      roles: ["user"],
+      appRoles: {},
+    });
   });
 
   it("clears the auth cookie on logout", async () => {
@@ -380,7 +408,10 @@ describe("host same-origin platform mediation routes", () => {
   });
 
   it("does NOT clear the session cookie when the data worker returns 401 (signing-key drift must not sign the user out)", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("invalid session", { status: 401 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("invalid session", { status: 401 })),
+    );
 
     const res = await worker.fetch(
       new Request("https://meetup.proappstore.online/.pas/data/query", {
@@ -418,7 +449,9 @@ describe("host same-origin platform mediation routes", () => {
 });
 
 function makeEnv(opts: { apiFetch?: (request: Request) => Promise<Response> } = {}): Env {
-  const apiFetch = opts.apiFetch ?? (async () => Response.json({ id: "gh:1", login: "creator", roles: ["user"], appRoles: {} }));
+  const apiFetch =
+    opts.apiFetch ??
+    (async () => Response.json({ id: "gh:1", login: "creator", roles: ["user"], appRoles: {} }));
   return {
     APPS: { get: vi.fn() },
     DB: fakeRouteDb(),
@@ -470,38 +503,46 @@ describe("host auth callback — one-time code (#87)", () => {
   const CALLBACK = "https://meetup.proappstore.online/.pas/auth/callback";
   const withNonce = { headers: { Cookie: "__Host-pas_auth_nonce=nonce-1" } };
 
-  /** Stub global fetch for the code-exchange POST only. */
+  /** Stub the API service binding for the code-exchange POST only. */
   function stubExchange(impl: (body: { code?: string }) => Response) {
-    const spy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input instanceof Request ? input.url : input);
-      if (url.includes("/v1/auth/code/exchange")) {
-        return impl(JSON.parse(String(init?.body ?? "{}")));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("global fetch should not redeem host auth codes");
+      }),
+    );
+    const spy = vi.fn(async (request: Request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/v1/auth/code/exchange") {
+        return impl(JSON.parse(await request.text()));
       }
-      throw new Error(`unexpected fetch: ${url}`);
+      if (url.pathname === "/v1/auth/me") {
+        return Response.json({ id: "gh:1", login: "creator", roles: ["user"], appRoles: {} });
+      }
+      throw new Error(`unexpected API fetch: ${url.toString()}`);
     });
-    vi.stubGlobal("fetch", spy);
-    return spy;
+    return { env: makeEnv({ apiFetch: spy }), spy };
   }
 
   it("redeems ?code= and sets the session cookie from the response", async () => {
-    const spy = stubExchange(() => Response.json({ token: "exchanged-token" }));
+    const { env, spy } = stubExchange(() => Response.json({ token: "exchanged-token" }));
     const res = await worker.fetch(
       new Request(`${CALLBACK}?code=abc123&return_to=/dashboard&nonce=nonce-1`, withNonce),
-      makeEnv(),
+      env,
       ctx(),
     );
 
     expect(res.status).toBe(303);
     expect(res.headers.getSetCookie().join(" ")).toContain("__Host-pas_session=exchanged-token");
     expect(spy).toHaveBeenCalled();
-    expect(spy.mock.calls[0]![1]).toMatchObject({ method: "POST" });
+    expect(spy.mock.calls[0]?.[0].method).toBe("POST");
   });
 
   it("never puts the code or token in the redirect Location", async () => {
-    stubExchange(() => Response.json({ token: "exchanged-token" }));
+    const { env } = stubExchange(() => Response.json({ token: "exchanged-token" }));
     const res = await worker.fetch(
       new Request(`${CALLBACK}?code=abc123&return_to=/dashboard&nonce=nonce-1`, withNonce),
-      makeEnv(),
+      env,
       ctx(),
     );
 
@@ -511,10 +552,13 @@ describe("host auth callback — one-time code (#87)", () => {
   });
 
   it("prefers ?code= when both are present", async () => {
-    stubExchange(() => Response.json({ token: "exchanged-token" }));
+    const { env } = stubExchange(() => Response.json({ token: "exchanged-token" }));
     const res = await worker.fetch(
-      new Request(`${CALLBACK}?code=abc123&session=raw-token&return_to=/dashboard&nonce=nonce-1`, withNonce),
-      makeEnv(),
+      new Request(
+        `${CALLBACK}?code=abc123&session=raw-token&return_to=/dashboard&nonce=nonce-1`,
+        withNonce,
+      ),
+      env,
       ctx(),
     );
     expect(res.headers.getSetCookie().join(" ")).toContain("exchanged-token");
@@ -522,15 +566,14 @@ describe("host auth callback — one-time code (#87)", () => {
   });
 
   it("fails like an absent credential when the exchange is refused", async () => {
-    stubExchange(() => new Response("nope", { status: 400 }));
+    const { env } = stubExchange(() => new Response("nope", { status: 400 }));
     const res = await worker.fetch(
       new Request(`${CALLBACK}?code=bad&return_to=/dashboard&nonce=nonce-1`, withNonce),
-      makeEnv(),
+      env,
       ctx(),
     );
 
     expect(res.status).toBe(303);
     expect(res.headers.get("Location")).toContain("auth_error=missing_session");
   });
-
 });

@@ -9,7 +9,11 @@ const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 const NONCE_TTL_SECONDS = 10 * 60;
 const PROVIDERS = new Set(["github", "google"]);
 
-export async function handleAuthRoute(request: Request, env: Env, route: Route): Promise<Response | null> {
+export async function handleAuthRoute(
+  request: Request,
+  env: Env,
+  route: Route,
+): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith(`${AUTH_PREFIX}/`) && url.pathname !== AUTH_PREFIX) return null;
 
@@ -62,11 +66,13 @@ async function authCallback(request: Request, env: Env): Promise<Response> {
   // now fails as a missing credential rather than being honoured.
   const code = url.searchParams.get("code");
   if (!code) return redirectWithAuthError(url, returnPath, "missing_session", [clearNonceCookie()]);
-  const session = await exchangeCode(code);
-  if (!session) return redirectWithAuthError(url, returnPath, "missing_session", [clearNonceCookie()]);
+  const session = await exchangeCode(env.API, code);
+  if (!session)
+    return redirectWithAuthError(url, returnPath, "missing_session", [clearNonceCookie()]);
 
   const user = await fetchMe(env, session);
-  if (!user.ok) return redirectWithAuthError(url, returnPath, "invalid_session", [clearNonceCookie()]);
+  if (!user.ok)
+    return redirectWithAuthError(url, returnPath, "invalid_session", [clearNonceCookie()]);
 
   const dest = new URL(returnPath, url.origin);
   const headers = new Headers({
@@ -85,13 +91,15 @@ async function authCallback(request: Request, env: Env): Promise<Response> {
  * `missing_session` redirect a bad `?session=` produced, so a failed exchange
  * is indistinguishable from an absent credential.
  */
-async function exchangeCode(code: string): Promise<string | null> {
+async function exchangeCode(api: Fetcher, code: string): Promise<string | null> {
   try {
-    const response = await fetch(`${API_BASE}/v1/auth/code/exchange`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code }),
-    });
+    const response = await api.fetch(
+      new Request(`${API_BASE}/v1/auth/code/exchange`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      }),
+    );
     if (!response.ok) return null;
     const body = (await response.json()) as { token?: unknown };
     return typeof body.token === "string" && body.token ? body.token : null;
@@ -140,7 +148,10 @@ export function isSameOriginMutation(request: Request): boolean {
   return false;
 }
 
-async function fetchMe(env: Env, token: string): Promise<{ ok: boolean; status: number; body: string; contentType: string | null }> {
+async function fetchMe(
+  env: Env,
+  token: string,
+): Promise<{ ok: boolean; status: number; body: string; contentType: string | null }> {
   const response = await env.API.fetch(
     new Request(`${API_BASE}/v1/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -154,7 +165,12 @@ async function fetchMe(env: Env, token: string): Promise<{ ok: boolean; status: 
   };
 }
 
-function redirectWithAuthError(url: URL, returnPath: string, reason: string, cookies: string[] = []): Response {
+function redirectWithAuthError(
+  url: URL,
+  returnPath: string,
+  reason: string,
+  cookies: string[] = [],
+): Response {
   const dest = new URL(returnPath, url.origin);
   dest.hash = `auth_error=${encodeURIComponent(reason)}`;
   return redirect(dest.toString(), 303, cookies);
@@ -165,7 +181,8 @@ function sameOriginPath(baseUrl: URL, raw: string | null): string {
   try {
     const parsed = new URL(raw, baseUrl.origin);
     if (parsed.origin !== baseUrl.origin) return "/";
-    if (parsed.pathname === AUTH_PREFIX || parsed.pathname.startsWith(`${AUTH_PREFIX}/`)) return "/";
+    if (parsed.pathname === AUTH_PREFIX || parsed.pathname.startsWith(`${AUTH_PREFIX}/`))
+      return "/";
     return `${parsed.pathname}${parsed.search}${parsed.hash}`;
   } catch {
     return "/";
