@@ -641,7 +641,7 @@ export function registerProjectTools(
       return text([
         data.success ? `Published: **${name}** (${app_id})` : `Publish failed for ${app_id}`,
         `Live: https://${app_id}.proappstore.online`,
-        `Listing: https://proappstore.online/apps/${app_id}/`,
+        `Listing: https://proappstore.online/app/${app_id}`,
         "",
         steps,
       ].join("\n"));

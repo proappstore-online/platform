@@ -556,6 +556,7 @@ describe('publish_app', () => {
     const out = getText(result);
     expect(out).toContain('Published: **Chess Academy**');
     expect(out).toContain('chess-academy.proappstore.online');
+    expect(out).toContain('https://proappstore.online/app/chess-academy');
     expect(out).toContain('+ GitHub repo: created');
     expect(out).toContain('+ Registry: Added Chess Academy');
 
