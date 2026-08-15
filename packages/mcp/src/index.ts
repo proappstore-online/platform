@@ -149,6 +149,7 @@ export default {
       const oauthRes = await handleOAuthRoute(request, {
         issuer,
         authStart: env.AUTH_START ?? `${env.API_BASE}/v1/auth/github/start`,
+        api: env.API,
         kv: env.OAUTH_KV,
         sessionSigningKey: env.SESSION_SIGNING_KEY,
       });

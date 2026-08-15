@@ -25,9 +25,9 @@ command = "node scripts/embed-data-worker.mjs"
 [vars]
 # Public base URL of this API — used to build OAuth callback URLs (routes/auth.ts).
 APP_BASE = "https://api.proappstore.online"
-# PAS GitHub OAuth App client id (public — sent in the authorize URL). The secret
-# is a Worker secret (GITHUB_CLIENT_SECRET, from Doppler OAUTH_CLIENT_SECRET).
-GITHUB_CLIENT_ID = "Ov23ctEs8trbfizdBGfQ"
+# PAS GitHub OAuth App client id must be configured as a Worker secret together
+# with GITHUB_CLIENT_SECRET. Do not commit a fallback client id: the previous
+# value pointed at FreeAppStore, which made PAS auth depend on the wrong store.
 CF_ACCOUNT_ID = "c1089bfcc43c1c6c2aa89e584e86f0bc"
 VAPID_PUBLIC_KEY = "BPg6E92QAOhdcif_HckOEGY6mL03VKWNQ3CS1xQX5q59fXURI1xCGwwBr4Vsv7gn3TXIGSJquJwvHGYRbMcAQc0"
 # Comma-separated `gh:<id>` strings allowed to approve/reject submissions.

@@ -154,9 +154,10 @@ describe('handleOAuthRoute', () => {
 // history — and it is a directly reusable Bearer for the life of the session.
 // This is precisely why OAuth returns a short-lived single-use code instead.
 describe('oauth callback — one-time code (#110)', () => {
-  const config = (kv: KVNamespace) => ({
+  const config = (kv: KVNamespace, api?: Fetcher) => ({
     issuer: 'https://mcp.proappstore.online',
     authStart: 'https://api.proappstore.online/v1/auth/github/start',
+    api,
     kv,
     sessionSigningKey: 'test-key',
   });
@@ -215,6 +216,27 @@ describe('oauth callback — one-time code (#110)', () => {
     const init = spy.mock.calls[0]![1] as RequestInit;
     expect(init.method).toBe('POST');
     expect(String(init.body)).toContain('one-time');
+  });
+
+  it('uses the API service binding for the exchange when provided', async () => {
+    const session = await mintTestSession();
+    const globalSpy = vi.fn(async () => {
+      throw new Error('global fetch should not be used for API exchange');
+    });
+    vi.stubGlobal('fetch', globalSpy);
+    const apiFetch = vi.fn(async () => Response.json({ token: session }));
+    const api = { fetch: apiFetch } as unknown as Fetcher;
+
+    const res = await handleOAuthRoute(
+      new Request('https://mcp.proappstore.online/oauth/callback?nonce=n1&code=one-time', {
+        headers: { Cookie: 'pas_mcp_oauth_nonce=n1' },
+      }),
+      config(makeKv({ 'authreq:n1': authReq }), api),
+    );
+
+    expect(res?.status).toBe(302);
+    expect(apiFetch).toHaveBeenCalledOnce();
+    expect(globalSpy).not.toHaveBeenCalled();
   });
 
   it('400s when the exchange is refused', async () => {

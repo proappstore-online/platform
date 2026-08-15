@@ -15,6 +15,8 @@ export interface OAuthConfig {
   issuer: string;
   /** Auth start URL (e.g. "https://api.proappstore.online/v1/auth/github/start") */
   authStart: string;
+  /** Service binding for server-to-server API calls from this Worker. */
+  api?: Fetcher;
   /** Workers KV namespace for OAuth state */
   kv: KVNamespace;
   /** HMAC signing key for session verification */
@@ -318,7 +320,8 @@ async function continueAuthorize(request: Request, config: OAuthConfig): Promise
 async function exchangeLoginCode(config: OAuthConfig, code: string): Promise<string | null> {
   try {
     const exchangeUrl = new URL("/v1/auth/code/exchange", config.authStart);
-    const response = await fetch(exchangeUrl.toString(), {
+    const api = config.api ?? globalThis;
+    const response = await api.fetch(exchangeUrl.toString(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code }),
