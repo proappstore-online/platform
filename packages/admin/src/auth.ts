@@ -3,6 +3,7 @@
 // verifies its OWN sessions with its OWN SESSION_SIGNING_KEY — no
 // dependency on FAS's signing key (per the admin-worker-per-store
 // principle). `pas login` exchanges a GitHub token for a session here.
+import { verifySession as verifyPasSession } from "@proappstore/build-core";
 
 interface GitHubUser {
   login: string;
@@ -44,9 +45,15 @@ async function mintSessionToken(login: string, signingKey: string): Promise<stri
 }
 
 export async function verifySession(token: string, signingKey: string): Promise<string | null> {
+  const pasClaims = await verifyPasSession(token, signingKey);
+  if (pasClaims) return pasClaims.login ?? pasClaims.uid;
+
   try {
     const parts = token.split(".");
     if (parts.length !== 3) return null;
+    const bodyPart = parts[1];
+    const sigPart = parts[2];
+    if (!bodyPart || !sigPart) return null;
     const encoder = new TextEncoder();
     const key = await crypto.subtle.importKey(
       "raw",
@@ -55,7 +62,7 @@ export async function verifySession(token: string, signingKey: string): Promise<
       false,
       ["verify"],
     );
-    const sig = Uint8Array.from(atob(parts[2]!), (c) => c.charCodeAt(0));
+    const sig = Uint8Array.from(atob(sigPart), (c) => c.charCodeAt(0));
     const valid = await crypto.subtle.verify(
       "HMAC",
       key,
@@ -63,7 +70,7 @@ export async function verifySession(token: string, signingKey: string): Promise<
       encoder.encode(`${parts[0]}.${parts[1]}`),
     );
     if (!valid) return null;
-    const payload = JSON.parse(atob(parts[1]!)) as { sub: string; exp: number };
+    const payload = JSON.parse(atob(bodyPart)) as { sub: string; exp: number };
     if (payload.exp < Math.floor(Date.now() / 1000)) return null;
     return payload.sub;
   } catch {
