@@ -13,6 +13,16 @@ import { registerAgentsTools } from "./agents-tools.js";
 import { registerQaTools } from "./qa-tools.js";
 import { createAuthChallenge, handleOAuthRoute, resolveOAuthToken } from "./oauth-provider.js";
 
+const AUTH_PROVIDERS = ["github", "google"] as const;
+
+function configuredAuthProviders(raw: string | undefined): Array<typeof AUTH_PROVIDERS[number]> | undefined {
+  const providers = (raw ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value): value is typeof AUTH_PROVIDERS[number] => AUTH_PROVIDERS.includes(value as typeof AUTH_PROVIDERS[number]));
+  return providers.length ? providers : undefined;
+}
+
 export class PasMcpAgent extends McpAgent<Env> {
   server = new McpServer({
     name: "ProAppStore",
@@ -150,6 +160,7 @@ export default {
         issuer,
         authStart: env.AUTH_START ?? `${env.API_BASE}/v1/auth/github/start`,
         api: env.API,
+        authProviders: configuredAuthProviders(env.AUTH_PROVIDERS),
         kv: env.OAUTH_KV,
         sessionSigningKey: env.SESSION_SIGNING_KEY,
       });

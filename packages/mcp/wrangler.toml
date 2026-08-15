@@ -20,6 +20,9 @@ API_BASE = "https://api.proappstore.online"
 AGENTS_BASE = "https://agents.proappstore.online"
 GITHUB_ORG = "proappstore-online"
 AUTH_START = "https://api.proappstore.online/v1/auth/github/start"
+# GitHub is intentionally disabled until PAS has its own GitHub OAuth app
+# configured on the API Worker. Do not point PAS at the FreeAppStore OAuth app.
+AUTH_PROVIDERS = "google"
 
 # Secrets set via `wrangler secret put`:
 #   SESSION_SIGNING_KEY

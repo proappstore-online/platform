@@ -125,6 +125,38 @@ describe('handleOAuthRoute', () => {
     expect(res?.headers.get('Location')).toContain('response_mode=query');
   });
 
+  it('can hide and reject disabled auth providers', async () => {
+    const kv = makeKv({
+      'client:client-1': JSON.stringify({
+        redirect_uris: ['http://127.0.0.1:9876/callback'],
+        client_name: 'Codex',
+      }),
+    });
+    const config = {
+      issuer: 'https://mcp.proappstore.online',
+      authStart: 'https://api.proappstore.online/v1/auth/github/start',
+      authProviders: ['google'] as const,
+      kv,
+      sessionSigningKey: 'test-key',
+    };
+
+    const page = await handleOAuthRoute(
+      new Request('https://mcp.proappstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=abc&code_challenge_method=S256'),
+      config,
+    );
+    const html = await page!.text();
+    expect(html).toContain('Continue with Google');
+    expect(html).not.toContain('Continue with GitHub');
+
+    const nonce = html.match(/nonce=([^&"]+)/)?.[1];
+    const github = await handleOAuthRoute(
+      new Request(`https://mcp.proappstore.online/authorize/continue?nonce=${nonce}&provider=github`),
+      config,
+    );
+    expect(github?.status).toBe(400);
+    await expect(github?.text()).resolves.toBe('auth provider is not enabled');
+  });
+
   it('allows a fresh authorization even when another tab previously started one', async () => {
     const kv = makeKv({
       'client:client-1': JSON.stringify({ redirect_uris: ['http://127.0.0.1:9876/callback'] }),

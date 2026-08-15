@@ -17,6 +17,8 @@ export interface OAuthConfig {
   authStart: string;
   /** Service binding for server-to-server API calls from this Worker. */
   api?: Fetcher;
+  /** OAuth providers exposed by this MCP server. Defaults to GitHub + Google. */
+  authProviders?: readonly AuthProvider[];
   /** Workers KV namespace for OAuth state */
   kv: KVNamespace;
   /** HMAC signing key for session verification */
@@ -149,6 +151,11 @@ function authProvider(raw: string | null): AuthProvider | null {
   return AUTH_PROVIDERS.includes(raw as AuthProvider) ? raw as AuthProvider : null;
 }
 
+function configuredAuthProviders(config: OAuthConfig): AuthProvider[] {
+  const providers = config.authProviders?.filter((provider) => AUTH_PROVIDERS.includes(provider));
+  return providers?.length ? providers : [...AUTH_PROVIDERS];
+}
+
 function authStartUrl(config: OAuthConfig, nonce: string, provider: AuthProvider): string {
   const authUrl = new URL(config.authStart);
   if (provider !== "github") {
@@ -170,6 +177,11 @@ function authConfirmPage(config: OAuthConfig, nonce: string, clientName: string 
     return url.toString();
   };
   const name = clientName ? escapeHtml(clientName) : "your MCP client";
+  const providerLinks = configuredAuthProviders(config).map((provider, index) => {
+    const label = provider === "github" ? "GitHub" : "Google";
+    const attrs = index === 0 ? " autofocus" : ' class="secondary"';
+    return `<a${attrs} href="${escapeHtml(continueUrl(provider))}">Continue with ${label}</a>`;
+  }).join("\n      ");
   return new Response(
     `<!doctype html>
 <html lang="en">
@@ -192,8 +204,7 @@ function authConfirmPage(config: OAuthConfig, nonce: string, clientName: string 
     <h1>Connect ProAppStore MCP</h1>
     <p>${name} wants to use ProAppStore MCP tools as your account. Choose how to sign in.</p>
     <div class="actions">
-      <a href="${escapeHtml(continueUrl("github"))}" autofocus>Continue with GitHub</a>
-      <a class="secondary" href="${escapeHtml(continueUrl("google"))}">Continue with Google</a>
+      ${providerLinks}
     </div>
   </main>
 </body>
@@ -291,8 +302,12 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
 async function continueAuthorize(request: Request, config: OAuthConfig): Promise<Response> {
   const url = new URL(request.url);
   const nonce = url.searchParams.get("nonce");
-  const provider = authProvider(url.searchParams.get("provider")) ?? "github";
+  const provider = authProvider(url.searchParams.get("provider"));
   if (!nonce) return new Response("missing nonce", { status: 400 });
+  if (!provider) return new Response("unsupported auth provider", { status: 400 });
+  if (!configuredAuthProviders(config).includes(provider)) {
+    return new Response("auth provider is not enabled", { status: 400 });
+  }
 
   const reqRaw = await config.kv.get(`authreq:${nonce}`);
   if (!reqRaw) return new Response("invalid or expired nonce", { status: 400 });
