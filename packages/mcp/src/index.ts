@@ -51,6 +51,7 @@ export class PasMcpAgent extends McpAgent<Env> {
     registerProjectTools(this.server, this.env, () => ({
       userId: this.userId,
       token: this.userToken,
+      roles: this.userRoles,
     }));
 
     // ── Agent Teams loop tools (create app, KB, chat PO/Architect, ─
@@ -154,7 +155,7 @@ export default {
     if (url.pathname === "/" || url.pathname === "") {
       if (isProtocolClient(request)) return wrongEndpoint();
       return new Response(
-        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools, recipe\nProject tools: scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running, set_project_budget, run_tests, set_model, add_ticket\nAgent introspection: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\nIdentity: whoami (show the authenticated PAS account + roles).\nSafety: mcp_audit_log (per-account audit trail). Mutating tools are audited; destructive tools (scaffold_app, delete_file, publish_app) require confirm: true; expensive/irreversible tools accept dry_run: true to preview; set MCP_READ_ONLY=1 to block all writes.\n",
+        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools, recipe\nProject tools: provision_pas_app, scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running, set_project_budget, run_tests, set_model, add_ticket\nAgent introspection: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\nIdentity: whoami (show the authenticated PAS account + roles).\nSafety: mcp_audit_log (per-account audit trail). Mutating tools are audited; destructive tools (provision_pas_app, scaffold_app, delete_file, publish_app) require confirm: true; expensive/irreversible tools accept dry_run: true to preview; set MCP_READ_ONLY=1 to block all writes.\n",
         { headers: { "content-type": "text/plain" } }
       );
     }
@@ -163,12 +164,22 @@ export default {
     const auth = request.headers.get("Authorization");
     let bearer = auth?.replace(/^Bearer\s+/i, "");
     if (bearer && env.OAUTH_KV) {
-      const session = await resolveOAuthToken(bearer, env.OAUTH_KV);
-      if (session) bearer = session;
+      try {
+        const session = await resolveOAuthToken(bearer, env.OAUTH_KV);
+        if (session) bearer = session;
+      } catch (e) {
+        console.warn(`MCP OAuth token resolution failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
-    const user = bearer && env.SESSION_SIGNING_KEY
-      ? await verifyToken(env.SESSION_SIGNING_KEY, bearer)
-      : null;
+    let user: { id: string; login: string } | null = null;
+    if (bearer && env.SESSION_SIGNING_KEY) {
+      try {
+        user = await verifyToken(env.SESSION_SIGNING_KEY, bearer);
+      } catch (e) {
+        console.warn(`MCP bearer verification failed: ${e instanceof Error ? e.message : String(e)}`);
+        user = null;
+      }
+    }
 
     const isMcpTransport = url.pathname === "/mcp" || url.pathname.startsWith("/mcp/");
     if (isMcpTransport && request.method !== "OPTIONS" && env.OAUTH_KV && env.SESSION_SIGNING_KEY && !user) {

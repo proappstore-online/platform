@@ -56,12 +56,13 @@ const env = {
   API_BASE: 'https://api.test.com',
   API: svc,
   ADMIN: svc,
+  HOST: svc,
   R2_ACCESS_KEY_ID: 'r2-ak',
   R2_SECRET_ACCESS_KEY: 'r2-sk',
   R2_ACCOUNT_ID: 'r2-acct',
 };
 
-let userCtx: { userId: string | null; token: string | null } = { userId: 'u1', token: 'tok-1' };
+let userCtx: { userId: string | null; token: string | null; roles?: string[] } = { userId: 'u1', token: 'tok-1' };
 registerProjectTools(fakeServer as any, env, () => userCtx);
 
 function getText(result: { content: { type: string; text: string }[] }): string {
@@ -72,6 +73,165 @@ beforeEach(() => {
   vi.clearAllMocks();
   userCtx = { userId: 'u1', token: 'tok-1' };
   mockOwnership.mockResolvedValue(true);
+});
+
+describe('provision_pas_app', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const args = {
+    app_id: 'school-clubs',
+    name: 'School Clubs',
+    description: 'Coordinate school clubs.',
+  };
+
+  async function runProvisionPas(extra: Record<string, unknown> = {}) {
+    const p = tools.get('provision_pas_app')!({ confirm: true, verify: false, ...args, ...extra });
+    await vi.advanceTimersByTimeAsync(5000);
+    return p;
+  }
+
+  it('previews the full operator workflow without mutating', async () => {
+    const result = await tools.get('provision_pas_app')!({ ...args, dry_run: true });
+    const out = getText(result);
+
+    expect(out).toContain('create GitHub repo test-org/school-clubs');
+    expect(out).toContain('call /v1/provision');
+    expect(mockGh.createRepoFromTemplate).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('requires confirm before creating repo or infra', async () => {
+    const result = await tools.get('provision_pas_app')!(args);
+    expect(getText(result)).toContain('Refused');
+    expect(mockGh.createRepoFromTemplate).not.toHaveBeenCalled();
+  });
+
+  it('creates a private template repo, patches placeholders, provisions infra, and reports links', async () => {
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: { id: 1 } });
+    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
+    mockGh.getFile.mockImplementation(async (_id: string, path: string) => {
+      if (path === 'package.json') return { ok: true, status: 200, content: '{"name":"APPNAME"}', sha: 'pkg' };
+      if (path === 'web/src/App.tsx') return { ok: true, status: 200, content: "initPro({ appId: 'APPNAME' })", sha: 'app' };
+      return { ok: false, status: 404 };
+    });
+    mockGh.pushFiles.mockResolvedValue({ ok: true, commitSha: 'abcdef1234567890' });
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        success: true,
+        appUrl: 'https://school-clubs.proappstore.online',
+        dataWorkerUrl: 'https://data-school-clubs.proappstore.online',
+        steps: [
+          { name: 'route', status: 'ok', detail: 'school-clubs.proappstore.online -> apps/school-clubs/' },
+          { name: 'create_d1', status: 'ok', detail: 'pas-data-school-clubs (db-1)' },
+        ],
+      }),
+    });
+
+    const result = await runProvisionPas();
+    const out = getText(result);
+
+    expect(mockGh.createRepoFromTemplate).toHaveBeenCalledWith('school-clubs', {
+      template: 'template-app',
+      description: 'Coordinate school clubs.',
+      private: true,
+    });
+    expect(mockGh.setRepoVariable).toHaveBeenCalledTimes(3);
+    expect(mockGh.pushFiles).toHaveBeenCalledWith(
+      'school-clubs',
+      [
+        { path: 'package.json', content: '{"name":"school-clubs"}' },
+        { path: 'web/src/App.tsx', content: "initPro({ appId: 'school-clubs' })" },
+      ],
+      'chore: configure school-clubs template',
+      { initIfEmpty: false },
+    );
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toMatchObject({
+      appId: 'school-clubs',
+      skipCompliance: false,
+      repoOwner: 'test-org',
+      repoName: 'school-clubs',
+    });
+    expect(out).toContain('PAS app provisioned');
+    expect(out).toContain('Repo: https://github.com/test-org/school-clubs');
+    expect(out).toContain('+ Template placeholders: replaced APPNAME in 2 file(s)');
+    expect(out).toContain('+ route');
+  });
+
+  it('blocks reuse of an existing unowned repo for non-admin callers', async () => {
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: false, status: 422, data: { message: 'exists' } });
+    mockGh.repoExists.mockResolvedValue(true);
+    mockOwnership.mockResolvedValue(false);
+
+    const result = await runProvisionPas({ app_id: 'manual-repo' });
+    const out = getText(result);
+
+    expect(out).toContain('already exists');
+    expect(out).toContain('requires a platform admin session');
+    expect(mockGh.setRepoVariable).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('allows admins to reuse an existing unowned repo', async () => {
+    userCtx = { userId: 'admin-1', token: 'tok-admin', roles: ['user', 'admin'] };
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: false, status: 422, data: { message: 'exists' } });
+    mockGh.repoExists.mockResolvedValue(true);
+    mockOwnership.mockResolvedValue(false);
+    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
+    mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ success: true, steps: [{ name: 'route', status: 'skip', detail: 'already routed' }] }),
+    });
+
+    const result = await runProvisionPas({ app_id: 'manual-repo' });
+    const out = getText(result);
+
+    expect(out).toContain('GitHub repo: test-org/manual-repo already exists');
+    expect(out).toContain('PAS app provisioned');
+    expect(mockGh.setRepoVariable).toHaveBeenCalledTimes(3);
+    expect(mockFetch).toHaveBeenCalled();
+  });
+
+  it('reports best-effort verification when requested', async () => {
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: { id: 1 } });
+    mockGh.repoExists.mockResolvedValue(true);
+    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
+    mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
+    mockGh.getDeployStatus.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        workflow_runs: [
+          { name: 'Deploy to R2', status: 'in_progress', conclusion: null, updated_at: '2026-08-15T06:12:42Z' },
+        ],
+      },
+    });
+    mockFetch.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'HEAD') return { ok: false, status: 404 };
+      return {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          success: true,
+          appUrl: 'https://school-clubs.proappstore.online',
+          dataWorkerUrl: 'https://data-school-clubs.proappstore.online',
+          steps: [],
+        }),
+      };
+    });
+
+    const result = await runProvisionPas({ verify: true });
+    const out = getText(result);
+
+    expect(out).toContain('+ Verify repo: https://github.com/test-org/school-clubs exists');
+    expect(out).toContain('+ Verify provision: backend reported success');
+    expect(out).toContain('~ Verify deploy: Deploy to R2 is in_progress');
+    expect(out).toContain('~ Verify host: https://school-clubs.proappstore.online returned 404');
+  });
 });
 
 describe('auth helpers', () => {

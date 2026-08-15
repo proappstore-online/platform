@@ -1,6 +1,6 @@
 # @proappstore/mcp
 
-MCP server for [ProAppStore](https://proappstore.online) — 35 AI agent tools for building, managing, and querying Pro web apps.
+MCP server for [ProAppStore](https://proappstore.online) — AI agent tools for building, provisioning, managing, and querying Pro web apps.
 
 ## Quick start
 
@@ -35,7 +35,7 @@ https://mcp.proappstore.online/mcp
 
 **Platform info** — `sdk_reference`, `recipe`, `platform_guide`, `deploy_status`, `app_info`, `list_apps`, `discover_tools`
 
-**Build apps** — `scaffold_app`, `write_file`, `read_file`, `list_files`, `delete_file`, `search_files`, `batch_write_files`, `get_deploy_status`, `provision_app`
+**Build apps** — `provision_pas_app`, `scaffold_app`, `write_file`, `read_file`, `list_files`, `delete_file`, `search_files`, `batch_write_files`, `get_deploy_status`, `provision_app`
 
 **Agent Teams** — `create_app`, `list_projects`, `get_project`, `build_knowledge_base`, `chat_agent`, `list_tickets`, `list_agents`, `get_project_files`, `set_project_running`, `set_project_budget`, `run_tests`, `set_model`, `add_ticket`
 

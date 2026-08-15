@@ -19,6 +19,7 @@ interface ProjectToolsEnv {
   /** Service bindings — same-zone subrequests bypass route-mapped Workers. */
   API: Fetcher;
   ADMIN: Fetcher;
+  HOST: Fetcher;
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;
   R2_ACCOUNT_ID?: string;
@@ -39,13 +40,41 @@ const DRY_RUN = z
 type Text = { content: { type: "text"; text: string }[] };
 const text = (s: string): Text => ({ content: [{ type: "text" as const, text: s }] });
 
-const APP_ID = z.string().regex(/^[a-z][a-z0-9-]*$/).describe("App ID (lowercase, e.g. 'chess-academy')");
+const APP_ID = z.string().max(58).regex(/^[a-z][a-z0-9-]*$/).describe("App ID (lowercase, max 58 chars, e.g. 'chess-academy')");
 const OWNERSHIP_CACHE_TTL_MS = 60_000;
+const TEMPLATE_PLACEHOLDER_FILES = [
+  "CLAUDE.md",
+  "README.md",
+  "package.json",
+  "web/index.html",
+  "web/package.json",
+  "web/src/App.tsx",
+  "web/vite.config.ts",
+] as const;
+
+interface ProvisionStep {
+  name: string;
+  status: string;
+  detail: string;
+}
+
+interface ProvisionResult {
+  appId?: string;
+  steps?: ProvisionStep[];
+  dataWorkerUrl?: string;
+  appUrl?: string;
+  success?: boolean;
+  error?: string;
+}
+
+const stepIcon = (status: string) => status === "ok" ? "+" : status === "skip" ? "~" : "!";
+const formatSteps = (steps: ProvisionStep[] = []) =>
+  steps.map((s) => `${stepIcon(s.status)} ${s.name}: ${s.detail}`).join("\n");
 
 export function registerProjectTools(
   server: McpServer,
   env: ProjectToolsEnv,
-  getUserContext: () => { userId: string | null; token: string | null },
+  getUserContext: () => { userId: string | null; token: string | null; roles?: string[] },
 ): void {
   const { GITHUB_ORG: org, GITHUB_TOKEN: ghToken, API_BASE: apiBase } = env;
   const gh = makeGitHub(ghToken, org);
@@ -60,14 +89,14 @@ export function registerProjectTools(
     dryRun({ env, subject: getUserContext().userId }, tool, active, plan, input);
 
   /** Require a valid session token; return it or the error response. */
-  function requireAuth(): { token: string } | Text {
-    const { token } = getUserContext();
+  function requireAuth(): { token: string; roles: string[] } | Text {
+    const { token, roles } = getUserContext();
     if (!token) return text("Error: authentication required. Authenticate the MCP connection or send a PAS session token.");
-    return { token };
+    return { token, roles: roles ?? [] };
   }
 
   /** Require auth + app ownership. Returns the token or an error response. */
-  async function requireOwner(appId: string): Promise<{ token: string } | Text> {
+  async function requireOwner(appId: string): Promise<{ token: string; roles: string[] } | Text> {
     const auth = requireAuth();
     if ('content' in auth) return auth;
     const { userId } = getUserContext();
@@ -83,6 +112,17 @@ export function registerProjectTools(
       return text(`Error: you don't own app "${appId}". Only the app owner can use project tools on it.`);
     }
     return auth;
+  }
+
+  async function ownsApp(appId: string, token: string): Promise<boolean> {
+    const { userId } = getUserContext();
+    const cacheKey = `${userId ?? token}:${appId}`;
+    const now = Date.now();
+    const cached = ownershipCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) return cached.ok;
+    const ok = await verifyAppOwnership(apiBase, token, appId);
+    ownershipCache.set(cacheKey, { ok, expiresAt: now + OWNERSHIP_CACHE_TTL_MS });
+    return ok;
   }
 
   /** Set R2 deploy credentials as GitHub Actions variables on a repo. */
@@ -104,21 +144,202 @@ export function registerProjectTools(
   }
 
   /** Call /v1/provision and format the step results. */
-  async function provision(appId: string, token: string): Promise<string> {
+  async function provisionDetailed(appId: string, token: string, opts?: { skipCompliance?: boolean }): Promise<{ ok: boolean; status: number; data: ProvisionResult; text: string }> {
     try {
       const res = await env.API.fetch(`${apiBase}/v1/provision`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ appId, skipCompliance: true, repoOwner: org, repoName: appId }),
+        body: JSON.stringify({
+          appId,
+          skipCompliance: opts?.skipCompliance ?? true,
+          repoOwner: org,
+          repoName: appId,
+        }),
       });
-      const data = (await res.json()) as { steps?: { name: string; status: string; detail: string }[] };
-      return (data.steps ?? [])
-        .map((s) => `${s.status === "ok" ? "+" : s.status === "skip" ? "~" : "!"} ${s.name}: ${s.detail}`)
-        .join("\n");
+      let data: ProvisionResult;
+      if (typeof res.text === "function") {
+        const raw = await res.text();
+        try {
+          data = raw ? JSON.parse(raw) as ProvisionResult : {};
+        } catch {
+          data = { error: raw || `HTTP ${res.status}` };
+        }
+      } else {
+        data = (await res.json()) as ProvisionResult;
+      }
+      if (!res.ok && !data.error) data.error = `HTTP ${res.status}`;
+      const body = formatSteps(data.steps);
+      return {
+        ok: res.ok && data.success !== false,
+        status: res.status,
+        data,
+        text: [
+          data.error ? `! error: ${data.error}` : "",
+          body,
+        ].filter(Boolean).join("\n"),
+      };
     } catch (e) {
-      return `! provision error: ${e instanceof Error ? e.message : 'unknown'}`;
+      return {
+        ok: false,
+        status: 0,
+        data: {},
+        text: `! provision error: ${e instanceof Error ? e.message : 'unknown'}`,
+      };
     }
   }
+
+  async function provision(appId: string, token: string): Promise<string> {
+    return (await provisionDetailed(appId, token)).text;
+  }
+
+  async function patchTemplatePlaceholders(appId: string): Promise<string[]> {
+    const files: { path: string; content: string }[] = [];
+    for (const filePath of TEMPLATE_PLACEHOLDER_FILES) {
+      const file = await gh.getFile(appId, filePath);
+      if (!file.ok || file.content === undefined) continue;
+      const patched = file.content.replaceAll("APPNAME", appId);
+      if (patched !== file.content) files.push({ path: filePath, content: patched });
+    }
+    if (files.length === 0) return ["~ Template placeholders: no APPNAME placeholders found"];
+    const res = await gh.pushFiles(appId, files, `chore: configure ${appId} template`, { initIfEmpty: false });
+    if (!res.ok) return [`! Template placeholders: ${res.error ?? "failed to commit replacements"}`];
+    return [`+ Template placeholders: replaced APPNAME in ${files.length} file(s)${res.commitSha ? ` (${res.commitSha.slice(0, 7)})` : ""}`];
+  }
+
+  async function verifyProvision(appId: string, provisionResult: ProvisionResult): Promise<string[]> {
+    const lines: string[] = [];
+    lines.push(await gh.repoExists(appId)
+      ? `+ Verify repo: https://github.com/${org}/${appId} exists`
+      : `! Verify repo: https://github.com/${org}/${appId} was not reachable`);
+
+    if (provisionResult.success === true) {
+      lines.push("+ Verify provision: backend reported success");
+    } else if (provisionResult.success === false) {
+      lines.push("! Verify provision: backend reported failure");
+    } else {
+      lines.push("~ Verify provision: backend did not return a success flag");
+    }
+
+    const runs = await gh.getDeployStatus(appId, 1).catch(() => ({ ok: false, status: 0, data: {} as unknown }));
+    if (runs.ok) {
+      const latest = ((runs.data as { workflow_runs?: { name: string; status: string; conclusion: string | null; updated_at: string }[] }).workflow_runs ?? [])[0];
+      if (latest) {
+        lines.push(`~ Verify deploy: ${latest.name} is ${latest.conclusion ?? latest.status} (${latest.updated_at})`);
+      } else {
+        lines.push("~ Verify deploy: no GitHub Actions run yet; first deploy may start after the template commit");
+      }
+    } else {
+      lines.push("~ Verify deploy: GitHub Actions status unavailable");
+    }
+
+    const appUrl = provisionResult.appUrl ?? `https://${appId}.proappstore.online`;
+    try {
+      const res = await env.HOST.fetch(appUrl, { method: "HEAD" });
+      lines.push(res.ok
+        ? `+ Verify host: ${appUrl} responds ${res.status}`
+        : `~ Verify host: ${appUrl} returned ${res.status}; deploy may still be pending`);
+    } catch (e) {
+      lines.push(`~ Verify host: ${e instanceof Error ? e.message : "unreachable"}; deploy may still be pending`);
+    }
+
+    return lines;
+  }
+
+  // ── provision_pas_app ──────────────────────────────────────
+  server.tool(
+    "provision_pas_app",
+    "Operator workflow: create or reuse a PAS app GitHub repo from template-app, configure deploy credentials/placeholders, provision platform infrastructure, and verify the result. Use publish_app separately when the app should appear in the public storefront.",
+    {
+      app_id: APP_ID,
+      name: z.string().describe("Display name for the app"),
+      description: z.string().describe("Short description for the GitHub repo"),
+      template_repo: z.string().optional().describe("Template repo name in the configured GitHub org. Defaults to template-app."),
+      private_repo: z.boolean().optional().describe("Create the GitHub repo as private. Defaults to true."),
+      reuse_existing_repo: z.boolean().optional().describe("Reuse an existing org repo when present. Defaults to true; existing unowned repos require a platform admin session."),
+      skip_compliance: z.boolean().optional().describe("Request backend compliance bypass. Only honored for platform admins; default false."),
+      verify: z.boolean().optional().describe("Run best-effort repo/deploy/host verification after provisioning. Defaults to true."),
+      confirm: CONFIRM,
+      dry_run: DRY_RUN,
+    },
+    async ({ app_id, name, description, template_repo, private_repo, reuse_existing_repo, skip_compliance, verify, confirm, dry_run }) => {
+      const auth = requireAuth();
+      if ('content' in auth) return auth;
+      const reuse = reuse_existing_repo !== false;
+      const preview = await dry(
+        "provision_pas_app",
+        dry_run,
+        [
+          `- create GitHub repo ${org}/${app_id} from ${org}/${template_repo ?? "template-app"} if it does not exist`,
+          reuse ? "- reuse an existing repo only when the caller already owns the PAS app or is a platform admin" : "- fail if the repo already exists",
+          "- configure R2 deploy variables on the repo",
+          "- replace APPNAME placeholders in template files",
+          "- call /v1/provision for R2 route + D1 database + data worker + app record",
+          verify === false ? "- skip live verification" : "- verify repo, provision result, deploy status, and host response",
+        ].join("\n"),
+        { app_id, name, template_repo: template_repo ?? "template-app" },
+      );
+      if (preview) return text(preview);
+      if (confirm !== true) {
+        return text(`Refused: provision_pas_app creates/reuses ${org}/${app_id} and provisions live PAS infrastructure. Re-call with confirm: true to proceed.`);
+      }
+      await gate("provision_pas_app", { app_id, name, template_repo: template_repo ?? "template-app" });
+
+      const steps: string[] = [];
+      let repoCreated = false;
+      const createRes = await gh.createRepoFromTemplate(app_id, {
+        template: template_repo ?? "template-app",
+        description,
+        private: private_repo ?? true,
+      });
+
+      if (createRes.ok) {
+        repoCreated = true;
+        steps.push(`+ GitHub repo: created ${org}/${app_id} from ${org}/${template_repo ?? "template-app"}`);
+        await new Promise((r) => setTimeout(r, 4000));
+      } else if (createRes.status === 422 && await gh.repoExists(app_id)) {
+        if (!reuse) {
+          return text(`Error: ${org}/${app_id} already exists and reuse_existing_repo is false.`);
+        }
+        const owned = await ownsApp(app_id, auth.token);
+        const isAdmin = auth.roles.includes("admin");
+        if (!owned && !isAdmin) {
+          return text(`Error: ${org}/${app_id} already exists, but "${app_id}" is not owned by this PAS account. Reusing an unowned existing repo requires a platform admin session.`);
+        }
+        steps.push(`~ GitHub repo: ${org}/${app_id} already exists`);
+      } else if (createRes.status === 404) {
+        return text(
+          `Error creating repo: GitHub returned 404 from the template-generate API. The source ` +
+          `template repo "${org}/${template_repo ?? "template-app"}" must exist and be marked as a GitHub template.`,
+        );
+      } else {
+        return text(`Error creating repo: ${JSON.stringify(createRes.data)}`);
+      }
+
+      const r2Errors = await setR2Variables(app_id);
+      steps.push(r2Errors.length === 0
+        ? "+ R2 deploy variables: configured"
+        : `! R2 deploy variables: ${r2Errors.join(", ")}`);
+
+      steps.push(...await patchTemplatePlaceholders(app_id));
+
+      const prov = await provisionDetailed(app_id, auth.token, { skipCompliance: skip_compliance ?? false });
+      if (prov.text) steps.push(prov.text);
+
+      if (verify !== false) {
+        steps.push(...await verifyProvision(app_id, prov.data));
+      }
+
+      return text([
+        `${prov.ok ? "PAS app provisioned" : "PAS app provisioning finished with issues"}: **${name}** (${app_id})`,
+        `Repo: https://github.com/${org}/${app_id}`,
+        `Live URL: ${prov.data.appUrl ?? `https://${app_id}.proappstore.online`}`,
+        `Data worker: ${prov.data.dataWorkerUrl ?? `https://data-${app_id}.proappstore.online`}`,
+        `Repo action: ${repoCreated ? "created" : "reused"}`,
+        "",
+        ...steps,
+      ].join("\n"));
+    },
+  );
 
   // ── scaffold_app ──────────────────────────────────────────
   server.tool(

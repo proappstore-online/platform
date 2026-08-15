@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.proappstore-online/proappstore",
   "title": "ProAppStore",
-  "description": "35 AI agent tools for building, managing, and querying Pro web apps. Create apps, scaffold from templates, manage Agent Teams projects, chat with PO/Architect agents, read SDK docs, get code recipes, run tests, and query app databases.",
+  "description": "AI agent tools for building, provisioning, managing, and querying Pro web apps. Create apps, provision repos and infrastructure, manage Agent Teams projects, chat with PO/Architect agents, read SDK docs, get code recipes, run tests, and query app databases.",
   "version": "1.0.0",
   "packages": [
     {
@@ -23,6 +23,7 @@
   "tools": [
     {"name": "sdk_reference", "description": "SDK reference for auth, db, storage, maps, AI, rooms, hooks, UI, recipes, design system"},
     {"name": "recipe", "description": "19 pre-built code recipes (CRUD, forms, modals, maps, AI chat, notifications)"},
+    {"name": "provision_pas_app", "description": "Create or reuse a PAS app repo from template, provision platform infrastructure, and verify status"},
     {"name": "scaffold_app", "description": "Create a new Pro app from template"},
     {"name": "create_app", "description": "Create an Agent Teams project (AI-powered build)"},
     {"name": "chat_agent", "description": "Chat with PO or Architect agent"},

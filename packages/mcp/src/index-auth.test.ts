@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Env } from './env.js';
 
+const verifyTokenMock = vi.hoisted(() => vi.fn());
+
 vi.mock('agents/mcp', () => ({
   McpAgent: class {
     static serve() {
@@ -15,6 +17,11 @@ vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => ({
   McpServer: class {},
 }));
 
+vi.mock('./api-helpers.js', () => ({
+  extractToken: (props: { authToken?: string }) => props.authToken ?? null,
+  verifyToken: verifyTokenMock,
+}));
+
 const { default: worker } = await import('./index.js');
 
 const env = {
@@ -26,6 +33,18 @@ const env = {
 const ctx = {} as ExecutionContext;
 
 describe('MCP transport auth', () => {
+  it('turns bearer verifier failures into a clean invalid-token challenge', async () => {
+    verifyTokenMock.mockRejectedValueOnce(new Error('verifier exploded'));
+
+    const res = await worker.fetch(new Request('https://mcp.proappstore.online/mcp', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer expired-or-bad-token' },
+    }), env, ctx);
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('WWW-Authenticate')).toContain('error="invalid_token"');
+  });
+
   it('challenges unauthenticated MCP transport requests', async () => {
     const res = await worker.fetch(new Request('https://mcp.proappstore.online/mcp'), env, ctx);
 

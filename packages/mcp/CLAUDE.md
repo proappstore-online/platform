@@ -6,7 +6,7 @@ Remote MCP server for AI agents to interact with the ProAppStore platform.
 - Dev: `npm install && npm run dev`
 - Deploy: `git push origin main` (auto-deploys via GitHub Actions)
 
-## Tools (37 static + dynamic per-app)
+## Tools (38 static + dynamic per-app)
 
 ### Platform tools (no auth required unless noted)
 
@@ -31,7 +31,8 @@ Tools marked **confirm** need `confirm: true` to execute; **dry_run** tools acce
 
 | Tool | Description |
 |------|-------------|
-| `scaffold_app` | Create a new PAS app from template (GitHub repo + CF Pages + D1 + DNS) — **confirm**, **dry_run** |
+| `provision_pas_app` | Operator workflow: create/reuse a PAS app GitHub repo from `template-app`, configure deploy variables, provision R2 route + D1 + data worker, and verify status — **confirm**, **dry_run** |
+| `scaffold_app` | Legacy create-from-template flow (GitHub repo + R2 route + D1 + data worker) — **confirm**, **dry_run** |
 | `write_file` | Create/overwrite a file in an app's repo (commits to main) |
 | `read_file` | Read a file from an app's repo |
 | `list_files` | List files in an app's repo |
@@ -115,12 +116,12 @@ from the reference is present:
   KV binding or an authenticated subject; reads aren't logged.
 - **Read-only mode** — set `MCP_READ_ONLY=1` (server-wide) to block every mutating
   tool (they throw, so a caller can't misreport success). Reads + dry-runs still work.
-- **confirm** — irreversible/public tools (`scaffold_app`, `delete_file`,
+- **confirm** — irreversible/public tools (`provision_pas_app`, `scaffold_app`, `delete_file`,
   `publish_app`) refuse unless called with `confirm: true`.
 - **dry_run** — expensive/irreversible tools accept `dry_run: true` to audit +
   return the plan they *would* execute and make no changes. A preview needs no
   `confirm` and is allowed even in read-only mode. Tools: `scaffold_app`,
-  `provision_app`, `publish_app`, `delete_file`, `deploy_project`,
+  `provision_pas_app`, `provision_app`, `publish_app`, `delete_file`, `deploy_project`,
   `delete_project_files`.
 - **Ownership** — project tools (`write_file`, `read_file`, `provision_app`,
   `publish_app`, …) call `requireOwner` (`verifyAppOwnership`, 60s-cached) so a

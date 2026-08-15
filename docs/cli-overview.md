@@ -120,6 +120,26 @@ instructions.
 
 Idempotent — re-running fills in only missing pieces.
 
+## MCP Provisioning
+
+The ProAppStore MCP server exposes the same first-time provisioning path for
+operator agents:
+
+```text
+provision_pas_app(app_id, name, description, confirm: true)
+```
+
+`provision_pas_app` creates or reuses `proappstore-online/<app-id>` from
+`template-app`, configures the repo for R2 deploys, replaces template
+placeholders, calls `/v1/provision` for the R2 route, D1 database, data worker,
+and app record, then reports verification status. Use `dry_run: true` first to
+preview the repo and infrastructure changes. Reusing an existing unowned org
+repo requires a platform admin session; normal users can safely provision fresh
+repos or apps they already own.
+
+Use MCP `publish_app` after provisioning only when the app should also appear in
+the public storefront registry.
+
 ## App Icons And Link Previews
 
 The source of truth for an app's browser icon, installed PWA icon, and shared
