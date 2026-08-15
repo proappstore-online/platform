@@ -57,12 +57,17 @@ const env = {
   API: svc,
   ADMIN: svc,
   HOST: svc,
+  INTERNAL_TOKEN: 'internal-secret',
   R2_ACCESS_KEY_ID: 'r2-ak',
   R2_SECRET_ACCESS_KEY: 'r2-sk',
   R2_ACCOUNT_ID: 'r2-acct',
 };
 
-let userCtx: { userId: string | null; token: string | null; roles?: string[] } = { userId: 'u1', token: 'tok-1' };
+let userCtx: { userId: string | null; login?: string | null; token: string | null; roles?: string[] } = {
+  userId: 'u1',
+  login: 'alice',
+  token: 'tok-1',
+};
 registerProjectTools(fakeServer as any, env, () => userCtx);
 
 function getText(result: { content: { type: string; text: string }[] }): string {
@@ -71,7 +76,7 @@ function getText(result: { content: { type: string; text: string }[] }): string 
 
 beforeEach(() => {
   vi.clearAllMocks();
-  userCtx = { userId: 'u1', token: 'tok-1' };
+  userCtx = { userId: 'u1', login: 'alice', token: 'tok-1' };
   mockOwnership.mockResolvedValue(true);
 });
 
@@ -557,7 +562,14 @@ describe('publish_app', () => {
     // Verify it called admin.test.com (hostname replaced from api.test.com)
     expect(mockFetch).toHaveBeenCalledWith(
       'https://admin.test.com/api/publish-app',
-      expect.objectContaining({ method: 'POST' }),
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'Content-Type': 'application/json',
+          'X-Internal-Token': 'internal-secret',
+          'X-PAS-Login': 'alice',
+        }),
+      }),
     );
   });
 

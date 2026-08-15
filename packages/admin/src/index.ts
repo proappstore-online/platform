@@ -33,9 +33,28 @@ function observeAccessEdge(request: Request, pathname: string): void {
   if (request.method === "GET" || pathname === "/health") return;
   if (request.headers.get("Cf-Access-Jwt-Assertion")) return;
   console.warn(
-    `[#83] ${pathname} reached without Cf-Access-Jwt-Assertion — `
-      + "Cloudflare Access does not appear to be in front of this worker",
+    `[#83] ${pathname} reached without Cf-Access-Jwt-Assertion — ` +
+      "Cloudflare Access does not appear to be in front of this worker",
   );
+}
+
+function safeGitHubLogin(login: string | null): string | null {
+  const trimmed = login?.trim();
+  if (!trimmed) return null;
+  // GitHub login rules: max 39 chars, alnum or single hyphens, no edge hyphen.
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(trimmed)) return null;
+  if (trimmed.includes("--")) return null;
+  return trimmed;
+}
+
+async function verifyPublishLogin(request: Request, env: Env): Promise<string | null> {
+  if (internalTokenOk(request.headers.get("X-Internal-Token"), env.INTERNAL_TOKEN)) {
+    return safeGitHubLogin(request.headers.get("X-PAS-Login"));
+  }
+
+  const authHeader = request.headers.get("Authorization");
+  if (!authHeader?.startsWith("Bearer ")) return null;
+  return verifySession(authHeader.slice(7), env.SESSION_SIGNING_KEY);
 }
 
 export default {
@@ -56,14 +75,10 @@ export default {
     }
 
     if (url.pathname === "/api/publish-app" && request.method === "POST") {
-      // HS256 Bearer session check. Without this, anyone reachable to
-      // admin.proappstore.online can provision repos in proappstore-online
-      // and mint CF resources. Add CF Access in front for defense-in-depth.
-      const authHeader = request.headers.get("Authorization");
-      if (!authHeader?.startsWith("Bearer ")) {
-        return Response.json({ error: "unauthorized" }, { status: 401 });
-      }
-      const login = await verifySession(authHeader.slice(7), env.SESSION_SIGNING_KEY);
+      // Authenticated publish. Public callers use an Admin/PAS Bearer session;
+      // sibling workers that have already authenticated and owner-gated the
+      // caller may use INTERNAL_TOKEN + X-PAS-Login.
+      const login = await verifyPublishLogin(request, env);
       if (!login) {
         return Response.json({ error: "invalid or expired session" }, { status: 401 });
       }
@@ -89,10 +104,7 @@ export default {
       // client-supplied creatorGithub. Otherwise any authenticated user could
       // POST {creatorGithub:"victim"} to forge app ownership in the registry AND
       // invite an arbitrary GitHub account as a push collaborator on the repo.
-      const result = await handlePublish(
-        { ...body, creatorGithub: login },
-        env,
-      );
+      const result = await handlePublish({ ...body, creatorGithub: login }, env);
       return Response.json(result, { status: result.success ? 200 : 422 });
     }
 
@@ -146,11 +158,7 @@ export default {
     // Cloudflare Workflow (per-step retry + persistence). Returns the instance
     // id immediately; poll status at /api/provision-workflow/status?id=.
     if (url.pathname === "/api/provision-workflow" && request.method === "POST") {
-      const authHeader = request.headers.get("Authorization");
-      if (!authHeader?.startsWith("Bearer ")) {
-        return Response.json({ error: "unauthorized" }, { status: 401 });
-      }
-      const login = await verifySession(authHeader.slice(7), env.SESSION_SIGNING_KEY);
+      const login = await verifyPublishLogin(request, env);
       if (!login) {
         return Response.json({ error: "invalid or expired session" }, { status: 401 });
       }
@@ -174,7 +182,8 @@ export default {
         return Response.json({ error: "forbidden" }, { status: 403 });
       }
       const body = await request.json<AgentDeployRequest>();
-      if (!body.id || !body.name) return Response.json({ error: "id and name required" }, { status: 400 });
+      if (!body.id || !body.name)
+        return Response.json({ error: "id and name required" }, { status: 400 });
       const instance = await env.PROVISION_WORKFLOW.create({
         params: {
           req: {

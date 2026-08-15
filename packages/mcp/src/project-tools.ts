@@ -25,6 +25,7 @@ interface ProjectToolsEnv {
   R2_ACCOUNT_ID?: string;
   OAUTH_KV?: KVNamespace;
   MCP_READ_ONLY?: string;
+  INTERNAL_TOKEN?: string;
 }
 
 const CONFIRM = z
@@ -74,7 +75,7 @@ const formatSteps = (steps: ProvisionStep[] = []) =>
 export function registerProjectTools(
   server: McpServer,
   env: ProjectToolsEnv,
-  getUserContext: () => { userId: string | null; token: string | null; roles?: string[] },
+  getUserContext: () => { userId: string | null; login?: string | null; token: string | null; roles?: string[] },
 ): void {
   const { GITHUB_ORG: org, GITHUB_TOKEN: ghToken, API_BASE: apiBase } = env;
   const gh = makeGitHub(ghToken, org);
@@ -89,14 +90,14 @@ export function registerProjectTools(
     dryRun({ env, subject: getUserContext().userId }, tool, active, plan, input);
 
   /** Require a valid session token; return it or the error response. */
-  function requireAuth(): { token: string; roles: string[] } | Text {
-    const { token, roles } = getUserContext();
+  function requireAuth(): { token: string; login: string | null; roles: string[] } | Text {
+    const { token, login, roles } = getUserContext();
     if (!token) return text("Error: authentication required. Authenticate the MCP connection or send a PAS session token.");
-    return { token, roles: roles ?? [] };
+    return { token, login: login ?? null, roles: roles ?? [] };
   }
 
   /** Require auth + app ownership. Returns the token or an error response. */
-  async function requireOwner(appId: string): Promise<{ token: string; roles: string[] } | Text> {
+  async function requireOwner(appId: string): Promise<{ token: string; login: string | null; roles: string[] } | Text> {
     const auth = requireAuth();
     if ('content' in auth) return auth;
     const { userId } = getUserContext();
@@ -590,7 +591,9 @@ export function registerProjectTools(
         return text(`Refused: publish_app lists "${app_id}" publicly on proappstore.online. Re-call with confirm: true to proceed.`);
       await gate("publish_app", { app_id, name, category });
 
-      // Call the admin Worker's publish endpoint — same path as `pas publish` CLI.
+      // Call the admin Worker's publish endpoint. MCP has already authenticated
+      // and ownership-gated the user, so prefer the internal sibling-worker
+      // path; fall back to Bearer only in environments without INTERNAL_TOKEN.
       // This provisions infra + adds to registry in one atomic flow.
       const adminBase = new URL(apiBase);
       adminBase.hostname = adminBase.hostname.replace(/^api\./, "admin.");
@@ -600,9 +603,16 @@ export function registerProjectTools(
         error?: string;
       };
       try {
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (env.INTERNAL_TOKEN && auth.login) {
+          headers["X-Internal-Token"] = env.INTERNAL_TOKEN;
+          headers["X-PAS-Login"] = auth.login;
+        } else {
+          headers.Authorization = `Bearer ${auth.token}`;
+        }
         const res = await env.ADMIN.fetch(`${adminBase.origin}/api/publish-app`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${auth.token}`, "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify({
             id: app_id,
             name,

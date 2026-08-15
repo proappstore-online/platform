@@ -21,6 +21,7 @@ export class PasMcpAgent extends McpAgent<Env> {
 
   // User context — set during init if a token is provided
   private userId: string | null = null;
+  private userLogin: string | null = null;
   private userToken: string | null = null;
   private userRoles: string[] = [];
 
@@ -35,6 +36,7 @@ export class PasMcpAgent extends McpAgent<Env> {
       const user = await verifyToken(this.env.SESSION_SIGNING_KEY, token);
       if (user) {
         this.userId = user.id;
+        this.userLogin = user.login;
         this.userToken = token;
         // Platform roles (global, always current in the session) power the
         // app-tool pre-flight role check in tool-loader.
@@ -50,6 +52,7 @@ export class PasMcpAgent extends McpAgent<Env> {
     // ── Project-building tools (for AI agent app creation) ─────
     registerProjectTools(this.server, this.env, () => ({
       userId: this.userId,
+      login: this.userLogin,
       token: this.userToken,
       roles: this.userRoles,
     }));
