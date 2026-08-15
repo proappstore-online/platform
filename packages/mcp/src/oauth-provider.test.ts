@@ -46,7 +46,7 @@ describe('handleOAuthRoute', () => {
     });
   });
 
-  it('sets an in-flight cookie on the first browser authorization page', async () => {
+  it('sets a nonce-binding cookie on the browser authorization page', async () => {
     const kv = makeKv({
       'client:client-1': JSON.stringify({
         redirect_uris: ['http://127.0.0.1:9876/callback'],
@@ -66,7 +66,7 @@ describe('handleOAuthRoute', () => {
 
     expect(res?.status).toBe(200);
     expect(res?.headers.get('Location')).toBeNull();
-    expect(res?.headers.get('Set-Cookie')).toContain('pas_mcp_oauth_inflight=1');
+    expect(res?.headers.get('Set-Cookie')).toContain('pas_mcp_oauth_nonce=');
     const html = await res!.text();
     expect(html).toContain('Connect ProAppStore MCP');
     expect(html).toContain('Codex wants to use ProAppStore MCP tools');
@@ -125,14 +125,14 @@ describe('handleOAuthRoute', () => {
     expect(res?.headers.get('Location')).toContain('response_mode=query');
   });
 
-  it('does not redirect duplicate browser authorization tabs to GitHub', async () => {
+  it('allows a fresh authorization even when another tab previously started one', async () => {
     const kv = makeKv({
       'client:client-1': JSON.stringify({ redirect_uris: ['http://127.0.0.1:9876/callback'] }),
     });
 
     const res = await handleOAuthRoute(
       new Request('https://mcp.proappstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=abc&code_challenge_method=S256', {
-        headers: { Cookie: 'pas_mcp_oauth_inflight=1' },
+        headers: { Cookie: 'pas_mcp_oauth_nonce=older-flow' },
       }),
       {
         issuer: 'https://mcp.proappstore.online',
@@ -144,7 +144,8 @@ describe('handleOAuthRoute', () => {
 
     expect(res?.status).toBe(200);
     expect(res?.headers.get('Location')).toBeNull();
-    await expect(res?.text()).resolves.toContain('already in progress');
+    await expect(res?.text()).resolves.toContain('Connect ProAppStore MCP');
+    expect(res?.headers.get('Set-Cookie')).toContain('pas_mcp_oauth_nonce=');
   });
 });
 
@@ -188,7 +189,9 @@ describe('oauth callback — one-time code (#110)', () => {
     const kv = makeKv({ 'authreq:n1': authReq });
 
     const res = await handleOAuthRoute(
-      new Request('https://mcp.proappstore.online/oauth/callback?nonce=n1&code=one-time'),
+      new Request('https://mcp.proappstore.online/oauth/callback?nonce=n1&code=one-time', {
+        headers: { Cookie: 'pas_mcp_oauth_nonce=n1' },
+      }),
       config(kv),
     );
 
@@ -204,7 +207,9 @@ describe('oauth callback — one-time code (#110)', () => {
     const session = await mintTestSession();
     const spy = stubExchange(() => Response.json({ token: session }));
     await handleOAuthRoute(
-      new Request('https://mcp.proappstore.online/oauth/callback?nonce=n1&code=one-time'),
+      new Request('https://mcp.proappstore.online/oauth/callback?nonce=n1&code=one-time', {
+        headers: { Cookie: 'pas_mcp_oauth_nonce=n1' },
+      }),
       config(makeKv({ 'authreq:n1': authReq })),
     );
     const init = spy.mock.calls[0]![1] as RequestInit;
@@ -215,16 +220,47 @@ describe('oauth callback — one-time code (#110)', () => {
   it('400s when the exchange is refused', async () => {
     stubExchange(() => new Response('nope', { status: 400 }));
     const res = await handleOAuthRoute(
-      new Request('https://mcp.proappstore.online/oauth/callback?nonce=n1&code=bad'),
+      new Request('https://mcp.proappstore.online/oauth/callback?nonce=n1&code=bad', {
+        headers: { Cookie: 'pas_mcp_oauth_nonce=n1' },
+      }),
       config(makeKv({ 'authreq:n1': authReq })),
     );
     expect(res?.status).toBe(400);
+    await expect(res?.text()).resolves.toBe('invalid or expired code');
+  });
+
+  it('accepts sessionToken from a compatible exchange response', async () => {
+    const session = await mintTestSession();
+    stubExchange(() => Response.json({ sessionToken: session }));
+    const res = await handleOAuthRoute(
+      new Request('https://mcp.proappstore.online/oauth/callback?nonce=n1&code=one-time', {
+        headers: { Cookie: 'pas_mcp_oauth_nonce=n1' },
+      }),
+      config(makeKv({ 'authreq:n1': authReq })),
+    );
+
+    expect(res?.status).toBe(302);
+  });
+
+  it('requires the nonce-binding browser cookie', async () => {
+    const session = await mintTestSession();
+    const spy = stubExchange(() => Response.json({ token: session }));
+    const res = await handleOAuthRoute(
+      new Request('https://mcp.proappstore.online/oauth/callback?nonce=n1&code=one-time'),
+      config(makeKv({ 'authreq:n1': authReq })),
+    );
+
+    expect(res?.status).toBe(400);
+    await expect(res?.text()).resolves.toBe('authorization flow not bound to this browser');
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('refuses a stale ?session= link now that the fallback is gone', async () => {
     const session = await mintTestSession();
     const res = await handleOAuthRoute(
-      new Request(`https://mcp.proappstore.online/oauth/callback?nonce=n1&session=${session}`),
+      new Request(`https://mcp.proappstore.online/oauth/callback?nonce=n1&session=${session}`, {
+        headers: { Cookie: 'pas_mcp_oauth_nonce=n1' },
+      }),
       config(makeKv({ 'authreq:n1': authReq })),
     );
     expect(res?.status).toBe(400);

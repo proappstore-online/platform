@@ -6,7 +6,7 @@
 
 import { verifySession } from "./session.js";
 
-const AUTH_IN_FLIGHT_COOKIE = "pas_mcp_oauth_inflight";
+const AUTH_NONCE_COOKIE = "pas_mcp_oauth_nonce";
 const AUTH_PROVIDERS = ["github", "google"] as const;
 type AuthProvider = typeof AUTH_PROVIDERS[number];
 
@@ -133,18 +133,6 @@ function cookieValue(request: Request, name: string): string | null {
   return null;
 }
 
-function authAlreadyInProgress(): Response {
-  return new Response(
-    "<!doctype html><title>ProAppStore sign-in</title><p>ProAppStore MCP sign-in is already in progress in another tab. Complete that sign-in, then return to your MCP client.</p>",
-    {
-      status: 200,
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-      },
-    },
-  );
-}
-
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (ch) => ({
     '&': '&amp;',
@@ -212,7 +200,7 @@ function authConfirmPage(config: OAuthConfig, nonce: string, clientName: string 
       status: 200,
       headers: {
         "Content-Type": "text/html; charset=utf-8",
-        "Set-Cookie": `${AUTH_IN_FLIGHT_COOKIE}=1; Max-Age=120; Path=/; Secure; HttpOnly; SameSite=Lax`,
+        "Set-Cookie": `${AUTH_NONCE_COOKIE}=${nonce}; Max-Age=600; Path=/; Secure; HttpOnly; SameSite=Lax`,
       },
     },
   );
@@ -277,10 +265,6 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
   if (codeChallengeMethod && codeChallengeMethod !== "S256") {
     return new Response("only S256 is supported", { status: 400 });
   }
-  if (cookieValue(request, AUTH_IN_FLIGHT_COOKIE)) {
-    return authAlreadyInProgress();
-  }
-
   // Verify client registration
   const clientRaw = await config.kv.get(`client:${clientId}`);
   if (!clientRaw) {
@@ -340,8 +324,13 @@ async function exchangeLoginCode(config: OAuthConfig, code: string): Promise<str
       body: JSON.stringify({ code }),
     });
     if (!response.ok) return null;
-    const body = (await response.json()) as { token?: unknown };
-    return typeof body.token === "string" && body.token ? body.token : null;
+    const body = (await response.json()) as {
+      token?: unknown;
+      session?: unknown;
+      sessionToken?: unknown;
+    };
+    const token = body.token ?? body.session ?? body.sessionToken;
+    return typeof token === "string" && token ? token : null;
   } catch {
     return null;
   }
@@ -350,6 +339,30 @@ async function exchangeLoginCode(config: OAuthConfig, code: string): Promise<str
 async function oauthCallback(request: Request, config: OAuthConfig): Promise<Response> {
   const url = new URL(request.url);
   const nonce = url.searchParams.get("nonce");
+  const codeParam = url.searchParams.get("code");
+
+  if (!nonce) {
+    return new Response("missing nonce", { status: 400 });
+  }
+  if (!codeParam) {
+    return new Response("missing code", { status: 400 });
+  }
+
+  // Browser binding: the nonce must match the cookie set at /authorize, proving
+  // this is the same browser that started the flow. This mirrors the working
+  // PAGS MCP flow and blocks login-CSRF / authorization-code injection.
+  const cookieNonce = cookieValue(request, AUTH_NONCE_COOKIE);
+  if (!cookieNonce || cookieNonce !== nonce) {
+    return new Response("authorization flow not bound to this browser", { status: 400 });
+  }
+
+  // Retrieve the auth request BEFORE redeeming the platform login code. If the
+  // nonce expired, do not burn the one-time code and turn the real problem into
+  // a misleading "missing session" error.
+  const reqRaw = await config.kv.get(`authreq:${nonce}`);
+  if (!reqRaw) {
+    return new Response("invalid or expired nonce", { status: 400 });
+  }
 
   // SECURITY (#110): prefer a one-time code redeemed server-to-server over a
   // session token in the query string. A query parameter — unlike the fragment
@@ -361,18 +374,12 @@ async function oauthCallback(request: Request, config: OAuthConfig): Promise<Res
   //
   // The `?session=` fallback is gone as of phase 3; a stale link carrying one
   // now fails rather than being honoured.
-  const codeParam = url.searchParams.get("code");
-  const session = codeParam ? await exchangeLoginCode(config, codeParam) : null;
-
-  if (!nonce || !session) {
-    return new Response("missing nonce or session", { status: 400 });
+  const session = await exchangeLoginCode(config, codeParam);
+  if (!session) {
+    return new Response("invalid or expired code", { status: 400 });
   }
 
-  // Retrieve and consume auth request (single-use)
-  const reqRaw = await config.kv.get(`authreq:${nonce}`);
-  if (!reqRaw) {
-    return new Response("invalid or expired nonce", { status: 400 });
-  }
+  // Consume auth request (single-use)
   await config.kv.delete(`authreq:${nonce}`);
 
   // Verify the session is valid
@@ -411,7 +418,7 @@ async function oauthCallback(request: Request, config: OAuthConfig): Promise<Res
     status: 302,
     headers: {
       Location: redirect.toString(),
-      "Set-Cookie": `${AUTH_IN_FLIGHT_COOKIE}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax`,
+      "Set-Cookie": `${AUTH_NONCE_COOKIE}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax`,
     },
   });
 }
