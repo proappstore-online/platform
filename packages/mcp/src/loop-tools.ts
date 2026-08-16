@@ -289,6 +289,44 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
     },
   );
 
+  // ── update_ticket ─────────────────────────────────────────
+  // #137: a ticket could be filed and read but never edited, so correcting one
+  // word meant filing a corrected ticket and cancelling the first — a dead card
+  // left on the board for a one-field fix.
+  server.tool(
+    "update_ticket",
+    "Edit an existing backlog ticket's wording: its title and/or its description and reasoning (`rawIdea` — the full statement of what to build/fix and why). Only the fields you pass change; omit one and it is left alone. Get the ticket's `id` from list_tickets or agent_board — it is the UUID, not the `#seq` shown on the card. This tool does NOT move a ticket between statuses: the pipeline owns that, and a status change has to go through the transition it validates.",
+    {
+      token: TOKEN,
+      slug: SLUG,
+      // Validated for the same reason as SLUG: this is interpolated into an
+      // internal API subrequest path. It also matches the DO's own route regex,
+      // so a malformed id is refused here with a usable message instead of
+      // falling through that route to an opaque 404.
+      id: z.string().regex(/^[a-f0-9-]+$/).describe("The ticket's UUID from list_tickets / agent_board (not the #seq)."),
+      title: z.string().optional().describe("Replacement short title. Omit to leave the current one alone."),
+      rawIdea: z.string().optional().describe("Replacement description and reasoning — the full statement of what to build/fix and why. Omit to leave the current one alone."),
+    },
+    async ({ token, slug, id, title, rawIdea }) => {
+      // Built from what was PASSED, not from what is non-empty: the DO patches
+      // on `!== undefined`, so an omitted field must not appear in the body at
+      // all or it would overwrite the stored value.
+      const patch: Record<string, string> = {};
+      if (title !== undefined) patch.title = title;
+      if (rawIdea !== undefined) patch.rawIdea = rawIdea;
+      if (Object.keys(patch).length === 0) {
+        return text("Nothing to update: pass `title`, `rawIdea`, or both. An empty edit would only move the ticket's updated_at.");
+      }
+
+      const r = await call(`/v1/projects/${slug}/tickets/${id}`, token, { method: "PATCH", body: patch });
+      if (!r.ok) return text(String(r.data));
+      // The PATCH answers with the ticket itself (the DO returns getTicket), not
+      // a `{ ticket }` envelope like create does.
+      const d = r.data as { seq?: number; title?: string };
+      return text(`Ticket #${d.seq ?? '?'} updated (${Object.keys(patch).join(', ')}): "${d.title ?? title ?? ''}"`);
+    },
+  );
+
   // ── Direct (agent-free) build ──────────────────────────────────
   // Write the project working tree yourself (any AI brain) instead of paying the
   // BYO-key agents, then deploy. Pairs with get_project_files. The DO requires the

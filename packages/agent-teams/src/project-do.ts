@@ -1434,6 +1434,18 @@ export class ProjectDO implements DurableObject {
     const body = (await request.json()) as Partial<Ticket>;
     const now = Date.now();
 
+    // Check the row exists BEFORE touching anything (#137). The RESPONSE was
+    // already right — `getTicket` at the bottom 404s on a miss — but an unknown
+    // id still ran an UPDATE that matched nothing and then broadcast
+    // `ticket-updated`, so every open board and panel handled a change to a card
+    // it could not find. Same pre-check `deleteTicket` already does, and it has
+    // to be a SELECT: `sql.exec` gives no changed-row count to test after the
+    // fact, and a broadcast cannot be taken back once sent.
+    const existing = this.state.storage.sql
+      .exec('SELECT id FROM tickets WHERE id = ?', id)
+      .toArray()[0] as { id: string } | undefined;
+    if (!existing) return json({ error: 'ticket_not_found' }, 404);
+
     const sets: string[] = ['updated_at = ?'];
     const vals: unknown[] = [now];
 
