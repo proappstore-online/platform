@@ -27,7 +27,9 @@ AUTH_PROVIDERS = "google"
 # Secrets set via `wrangler secret put`:
 #   SESSION_SIGNING_KEY
 #   GITHUB_TOKEN (org-level PAT for repo operations)
-#   INTERNAL_TOKEN (service-to-service auth for agents Worker)
+#   INTERNAL_TOKEN (service-to-service auth for the agents Worker, and for
+#     GET /v1/auth/me/account — the first-party gate behind whoami's email +
+#     sign-in provider, #136. Without it whoami still prints uid/login/roles.)
 #
 # Optional read-only mode — set to "1" to block every mutating MCP tool and
 # audit the denial. Leave unset for normal read/write operation.

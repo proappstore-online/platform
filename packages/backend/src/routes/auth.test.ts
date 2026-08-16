@@ -113,6 +113,118 @@ describe('GET /v1/auth/me (PAS-owned session verification)', () => {
   });
 });
 
+// #136: the MCP connector could not answer "which email is my account tied
+// to?". These cover the gate that keeps the answer away from creator JS, and
+// the three account shapes the two email columns encode (0021 / 0029 / 0042).
+describe('GET /v1/auth/me/account (#136 account details)', () => {
+  const INTERNAL = 'internal-token-for-tests';
+  const NOW = Date.UTC(2026, 7, 16);
+
+  // `null` means "not configured". Not `undefined` — passing that explicitly
+  // re-triggers the default parameter and would silently keep the token set.
+  const accountEnv = (
+    userRow: Record<string, unknown> | null,
+    internalToken: string | null = INTERNAL,
+  ) => ({
+    ...(env(userRow) as unknown as Record<string, unknown>),
+    INTERNAL_TOKEN: internalToken ?? undefined,
+  }) as never;
+
+  const oauthRow = {
+    provider: 'google', login: 'serge', email: 'serge@example.com',
+    credential_email: null, is_child: 0, created_at: NOW, last_login_at: NOW,
+  };
+
+  const get = (token: string | null, internalHeader: string | null, testEnv: never) =>
+    app.request('/v1/auth/me/account', {
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(internalHeader ? { 'X-Internal-Token': internalHeader } : {}),
+      },
+    }, testEnv);
+
+  it('503s when INTERNAL_TOKEN is not configured (fails closed, never open)', async () => {
+    const token = await mintSession({ uid: 'google:1', roles: ['user'] }, KEY);
+    const res = await get(token, INTERNAL, accountEnv(oauthRow, null));
+    expect(res.status).toBe(503);
+  });
+
+  // The point of the separate endpoint: a valid user session is NOT enough.
+  // Creator-controlled app JS holds one of these (#56) and must not get an email.
+  it('403s for a valid session with no internal token — the app-origin case', async () => {
+    const token = await mintSession({ uid: 'google:1', roles: ['user'] }, KEY);
+    const res = await get(token, null, accountEnv(oauthRow));
+    expect(res.status).toBe(403);
+    expect(await res.text()).not.toContain('serge@example.com');
+  });
+
+  it('403s on a wrong internal token', async () => {
+    const token = await mintSession({ uid: 'google:1', roles: ['user'] }, KEY);
+    const res = await get(token, 'not-the-token', accountEnv(oauthRow));
+    expect(res.status).toBe(403);
+  });
+
+  it('401s without a session, even from a first-party caller', async () => {
+    const res = await get(null, INTERNAL, accountEnv(oauthRow));
+    expect(res.status).toBe(401);
+  });
+
+  it('404s when the session has no user row', async () => {
+    const token = await mintSession({ uid: 'google:missing', roles: ['user'] }, KEY);
+    const res = await get(token, INTERNAL, accountEnv(null));
+    expect(res.status).toBe(404);
+  });
+
+  it('returns the provider-vouched email for an OAuth account', async () => {
+    const token = await mintSession({ uid: 'google:1', login: 'serge', roles: ['user'] }, KEY);
+    const res = await get(token, INTERNAL, accountEnv(oauthRow));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      id: 'google:1',
+      provider: 'google',
+      providerLabel: 'Google',
+      accountType: 'oauth',
+      email: 'serge@example.com',
+      emailVerified: true,
+      createdAt: '2026-08-16T00:00:00.000Z',
+    });
+  });
+
+  // 0042: credential_email is a sign-in identifier we never send to. It may be
+  // returned, but never as a verified address.
+  it('returns a provisioned adult’s credential_email as UNVERIFIED', async () => {
+    const token = await mintSession({ uid: 'cred:abc', login: 'coach', roles: ['user'] }, KEY);
+    const res = await get(token, INTERNAL, accountEnv({
+      provider: 'credential', login: 'coach', email: null,
+      credential_email: 'coach@example.com', is_child: 0, created_at: NOW, last_login_at: NOW,
+    }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      provider: 'credential',
+      providerLabel: 'Username + password',
+      accountType: 'credential',
+      email: 'coach@example.com',
+      emailVerified: false,
+    });
+  });
+
+  // 0029 makes "no email, no real name" the COPPA privacy feature. Provisioning
+  // rejects an email on an is_child account, so a row carrying one is already
+  // anomalous — the endpoint must still refuse to surface it.
+  it('never returns an address for a child account, even if the row has one', async () => {
+    const token = await mintSession({ uid: 'cred:kid', login: 'rabbit-bear-wolf', roles: ['user'] }, KEY);
+    const res = await get(token, INTERNAL, accountEnv({
+      provider: 'credential', login: 'rabbit-bear-wolf', email: 'leaked@example.com',
+      credential_email: 'also-leaked@example.com', is_child: 1, created_at: NOW, last_login_at: NOW,
+    }));
+    expect(res.status).toBe(200);
+    const body = await res.json() as { accountType: string; email: string | null; emailVerified: boolean };
+    expect(body.accountType).toBe('child');
+    expect(body.email).toBeNull();
+    expect(body.emailVerified).toBe(false);
+  });
+});
+
 describe('CORS for app custom domains', () => {
   const preflight = (origin: string, customDomains: CustomDomain[]) =>
     app.request(
