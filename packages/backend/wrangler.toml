@@ -25,9 +25,26 @@ command = "node scripts/embed-data-worker.mjs"
 [vars]
 # Public base URL of this API — used to build OAuth callback URLs (routes/auth.ts).
 APP_BASE = "https://api.proappstore.online"
-# PAS GitHub OAuth App client id must be configured as a Worker secret together
-# with GITHUB_CLIENT_SECRET. Do not commit a fallback client id: the previous
-# value pointed at FreeAppStore, which made PAS auth depend on the wrong store.
+# PAS GitHub OAuth App client id. PUBLIC by design — it is sent to the browser in
+# the authorize URL on every sign-in — so it lives here in git, NOT as a secret.
+#
+# Do not "clean this up" into a Worker secret (#141). It was one from 2026-08-16
+# 07:50 to 08:5x on the premise that this value pointed at FreeAppStore. It does
+# not: FAS's app was Ov23liuUpYPXc1ikEFm2, a different id that only ever lived in
+# packages/cli and was removed in 4a17839. This one is PAS's own, verified in #61.
+# Because it was a var and not a secret, deleting it here deleted it from the live
+# Worker on the next deploy (wrangler replaces the whole vars set; secrets survive)
+# and every GitHub sign-in 503'd — routes/auth.ts:322 gates on the client id alone.
+# Nothing in .github/workflows/ syncs it, so a redeploy could not heal it either.
+# In git, a redeploy always restores it and the value is reviewable in the diff.
+#
+# Only the secret half is a secret: GITHUB_CLIENT_SECRET, set with
+# `wrangler secret put` on proappstore-api (rotated 2026-07-16 under #61).
+# Asymmetry worth knowing before you tidy anything here: GOOGLE_CLIENT_ID is a
+# *secret* on this Worker rather than a var, which is the only reason Google
+# sign-in survived that deploy untouched. That inconsistency is deliberate-by-
+# accident and is being left as-is; it is not a licence to move this one.
+GITHUB_CLIENT_ID = "Ov23ctEs8trbfizdBGfQ"
 CF_ACCOUNT_ID = "c1089bfcc43c1c6c2aa89e584e86f0bc"
 VAPID_PUBLIC_KEY = "BPg6E92QAOhdcif_HckOEGY6mL03VKWNQ3CS1xQX5q59fXURI1xCGwwBr4Vsv7gn3TXIGSJquJwvHGYRbMcAQc0"
 # Comma-separated `gh:<id>` strings allowed to approve/reject submissions.
@@ -104,10 +121,13 @@ service = "proappstore-api"
 #                                    and the Console hides the Upgrade button)
 #   SESSION_SIGNING_KEY             (signs PAS session JWTs — routes/auth.ts)
 #   VAPID_PRIVATE_KEY               (for Web Push notifications)
-#   GITHUB_CLIENT_ID                (PAS GitHub OAuth app — enables browser sign-in;
-#   GITHUB_CLIENT_SECRET             callback: https://api.proappstore.online/v1/auth/github/callback)
+#   GITHUB_CLIENT_SECRET            (PAS GitHub OAuth app — enables browser sign-in;
+#                                    callback: https://api.proappstore.online/v1/auth/github/callback.
+#                                    The client ID is NOT a secret — it is a [vars]
+#                                    entry above. See #141.)
 #   GOOGLE_CLIENT_ID                (shared Google OAuth client — add the same
-#   GOOGLE_CLIENT_SECRET             callback as an authorized redirect URI)
+#   GOOGLE_CLIENT_SECRET             callback as an authorized redirect URI. Both
+#                                    halves are secrets here, unlike GitHub's.)
 #   APP_SECRET_KEK                  (32-byte base64 key for envelope encryption
 #                                    of app proxy secrets; without this, proxy/
 #                                    secrets/allowlist endpoints return 503)

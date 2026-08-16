@@ -20,9 +20,16 @@ API_BASE = "https://api.proappstore.online"
 AGENTS_BASE = "https://agents.proappstore.online"
 GITHUB_ORG = "proappstore-online"
 AUTH_START = "https://api.proappstore.online/v1/auth/github/start"
-# GitHub is intentionally disabled until PAS has its own GitHub OAuth app
-# configured on the API Worker. Do not point PAS at the FreeAppStore OAuth app.
-AUTH_PROVIDERS = "google"
+# Which providers the MCP login page offers, in order — the first one gets
+# autofocus (oauth-provider.ts:180-184), so GitHub is the primary button.
+# This is the single source of truth: continueAuthorize 400s an unlisted provider
+# rather than silently defaulting (oauth-provider.ts:302-310). Keep that.
+#
+# GitHub was disabled here on 2026-08-16 (d584a45) because the API Worker's
+# GITHUB_CLIENT_ID had just been deleted and the button led to a 503. PAS has
+# always had its own GitHub OAuth app (#61) — the id is restored in
+# packages/backend/wrangler.toml, so the button works again. See #141.
+AUTH_PROVIDERS = "github,google"
 
 # Secrets set via `wrangler secret put`:
 #   SESSION_SIGNING_KEY
