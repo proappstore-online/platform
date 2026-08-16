@@ -2,7 +2,7 @@ import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Env } from "./env.js";
-import { extractToken, verifyToken } from "./api-helpers.js";
+import { extractToken, fetchAccount, verifyToken } from "./api-helpers.js";
 import { verifySession } from "./session.js";
 import { listAuditEvents } from "./safety.js";
 import { registerPlatformTools } from "./platform-tools.js";
@@ -106,7 +106,7 @@ export class PasMcpAgent extends McpAgent<Env> {
     // ── Identity: whoami ───────────────────────────────────────
     this.server.tool(
       "whoami",
-      "Show the identity this MCP connection is authenticated as — PAS user id, login, platform roles, per-app roles, and token expiry. Use to confirm which account you're acting as before running owner-scoped tools.",
+      "Show the account this MCP connection is authenticated as — PAS user id, login, email address, sign-in provider, platform roles, and token expiry. Use to confirm which account you're acting as before running owner-scoped tools, or to answer which email the account is tied to.",
       {},
       async () => {
         if (!this.userToken || !this.env.SESSION_SIGNING_KEY) {
@@ -122,13 +122,44 @@ export class PasMcpAgent extends McpAgent<Env> {
         // app roles now live only in the `app_roles` table, read at the point of
         // use so a revocation takes effect immediately. tool-loader.ts already
         // declined to enforce them here for the same staleness reason.
+        //
+        // #136: email and provider are NOT in the session token — SessionClaims
+        // is uid/login/avatarUrl/roles by design — so they need the API. The
+        // call is best-effort: a failure costs the two extra lines, not whoami.
+        const account = await fetchAccount(
+          this.env.API,
+          this.env.API_BASE,
+          this.userToken,
+          this.env.INTERNAL_TOKEN,
+        );
+
         const lines = [
           "Authenticated as:",
-          `  uid:     ${payload.uid}`,
-          ...(login ? [`  login:   ${login}`] : []),
-          `  roles:   ${(payload.roles ?? []).join(", ") || "(none)"}`,
-          `  expires: ${new Date(payload.exp * 1000).toISOString()}`,
+          `  uid:       ${payload.uid}`,
+          ...(login ? [`  login:     ${login}`] : []),
         ];
+        if (account) {
+          lines.push(`  provider:  ${account.providerLabel}`);
+          if (account.email) {
+            // A credential_email is a sign-in identifier we never send to, so it
+            // must not be presented as a confirmed contact address (0042).
+            lines.push(`  email:     ${account.email}${account.emailVerified ? "" : "  (unverified — a sign-in identifier, not a confirmed address)"}`);
+          } else if (account.accountType === "child") {
+            lines.push("  email:     (none — child accounts never store an address)");
+          } else {
+            lines.push("  email:     (none on file)");
+          }
+        }
+        lines.push(
+          `  roles:     ${(payload.roles ?? []).join(", ") || "(none)"}`,
+          `  expires:   ${new Date(payload.exp * 1000).toISOString()}`,
+        );
+        if (!account) {
+          lines.push(
+            "",
+            "Email and sign-in provider are unavailable — the connector could not reach the account endpoint. The identity above is read from the session token itself.",
+          );
+        }
         return { content: [{ type: "text" as const, text: lines.join("\n") }] };
       },
     );
@@ -170,7 +201,7 @@ export default {
     if (url.pathname === "/" || url.pathname === "") {
       if (isProtocolClient(request)) return wrongEndpoint();
       return new Response(
-        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools, recipe\nProject tools: provision_pas_app, scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running, set_project_budget, run_tests, set_model, add_ticket\nAgent introspection: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\nIdentity: whoami (show the authenticated PAS account + roles).\nSafety: mcp_audit_log (per-account audit trail). Mutating tools are audited; destructive tools (provision_pas_app, scaffold_app, delete_file, publish_app) require confirm: true; expensive/irreversible tools accept dry_run: true to preview; set MCP_READ_ONLY=1 to block all writes.\n",
+        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools, recipe\nProject tools: provision_pas_app, scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running, set_project_budget, run_tests, set_model, add_ticket\nAgent introspection: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\nIdentity: whoami (show the authenticated PAS account — uid, login, email, sign-in provider, roles).\nSafety: mcp_audit_log (per-account audit trail). Mutating tools are audited; destructive tools (provision_pas_app, scaffold_app, delete_file, publish_app) require confirm: true; expensive/irreversible tools accept dry_run: true to preview; set MCP_READ_ONLY=1 to block all writes.\n",
         { headers: { "content-type": "text/plain" } }
       );
     }

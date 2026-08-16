@@ -12,7 +12,7 @@ Remote MCP server for AI agents to interact with the ProAppStore platform.
 
 | Tool | Auth | Description |
 |------|------|-------------|
-| `whoami` | Connection | Show the authenticated PAS account — uid, login, platform roles, per-app roles, token expiry. Confirms which identity owner-scoped tools run as |
+| `whoami` | Connection | Show the authenticated PAS account — uid, login, email, sign-in provider, platform roles, token expiry. Confirms which identity owner-scoped tools run as, and answers which email the account is tied to (#136). Email/provider come from `GET /v1/auth/me/account`, which requires INTERNAL_TOKEN as well as the session; without that secret whoami still prints the token-derived identity |
 | `list_apps` | Session token | List your published Pro apps |
 | `deploy_status` | None | Check GitHub Actions deploy status |
 | `schema_status` | Session token | Show an app's D1 migration status (#33) — recent migrate attempts + whether the latest applied or FAILED (surfaces schema drift). Owner-only |

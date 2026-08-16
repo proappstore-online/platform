@@ -15,7 +15,7 @@
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { Hono } from 'hono';
 import { setCookie, getCookie, deleteCookie } from 'hono/cookie';
-import { mintSession, verifySession, type NewSession, type SessionClaims } from '@proappstore/build-core';
+import { internalTokenOk, mintSession, verifySession, type NewSession, type SessionClaims } from '@proappstore/build-core';
 import type { Context } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError } from '../lib/auth.js';
@@ -449,6 +449,101 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
 authRoutes.get('/auth/me', async (c) => {
   const claims = await requireClaims(c);
   return c.json(await authUserDto(c.env, claims));
+});
+
+// ── GET /v1/auth/me/account ────────────────────────────────
+/** Human-readable name for the sign-in method, so callers need not parse the uid prefix. */
+const PROVIDER_LABELS: Record<string, string> = {
+  github: 'GitHub',
+  google: 'Google',
+  credential: 'Username + password',
+};
+
+/**
+ * The signed-in user's own account details — email, sign-in provider, account
+ * type (#136). Over the MCP connector there was no way to answer "which email
+ * is my account tied to?", because the session JWT carries only uid/login/
+ * avatarUrl/roles and no endpoint exposed the address.
+ *
+ * SEPARATE from `/v1/auth/me` deliberately, and the separation is the whole
+ * point. That endpoint's response shape is the SDK's `User` contract, handed to
+ * every app's client JS — and per #56 an app origin is exactly where that JS is
+ * creator-controlled. Adding `email` there would give every creator the address
+ * of every user who signs into their app. Putting it on a second URL with no
+ * extra gate would leak identically, so this route requires TWO credentials
+ * answering different questions:
+ *
+ *   * `Authorization: Bearer <session>` — WHO the caller is. The row returned is
+ *     always that user's own; there is no lookup-by-id parameter to abuse.
+ *   * `X-Internal-Token` — that the caller is a first-party PAS Worker (the MCP
+ *     server, over its service binding). Creator app JS holds a user session but
+ *     not the shared worker secret, so it cannot reach this at all.
+ *
+ * Role-gating was the obvious alternative and does not work: MCP's OAuth
+ * callback is `mcp.proappstore.online`, which `isFirstPartyHost` does not list,
+ * so an MCP session is de-privileged to plain `['user']` by #56 — requiring
+ * `creator` would lock out the only caller this exists for.
+ *
+ * Fails CLOSED: with no INTERNAL_TOKEN configured the gate cannot be enforced,
+ * so the route reports itself unavailable rather than serving addresses openly.
+ */
+authRoutes.get('/auth/me/account', async (c) => {
+  if (!c.env.INTERNAL_TOKEN) {
+    return c.json({ error: 'account details are not configured (missing INTERNAL_TOKEN)' }, 503);
+  }
+  if (!internalTokenOk(c.req.header('X-Internal-Token'), c.env.INTERNAL_TOKEN)) {
+    throw new HttpError('account details require a first-party caller', 403);
+  }
+  const claims = await requireClaims(c);
+
+  const row = await c.env.DB.prepare(
+    `SELECT provider, login, email, credential_email, is_child, created_at, last_login_at
+     FROM users WHERE id = ?`,
+  )
+    .bind(claims.uid)
+    .first<{
+      provider: string;
+      login: string | null;
+      email: string | null;
+      credential_email: string | null;
+      is_child: number | null;
+      created_at: number | null;
+      last_login_at: number | null;
+    }>();
+  if (!row) throw new HttpError('account not found', 404);
+
+  const isChild = row.is_child === 1;
+  const accountType = row.provider === 'credential'
+    ? (isChild ? 'child' : 'credential')
+    : 'oauth';
+
+  // Three shapes, and the two email columns are NOT interchangeable (0042):
+  //   * oauth      — `users.email`, an identity provider vouched for it.
+  //   * credential — `credential_email`, a self-declared second sign-in
+  //                  identifier we never send to, so it is reported unverified.
+  //   * child      — no address at all. 0029 makes "no email, no real name" the
+  //                  COPPA privacy feature and provisioning rejects an email on
+  //                  an is_child account; surfacing one here would undo that.
+  const email = accountType === 'oauth'
+    ? row.email
+    : accountType === 'credential'
+      ? row.credential_email
+      : null;
+
+  return c.json({
+    id: claims.uid,
+    login: claims.login ?? row.login ?? claims.uid,
+    provider: row.provider,
+    providerLabel: PROVIDER_LABELS[row.provider] ?? row.provider,
+    accountType,
+    email: email ?? null,
+    // Only an IdP-vouched address is verified. A credential_email is never sent
+    // to, so callers must not present it as a confirmed contact address.
+    emailVerified: accountType === 'oauth' && Boolean(email),
+    roles: claims.roles,
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+    lastLoginAt: row.last_login_at ? new Date(row.last_login_at).toISOString() : null,
+  });
 });
 
 // ── PATCH /v1/auth/me/date-of-birth ────────────────────────

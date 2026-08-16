@@ -38,6 +38,47 @@ export async function pasApi(api: Fetcher, apiBase: string, path: string, token?
   return await res.json();
 }
 
+/** The signed-in user's account details, as returned by `/v1/auth/me/account` (#136). */
+export interface AccountDetails {
+  provider: string;
+  providerLabel: string;
+  accountType: "oauth" | "credential" | "child";
+  email: string | null;
+  emailVerified: boolean;
+  createdAt: string | null;
+  lastLoginAt: string | null;
+}
+
+/**
+ * Fetch the connected user's email / sign-in provider / account type (#136).
+ *
+ * Sends BOTH credentials the backend route demands: the user's session token
+ * (who they are) and INTERNAL_TOKEN (that this is a first-party Worker). The
+ * route is gated on the latter precisely so creator-controlled app JS — which
+ * holds a user session but not the shared worker secret — cannot read addresses.
+ *
+ * Returns null on ANY failure, including an unset INTERNAL_TOKEN, so `whoami`
+ * degrades to the identity it can always derive from the session token itself
+ * rather than breaking when the secret is not deployed.
+ */
+export async function fetchAccount(
+  api: Fetcher,
+  apiBase: string,
+  token: string,
+  internalToken: string | undefined,
+): Promise<AccountDetails | null> {
+  if (!internalToken) return null;
+  try {
+    const res = await api.fetch(`${apiBase}/v1/auth/me/account`, {
+      headers: { Authorization: `Bearer ${token}`, "X-Internal-Token": internalToken },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as AccountDetails;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Extract session token from the MCP transport's initial request headers.
  * The agent passes `Authorization: Bearer <token>` when connecting.
