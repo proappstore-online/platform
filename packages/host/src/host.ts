@@ -239,6 +239,9 @@ export function isUpdateSensitivePath(pathname: string): boolean {
     name === "registersw.js" ||
     name === "manifest.json" ||
     name === "manifest.webmanifest" ||
+    name === "api-docs.html" ||
+    name === "openapi.json" ||
+    name === "openapi.yaml" ||
     name === "favicon.ico" ||
     name === "favicon.svg" ||
     name === "apple-touch-icon.png" ||

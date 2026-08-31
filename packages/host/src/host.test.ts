@@ -258,6 +258,12 @@ describe("isUpdateSensitivePath", () => {
     expect(isUpdateSensitivePath("apps/interns/.buildinfo.json")).toBe(true);
   });
 
+  it("marks app API documentation as update-sensitive", () => {
+    expect(isUpdateSensitivePath("/api-docs.html")).toBe(true);
+    expect(isUpdateSensitivePath("/openapi.json")).toBe(true);
+    expect(isUpdateSensitivePath("/openapi.yaml")).toBe(true);
+  });
+
   it("does not mark hashed assets as update-sensitive", () => {
     expect(isUpdateSensitivePath("/assets/index-B8lC6GEu.js")).toBe(false);
   });
