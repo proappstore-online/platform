@@ -14,13 +14,18 @@ export const toolsRoutes = new Hono<{ Bindings: Env }>();
 const ALLOWED_PREFIXES = ['SELECT', 'INSERT', 'UPDATE', 'DELETE'];
 const FORBIDDEN_KEYWORDS = ['CREATE', 'DROP', 'ALTER', 'PRAGMA', 'ATTACH', 'DETACH', 'VACUUM', 'REINDEX'];
 
+function isSelectLike(upperSql: string): boolean {
+  return upperSql.startsWith('SELECT') || /^WITH\b[\s\S]+\)\s*SELECT\b/.test(upperSql);
+}
+
 function validateSql(sql: string, operation: string): string | null {
   const trimmed = sql.trim();
   const upper = trimmed.toUpperCase();
 
   // Must start with an allowed prefix
-  if (!ALLOWED_PREFIXES.some(p => upper.startsWith(p))) {
-    return `SQL must start with ${ALLOWED_PREFIXES.join(', ')}`;
+  const allowedPrefixes = operation === 'query' ? [...ALLOWED_PREFIXES, 'WITH'] : ALLOWED_PREFIXES;
+  if (!allowedPrefixes.some(p => upper.startsWith(p))) {
+    return `SQL must start with ${allowedPrefixes.join(', ')}`;
   }
 
   // No semicolons (prevent multi-statement)
@@ -42,10 +47,10 @@ function validateSql(sql: string, operation: string): string | null {
   }
 
   // operation match
-  if (operation === 'query' && !upper.startsWith('SELECT')) {
+  if (operation === 'query' && !isSelectLike(upper)) {
     return 'operation "query" must use SELECT';
   }
-  if (operation === 'execute' && upper.startsWith('SELECT')) {
+  if (operation === 'execute' && isSelectLike(upper)) {
     return 'operation "execute" must not use SELECT (use "query" instead)';
   }
 

@@ -66,6 +66,26 @@ describe('PUT /v1/apps/:appId/tools', () => {
     expect(db.batch).toHaveBeenCalledTimes(1);
   });
 
+  it('registers query tools that use a read CTE', async () => {
+    const ownerStmt = mockStmt({ first: { creator_id: 'gh:1' } });
+    const db = mockD1(ownerStmt);
+    const res = await app.request(
+      '/v1/apps/test-app/tools',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tools: [{
+            ...validTool,
+            sql: 'WITH current_org AS (SELECT :org_id AS org_id) SELECT * FROM items LIMIT :limit',
+          }],
+        }),
+      },
+      makeEnv({}, db),
+    );
+    expect(res.status).toBe(200);
+  });
+
   it('rejects DDL in SQL', async () => {
     const ownerStmt = mockStmt({ first: { creator_id: 'gh:1' } });
     const db = mockD1(ownerStmt);
