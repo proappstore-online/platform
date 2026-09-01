@@ -78,6 +78,10 @@ describe('PUT /v1/apps/:appId/tools', () => {
           tools: [{
             ...validTool,
             sql: 'WITH current_org AS (SELECT :org_id AS org_id) SELECT * FROM items LIMIT :limit',
+            params: {
+              ...validTool.params,
+              org_id: { type: 'string', optional: true },
+            },
           }],
         }),
       },
