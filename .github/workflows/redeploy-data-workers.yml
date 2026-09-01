@@ -14,6 +14,10 @@ on:
         description: 'Single app id to redeploy (blank = whole fleet)'
         required: false
         default: ''
+      creator_id:
+        description: 'Creator user id for bootstrapping a missing single app, e.g. gh:123'
+        required: false
+        default: ''
 
 concurrency:
   group: redeploy-data-workers
@@ -36,12 +40,20 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           ONE_APP: ${{ github.event.inputs.app_id }}
+          CREATOR_ID: ${{ github.event.inputs.creator_id }}
         working-directory: packages/backend
         run: |
           if [ -n "$ONE_APP" ]; then
             # creator_id looked up so the upsert preserves it
             ROW=$(pnpm exec wrangler d1 execute pas --remote --json \
               --command "SELECT id, creator_id FROM apps WHERE id='$ONE_APP'")
+            if [ "$(echo "$ROW" | jq '.[0].results | length')" = "0" ]; then
+              if [ -z "$CREATOR_ID" ]; then
+                echo "::error::app '$ONE_APP' is not in apps; rerun with creator_id to bootstrap it"
+                exit 1
+              fi
+              ROW=$(jq -cn --arg id "$ONE_APP" --arg creator_id "$CREATOR_ID" '[{results:[{id:$id, creator_id:$creator_id}]}]')
+            fi
           else
             ROW=$(pnpm exec wrangler d1 execute pas --remote --json \
               --command "SELECT id, creator_id FROM apps ORDER BY id")
