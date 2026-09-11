@@ -1,13 +1,19 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from './env.js';
 
 const verifyTokenMock = vi.hoisted(() => vi.fn());
+const servedMock = vi.hoisted(() => ({
+  calls: [] as Array<{ path: string; url: string; props: Record<string, unknown> | undefined }>,
+}));
 
 vi.mock('agents/mcp', () => ({
   McpAgent: class {
-    static serve() {
+    static serve(path: string) {
       return {
-        fetch: () => new Response('mock mcp transport'),
+        fetch: (request: Request, _env: Env, ctx: ExecutionContext & { props?: Record<string, unknown> }) => {
+          servedMock.calls.push({ path, url: request.url, props: ctx.props });
+          return new Response('mock mcp transport');
+        },
       };
     }
   },
@@ -33,6 +39,12 @@ const env = {
 const ctx = {} as ExecutionContext;
 
 describe('MCP transport auth', () => {
+  afterEach(() => {
+    verifyTokenMock.mockReset();
+    servedMock.calls.length = 0;
+    delete (ctx as ExecutionContext & { props?: Record<string, unknown> }).props;
+  });
+
   it('turns bearer verifier failures into a clean invalid-token challenge', async () => {
     verifyTokenMock.mockRejectedValueOnce(new Error('verifier exploded'));
 
@@ -59,5 +71,31 @@ describe('MCP transport auth', () => {
 
     expect(res.status).toBe(200);
     await expect(res.text()).resolves.toContain('ProAppStore MCP Server');
+  });
+
+  it('routes app-scoped MCP URLs through the shared transport with appScope props', async () => {
+    verifyTokenMock.mockResolvedValueOnce({ id: 'user-1', login: 'serge' });
+
+    const res = await worker.fetch(new Request('https://mcp.proappstore.online/mcp/apps/crm', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer good-token' },
+    }), env, ctx);
+
+    expect(res.status).toBe(200);
+    expect(servedMock.calls).toEqual([{
+      path: '/mcp',
+      url: 'https://mcp.proappstore.online/mcp',
+      props: { authToken: 'good-token', appScope: 'crm' },
+    }]);
+  });
+
+  it('rejects invalid app-scoped MCP URLs before transport dispatch', async () => {
+    const res = await worker.fetch(new Request('https://mcp.proappstore.online/mcp/apps/CRM!', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer good-token' },
+    }), env, ctx);
+
+    expect(res.status).toBe(400);
+    expect(servedMock.calls).toEqual([]);
   });
 });

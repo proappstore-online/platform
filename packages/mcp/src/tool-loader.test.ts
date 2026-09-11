@@ -34,6 +34,39 @@ describe('fetchTools', () => {
     expect(globalThis.fetch).toHaveBeenCalledWith('https://api.proappstore.online/v1/tools');
   });
 
+  it('fetches and stamps tools for one app when appId is provided', async () => {
+    const tools = [
+      { name: 'list_companies', description: 'List companies', operation: 'query', sql: 'SELECT 1', params: {} },
+    ];
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ tools }), { status: 200 }),
+    );
+
+    const result = await fetchTools(api, 'https://api.proappstore.online', 'crm');
+
+    expect(result).toEqual([expect.objectContaining({ app_id: 'crm', name: 'list_companies' })]);
+    expect(globalThis.fetch).toHaveBeenCalledWith('https://api.proappstore.online/v1/apps/crm/tools');
+  });
+
+  it('keeps app-scoped tool caches separate from the shared cache', async () => {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        tools: [{ app_id: 'a', name: 'x', description: '', operation: 'query', sql: 'SELECT 1', params: {} }],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        tools: [{ name: 'y', description: '', operation: 'query', sql: 'SELECT 1', params: {} }],
+      }), { status: 200 }));
+
+    await fetchTools(api, 'https://api.test');
+    await fetchTools(api, 'https://api.test', 'crm');
+    await fetchTools(api, 'https://api.test');
+    await fetchTools(api, 'https://api.test', 'crm');
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(1, 'https://api.test/v1/tools');
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(2, 'https://api.test/v1/apps/crm/tools');
+  });
+
   it('caches results for 60 seconds', async () => {
     const tools = [{ app_id: 'a', name: 'x', description: '', operation: 'query', sql: 'SELECT 1', params: {} }];
     globalThis.fetch = vi.fn().mockResolvedValue(

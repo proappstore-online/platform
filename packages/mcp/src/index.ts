@@ -34,6 +34,7 @@ export class PasMcpAgent extends McpAgent<Env> {
   private userLogin: string | null = null;
   private userToken: string | null = null;
   private userRoles: string[] = [];
+  private appScope: string | null = null;
 
   async init() {
     // Connection-level auth: the `fetch` handler below copies the request's
@@ -42,6 +43,7 @@ export class PasMcpAgent extends McpAgent<Env> {
     // now see the user. (The agent-teams loop tools also accept an explicit
     // `token` arg, so they work even without this.)
     const token = extractToken(this.props as Record<string, unknown>);
+    this.appScope = extractAppScope(this.props as Record<string, unknown>);
     if (token && this.env.SESSION_SIGNING_KEY) {
       const user = await verifyToken(this.env.SESSION_SIGNING_KEY, token);
       if (user) {
@@ -55,41 +57,43 @@ export class PasMcpAgent extends McpAgent<Env> {
       }
     }
 
-    // ── Platform-info tools (list_apps, deploy_status, app_info, ─
-    //    platform_guide, sdk_reference, discover_tools) ──────────
-    registerPlatformTools(this.server, this.env);
+    if (!this.appScope) {
+      // ── Platform-info tools (list_apps, deploy_status, app_info, ─
+      //    platform_guide, sdk_reference, discover_tools) ──────────
+      registerPlatformTools(this.server, this.env);
 
-    // ── Project-building tools (for AI agent app creation) ─────
-    registerProjectTools(this.server, this.env, () => ({
-      userId: this.userId,
-      login: this.userLogin,
-      token: this.userToken,
-      roles: this.userRoles,
-    }));
+      // ── Project-building tools (for AI agent app creation) ─────
+      registerProjectTools(this.server, this.env, () => ({
+        userId: this.userId,
+        login: this.userLogin,
+        token: this.userToken,
+        roles: this.userRoles,
+      }));
 
-    // ── Agent Teams loop tools (create app, KB, chat PO/Architect, ─
-    //    tickets, agents, play/pause) — drive the whole build over MCP ─
-    //    The explicit `token` arg is optional; falls back to the authenticated
-    //    connection identity so an owner-authed MCP session can drive everything.
-    registerLoopTools(this.server, this.env, () => this.userToken);
+      // ── Agent Teams loop tools (create app, KB, chat PO/Architect, ─
+      //    tickets, agents, play/pause) — drive the whole build over MCP ─
+      //    The explicit `token` arg is optional; falls back to the authenticated
+      //    connection identity so an owner-authed MCP session can drive everything.
+      registerLoopTools(this.server, this.env, () => this.userToken);
 
-    // ── Agent-team introspection tools ──────────────────────────
-    registerAgentsTools(
-      this.server,
-      () => ({ userId: this.userId, token: this.userToken }),
-      this.env.INTERNAL_TOKEN ?? null,
-      this.env.AGENTS_BASE,
-      this.env.AGENTS,
-    );
+      // ── Agent-team introspection tools ──────────────────────────
+      registerAgentsTools(
+        this.server,
+        () => ({ userId: this.userId, token: this.userToken }),
+        this.env.INTERNAL_TOKEN ?? null,
+        this.env.AGENTS_BASE,
+        this.env.AGENTS,
+      );
 
-    // ── QA automation tools (connect + write/run browser e2e tests) ─
-    registerQaTools(this.server, this.env, () => ({
-      userId: this.userId,
-      token: this.userToken,
-    }));
+      // ── QA automation tools (connect + write/run browser e2e tests) ─
+      registerQaTools(this.server, this.env, () => ({
+        userId: this.userId,
+        token: this.userToken,
+      }));
+    }
 
     // ── Load and register app tools dynamically ────────────────
-    const appTools = await fetchTools(this.env.API, this.env.API_BASE);
+    const appTools = await fetchTools(this.env.API, this.env.API_BASE, this.appScope);
     const registered = registerAppTools(
       this.server,
       appTools,
@@ -101,6 +105,8 @@ export class PasMcpAgent extends McpAgent<Env> {
 
     if (registered.length > 0) {
       console.log(`Registered ${registered.length} app tool(s): ${registered.join(', ')}`);
+    } else if (this.appScope) {
+      console.log(`No app tools registered for scoped MCP app: ${this.appScope}`);
     }
 
     // ── Identity: whoami ───────────────────────────────────────
@@ -134,7 +140,7 @@ export class PasMcpAgent extends McpAgent<Env> {
         );
 
         const lines = [
-          "Authenticated as:",
+          this.appScope ? `Authenticated for app-scoped MCP: ${this.appScope}` : "Authenticated as:",
           `  uid:       ${payload.uid}`,
           ...(login ? [`  login:     ${login}`] : []),
         ];
@@ -201,7 +207,7 @@ export default {
     if (url.pathname === "/" || url.pathname === "") {
       if (isProtocolClient(request)) return wrongEndpoint();
       return new Response(
-        "ProAppStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proappstore.online/mcp\n\nPlatform tools: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools, recipe\nProject tools: provision_pas_app, scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running, set_project_budget, run_tests, set_model, add_ticket\nAgent introspection: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: dynamically loaded from app manifests (use discover_tools to see available)\nIdentity: whoami (show the authenticated PAS account — uid, login, email, sign-in provider, roles).\nSafety: mcp_audit_log (per-account audit trail). Mutating tools are audited; destructive tools (provision_pas_app, scaffold_app, delete_file, publish_app) require confirm: true; expensive/irreversible tools accept dry_run: true to preview; set MCP_READ_ONLY=1 to block all writes.\n",
+        "ProAppStore MCP Server\n\nShared platform endpoint: npx mcp-remote https://mcp.proappstore.online/mcp\nApp-scoped endpoint: npx mcp-remote https://mcp.proappstore.online/mcp/apps/<app-id>\n\nPlatform tools on /mcp: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools, recipe\nProject tools on /mcp: provision_pas_app, scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop on /mcp: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running, set_project_budget, run_tests, set_model, add_ticket\nAgent introspection on /mcp: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: dynamically loaded from app manifests. Use /mcp/apps/<app-id> for an isolated one-app tool list.\nIdentity: whoami (show the authenticated PAS account — uid, login, email, sign-in provider, roles).\nSafety: mcp_audit_log (per-account audit trail). Mutating tools are audited; destructive tools (provision_pas_app, scaffold_app, delete_file, publish_app) require confirm: true; expensive/irreversible tools accept dry_run: true to preview; set MCP_READ_ONLY=1 to block all writes.\n",
         { headers: { "content-type": "text/plain" } }
       );
     }
@@ -227,8 +233,11 @@ export default {
       }
     }
 
-    const isMcpTransport = url.pathname === "/mcp" || url.pathname.startsWith("/mcp/");
-    if (isMcpTransport && request.method !== "OPTIONS" && env.OAUTH_KV && env.SESSION_SIGNING_KEY && !user) {
+    const mcpRoute = resolveMcpRoute(url.pathname);
+    if (mcpRoute.error) {
+      return new Response(mcpRoute.error, { status: mcpRoute.status });
+    }
+    if (mcpRoute.isTransport && request.method !== "OPTIONS" && env.OAUTH_KV && env.SESSION_SIGNING_KEY && !user) {
       return createAuthChallenge({ issuer }, bearer ? "invalid_token" : undefined);
     }
 
@@ -238,20 +247,57 @@ export default {
     // harmless — but that is library internals, not a contract: `transport:
     // "auto"` in agents>=0.14 dispatches a bare GET to the legacy SSE handler
     // without re-checking the base path. Own the routing here instead.
-    if (!isMcpTransport) {
-      return new Response("Not found — the MCP endpoint is /mcp", { status: 404 });
+    if (!mcpRoute.isTransport) {
+      return new Response("Not found — the MCP endpoint is /mcp or /mcp/apps/:appId", { status: 404 });
     }
 
-    if (bearer && user) {
-      (ctx as unknown as { props?: Record<string, unknown> }).props = {
-        ...((ctx as unknown as { props?: Record<string, unknown> }).props ?? {}),
-        authToken: bearer,
-      };
-    }
+    (ctx as unknown as { props?: Record<string, unknown> }).props = {
+      ...((ctx as unknown as { props?: Record<string, unknown> }).props ?? {}),
+      ...(bearer && user ? { authToken: bearer } : {}),
+      ...(mcpRoute.appScope ? { appScope: mcpRoute.appScope } : {}),
+    };
 
-    return PasMcpAgent.serve("/mcp").fetch(request, env, ctx);
+    return PasMcpAgent.serve("/mcp").fetch(rewriteToSharedMcpPath(request), env, ctx);
   },
 };
+
+function extractAppScope(props: Record<string, unknown>): string | null {
+  return typeof props.appScope === "string" && isValidAppId(props.appScope)
+    ? props.appScope
+    : null;
+}
+
+function isValidAppId(value: string): boolean {
+  return /^[a-z][a-z0-9-]{0,57}$/.test(value);
+}
+
+function resolveMcpRoute(pathname: string): {
+  isTransport: boolean;
+  appScope: string | null;
+  error?: string;
+  status?: number;
+} {
+  if (pathname === "/mcp" || pathname === "/mcp/") {
+    return { isTransport: true, appScope: null };
+  }
+  const prefix = "/mcp/apps/";
+  if (!pathname.startsWith(prefix)) {
+    return { isTransport: false, appScope: null };
+  }
+  const rest = pathname.slice(prefix.length);
+  const appId = rest.endsWith("/") ? rest.slice(0, -1) : rest;
+  if (!isValidAppId(appId)) {
+    return { isTransport: false, appScope: null, error: "Invalid MCP app endpoint — expected /mcp/apps/:appId", status: 400 };
+  }
+  return { isTransport: true, appScope: appId };
+}
+
+function rewriteToSharedMcpPath(request: Request): Request {
+  const url = new URL(request.url);
+  if (url.pathname === "/mcp") return request;
+  url.pathname = "/mcp";
+  return new Request(url.toString(), request);
+}
 
 /**
  * Is this an MCP protocol client rather than a person in a browser?

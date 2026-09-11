@@ -56,37 +56,43 @@ interface ToolsResponse {
   tools: AppTool[];
 }
 
-// Cache tools for 60 seconds
-let cachedTools: AppTool[] | null = null;
-let cacheTime = 0;
+// Cache tools for 60 seconds. Keep app-scoped caches separate from the shared
+// platform cache so one connection cannot accidentally widen another.
+const cachedTools = new Map<string, { tools: AppTool[]; time: number }>();
 const CACHE_TTL = 60_000;
 
-export async function fetchTools(api: Fetcher, apiBase: string): Promise<AppTool[]> {
+export async function fetchTools(api: Fetcher, apiBase: string, appId?: string | null): Promise<AppTool[]> {
   const now = Date.now();
-  if (cachedTools && now - cacheTime < CACHE_TTL) return cachedTools;
+  const cacheKey = appId ? `app:${appId}` : "all";
+  const cached = cachedTools.get(cacheKey);
+  if (cached && now - cached.time < CACHE_TTL) return cached.tools;
 
   let res: Response;
   try {
-    res = await api.fetch(`${apiBase}/v1/tools`);
+    const path = appId
+      ? `/v1/apps/${encodeURIComponent(appId)}/tools`
+      : "/v1/tools";
+    res = await api.fetch(`${apiBase}${path}`);
   } catch (err) {
     console.error(`Failed to fetch tools (network):`, err);
-    return cachedTools ?? [];
+    return cached?.tools ?? [];
   }
   if (!res.ok) {
     console.error(`Failed to fetch tools: ${res.status}`);
-    return cachedTools ?? [];
+    return cached?.tools ?? [];
   }
 
   const data = (await res.json()) as ToolsResponse;
-  cachedTools = data.tools;
-  cacheTime = now;
-  return cachedTools;
+  const tools = appId
+    ? data.tools.map((tool) => ({ ...tool, app_id: appId }))
+    : data.tools;
+  cachedTools.set(cacheKey, { tools, time: now });
+  return tools;
 }
 
 /** Clear the tool cache (e.g. after a publish) */
 export function invalidateCache(): void {
-  cachedTools = null;
-  cacheTime = 0;
+  cachedTools.clear();
 }
 
 /** Execute an app tool through the shared platform action executor. */

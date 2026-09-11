@@ -23,7 +23,8 @@ your app repo                 platform backend            platform MCP server
 1. Your app declares tools in an **`mcp.json`** manifest at the repo root.
 2. On publish, those tools are registered to the backend `app_tools` table.
 3. The platform MCP server loads them dynamically and exposes each as
-   `<app_id>/<tool_name>`, discoverable via the `discover_tools` tool.
+   `<app_id>/<tool_name>`. The shared `/mcp` endpoint can discover all app
+   tools, while `/mcp/apps/<app_id>` exposes only one app's tools.
 4. When called, the MCP server sends the request to the platform action
    executor (`/v1/apps/:appId/actions/:name`) with the caller's session. The
    platform validates auth, checks role metadata, injects magic params, and
@@ -212,7 +213,22 @@ There are two paths, both idempotent (re-registering replaces the app's tool set
 
 ## Calling an app's tools
 
-Point any MCP client at the platform server:
+Point app users at an app-scoped platform endpoint so their MCP client only sees
+that app's tool set:
+
+```json
+{
+  "mcpServers": {
+    "crm": {
+      "command": "npx",
+      "args": ["mcp-remote", "https://mcp.proappstore.online/mcp/apps/crm"]
+    }
+  }
+}
+```
+
+Use the shared platform endpoint for ProAppStore builder/operator workflows that
+need platform, project, QA, or cross-app discovery tools:
 
 ```json
 {
@@ -230,7 +246,8 @@ OAuth challenge and open a PAS browser confirmation page. The user chooses
 GitHub or Google on that page, then completes sign-in in the browser. After the
 OAuth flow completes, the client retries with an OAuth access token. The MCP
 server maps that access token to a PAS session, so `discover_tools` and
-`<app>/<tool>` calls run as the connected user.
+`<app>/<tool>` calls run as the connected user. On an app-scoped endpoint, only
+that app's dynamic tools are registered for the connection.
 
 Clients that cannot run the browser OAuth flow can still send an existing PAS
 session token as `Authorization: Bearer <token>`; `pas login` stores that token
