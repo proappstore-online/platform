@@ -25,8 +25,14 @@ export interface OAuthConfig {
   sessionSigningKey: string;
 }
 
-export function createAuthChallenge(config: Pick<OAuthConfig, "issuer">, error?: "invalid_token"): Response {
-  const metadata = new URL("/.well-known/oauth-protected-resource/mcp", config.issuer);
+export function createAuthChallenge(
+  config: Pick<OAuthConfig, "issuer"> & { appId?: string | null },
+  error?: "invalid_token",
+): Response {
+  const metadataPath = config.appId
+    ? `/.well-known/oauth-protected-resource/mcp/apps/${config.appId}`
+    : "/.well-known/oauth-protected-resource/mcp";
+  const metadata = new URL(metadataPath, config.issuer);
   const params = [`resource_metadata="${metadata.toString()}"`];
   if (error) params.push(`error="${error}"`);
   return new Response("Authentication required", {
@@ -66,12 +72,10 @@ export async function handleOAuthRoute(
     }
   }
 
-  if (
-    path === "/.well-known/oauth-protected-resource" ||
-    path === "/.well-known/oauth-protected-resource/mcp"
-  ) {
+  const protectedResource = protectedResourceFromPath(path, config.issuer);
+  if (protectedResource) {
     return json({
-      resource: `${config.issuer}/mcp`,
+      resource: protectedResource,
       authorization_servers: [config.issuer],
     });
   }
@@ -169,7 +173,40 @@ function authStartUrl(config: OAuthConfig, nonce: string, provider: AuthProvider
   return authUrl.toString();
 }
 
-function authConfirmPage(config: OAuthConfig, nonce: string, clientName: string | null): Response {
+function appNameFromId(appId: string): string {
+  return appId
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part === "crm" ? "CRM" : `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ");
+}
+
+function appIdFromResource(resource: string | null, issuer: string): string | null {
+  if (!resource) return null;
+  try {
+    const url = new URL(resource);
+    const expected = new URL(issuer);
+    if (url.origin !== expected.origin) return null;
+    const match = url.pathname.match(/^\/mcp\/apps\/([a-z][a-z0-9-]{0,57})\/?$/);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function protectedResourceFromPath(path: string, issuer: string): string | null {
+  if (
+    path === "/.well-known/oauth-protected-resource" ||
+    path === "/.well-known/oauth-protected-resource/mcp"
+  ) {
+    return `${issuer}/mcp`;
+  }
+  const match = path.match(/^\/\.well-known\/oauth-protected-resource\/mcp\/apps\/([a-z][a-z0-9-]{0,57})\/?$/);
+  if (!match) return null;
+  return `${issuer}/mcp/apps/${match[1]}`;
+}
+
+function authConfirmPage(config: OAuthConfig, nonce: string, clientName: string | null, appId: string | null): Response {
   const continueUrl = (provider: AuthProvider) => {
     const url = new URL("/authorize/continue", config.issuer);
     url.searchParams.set("nonce", nonce);
@@ -177,6 +214,9 @@ function authConfirmPage(config: OAuthConfig, nonce: string, clientName: string 
     return url.toString();
   };
   const name = clientName ? escapeHtml(clientName) : "your MCP client";
+  const appName = appId ? appNameFromId(appId) : null;
+  const productName = appName ? `${appName} MCP` : "ProAppStore MCP";
+  const toolScope = appName ? `${appName} tools` : "ProAppStore MCP tools";
   const providerLinks = configuredAuthProviders(config).map((provider, index) => {
     const label = provider === "github" ? "GitHub" : "Google";
     const attrs = index === 0 ? " autofocus" : ' class="secondary"';
@@ -188,7 +228,7 @@ function authConfirmPage(config: OAuthConfig, nonce: string, clientName: string 
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Connect ProAppStore MCP</title>
+  <title>Connect ${escapeHtml(productName)}</title>
   <style>
     body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;min-height:100vh;display:grid;place-items:center;background:#f8fafc;color:#111827}
     main{max-width:440px;padding:32px;border:1px solid #e5e7eb;border-radius:12px;background:white;box-shadow:0 12px 32px rgba(15,23,42,.08)}
@@ -201,8 +241,8 @@ function authConfirmPage(config: OAuthConfig, nonce: string, clientName: string 
 </head>
 <body>
   <main>
-    <h1>Connect ProAppStore MCP</h1>
-    <p>${name} wants to use ProAppStore MCP tools as your account. Choose how to sign in.</p>
+    <h1>Connect ${escapeHtml(productName)}</h1>
+    <p>${name} wants to use ${escapeHtml(toolScope)} as your ProAppStore account. Choose how to sign in.</p>
     <div class="actions">
       ${providerLinks}
     </div>
@@ -268,6 +308,7 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
   const codeChallenge = url.searchParams.get("code_challenge");
   const codeChallengeMethod = url.searchParams.get("code_challenge_method");
   const state = url.searchParams.get("state");
+  const appId = appIdFromResource(url.searchParams.get("resource"), config.issuer);
 
   if (responseType !== "code") {
     return new Response("unsupported_response_type", { status: 400 });
@@ -296,7 +337,7 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
     { expirationTtl: 600 },
   );
 
-  return authConfirmPage(config, nonce, client.client_name ?? null);
+  return authConfirmPage(config, nonce, client.client_name ?? null, appId);
 }
 
 async function continueAuthorize(request: Request, config: OAuthConfig): Promise<Response> {

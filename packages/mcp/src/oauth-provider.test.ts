@@ -20,6 +20,15 @@ describe('createAuthChallenge', () => {
     );
   });
 
+  it('returns an app-scoped protected-resource challenge', () => {
+    const res = createAuthChallenge({ issuer: 'https://mcp.proappstore.online', appId: 'crm' });
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('WWW-Authenticate')).toBe(
+      'Bearer resource_metadata="https://mcp.proappstore.online/.well-known/oauth-protected-resource/mcp/apps/crm"',
+    );
+  });
+
   it('can mark invalid bearer tokens', () => {
     const res = createAuthChallenge({ issuer: 'https://mcp.proappstore.online' }, 'invalid_token');
 
@@ -42,6 +51,24 @@ describe('handleOAuthRoute', () => {
     expect(res?.status).toBe(200);
     await expect(res?.json()).resolves.toEqual({
       resource: 'https://mcp.proappstore.online/mcp',
+      authorization_servers: ['https://mcp.proappstore.online'],
+    });
+  });
+
+  it('serves protected resource metadata for an app-scoped MCP endpoint', async () => {
+    const res = await handleOAuthRoute(
+      new Request('https://mcp.proappstore.online/.well-known/oauth-protected-resource/mcp/apps/crm'),
+      {
+        issuer: 'https://mcp.proappstore.online',
+        authStart: 'https://api.proappstore.online/v1/auth/github/start',
+        kv: makeKv(),
+        sessionSigningKey: 'test-key',
+      },
+    );
+
+    expect(res?.status).toBe(200);
+    await expect(res?.json()).resolves.toEqual({
+      resource: 'https://mcp.proappstore.online/mcp/apps/crm',
       authorization_servers: ['https://mcp.proappstore.online'],
     });
   });
@@ -73,6 +100,31 @@ describe('handleOAuthRoute', () => {
     expect(html).toContain('/authorize/continue?nonce=');
     expect(html).toContain('provider=github');
     expect(html).toContain('provider=google');
+  });
+
+  it('uses app-specific consent copy when the OAuth resource is app-scoped', async () => {
+    const kv = makeKv({
+      'client:client-1': JSON.stringify({
+        redirect_uris: ['http://127.0.0.1:9876/callback'],
+        client_name: 'Codex',
+      }),
+    });
+
+    const res = await handleOAuthRoute(
+      new Request('https://mcp.proappstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=abc&code_challenge_method=S256&resource=https%3A%2F%2Fmcp.proappstore.online%2Fmcp%2Fapps%2Fcrm'),
+      {
+        issuer: 'https://mcp.proappstore.online',
+        authStart: 'https://api.proappstore.online/v1/auth/github/start',
+        kv,
+        sessionSigningKey: 'test-key',
+      },
+    );
+
+    expect(res?.status).toBe(200);
+    const html = await res!.text();
+    expect(html).toContain('Connect CRM MCP');
+    expect(html).toContain('Codex wants to use CRM tools as your ProAppStore account');
+    expect(html).not.toContain('Codex wants to use ProAppStore MCP tools');
   });
 
   it('redirects to GitHub only after the user continues', async () => {

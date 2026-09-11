@@ -238,7 +238,7 @@ export default {
       return new Response(mcpRoute.error, { status: mcpRoute.status });
     }
     if (mcpRoute.isTransport && request.method !== "OPTIONS" && env.OAUTH_KV && env.SESSION_SIGNING_KEY && !user) {
-      return createAuthChallenge({ issuer }, bearer ? "invalid_token" : undefined);
+      return createAuthChallenge({ issuer, appId: mcpRoute.appScope }, bearer ? "invalid_token" : undefined);
     }
 
     // Anything that isn't /mcp 404s here rather than being handed to serve().

@@ -66,6 +66,15 @@ describe('MCP transport auth', () => {
     );
   });
 
+  it('challenges unauthenticated app-scoped MCP transport requests with app metadata', async () => {
+    const res = await worker.fetch(new Request('https://mcp.proappstore.online/mcp/apps/crm'), env, ctx);
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('WWW-Authenticate')).toBe(
+      'Bearer resource_metadata="https://mcp.proappstore.online/.well-known/oauth-protected-resource/mcp/apps/crm"',
+    );
+  });
+
   it('keeps the public landing page unauthenticated', async () => {
     const res = await worker.fetch(new Request('https://mcp.proappstore.online/'), env, ctx);
 
