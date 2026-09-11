@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createAuthChallenge, handleOAuthRoute } from './oauth-provider.js';
+import { createAuthChallenge, handleOAuthRoute, resolveOAuthToken } from './oauth-provider.js';
 
 function makeKv(seed: Record<string, string> = {}): KVNamespace {
   const data = new Map(Object.entries(seed));
@@ -127,6 +127,28 @@ describe('handleOAuthRoute', () => {
     expect(html).not.toContain('Codex wants to use ProAppStore MCP tools');
   });
 
+  it('rejects invalid OAuth resource targets instead of falling back to platform consent', async () => {
+    const kv = makeKv({
+      'client:client-1': JSON.stringify({
+        redirect_uris: ['http://127.0.0.1:9876/callback'],
+        client_name: 'Codex',
+      }),
+    });
+
+    const res = await handleOAuthRoute(
+      new Request('https://mcp.proappstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=abc&code_challenge_method=S256&resource=https%3A%2F%2Fmcp.proappstore.online%2Fmcp%2Fapps%2FCRM!'),
+      {
+        issuer: 'https://mcp.proappstore.online',
+        authStart: 'https://api.proappstore.online/v1/auth/github/start',
+        kv,
+        sessionSigningKey: 'test-key',
+      },
+    );
+
+    expect(res?.status).toBe(400);
+    await expect(res?.text()).resolves.toBe('invalid_target');
+  });
+
   it('redirects to GitHub only after the user continues', async () => {
     const kv = makeKv({
       'authreq:nonce-1': JSON.stringify({
@@ -233,6 +255,20 @@ describe('handleOAuthRoute', () => {
   });
 });
 
+describe('resolveOAuthToken', () => {
+  it('resolves resource-bound OAuth token records', async () => {
+    await expect(resolveOAuthToken('tok', makeKv({
+      'token:tok': JSON.stringify({ session: 'pas-session', appId: 'crm' }),
+    }))).resolves.toEqual({ session: 'pas-session', appId: 'crm', bound: true });
+  });
+
+  it('marks legacy raw-session OAuth token records as unbound', async () => {
+    await expect(resolveOAuthToken('tok', makeKv({
+      'token:tok': 'pas-session',
+    }))).resolves.toEqual({ session: 'pas-session', appId: null, bound: false });
+  });
+});
+
 // #110: `?session=` handed the raw PAS session token to this Worker in a query
 // string, where it reaches Cloudflare request logs, Referer headers and browser
 // history — and it is a directly reusable Bearer for the life of the session.
@@ -277,7 +313,12 @@ describe('oauth callback — one-time code (#110)', () => {
       new Request('https://mcp.proappstore.online/oauth/callback?nonce=n1&code=one-time', {
         headers: { Cookie: 'pas_mcp_oauth_nonce=n1' },
       }),
-      config(kv),
+      {
+        issuer: 'https://mcp.proappstore.online',
+        authStart: 'https://api.proappstore.online/v1/auth/github/start',
+        kv,
+        sessionSigningKey: 'test-key',
+      },
     );
 
     expect(res?.status).toBe(302);
@@ -373,6 +414,50 @@ describe('oauth callback — one-time code (#110)', () => {
   });
 });
 
+describe('token exchange resource binding', () => {
+  it('persists the auth code app binding on the issued access token', async () => {
+    const verifier = 'verifier-1';
+    const codeChallenge = await pkceChallenge(verifier);
+    const kv = makeKv({
+      'code:code-1': JSON.stringify({
+        session: 'pas-session',
+        codeChallenge,
+        redirectUri: 'https://client.example/cb',
+        clientId: 'client-1',
+        appId: 'crm',
+      }),
+    });
+
+    const res = await handleOAuthRoute(
+      new Request('https://mcp.proappstore.online/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: 'code-1',
+          redirect_uri: 'https://client.example/cb',
+          client_id: 'client-1',
+          code_verifier: verifier,
+        }),
+      }),
+      {
+        issuer: 'https://mcp.proappstore.online',
+        authStart: 'https://api.proappstore.online/v1/auth/github/start',
+        kv,
+        sessionSigningKey: 'test-key',
+      },
+    );
+
+    expect(res?.status).toBe(200);
+    const body = await res!.json() as { access_token: string };
+    await expect(resolveOAuthToken(body.access_token, kv)).resolves.toEqual({
+      session: 'pas-session',
+      appId: 'crm',
+      bound: true,
+    });
+  });
+});
+
 /** A session this provider's verifySession will accept (signing key 'test-key'). */
 async function mintTestSession(): Promise<string> {
   const claims = { uid: 'gh:1', login: 'alice', roles: ['user'], iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600 };
@@ -382,4 +467,11 @@ async function mintTestSession(): Promise<string> {
   let bin = '';
   for (const b of sig) bin += String.fromCharCode(b);
   return `${body}.${btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+}
+
+async function pkceChallenge(verifier: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  let bin = '';
+  for (const b of new Uint8Array(digest)) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }

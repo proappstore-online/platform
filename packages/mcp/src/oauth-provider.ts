@@ -8,7 +8,14 @@ import { verifySession } from "./session.js";
 
 const AUTH_NONCE_COOKIE = "pas_mcp_oauth_nonce";
 const AUTH_PROVIDERS = ["github", "google"] as const;
+const APP_ID_RE = /^[a-z][a-z0-9-]{0,57}$/;
 type AuthProvider = typeof AUTH_PROVIDERS[number];
+
+export interface OAuthTokenResolution {
+  session: string;
+  appId: string | null;
+  bound: boolean;
+}
 
 export interface OAuthConfig {
   /** Base URL of this MCP server (e.g. "https://mcp.proappstore.online") */
@@ -116,8 +123,24 @@ export async function handleOAuthRoute(
 export async function resolveOAuthToken(
   bearer: string,
   kv: KVNamespace,
-): Promise<string | null> {
-  return kv.get(`token:${bearer}`);
+): Promise<OAuthTokenResolution | null> {
+  const raw = await kv.get(`token:${bearer}`);
+  if (!raw) return null;
+  try {
+    const data = JSON.parse(raw) as { session?: unknown; appId?: unknown };
+    if (typeof data.session === "string" && data.session) {
+      return {
+        session: data.session,
+        appId: typeof data.appId === "string" && APP_ID_RE.test(data.appId) ? data.appId : null,
+        bound: true,
+      };
+    }
+  } catch {
+    // Legacy entries stored the PAS session directly and have no OAuth
+    // resource binding. Treat them as valid-looking but untrusted so callers can
+    // force re-auth instead of silently widening an app-scoped grant.
+  }
+  return { session: raw, appId: null, bound: false };
 }
 
 // ── Internals ──────────────────────────────────────────────
@@ -181,17 +204,20 @@ function appNameFromId(appId: string): string {
     .join(" ");
 }
 
-function appIdFromResource(resource: string | null, issuer: string): string | null {
-  if (!resource) return null;
+function resourceTarget(resource: string | null, issuer: string): { ok: true; appId: string | null } | { ok: false } {
+  if (!resource) return { ok: true, appId: null };
   try {
     const url = new URL(resource);
     const expected = new URL(issuer);
-    if (url.origin !== expected.origin) return null;
+    if (url.origin !== expected.origin) return { ok: false };
+    if (url.search || url.hash) return { ok: false };
+    if (url.pathname === "/mcp" || url.pathname === "/mcp/") return { ok: true, appId: null };
     const match = url.pathname.match(/^\/mcp\/apps\/([a-z][a-z0-9-]{0,57})\/?$/);
-    return match?.[1] ?? null;
+    if (match) return { ok: true, appId: match[1] };
   } catch {
-    return null;
+    // fall through
   }
+  return { ok: false };
 }
 
 function protectedResourceFromPath(path: string, issuer: string): string | null {
@@ -308,10 +334,13 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
   const codeChallenge = url.searchParams.get("code_challenge");
   const codeChallengeMethod = url.searchParams.get("code_challenge_method");
   const state = url.searchParams.get("state");
-  const appId = appIdFromResource(url.searchParams.get("resource"), config.issuer);
+  const target = resourceTarget(url.searchParams.get("resource"), config.issuer);
 
   if (responseType !== "code") {
     return new Response("unsupported_response_type", { status: 400 });
+  }
+  if (!target.ok) {
+    return new Response("invalid_target", { status: 400 });
   }
   if (!clientId || !redirectUri || !codeChallenge) {
     return new Response("missing client_id, redirect_uri, or code_challenge", { status: 400 });
@@ -333,11 +362,11 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
   const nonce = crypto.randomUUID();
   await config.kv.put(
     `authreq:${nonce}`,
-    JSON.stringify({ clientId, redirectUri, codeChallenge, state }),
+    JSON.stringify({ clientId, redirectUri, codeChallenge, state, appId: target.appId }),
     { expirationTtl: 600 },
   );
 
-  return authConfirmPage(config, nonce, client.client_name ?? null, appId);
+  return authConfirmPage(config, nonce, client.client_name ?? null, target.appId);
 }
 
 async function continueAuthorize(request: Request, config: OAuthConfig): Promise<Response> {
@@ -452,6 +481,7 @@ async function oauthCallback(request: Request, config: OAuthConfig): Promise<Res
     redirectUri: string;
     codeChallenge: string;
     state: string | null;
+    appId?: string | null;
   };
 
   // Generate single-use auth code (10-min TTL)
@@ -463,6 +493,7 @@ async function oauthCallback(request: Request, config: OAuthConfig): Promise<Res
       codeChallenge: authReq.codeChallenge,
       redirectUri: authReq.redirectUri,
       clientId: authReq.clientId,
+      appId: authReq.appId ?? null,
     }),
     { expirationTtl: 600 },
   );
@@ -516,6 +547,7 @@ async function tokenExchange(request: Request, config: OAuthConfig): Promise<Res
     codeChallenge: string;
     redirectUri: string;
     clientId: string;
+    appId?: string | null;
   };
 
   if (codeData.redirectUri !== redirectUri || codeData.clientId !== clientId) {
@@ -538,9 +570,11 @@ async function tokenExchange(request: Request, config: OAuthConfig): Promise<Res
 
   // Issue opaque access token → maps to session in KV (24h TTL)
   const accessToken = crypto.randomUUID();
-  await config.kv.put(`token:${accessToken}`, codeData.session, {
-    expirationTtl: 86_400,
-  });
+  await config.kv.put(
+    `token:${accessToken}`,
+    JSON.stringify({ session: codeData.session, appId: codeData.appId ?? null }),
+    { expirationTtl: 86_400 },
+  );
 
   return json({
     access_token: accessToken,

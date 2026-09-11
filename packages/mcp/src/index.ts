@@ -215,10 +215,16 @@ export default {
     // Resolve OAuth token → PAS session, verify it, then lift into ctx.props.
     const auth = request.headers.get("Authorization");
     let bearer = auth?.replace(/^Bearer\s+/i, "");
+    let oauthToken:
+      | { appId: string | null; bound: boolean }
+      | null = null;
     if (bearer && env.OAUTH_KV) {
       try {
-        const session = await resolveOAuthToken(bearer, env.OAUTH_KV);
-        if (session) bearer = session;
+        const resolved = await resolveOAuthToken(bearer, env.OAUTH_KV);
+        if (resolved) {
+          bearer = resolved.session;
+          oauthToken = { appId: resolved.appId, bound: resolved.bound };
+        }
       } catch (e) {
         console.warn(`MCP OAuth token resolution failed: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -236,6 +242,14 @@ export default {
     const mcpRoute = resolveMcpRoute(url.pathname);
     if (mcpRoute.error) {
       return new Response(mcpRoute.error, { status: mcpRoute.status });
+    }
+    if (
+      mcpRoute.isTransport &&
+      request.method !== "OPTIONS" &&
+      oauthToken &&
+      (!oauthToken.bound || oauthToken.appId !== mcpRoute.appScope)
+    ) {
+      return createAuthChallenge({ issuer, appId: mcpRoute.appScope }, "invalid_token");
     }
     if (mcpRoute.isTransport && request.method !== "OPTIONS" && env.OAUTH_KV && env.SESSION_SIGNING_KEY && !user) {
       return createAuthChallenge({ issuer, appId: mcpRoute.appScope }, bearer ? "invalid_token" : undefined);
