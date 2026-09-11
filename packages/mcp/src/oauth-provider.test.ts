@@ -267,6 +267,18 @@ describe('resolveOAuthToken', () => {
       'token:tok': 'pas-session',
     }))).resolves.toEqual({ session: 'pas-session', appId: null, bound: false });
   });
+
+  it('rejects malformed bound token records with invalid app ids', async () => {
+    await expect(resolveOAuthToken('tok', makeKv({
+      'token:tok': JSON.stringify({ session: 'pas-session', appId: 'CRM!' }),
+    }))).resolves.toBeNull();
+  });
+
+  it('rejects malformed bound token records missing an explicit app binding', async () => {
+    await expect(resolveOAuthToken('tok', makeKv({
+      'token:tok': JSON.stringify({ session: 'pas-session' }),
+    }))).resolves.toBeNull();
+  });
 });
 
 // #110: `?session=` handed the raw PAS session token to this Worker in a query

@@ -129,9 +129,12 @@ export async function resolveOAuthToken(
   try {
     const data = JSON.parse(raw) as { session?: unknown; appId?: unknown };
     if (typeof data.session === "string" && data.session) {
+      if (data.appId !== null && (typeof data.appId !== "string" || !APP_ID_RE.test(data.appId))) {
+        return null;
+      }
       return {
         session: data.session,
-        appId: typeof data.appId === "string" && APP_ID_RE.test(data.appId) ? data.appId : null,
+        appId: data.appId,
         bound: true,
       };
     }

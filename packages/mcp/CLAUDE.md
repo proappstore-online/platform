@@ -81,17 +81,20 @@ Use connection-level auth or internal token.
 
 ### Per-app tools (dynamic)
 
-Beyond the fixed tools above, the server loads each app's own tools from its
-`mcp.json` manifest and exposes them as `<app_id>/<tool_name>` (each tool is one
-parameterized SQL op against that app's D1, proxied to its data worker; auth via
-the caller's session token). Two ways an app gets registered:
+Beyond the fixed tools above, the shared `/mcp` endpoint loads each app's own
+tools from its `mcp.json` manifest and exposes them as `<app_id>/<tool_name>`
+(each tool is one parameterized SQL op against that app's D1, proxied to its
+data worker; auth via the caller's session token). App users should normally use
+`/mcp/apps/<app_id>` instead, which registers only that app's dynamic tools plus
+`whoami` and `mcp_audit_log`. Two ways an app gets registered:
 
 - **CLI apps** — `pas publish` reads the repo's `mcp.json` (`PUT /v1/apps/:id/tools`).
 - **Agent-built apps** — the Agent Teams deploy stage auto-registers the working
   tree's `mcp.json` after a green deploy (`POST /v1/apps/:id/tools/internal`), so
   every agent-built app with `app.db` data is MCP-callable without a manual step.
 
-Use `discover_tools` to see what's currently available.
+Use `discover_tools` on the shared `/mcp` endpoint to see what's currently
+available across apps.
 
 ## Security & safety model
 
@@ -105,7 +108,9 @@ from the reference is present:
   (`/.well-known/oauth-authorization-server`, `.../oauth-protected-resource`),
   dynamic client registration (`POST /register`, rate-limited 20/hr/IP), authorize
   + token endpoints. Plaintext PKCE is rejected; non-S256 challenge methods are
-  refused. Access tokens are opaque, KV-stored, 24h TTL. `mcp-remote` compatible.
+  refused. Access tokens are opaque, KV-stored, 24h TTL, and bound to the
+  requested MCP resource (`/mcp` or `/mcp/apps/<app_id>`). `mcp-remote`
+  compatible.
 - **Session tokens** — the alternative to browser OAuth: pass a PAS session JWT as
   `Authorization: Bearer` (connection-level) or a per-call `token` arg on the loop
   tools. Verified locally via `verifySession` (`@proappstore/build-core`,
@@ -142,12 +147,27 @@ subject-less calls. Revisit if PAS ever authorizes third-party/delegated agents.
 
 ## Connect from Claude Code
 
+Shared platform/operator endpoint:
+
 ```json
 {
   "mcpServers": {
     "proappstore": {
       "command": "npx",
       "args": ["mcp-remote", "https://mcp.proappstore.online/mcp"]
+    }
+  }
+}
+```
+
+Single-app endpoint:
+
+```json
+{
+  "mcpServers": {
+    "crm": {
+      "command": "npx",
+      "args": ["mcp-remote", "https://mcp.proappstore.online/mcp/apps/crm"]
     }
   }
 }

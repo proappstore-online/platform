@@ -245,9 +245,14 @@ On first connection, auth-capable clients such as `mcp-remote` receive an MCP
 OAuth challenge and open a PAS browser confirmation page. The user chooses
 GitHub or Google on that page, then completes sign-in in the browser. After the
 OAuth flow completes, the client retries with an OAuth access token. The MCP
-server maps that access token to a PAS session, so `discover_tools` and
-`<app>/<tool>` calls run as the connected user. On an app-scoped endpoint, only
-that app's dynamic tools are registered for the connection.
+server maps that access token to a PAS session and the requested MCP resource.
+On an app-scoped endpoint, only that app's dynamic tools are registered for the
+connection, alongside `whoami` and `mcp_audit_log`; platform discovery tools
+such as `discover_tools` remain limited to the shared `/mcp` endpoint.
+
+OAuth access tokens are bound to their requested MCP resource. A token minted
+for `/mcp/apps/crm` is rejected on `/mcp` and on other app endpoints, forcing a
+separate consent flow for each app or for platform-level operation.
 
 Clients that cannot run the browser OAuth flow can still send an existing PAS
 session token as `Authorization: Bearer <token>`; `pas login` stores that token
