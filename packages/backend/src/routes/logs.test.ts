@@ -194,13 +194,22 @@ describe('POST /v1/apps/:appId/logs — quota', () => {
   });
 
   it('throttles a burst from one client without a 4xx that would trigger retries', async () => {
-    const full = () => Array.from({ length: 100 }, () => entry());
-    // Two full batches fit inside the per-second ceiling; the third does not.
-    expect((await post({ entries: full() }, { env: makeEnv({}, ingestDb()) })).status).toBe(200);
-    expect((await post({ entries: full() }, { env: makeEnv({}, ingestDb()) })).status).toBe(200);
-    const third = await post({ entries: full() }, { env: makeEnv({}, ingestDb()) });
-    expect(third.status).toBe(202);
-    expect(await third.json()).toMatchObject({ throttled: 'burst' });
+    // #126: pin the clock. The route reads Date.now() once per request and the
+    // burst bucket refills per elapsed second, so on a loaded full-suite run the
+    // third call could land in the next second, refill, and return 200. Freezing
+    // time keeps all three calls inside one burst window deterministically.
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    try {
+      const full = () => Array.from({ length: 100 }, () => entry());
+      // Two full batches fit inside the per-second ceiling; the third does not.
+      expect((await post({ entries: full() }, { env: makeEnv({}, ingestDb()) })).status).toBe(200);
+      expect((await post({ entries: full() }, { env: makeEnv({}, ingestDb()) })).status).toBe(200);
+      const third = await post({ entries: full() }, { env: makeEnv({}, ingestDb()) });
+      expect(third.status).toBe(202);
+      expect(await third.json()).toMatchObject({ throttled: 'burst' });
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('keeps counting throttled entries as metrics so a spike stays visible', async () => {
