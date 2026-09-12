@@ -21,6 +21,8 @@ export async function handleAuthRoute(
   if (url.pathname === `${AUTH_PREFIX}/callback`) return authCallback(request, env);
   if (url.pathname === `${AUTH_PREFIX}/me`) return authMe(request, env);
   if (url.pathname === `${AUTH_PREFIX}/logout`) return authLogout(request);
+  if (url.pathname === `${AUTH_PREFIX}/credentials/login`) return authCredentialsLogin(request, env);
+  if (url.pathname === `${AUTH_PREFIX}/email/start`) return authEmailStart(request, env, route);
 
   return noStore(new Response("Not found", { status: 404 }));
 }
@@ -122,6 +124,70 @@ async function authMe(request: Request, env: Env): Promise<Response> {
   return new Response(upstream.body, { status: upstream.status, headers });
 }
 
+async function authCredentialsLogin(request: Request, env: Env): Promise<Response> {
+  if (request.method !== "POST") return methodNotAllowed("POST");
+  if (!isSameOriginMutation(request)) return noStore(new Response("Forbidden", { status: 403 }));
+
+  const body = (await request.json().catch(() => ({}))) as { login?: unknown; password?: unknown };
+  const upstream = await env.API.fetch(
+    new Request(`${API_BASE}/v1/auth/credentials/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        login: typeof body.login === "string" ? body.login : "",
+        password: typeof body.password === "string" ? body.password : "",
+      }),
+    }),
+  );
+  if (!upstream.ok) return noStore(upstream);
+
+  const sessionBody = (await upstream.json().catch(() => null)) as { token?: unknown } | null;
+  const token = typeof sessionBody?.token === "string" && sessionBody.token ? sessionBody.token : "";
+  if (!token) return noStore(Response.json({ error: "invalid session response" }, { status: 502 }));
+
+  const user = await fetchMe(env, token);
+  if (!user.ok) return noStore(new Response(user.body, {
+    status: user.status,
+    headers: user.contentType ? { "Content-Type": user.contentType } : undefined,
+  }));
+
+  const headers = new Headers({
+    "Cache-Control": "no-store",
+    "Content-Type": user.contentType ?? "application/json; charset=utf-8",
+    "Set-Cookie": sessionCookie(token),
+  });
+  return new Response(user.body, { status: 200, headers });
+}
+
+async function authEmailStart(request: Request, env: Env, route: Route): Promise<Response> {
+  if (request.method !== "POST") return methodNotAllowed("POST");
+  if (!isSameOriginMutation(request)) return noStore(new Response("Forbidden", { status: 403 }));
+
+  const url = new URL(request.url);
+  const body = (await request.json().catch(() => ({}))) as { email?: unknown; returnTo?: unknown };
+  const returnPath = sameOriginPath(url, typeof body.returnTo === "string" ? body.returnTo : null);
+  const nonce = crypto.randomUUID();
+  const callback = new URL(`${AUTH_PREFIX}/callback`, url.origin);
+  callback.searchParams.set("return_to", returnPath);
+  callback.searchParams.set("nonce", nonce);
+
+  const upstream = await env.API.fetch(
+    new Request(`${API_BASE}/v1/auth/email/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: typeof body.email === "string" ? body.email : "",
+        appId: route.slug,
+        returnTo: callback.toString(),
+        responseMode: "query",
+      }),
+    }),
+  );
+  const response = noStore(upstream);
+  if (upstream.ok) response.headers.append("Set-Cookie", nonceCookie(nonce));
+  return response;
+}
+
 function authLogout(request: Request): Response {
   if (request.method !== "POST") return methodNotAllowed("POST");
   if (!isSameOriginMutation(request)) return noStore(new Response("Forbidden", { status: 403 }));
@@ -209,7 +275,7 @@ export function readCookie(header: string | null, name: string): string | null {
   return null;
 }
 
-function sessionCookie(token: string): string {
+export function sessionCookie(token: string): string {
   return [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
     `Max-Age=${SESSION_TTL_SECONDS}`,

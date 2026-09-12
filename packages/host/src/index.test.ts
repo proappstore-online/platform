@@ -198,6 +198,92 @@ describe("host auth token-handler routes", () => {
     });
   });
 
+  it("signs in credentials through the API and stores the session in an HttpOnly cookie", async () => {
+    const apiFetch = vi.fn(async (request: Request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/v1/auth/credentials/login") {
+        expect(request.method).toBe("POST");
+        expect(request.headers.get("Authorization")).toBeNull();
+        expect(JSON.parse(await request.text())).toEqual({
+          login: "student-one",
+          password: "secret",
+        });
+        return Response.json({ token: "credential-token" });
+      }
+      expect(request.headers.get("Authorization")).toBe("Bearer credential-token");
+      return Response.json({
+        id: "cred:student-one",
+        login: "student-one",
+        roles: ["user"],
+        appRoles: {},
+      });
+    });
+    const env = makeEnv({ apiFetch });
+
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/auth/credentials/login", {
+        method: "POST",
+        headers: {
+          Origin: "https://meetup.proappstore.online",
+          "Sec-Fetch-Site": "same-origin",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ login: "student-one", password: "secret" }),
+      }),
+      env,
+      ctx(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      id: "cred:student-one",
+      login: "student-one",
+      roles: ["user"],
+      appRoles: {},
+    });
+    const cookie = res.headers.get("Set-Cookie")!;
+    expect(cookie).toContain("__Host-pas_session=credential-token");
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("Secure");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts email sign-in through the API with a same-origin host callback", async () => {
+    const apiFetch = vi.fn(async (request: Request) => {
+      expect(request.url).toBe("https://api.proappstore.online/v1/auth/email/start");
+      const body = JSON.parse(await request.text());
+      expect(body.email).toBe("student@example.com");
+      expect(body.appId).toBe("meetup");
+      expect(body.responseMode).toBe("query");
+      const callback = new URL(body.returnTo);
+      expect(callback.origin).toBe("https://meetup.proappstore.online");
+      expect(callback.pathname).toBe("/.pas/auth/callback");
+      expect(callback.searchParams.get("return_to")).toBe("/join?club=1");
+      expect(callback.searchParams.get("nonce")).toBeTruthy();
+      return Response.json({ ok: true });
+    });
+    const env = makeEnv({ apiFetch });
+
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/auth/email/start", {
+        method: "POST",
+        headers: {
+          Origin: "https://meetup.proappstore.online",
+          "Sec-Fetch-Site": "same-origin",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email: "student@example.com", returnTo: "/join?club=1" }),
+      }),
+      env,
+      ctx(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(res.headers.get("Set-Cookie")).toContain("__Host-pas_auth_nonce=");
+  });
+
   it("clears the auth cookie on logout", async () => {
     const env = makeEnv();
 

@@ -106,11 +106,21 @@ export class Auth {
    */
   async signInWithEmail(email: string): Promise<void> {
     if (typeof window === 'undefined') return;
-    if (this.authMode === 'platform-cookie') {
-      throw new Error('Email magic-link sign-in is not available in platform-cookie mode yet.');
-    }
     const here = new URL(window.location.href);
     here.hash = '';
+    if (this.authMode === 'platform-cookie') {
+      const res = await fetch('/.pas/auth/email/start', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, returnTo: `${here.pathname}${here.search}` }),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`Magic-link request failed: ${res.status} ${body}`);
+      }
+      return;
+    }
     const res = await fetch(new URL('/v1/auth/email/start', this.apiBase), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -133,7 +143,24 @@ export class Auth {
    */
   async signInWithCredentials(login: string, password: string): Promise<User> {
     if (this.authMode === 'platform-cookie') {
-      throw new Error('Credential sign-in is not available in platform-cookie mode yet.');
+      const res = await fetch('/.pas/auth/credentials/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ login, password }),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        if (res.status === 401) throw new Error('Invalid login or password.');
+        if (res.status === 429) throw new Error('Too many sign-in attempts — please try again later.');
+        throw new Error(`Sign-in failed (${res.status}): ${body}`);
+      }
+      const user = normalizeUser((await res.json()) as User);
+      this.session = { token: null, user };
+      this.lastAuthError = null;
+      this.emit();
+      this.ensureMember();
+      return user;
     }
     const res = await fetch(new URL('/v1/auth/credentials/login', this.apiBase), {
       method: 'POST',

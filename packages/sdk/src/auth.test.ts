@@ -201,6 +201,92 @@ describe('Auth.init', () => {
     }));
   });
 
+  it('signs in with credentials through same-origin host auth in platform-cookie mode', async () => {
+    const localStorage = {
+      getItem: vi.fn(() => { throw new Error('should not read storage'); }),
+      setItem: vi.fn(() => { throw new Error('should not write storage'); }),
+      removeItem: vi.fn(() => { throw new Error('should not clear storage'); }),
+    };
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url === '/.pas/auth/credentials/login') {
+        return new Response(JSON.stringify({
+          id: 'cred:student-one',
+          login: 'student-one',
+          avatarUrl: null,
+          roles: ['user'],
+          appRoles: {},
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url === '/.pas/api/v1/apps/interns/roles/ensure-member') {
+        return new Response(null, { status: 204 });
+      }
+      return new Response('unexpected', { status: 500 });
+    });
+    vi.stubGlobal('window', {
+      location: {
+        hash: '',
+        href: 'https://interns.proappstore.online/sign-in',
+        origin: 'https://interns.proappstore.online',
+        pathname: '/sign-in',
+        search: '',
+      },
+      localStorage,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const auth = new Auth('interns', 'https://api.proappstore.online', 'platform-cookie');
+    const user = await auth.signInWithCredentials('student-one', 'secret');
+
+    expect(user.login).toBe('student-one');
+    expect(auth.isSignedIn).toBe(true);
+    expect(auth.token).toBeNull();
+    expect(localStorage.getItem).not.toHaveBeenCalled();
+    expect(localStorage.setItem).not.toHaveBeenCalled();
+    expect(localStorage.removeItem).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith('/.pas/auth/credentials/login', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ login: 'student-one', password: 'secret' }),
+    });
+  });
+
+  it('starts email sign-in through same-origin host auth in platform-cookie mode', async () => {
+    const localStorage = {
+      getItem: vi.fn(() => { throw new Error('should not read storage'); }),
+      setItem: vi.fn(() => { throw new Error('should not write storage'); }),
+      removeItem: vi.fn(() => { throw new Error('should not clear storage'); }),
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal('window', {
+      location: {
+        hash: '#old',
+        href: 'https://interns.proappstore.online/join?club=1#old',
+        origin: 'https://interns.proappstore.online',
+        pathname: '/join',
+        search: '?club=1',
+      },
+      localStorage,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const auth = new Auth('interns', 'https://api.proappstore.online', 'platform-cookie');
+    await auth.signInWithEmail('student@example.com');
+
+    expect(auth.isSignedIn).toBe(false);
+    expect(auth.token).toBeNull();
+    expect(localStorage.getItem).not.toHaveBeenCalled();
+    expect(localStorage.setItem).not.toHaveBeenCalled();
+    expect(localStorage.removeItem).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith('/.pas/auth/email/start', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'student@example.com', returnTo: '/join?club=1' }),
+    });
+  });
+
   it('rewrites API requests through same-origin mediation in platform-cookie mode', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     vi.stubGlobal('window', {
