@@ -198,10 +198,34 @@ app.post('/v1/projects', async (c) => {
       const row = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM agent_projects WHERE owner_id = ?')
         .bind(user.id).first<{ n: number }>();
       if ((row?.n ?? 0) >= MAX_PROJECTS_PER_USER) {
-        return c.json({ error: `Project limit reached (${MAX_PROJECTS_PER_USER} per account). Delete an app to make room.` }, 429);
+        return c.json({ error: `Project limit reached (${MAX_PROJECTS_PER_USER} per account).` }, 429);
       }
     }
   } catch { /* fail open */ }
+
+  // Index the project BEFORE creating the DO (#143). The DOs are isolated and
+  // can't be enumerated, so this row is the only pointer the owner's listing has.
+  // It used to be written after the DO call, best-effort, inside a bare catch —
+  // so a failed write returned 2xx and left a project that exists but can't be
+  // named. Now a failed write fails the create: both this upsert and the DO's
+  // PUT /project are idempotent, so the caller's retry is safe and complete. A
+  // leftover row for a DO that never initialised is honest — it lists, and
+  // get_project on it answers project_not_initialized.
+  //
+  // The WHERE guard keeps a non-owner who re-creates someone else's slug from
+  // renaming that owner's index entry (the DO rejects them a moment later, but
+  // this write now runs first).
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO agent_projects (slug, owner_id, name, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(slug) DO UPDATE SET name = excluded.name
+         WHERE owner_id = excluded.owner_id`,
+    ).bind(body.slug, user.id, body.name, Date.now()).run();
+  } catch (err) {
+    console.error('[projects] index write failed', { slug: body.slug, owner: user.id, err: String(err) });
+    return c.json({ error: 'index_unavailable' }, 503);
+  }
 
   const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(body.slug));
   // The agent team (BA/Dev/QA) is seeded on create. If an initial idea is given,
@@ -211,17 +235,6 @@ app.post('/v1/projects', async (c) => {
     method: 'PUT',
     body: JSON.stringify({ name: body.name, slug: body.slug, ownerId: user.id, costCapMonthlyUsd: cap, idea: body.idea, template: body.template }),
   });
-  // Index the project so the creator console can list a user's projects (the DOs
-  // are isolated and can't be enumerated). Best-effort — don't fail create on it.
-  if (res.ok) {
-    try {
-      await c.env.DB.prepare(
-        `INSERT INTO agent_projects (slug, owner_id, name, created_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(slug) DO UPDATE SET name = excluded.name`,
-      ).bind(body.slug, user.id, body.name, Date.now()).run();
-    } catch { /* index write is non-fatal */ }
-  }
   return new Response(res.body, { status: res.status, headers: res.headers });
 });
 
@@ -235,13 +248,36 @@ app.get('/v1/projects', async (c) => {
     return c.json({
       projects: (rows.results ?? []).map((r) => ({ slug: r.slug, name: r.name, createdAt: r.created_at })),
     });
-  } catch {
-    return c.json({ projects: [] });
+  } catch (err) {
+    // #143: an index read failure must not be byte-identical to an empty
+    // listing. MCP list_projects prints the raw error on a non-200; the console
+    // already catches and shows an empty list, so neither needs a change.
+    console.error('[projects] index read failed', { owner: user.id, err: String(err) });
+    return c.json({ error: 'index_unavailable' }, 503);
   }
 });
 
-// Get project
-app.get('/v1/projects/:slug', (c) => relay(c, '/project'));
+// Get project. Self-heals the agent_projects index (#143): a row lost before
+// the reorder above is unrecoverable by any job (DOs can't be enumerated), but
+// an owner who still has the slug can repair their own listing by opening the
+// project once. Only fires when the DO itself says the caller is the owner.
+app.get('/v1/projects/:slug', async (c) => {
+  const res = await relay(c, '/project');
+  if (res.status !== 200) return res;
+  const user = c.get('user' as never) as { id: string };
+  const slug = c.req.param('slug')!;
+  try {
+    const project = await res.clone().json<{ ownerId?: string; name?: string; createdAt?: number }>();
+    if (project.ownerId === user.id) {
+      await c.env.DB.prepare(
+        `INSERT INTO agent_projects (slug, owner_id, name, created_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(slug) DO NOTHING`,
+      ).bind(slug, user.id, project.name ?? slug, project.createdAt ?? Date.now()).run();
+    }
+  } catch { /* best-effort repair on a read path: the caller already has the project; the next open retries */ }
+  return res;
+});
 
 // ── Play/Pause ──────────────────────────────────────────────
 // Play forwards the owner session token so the DO can authenticate autonomous
