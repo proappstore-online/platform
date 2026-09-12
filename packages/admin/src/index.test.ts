@@ -1,3 +1,4 @@
+import { mintSession } from "@proappstore/build-core";
 import { describe, expect, it, vi } from "vitest";
 import worker from "./index.js";
 import type { Env } from "./env.js";
@@ -145,5 +146,54 @@ describe("GET /api/provision-workflow/status", () => {
     const json = (await res.json()) as { id: string; status: { status: string } };
     expect(json.id).toBe("inst-1");
     expect(json.status.status).toBe("running");
+  });
+});
+
+describe("GitHub-token exchange removed (#142)", () => {
+  const KEY = "test-signing-key";
+  const env = { SESSION_SIGNING_KEY: KEY, INTERNAL_TOKEN: TOKEN } as unknown as Env;
+
+  it("404s POST /v1/auth/exchange — no any-audience token → session path remains", async () => {
+    const res = await worker.fetch(
+      new Request("https://admin.proappstore.online/v1/auth/exchange", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ githubToken: "gho_anything" }),
+      }),
+      env,
+      ctx,
+    );
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "not_found", route: "/v1/auth/exchange" });
+  });
+
+  it("still answers /v1/auth/me for a backend-minted PAS session", async () => {
+    const token = await mintSession({ uid: "gh:1", login: "serge-ivo", roles: ["user"] }, KEY);
+    const res = await worker.fetch(
+      new Request("https://admin.proappstore.online/v1/auth/me", { headers: { Authorization: `Bearer ${token}` } }),
+      env,
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ login: "serge-ivo" });
+  });
+
+  it("400s, not 500s, on /api/publish-app with a valid session and an empty body", async () => {
+    const token = await mintSession({ uid: "gh:1", login: "serge-ivo", roles: ["user"] }, KEY);
+    const post = (body: string) => worker.fetch(
+      new Request("https://admin.proappstore.online/api/publish-app", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body,
+      }),
+      env,
+      ctx,
+    );
+    const empty = await post("{}");
+    expect(empty.status).toBe(400);
+    expect(await empty.json()).toEqual({ error: "id required" });
+
+    const malformed = await post("");
+    expect(malformed.status).toBe(400);
   });
 });

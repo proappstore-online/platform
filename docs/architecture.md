@@ -111,8 +111,12 @@ is a separate dashboard endpoint at `admin.proappstore.online` that
 exposes `/api/publish-app` for owner-driven catalog edits — it's not on
 the CLI publish path.
 
-Auth: PAS platform validates its own signed PAS sessions with
-`SESSION_SIGNING_KEY`. No CF Access on `api.proappstore.online`.
+Auth: the admin Worker does not mint sessions. It verifies backend-minted
+PAS sessions with the same `SESSION_SIGNING_KEY` the backend signs with, and
+accepts `INTERNAL_TOKEN` + `X-PAS-Login` from sibling Workers that have already
+authenticated the caller. (Its own GitHub-token exchange was removed in #142:
+it never checked which OAuth app a token was issued to.) No CF Access on
+`api.proappstore.online`.
 
 ### 3. `host` Worker — app hosting and sibling dispatch
 

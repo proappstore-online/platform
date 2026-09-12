@@ -18,9 +18,11 @@ export type Env = {
   // secrets (wrangler secret put)
   CF_API_TOKEN: string;
   GITHUB_TOKEN: string;
-  /** PAS's own HS256 key used to mint + verify Bearer session tokens (see
-   *  auth.ts — no FAS dependency, per the admin-worker-per-store principle).
-   *  Required for /api/publish-app auth. */
+  /** HS256 key used to VERIFY Bearer session tokens (see auth.ts). Must equal
+   *  the backend's SESSION_SIGNING_KEY: since #142 this Worker mints nothing,
+   *  so every accepted session is one the backend signed. Set by hand
+   *  (`wrangler secret put`), not by deploy-admin.yml. Required for
+   *  /api/publish-app auth. */
   SESSION_SIGNING_KEY: string;
   /** Shared secret for internal service-to-service calls (e.g. the agent-teams
    *  Worker calling /api/agent-deploy). Mirrors INTERNAL_TOKEN on agent-teams +

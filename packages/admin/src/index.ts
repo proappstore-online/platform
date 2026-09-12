@@ -1,5 +1,5 @@
 import { internalTokenOk } from "@proappstore/build-core";
-import { handleAuthExchange, handleAuthMe, verifySession } from "./auth.js";
+import { handleAuthMe, verifySession } from "./auth.js";
 import type { Env } from "./env.js";
 import { guardProvisionRequest } from "./provision-guard.js";
 import {
@@ -66,10 +66,9 @@ export default {
       return Response.json({ ok: true, worker: "proappstore-admin", version: "0.3.0" });
     }
 
-    // Self-contained auth: exchange a GitHub token for a PAS admin session.
-    if (url.pathname === "/v1/auth/exchange" && request.method === "POST") {
-      return handleAuthExchange(request, env);
-    }
+    // No GitHub-token → session exchange here (#142): sessions are minted by
+    // the backend, whose exchange checks the token's OAuth audience. This
+    // Worker only verifies them (verifyPublishLogin) and answers whoami.
     if (url.pathname === "/v1/auth/me" && request.method === "GET") {
       return handleAuthMe(request, env);
     }
@@ -82,7 +81,13 @@ export default {
       if (!login) {
         return Response.json({ error: "invalid or expired session" }, { status: 401 });
       }
-      const body = await request.json<PublishRequest>();
+      let body: PublishRequest;
+      try {
+        body = await request.json<PublishRequest>();
+      } catch {
+        return Response.json({ error: "invalid JSON body" }, { status: 400 });
+      }
+      if (!body?.id) return Response.json({ error: "id required" }, { status: 400 });
 
       // SECURITY (#83): publishing is self-service — any signed-in GitHub
       // account may publish — so a session alone is not enough. Refuse an appId
