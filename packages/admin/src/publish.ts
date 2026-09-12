@@ -246,7 +246,7 @@ jobs:
  * API-token scope and no shared secret. Injected at deploy; triggers only when
  * the KB markdown changes. `\${{ }}` escaped for the literal.
  */
-function kbWorkflowYaml(): string {
+export function kbWorkflowYaml(): string {
   return `name: Publish Knowledge Base
 
 on:

@@ -1,0 +1,107 @@
+name: Reconcile app KB workflows
+
+# WHY (#57): kb-host's `/_ingest` used to be gated only by the shared
+# INTERNAL_TOKEN, which every app's CI holds — so any app creator could read it
+# out of their own Actions context and overwrite another tenant's KB. Ingest now
+# binds each write to the caller's GitHub OIDC `repository` claim, and the
+# generated kb.yml mints that token. But apps provisioned BEFORE that change keep
+# their old kb.yml until something rewrites it. This job is that something.
+#
+# It compares every app repo's .github/workflows/kb.yml to the reviewed golden
+# (packages/admin/src/__fixtures__/canonical-kb.yml — a unit test keeps it
+# byte-identical to the generator) and, when told to apply, commits the golden
+# over any drifted copy. That commit matches kb.yml's own path filter, so the
+# app republishes its KB over OIDC immediately.
+#
+# Dispatch-only and DRY-RUN BY DEFAULT: it writes commits into other repos, so
+# it never runs on a schedule. Once it reports zero legacy copies, the remaining
+# #57 steps (revoke the org INTERNAL_TOKEN, delete kb-host's legacy branch) can
+# go ahead.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Push the golden kb.yml to drifted repos. false = report only."
+        type: boolean
+        required: false
+        default: false
+      repo:
+        description: "Single repo to reconcile (name only). Blank = all app repos."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reconcile-kb-workflows
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    env:
+      # GH_ADMIN_TOKEN — org secret PAT with repo + workflow on the org's repos.
+      # `workflow` is required: GitHub refuses to write under .github/workflows/
+      # with a token that lacks it, and the default GITHUB_TOKEN is scoped to THIS
+      # repo only.
+      GH_TOKEN: ${{ secrets.GH_ADMIN_TOKEN }}
+      APPLY: ${{ github.event.inputs.apply }}
+      ONLY_REPO: ${{ github.event.inputs.repo }}
+      GOLDEN: packages/admin/src/__fixtures__/canonical-kb.yml
+      WF_PATH: .github/workflows/kb.yml
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare every app repo's kb.yml to the golden (push when apply=true)
+        run: |
+          set -euo pipefail
+
+          if [ -n "${ONLY_REPO}" ]; then
+            repos="${ONLY_REPO}"
+          else
+            repos=$(gh repo list proappstore-online --limit 300 --no-archived \
+              --json name,isFork --jq '.[] | select(.isFork==false) | .name')
+          fi
+
+          golden_b64=$(base64 -w0 < "$GOLDEN")
+          in_sync=0; drifted=0; pushed=0; skipped=0
+          drift_list=""
+
+          for r in $repos; do
+            full="proappstore-online/$r"
+            # Only app repos — identified by the injected deploy workflow (same
+            # rule as reconcile-app-secrets). The platform, storefront, template
+            # and console repos are not apps and are left alone.
+            if ! gh api "repos/$full/contents/.github/workflows/deploy.yml" --silent >/dev/null 2>&1; then
+              skipped=$((skipped + 1)); continue
+            fi
+            # No kb.yml at all → nothing to reconcile (the app never publishes a KB).
+            live=$(gh api "repos/$full/contents/$WF_PATH" 2>/dev/null || true)
+            if [ -z "$live" ]; then
+              skipped=$((skipped + 1)); continue
+            fi
+            sha=$(jq -r '.sha' <<<"$live")
+            if [ "$(jq -r '.content' <<<"$live" | tr -d '\n')" = "$golden_b64" ]; then
+              in_sync=$((in_sync + 1)); continue
+            fi
+
+            drifted=$((drifted + 1)); drift_list="$drift_list $r"
+            if [ "$APPLY" = "true" ]; then
+              gh api -X PUT "repos/$full/contents/$WF_PATH" \
+                -f message="ci: reconcile kb.yml to canonical keyless OIDC ingest (#57)" \
+                -f content="$golden_b64" \
+                -f sha="$sha" --silent
+              echo "pushed  $r"
+              pushed=$((pushed + 1))
+            else
+              echo "DRIFT   $r  (dry run — re-run with apply=true to push)"
+            fi
+          done
+
+          echo
+          echo "in sync: $in_sync   drifted: $drifted   pushed: $pushed   skipped (not an app / no kb.yml): $skipped"
+          if [ "$drifted" -gt 0 ] && [ "$APPLY" != "true" ]; then
+            echo "::warning::$drifted app repo(s) still carry a non-canonical kb.yml:$drift_list"
+          fi

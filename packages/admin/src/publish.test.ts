@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "./env.js";
-import { buildAgentBundle, deployWorkflowYaml, handleAgentDeploy, handlePublish } from "./publish.js";
+import { buildAgentBundle, deployWorkflowYaml, handleAgentDeploy, handlePublish, kbWorkflowYaml } from "./publish.js";
 
 /**
  * The two ways an app repo gets provisioned must yield the SAME hosting:
@@ -359,5 +359,25 @@ describe("documented divergences", () => {
     expect(agent.success).toBe(false);
     expect(agent.steps[0]!.name).toBe("Validation");
     expect(agent.repoUrl).toBeNull();
+  });
+});
+
+describe("canonical KB workflow — single source of truth (#57)", () => {
+  // kbWorkflowYaml() is THE canonical KB publish workflow. The committed golden
+  // (__fixtures__/canonical-kb.yml) is what reconcile-kb-workflows.yml pushes
+  // into app repos that still carry an older copy — the ones provisioned before
+  // ingest moved to keyless OIDC. Same contract as canonical-deploy.yml: any
+  // generator change fails here until the golden is regenerated.
+  it("generator output is byte-identical to the committed golden file", () => {
+    const golden = readFileSync(new URL("./__fixtures__/canonical-kb.yml", import.meta.url), "utf8");
+    expect(kbWorkflowYaml()).toBe(golden);
+  });
+
+  it("the golden mints an OIDC token and never references the shared INTERNAL_TOKEN secret", () => {
+    const golden = readFileSync(new URL("./__fixtures__/canonical-kb.yml", import.meta.url), "utf8");
+    expect(golden).toContain("id-token: write");
+    expect(golden).toContain("audience=proappstore-kb-host");
+    expect(golden).not.toContain("secrets.INTERNAL_TOKEN");
+    expect(golden).not.toContain("x-internal-token");
   });
 });
