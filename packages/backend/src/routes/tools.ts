@@ -90,6 +90,7 @@ interface ToolManifest {
     required?: boolean;
     platform_roles?: string[];
     app_roles?: string[];
+    caller_unscoped?: { reason: string };
   };
 }
 
@@ -265,23 +266,38 @@ export async function replaceAppTools(
     if (err) return { status: 400, payload: { error: `tool "${tool?.name}": ${err}` } };
   }
 
-  // Security lint (non-blocking): a write statement with no :__user_id has
-  // neither identity scoping nor a caller guard — any signed-in user can run
-  // it against arbitrary rows. Legitimate exceptions exist (e.g. consuming a
-  // join code by its unguessable id), so this warns rather than rejects; the
-  // deploy workflow surfaces the warnings in the run log.
-  const warnings: string[] = [];
+  // Security lint: a write statement with no :__user_id must declare an explicit
+  // auth.caller_unscoped exemption (with a non-empty reason string). Public
+  // (requires_auth: false) tools are exempt. Failure is a hard rejection, not a
+  // warning, so a misconfigured tool cannot be registered at all.
+  const writeErrors: string[] = [];
   for (const tool of tools as ToolManifest[]) {
+    if (tool.requires_auth === false) continue; // public query path — no user identity expected
+    const hasCallerUnscoped =
+      typeof tool.auth?.caller_unscoped?.reason === 'string' &&
+      tool.auth.caller_unscoped.reason.trim().length > 0;
     const stmts = tool.operation === 'batch' ? (tool.statements ?? []) : [tool.sql ?? ''];
-    for (const stmt of stmts) {
+    stmts.forEach((stmt, idx) => {
       const upper = stmt.trim().toUpperCase();
-      const isWrite = upper.startsWith('UPDATE') || upper.startsWith('DELETE') || upper.startsWith('INSERT');
-      if (isWrite && !stmt.includes(':__user_id')) {
-        warnings.push(
-          `${tool.name}: write statement has no :__user_id — no identity scoping or caller guard; any signed-in user can run it`,
+      const isWrite =
+        upper.startsWith('UPDATE') || upper.startsWith('DELETE') || upper.startsWith('INSERT');
+      if (isWrite && !stmt.includes(':__user_id') && !hasCallerUnscoped) {
+        const location =
+          tool.operation === 'batch' ? `"${tool.name}" statement[${idx}]` : `"${tool.name}"`;
+        writeErrors.push(
+          `${location}: write statement has no :__user_id and no auth.caller_unscoped exemption`,
         );
       }
-    }
+    });
+  }
+  if (writeErrors.length > 0) {
+    return {
+      status: 400,
+      payload: {
+        error: 'write statements must include :__user_id or declare auth.caller_unscoped',
+        details: writeErrors,
+      },
+    };
   }
 
   // Schema coherence (#33): reject actions whose SQL references a missing
@@ -296,7 +312,6 @@ export async function replaceAppTools(
         payload: {
           error: `schema coherence: ${coherenceErrors.length} action(s) reference schema that doesn't exist`,
           details: coherenceErrors,
-          ...(warnings.length ? { warnings } : {}),
         },
       };
     }
@@ -314,7 +329,7 @@ export async function replaceAppTools(
   await db.batch(stmts);
   return {
     status: 200,
-    payload: { ok: true, registered: tools.length, ...(warnings.length ? { warnings } : {}) },
+    payload: { ok: true, registered: tools.length },
   };
 }
 

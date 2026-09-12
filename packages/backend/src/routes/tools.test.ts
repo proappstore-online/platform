@@ -585,6 +585,82 @@ describe('PUT /v1/apps/:appId/tools — requires_auth enforcement', () => {
   });
 });
 
+describe('PUT /v1/apps/:appId/tools — unscoped write rejection (#150)', () => {
+  const put = (tool: Record<string, unknown>) => app.request(
+    '/v1/apps/test-app/tools',
+    {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tools: [tool] }),
+    },
+    makeEnv({}, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }))),
+  );
+  const reapStale = {
+    name: 'reap_stale',
+    description: 'Delete expired sessions',
+    operation: 'execute',
+    sql: 'DELETE FROM sessions WHERE expires_at < :__now',
+    params: {},
+    requires_auth: true,
+  };
+
+  it('rejects an execute write with no :__user_id and no exemption', async () => {
+    const res = await put(reapStale);
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string; details: string[] };
+    expect(body.error).toContain('caller_unscoped');
+    expect(body.details).toEqual([
+      '"reap_stale": write statement has no :__user_id and no auth.caller_unscoped exemption',
+    ]);
+  });
+
+  it('rejects a batch tool when any member statement is unscoped, naming the index', async () => {
+    const res = await put({
+      name: 'rollover',
+      description: 'Archive then purge',
+      operation: 'batch',
+      statements: [
+        'UPDATE items SET archived = 1 WHERE user_id = :__user_id',
+        'DELETE FROM items WHERE archived = 1',
+      ],
+      params: {},
+      requires_auth: true,
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { details: string[] };
+    expect(body.details).toEqual([
+      '"rollover" statement[1]: write statement has no :__user_id and no auth.caller_unscoped exemption',
+    ]);
+  });
+
+  it('accepts an unscoped write that declares auth.caller_unscoped with a reason', async () => {
+    const res = await put({
+      ...reapStale,
+      auth: { caller_unscoped: { reason: 'housekeeping: rows are selected by expiry, not identity' } },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, registered: 1 });
+  });
+
+  it('rejects an exemption with an empty or whitespace reason', async () => {
+    expect((await put({ ...reapStale, auth: { caller_unscoped: { reason: '' } } })).status).toBe(400);
+    expect((await put({ ...reapStale, auth: { caller_unscoped: { reason: '   ' } } })).status).toBe(400);
+    expect((await put({ ...reapStale, auth: { caller_unscoped: {} } })).status).toBe(400);
+  });
+
+  it('leaves the public requires_auth: false query path unaffected', async () => {
+    const res = await put({
+      name: 'get_org_by_slug',
+      description: 'Read public org branding',
+      operation: 'query',
+      sql: 'SELECT id, name, logo_url FROM orgs WHERE slug = :slug LIMIT 1',
+      params: { slug: { type: 'string' } },
+      requires_auth: false,
+    });
+    expect(res.status).toBe(200);
+  });
+});
+
 describe('GET /v1/tools — JSON.parse safety', () => {
   it('skips rows with corrupted manifest JSON', async () => {
     const goodManifest = JSON.stringify(validTool);

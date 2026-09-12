@@ -65,8 +65,9 @@ Pro primitives (read_docs has exact return shapes — check before assuming fiel
     guards (e.g. "has an accepted invite") must be consumed/revoked, or they replay forever.
   - Multi-step flows that must not be observable half-applied use \`"operation": "batch"\` with
     \`"statements": [...]\` (max 25, one shared params pool) — executed as ONE atomic D1 transaction.
-  - Registration warns on write statements with no \`:__user_id\` — treat warnings as bugs unless
-    the statement is deliberately unscoped (e.g. consuming an unguessable one-time code).
+  - Registration REJECTS write statements with no \`:__user_id\`. If a write is deliberately
+    unscoped (e.g. consuming an unguessable one-time code), declare
+    \`"auth": { "caller_unscoped": { "reason": "..." } }\` on that tool with a non-empty reason.
   - Registration also COMPILES each action against the live schema (#33): an action that
     references a table/column not in \`migrations.json\` FAILS the deploy, naming the tool + column.
     So keep \`migrations.json\` and \`mcp.json\` in lockstep — every column an action reads/writes
