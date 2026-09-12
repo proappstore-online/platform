@@ -78,8 +78,10 @@ jobs:
               skipped=$((skipped + 1)); continue
             fi
             # No kb.yml at all → nothing to reconcile (the app never publishes a KB).
-            live=$(gh api "repos/$full/contents/$WF_PATH" 2>/dev/null || true)
-            if [ -z "$live" ]; then
+            # Test the EXIT STATUS: on a 404 `gh api` still prints the error body
+            # to stdout, so a non-empty check would treat every such repo as
+            # drifted and, with apply=true, create a kb.yml where none belongs.
+            if ! live=$(gh api "repos/$full/contents/$WF_PATH" 2>/dev/null); then
               skipped=$((skipped + 1)); continue
             fi
             sha=$(jq -r '.sha' <<<"$live")
