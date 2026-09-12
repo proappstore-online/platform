@@ -29,7 +29,7 @@ describe("keyForPath", () => {
 
 describe("_ingest authorization (#57)", () => {
   const put = vi.fn();
-  const env = { INTERNAL_TOKEN: "shared-secret", KB_R2: { put, get: vi.fn() } } as never;
+  const env = { KB_R2: { put, get: vi.fn() } } as never;
 
   beforeEach(() => {
     put.mockReset().mockResolvedValue(undefined);
@@ -42,21 +42,17 @@ describe("_ingest authorization (#57)", () => {
       env,
     );
 
-  it("legacy INTERNAL_TOKEN may write an app prefix", async () => {
-    const res = await ingest("interns/index.html", { "x-internal-token": "shared-secret" });
-    expect(res.status).toBe(200);
-    expect(put).toHaveBeenCalledWith("interns/index.html", expect.anything());
-  });
-
-  it("legacy INTERNAL_TOKEN may NOT write the reserved platform/ prefix (protects official docs)", async () => {
-    const res = await ingest("platform/index.html", { "x-internal-token": "shared-secret" });
-    expect(res.status).toBe(403);
+  it("the retired shared x-internal-token is refused for EVERY prefix (#57 step 4)", async () => {
+    // The shared CI secret used to be accepted for any app prefix. It never
+    // proved which app was calling, so this must stay a 403 even for a value
+    // that would once have matched — there is no token to match any more.
+    expect((await ingest("interns/index.html", { "x-internal-token": "shared-secret" })).status).toBe(403);
+    expect((await ingest("platform/index.html", { "x-internal-token": "shared-secret" })).status).toBe(403);
     expect(put).not.toHaveBeenCalled();
   });
 
-  it("a wrong/absent token is rejected", async () => {
+  it("an absent credential is rejected", async () => {
     expect((await ingest("interns/x.html", {})).status).toBe(403);
-    expect((await ingest("interns/x.html", { "x-internal-token": "nope" })).status).toBe(403);
     expect(put).not.toHaveBeenCalled();
   });
 
