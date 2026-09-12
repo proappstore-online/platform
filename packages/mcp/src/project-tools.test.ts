@@ -13,6 +13,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock build-core
 const mockGh = {
+  api: vi.fn(),
   createRepoFromTemplate: vi.fn(),
   repoExists: vi.fn(),
   getFile: vi.fn(),
@@ -165,18 +166,63 @@ describe('provision_pas_app', () => {
     expect(out).toContain('+ route');
   });
 
-  it('blocks reuse of an existing unowned repo for non-admin callers', async () => {
+  it('blocks reuse of a repo whose app record belongs to another account', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: false, status: 422, data: { message: 'exists' } });
     mockGh.repoExists.mockResolvedValue(true);
     mockOwnership.mockResolvedValue(false);
+    // #144: the record-state probe answers 403 → someone else's app.
+    mockFetch.mockResolvedValue({ ok: false, status: 403, text: () => Promise.resolve('not the app owner') });
 
     const result = await runProvisionPas({ app_id: 'manual-repo' });
     const out = getText(result);
 
     expect(out).toContain('already exists');
-    expect(out).toContain('requires a platform admin session');
+    expect(out).toContain('owned by another account');
+    expect(out).toContain('choose a different app id');
     expect(mockGh.setRepoVariable).not.toHaveBeenCalled();
-    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockFetch.mock.calls.map((c) => String(c[0]))).not.toContainEqual(expect.stringContaining('/v1/provision'));
+  });
+
+  it('adopts an orphaned repo (no app record, untouched template scaffold) for its non-admin caller (#144)', async () => {
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: false, status: 422, data: { message: 'exists' } });
+    mockGh.repoExists.mockResolvedValue(true);
+    mockOwnership.mockResolvedValue(false);
+    mockGh.api.mockResolvedValue({ ok: true, status: 200, data: [{ sha: '0572725' }] }); // one commit
+    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
+    mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes('/listing')) return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve('app not found') });
+      return Promise.resolve({
+        ok: true, status: 200,
+        text: () => Promise.resolve(JSON.stringify({ success: true, steps: [{ name: 'record_app', status: 'ok', detail: 'creator: alice' }] })),
+        json: () => Promise.resolve({ success: true, steps: [] }),
+      });
+    });
+
+    const result = await runProvisionPas({ app_id: 'school-clubs' });
+    const out = getText(result);
+
+    expect(out).toContain('no PAS app record (untouched template scaffold) — adopting it');
+    expect(out).toContain('PAS app provisioned');
+    expect(mockGh.api).toHaveBeenCalledWith('/repos/test-org/school-clubs/commits?per_page=2');
+    expect(mockGh.setRepoVariable).toHaveBeenCalledTimes(3);
+    expect(mockFetch.mock.calls.map((c) => String(c[0]))).toContainEqual(expect.stringContaining('/v1/provision'));
+  });
+
+  it('refuses to adopt an orphaned repo that has commits beyond the scaffold (#144)', async () => {
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: false, status: 422, data: { message: 'exists' } });
+    mockGh.repoExists.mockResolvedValue(true);
+    mockOwnership.mockResolvedValue(false);
+    mockGh.api.mockResolvedValue({ ok: true, status: 200, data: [{ sha: 'a' }, { sha: 'b' }] }); // two commits
+    mockFetch.mockResolvedValue({ ok: false, status: 404, text: () => Promise.resolve('app not found') });
+
+    const result = await runProvisionPas({ app_id: 'school-clubs' });
+    const out = getText(result);
+
+    expect(out).toContain('commits beyond the template scaffold');
+    expect(out).toContain('platform admin');
+    expect(mockGh.setRepoVariable).not.toHaveBeenCalled();
+    expect(mockFetch.mock.calls.map((c) => String(c[0]))).not.toContainEqual(expect.stringContaining('/v1/provision'));
   });
 
   it('allows admins to reuse an existing unowned repo', async () => {

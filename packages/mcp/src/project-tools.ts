@@ -126,6 +126,39 @@ export function registerProjectTools(
     return ok;
   }
 
+  /**
+   * Whether a PAS app record exists for `appId`, and whose it is (#144). Uses an
+   * owner-gated, side-effect-free backend GET with the caller's own token:
+   * 200 → the caller owns it, 403 → someone else's, 404 → no record at all.
+   * That last state is the orphan case — a repo whose provisioning died before
+   * the app-record step — and `ownsApp` alone cannot tell it from "someone
+   * else's app". Over the API service binding, never a same-zone fetch.
+   */
+  async function appRecordState(appId: string, token: string): Promise<"owner" | "other" | "none" | "unknown"> {
+    try {
+      const res = await env.API.fetch(`${apiBase}/v1/apps/${encodeURIComponent(appId)}/listing`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.status === 200) return "owner";
+      if (res.status === 403) return "other";
+      if (res.status === 404) return "none";
+      return "unknown";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  /**
+   * True when the org repo is still the untouched template scaffold — exactly
+   * one commit (the template-generate "Initial commit"). Adopting an orphan is
+   * only allowed in that state: anything with real commits could be someone's
+   * work-in-progress and stays admin-only.
+   */
+  async function isUntouchedTemplate(appId: string): Promise<boolean> {
+    const r = await gh.api(`/repos/${org}/${appId}/commits?per_page=2`);
+    return r.ok && Array.isArray(r.data) && r.data.length === 1;
+  }
+
   /** Set R2 deploy credentials as GitHub Actions variables on a repo. */
   async function setR2Variables(appId: string): Promise<string[]> {
     const vars: [string, string][] = [
@@ -304,9 +337,34 @@ export function registerProjectTools(
         const owned = await ownsApp(app_id, auth.token);
         const isAdmin = auth.roles.includes("admin");
         if (!owned && !isAdmin) {
-          return text(`Error: ${org}/${app_id} already exists, but "${app_id}" is not owned by this PAS account. Reusing an unowned existing repo requires a platform admin session.`);
+          // #144: "not owned by this account" is two different situations.
+          // Someone else's app stays refused. A repo with NO app record at all
+          // is a half-provisioned orphan — repo created, app-record step never
+          // ran — and the owner of that failure had no non-admin way back in.
+          // Adopt it when it is still the untouched scaffold; /v1/provision then
+          // creates the record under this caller, so a retry completes the
+          // provisioning that died. Its own guard still 403s a claimed id.
+          const state = await appRecordState(app_id, auth.token);
+          if (state === "other") {
+            return text(
+              `Error: ${org}/${app_id} already exists and its PAS app record is owned by another account. ` +
+              `Sign in as that account to reuse it, or choose a different app id.`,
+            );
+          }
+          if (state === "unknown") {
+            return text(`Error: ${org}/${app_id} already exists and its PAS app record could not be checked (backend unreachable). Retry, or ask a platform admin.`);
+          }
+          // state === "none": no record anywhere.
+          if (!(await isUntouchedTemplate(app_id))) {
+            return text(
+              `Error: ${org}/${app_id} already exists with no PAS app record, but it has commits beyond the template scaffold, ` +
+              `so it cannot be adopted automatically. A platform admin can provision it with reuse; or choose a different app id.`,
+            );
+          }
+          steps.push(`~ GitHub repo: ${org}/${app_id} already existed with no PAS app record (untouched template scaffold) — adopting it (#144)`);
+        } else {
+          steps.push(`~ GitHub repo: ${org}/${app_id} already exists`);
         }
-        steps.push(`~ GitHub repo: ${org}/${app_id} already exists`);
       } else if (createRes.status === 404) {
         return text(
           `Error creating repo: GitHub returned 404 from the template-generate API. The source ` +
