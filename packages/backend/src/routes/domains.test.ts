@@ -334,6 +334,65 @@ describe('POST /v1/apps/:appId/domains — wildcard base domains', () => {
     expect(mock.cfCalls).toHaveLength(0);
   });
 
+  it('rejects an exact domain another app already holds — exact-vs-exact (#59)', async () => {
+    const conflict = mockStmt({ first: { app_id: 'other', domain: 'shop.example.com', kind: 'exact' } });
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), conflict);
+    const mock = mockFetchWithCf([]);
+    mock.install();
+
+    const res = await app.request('/v1/apps/meetup/domains', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: 'shop.example.com' }),
+    }, makeEnv({ db }));
+
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain('already attached to another app');
+    expect(mock.cfCalls).toHaveLength(0);
+    // The caller's own app is excluded (idempotent re-attach stays allowed) and
+    // the covering wildcard base is checked in the same statement.
+    expect(conflict.bind).toHaveBeenCalledWith('meetup', 'shop.example.com', 'example.com');
+  });
+
+  it('rejects a wildcard base that would shadow another app\'s exact hostname (#59)', async () => {
+    const conflict = mockStmt({ first: { app_id: 'other', domain: 'club.chessclubs.online', kind: 'exact' } });
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), conflict);
+    const mock = mockFetchWithCf([]);
+    mock.install();
+
+    const res = await app.request('/v1/apps/meetup/domains', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: 'chessclubs.online', wildcard: true }),
+    }, makeEnv({ db }));
+
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain('club.chessclubs.online is already attached to another app under this base');
+    expect(mock.cfCalls).toHaveLength(0);
+    expect(conflict.bind).toHaveBeenCalledWith('meetup', 'chessclubs.online', '%.chessclubs.online');
+  });
+
+  it('an apex exact domain checks exact-vs-exact only (no parent to consult) (#59)', async () => {
+    const conflict = mockStmt({ first: null });
+    const db = mockD1(
+      mockStmt({ first: { creator_id: 'gh:1' } }),
+      conflict,
+      mockStmt({ run: { meta: { changes: 1 } } }),
+      mockStmt({ first: { app_id: 'meetup', domain: 'example.com', kind: 'exact', status: 'active', cf_status: 'active', cf_payload: '{"kind":"worker"}', added_at: 1000, verified_at: 1000 } }),
+    );
+    const mock = mockFetchWithCf([zoneFound('zone1', 'example.com'), bindOk('example.com')]);
+    mock.install();
+
+    const res = await app.request('/v1/apps/meetup/domains', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: 'example.com' }),
+    }, makeEnv({ db }));
+
+    expect(res.status).toBe(201);
+    expect(conflict.bind).toHaveBeenCalledWith('meetup', 'example.com', '');
+  });
+
   it('rejects exact domains under another app wildcard base before calling Cloudflare', async () => {
     const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ first: { app_id: 'other' } }));
     const mock = mockFetchWithCf([]);

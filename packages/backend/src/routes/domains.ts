@@ -331,26 +331,58 @@ function extractCfResult(body: unknown): { ok: boolean; result: any; error: stri
   return { ok: false, result: null, error: String(msg) };
 }
 
+/**
+ * Registration-time guard against two apps claiming overlapping hostnames (#59).
+ * The table's key is (app_id, domain), so nothing at the schema level stops a
+ * second app from attaching a hostname another app already holds; the host's
+ * resolve query is specificity-first so serving is deterministic, but the loser
+ * would still hold an "active" row it never serves. One query per attach:
+ *
+ *   exact `d`      → 409 if another app holds exact `d`, or the wildcard base
+ *                    that covers it (parent of `d`).
+ *   wildcard `b`   → 409 if another app holds wildcard `b`, or any exact
+ *                    hostname under `b` (the route would shadow it).
+ *
+ * `failed` rows are ignored (a dead claim must not squat). Pending rows are
+ * NOT ignored: a pending SaaS hostname is already registered with Cloudflare,
+ * so a second app could not verify it anyway, and racing two pending claims
+ * is the state this guard exists to prevent. LIKE is safe here: hostnames are
+ * lowercase and cannot contain `%` or `_` (see HOSTNAME_RE).
+ */
 async function assertNoCrossAppDomainConflict(db: D1Database, appId: string, domain: string, wildcard: boolean): Promise<void> {
-  if (wildcard) {
-    const existing = await db.prepare(
-      `SELECT app_id FROM app_custom_domains
-       WHERE domain = ? AND COALESCE(kind, 'exact') = 'wildcard' AND app_id <> ?
-       LIMIT 1`,
-    ).bind(domain, appId).first<{ app_id: string }>();
-    if (existing) throw new HttpError(`${domain} is already attached as a wildcard base`, 409);
-    return;
-  }
-
   const labels = domain.split('.');
-  if (labels.length <= 2) return;
-  const parent = labels.slice(1).join('.');
-  const wildcardOwner = await db.prepare(
-    `SELECT app_id FROM app_custom_domains
-     WHERE domain = ? AND COALESCE(kind, 'exact') = 'wildcard' AND app_id <> ?
-     LIMIT 1`,
-  ).bind(parent, appId).first<{ app_id: string }>();
-  if (wildcardOwner) throw new HttpError(`${domain} is under a wildcard base owned by another app`, 409);
+  const parent = labels.length > 2 ? labels.slice(1).join('.') : '';
+  const row = wildcard
+    ? await db.prepare(
+        `SELECT app_id, domain, COALESCE(kind, 'exact') AS kind FROM app_custom_domains
+         WHERE app_id <> ? AND status <> 'failed'
+           AND ((domain = ? AND COALESCE(kind, 'exact') = 'wildcard')
+             OR (COALESCE(kind, 'exact') = 'exact' AND domain LIKE ?))
+         LIMIT 1`,
+      ).bind(appId, domain, `%.${domain}`).first<{ app_id: string; domain?: string; kind?: string }>()
+    : await db.prepare(
+        `SELECT app_id, domain, COALESCE(kind, 'exact') AS kind FROM app_custom_domains
+         WHERE app_id <> ? AND status <> 'failed'
+           AND ((domain = ? AND COALESCE(kind, 'exact') = 'exact')
+             OR (domain = ? AND COALESCE(kind, 'exact') = 'wildcard'))
+         LIMIT 1`,
+      ).bind(appId, domain, parent).first<{ app_id: string; domain?: string; kind?: string }>();
+  if (!row) return;
+
+  if (wildcard) {
+    throw new HttpError(
+      row.kind === 'exact'
+        ? `${row.domain ?? 'a hostname'} is already attached to another app under this base`
+        : `${domain} is already attached as a wildcard base`,
+      409,
+    );
+  }
+  throw new HttpError(
+    row.kind === 'wildcard'
+      ? `${domain} is under a wildcard base owned by another app`
+      : `${domain} is already attached to another app`,
+    409,
+  );
 }
 
 function wrap(handler: (c: Ctx) => Promise<Response>) {
