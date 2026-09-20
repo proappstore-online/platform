@@ -534,6 +534,32 @@ describe("host same-origin platform mediation routes", () => {
   });
 });
 
+describe("direct api.* dispatch — app context (#80)", () => {
+  it("strips a client-supplied X-PAS-App before it reaches the API", async () => {
+    // The backend's secret proxy treats X-PAS-App as the host's word. On the
+    // direct path nobody resolved a route, so a caller-supplied value must not
+    // survive — otherwise any bearer could claim any app.
+    const seen: Request[] = [];
+    const env = makeEnv({
+      apiFetch: async (request) => {
+        seen.push(request);
+        return Response.json({});
+      },
+    });
+    await worker.fetch(
+      new Request("https://api.proappstore.online/v1/apps/victim/proxy/api.example.com/x", {
+        headers: { Authorization: "Bearer tok", "X-PAS-App": "victim" },
+      }),
+      env,
+      ctx(),
+    );
+    expect(seen).toHaveLength(1);
+    expect(seen[0].headers.get("X-PAS-App")).toBeNull();
+    expect(seen[0].headers.get("Authorization")).toBe("Bearer tok");
+    expect(seen[0].url).toBe("https://api.proappstore.online/v1/apps/victim/proxy/api.example.com/x");
+  });
+});
+
 function makeEnv(opts: { apiFetch?: (request: Request) => Promise<Response> } = {}): Env {
   const apiFetch =
     opts.apiFetch ??

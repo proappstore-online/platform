@@ -53,7 +53,10 @@ Uncapped on Pro (32 peers/room, 64 rooms/app on Free).`,
     proxy: `## Secret-injecting API Proxy
 \`\`\`tsx
 const res = await app.proxy.fetch('api.example.com/v1/data')
-\`\`\``,
+\`\`\`
+Requires \`initPro({ appId, authMode: 'platform-cookie' })\`. The proxy spends the app's
+secrets, so it only answers calls mediated through the app's own origin; a
+legacy-bearer call gets 403.`,
     db: `## Per-app SQL Database (D1)
 
 ### Schema lives in migrations.json (canonical — applied on every deploy)

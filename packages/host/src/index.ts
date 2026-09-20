@@ -42,7 +42,15 @@ export default {
     // ── Reserved subdomain dispatch ──────────────────────────────
 
     // Service-bound Workers (zero-hop, no external fetch)
-    if (slug === "api") return env.API.fetch(request);
+    if (slug === "api") {
+      // X-PAS-App is this worker's assertion of which app a *mediated* request
+      // came from (platform-mediation.ts), and the backend's secret proxy binds
+      // calls to it (#80). A caller hitting the API directly must not be able to
+      // say it for us.
+      const direct = new Request(request);
+      direct.headers.delete("X-PAS-App");
+      return env.API.fetch(direct);
+    }
     if (slug === "admin") return env.ADMIN.fetch(request);
     if (slug === "agents") return env.AGENTS.fetch(request);
     if (slug === "mcp") return env.MCP.fetch(request);

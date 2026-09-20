@@ -36,7 +36,8 @@ app.counters.increment(name) / .get(name) / .list()
 // Real-time WebSocket rooms
 app.rooms.join(roomId) → room.send() / .onMessage() / .onPeers() / .close()
 
-// Secret-injecting API proxy
+// Secret-injecting API proxy — requires authMode: 'platform-cookie' (calls are
+// bound to the app's own origin; a legacy-bearer call gets 403)
 app.proxy.fetch(url, opts)
 
 // Per-app SQL database (D1)

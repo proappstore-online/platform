@@ -334,8 +334,8 @@ describe('DELETE /v1/apps/:appId/allowlist', () => {
 
 // The proxy is deliberately callable by any signed-in user — an app's end users
 // are not team members, and there is no "user U is a user of app A" record to
-// check. That is why a mediated request's app claim is load-bearing: it is the
-// one signal that says which app a call actually came from.
+// check. That is why the mediated app claim is load-bearing: it is the one
+// signal that says which app a call actually came from, so the proxy requires it.
 describe('ALL /v1/apps/:appId/proxy/* — app context (#80)', () => {
   it('rejects a mediated request that claims a different app', async () => {
     // X-PAS-App is set by the host from the resolved route, with any
@@ -360,15 +360,19 @@ describe('ALL /v1/apps/:appId/proxy/* — app context (#80)', () => {
     expect(body.error).not.toBe('app context mismatch');
   });
 
-  it('does not reject an unmediated request (absence proves nothing)', async () => {
-    // A direct legacy-bearer caller sends no header. Rejecting on absence would
-    // break every app not yet on the platform-cookie path (#20); the per-user
-    // sub-cap is what bounds this case instead.
-    const res = await app.request('/v1/apps/myapp/proxy/api.example.com/v1/thing', {
+  it('rejects an unmediated request before touching secrets', async () => {
+    // A direct bearer call names its app in the URL and nothing vouches for it:
+    // a session obtained anywhere could spend any app's secrets. The host strips
+    // a client-supplied X-PAS-App on the direct api.* path, so absence is what a
+    // direct caller looks like.
+    const db = mockD1();
+    const res = await app.request('/v1/apps/victimapp/proxy/api.example.com/v1/thing', {
       method: 'GET',
       headers: { Authorization: `Bearer ${TOK}` },
-    }, makeEnv());
+    }, makeEnv({}, db));
+    expect(res.status).toBe(403);
     const body = (await res.json()) as { error?: string };
-    expect(body.error).not.toBe('app context mismatch');
+    expect(body.error).toContain("app's own origin");
+    expect(db.prepare).not.toHaveBeenCalled();
   });
 });

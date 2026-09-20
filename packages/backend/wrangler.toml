@@ -2,7 +2,11 @@ name = "proappstore-api"
 main = "src/index.ts"
 compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
-workers_dev = true
+# SECURITY (#80): no workers.dev URL. api.proappstore.online is dispatched by the
+# host worker, which strips client-supplied X-PAS-App; a workers.dev hostname
+# would bypass the host and let a direct caller forge the app context the secret
+# proxy binds to. Sibling workers reach this one via service bindings.
+workers_dev = false
 
 # De-minify Worker stack traces. Worker code only — app assets ship via each
 # app's own CI, so browser symbolication is a separate follow-up (ADR-008).

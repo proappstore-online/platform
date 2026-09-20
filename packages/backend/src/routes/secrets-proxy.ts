@@ -65,29 +65,41 @@ const PROXY_RESPONSE_SKIP_HEADERS = new Set([
 export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
   secretsRoutes.all('/apps/:appId/proxy/:host/*', async (c) => {
     try {
-      // Auth: any valid platform session can call the proxy. The app's owner
-      // pays the quota, not the caller. (See spec: free tier, per-app quota.)
+      // Auth: any valid platform session can call the proxy — but only from the
+      // app's own origin (below). The app's owner pays the quota, not the caller.
       const user = await requireUser(c);
       const appId = c.req.param('appId')!;
       const host = c.req.param('host')!;
 
-      // SECURITY (#80): a request arriving through same-origin mediation carries
-      // X-PAS-App, injected by the host from the resolved route and stripped of
-      // any client-supplied copy — so its presence is the host's word, not the
-      // page's. A mismatch means a page on app A is driving app B's proxy, which
-      // spends B's secrets and B's quota. Reject it.
+      // SECURITY (#80): every proxy call is bound to the calling app. A request
+      // arriving through same-origin mediation carries X-PAS-App, set by the host
+      // from the resolved route; the host strips any client-supplied copy on both
+      // the mediated path (platform-mediation.ts) and the direct api.* dispatch
+      // (host index.ts), and this worker has no workers.dev URL to go around it —
+      // so the header is the host's word, never the caller's. Anything else would
+      // let a session obtained on app A spend app B's secrets and quota.
+      //
+      // Absent → the call did not come from an app origin at all (legacy-bearer,
+      // curl with a bearer). The proxy decrypts and spends an app's secrets, so
+      // unlike logs it does not accept "unverified": it requires the mediated
+      // path, i.e. initPro({ authMode: 'platform-cookie' }).
       //
       // Checked before requireKek deliberately: a cross-app request should be
       // turned away before the handler touches key material at all.
       //
-      // Absence is NOT proof of anything: a direct (legacy-bearer) caller has no
-      // such header, and an attacker simply omits it. Binding every call to an
-      // app origin needs the mediated path to be the only path — blocked on the
-      // platform-cookie migration (#20). Until then the per-user sub-cap below
-      // is what bounds an unmediated caller.
+      // A signed-in user can still script the victim app's own origin — any
+      // platform user may use any app — which is what the per-user sub-cap
+      // below bounds.
       const mediatedApp = c.req.header(APP_CONTEXT_HEADER);
-      if (mediatedApp && mediatedApp !== appId) {
-        return c.json({ error: 'app context mismatch' }, 403);
+      if (mediatedApp !== appId) {
+        return c.json(
+          {
+            error: mediatedApp
+              ? 'app context mismatch'
+              : "proxy is only callable from the app's own origin — use initPro({ authMode: 'platform-cookie' })",
+          },
+          403,
+        );
       }
 
       const kek = requireKek(c);
