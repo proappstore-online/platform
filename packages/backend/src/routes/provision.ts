@@ -8,7 +8,7 @@ import {
   d1ProvisionAttemptStore,
 } from '@proappstore/build-core';
 import type { Env } from '../types.js';
-import { requireUser, HttpError } from '../lib/auth.js';
+import { requireUser, HttpError, TEAM_ROLES, type TeamRole } from '../lib/auth.js';
 import { provisionData } from '../lib/provision-data.js';
 import { fetchRepoFiles, type RepoLocation } from '../lib/github-fetch.js';
 
@@ -225,6 +225,28 @@ provisionRoutes.post('/provision-data', async (c) => {
   if (!c.env.SESSION_SIGNING_KEY) {
     return c.text('Platform provisioning not configured (missing SESSION_SIGNING_KEY)', 503);
   }
+
+  // SECURITY (#82): the same "not yours" check /v1/provision makes, for the
+  // same reason. appId here is an Agent Teams project slug, and slugs are only
+  // unique among agent projects — nothing stops a user naming theirs after
+  // someone else's published app. Without this, their deploy stage would drive
+  // a redeploy of that app's data worker on the owner's behalf. The internal
+  // token authenticates agent-teams, not the user it is acting for.
+  //
+  // Team developers pass: running Agent Teams on an app you build for its
+  // creator is legitimate. Before any Cloudflare call, like the user path.
+  const claimed = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?')
+    .bind(body.appId)
+    .first<{ creator_id: string }>();
+  if (claimed && claimed.creator_id !== body.creatorId) {
+    const member = await c.env.DB.prepare('SELECT role FROM team_members WHERE app_id = ? AND user_id = ?')
+      .bind(body.appId, body.creatorId)
+      .first<{ role: string }>();
+    if (!member || TEAM_ROLES.indexOf(member.role as TeamRole) < TEAM_ROLES.indexOf('developer')) {
+      return c.text('appId already claimed by another user', 403);
+    }
+  }
+
   const data = await provisionData({
     appId: body.appId,
     creatorId: body.creatorId,

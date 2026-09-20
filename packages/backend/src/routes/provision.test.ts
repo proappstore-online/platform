@@ -395,6 +395,47 @@ describe('POST /v1/provision-data (internal)', () => {
 // could name a live app and drive its whole data-plane provision — and the
 // compliance gate did not help, because for a non-admin it pins the repo to
 // <ORG>/<appId>, i.e. the victim's own (published, compliant) repo.
+// The internal path has the same hole by a different door: appId is an Agent
+// Teams project slug, which is only unique among agent projects.
+describe('POST /v1/provision-data — appId ownership (#82)', () => {
+  const call = (db: ReturnType<typeof mockD1>) =>
+    app.request('/v1/provision-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': 'sekret' },
+      body: JSON.stringify({ appId: 'victimapp', creatorId: 'gh:42' }),
+    }, makeEnv({ INTERNAL_TOKEN: 'sekret' }, db));
+
+  it('403s, touching no Cloudflare API, when the appId belongs to someone else', async () => {
+    const fetchSpy = multiFetch();
+    globalThis.fetch = fetchSpy;
+    const res = await call(mockD1Claimed('gh:99'));
+
+    expect(res.status).toBe(403);
+    expect(await res.text()).toMatch(/already claimed/i);
+    const cfCalls = fetchSpy.mock.calls.filter(([u]: [unknown]) => String(u).includes('api.cloudflare.com'));
+    expect(cfCalls).toHaveLength(0);
+  });
+
+  it('allows the creator to re-provision their own app', async () => {
+    globalThis.fetch = multiFetch({
+      'd1/database': { status: 200, body: { success: true, result: { uuid: 'db-9' } } },
+    });
+    const res = await call(mockD1Claimed('gh:42'));
+    expect(res.status).not.toBe(403);
+  });
+
+  it('allows a team developer of the app, but not a viewer', async () => {
+    globalThis.fetch = multiFetch({
+      'd1/database': { status: 200, body: { success: true, result: { uuid: 'db-9' } } },
+    });
+    // team_members is the first statement past the SQL-shape guards.
+    const asDev = await call(mockD1Claimed('gh:99', mockStmt({ first: { role: 'developer' } })));
+    expect(asDev.status).not.toBe(403);
+    const asViewer = await call(mockD1Claimed('gh:99', mockStmt({ first: { role: 'viewer' } })));
+    expect(asViewer.status).toBe(403);
+  });
+});
+
 describe('POST /v1/provision — appId ownership (#82)', () => {
   it('403s when the appId is already claimed by someone else', async () => {
     const db = mockD1Claimed('gh:99');
