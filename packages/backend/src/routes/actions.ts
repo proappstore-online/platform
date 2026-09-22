@@ -65,7 +65,11 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   // runs it for the end-user without requiring them to own the app. Public
   // read-only actions deliberately omit Authorization; authenticated actions
   // still forward it for compatibility with un-redeployed data workers.
-  const upstream = await fetch(`https://data-${appId}.proappstore.online/${endpoint}`, {
+  // Actions are a server-to-server path. Going through the public data-* route
+  // adds the host worker as an unnecessary proxy hop and can surface a 522 even
+  // when the target data worker is healthy. Reach the provisioned worker's
+  // direct Workers URL instead; it is still protected by the internal token.
+  const upstream = await fetch(`https://pas-data-${appId}.serge-the-dev.workers.dev/${endpoint}`, {
     method: 'POST',
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),

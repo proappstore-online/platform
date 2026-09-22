@@ -71,7 +71,7 @@ describe('POST /v1/apps/:appId/actions/:name', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ rows: [{ id: 'item-1' }] });
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://data-interns.proappstore.online/query',
+      'https://pas-data-interns.serge-the-dev.workers.dev/query',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
@@ -141,7 +141,7 @@ describe('POST /v1/apps/:appId/actions/:name', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ rows: [{ id: 'org-1' }] });
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://data-interns.proappstore.online/query',
+      'https://pas-data-interns.serge-the-dev.workers.dev/query',
       expect.objectContaining({
         method: 'POST',
         headers: {
