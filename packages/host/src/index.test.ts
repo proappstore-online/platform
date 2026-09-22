@@ -301,6 +301,7 @@ describe("host auth token-handler routes", () => {
 
     expect(res.status).toBe(204);
     expect(res.headers.get("Set-Cookie")).toContain("__Host-pas_session=; Max-Age=0");
+    expect(res.headers.get("Clear-Site-Data")).toBe('"cache"');
   });
 
   it("does not allow cross-site or GET logout", async () => {

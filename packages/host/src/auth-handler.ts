@@ -195,6 +195,11 @@ function authLogout(request: Request): Response {
     status: 204,
     headers: {
       "Cache-Control": "no-store",
+      // A custom host can retain a pre-cookie-auth PWA shell across deploys.
+      // Logout is the explicit recovery boundary: clearing only Cache Storage
+      // lets the next load fetch the current app without discarding preferences
+      // or data from the host.
+      "Clear-Site-Data": '"cache"',
       "Set-Cookie": clearSessionCookie(),
     },
   });
