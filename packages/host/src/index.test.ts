@@ -304,6 +304,36 @@ describe("host auth token-handler routes", () => {
     expect(res.headers.get("Clear-Site-Data")).toBe('"cache"');
   });
 
+  it("recovers a stale app shell through the service-worker-excluded auth path", async () => {
+    const env = makeEnv();
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/auth/recover", {
+        headers: { "Sec-Fetch-Site": "same-origin" },
+      }),
+      env,
+      ctx(),
+    );
+
+    expect(res.status).toBe(303);
+    expect(res.headers.get("Location")).toBe("/?recovered=1");
+    expect(res.headers.get("Set-Cookie")).toContain("__Host-pas_session=; Max-Age=0");
+    expect(res.headers.get("Clear-Site-Data")).toBe('"cache"');
+  });
+
+  it("does not let another site trigger a recovery logout", async () => {
+    const env = makeEnv();
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/auth/recover", {
+        headers: { "Sec-Fetch-Site": "cross-site" },
+      }),
+      env,
+      ctx(),
+    );
+
+    expect(res.status).toBe(403);
+    expect(res.headers.get("Set-Cookie")).toBeNull();
+  });
+
   it("does not allow cross-site or GET logout", async () => {
     const env = makeEnv();
 

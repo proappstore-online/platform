@@ -21,6 +21,7 @@ export async function handleAuthRoute(
   if (url.pathname === `${AUTH_PREFIX}/callback`) return authCallback(request, env);
   if (url.pathname === `${AUTH_PREFIX}/me`) return authMe(request, env);
   if (url.pathname === `${AUTH_PREFIX}/logout`) return authLogout(request);
+  if (url.pathname === `${AUTH_PREFIX}/recover`) return authRecover(request);
   if (url.pathname === `${AUTH_PREFIX}/credentials/login`) return authCredentialsLogin(request, env);
   if (url.pathname === `${AUTH_PREFIX}/email/start`) return authEmailStart(request, env, route);
 
@@ -199,6 +200,28 @@ function authLogout(request: Request): Response {
       // Logout is the explicit recovery boundary: clearing only Cache Storage
       // lets the next load fetch the current app without discarding preferences
       // or data from the host.
+      "Clear-Site-Data": '"cache"',
+      "Set-Cookie": clearSessionCookie(),
+    },
+  });
+}
+
+/**
+ * A navigation-safe recovery route for stale app service workers. `/.pas/` is
+ * excluded from the SPA navigation fallback, so even an obsolete PWA shell can
+ * reach this endpoint and receive the cache/session reset response.
+ */
+function authRecover(request: Request): Response {
+  if (request.method !== "GET") return methodNotAllowed("GET");
+  const fetchSite = request.headers.get("Sec-Fetch-Site");
+  if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") {
+    return noStore(new Response("Forbidden", { status: 403 }));
+  }
+  return new Response(null, {
+    status: 303,
+    headers: {
+      Location: "/?recovered=1",
+      "Cache-Control": "no-store",
       "Clear-Site-Data": '"cache"',
       "Set-Cookie": clearSessionCookie(),
     },
