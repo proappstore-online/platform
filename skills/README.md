@@ -11,6 +11,7 @@ tests or platform data access, and never carry credentials.
 |---|---|---|
 | [`create-proappstore-app`](./create-proappstore-app/SKILL.md) | creating, scaffolding or provisioning a **new** ProAppStore app | read-only MCP tools + `provision_pas_app` / `scaffold_app` (dry-run → explicit confirm) |
 | [`proappstore-auth-sessions-roles`](./proappstore-auth-sessions-roles/SKILL.md) | adding or reviewing **authentication, cookie sessions, roles and permissions** in a ProAppStore app — platform-cookie sessions, SDK sign-in/sign-out, app roles + manifest gates + SQL scoping, a gated permissions UI, negative tests; detects storage-held sessions, `app.auth.token` coupling, home-grown sign-in, membership-only gates, unsafe return URLs, incomplete sign-out | read-only MCP tools only (`sdk_reference`, `recipe`, `platform_guide`, `app_info`, `discover_tools`, `schema_status`, `whoami`) |
+| [`proappstore-data-migrations-actions`](./proappstore-data-migrations-actions/SKILL.md) | designing or reviewing **migrations, registered actions and tenant-safe data access** — store choice, additive `migrations.json`, `mcp.json` actions with typed params and server-owned magic params, SQL scoping and invariants, batches, idempotency, negative tests, migration and deployment checks; detects cross-tenant access, guessed ids, replayable grants, unsafe writes, drift, raw browser SQL, client-only authorization | read-only MCP tools only (`sdk_reference`, `recipe`, `platform_guide`, `app_info`, `discover_tools`, `schema_status`, `whoami`) |
 | [`choose-proappstore-architecture`](./choose-proappstore-architecture/SKILL.md) | choosing the **architecture and platform services** for a ProAppStore app — which primitive serves each need, what is unsupported, the trade-offs, a bounded decision citing the standard | read-only MCP tools only (`sdk_reference`, `recipe`, `platform_guide`, `list_templates`, `app_info`, `discover_tools`, `schema_status`, `whoami`) |
 
 ## Install (until the plugin package lands — issue #169)
@@ -39,4 +40,4 @@ no client-specific copies.
   secret shapes, duplicates, dry-run-before-confirm for mutating skills,
   read-only for advisory ones) and each skill ships machine-checked
   evaluations (`evals/cases.json`; e.g. `packages/mcp/src/skill-create-app.evals.test.ts`,
-  `test/skills-architecture.evals.test.ts`, `test/skills-auth.evals.test.ts`).
+  `test/skills-architecture.evals.test.ts`, `test/skills-auth.evals.test.ts`, `test/skills-data.evals.test.ts`).

@@ -50,8 +50,9 @@ gather inputs, choose an approved template, dry-run `provision_pas_app`,
 confirm, provision, verify; `choose-proappstore-architecture`: map requirements
 to platform primitives with `sdk_reference` / `recipe`, read-only;
 `proappstore-auth-sessions-roles`: platform-cookie sessions, app roles and
-permissions, auth anti-pattern remediation, read-only) live in the platform
-repository under
+permissions, auth anti-pattern remediation, read-only;
+`proappstore-data-migrations-actions`: migrations, registered actions and
+tenant-safe SQL, read-only) live in the platform repository under
 [`skills/`](https://github.com/proappstore-online/platform/tree/main/skills).
 Copy a skill directory into your client's skills location and connect this
 server.
