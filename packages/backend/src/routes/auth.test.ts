@@ -1018,12 +1018,17 @@ describe('OAuth callback — issues a code, never a token in the query (#87, #11
       .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   }
 
-  async function callback(returnTo: string, mode: 'query' | 'fragment', db: ReturnType<typeof codeIssuingDb>) {
+  async function callback(
+    returnTo: string,
+    mode: 'query' | 'fragment',
+    db: ReturnType<typeof codeIssuingDb>,
+    envOverrides: Record<string, string> = {},
+  ) {
     const state = stateFor(returnTo, mode);
     return app.request(
       `/v1/auth/github/callback?code=gh-code&state=${state}`,
       { headers: { Cookie: `__Host-pas_oauth_state=${state}` } },
-      makeEnv({ GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'sec', APP_BASE: 'https://api.proappstore.online' }, db as never),
+      makeEnv({ GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'sec', APP_BASE: 'https://api.proappstore.online', ...envOverrides }, db as never),
     );
   }
 
@@ -1091,5 +1096,96 @@ describe('OAuth callback — issues a code, never a token in the query (#87, #11
 
     expect(res.headers.get('location')).toContain('#pas_session=');
     expect(db.inserts).toHaveLength(0);
+  });
+});
+
+// #196: the app-origin fragment is the only sign-in path a legacy-bearer
+// bundle has. It stays — logged — until the fleet is rebuilt on an SDK that
+// defaults to platform-cookie; then RETIRE_FRAGMENT_DELIVERY=1 turns it off
+// without touching first-party surfaces.
+describe('OAuth callback — #pas_session fragment retirement (#196)', () => {
+  function stubGithub() {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes('login/oauth/access_token')) return Response.json({ access_token: 'gho_x' });
+      if (url.endsWith('api.github.com/user')) {
+        return Response.json({ id: 4242, login: 'alice', avatar_url: 'https://a', email: 'a@b.c' });
+      }
+      if (url.includes('api.github.com/user/emails')) return Response.json([]);
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+  }
+  const db = () => ({
+    prepare: vi.fn(() => ({
+      bind: () => ({ async first() { return null; }, async run() { return { meta: { changes: 1 } }; } }),
+    })),
+  });
+  function stateFor(returnTo: string, appId?: string): string {
+    return btoa(JSON.stringify({ r: returnTo, m: 'fragment', n: 'nonce-1', a: appId }))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  async function fragmentCallback(returnTo: string, env: Record<string, string> = {}, appId?: string) {
+    const state = stateFor(returnTo, appId);
+    return app.request(
+      `/v1/auth/github/callback?code=gh-code&state=${state}`,
+      { headers: { Cookie: `__Host-pas_oauth_state=${state}` } },
+      makeEnv({ GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'sec', APP_BASE: 'https://api.proappstore.online', ...env }, db() as never),
+    );
+  }
+  const APP = 'https://someapp.proappstore.online/cb';
+  const FIRST_PARTY = 'https://console.proappstore.online/cb';
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('flag unset: an app origin still receives the fragment (existing behaviour preserved)', async () => {
+    stubGithub();
+    const res = await fragmentCallback(APP);
+    expect(res.status).toBe(302);
+    const hash = new URL(res.headers.get('location')!).hash;
+    expect(hash).toMatch(/^#pas_session=/);
+    expect(hash).not.toContain('auth_error');
+  });
+
+  it('flag unset: a legacy app-origin sign-in is logged with the app id and host', async () => {
+    stubGithub();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await fragmentCallback(APP, {}, 'someapp');
+    expect(warn).toHaveBeenCalledWith(
+      '[pas_session-fragment] legacy fragment delivery to non-first-party host',
+      { appId: 'someapp', hostname: 'someapp.proappstore.online' },
+    );
+  });
+
+  it('flag unset: a first-party fragment sign-in is not logged as legacy', async () => {
+    stubGithub();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await fragmentCallback(FIRST_PARTY);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("RETIRE_FRAGMENT_DELIVERY='1': an app origin gets #auth_error=fragment_delivery_retired and no token", async () => {
+    stubGithub();
+    const res = await fragmentCallback(APP, { RETIRE_FRAGMENT_DELIVERY: '1' });
+    expect(res.status).toBe(302);
+    const loc = new URL(res.headers.get('location')!);
+    expect(loc.origin + loc.pathname).toBe(APP);
+    expect(loc.hash).toBe('#auth_error=fragment_delivery_retired');
+    expect(res.headers.get('location')).not.toContain('pas_session');
+    expect(loc.searchParams.has('code')).toBe(false);
+  });
+
+  it("RETIRE_FRAGMENT_DELIVERY='1': first-party destinations still receive #pas_session=", async () => {
+    stubGithub();
+    const res = await fragmentCallback(FIRST_PARTY, { RETIRE_FRAGMENT_DELIVERY: '1' });
+    expect(new URL(res.headers.get('location')!).hash).toMatch(/^#pas_session=/);
+  });
+
+  it('any value other than "1" leaves the flag off', async () => {
+    stubGithub();
+    const res = await fragmentCallback(APP, { RETIRE_FRAGMENT_DELIVERY: 'true' });
+    expect(new URL(res.headers.get('location')!).hash).toMatch(/^#pas_session=/);
   });
 });

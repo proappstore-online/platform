@@ -433,9 +433,23 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
     //
     // The fragment branch is unchanged: fragments are never sent to servers, so
     // they were never the leak this addresses.
+    //
+    // RETIREMENT (#196): the fragment is the only sign-in path a legacy-bearer
+    // bundle has, so it survives until the hosted fleet is rebuilt on an SDK
+    // that defaults to platform-cookie (≥ 1.16.46). Until then every legacy
+    // sign-in to an app origin is logged so the remaining fleet is visible in
+    // Workers logs; once the log goes quiet, RETIRE_FRAGMENT_DELIVERY=1 turns
+    // the app-origin fragment into `#auth_error=fragment_delivery_retired`
+    // (the SDK surfaces it via `auth.authError`) with no token issued.
+    // First-party surfaces keep the fragment regardless of the flag.
     if (responseMode === 'query') {
       dest.searchParams.set('code', await issueExchangeCode(c.env.DB, claims, Date.now()));
+    } else if (!isFirstPartyHost(dest.hostname) && c.env.RETIRE_FRAGMENT_DELIVERY === '1') {
+      dest.hash = 'auth_error=fragment_delivery_retired';
     } else {
+      if (!isFirstPartyHost(dest.hostname)) {
+        console.warn('[pas_session-fragment] legacy fragment delivery to non-first-party host', { appId, hostname: dest.hostname });
+      }
       const token = await mintSession(claims, c.env.SESSION_SIGNING_KEY);
       dest.hash = `pas_session=${encodeURIComponent(token)}`;
     }

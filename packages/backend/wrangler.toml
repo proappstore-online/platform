@@ -29,6 +29,10 @@ command = "node scripts/embed-data-worker.mjs"
 [vars]
 # Public base URL of this API — used to build OAuth callback URLs (routes/auth.ts).
 APP_BASE = "https://api.proappstore.online"
+# #196 kill switch — uncomment once every hosted app is rebuilt on
+# @proappstore/sdk >= 1.16.46 (watch for "[pas_session-fragment]" warnings to go
+# quiet). Stops delivering #pas_session= to app origins; first-party unaffected.
+# RETIRE_FRAGMENT_DELIVERY = "1"
 # PAS GitHub OAuth App client id. PUBLIC by design — it is sent to the browser in
 # the authorize URL on every sign-in — so it lives here in git, NOT as a secret.
 #

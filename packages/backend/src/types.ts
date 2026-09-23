@@ -22,6 +22,12 @@ export interface Env {
   GITHUB_CLIENT_SECRET?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
+  /** Kill switch (#196): set to '1' to stop delivering `#pas_session=` to app
+   *  origins (non-first-party `return_to`). Legacy-bearer bundles then get
+   *  `#auth_error=fragment_delivery_retired` instead of a token. First-party
+   *  surfaces are never affected. Flip only after the hosted fleet is on
+   *  @proappstore/sdk ≥ 1.16.46, where cookie mode is the default. */
+  RETIRE_FRAGMENT_DELIVERY?: string;
   /** CF credentials for provisioning (D1, Pages, Workers). */
   CF_API_TOKEN: string;
   CF_ACCOUNT_ID: string;
