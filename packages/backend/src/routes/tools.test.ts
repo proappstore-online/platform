@@ -389,6 +389,123 @@ describe('GET /v1/apps/:appId/tools', () => {
   });
 });
 
+// SECURITY (#158): the two listings used to spread the whole stored manifest
+// into the response, so every app's SQL — the app's authorization model — was
+// downloadable with no credential. Public callers now get an allowlisted view;
+// the full manifest goes only to the app's team via requireAppAccess('viewer').
+const ADMIN_TOK = await testToken('gh:900', { roles: ['user', 'admin'] });
+
+describe('GET tool listings — SQL only to the app team (#158)', () => {
+  const PUBLIC_FIELDS = ['name', 'description', 'operation', 'params', 'requires_auth', 'updated_at'];
+
+  const batchTool = {
+    name: 'archive_board',
+    description: 'Archive a board and its cards',
+    operation: 'batch',
+    statements: [
+      'UPDATE boards SET archived = 1 WHERE id = :id AND owner_id = :__user_id',
+      'UPDATE cards SET archived = 1 WHERE board_id = :id',
+    ],
+    params: { id: { type: 'string' } },
+    requires_auth: true,
+  };
+  const unscopedTool = {
+    name: 'reap_stale',
+    description: 'Delete stale rows',
+    operation: 'execute',
+    sql: "DELETE FROM sessions WHERE expires_at < :now",
+    params: { now: { type: 'integer' } },
+    requires_auth: true,
+    auth: { platform_roles: ['admin'], caller_unscoped: { reason: 'housekeeping over all users' } },
+  };
+  const rows = (...tools: object[]) =>
+    mockStmt({ all: { results: tools.map((t, i) => ({ name: (t as { name: string }).name, manifest: JSON.stringify(t), updated_at: 1000 + i })) } });
+
+  type Tool = Record<string, unknown> & { auth?: Record<string, unknown> };
+  const list = async (headers: Record<string, string>, db: ReturnType<typeof mockD1>) => {
+    const res = await app.request('/v1/apps/test-app/tools', { headers }, makeEnv({}, db));
+    return { res, tools: ((await res.json()) as { tools: Tool[] }).tools };
+  };
+
+  it('anonymous: names/params only, no sql, statements, or unknown fields', async () => {
+    const withExtra = { ...validTool, future_private_field: 'leak me' };
+    const { res, tools } = await list({}, mockD1(rows(withExtra, batchTool, unscopedTool)));
+    expect(res.status).toBe(200);
+    expect(tools).toHaveLength(3);
+    for (const t of tools) {
+      expect(Object.keys(t).sort()).toEqual(expect.arrayContaining(PUBLIC_FIELDS));
+      expect(t).not.toHaveProperty('sql');
+      expect(t).not.toHaveProperty('statements');
+      expect(t).not.toHaveProperty('future_private_field');
+    }
+    expect(tools[0]).toMatchObject({ name: 'list_items', operation: 'query', requires_auth: true, params: validTool.params });
+    expect(tools[1]).toMatchObject({ name: 'archive_board', operation: 'batch' });
+    expect(res.headers.get('Cache-Control')).toBeNull();
+  });
+
+  it('anonymous: auth keeps roles but drops the caller_unscoped reason', async () => {
+    const { tools } = await list({}, mockD1(rows(unscopedTool)));
+    expect(tools[0].auth).toEqual({ required: undefined, platform_roles: ['admin'], app_roles: undefined });
+    expect(JSON.stringify(tools[0])).not.toContain('housekeeping');
+  });
+
+  it('signed-in non-member: same public view as anonymous', async () => {
+    // requireAppAccess: apps.creator_id is someone else, no team_members row.
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:2' } }), mockStmt({ first: null }), rows(validTool, batchTool));
+    const { res, tools } = await list({ Authorization: `Bearer ${TOK}` }, db);
+    expect(res.status).toBe(200);
+    expect(tools).toHaveLength(2);
+    expect(tools.some((t) => 'sql' in t || 'statements' in t)).toBe(false);
+    expect(res.headers.get('Cache-Control')).toBeNull();
+  });
+
+  it('team viewer: full manifests, private no-store', async () => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:2' } }), mockStmt({ first: { role: 'viewer' } }), rows(validTool, batchTool, unscopedTool));
+    const { res, tools } = await list({ Authorization: `Bearer ${TOK}` }, db);
+    expect(tools[0].sql).toBe(validTool.sql);
+    expect(tools[1].statements).toEqual(batchTool.statements);
+    expect(tools[2].auth).toEqual(unscopedTool.auth);
+    expect(tools[0].updated_at).toBe(1000);
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('owner: full manifests, private no-store', async () => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), rows(validTool, batchTool));
+    const { res, tools } = await list({ Authorization: `Bearer ${TOK}` }, db);
+    expect(tools[0].sql).toBe(validTool.sql);
+    expect(tools[1].statements).toEqual(batchTool.statements);
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('platform admin: full manifests without any app lookup', async () => {
+    const db = mockD1(rows(validTool));
+    const { res, tools } = await list({ Authorization: `Bearer ${ADMIN_TOK}` }, db);
+    expect(tools[0].sql).toBe(validTool.sql);
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('an invalid or expired bearer degrades to the public view rather than 401', async () => {
+    // The listing is public by contract (#37); a bad token must not make it
+    // stricter than no token, only deny the SQL.
+    const { res, tools } = await list({ Authorization: 'Bearer nope' }, mockD1(rows(validTool)));
+    expect(res.status).toBe(200);
+    expect(tools[0]).not.toHaveProperty('sql');
+  });
+
+  it('GET /v1/tools is always the public view', async () => {
+    const withExtra = { ...validTool, future_private_field: 'leak me' };
+    const db = mockD1(mockStmt({ all: { results: [
+      { app_id: 'jobs', name: 'list_items', manifest: JSON.stringify(withExtra) },
+      { app_id: 'kanban', name: 'archive_board', manifest: JSON.stringify(batchTool) },
+    ] } }));
+    const res = await app.request('/v1/tools', { headers: { Authorization: `Bearer ${ADMIN_TOK}` } }, makeEnv({}, db));
+    const { tools } = (await res.json()) as { tools: Tool[] };
+    expect(tools).toHaveLength(2);
+    expect(tools[0]).toMatchObject({ app_id: 'jobs', name: 'list_items', params: validTool.params });
+    expect(tools.some((t) => 'sql' in t || 'statements' in t || 'future_private_field' in t)).toBe(false);
+  });
+});
+
 describe('PUT /v1/apps/:appId/tools — requires_auth enforcement', () => {
   it('rejects app data tools without requires_auth', async () => {
     const ownerStmt = mockStmt({ first: { creator_id: 'gh:1' } });

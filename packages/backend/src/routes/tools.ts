@@ -6,7 +6,7 @@
 import { Hono } from 'hono';
 import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
-import { requireAppOwner } from '../lib/auth.js';
+import { requireAppAccess, requireAppOwner } from '../lib/auth.js';
 
 export const toolsRoutes = new Hono<{ Bindings: Env }>();
 
@@ -361,24 +361,63 @@ toolsRoutes.post('/apps/:appId/tools/internal', async (c) => {
   return c.json(payload, status as 200 | 400 | 422);
 });
 
+/**
+ * SECURITY (#158): what an unauthenticated caller may see of a manifest —
+ * everything needed to CALL a tool, never how it is implemented. The SQL is
+ * the app's authorization model (docs/mcp-app-tools.md), and app repos are
+ * private, so it goes only to the app's team.
+ *
+ * An allowlist, not a `delete m.sql` denylist: a field added to the manifest
+ * later (statements, auth.caller_unscoped.reason) is private until listed here.
+ */
+function publicToolView(m: ToolManifest) {
+  return {
+    name: m.name,
+    description: m.description,
+    operation: m.operation,
+    params: m.params,
+    requires_auth: m.requires_auth,
+    ...(m.auth
+      ? { auth: { required: m.auth.required, platform_roles: m.auth.platform_roles, app_roles: m.auth.app_roles } }
+      : {}),
+  };
+}
+
 // ── GET /v1/apps/:appId/tools — list tools for one app ──────────
+//
+// Public: names, descriptions, params (the MCP's per-app session calls this
+// with no credential and never reads the SQL). Full manifests, SQL included,
+// only for the app's team — creator, any team_members role, or a platform
+// admin — which is what the console's "show SQL" sends a bearer for.
 toolsRoutes.get('/apps/:appId/tools', async (c) => {
   const appId = c.req.param('appId')!;
+  const teamMember = await requireAppAccess(c, appId, 'viewer').then(() => true, () => false);
+
   const result = await c.env.DB.prepare(
     'SELECT name, manifest, updated_at FROM app_tools WHERE app_id = ? ORDER BY name',
   ).bind(appId).all<{ name: string; manifest: string; updated_at: number }>();
 
   const tools: unknown[] = [];
   for (const r of result.results ?? []) {
+    let manifest: ToolManifest;
     try {
-      tools.push({ name: r.name, ...JSON.parse(r.manifest), updated_at: r.updated_at });
-    } catch { /* skip corrupted row */ }
+      manifest = JSON.parse(r.manifest);
+    } catch { continue; /* skip corrupted row */ }
+    tools.push(
+      teamMember
+        ? { ...manifest, updated_at: r.updated_at }
+        : { ...publicToolView(manifest), updated_at: r.updated_at },
+    );
   }
 
+  // The full variant is per-caller; no cache layer may hand it to anyone else.
+  if (teamMember) c.header('Cache-Control', 'private, no-store');
   return c.json({ tools });
 });
 
 // ── GET /v1/tools — list all tools across all apps (for MCP server) ──
+// Always the public view: there is no per-app caller to authorize against.
+// Retired by #158 Step B once #157 stops the MCP calling it.
 toolsRoutes.get('/tools', async (c) => {
   const result = await c.env.DB.prepare(
     'SELECT app_id, name, manifest FROM app_tools ORDER BY app_id, name',
@@ -387,7 +426,7 @@ toolsRoutes.get('/tools', async (c) => {
   const tools: unknown[] = [];
   for (const r of result.results ?? []) {
     try {
-      tools.push({ app_id: r.app_id, name: r.name, ...JSON.parse(r.manifest) });
+      tools.push({ app_id: r.app_id, ...publicToolView(JSON.parse(r.manifest)) });
     } catch { /* skip corrupted row */ }
   }
 
