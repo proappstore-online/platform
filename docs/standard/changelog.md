@@ -4,6 +4,27 @@ Part of the [Application Standard](./index.md). One entry per version, newest
 first; the [changelog policy](./governance.md#changelog-policy) defines the
 sections.
 
+## 1.5
+
+Testing, deployment, and operations (chapter `OPS`).
+
+- **Added** — PAS-OPS-001 to PAS-OPS-020: test suites in CI (001), negative
+  authorization and tenant-isolation tests (002), live sign-in/sign-out/
+  custom-domain/rooms/storage flows (003), CI gates (004), keyless deploy and
+  required evidence (005), secrets (006), dependency and vulnerability policy
+  (007), forward-only schema (008), code rollback (009), post-deploy smoke
+  (010), logs without credentials or personal data (011), monitoring and
+  error states (012), rate limits (013), recovery without app-facing backups
+  (014), incident evidence within retention windows (015), data minimisation
+  (016), retention and deletion — including that `deleteAccount()` is not
+  account deletion (017), telemetry disclosure (018), the human operational
+  checklist (019), the deployment evidence bundle (020). Plus the governing
+  rule that passing tests never evidence production security, a
+  verification-class table, and a platform-provides / app-must-add table.
+- **Changed** — none.
+- **Withdrawn** — none.
+- **Editorial** — none.
+
 ## 1.4
 
 UI, browser security, and PWA (chapter `UI`).
