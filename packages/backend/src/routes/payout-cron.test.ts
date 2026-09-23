@@ -374,6 +374,77 @@ describe('POST /v1/internal/payouts/run — clawback netting (#85)', () => {
     expect(stamped).toBe(true);
   });
 
+  it('persists the zero-transfer settlement to clawback_settlements (#85 item c)', async () => {
+    // No service_payouts row can exist for a month that moved no money, so this
+    // row is the only durable record that the earnings were consumed against debt.
+    const settledCheck = mockStmt({ first: null }); // no settlement yet this month
+    const updateEng = mockStmt();
+    const insertSettlement = mockStmt();
+    const db = mockD1WithDebt(
+      7000,
+      mockStmt({ all: { results: [{ developer_id: 'gh:10', total_cents: 4500, eng_count: 2, eng_ids: 'e1,e2' }] } }),
+      settledCheck,      // SELECT id FROM clawback_settlements …
+      updateEng,         // batch: UPDATE engagements (developer_clawbacks is answered out-of-band)
+      insertSettlement,  // batch: INSERT OR IGNORE INTO clawback_settlements
+    );
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('no transfer should be attempted'));
+
+    const res = await app.request('/v1/internal/payouts/run', {
+      method: 'POST', headers: { 'X-Internal-Token': 'secret-cron-token' },
+    }, env({}, db));
+    const body = await res.json() as {
+      payoutMonth: string;
+      clawbackSettlements: { settlementId: string }[];
+    };
+
+    const insertSql = db.sqlSeen.find((s) => /INSERT OR IGNORE INTO clawback_settlements/i.test(s));
+    expect(insertSql).toBeDefined();
+    // Same batch as the ledger + engagement writes: all land or none do.
+    expect(db.batch).toHaveBeenCalledTimes(1);
+    expect(db.batch.mock.calls[0][0]).toHaveLength(3);
+
+    const [id, developerId, payoutMonth, clawbackCents, remainingCents, engagementCount] =
+      insertSettlement.bind.mock.calls[0];
+    expect(id).toBe(body.clawbackSettlements[0].settlementId);
+    expect(developerId).toBe('gh:10');
+    expect(payoutMonth).toBe(body.payoutMonth);
+    expect(payoutMonth).toMatch(/^\d{4}-\d{2}$/);
+    expect(clawbackCents).toBe(4500);     // earnings consumed
+    expect(remainingCents).toBe(2500);    // 7000 − 4500 carried forward
+    expect(engagementCount).toBe(2);
+
+    // The pre-check is keyed the same way as the UNIQUE index.
+    expect(settledCheck.bind.mock.calls[0]).toEqual(['gh:10', body.payoutMonth]);
+  });
+
+  it('does not settle twice in the same month (idempotent retry)', async () => {
+    // A second run in the same month finds the audit row and leaves the
+    // engagements alone — they are netted next month — rather than consuming
+    // them with no record (INSERT OR IGNORE would have dropped the row).
+    const db = mockD1WithDebt(
+      7000,
+      mockStmt({ all: { results: [{ developer_id: 'gh:10', total_cents: 4500, eng_count: 2, eng_ids: 'e1,e2' }] } }),
+      mockStmt({ first: { id: 'settlement-existing' } }), // already settled this month
+    );
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('no transfer should be attempted'));
+
+    const res = await app.request('/v1/internal/payouts/run', {
+      method: 'POST', headers: { 'X-Internal-Token': 'secret-cron-token' },
+    }, env({}, db));
+    const body = await res.json() as {
+      clawbackSettlements: unknown[];
+      skipped: { developerId: string; reason: string }[];
+      summary: Record<string, number>;
+    };
+
+    expect(db.batch).not.toHaveBeenCalled();
+    expect(db.sqlSeen.some((s) => /INSERT OR IGNORE INTO clawback_settlements/i.test(s))).toBe(false);
+    expect(db.sqlSeen.some((s) => /UPDATE engagements/i.test(s))).toBe(false);
+    expect(body.clawbackSettlements).toHaveLength(0);
+    expect(body.skipped).toEqual([{ developerId: 'gh:10', reason: 'clawback already settled this month' }]);
+    expect(body.summary.totalClawbackRecoveredCents).toBe(0);
+  });
+
   it('guards the debt write on the value it netted against', async () => {
     // Compare-and-swap: two concurrent runs must not both subtract the same
     // earnings from the same debt. Stripe idempotency guards the money; this

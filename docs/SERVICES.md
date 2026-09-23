@@ -208,6 +208,28 @@ CREATE TABLE service_payouts (
 -- Idempotency: one payout per developer per month.
 CREATE UNIQUE INDEX idx_service_payouts_dev_month ON service_payouts(developer_id, payout_month);
 CREATE INDEX idx_service_payouts_month ON service_payouts(payout_month);
+
+-- Refund debt per developer (migration 0045, #85). Netted from the next payout.
+CREATE TABLE developer_clawbacks (
+  developer_id TEXT PRIMARY KEY,
+  pending_clawback_cents INTEGER NOT NULL DEFAULT 0,  -- always >= 0; 0 = settled
+  updated_at INTEGER NOT NULL
+);
+
+-- Zero-transfer settlements (migration 0049, #85 item c): a month whose
+-- earnings were consumed entirely by debt has no service_payouts row (no
+-- transfer id), so the offset is recorded here instead.
+CREATE TABLE clawback_settlements (
+  id TEXT PRIMARY KEY,
+  developer_id TEXT NOT NULL,
+  payout_month TEXT NOT NULL,            -- YYYY-MM
+  clawback_cents INTEGER NOT NULL,       -- earnings consumed against debt
+  remaining_clawback_cents INTEGER NOT NULL,  -- debt carried forward
+  engagement_count INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+-- Idempotency: one settlement per developer per month.
+CREATE UNIQUE INDEX idx_clawback_settlements_dev_month ON clawback_settlements(developer_id, payout_month);
 ```
 
 ## API routes
@@ -284,8 +306,29 @@ doesn't pay the developer for refunded work:
   share (90%) plus the platform fee (10%) are clawed back out of
   `total_dev_earned_cents` / `total_platform_fee_cents` (never driven negative).
 - If the engagement was already paid out (`payout_month` set), the dev's share
-  is already gone via Stripe; the response flags `clawbackAlreadyPaid` so an
-  admin knows a manual reversal is still needed.
+  is already gone via Stripe. The full clawback is banked in
+  `developer_clawbacks` (response field `pendingClawbackCents`) and netted from
+  the developer's next payout by the cron; `clawbackAlreadyPaid` still flags
+  that the money had left. Recovery is automatic — no manual reversal is needed
+  while the developer keeps earning. A Stripe transfer reversal for developers
+  who never earn again is deferred pending owner sign-off (#85 item b).
+
+## Payout cron and clawback netting
+
+`POST /v1/internal/payouts/run` (guarded by `INTERNAL_TOKEN`) sums unpaid
+delivered earnings per developer and nets `developer_clawbacks` first:
+
+- Debt smaller than the month: transfer the difference, clear the debt, write
+  `service_payouts`.
+- Debt at least the month: **no transfer**. The engagements are still stamped
+  with `payout_month` (otherwise they would be re-counted next month against a
+  debt they already reduced), the ledger is reduced, and a
+  `clawback_settlements` row records the offset — all in one D1 batch. One
+  settlement per developer per month; a re-run that finds the row skips the
+  developer with `clawback already settled this month` and their new
+  engagements are netted next month.
+- Both ledger writes compare-and-swap on the debt value they read, so two
+  concurrent runs cannot subtract the same earnings twice.
 
 ## Console UI
 
@@ -335,7 +378,8 @@ doesn't pay the developer for refunded work:
 - [ ] Quality score cron job (scheduled Worker that calls /services/recompute-stats + LLM judge)
 - [~] Dev payout — logic + endpoint built (`POST /v1/internal/payouts/run`,
   transfers `total_dev_earned_cents` to Stripe Connect, records `service_payouts`,
-  stamps `payout_month`); the scheduled cron trigger isn't wired yet (no cron in `wrangler.toml`)
+  stamps `payout_month`, nets refund debt and records zero-transfer months in
+  `clawback_settlements`); the scheduled cron trigger isn't wired yet (no cron in `wrangler.toml`)
 - [ ] Wire engagement to agent-teams project (workspace link endpoints exist; no auto-provision service binding)
 - [ ] Push notifications for new messages (WebPush via existing infrastructure)
 

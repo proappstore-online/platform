@@ -17,7 +17,9 @@ import { internalTokenOk } from '@proappstore/build-core';
  * recovered by decrementing that engagement — this query never looks at settled
  * rows again — so the shortfall is banked in `developer_clawbacks` and netted
  * here against the developer's next earnings. Debt larger than the month's
- * earnings carries forward rather than being written off.
+ * earnings carries forward rather than being written off. A month whose
+ * earnings are consumed entirely by debt moves no money and so has no
+ * service_payouts row; it is recorded in `clawback_settlements` instead.
  */
 
 export const payoutCronRoutes = new Hono<{ Bindings: Env }>();
@@ -50,6 +52,8 @@ interface PayoutResult {
  * debt that had already been reduced.
  */
 interface ClawbackSettlement {
+  /** Row id in `clawback_settlements` — the persisted audit record of this offset. */
+  settlementId: string;
   developerId: string;
   earnedCents: number;
   clawbackAppliedCents: number;
@@ -121,8 +125,23 @@ payoutCronRoutes.post('/internal/payouts/run', async (c) => {
       // re-count them next month against a debt already reduced by them, paying
       // the developer for work the client was refunded for a second time.
       const remaining = debtCents - earnedCents;
+
+      // One settlement per developer per month, same as service_payouts. The
+      // audit row below is what proves these earnings were consumed against
+      // debt; without this check a re-run in the same month would stamp the
+      // engagements and reduce the ledger while INSERT OR IGNORE dropped the
+      // record. Skipped engagements are netted next month instead.
+      const settledAlready = await c.env.DB.prepare(
+        'SELECT id FROM clawback_settlements WHERE developer_id = ? AND payout_month = ?',
+      ).bind(row.developer_id, payoutMonth).first<{ id: string }>();
+      if (settledAlready) {
+        skipped.push({ developerId: row.developer_id, reason: 'clawback already settled this month' });
+        continue;
+      }
+
       const idPlaceholders = engIdsAll.map(() => '?').join(',');
       const settledAt = Date.now();
+      const settlementId = crypto.randomUUID();
       try {
         await c.env.DB.batch([
           c.env.DB.prepare(
@@ -134,8 +153,18 @@ payoutCronRoutes.post('/internal/payouts/run', async (c) => {
             `UPDATE engagements SET payout_month = ?
               WHERE id IN (${idPlaceholders}) AND payout_month IS NULL`,
           ).bind(payoutMonth, ...engIdsAll),
+          // Persist the offset (#85 item c). No service_payouts row can exist for
+          // a settlement that moved no money, so this table is the audit trail.
+          // OR IGNORE: a concurrent run that passed the check above must not
+          // fail the batch on the UNIQUE (developer_id, payout_month) index.
+          c.env.DB.prepare(
+            `INSERT OR IGNORE INTO clawback_settlements
+               (id, developer_id, payout_month, clawback_cents, remaining_clawback_cents, engagement_count, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          ).bind(settlementId, row.developer_id, payoutMonth, earnedCents, remaining, Number(row.eng_count), settledAt),
         ]);
         clawbackSettlements.push({
+          settlementId,
           developerId: row.developer_id,
           earnedCents,
           clawbackAppliedCents: earnedCents,
