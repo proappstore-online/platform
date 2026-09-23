@@ -1,6 +1,12 @@
 /**
  * App tool CRUD — apps register MCP tools via `pas publish` (reads mcp.json).
- * The MCP server fetches tools from GET /v1/tools to register them dynamically.
+ *
+ * The MCP server reads them back through GET /v1/apps/:appId/tools for a
+ * per-app session, and — until #157 replaces the shared session's bulk
+ * registration with per-app discovery — through GET /v1/tools for the shared
+ * /mcp session. Both return only the allowlisted public view to callers
+ * outside the app's team (#158); GET /v1/tools is retired by #193 once #157
+ * is deployed. Deleting it earlier empties every app tool on /mcp silently.
  */
 
 import { Hono } from 'hono';

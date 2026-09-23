@@ -286,6 +286,11 @@ so tool listing and tool calls are tied to a user.
 - **Parameterized.** All inputs bind as positional params; no string-built SQL.
 - **Per-user scoped.** `:__user_id` + `requires_auth` keep a user's data scoped
   to them. Public tools cannot reference `:__user_id`.
+- **SQL is not public.** `GET /v1/apps/:appId/tools` returns tool names,
+  descriptions and params to any caller. `sql` / `statements` are returned
+  only to the app's team (`requireAppAccess`, any team role). The cross-app
+  `GET /v1/tools` returns the same public view only and is being retired
+  (#193, after #157).
 - **Role-aware before SQL.** Manifest `auth.platform_roles` and
   `auth.app_roles` are checked by the platform action executor (the live
   authority). The MCP server additionally pre-flights `auth.platform_roles` at
