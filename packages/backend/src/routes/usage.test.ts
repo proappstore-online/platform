@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
 import { testToken, TEST_SK, mockStmt, mockD1, makeEnv as sharedMakeEnv } from '../test-helpers.js';
+import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 
 const TOK = await testToken('gh:1');
 
@@ -27,7 +28,7 @@ describe('POST /v1/usage/ping', () => {
       '/v1/usage/ping',
       {
         method: 'POST',
-        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json', [APP_CONTEXT_HEADER]: 'meetup' },
         body: JSON.stringify({ appId: 'meetup', deltaSeconds: 999 }),
       },
       makeEnv(db),
@@ -54,7 +55,7 @@ describe('POST /v1/usage/ping', () => {
       '/v1/usage/ping',
       {
         method: 'POST',
-        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json', [APP_CONTEXT_HEADER]: 'meetup' },
         body: JSON.stringify({ appId: 'meetup', deltaSeconds: 90 }),
       },
       makeEnv(db),
@@ -80,7 +81,7 @@ describe('POST /v1/usage/ping', () => {
       '/v1/usage/ping',
       {
         method: 'POST',
-        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json', [APP_CONTEXT_HEADER]: 'meetup' },
         body: JSON.stringify({ appId: 'meetup', deltaSeconds: 90 }),
       },
       makeEnv(db),
@@ -99,7 +100,7 @@ describe('POST /v1/usage/ping', () => {
       '/v1/usage/ping',
       {
         method: 'POST',
-        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json', [APP_CONTEXT_HEADER]: 'does-not-exist' },
         body: JSON.stringify({ appId: 'does-not-exist', deltaSeconds: 30 }),
       },
       makeEnv(db),
@@ -133,7 +134,7 @@ describe('POST /v1/usage/ping', () => {
       '/v1/usage/ping',
       {
         method: 'POST',
-        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json', [APP_CONTEXT_HEADER]: 'meetup' },
         body: JSON.stringify({ appId: 'meetup', deltaApiCalls: 99999 }),
       },
       makeEnv(db),
@@ -155,7 +156,7 @@ describe('POST /v1/usage/ping', () => {
       '/v1/usage/ping',
       {
         method: 'POST',
-        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json', [APP_CONTEXT_HEADER]: 'meetup' },
         body: JSON.stringify({ appId: 'meetup', deltaApiCalls: 1000 }),
       },
       makeEnv(db),
@@ -179,7 +180,7 @@ describe('POST /v1/usage/ping', () => {
       '/v1/usage/ping',
       {
         method: 'POST',
-        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json', [APP_CONTEXT_HEADER]: 'meetup' },
         body: JSON.stringify({ appId: 'meetup', deltaApiCalls: 1000 }),
       },
       makeEnv(db),
@@ -187,6 +188,87 @@ describe('POST /v1/usage/ping', () => {
     expect(res.status).toBe(200);
     const boundArgs = (upsert.bind as ReturnType<typeof vi.fn>).mock.calls[0] as unknown[];
     expect(boundArgs[4]).toBe(1000);
+  });
+
+  // ── Origin binding (#58): attribution follows the host-asserted app, never the body ──
+
+  it('REFUSES a mediated ping whose body names a different app (403, nothing touched)', async () => {
+    // Host says the caller is inside `meetup`; the body tries to credit `rival`.
+    const db = mockD1();
+    const res = await app.request(
+      '/v1/usage/ping',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json', [APP_CONTEXT_HEADER]: 'meetup' },
+        body: JSON.stringify({ appId: 'rival', deltaSeconds: 60 }),
+      },
+      makeEnv(db),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.text()).toMatch(/app context mismatch/i);
+    expect((db.prepare as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+  });
+
+  it('does NOT record a ping that arrives without the mediated app origin (direct API call)', async () => {
+    // An active subscriber calling api.proappstore.online directly can name any
+    // appId it likes; without the host's X-PAS-App there is nothing to bind the
+    // usage to, so it is acknowledged and dropped — not credited to `meetup`.
+    const appLookup = mockStmt({ first: { id: 'meetup' } });
+    const db = mockD1(appLookup, active());
+    const res = await app.request(
+      '/v1/usage/ping',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId: 'meetup', deltaSeconds: 60, deltaApiCalls: 10 }),
+      },
+      makeEnv(db),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; recorded: boolean; reason?: string; sessionSeconds: number; apiCalls: number };
+    expect(body.ok).toBe(true);
+    expect(body.recorded).toBe(false);
+    expect(body.reason).toBe('unverified-origin');
+    expect(body.sessionSeconds).toBe(0);
+    expect(body.apiCalls).toBe(0);
+    // Only the app-exists lookup ran: no subscription read, no prior read, no upsert.
+    expect((db.prepare as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+  });
+
+  it('a mediated ping for the asserted app records normally (the SDK cookie-mode path)', async () => {
+    const appLookup = mockStmt({ first: { id: 'meetup' } });
+    const prior = mockStmt({ first: null });
+    const upsert = mockStmt();
+    const db = mockD1(appLookup, active(), prior, upsert);
+    const res = await app.request(
+      '/v1/usage/ping',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json', [APP_CONTEXT_HEADER]: 'meetup' },
+        body: JSON.stringify({ appId: 'meetup', deltaSeconds: 60 }),
+      },
+      makeEnv(db),
+    );
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { recorded: boolean }).recorded).toBe(true);
+    const boundArgs = (upsert.bind as ReturnType<typeof vi.fn>).mock.calls[0] as unknown[];
+    expect(boundArgs[0]).toBe('meetup'); // credited to the host-asserted app
+    expect(boundArgs[3]).toBe(60);
+  });
+
+  it('a mismatch is refused before the subscription gate — even an active subscriber cannot redirect usage', async () => {
+    const db = mockD1(mockStmt({ first: { id: 'rival' } }), active());
+    const res = await app.request(
+      '/v1/usage/ping',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json', [APP_CONTEXT_HEADER]: 'meetup' },
+        body: JSON.stringify({ appId: 'rival', deltaSeconds: 90 }),
+      },
+      makeEnv(db),
+    );
+    expect(res.status).toBe(403);
+    expect((db.prepare as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
   });
 });
 

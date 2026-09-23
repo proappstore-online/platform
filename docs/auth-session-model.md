@@ -206,7 +206,11 @@ In `platform-cookie` mode:
   mediation instead of JavaScript-readable bearer tokens.
 - `app.usage` sends normal heartbeats and pagehide beacons through same-origin
   `/.pas/api/v1/usage/ping` mediation, so unload telemetry can use the
-  HttpOnly app cookie without exposing a bearer token to JavaScript.
+  HttpOnly app cookie without exposing a bearer token to JavaScript. The host
+  asserts the app id on that path (`X-PAS-App`, set from the resolved route),
+  and the backend records usage only for that app: a ping naming a different
+  app is refused, and a ping without the mediated origin (a direct API call,
+  or the SDK in legacy-bearer mode) is acknowledged but not recorded (#58).
 - `app.rooms` connects through same-origin `/.pas/api/*` WebSocket mediation
   instead of putting the session token in the URL query string.
 - `app.maps.geocode()`, `app.maps.route()`, and `app.maps.reverseGeocode()`

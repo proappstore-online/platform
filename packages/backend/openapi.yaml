@@ -3325,6 +3325,7 @@ paths:
       tags:
       - Usage
       summary: Ping usage
+      description: Records session_seconds/api_calls for (app, user, day). Attribution is bound to the app origin the host asserts (X-PAS-App, set by platform mediation): a mismatch with the body's appId is refused (403); a ping without the mediated origin (direct API call, legacy-bearer SDK) is acknowledged with recorded=false and not stored; only active subscribers' usage is recorded (#58).
       operationId: post_v1_usage_ping
       responses:
         '200':
@@ -3333,6 +3334,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: app context mismatch (the mediated origin names a different app than the body)
       security:
       - bearerAuth: []
       requestBody:

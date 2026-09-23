@@ -3,6 +3,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, requireAppOwner, HttpError } from '../lib/auth.js';
 import { APP_ID_RE } from './validation.js';
+import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 
 /**
  * Usage telemetry — powers usage-proportional creator payouts.
@@ -13,6 +14,9 @@ import { APP_ID_RE } from './validation.js';
  *                            Upserts the (app, user, day) row and bumps
  *                            session_seconds + api_calls. Clamps the per-ping
  *                            deltas so a misbehaving SDK can't inflate usage.
+ *                            SECURITY (#58): attribution is bound to the app
+ *                            origin the host asserts (`X-PAS-App`), never to
+ *                            the client-declared `appId` alone — see the route.
  *
  *   - GET  /v1/apps/:id/usage?days=N
  *                            Owner-only daily series for one app, aggregated
@@ -106,6 +110,17 @@ usageRoutes.post('/usage/ping', async (c) => {
       return c.text('invalid appId', 400);
     }
 
+    // SECURITY (#58): the body's `appId` is the page's word. The only claim
+    // about WHICH app a caller is actually using comes from the host's
+    // platform mediation, which strips any client copy of X-PAS-App and sets it
+    // from the resolved route (lib/app-context.ts). A mediated ping that names a
+    // different app is hostile — a subscriber redirecting their pool share onto
+    // an arbitrary app — and is refused outright.
+    const mediatedApp = c.req.header(APP_CONTEXT_HEADER);
+    if (mediatedApp && mediatedApp !== appId) {
+      return c.text('app context mismatch', 403);
+    }
+
     // Make sure the app actually exists — otherwise a typo'd appId would
     // silently accumulate rows that no creator owns.
     const appRow = await c.env.DB.prepare('SELECT id FROM apps WHERE id = ?')
@@ -115,6 +130,17 @@ usageRoutes.post('/usage/ping', async (c) => {
 
     const now = Date.now();
     const day = utcDayKey(now);
+
+    // SECURITY (#58): no mediated origin means the request did not come from
+    // the app's own origin — a direct API call, or the SDK in legacy-bearer
+    // mode, which posts straight to api.proappstore.online. Such a caller can
+    // name any app it likes, so its usage is acknowledged but NOT recorded:
+    // usage that drives creator payouts must be attributable to an app the
+    // caller is verifiably inside. Benign 200 so the SDK heartbeat never
+    // error-spams; hosted apps are on the mediated path per PAS-AUTH-001.
+    if (!mediatedApp) {
+      return c.json({ ok: true, recorded: false, reason: 'unverified-origin', day, sessionSeconds: 0, apiCalls: 0 });
+    }
 
     // SECURITY (#58): usage drives creator payouts from the subscription pool,
     // so only an ACTIVE PAID subscriber's usage may be recorded — otherwise
@@ -127,7 +153,7 @@ usageRoutes.post('/usage/ping', async (c) => {
       .bind(user.id)
       .first<{ 1: number }>();
     if (!sub) {
-      return c.json({ ok: true, recorded: false, day, sessionSeconds: 0, apiCalls: 0 });
+      return c.json({ ok: true, recorded: false, reason: 'no-subscription', day, sessionSeconds: 0, apiCalls: 0 });
     }
 
     // Read the prior row up front so we can bind recorded session time to REAL
