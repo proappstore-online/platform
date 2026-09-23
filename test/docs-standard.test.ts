@@ -1,4 +1,6 @@
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { validate } from './lib/validate-json-schema.js';
 import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -155,5 +157,111 @@ describe('standard: public links', () => {
       }
     }
     expect(inbound, 'the standard must be linked from the rest of the docs').toBeGreaterThan(0);
+  });
+});
+
+/**
+ * #167 — the machine-readable standard and the audit contract. The markdown
+ * is canonical; standard.json and llms-full.txt are generated and committed so
+ * the unchanged docs publish workflow ships them. These tests hold the three
+ * promises: generated == committed, the schemas validate, and every URL in the
+ * data resolves to a real page and clause anchor.
+ */
+describe('standard: machine-readable artifacts (#167)', () => {
+  const ROOT = resolve(__dirname, '..');
+  const readJson = (rel: string) => JSON.parse(readFileSync(join(STANDARD, rel), 'utf8'));
+  const standardSchema = readJson('standard.schema.json');
+  const findingSchema = readJson('finding.schema.json');
+  const data = readJson('standard.json');
+  const example = readJson('examples/audit.example.json');
+  const clauseIds = new Set(clauses.map((c) => c.id.toLowerCase()));
+
+  it('generator output equals the committed standard.json and llms-full.txt (--check)', () => {
+    expect(() => execFileSync('node', ['scripts/build-standard-data.mjs', '--check'], { cwd: ROOT, stdio: 'pipe' })).not.toThrow();
+  });
+
+  it('standard.json validates against standard.schema.json', () => {
+    expect(validate(standardSchema, data)).toEqual([]);
+  });
+
+  it('standard.json carries every clause the markdown defines, at the same version', () => {
+    const version = /\*\*Standard version (\d+\.\d+)\*\*/.exec(readFileSync(join(STANDARD, 'governance.md'), 'utf8'))![1];
+    expect(data.standard.version).toBe(version);
+    expect(data.clauses.map((c: { id: string }) => c.id).sort()).toEqual(clauses.map((c) => c.id).sort());
+    for (const c of data.clauses) if (c.status === 'active') expect(c.since <= version, `${c.id} since ${c.since} > ${version}`).toBe(true);
+  });
+
+  it('every clause url in standard.json resolves to an existing page and clause anchor', () => {
+    for (const c of data.clauses) {
+      const m = /^https:\/\/docs\.proappstore\.online\/standard\/([a-z-]+)\/#(pas-[a-z]+-\d{3})$/.exec(c.url);
+      expect(m, `${c.id}: malformed url ${c.url}`).not.toBeNull();
+      expect(existsSync(join(STANDARD, `${m![1]}.md`)), `${c.id}: page ${m![1]}.md missing`).toBe(true);
+      expect(m![2]).toBe(c.id.toLowerCase());
+      expect(clauseIds.has(m![2]), `${c.id}: anchor not found in markdown`).toBe(true);
+      expect(c.page).toBe(m![1]);
+    }
+    for (const ch of data.chapters) expect(existsSync(join(STANDARD, `${ch.page}.md`)), `chapter page ${ch.page}.md`).toBe(true);
+  });
+
+  it('the example audit validates against finding.schema.json', () => {
+    expect(validate(findingSchema, example)).toEqual([]);
+  });
+
+  it('example findings cite real clauses, with the exact url from standard.json', () => {
+    const byId = new Map<string, { url: string; severity: string; verification: string }>(data.clauses.map((c: any) => [c.id, c]));
+    for (const f of example.findings) {
+      const clause = byId.get(f.clause_id);
+      expect(clause, `${f.clause_id} is not a published clause`).toBeDefined();
+      expect(f.clause_url).toBe(clause!.url);
+      expect(f.verification).toBe(clause!.verification);
+    }
+  });
+
+  it('example findings have unique dedupe keys that follow <app_id>:<clause_id>:<primary evidence path>', () => {
+    const keys = example.findings.map((f: any) => f.dedupe_key);
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const f of example.findings) {
+      expect(f.evidence.length, `${f.clause_id}: evidence required`).toBeGreaterThan(0);
+      expect(f.dedupe_key).toBe(`${example.app_id}:${f.clause_id}:${f.evidence[0].path}`);
+    }
+  });
+
+  it('example fails carry impact, remediation and acceptance tests; human clauses stay manual-review; titles name the defect', () => {
+    for (const f of example.findings) {
+      if (f.state === 'fail') {
+        expect(f.impact?.length ?? 0).toBeGreaterThan(0);
+        expect(f.remediation?.length ?? 0).toBeGreaterThan(0);
+        expect(f.acceptance_tests?.length ?? 0).toBeGreaterThan(0);
+      }
+      if (f.verification === 'human') { expect(f.state).toBe('manual-review'); expect(f.human_validation).toBe('required'); }
+      expect(f.title, `${f.clause_id}: title must name the defect, not the clause`).not.toMatch(/^PAS-[A-Z]+-\d{3}/);
+      if (f.state === 'not-applicable') expect(f.applicability.applies).toBe(false);
+    }
+    expect(example.findings.map((f: any) => f.state).sort()).toEqual(['fail', 'fail', 'manual-review', 'not-applicable']);
+  });
+
+  it('the validator itself rejects a broken finding', () => {
+    const broken = JSON.parse(JSON.stringify(example));
+    broken.findings[0].state = 'maybe';
+    broken.findings[0].clause_url = 'https://example.com/x';
+    delete broken.findings[0].dedupe_key;
+    const errors = validate(findingSchema, broken);
+    expect(errors.some((e) => e.includes('not in enum'))).toBe(true);
+    expect(errors.some((e) => e.includes('does not match'))).toBe(true);
+    expect(errors.some((e) => e.includes('missing required dedupe_key'))).toBe(true);
+  });
+
+  it('the AI-friendly indexes link the artifacts and every linked artifact exists', () => {
+    for (const rel of ['llms.txt', 'standard/llms.txt']) {
+      const txt = readFileSync(join(DOCS, rel), 'utf8');
+      for (const art of ['standard.json', 'standard.schema.json', 'finding.schema.json', 'llms-full.txt', 'examples/audit.example.json', 'audit-instructions/']) {
+        expect(txt, `${rel} must link ${art}`).toContain(`https://docs.proappstore.online/standard/${art}`);
+      }
+      for (const m of txt.matchAll(/https:\/\/docs\.proappstore\.online\/standard\/([A-Za-z0-9./_-]+)/g)) {
+        const p = m[1]!;
+        const file = p.endsWith('/') ? `${p.slice(0, -1) || 'index'}.md` : p.includes('.') ? p : `${p}.md`;
+        expect(existsSync(join(STANDARD, file.replace(/^index\.md$/, 'index.md'))), `${rel} → ${p}`).toBe(true);
+      }
+    }
   });
 });

@@ -1,0 +1,120 @@
+{
+  "$schema": "https://docs.proappstore.online/standard/finding.schema.json",
+  "standard_version": "1.5",
+  "app_id": "tasks-demo",
+  "repository": "proappstore-online/tasks-demo",
+  "commit_sha": "3f9c2e1",
+  "audited_at": "2026-09-24",
+  "auditor": {
+    "kind": "ai",
+    "name": "example-auditor"
+  },
+  "findings": [
+    {
+      "clause_id": "PAS-AUTH-001",
+      "clause_url": "https://docs.proappstore.online/standard/auth/#pas-auth-001",
+      "title": "Session kept in localStorage: initPro runs in legacy-bearer mode on a hosted app",
+      "state": "fail",
+      "severity": "high",
+      "verification": "manual",
+      "applicability": {
+        "applies": true,
+        "reason": "Hosted at tasks-demo.proappstore.online (deploy.yml uploads to apps/tasks-demo/)"
+      },
+      "evidence": [
+        {
+          "class": "source",
+          "path": "web/src/lib/app.ts",
+          "line": 3,
+          "excerpt": "export const app = initPro({ appId: 'tasks-demo' })",
+          "observation": "No authMode option \u2014 the SDK default is legacy-bearer, so the session token is cached under localStorage['pas:session']"
+        }
+      ],
+      "impact": "Any script on the app origin can read the platform session token and drive every SDK call as the user; the secret proxy is also unavailable in this mode.",
+      "remediation": "Pass authMode: 'platform-cookie' in web/src/lib/app.ts; remove any code that reads app.auth.token; verify sign-in, one data call and sign-out on the live app.",
+      "acceptance_tests": [
+        "app.auth.usesPlatformCookie === true at runtime",
+        "after sign-in, localStorage.getItem('pas:session') is null",
+        "document.cookie contains no session on the live app"
+      ],
+      "confidence": "high",
+      "human_validation": "not-required",
+      "dedupe_key": "tasks-demo:PAS-AUTH-001:web/src/lib/app.ts"
+    },
+    {
+      "clause_id": "PAS-DATA-007",
+      "clause_url": "https://docs.proappstore.online/standard/data/#pas-data-007",
+      "title": "list_tasks returns every organisation's rows: org_id is filtered only by a client-supplied param",
+      "state": "fail",
+      "severity": "critical",
+      "verification": "manual",
+      "applicability": {
+        "applies": true,
+        "reason": "Ready app: orgs table + org_members table in migrations.json; list_tasks is requires_auth: true"
+      },
+      "evidence": [
+        {
+          "class": "configuration",
+          "path": "mcp.json",
+          "line": 41,
+          "excerpt": "SELECT id, title FROM tasks WHERE org_id = :org_id AND :__user_id IS NOT NULL ORDER BY created_at DESC LIMIT :limit",
+          "observation": ":__user_id appears only in a tautology; nothing ties org_id to the caller's membership"
+        }
+      ],
+      "impact": "Any signed-in platform user can read any organisation's tasks by guessing or enumerating org ids.",
+      "remediation": "Rewrite the predicate as WHERE org_id = :org_id AND EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = tasks.org_id AND m.user_id = :__user_id); re-register on deploy.",
+      "acceptance_tests": [
+        "Cross-tenant negative test: a member of org A calling list_tasks with org B's id receives zero rows",
+        "Manifest test passes in CI (PAS-DATA-022)"
+      ],
+      "confidence": "high",
+      "human_validation": "not-required",
+      "dedupe_key": "tasks-demo:PAS-DATA-007:mcp.json"
+    },
+    {
+      "clause_id": "PAS-DATA-011",
+      "clause_url": "https://docs.proappstore.online/standard/data/#pas-data-011",
+      "title": "No public queries are declared",
+      "state": "not-applicable",
+      "severity": "high",
+      "verification": "manual",
+      "applicability": {
+        "applies": false,
+        "reason": "mcp.json declares no tool with requires_auth: false (14 tools, all requires_auth: true)"
+      },
+      "evidence": [
+        {
+          "class": "configuration",
+          "path": "mcp.json",
+          "observation": "grep -c '\"requires_auth\": false' mcp.json \u2192 0"
+        }
+      ],
+      "confidence": "high",
+      "human_validation": "not-required",
+      "dedupe_key": "tasks-demo:PAS-DATA-011:mcp.json"
+    },
+    {
+      "clause_id": "PAS-AUTH-020",
+      "clause_url": "https://docs.proappstore.online/standard/auth/#pas-auth-020",
+      "title": "Live sign-in, sign-out and role-change verification not yet performed by a person",
+      "state": "manual-review",
+      "severity": "medium",
+      "verification": "human",
+      "applicability": {
+        "applies": true,
+        "reason": "Hosted app with GitHub sign-in and app roles (coach, member)"
+      },
+      "evidence": [
+        {
+          "class": "runtime",
+          "path": "https://tasks-demo.proappstore.online/",
+          "observation": "Checklist from PAS-AUTH-020 attached; the auditor gathered no live results because this clause is Human-verified"
+        }
+      ],
+      "confidence": "high",
+      "human_validation": "required",
+      "dedupe_key": "tasks-demo:PAS-AUTH-020:https://tasks-demo.proappstore.online/",
+      "notes": "An AI auditor must not mark this clause pass; a person runs the checklist and records the outcome."
+    }
+  ]
+}

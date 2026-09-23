@@ -121,6 +121,7 @@ jobs:
             - Application Standard:
                 - Overview & audit guide: standard/index.md
                 - Audit model: standard/audit-model.md
+                - Audit instructions: standard/audit-instructions.md
                 - Governance & versioning: standard/governance.md
                 - Stack & platform services: standard/stack.md
                 - Identity, sessions & permissions: standard/auth.md

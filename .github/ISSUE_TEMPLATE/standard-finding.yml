@@ -1,0 +1,101 @@
+# Standard finding — the issue form the AI audit contract produces (#167).
+# The TITLE names the defect in the app's own terms; the clause is a field.
+# Follow-up: proappstore-online/template-app needs the same form so app repos
+# scaffolded from it carry it; it cannot be added from this repository.
+name: Standard finding
+description: A defect found by auditing against the Recommended Application Standard
+title: "<defect, in the app's terms — e.g. Session token stored in localStorage>"
+labels: ["standard-finding"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One finding per issue. The title must name the **defect**, never just the clause ID.
+        Contract: https://docs.proappstore.online/standard/finding.schema.json · Procedure: https://docs.proappstore.online/standard/audit-instructions/
+  - type: input
+    id: clause
+    attributes:
+      label: Clause
+      description: Clause ID and title from standard.json
+      placeholder: PAS-AUTH-001 — Hosted apps authenticate in platform-cookie mode
+    validations: { required: true }
+  - type: input
+    id: clause_url
+    attributes:
+      label: Clause URL
+      placeholder: https://docs.proappstore.online/standard/auth/#pas-auth-001
+    validations: { required: true }
+  - type: input
+    id: standard_version
+    attributes:
+      label: Standard version
+      placeholder: "1.5"
+    validations: { required: true }
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options: [critical, high, medium, low, info]
+    validations: { required: true }
+  - type: dropdown
+    id: state
+    attributes:
+      label: State
+      options: [fail, manual-review]
+    validations: { required: true }
+  - type: dropdown
+    id: verification
+    attributes:
+      label: Verification class
+      options: [automated, manual, human]
+    validations: { required: true }
+  - type: textarea
+    id: applicability
+    attributes:
+      label: Applicability
+      description: Why this clause applies to this app
+    validations: { required: true }
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: "class · path:line · excerpt or observation. Never paste secrets or personal data."
+      placeholder: "source · web/src/lib/app.ts:3 · initPro({ appId: 'my-app' }) — no authMode"
+    validations: { required: true }
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: What the failure allows or breaks, in this app's terms
+    validations: { required: true }
+  - type: textarea
+    id: remediation
+    attributes:
+      label: Remediation (bounded)
+      description: One clause, one app, one pull request
+    validations: { required: true }
+  - type: textarea
+    id: acceptance_tests
+    attributes:
+      label: Acceptance tests
+      description: How the fix is proven, from the clause's Tests section
+    validations: { required: true }
+  - type: dropdown
+    id: confidence
+    attributes:
+      label: Confidence
+      options: [high, medium, low]
+    validations: { required: true }
+  - type: dropdown
+    id: human_validation
+    attributes:
+      label: Human validation
+      options: [not-required, required]
+    validations: { required: true }
+  - type: input
+    id: dedupe_key
+    attributes:
+      label: Deduplication key
+      description: "<app_id>:<clause_id>:<primary evidence path> — search issues for this before filing"
+      placeholder: "my-app:PAS-AUTH-001:web/src/lib/app.ts"
+    validations: { required: true }

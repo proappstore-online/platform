@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.proappstore.online/standard/finding.schema.json",
+  "title": "ProAppStore Application Standard \u2014 audit report and finding",
+  "description": "The AI audit contract (audit-model.md#findings). A report lists one finding per clause evaluated. A `fail` (and a `manual-review` worth raising) becomes one GitHub issue whose title names the defect. Deduplication key formula: `<app_id>:<clause_id>:<primary evidence path>` where the primary evidence path is `evidence[0].path` \u2014 so a re-run never opens a second issue for the same defect.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "standard_version",
+    "app_id",
+    "repository",
+    "commit_sha",
+    "audited_at",
+    "auditor",
+    "findings"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "const": "https://docs.proappstore.online/standard/finding.schema.json"
+    },
+    "standard_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "The standard version audited against (standard.json \u2192 standard.version)"
+    },
+    "app_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "The app id / repository name / subdomain"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+      "description": "GitHub owner/name"
+    },
+    "commit_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$",
+      "description": "The commit the evidence was read from"
+    },
+    "audited_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "ISO date. Keep the report deterministic: same commit + same standard version \u21d2 same findings and keys"
+    },
+    "auditor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "ai",
+            "human"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "deployment_evidence": {
+      "type": "object",
+      "description": "The bundle PAS-OPS-020 requires; optional for read-only audits",
+      "additionalProperties": true
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    }
+  },
+  "$defs": {
+    "evidenceItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "class",
+        "path"
+      ],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "configuration",
+            "source",
+            "process",
+            "runtime",
+            "documentation"
+          ],
+          "description": "audit-model.md#evidence-classes"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repository path (configuration/source/process/documentation) or a URL (runtime). The first item's path is the primary evidence path used in dedupe_key"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "excerpt": {
+          "type": "string",
+          "description": "A short quote of the evidence \u2014 never a secret or personal data"
+        },
+        "observation": {
+          "type": "string",
+          "description": "What was observed (runtime) or why this file proves the point"
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clause_id",
+        "clause_url",
+        "title",
+        "state",
+        "severity",
+        "verification",
+        "applicability",
+        "evidence",
+        "confidence",
+        "human_validation",
+        "dedupe_key"
+      ],
+      "properties": {
+        "clause_id": {
+          "type": "string",
+          "pattern": "^PAS-(STACK|AUTH|DATA|INT|UI|OPS)-[0-9]{3}$"
+        },
+        "clause_url": {
+          "type": "string",
+          "pattern": "^https://docs\\.proappstore\\.online/standard/[a-z-]+/#pas-(stack|auth|data|int|ui|ops)-[0-9]{3}$",
+          "description": "Must equal the clause's url in standard.json"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 8,
+          "description": "Names the DEFECT, in the app's terms \u2014 e.g. 'Session token stored in localStorage' \u2014 never just the clause ID. Also the GitHub issue title"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "not-applicable",
+            "manual-review"
+          ]
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "info"
+          ],
+          "description": "The clause's default unless lowered with a stated reason; never raised without human validation"
+        },
+        "severity_reason": {
+          "type": "string",
+          "description": "Required when severity differs from the clause default"
+        },
+        "verification": {
+          "type": "string",
+          "enum": [
+            "automated",
+            "manual",
+            "human"
+          ]
+        },
+        "applicability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "applies",
+            "reason"
+          ],
+          "properties": {
+            "applies": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Why the clause applies, or the evidence that its condition is not met (a not-applicable is a result, not a skip)"
+            }
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidenceItem"
+          },
+          "description": "At least one item for fail; for pass/not-applicable, what was inspected"
+        },
+        "impact": {
+          "type": "string",
+          "description": "Required for fail: what the failure allows or breaks, in the app's own terms"
+        },
+        "remediation": {
+          "type": "string",
+          "description": "Required for fail: one bounded change \u2014 one clause, one app, one PR"
+        },
+        "acceptance_tests": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Required for fail: how the fix is proven, from the clause's Tests"
+        },
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "human_validation": {
+          "type": "string",
+          "enum": [
+            "required",
+            "not-required"
+          ],
+          "description": "required when verification is human, when confidence is below high, or when the remediation would change architecture"
+        },
+        "dedupe_key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*:PAS-(STACK|AUTH|DATA|INT|UI|OPS)-[0-9]{3}:.+$",
+          "description": "<app_id>:<clause_id>:<evidence[0].path>"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

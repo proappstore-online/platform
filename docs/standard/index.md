@@ -1,6 +1,6 @@
 # Recommended Application Standard and Audit Guide
 
-**Standard version 1.5** · [Changelog](./changelog.md) · [Governance and versioning](./governance.md) · [Audit model](./audit-model.md)
+**Standard version 1.5** · [Changelog](./changelog.md) · [Governance and versioning](./governance.md) · [Audit model](./audit-model.md) · [Audit instructions](./audit-instructions.md)
 
 This is the canonical, clause-numbered standard for how an application built on
 ProAppStore should be designed and implemented. It exists so that developers and
@@ -65,6 +65,20 @@ what each chapter covers.
 | [Integrations and platform services](./integrations.md) | `INT` | Proxy and secrets, AI, maps, notifications, email/SMS, webhooks, subscriptions and licenses, MCP tools |
 | [UI, browser security, and PWA](./ui.md) | `UI` | UI components, browser security, accessibility, responsive and mobile behaviour, PWA |
 | [Testing, deployment, and operations](./ops.md) | `OPS` | Testing, CI and OIDC deployment, rollback, logging and monitoring, privacy, dependency policy |
+
+## Machine-readable and AI-friendly forms
+
+The HTML pages are canonical; these are generated from them on every commit
+and published by the same docs build, so a clean unauthenticated client can
+fetch everything it needs to audit an app:
+
+| Artifact | URL | What it is |
+|---|---|---|
+| Audit instructions | [`standard/audit-instructions/`](./audit-instructions.md) | The reusable procedure a person or an AI follows, plus the issue template |
+| Standard as data | [`standard/standard.json`](./standard.json) | Every clause: id, stable URL, severity, verification, enforcement, all sections — validated by [`standard.schema.json`](./standard.schema.json) |
+| Finding contract | [`standard/finding.schema.json`](./finding.schema.json) | The audit report and finding shape (state, severity, evidence, impact, bounded remediation, acceptance tests, confidence, human validation, deduplication key); example: [`examples/audit.example.json`](./examples/audit.example.json) |
+| Full text | [`standard/llms-full.txt`](./llms-full.txt) | All clauses as plain text for AI ingestion |
+| Index | [`standard/llms.txt`](./llms.txt), [`/llms.txt`](../llms.txt) | llms.txt-style indexes of the standard and of the whole docs site |
 
 ## Where this sits among the docs
 

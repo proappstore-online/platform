@@ -23,7 +23,13 @@ Testing, deployment, and operations (chapter `OPS`).
   verification-class table, and a platform-provides / app-must-add table.
 - **Changed** — none.
 - **Withdrawn** — none.
-- **Editorial** — none.
+- **Editorial** — machine-readable and AI-friendly forms published alongside
+  the HTML (no clause changes, so no version bump): `standard.json` (generated
+  from the markdown by `scripts/build-standard-data.mjs`, validated by
+  `standard.schema.json`), `finding.schema.json` with
+  `examples/audit.example.json`, `llms-full.txt`, `llms.txt` (site and
+  standard), the `audit-instructions` page, and the *Standard finding* GitHub
+  issue form in the platform repository.
 
 ## 1.4
 

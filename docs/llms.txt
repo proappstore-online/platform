@@ -1,0 +1,41 @@
+# ProAppStore Platform Docs
+
+> Developer documentation and knowledge base for ProAppStore (https://proappstore.online), the paid app marketplace on Cloudflare Workers + D1: SDK, CLI, architecture, security model, and the clause-numbered Recommended Application Standard that says how an app should use the platform and how a human or an AI copilot audits one. The storefront's own index is at https://proappstore.online/llms.txt; the AI agent guide is https://proappstore.online/skills.md.
+
+## Application Standard (audit an app)
+
+- [Standard — overview and audit guide](https://docs.proappstore.online/standard/): What the standard is, recommendation vs enforcement vs optional capability, the six-step audit procedure, chapter map.
+- [Audit instructions](https://docs.proappstore.online/standard/audit-instructions/): The reusable, tool-agnostic procedure an AI or a person follows to audit a repository and emit findings. Start here to audit.
+- [standard.json](https://docs.proappstore.online/standard/standard.json): Every clause as data — id, stable URL, severity, verification class, enforcement, and all ten template sections. Validated by [standard.schema.json](https://docs.proappstore.online/standard/standard.schema.json).
+- [finding.schema.json](https://docs.proappstore.online/standard/finding.schema.json): The finding and audit-report contract (state, severity, evidence with file:line, impact, bounded remediation, acceptance tests, confidence, human-validation flag, deduplication key). Example: [audit.example.json](https://docs.proappstore.online/standard/examples/audit.example.json).
+- [llms-full.txt](https://docs.proappstore.online/standard/llms-full.txt): The full text of every clause in one plain-text file.
+- [Audit model](https://docs.proappstore.online/standard/audit-model/): Applicability, evidence classes, verification classes, result states, severity levels, finding fields.
+- [Governance and versioning](https://docs.proappstore.online/standard/governance/): Chapter taxonomy, clause-ID grammar and anchors, MUST/SHOULD/MAY, clause template, versioning, withdrawals.
+- [Changelog](https://docs.proappstore.online/standard/changelog/): One entry per standard version.
+
+### Chapters
+
+- [STACK — stack and platform services](https://docs.proappstore.online/standard/stack/): Which platform primitive to use for each need; the decision tree.
+- [AUTH — identity, sessions, and permissions](https://docs.proappstore.online/standard/auth/): Platform-cookie auth, no app-managed tokens, RBAC scopes, permissions UI.
+- [DATA — data, actions, and Workers](https://docs.proappstore.online/standard/data/): Migrations, registered actions, SQL row scoping, KV/D1/storage/counters/rooms, service bindings.
+- [UI — UI, browser security, and PWA](https://docs.proappstore.online/standard/ui/): Components and tokens, accessibility, responsive, CSP/XSS/uploads/framing, service worker and PWA.
+- [OPS — testing, deployment, and operations](https://docs.proappstore.online/standard/ops/): Tests, CI, keyless deploy, secrets, rollback, logging, monitoring, privacy, incident evidence.
+- [INT — integrations and platform services](https://docs.proappstore.online/standard/integrations/): Proxy/secrets, AI, maps, notifications, email/SMS, subscriptions, MCP (clauses pending).
+
+## Platform docs
+
+- [Getting started](https://docs.proappstore.online/getting-started/): Quick start, tech stack, monorepo layout.
+- [SDK overview](https://docs.proappstore.online/sdk-overview/): initPro, every SDK surface, monitoring, auth session storage.
+- [UI components](https://docs.proappstore.online/ui/): ProShell, composable components, hooks, design tokens.
+- [Recipes](https://docs.proappstore.online/recipes/): CRUD, forms, tables, UI patterns, SDK features.
+- [CLI overview](https://docs.proappstore.online/cli-overview/): pas create / check / publish / secret / proxy / domain.
+- [Publishing flow](https://docs.proappstore.online/publishing-flow/): Provisioning sequence, key properties, failure modes.
+- [MCP app tools](https://docs.proappstore.online/mcp-app-tools/): The mcp.json manifest, auth model, validation rules, security model.
+- [App actions and data access security](https://docs.proappstore.online/app-actions-security/): Guard idioms — the SQL is the security boundary; batch tools; registration and drift.
+- [Architecture](https://docs.proappstore.online/architecture/): Control plane, worker-to-worker pattern (service bindings are mandatory), databases.
+- [Browser auth session model](https://docs.proappstore.online/auth-session-model/): Platform-cookie token handler, custom domains, app author rules.
+- [Authorization model](https://docs.proappstore.online/authorization-model/): The three role scopes and which check to use.
+- [Build and deploy](https://docs.proappstore.online/build-and-deploy/): Per-repo keyless workflow → R2 → host worker.
+- [Monitoring runbook](https://docs.proappstore.online/monitoring-runbook/): Signals, triage, thresholds.
+- [Migration repair runbook](https://docs.proappstore.online/migration-repair-runbook/): Detect, interpret, repair schema drift.
+- [ADRs](https://docs.proappstore.online/adr/001-cloudflare-workers-only/): Architecture decision records.

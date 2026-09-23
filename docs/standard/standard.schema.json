@@ -1,0 +1,405 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.proappstore.online/standard/standard.schema.json",
+  "title": "ProAppStore Recommended Application Standard \u2014 data file",
+  "description": "Machine-readable form of the clause-numbered standard published at https://docs.proappstore.online/standard/. Generated from the markdown by scripts/build-standard-data.mjs; the HTML pages are canonical. Clause IDs are append-only within a major version; withdrawn clauses keep their ID with status 'withdrawn'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "standard",
+    "chapters",
+    "clauses"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "standard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "base_url",
+        "html",
+        "audit_instructions",
+        "finding_schema",
+        "full_text",
+        "changelog",
+        "id_grammar",
+        "severities",
+        "verification_classes",
+        "result_states",
+        "evidence_classes",
+        "dedupe_key"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$",
+          "description": "MAJOR.MINOR \u2014 see governance.md#versioning"
+        },
+        "base_url": {
+          "type": "string",
+          "const": "https://docs.proappstore.online/standard/"
+        },
+        "html": {
+          "type": "string"
+        },
+        "audit_instructions": {
+          "type": "string"
+        },
+        "finding_schema": {
+          "type": "string"
+        },
+        "full_text": {
+          "type": "string"
+        },
+        "changelog": {
+          "type": "string"
+        },
+        "id_grammar": {
+          "type": "string",
+          "const": "PAS-<CHAPTER>-<NNN>"
+        },
+        "severities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low",
+              "info"
+            ]
+          },
+          "minItems": 5,
+          "uniqueItems": true
+        },
+        "verification_classes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "automated",
+              "manual",
+              "human"
+            ]
+          },
+          "minItems": 3,
+          "uniqueItems": true
+        },
+        "result_states": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail",
+              "not-applicable",
+              "manual-review"
+            ]
+          },
+          "minItems": 4,
+          "uniqueItems": true
+        },
+        "evidence_classes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "configuration",
+              "source",
+              "process",
+              "runtime",
+              "documentation"
+            ]
+          },
+          "minItems": 5,
+          "uniqueItems": true
+        },
+        "dedupe_key": {
+          "type": "string",
+          "const": "<app_id>:<clause_id>:<primary evidence path>"
+        }
+      }
+    },
+    "chapters": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "title",
+          "page",
+          "scope",
+          "url"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "STACK",
+              "AUTH",
+              "DATA",
+              "INT",
+              "UI",
+              "OPS"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "page": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https://docs\\.proappstore\\.online/standard/[a-z-]+/$"
+          }
+        }
+      }
+    },
+    "clauses": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/clause"
+      }
+    }
+  },
+  "$defs": {
+    "clause": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/activeClause"
+        },
+        {
+          "$ref": "#/$defs/withdrawnClause"
+        }
+      ]
+    },
+    "activeClause": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "chapter",
+        "number",
+        "title",
+        "page",
+        "anchor",
+        "url",
+        "status",
+        "severity",
+        "verification",
+        "verification_detail",
+        "enforcement",
+        "enforcement_detail",
+        "since",
+        "rule",
+        "applicability",
+        "rationale",
+        "recommended_implementation",
+        "conforming_example",
+        "non_conforming_example",
+        "evidence",
+        "remediation",
+        "tests",
+        "supporting_links"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^PAS-(STACK|AUTH|DATA|INT|UI|OPS)-[0-9]{3}$"
+        },
+        "chapter": {
+          "type": "string",
+          "enum": [
+            "STACK",
+            "AUTH",
+            "DATA",
+            "INT",
+            "UI",
+            "OPS"
+          ]
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "page": {
+          "type": "string",
+          "pattern": "^[a-z-]+$"
+        },
+        "anchor": {
+          "type": "string",
+          "pattern": "^pas-(stack|auth|data|int|ui|ops)-[0-9]{3}$"
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https://docs\\.proappstore\\.online/standard/[a-z-]+/#pas-(stack|auth|data|int|ui|ops)-[0-9]{3}$"
+        },
+        "status": {
+          "type": "string",
+          "const": "active"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "info"
+          ]
+        },
+        "verification": {
+          "type": "string",
+          "enum": [
+            "automated",
+            "manual",
+            "human"
+          ],
+          "description": "Normalised class; the clause's own words are in verification_detail"
+        },
+        "verification_detail": {
+          "type": "string"
+        },
+        "enforcement": {
+          "type": "string",
+          "enum": [
+            "none",
+            "automated",
+            "optional"
+          ],
+          "description": "none = recommended conformity only; automated = a named platform/compliance mechanism enforces it; optional = a MAY capability"
+        },
+        "enforcement_detail": {
+          "type": "string"
+        },
+        "since": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "kind": {
+          "type": "string",
+          "description": "Present on UI clauses: Security, Quality, or Accessibility (quality)"
+        },
+        "rule": {
+          "type": "string",
+          "minLength": 1
+        },
+        "applicability": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "recommended_implementation": {
+          "type": "string"
+        },
+        "conforming_example": {
+          "type": "string"
+        },
+        "non_conforming_example": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        },
+        "remediation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tests": {
+          "type": "string",
+          "minLength": 1
+        },
+        "supporting_links": {
+          "type": "string"
+        }
+      }
+    },
+    "withdrawnClause": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "chapter",
+        "number",
+        "title",
+        "page",
+        "anchor",
+        "url",
+        "status",
+        "withdrawn_in",
+        "withdrawn_reason"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^PAS-(STACK|AUTH|DATA|INT|UI|OPS)-[0-9]{3}$"
+        },
+        "chapter": {
+          "type": "string",
+          "enum": [
+            "STACK",
+            "AUTH",
+            "DATA",
+            "INT",
+            "UI",
+            "OPS"
+          ]
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "page": {
+          "type": "string",
+          "pattern": "^[a-z-]+$"
+        },
+        "anchor": {
+          "type": "string",
+          "pattern": "^pas-(stack|auth|data|int|ui|ops)-[0-9]{3}$"
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https://docs\\.proappstore\\.online/standard/[a-z-]+/#pas-(stack|auth|data|int|ui|ops)-[0-9]{3}$"
+        },
+        "status": {
+          "type": "string",
+          "const": "withdrawn"
+        },
+        "withdrawn_in": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "withdrawn_reason": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

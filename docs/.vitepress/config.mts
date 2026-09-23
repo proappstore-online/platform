@@ -50,6 +50,7 @@ const mainSidebar = [
     items: [
       { text: "Overview & Audit Guide", link: "/standard/" },
       { text: "Audit Model", link: "/standard/audit-model" },
+      { text: "Audit Instructions", link: "/standard/audit-instructions" },
       { text: "Governance & Versioning", link: "/standard/governance" },
       { text: "Stack & Platform Services", link: "/standard/stack" },
       { text: "Identity, Sessions & Permissions", link: "/standard/auth" },

@@ -98,9 +98,12 @@ One finding becomes one issue. Every finding carries:
 | **Human validation** | `required` when the verification class is *Human*, when confidence is below `high`, or when the remediation would change architecture. |
 | **Deduplication key** | `<app id>:<clause id>:<primary evidence path>`, so a re-run does not open a second issue for the same defect. |
 
-The machine-readable form of this contract, and the issue template an AI
-should emit, are published alongside the standard as they land; this page is
-the normative definition either way.
+The machine-readable form of this contract is
+[`finding.schema.json`](./finding.schema.json) (with a worked example in
+[`examples/audit.example.json`](./examples/audit.example.json)); the procedure
+that produces findings is the [audit instructions](./audit-instructions.md),
+and the clauses themselves are available as [`standard.json`](./standard.json).
+This page is the normative definition either way.
 
 ## Audit report
 

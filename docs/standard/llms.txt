@@ -1,0 +1,19 @@
+# ProAppStore Recommended Application Standard
+
+> Clause-numbered standard (version in standard.json → standard.version) for how an app on ProAppStore should be designed and implemented, and how a human or an AI copilot audits a repository against it. Advisory unless a clause's Enforcement line names a platform mechanism. Clause URLs are stable: https://docs.proappstore.online/standard/<chapter>/#pas-<chapter>-<nnn>.
+
+## Machine-readable
+
+- [standard.json](https://docs.proappstore.online/standard/standard.json): All clauses as data. Schema: [standard.schema.json](https://docs.proappstore.online/standard/standard.schema.json).
+- [finding.schema.json](https://docs.proappstore.online/standard/finding.schema.json): Audit report + finding contract. Example: [examples/audit.example.json](https://docs.proappstore.online/standard/examples/audit.example.json).
+- [llms-full.txt](https://docs.proappstore.online/standard/llms-full.txt): Full clause text, plain.
+
+## Read first
+
+- [Audit instructions](https://docs.proappstore.online/standard/audit-instructions/): The procedure and the issue template.
+- [Audit model](https://docs.proappstore.online/standard/audit-model/): Result states, evidence and verification classes, severities, finding fields.
+- [Governance](https://docs.proappstore.online/standard/governance/): IDs, anchors, keywords, template, versioning.
+
+## Chapters
+
+- [STACK](https://docs.proappstore.online/standard/stack/) · [AUTH](https://docs.proappstore.online/standard/auth/) · [DATA](https://docs.proappstore.online/standard/data/) · [INT](https://docs.proappstore.online/standard/integrations/) · [UI](https://docs.proappstore.online/standard/ui/) · [OPS](https://docs.proappstore.online/standard/ops/) · [Changelog](https://docs.proappstore.online/standard/changelog/)
