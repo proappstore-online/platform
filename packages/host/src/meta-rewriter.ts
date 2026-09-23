@@ -10,8 +10,20 @@ export interface SocialMeta extends ListingMeta {
   title?: string | null;
 }
 
+/**
+ * Marker the host stamps on every HTML page it serves (#20). The SDK reads it
+ * to default `authMode` to `platform-cookie`: the `/.pas/*` token-handler
+ * routes only exist on origins this worker serves, so the marker — not the
+ * hostname — is what proves cookie mode will work. (`console.` and
+ * `dashboard.proappstore.online` are platform subdomains that are NOT served
+ * here, which is why a hostname heuristic would break them.) An app that
+ * ships its own tag with this name keeps it; the host never overrides it.
+ */
+export const AUTH_MODE_META_NAME = "pas-auth-mode";
+export const AUTH_MODE_META_TAG = `<meta name="${AUTH_MODE_META_NAME}" content="platform-cookie">`;
+
 /** Track which meta tags were found so we can inject missing ones. */
-class MetaTagTracker {
+export class MetaTagTracker {
   readonly found = new Set<string>();
   private meta: SocialMeta;
   private canonicalUrl: string;
@@ -52,6 +64,7 @@ class MetaTagTracker {
     }
     if (!this.found.has("og:url"))
       parts.push(`<meta property="og:url" content="${esc(this.canonicalUrl)}">`);
+    if (!this.found.has(AUTH_MODE_META_NAME)) parts.push(AUTH_MODE_META_TAG);
     if (!this.found.has("twitter:card")) {
       const hasShareImage = Boolean(icon) || this.found.has("twitter:image") || this.found.has("og:image");
       parts.push(`<meta name="twitter:card" content="${hasShareImage ? "summary_large_image" : "summary"}">`);
@@ -173,7 +186,10 @@ class HeadEndInjector implements HTMLRewriterElementContentHandlers {
  */
 export function rewriteMetaTags(response: Response, meta: SocialMeta, canonicalUrl: string): Response {
   const tracker = new MetaTagTracker(meta, canonicalUrl);
-  let rewriter = new HTMLRewriter();
+  let rewriter = new HTMLRewriter().on(
+    `meta[name="${AUTH_MODE_META_NAME}"]`,
+    new FoundTagMarker(AUTH_MODE_META_NAME, tracker),
+  );
 
   if (meta.title) {
     rewriter = rewriter

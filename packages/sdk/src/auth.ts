@@ -3,6 +3,30 @@ import type { Unsubscribe, User } from './base-types.js';
 export type AuthProvider = 'github' | 'google' | 'email';
 export type AuthMode = 'legacy-bearer' | 'platform-cookie';
 
+/** `<meta name>` the PAS host stamps on every page it serves (host meta-rewriter). */
+export const AUTH_MODE_META_NAME = 'pas-auth-mode';
+
+/**
+ * Pick the auth mode when the app did not set one (#20).
+ *
+ * `platform-cookie` only works on an origin the PAS host worker serves, because
+ * that is where the `/.pas/auth/*` and `/.pas/api|data/*` routes live. The
+ * host marks those pages with `<meta name="pas-auth-mode" content="platform-cookie">`,
+ * so the marker — not the hostname — decides. Anything else (localhost, a
+ * Pages-hosted first-party site, SSR, tests) stays `legacy-bearer`. An
+ * explicit `authMode` always wins.
+ */
+export function resolveAuthMode(explicit?: AuthMode): AuthMode {
+  if (explicit) return explicit;
+  const doc = (globalThis as { document?: { querySelector?: (selector: string) => { getAttribute(name: string): string | null } | null } }).document;
+  try {
+    const content = doc?.querySelector?.(`meta[name="${AUTH_MODE_META_NAME}"]`)?.getAttribute('content');
+    return content === 'platform-cookie' ? 'platform-cookie' : 'legacy-bearer';
+  } catch {
+    return 'legacy-bearer';
+  }
+}
+
 /** PAS-owned localStorage key for the legacy cached session (per-origin). */
 const STORAGE_KEY = 'pas:session';
 

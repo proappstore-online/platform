@@ -8,8 +8,11 @@ export interface ProInitOptions {
    * - platform-cookie: PAS-hosted apps use same-origin /.pas/auth/* routes and
    *   a host-only HttpOnly cookie. Browser JS never receives the bearer token.
    *
-   * Defaults to legacy-bearer for backwards compatibility until all SDK
-   * primitives support the platform-cookie mediation path.
+   * Default: platform-cookie when the page carries the PAS host's
+   * `<meta name="pas-auth-mode" content="platform-cookie">` marker (every page
+   * served from `<app>.proappstore.online` or an active custom domain), and
+   * legacy-bearer everywhere else (localhost, non-hosted sites, SSR). Set it
+   * explicitly to override either way.
    */
   authMode?: 'legacy-bearer' | 'platform-cookie';
   /** Defaults to https://api.proappstore.online. */

@@ -138,8 +138,11 @@ SDK HTTP calls use `/.pas/api/*` or `/.pas/data/*` mediation, and rooms use
 same-origin `/.pas/api/*` WebSocket mediation. The bearer token stays in a
 host-only HttpOnly cookie and is injected server-side by PAS.
 
-The SDK default remains `legacy-bearer` only for un-migrated apps; it is a
-compatibility setting, not a recommendation. See [Browser auth session
+When `authMode` is omitted the SDK reads the `<meta name="pas-auth-mode">`
+marker the host stamps on every page it serves and defaults to
+`platform-cookie` there; on localhost or any origin the platform does not host
+it stays `legacy-bearer`. Set the option explicitly on hosted apps anyway
+([PAS-AUTH-001](./standard/auth.md#pas-auth-001)). See [Browser auth session
 model](/auth-session-model) and the standard's
 [identity chapter](./standard/auth.md).
 

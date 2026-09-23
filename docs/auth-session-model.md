@@ -154,8 +154,8 @@ Implemented foundation:
 - Active custom domains can resolve back to their app route when they are served
   through PAS-controlled hosting.
 
-Remaining: make the SDK use these endpoints by default once same-origin API
-mediation is available.
+The SDK uses these endpoints by default on every page the host serves (see
+"Default mode" below).
 
 ### Phase 3: Same-Origin API Mediation
 
@@ -217,35 +217,60 @@ In `platform-cookie` mode:
   use authenticated same-origin API mediation in cookie mode. `embedUrl()` and
   `staticUrl()` remain public OpenStreetMap URL helpers.
 
-The compatibility default remains `legacy-bearer` until all SDK paths are
-covered and real hosted apps have passed end-to-end verification.
+#### Default mode
 
-Keep explicit fallback modes for compatibility:
+Since `@proappstore/sdk` 1.16.46 the default is decided by the page, not by a
+hostname rule:
+
+- The host worker stamps every HTML page it serves — `<app>.proappstore.online`
+  and active custom domains alike — with
+  `<meta name="pas-auth-mode" content="platform-cookie">`.
+- `initPro()` without `authMode` reads that marker and uses `platform-cookie`
+  when it is present, `legacy-bearer` otherwise.
+- An explicit `authMode` always wins.
+
+The marker, rather than the hostname, is what proves the `/.pas/*` routes exist
+on that origin. `console.proappstore.online` and `dashboard.proappstore.online`
+are platform subdomains that are *not* served by the host worker, so they keep
+`legacy-bearer` automatically; `localhost` and any non-hosted deployment do too.
+An app that rebuilds against the current SDK therefore moves to cookie mode
+with no code change; an app that still reads `app.auth.token` must be
+refactored first ([PAS-AUTH-003](./standard/auth.md#pas-auth-003), #71).
+
+Both modes remain explicit options:
 
 - `platform-cookie`: same-origin token-handler mode
-- `legacy-bearer`: current localStorage-backed bearer mode
+- `legacy-bearer`: localStorage-backed bearer mode, for local development and
+  origins the platform does not host
 
 **Recommendation (Application Standard [PAS-AUTH-001](./standard/auth.md#pas-auth-001)):**
-every hosted app sets `authMode: 'platform-cookie'` explicitly. The SDK's
-*default* stays `legacy-bearer` only so that un-migrated apps keep working; it
-is a compatibility setting, not the recommended configuration.
+every hosted app still sets `authMode: 'platform-cookie'` explicitly. The
+default makes an un-migrated app safe on its next rebuild; the explicit option
+makes the choice visible to an audit and immune to the marker being absent from
+a stale cached page.
 
-**Status (2026-09-23):** `platform-cookie` sign-in, `/.pas/auth/me`, data,
+**Status (2026-09-24):** `platform-cookie` sign-in, `/.pas/auth/me`, data,
 rooms, usage, maps and sign-out are verified end-to-end on hosted apps for
 GitHub, Google and credential accounts (`chess-academy` completed its
-migration and post-flip test plan in issue #142 of its repo). 17 of the 32
-apps in the org ship in `platform-cookie` mode; the remainder are tracked by
-#20, with the four that read `app.auth.token` directly blocked on #71.
+migration and post-flip test plan in issue #142 of its repo). Apps that ship
+without the option pick up cookie mode when they next rebuild against SDK
+≥ 1.16.46; the four that read `app.auth.token` directly are tracked in #71.
+The legacy `#pas_session=` fragment delivery in the API's OAuth callback
+stays until the last hosted app has rebuilt, because a legacy-bearer bundle
+cannot sign in without it.
 
 ### Phase 5: Security Gates
 
-Before cookie mode becomes default:
+All in place before cookie mode became the default:
 
-- enforce same-origin `Origin` checks on mutating routes
-- use `Sec-Fetch-Site` where available
-- add CSRF protection where Origin/Fetch-Metadata is insufficient
-- avoid broad credentialed CORS across `*.proappstore.online`
-- add tests for cross-app and custom-domain cookie isolation
+- same-origin `Origin` checks on mutating routes (`/.pas/auth/logout`, every
+  mutating `/.pas/api/*` and `/.pas/data/*` call)
+- `Sec-Fetch-Site` where available, fail-closed when neither header is present
+- no credentialed CORS across `*.proappstore.online`; mediation is same-origin
+  only
+- host tests for platform subdomains, custom-domain callback origins, cookie
+  attributes (`__Host-`, `HttpOnly`, `Secure`, `SameSite=Lax`, no `Domain=`),
+  nonce rejection, and auth-route shadowing
 
 ## App Author Rules
 

@@ -1,6 +1,6 @@
 // Self-contained PAS SDK. All primitives (auth, kv, counters, rooms, roles,
 // proxy, db, etc.) hit the PAS backend — no FAS dependency at runtime.
-import { Auth } from './auth.js';
+import { Auth, resolveAuthMode } from './auth.js';
 import { Kv } from './kv.js';
 import { Counters } from './counters.js';
 import { Rooms } from './rooms.js';
@@ -101,7 +101,7 @@ export class ProAppStore {
 
   constructor(opts: ProInitOptions) {
     const apiBase = opts.proApiBase ?? 'https://api.proappstore.online';
-    const authMode = opts.authMode ?? 'legacy-bearer';
+    const authMode = resolveAuthMode(opts.authMode);
     this.auth = new Auth(opts.appId, apiBase, authMode);
     const dataApiBase = opts.dataApiBase ?? (this.auth.usesPlatformCookie ? '/.pas/data' : `https://data-${opts.appId}.proappstore.online`);
     this.kv = new Kv(opts.appId, apiBase, this.auth);
