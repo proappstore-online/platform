@@ -1,0 +1,49 @@
+{
+  "$comment": "Evaluation contract for audit-proappstore-app (#172): the rules the harness checks for presence, the allow-list it must equal, the context budgets, the output sections the template must carry, the markers every worked example must contain, and which test covers each issue property.",
+  "skill": "audit-proappstore-app",
+  "mutating": false,
+  "allowed_tools": [
+    "whoami",
+    "app_info",
+    "discover_tools",
+    "schema_status",
+    "deploy_status",
+    "qa_list_runs",
+    "platform_guide"
+  ],
+  "rules": {
+    "rerun": "\\*\\*Rerun:\\*\\* an audit is idempotent",
+    "stop_or_rollback": "\\*\\*Failure:\\*\\* if standard\\.json cannot be fetched, stop"
+  },
+  "budgets": {
+    "skill_md_bytes": 12288,
+    "references_bytes": 32768,
+    "bundle_bytes": 65536
+  },
+  "output_sections": [
+    "Envelope",
+    "Results by chapter",
+    "Findings",
+    "Not-applicable clauses",
+    "Human-only clauses",
+    "Deployment evidence",
+    "Issues",
+    "Blockers"
+  ],
+  "example_markers": [
+    "Unsupported:",
+    "PAS-"
+  ],
+  "properties": {
+    "triggering": "test/skills-harness.test.ts",
+    "non-triggering": "test/skills-harness.test.ts",
+    "tool-selection-order": "test/skills-harness.test.ts",
+    "dry-run-confirmation": "test/skills.test.ts",
+    "output-schema": "test/skills-audit.evals.test.ts",
+    "idempotency": "test/skills-audit.evals.test.ts",
+    "failure-recovery": "test/skills-harness.test.ts",
+    "citation-accuracy": "test/skills-audit.evals.test.ts",
+    "secret-safety": "test/skills.test.ts",
+    "context-size": "test/skills-harness.test.ts"
+  }
+}

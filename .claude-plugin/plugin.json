@@ -1,0 +1,25 @@
+{
+  "name": "proappstore",
+  "version": "1.0.0",
+  "description": "ProAppStore Agent Skills — create and provision, choose architecture, secure auth and roles, design migrations and registered actions, publish and roll back, upgrade, and audit a ProAppStore app — packaged with the ProAppStore MCP server as the authenticated action layer.",
+  "author": { "name": "proappstore-online", "url": "https://proappstore.online" },
+  "homepage": "https://docs.proappstore.online/skills/evaluations/",
+  "repository": "https://github.com/proappstore-online/platform",
+  "license": "MIT",
+  "keywords": ["proappstore", "agent-skills", "mcp", "cloudflare", "d1", "pwa"],
+  "skills": [
+    "./skills/create-proappstore-app",
+    "./skills/choose-proappstore-architecture",
+    "./skills/proappstore-auth-sessions-roles",
+    "./skills/proappstore-data-migrations-actions",
+    "./skills/proappstore-publish-deploy",
+    "./skills/proappstore-upgrade-app",
+    "./skills/audit-proappstore-app"
+  ],
+  "mcpServers": {
+    "proappstore": {
+      "type": "http",
+      "url": "https://mcp.proappstore.online/mcp"
+    }
+  }
+}

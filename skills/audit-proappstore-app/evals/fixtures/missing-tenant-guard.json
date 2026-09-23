@@ -1,0 +1,52 @@
+{
+  "id": "missing-tenant-guard",
+  "kind": "non-conforming",
+  "app_id": "ledger",
+  "repository": "proappstore-online/ledger",
+  "hosted": true,
+  "category": "Ready",
+  "files": {
+    "web/src/lib/app.ts": "import { initPro } from '@proappstore/sdk'\n\nexport const app = initPro({ appId: 'ledger', authMode: 'platform-cookie' })\n",
+    "web/index.html": "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" /></head><body><div id=\"root\"></div></body></html>\n",
+    "migrations.json": "{\"migrations\": [{\"name\": \"0001_init\", \"sql\": \"CREATE TABLE IF NOT EXISTS orgs (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS org_members (org_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(org_id, user_id)); CREATE TABLE IF NOT EXISTS items (id TEXT PRIMARY KEY, org_id TEXT NOT NULL, title TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)\"}]}",
+    "mcp.json": "{\n \"tools\": [\n  {\n   \"name\": \"list_items\",\n   \"operation\": \"query\",\n   \"sql\": \"SELECT id, title, done FROM items WHERE org_id IN (SELECT org_id FROM org_members WHERE user_id = :__user_id) ORDER BY created_at DESC LIMIT :limit\",\n   \"params\": {\n    \"limit\": {\n     \"type\": \"integer\",\n     \"default\": 50,\n     \"max\": 100,\n     \"optional\": true\n    }\n   },\n   \"requires_auth\": true\n  },\n  {\n   \"name\": \"update_item\",\n   \"operation\": \"execute\",\n   \"sql\": \"UPDATE items SET done = :done WHERE id = :id\",\n   \"params\": {\n    \"id\": {\n     \"type\": \"string\"\n    },\n    \"done\": {\n     \"type\": \"boolean\"\n    }\n   },\n   \"requires_auth\": true\n  }\n ]\n}",
+    ".github/workflows/deploy.yml": "name: Deploy to R2\non:\n  push:\n    branches: [main]\n# uploads to apps/ledger/\n"
+  },
+  "expected": {
+    "fail": [
+      "PAS-DATA-007"
+    ],
+    "findings": [
+      {
+        "clause_id": "PAS-DATA-007",
+        "clause_url": "https://docs.proappstore.online/standard/data/#pas-data-007",
+        "title": "update_item lets any signed-in user flip any item: the statement is scoped by id only",
+        "state": "fail",
+        "severity": "critical",
+        "verification": "manual",
+        "applicability": {
+          "applies": true,
+          "reason": "Ready app: migrations.json defines org_members; rows belong to organisations"
+        },
+        "evidence": [
+          {
+            "class": "configuration",
+            "path": "mcp.json",
+            "line": 9,
+            "excerpt": "\"sql\": \"UPDATE items SET done = :done WHERE id = :id\"",
+            "observation": "requires_auth is true but the statement carries no :__user_id predicate and no org_members sub-query; any authenticated user who knows or guesses an id can update the row"
+          }
+        ],
+        "impact": "Cross-tenant write: every organisation's items can be modified by any signed-in user of the app.",
+        "remediation": "Add the membership guard to the statement: WHERE id = :id AND org_id IN (SELECT org_id FROM org_members WHERE user_id = :__user_id); add the cross-tenant negative test.",
+        "acceptance_tests": [
+          "as user B (not a member) calling update_item with A's item id returns meta.changes === 0",
+          "as a member of the org the update succeeds"
+        ],
+        "confidence": "high",
+        "human_validation": "not-required",
+        "dedupe_key": "ledger:PAS-DATA-007:mcp.json"
+      }
+    ]
+  }
+}

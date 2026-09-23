@@ -1,8 +1,8 @@
 # Provisioning tools — contracts this skill relies on
 
-All tools live on the ProAppStore MCP server (`https://mcp.proappstore.online/mcp`,
-source `packages/mcp/src/` in `proappstore-online/platform`). Nothing here is
-re-implemented by the skill.
+All tools live on the ProAppStore MCP server (`https://mcp.proappstore.online/mcp`;
+reference: [MCP app tools](https://docs.proappstore.online/mcp-app-tools/)).
+Nothing here is re-implemented by the skill.
 
 ## `provision_pas_app` (preferred)
 

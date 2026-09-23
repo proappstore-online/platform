@@ -1,0 +1,155 @@
+{
+  "$comment": "Content evaluations for audit-proappstore-app (#172). test/skills-audit.evals.test.ts applies the skill's direct rules to each repository fixture under evals/fixtures/ and asserts the expected fail set, validates every expected finding and the assembled report against the published finding contract (docs/standard/finding.schema.json), checks dedupe keys and clause URLs against standard.json, and checks the skill's rules (fetched standard, one result per clause, human clauses manual-review, read-only default, duplicate check) are present.",
+  "cases": [
+    {
+      "id": "legacy-token-storage",
+      "class": "scenario",
+      "fixture": "legacy-token-storage",
+      "title": "session in localStorage on a hosted app — PAS-AUTH-001 + PAS-AUTH-002 fail with bounded remediation",
+      "requirements": "initPro without authMode; localStorage pas:session read",
+      "expect": {
+        "fail": [
+          "PAS-AUTH-001",
+          "PAS-AUTH-002"
+        ],
+        "clauses": [
+          "PAS-AUTH-001",
+          "PAS-AUTH-002"
+        ],
+        "rules": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "id": "missing-tenant-guard",
+      "class": "scenario",
+      "fixture": "missing-tenant-guard",
+      "title": "authenticated action scoped by id only — PAS-DATA-007 fail, membership sub-query remediation",
+      "requirements": "update_item with requires_auth and no :__user_id",
+      "expect": {
+        "fail": [
+          "PAS-DATA-007"
+        ],
+        "clauses": [
+          "PAS-DATA-007",
+          "PAS-STACK-011"
+        ],
+        "rules": [
+          8
+        ]
+      }
+    },
+    {
+      "id": "conforming-app",
+      "class": "scenario",
+      "fixture": "conforming-app",
+      "title": "no direct-rule hits — the covered clauses pass with evidence, the rest are still walked",
+      "requirements": "platform-cookie; scoped statements; zoomable viewport",
+      "expect": {
+        "fail": [],
+        "clauses": [
+          "PAS-AUTH-001",
+          "PAS-AUTH-002",
+          "PAS-DATA-007",
+          "PAS-UI-007",
+          "PAS-DATA-003"
+        ],
+        "rules": []
+      }
+    },
+    {
+      "id": "tailored-not-applicable",
+      "class": "scenario",
+      "title": "Ready-only clause on a Tailored app — not-applicable with evidence, never skipped",
+      "requirements": "no membership tables; one fork per customer",
+      "expect": {
+        "clauses": [
+          "PAS-STACK-011"
+        ],
+        "state": "not-applicable"
+      }
+    },
+    {
+      "id": "human-only-clause",
+      "class": "scenario",
+      "title": "human clauses stay manual-review even after a green smoke",
+      "requirements": "smoke passed; sign-in on custom domain unverified",
+      "expect": {
+        "clauses": [
+          "PAS-AUTH-020",
+          "PAS-OPS-019"
+        ],
+        "state": "manual-review"
+      }
+    },
+    {
+      "id": "issue-creation-mode",
+      "class": "scenario",
+      "title": "issues only when asked, after the dedupe-key search, titled by the defect",
+      "requirements": "threshold high; one key already open",
+      "expect": {
+        "clauses": [],
+        "mode": "issue-creation"
+      }
+    },
+    {
+      "id": "blocker-green-tests",
+      "class": "blocker",
+      "blocker": "unsupported-requirement",
+      "title": "green CI is not compliance",
+      "requirements": "user wants a pass because tests are green",
+      "expect": {
+        "clauses": [
+          "PAS-OPS-001"
+        ]
+      }
+    },
+    {
+      "id": "blocker-human-clause",
+      "class": "blocker",
+      "blocker": "manual-verification",
+      "title": "sign-in on the custom domain is a human check",
+      "requirements": "confirm sign-in works",
+      "expect": {
+        "clauses": [
+          "PAS-AUTH-020"
+        ]
+      }
+    },
+    {
+      "id": "blocker-secret-evidence",
+      "class": "blocker",
+      "blocker": "credentials",
+      "title": "never quote a secret as evidence",
+      "requirements": "finding needs a key value",
+      "expect": {
+        "clauses": []
+      }
+    },
+    {
+      "id": "blocker-duplicate",
+      "class": "blocker",
+      "blocker": "duplicate",
+      "title": "dedupe key already in an open issue — comment, do not open",
+      "requirements": "issue-creation mode; key found",
+      "expect": {
+        "clauses": []
+      }
+    },
+    {
+      "id": "blocker-unknown-clause",
+      "class": "blocker",
+      "blocker": "verification",
+      "title": "a clause id not in standard.json",
+      "requirements": "user cites PAS-AUTH-031",
+      "expect": {
+        "absent_clauses": [
+          "PAS-AUTH-031"
+        ],
+        "clauses": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "name": "proappstore",
+  "owner": { "name": "proappstore-online", "url": "https://proappstore.online" },
+  "metadata": {
+    "description": "ProAppStore Agent Skills and MCP server for building, securing, shipping, upgrading and auditing ProAppStore apps.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "proappstore",
+      "source": "./",
+      "description": "Seven portable Agent Skills (create, architecture, auth and roles, data, publish and roll back, upgrade, audit) plus the ProAppStore MCP server (https://mcp.proappstore.online/mcp). Read-only by default; provisioning is dry-run then explicit confirm.",
+      "version": "1.0.0",
+      "category": "development",
+      "homepage": "https://docs.proappstore.online/skills/evaluations/",
+      "license": "MIT",
+      "keywords": ["proappstore", "agent-skills", "mcp"]
+    }
+  ]
+}

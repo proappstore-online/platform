@@ -1,0 +1,31 @@
+{
+  "$comment": "Trigger fixtures for audit-proappstore-app (#172): positive prompts must route to this skill and no other, negative prompts to no skill, sibling prompts to the named sibling. Scored deterministically by test/skills-harness.test.ts over metadata.triggers.",
+  "positive": [
+    "Audit my ProAppStore app against the current standard and list every failing clause.",
+    "Run a compliance check on our PAS app and give me findings with clause URLs and evidence.",
+    "Is this ProAppStore app in conformance with the Application Standard? Report clause by clause.",
+    "Produce audit findings for my ProAppStore repo and open GitHub issues for anything high or critical.",
+    "Before we hand over, audit the ProAppStore app for security clauses only, read-only, no issues."
+  ],
+  "negative": [
+    "Audit my AWS account for unused IAM roles.",
+    "Run a SOC 2 compliance check on our infrastructure.",
+    "Is this Django project in conformance with PEP 8?",
+    "Produce accessibility findings for my WordPress site.",
+    "Audit the smart contract for reentrancy bugs."
+  ],
+  "sibling": [
+    {
+      "prompt": "Fix the authentication and sessions in my ProAppStore app so the session is not in localStorage.",
+      "skill": "proappstore-auth-sessions-roles"
+    },
+    {
+      "prompt": "Add the tenant guard to the registered actions in my ProAppStore app.",
+      "skill": "proappstore-data-migrations-actions"
+    },
+    {
+      "prompt": "Upgrade my ProAppStore app to the latest SDK and fix the template drift.",
+      "skill": "proappstore-upgrade-app"
+    }
+  ]
+}

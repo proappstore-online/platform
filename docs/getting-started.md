@@ -103,6 +103,8 @@ No need to import both SDKs. `initPro()` initializes everything.
 
 ## What to read next
 
+- **Using an AI client?** Install the [ProAppStore Agent Skills plugin](https://github.com/proappstore-online/platform/blob/main/skills/README.md) — seven workflows (create, architecture, auth and roles, data, publish and roll back, upgrade, audit) that drive this platform's MCP server. Claude Code: `/plugin marketplace add proappstore-online/platform`. What they are evaluated for: [evaluation summary](./skills/evaluations.md).
+
 - [SDK overview](/sdk-overview) — all modules and their APIs
 - [App actions and data access security](/app-actions-security) — recommended app-data pattern
 - [CLI overview](/cli-overview) — every command explained

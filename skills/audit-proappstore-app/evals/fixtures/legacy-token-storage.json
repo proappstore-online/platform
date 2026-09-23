@@ -1,0 +1,84 @@
+{
+  "id": "legacy-token-storage",
+  "kind": "non-conforming",
+  "app_id": "tasks-demo",
+  "repository": "proappstore-online/tasks-demo",
+  "hosted": true,
+  "category": "Tailored",
+  "files": {
+    "web/src/lib/app.ts": "import { initPro } from '@proappstore/sdk'\n\nexport const app = initPro({ appId: 'tasks-demo' })\n",
+    "web/src/lib/session.ts": "// legacy: keep the session across reloads\nexport function restore() {\n  const raw =\n    localStorage.getItem('pas:session')\n  return raw ? JSON.parse(raw) : null\n}\n",
+    "web/index.html": "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" /></head><body><div id=\"root\"></div></body></html>\n",
+    "mcp.json": "{\"tools\": [{\"name\": \"list_tasks\", \"operation\": \"query\", \"sql\": \"SELECT id, title FROM tasks WHERE user_id = :__user_id LIMIT :limit\", \"params\": {\"limit\": {\"type\": \"integer\", \"default\": 50, \"max\": 100, \"optional\": true}}, \"requires_auth\": true}]}",
+    ".github/workflows/deploy.yml": "name: Deploy to R2\non:\n  push:\n    branches: [main]\n# uploads to apps/tasks-demo/\n"
+  },
+  "expected": {
+    "fail": [
+      "PAS-AUTH-001",
+      "PAS-AUTH-002"
+    ],
+    "findings": [
+      {
+        "clause_id": "PAS-AUTH-001",
+        "clause_url": "https://docs.proappstore.online/standard/auth/#pas-auth-001",
+        "title": "Session kept in localStorage: initPro runs in legacy-bearer mode on a hosted app",
+        "state": "fail",
+        "severity": "high",
+        "verification": "manual",
+        "applicability": {
+          "applies": true,
+          "reason": "Hosted at tasks-demo.proappstore.online (deploy.yml uploads to apps/tasks-demo/)"
+        },
+        "evidence": [
+          {
+            "class": "source",
+            "path": "web/src/lib/app.ts",
+            "line": 3,
+            "excerpt": "export const app = initPro({ appId: 'tasks-demo' })",
+            "observation": "No authMode option — the SDK default is legacy-bearer, so the session token is cached under localStorage['pas:session']"
+          }
+        ],
+        "impact": "Any script on the app origin can read the platform session token and drive every SDK call as the user; the secret proxy is unavailable in this mode.",
+        "remediation": "Pass authMode: 'platform-cookie' in web/src/lib/app.ts and remove code that reads the session; verify sign-in, one data call and sign-out on the live app.",
+        "acceptance_tests": [
+          "app.auth.usesPlatformCookie === true at runtime",
+          "after sign-in localStorage.getItem('pas:session') is null",
+          "document.cookie on the live app does not contain a session"
+        ],
+        "confidence": "high",
+        "human_validation": "not-required",
+        "dedupe_key": "tasks-demo:PAS-AUTH-001:web/src/lib/app.ts"
+      },
+      {
+        "clause_id": "PAS-AUTH-002",
+        "clause_url": "https://docs.proappstore.online/standard/auth/#pas-auth-002",
+        "title": "App reads the platform session from localStorage in web/src/lib/session.ts",
+        "state": "fail",
+        "severity": "critical",
+        "verification": "manual",
+        "applicability": {
+          "applies": true,
+          "reason": "Hosted at tasks-demo.proappstore.online (deploy.yml uploads to apps/tasks-demo/)"
+        },
+        "evidence": [
+          {
+            "class": "source",
+            "path": "web/src/lib/session.ts",
+            "line": 4,
+            "excerpt": "localStorage.getItem('pas:session')",
+            "observation": "The app reads the SDK's pas:session key itself; session persistence belongs to the SDK and the host worker only"
+          }
+        ],
+        "impact": "The session token is exposed to every script on the page and outlives sign-out.",
+        "remediation": "Delete web/src/lib/session.ts and its call sites; rely on authMode: 'platform-cookie' and app.auth.init().",
+        "acceptance_tests": [
+          "grep -rn \"pas:session\" web/src returns nothing",
+          "after sign-out no storage key and no cookie carries identity"
+        ],
+        "confidence": "high",
+        "human_validation": "not-required",
+        "dedupe_key": "tasks-demo:PAS-AUTH-002:web/src/lib/session.ts"
+      }
+    ]
+  }
+}

@@ -28,17 +28,19 @@ Every skill is checked, deterministically and on every push, for the ten propert
 
 | Skill | Version | Mutating | Cases (by class) | Trigger prompts (+ / − / sibling) | SKILL.md | References | Bundle | Verified content digest |
 |---|---|---|---|---|---|---|---|---|
+| [`audit-proappstore-app`](https://github.com/proappstore-online/platform/blob/main/skills/audit-proappstore-app/SKILL.md) | 1.0 | no | 11 (scenario 6, blocker 5) | 5 / 5 / 3 | 9.0 KB of 12.0 KB | 17.1 KB of 32.0 KB | 44.2 KB of 64.0 KB | `16fea621ce70` |
 | [`choose-proappstore-architecture`](https://github.com/proappstore-online/platform/blob/main/skills/choose-proappstore-architecture/SKILL.md) | 1.0 | no | 8 (scenario 5, blocker 3) | 6 / 5 / 3 | 9.2 KB of 12.0 KB | 22.6 KB of 32.0 KB | 40.7 KB of 48.0 KB | `e2eda7ae586f` |
-| [`create-proappstore-app`](https://github.com/proappstore-online/platform/blob/main/skills/create-proappstore-app/SKILL.md) | 1.0 | yes (dry-run → confirm) | 12 (happy 3, template 2, confirm 1, rerun 1, blocker 5) | 5 / 5 / 3 | 9.4 KB of 12.0 KB | 8.9 KB of 16.0 KB | 28.7 KB of 36.0 KB | `5e35d3a29468` |
+| [`create-proappstore-app`](https://github.com/proappstore-online/platform/blob/main/skills/create-proappstore-app/SKILL.md) | 1.0 | yes (dry-run → confirm) | 12 (happy 3, template 2, confirm 1, rerun 1, blocker 5) | 5 / 5 / 3 | 9.4 KB of 12.0 KB | 8.9 KB of 16.0 KB | 28.8 KB of 36.0 KB | `75e16d4efc27` |
 | [`proappstore-auth-sessions-roles`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-auth-sessions-roles/SKILL.md) | 1.0 | no | 13 (scenario 9, blocker 4) | 6 / 5 / 3 | 9.2 KB of 12.0 KB | 30.2 KB of 40.0 KB | 49.5 KB of 60.0 KB | `1e7919f78903` |
 | [`proappstore-data-migrations-actions`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-data-migrations-actions/SKILL.md) | 1.0 | no | 15 (scenario 10, blocker 5) | 6 / 5 / 3 | 10.0 KB of 12.0 KB | 37.1 KB of 48.0 KB | 58.1 KB of 68.0 KB | `d6d67e4dec5c` |
 | [`proappstore-publish-deploy`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-publish-deploy/SKILL.md) | 1.0 | no | 11 (scenario 6, blocker 5) | 6 / 5 / 3 | 11.0 KB of 12.0 KB | 28.0 KB of 40.0 KB | 47.8 KB of 60.0 KB | `8c54ecff6b6c` |
-| [`proappstore-upgrade-app`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-upgrade-app/SKILL.md) | 1.0 | no | 14 (scenario 8, blocker 6) | 6 / 5 / 3 | 10.5 KB of 12.0 KB | 34.1 KB of 48.0 KB | 54.9 KB of 68.0 KB | `7b849d96a71c` |
+| [`proappstore-upgrade-app`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-upgrade-app/SKILL.md) | 1.0 | no | 14 (scenario 8, blocker 6) | 6 / 5 / 3 | 10.5 KB of 12.0 KB | 34.1 KB of 48.0 KB | 54.9 KB of 68.0 KB | `67661c18a9d1` |
 
 Property coverage per skill (the test that holds each property):
 
 | Skill | triggering | non-triggering | tool-selection-order | dry-run-confirmation | output-schema | idempotency | failure-recovery | citation-accuracy | secret-safety | context-size |
 |---|---|---|---|---|---|---|---|---|---|---|
+| `audit-proappstore-app` | `skills-harness.test.ts` | `skills-harness.test.ts` | `skills-harness.test.ts` | `skills.test.ts` | `skills-audit.evals.test.ts` | `skills-audit.evals.test.ts` | `skills-harness.test.ts` | `skills-audit.evals.test.ts` | `skills.test.ts` | `skills-harness.test.ts` |
 | `choose-proappstore-architecture` | `skills-harness.test.ts` | `skills-harness.test.ts` | `skills-harness.test.ts` | `skills.test.ts` | `skills-harness.test.ts` | `skills-harness.test.ts` | `skills-harness.test.ts` | `skills-architecture.evals.test.ts` | `skills.test.ts` | `skills-harness.test.ts` |
 | `create-proappstore-app` | `skills-harness.test.ts` | `skills-harness.test.ts` | `skills-harness.test.ts` | `skill-create-app.evals.test.ts` | `skills-harness.test.ts` | `skills-harness.test.ts` | `skills-harness.test.ts` | `skill-create-app.evals.test.ts` | `skills.test.ts` | `skills-harness.test.ts` |
 | `proappstore-auth-sessions-roles` | `skills-harness.test.ts` | `skills-harness.test.ts` | `skills-harness.test.ts` | `skills.test.ts` | `skills-harness.test.ts` | `skills-harness.test.ts` | `skills-harness.test.ts` | `skills-auth.evals.test.ts` | `skills.test.ts` | `skills-harness.test.ts` |
@@ -54,7 +56,12 @@ Property coverage per skill (the test that holds each property):
 - a file is executable outside `scripts/`, binary outside `assets/`, or over the size caps (256 KB binary, 128 KB text);
 - any file contains a secret-shaped string;
 - a Markdown link points outside the bundle or to a missing file;
+- `.claude-plugin/plugin.json` or `marketplace.json` lists a different set of skills than the bundles, or a client row lacks its install / update / uninstall / smoke-evidence fields;
 - `skills/index.json` or this page differs from what the bundles produce.
+
+## Install
+
+The plugin manifest is [`.claude-plugin/plugin.json`](https://github.com/proappstore-online/platform/blob/main/.claude-plugin/plugin.json) (skills + the MCP endpoint); the client-neutral discovery manifest with per-client install, update and uninstall steps is [`marketplace.json`](https://github.com/proappstore-online/platform/blob/main/marketplace.json); the human-readable version is [`skills/README.md`](https://github.com/proappstore-online/platform/blob/main/skills/README.md).
 
 ## Supported-client smoke evidence — pending #169
 

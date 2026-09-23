@@ -3,7 +3,135 @@
   "format": "agentskills.io/specification",
   "standard_version": "1.5",
   "mcp_endpoint": "https://mcp.proappstore.online/mcp",
+  "plugin": ".claude-plugin/plugin.json",
+  "marketplace": "marketplace.json",
   "skills": [
+    {
+      "name": "audit-proappstore-app",
+      "version": "1.0",
+      "description": "Audit a ProAppStore app repository against the current public Recommended Application Standard — fetch standard.json and the finding contract, decide applicability clause by clause, inspect code, configuration, tests and (optionally) the deployed app, and emit pass / fail / not-applicable / manual-review findings; every failure carries the standard version, the exact clause URL, file and line evidence, impact, a bounded remediation, acceptance tests, confidence, the human-validation flag and a deduplication key. Read-only by default (a report); creates GitHub issues only in issue-creation mode after a duplicate check, with defect-oriented titles. Use when a user asks to audit, check compliance or conformance of, find findings in, or review clause by clause a ProAppStore app on proappstore.online. Not for fixing the app, creating it, releasing it, or choosing its architecture.",
+      "license": "MIT",
+      "standard-version": "1.5",
+      "issue": "proappstore-online/platform#172",
+      "allowed-tools": [
+        "whoami",
+        "app_info",
+        "discover_tools",
+        "schema_status",
+        "deploy_status",
+        "qa_list_runs",
+        "platform_guide"
+      ],
+      "mutating": false,
+      "bytes": 45306,
+      "digest": "16fea621ce70fc50e2e296f28bc899e0bc52ed18fdfc42e423d1439f554c7d27",
+      "files": [
+        {
+          "path": "evals/cases.json",
+          "bytes": 4698,
+          "sha256": "ffe775dd74738d6419086751d5a9670cf1ea0e89e9ec05f9fd593751c8f2179b"
+        },
+        {
+          "path": "evals/contract.json",
+          "bytes": 1604,
+          "sha256": "d9df719788371f72a5f379316593f8ae3f44c49a5d15af7fdbe5aa592fbcfdbd"
+        },
+        {
+          "path": "evals/fixtures/conforming-app.json",
+          "bytes": 1674,
+          "sha256": "44d384964342cc9f16dae2e69b234bac797483134cf348a17f5bdf6030b882b3"
+        },
+        {
+          "path": "evals/fixtures/legacy-token-storage.json",
+          "bytes": 4265,
+          "sha256": "29560027462180ebf8260e9557ca309b94e1bfd97c3082676b413fd6fca0a468"
+        },
+        {
+          "path": "evals/fixtures/missing-tenant-guard.json",
+          "bytes": 3560,
+          "sha256": "2caf5f6441625422ce78db87d0276d1cb5881b884d30136634de00045c1ac4d6"
+        },
+        {
+          "path": "evals/README.md",
+          "bytes": 1181,
+          "sha256": "776c3d77fb525f25e05b1020939137470404c7ef8bb521f163b89292ea46ced3"
+        },
+        {
+          "path": "evals/triggers.json",
+          "bytes": 1595,
+          "sha256": "be2311c605caa7e6983a6150fe95758b44c9ce03917ca1298a651e47c18e6f89"
+        },
+        {
+          "path": "references/decision-tables.md",
+          "bytes": 4497,
+          "sha256": "13ddefc6b9b8920e03633bc7f28defb0bd223ee401f1c93d916a05f41f104288"
+        },
+        {
+          "path": "references/direct-rules.md",
+          "bytes": 2530,
+          "sha256": "c73004ca3e6be6359de7b6ea25cbb86a85b94eed0422bbb266449215e4b9a16d"
+        },
+        {
+          "path": "references/negative-cases.md",
+          "bytes": 1480,
+          "sha256": "8c8eb8619234bae01e61550dca02b68fe0a52caf7d75c35c2e7df48c6a571af6"
+        },
+        {
+          "path": "references/output-template.md",
+          "bytes": 2588,
+          "sha256": "f5a5ef43441116138ef56dbd92f85db2d9282225d92edee02b7d4f134b7cd9ca"
+        },
+        {
+          "path": "references/unsupported-requirements.md",
+          "bytes": 2284,
+          "sha256": "7df88fe4579bbc44124cc40919631eef379b429ace3cd6988b8e09c86784e908"
+        },
+        {
+          "path": "references/worked-examples.md",
+          "bytes": 4102,
+          "sha256": "50526bb13ec074fa39a6366f970064c8b08b9272a649a10be0796d61b13dceb6"
+        },
+        {
+          "path": "SKILL.md",
+          "bytes": 9248,
+          "sha256": "2887fd76a50504bc0853ebfc75319acef8f97e52ec3ef57870fa4cde54a7b730"
+        }
+      ],
+      "evaluations": {
+        "cases": 11,
+        "by_class": {
+          "scenario": 6,
+          "blocker": 5
+        },
+        "trigger_prompts": {
+          "positive": 5,
+          "negative": 5,
+          "sibling": 3
+        },
+        "budgets": {
+          "skill_md_bytes": 12288,
+          "references_bytes": 32768,
+          "bundle_bytes": 65536
+        },
+        "actual": {
+          "skill_md_bytes": 9248,
+          "references_bytes": 17481,
+          "bundle_bytes": 45306
+        },
+        "properties": {
+          "triggering": "test/skills-harness.test.ts",
+          "non-triggering": "test/skills-harness.test.ts",
+          "tool-selection-order": "test/skills-harness.test.ts",
+          "dry-run-confirmation": "test/skills.test.ts",
+          "output-schema": "test/skills-audit.evals.test.ts",
+          "idempotency": "test/skills-audit.evals.test.ts",
+          "failure-recovery": "test/skills-harness.test.ts",
+          "citation-accuracy": "test/skills-audit.evals.test.ts",
+          "secret-safety": "test/skills.test.ts",
+          "context-size": "test/skills-harness.test.ts"
+        }
+      }
+    },
     {
       "name": "choose-proappstore-architecture",
       "version": "1.0",
@@ -135,8 +263,8 @@
         "scaffold_app"
       ],
       "mutating": true,
-      "bytes": 29427,
-      "digest": "5e35d3a29468fc04e7fcb86409465c02b3e6bfc8684408d6631a337c1213d3a3",
+      "bytes": 29442,
+      "digest": "75e16d4efc277d80820c1a52aca5d0ba9a4921b7c7c420ff1366c9d81de03f72",
       "files": [
         {
           "path": "evals/cases.json",
@@ -170,8 +298,8 @@
         },
         {
           "path": "references/provisioning-tools.md",
-          "bytes": 3385,
-          "sha256": "99066fb54721d370a59e1c376f909b85d5065566c04be4e7a13b517142885a7a"
+          "bytes": 3400,
+          "sha256": "89f7dabebcc5a9cef7ddee9f1cf748b56f963933fe56fe287ea0290bde9a73e2"
         },
         {
           "path": "references/verification-checklist.md",
@@ -205,8 +333,8 @@
         },
         "actual": {
           "skill_md_bytes": 9651,
-          "references_bytes": 9148,
-          "bundle_bytes": 29427
+          "references_bytes": 9163,
+          "bundle_bytes": 29442
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",
@@ -581,8 +709,8 @@
         "qa_list_runs"
       ],
       "mutating": false,
-      "bytes": 56221,
-      "digest": "7b849d96a71c3f4a933e418cc7ccea985a8da524a88d387d256e29bf5eb741ac",
+      "bytes": 56212,
+      "digest": "67661c18a9d1be517144e4b56c6b16e26e0822573ba562bd0d648669aebb6ee4",
       "files": [
         {
           "path": "evals/cases.json",
@@ -601,8 +729,8 @@
         },
         {
           "path": "evals/triggers.json",
-          "bytes": 1504,
-          "sha256": "f9ecbb3e255e42fba8b6535f94180bdeb171154eed745f7dc671b6c5ee0d7239"
+          "bytes": 1495,
+          "sha256": "21f9bd2c6a8f342166b7f5abdc73804333639a40ea97bdf947795905527cd919"
         },
         {
           "path": "references/anti-patterns.md",
@@ -659,7 +787,7 @@
         "actual": {
           "skill_md_bytes": 10757,
           "references_bytes": 34908,
-          "bundle_bytes": 56221
+          "bundle_bytes": 56212
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",

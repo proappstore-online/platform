@@ -1,0 +1,29 @@
+{
+  "id": "conforming-app",
+  "kind": "conforming",
+  "app_id": "notes",
+  "repository": "proappstore-online/notes",
+  "hosted": true,
+  "category": "Tailored",
+  "files": {
+    "web/src/lib/app.ts": "import { initPro } from '@proappstore/sdk'\n\nexport const app = initPro({ appId: 'notes', authMode: 'platform-cookie' })\n",
+    "web/src/App.tsx": "import { app } from './lib/app'\nexport async function load(limit: number) {\n  return app.actions.call('list_notes', { limit })\n}\n",
+    "web/index.html": "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, viewport-fit=cover\" /></head><body><div id=\"root\"></div></body></html>\n",
+    "mcp.json": "{\"tools\": [{\"name\": \"list_notes\", \"operation\": \"query\", \"sql\": \"SELECT id, title, created_at FROM notes WHERE user_id = :__user_id ORDER BY created_at DESC LIMIT :limit\", \"params\": {\"limit\": {\"type\": \"integer\", \"default\": 50, \"max\": 100, \"optional\": true}}, \"requires_auth\": true}, {\"name\": \"create_note\", \"operation\": \"execute\", \"sql\": \"INSERT OR IGNORE INTO notes (id, user_id, title, created_at) VALUES (:id, :__user_id, :title, :__now)\", \"params\": {\"id\": {\"type\": \"string\"}, \"title\": {\"type\": \"string\"}}, \"requires_auth\": true}]}",
+    ".github/workflows/deploy.yml": "name: Deploy to R2\non:\n  push:\n    branches: [main]\n# uploads to apps/notes/\n"
+  },
+  "expected": {
+    "fail": [],
+    "findings": [],
+    "pass": [
+      "PAS-AUTH-001",
+      "PAS-AUTH-002",
+      "PAS-AUTH-003",
+      "PAS-DATA-003",
+      "PAS-DATA-007",
+      "PAS-DATA-016",
+      "PAS-UI-007",
+      "PAS-UI-014"
+    ]
+  }
+}

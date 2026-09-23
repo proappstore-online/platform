@@ -1,0 +1,45 @@
+{
+  "$comment": "Client-neutral discovery manifest for the ProAppStore Agent Skills plugin (#169). Claude Code reads .claude-plugin/plugin.json and .claude-plugin/marketplace.json; other Agent Skills clients install the skill directories listed here. Validated by scripts/build-skills-manifest.mjs --check (every listed skill must exist and every skill directory must be listed).",
+  "name": "proappstore",
+  "version": "1.0.0",
+  "description": "Portable ProAppStore Agent Skills (agentskills.io format) packaged with the ProAppStore MCP server.",
+  "license": "MIT",
+  "format": "agentskills.io/specification",
+  "plugin": ".claude-plugin/plugin.json",
+  "skills_index": "skills/index.json",
+  "mcp": {
+    "remote": "https://mcp.proappstore.online/mcp",
+    "package": "@proappstore/mcp",
+    "stdio": "npx -y @proappstore/mcp",
+    "remote_bridge": "npx -y mcp-remote https://mcp.proappstore.online/mcp",
+    "registry": "io.github.proappstore-online/proappstore"
+  },
+  "permissions": {
+    "credentials": "none — the plugin carries no tokens; the MCP server authenticates the user's own session (GitHub or Google)",
+    "read_only_tools": "every skill's allowed-tools are read-only MCP tools; see skills/index.json",
+    "mutating_tools": "provision_pas_app / scaffold_app (create-proappstore-app: dry-run then explicit confirm) and qa_run (publish-deploy: queues a browser smoke run)",
+    "repository": "advisory skills edit only the user's own app repository, one reviewed stage at a time; deploys happen by the user's git push"
+  },
+  "skills": [
+    { "name": "create-proappstore-app", "path": "skills/create-proappstore-app", "mutating": true },
+    { "name": "choose-proappstore-architecture", "path": "skills/choose-proappstore-architecture", "mutating": false },
+    { "name": "proappstore-auth-sessions-roles", "path": "skills/proappstore-auth-sessions-roles", "mutating": false },
+    { "name": "proappstore-data-migrations-actions", "path": "skills/proappstore-data-migrations-actions", "mutating": false },
+    { "name": "proappstore-publish-deploy", "path": "skills/proappstore-publish-deploy", "mutating": false },
+    { "name": "proappstore-upgrade-app", "path": "skills/proappstore-upgrade-app", "mutating": false },
+    { "name": "audit-proappstore-app", "path": "skills/audit-proappstore-app", "mutating": false }
+  ],
+  "clients": [
+    { "client": "Claude Code", "install": "/plugin marketplace add proappstore-online/platform && /plugin install proappstore@proappstore", "update": "/plugin update proappstore@proappstore", "uninstall": "/plugin uninstall proappstore@proappstore", "mcp": "bundled (.claude-plugin/plugin.json mcpServers)", "smoke_evidence": "pending #169" },
+    { "client": "Codex", "install": "copy each skills/<name>/ directory into the Codex skills directory; add the MCP server with the stdio or remote command above", "update": "replace the directories with the current main (compare digests in skills/index.json)", "uninstall": "delete the directories and the MCP server entry", "mcp": "manual", "smoke_evidence": "pending #169" },
+    { "client": "GitHub Copilot", "install": "copy each skills/<name>/ directory into the Copilot skills location per its documentation; add the MCP server", "update": "replace the directories with the current main", "uninstall": "delete the directories and the MCP server entry", "mcp": "manual", "smoke_evidence": "pending #169" },
+    { "client": "Any Agent Skills client", "install": "copy skills/<name>/ unchanged; connect https://mcp.proappstore.online/mcp", "update": "re-copy; verify with skills/index.json digests", "uninstall": "delete the directory", "mcp": "manual", "smoke_evidence": "pending #169" }
+  ],
+  "docs": {
+    "skills_readme": "https://github.com/proappstore-online/platform/blob/main/skills/README.md",
+    "evaluations": "https://docs.proappstore.online/skills/evaluations/",
+    "mcp_tools": "https://docs.proappstore.online/mcp-app-tools/",
+    "standard": "https://docs.proappstore.online/standard/",
+    "llms": "https://docs.proappstore.online/llms.txt"
+  }
+}

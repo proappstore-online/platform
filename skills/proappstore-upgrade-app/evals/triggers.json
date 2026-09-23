@@ -5,7 +5,7 @@
     "Update our old ProAppStore app to the current standard without breaking our custom code.",
     "Modernise this PAS app scaffolded last year — it still uses legacy bearer auth.",
     "Is my ProAppStore app behind the latest SDK? Show me the template drift.",
-    "Re-align my ProAppStore app with the current workflows and compliance checks.",
+    "Re-align my ProAppStore app with the current workflows and CI gates.",
     "Give me a dry-run upgrade report for my ProAppStore app before changing anything."
   ],
   "negative": [

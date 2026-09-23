@@ -323,7 +323,14 @@ evidence bundle → `git revert` rollback; read-only plus `qa_run`) and
 [`proappstore-upgrade-app`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-upgrade-app/SKILL.md)
 (inventory → `list_templates` baseline → drift → staged plan; dry-run by
 default, one reviewed stage per commit, product code never overwritten;
-read-only). Every skill is evaluated on every push — see the
+read-only) and
+[`audit-proappstore-app`](https://github.com/proappstore-online/platform/blob/main/skills/audit-proappstore-app/SKILL.md)
+(fetch `standard.json` → applicability → direct rules → one result per
+clause → findings in the published contract → optional issue creation after
+a duplicate check; read-only). They install as one plugin
+([`.claude-plugin/plugin.json`](https://github.com/proappstore-online/platform/blob/main/.claude-plugin/plugin.json),
+[`marketplace.json`](https://github.com/proappstore-online/platform/blob/main/marketplace.json)).
+Every skill is evaluated on every push — see the
 [evaluation summary](./skills/evaluations.md) — and released through the
 bundle gate (`skills/index.json` with checksums). Skills carry no credentials, call only a minimal allow-list of MCP
 tools, and are validated by `test/skills.test.ts`.

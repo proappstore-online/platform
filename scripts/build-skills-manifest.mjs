@@ -125,11 +125,47 @@ for (const dir of readdirSync(SKILLS).filter((d) => statSync(join(SKILLS, d)).is
   });
 }
 
+// Package manifests (#169): the Claude Code plugin and the client-neutral
+// marketplace manifest must list exactly the skill bundles, and nothing else.
+{
+  const names = entries.map((e) => e.name).sort();
+  const pluginPath = join(ROOT, '.claude-plugin', 'plugin.json');
+  const marketPath = join(ROOT, 'marketplace.json');
+  const claudeMarketPath = join(ROOT, '.claude-plugin', 'marketplace.json');
+  for (const p of [pluginPath, marketPath, claudeMarketPath]) if (!existsSync(p)) fail(`missing package manifest ${relative(ROOT, p)}`);
+  if (existsSync(pluginPath)) {
+    const plugin = JSON.parse(readFileSync(pluginPath, 'utf8'));
+    const listed = (plugin.skills ?? []).map((s) => s.replace(/^\.\/skills\//, '')).sort();
+    if (JSON.stringify(listed) !== JSON.stringify(names)) fail(`.claude-plugin/plugin.json skills ${JSON.stringify(listed)} ≠ bundles ${JSON.stringify(names)}`);
+    if (plugin.mcpServers?.proappstore?.url !== 'https://mcp.proappstore.online/mcp') fail('.claude-plugin/plugin.json must bundle the ProAppStore MCP endpoint');
+    for (const k of ['name', 'version', 'description', 'license']) if (!plugin[k]) fail(`.claude-plugin/plugin.json lacks ${k}`);
+  }
+  if (existsSync(marketPath)) {
+    const market = JSON.parse(readFileSync(marketPath, 'utf8'));
+    const listed = (market.skills ?? []).map((s) => s.name).sort();
+    if (JSON.stringify(listed) !== JSON.stringify(names)) fail(`marketplace.json skills ${JSON.stringify(listed)} ≠ bundles ${JSON.stringify(names)}`);
+    for (const s of market.skills ?? []) {
+      const e = entries.find((x) => x.name === s.name);
+      if (e && s.path !== `skills/${e.name}`) fail(`marketplace.json: ${s.name} path ${s.path}`);
+      if (e && s.mutating !== e.mutating) fail(`marketplace.json: ${s.name} mutating ${s.mutating} ≠ contract ${e.mutating}`);
+    }
+    if (!Array.isArray(market.clients) || market.clients.length < 3) fail('marketplace.json must list the supported clients');
+    for (const c of market.clients ?? []) for (const k of ['client', 'install', 'update', 'uninstall', 'smoke_evidence']) if (!c[k]) fail(`marketplace.json client ${c.client ?? '?'} lacks ${k}`);
+    if (market.mcp?.remote !== 'https://mcp.proappstore.online/mcp') fail('marketplace.json must point at the ProAppStore MCP endpoint');
+  }
+  if (existsSync(claudeMarketPath)) {
+    const m = JSON.parse(readFileSync(claudeMarketPath, 'utf8'));
+    if (!m.plugins?.some((p) => p.name === 'proappstore' && p.source === './')) fail('.claude-plugin/marketplace.json must publish the proappstore plugin from this repository');
+  }
+}
+
 const index = {
   $schema: 'https://docs.proappstore.online/skills/index.schema.json',
   format: 'agentskills.io/specification',
   standard_version: standard.version,
   mcp_endpoint: 'https://mcp.proappstore.online/mcp',
+  plugin: '.claude-plugin/plugin.json',
+  marketplace: 'marketplace.json',
   skills: entries,
 };
 const indexJson = `${JSON.stringify(index, null, 2)}\n`;
@@ -187,7 +223,12 @@ lines.push('- a bundle lacks `SKILL.md`, `evals/cases.json`, `evals/triggers.jso
 lines.push('- a file is executable outside `scripts/`, binary outside `assets/`, or over the size caps (256 KB binary, 128 KB text);');
 lines.push('- any file contains a secret-shaped string;');
 lines.push('- a Markdown link points outside the bundle or to a missing file;');
+lines.push('- `.claude-plugin/plugin.json` or `marketplace.json` lists a different set of skills than the bundles, or a client row lacks its install / update / uninstall / smoke-evidence fields;');
 lines.push('- `skills/index.json` or this page differs from what the bundles produce.');
+lines.push('');
+lines.push('## Install');
+lines.push('');
+lines.push('The plugin manifest is [`.claude-plugin/plugin.json`](https://github.com/proappstore-online/platform/blob/main/.claude-plugin/plugin.json) (skills + the MCP endpoint); the client-neutral discovery manifest with per-client install, update and uninstall steps is [`marketplace.json`](https://github.com/proappstore-online/platform/blob/main/marketplace.json); the human-readable version is [`skills/README.md`](https://github.com/proappstore-online/platform/blob/main/skills/README.md).');
 lines.push('');
 lines.push('## Supported-client smoke evidence — pending #169');
 lines.push('');
