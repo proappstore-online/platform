@@ -43,6 +43,15 @@ https://mcp.proappstore.online/mcp
 
 **App data** — dynamic per-app tools from `mcp.json` manifests
 
+## Agent Skills
+
+Open-format skills that orchestrate these tools (e.g. `create-proappstore-app`:
+gather inputs, choose an approved template, dry-run `provision_pas_app`,
+confirm, provision, verify) live in the platform repository under
+[`skills/`](https://github.com/proappstore-online/platform/tree/main/skills).
+Copy a skill directory into your client's skills location and connect this
+server.
+
 ## Links
 
 - [Full setup guide](https://proappstore.online/build-with-ai#mcp)

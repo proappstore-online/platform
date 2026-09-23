@@ -1,0 +1,38 @@
+# ProAppStore Agent Skills
+
+Portable workflows in the open [Agent Skills](https://agentskills.io/specification)
+format (`<skill>/SKILL.md` + optional `references/`, `scripts/`, `assets/`,
+`evals/`). Skills teach the *workflow*; the
+[ProAppStore MCP server](https://mcp.proappstore.online/mcp) remains the
+authenticated action layer — skills never re-implement provisioning, deploys,
+tests or platform data access, and never carry credentials.
+
+| Skill | Use when | Tools it may call |
+|---|---|---|
+| [`create-proappstore-app`](./create-proappstore-app/SKILL.md) | creating, scaffolding or provisioning a **new** ProAppStore app | read-only MCP tools + `provision_pas_app` / `scaffold_app` (dry-run → explicit confirm) |
+
+## Install (until the plugin package lands — issue #169)
+
+Copy a skill directory into your client's skills location, unchanged:
+
+- **Claude Code**: `.claude/skills/<name>/` in the project, or `~/.claude/skills/<name>/`.
+- **Other Agent Skills clients** (Codex, Copilot, …): the client's skills directory per its documentation.
+
+Then connect the ProAppStore MCP server (`npx mcp-remote https://mcp.proappstore.online/mcp`,
+or `npx @proappstore/mcp`). Skills are content-only: no scripts, no secrets,
+no client-specific copies.
+
+## Rules every skill here follows
+
+- Frontmatter per the spec: `name` (= directory), `description` (what + when),
+  `license`, `metadata`, and a **minimal `allowed-tools`** list of MCP tool
+  names — never `write_file`, `delete_*`, `set_*`, `batch_write_files`, shell
+  or `wrangler`.
+- Mutating MCP tools are called **dry-run first**, then only with the user's
+  explicit confirmation; read-only server mode degrades to planning.
+- Links go to the live docs (https://docs.proappstore.online/) and the
+  [Application Standard](https://docs.proappstore.online/standard/); platform
+  rules are cited, not restated.
+- `test/skills.test.ts` validates every skill (format, links, tool allow-list,
+  secret shapes, duplicates, dry-run-before-confirm) and each skill ships
+  machine-checked evaluations.

@@ -2,6 +2,10 @@
 
 > Developer documentation and knowledge base for ProAppStore (https://proappstore.online), the paid app marketplace on Cloudflare Workers + D1: SDK, CLI, architecture, security model, and the clause-numbered Recommended Application Standard that says how an app should use the platform and how a human or an AI copilot audits one. The storefront's own index is at https://proappstore.online/llms.txt; the AI agent guide is https://proappstore.online/skills.md.
 
+## Agent Skills (workflows for AI clients)
+
+- [create-proappstore-app](https://github.com/proappstore-online/platform/blob/main/skills/create-proappstore-app/SKILL.md): Open Agent Skills workflow to create, scaffold and provision a new ProAppStore app through the MCP server — gather inputs, pick an approved template, dry-run `provision_pas_app`, confirm, provision, verify. Index: [skills/README.md](https://github.com/proappstore-online/platform/blob/main/skills/README.md).
+
 ## Application Standard (audit an app)
 
 - [Standard — overview and audit guide](https://docs.proappstore.online/standard/): What the standard is, recommendation vs enforcement vs optional capability, the six-step audit procedure, chapter map.

@@ -295,6 +295,16 @@ so tool listing and tool calls are tied to a user.
   permissions in SQL.
 - **Mutations are constrained** — `UPDATE`/`DELETE` require a `WHERE`; no DDL.
 
+## Agent Skills
+
+Workflows that drive these tools from an AI client are published as open
+[Agent Skills](https://agentskills.io/specification) in the platform
+repository under `skills/` — currently
+[`create-proappstore-app`](https://github.com/proappstore-online/platform/blob/main/skills/create-proappstore-app/SKILL.md)
+(gather inputs → `list_templates` → `provision_pas_app` dry-run → explicit
+confirm → provision → verify). Skills carry no credentials, call only a
+minimal allow-list of MCP tools, and are validated by `test/skills.test.ts`.
+
 ## Limits & roadmap
 
 - Tools are **SQL against the app's D1** — they can't (yet) call an external API
