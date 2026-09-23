@@ -9,7 +9,7 @@ metadata:
   mcp-endpoint: https://mcp.proappstore.online/mcp
   standard-version: "1.5"
   issue: proappstore-online/platform#174
-  triggers: publish, deploy, verify, roll back, ProAppStore
+  triggers: publish, deploy, verify, roll back, ship, release, ProAppStore
 allowed-tools: whoami app_info list_apps deploy_status get_deploy_status schema_status discover_tools qa_list_flows qa_run qa_list_runs qa_run_artifacts qa_flow_playwright platform_guide
 ---
 
@@ -166,6 +166,16 @@ the rollback path. A report without the evidence is marked incomplete.
 | **Live schema** | `schema_status` failed before or after the push | stop; the [migration repair runbook](https://docs.proappstore.online/migration-repair-runbook/) |
 | **Unsupported requirement** | manual R2 upload, `wrangler`, a hotfix on the host, blue/green, a second environment | the supported path and the clause; no workaround |
 | **Manual verification** | sign-in per hostname, custom domains, the operational checklist | list as pending for a person; never mark passed |
+
+## Reruns and failures
+
+- **Rerun:** a release is idempotent per commit — re-running the workflow
+  for the same SHA re-applies nothing that already applied (migrations by
+  name, R2 by prefix, the manifest whole) and is the standard recovery for a
+  partial deployment.
+- **Failure:** stop at the failed gate or step, read the run log and
+  `schema_status`, then retry once or roll back with `git revert`; never
+  loop.
 
 ## Worked examples
 

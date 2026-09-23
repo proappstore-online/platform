@@ -1,0 +1,51 @@
+{
+  "$comment": "Evaluation contract for create-proappstore-app (#176): the rules the harness checks for presence, the allow-list it must equal, the context budgets, the output sections the template must carry, the markers every worked example must contain, and which test covers each issue property.",
+  "skill": "create-proappstore-app",
+  "mutating": true,
+  "allowed_tools": [
+    "whoami",
+    "list_templates",
+    "app_info",
+    "deploy_status",
+    "get_deploy_status",
+    "schema_status",
+    "discover_tools",
+    "qa_run",
+    "qa_list_runs",
+    "list_apps",
+    "platform_guide",
+    "sdk_reference",
+    "provision_pas_app",
+    "scaffold_app"
+  ],
+  "rules": {
+    "rerun": "## Idempotent reruns",
+    "stop_or_rollback": "## Blockers — hand back, do not work around"
+  },
+  "budgets": {
+    "skill_md_bytes": 12288,
+    "references_bytes": 16384,
+    "bundle_bytes": 36864
+  },
+  "output_sections": [
+    "Created",
+    "Why this template",
+    "Verification",
+    "Day-one follow-ups",
+    "Next steps",
+    "Blockers"
+  ],
+  "example_markers": [],
+  "properties": {
+    "triggering": "test/skills-harness.test.ts",
+    "non-triggering": "test/skills-harness.test.ts",
+    "tool-selection-order": "test/skills-harness.test.ts",
+    "dry-run-confirmation": "packages/mcp/src/skill-create-app.evals.test.ts",
+    "output-schema": "test/skills-harness.test.ts",
+    "idempotency": "test/skills-harness.test.ts",
+    "failure-recovery": "test/skills-harness.test.ts",
+    "citation-accuracy": "packages/mcp/src/skill-create-app.evals.test.ts",
+    "secret-safety": "test/skills.test.ts",
+    "context-size": "test/skills-harness.test.ts"
+  }
+}

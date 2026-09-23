@@ -1,0 +1,54 @@
+{
+  "$comment": "Evaluation contract for proappstore-publish-deploy (#176): the rules the harness checks for presence, the allow-list it must equal, the context budgets, the output sections the template must carry, the markers every worked example must contain, and which test covers each issue property.",
+  "skill": "proappstore-publish-deploy",
+  "mutating": false,
+  "allowed_tools": [
+    "whoami",
+    "app_info",
+    "list_apps",
+    "deploy_status",
+    "get_deploy_status",
+    "schema_status",
+    "discover_tools",
+    "qa_list_flows",
+    "qa_run",
+    "qa_list_runs",
+    "qa_run_artifacts",
+    "qa_flow_playwright",
+    "platform_guide"
+  ],
+  "rules": {
+    "rerun": "\\*\\*Rerun:\\*\\* a release is idempotent per commit",
+    "stop_or_rollback": "Rollback is a revert on `main`"
+  },
+  "budgets": {
+    "skill_md_bytes": 12288,
+    "references_bytes": 40960,
+    "bundle_bytes": 61440
+  },
+  "output_sections": [
+    "Gates",
+    "What this push applies",
+    "Evidence bundle",
+    "Verification",
+    "Failures and recovery",
+    "Rollback path",
+    "Blockers"
+  ],
+  "example_markers": [
+    "Unsupported:",
+    "PAS-OPS-"
+  ],
+  "properties": {
+    "triggering": "test/skills-harness.test.ts",
+    "non-triggering": "test/skills-harness.test.ts",
+    "tool-selection-order": "test/skills-harness.test.ts",
+    "dry-run-confirmation": "test/skills.test.ts",
+    "output-schema": "test/skills-harness.test.ts",
+    "idempotency": "test/skills-harness.test.ts",
+    "failure-recovery": "test/skills-harness.test.ts",
+    "citation-accuracy": "test/skills-publish-deploy.evals.test.ts",
+    "secret-safety": "test/skills.test.ts",
+    "context-size": "test/skills-harness.test.ts"
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.proappstore.online/skills/evals.schema.json",
+  "title": "ProAppStore Agent Skill evaluation fixtures",
+  "description": "The common envelope every skills/<skill>/evals/cases.json follows (#176). Skill-specific expectations live under expect and are checked by that skill's evals test; the envelope is checked for every skill by test/skills-harness.test.ts. $defs.triggers and $defs.contract describe evals/triggers.json and evals/contract.json.",
+  "type": "object",
+  "required": ["cases"],
+  "properties": {
+    "$comment": { "type": "string" },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "class", "title", "expect"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+          "class": { "type": "string", "enum": ["scenario", "blocker", "happy", "template", "confirm", "rerun"] },
+          "blocker": { "type": "string", "pattern": "^[a-z]+(-[a-z]+)*$" },
+          "title": { "type": "string", "minLength": 8 },
+          "requirements": { "type": "string" },
+          "anti_pattern": { "type": "string" },
+          "args": { "type": "object" },
+          "mocks": { "type": "object" },
+          "expect": { "type": "object" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "triggers": {
+      "type": "object",
+      "required": ["positive", "negative", "sibling"],
+      "additionalProperties": false,
+      "properties": {
+        "$comment": { "type": "string" },
+        "positive": { "type": "array", "minItems": 4, "uniqueItems": true, "items": { "type": "string", "minLength": 12 } },
+        "negative": { "type": "array", "minItems": 4, "uniqueItems": true, "items": { "type": "string", "minLength": 12 } },
+        "sibling": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": ["prompt", "skill"],
+            "additionalProperties": false,
+            "properties": { "prompt": { "type": "string", "minLength": 12 }, "skill": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" } }
+          }
+        }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "required": ["skill", "mutating", "allowed_tools", "rules", "budgets", "output_sections", "example_markers", "properties"],
+      "additionalProperties": false,
+      "properties": {
+        "$comment": { "type": "string" },
+        "skill": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+        "mutating": { "type": "boolean" },
+        "allowed_tools": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z_]+$" } },
+        "rules": {
+          "type": "object",
+          "required": ["rerun", "stop_or_rollback"],
+          "additionalProperties": false,
+          "properties": { "rerun": { "type": "string", "minLength": 4 }, "stop_or_rollback": { "type": "string", "minLength": 4 } }
+        },
+        "budgets": {
+          "type": "object",
+          "required": ["skill_md_bytes", "references_bytes", "bundle_bytes"],
+          "additionalProperties": false,
+          "properties": {
+            "skill_md_bytes": { "type": "integer", "minimum": 1024 },
+            "references_bytes": { "type": "integer", "minimum": 1024 },
+            "bundle_bytes": { "type": "integer", "minimum": 1024 }
+          }
+        },
+        "output_sections": { "type": "array", "minItems": 2, "uniqueItems": true, "items": { "type": "string", "minLength": 3 } },
+        "example_markers": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 3 } },
+        "properties": {
+          "type": "object",
+          "required": ["triggering", "non-triggering", "tool-selection-order", "dry-run-confirmation", "output-schema", "idempotency", "failure-recovery", "citation-accuracy", "secret-safety", "context-size"],
+          "additionalProperties": false,
+          "properties": {
+            "triggering": { "type": "string" }, "non-triggering": { "type": "string" }, "tool-selection-order": { "type": "string" },
+            "dry-run-confirmation": { "type": "string" }, "output-schema": { "type": "string" }, "idempotency": { "type": "string" },
+            "failure-recovery": { "type": "string" }, "citation-accuracy": { "type": "string" }, "secret-safety": { "type": "string" }, "context-size": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

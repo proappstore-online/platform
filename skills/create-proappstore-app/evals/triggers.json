@@ -1,0 +1,31 @@
+{
+  "$comment": "Trigger fixtures for create-proappstore-app (#176): positive prompts must route to this skill and no other, negative prompts to no skill, sibling prompts to the named sibling. Scored deterministically by test/skills-harness.test.ts over metadata.triggers.",
+  "positive": [
+    "Create a new ProAppStore app called club-roster for our school clubs.",
+    "Scaffold and provision a new ProAppStore app for tracking invoices, private repo please.",
+    "I want to provision a new ProAppStore app — what do you need from me?",
+    "Scaffold a brand new ProAppStore app from the approved template and get it deployed.",
+    "Please create a new ProAppStore app for a recipe box; category Ready, public."
+  ],
+  "negative": [
+    "Create a new Next.js project with Tailwind and deploy it to Vercel.",
+    "Scaffold a Django REST API with a Postgres database.",
+    "Provision an EC2 instance and set up nginx.",
+    "Write a poem about autumn in Melbourne.",
+    "Create a new GitHub repository for my dotfiles."
+  ],
+  "sibling": [
+    {
+      "prompt": "Which ProAppStore service should I use for realtime chat in my app?",
+      "skill": "choose-proappstore-architecture"
+    },
+    {
+      "prompt": "Publish and deploy my ProAppStore app, then verify it is live.",
+      "skill": "proappstore-publish-deploy"
+    },
+    {
+      "prompt": "Upgrade my old ProAppStore app to the latest SDK.",
+      "skill": "proappstore-upgrade-app"
+    }
+  ]
+}

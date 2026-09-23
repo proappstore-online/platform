@@ -1,0 +1,32 @@
+{
+  "$comment": "Trigger fixtures for proappstore-upgrade-app (#176): positive prompts must route to this skill and no other, negative prompts to no skill, sibling prompts to the named sibling. Scored deterministically by test/skills-harness.test.ts over metadata.triggers.",
+  "positive": [
+    "Upgrade my ProAppStore app to the latest SDK and template.",
+    "Update our old ProAppStore app to the current standard without breaking our custom code.",
+    "Modernise this PAS app scaffolded last year — it still uses legacy bearer auth.",
+    "Is my ProAppStore app behind the latest SDK? Show me the template drift.",
+    "Re-align my ProAppStore app with the current workflows and compliance checks.",
+    "Give me a dry-run upgrade report for my ProAppStore app before changing anything."
+  ],
+  "negative": [
+    "Upgrade my Rails app from 6 to 7.",
+    "Update all npm dependencies in my monorepo to the latest versions.",
+    "Modernise a jQuery site to React.",
+    "How do I upgrade Ubuntu 22.04 to 24.04?",
+    "Show me the template drift in my Terraform modules."
+  ],
+  "sibling": [
+    {
+      "prompt": "Publish my ProAppStore app and verify the smoke passes.",
+      "skill": "proappstore-publish-deploy"
+    },
+    {
+      "prompt": "Create a new ProAppStore app from the approved template.",
+      "skill": "create-proappstore-app"
+    },
+    {
+      "prompt": "Fix the authentication and sessions in my ProAppStore app.",
+      "skill": "proappstore-auth-sessions-roles"
+    }
+  ]
+}

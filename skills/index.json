@@ -1,0 +1,679 @@
+{
+  "$schema": "https://docs.proappstore.online/skills/index.schema.json",
+  "format": "agentskills.io/specification",
+  "standard_version": "1.5",
+  "mcp_endpoint": "https://mcp.proappstore.online/mcp",
+  "skills": [
+    {
+      "name": "choose-proappstore-architecture",
+      "version": "1.0",
+      "description": "Choose the architecture and platform services for a ProAppStore app from its requirements — map each need (data, tenancy, realtime, files, identity and roles, external APIs, AI, maps, notifications, email/SMS/webhooks, monetisation, monitoring, UI shell, MCP, background work) to the existing platform primitive, name what the platform does not support, explain the trade-offs, and produce a bounded architecture decision that cites the Recommended Application Standard. Use when a user asks which ProAppStore service to use, how to design or structure a ProAppStore (PAS) app, whether to use D1, KV, storage, counters or rooms, or how to choose platform services and architecture for an app on proappstore.online. Not for creating, provisioning, deploying or auditing an app.",
+      "license": "MIT",
+      "standard-version": "1.5",
+      "issue": "proappstore-online/platform#171",
+      "allowed-tools": [
+        "whoami",
+        "sdk_reference",
+        "recipe",
+        "platform_guide",
+        "list_templates",
+        "app_info",
+        "discover_tools",
+        "schema_status"
+      ],
+      "mutating": false,
+      "bytes": 41634,
+      "digest": "e2eda7ae586f867c76a9f8aa301833f43bc850de594a7a099f993aeedcbe0951",
+      "files": [
+        {
+          "path": "evals/cases.json",
+          "bytes": 5245,
+          "sha256": "d477f385fa76a76e10170b492cb42f06b81535d9602b4e2bb7c97fd1abfc870c"
+        },
+        {
+          "path": "evals/contract.json",
+          "bytes": 1596,
+          "sha256": "95f3fd791ccdd43ed69c7dbd0ffa615f9008a8d6f5c3435417decc09f76b9ab3"
+        },
+        {
+          "path": "evals/README.md",
+          "bytes": 669,
+          "sha256": "e29eab7586a1d27aee117d09e51f615f749e930800c250ec7efa2aeccf006a42"
+        },
+        {
+          "path": "evals/triggers.json",
+          "bytes": 1592,
+          "sha256": "7b1a9a6b038637c14901d3c56058db751b3679859d6d75b47d105ed72c51e223"
+        },
+        {
+          "path": "references/decision-tables.md",
+          "bytes": 10588,
+          "sha256": "2786044dec07b106712589a866bdd290df5beb0ba50dac99108eab062564597b"
+        },
+        {
+          "path": "references/negative-cases.md",
+          "bytes": 1170,
+          "sha256": "6662174f3cf03623cdd09a53fd28bd77b483ba9f07a6f716df75e0531e9abe3a"
+        },
+        {
+          "path": "references/output-template.md",
+          "bytes": 1185,
+          "sha256": "13ef7fe28f4292145d42f4503a4abf364aa80d788386a45461ba7122e7b282b8"
+        },
+        {
+          "path": "references/unsupported-requirements.md",
+          "bytes": 4013,
+          "sha256": "18b008affeab6628858cf593c11919c6c8c2e8b7dcd3fd84d27f0547d88674e9"
+        },
+        {
+          "path": "references/worked-examples.md",
+          "bytes": 6153,
+          "sha256": "77555721c03ccdd68bc89754df8ce1275c77fbfc08fbb31a37805d82064f0aef"
+        },
+        {
+          "path": "SKILL.md",
+          "bytes": 9423,
+          "sha256": "d1acd9c411eab2b926d40e382eab6c19e5236b1f0d51ad9ea96352df4aa86907"
+        }
+      ],
+      "evaluations": {
+        "cases": 8,
+        "by_class": {
+          "scenario": 5,
+          "blocker": 3
+        },
+        "trigger_prompts": {
+          "positive": 6,
+          "negative": 5,
+          "sibling": 3
+        },
+        "budgets": {
+          "skill_md_bytes": 12288,
+          "references_bytes": 32768,
+          "bundle_bytes": 49152
+        },
+        "actual": {
+          "skill_md_bytes": 9423,
+          "references_bytes": 23109,
+          "bundle_bytes": 41634
+        },
+        "properties": {
+          "triggering": "test/skills-harness.test.ts",
+          "non-triggering": "test/skills-harness.test.ts",
+          "tool-selection-order": "test/skills-harness.test.ts",
+          "dry-run-confirmation": "test/skills.test.ts",
+          "output-schema": "test/skills-harness.test.ts",
+          "idempotency": "test/skills-harness.test.ts",
+          "failure-recovery": "test/skills-harness.test.ts",
+          "citation-accuracy": "test/skills-architecture.evals.test.ts",
+          "secret-safety": "test/skills.test.ts",
+          "context-size": "test/skills-harness.test.ts"
+        }
+      }
+    },
+    {
+      "name": "create-proappstore-app",
+      "version": "1.0",
+      "description": "Create, scaffold and provision a new ProAppStore app end to end through the ProAppStore MCP server — gather the app name, id, category, visibility and data needs, pick an approved template from the catalogue and explain the choice, dry-run provision_pas_app, get explicit confirmation, provision live, then verify the GitHub repository, R2 route, D1 database and data worker, deploy configuration, registered actions and live status. Use when the user asks to create a new ProAppStore app, scaffold a Pro app, provision an app on proappstore.online, set up a new PAS app, or start a new app from the ProAppStore template. Not for editing, deploying or auditing an existing app.",
+      "license": "MIT",
+      "standard-version": "1.5",
+      "issue": "proappstore-online/platform#170",
+      "allowed-tools": [
+        "whoami",
+        "list_templates",
+        "app_info",
+        "deploy_status",
+        "get_deploy_status",
+        "schema_status",
+        "discover_tools",
+        "qa_run",
+        "qa_list_runs",
+        "list_apps",
+        "platform_guide",
+        "sdk_reference",
+        "provision_pas_app",
+        "scaffold_app"
+      ],
+      "mutating": true,
+      "bytes": 29427,
+      "digest": "5e35d3a29468fc04e7fcb86409465c02b3e6bfc8684408d6631a337c1213d3a3",
+      "files": [
+        {
+          "path": "evals/cases.json",
+          "bytes": 6848,
+          "sha256": "d2b32d2c91624d9fe1f9eafdabdccd3eedf7e0f17ba1c30e740c7e82005f1183"
+        },
+        {
+          "path": "evals/contract.json",
+          "bytes": 1661,
+          "sha256": "a5c55e49714a00ae222ea634d020570ae0be7d5effb899a407371f29a19af587"
+        },
+        {
+          "path": "evals/README.md",
+          "bytes": 656,
+          "sha256": "be2bd6753cd6d5c27caefe1c87f50d23ad52cf44002278c60b458ff4582793a0"
+        },
+        {
+          "path": "evals/triggers.json",
+          "bytes": 1463,
+          "sha256": "5a0efd9af0becefd6edddecfe8217e8fb90e620d25d8fed8aa7c1ee605c43cb8"
+        },
+        {
+          "path": "references/negative-cases.md",
+          "bytes": 2298,
+          "sha256": "cc23337d1117f5ddafb1b45306718d65efafed321d59f68ec1c13466b2b577c2"
+        },
+        {
+          "path": "references/output-template.md",
+          "bytes": 1543,
+          "sha256": "aa8d3c1aab53dfd182794e884e0c4a8201946cb8daa948d27d2a1bde73783418"
+        },
+        {
+          "path": "references/provisioning-tools.md",
+          "bytes": 3385,
+          "sha256": "99066fb54721d370a59e1c376f909b85d5065566c04be4e7a13b517142885a7a"
+        },
+        {
+          "path": "references/verification-checklist.md",
+          "bytes": 1922,
+          "sha256": "c8ae39d7e4ba9f113b2f6008ae234400a7bc0b9380403ab621075a0c9774e256"
+        },
+        {
+          "path": "SKILL.md",
+          "bytes": 9651,
+          "sha256": "0baa0187a71540af2ef742cdf9633a097668fcbe6c82af71dd972007eea72548"
+        }
+      ],
+      "evaluations": {
+        "cases": 12,
+        "by_class": {
+          "happy": 3,
+          "template": 2,
+          "confirm": 1,
+          "rerun": 1,
+          "blocker": 5
+        },
+        "trigger_prompts": {
+          "positive": 5,
+          "negative": 5,
+          "sibling": 3
+        },
+        "budgets": {
+          "skill_md_bytes": 12288,
+          "references_bytes": 16384,
+          "bundle_bytes": 36864
+        },
+        "actual": {
+          "skill_md_bytes": 9651,
+          "references_bytes": 9148,
+          "bundle_bytes": 29427
+        },
+        "properties": {
+          "triggering": "test/skills-harness.test.ts",
+          "non-triggering": "test/skills-harness.test.ts",
+          "tool-selection-order": "test/skills-harness.test.ts",
+          "dry-run-confirmation": "packages/mcp/src/skill-create-app.evals.test.ts",
+          "output-schema": "test/skills-harness.test.ts",
+          "idempotency": "test/skills-harness.test.ts",
+          "failure-recovery": "test/skills-harness.test.ts",
+          "citation-accuracy": "packages/mcp/src/skill-create-app.evals.test.ts",
+          "secret-safety": "test/skills.test.ts",
+          "context-size": "test/skills-harness.test.ts"
+        }
+      }
+    },
+    {
+      "name": "proappstore-auth-sessions-roles",
+      "version": "1.0",
+      "description": "Add or correct authentication, cookie sessions, roles and permissions in a ProAppStore app — platform-cookie sessions for hosted apps, sign-in / sign-out / session hydration through the SDK, app roles for in-app RBAC with manifest gates and SQL scoping, a gated permissions UI, and negative authorization tests. Detects and remediates localStorage token handling, app.auth.token coupling, home-grown sign-in or session tables, membership-only privileged gates, unsafe return URLs, incomplete sign-out and missing negative tests, citing the Application Standard's AUTH clauses. Use when a user asks how to sign users in, keep sessions, protect routes or actions, define roles or permissions, build a permissions screen, or review the auth of an app on proappstore.online. Not for creating, provisioning, deploying or fully auditing an app, and not for platform or team roles.",
+      "license": "MIT",
+      "standard-version": "1.5",
+      "issue": "proappstore-online/platform#173",
+      "allowed-tools": [
+        "whoami",
+        "sdk_reference",
+        "recipe",
+        "platform_guide",
+        "app_info",
+        "discover_tools",
+        "schema_status"
+      ],
+      "mutating": false,
+      "bytes": 50670,
+      "digest": "1e7919f78903da7a084ebb7f0906c7d49aeba0d8ddd2eac9c08d6d48898e0487",
+      "files": [
+        {
+          "path": "evals/cases.json",
+          "bytes": 6346,
+          "sha256": "348f2fc3a4dca6dd8040d1ea47bb452f51adf209f851a9cef06a25276492b98b"
+        },
+        {
+          "path": "evals/contract.json",
+          "bytes": 1591,
+          "sha256": "c1e6c913d61ebed054c80fc7f23a402bc923209e736901babc800a407788628d"
+        },
+        {
+          "path": "evals/README.md",
+          "bytes": 877,
+          "sha256": "964ac56eac4bbef48fe8e84fc4e6adf3381624248ec6046ace0a3275826add24"
+        },
+        {
+          "path": "evals/triggers.json",
+          "bytes": 1548,
+          "sha256": "0bc057456927fa2712208a04ac0b3339076d95f284bd797ec59480c28b4a8143"
+        },
+        {
+          "path": "references/anti-patterns.md",
+          "bytes": 7051,
+          "sha256": "368be7b14a804385cddc163e4aa6c26626843d2b4a893dd209661ce5470ae248"
+        },
+        {
+          "path": "references/decision-tables.md",
+          "bytes": 8851,
+          "sha256": "9afc9930335761e564a69f28859d73d5a2491d34744b0136b877d4d200346f76"
+        },
+        {
+          "path": "references/negative-cases.md",
+          "bytes": 1487,
+          "sha256": "9e8ff5cda491cef933a2ad2ea57240563ffb70c210664bf4601eff2905193870"
+        },
+        {
+          "path": "references/output-template.md",
+          "bytes": 1714,
+          "sha256": "aeba878cc33a7ec99866101c9f83f0a64a5fdc6c7ccb641aeade35df8c25f425"
+        },
+        {
+          "path": "references/unsupported-requirements.md",
+          "bytes": 3975,
+          "sha256": "8ea7f7f6042fac64e7b8ccb600a435061a496eabcda323acd5a430b463357840"
+        },
+        {
+          "path": "references/worked-examples.md",
+          "bytes": 7833,
+          "sha256": "9f5001055cbddef846f0de80b95de2d25a3dc69656a8d891f5b73a16f289515c"
+        },
+        {
+          "path": "SKILL.md",
+          "bytes": 9397,
+          "sha256": "9e49d620c390027c62ccb005579ff14579e5e1c55841c580a9b902ab74eb6169"
+        }
+      ],
+      "evaluations": {
+        "cases": 13,
+        "by_class": {
+          "scenario": 9,
+          "blocker": 4
+        },
+        "trigger_prompts": {
+          "positive": 6,
+          "negative": 5,
+          "sibling": 3
+        },
+        "budgets": {
+          "skill_md_bytes": 12288,
+          "references_bytes": 40960,
+          "bundle_bytes": 61440
+        },
+        "actual": {
+          "skill_md_bytes": 9397,
+          "references_bytes": 30911,
+          "bundle_bytes": 50670
+        },
+        "properties": {
+          "triggering": "test/skills-harness.test.ts",
+          "non-triggering": "test/skills-harness.test.ts",
+          "tool-selection-order": "test/skills-harness.test.ts",
+          "dry-run-confirmation": "test/skills.test.ts",
+          "output-schema": "test/skills-harness.test.ts",
+          "idempotency": "test/skills-harness.test.ts",
+          "failure-recovery": "test/skills-harness.test.ts",
+          "citation-accuracy": "test/skills-auth.evals.test.ts",
+          "secret-safety": "test/skills.test.ts",
+          "context-size": "test/skills-harness.test.ts"
+        }
+      }
+    },
+    {
+      "name": "proappstore-data-migrations-actions",
+      "version": "1.0",
+      "description": "Design and implement a ProAppStore app's data layer — choose D1 versus KV, storage, counters or rooms, write additive migrations in migrations.json, define registered actions in mcp.json with declared typed parameters and the server-owned magic parameters, scope every statement to the caller, project or tenant in SQL, put write invariants and server-derived grants in the statement, use atomic batch actions, keep writes idempotent, and produce negative authorization tests, migration verification and deployment checks. Reviews schemas and manifests for cross-tenant access, guessed identifiers, replayable grants, unsafe writes and migration or action drift, citing the Application Standard's DATA clauses. Use when a user asks how to model tables, write a migration, add or fix a registered action, scope queries to a tenant, make a write safe under retry, or review the data access of an app on proappstore.online. Not for creating an app, overall architecture, authentication, or a full audit.",
+      "license": "MIT",
+      "standard-version": "1.5",
+      "issue": "proappstore-online/platform#175",
+      "allowed-tools": [
+        "whoami",
+        "sdk_reference",
+        "recipe",
+        "platform_guide",
+        "app_info",
+        "discover_tools",
+        "schema_status"
+      ],
+      "mutating": false,
+      "bytes": 59496,
+      "digest": "d6d67e4dec5c4221e213b3f9274bd059a96373d8b9137eb11c24c6dd0f1dfc05",
+      "files": [
+        {
+          "path": "evals/cases.json",
+          "bytes": 7093,
+          "sha256": "db9566899bb8c40ded094fd67e629e5702f9af242b08d63d433d868f948c102a"
+        },
+        {
+          "path": "evals/contract.json",
+          "bytes": 1632,
+          "sha256": "d46cab7500ea5722108f655d75edb608abf09e06936330338736afdb0a6dcc0c"
+        },
+        {
+          "path": "evals/README.md",
+          "bytes": 972,
+          "sha256": "223d3e0e46aab280392fb69c0acf08a53c2b109fbba61fa55d7ebed218f75726"
+        },
+        {
+          "path": "evals/triggers.json",
+          "bytes": 1615,
+          "sha256": "5cb4f703699108f6b8076e90dc4fd5bb9548aa90cc486a2cfeca7ce459b12f99"
+        },
+        {
+          "path": "references/anti-patterns.md",
+          "bytes": 8001,
+          "sha256": "67cf86f53690872c9eddfc98a3ca2d3fec5d519110a6cfcd298eaf1adab639b2"
+        },
+        {
+          "path": "references/decision-tables.md",
+          "bytes": 12261,
+          "sha256": "1f573e61440a4e886353b6f789d7996e324ba0a69f9965b679f433c27470b0d3"
+        },
+        {
+          "path": "references/negative-cases.md",
+          "bytes": 1852,
+          "sha256": "b6574a6992025ee346083282cd7af9727b300325dfca7e63dae2c11fab4bc8b7"
+        },
+        {
+          "path": "references/output-template.md",
+          "bytes": 2199,
+          "sha256": "316bf3d74b36a104d448ca00947e8b9fbfd481fdd66b8a58ccb96c16da583cc4"
+        },
+        {
+          "path": "references/unsupported-requirements.md",
+          "bytes": 3792,
+          "sha256": "fb9ed710f85fdcb3177f973c5d805940099bd6771c31e196faa3cc14fe6ae549"
+        },
+        {
+          "path": "references/worked-examples.md",
+          "bytes": 9871,
+          "sha256": "c24f9bd806c23c5fb939ebdd73cd53d3f128696dc93dcd3ed25fd657f709cbdd"
+        },
+        {
+          "path": "SKILL.md",
+          "bytes": 10208,
+          "sha256": "a0be2683dd2186efac6929b9799e7ddac1b4198ef367fa000e947e7335efe301"
+        }
+      ],
+      "evaluations": {
+        "cases": 15,
+        "by_class": {
+          "scenario": 10,
+          "blocker": 5
+        },
+        "trigger_prompts": {
+          "positive": 6,
+          "negative": 5,
+          "sibling": 3
+        },
+        "budgets": {
+          "skill_md_bytes": 12288,
+          "references_bytes": 49152,
+          "bundle_bytes": 69632
+        },
+        "actual": {
+          "skill_md_bytes": 10208,
+          "references_bytes": 37976,
+          "bundle_bytes": 59496
+        },
+        "properties": {
+          "triggering": "test/skills-harness.test.ts",
+          "non-triggering": "test/skills-harness.test.ts",
+          "tool-selection-order": "test/skills-harness.test.ts",
+          "dry-run-confirmation": "test/skills.test.ts",
+          "output-schema": "test/skills-harness.test.ts",
+          "idempotency": "test/skills-harness.test.ts",
+          "failure-recovery": "test/skills-harness.test.ts",
+          "citation-accuracy": "test/skills-data.evals.test.ts",
+          "secret-safety": "test/skills.test.ts",
+          "context-size": "test/skills-harness.test.ts"
+        }
+      }
+    },
+    {
+      "name": "proappstore-publish-deploy",
+      "version": "1.0",
+      "description": "Publish, deploy, verify and roll back a ProAppStore app through the supported path — check the preconditions and repository policy, run the canonical gates (frozen lockfile, typecheck, tests, pas check), inspect the migrations and registered actions the release will apply, preview consequential changes, deploy by pushing to main so the keyless OIDC workflow runs, monitor the deploy run and the live status, confirm the smoke or QA run, check the served build is not stale, capture the evidence bundle, and stop or roll back with a git revert on failure. Covers idempotent retry, partial-deployment recovery, migration failures and the final release report. Use when a user asks to publish, deploy, release, ship, verify a deploy of, or roll back a ProAppStore app on proappstore.online. Not for creating or provisioning a new app, designing its data or auth, or a full audit.",
+      "license": "MIT",
+      "standard-version": "1.5",
+      "issue": "proappstore-online/platform#174",
+      "allowed-tools": [
+        "whoami",
+        "app_info",
+        "list_apps",
+        "deploy_status",
+        "get_deploy_status",
+        "schema_status",
+        "discover_tools",
+        "qa_list_flows",
+        "qa_run",
+        "qa_list_runs",
+        "qa_run_artifacts",
+        "qa_flow_playwright",
+        "platform_guide"
+      ],
+      "mutating": false,
+      "bytes": 48904,
+      "digest": "8c54ecff6b6cf7c8ea400bdbe6780f8a27fdd2ff4faa98cde385be85ab258bca",
+      "files": [
+        {
+          "path": "evals/cases.json",
+          "bytes": 4833,
+          "sha256": "4f2173b39104ab5c8c79817d84f932e4ec2a4e5aed33a9113040e47bf5bbc593"
+        },
+        {
+          "path": "evals/contract.json",
+          "bytes": 1706,
+          "sha256": "eb0553e4c7916c786b3b67383868c19f6b9fdcc62c057fa83804828c3dcc3b27"
+        },
+        {
+          "path": "evals/README.md",
+          "bytes": 945,
+          "sha256": "61cfe1fa2ea5d304674261adb03e2b8bcdd3563d7f622f97002691740da93fbd"
+        },
+        {
+          "path": "evals/triggers.json",
+          "bytes": 1468,
+          "sha256": "009538993789ba2812cc721dee5feee37e9f99c1edb830fe5d8866c9bd3d82c1"
+        },
+        {
+          "path": "references/anti-patterns.md",
+          "bytes": 6478,
+          "sha256": "9c12d110b071040c5458165511bad74307eada8d231402042aa656ec2c0ec975"
+        },
+        {
+          "path": "references/decision-tables.md",
+          "bytes": 9777,
+          "sha256": "53761dcd79148c74b0e58b3c5732bca55213b00e2ace7e4dae13dc5c89126ec9"
+        },
+        {
+          "path": "references/negative-cases.md",
+          "bytes": 1886,
+          "sha256": "cc1e0ee1a8052b1aadf9d28d3e164de507fa59f41f66902a5b012823d0f72562"
+        },
+        {
+          "path": "references/output-template.md",
+          "bytes": 2070,
+          "sha256": "0b376ead0d1be406b7220b25b1e43493214f5e8f753194e765765515775fa95d"
+        },
+        {
+          "path": "references/unsupported-requirements.md",
+          "bytes": 3135,
+          "sha256": "bbdff9ec21e54b933b7d9e4a57bc1090f7a6486c53790380c6a25be148919046"
+        },
+        {
+          "path": "references/worked-examples.md",
+          "bytes": 5313,
+          "sha256": "95ce29974526093aac7d591a5c59078e3e798697a78f136f9d82e3ac2d29155d"
+        },
+        {
+          "path": "SKILL.md",
+          "bytes": 11293,
+          "sha256": "27499850184419da9f5155a7642536da2909bb160bd425ba415f9ab74d1e9a85"
+        }
+      ],
+      "evaluations": {
+        "cases": 11,
+        "by_class": {
+          "scenario": 6,
+          "blocker": 5
+        },
+        "trigger_prompts": {
+          "positive": 6,
+          "negative": 5,
+          "sibling": 3
+        },
+        "budgets": {
+          "skill_md_bytes": 12288,
+          "references_bytes": 40960,
+          "bundle_bytes": 61440
+        },
+        "actual": {
+          "skill_md_bytes": 11293,
+          "references_bytes": 28659,
+          "bundle_bytes": 48904
+        },
+        "properties": {
+          "triggering": "test/skills-harness.test.ts",
+          "non-triggering": "test/skills-harness.test.ts",
+          "tool-selection-order": "test/skills-harness.test.ts",
+          "dry-run-confirmation": "test/skills.test.ts",
+          "output-schema": "test/skills-harness.test.ts",
+          "idempotency": "test/skills-harness.test.ts",
+          "failure-recovery": "test/skills-harness.test.ts",
+          "citation-accuracy": "test/skills-publish-deploy.evals.test.ts",
+          "secret-safety": "test/skills.test.ts",
+          "context-size": "test/skills-harness.test.ts"
+        }
+      }
+    },
+    {
+      "name": "proappstore-upgrade-app",
+      "version": "1.0",
+      "description": "Upgrade an existing ProAppStore app to the current SDK, template and Application Standard without overwriting its product code — inventory the app, compare its dependencies, configuration and workflows with the supported baseline (SDK and CLI versions, Node and pnpm, the approved template revision, the canonical deploy, CI and compliance workflows), find template drift, and prepare a staged upgrade plan covering the platform-cookie session migration, registered actions and migrations, the UI/PWA baseline, MCP tools, tests and rollback. Runs in dry-run report mode by default and in a bounded implementation mode that changes one stage at a time, preserves customer customisations, and requires explicit review before any destructive or broad rewrite. Use when a user asks to upgrade, update, modernise or re-align an existing app on proappstore.online with the latest SDK, template or standard. Not for creating a new app, a release, or a full audit.",
+      "license": "MIT",
+      "standard-version": "1.5",
+      "issue": "proappstore-online/platform#177",
+      "allowed-tools": [
+        "whoami",
+        "app_info",
+        "list_templates",
+        "schema_status",
+        "discover_tools",
+        "deploy_status",
+        "sdk_reference",
+        "recipe",
+        "platform_guide",
+        "qa_list_runs"
+      ],
+      "mutating": false,
+      "bytes": 56221,
+      "digest": "7b849d96a71c3f4a933e418cc7ccea985a8da524a88d387d256e29bf5eb741ac",
+      "files": [
+        {
+          "path": "evals/cases.json",
+          "bytes": 6296,
+          "sha256": "872b859759687cfd6ad7a06b330bcc0ec7011327810aafaa615182c93a66f978"
+        },
+        {
+          "path": "evals/contract.json",
+          "bytes": 1615,
+          "sha256": "9835adbd002402905ba2d76f4a59c18673053bbb23f48fc73990cf71441318d8"
+        },
+        {
+          "path": "evals/README.md",
+          "bytes": 1141,
+          "sha256": "d255ac874f55ebf833eec686bde09b820b281a9c9b0b45e2ec783bd2d930892c"
+        },
+        {
+          "path": "evals/triggers.json",
+          "bytes": 1504,
+          "sha256": "f9ecbb3e255e42fba8b6535f94180bdeb171154eed745f7dc671b6c5ee0d7239"
+        },
+        {
+          "path": "references/anti-patterns.md",
+          "bytes": 8223,
+          "sha256": "cab4012807d4f5a9fb57b5b99737de70b964df8267c760e30f6bf5ae0ab562aa"
+        },
+        {
+          "path": "references/decision-tables.md",
+          "bytes": 10593,
+          "sha256": "3b553925e580ceb402a227e38d24a3e4b90a20df193cdf40cce2f403e93400ef"
+        },
+        {
+          "path": "references/negative-cases.md",
+          "bytes": 1985,
+          "sha256": "7078359be7d83debaaa7a623aa491b32a9e0ad27dba34e3de5827dc227daa365"
+        },
+        {
+          "path": "references/output-template.md",
+          "bytes": 2629,
+          "sha256": "484162e0b563b3d21f217bca6b15aa9a2bccbc13a797f55b3fd6f0a04d8d6fd2"
+        },
+        {
+          "path": "references/unsupported-requirements.md",
+          "bytes": 3355,
+          "sha256": "f330c71c175118d04683c0cda1c15040ec76e28650685832943a97446eeead8c"
+        },
+        {
+          "path": "references/worked-examples.md",
+          "bytes": 8123,
+          "sha256": "18ca0d9bcf24baf415a5ecd2a7dfb500df17b375e5c9bc7dd91b7bfeb2b278b7"
+        },
+        {
+          "path": "SKILL.md",
+          "bytes": 10757,
+          "sha256": "99c3c9e87cb52bf812e24b97149661a6ed10c941606b7b84c3e8bbd452f343a6"
+        }
+      ],
+      "evaluations": {
+        "cases": 14,
+        "by_class": {
+          "scenario": 8,
+          "blocker": 6
+        },
+        "trigger_prompts": {
+          "positive": 6,
+          "negative": 5,
+          "sibling": 3
+        },
+        "budgets": {
+          "skill_md_bytes": 12288,
+          "references_bytes": 49152,
+          "bundle_bytes": 69632
+        },
+        "actual": {
+          "skill_md_bytes": 10757,
+          "references_bytes": 34908,
+          "bundle_bytes": 56221
+        },
+        "properties": {
+          "triggering": "test/skills-harness.test.ts",
+          "non-triggering": "test/skills-harness.test.ts",
+          "tool-selection-order": "test/skills-harness.test.ts",
+          "dry-run-confirmation": "test/skills.test.ts",
+          "output-schema": "test/skills-harness.test.ts",
+          "idempotency": "test/skills-harness.test.ts",
+          "failure-recovery": "test/skills-harness.test.ts",
+          "citation-accuracy": "test/skills-upgrade.evals.test.ts",
+          "secret-safety": "test/skills.test.ts",
+          "context-size": "test/skills-harness.test.ts"
+        }
+      }
+    }
+  ]
+}

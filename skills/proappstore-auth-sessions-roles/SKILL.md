@@ -9,7 +9,7 @@ metadata:
   mcp-endpoint: https://mcp.proappstore.online/mcp
   standard-version: "1.5"
   issue: proappstore-online/platform#173
-  triggers: authentication, sessions, roles, permissions, ProAppStore
+  triggers: authentication, sessions, session, roles, permissions, sign-in, sign-out, sign users in, ProAppStore
 allowed-tools: whoami sdk_reference recipe platform_guide app_info discover_tools schema_status
 ---
 
@@ -134,6 +134,15 @@ PAS-AUTH-020. One screen; details in the tables.
 | **Product decision** | the role vocabulary or who administers roles is undecided | ask; propose the platform roles as a starting set; do not invent |
 | **Verification** | `sdk_reference` does not show the method the user wants | say it does not exist; recommend the closest real one |
 | **Manual verification** | PAS-AUTH-020 checks on the live app | list the checklist for a person; never mark it passed |
+
+## Reruns and failures
+
+- **Rerun:** the review is idempotent — the same repository state produces
+  the same findings and the same plan; nothing on the platform changes
+  between runs. Rerun after each remediation to confirm the finding is gone.
+- **Failure:** if `app_info`, `discover_tools` or `schema_status` fails,
+  report the gap, keep the findings that do not depend on it, and stop rather
+  than infer the missing part.
 
 ## Worked examples
 

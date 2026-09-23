@@ -323,7 +323,9 @@ evidence bundle → `git revert` rollback; read-only plus `qa_run`) and
 [`proappstore-upgrade-app`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-upgrade-app/SKILL.md)
 (inventory → `list_templates` baseline → drift → staged plan; dry-run by
 default, one reviewed stage per commit, product code never overwritten;
-read-only). Skills carry no credentials, call only a minimal allow-list of MCP
+read-only). Every skill is evaluated on every push — see the
+[evaluation summary](./skills/evaluations.md) — and released through the
+bundle gate (`skills/index.json` with checksums). Skills carry no credentials, call only a minimal allow-list of MCP
 tools, and are validated by `test/skills.test.ts`.
 
 ## Limits & roadmap

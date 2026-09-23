@@ -1,0 +1,32 @@
+{
+  "$comment": "Trigger fixtures for proappstore-auth-sessions-roles (#176): positive prompts must route to this skill and no other, negative prompts to no skill, sibling prompts to the named sibling. Scored deterministically by test/skills-harness.test.ts over metadata.triggers.",
+  "positive": [
+    "How do I add GitHub sign-in and keep users signed in in my ProAppStore app?",
+    "Set up roles and permissions in my ProAppStore app so only editors can publish posts.",
+    "Review the authentication in my ProAppStore app — I think we store the session in localStorage.",
+    "Build a permissions screen for club admins in our PAS app.",
+    "Why does sign-out not fully work in my ProAppStore app? Sessions seem to persist.",
+    "Which ProAppStore roles should gate the delete action: team roles or app roles?"
+  ],
+  "negative": [
+    "How do I add GitHub sign-in to a Next.js app with NextAuth?",
+    "Set up roles and permissions in Django admin.",
+    "Explain OAuth 2.0 PKCE.",
+    "Configure Auth0 rules for my React SPA.",
+    "How do I hash passwords with bcrypt in Node?"
+  ],
+  "sibling": [
+    {
+      "prompt": "Scope every registered action to the tenant in my ProAppStore app.",
+      "skill": "proappstore-data-migrations-actions"
+    },
+    {
+      "prompt": "Deploy my ProAppStore app and verify the smoke test passes.",
+      "skill": "proappstore-publish-deploy"
+    },
+    {
+      "prompt": "Which ProAppStore service should I use for realtime presence?",
+      "skill": "choose-proappstore-architecture"
+    }
+  ]
+}

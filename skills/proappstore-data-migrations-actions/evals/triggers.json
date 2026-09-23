@@ -1,0 +1,32 @@
+{
+  "$comment": "Trigger fixtures for proappstore-data-migrations-actions (#176): positive prompts must route to this skill and no other, negative prompts to no skill, sibling prompts to the named sibling. Scored deterministically by test/skills-harness.test.ts over metadata.triggers.",
+  "positive": [
+    "Write the migrations and registered actions for a tasks table in my ProAppStore app.",
+    "How do I scope queries to the tenant in a ProAppStore app so orgs cannot see each other's rows?",
+    "Add a registered action that closes a task idempotently in my PAS app.",
+    "Review the data access in my ProAppStore app for cross-tenant leaks.",
+    "My ProAppStore migrations failed when the workflow applied them — how should the migrations be written?",
+    "Design the migrations for a multi-tenant ledger in a ProAppStore app."
+  ],
+  "negative": [
+    "Write the migrations for a tasks table in Django.",
+    "How do I scope queries to the tenant with Postgres row-level security?",
+    "Add a Prisma migration that renames a column.",
+    "Review my Supabase RLS policies.",
+    "Explain SQL injection."
+  ],
+  "sibling": [
+    {
+      "prompt": "Add roles and permissions so only managers can close tasks in my ProAppStore app.",
+      "skill": "proappstore-auth-sessions-roles"
+    },
+    {
+      "prompt": "Should my ProAppStore app keep files in D1 or storage? Which service?",
+      "skill": "choose-proappstore-architecture"
+    },
+    {
+      "prompt": "Publish the new version of my ProAppStore app and roll back if the smoke fails.",
+      "skill": "proappstore-publish-deploy"
+    }
+  ]
+}

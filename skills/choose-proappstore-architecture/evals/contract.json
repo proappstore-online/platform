@@ -1,0 +1,47 @@
+{
+  "$comment": "Evaluation contract for choose-proappstore-architecture (#176): the rules the harness checks for presence, the allow-list it must equal, the context budgets, the output sections the template must carry, the markers every worked example must contain, and which test covers each issue property.",
+  "skill": "choose-proappstore-architecture",
+  "mutating": false,
+  "allowed_tools": [
+    "whoami",
+    "sdk_reference",
+    "recipe",
+    "platform_guide",
+    "list_templates",
+    "app_info",
+    "discover_tools",
+    "schema_status"
+  ],
+  "rules": {
+    "rerun": "\\*\\*Rerun:\\*\\* the skill is idempotent",
+    "stop_or_rollback": "\\*\\*Failure:\\*\\*[\\s\\S]{0,200}stop rather than guess"
+  },
+  "budgets": {
+    "skill_md_bytes": 12288,
+    "references_bytes": 32768,
+    "bundle_bytes": 49152
+  },
+  "output_sections": [
+    "Requirements → platform services",
+    "Unsupported requirements",
+    "Verified surfaces",
+    "Follow-ups",
+    "Blockers"
+  ],
+  "example_markers": [
+    "Unsupported:",
+    "PAS-"
+  ],
+  "properties": {
+    "triggering": "test/skills-harness.test.ts",
+    "non-triggering": "test/skills-harness.test.ts",
+    "tool-selection-order": "test/skills-harness.test.ts",
+    "dry-run-confirmation": "test/skills.test.ts",
+    "output-schema": "test/skills-harness.test.ts",
+    "idempotency": "test/skills-harness.test.ts",
+    "failure-recovery": "test/skills-harness.test.ts",
+    "citation-accuracy": "test/skills-architecture.evals.test.ts",
+    "secret-safety": "test/skills.test.ts",
+    "context-size": "test/skills-harness.test.ts"
+  }
+}

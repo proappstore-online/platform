@@ -30,6 +30,22 @@ jobs:
       - run: pnpm -r typecheck
       - run: pnpm test
 
+  # Release gate for the Agent Skills bundles (#176): every skills/<skill>/
+  # bundle must validate (required files, no executables outside scripts/, no
+  # binaries outside assets/, size caps, no secret-shaped strings, no dangling
+  # links) and the committed skills/index.json + docs/skills/evaluations.md
+  # must equal what the bundles produce. The same check runs under `pnpm test`
+  # (test/skills-manifest.test.ts); this job makes it visible on its own.
+  skills-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: skill bundles are valid and the manifest is up to date
+        run: node scripts/build-skills-manifest.mjs --check
+
   # Drift guard: the template-app repo's deploy workflow is cloned verbatim by
   # `pas create` (CLI) and MCP `create_app` — that path has no strip-and-inject,
   # so template-app's committed workflow IS what those apps run. It must stay

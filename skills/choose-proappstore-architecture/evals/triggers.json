@@ -1,0 +1,32 @@
+{
+  "$comment": "Trigger fixtures for choose-proappstore-architecture (#176): positive prompts must route to this skill and no other, negative prompts to no skill, sibling prompts to the named sibling. Scored deterministically by test/skills-harness.test.ts over metadata.triggers.",
+  "positive": [
+    "Which ProAppStore service should I use for storing user uploads?",
+    "Help me choose the architecture for a multi-tenant CRM on ProAppStore.",
+    "Should this ProAppStore app use D1 or KV for per-user preferences?",
+    "How should I structure a ProAppStore app that needs realtime cursors and chat?",
+    "What platform services does ProAppStore offer for background jobs, and what should I pick?",
+    "Can a PAS app use rooms for a 200-player game, or do I need something else?"
+  ],
+  "negative": [
+    "Which AWS service should I use for storing user uploads?",
+    "Help me choose between Postgres and MongoDB for a CRM.",
+    "Design a microservice architecture for a payments platform on Kubernetes.",
+    "Should I use Redis or Memcached for session storage in Rails?",
+    "Explain the CAP theorem."
+  ],
+  "sibling": [
+    {
+      "prompt": "Create a new ProAppStore app for a CRM.",
+      "skill": "create-proappstore-app"
+    },
+    {
+      "prompt": "Write the registered actions and migrations for the CRM's leads table in my ProAppStore app.",
+      "skill": "proappstore-data-migrations-actions"
+    },
+    {
+      "prompt": "Add roles and permissions to my ProAppStore CRM so managers can delete leads.",
+      "skill": "proappstore-auth-sessions-roles"
+    }
+  ]
+}

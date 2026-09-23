@@ -9,7 +9,7 @@ metadata:
   mcp-endpoint: https://mcp.proappstore.online/mcp
   standard-version: "1.5"
   issue: proappstore-online/platform#171
-  triggers: choose, architecture, platform services, which ProAppStore service, structure a ProAppStore, D1, KV, storage, counters or rooms
+  triggers: choose, architecture, platform services, which ProAppStore service, structure a ProAppStore, D1, KV, storage, counters, rooms
 allowed-tools: whoami sdk_reference recipe platform_guide list_templates app_info discover_tools schema_status
 ---
 
@@ -134,6 +134,14 @@ the follow-ups. Keep it to one screen; put detail in the tables.
 | **Unsupported requirement** | a need with no primitive (scheduled work, trusted server code, authoritative realtime, own Worker, external DB, per-app pricing) | the interim pattern from the reference, and the issue to follow (#123, #148) |
 | **Product decision** | tenancy model, visibility, monetisation, what is stored about people | ask; do not invent |
 | **Verification** | `sdk_reference` does not show the method you wanted to cite | say the surface does not exist; recommend the closest real one |
+
+## Reruns and failures
+
+- **Rerun:** the skill is idempotent — the same requirements and the same
+  docs produce the same decision, and nothing on the platform changes
+  between runs. Rerun freely after a requirement changes.
+- **Failure:** if a lookup (`sdk_reference`, `recipe`, `app_info`) fails, say
+  so, mark that row of the decision *unverified* and stop rather than guess.
 
 ## Worked examples
 

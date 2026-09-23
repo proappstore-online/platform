@@ -9,7 +9,7 @@ metadata:
   mcp-endpoint: https://mcp.proappstore.online/mcp
   standard-version: "1.5"
   issue: proappstore-online/platform#175
-  triggers: migrations, registered actions, tenant, data access, ProAppStore
+  triggers: migrations, migration, registered actions, registered action, tenant, data access, ProAppStore
 allowed-tools: whoami sdk_reference recipe platform_guide app_info discover_tools schema_status
 ---
 
@@ -146,6 +146,15 @@ tables.
 | **Product decision** | the tenancy model or who may see whose rows is undecided | ask; do not invent a scoping rule |
 | **Verification** | `sdk_reference` or the manifest reference lacks the key or method the user wants | say it does not exist; recommend the real one |
 | **Live schema** | `schema_status` shows a failed migration | stop designing on top of it; point at the runbook |
+
+## Reruns and failures
+
+- **Rerun:** the plan is idempotent — the same schema, manifest and
+  requirements produce the same plan; nothing on the platform changes
+  between runs. Rerun after each edit to confirm a finding is gone.
+- **Failure:** if `schema_status` or `discover_tools` fails, keep the
+  static findings, mark the live checks *unverified*, and stop rather than
+  design on an unknown schema.
 
 ## Worked examples
 

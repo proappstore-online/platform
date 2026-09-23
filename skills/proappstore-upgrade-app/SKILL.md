@@ -9,7 +9,7 @@ metadata:
   mcp-endpoint: https://mcp.proappstore.online/mcp
   standard-version: "1.5"
   issue: proappstore-online/platform#177
-  triggers: upgrade, SDK, template, standard, ProAppStore
+  triggers: upgrade, update, modernise, re-align, latest SDK, template drift, ProAppStore
 allowed-tools: whoami app_info list_templates schema_status discover_tools deploy_status sdk_reference recipe platform_guide qa_list_runs
 ---
 
@@ -153,6 +153,14 @@ reverting one does not undo the others
 | **Live schema** | `schema_status` shows a failed migration | stop; the [migration repair runbook](https://docs.proappstore.online/migration-repair-runbook/) |
 | **Credentials** | a stored token in a workflow or secret, or one offered to "make the upgrade easier" | never use it; replace the workflow with the keyless one and have the user delete the secret |
 | **Manual verification** | sign-in per hostname after the cookie stage; the installed app after the UI stage | list as pending for a person |
+
+## Reruns and failures
+
+- **Rerun:** the dry-run report is idempotent — the same repository and
+  baseline produce the same plan; a stage already applied is reported as
+  done and skipped, never re-applied.
+- **Failure:** a stage whose gates or smoke fail is reverted as one commit
+  (`git revert`) and re-planned; the other stages stay in place.
 
 ## Worked examples
 

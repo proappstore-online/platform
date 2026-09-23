@@ -1,0 +1,48 @@
+{
+  "$comment": "Evaluation contract for proappstore-auth-sessions-roles (#176): the rules the harness checks for presence, the allow-list it must equal, the context budgets, the output sections the template must carry, the markers every worked example must contain, and which test covers each issue property.",
+  "skill": "proappstore-auth-sessions-roles",
+  "mutating": false,
+  "allowed_tools": [
+    "whoami",
+    "sdk_reference",
+    "recipe",
+    "platform_guide",
+    "app_info",
+    "discover_tools",
+    "schema_status"
+  ],
+  "rules": {
+    "rerun": "\\*\\*Rerun:\\*\\* the review is idempotent",
+    "stop_or_rollback": "\\*\\*Failure:\\*\\*[\\s\\S]{0,260}stop rather\\s+than infer"
+  },
+  "budgets": {
+    "skill_md_bytes": 12288,
+    "references_bytes": 40960,
+    "bundle_bytes": 61440
+  },
+  "output_sections": [
+    "Decisions",
+    "Findings",
+    "Role vocabulary",
+    "Permissions UI",
+    "Negative tests to add",
+    "Human verification",
+    "Blockers"
+  ],
+  "example_markers": [
+    "Unsupported:",
+    "PAS-AUTH-"
+  ],
+  "properties": {
+    "triggering": "test/skills-harness.test.ts",
+    "non-triggering": "test/skills-harness.test.ts",
+    "tool-selection-order": "test/skills-harness.test.ts",
+    "dry-run-confirmation": "test/skills.test.ts",
+    "output-schema": "test/skills-harness.test.ts",
+    "idempotency": "test/skills-harness.test.ts",
+    "failure-recovery": "test/skills-harness.test.ts",
+    "citation-accuracy": "test/skills-auth.evals.test.ts",
+    "secret-safety": "test/skills.test.ts",
+    "context-size": "test/skills-harness.test.ts"
+  }
+}

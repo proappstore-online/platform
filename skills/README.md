@@ -38,6 +38,19 @@ no client-specific copies.
 - Links go to the live docs (https://docs.proappstore.online/) and the
   [Application Standard](https://docs.proappstore.online/standard/); platform
   rules are cited, not restated.
+- Every skill ships three fixtures under `evals/` that follow
+  [`evals.schema.json`](./evals.schema.json): `cases.json` (scenario and
+  blocker expectations), `triggers.json` (prompts that must, must not, or
+  must route to a sibling) and `contract.json` (allow-list, rerun and
+  stop-or-rollback rules, context budgets, output sections). The
+  cross-skill harness `test/skills-harness.test.ts` scores triggering
+  deterministically, checks tool selection and order, the rules, the output
+  schema and the budgets.
+- The release gate `scripts/build-skills-manifest.mjs --check` (CI job
+  `skills-gate`, and `test/skills-manifest.test.ts`) validates every bundle
+  and pins [`index.json`](./index.json) (per-skill SHA-256 file list and
+  content digest) and the published
+  [evaluation summary](https://docs.proappstore.online/skills/evaluations/).
 - `test/skills.test.ts` validates every skill (format, links, tool allow-list,
   secret shapes, duplicates, dry-run-before-confirm for mutating skills,
   read-only for advisory ones) and each skill ships machine-checked

@@ -1,0 +1,51 @@
+{
+  "$comment": "Evaluation contract for proappstore-upgrade-app (#176): the rules the harness checks for presence, the allow-list it must equal, the context budgets, the output sections the template must carry, the markers every worked example must contain, and which test covers each issue property.",
+  "skill": "proappstore-upgrade-app",
+  "mutating": false,
+  "allowed_tools": [
+    "whoami",
+    "app_info",
+    "list_templates",
+    "schema_status",
+    "discover_tools",
+    "deploy_status",
+    "sdk_reference",
+    "recipe",
+    "platform_guide",
+    "qa_list_runs"
+  ],
+  "rules": {
+    "rerun": "\\*\\*Rerun:\\*\\* the dry-run report is idempotent",
+    "stop_or_rollback": "### 6\\. Roll back a stage"
+  },
+  "budgets": {
+    "skill_md_bytes": 12288,
+    "references_bytes": 49152,
+    "bundle_bytes": 69632
+  },
+  "output_sections": [
+    "Inventory",
+    "Customisations preserved",
+    "Staged plan",
+    "Risks and unsupported",
+    "Gates",
+    "Human checks pending",
+    "Rollback"
+  ],
+  "example_markers": [
+    "Unsupported:",
+    "PAS-"
+  ],
+  "properties": {
+    "triggering": "test/skills-harness.test.ts",
+    "non-triggering": "test/skills-harness.test.ts",
+    "tool-selection-order": "test/skills-harness.test.ts",
+    "dry-run-confirmation": "test/skills.test.ts",
+    "output-schema": "test/skills-harness.test.ts",
+    "idempotency": "test/skills-harness.test.ts",
+    "failure-recovery": "test/skills-harness.test.ts",
+    "citation-accuracy": "test/skills-upgrade.evals.test.ts",
+    "secret-safety": "test/skills.test.ts",
+    "context-size": "test/skills-harness.test.ts"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$comment": "Trigger fixtures for proappstore-publish-deploy (#176): positive prompts must route to this skill and no other, negative prompts to no skill, sibling prompts to the named sibling. Scored deterministically by test/skills-harness.test.ts over metadata.triggers.",
+  "positive": [
+    "Publish my ProAppStore app and verify the deploy went through.",
+    "Deploy the latest commit of my ProAppStore app and check the smoke test.",
+    "Roll back the last release of my ProAppStore app — users see errors.",
+    "Verify that my PAS app deploy applied the migration and registered the actions.",
+    "Ship this ProAppStore app change to production and give me the evidence bundle.",
+    "Why did the deploy of my ProAppStore app fail at the upload step?"
+  ],
+  "negative": [
+    "Deploy my Django app to Heroku.",
+    "Roll back a Kubernetes deployment to the previous revision.",
+    "Publish my npm package with provenance.",
+    "Verify my SSL certificate renewed.",
+    "Set up a blue/green deploy on AWS."
+  ],
+  "sibling": [
+    {
+      "prompt": "Upgrade my ProAppStore app to the latest SDK and template drift fixes.",
+      "skill": "proappstore-upgrade-app"
+    },
+    {
+      "prompt": "Create a new ProAppStore app for a booking system.",
+      "skill": "create-proappstore-app"
+    },
+    {
+      "prompt": "Write the registered actions for bookings in my ProAppStore app.",
+      "skill": "proappstore-data-migrations-actions"
+    }
+  ]
+}
