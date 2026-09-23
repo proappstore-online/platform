@@ -1,7 +1,12 @@
 name = "proappstore-admin"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
-workers_dev = true
+# SECURITY (#83): no workers.dev URL. admin.proappstore.online is dispatched by
+# the host Worker over the ADMIN service binding (host wrangler.toml), which is
+# the only entry point that could ever sit behind Cloudflare Access. A
+# workers.dev hostname would be a second, unprotectable front door to the
+# provisioning machinery. Same stance as proappstore-api and kb-host.
+workers_dev = false
 
 # Secrets (set via `wrangler secret put`):
 #   CF_API_TOKEN        Pages:Edit + DNS:Edit on proappstore.online

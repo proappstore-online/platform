@@ -4,8 +4,11 @@ ProAppStore admin Worker: automated app provisioning.
 
 **Status:** v0.2 — deployed, publish flow live.
 
-**URL:** `https://proappstore-admin.serge-the-dev.workers.dev`
-(Custom domain `admin.proappstore.online` DNS exists, Workers Route pending)
+**URL:** `https://admin.proappstore.online` — dispatched by the host Worker over
+its `ADMIN` service binding (`packages/host/wrangler.toml`). There is
+deliberately **no `workers.dev` URL** (`workers_dev = false`, #83): the custom
+domain is the only entry point, so an edge control such as Cloudflare Access on
+it cannot be bypassed.
 
 ## What it does
 
@@ -37,7 +40,7 @@ and a durable Cloudflare Workflow variant (`/api/provision-workflow`).
 ## Usage
 
 ```bash
-curl -X POST https://proappstore-admin.serge-the-dev.workers.dev/api/publish-app \
+curl -X POST https://admin.proappstore.online/api/publish-app \
   -H "Content-Type: application/json" \
   -d '{
     "id": "my-app",
