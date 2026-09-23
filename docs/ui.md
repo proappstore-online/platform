@@ -1,5 +1,7 @@
 # UI Component Library
 
+> **App requirements** for UI, accessibility, browser security and PWA behaviour are clauses in the [Application Standard — UI chapter](./standard/ui.md), which also lists what each SDK component provides for accessibility. This page is the component reference those clauses cite.
+
 Drop-in React components for ProAppStore apps. Composable primitives, design tokens, and a zero-config shell.
 
 ## Choose your level

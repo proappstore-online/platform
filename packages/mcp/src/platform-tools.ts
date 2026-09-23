@@ -132,7 +132,18 @@ export function registerPlatformTools(server: McpServer, env: Env) {
       const res = await fetch("https://proappstore.online/skills.md");
       if (!res.ok) return { content: [{ type: "text" as const, text: "Failed to fetch skills.md" }] };
       const text = await res.text();
-      return { content: [{ type: "text" as const, text }] };
+      // The clause-numbered Application Standard is what an audit cites; skills.md
+      // is the capability guide. Point every guide reader at both (#159).
+      const standard = [
+        "",
+        "---",
+        "## Recommended Application Standard (audit an app)",
+        "- Guide + chapters: https://docs.proappstore.online/standard/",
+        "- Audit procedure: https://docs.proappstore.online/standard/audit-instructions/",
+        "- Clauses as data: https://docs.proappstore.online/standard/standard.json · finding contract: https://docs.proappstore.online/standard/finding.schema.json",
+        "- Hosted apps set `initPro({ appId, authMode: 'platform-cookie' })` (PAS-AUTH-001).",
+      ].join("\n");
+      return { content: [{ type: "text" as const, text: text + standard }] };
     }
   );
 

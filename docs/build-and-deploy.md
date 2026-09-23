@@ -1,5 +1,7 @@
 # Build & Deploy — current state vs future state
 
+> **App requirements** for deployment — the keyless workflow, evidence per deploy, rollback and smoke tests — are clauses in the [Application Standard — Operations chapter](./standard/ops.md) ([PAS-OPS-005](./standard/ops.md#pas-ops-005), [009](./standard/ops.md#pas-ops-009), [010](./standard/ops.md#pas-ops-010)). This page describes the platform path those clauses cite.
+
 How a PAS app gets from a git push to a live URL, what we watch, and where this
 goes if we ever centralize. Decision record: [ADR-006](./adr/006-centralized-build-service.md).
 

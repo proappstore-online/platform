@@ -1,5 +1,7 @@
 # Stripe & entitlements
 
+> **App requirement:** monetisation is the platform subscription and the SDK gates — no per-app checkout or pricing ([PAS-STACK-020](./standard/stack.md#pas-stack-020) in the [Application Standard](./standard/index.md)). This page describes the platform mechanism.
+
 The pro SDK's job is to make a paid app a paid app. Three primitives:
 **subscriptions**, **license keys**, and **entitlements**. All backed by
 the `pas` Worker and a small D1 schema. **v0 status: skeleton.**

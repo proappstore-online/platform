@@ -9,12 +9,14 @@ export function buildSdkReferenceSections(): Record<string, string> {
     auth: `## Auth
 \`\`\`tsx
 import { initPro } from '@proappstore/sdk'
-const app = initPro({ appId: 'my-app' })
+// Hosted apps: platform-cookie mode — the session lives in an HttpOnly cookie,
+// never in JS (Application Standard PAS-AUTH-001, https://docs.proappstore.online/standard/auth/#pas-auth-001)
+const app = initPro({ appId: 'my-app', authMode: 'platform-cookie' })
 await app.auth.init()
 app.auth.signIn()        // GitHub OAuth
 app.auth.signOut()
 app.auth.user            // { id, name, login, avatarUrl } | null
-app.auth.token           // session token
+// app.auth.token is null in platform-cookie mode — never build requests from it (PAS-AUTH-003)
 app.auth.signIn('google') // Google OAuth
 await app.auth.signInWithEmail('user@example.com') // magic link
 

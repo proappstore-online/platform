@@ -67,6 +67,15 @@ platform-run automation — **no test code in the app repo**:
 
 See `packages/qa-spec/README.md` and `packages/qa-worker/README.md`.
 
+## Application Standard
+
+The clause-numbered **Recommended Application Standard and Audit Guide** —
+how an app should use the platform and how a person or an AI audits one — is
+published from `docs/standard/` to <https://docs.proappstore.online/standard/>
+(HTML, `standard.json`, `finding.schema.json`, `compliance-checks.json`,
+`llms.txt`). `pas check` cites its clauses; `test/docs-standard.test.ts` holds
+the clause-ID and URL promises.
+
 ## Architecture
 
 ```

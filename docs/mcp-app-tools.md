@@ -1,5 +1,7 @@
 # MCP app tools and auth
 
+> **App requirements** for registered actions — explicit auth metadata, declared parameters, row scoping, batch atomicity, public queries — are clauses in the [Application Standard — Data, actions, and Workers](./standard/data.md); MCP-specific expectations are [PAS-STACK-023](./standard/stack.md#pas-stack-023). This page is the mechanism those clauses cite.
+
 ProAppStore is **AI-first**: every app you publish can expose its own tools to
 the platform's remote MCP server, so an external AI (Claude Code, Cursor, the
 Anthropic API, …) can call your app's data operations directly — list rows,

@@ -1,5 +1,7 @@
 # Tailored vs Ready
 
+> The category decides the tenancy clauses' applicability in the [Application Standard](./standard/index.md): a Ready app must scope every row by membership ([PAS-DATA-007](./standard/data.md#pas-data-007), [PAS-STACK-011](./standard/stack.md#pas-stack-011)); a Tailored fork records those as not-applicable with the fork as evidence.
+
 ProAppStore lists two categories of apps. Same storefront, same control
 plane, same SDK packages — but a meaningfully different shape per
 category. This page is the canonical reference for which is which and why.

@@ -1,5 +1,7 @@
 # Migration Repair Runbook
 
+> **App requirements** for schema changes — additive, named, never edited, forward-only repair — are [PAS-DATA-002](./standard/data.md#pas-data-002) and [PAS-OPS-008](./standard/ops.md#pas-ops-008) in the [Application Standard](./standard/index.md). This runbook is the repair procedure those clauses cite.
+
 PAS app schema is deployed from each app repo's committed `migrations.json`.
 Deploys apply migrations before uploading frontend code and before registering
 `mcp.json` actions. Failures are recorded in `migration_audit`.

@@ -1,5 +1,7 @@
 # Publishing flow
 
+> **App requirements** around publishing — CLI-managed lifecycle, no manual infrastructure, deploy evidence — are [PAS-STACK-004](./standard/stack.md#pas-stack-004) and [PAS-OPS-005](./standard/ops.md#pas-ops-005) in the [Application Standard](./standard/index.md).
+
 `pas publish` calls `POST /v1/provision` on the PAS backend
 (`api.proappstore.online`). The PAS platform owns the full publish flow —
 no delegation to FAS or any other store's admin.

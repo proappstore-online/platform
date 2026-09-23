@@ -146,6 +146,7 @@ ${hasRemote ? `
     4. pas publish
 `}
   Docs:    https://docs.proappstore.online/
+  Standard: https://docs.proappstore.online/standard/   (how to build + audit; set authMode: 'platform-cookie')
   Console: https://console.proappstore.online
 
 `);

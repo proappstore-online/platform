@@ -1,5 +1,7 @@
 # Getting Started
 
+> **Building to the standard?** The [Application Standard](./standard/index.md) says which platform primitive to use for each need ([STACK chapter](./standard/stack.md)) and how an audit checks an app; hosted apps set `authMode: 'platform-cookie'` from day one ([PAS-AUTH-001](./standard/auth.md#pas-auth-001)).
+
 ProAppStore is the paid counterpart to FreeAppStore. Same Cloudflare
 Workers + D1 stack, plus Stripe subscriptions, license keys, server-side
 AI, file storage, maps, push notifications, and more.

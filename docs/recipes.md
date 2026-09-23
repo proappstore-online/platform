@@ -1,5 +1,7 @@
 # Recipes
 
+> The recipes here are the *conforming* patterns the [Application Standard](./standard/index.md) points at; a recipe never overrides a clause. When a recipe and a clause disagree, the clause's *Since* version says which is current.
+
 Pre-built code patterns for ProAppStore apps. Copy, paste, and adapt — each recipe uses the PAS SDK, the design system CSS classes, and pre-installed libraries (lucide-react, date-fns, react-i18next).
 
 AI agents: use the `recipe` MCP tool to fetch any recipe programmatically.
