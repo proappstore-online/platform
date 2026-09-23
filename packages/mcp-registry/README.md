@@ -54,7 +54,9 @@ permissions, auth anti-pattern remediation, read-only;
 `proappstore-data-migrations-actions`: migrations, registered actions and
 tenant-safe SQL, read-only; `proappstore-publish-deploy`: gates, push-to-main
 deploy, deploy/schema/QA status monitoring, evidence and `git revert`
-rollback, read-only plus `qa_run`) live in the platform repository under
+rollback, read-only plus `qa_run`; `proappstore-upgrade-app`: staged upgrade
+to the current SDK, template and standard with `list_templates` as the
+baseline, dry-run by default, read-only) live in the platform repository under
 [`skills/`](https://github.com/proappstore-online/platform/tree/main/skills).
 Copy a skill directory into your client's skills location and connect this
 server.

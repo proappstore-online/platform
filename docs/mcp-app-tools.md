@@ -319,8 +319,11 @@ unsafe writes and drift; read-only) and
 [`proappstore-publish-deploy`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-publish-deploy/SKILL.md)
 (gates → inspect migrations and actions → preview → push to `main` →
 `deploy_status` / `schema_status` / `discover_tools` / `qa_list_runs` →
-evidence bundle → `git revert` rollback; read-only plus `qa_run`). Skills
-carry no credentials, call only a minimal allow-list of MCP
+evidence bundle → `git revert` rollback; read-only plus `qa_run`) and
+[`proappstore-upgrade-app`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-upgrade-app/SKILL.md)
+(inventory → `list_templates` baseline → drift → staged plan; dry-run by
+default, one reviewed stage per commit, product code never overwritten;
+read-only). Skills carry no credentials, call only a minimal allow-list of MCP
 tools, and are validated by `test/skills.test.ts`.
 
 ## Limits & roadmap
