@@ -4,6 +4,27 @@ Part of the [Application Standard](./index.md). One entry per version, newest
 first; the [changelog policy](./governance.md#changelog-policy) defines the
 sections.
 
+## 1.3
+
+Data, actions, and Workers (chapter `DATA`).
+
+- **Added** — PAS-DATA-001 to PAS-DATA-022: schema conventions (001),
+  additive named migrations (002), actions not raw SQL (003), explicit
+  minimal auth metadata (004), declared bound parameters (005), server-owned
+  magic parameters (006), SQL row scoping for users/projects/orgs/tenants
+  (007), write invariants and server-derived grants (008), atomic batch
+  actions (009), bounded cursor pagination (010), public queries (011),
+  exports/search/stats and `caller_unscoped` (012), store selection (013),
+  static apps and platform-provisioned data workers (014), same-zone service
+  bindings (015), data-worker boundaries (016), rooms as untrusted ephemeral
+  fan-out (017), idempotent writes (018), background work without cron (019),
+  caches bound to the session (020), surfaced failures (021), cross-tenant
+  negative tests (022). Plus the store decision table and the
+  `mcp.json` / `migrations.json` audit procedure.
+- **Changed** — none.
+- **Withdrawn** — none.
+- **Editorial** — none.
+
 ## 1.2
 
 Identity, sessions, and permissions (chapter `AUTH`).
