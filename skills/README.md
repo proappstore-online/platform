@@ -71,3 +71,65 @@ session — the plugin carries no credentials.
   read-only for advisory ones) and each skill ships machine-checked
   evaluations (`evals/cases.json`; e.g. `packages/mcp/src/skill-create-app.evals.test.ts`,
   `test/skills-architecture.evals.test.ts`, `test/skills-auth.evals.test.ts`, `test/skills-data.evals.test.ts`, `test/skills-publish-deploy.evals.test.ts`, `test/skills-upgrade.evals.test.ts`, `test/skills-audit.evals.test.ts`).
+
+## Contributing a skill
+
+One bundle per workflow, in the open Agent Skills layout. The gates below
+are the definition of done; a bundle that does not pass them is not a skill.
+
+1. **Name and directory.** `skills/<name>/` with `name` matching
+   `^[a-z0-9]+(-[a-z0-9]+)*$` (≤ 64 chars) and equal to the frontmatter
+   `name`. Names are unique across `skills/`; pick one that says the
+   workflow (`proappstore-<verb>-<object>`), not the platform.
+2. **Required files.** `SKILL.md` (frontmatter: `name`, `description` ≤ 1024
+   chars that says *what* and *when* and carries every `metadata.triggers`
+   phrase; `license: MIT`; `metadata.author`, `version`, `mcp-endpoint`,
+   `standard-version`, `issue`, `triggers`; a **minimal, read-only**
+   `allowed-tools` list — a provisioner only for a create workflow);
+   `references/output-template.md` plus the decision tables, anti-patterns,
+   unsupported requirements, negative cases and worked examples the workflow
+   needs; `evals/cases.json`, `evals/triggers.json`, `evals/contract.json`
+   and `evals/README.md` following [`evals.schema.json`](./evals.schema.json).
+   No `scripts/` unless the script is pure content transformation; no
+   secrets, tokens, `.env` contents or infrastructure commands anywhere.
+3. **Trigger phrases are unique.** Every specific phrase in
+   `metadata.triggers` must belong to one skill only, and the fixture
+   prompts must route unambiguously (`test/skills-harness.test.ts` scores
+   them deterministically). Add sibling prompts for the neighbouring skills.
+4. **Cite, never restate.** Link every rule to its clause URL under
+   https://docs.proappstore.online/standard/ and every capability to its
+   docs page; name only SDK, MCP, CLI and manifest surfaces that exist — the
+   per-skill evals test must prove it against the source.
+5. **Write the evals test** `test/skills-<short>.evals.test.ts` in the
+   shape of the existing ones: no-fabrication guards, security content,
+   per-scenario and per-blocker expectations from `evals/cases.json`.
+6. **Register the skill** in the table above, `.claude-plugin/plugin.json`,
+   `marketplace.json`, `docs/llms.txt`, `docs/mcp-app-tools.md` and
+   `packages/mcp-registry/README.md`.
+7. **Run the gates** from the repository root and fix everything they say:
+
+   ```bash
+   pnpm exec vitest run test/skills.test.ts test/skills-harness.test.ts test/skills-<short>.evals.test.ts
+   node scripts/build-skills-manifest.mjs            # regenerates skills/index.json + docs/skills/evaluations.md
+   node scripts/build-skills-manifest.mjs --check    # the release gate — must print "✓ N skill bundle(s) valid"
+   pnpm -r typecheck && pnpm test
+   ```
+
+8. **Ship it.** Maintainers commit straight to `main` (this repository's
+   delivery mode; see `CLAUDE.md`) with the issue's closing keyword. External
+   contributors open a pull request against `main`; CI runs the same gates
+   (`check`, `skills-gate`) and a maintainer lands it. Bump
+   `metadata.version` on any change to a skill's behaviour; the release gate
+   pins the new content digest in `index.json`.
+9. **Security review.** Every change to a skill is reviewed against
+   [`SECURITY.md`](./SECURITY.md) before it lands; the review log there
+   records who reviewed what and when.
+
+## Approved-template discovery
+
+The epic's "discover and select approved templates" workflow has no bundle of
+its own on purpose: it is one MCP call, `list_templates`, whose contract is
+the [template catalogue](https://docs.proappstore.online/templates/), and it
+is step 3 of [`create-proappstore-app`](./create-proappstore-app/SKILL.md)
+(choose from the catalogue, explain the choice, surface known deviations).
+The upgrade skill reads the same catalogue for its baseline.

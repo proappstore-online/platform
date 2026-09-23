@@ -54,6 +54,7 @@ tools.
 - [Publishing flow](./publishing-flow.md)
 - [Browser auth session model](./auth-session-model.md)
 - [MCP app tools and auth](./mcp-app-tools.md)
+- [Agent Skills](https://github.com/proappstore-online/platform/blob/main/skills/README.md) — seven portable workflows for AI clients, installable as a plugin with the MCP server; [what they are evaluated for](./skills/evaluations.md)
 - [App actions and data access security](./app-actions-security.md)
 - [Migration repair runbook](./migration-repair-runbook.md)
 - [Agent customization](./agent-customization.md)
