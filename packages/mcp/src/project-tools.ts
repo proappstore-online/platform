@@ -10,6 +10,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { makeGitHub, verifyAppOwnership } from "@proappstore/build-core";
+import { selectTemplate, getTemplate, DEFAULT_TEMPLATE_ID } from "@proappstore/build-core";
 import { gateMutation, dryRun } from "./safety.js";
 
 interface ProjectToolsEnv {
@@ -178,7 +179,9 @@ export function registerProjectTools(
   }
 
   /** Call /v1/provision and format the step results. */
-  async function provisionDetailed(appId: string, token: string, opts?: { skipCompliance?: boolean }): Promise<{ ok: boolean; status: number; data: ProvisionResult; text: string }> {
+  interface ProvisionOpts { skipCompliance?: boolean; template?: string; templateRev?: string; allowUnapprovedTemplate?: boolean }
+
+  async function provisionDetailed(appId: string, token: string, opts?: ProvisionOpts): Promise<{ ok: boolean; status: number; data: ProvisionResult; text: string }> {
     try {
       const res = await env.API.fetch(`${apiBase}/v1/provision`, {
         method: "POST",
@@ -188,6 +191,10 @@ export function registerProjectTools(
           skipCompliance: opts?.skipCompliance ?? true,
           repoOwner: org,
           repoName: appId,
+          // #178: provenance — which approved template, at which exact commit.
+          ...(opts?.template ? { template: opts.template } : {}),
+          ...(opts?.templateRev ? { templateRev: opts.templateRev } : {}),
+          ...(opts?.allowUnapprovedTemplate ? { allowUnapprovedTemplate: true } : {}),
         }),
       });
       let data: ProvisionResult;
@@ -222,8 +229,24 @@ export function registerProjectTools(
     }
   }
 
-  async function provision(appId: string, token: string): Promise<string> {
-    return (await provisionDetailed(appId, token)).text;
+  async function provision(appId: string, token: string, opts?: ProvisionOpts): Promise<string> {
+    return (await provisionDetailed(appId, token, opts)).text;
+  }
+
+  /**
+   * #178: the exact template revision GitHub copied. The template-generate API
+   * does not return it, so read the template's branch head right after the
+   * copy. Best-effort: an unresolved revision is recorded as unknown, never
+   * invented.
+   */
+  async function resolveTemplateRev(repoName: string, ref: string): Promise<string | null> {
+    try {
+      const r = await gh.api(`/repos/${org}/${repoName}/commits/${ref}`);
+      const sha = r && r.ok ? (r.data as { sha?: unknown } | undefined)?.sha : undefined;
+      return typeof sha === "string" && /^[0-9a-f]{7,40}$/.test(sha) ? sha : null;
+    } catch {
+      return null;
+    }
   }
 
   async function patchTemplatePlaceholders(appId: string): Promise<string[]> {
@@ -287,7 +310,8 @@ export function registerProjectTools(
       app_id: APP_ID,
       name: z.string().describe("Display name for the app"),
       description: z.string().describe("Short description for the GitHub repo"),
-      template_repo: z.string().optional().describe("Template repo name in the configured GitHub org. Defaults to template-app."),
+      template_repo: z.string().optional().describe("Approved template id (see list_templates). Defaults to template-app. Unknown or withdrawn templates are refused; deprecated ones warn."),
+      allow_unapproved_template: z.boolean().optional().describe("Platform admins only: proceed with a template outside the approved catalogue. Recorded on the app."),
       private_repo: z.boolean().optional().describe("Create the GitHub repo as private. Defaults to true."),
       reuse_existing_repo: z.boolean().optional().describe("Reuse an existing org repo when present. Defaults to true; existing unowned repos require a platform admin session."),
       skip_compliance: z.boolean().optional().describe("Request backend compliance bypass. Only honored for platform admins; default false."),
@@ -295,40 +319,53 @@ export function registerProjectTools(
       confirm: CONFIRM,
       dry_run: DRY_RUN,
     },
-    async ({ app_id, name, description, template_repo, private_repo, reuse_existing_repo, skip_compliance, verify, confirm, dry_run }) => {
+    async ({ app_id, name, description, template_repo, allow_unapproved_template, private_repo, reuse_existing_repo, skip_compliance, verify, confirm, dry_run }) => {
       const auth = requireAuth();
       if ('content' in auth) return auth;
       const reuse = reuse_existing_repo !== false;
+      // #178: selection contract — before any preview, mutation or GitHub call.
+      const isAdmin = auth.roles.includes("admin");
+      const selection = selectTemplate(template_repo, { allowUnapproved: allow_unapproved_template === true && isAdmin });
+      if (!selection.ok) {
+        return text(`Refused: ${selection.reason} Call list_templates to see the catalogue.${allow_unapproved_template && !isAdmin ? " allow_unapproved_template requires a platform admin session." : ""}`);
+      }
+      const templateId = selection.template?.id ?? template_repo ?? DEFAULT_TEMPLATE_ID;
+      const templateRepoName = selection.template ? selection.template.repo.split("/")[1]! : (template_repo ?? DEFAULT_TEMPLATE_ID);
+      const templateRef = selection.template?.ref ?? "main";
+      const templateWarnings = selection.warnings.map((w) => `! template: ${w}`);
       const preview = await dry(
         "provision_pas_app",
         dry_run,
         [
-          `- create GitHub repo ${org}/${app_id} from ${org}/${template_repo ?? "template-app"} if it does not exist`,
+          `- template: ${templateId} (${org}/${templateRepoName}@${templateRef}, ${selection.template ? `${selection.template.status}, reviewed commit ${selection.template.release.source_commit.slice(0, 7)}` : "NOT in the approved catalogue — admin override"})`,
+          ...templateWarnings,
+          `- create GitHub repo ${org}/${app_id} from ${org}/${templateRepoName} if it does not exist`,
           reuse ? "- reuse an existing repo only when the caller already owns the PAS app or is a platform admin" : "- fail if the repo already exists",
           "- configure R2 deploy variables on the repo",
           "- replace APPNAME placeholders in template files",
           "- call /v1/provision for R2 route + D1 database + data worker + app record",
           verify === false ? "- skip live verification" : "- verify repo, provision result, deploy status, and host response",
         ].join("\n"),
-        { app_id, name, template_repo: template_repo ?? "template-app" },
+        { app_id, name, template: templateId, template_repo: templateRepoName },
       );
       if (preview) return text(preview);
       if (confirm !== true) {
         return text(`Refused: provision_pas_app creates/reuses ${org}/${app_id} and provisions live PAS infrastructure. Re-call with confirm: true to proceed.`);
       }
-      await gate("provision_pas_app", { app_id, name, template_repo: template_repo ?? "template-app" });
+      await gate("provision_pas_app", { app_id, name, template: templateId, template_repo: templateRepoName });
 
       const steps: string[] = [];
       let repoCreated = false;
       const createRes = await gh.createRepoFromTemplate(app_id, {
-        template: template_repo ?? "template-app",
+        template: templateRepoName,
         description,
         private: private_repo ?? true,
       });
 
       if (createRes.ok) {
         repoCreated = true;
-        steps.push(`+ GitHub repo: created ${org}/${app_id} from ${org}/${template_repo ?? "template-app"}`);
+        steps.push(`+ GitHub repo: created ${org}/${app_id} from ${org}/${templateRepoName}`);
+        for (const w of templateWarnings) steps.push(w);
         await new Promise((r) => setTimeout(r, 4000));
       } else if (createRes.status === 422 && await gh.repoExists(app_id)) {
         if (!reuse) {
@@ -368,7 +405,7 @@ export function registerProjectTools(
       } else if (createRes.status === 404) {
         return text(
           `Error creating repo: GitHub returned 404 from the template-generate API. The source ` +
-          `template repo "${org}/${template_repo ?? "template-app"}" must exist and be marked as a GitHub template.`,
+          `template repo "${org}/${templateRepoName}" must exist and be marked as a GitHub template.`,
         );
       } else {
         return text(`Error creating repo: ${JSON.stringify(createRes.data)}`);
@@ -381,7 +418,19 @@ export function registerProjectTools(
 
       steps.push(...await patchTemplatePlaceholders(app_id));
 
-      const prov = await provisionDetailed(app_id, auth.token, { skipCompliance: skip_compliance ?? false });
+      // #178: record the exact template revision that was copied (or, for an
+      // adopted/reused repo, the template's current head — the best available
+      // provenance) and hand it to /v1/provision with the template id.
+      const templateRev = await resolveTemplateRev(templateRepoName, templateRef);
+      steps.push(templateRev
+        ? `+ Template revision: ${templateId}@${templateRev.slice(0, 12)}`
+        : `~ Template revision: could not resolve ${org}/${templateRepoName}@${templateRef} — recorded as unknown`);
+      const prov = await provisionDetailed(app_id, auth.token, {
+        skipCompliance: skip_compliance ?? false,
+        template: templateId,
+        ...(templateRev ? { templateRev } : {}),
+        ...(allow_unapproved_template && isAdmin && !selection.template ? { allowUnapprovedTemplate: true } : {}),
+      });
       if (prov.text) steps.push(prov.text);
 
       if (verify !== false) {
@@ -477,7 +526,11 @@ export function registerProjectTools(
       }
 
       // 4. Provision (route + D1 + data worker)
-      const provResult = await provision(app_id, auth.token);
+      // #178: scaffold_app always uses the default approved template; record which
+      // revision was copied.
+      const scaffoldTemplate = getTemplate(DEFAULT_TEMPLATE_ID)!;
+      const scaffoldRev = await resolveTemplateRev(scaffoldTemplate.repo.split("/")[1]!, scaffoldTemplate.ref);
+      const provResult = await provision(app_id, auth.token, { template: scaffoldTemplate.id, ...(scaffoldRev ? { templateRev: scaffoldRev } : {}) });
       if (provResult) steps.push(provResult);
 
       return text([

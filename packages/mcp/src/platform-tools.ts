@@ -13,6 +13,7 @@ import { getDeployStatus, pasApi } from "./api-helpers.js";
 import { buildSdkReferenceSections } from "./sdk-reference.js";
 import { fetchTools } from "./tool-loader.js";
 import { getRecipe } from "../../agent-teams/src/recipes.js";
+import { TEMPLATE_CATALOGUE, DEFAULT_TEMPLATE_ID, TEMPLATE_CATALOGUE_VERSION } from "@proappstore/build-core";
 
 export function registerPlatformTools(server: McpServer, env: Env) {
   // ── list_apps ──────────────────────────────────────────────
@@ -80,6 +81,39 @@ export function registerPlatformTools(server: McpServer, env: Env) {
         return `- ${icon} ${when} (${h.source})${applied}${detail}`;
       });
       return { content: [{ type: "text" as const, text: `${header}\n\n${lines.join("\n")}` }] };
+    }
+  );
+
+  // ── list_templates ─────────────────────────────────────────
+  // #178: read-only discovery of the approved-template catalogue for the
+  // create-app workflow. No auth, no side effects; the same data is public at
+  // https://docs.proappstore.online/templates/catalogue.json.
+  server.tool(
+    "list_templates",
+    "List the approved ProAppStore app templates and the selection contract: id, purpose, supported categories, required SDK/CLI/Node, capabilities, security/compliance status, maintainer, reviewed source commit, deprecation state, and which one is the default. Use before provision_pas_app; pass the template id as template_repo.",
+    { include_deprecated: z.boolean().optional().describe("Include deprecated and withdrawn templates. Default false.") },
+    async ({ include_deprecated }) => {
+      const templates = TEMPLATE_CATALOGUE.filter((t) => include_deprecated || t.status === "approved");
+      const lines = [
+        `# Approved templates (catalogue v${TEMPLATE_CATALOGUE_VERSION}) — default: ${DEFAULT_TEMPLATE_ID}`,
+        "Selection contract: unknown/withdrawn templates are rejected by provisioning; deprecated ones proceed with a warning; omit the template to get the default. The exact source commit copied is recorded on the app (apps.template_rev).",
+        "Public copy: https://docs.proappstore.online/templates/catalogue.json · guide: https://docs.proappstore.online/templates/",
+        "",
+      ];
+      for (const t of templates) {
+        lines.push(
+          `## ${t.id}${t.default ? " (default)" : ""} — ${t.title} [${t.status}]`,
+          `- repo: ${t.repo}@${t.ref} · reviewed source commit: ${t.release.source_commit} (${t.release.version})`,
+          `- purpose: ${t.purpose}`,
+          `- categories: ${t.supported_categories.join(", ")} · requires: sdk ${t.requires.sdk}; cli ${t.requires.cli}; node ${t.requires.node}; pnpm ${t.requires.pnpm}`,
+          `- capabilities: ${t.capabilities.join(", ")}`,
+          `- security/compliance: ${t.security_compliance.status} ${t.security_compliance.reviewed_at}; known deviations: ${t.security_compliance.known_deviations.join(", ") || "none"} — ${t.security_compliance.notes}`,
+          `- maintainer: ${t.maintainer.org} (${t.maintainer.contact}) · preview: ${t.preview.docs}`,
+          t.deprecation ? `- DEPRECATED since ${t.deprecation.since}: ${t.deprecation.reason}${t.deprecation.replaced_by ? ` → ${t.deprecation.replaced_by}` : ""}` : "",
+          "",
+        );
+      }
+      return { content: [{ type: "text" as const, text: lines.filter((l, i, a) => !(l === "" && a[i - 1] === "")).join("\n") }] };
     }
   );
 

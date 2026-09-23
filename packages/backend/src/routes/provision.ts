@@ -10,6 +10,7 @@ import {
 import type { Env } from '../types.js';
 import { requireUser, HttpError, TEAM_ROLES, type TeamRole } from '../lib/auth.js';
 import { provisionData } from '../lib/provision-data.js';
+import { selectTemplate, TEMPLATE_REV_RE } from '@proappstore/build-core';
 import { fetchRepoFiles, type RepoLocation } from '../lib/github-fetch.js';
 
 /**
@@ -43,6 +44,12 @@ interface ProvisionBody {
   repoOwner?: string;
   repoName?: string;
   ref?: string;
+  /** #178: catalogue id of the template the repo was created from (default: template-app). */
+  template?: string;
+  /** #178: exact source commit that was copied (7–40 hex). */
+  templateRev?: string;
+  /** #178: platform admins only — proceed with a template outside the approved catalogue. */
+  allowUnapprovedTemplate?: boolean;
 }
 
 export const provisionRoutes = new Hono<{ Bindings: Env }>();
@@ -107,9 +114,24 @@ provisionRoutes.post('/provision', async (c) => {
       console.warn(`provision rate limit unavailable, allowing: ${(e as Error).message}`);
     }
 
+    // #178: the template selection contract. Unknown or withdrawn templates are
+    // refused before any Cloudflare call; deprecated ones proceed with a recorded
+    // warning; omitting the template means the default. Admins may override an
+    // unknown template explicitly, and the override is recorded on the app row.
+    if (body.templateRev !== undefined && !TEMPLATE_REV_RE.test(String(body.templateRev))) {
+      return c.text('templateRev must be a git object id (7–40 hex chars)', 400);
+    }
+    const selection = selectTemplate(body.template, { allowUnapproved: body.allowUnapprovedTemplate === true && user.roles.includes('admin') });
+    if (!selection.ok) return c.text(`template: ${selection.reason}`, 400);
+    const templateId = selection.template?.id ?? body.template;
+    const templateRev = body.templateRev;
+
     const cfToken = c.env.CF_API_TOKEN;
     const cfAccount = c.env.CF_ACCOUNT_ID;
     const steps: Step[] = [];
+    if (selection.warnings.length > 0) {
+      steps.push({ name: 'template', status: 'ok', detail: `warning: ${selection.warnings.join('; ')}` });
+    }
 
     if (!cfToken || !cfAccount) {
       return c.text('Platform provisioning not configured (missing CF credentials)', 503);
@@ -194,6 +216,8 @@ provisionRoutes.post('/provision', async (c) => {
       db: c.env.DB,
       sessionSigningKey: c.env.SESSION_SIGNING_KEY,
       internalToken: c.env.INTERNAL_TOKEN ?? '',
+      ...(templateId ? { templateId } : {}),
+      ...(templateRev ? { templateRev } : {}),
     });
     steps.push(...data.steps);
     const dataWorkerUrl = data.dataWorkerUrl;

@@ -65,6 +65,8 @@ function hintForStep(name: string, detail: string): string | null {
 export async function publishApp(opts: PublishOptions): Promise<void> {
   const cwd = process.cwd();
   const pkg = readJsonIfExists<{ name?: string; description?: string }>(resolve(cwd, 'package.json'));
+  // #178: template provenance written by `pas create` (local, git-ignored).
+  const pasConfig = readJsonIfExists<{ template?: string; templateRev?: string }>(resolve(cwd, '.pas.json'));
   if (!pkg || !pkg.name) {
     process.stderr.write(
       'pas publish: no package.json with a `name` field in the current directory.\n' +
@@ -111,6 +113,8 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
         icon: opts.icon,
         iconBg: opts.iconBg,
         proFeatures,
+        ...(pasConfig?.template ? { template: pasConfig.template } : {}),
+        ...(pasConfig?.templateRev ? { templateRev: pasConfig.templateRev } : {}),
       }),
     });
   } catch (e) {

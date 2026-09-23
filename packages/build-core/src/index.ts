@@ -24,3 +24,13 @@ export type {
 } from './provision-rate-limit.js';
 export { mintSession, verifySession } from './session-jwt.js';
 export type { SessionClaims, NewSession } from './session-jwt.js';
+export {
+  DEFAULT_TEMPLATE_ID,
+  TEMPLATE_CATALOGUE,
+  TEMPLATE_CATALOGUE_VERSION,
+  TEMPLATE_REV_RE,
+  getTemplate,
+  selectTemplate,
+  templateCatalogueJson,
+} from './template-catalogue.js';
+export type { TemplateEntry, TemplateSelection, TemplateStatus } from './template-catalogue.js';

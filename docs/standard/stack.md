@@ -127,7 +127,7 @@ provides and are not restated here.
 
 **Rationale.** The deploy workflow, compliance checks, the CLI and the SDK are exercised against this toolchain. A hand-rolled project misses the workflows, `migrations.json`, `mcp.json` and `CLAUDE.md` the template ships, and each missing piece becomes its own audit failure.
 
-**Recommended implementation.** Run `pas create <app-id>` (see [CLI overview](../cli-overview.md#create)). Keep the root `package.json` `engines`, `packageManager` and the `prebuild` compliance hook the template generates. Swap the frontend framework inside `web/` if you wish; keep `web/dist` as the build output the deploy workflow locates.
+**Recommended implementation.** Run `pas create <app-id>` (see [CLI overview](../cli-overview.md#create)); the template comes from the [approved-template catalogue](../templates/index.md), which records the copied revision on the app. Keep the root `package.json` `engines`, `packageManager` and the `prebuild` compliance hook the template generates. Swap the frontend framework inside `web/` if you wish; keep `web/dist` as the build output the deploy workflow locates.
 
 **Conforming example.**
 

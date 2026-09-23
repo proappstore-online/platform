@@ -1,0 +1,283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.proappstore.online/templates/catalogue.schema.json",
+  "title": "ProAppStore approved-template catalogue",
+  "description": "Templates an app may be provisioned from, with the selection contract. Published copy of packages/build-core/src/template-catalogue.ts; the package's tests fail on drift. One entry per reviewed, maintained template \u2014 never populated for its own sake (#178).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "catalogue_version",
+    "default",
+    "selection_contract",
+    "templates"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "const": "https://docs.proappstore.online/templates/catalogue.schema.json"
+    },
+    "catalogue_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "default": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "selection_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unknown",
+        "withdrawn",
+        "deprecated",
+        "approved",
+        "omitted",
+        "recorded"
+      ],
+      "properties": {
+        "unknown": {
+          "type": "string"
+        },
+        "withdrawn": {
+          "type": "string"
+        },
+        "deprecated": {
+          "type": "string"
+        },
+        "approved": {
+          "type": "string"
+        },
+        "omitted": {
+          "type": "string"
+        },
+        "recorded": {
+          "type": "string"
+        }
+      }
+    },
+    "templates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/template"
+      }
+    }
+  },
+  "$defs": {
+    "template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "repo",
+        "ref",
+        "title",
+        "purpose",
+        "supported_categories",
+        "requires",
+        "capabilities",
+        "security_compliance",
+        "maintainer",
+        "release",
+        "preview",
+        "status",
+        "deprecation",
+        "default"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1
+        },
+        "supported_categories": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "requires": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sdk",
+            "cli",
+            "node",
+            "pnpm"
+          ],
+          "properties": {
+            "sdk": {
+              "type": "string"
+            },
+            "cli": {
+              "type": "string"
+            },
+            "node": {
+              "type": "string"
+            },
+            "pnpm": {
+              "type": "string"
+            }
+          }
+        },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "uniqueItems": true
+        },
+        "security_compliance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "reviewed_at",
+            "known_deviations",
+            "notes"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "reviewed",
+                "unreviewed"
+              ]
+            },
+            "reviewed_at": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            },
+            "known_deviations": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^PAS-(STACK|AUTH|DATA|INT|UI|OPS)-[0-9]{3}$"
+              },
+              "uniqueItems": true
+            },
+            "notes": {
+              "type": "string"
+            }
+          }
+        },
+        "maintainer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "org",
+            "contact"
+          ],
+          "properties": {
+            "org": {
+              "type": "string"
+            },
+            "contact": {
+              "type": "string"
+            }
+          }
+        },
+        "release": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "source_commit",
+            "released_at"
+          ],
+          "properties": {
+            "version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source_commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "released_at": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            }
+          }
+        },
+        "preview": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "docs",
+            "screenshot"
+          ],
+          "properties": {
+            "docs": {
+              "type": "string"
+            },
+            "screenshot": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "approved",
+            "deprecated",
+            "withdrawn"
+          ]
+        },
+        "deprecation": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "since",
+            "replaced_by",
+            "reason"
+          ],
+          "properties": {
+            "since": {
+              "type": "string"
+            },
+            "replaced_by": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        },
+        "default": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

@@ -436,6 +436,69 @@ describe('POST /v1/provision-data — appId ownership (#82)', () => {
   });
 });
 
+describe('POST /v1/provision — template selection contract (#178)', () => {
+  const post = (body: Record<string, unknown>, tok = TOK, db = mockD1()) =>
+    app.request('/v1/provision', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'tpl-app', skipCompliance: true, skipPublish: true, ...body }),
+    }, makeEnv({}, db));
+
+  it('refuses an unknown template with the approved list, touching no Cloudflare API', async () => {
+    const fetchSpy = multiFetch(); globalThis.fetch = fetchSpy;
+    const res = await post({ template: 'evil-template' });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toMatch(/unknown template "evil-template".*template-app/);
+    expect(fetchSpy.mock.calls.filter(([u]: [unknown]) => String(u).includes('api.cloudflare.com'))).toHaveLength(0);
+  });
+
+  it('refuses a non-admin override of an unknown template', async () => {
+    globalThis.fetch = multiFetch();
+    const res = await post({ template: 'evil-template', allowUnapprovedTemplate: true }, NON_ADMIN_TOK);
+    expect(res.status).toBe(400);
+  });
+
+  it('refuses a malformed templateRev', async () => {
+    globalThis.fetch = multiFetch();
+    const res = await post({ template: 'template-app', templateRev: 'main' });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain('templateRev');
+  });
+
+  it('records template id + copied revision on the app row', async () => {
+    const appStmt = mockStmt();
+    globalThis.fetch = multiFetch({ 'd1/database': { status: 200, body: { success: true, result: { uuid: 'db-1' } } } });
+    const res = await post({ template: 'template-app', templateRev: 'd8c2e08f32b8e30847b27c7092fd4b0e64341d2f' }, TOK, mockD1(appStmt));
+    expect(res.status).toBe(200);
+    const bind = appStmt.bind.mock.calls[0]!;
+    expect(bind[0]).toBe('tpl-app');
+    expect(bind[4]).toBe('template-app');
+    expect(bind[5]).toBe('d8c2e08f32b8e30847b27c7092fd4b0e64341d2f');
+    const data = await res.json() as { steps: { name: string; detail: string }[] };
+    expect(data.steps.find((s) => s.name === 'record_app')!.detail).toContain('template: template-app@d8c2e08f32b8e30847b27c7092fd4b0e64341d2f');
+  });
+
+  it('defaults to template-app when no template is named, with a null revision', async () => {
+    const appStmt = mockStmt();
+    globalThis.fetch = multiFetch({ 'd1/database': { status: 200, body: { success: true, result: { uuid: 'db-1' } } } });
+    const res = await post({}, TOK, mockD1(appStmt));
+    expect(res.status).toBe(200);
+    const bind = appStmt.bind.mock.calls[0]!;
+    expect(bind[4]).toBe('template-app');
+    expect(bind[5]).toBeNull();
+  });
+
+  it('lets a platform admin override an unknown template, and records the override as a warning step', async () => {
+    const appStmt = mockStmt();
+    globalThis.fetch = multiFetch({ 'd1/database': { status: 200, body: { success: true, result: { uuid: 'db-1' } } } });
+    const res = await post({ template: 'internal-experiment', allowUnapprovedTemplate: true, templateRev: 'abc1234' }, TOK, mockD1(appStmt));
+    expect(res.status).toBe(200);
+    const data = await res.json() as { steps: { name: string; detail: string }[] };
+    expect(data.steps.find((s) => s.name === 'template')!.detail).toContain('not in the approved catalogue');
+    expect(appStmt.bind.mock.calls[0]![4]).toBe('internal-experiment');
+  });
+});
+
 describe('POST /v1/provision — appId ownership (#82)', () => {
   it('403s when the appId is already claimed by someone else', async () => {
     const db = mockD1Claimed('gh:99');

@@ -6,7 +6,7 @@ Remote MCP server for AI agents to interact with the ProAppStore platform.
 - Dev: `npm install && npm run dev`
 - Deploy: `git push origin main` (auto-deploys via GitHub Actions)
 
-## Tools (38 static + dynamic per-app)
+## Tools (39 static + dynamic per-app)
 
 ### Platform tools (no auth required unless noted)
 
@@ -17,6 +17,7 @@ Remote MCP server for AI agents to interact with the ProAppStore platform.
 | `deploy_status` | None | Check GitHub Actions deploy status |
 | `schema_status` | Session token | Show an app's D1 migration status (#33) — recent migrate attempts + whether the latest applied or FAILED (surfaces schema drift). Owner-only |
 | `app_info` | None | Get app URLs, repo, data worker, status |
+| `list_templates` | None | Approved-template catalogue + selection contract (#178) — read-only; the same data as https://docs.proappstore.online/templates/catalogue.json. Pass an id as `template_repo` to `provision_pas_app`; unknown/withdrawn ids are refused, deprecated ones warn, and the copied source commit is recorded on the app |
 | `platform_guide` | None | Fetch skills.md (full platform guide) |
 | `sdk_reference` | None | Quick SDK reference (auth, db, storage, maps, AI, subscriptions, hooks, UI, recipes, design_system) |
 | `discover_tools` | None | List the per-app tools currently registered (the `<app>/<tool>` set) |

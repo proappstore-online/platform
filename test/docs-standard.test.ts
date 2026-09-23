@@ -274,3 +274,38 @@ describe('standard: machine-readable artifacts (#167)', () => {
     }
   });
 });
+
+/**
+ * #178 — the approved-template catalogue published beside the standard. The
+ * TS module in build-core is canonical; docs/templates/catalogue.json is its
+ * generated copy and must validate, cite real clauses, and never drift.
+ */
+describe('templates: approved-template catalogue (#178)', () => {
+  const ROOT = resolve(__dirname, '..');
+  const TEMPLATES = join(DOCS, 'templates');
+  const catalogue = JSON.parse(readFileSync(join(TEMPLATES, 'catalogue.json'), 'utf8'));
+  const schema = JSON.parse(readFileSync(join(TEMPLATES, 'catalogue.schema.json'), 'utf8'));
+
+  it('validates against its schema and the generator --check passes', () => {
+    expect(validate(schema, catalogue)).toEqual([]);
+    expect(() => execFileSync('node', ['--experimental-strip-types', 'scripts/build-template-catalogue.mjs', '--check'], { cwd: ROOT, stdio: 'pipe' })).not.toThrow();
+  });
+
+  it('cites only published, active clauses as known deviations, and names a default that exists', () => {
+    const std = JSON.parse(readFileSync(join(STANDARD, 'standard.json'), 'utf8'));
+    const active = new Set(std.clauses.filter((c: any) => c.status === 'active').map((c: any) => c.id));
+    for (const t of catalogue.templates) for (const d of t.security_compliance.known_deviations) expect(active.has(d), `${t.id} → ${d}`).toBe(true);
+    expect(catalogue.templates.some((t: any) => t.id === catalogue.default && t.default && t.status === 'approved')).toBe(true);
+  });
+
+  it('is discoverable: the page, the nav, and llms.txt link it, and its links resolve', () => {
+    expect(existsSync(join(TEMPLATES, 'index.md'))).toBe(true);
+    expect(readFileSync(join(DOCS, 'llms.txt'), 'utf8')).toContain('https://docs.proappstore.online/templates/catalogue.json');
+    expect(readFileSync(resolve(ROOT, '.github/workflows/publish-docs.yml'), 'utf8')).toContain('templates/index.md');
+    for (const m of withoutFences(readFileSync(join(TEMPLATES, 'index.md'), 'utf8')).matchAll(/\]\(([^)\s]+)\)/g)) {
+      const t = m[1]!;
+      if (/^(https?:|#)/.test(t)) continue;
+      expect(existsSync(resolve(TEMPLATES, t.split('#')[0]!)), `templates/index.md → ${t}`).toBe(true);
+    }
+  });
+});

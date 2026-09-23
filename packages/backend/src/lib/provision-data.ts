@@ -15,6 +15,10 @@ export interface ProvisionDataArgs {
   /** INTERNAL_TOKEN — bound on the data-worker so it trusts the platform
    *  actions-executor. Empty string leaves the internal path inert (fail-closed). */
   internalToken?: string;
+  /** #178: approved-template id the app was scaffolded from (validated by the caller). */
+  templateId?: string;
+  /** #178: exact source commit of the template that was copied (7–40 hex). */
+  templateRev?: string;
 }
 
 /**
@@ -30,7 +34,7 @@ export interface ProvisionDataArgs {
 export async function provisionData(
   args: ProvisionDataArgs,
 ): Promise<{ steps: Step[]; dataWorkerUrl: string; dbId: string }> {
-  const { appId, creatorId, creatorLabel, cfToken, cfAccount, db, sessionSigningKey, internalToken } = args;
+  const { appId, creatorId, creatorLabel, cfToken, cfAccount, db, sessionSigningKey, internalToken, templateId, templateRev } = args;
   const steps: Step[] = [];
 
   // 1. Create D1 database (skip if it already exists)
@@ -101,13 +105,17 @@ export async function provisionData(
     try {
       await db
         .prepare(
-          `INSERT INTO apps (id, creator_id, d1_database_id, created_at) VALUES (?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET d1_database_id = excluded.d1_database_id
-           WHERE apps.d1_database_id IS NULL OR apps.d1_database_id = ''`,
+          `INSERT INTO apps (id, creator_id, d1_database_id, created_at, template_id, template_rev) VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             d1_database_id = CASE WHEN apps.d1_database_id IS NULL OR apps.d1_database_id = '' THEN excluded.d1_database_id ELSE apps.d1_database_id END,
+             template_id = COALESCE(apps.template_id, excluded.template_id),
+             template_rev = COALESCE(apps.template_rev, excluded.template_rev)`,
         )
-        .bind(appId, creatorId, dbId, Date.now())
+        .bind(appId, creatorId, dbId, Date.now(), templateId ?? null, templateRev ?? null)
         .run();
-      steps.push({ name: 'record_app', status: 'ok', detail: `creator: ${creatorLabel ?? creatorId}` });
+      // #178: the template + revision are recorded once (first provision wins) so a
+      // re-provision can never rewrite the provenance of an existing app.
+      steps.push({ name: 'record_app', status: 'ok', detail: `creator: ${creatorLabel ?? creatorId}${templateId ? `; template: ${templateId}@${templateRev ?? 'unknown'}` : ''}` });
 
       // Auto-create a dev services profile for the creator (no-op if exists)
       try {

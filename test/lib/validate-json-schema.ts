@@ -1,6 +1,6 @@
 /**
  * A deliberately small JSON Schema (2020-12) validator covering exactly the
- * subset docs/standard/*.schema.json uses: type, properties, required,
+ * subset the docs schemas use: type (string or array of strings), properties, required,
  * additionalProperties (boolean), items, enum, const, pattern, minLength,
  * minimum, minItems, uniqueItems, oneOf, $ref to #/$defs/*. No dependency, no
  * format/conditional keywords — keep the schemas inside this subset or extend
@@ -27,8 +27,11 @@ export function validate(schema: Schema, value: Json, root: Schema = schema, pat
   if (schema.enum && !(schema.enum as Json[]).some((e) => e === value)) errors.push(`${path}: ${JSON.stringify(value)} not in enum`);
   if (schema.type) {
     const t = Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value;
-    const ok = schema.type === 'integer' ? typeof value === 'number' && Number.isInteger(value) : t === schema.type;
-    if (!ok) { errors.push(`${path}: expected ${schema.type}, got ${t}`); return errors; }
+    const matches = (want: string) => (want === 'integer' ? typeof value === 'number' && Number.isInteger(value) : t === want);
+    const wanted: string[] = Array.isArray(schema.type) ? schema.type : [schema.type];
+    if (!wanted.some(matches)) { errors.push(`${path}: expected ${wanted.join('|')}, got ${t}`); return errors; }
+    // A nullable object/array: nothing below applies to null.
+    if (value === null) return errors;
   }
   if (typeof value === 'string') {
     if (schema.minLength !== undefined && value.length < schema.minLength) errors.push(`${path}: shorter than minLength ${schema.minLength}`);

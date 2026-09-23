@@ -1,0 +1,68 @@
+{
+  "$schema": "https://docs.proappstore.online/templates/catalogue.schema.json",
+  "catalogue_version": "1.0",
+  "default": "template-app",
+  "selection_contract": {
+    "unknown": "rejected (platform admins may override explicitly; the override is recorded)",
+    "withdrawn": "rejected (admin override only)",
+    "deprecated": "allowed with a warning that the caller must surface",
+    "approved": "allowed",
+    "omitted": "the default template (template-app) is used",
+    "recorded": "apps.template_id and apps.template_rev hold the template id and the exact source commit copied at provision time"
+  },
+  "templates": [
+    {
+      "id": "template-app",
+      "repo": "proappstore-online/template-app",
+      "ref": "main",
+      "title": "ProAppStore app template",
+      "purpose": "The canonical Pro app scaffold: React 19 + Vite 8 + Tailwind 4 web/ workspace, @proappstore/sdk, registered actions (mcp.json), additive D1 migrations (migrations.json), PWA manifest and service worker, the keyless deploy / CI / compliance workflows, and the design tokens. Suits any app category.",
+      "supported_categories": [
+        "any"
+      ],
+      "requires": {
+        "sdk": ">=1.16.0 (template pins ^1.9.0; resolves to the latest 1.x on install)",
+        "cli": ">=2.6.0",
+        "node": ">=22",
+        "pnpm": "10.x"
+      },
+      "capabilities": [
+        "platform-auth",
+        "registered-actions",
+        "d1-migrations",
+        "pwa",
+        "design-tokens",
+        "keyless-oidc-deploy",
+        "ci-typecheck",
+        "compliance-workflow",
+        "app-shell"
+      ],
+      "security_compliance": {
+        "status": "reviewed",
+        "reviewed_at": "2026-09-23",
+        "known_deviations": [
+          "PAS-AUTH-001",
+          "PAS-UI-002",
+          "PAS-UI-007"
+        ],
+        "notes": "Template actions list_items/get_item are scoped to the calling user (d8c2e08). Known deviations an app must fix on day one: initPro() is called without authMode (PAS-AUTH-001), the theme boot script reads fas:theme instead of stores-theme (PAS-UI-002), and the viewport meta ships user-scalable=no (PAS-UI-007). Tracked for the template repository."
+      },
+      "maintainer": {
+        "org": "proappstore-online",
+        "contact": "https://github.com/proappstore-online/platform/issues"
+      },
+      "release": {
+        "version": "2026.09.23",
+        "source_commit": "d8c2e08f32b8e30847b27c7092fd4b0e64341d2f",
+        "released_at": "2026-09-23"
+      },
+      "preview": {
+        "docs": "https://docs.proappstore.online/getting-started/",
+        "screenshot": null
+      },
+      "status": "approved",
+      "deprecation": null,
+      "default": true
+    }
+  ]
+}

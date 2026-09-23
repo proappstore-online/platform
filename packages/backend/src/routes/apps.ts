@@ -25,6 +25,8 @@ interface AppRow {
   created_at: number;
   /** Caller's effective team role for this app ('owner' for the creator). */
   team_role?: string | null;
+  template_id?: string | null;
+  template_rev?: string | null;
 }
 
 interface SubmissionMetaRow {
@@ -45,6 +47,10 @@ interface AppDto {
   creator_id: string;
   created_at: number;
   d1_database_id: string;
+  /** #178: approved-template id the app was provisioned from; null before the catalogue existed. */
+  template_id: string | null;
+  /** #178: exact template source commit copied at provision time. */
+  template_rev: string | null;
   name: string;
   category: string | null;
   description: string | null;
@@ -135,6 +141,8 @@ appsRoutes.get('/apps', async (c) => {
         creator_id: a.creator_id,
         created_at: a.created_at,
         d1_database_id: a.d1_database_id,
+        template_id: a.template_id ?? null,
+        template_rev: a.template_rev ?? null,
         name: sub?.name ?? toTitleCase(a.id),
         category: sub?.category ?? null,
         description: sub?.description ?? null,

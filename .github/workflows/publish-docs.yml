@@ -135,6 +135,7 @@ jobs:
             - Recipes: recipes.md
             - CLI: cli-overview.md
             - Publishing: publishing-flow.md
+            - Approved templates: templates/index.md
             - MCP App Tools: mcp-app-tools.md
             - Agent Customization: agent-customization.md
             - Architecture: architecture.md

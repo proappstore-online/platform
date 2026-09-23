@@ -23,7 +23,7 @@ Rationale: The deploy workflow, compliance checks, the CLI and the SDK are exerc
 
 *
 
-Recommended implementation: Run `pas create <app-id>` (see [CLI overview](../cli-overview.md#create)). Keep the root `package.json` `engines`, `packageManager` and the `prebuild` compliance hook the template generates. Swap the frontend framework inside `web/` if you wish; keep `web/dist` as the build output the deploy workflow locates.
+Recommended implementation: Run `pas create <app-id>` (see [CLI overview](../cli-overview.md#create)); the template comes from the [approved-template catalogue](../templates/index.md), which records the copied revision on the app. Keep the root `package.json` `engines`, `packageManager` and the `prebuild` compliance hook the template generates. Swap the frontend framework inside `web/` if you wish; keep `web/dist` as the build output the deploy workflow locates.
 
 *
 

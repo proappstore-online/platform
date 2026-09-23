@@ -25,7 +25,10 @@ const mockGh = {
   getDeployStatus: vi.fn(),
   setRepoVariable: vi.fn(),
 };
-vi.mock('@proappstore/build-core', () => ({
+vi.mock('@proappstore/build-core', async (importOriginal) => ({
+  // #178: keep the real template catalogue + selection contract; mock only the
+  // GitHub client and the ownership check.
+  ...(await importOriginal<typeof import('@proappstore/build-core')>()),
   makeGitHub: () => mockGh,
   verifyAppOwnership: vi.fn(),
 }));
@@ -79,6 +82,80 @@ beforeEach(() => {
   vi.clearAllMocks();
   userCtx = { userId: 'u1', login: 'alice', token: 'tok-1' };
   mockOwnership.mockResolvedValue(true);
+});
+
+describe('provision_pas_app — template selection contract (#178)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+  const args = { app_id: 'school-clubs', name: 'School Clubs', description: 'Coordinate school clubs.' };
+  const run = async (extra: Record<string, unknown> = {}) => {
+    const p = tools.get('provision_pas_app')!({ confirm: true, verify: false, ...args, ...extra });
+    await vi.advanceTimersByTimeAsync(5000);
+    return p;
+  };
+  const okProvision = () => mockFetch.mockResolvedValue({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify({ success: true, steps: [] })) });
+
+  it('refuses an unknown template before any GitHub or provisioning call, even in dry_run', async () => {
+    const out = getText(await tools.get('provision_pas_app')!({ ...args, template_repo: 'evil-template', dry_run: true }));
+    expect(out).toContain('Refused: unknown template "evil-template"');
+    expect(out).toContain('template-app');
+    expect(out).toContain('list_templates');
+    expect(mockGh.createRepoFromTemplate).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-admin override of an unknown template', async () => {
+    const out = getText(await run({ template_repo: 'evil-template', allow_unapproved_template: true }));
+    expect(out).toContain('Refused');
+    expect(out).toContain('requires a platform admin session');
+    expect(mockGh.createRepoFromTemplate).not.toHaveBeenCalled();
+  });
+
+  it('shows the template, its status and reviewed commit in the dry-run plan', async () => {
+    const out = getText(await tools.get('provision_pas_app')!({ ...args, dry_run: true }));
+    expect(out).toMatch(/template: template-app \(test-org\/template-app@main, approved, reviewed commit [0-9a-f]{7}\)/);
+  });
+
+  it('records the copied template revision and forwards template + rev to /v1/provision', async () => {
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
+    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
+    mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
+    mockGh.api.mockResolvedValue({ ok: true, status: 200, data: { sha: 'd8c2e08f32b8e30847b27c7092fd4b0e64341d2f' } });
+    okProvision();
+    const out = getText(await run());
+    expect(mockGh.api).toHaveBeenCalledWith('/repos/test-org/template-app/commits/main');
+    expect(out).toContain('+ Template revision: template-app@d8c2e08f32b8');
+    const body = JSON.parse((mockFetch.mock.calls.find((c) => String(c[0]).includes('/v1/provision'))![1] as RequestInit).body as string);
+    expect(body).toMatchObject({ template: 'template-app', templateRev: 'd8c2e08f32b8e30847b27c7092fd4b0e64341d2f' });
+    expect(body.allowUnapprovedTemplate).toBeUndefined();
+  });
+
+  it('never invents a revision: an unresolved head is reported as unknown and omitted from the payload', async () => {
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
+    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
+    mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
+    mockGh.api.mockResolvedValue({ ok: false, status: 500, data: {} });
+    okProvision();
+    const out = getText(await run());
+    expect(out).toContain('~ Template revision: could not resolve');
+    const body = JSON.parse((mockFetch.mock.calls.find((c) => String(c[0]).includes('/v1/provision'))![1] as RequestInit).body as string);
+    expect(body.template).toBe('template-app');
+    expect(body.templateRev).toBeUndefined();
+  });
+
+  it('scaffold_app forwards the default template and its revision too', async () => {
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
+    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
+    mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
+    mockGh.api.mockResolvedValue({ ok: true, status: 200, data: { sha: 'abc1234' } });
+    okProvision();
+    const p = tools.get('scaffold_app')!({ ...args, confirm: true });
+    await vi.advanceTimersByTimeAsync(10000);
+    await p;
+    const call = mockFetch.mock.calls.find((c) => String(c[0]).includes('/v1/provision'));
+    expect(call).toBeDefined();
+    expect(JSON.parse((call![1] as RequestInit).body as string)).toMatchObject({ template: 'template-app', templateRev: 'abc1234' });
+  });
 });
 
 describe('provision_pas_app', () => {
