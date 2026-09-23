@@ -45,9 +45,11 @@ https://mcp.proappstore.online/mcp
 
 ## Agent Skills
 
-Open-format skills that orchestrate these tools (e.g. `create-proappstore-app`:
+Open-format skills that orchestrate these tools (`create-proappstore-app`:
 gather inputs, choose an approved template, dry-run `provision_pas_app`,
-confirm, provision, verify) live in the platform repository under
+confirm, provision, verify; `choose-proappstore-architecture`: map requirements
+to platform primitives with `sdk_reference` / `recipe`, read-only) live in the
+platform repository under
 [`skills/`](https://github.com/proappstore-online/platform/tree/main/skills).
 Copy a skill directory into your client's skills location and connect this
 server.

@@ -3,7 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * Agent Skills validation (#170, foundation for #169). Every directory under
+ * Agent Skills validation (#170, foundation for #169; generalised for #171). Every directory under
  * skills/ must be a spec-conformant skill (https://agentskills.io/specification):
  * frontmatter shape, name = directory, narrow description, short body, live
  * file references, a minimal MCP-only allow-list, no secrets, no duplicate
@@ -57,6 +57,18 @@ const TOOLS = mcpToolNames();
 /** Mutating tools a skill may never pre-approve, except the two provisioners. */
 const FORBIDDEN_TOOL_RE = /^(write_|delete_|set_|batch_write|publish_app$|provision_app$|create_app$|deploy_project$|add_ticket$|update_ticket$|run_tests$|qa_save_flow$|qa_delete_flow$|qa_mint_key$|build_knowledge_base$|chat_agent$|write_project_files$|delete_project_files$)/;
 const PROVISIONERS = new Set(['provision_pas_app', 'scaffold_app']);
+/** A skill "mutates" when it pre-approves a provisioner; advisory skills are read-only. */
+const mutates = (s: Skill) => (s.fm['allowed-tools'] ?? '').split(/\s+/).some((t) => PROVISIONERS.has(t));
+/** Tool parameters and /v1/provision step names that legitimately appear in backticks. */
+const PARAMS = new Set(['app_id', 'template_repo', 'allow_unapproved_template', 'private_repo', 'reuse_existing_repo', 'skip_compliance', 'dry_run', 'template_id', 'template_rev', 'known_deviations', 'security_compliance', 'include_deprecated', 'confirm', 'verify', 'create_d1', 'deploy_worker', 'record_app', 'app_roles', 'platform_roles', 'caller_unscoped', 'requires_auth']);
+/** `sdk_reference` feature names, read from the tool's enum. */
+function sdkFeatures(): Set<string> {
+  const src = readFileSync(join(ROOT, 'packages/mcp/src/platform-tools.ts'), 'utf8');
+  const m = /feature:\s*z\.enum\(\[([\s\S]*?)\]\)/.exec(src);
+  if (!m) throw new Error('sdk_reference feature enum not found');
+  return new Set([...m[1]!.matchAll(/"([a-z_]+)"/g)].map((x) => x[1]!));
+}
+const SDK_FEATURES = sdkFeatures();
 const SECRET_RE = /(sk-[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{10,}|github_pat_[A-Za-z0-9_]{10,}|\bBearer\s+[A-Za-z0-9._-]{16,}|\b[0-9a-f]{32,}\b|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY)/;
 
 function skillFiles(dir: string): string[] {
@@ -100,7 +112,11 @@ describe.each(skills)('skill $dir', (s) => {
     expect(d.length).toBeGreaterThan(0);
     expect(d.length).toBeLessThanOrEqual(1024);
     expect(d).toMatch(/Use when/i);
-    for (const kw of ['create', 'scaffold', 'provision', 'ProAppStore app']) expect(d, `description lacks "${kw}"`).toContain(kw);
+    // Each skill declares its own trigger phrases in metadata.triggers; the
+    // description must carry every one so clients match narrowly on them.
+    const triggers = (s.metadata.triggers ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+    expect(triggers.length, 'metadata.triggers is required').toBeGreaterThan(0);
+    for (const kw of triggers) expect(d.toLowerCase(), `description lacks trigger "${kw}"`).toContain(kw.toLowerCase());
     expect(s.fm.license).toBe('MIT');
     expect(s.metadata.author).toBeTruthy();
     expect(s.metadata.version).toMatch(/^\d+\.\d+$/);
@@ -131,23 +147,30 @@ describe.each(skills)('skill $dir', (s) => {
     for (const bad of ['write_file', 'delete_file', 'set_model', 'batch_write_files', 'publish_app']) expect(allowed).not.toContain(bad);
   });
 
-  it('names only MCP tools that exist, and mandates dry_run before confirm', () => {
-    // Backticked snake_case identifiers that are not tool *parameters* must be
-    // registered MCP tools — a skill that names a tool the server lacks sends
-    // the agent down a dead end.
-    // Tool parameters and /v1/provision step names that legitimately appear in backticks.
-    const PARAMS = new Set(['app_id', 'template_repo', 'allow_unapproved_template', 'private_repo', 'reuse_existing_repo', 'skip_compliance', 'dry_run', 'template_id', 'template_rev', 'known_deviations', 'security_compliance', 'include_deprecated', 'confirm', 'verify', 'create_d1', 'deploy_worker', 'record_app']);
-    const named = [...s.body.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)].map((m) => m[1]!).filter((n) => !PARAMS.has(n));
+  it('names only MCP tools that exist', () => {
+    // Backticked snake_case identifiers that are not tool *parameters* (or
+    // sdk_reference feature names) must be registered MCP tools — a skill that
+    // names a tool the server lacks sends the agent down a dead end.
+    const named = [...s.body.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)].map((m) => m[1]!).filter((n) => !PARAMS.has(n) && !SDK_FEATURES.has(n));
     for (const n of new Set(named)) expect(TOOLS.has(n), `body names unknown tool \`${n}\``).toBe(true);
-    // In the workflow itself the dry-run step must come before the confirmed run.
-    const workflow = s.body.slice(s.body.indexOf('## Workflow'));
-    const dry = workflow.indexOf('dry_run: true');
-    const confirm = workflow.indexOf('confirm: true');
-    expect(dry).toBeGreaterThan(-1);
-    expect(confirm).toBeGreaterThan(dry);
-    expect(s.body).toMatch(/Never call `provision_pas_app` with\s+`confirm: true` until/);
-    expect(s.body).toMatch(/read-only mode/i);
-    expect(s.body).toMatch(/known deviations/i);
+  });
+
+  it(mutates(s) ? 'mandates dry_run before confirm and degrades in read-only mode' : 'is read-only: pre-approves no mutating tool and never asks to confirm a write', () => {
+    if (mutates(s)) {
+      // In the workflow itself the dry-run step must come before the confirmed run.
+      const workflow = s.body.slice(s.body.indexOf('## Workflow'));
+      const dry = workflow.indexOf('dry_run: true');
+      const confirm = workflow.indexOf('confirm: true');
+      expect(dry).toBeGreaterThan(-1);
+      expect(confirm).toBeGreaterThan(dry);
+      expect(s.body).toMatch(/Never call `provision_pas_app` with\s+`confirm: true` until/);
+      expect(s.body).toMatch(/read-only mode/i);
+      expect(s.body).toMatch(/known deviations/i);
+    } else {
+      expect(s.body).not.toMatch(/confirm: true/);
+      expect(s.body).toMatch(/read-only/i);
+      expect(s.fm.compatibility ?? '').toMatch(/read-only/i);
+    }
   });
 
   it('never handles credentials or infrastructure directly', () => {
@@ -182,9 +205,15 @@ describe.each(skills)('skill $dir', (s) => {
     expect(existsSync(evalsPath)).toBe(true);
     const cases = JSON.parse(readFileSync(evalsPath, 'utf8')).cases as Array<{ id: string; class: string; blocker?: string }>;
     expect(new Set(cases.map((c) => c.id)).size).toBe(cases.length);
-    for (const cls of ['happy', 'template', 'confirm', 'rerun', 'blocker']) expect(cases.some((c) => c.class === cls), `no ${cls} case`).toBe(true);
+    for (const c of cases) expect(c.class, `${c.id} has no class`).toBeTruthy();
+    // Provisioning skills exercise the whole mutating lifecycle; advisory
+    // skills need their scenarios plus every blocker.
+    const required = mutates(s) ? ['happy', 'template', 'confirm', 'rerun', 'blocker'] : ['scenario', 'blocker'];
+    for (const cls of required) expect(cases.some((c) => c.class === cls), `no ${cls} case`).toBe(true);
     const negatives = readFileSync(join(SKILLS, s.dir, 'references', 'negative-cases.md'), 'utf8');
-    const classes = new Set([...negatives.matchAll(/\*\*(credentials|ownership|template|compliance)[^*]*\*\*/g)].map((m) => m[1]!));
+    // "Blocker: **class**" (optionally "class/qualifier") in negative-cases.md.
+    const classes = new Set([...negatives.matchAll(/Blocker[^*]{0,40}\*\*([a-z-]+)/g)].map((m) => m[1]!));
+    expect(classes.size, `${s.dir}: negative-cases.md names no blocker class`).toBeGreaterThan(0);
     for (const b of classes) expect(cases.some((c) => c.class === 'blocker' && c.blocker === b), `no fixture for blocker class ${b}`).toBe(true);
   });
 });

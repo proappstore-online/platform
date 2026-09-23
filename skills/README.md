@@ -10,6 +10,7 @@ tests or platform data access, and never carry credentials.
 | Skill | Use when | Tools it may call |
 |---|---|---|
 | [`create-proappstore-app`](./create-proappstore-app/SKILL.md) | creating, scaffolding or provisioning a **new** ProAppStore app | read-only MCP tools + `provision_pas_app` / `scaffold_app` (dry-run → explicit confirm) |
+| [`choose-proappstore-architecture`](./choose-proappstore-architecture/SKILL.md) | choosing the **architecture and platform services** for a ProAppStore app — which primitive serves each need, what is unsupported, the trade-offs, a bounded decision citing the standard | read-only MCP tools only (`sdk_reference`, `recipe`, `platform_guide`, `list_templates`, `app_info`, `discover_tools`, `schema_status`, `whoami`) |
 
 ## Install (until the plugin package lands — issue #169)
 
@@ -34,5 +35,7 @@ no client-specific copies.
   [Application Standard](https://docs.proappstore.online/standard/); platform
   rules are cited, not restated.
 - `test/skills.test.ts` validates every skill (format, links, tool allow-list,
-  secret shapes, duplicates, dry-run-before-confirm) and each skill ships
-  machine-checked evaluations.
+  secret shapes, duplicates, dry-run-before-confirm for mutating skills,
+  read-only for advisory ones) and each skill ships machine-checked
+  evaluations (`evals/cases.json`; e.g. `packages/mcp/src/skill-create-app.evals.test.ts`,
+  `test/skills-architecture.evals.test.ts`).

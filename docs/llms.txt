@@ -5,6 +5,7 @@
 ## Agent Skills (workflows for AI clients)
 
 - [create-proappstore-app](https://github.com/proappstore-online/platform/blob/main/skills/create-proappstore-app/SKILL.md): Open Agent Skills workflow to create, scaffold and provision a new ProAppStore app through the MCP server — gather inputs, pick an approved template, dry-run `provision_pas_app`, confirm, provision, verify. Index: [skills/README.md](https://github.com/proappstore-online/platform/blob/main/skills/README.md).
+- [choose-proappstore-architecture](https://github.com/proappstore-online/platform/blob/main/skills/choose-proappstore-architecture/SKILL.md): read-only Agent Skill to choose the architecture and platform services for a ProAppStore app — maps each requirement to the platform primitive (registered actions on D1, `app.kv`, `app.counters`, `app.storage`, `app.rooms`, `app.roles`, the proxy and integrations), names unsupported needs with the interim pattern, explains trade-offs, and produces a bounded decision citing the Application Standard.
 
 ## Application Standard (audit an app)
 

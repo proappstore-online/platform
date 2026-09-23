@@ -302,8 +302,12 @@ Workflows that drive these tools from an AI client are published as open
 repository under `skills/` — currently
 [`create-proappstore-app`](https://github.com/proappstore-online/platform/blob/main/skills/create-proappstore-app/SKILL.md)
 (gather inputs → `list_templates` → `provision_pas_app` dry-run → explicit
-confirm → provision → verify). Skills carry no credentials, call only a
-minimal allow-list of MCP tools, and are validated by `test/skills.test.ts`.
+confirm → provision → verify) and
+[`choose-proappstore-architecture`](https://github.com/proappstore-online/platform/blob/main/skills/choose-proappstore-architecture/SKILL.md)
+(requirements → decision tables → unsupported needs → `sdk_reference` /
+`recipe` verification → a bounded architecture decision citing the standard;
+read-only). Skills carry no credentials, call only a minimal allow-list of MCP
+tools, and are validated by `test/skills.test.ts`.
 
 ## Limits & roadmap
 

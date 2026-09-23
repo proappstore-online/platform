@@ -1,0 +1,187 @@
+{
+  "$comment": "Content evaluations for choose-proappstore-architecture (#171). test/skills-architecture.evals.test.ts checks, per scenario, that the recommended primitives appear in the decision tables, the cited clauses exist and are active in docs/standard/standard.json and are cited by the skill, unsupported needs are named in unsupported-requirements.md, the rejected substitutes are listed as 'do not use', and a worked example exists.",
+  "cases": [
+    {
+      "id": "simple-crud",
+      "title": "personal notes app: D1 actions, search, counters, KV prefs",
+      "requirements": "one user's notes with tags, search, favourites count, theme preference",
+      "expect": {
+        "primitives": [
+          "app.actions",
+          "app.counters",
+          "app.kv"
+        ],
+        "clauses": [
+          "PAS-STACK-007",
+          "PAS-DATA-007",
+          "PAS-DATA-010",
+          "PAS-STACK-009",
+          "PAS-STACK-010"
+        ],
+        "unsupported": [],
+        "rejected": [
+          "Firestore",
+          "localStorage"
+        ],
+        "recipes": [
+          "crud-list",
+          "search-filter"
+        ]
+      },
+      "class": "scenario"
+    },
+    {
+      "id": "multi-tenant",
+      "title": "agency CRM: membership scoping, roles, invites, batch, export",
+      "requirements": "agencies with members and roles; leads per org; CSV export; manager-only delete",
+      "expect": {
+        "primitives": [
+          "app.actions",
+          "app.roles",
+          "app.invites"
+        ],
+        "clauses": [
+          "PAS-DATA-007",
+          "PAS-STACK-011",
+          "PAS-AUTH-013",
+          "PAS-AUTH-014",
+          "PAS-DATA-009",
+          "PAS-DATA-012"
+        ],
+        "unsupported": [],
+        "rejected": [
+          "client-supplied tenant id"
+        ],
+        "recipes": [
+          "roles-rbac",
+          "data-table"
+        ]
+      },
+      "class": "scenario"
+    },
+    {
+      "id": "realtime-collab",
+      "title": "shared whiteboard: rooms for cursors/chat, actions for the record",
+      "requirements": "live cursors and chat for 20 people; boards persist; owner lock",
+      "expect": {
+        "primitives": [
+          "app.rooms",
+          "app.actions"
+        ],
+        "clauses": [
+          "PAS-STACK-013",
+          "PAS-DATA-017",
+          "PAS-DATA-008"
+        ],
+        "unsupported": [
+          "Server-authoritative realtime state"
+        ],
+        "rejected": [
+          "Pusher",
+          "Firebase RTDB"
+        ],
+        "recipes": [
+          "realtime-chat"
+        ]
+      },
+      "class": "scenario"
+    },
+    {
+      "id": "file-heavy",
+      "title": "document library: storage with D1 metadata, permissions, safe rendering",
+      "requirements": "PDFs and images to 40 MB, private by default, public links, folder permissions, previews",
+      "expect": {
+        "primitives": [
+          "app.storage",
+          "app.actions"
+        ],
+        "clauses": [
+          "PAS-STACK-012",
+          "PAS-DATA-013",
+          "PAS-UI-016",
+          "PAS-DATA-007"
+        ],
+        "unsupported": [
+          "Files over 50 MB"
+        ],
+        "rejected": [
+          "base64 in D1",
+          "S3/Cloudinary"
+        ],
+        "recipes": [
+          "file-upload"
+        ]
+      },
+      "class": "scenario"
+    },
+    {
+      "id": "background-work",
+      "title": "expiring tournament games: no cron \u2014 idempotent privileged sweep",
+      "requirements": "games idle 15 minutes must be marked abandoned even if nobody is watching",
+      "expect": {
+        "primitives": [
+          "app.actions"
+        ],
+        "clauses": [
+          "PAS-DATA-019",
+          "PAS-DATA-018"
+        ],
+        "unsupported": [
+          "Scheduled / background execution",
+          "Trusted server-side app code"
+        ],
+        "rejected": [
+          "browser timers",
+          "external cron"
+        ],
+        "recipes": []
+      },
+      "class": "scenario"
+    },
+    {
+      "id": "blocker-unsupported-cron",
+      "class": "blocker",
+      "blocker": "unsupported-requirement",
+      "title": "weekly digest: no cron \u2014 interim sweep action, cite #123",
+      "requirements": "send a digest every Monday",
+      "expect": {
+        "unsupported": [
+          "Scheduled / background execution"
+        ],
+        "clauses": [
+          "PAS-DATA-019"
+        ],
+        "rejected": [
+          "browser timers",
+          "external cron"
+        ],
+        "issue": "#123"
+      }
+    },
+    {
+      "id": "blocker-fabricated-api",
+      "class": "blocker",
+      "blocker": "verification",
+      "title": "app.storage.resize() does not exist \u2014 say so",
+      "requirements": "resize images on upload with app.storage.resize()",
+      "expect": {
+        "absent_methods": [
+          "resize"
+        ],
+        "feature": "storage"
+      }
+    },
+    {
+      "id": "blocker-tenancy-undecided",
+      "class": "blocker",
+      "blocker": "product-decision",
+      "title": "Tailored vs Ready undecided \u2014 present trade-offs and stop",
+      "requirements": "unclear whether customers share a deployment",
+      "expect": {
+        "docs": [
+          "tailored-vs-ready"
+        ]
+      }
+    }
+  ]
+}
