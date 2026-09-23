@@ -3275,18 +3275,6 @@ paths:
           application/json:
             schema:
               type: object
-  /v1/tools:
-    get:
-      tags:
-      - Tools
-      summary: List tools
-      description: Public, allowlisted view of every app's registered tools (name, description, operation, params, requires_auth, auth roles) — never sql or statements (#158). Deprecated: consumed only by the shared MCP session until #157 lands; retired by #193. Prefer GET /v1/apps/{appId}/tools.
-      deprecated: true
-      operationId: get_v1_tools
-      responses:
-        '200':
-          description: Success
-      security: []
   /v1/usage/me:
     get:
       tags:

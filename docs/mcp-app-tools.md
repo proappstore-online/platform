@@ -13,20 +13,22 @@ story: agents *build* your app, and MCP makes the finished app *callable*.
 ## Current implementation
 
 ```
-your app repo                 platform backend            platform MCP server
-┌───────────────┐  publish    ┌──────────────┐  GET /v1/  ┌──────────────────┐
-│  mcp.json     ├────────────►│  app_tools   ├──tools────►│ mcp.proappstore  │
-│  (manifest)   │  registers  │  (D1 table)  │            │ .online/mcp      │
-└───────────────┘             └──────────────┘            └────────┬─────────┘
-                                                                    │ <app>/<tool>
-                                          data-<app>.proappstore ◄──┘  (actions → D1)
+your app repo                 platform backend              platform MCP server
+┌───────────────┐  publish    ┌──────────────┐ GET /v1/apps/ ┌────────────────────┐
+│  mcp.json     ├────────────►│  app_tools   ├──:id/tools───►│ mcp.proappstore    │
+│  (manifest)   │  registers  │  (D1 table)  │               │ .online/mcp/apps/<app_id> │
+└───────────────┘             └──────────────┘               └──────────┬─────────┘
+                                                                        │ <tool_name>
+                                          data-<app>.proappstore ◄──────┘  (actions → D1)
 ```
 
 1. Your app declares tools in an **`mcp.json`** manifest at the repo root.
 2. On publish, those tools are registered to the backend `app_tools` table.
-3. The platform MCP server loads them dynamically and exposes each as
-   `<app_id>/<tool_name>`. The shared `/mcp` endpoint can discover all app
-   tools, while `/mcp/apps/<app_id>` exposes only one app's tools.
+3. The platform MCP server exposes an app's tools on that app's own endpoint,
+   `/mcp/apps/<app_id>`, under their manifest names. The shared `/mcp`
+   endpoint does not register app tools. It offers `list_app_tools(app_id)`
+   and `call_app_tool(app_id, tool, params)` to reach any app's tools without
+   loading them all.
 4. When called, the MCP server sends the request to the platform action
    executor (`/v1/apps/:appId/actions/:name`) with the caller's session. The
    platform validates auth, checks role metadata, injects magic params, and
@@ -159,7 +161,7 @@ against your app's own D1 tables.
 
 | Field | Meaning |
 |-------|---------|
-| `name` | lowercase `a-z0-9_`. Exposed as `<app_id>/<name>`. |
+| `name` | lowercase `a-z0-9_`. Exposed under this name on `/mcp/apps/<app_id>`. |
 | `description` | what the tool does (the model reads this to decide when to call it). |
 | `operation` | `query` → a single `SELECT` (returns rows). `execute` → a single `INSERT`/`UPDATE`/`DELETE`. `batch` → multiple write statements in one D1 transaction. |
 | `sql` | required for `query` and `execute`. Bind values with `:name` placeholders; **no semicolons**, one statement only. |
@@ -234,8 +236,9 @@ that app's tool set:
 }
 ```
 
-Use the shared platform endpoint for ProAppStore builder/operator workflows that
-need platform, project, QA, or cross-app discovery tools:
+Use the shared platform endpoint for ProAppStore builder/operator workflows
+(platform, project and QA tools). It reaches app tools only through
+`list_app_tools` / `call_app_tool`:
 
 ```json
 {
@@ -253,9 +256,9 @@ OAuth challenge and open a PAS browser confirmation page. The user chooses
 GitHub or Google on that page, then completes sign-in in the browser. After the
 OAuth flow completes, the client retries with an OAuth access token. The MCP
 server maps that access token to a PAS session and the requested MCP resource.
-On an app-scoped endpoint, only that app's dynamic tools are registered for the
-connection, alongside `whoami` and `mcp_audit_log`; platform discovery tools
-such as `discover_tools` remain limited to the shared `/mcp` endpoint.
+On an app-scoped endpoint, only that app's tools are registered, alongside
+`whoami` and `mcp_audit_log`. The shared `/mcp` endpoint registers no app
+tools; `list_app_tools` and `call_app_tool` live there.
 
 OAuth access tokens are bound to their requested MCP resource. A token minted
 for `/mcp/apps/crm` is rejected on `/mcp` and on other app endpoints, forcing a
@@ -273,8 +276,8 @@ Unauthenticated access is limited to public protocol and documentation surfaces:
 - OAuth discovery, dynamic client registration, and OAuth login start.
 - Protected resource metadata and authorization server metadata.
 
-MCP tools, including `discover_tools`, are authenticated at the transport level
-so tool listing and tool calls are tied to a user.
+MCP tools, including `list_app_tools` and `call_app_tool`, are authenticated
+at the transport level so tool listing and tool calls are tied to a user.
 
 ## Security model
 
@@ -288,9 +291,8 @@ so tool listing and tool calls are tied to a user.
   to them. Public tools cannot reference `:__user_id`.
 - **SQL is not public.** `GET /v1/apps/:appId/tools` returns tool names,
   descriptions and params to any caller. `sql` / `statements` are returned
-  only to the app's team (`requireAppAccess`, any team role). The cross-app
-  `GET /v1/tools` returns the same public view only and is being retired
-  (#193, after #157).
+  only to the app's team (`requireAppAccess`, any team role). There is no
+  cross-app listing: the former `GET /v1/tools` was retired (#193).
 - **Role-aware before SQL.** Manifest `auth.platform_roles` and
   `auth.app_roles` are checked by the platform action executor (the live
   authority). The MCP server additionally pre-flights `auth.platform_roles` at
@@ -323,7 +325,7 @@ deployment checks; detects cross-tenant access, guessed ids, replayable grants,
 unsafe writes and drift; read-only) and
 [`proappstore-publish-deploy`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-publish-deploy/SKILL.md)
 (gates → inspect migrations and actions → preview → push to `main` →
-`deploy_status` / `schema_status` / `discover_tools` / `qa_list_runs` →
+`deploy_status` / `schema_status` / `list_app_tools` / `qa_list_runs` →
 evidence bundle → `git revert` rollback; read-only plus `qa_run`) and
 [`proappstore-upgrade-app`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-upgrade-app/SKILL.md)
 (inventory → `list_templates` baseline → drift → staged plan; dry-run by

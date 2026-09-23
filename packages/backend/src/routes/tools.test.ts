@@ -353,27 +353,6 @@ describe('PUT /v1/apps/:appId/tools — batch tools', () => {
   });
 });
 
-describe('GET /v1/tools', () => {
-  it('returns all tools across apps', async () => {
-    const manifest = JSON.stringify(validTool);
-    const allStmt = mockStmt({
-      all: {
-        results: [
-          { app_id: 'jobs', name: 'list_items', manifest },
-          { app_id: 'kanban', name: 'list_boards', manifest },
-        ],
-      },
-    });
-    const db = mockD1(allStmt);
-    const res = await app.request('/v1/tools', {}, makeEnv({}, db));
-    expect(res.status).toBe(200);
-    const body = await res.json() as { tools: Array<{ app_id: string; name: string }> };
-    expect(body.tools).toHaveLength(2);
-    expect(body.tools[0].app_id).toBe('jobs');
-    expect(body.tools[1].app_id).toBe('kanban');
-  });
-});
-
 describe('GET /v1/apps/:appId/tools', () => {
   it('returns tools for one app', async () => {
     const manifest = JSON.stringify(validTool);
@@ -490,19 +469,6 @@ describe('GET tool listings — SQL only to the app team (#158)', () => {
     const { res, tools } = await list({ Authorization: 'Bearer nope' }, mockD1(rows(validTool)));
     expect(res.status).toBe(200);
     expect(tools[0]).not.toHaveProperty('sql');
-  });
-
-  it('GET /v1/tools is always the public view', async () => {
-    const withExtra = { ...validTool, future_private_field: 'leak me' };
-    const db = mockD1(mockStmt({ all: { results: [
-      { app_id: 'jobs', name: 'list_items', manifest: JSON.stringify(withExtra) },
-      { app_id: 'kanban', name: 'archive_board', manifest: JSON.stringify(batchTool) },
-    ] } }));
-    const res = await app.request('/v1/tools', { headers: { Authorization: `Bearer ${ADMIN_TOK}` } }, makeEnv({}, db));
-    const { tools } = (await res.json()) as { tools: Tool[] };
-    expect(tools).toHaveLength(2);
-    expect(tools[0]).toMatchObject({ app_id: 'jobs', name: 'list_items', params: validTool.params });
-    expect(tools.some((t) => 'sql' in t || 'statements' in t || 'future_private_field' in t)).toBe(false);
   });
 });
 
@@ -791,27 +757,6 @@ describe('PUT /v1/apps/:appId/tools — unscoped statement rejection (#150)', ()
       requires_auth: false,
     });
     expect(res.status).toBe(200);
-  });
-});
-
-describe('GET /v1/tools — JSON.parse safety', () => {
-  it('skips rows with corrupted manifest JSON', async () => {
-    const goodManifest = JSON.stringify(validTool);
-    const stmt = mockStmt({
-      all: {
-        results: [
-          { app_id: 'jobs', name: 'good', manifest: goodManifest },
-          { app_id: 'jobs', name: 'bad', manifest: '{corrupt json!!!' },
-          { app_id: 'kanban', name: 'also_good', manifest: goodManifest },
-        ],
-      },
-    });
-    const db = mockD1(stmt);
-    const res = await app.request('/v1/tools', {}, makeEnv({}, db));
-    expect(res.status).toBe(200);
-    const body = await res.json() as { tools: Array<{ name: string }> };
-    // Corrupted row skipped, other two returned
-    expect(body.tools).toHaveLength(2);
   });
 });
 

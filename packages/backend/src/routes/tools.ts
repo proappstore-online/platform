@@ -1,12 +1,11 @@
 /**
  * App tool CRUD — apps register MCP tools via `pas publish` (reads mcp.json).
  *
- * The MCP server reads them back through GET /v1/apps/:appId/tools for a
- * per-app session, and — until #157 replaces the shared session's bulk
- * registration with per-app discovery — through GET /v1/tools for the shared
- * /mcp session. Both return only the allowlisted public view to callers
- * outside the app's team (#158); GET /v1/tools is retired by #193 once #157
- * is deployed. Deleting it earlier empties every app tool on /mcp silently.
+ * The MCP server reads them back through GET /v1/apps/:appId/tools for one
+ * app (an app-scoped session registers that app's tools; the shared session
+ * reaches them through list_app_tools / call_app_tool, #157). Callers outside
+ * the app's team get only the allowlisted public view — never SQL (#158).
+ * There is no cross-app listing: GET /v1/tools was retired (#193).
  */
 
 import { Hono } from 'hono';
@@ -418,24 +417,6 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
 
   // The full variant is per-caller; no cache layer may hand it to anyone else.
   if (teamMember) c.header('Cache-Control', 'private, no-store');
-  return c.json({ tools });
-});
-
-// ── GET /v1/tools — list all tools across all apps (for MCP server) ──
-// Always the public view: there is no per-app caller to authorize against.
-// Retired by #158 Step B once #157 stops the MCP calling it.
-toolsRoutes.get('/tools', async (c) => {
-  const result = await c.env.DB.prepare(
-    'SELECT app_id, name, manifest FROM app_tools ORDER BY app_id, name',
-  ).all<{ app_id: string; name: string; manifest: string }>();
-
-  const tools: unknown[] = [];
-  for (const r of result.results ?? []) {
-    try {
-      tools.push({ app_id: r.app_id, ...publicToolView(JSON.parse(r.manifest)) });
-    } catch { /* skip corrupted row */ }
-  }
-
   return c.json({ tools });
 });
 
