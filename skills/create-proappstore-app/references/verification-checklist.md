@@ -15,7 +15,7 @@ decided it. Never mark an item passed without a tool result.
 | 7 | Deploy configuration | `provision_pas_app` result | `setRepoVariable` lines / "R2 deploy variables" reported; the workflow is the template's `deploy.yml` |
 | 8 | First deploy | `deploy_status` / `get_deploy_status` | the *Deploy to R2* run for the placeholder commit succeeded (pending until it runs) |
 | 9 | Migrations applied | `schema_status` | latest migration `applied`, no `failed` rows (pending before the first deploy) |
-| 10 | Registered actions | `discover_tools` | the template's tools (`list_items`, `get_item`, …) are listed (pending before the first deploy) |
+| 10 | Registered actions | `list_app_tools` | the template's tools (`list_items`, `get_item`, …) are listed (pending before the first deploy) |
 | 11 | Live status | `app_info` | `Live (200)` |
 | 12 | Post-deploy smoke | `qa_run` → `qa_list_runs` | a saved flow passed (pending until a flow exists) |
 

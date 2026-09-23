@@ -47,7 +47,7 @@ Go-ahead required before pushing.
 | Served build | <sha from a fresh log entry> |
 
 ### Verification
-- [x] registered actions match the committed mcp.json (`discover_tools`)
+- [x] registered actions match the committed mcp.json (`list_app_tools`)
 - [x] smoke passed for this SHA
 - [x] served build equals the pushed SHA
 - [ ] **pending (human):** sign-in per provider and hostname; custom domains; operational checklist — PAS-OPS-019 / PAS-AUTH-020

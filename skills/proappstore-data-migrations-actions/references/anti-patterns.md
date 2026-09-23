@@ -38,7 +38,7 @@ the test that proves the fix. Findings cite the clause and the file.
 
 ## 5. Migration or action drift
 
-**Detect:** `schema_status` shows a failed or pending migration; an edited or reordered entry in `migrations.json` (`git log -p migrations.json`); an action referencing a column absent from `migrations.json`; `DROP`, `RENAME`, `DELETE`, `UPDATE` or `NOT NULL` without a default in a migration; `app.db.migrate` in app code; `discover_tools` listing tools that are not in the committed `mcp.json`.
+**Detect:** `schema_status` shows a failed or pending migration; an edited or reordered entry in `migrations.json` (`git log -p migrations.json`); an action referencing a column absent from `migrations.json`; `DROP`, `RENAME`, `DELETE`, `UPDATE` or `NOT NULL` without a default in a migration; `app.db.migrate` in app code; `list_app_tools` listing tools that are not in the committed `mcp.json`.
 **Why:** the deploy applies migrations before registering actions and rejects destructive statements; an edited entry never re-applies, so the live schema and the manifest diverge and users hit "no such column".
 **Clause:** [PAS-DATA-002](https://docs.proappstore.online/standard/data/#pas-data-002), [PAS-STACK-008](https://docs.proappstore.online/standard/stack/#pas-stack-008).
 **Remediate:** append a new additive entry (never edit); expand / contract for renames; move runtime DDL into `migrations.json`; commit `mcp.json` and let the deploy register it; for a failed migration follow the [migration repair runbook](https://docs.proappstore.online/migration-repair-runbook/).

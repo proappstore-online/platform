@@ -16,7 +16,7 @@
       "allowed-tools": [
         "whoami",
         "app_info",
-        "discover_tools",
+        "list_app_tools",
         "schema_status",
         "deploy_status",
         "qa_list_runs",
@@ -24,7 +24,7 @@
       ],
       "mutating": false,
       "bytes": 45306,
-      "digest": "16fea621ce70fc50e2e296f28bc899e0bc52ed18fdfc42e423d1439f554c7d27",
+      "digest": "1685216f9e4ef6c1ff77dc270b9b38233d783a531ab8358c4ca1afb54553bc83",
       "files": [
         {
           "path": "evals/cases.json",
@@ -34,7 +34,7 @@
         {
           "path": "evals/contract.json",
           "bytes": 1604,
-          "sha256": "d9df719788371f72a5f379316593f8ae3f44c49a5d15af7fdbe5aa592fbcfdbd"
+          "sha256": "0e65c032c7d3bca1219f72dfad8a7ab27cccb22d11e6d4b339d2870f16ecce50"
         },
         {
           "path": "evals/fixtures/conforming-app.json",
@@ -64,7 +64,7 @@
         {
           "path": "references/decision-tables.md",
           "bytes": 4497,
-          "sha256": "13ddefc6b9b8920e03633bc7f28defb0bd223ee401f1c93d916a05f41f104288"
+          "sha256": "11406b15da24346da53385218a2a7edbd43a9fbc17254eaa333e50ca5d60b91a"
         },
         {
           "path": "references/direct-rules.md",
@@ -94,7 +94,7 @@
         {
           "path": "SKILL.md",
           "bytes": 9248,
-          "sha256": "2887fd76a50504bc0853ebfc75319acef8f97e52ec3ef57870fa4cde54a7b730"
+          "sha256": "07ad1fe51ffd82ca692ec0016816fcf8335740da62cbac89014e144d3575c3fb"
         }
       ],
       "evaluations": {
@@ -146,12 +146,12 @@
         "platform_guide",
         "list_templates",
         "app_info",
-        "discover_tools",
+        "list_app_tools",
         "schema_status"
       ],
       "mutating": false,
       "bytes": 41634,
-      "digest": "e2eda7ae586f867c76a9f8aa301833f43bc850de594a7a099f993aeedcbe0951",
+      "digest": "d029264363484d84b3679c7b03e8a832f6be43f62083df50f42190f2353fb800",
       "files": [
         {
           "path": "evals/cases.json",
@@ -161,7 +161,7 @@
         {
           "path": "evals/contract.json",
           "bytes": 1596,
-          "sha256": "95f3fd791ccdd43ed69c7dbd0ffa615f9008a8d6f5c3435417decc09f76b9ab3"
+          "sha256": "14ec5d4d8320cada5e68fddf338c1d5a3f5e27b3c66d17f0aead4374bce3491f"
         },
         {
           "path": "evals/README.md",
@@ -181,7 +181,7 @@
         {
           "path": "references/negative-cases.md",
           "bytes": 1170,
-          "sha256": "6662174f3cf03623cdd09a53fd28bd77b483ba9f07a6f716df75e0531e9abe3a"
+          "sha256": "cf2316bc25fa7332427bcbd89b2ca9d154341e2888a62bdd038479427d60462a"
         },
         {
           "path": "references/output-template.md",
@@ -201,7 +201,7 @@
         {
           "path": "SKILL.md",
           "bytes": 9423,
-          "sha256": "d1acd9c411eab2b926d40e382eab6c19e5236b1f0d51ad9ea96352df4aa86907"
+          "sha256": "01d1eac754908221b2a7abe6a4038991e5e69a717b48efbe25a4f48ea139b562"
         }
       ],
       "evaluations": {
@@ -253,7 +253,7 @@
         "deploy_status",
         "get_deploy_status",
         "schema_status",
-        "discover_tools",
+        "list_app_tools",
         "qa_run",
         "qa_list_runs",
         "list_apps",
@@ -264,7 +264,7 @@
       ],
       "mutating": true,
       "bytes": 29442,
-      "digest": "75e16d4efc277d80820c1a52aca5d0ba9a4921b7c7c420ff1366c9d81de03f72",
+      "digest": "ad90d0b5a6b02b897b8c3a6cf196c29254e9aed354f4e39d7d7b171b6aabf034",
       "files": [
         {
           "path": "evals/cases.json",
@@ -274,7 +274,7 @@
         {
           "path": "evals/contract.json",
           "bytes": 1661,
-          "sha256": "a5c55e49714a00ae222ea634d020570ae0be7d5effb899a407371f29a19af587"
+          "sha256": "cd47dee2dd377259c679cfbf74a9efe4367f17a05429e4b07852d27fcc72c600"
         },
         {
           "path": "evals/README.md",
@@ -299,17 +299,17 @@
         {
           "path": "references/provisioning-tools.md",
           "bytes": 3400,
-          "sha256": "89f7dabebcc5a9cef7ddee9f1cf748b56f963933fe56fe287ea0290bde9a73e2"
+          "sha256": "f2bd43da1ccf0ad74e0f9d093a8da084c3adbc75f98a4062cd567ed0b23b9257"
         },
         {
           "path": "references/verification-checklist.md",
           "bytes": 1922,
-          "sha256": "c8ae39d7e4ba9f113b2f6008ae234400a7bc0b9380403ab621075a0c9774e256"
+          "sha256": "126811c8705ac15d4583c20097746bbe34a0382605d472eb3b7d15d6a4089166"
         },
         {
           "path": "SKILL.md",
           "bytes": 9651,
-          "sha256": "0baa0187a71540af2ef742cdf9633a097668fcbe6c82af71dd972007eea72548"
+          "sha256": "a0f747162e0c67a829df36dc58d54df4075b8325a5892c6239ed77da9e7e5662"
         }
       ],
       "evaluations": {
@@ -363,12 +363,12 @@
         "recipe",
         "platform_guide",
         "app_info",
-        "discover_tools",
+        "list_app_tools",
         "schema_status"
       ],
       "mutating": false,
       "bytes": 50670,
-      "digest": "1e7919f78903da7a084ebb7f0906c7d49aeba0d8ddd2eac9c08d6d48898e0487",
+      "digest": "e8a347a3897403db13af07abe28e3d09338b99750dbc5331ab89cf4def6221c3",
       "files": [
         {
           "path": "evals/cases.json",
@@ -378,7 +378,7 @@
         {
           "path": "evals/contract.json",
           "bytes": 1591,
-          "sha256": "c1e6c913d61ebed054c80fc7f23a402bc923209e736901babc800a407788628d"
+          "sha256": "06396c62cdd2558ae31fad724d33a06c15c1a5c8af8cc2714f7fbce1c47d86cb"
         },
         {
           "path": "evals/README.md",
@@ -403,7 +403,7 @@
         {
           "path": "references/negative-cases.md",
           "bytes": 1487,
-          "sha256": "9e8ff5cda491cef933a2ad2ea57240563ffb70c210664bf4601eff2905193870"
+          "sha256": "ff229bcf517a193d3d0a784200e15212de19da34a598fa6628c40076e69c72ea"
         },
         {
           "path": "references/output-template.md",
@@ -423,7 +423,7 @@
         {
           "path": "SKILL.md",
           "bytes": 9397,
-          "sha256": "9e49d620c390027c62ccb005579ff14579e5e1c55841c580a9b902ab74eb6169"
+          "sha256": "065ed363d485e144edd1bee65c9dee21cbac132d6cf3071dc37fd3d8e30db5b4"
         }
       ],
       "evaluations": {
@@ -474,12 +474,12 @@
         "recipe",
         "platform_guide",
         "app_info",
-        "discover_tools",
+        "list_app_tools",
         "schema_status"
       ],
       "mutating": false,
       "bytes": 59496,
-      "digest": "d6d67e4dec5c4221e213b3f9274bd059a96373d8b9137eb11c24c6dd0f1dfc05",
+      "digest": "279cc4487919d6e99c4c76a11ce592b45fcb5041925279f9496f9b00b9e61822",
       "files": [
         {
           "path": "evals/cases.json",
@@ -489,7 +489,7 @@
         {
           "path": "evals/contract.json",
           "bytes": 1632,
-          "sha256": "d46cab7500ea5722108f655d75edb608abf09e06936330338736afdb0a6dcc0c"
+          "sha256": "149a6223c4c749147ff94f005cc2e19cd910ae57946398bcce2aa65d58c59f5c"
         },
         {
           "path": "evals/README.md",
@@ -504,22 +504,22 @@
         {
           "path": "references/anti-patterns.md",
           "bytes": 8001,
-          "sha256": "67cf86f53690872c9eddfc98a3ca2d3fec5d519110a6cfcd298eaf1adab639b2"
+          "sha256": "e11305ffedcddcac1b92d78acafea4f05bf3f98a23c720316630955b4e8951d0"
         },
         {
           "path": "references/decision-tables.md",
           "bytes": 12261,
-          "sha256": "1f573e61440a4e886353b6f789d7996e324ba0a69f9965b679f433c27470b0d3"
+          "sha256": "f039e0bbd73e398cb1a00a9111cdb710c56fa71ec886424d78a6ffeb073dfd37"
         },
         {
           "path": "references/negative-cases.md",
           "bytes": 1852,
-          "sha256": "b6574a6992025ee346083282cd7af9727b300325dfca7e63dae2c11fab4bc8b7"
+          "sha256": "f8bd60856cc32770d8f8e088ba707678944b96812ceee655b2919f08569c6a73"
         },
         {
           "path": "references/output-template.md",
           "bytes": 2199,
-          "sha256": "316bf3d74b36a104d448ca00947e8b9fbfd481fdd66b8a58ccb96c16da583cc4"
+          "sha256": "011790077bdb2306d6e335c546c65784633a0c42549c4aef92c56877782228ec"
         },
         {
           "path": "references/unsupported-requirements.md",
@@ -534,7 +534,7 @@
         {
           "path": "SKILL.md",
           "bytes": 10208,
-          "sha256": "a0be2683dd2186efac6929b9799e7ddac1b4198ef367fa000e947e7335efe301"
+          "sha256": "3dc86a5e68121a85ce5e8d7234fac4a6f7201ca88d98d94e28da5674a4abbfec"
         }
       ],
       "evaluations": {
@@ -586,7 +586,7 @@
         "deploy_status",
         "get_deploy_status",
         "schema_status",
-        "discover_tools",
+        "list_app_tools",
         "qa_list_flows",
         "qa_run",
         "qa_list_runs",
@@ -596,17 +596,17 @@
       ],
       "mutating": false,
       "bytes": 48904,
-      "digest": "8c54ecff6b6cf7c8ea400bdbe6780f8a27fdd2ff4faa98cde385be85ab258bca",
+      "digest": "554f6eb356084e2dd472a6f4e8bc278bf40f7f7ad7424f68a3351a4b53cfefe3",
       "files": [
         {
           "path": "evals/cases.json",
           "bytes": 4833,
-          "sha256": "4f2173b39104ab5c8c79817d84f932e4ec2a4e5aed33a9113040e47bf5bbc593"
+          "sha256": "0fe8e1dd4b408fd10e2b2793579b7fdcfc76aa2a5703702d73e4681745e86abd"
         },
         {
           "path": "evals/contract.json",
           "bytes": 1706,
-          "sha256": "eb0553e4c7916c786b3b67383868c19f6b9fdcc62c057fa83804828c3dcc3b27"
+          "sha256": "e22eaa3dd947319b4abfbb2b21afc1306a9637ffac8646f2c2a2615e57c24bfb"
         },
         {
           "path": "evals/README.md",
@@ -621,12 +621,12 @@
         {
           "path": "references/anti-patterns.md",
           "bytes": 6478,
-          "sha256": "9c12d110b071040c5458165511bad74307eada8d231402042aa656ec2c0ec975"
+          "sha256": "bfc9d5acd6f98085934af0b7e9c775518b242e970401da6be1b13a4909fa5426"
         },
         {
           "path": "references/decision-tables.md",
           "bytes": 9777,
-          "sha256": "53761dcd79148c74b0e58b3c5732bca55213b00e2ace7e4dae13dc5c89126ec9"
+          "sha256": "fc7fe0e37c1861ae29426025670c45047454fed7cd7dd2b261fc459c99422c33"
         },
         {
           "path": "references/negative-cases.md",
@@ -636,7 +636,7 @@
         {
           "path": "references/output-template.md",
           "bytes": 2070,
-          "sha256": "0b376ead0d1be406b7220b25b1e43493214f5e8f753194e765765515775fa95d"
+          "sha256": "95c11972a414334f22f82ef12afb8fef67dda8061bfd395e2e6bae92c7f242b1"
         },
         {
           "path": "references/unsupported-requirements.md",
@@ -646,12 +646,12 @@
         {
           "path": "references/worked-examples.md",
           "bytes": 5313,
-          "sha256": "95ce29974526093aac7d591a5c59078e3e798697a78f136f9d82e3ac2d29155d"
+          "sha256": "7cffbc756a2d799450683a851ba76563dcb106a7c5faada21e2ea11616e3de08"
         },
         {
           "path": "SKILL.md",
           "bytes": 11293,
-          "sha256": "27499850184419da9f5155a7642536da2909bb160bd425ba415f9ab74d1e9a85"
+          "sha256": "89e0a726e7dde172493bcff0a3ba8cfca4c79f7852986823436fe76a2ef685e4"
         }
       ],
       "evaluations": {
@@ -701,7 +701,7 @@
         "app_info",
         "list_templates",
         "schema_status",
-        "discover_tools",
+        "list_app_tools",
         "deploy_status",
         "sdk_reference",
         "recipe",
@@ -710,17 +710,17 @@
       ],
       "mutating": false,
       "bytes": 56212,
-      "digest": "67661c18a9d1be517144e4b56c6b16e26e0822573ba562bd0d648669aebb6ee4",
+      "digest": "19caaeff892597d214bfd0ae93151284491924b8c86d0cac46c556451588bd93",
       "files": [
         {
           "path": "evals/cases.json",
           "bytes": 6296,
-          "sha256": "872b859759687cfd6ad7a06b330bcc0ec7011327810aafaa615182c93a66f978"
+          "sha256": "c9c0814ee41db3b343116dbaab9e6c4058471df5416b867d1bedabcfd2fac964"
         },
         {
           "path": "evals/contract.json",
           "bytes": 1615,
-          "sha256": "9835adbd002402905ba2d76f4a59c18673053bbb23f48fc73990cf71441318d8"
+          "sha256": "34d3c3d0007d9e72ca785c1651a9375e9a2e2ef32e19f829221c5d4e75d33462"
         },
         {
           "path": "evals/README.md",
@@ -735,12 +735,12 @@
         {
           "path": "references/anti-patterns.md",
           "bytes": 8223,
-          "sha256": "cab4012807d4f5a9fb57b5b99737de70b964df8267c760e30f6bf5ae0ab562aa"
+          "sha256": "2b4bc6659a684ee1a4535a3f6f88ac9f04f38fac4f3cc318d35d3a74d6823981"
         },
         {
           "path": "references/decision-tables.md",
           "bytes": 10593,
-          "sha256": "3b553925e580ceb402a227e38d24a3e4b90a20df193cdf40cce2f403e93400ef"
+          "sha256": "00e81a9dc37061641e3b7fe4de7ab7365d3e3df0055d87c5a2f9dffd9ab242c8"
         },
         {
           "path": "references/negative-cases.md",
@@ -750,7 +750,7 @@
         {
           "path": "references/output-template.md",
           "bytes": 2629,
-          "sha256": "484162e0b563b3d21f217bca6b15aa9a2bccbc13a797f55b3fd6f0a04d8d6fd2"
+          "sha256": "820ea3a9125a123886792025ab7daaad7b3255662b6f193861a10b2aa358c71f"
         },
         {
           "path": "references/unsupported-requirements.md",
@@ -760,12 +760,12 @@
         {
           "path": "references/worked-examples.md",
           "bytes": 8123,
-          "sha256": "18ca0d9bcf24baf415a5ecd2a7dfb500df17b375e5c9bc7dd91b7bfeb2b278b7"
+          "sha256": "8115485914600d5a82151a418352c76a38b34f75bc2bcf062ab5a39d7494bc7e"
         },
         {
           "path": "SKILL.md",
           "bytes": 10757,
-          "sha256": "99c3c9e87cb52bf812e24b97149661a6ed10c941606b7b84c3e8bbd452f343a6"
+          "sha256": "9906796df60389c236468a91da77006ba6171428b5b5bd6f0f73bf3bb283bdc8"
         }
       ],
       "evaluations": {

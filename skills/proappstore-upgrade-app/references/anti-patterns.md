@@ -53,11 +53,11 @@ and the proof. Findings cite the clause and the file.
 
 ## 7. Legacy data access
 
-**Detect:** `app.db.migrate([...])` in app code; no `migrations.json`; `app.db.query` / `execute` in user paths; actions without explicit `requires_auth`; `discover_tools` differing from `mcp.json`.
+**Detect:** `app.db.migrate([...])` in app code; no `migrations.json`; `app.db.query` / `execute` in user paths; actions without explicit `requires_auth`; `list_app_tools` differing from `mcp.json`.
 **Why:** schema must be applied by the deploy before actions register; raw SQL is team-only; an implicit `requires_auth` is a default the reviewer cannot see.
 **Clause:** [PAS-DATA-002](https://docs.proappstore.online/standard/data/#pas-data-002), [PAS-DATA-003](https://docs.proappstore.online/standard/data/#pas-data-003), [PAS-DATA-004](https://docs.proappstore.online/standard/data/#pas-data-004).
 **Remediate:** stage 5 — write `migrations.json` from the statements the app already ran (names in order, additive), remove the runtime call, make `requires_auth` explicit, move user-path SQL into actions; every edit shown for review.
-**Prove:** `schema_status` shows the entries applied (or `already`); `discover_tools` equals the file; negative tests pass.
+**Prove:** `schema_status` shows the entries applied (or `already`); `list_app_tools` equals the file; negative tests pass.
 
 ## 8. Big-bang upgrade
 

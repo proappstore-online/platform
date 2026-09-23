@@ -9,7 +9,7 @@ Inventory: `engines` missing, `packageManager` absent; `@proappstore/sdk ^1.4.0`
 the session in `localStorage`; `deploy.yml` is a hand-edited variant with a
 Cloudflare API token secret and no *Register app tools* step; `compliance.yml`
 deleted; no `migrations.json` — `app.db.migrate([...])` runs at startup;
-`mcp.json` has 9 actions, 3 without `requires_auth`; `discover_tools` lists 8;
+`mcp.json` has 9 actions, 3 without `requires_auth`; `list_app_tools` lists 8;
 the theme boot reads `fas:theme`; viewport has `user-scalable=no`; PWA plugin
 lacks `navigateFallbackDenylist`. Customisations: `web/src/App.tsx` (routing,
 12 components), `web/src/ledger/*`, custom `index.html` metas and OG image,
@@ -66,14 +66,14 @@ on `ledger.proappstore.online` and `ledger.example.com` (pending). Clause:
 ## data-layer — stage 5
 
 Finding: `app.db.migrate([...])` at startup with 4 statements; no
-`migrations.json`; 3 actions without `requires_auth`; `discover_tools` lists
+`migrations.json`; 3 actions without `requires_auth`; `list_app_tools` lists
 8 of 9 actions (the deploy never registered the last, because the old
 workflow lacked the step). `schema_status` shows no failed rows.
 Remediation: `migrations.json` with one entry per already-applied statement
 in order (`0001_init` … `0004_ledger_tags`), the runtime call removed,
 `requires_auth: true` added to the three actions — each edit shown and
 approved; nothing else in `mcp.json` changed. Prove: the deploy reports the
-entries as `already`; `schema_status` applied; `discover_tools` lists 9;
+entries as `already`; `schema_status` applied; `list_app_tools` lists 9;
 negative tests added for the three actions. Clause:
 [PAS-DATA-002](https://docs.proappstore.online/standard/data/#pas-data-002), [PAS-DATA-003](https://docs.proappstore.online/standard/data/#pas-data-003),
 [PAS-DATA-004](https://docs.proappstore.online/standard/data/#pas-data-004), [PAS-STACK-008](https://docs.proappstore.online/standard/stack/#pas-stack-008).

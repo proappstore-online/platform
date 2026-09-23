@@ -6,7 +6,7 @@ import { extractToken, fetchAccount, verifyToken } from "./api-helpers.js";
 import { verifySession } from "./session.js";
 import { listAuditEvents } from "./safety.js";
 import { registerPlatformTools } from "./platform-tools.js";
-import { fetchTools, registerAppTools } from "./tool-loader.js";
+import { fetchTools, registerAppDiscoveryTools, registerAppTools } from "./tool-loader.js";
 import { registerProjectTools } from "./project-tools.js";
 import { registerLoopTools } from "./loop-tools.js";
 import { registerAgentsTools } from "./agents-tools.js";
@@ -59,8 +59,20 @@ export class PasMcpAgent extends McpAgent<Env> {
 
     if (!this.appScope) {
       // ── Platform-info tools (list_apps, deploy_status, app_info, ─
-      //    platform_guide, sdk_reference, discover_tools) ──────────
+      //    platform_guide, sdk_reference, recipe) ─────────────────
       registerPlatformTools(this.server, this.env);
+
+      // ── App-tool discovery for the shared endpoint (#157) ───────
+      //    list_app_tools(app_id) → call_app_tool(app_id, tool, params).
+      //    The shared session registers NO app tools (see below), so its
+      //    size is fixed (src/tool-count.ts) however many apps exist.
+      registerAppDiscoveryTools(
+        this.server,
+        () => ({ userId: this.userId, token: this.userToken, roles: this.userRoles }),
+        this.env.API,
+        this.env.API_BASE,
+        this.env,
+      );
 
       // ── Project-building tools (for AI agent app creation) ─────
       registerProjectTools(this.server, this.env, () => ({
@@ -92,21 +104,26 @@ export class PasMcpAgent extends McpAgent<Env> {
       }));
     }
 
-    // ── Load and register app tools dynamically ────────────────
-    const appTools = await fetchTools(this.env.API, this.env.API_BASE, this.appScope);
-    const registered = registerAppTools(
-      this.server,
-      appTools,
-      () => ({ userId: this.userId, token: this.userToken, roles: this.userRoles }),
-      this.env.API,
-      this.env.API_BASE,
-      this.env,
-    );
-
-    if (registered.length > 0) {
-      console.log(`Registered ${registered.length} app tool(s): ${registered.join(', ')}`);
-    } else if (this.appScope) {
-      console.log(`No app tools registered for scoped MCP app: ${this.appScope}`);
+    // ── App tools: ONLY on an app-scoped session (#157) ─────────
+    //    /mcp/apps/<app_id> registers that app's tools under their manifest
+    //    names. The shared /mcp never fetches or registers app tools — it
+    //    used to load every app's tools for every connection (824 tools,
+    //    485 KB of tools/list), and that is what list_app_tools replaces.
+    if (this.appScope) {
+      const appTools = await fetchTools(this.env.API, this.env.API_BASE, this.appScope);
+      const registered = registerAppTools(
+        this.server,
+        appTools,
+        () => ({ userId: this.userId, token: this.userToken, roles: this.userRoles }),
+        this.env.API,
+        this.env.API_BASE,
+        this.env,
+      );
+      if (registered.length > 0) {
+        console.log(`Registered ${registered.length} app tool(s) for ${this.appScope}: ${registered.join(', ')}`);
+      } else {
+        console.log(`No app tools registered for scoped MCP app: ${this.appScope}`);
+      }
     }
 
     // ── Identity: whoami ───────────────────────────────────────
@@ -207,7 +224,7 @@ export default {
     if (url.pathname === "/" || url.pathname === "") {
       if (isProtocolClient(request)) return wrongEndpoint();
       return new Response(
-        "ProAppStore MCP Server\n\nShared platform endpoint: npx mcp-remote https://mcp.proappstore.online/mcp\nApp-scoped endpoint: npx mcp-remote https://mcp.proappstore.online/mcp/apps/<app-id>\n\nPlatform tools on /mcp: list_apps, deploy_status, app_info, platform_guide, sdk_reference, discover_tools, recipe\nProject tools on /mcp: provision_pas_app, scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop on /mcp: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running, set_project_budget, run_tests, set_model, add_ticket\nAgent introspection on /mcp: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: dynamically loaded from app manifests. Use /mcp/apps/<app-id> for an isolated one-app tool list.\nIdentity: whoami (show the authenticated PAS account — uid, login, email, sign-in provider, roles).\nSafety: mcp_audit_log (per-account audit trail). Mutating tools are audited; destructive tools (provision_pas_app, scaffold_app, delete_file, publish_app) require confirm: true; expensive/irreversible tools accept dry_run: true to preview; set MCP_READ_ONLY=1 to block all writes.\n",
+        "ProAppStore MCP Server\n\nShared platform endpoint: npx mcp-remote https://mcp.proappstore.online/mcp\nApp-scoped endpoint: npx mcp-remote https://mcp.proappstore.online/mcp/apps/<app-id>\n\nPlatform tools on /mcp: list_apps, deploy_status, schema_status, app_info, platform_guide, sdk_reference, recipe, list_app_tools, call_app_tool\nProject tools on /mcp: provision_pas_app, scaffold_app, write_file, read_file, list_files, delete_file, search_files, batch_write_files, get_deploy_status, provision_app\nAgent Teams loop on /mcp: create_app, list_projects, get_project, build_knowledge_base, chat_agent, list_tickets, list_agents, get_project_files, set_project_running, set_project_budget, run_tests, set_model, add_ticket\nAgent introspection on /mcp: agent_project_status, agent_board, agent_activity, agent_ticket_detail, agent_cost\nApp tools: only on /mcp/apps/<app-id>, under their manifest names. From /mcp, list one app's tools with list_app_tools(app_id) and call one with call_app_tool(app_id, tool, params).\nIdentity: whoami (show the authenticated PAS account — uid, login, email, sign-in provider, roles).\nSafety: mcp_audit_log (per-account audit trail). Mutating tools are audited; destructive tools (provision_pas_app, scaffold_app, delete_file, publish_app) require confirm: true; expensive/irreversible tools accept dry_run: true to preview; set MCP_READ_ONLY=1 to block all writes.\n",
         { headers: { "content-type": "text/plain" } }
       );
     }

@@ -21,5 +21,5 @@ forbids it ([PAS-STACK-006](https://docs.proappstore.online/standard/stack/#pas-
 Do not design a hybrid.
 
 ## An existing app you cannot read
-`app_info` / `discover_tools` fail or the app is not on ProAppStore → Ask for
+`app_info` / `list_app_tools` fail or the app is not on ProAppStore → Ask for
 the repository or the app id; do not infer its architecture.

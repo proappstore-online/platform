@@ -10,7 +10,7 @@ metadata:
   standard-version: "1.5"
   issue: proappstore-online/platform#173
   triggers: authentication, sessions, session, roles, permissions, sign-in, sign-out, sign users in, ProAppStore
-allowed-tools: whoami sdk_reference recipe platform_guide app_info discover_tools schema_status
+allowed-tools: whoami sdk_reference recipe platform_guide app_info list_app_tools schema_status
 ---
 
 # Secure authentication, cookie sessions, roles and permissions
@@ -80,7 +80,7 @@ Ask for or read: hosted on the platform subdomain, a custom domain, or local
 only; the sign-in paths wanted (GitHub, Google, email magic link, provisioned
 username/password accounts); the capabilities that need a role; whether the
 app is Tailored or Ready (multi-tenant). For an **existing** app: `app_info`
-(hostnames, template provenance), `discover_tools` (which registered actions
+(hostnames, template provenance), `list_app_tools` (which registered actions
 require auth), `schema_status` (migrations, to spot home-grown user/session
 tables). If the client can read the repository, run the greps in
 [references/anti-patterns.md](references/anti-patterns.md).
@@ -140,7 +140,7 @@ PAS-AUTH-020. One screen; details in the tables.
 - **Rerun:** the review is idempotent — the same repository state produces
   the same findings and the same plan; nothing on the platform changes
   between runs. Rerun after each remediation to confirm the finding is gone.
-- **Failure:** if `app_info`, `discover_tools` or `schema_status` fails,
+- **Failure:** if `app_info`, `list_app_tools` or `schema_status` fails,
   report the gap, keep the findings that do not depend on it, and stop rather
   than infer the missing part.
 

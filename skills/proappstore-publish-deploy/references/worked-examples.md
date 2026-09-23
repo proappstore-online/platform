@@ -11,7 +11,7 @@ green (`deploy_status`), `schema_status` clean. Gates: all four pass. Inspect:
 workflow change. Preview shown; go-ahead given. Push. `deploy_status` shows
 the run for the SHA succeeded; log: `Applied migration(s): ["0004_tasks_priority"]`,
 `Registered 7 app tool(s)`, `Deployed apps/tasks from <sha>`. `schema_status`
-applied; `discover_tools` lists 7 tools; `qa_list_runs` shows the
+applied; `list_app_tools` lists 7 tools; `qa_list_runs` shows the
 deploy-triggered run passed 5/5; served build equals the SHA. Report with
 the evidence bundle; human checks pending. Clauses:
 [PAS-OPS-004](https://docs.proappstore.online/standard/ops/#pas-ops-004), [PAS-OPS-005](https://docs.proappstore.online/standard/ops/#pas-ops-005),

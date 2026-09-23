@@ -1,6 +1,7 @@
 /**
  * Platform-info MCP tools — list_apps, deploy_status, app_info,
- * platform_guide, sdk_reference, discover_tools, recipe.
+ * platform_guide, sdk_reference, recipe. (App-tool discovery — list_app_tools /
+ * call_app_tool — lives in tool-loader.ts, #157.)
  *
  * Registers the static (non project-building, non app-data) tools on the
  * MCP server.
@@ -11,7 +12,6 @@ import { z } from "zod";
 import type { Env } from "./env.js";
 import { getDeployStatus, pasApi } from "./api-helpers.js";
 import { buildSdkReferenceSections } from "./sdk-reference.js";
-import { fetchTools } from "./tool-loader.js";
 import { getRecipe } from "../../agent-teams/src/recipes.js";
 import { TEMPLATE_CATALOGUE, DEFAULT_TEMPLATE_ID, TEMPLATE_CATALOGUE_VERSION } from "@proappstore/build-core";
 
@@ -203,45 +203,6 @@ export function registerPlatformTools(server: McpServer, env: Env) {
     }
   );
 
-  // ── discover_tools ─────────────────────────────────────────
-  server.tool(
-    "discover_tools",
-    "List all app data tools available on ProAppStore. Shows tools grouped by app with descriptions and parameters.",
-    {},
-    async () => {
-      const tools = await fetchTools(env.API, env.API_BASE);
-      if (tools.length === 0) {
-        return { content: [{ type: "text" as const, text: "No app tools registered yet. Apps can expose tools by adding an mcp.json manifest." }] };
-      }
-
-      // Group by app
-      const byApp = new Map<string, typeof tools>();
-      for (const t of tools) {
-        const list = byApp.get(t.app_id) ?? [];
-        list.push(t);
-        byApp.set(t.app_id, list);
-      }
-
-      const lines: string[] = [];
-      for (const [appId, appTools] of byApp) {
-        lines.push(`## ${appId}`);
-        for (const t of appTools) {
-          const params = Object.entries(t.params)
-            .map(([name, def]) => {
-              const p = def as { type: string; optional?: boolean; description?: string };
-              const opt = p.optional ? '?' : '';
-              return `${name}${opt}: ${p.type}${p.description ? ` — ${p.description}` : ''}`;
-            })
-            .join(', ');
-          lines.push(`- **${appId}/${t.name}** [auth required]: ${t.description}`);
-          if (params) lines.push(`  Params: ${params}`);
-        }
-        lines.push('');
-      }
-
-      return { content: [{ type: "text" as const, text: `# Available App Tools\n\n${tools.length} tool(s) across ${byApp.size} app(s):\n\n${lines.join("\n")}` }] };
-    }
-  );
 
   // ── recipe ──────────────────────────────────────────────────
   server.tool(

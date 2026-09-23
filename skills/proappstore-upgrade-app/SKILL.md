@@ -10,7 +10,7 @@ metadata:
   standard-version: "1.5"
   issue: proappstore-online/platform#177
   triggers: upgrade, update, modernise, re-align, latest SDK, template drift, ProAppStore
-allowed-tools: whoami app_info list_templates schema_status discover_tools deploy_status sdk_reference recipe platform_guide qa_list_runs
+allowed-tools: whoami app_info list_templates schema_status list_app_tools deploy_status sdk_reference recipe platform_guide qa_list_runs
 ---
 
 # Upgrade an existing app to the current SDK, template and standard
@@ -94,7 +94,7 @@ Read, and record in the [output template](references/output-template.md):
   their diff from the canonical ones; repository secrets (`gh secret list` —
   there must be none; a stored token is a blocker, never an input).
 - `migrations.json` and `mcp.json`: present, additive, actions with explicit
-  `requires_auth`; `schema_status` and `discover_tools` for the live state.
+  `requires_auth`; `schema_status` and `list_app_tools` for the live state.
 - `web/index.html` and `web/vite.config.ts`: theme key, viewport, PWA
   plugin settings, manifest and icons.
 - Tests: `pnpm typecheck`, `pnpm test`, e2e or QA flows (`qa_list_runs`).
@@ -132,7 +132,7 @@ stage alone with a message naming it. Hand the commit to
 ### 5. Verify and record
 
 After each stage's deploy: `deploy_status` green, `schema_status` clean,
-`discover_tools` unchanged unless the stage changed `mcp.json`, the smoke
+`list_app_tools` unchanged unless the stage changed `mcp.json`, the smoke
 passed, and the human checks the stage needs listed as pending. Update the
 report; the next stage starts from step 4.
 

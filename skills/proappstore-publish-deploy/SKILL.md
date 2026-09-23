@@ -10,7 +10,7 @@ metadata:
   standard-version: "1.5"
   issue: proappstore-online/platform#174
   triggers: publish, deploy, verify, roll back, ship, release, ProAppStore
-allowed-tools: whoami app_info list_apps deploy_status get_deploy_status schema_status discover_tools qa_list_flows qa_run qa_list_runs qa_run_artifacts qa_flow_playwright platform_guide
+allowed-tools: whoami app_info list_apps deploy_status get_deploy_status schema_status list_app_tools qa_list_flows qa_run qa_list_runs qa_run_artifacts qa_flow_playwright platform_guide
 ---
 
 # Publish, deploy, verify and roll back a ProAppStore app
@@ -105,7 +105,7 @@ Diff `migrations.json` and `mcp.json` against the deployed commit:
 - New migration entries are appended, named, additive (`CREATE`, `ALTER … ADD`
   with a default); no entry edited or removed.
 - Actions added, changed or removed; every column they touch exists in
-  `migrations.json`; `discover_tools` gives the currently registered baseline.
+  `migrations.json`; `list_app_tools` gives the currently registered baseline.
 - Changes to `deploy.yml`, `ci.yml`, dependencies or secrets handling.
 
 ### 4. Preview consequential changes and get the go-ahead
@@ -127,7 +127,7 @@ and read the run log for the three lines that must be present —
 ### 6. Verify live
 
 - `schema_status`: latest migration applied, no failed rows.
-- `discover_tools`: the registered actions equal the committed `mcp.json`.
+- `list_app_tools`: the registered actions equal the committed `mcp.json`.
 - Smoke: `qa_list_runs` shows the deploy-triggered run for this SHA passing;
   if the app has no automatic run, `qa_run`, then `qa_list_runs` and
   `qa_run_artifacts` for the screenshots. A failed step is a failed deploy.

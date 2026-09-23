@@ -17,7 +17,7 @@
 | configuration | `package.json`, workflows, `mcp.json`, `migrations.json`, `web/vite.config.ts`, `web/index.html` | `path:line` + excerpt |
 | source | `web/src/**` | `path:line` + excerpt (never a secret or personal data) |
 | process | CI runs, deploy runs, `pas check` output, `gh secret list`, git history | URL or command + observation |
-| runtime | the deployed app: `app_info`, `deploy_status`, `schema_status`, `discover_tools`, `qa_list_runs`, a browser | URL + observation |
+| runtime | the deployed app: `app_info`, `deploy_status`, `schema_status`, `list_app_tools`, `qa_list_runs`, a browser | URL + observation |
 | documentation | README, privacy notice, recovery section | `path:line` |
 
 ## Severity, confidence, human validation

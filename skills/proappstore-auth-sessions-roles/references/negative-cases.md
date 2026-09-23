@@ -27,5 +27,5 @@ app. Define an app role and gate the action with it
 ([PAS-AUTH-013](https://docs.proappstore.online/standard/auth/#pas-auth-013)); do not check the team role.
 
 ## An app you cannot read
-`app_info` / `discover_tools` fail or the app is not on ProAppStore → ask for
+`app_info` / `list_app_tools` fail or the app is not on ProAppStore → ask for
 the repository or the app id; do not infer its auth.

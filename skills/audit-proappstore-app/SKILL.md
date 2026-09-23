@@ -10,7 +10,7 @@ metadata:
   standard-version: "1.5"
   issue: proappstore-online/platform#172
   triggers: audit, compliance, conformance, findings, clause by clause, ProAppStore
-allowed-tools: whoami app_info discover_tools schema_status deploy_status qa_list_runs platform_guide
+allowed-tools: whoami app_info list_app_tools schema_status deploy_status qa_list_runs platform_guide
 ---
 
 # Audit a ProAppStore app against the Recommended Application Standard
@@ -80,7 +80,7 @@ severity threshold and exclusions from the user, recorded in the envelope.
 Read `package.json`, the workflows, `mcp.json`, `migrations.json`,
 `web/index.html`, `web/vite.config.ts`, the `initPro` call site and the
 README. Decide Tailored or Ready — it decides the tenancy clauses'
-applicability. `discover_tools` gives the registered actions as the platform
+applicability. `list_app_tools` gives the registered actions as the platform
 sees them; `schema_status` the migration state; `deploy_status` and
 `qa_list_runs` the deploy and smoke evidence for the OPS chapter.
 

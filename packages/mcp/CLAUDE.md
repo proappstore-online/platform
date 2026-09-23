@@ -20,7 +20,8 @@ Remote MCP server for AI agents to interact with the ProAppStore platform.
 | `list_templates` | None | Approved-template catalogue + selection contract (#178) — read-only; the same data as https://docs.proappstore.online/templates/catalogue.json. Pass an id as `template_repo` to `provision_pas_app`; unknown/withdrawn ids are refused, deprecated ones warn, and the copied source commit is recorded on the app |
 | `platform_guide` | None | Fetch skills.md (full platform guide) |
 | `sdk_reference` | None | Quick SDK reference (auth, db, storage, maps, AI, subscriptions, hooks, UI, recipes, design_system) |
-| `discover_tools` | None | List the per-app tools currently registered (the `<app>/<tool>` set) |
+| `list_app_tools` | Connection | One app's registered tools (names, reads/writes, descriptions; params on request). Never SQL |
+| `call_app_tool` | Connection | Call one app's tool through the platform action executor (mutations audited; refused in read-only mode) |
 | `recipe` | None | Get a pre-built code recipe (19 available). No name = list all, with name = full code |
 
 ### Project tools (build apps over MCP)
@@ -80,22 +81,22 @@ Use connection-level auth or internal token.
 | `agent_ticket_detail` | Detailed ticket info with messages |
 | `agent_cost` | Cost breakdown by role and model |
 
-### Per-app tools (dynamic)
+### Per-app tools
 
-Beyond the fixed tools above, the shared `/mcp` endpoint loads each app's own
-tools from its `mcp.json` manifest and exposes them as `<app_id>/<tool_name>`
-(each tool is one parameterized SQL op against that app's D1, proxied to its
-data worker; auth via the caller's session token). App users should normally use
-`/mcp/apps/<app_id>` instead, which registers only that app's dynamic tools plus
-`whoami` and `mcp_audit_log`. Two ways an app gets registered:
+An app's `mcp.json` tools are registered **only** on that app's endpoint,
+`/mcp/apps/<app_id>`, under their manifest names, alongside `whoami` and
+`mcp_audit_log`. The shared `/mcp` endpoint never registers app tools; its size
+is fixed (`src/tool-count.ts`, asserted by `tool-count.test.ts`). From `/mcp`,
+use `list_app_tools(app_id)` → `call_app_tool(app_id, tool, params)`. Both paths
+execute through the platform action executor (`POST /v1/apps/:id/actions/:name`),
+which enforces `requires_auth` and the manifest's roles; the MCP layer reads only
+the public listing (`GET /v1/apps/:id/tools`, never SQL — #158). Two ways an app
+gets registered:
 
 - **CLI apps** — `pas publish` reads the repo's `mcp.json` (`PUT /v1/apps/:id/tools`).
 - **Agent-built apps** — the Agent Teams deploy stage auto-registers the working
   tree's `mcp.json` after a green deploy (`POST /v1/apps/:id/tools/internal`), so
   every agent-built app with `app.db` data is MCP-callable without a manual step.
-
-Use `discover_tools` on the shared `/mcp` endpoint to see what's currently
-available across apps.
 
 ## Security & safety model
 

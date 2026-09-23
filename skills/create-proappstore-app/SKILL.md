@@ -10,7 +10,7 @@ metadata:
   standard-version: "1.5"
   issue: proappstore-online/platform#170
   triggers: create, scaffold, provision, new ProAppStore app
-allowed-tools: whoami list_templates app_info deploy_status get_deploy_status schema_status discover_tools qa_run qa_list_runs list_apps platform_guide sdk_reference provision_pas_app scaffold_app
+allowed-tools: whoami list_templates app_info deploy_status get_deploy_status schema_status list_app_tools qa_run qa_list_runs list_apps platform_guide sdk_reference provision_pas_app scaffold_app
 ---
 
 # Create and provision a new ProAppStore app
@@ -110,7 +110,7 @@ host response. Complete the checklist in
 [references/verification-checklist.md](references/verification-checklist.md)
 with the read-only tools: `app_info` (live URL, repo, data worker),
 `deploy_status` / `get_deploy_status` (the first *Deploy to R2* run after the
-template commit), `schema_status` (migrations applied), `discover_tools`
+template commit), `schema_status` (migrations applied), `list_app_tools`
 (registered actions from `mcp.json`), and `qa_run` / `qa_list_runs` for a
 post-deploy smoke once a flow exists. Record each item as passed, pending
 (e.g. no deploy run yet) or failed, with the tool that said so.

@@ -7,7 +7,7 @@
     "app_info",
     "list_templates",
     "schema_status",
-    "discover_tools",
+    "list_app_tools",
     "deploy_status",
     "sdk_reference",
     "recipe",

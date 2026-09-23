@@ -33,5 +33,5 @@ from the data worker, and the boundary would be the browser
 ([PAS-DATA-003](https://docs.proappstore.online/standard/data/#pas-data-003)). Give the registered action.
 
 ## An app you cannot read
-`app_info` / `discover_tools` / `schema_status` fail or the app is not on
+`app_info` / `list_app_tools` / `schema_status` fail or the app is not on
 ProAppStore → ask for the repository or the app id; do not infer.

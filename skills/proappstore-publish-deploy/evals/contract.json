@@ -9,7 +9,7 @@
     "deploy_status",
     "get_deploy_status",
     "schema_status",
-    "discover_tools",
+    "list_app_tools",
     "qa_list_flows",
     "qa_run",
     "qa_list_runs",

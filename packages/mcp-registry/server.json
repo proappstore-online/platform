@@ -32,6 +32,7 @@
     {"name": "run_tests", "description": "Trigger Playwright E2E test run"},
     {"name": "list_apps", "description": "List published Pro apps"},
     {"name": "deploy_status", "description": "Check deploy status"},
-    {"name": "discover_tools", "description": "List per-app data tools"}
+    {"name": "list_app_tools", "description": "List one app's registered data tools (never SQL)"},
+    {"name": "call_app_tool", "description": "Call one app's data tool through the platform action executor"}
   ]
 }

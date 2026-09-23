@@ -69,8 +69,8 @@ and the proof. Findings cite the clause and the file, run or command.
 
 ## 9. Registered actions drift from the manifest
 
-**Detect:** `discover_tools` lists tools not in the committed `mcp.json`, or misses some; the *Register app tools* step warned about a missing column; a manifest registered by hand.
+**Detect:** `list_app_tools` lists tools not in the committed `mcp.json`, or misses some; the *Register app tools* step warned about a missing column; a manifest registered by hand.
 **Why:** the deploy re-registers the committed manifest on every run; a difference means a step did not run or someone registered outside the path.
 **Clause:** [PAS-STACK-008](https://docs.proappstore.online/standard/stack/#pas-stack-008), [PAS-DATA-002](https://docs.proappstore.online/standard/data/#pas-data-002).
 **Remediate:** re-run the workflow for the SHA; fix `mcp.json` or append the migration if registration rejected it.
-**Prove:** `Registered N app tool(s)` with N equal to the manifest; `discover_tools` matches.
+**Prove:** `Registered N app tool(s)` with N equal to the manifest; `list_app_tools` matches.

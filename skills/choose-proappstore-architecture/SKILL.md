@@ -10,7 +10,7 @@ metadata:
   standard-version: "1.5"
   issue: proappstore-online/platform#171
   triggers: choose, architecture, platform services, which ProAppStore service, structure a ProAppStore, D1, KV, storage, counters, rooms
-allowed-tools: whoami sdk_reference recipe platform_guide list_templates app_info discover_tools schema_status
+allowed-tools: whoami sdk_reference recipe platform_guide list_templates app_info list_app_tools schema_status
 ---
 
 # Choose ProAppStore architecture and platform services
@@ -83,7 +83,7 @@ the set. Product decisions are the user's — record them as blockers if open.
 | **Mobile/PWA, monitoring, agents (MCP)** | UI shell, logs, registered actions |
 
 For an **existing** app, read it first: `app_info` (URLs, template
-provenance), `discover_tools` (its registered actions), `schema_status`
+provenance), `list_app_tools` (its registered actions), `schema_status`
 (migrations). Do not guess what it already uses.
 
 ### 2. Map each need with the decision tables

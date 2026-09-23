@@ -40,7 +40,7 @@
 
 ### Deployment checks
 - [ ] *Register app tools* step passes (declared params, no DDL, coherence)
-- [ ] `discover_tools` matches the committed `mcp.json`
+- [ ] `list_app_tools` matches the committed `mcp.json`
 - [ ] cross-tenant tests ran in CI on this commit
 
 ### Unsupported

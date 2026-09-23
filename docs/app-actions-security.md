@@ -41,7 +41,7 @@ const result = await app.actions.call<{ rows: Org[] }>('list_orgs', {
 ```
 
 After publish, the same action is available to authenticated MCP clients as
-`{app_id}/list_orgs`.
+`list_orgs` on `/mcp/apps/{app_id}` (and through `call_app_tool` from `/mcp`).
 
 ## Request flow
 

@@ -50,7 +50,7 @@ only when `provision_pas_app` is unavailable.
 | `app_info` | live URL, repo URL, data worker URL, host status |
 | `deploy_status` / `get_deploy_status` | GitHub Actions runs (the *Deploy to R2* workflow) |
 | `schema_status` | D1 migration attempts and whether the latest applied |
-| `discover_tools` | the app's registered actions (from `mcp.json`) |
+| `list_app_tools` | the app's registered actions (from `mcp.json`) |
 | `qa_run`, `qa_list_runs` | queue/read a post-deploy browser smoke (needs a saved flow) |
 | `list_apps` | the caller's apps — confirms the app record exists |
 

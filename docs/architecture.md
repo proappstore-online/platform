@@ -131,10 +131,11 @@ and `dashboard` are routed to the Pages storefront/admin surfaces.
 
 ### 4. `mcp` Worker — platform and app tools
 
-The MCP Worker exposes platform tools, project/repo tools, and dynamically
-registered app tools at `mcp.proappstore.online`. App tools are loaded from the
-backend `app_tools` table and execute through the same
-`/v1/apps/:appId/actions/:name` path used by the browser SDK.
+The MCP Worker exposes platform tools, project/repo tools, and app tools at
+`mcp.proappstore.online`. An app's tools are registered only on its own
+endpoint, `/mcp/apps/<app_id>`, under their manifest names; the shared `/mcp`
+endpoint reaches them through `list_app_tools` / `call_app_tool`. Both execute
+through the same `/v1/apps/:appId/actions/:name` path used by the browser SDK.
 
 ### 5. `agent-teams` Worker — AI build team
 

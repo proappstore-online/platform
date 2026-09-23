@@ -10,7 +10,7 @@ metadata:
   standard-version: "1.5"
   issue: proappstore-online/platform#175
   triggers: migrations, migration, registered actions, registered action, tenant, data access, ProAppStore
-allowed-tools: whoami sdk_reference recipe platform_guide app_info discover_tools schema_status
+allowed-tools: whoami sdk_reference recipe platform_guide app_info list_app_tools schema_status
 ---
 
 # Design migrations, registered actions and tenant-safe data access
@@ -78,7 +78,7 @@ plan and prescribe; you never run SQL, provision or deploy.
 Ask for or read: the entities and who shares them (one user, a project, an
 organisation, a tenant — Tailored or Ready); which flows write, which read,
 which must be atomic; volumes and list sizes; what must be public. For an
-**existing** app: `app_info` (hostnames, template), `discover_tools` (its
+**existing** app: `app_info` (hostnames, template), `list_app_tools` (its
 registered actions and which require auth), `schema_status` (whether the
 latest migration applied or failed). If the client can read the repository,
 read `migrations.json` and `mcp.json` and run the checks in
@@ -152,7 +152,7 @@ tables.
 - **Rerun:** the plan is idempotent — the same schema, manifest and
   requirements produce the same plan; nothing on the platform changes
   between runs. Rerun after each edit to confirm a finding is gone.
-- **Failure:** if `schema_status` or `discover_tools` fails, keep the
+- **Failure:** if `schema_status` or `list_app_tools` fails, keep the
   static findings, mark the live checks *unverified*, and stop rather than
   design on an unknown schema.
 

@@ -1,5 +1,20 @@
 /**
  * Load app tools from the platform API and register them on the MCP server.
+ *
+ * Two surfaces, one executor (#157):
+ *
+ *   · `/mcp/apps/<app_id>` — that ONE app's tools, registered under their
+ *     manifest names beside the fixed `whoami` / `mcp_audit_log`
+ *     (`registerAppTools`). Fetched from `GET /v1/apps/:appId/tools`, which
+ *     returns the allowlisted public view (#158): never SQL.
+ *   · `/mcp` — the shared platform endpoint registers NO app tools, so its size
+ *     does not depend on how many apps exist. It reaches any app's tools through
+ *     `list_app_tools(app_id)` → `call_app_tool(app_id, tool, params)`
+ *     (`registerAppDiscoveryTools`), which read the same per-app listing.
+ *
+ * Both paths execute through the platform action executor
+ * (`POST /v1/apps/:appId/actions/:name`, `executeToolCall`), which is the real
+ * authority on auth and params. Nothing here re-validates a manifest.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -14,7 +29,7 @@ interface ToolParam {
   max?: number;
 }
 
-interface ToolManifest {
+export interface ToolManifest {
   name: string;
   description: string;
   operation: 'query' | 'execute' | 'batch';
@@ -29,9 +44,15 @@ interface ToolManifest {
   };
 }
 
-interface AppTool extends ToolManifest {
+export interface AppTool extends ToolManifest {
   app_id: string;
 }
+
+/** Tools every app-scoped session carries besides the app's own; a manifest name that collides
+ *  with one is skipped (and logged) rather than shadowing it. */
+export const FIXED_APP_SCOPED_TOOLS = ['whoami', 'mcp_audit_log'] as const;
+
+const APP_ID_RE = /^[a-z][a-z0-9-]{0,57}$/;
 
 /**
  * Pre-flight platform-role check for an app tool. The backend action executor
@@ -56,23 +77,22 @@ interface ToolsResponse {
   tools: AppTool[];
 }
 
-// Cache tools for 60 seconds. Keep app-scoped caches separate from the shared
-// platform cache so one connection cannot accidentally widen another.
+// Cache one app's tools for 60 seconds, keyed per app so one connection cannot
+// widen another. There is no global cache and no global fetch any more (#157):
+// the cross-app `GET /v1/tools` is retired (#193).
 const cachedTools = new Map<string, { tools: AppTool[]; time: number }>();
 const CACHE_TTL = 60_000;
 
-export async function fetchTools(api: Fetcher, apiBase: string, appId?: string | null): Promise<AppTool[]> {
+/** One app's registered tools, from `GET /v1/apps/:appId/tools` (public view — never SQL). */
+export async function fetchTools(api: Fetcher, apiBase: string, appId: string): Promise<AppTool[]> {
   const now = Date.now();
-  const cacheKey = appId ? `app:${appId}` : "all";
+  const cacheKey = `app:${appId}`;
   const cached = cachedTools.get(cacheKey);
   if (cached && now - cached.time < CACHE_TTL) return cached.tools;
 
   let res: Response;
   try {
-    const path = appId
-      ? `/v1/apps/${encodeURIComponent(appId)}/tools`
-      : "/v1/tools";
-    res = await api.fetch(`${apiBase}${path}`);
+    res = await api.fetch(`${apiBase}/v1/apps/${encodeURIComponent(appId)}/tools`);
   } catch (err) {
     console.error(`Failed to fetch tools (network):`, err);
     return cached?.tools ?? [];
@@ -83,9 +103,7 @@ export async function fetchTools(api: Fetcher, apiBase: string, appId?: string |
   }
 
   const data = (await res.json()) as ToolsResponse;
-  const tools = appId
-    ? data.tools.map((tool) => ({ ...tool, app_id: appId }))
-    : data.tools;
+  const tools = (data.tools ?? []).map((tool) => ({ ...tool, app_id: appId }));
   cachedTools.set(cacheKey, { tools, time: now });
   return tools;
 }
@@ -171,14 +189,20 @@ function buildZodSchema(params: Record<string, { type: string; description?: str
   return schema;
 }
 
+type UserContext = () => { userId: string | null; token: string | null; roles: string[] };
+
 /**
- * Register all app tools on the MCP server. Called during init().
- * Returns tool names that were registered.
+ * Register ONE app's tools on an app-scoped session (`/mcp/apps/<app_id>`),
+ * under their manifest names (#157 step 3). The client's server name already
+ * namespaces them (a client shows `mcp__crm__list_companies`), and `<app>/<tool>`
+ * violated the MCP tool-name rule (`[A-Za-z0-9._-]`), which the SDK warned about
+ * on every registration. A manifest name that collides with a fixed tool is
+ * skipped and logged rather than shadowing it. Returns the names registered.
  */
 export function registerAppTools(
   server: McpServer,
   tools: AppTool[],
-  getUserContext: () => { userId: string | null; token: string | null; roles: string[] },
+  getUserContext: UserContext,
   api: Fetcher,
   apiBase: string,
   env: SafetyEnv,
@@ -186,11 +210,14 @@ export function registerAppTools(
   const registered: string[] = [];
 
   for (const tool of tools) {
-    const toolName = `${tool.app_id}/${tool.name}`;
+    if ((FIXED_APP_SCOPED_TOOLS as readonly string[]).includes(tool.name)) {
+      console.warn(`Skipping app tool ${tool.app_id}/${tool.name}: collides with the fixed tool "${tool.name}"`);
+      continue;
+    }
     const zodSchema = buildZodSchema(tool.params);
 
     server.tool(
-      toolName,
+      tool.name,
       `[${tool.app_id}] ${tool.description}`,
       zodSchema,
       async (args) => {
@@ -201,17 +228,100 @@ export function registerAppTools(
         const roleErr = checkPlatformRoles(tool, roles);
         if (roleErr) return { content: [{ type: 'text' as const, text: roleErr }] };
         // `execute` and `batch` actions mutate app data; `query` actions are read-only.
-        // Gate + audit the mutating ones (read-only mode throws here).
+        // Gate + audit the mutating ones (read-only mode throws here). `scope: "app"`
+        // lets the audit log tell this path from `call_app_tool` on the shared endpoint.
         if (tool.operation !== 'query') {
-          await gateMutation({ env, subject: userId }, toolName, { app_id: tool.app_id });
+          await gateMutation({ env, subject: userId }, tool.name, { app_id: tool.app_id, scope: 'app' });
         }
         const result = await executeToolCall(tool, args as Record<string, unknown>, token, api, apiBase);
         return { content: [{ type: 'text' as const, text: result }] };
       },
     );
 
-    registered.push(toolName);
+    registered.push(tool.name);
   }
 
   return registered;
+}
+
+/** One line per tool for `list_app_tools`: what it is, whether it writes, whether it needs a session. */
+function describeTool(t: AppTool, includeParams: boolean): string {
+  const kind = t.operation === 'query' ? 'reads' : 'writes';
+  const auth = t.requires_auth === false ? 'public' : 'auth';
+  const line = `${t.name} — ${kind} — ${auth} — ${t.description}`;
+  if (!includeParams) return line;
+  const params = Object.entries(t.params ?? {})
+    .map(([name, def]) => `${name}${def.optional || def.default !== undefined ? '?' : ''}: ${def.type}${def.description ? ` — ${def.description}` : ''}`)
+    .join(', ');
+  return params ? `${line}\n  params: ${params}` : line;
+}
+
+/**
+ * The shared endpoint's way to reach any app's tools without registering them
+ * all (#157 step 2, vendored from PAGS `list_instance_tools` / `call_instance_tool`):
+ *
+ *   · `list_app_tools(app_id, include_params?)` — one line per tool, schemas off
+ *     by default ("ask for them when you are about to call one"). Never `sql`.
+ *   · `call_app_tool(app_id, tool, params?)` — the generic invoker: the same
+ *     platform-role pre-flight and mutation gate as a registered tool, then the
+ *     same `executeToolCall`. The backend validates params; nothing here does.
+ *
+ * Discovery deliberately mirrors the executor: any authenticated caller may list
+ * any app, because the executor already lets any signed-in user call any app's
+ * `requires_auth` action by name — a stricter list would claim a boundary the
+ * executor does not enforce. Identity comes from the connection, not a `token` arg.
+ */
+export function registerAppDiscoveryTools(
+  server: McpServer,
+  getUserContext: UserContext,
+  api: Fetcher,
+  apiBase: string,
+  env: SafetyEnv,
+): void {
+  server.tool(
+    'list_app_tools',
+    "One app's registered data tools (its mcp.json), as the platform sees them: name, reads or writes, auth or public, description — and each tool's params with include_params. Never SQL. From the shared /mcp endpoint this is how you find what an app exposes; call one with call_app_tool, or connect to /mcp/apps/<app_id> to have them registered directly. An empty list means the app has no registered tools or does not exist.",
+    {
+      app_id: z.string().describe("The app id (its subdomain / repository name), e.g. 'crm'."),
+      include_params: z.boolean().optional().describe("Append each tool's params (name, type, description). Off by default; ask for them when you are about to call one."),
+    },
+    async ({ app_id, include_params }) => {
+      if (!APP_ID_RE.test(app_id)) return { content: [{ type: 'text' as const, text: `Error: invalid app_id "${app_id}".` }] };
+      const tools = await fetchTools(api, apiBase, app_id);
+      if (tools.length === 0) {
+        return { content: [{ type: 'text' as const, text: `${app_id} has no registered tools (or does not exist). Apps register tools by committing an mcp.json; list_apps shows the apps you can see.` }] };
+      }
+      const lines = tools.map((t) => describeTool(t, include_params === true));
+      return { content: [{ type: 'text' as const, text: `# ${app_id}: ${tools.length} tool(s)\n\n${lines.join('\n')}\n\nCall one with call_app_tool({ app_id: "${app_id}", tool: "<name>", params: { … } }).` }] };
+    },
+  );
+
+  server.tool(
+    'call_app_tool',
+    "Call one app's registered data tool through the platform action executor, exactly as the app's own /mcp/apps/<app_id> endpoint and the browser SDK do: the executor enforces requires_auth and the manifest's platform / app roles, validates params against the manifest, and scopes rows in the tool's SQL. Query tools return rows; execute and batch tools mutate app data, are audited, and are refused in read-only mode. Runs as the connected account. Use list_app_tools first to see names and params.",
+    {
+      app_id: z.string().describe("The app id, e.g. 'crm'."),
+      tool: z.string().describe('The tool name from list_app_tools.'),
+      params: z.record(z.unknown()).optional().describe("The tool's params, by name."),
+    },
+    async ({ app_id, tool, params }) => {
+      if (!APP_ID_RE.test(app_id)) return { content: [{ type: 'text' as const, text: `Error: invalid app_id "${app_id}".` }] };
+      const tools = await fetchTools(api, apiBase, app_id);
+      const manifest = tools.find((t) => t.name === tool);
+      if (!manifest) {
+        return { content: [{ type: 'text' as const, text: `Unknown tool ${tool} for ${app_id}; call list_app_tools({ app_id: "${app_id}" }) for the names it exposes.` }] };
+      }
+      const { userId, token, roles } = getUserContext();
+      const roleErr = checkPlatformRoles(manifest, roles);
+      if (roleErr) return { content: [{ type: 'text' as const, text: roleErr }] };
+      // Query tools must keep working under MCP_READ_ONLY; only the mutating operations are
+      // gated and audited. PAGS gates its invoker unconditionally because it cannot know the
+      // side effect; PAS knows `operation`.
+      if (manifest.operation !== 'query') {
+        await gateMutation({ env, subject: userId }, 'call_app_tool', { app_id, tool, scope: 'shared' });
+      }
+      const result = await executeToolCall(manifest, params ?? {}, token, api, apiBase);
+      return { content: [{ type: 'text' as const, text: result }] };
+    },
+  );
 }

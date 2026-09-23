@@ -5,7 +5,7 @@
   "allowed_tools": [
     "whoami",
     "app_info",
-    "discover_tools",
+    "list_app_tools",
     "schema_status",
     "deploy_status",
     "qa_list_runs",

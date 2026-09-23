@@ -54,7 +54,7 @@ Next: pick a stage number to implement (bounded mode).
 | pas check | ok |
 
 ### Release
-Handed to `proappstore-publish-deploy`: deploy run <URL>, smoke <run id: passed>, schema_status <…>, discover_tools <unchanged | updated>.
+Handed to `proappstore-publish-deploy`: deploy run <URL>, smoke <run id: passed>, schema_status <…>, list_app_tools <unchanged | updated>.
 
 ### Human checks pending
 - [ ] <e.g. sign in on <hostname> — PAS-AUTH-020>

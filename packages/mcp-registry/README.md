@@ -33,7 +33,7 @@ https://mcp.proappstore.online/mcp
 
 ## Tools
 
-**Platform info** — `sdk_reference`, `recipe`, `platform_guide`, `deploy_status`, `app_info`, `list_apps`, `discover_tools`
+**Platform info** — `sdk_reference`, `recipe`, `platform_guide`, `deploy_status`, `app_info`, `list_apps`, `list_app_tools`, `call_app_tool`
 
 **Build apps** — `provision_pas_app`, `scaffold_app`, `write_file`, `read_file`, `list_files`, `delete_file`, `search_files`, `batch_write_files`, `get_deploy_status`, `provision_app`
 
