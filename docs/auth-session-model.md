@@ -1,5 +1,7 @@
 # Browser Auth Session Model
 
+> **App requirements** for sessions and sign-in live in the [Application Standard — Identity, sessions, and permissions](./standard/auth.md). This page is the platform design those clauses cite; where the two differ, the standard's *Since* version says which is current.
+
 PAS owns browser auth for apps. App code should use the SDK auth APIs and should
 not store, copy, or parse PAS session tokens itself.
 

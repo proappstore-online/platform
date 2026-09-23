@@ -1,5 +1,7 @@
 # App Actions and Data Access Security
 
+> **App requirements** for registered actions, row scoping and raw SQL are clauses in the [Application Standard — Data, actions, and Workers](./standard/data.md). This page is the platform mechanism those clauses cite.
+
 PAS app data should be exposed through registered actions. The same action
 manifest powers browser SDK calls and MCP app tools, so authentication,
 authorization, parameter binding, and data-worker execution stay in one platform

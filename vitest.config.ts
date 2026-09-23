@@ -8,7 +8,7 @@ const workerdStub = fileURLToPath(new URL('./test/cloudflare-virtual-stub.ts', i
 
 export default defineConfig({
   test: {
-    include: ['packages/*/src/**/*.test.ts'],
+    include: ['packages/*/src/**/*.test.ts', 'test/**/*.test.ts'],
     environment: 'node',
     alias: {
       'cloudflare:workers': workerdStub,

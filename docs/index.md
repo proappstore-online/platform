@@ -44,6 +44,9 @@ tools.
 ## Start here
 
 - [Getting Started](./getting-started.md)
+- [Application Standard and Audit Guide](./standard/index.md) — how an app
+  should use the platform, clause by clause, and how a human or an AI copilot
+  audits a repository against it
 - [SDK overview](./sdk-overview.md)
 - [UI components](./ui.md)
 - [Recipes](./recipes.md)
@@ -56,3 +59,12 @@ tools.
 - [Agent customization](./agent-customization.md)
 - [Project docs sharing](./project-docs-sharing.md)
 - [Architecture](./architecture.md)
+
+## Building an app to the standard
+
+The capability pages above say what the platform provides. The
+[Recommended Application Standard](./standard/index.md) says when an app should
+use each capability, what the recommended pattern is, which substitutes are
+unsafe, and what evidence shows correct use. Give it to your AI copilot and ask
+for an audit: it produces pass/fail/not-applicable results per clause and one
+bounded issue per genuine failure, each citing the public clause URL.

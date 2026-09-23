@@ -106,6 +106,10 @@ jobs:
             - https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js
             - javascripts/mermaid-init.js
           markdown_extensions:
+            - attr_list
+            - tables
+            - toc:
+                permalink: true
             - pymdownx.superfences:
                 custom_fences:
                   - name: mermaid
@@ -114,6 +118,17 @@ jobs:
           nav:
             - Home: index.md
             - Getting Started: getting-started.md
+            - Application Standard:
+                - Overview & audit guide: standard/index.md
+                - Audit model: standard/audit-model.md
+                - Governance & versioning: standard/governance.md
+                - Stack & platform services: standard/stack.md
+                - Identity, sessions & permissions: standard/auth.md
+                - Data, actions & Workers: standard/data.md
+                - Integrations & platform services: standard/integrations.md
+                - UI, browser security & PWA: standard/ui.md
+                - Testing, deployment & operations: standard/ops.md
+                - Changelog: standard/changelog.md
             - SDK: sdk-overview.md
             - UI Components: ui.md
             - Recipes: recipes.md

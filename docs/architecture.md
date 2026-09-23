@@ -1,5 +1,7 @@
 # Architecture
 
+> **Building an app on this?** The [Application Standard](./standard/index.md) says which of these components an app should use for each need and how an audit checks it; start with the [Stack and platform services chapter](./standard/stack.md). This page describes the platform; it does not set app requirements.
+
 ProAppStore runs as a **single control plane composed of Cloudflare Workers**.
 Apps published on the platform — Tailored or Ready — talk to PAS-owned APIs;
 the only difference is which resources the publisher provisions and which SDK

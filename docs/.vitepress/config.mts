@@ -46,6 +46,21 @@ const mainSidebar = [
     ],
   },
   {
+    text: "Application Standard",
+    items: [
+      { text: "Overview & Audit Guide", link: "/standard/" },
+      { text: "Audit Model", link: "/standard/audit-model" },
+      { text: "Governance & Versioning", link: "/standard/governance" },
+      { text: "Stack & Platform Services", link: "/standard/stack" },
+      { text: "Identity, Sessions & Permissions", link: "/standard/auth" },
+      { text: "Data, Actions & Workers", link: "/standard/data" },
+      { text: "Integrations & Platform Services", link: "/standard/integrations" },
+      { text: "UI, Browser Security & PWA", link: "/standard/ui" },
+      { text: "Testing, Deployment & Operations", link: "/standard/ops" },
+      { text: "Changelog", link: "/standard/changelog" },
+    ],
+  },
+  {
     text: "Architecture",
     items: [
       { text: "System Overview", link: "/architecture" },
