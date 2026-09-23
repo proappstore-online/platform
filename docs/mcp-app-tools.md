@@ -306,6 +306,10 @@ confirm → provision → verify) and
 [`choose-proappstore-architecture`](https://github.com/proappstore-online/platform/blob/main/skills/choose-proappstore-architecture/SKILL.md)
 (requirements → decision tables → unsupported needs → `sdk_reference` /
 `recipe` verification → a bounded architecture decision citing the standard;
+read-only) and
+[`proappstore-auth-sessions-roles`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-auth-sessions-roles/SKILL.md)
+(platform-cookie sessions, SDK sign-in/sign-out, app roles + manifest gates +
+SQL scoping, permissions UI, negative tests; detects the auth anti-patterns;
 read-only). Skills carry no credentials, call only a minimal allow-list of MCP
 tools, and are validated by `test/skills.test.ts`.
 
