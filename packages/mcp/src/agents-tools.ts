@@ -22,11 +22,14 @@ async function agentsApi(
     return { ok: false, status: 401, data: { error: "no auth available" } };
   }
   const res = await agents.fetch(`${agentsBase}${path}`, { headers });
+  // Read the body once: `res.json()` consumes it, so a `res.text()` fallback
+  // after a parse failure threw and the detail collapsed to "unknown".
+  const raw = await res.text().catch(() => "");
   let data: unknown;
   try {
-    data = await res.json();
+    data = JSON.parse(raw);
   } catch {
-    data = { error: await res.text().catch(() => "unknown") };
+    data = { error: raw || "unknown" };
   }
   return { ok: res.ok, status: res.status, data };
 }
@@ -165,11 +168,15 @@ export function registerAgentsTools(
       if (!ticket) return txt(`Ticket #${ticket_seq} not found.`);
 
       const msgsR = await agentsApi(agents, agentsBase, `/v1/projects/${app_id}/tickets/${ticket.id}/messages`, token, internalToken);
-      const messages = msgsR.ok
-        ? (((msgsR.data as { messages: unknown[] }).messages ?? []) as Array<{
-            id: string; author: string; body: string; createdAt: number;
-          }>)
-        : [];
+      // A failed messages read used to fall through to `[]` and print
+      // "Messages (0)" — an outage or a 403 became a valid-looking empty
+      // conversation (#152). Surface it like the ticket read above does.
+      if (!msgsR.ok) {
+        return txt(`Error: ${msgsR.status} reading messages for #${ticket.seq}: ${JSON.stringify(msgsR.data)}`);
+      }
+      const messages = ((msgsR.data as { messages: unknown[] }).messages ?? []) as Array<{
+        id: string; author: string; body: string; createdAt: number;
+      }>;
 
       const lines = [
         `**#${ticket.seq} ${ticket.title}**`,
