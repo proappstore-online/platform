@@ -1,6 +1,6 @@
 # Audit model
 
-**Standard version 1.3** · Part of the [Application Standard](./index.md)
+**Standard version 1.4** · Part of the [Application Standard](./index.md)
 
 This page defines the vocabulary an audit uses: how applicability is decided,
 what counts as evidence, how a clause is verified, how results and severities

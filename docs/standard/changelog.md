@@ -4,6 +4,31 @@ Part of the [Application Standard](./index.md). One entry per version, newest
 first; the [changelog policy](./governance.md#changelog-policy) defines the
 sections.
 
+## 1.4
+
+UI, browser security, and PWA (chapter `UI`).
+
+- **Added** — PAS-UI-001 to PAS-UI-023: SDK components and design tokens
+  (001), dark mode via `data-theme` and `stores-theme` (002), landmarks and
+  headings (003), accessible names and labels (004), keyboard operability
+  (005), colour contrast (006), zoom never blocked — `user-scalable=no`
+  flagged (007), viewport meta and supported viewports (008), 360 px layout,
+  overflow and touch targets (009), safe areas and `svh`/`dvh` (010),
+  loading/empty/error states (011), platform security headers as the floor
+  (012), stricter per-app CSP (013), no HTML sinks (014), URL and redirect
+  validation (015), uploads and content types (016), framing (017),
+  service-worker cache and session isolation (018), offline behaviour (019),
+  installability (020), bundle budget and no source maps (021), dependency
+  hygiene (022), human browser verification (023). Plus the compliance-check
+  → clause map with what the scanner cannot prove, the known scaffold
+  defects table, the security-versus-quality split, and the SDK component
+  accessibility table. Every clause carries a **Kind** line.
+- **Changed** — none.
+- **Withdrawn** — none.
+- **Editorial** — `ui.md` (capability page) token table replaced: the
+  purple/slate aliases (`--bg`, `--surface`, `--border`, …) are gone in
+  favour of the canonical token names from `DESIGN-SYSTEM.md` (`--paper`, `--panel`, `--panel-alt`, `--line`, `--line-strong`); values unchanged.
+
 ## 1.3
 
 Data, actions, and Workers (chapter `DATA`).

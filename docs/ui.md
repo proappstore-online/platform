@@ -47,21 +47,25 @@ Dedicated settings page for any route.
 
 ## Design Tokens
 
-SDK components reference CSS custom properties. ProAppStore uses a purple accent palette.
+SDK components reference the platform's canonical CSS custom properties (the
+contract in `DESIGN-SYSTEM.md`). ProAppStore uses a purple accent palette. The
+old aliases `--bg`, `--surface`, `--surface-2`, `--border` and `--border-strong`
+are banned by the design-system lint — use the names below.
 
 | Token | Light | Dark | Purpose |
 | --- | --- | --- | --- |
-| `--bg` | `#f8fafc` | `#0f172a` | Page background |
-| `--surface` | `#ffffff` | `#1e293b` | Card/panel background |
+| `--paper` | `#f8fafc` | `#0f172a` | Page background |
+| `--panel` | `#ffffff` | `#1e293b` | Card / elevated surface |
+| `--panel-alt` | `#f1f5f9` | `#0f172a` | Secondary surface |
 | `--ink` | `#1e293b` | `#f1f5f9` | Primary text |
+| `--ink-strong` | `#0f172a` | `#ffffff` | Headings, emphasis |
 | `--muted` | `#64748b` | `#94a3b8` | Secondary text |
-| `--border` | `#e2e8f0` | `#334155` | Borders |
+| `--line` | `#e2e8f0` | `#334155` | Borders |
+| `--line-strong` | `#cbd5e1` | `#475569` | Emphasized borders (hover, focus) |
 | `--accent` | `#7c3aed` | `#a78bfa` | Primary action (purple) |
 | `--accent-hover` | `#6d28d9` | `#7c3aed` | Action hover |
 | `--accent-soft` | `#f5f3ff` | `#2e1065` | Accent background |
-| `--ink-strong` | `#0f172a` | `#ffffff` | Emphasized text |
-| `--surface-2` | `#f1f5f9` | `#0f172a` | Secondary surface |
-| `--border-strong` | `#cbd5e1` | `#475569` | Strong borders |
+| `--danger` / `--success` / `--warning` (+ `-soft`) | see `DESIGN-SYSTEM.md` | | Semantic status colours |
 | `--radius` | `0.75rem` | | Default border radius |
 | `--radius-sm` | `0.5rem` | | Small border radius |
 | `--shadow` | `0 1px 3px rgba(15,23,42,0.08)` | | Card shadow |

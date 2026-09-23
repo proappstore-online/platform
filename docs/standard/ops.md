@@ -1,6 +1,6 @@
 # Testing, deployment, and operations
 
-**Standard version 1.3** · Chapter `OPS` · Part of the [Application Standard](./index.md)
+**Standard version 1.4** · Chapter `OPS` · Part of the [Application Standard](./index.md)
 
 **Scope.** Testing, CI and OIDC deployment, rollback, logging and monitoring, privacy, dependency policy.
 
@@ -21,5 +21,5 @@ provides and are not restated here.
 
 ## Clauses
 
-No clauses are published in this chapter at standard version 1.3. Clauses are
+No clauses are published in this chapter at standard version 1.4. Clauses are
 added in minor versions and listed in the [changelog](./changelog.md).
