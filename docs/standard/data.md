@@ -1,6 +1,6 @@
 # Data, actions, and Workers
 
-**Standard version 1.0** · Chapter `DATA` · Part of the [Application Standard](./index.md)
+**Standard version 1.1** · Chapter `DATA` · Part of the [Application Standard](./index.md)
 
 **Scope.** D1 schema and migrations, registered actions, per-user/project/tenant row scoping, KV, counters, storage, rooms and Durable Objects, Workers and service bindings.
 
@@ -21,5 +21,5 @@ provides and are not restated here.
 
 ## Clauses
 
-No clauses are published in this chapter at standard version 1.0. Clauses are
+No clauses are published in this chapter at standard version 1.1. Clauses are
 added in minor versions and listed in the [changelog](./changelog.md).

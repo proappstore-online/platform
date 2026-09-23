@@ -1,6 +1,6 @@
 # Recommended Application Standard and Audit Guide
 
-**Standard version 1.0** · [Changelog](./changelog.md) · [Governance and versioning](./governance.md) · [Audit model](./audit-model.md)
+**Standard version 1.1** · [Changelog](./changelog.md) · [Governance and versioning](./governance.md) · [Audit model](./audit-model.md)
 
 This is the canonical, clause-numbered standard for how an application built on
 ProAppStore should be designed and implemented. It exists so that developers and

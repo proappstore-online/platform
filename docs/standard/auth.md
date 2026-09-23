@@ -1,6 +1,6 @@
 # Identity, sessions, and permissions
 
-**Standard version 1.0** · Chapter `AUTH` · Part of the [Application Standard](./index.md)
+**Standard version 1.1** · Chapter `AUTH` · Part of the [Application Standard](./index.md)
 
 **Scope.** Platform-cookie authentication, sign-in and sign-out, platform/team/app RBAC, and permissions UI.
 
@@ -19,5 +19,5 @@ provides and are not restated here.
 
 ## Clauses
 
-No clauses are published in this chapter at standard version 1.0. Clauses are
+No clauses are published in this chapter at standard version 1.1. Clauses are
 added in minor versions and listed in the [changelog](./changelog.md).
