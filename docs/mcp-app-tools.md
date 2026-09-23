@@ -315,7 +315,12 @@ read-only) and
 (store choice, additive migrations, registered actions with typed params and
 magic params, SQL scoping, batches, idempotency, negative tests, migration and
 deployment checks; detects cross-tenant access, guessed ids, replayable grants,
-unsafe writes and drift; read-only). Skills carry no credentials, call only a minimal allow-list of MCP
+unsafe writes and drift; read-only) and
+[`proappstore-publish-deploy`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-publish-deploy/SKILL.md)
+(gates → inspect migrations and actions → preview → push to `main` →
+`deploy_status` / `schema_status` / `discover_tools` / `qa_list_runs` →
+evidence bundle → `git revert` rollback; read-only plus `qa_run`). Skills
+carry no credentials, call only a minimal allow-list of MCP
 tools, and are validated by `test/skills.test.ts`.
 
 ## Limits & roadmap

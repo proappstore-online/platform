@@ -52,7 +52,9 @@ to platform primitives with `sdk_reference` / `recipe`, read-only;
 `proappstore-auth-sessions-roles`: platform-cookie sessions, app roles and
 permissions, auth anti-pattern remediation, read-only;
 `proappstore-data-migrations-actions`: migrations, registered actions and
-tenant-safe SQL, read-only) live in the platform repository under
+tenant-safe SQL, read-only; `proappstore-publish-deploy`: gates, push-to-main
+deploy, deploy/schema/QA status monitoring, evidence and `git revert`
+rollback, read-only plus `qa_run`) live in the platform repository under
 [`skills/`](https://github.com/proappstore-online/platform/tree/main/skills).
 Copy a skill directory into your client's skills location and connect this
 server.
