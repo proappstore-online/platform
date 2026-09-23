@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
 import { testToken, TEST_SK, mockStmt, mockD1, makeEnv } from '../test-helpers.js';
+import { mintLicenseKey, LICENSE_KEY_BYTES } from './license.js';
 
 const TOK = await testToken('gh:1');
 
@@ -315,5 +316,126 @@ describe('POST /v1/license/validate — throttle (#86)', () => {
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ valid: true });
+  });
+});
+
+// #86: issuance. Nothing wrote to `licenses` before this; the read path's
+// subscription join was a trap for whoever built it. These routes are that
+// writer, gated the same way the reads are.
+describe('POST /v1/apps/:appId/license — issuance (#86)', () => {
+  /** SQL-routed mock: subscription status, existing license, and the INSERT. */
+  function issueDb(opts: { sub?: string | null; existing?: Record<string, unknown> | null } = {}) {
+    const insert = mockStmt({ run: { meta: { changes: 1 } } });
+    const prepare = vi.fn((sql: string) => {
+      if (/FROM subscriptions/i.test(sql)) return mockStmt({ first: opts.sub === null || opts.sub === undefined ? null : { status: opts.sub } });
+      if (/INSERT INTO licenses/i.test(sql)) return insert;
+      if (/FROM licenses/i.test(sql)) return mockStmt({ first: opts.existing ?? null });
+      return mockStmt();
+    });
+    return { db: { prepare } as unknown as ReturnType<typeof mockD1>, insert, prepare };
+  }
+  const post = (db: ReturnType<typeof mockD1>) =>
+    app.request('/v1/apps/myapp/license', { method: 'POST', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({}, db));
+
+  it('returns 401 without auth', async () => {
+    const res = await app.request('/v1/apps/myapp/license', { method: 'POST', headers: { Authorization: 'Bearer bad' } }, makeEnv());
+    expect(res.status).toBe(401);
+  });
+
+  it('mints a 256-bit key for an active subscriber (201)', async () => {
+    const { db, insert } = issueDb({ sub: 'active' });
+    const res = await post(db);
+    expect(res.status).toBe(201);
+    const body = await res.json() as { key: string; appId: string; issuedAt: number; expiresAt: number | null };
+    expect(body.appId).toBe('myapp');
+    expect(body.expiresAt).toBeNull();
+    expect(body.key).toMatch(/^[A-Za-z0-9_-]{43}$/); // 32 bytes base64url, no padding
+    // The stored key is the returned key, owned by the caller, for this app.
+    const [key, appId, userId, issuedAt] = insert.bind.mock.calls[0];
+    expect(key).toBe(body.key);
+    expect(appId).toBe('myapp');
+    expect(userId).toBe('gh:1');
+    expect(issuedAt).toBe(body.issuedAt);
+  });
+
+  it('is idempotent: returns the existing live key (200) instead of minting another', async () => {
+    const { db, insert } = issueDb({ sub: 'active', existing: { key: 'existing-key', app_id: 'myapp', issued_at: 5, expires_at: null } });
+    const res = await post(db);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ key: 'existing-key', appId: 'myapp', issuedAt: 5, expiresAt: null });
+    expect(insert.run).not.toHaveBeenCalled();
+  });
+
+  it('only reuses an un-revoked, un-expired key (filtered in SQL)', async () => {
+    const { db, prepare } = issueDb({ sub: 'active' });
+    await post(db);
+    const lookup = prepare.mock.calls.map(([sql]) => sql as string).find((sql) => /FROM licenses/i.test(sql))!;
+    expect(lookup).toMatch(/revoked = 0/);
+    expect(lookup).toMatch(/expires_at IS NULL OR expires_at > \?/);
+  });
+
+  it.each(['canceled', 'past_due', 'incomplete'])('refuses to mint for a %s subscription (403)', async (status) => {
+    const { db, insert } = issueDb({ sub: status });
+    const res = await post(db);
+    expect(res.status).toBe(403);
+    expect(await res.text()).toBe('subscription inactive');
+    expect(insert.run).not.toHaveBeenCalled();
+  });
+
+  it('refuses to mint when the user has no subscription row (403)', async () => {
+    const { db, insert } = issueDb({ sub: null });
+    const res = await post(db);
+    expect(res.status).toBe(403);
+    expect(insert.run).not.toHaveBeenCalled();
+  });
+
+  it('checks the subscription BEFORE reading or writing licenses', async () => {
+    // A lapsed caller must not learn whether a key exists, and must not create one.
+    const { db, prepare } = issueDb({ sub: 'canceled' });
+    await post(db);
+    const sqls = prepare.mock.calls.map(([sql]) => sql as string);
+    expect(sqls.some((sql) => /licenses/i.test(sql))).toBe(false);
+  });
+});
+
+describe('DELETE /v1/apps/:appId/license — revocation (#86)', () => {
+  it('returns 401 without auth', async () => {
+    const res = await app.request('/v1/apps/myapp/license', { method: 'DELETE', headers: { Authorization: 'Bearer bad' } }, makeEnv());
+    expect(res.status).toBe(401);
+  });
+
+  it("revokes only the caller's own un-revoked keys for the app and reports the count", async () => {
+    const update = mockStmt({ run: { meta: { changes: 2 } } });
+    const db = mockD1(update);
+    const res = await app.request('/v1/apps/myapp/license', { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({}, db));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ revoked: 2 });
+    const sql = (db.prepare as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(sql).toMatch(/UPDATE licenses SET revoked = 1/);
+    expect(sql).toMatch(/app_id = \? AND user_id = \? AND revoked = 0/);
+    expect(update.bind).toHaveBeenCalledWith('myapp', 'gh:1');
+  });
+
+  it('reports zero when there was nothing to revoke', async () => {
+    const db = mockD1(mockStmt({ run: { meta: { changes: 0 } } }));
+    const res = await app.request('/v1/apps/myapp/license', { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({}, db));
+    expect(await res.json()).toEqual({ revoked: 0 });
+  });
+});
+
+describe('mintLicenseKey (#86)', () => {
+  it('encodes at least 128 bits of randomness', () => {
+    expect(LICENSE_KEY_BYTES * 8).toBeGreaterThanOrEqual(128);
+    // 32 bytes → 43 base64url chars, no padding, URL/header safe.
+    expect(mintLicenseKey()).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  });
+
+  it('draws from crypto.getRandomValues and never repeats', () => {
+    const spy = vi.spyOn(crypto, 'getRandomValues');
+    const keys = new Set(Array.from({ length: 200 }, () => mintLicenseKey()));
+    expect(keys.size).toBe(200);
+    expect(spy).toHaveBeenCalledTimes(200);
+    expect((spy.mock.calls[0][0] as Uint8Array).byteLength).toBe(LICENSE_KEY_BYTES);
+    spy.mockRestore();
   });
 });

@@ -12,11 +12,13 @@
  * `app_id` column. Joining on app would not just be wrong, it would not compile
  * against the schema.
  *
- * NOTE: nothing in this repo issues a license — there is no INSERT into
- * `licenses` anywhere, so the table is empty in practice and both routes are
- * inert today. These checks exist so that whoever builds issuance inherits a
- * correct read path rather than this hole. See #86 for what issuance still owes:
- * key entropy, and revocation semantics beyond the subscription join.
+ * ISSUANCE (#86): `POST /apps/:appId/license` mints the caller's key. It is
+ * gated on an active subscription up front, so a lapsed subscriber cannot even
+ * obtain a key, and it is idempotent — a second call returns the existing
+ * un-revoked, un-expired key rather than minting another. Keys are 32 bytes
+ * from crypto.getRandomValues (256 bits), base64url. `DELETE` revokes the
+ * caller's own keys for the app — the compromised-key case, where the
+ * subscription is still active and the join above would keep validating.
  */
 
 import { Hono } from 'hono';
@@ -30,6 +32,21 @@ import {
 } from '../lib/license-rate-limit.js';
 
 export const licenseRoutes = new Hono<{ Bindings: Env }>();
+
+/** Bytes of randomness in a license key. 32 bytes = 256 bits (#86 asks for ≥128). */
+export const LICENSE_KEY_BYTES = 32;
+
+/** A fresh license key: 256 random bits, base64url without padding (43 chars). */
+export function mintLicenseKey(): string {
+  const buf = crypto.getRandomValues(new Uint8Array(LICENSE_KEY_BYTES));
+  let bin = '';
+  for (const b of buf) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function licenseJson(row: Pick<LicenseRow, 'key' | 'app_id' | 'issued_at' | 'expires_at'>) {
+  return { key: row.key, appId: row.app_id, issuedAt: row.issued_at, expiresAt: row.expires_at };
+}
 
 /** Get the current user's license for an app. */
 licenseRoutes.get('/apps/:appId/license', async (c) => {
@@ -62,12 +79,69 @@ licenseRoutes.get('/apps/:appId/license', async (c) => {
       return c.text('subscription inactive', 403);
     }
 
-    return c.json({
-      key: row.key,
-      appId: row.app_id,
-      issuedAt: row.issued_at,
-      expiresAt: row.expires_at,
-    });
+    return c.json(licenseJson(row));
+  } catch (err) {
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
+    throw err;
+  }
+});
+
+/**
+ * Issue the current user's license for an app (#86).
+ *
+ * 200 with the existing key when one is live, 201 when a new one was minted,
+ * 403 when the caller has no active subscription. The subscription check comes
+ * FIRST so that a lapsed user cannot mint a key that the validate join would
+ * refuse anyway — no orphaned rows, nothing to clean up on cancel.
+ */
+licenseRoutes.post('/apps/:appId/license', async (c) => {
+  try {
+    const user = await requireUser(c);
+    const { appId } = c.req.param();
+
+    const sub = await c.env.DB.prepare(
+      'SELECT status FROM subscriptions WHERE user_id = ?',
+    ).bind(user.id).first<{ status: string }>();
+    if (sub?.status !== 'active') return c.text('subscription inactive', 403);
+
+    const now = Date.now();
+    // Idempotent: a live key is returned, not replaced. Revoke first to rotate.
+    const existing = await c.env.DB.prepare(
+      `SELECT key, app_id, issued_at, expires_at
+         FROM licenses
+        WHERE app_id = ? AND user_id = ? AND revoked = 0
+          AND (expires_at IS NULL OR expires_at > ?)
+        ORDER BY issued_at DESC
+        LIMIT 1`,
+    ).bind(appId, user.id, now).first<Pick<LicenseRow, 'key' | 'app_id' | 'issued_at' | 'expires_at'>>();
+    if (existing) return c.json(licenseJson(existing));
+
+    const key = mintLicenseKey();
+    await c.env.DB.prepare(
+      `INSERT INTO licenses (key, app_id, user_id, issued_at, expires_at, revoked)
+       VALUES (?, ?, ?, ?, NULL, 0)`,
+    ).bind(key, appId, user.id, now).run();
+
+    return c.json(licenseJson({ key, app_id: appId, issued_at: now, expires_at: null }), 201);
+  } catch (err) {
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
+    throw err;
+  }
+});
+
+/**
+ * Revoke the current user's license(s) for an app (#86). Covers the case the
+ * subscription join cannot: a key that leaked while the subscription is still
+ * active. Revocation is permanent; `POST` mints a replacement.
+ */
+licenseRoutes.delete('/apps/:appId/license', async (c) => {
+  try {
+    const user = await requireUser(c);
+    const { appId } = c.req.param();
+    const result = await c.env.DB.prepare(
+      'UPDATE licenses SET revoked = 1 WHERE app_id = ? AND user_id = ? AND revoked = 0',
+    ).bind(appId, user.id).run();
+    return c.json({ revoked: result.meta?.changes ?? 0 });
   } catch (err) {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;

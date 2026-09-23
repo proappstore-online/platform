@@ -72,7 +72,7 @@ app.ai.generate(prompt, opts) / .chat(messages, opts) / .embed(text, opts)
 app.subscription.status() / .openCheckout(opts) / .openPortal(returnUrl)
 
 // License keys
-app.license.current() / .validate(key)
+app.license.current() / .issue() / .revoke() / .validate(key)
 
 // Usage tracking (auto-on, drives creator payouts)
 app.usage.start() / .stop() / .flush()

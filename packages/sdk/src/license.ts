@@ -27,6 +27,37 @@ export class LicenseApi {
     return (await response.json()) as LicenseInfo;
   }
 
+  /**
+   * Issue (or fetch the existing) license key for the signed-in user.
+   * Requires an active platform subscription — throws `license.issue failed: 403`
+   * otherwise. Idempotent: the live key is returned, not replaced.
+   */
+  async issue(): Promise<LicenseInfo> {
+    const response = await this.auth.authenticatedFetch(
+      new URL(`/v1/apps/${encodeURIComponent(this.appId)}/license`, this.apiBase),
+      { method: 'POST' },
+    );
+    if (response.status === 401) { this.auth.handleUnauthorized(); throw new Error('license.issue failed: 401'); }
+    if (!response.ok) throw new Error(`license.issue failed: ${response.status}`);
+    return (await response.json()) as LicenseInfo;
+  }
+
+  /**
+   * Revoke the signed-in user's license key(s) for this app — for a leaked key
+   * while the subscription is still active. Returns how many keys were revoked;
+   * call `issue()` afterwards for a replacement.
+   */
+  async revoke(): Promise<number> {
+    const response = await this.auth.authenticatedFetch(
+      new URL(`/v1/apps/${encodeURIComponent(this.appId)}/license`, this.apiBase),
+      { method: 'DELETE' },
+    );
+    if (response.status === 401) { this.auth.handleUnauthorized(); throw new Error('license.revoke failed: 401'); }
+    if (!response.ok) throw new Error(`license.revoke failed: ${response.status}`);
+    const { revoked } = (await response.json()) as { revoked: number };
+    return revoked;
+  }
+
   /** Validate an arbitrary license key against the server (no auth required). */
   async validate(key: string): Promise<boolean> {
     const response = await fetch(new URL('/v1/license/validate', this.apiBase), {

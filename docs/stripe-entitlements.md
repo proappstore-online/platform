@@ -34,22 +34,31 @@ Behind these calls:
 
 ## License keys
 
-For one-time payments, offline use, or non-subscription paid features:
+A per-app key the user can present outside the browser session (a CLI, a
+desktop companion, a server-side check). It is **not** a separate product:
+entitlement follows the platform subscription.
 
 ```ts
-const key = await pas.licenseKey.mint({
-  appId: 'pipeline',
-  email: 'customer@example.com',
-  metadata: { tier: 'lifetime' },
-});
+const license = await pas.license.issue();
+// { key, appId, issuedAt, expiresAt } — 200 if one already exists, 201 if minted
+// throws `license.issue failed: 403` when the subscription is not active
 
-const valid = await pas.licenseKey.validate(key);
-// { ok: true, appId, email, metadata, mintedAt, revokedAt? }
+const mine = await pas.license.current();   // null when none
+const ok = await pas.license.validate(key); // no auth — for the thing holding the key
+await pas.license.revoke();                 // leaked key; issue() mints a replacement
 ```
 
-License keys are signed JWTs with a server-side revocation list in D1.
-Validation works offline (signature check) but the most authoritative
-answer comes from the Worker (which checks revocation).
+Rules the Worker enforces (`routes/license.ts`, #86):
+
+- **Issue** requires an active subscription and is idempotent: the live key is
+  returned, never replaced. Keys are 256 random bits (base64url, 43 chars).
+- **Validate** joins `subscriptions` and only answers `{valid: true}` while the
+  owner's status is `active` — cancel or `past_due` and every key the user
+  holds stops validating, with no webhook work needed. It is unauthenticated,
+  so every failure is the same bare `{valid: false}`, and it is throttled at
+  10 attempts per minute per caller + app (429, not `valid:false`).
+- **Revoke** is for a key that leaked while the subscription is still active,
+  which the join cannot catch. Revocation is permanent.
 
 ## Entitlements
 

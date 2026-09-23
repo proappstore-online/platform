@@ -104,6 +104,81 @@ describe('LicenseApi', () => {
     });
   });
 
+  describe('issue', () => {
+    it('POSTs with auth and returns the LicenseInfo', async () => {
+      const auth = fakeAuth('tok_lic');
+      const api = new LicenseApi('myapp', 'https://api.proappstore.online', auth);
+      const license = { key: 'K', appId: 'myapp', issuedAt: 1, expiresAt: null };
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify(license), { status: 201 }));
+
+      const result = await api.issue();
+
+      expect(result).toEqual(license);
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url.toString()).toContain('/v1/apps/myapp/license');
+      expect(init.method).toBe('POST');
+      expect(init.headers.Authorization).toBe('Bearer tok_lic');
+    });
+
+    it('throws when the subscription is inactive (403)', async () => {
+      const auth = fakeAuth('tok_lic');
+      const api = new LicenseApi('myapp', 'https://api.proappstore.online', auth);
+      mockFetch.mockResolvedValueOnce(new Response('subscription inactive', { status: 403 }));
+
+      await expect(api.issue()).rejects.toThrow('license.issue failed: 403');
+    });
+
+    it('calls handleUnauthorized and throws on 401', async () => {
+      const auth = fakeAuth('tok_expired');
+      const api = new LicenseApi('myapp', 'https://api.proappstore.online', auth);
+      mockFetch.mockResolvedValueOnce(new Response('', { status: 401 }));
+
+      await expect(api.issue()).rejects.toThrow('license.issue failed: 401');
+      expect(auth.handleUnauthorized).toHaveBeenCalled();
+    });
+
+    it('throws when not signed in (no request made)', async () => {
+      const auth = fakeAuth(null);
+      const api = new LicenseApi('myapp', 'https://api.proappstore.online', auth);
+
+      await expect(api.issue()).rejects.toThrow('Not signed in.');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('revoke', () => {
+    it('DELETEs with auth and returns the revoked count', async () => {
+      const auth = fakeAuth('tok_lic');
+      const api = new LicenseApi('myapp', 'https://api.proappstore.online', auth);
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ revoked: 1 }), { status: 200 }));
+
+      const result = await api.revoke();
+
+      expect(result).toBe(1);
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url.toString()).toContain('/v1/apps/myapp/license');
+      expect(init.method).toBe('DELETE');
+      expect(init.headers.Authorization).toBe('Bearer tok_lic');
+    });
+
+    it('calls handleUnauthorized and throws on 401', async () => {
+      const auth = fakeAuth('tok_expired');
+      const api = new LicenseApi('myapp', 'https://api.proappstore.online', auth);
+      mockFetch.mockResolvedValueOnce(new Response('', { status: 401 }));
+
+      await expect(api.revoke()).rejects.toThrow('license.revoke failed: 401');
+      expect(auth.handleUnauthorized).toHaveBeenCalled();
+    });
+
+    it('throws on other non-ok status', async () => {
+      const auth = fakeAuth('tok_lic');
+      const api = new LicenseApi('myapp', 'https://api.proappstore.online', auth);
+      mockFetch.mockResolvedValueOnce(new Response('', { status: 500 }));
+
+      await expect(api.revoke()).rejects.toThrow('license.revoke failed: 500');
+    });
+  });
+
   describe('validate', () => {
     it('returns true when server confirms valid', async () => {
       const auth = fakeAuth('tok_lic');

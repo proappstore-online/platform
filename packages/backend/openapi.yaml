@@ -864,6 +864,48 @@ paths:
         required: true
         schema:
           type: string
+    post:
+      tags:
+      - Licensing
+      summary: Issue license
+      operationId: post_v1_apps_appId_license
+      description: Mint the caller's license key for this app, or return the existing live one (idempotent). Requires an active platform subscription. Keys are 256 random bits, base64url.
+      responses:
+        '200':
+          description: Existing license returned
+        '201':
+          description: New license issued
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Subscription inactive
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags:
+      - Licensing
+      summary: Revoke license
+      operationId: delete_v1_apps_appId_license
+      description: Revoke the caller's own license key(s) for this app (for a leaked key). Returns the number revoked; POST mints a replacement.
+      responses:
+        '200':
+          description: Success
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
   /v1/apps/{appId}/logs:
     post:
       tags:
@@ -3310,7 +3352,7 @@ paths:
       tags:
       - Usage
       summary: Ping usage
-      description: Records session_seconds/api_calls for (app, user, day). Attribution is bound to the app origin the host asserts (X-PAS-App, set by platform mediation): a mismatch with the body's appId is refused (403); a ping without the mediated origin (direct API call, legacy-bearer SDK) is acknowledged with recorded=false and not stored; only active subscribers' usage is recorded (#58).
+      description: 'Records session_seconds/api_calls for (app, user, day). Attribution is bound to the app origin the host asserts (X-PAS-App, set by platform mediation): a mismatch with the body''s appId is refused (403); a ping without the mediated origin (direct API call, legacy-bearer SDK) is acknowledged with recorded=false and not stored; only active subscribers'' usage is recorded (#58).'
       operationId: post_v1_usage_ping
       responses:
         '200':
