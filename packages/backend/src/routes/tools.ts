@@ -266,36 +266,36 @@ export async function replaceAppTools(
     if (err) return { status: 400, payload: { error: `tool "${tool?.name}": ${err}` } };
   }
 
-  // Security lint: a write statement with no :__user_id must declare an explicit
-  // auth.caller_unscoped exemption (with a non-empty reason string). Public
+  // Security lint: every statement of an authenticated tool — reads included —
+  // must be scoped to the caller via :__user_id, or the tool must declare an
+  // explicit auth.caller_unscoped exemption (with a non-empty reason string).
+  // An unscoped read lets any signed-in user read every tenant's rows. Public
   // (requires_auth: false) tools are exempt. Failure is a hard rejection, not a
   // warning, so a misconfigured tool cannot be registered at all.
-  const writeErrors: string[] = [];
+  const scopeErrors: string[] = [];
   for (const tool of tools as ToolManifest[]) {
     if (tool.requires_auth === false) continue; // public query path — no user identity expected
     const hasCallerUnscoped =
       typeof tool.auth?.caller_unscoped?.reason === 'string' &&
       tool.auth.caller_unscoped.reason.trim().length > 0;
+    if (hasCallerUnscoped) continue;
     const stmts = tool.operation === 'batch' ? (tool.statements ?? []) : [tool.sql ?? ''];
     stmts.forEach((stmt, idx) => {
-      const upper = stmt.trim().toUpperCase();
-      const isWrite =
-        upper.startsWith('UPDATE') || upper.startsWith('DELETE') || upper.startsWith('INSERT');
-      if (isWrite && !stmt.includes(':__user_id') && !hasCallerUnscoped) {
+      if (!stmt.includes(':__user_id')) {
         const location =
           tool.operation === 'batch' ? `"${tool.name}" statement[${idx}]` : `"${tool.name}"`;
-        writeErrors.push(
-          `${location}: write statement has no :__user_id and no auth.caller_unscoped exemption`,
+        scopeErrors.push(
+          `${location}: statement has no :__user_id and no auth.caller_unscoped exemption`,
         );
       }
     });
   }
-  if (writeErrors.length > 0) {
+  if (scopeErrors.length > 0) {
     return {
       status: 400,
       payload: {
-        error: 'write statements must include :__user_id or declare auth.caller_unscoped',
-        details: writeErrors,
+        error: 'statements must include :__user_id or declare auth.caller_unscoped',
+        details: scopeErrors,
       },
     };
   }

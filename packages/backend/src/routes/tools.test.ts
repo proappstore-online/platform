@@ -19,7 +19,7 @@ const validTool = {
   name: 'list_items',
   description: 'List items',
   operation: 'query',
-  sql: 'SELECT * FROM items WHERE (:status IS NULL OR status = :status) LIMIT :limit',
+  sql: 'SELECT * FROM items WHERE user_id = :__user_id AND (:status IS NULL OR status = :status) LIMIT :limit',
   params: {
     status: { type: 'string', optional: true },
     limit: { type: 'integer', optional: true, default: 20, max: 100 },
@@ -77,7 +77,7 @@ describe('PUT /v1/apps/:appId/tools', () => {
         body: JSON.stringify({
           tools: [{
             ...validTool,
-            sql: 'WITH current_org AS (SELECT :org_id AS org_id) SELECT * FROM items LIMIT :limit',
+            sql: 'WITH current_org AS (SELECT :org_id AS org_id) SELECT * FROM items WHERE user_id = :__user_id LIMIT :limit',
             params: {
               ...validTool.params,
               org_id: { type: 'string', optional: true },
@@ -585,7 +585,7 @@ describe('PUT /v1/apps/:appId/tools — requires_auth enforcement', () => {
   });
 });
 
-describe('PUT /v1/apps/:appId/tools — unscoped write rejection (#150)', () => {
+describe('PUT /v1/apps/:appId/tools — unscoped statement rejection (#150)', () => {
   const put = (tool: Record<string, unknown>) => app.request(
     '/v1/apps/test-app/tools',
     {
@@ -610,7 +610,7 @@ describe('PUT /v1/apps/:appId/tools — unscoped write rejection (#150)', () => 
     const body = await res.json() as { error: string; details: string[] };
     expect(body.error).toContain('caller_unscoped');
     expect(body.details).toEqual([
-      '"reap_stale": write statement has no :__user_id and no auth.caller_unscoped exemption',
+      '"reap_stale": statement has no :__user_id and no auth.caller_unscoped exemption',
     ]);
   });
 
@@ -629,7 +629,23 @@ describe('PUT /v1/apps/:appId/tools — unscoped write rejection (#150)', () => 
     expect(res.status).toBe(400);
     const body = await res.json() as { details: string[] };
     expect(body.details).toEqual([
-      '"rollover" statement[1]: write statement has no :__user_id and no auth.caller_unscoped exemption',
+      '"rollover" statement[1]: statement has no :__user_id and no auth.caller_unscoped exemption',
+    ]);
+  });
+
+  it('rejects an authenticated read with no :__user_id — reads leak across tenants too', async () => {
+    const res = await put({
+      name: 'get_invoice',
+      description: 'Read one invoice',
+      operation: 'query',
+      sql: 'SELECT * FROM invoices WHERE id = :id',
+      params: { id: { type: 'string' } },
+      requires_auth: true,
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { details: string[] };
+    expect(body.details).toEqual([
+      '"get_invoice": statement has no :__user_id and no auth.caller_unscoped exemption',
     ]);
   });
 

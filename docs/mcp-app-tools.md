@@ -191,6 +191,11 @@ These are injected by the platform — **do not** declare them in `params`:
 - `requires_auth` must be explicitly `true` or `false`.
 - `requires_auth: false` is only allowed for public `query` tools with no
   `:__user_id`, no roles, and a literal `LIMIT 500` or lower.
+- Every statement of a `requires_auth: true` tool — reads included — must
+  reference `:__user_id` (own rows, or an `EXISTS` on a membership table), or the
+  tool must declare `"auth": { "caller_unscoped": { "reason": "..." } }` with a
+  non-empty reason (shared catalog data, one-time codes). Never accept the
+  caller's id as a client param.
 - Max 120 tools per app.
 
 A manifest that violates any rule is rejected — the whole batch fails, so a bad
