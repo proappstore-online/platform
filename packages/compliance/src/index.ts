@@ -20,6 +20,7 @@ import { checkUnsafeVh } from './checks/unsafe-vh.js';
 import { checkViewportSupport } from './checks/viewport-support.js';
 import { type FileSource, fsFileSource, mapFileSource } from './lib/file-source.js';
 import { isGameProject } from './lib/project-type.js';
+import { CHECKS, annotate, annotateByName, getCheckMeta, getCheckMetaForName, citationsFor, clauseUrl, complianceMap, STANDARD_BASE_URL } from './clause-map.js';
 import type { CheckResult } from './types.js';
 
 export type { FileSource } from './lib/file-source.js';
@@ -35,7 +36,9 @@ export {
   checkNoTrackingLive,
   checkUnsafeVhLive,
 } from './live/index.js';
-export type { CheckResult, CheckStatus } from './types.js';
+export type { CheckAutomation, CheckResult, CheckStatus, EvidenceClass, StandardCitation } from './types.js';
+export type { CheckMeta } from './clause-map.js';
+export { CHECKS, annotate, annotateByName, getCheckMeta, getCheckMetaForName, citationsFor, clauseUrl, complianceMap, STANDARD_BASE_URL };
 export {
   checkAccessibilityStatic,
   checkBrandFonts,
@@ -79,27 +82,43 @@ export async function runChecksFromFiles(files: Map<string, string>): Promise<Ch
   return runChecksOn(mapFileSource(files));
 }
 
+/**
+ * Source-side checks in their stable output order, keyed by the id each result
+ * is decorated with (#166). Adding a check means adding it here AND to
+ * clause-map.ts; clause-map.test.ts fails on either half missing.
+ */
+const RUNNERS: ReadonlyArray<{ id: string; run: (source: FileSource) => Promise<CheckResult> }> = [
+  { id: 'license-mit', run: checkLicenseMit },
+  { id: 'no-env-production', run: checkNoEnvProduction },
+  { id: 'no-placeholders', run: checkNoPlaceholders },
+  { id: 'no-tracking', run: checkNoTracking },
+  { id: 'brand-fonts', run: checkBrandFonts },
+  { id: 'brand-tokens', run: checkBrandTokens },
+  { id: 'no-brand-overrides', run: checkNoBrandOverrides },
+  { id: 'no-scroll', run: checkNoScroll },
+  { id: 'viewport-support', run: checkViewportSupport },
+  { id: 'unsafe-vh', run: checkUnsafeVh },
+  { id: 'accessibility-static', run: checkAccessibilityStatic },
+  { id: 'html-meta', run: checkHtmlMeta },
+  { id: 'pwa-meta', run: checkPwaMeta },
+  { id: 'pwa-offline', run: checkPwaOffline },
+  { id: 'pwa-manifest', run: checkManifest },
+  { id: 'pwa-maskable-icon', run: checkMaskableIcon },
+  { id: 'store-link', run: checkStoreLink },
+  { id: 'dark-mode', run: checkDarkMode },
+  { id: 'bundle-size', run: checkBundleSize },
+  { id: 'claude-md-slim', run: checkClaudeMdSlim },
+];
+
+/** Ids of the source-side checks, in output order. */
+export const SOURCE_CHECK_IDS: readonly string[] = RUNNERS.map((r) => r.id);
+
 async function runChecksOn(source: FileSource): Promise<CheckResult[]> {
-  return Promise.all([
-    checkLicenseMit(source),
-    checkNoEnvProduction(source),
-    checkNoPlaceholders(source),
-    checkNoTracking(source),
-    checkBrandFonts(source),
-    checkBrandTokens(source),
-    checkNoBrandOverrides(source),
-    checkNoScroll(source),
-    checkViewportSupport(source),
-    checkUnsafeVh(source),
-    checkAccessibilityStatic(source),
-    checkHtmlMeta(source),
-    checkPwaMeta(source),
-    checkPwaOffline(source),
-    checkManifest(source),
-    checkMaskableIcon(source),
-    checkStoreLink(source),
-    checkDarkMode(source),
-    checkBundleSize(source),
-    checkClaudeMdSlim(source),
-  ]);
+  return Promise.all(
+    RUNNERS.map(async ({ id, run }) => {
+      const meta = getCheckMeta(id);
+      if (!meta) throw new Error(`compliance check ${id} has no clause mapping (clause-map.ts)`);
+      return annotate(await run(source), meta);
+    }),
+  );
 }

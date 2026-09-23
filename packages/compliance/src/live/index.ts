@@ -21,6 +21,7 @@
 import { gzipByteLength } from '../lib/gzip.js';
 import { matchedTrackers } from '../checks/no-tracking.js';
 import type { CheckResult } from '../types.js';
+import { annotateByName } from '../clause-map.js';
 
 export interface LiveAuditInput {
   appId: string;
@@ -61,6 +62,13 @@ function isSubrequestCapError(err: unknown): boolean {
 }
 
 export async function auditLive(input: LiveAuditInput): Promise<LiveAuditReport> {
+  const report = await auditLiveRaw(input);
+  // #166: every live result carries its stable id + clause citations too.
+  report.results = report.results.map(annotateByName);
+  return report;
+}
+
+async function auditLiveRaw(input: LiveAuditInput): Promise<LiveAuditReport> {
   const checkedAt = Date.now();
   const report: LiveAuditReport = {
     appId: input.appId,

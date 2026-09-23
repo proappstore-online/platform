@@ -1,0 +1,449 @@
+{
+  "$schema": "https://docs.proappstore.online/standard/compliance-checks.schema.json",
+  "standard_base_url": "https://docs.proappstore.online/standard/",
+  "automation_levels": {
+    "full": "The check is the clause's automated enforcement; a pass is the clause's evidence.",
+    "partial": "The check proves one observable facet of the clause; the rest needs the manual or human review the clause names."
+  },
+  "checks": [
+    {
+      "id": "license-mit",
+      "name": "MIT License",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-022",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-022"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "documentation",
+      "scope": "all",
+      "limits": "Assumes MIT while the Pro tier permits proprietary source; a proprietary licence records this as a known platform inconsistency, not an app defect.",
+      "live": false
+    },
+    {
+      "id": "no-env-production",
+      "name": "No .env.production",
+      "clauses": [
+        {
+          "clauseId": "PAS-OPS-006",
+          "url": "https://docs.proappstore.online/standard/ops/#pas-ops-006"
+        },
+        {
+          "clauseId": "PAS-STACK-015",
+          "url": "https://docs.proappstore.online/standard/stack/#pas-stack-015"
+        },
+        {
+          "clauseId": "PAS-UI-022",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-022"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "configuration",
+      "scope": "all",
+      "limits": "Only the one file name; keys in source, in VITE_* variables, or in other .env files are not detected.",
+      "live": false
+    },
+    {
+      "id": "no-placeholders",
+      "name": "No template placeholders",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-020",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020"
+        }
+      ],
+      "automation": "full",
+      "evidenceClass": "source",
+      "scope": "all",
+      "limits": "Detects the literal APPNAME token only.",
+      "live": false
+    },
+    {
+      "id": "no-tracking",
+      "name": "No tracking SDKs",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-022",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-022"
+        },
+        {
+          "clauseId": "PAS-STACK-021",
+          "url": "https://docs.proappstore.online/standard/stack/#pas-stack-021"
+        },
+        {
+          "clauseId": "PAS-OPS-018",
+          "url": "https://docs.proappstore.online/standard/ops/#pas-ops-018"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "source",
+      "scope": "all",
+      "limits": "A fixed list of known trackers; a self-hosted or unlisted tracker is not detected.",
+      "live": false
+    },
+    {
+      "id": "brand-fonts",
+      "name": "Brand fonts present",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-001",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-001"
+        },
+        {
+          "clauseId": "PAS-STACK-022",
+          "url": "https://docs.proappstore.online/standard/stack/#pas-stack-022"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "source",
+      "scope": "all",
+      "limits": "Presence of the font names in CSS/HTML; not that they are actually applied.",
+      "live": false
+    },
+    {
+      "id": "brand-tokens",
+      "name": "Brand tokens defined",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-001",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-001"
+        },
+        {
+          "clauseId": "PAS-STACK-022",
+          "url": "https://docs.proappstore.online/standard/stack/#pas-stack-022"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "source",
+      "scope": "all",
+      "limits": "That the canonical tokens are defined; not that the app uses them instead of hard-coded colours.",
+      "live": false
+    },
+    {
+      "id": "no-brand-overrides",
+      "name": "No brand overrides",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-001",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-001"
+        },
+        {
+          "clauseId": "PAS-STACK-022",
+          "url": "https://docs.proappstore.online/standard/stack/#pas-stack-022"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "source",
+      "scope": "all",
+      "limits": "Common override forms only; the banned alias names themselves are caught by the platform design-system lint, not here.",
+      "live": false
+    },
+    {
+      "id": "no-scroll",
+      "name": "No scroll (games only)",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-009",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-009"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "source",
+      "scope": "games",
+      "limits": "Games only; static CSS anti-patterns. Real document scroll is measured only in a browser.",
+      "live": false
+    },
+    {
+      "id": "viewport-support",
+      "name": "Viewport support",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-008",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-008"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "configuration",
+      "scope": "all",
+      "limits": "That orientation and min_viewport_width are declared; not that the layout works at that width.",
+      "live": false
+    },
+    {
+      "id": "unsafe-vh",
+      "name": "No unsafe 100vh",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-010",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-010"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "source",
+      "scope": "all",
+      "limits": "100vh in source only; safe-area padding and the iOS first-load scroll need a device.",
+      "live": false
+    },
+    {
+      "id": "accessibility-static",
+      "name": "Accessibility static",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-004",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-004"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "source",
+      "scope": "all",
+      "limits": "Missing alt text, unnamed buttons and unlabeled text controls only. Contrast, focus order, keyboard traps and rendered ARIA need a browser and a person (PAS-UI-005, 006, 023).",
+      "live": false
+    },
+    {
+      "id": "html-meta",
+      "name": "HTML meta tags",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-008",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-008"
+        },
+        {
+          "clauseId": "PAS-UI-020",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "configuration",
+      "scope": "all",
+      "limits": "Presence of lang, viewport, title and preview images; not the viewport's content (user-scalable=no is PAS-UI-007, a manual check).",
+      "live": false
+    },
+    {
+      "id": "pwa-meta",
+      "name": "PWA meta tags",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-020",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "configuration",
+      "scope": "all",
+      "limits": "The iOS install metas only; install behaviour is verified on a device.",
+      "live": false
+    },
+    {
+      "id": "pwa-offline",
+      "name": "PWA offline correctness",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-018",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-018"
+        },
+        {
+          "clauseId": "PAS-UI-019",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-019"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "configuration",
+      "scope": "all",
+      "limits": "That a service worker is registered and the workbox config is sane; not that /.pas/* or authenticated responses stay uncached at runtime.",
+      "live": false
+    },
+    {
+      "id": "pwa-manifest",
+      "name": "PWA manifest",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-020",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "configuration",
+      "scope": "all",
+      "limits": "The four required fields; the rest of the manifest is reviewed manually.",
+      "live": false
+    },
+    {
+      "id": "pwa-maskable-icon",
+      "name": "PWA maskable icon",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-020",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020"
+        }
+      ],
+      "automation": "full",
+      "evidenceClass": "configuration",
+      "scope": "all",
+      "limits": "Declaration only; the icon's safe zone is not rendered.",
+      "live": false
+    },
+    {
+      "id": "store-link",
+      "name": "Store link",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-001",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-001"
+        },
+        {
+          "clauseId": "PAS-STACK-022",
+          "url": "https://docs.proappstore.online/standard/stack/#pas-stack-022"
+        }
+      ],
+      "automation": "full",
+      "evidenceClass": "source",
+      "scope": "all",
+      "limits": "That the domain appears somewhere under web/src; not that it is visible.",
+      "live": false
+    },
+    {
+      "id": "dark-mode",
+      "name": "Dark mode support",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-002",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-002"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "source",
+      "scope": "apps",
+      "limits": "Warn-only signal detection; the storage-key split (fas:theme vs stores-theme) and dark-scheme contrast are manual.",
+      "live": false
+    },
+    {
+      "id": "bundle-size",
+      "name": "Bundle size",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-021",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-021"
+        },
+        {
+          "clauseId": "PAS-STACK-024",
+          "url": "https://docs.proappstore.online/standard/stack/#pas-stack-024"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "process",
+      "scope": "all",
+      "limits": "Warns when web/dist is unbuilt; measures the largest JS chunk only.",
+      "live": false
+    },
+    {
+      "id": "claude-md-slim",
+      "name": "CLAUDE.md is slim (no platform boilerplate)",
+      "clauses": [
+        {
+          "clauseId": "PAS-STACK-001",
+          "url": "https://docs.proappstore.online/standard/stack/#pas-stack-001"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "documentation",
+      "scope": "all",
+      "limits": "Documentation hygiene of the scaffold's agent guide; warn-only and not a security signal.",
+      "live": false
+    },
+    {
+      "id": "reachable",
+      "name": "Reachable",
+      "clauses": [
+        {
+          "clauseId": "PAS-OPS-010",
+          "url": "https://docs.proappstore.online/standard/ops/#pas-ops-010"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "runtime",
+      "scope": "all",
+      "live": true,
+      "limits": "HTTP 200 from the live URL; not that the app works (that is the post-deploy smoke)."
+    },
+    {
+      "id": "brand-fonts-live",
+      "name": "Brand fonts (live)",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-001",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-001"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "runtime",
+      "scope": "all",
+      "live": true,
+      "limits": "The fonts link in the served HTML only."
+    },
+    {
+      "id": "bundle-size-live",
+      "name": "Bundle size (live)",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-021",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-021"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "runtime",
+      "scope": "all",
+      "live": true,
+      "limits": "HEAD size of the main bundle only."
+    },
+    {
+      "id": "pwa-manifest-live",
+      "name": "PWA manifest (live)",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-020",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "runtime",
+      "scope": "all",
+      "live": true,
+      "limits": "Manifest reachable and minimally valid."
+    },
+    {
+      "id": "no-tracking-live",
+      "name": "No tracking SDKs (live)",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-022",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-022"
+        },
+        {
+          "clauseId": "PAS-STACK-021",
+          "url": "https://docs.proappstore.online/standard/stack/#pas-stack-021"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "runtime",
+      "scope": "all",
+      "live": true,
+      "limits": "Known trackers in the served HTML and fetched scripts only."
+    },
+    {
+      "id": "unsafe-vh-live",
+      "name": "No unsafe 100vh (live)",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-010",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-010"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "runtime",
+      "scope": "all",
+      "live": true,
+      "limits": "Served CSS text only."
+    }
+  ],
+  "standard_version": "1.5"
+}

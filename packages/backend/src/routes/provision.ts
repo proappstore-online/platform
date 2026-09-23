@@ -140,9 +140,13 @@ provisionRoutes.post('/provision', async (c) => {
         const hardFails = results.filter((r) => r.status === 'fail');
         const warnings = results.filter((r) => r.status === 'warn');
         if (hardFails.length > 0) {
-          const detail = hardFails.map((r) => `${r.name}: ${r.detail}`).join('; ');
+          // #166: cite the public standard clause each failure breaches, and hand
+          // the structured results back so CI can act on ids rather than prose.
+          const detail = hardFails
+            .map((r) => `${r.name}: ${r.detail}${r.citations?.length ? ` (see ${r.citations.map((x) => x.url).join(', ')})` : ''}`)
+            .join('; ');
           steps.push({ name: 'compliance', status: 'fail', detail: `${hardFails.length} rule(s) failed — ${detail}` });
-          return c.json({ appId, steps, dataWorkerUrl: '', appUrl: '', success: false }, 412);
+          return c.json({ appId, steps, dataWorkerUrl: '', appUrl: '', success: false, compliance: hardFails }, 412);
         }
         steps.push({
           name: 'compliance',

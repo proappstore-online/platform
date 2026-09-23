@@ -78,6 +78,7 @@ fetch everything it needs to audit an app:
 | Standard as data | [`standard/standard.json`](./standard.json) | Every clause: id, stable URL, severity, verification, enforcement, all sections — validated by [`standard.schema.json`](./standard.schema.json) |
 | Finding contract | [`standard/finding.schema.json`](./finding.schema.json) | The audit report and finding shape (state, severity, evidence, impact, bounded remediation, acceptance tests, confidence, human validation, deduplication key); example: [`examples/audit.example.json`](./examples/audit.example.json) |
 | Full text | [`standard/llms-full.txt`](./llms-full.txt) | All clauses as plain text for AI ingestion |
+| Compliance-check map | [`standard/compliance-checks.json`](./compliance-checks.json) | Every `pas check` id → the clauses it cites, its automation level and limits — validated by [`compliance-checks.schema.json`](./compliance-checks.schema.json); explained in [automation levels](./audit-model.md#automation-levels) |
 | Index | [`standard/llms.txt`](./llms.txt), [`/llms.txt`](../llms.txt) | llms.txt-style indexes of the standard and of the whole docs site |
 
 ## Where this sits among the docs

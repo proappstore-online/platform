@@ -70,6 +70,13 @@ export function renderCheckResults(results: CheckResult[]): {
         process.stdout.write(`     ${dim('→')} ${dim(s)}\n`);
       }
     }
+    // #166: a failure or warning cites the public standard clause it breaches.
+    // Plain URLs (not OSC-8 links) so they are clickable in any terminal and in CI logs.
+    if (r.status !== 'pass' && r.citations && r.citations.length > 0) {
+      for (const c of r.citations) {
+        process.stdout.write(`     ${dim('↗')} ${c.clauseId} ${dim(c.url)}\n`);
+      }
+    }
     if (r.status === 'fail') failed++;
     else if (r.status === 'warn') warned++;
     else passed++;
@@ -92,9 +99,16 @@ export function renderCheckResults(results: CheckResult[]): {
 export const checkCommand = new Command('check')
   .description('Run ProAppStore compliance checks against the current directory.')
   .option('--dir <path>', 'Directory to check', process.cwd())
-  .action(async (opts: { dir: string }) => {
+  .option('--json', 'Print results as JSON (check ids, clause citations, evidence) for CI consumers')
+  .action(async (opts: { dir: string; json?: boolean }) => {
     const root = findAppRoot(opts.dir);
     const results = await runChecks(root);
+    if (opts.json) {
+      const failed = results.filter((r) => r.status === 'fail').length;
+      process.stdout.write(`${JSON.stringify({ root, failed, results }, null, 2)}\n`);
+      if (failed > 0) process.exit(1);
+      return;
+    }
     const { failed } = renderCheckResults(results);
     if (failed > 0) process.exit(1);
   });

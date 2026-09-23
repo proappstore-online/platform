@@ -90,6 +90,29 @@ The current baseline includes:
 - bundle-size checks after `pnpm build`
 - baseline accessibility checks for images, buttons, and form controls
 
+Every check has a **stable id** and cites the public
+[Application Standard](./standard/index.md) clause it evidences. A failure or
+warning prints the clause id and a clickable URL:
+
+```text
+✗  No tracking SDKs             gtag in web/index.html
+     → Remove the tracker; the platform's analytics are cookieless and first-party.
+     ↗ PAS-UI-022 https://docs.proappstore.online/standard/ui/#pas-ui-022
+```
+
+`pas check --json` prints the same results as JSON for CI consumers — each
+result carries `checkId`, `citations[]` (`clauseId` + `url`), `automation`
+(`full` or `partial`) and `evidence` (`class` + the detail text). The publish
+gate (`POST /v1/provision`) returns the same structured failures on a `412`.
+The id → clause table is published at
+[`standard/compliance-checks.json`](./standard/compliance-checks.json).
+
+**Limits.** These checks are source and PWA hygiene scans, not a security
+audit: none of them reads `mcp.json` scoping, `initPro` options, service-worker
+runtime caching, or the deployed app. Every check is at most *partial*
+evidence for the clause it cites — see
+[automation levels](./standard/audit-model.md#automation-levels).
+
 The accessibility rule is intentionally static so it can run quickly without a
 browser. It catches missing image `alt` text, buttons without accessible names,
 and unlabeled text-style form controls. Deeper audits such as color contrast,

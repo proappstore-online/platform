@@ -29,7 +29,10 @@ Testing, deployment, and operations (chapter `OPS`).
   `standard.schema.json`), `finding.schema.json` with
   `examples/audit.example.json`, `llms-full.txt`, `llms.txt` (site and
   standard), the `audit-instructions` page, and the *Standard finding* GitHub
-  issue form in the platform repository.
+  issue form in the platform repository. Compliance checks now carry stable
+  ids and cite clauses (`pas check`, `--json`, the publish gate); the map is
+  published as `compliance-checks.json` and the audit model gained an
+  *Automation levels* section stating the limits of automated compliance.
 
 ## 1.4
 

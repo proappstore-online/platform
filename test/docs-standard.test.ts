@@ -240,6 +240,15 @@ describe('standard: machine-readable artifacts (#167)', () => {
     expect(example.findings.map((f: any) => f.state).sort()).toEqual(['fail', 'fail', 'manual-review', 'not-applicable']);
   });
 
+  it('compliance-checks.json validates against its schema and cites only published clause URLs', () => {
+    const map = readJson('compliance-checks.json');
+    expect(validate(readJson('compliance-checks.schema.json'), map)).toEqual([]);
+    expect(map.standard_version).toBe(data.standard.version);
+    const urlById = new Map<string, string>(data.clauses.map((c: any) => [c.id, c.url]));
+    for (const check of map.checks) for (const c of check.clauses) expect(c.url, `${check.id} → ${c.clauseId}`).toBe(urlById.get(c.clauseId));
+    expect(() => execFileSync('node', ['--experimental-strip-types', 'scripts/build-compliance-map.mjs', '--check'], { cwd: ROOT, stdio: 'pipe' })).not.toThrow();
+  });
+
   it('the validator itself rejects a broken finding', () => {
     const broken = JSON.parse(JSON.stringify(example));
     broken.findings[0].state = 'maybe';
@@ -254,7 +263,7 @@ describe('standard: machine-readable artifacts (#167)', () => {
   it('the AI-friendly indexes link the artifacts and every linked artifact exists', () => {
     for (const rel of ['llms.txt', 'standard/llms.txt']) {
       const txt = readFileSync(join(DOCS, rel), 'utf8');
-      for (const art of ['standard.json', 'standard.schema.json', 'finding.schema.json', 'llms-full.txt', 'examples/audit.example.json', 'audit-instructions/']) {
+      for (const art of ['standard.json', 'standard.schema.json', 'finding.schema.json', 'llms-full.txt', 'examples/audit.example.json', 'audit-instructions/', 'compliance-checks.json', 'compliance-checks.schema.json']) {
         expect(txt, `${rel} must link ${art}`).toContain(`https://docs.proappstore.online/standard/${art}`);
       }
       for (const m of txt.matchAll(/https:\/\/docs\.proappstore\.online\/standard\/([A-Za-z0-9./_-]+)/g)) {

@@ -3,12 +3,40 @@
 exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
 [
   {
+    "automation": "partial",
+    "checkId": "accessibility-static",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-004",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-004",
+      },
+    ],
     "detail": "images, buttons, and form controls have basic accessible names",
+    "evidence": {
+      "class": "source",
+      "detail": "images, buttons, and form controls have basic accessible names",
+    },
     "name": "Accessibility static",
     "status": "pass",
   },
   {
+    "automation": "partial",
+    "checkId": "brand-fonts",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-001",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-001",
+      },
+      {
+        "clauseId": "PAS-STACK-022",
+        "url": "https://docs.proappstore.online/standard/stack/#pas-stack-022",
+      },
+    ],
     "detail": "missing: Manrope, Fraunces",
+    "evidence": {
+      "class": "source",
+      "detail": "missing: Manrope, Fraunces",
+    },
     "name": "Brand fonts present",
     "status": "fail",
     "suggestions": [
@@ -17,7 +45,23 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "automation": "partial",
+    "checkId": "brand-tokens",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-001",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-001",
+      },
+      {
+        "clauseId": "PAS-STACK-022",
+        "url": "https://docs.proappstore.online/standard/stack/#pas-stack-022",
+      },
+    ],
     "detail": "missing CSS tokens: --paper, --ink",
+    "evidence": {
+      "class": "source",
+      "detail": "missing CSS tokens: --paper, --ink",
+    },
     "name": "Brand tokens defined",
     "status": "fail",
     "suggestions": [
@@ -26,12 +70,40 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "automation": "partial",
+    "checkId": "bundle-size",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-021",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-021",
+      },
+      {
+        "clauseId": "PAS-STACK-024",
+        "url": "https://docs.proappstore.online/standard/stack/#pas-stack-024",
+      },
+    ],
     "detail": "web/dist not built yet — run \`pnpm build\` to measure",
+    "evidence": {
+      "class": "process",
+      "detail": "web/dist not built yet — run \`pnpm build\` to measure",
+    },
     "name": "Bundle size",
     "status": "warn",
   },
   {
+    "automation": "partial",
+    "checkId": "claude-md-slim",
+    "citations": [
+      {
+        "clauseId": "PAS-STACK-001",
+        "url": "https://docs.proappstore.online/standard/stack/#pas-stack-001",
+      },
+    ],
     "detail": "platform-boilerplate sections: Platform: ProAppStore, Tech Stack, Brand Guidelines, Rules; missing SKILLS.md pointer",
+    "evidence": {
+      "class": "documentation",
+      "detail": "platform-boilerplate sections: Platform: ProAppStore, Tech Stack, Brand Guidelines, Rules; missing SKILLS.md pointer",
+    },
     "name": "CLAUDE.md is slim (no platform boilerplate)",
     "status": "warn",
     "suggestions": [
@@ -41,7 +113,19 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "automation": "partial",
+    "checkId": "dark-mode",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-002",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-002",
+      },
+    ],
     "detail": "no prefers-color-scheme / data-theme / color-scheme signal in web/src/",
+    "evidence": {
+      "class": "source",
+      "detail": "no prefers-color-scheme / data-theme / color-scheme signal in web/src/",
+    },
     "name": "Dark mode support",
     "status": "warn",
     "suggestions": [
@@ -50,7 +134,23 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "automation": "partial",
+    "checkId": "html-meta",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-008",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-008",
+      },
+      {
+        "clauseId": "PAS-UI-020",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020",
+      },
+    ],
     "detail": "missing: lang attribute on <html>, viewport meta, non-empty <title>, og:image, twitter:image",
+    "evidence": {
+      "class": "configuration",
+      "detail": "missing: lang attribute on <html>, viewport meta, non-empty <title>, og:image, twitter:image",
+    },
     "name": "HTML meta tags",
     "status": "fail",
     "suggestions": [
@@ -58,7 +158,19 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "automation": "partial",
+    "checkId": "license-mit",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-022",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-022",
+      },
+    ],
     "detail": "no LICENSE file at repo root",
+    "evidence": {
+      "class": "documentation",
+      "detail": "no LICENSE file at repo root",
+    },
     "name": "MIT License",
     "status": "fail",
     "suggestions": [
@@ -67,7 +179,27 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "automation": "partial",
+    "checkId": "no-env-production",
+    "citations": [
+      {
+        "clauseId": "PAS-OPS-006",
+        "url": "https://docs.proappstore.online/standard/ops/#pas-ops-006",
+      },
+      {
+        "clauseId": "PAS-STACK-015",
+        "url": "https://docs.proappstore.online/standard/stack/#pas-stack-015",
+      },
+      {
+        "clauseId": "PAS-UI-022",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-022",
+      },
+    ],
     "detail": "1 .env.production file(s): .env.production",
+    "evidence": {
+      "class": "configuration",
+      "detail": "1 .env.production file(s): .env.production",
+    },
     "name": "No .env.production",
     "status": "fail",
     "suggestions": [
@@ -76,7 +208,23 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "automation": "partial",
+    "checkId": "no-brand-overrides",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-001",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-001",
+      },
+      {
+        "clauseId": "PAS-STACK-022",
+        "url": "https://docs.proappstore.online/standard/stack/#pas-stack-022",
+      },
+    ],
     "detail": "2 apparent overrides",
+    "evidence": {
+      "class": "source",
+      "detail": "2 apparent overrides",
+    },
     "name": "No brand overrides",
     "status": "fail",
     "suggestions": [
@@ -87,12 +235,36 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "automation": "partial",
+    "checkId": "no-scroll",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-009",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-009",
+      },
+    ],
     "detail": "not a game project — check skipped",
+    "evidence": {
+      "class": "source",
+      "detail": "not a game project — check skipped",
+    },
     "name": "No scroll (games only)",
     "status": "pass",
   },
   {
+    "automation": "full",
+    "checkId": "no-placeholders",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-020",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020",
+      },
+    ],
     "detail": "2 file(s) still contain APPNAME: package.json, web/src/tracking.ts",
+    "evidence": {
+      "class": "source",
+      "detail": "2 file(s) still contain APPNAME: package.json, web/src/tracking.ts",
+    },
     "name": "No template placeholders",
     "status": "fail",
     "suggestions": [
@@ -101,7 +273,27 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "automation": "partial",
+    "checkId": "no-tracking",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-022",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-022",
+      },
+      {
+        "clauseId": "PAS-STACK-021",
+        "url": "https://docs.proappstore.online/standard/stack/#pas-stack-021",
+      },
+      {
+        "clauseId": "PAS-OPS-018",
+        "url": "https://docs.proappstore.online/standard/ops/#pas-ops-018",
+      },
+    ],
     "detail": "1 file(s) reference trackers: web/src/tracking.ts (amplitude)",
+    "evidence": {
+      "class": "source",
+      "detail": "1 file(s) reference trackers: web/src/tracking.ts (amplitude)",
+    },
     "name": "No tracking SDKs",
     "status": "fail",
     "suggestions": [
@@ -110,7 +302,19 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "automation": "partial",
+    "checkId": "unsafe-vh",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-010",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-010",
+      },
+    ],
     "detail": "2 occurrences of 100vh / h-screen — breaks on iOS Safari with URL bar visible",
+    "evidence": {
+      "class": "source",
+      "detail": "2 occurrences of 100vh / h-screen — breaks on iOS Safari with URL bar visible",
+    },
     "name": "No unsafe 100vh",
     "status": "warn",
     "suggestions": [
@@ -120,7 +324,19 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "automation": "partial",
+    "checkId": "pwa-manifest",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-020",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020",
+      },
+    ],
     "detail": "no manifest source found (looked for web/public/manifest.json and a VitePWA(...) block in web/vite.config.ts)",
+    "evidence": {
+      "class": "configuration",
+      "detail": "no manifest source found (looked for web/public/manifest.json and a VitePWA(...) block in web/vite.config.ts)",
+    },
     "name": "PWA manifest",
     "status": "fail",
     "suggestions": [
@@ -129,12 +345,36 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "automation": "full",
+    "checkId": "pwa-maskable-icon",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-020",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020",
+      },
+    ],
     "detail": "no manifest source (already reported by PWA manifest check)",
+    "evidence": {
+      "class": "configuration",
+      "detail": "no manifest source (already reported by PWA manifest check)",
+    },
     "name": "PWA maskable icon",
     "status": "pass",
   },
   {
+    "automation": "partial",
+    "checkId": "pwa-meta",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-020",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020",
+      },
+    ],
     "detail": "no apple-mobile-web-app-capable / mobile-web-app-capable meta",
+    "evidence": {
+      "class": "configuration",
+      "detail": "no apple-mobile-web-app-capable / mobile-web-app-capable meta",
+    },
     "name": "PWA meta tags",
     "status": "warn",
     "suggestions": [
@@ -142,7 +382,23 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "automation": "partial",
+    "checkId": "pwa-offline",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-018",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-018",
+      },
+      {
+        "clauseId": "PAS-UI-019",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-019",
+      },
+    ],
     "detail": "platform mandate: every app on proappstore.online must be an installable PWA, but no service worker is registered",
+    "evidence": {
+      "class": "configuration",
+      "detail": "platform mandate: every app on proappstore.online must be an installable PWA, but no service worker is registered",
+    },
     "name": "PWA offline correctness",
     "status": "fail",
     "suggestions": [
@@ -151,7 +407,23 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "automation": "full",
+    "checkId": "store-link",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-001",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-001",
+      },
+      {
+        "clauseId": "PAS-STACK-022",
+        "url": "https://docs.proappstore.online/standard/stack/#pas-stack-022",
+      },
+    ],
     "detail": "no link to proappstore.online found in web/src/",
+    "evidence": {
+      "class": "source",
+      "detail": "no link to proappstore.online found in web/src/",
+    },
     "name": "Store link",
     "status": "warn",
     "suggestions": [
@@ -160,7 +432,19 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
+    "automation": "partial",
+    "checkId": "viewport-support",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-008",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-008",
+      },
+    ],
     "detail": "no manifest source found (looked for web/public/manifest.json and a VitePWA(...) block in web/vite.config.ts)",
+    "evidence": {
+      "class": "configuration",
+      "detail": "no manifest source found (looked for web/public/manifest.json and a VitePWA(...) block in web/vite.config.ts)",
+    },
     "name": "Viewport support",
     "status": "fail",
   },

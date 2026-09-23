@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.proappstore.online/standard/compliance-checks.schema.json",
+  "title": "ProAppStore compliance checks \u2192 standard clauses",
+  "description": "The stable id of every @proappstore/compliance check, the Application Standard clauses it evidences (with public URLs), how much of them it proves, and its limits. Published copy of packages/compliance/src/clause-map.ts; the package's tests fail on drift.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "standard_base_url",
+    "automation_levels",
+    "checks",
+    "standard_version"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "const": "https://docs.proappstore.online/standard/compliance-checks.schema.json"
+    },
+    "standard_base_url": {
+      "type": "string",
+      "const": "https://docs.proappstore.online/standard/"
+    },
+    "standard_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "automation_levels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "full",
+        "partial"
+      ],
+      "properties": {
+        "full": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "string"
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "clauses",
+          "automation",
+          "evidenceClass",
+          "scope",
+          "limits",
+          "live"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+            "description": "Stable, never renamed"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The name the check emits on results"
+          },
+          "clauses": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "clauseId",
+                "url"
+              ],
+              "properties": {
+                "clauseId": {
+                  "type": "string",
+                  "pattern": "^PAS-(STACK|AUTH|DATA|INT|UI|OPS)-[0-9]{3}$"
+                },
+                "url": {
+                  "type": "string",
+                  "pattern": "^https://docs\\.proappstore\\.online/standard/[a-z-]+/#pas-(stack|auth|data|int|ui|ops)-[0-9]{3}$"
+                }
+              }
+            }
+          },
+          "automation": {
+            "type": "string",
+            "enum": [
+              "full",
+              "partial"
+            ]
+          },
+          "evidenceClass": {
+            "type": "string",
+            "enum": [
+              "configuration",
+              "source",
+              "process",
+              "runtime",
+              "documentation"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "apps",
+              "games",
+              "all"
+            ]
+          },
+          "limits": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What the check does not prove"
+          },
+          "live": {
+            "type": "boolean",
+            "description": "True for the post-publish live-URL audit variants"
+          }
+        }
+      }
+    }
+  }
+}

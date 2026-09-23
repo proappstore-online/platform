@@ -12,6 +12,18 @@ for (const r of results) {
 }
 ```
 
+## Check ids and standard citations
+
+Every result is decorated with a stable `checkId`, `citations[]` into the
+public [Application Standard](https://docs.proappstore.online/standard/)
+(`{ clauseId, url }`), an `automation` level (`full` | `partial`) and
+`evidence` (`{ class, detail }`). The mapping lives in `src/clause-map.ts` and
+is published at
+<https://docs.proappstore.online/standard/compliance-checks.json>; `CHECKS`,
+`clauseUrl()`, `annotateByName()` and `complianceMap()` are exported. Ids are
+never renamed. These checks are hygiene scans, not a security audit — see
+[automation levels](https://docs.proappstore.online/standard/audit-model/#automation-levels).
+
 ## Checks
 
 `runChecks(dir)` (and `runChecksFromFiles(map)`) runs the full suite below.
