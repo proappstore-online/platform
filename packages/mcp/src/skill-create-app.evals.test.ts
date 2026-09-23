@@ -74,11 +74,15 @@ describe('create-proappstore-app — end-to-end evaluations', () => {
       const tool = register(c.mocks.readOnly === true, session);
       const run = async (args: Record<string, unknown>) => {
         const p = tool({ ...fixture.input, ...args });
+        // A rejection may land while the fake timers advance; keep it observed so
+        // vitest does not report an unhandled error before `await p` sees it.
+        p.catch(() => {});
         await vi.advanceTimersByTimeAsync(5000);
         return p;
       };
       if (c.expect.throwsContaining) {
-        await expect(run(c.args)).rejects.toThrow(c.expect.throwsContaining);
+        // The read-only gate throws before any timer is scheduled.
+        await expect(tool({ ...fixture.input, ...c.args })).rejects.toThrow(c.expect.throwsContaining);
         if (c.expect.dryRunStillWorks) expect((await run({ dry_run: true })).content[0]!.text).toContain('create GitHub repo');
       } else {
         const out = (await run(c.args)).content[0]!.text;
