@@ -62,6 +62,16 @@ The canonical Pro app scaffold: React 19 + Vite 8 + Tailwind 4 web/ workspace, @
 - **Preview:** https://docs.proappstore.online/getting-started/
 - **Deprecation:** none
 
+## Candidate archetypes
+
+The 2026-09-23 investigation of the org's app repositories (#179) found three
+recurring domain spines and recommends one template for each — membership
+groups, back-office records workspace, two-sided listings marketplace — with
+an implementation ticket per archetype (#189, #190, #191). Evidence matrix,
+scores, what to extract and what must not be copied:
+[Template archetypes](./archetypes.md). None is in the catalogue until it
+exists as a reviewed template repository.
+
 ## Adding, deprecating, withdrawing
 
 A template enters the catalogue only after it exists as a GitHub template

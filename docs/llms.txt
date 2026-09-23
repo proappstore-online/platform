@@ -15,6 +15,11 @@
 - [Plugin](https://github.com/proappstore-online/platform/blob/main/.claude-plugin/plugin.json) and [discovery manifest](https://github.com/proappstore-online/platform/blob/main/marketplace.json): the seven skills packaged with the MCP endpoint; per-client install / update / uninstall steps (Claude Code: `/plugin marketplace add proappstore-online/platform`); checksums in [skills/index.json](https://github.com/proappstore-online/platform/blob/main/skills/index.json).
 - [Agent Skills evaluation summary](https://docs.proappstore.online/skills/evaluations/): what every skill is evaluated for (triggering, non-triggering, tool order, dry-run/confirmation, output schema, idempotency, failure recovery, citation accuracy, secret safety, context size), per-skill case counts and budgets, the release gate, and the supported-client smoke evidence still pending #169. Manifest with checksums: https://github.com/proappstore-online/platform/blob/main/skills/index.json
 
+## Templates
+
+- [Template catalogue](https://docs.proappstore.online/templates/): approved templates, selection contract, known deviations.
+- [Template archetypes](https://docs.proappstore.online/templates/archetypes/): evidence matrix over the org's apps and the three recommended archetypes (membership groups, back-office workspace, listings marketplace) with implementation tickets; machine-readable [archetype-evidence.json](https://docs.proappstore.online/templates/archetype-evidence.json).
+
 ## Application Standard (audit an app)
 
 - [Standard — overview and audit guide](https://docs.proappstore.online/standard/): What the standard is, recommendation vs enforcement vs optional capability, the six-step audit procedure, chapter map.
