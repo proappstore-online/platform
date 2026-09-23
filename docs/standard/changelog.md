@@ -4,6 +4,28 @@ Part of the [Application Standard](./index.md). One entry per version, newest
 first; the [changelog policy](./governance.md#changelog-policy) defines the
 sections.
 
+## 1.2
+
+Identity, sessions, and permissions (chapter `AUTH`).
+
+- **Added** — PAS-AUTH-001 to PAS-AUTH-020: platform-cookie mode (001), no
+  app-managed session storage with a direct `pas:session` audit rule (002),
+  SDK-only auth flows and no `app.auth.token` coupling (003), platform
+  providers and provisioned credentials (004), hydration (005), expiry and
+  401 handling (006), sign-out and recovery (007), authorization lookups fail
+  visibly (008), CSRF via same-origin mediation (009), return URLs (010),
+  custom domains (011), no app cookies (012), app roles not team/platform
+  roles (013), membership is not a role (014), least privilege (015),
+  fail-closed server authorization (016), app-defined roles (017),
+  permissions administration UI (018), privileged operations (019),
+  human-only production verification (020). Plus the weakness-class table
+  from the Chess Academy migration.
+- **Changed** — none.
+- **Withdrawn** — none.
+- **Editorial** — `auth-session-model.md` and `sdk-overview.md` now state the
+  hosted-app recommendation (platform-cookie) and the current fleet status
+  rather than presenting cookie mode as an experiment.
+
 ## 1.1
 
 Stack and platform-service decision guidance (chapter `STACK`).

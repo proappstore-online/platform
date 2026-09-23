@@ -221,16 +221,17 @@ Keep explicit fallback modes for compatibility:
 - `platform-cookie`: same-origin token-handler mode
 - `legacy-bearer`: current localStorage-backed bearer mode
 
-**Verified so far:** `platform-cookie` sign-in + `/.pas/auth/me` are confirmed
-working end-to-end on hosted apps (`interns`, `chess-academy`) for **both GitHub
-and Google**, once the signing-key drift blocker (#65/#66) was resolved. Only
-`interns` currently ships in `platform-cookie` mode; the rest of the fleet is
-still on `legacy-bearer`.
+**Recommendation (Application Standard [PAS-AUTH-001](./standard/auth.md#pas-auth-001)):**
+every hosted app sets `authMode: 'platform-cookie'` explicitly. The SDK's
+*default* stays `legacy-bearer` only so that un-migrated apps keep working; it
+is a compatibility setting, not the recommended configuration.
 
-Remaining before defaulting hosted apps to cookie mode: end-to-end verification
-of the remaining mediated paths (app **data**, **rooms**, **usage**, **maps**,
-**sign-out**) in cookie mode, then migrating the rest of the fleet off
-`legacy-bearer` (#20).
+**Status (2026-09-23):** `platform-cookie` sign-in, `/.pas/auth/me`, data,
+rooms, usage, maps and sign-out are verified end-to-end on hosted apps for
+GitHub, Google and credential accounts (`chess-academy` completed its
+migration and post-flip test plan in issue #142 of its repo). 17 of the 32
+apps in the org ship in `platform-cookie` mode; the remainder are tracked by
+#20, with the four that read `app.auth.token` directly blocked on #71.
 
 ### Phase 5: Security Gates
 

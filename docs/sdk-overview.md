@@ -122,7 +122,8 @@ mode, tries to cache it under the PAS-owned `pas:session` key. If browser
 storage is blocked or throws, the SDK falls back to memory-only state for the
 current page lifetime.
 
-Hosted PAS apps can opt into the same-origin token-handler model:
+Hosted PAS apps should use the same-origin token-handler model — the
+[Application Standard](./standard/auth.md#pas-auth-001) requires it:
 
 ```ts
 const app = initPro({
@@ -137,9 +138,10 @@ SDK HTTP calls use `/.pas/api/*` or `/.pas/data/*` mediation, and rooms use
 same-origin `/.pas/api/*` WebSocket mediation. The bearer token stays in a
 host-only HttpOnly cookie and is injected server-side by PAS.
 
-The default remains `legacy-bearer` for compatibility while hosted-app
-end-to-end verification is completed. See [Browser auth session
-model](/auth-session-model).
+The SDK default remains `legacy-bearer` only for un-migrated apps; it is a
+compatibility setting, not a recommendation. See [Browser auth session
+model](/auth-session-model) and the standard's
+[identity chapter](./standard/auth.md).
 
 ## App data access
 

@@ -1,6 +1,6 @@
 # UI, browser security, and PWA
 
-**Standard version 1.1** · Chapter `UI` · Part of the [Application Standard](./index.md)
+**Standard version 1.2** · Chapter `UI` · Part of the [Application Standard](./index.md)
 
 **Scope.** UI components, browser security headers and storage, accessibility, responsive and mobile behaviour, PWA.
 
@@ -19,5 +19,5 @@ provides and are not restated here.
 
 ## Clauses
 
-No clauses are published in this chapter at standard version 1.1. Clauses are
+No clauses are published in this chapter at standard version 1.2. Clauses are
 added in minor versions and listed in the [changelog](./changelog.md).
