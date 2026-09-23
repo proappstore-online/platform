@@ -441,54 +441,78 @@ async function addCollaborator(env: Env, id: string, username: string): Promise<
 // the opposite: app repos are PRIVATE on the free org and can't read org secrets,
 // so R2_* is set REPO-level, fanned out by the reconcile-app-secrets workflow.
 
+/** addToRegistry: attempts at the registry.json read-modify-write before giving up (#60). */
+const REGISTRY_WRITE_ATTEMPTS = 3;
+const REGISTRY_WRITE_BACKOFF_MS = 150;
+
 // Registry entry (storefront listing)
+//
+// registry.json is ONE file shared by every app on the platform, so any two
+// publishes anywhere at the same moment race on it: both read sha S, both PUT
+// with S, the second is rejected 409. This step is fatal in handlePublish, and
+// by then the repo and R2 route already exist — so a lost race used to leave a
+// half-provisioned app with no storefront listing and a "retry" that only a
+// human could perform (#60). Now: re-read, re-apply, retry, bounded.
 async function addToRegistry(env: Env, req: PublishRequest): Promise<Step> {
   const gh = ghFor(env);
-  // registry.json lives in the storefront repo (org/proappstore).
-  const file = await gh.getFile("proappstore", "registry.json");
-  if (!file.ok || !file.content || !file.sha) {
-    return { name: "Registry", status: "fail", detail: "Could not read registry.json" };
+  for (let attempt = 1; ; attempt++) {
+    // registry.json lives in the storefront repo (org/proappstore).
+    const file = await gh.getFile("proappstore", "registry.json");
+    if (!file.ok || !file.content || !file.sha) {
+      return { name: "Registry", status: "fail", detail: "Could not read registry.json" };
+    }
+
+    const content = JSON.parse(file.content);
+    const apps = content.apps || [];
+
+    // Re-checked on every attempt: the writer that beat us may have been a
+    // retry of this very app, in which case the entry now exists.
+    if (apps.some((a: { id: string }) => a.id === req.id)) {
+      return { name: "Registry", status: "skip", detail: "Already listed" };
+    }
+
+    apps.push({
+      id: req.id,
+      name: req.name,
+      category: req.category,
+      icon: req.icon,
+      iconBg: req.iconBg,
+      description: req.description,
+      appUrl: `https://${req.id}.${env.APPS_DOMAIN_BASE}`,
+      repo: `${env.PUBLISHERS_ORG}/${req.id}`,
+      hostedOn: "r2",
+      type: "connected",
+      developer: "ProAppStore",
+      ...(req.proFeatures?.length ? { proFeatures: req.proFeatures } : {}),
+      ...(req.creatorGithub ? { creatorGithub: req.creatorGithub } : {}),
+    });
+    content.apps = apps;
+
+    const update = await gh.putFile(
+      "proappstore",
+      "registry.json",
+      JSON.stringify(content, null, 2),
+      `Add ${req.name} to registry`,
+      file.sha,
+    );
+    if (update.ok) return { name: "Registry", status: "ok", detail: `Added ${req.name}` };
+    if (update.status === 409) {
+      if (attempt < REGISTRY_WRITE_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, REGISTRY_WRITE_BACKOFF_MS * attempt));
+        continue;
+      }
+      return {
+        name: "Registry",
+        status: "fail",
+        detail: `Registry write contended ${attempt} times — retry the publish`,
+      };
+    }
+    return {
+      name: "Registry",
+      status: "fail",
+      detail: (update.data as { message?: string }).message || "Failed to update registry",
+    };
   }
-
-  const content = JSON.parse(file.content);
-  const apps = content.apps || [];
-
-  if (apps.some((a: { id: string }) => a.id === req.id)) {
-    return { name: "Registry", status: "skip", detail: "Already listed" };
-  }
-
-  apps.push({
-    id: req.id,
-    name: req.name,
-    category: req.category,
-    icon: req.icon,
-    iconBg: req.iconBg,
-    description: req.description,
-    appUrl: `https://${req.id}.${env.APPS_DOMAIN_BASE}`,
-    repo: `${env.PUBLISHERS_ORG}/${req.id}`,
-    hostedOn: "r2",
-    type: "connected",
-    developer: "ProAppStore",
-    ...(req.proFeatures?.length ? { proFeatures: req.proFeatures } : {}),
-    ...(req.creatorGithub ? { creatorGithub: req.creatorGithub } : {}),
-  });
-  content.apps = apps;
-
-  const update = await gh.putFile(
-    "proappstore",
-    "registry.json",
-    JSON.stringify(content, null, 2),
-    `Add ${req.name} to registry`,
-    file.sha,
-  );
-  if (update.ok) return { name: "Registry", status: "ok", detail: `Added ${req.name}` };
-  if (update.status === 409)
-    return { name: "Registry", status: "fail", detail: "Registry write contended — retry" };
-  return {
-    name: "Registry",
-    status: "fail",
-    detail: (update.data as { message?: string }).message || "Failed to update registry",
-  };
 }
 
 // Push a file bundle as one commit via build-core (Git Data API; seeds empty repos).

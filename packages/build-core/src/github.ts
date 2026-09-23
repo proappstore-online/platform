@@ -96,6 +96,9 @@ const DEPLOY_GATE_WORKFLOW = 'Deploy to R2';
 const DEPLOY_GATE_WORKFLOW_PATH = '.github/workflows/deploy.yml';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+/** pushFiles: attempts at advancing `main` before giving up on a lost race (#60). */
+const PUSH_REF_ATTEMPTS = 3;
+const PUSH_REF_BACKOFF_MS = 150;
 
 function isDeployGateRun(run: Record<string, unknown>): boolean {
   return run.name === DEPLOY_GATE_WORKFLOW
@@ -213,8 +216,6 @@ export function makeGitHub(token: string, org: string): GitHub {
         }
         if (!refSha(ref)) return { ok: false, error: 'repo init did not propagate (no main ref)' };
       }
-      const parentSha = refSha(ref);
-
       // Embed file content inline in the tree instead of creating one blob per
       // file via POST /git/blobs. Dozens of rapid blob POSTs intermittently trip
       // GitHub's SECONDARY rate limit (observed: "blob failed for <random file>"
@@ -224,34 +225,52 @@ export function makeGitHub(token: string, org: string): GitHub {
       // assumed utf-8), so no behaviour change — just far fewer API calls.
       const treeItems = files.map((f) => ({ path: f.path, mode: '100644', type: 'blob' as const, content: f.content }));
 
-      let baseTree: string | undefined;
-      if (parentSha) {
-        const parent = await api(`/repos/${r}/git/commits/${parentSha}`);
-        baseTree = (d(parent).tree as { sha?: string } | undefined)?.sha;
-      }
       // GitHub returns the real reason in `.message` — surface it (e.g. "refusing
       // to allow a Personal Access Token to create or update workflow
       // `.github/workflows/deploy.yml` without `workflow` scope"). A bare "tree
       // creation failed" hides exactly the kind of cause callers need.
       const why = (res: GhResult) => (d(res).message as string | undefined) ?? `HTTP ${res.status}`;
 
-      const tree = await api(`/repos/${r}/git/trees`, {
-        method: 'POST',
-        body: baseTree ? { base_tree: baseTree, tree: treeItems } : { tree: treeItems },
-      });
-      const treeSha = d(tree).sha as string | undefined;
-      if (!treeSha) return { ok: false, error: `tree creation failed: ${why(tree)}` };
+      // Build-and-advance, with a bounded retry on a lost race (#60). Two pushes
+      // to the same repo can both read main = X; the first advances it, the
+      // second's PATCH is rejected 422 non-fast-forward and its commit object
+      // dangles. The durable Workflow path recovers by re-running the step; the
+      // inline callers (CLI/MCP provision, admin publish) did not, so that
+      // deploy's files were simply lost for the attempt. On 422 only: re-read
+      // main, rebuild the tree on the NEW parent, and try again.
+      for (let attempt = 1; ; attempt++) {
+        const parentSha = refSha(ref);
 
-      const commit = await api(`/repos/${r}/git/commits`, {
-        method: 'POST',
-        body: { message, tree: treeSha, parents: parentSha ? [parentSha] : [] },
-      });
-      const commitSha = d(commit).sha as string | undefined;
-      if (!commitSha) return { ok: false, error: `commit creation failed: ${why(commit)}` };
+        let baseTree: string | undefined;
+        if (parentSha) {
+          const parent = await api(`/repos/${r}/git/commits/${parentSha}`);
+          baseTree = (d(parent).tree as { sha?: string } | undefined)?.sha;
+        }
 
-      const upd = await api(`/repos/${r}/git/refs/heads/main`, { method: 'PATCH', body: { sha: commitSha } });
-      if (!upd.ok) return { ok: false, error: `ref update failed: ${why(upd)}` };
-      return { ok: true, commitSha };
+        const tree = await api(`/repos/${r}/git/trees`, {
+          method: 'POST',
+          body: baseTree ? { base_tree: baseTree, tree: treeItems } : { tree: treeItems },
+        });
+        const treeSha = d(tree).sha as string | undefined;
+        if (!treeSha) return { ok: false, error: `tree creation failed: ${why(tree)}` };
+
+        const commit = await api(`/repos/${r}/git/commits`, {
+          method: 'POST',
+          body: { message, tree: treeSha, parents: parentSha ? [parentSha] : [] },
+        });
+        const commitSha = d(commit).sha as string | undefined;
+        if (!commitSha) return { ok: false, error: `commit creation failed: ${why(commit)}` };
+
+        const upd = await api(`/repos/${r}/git/refs/heads/main`, { method: 'PATCH', body: { sha: commitSha } });
+        if (upd.ok) return { ok: true, commitSha };
+        if (upd.status !== 422 || attempt >= PUSH_REF_ATTEMPTS) {
+          const suffix = attempt > 1 ? ` (after ${attempt} attempts)` : '';
+          return { ok: false, error: `ref update failed: ${why(upd)}${suffix}` };
+        }
+        await sleep(PUSH_REF_BACKOFF_MS * attempt);
+        ref = await api(`/repos/${r}/git/ref/heads/main`);
+        if (!refSha(ref)) return { ok: false, error: `ref update failed: ${why(upd)} (could not re-read main to retry)` };
+      }
     },
 
     async getDeployStatus(id, perPage = 3) {

@@ -47,8 +47,9 @@ interface Recorder {
 /** Install a fetch mock that satisfies the full provision happy-path for both
  *  GitHub and Cloudflare, recording every call. `fail` forces a specific POST to
  *  return an error so we can exercise fatal-vs-tolerated branches. */
-function install(opts: { failDnsPost?: boolean } = {}): Recorder {
+function install(opts: { failDnsPost?: boolean; registryConflicts?: number } = {}): Recorder {
   const rec: Recorder = { calls: [], blobs: [] };
+  let registryPuts = 0;
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     const method = init?.method ?? "GET";
@@ -87,8 +88,13 @@ function install(opts: { failDnsPost?: boolean } = {}): Recorder {
     if (method === "POST" && url.endsWith("/repos")) return ok({ id: 1 }, 201);
     // registry.json read/write (storefront repo)
     if (url.includes("/contents/registry.json")) {
-      if (method === "PUT") return ok({ commit: { sha: "rcommit" } });
-      return ok({ sha: "rsha", content: Buffer.from('{"apps":[]}').toString("base64") });
+      if (method === "PUT") {
+        registryPuts++;
+        // #60: simulate a concurrent writer — the first N PUTs lose the race (409).
+        if (registryPuts <= (opts.registryConflicts ?? 0)) return ok({ message: "registry.json does not match rsha" }, 409);
+        return ok({ commit: { sha: "rcommit" } });
+      }
+      return ok({ sha: `rsha${registryPuts}`, content: Buffer.from('{"apps":[]}').toString("base64") });
     }
     // pushFiles: ref → parent commit → tree(inline content) → commit → ref update.
     // Files are embedded as inline tree content now (not per-file blobs), so record
@@ -142,6 +148,32 @@ describe("provisioning: shared core", () => {
     expect(r.success).toBe(true);
     expect(names(r)).toEqual(["GitHub repo", "R2 route", "Registry", "Analytics", "Deploy secrets"]);
     expect(rec.blobs).toHaveLength(0); // CLI pushes app files itself
+  });
+
+  it("handlePublish recovers from a lost registry.json race by re-reading and re-applying (#60)", async () => {
+    const rec = install({ registryConflicts: 1 });
+    const r = await handlePublish(
+      { id: "widget", name: "Widget", category: "Productivity", icon: "🧩", iconBg: "#000", description: "d" },
+      ENV,
+    );
+    expect(r.success).toBe(true);
+    const registry = r.steps.find((st) => st.name === "Registry")!;
+    expect(registry.status).toBe("ok");
+    const registryCalls = rec.calls.filter((c) => c.url.includes("/contents/registry.json")).map((c) => c.method);
+    expect(registryCalls).toEqual(["GET", "PUT", "GET", "PUT"]); // re-read the fresh sha before the retry
+  });
+
+  it("handlePublish gives up on registry.json after three lost races and reports it (#60)", async () => {
+    const rec = install({ registryConflicts: 99 });
+    const r = await handlePublish(
+      { id: "widget", name: "Widget", category: "Productivity", icon: "🧩", iconBg: "#000", description: "d" },
+      ENV,
+    );
+    expect(r.success).toBe(false);
+    const registry = r.steps.find((st) => st.name === "Registry")!;
+    expect(registry.status).toBe("fail");
+    expect(registry.detail).toContain("contended 3 times");
+    expect(rec.calls.filter((c) => c.url.includes("/contents/registry.json") && c.method === "PUT")).toHaveLength(3);
   });
 
   it("handleAgentDeploy provisions the same hosting + pushes files, no registry", async () => {

@@ -95,6 +95,82 @@ describe('makeGitHub', () => {
     expect(refReads).toBeGreaterThanOrEqual(2); // initial 404 + at least one poll
   });
 
+  it('pushFiles retries a non-fast-forward ref update by re-reading main and rebuilding on the new parent (#60)', async () => {
+    let refReads = 0;
+    let patches = 0;
+    const commitParents: string[][] = [];
+    mockFetch((url, init) => {
+      const method = init?.method ?? 'GET';
+      if (url.endsWith('/git/ref/heads/main') && method === 'GET') {
+        refReads++;
+        return { body: { object: { sha: refReads === 1 ? 'parent1' : 'parent2' } } };
+      }
+      if (/\/git\/commits\/parent[12]$/.test(url)) return { body: { tree: { sha: 'basetree' } } };
+      if (url.endsWith('/git/trees')) return { body: { sha: 'tree' } };
+      if (url.endsWith('/git/commits')) {
+        const body = JSON.parse(init!.body as string) as { parents: string[] };
+        commitParents.push(body.parents);
+        return { body: { sha: `commit${commitParents.length}` } };
+      }
+      if (url.endsWith('/git/refs/heads/main') && method === 'PATCH') {
+        patches++;
+        return patches === 1
+          ? { status: 422, body: { message: 'Update is not a fast forward' } }
+          : { body: { ref: 'refs/heads/main' } };
+      }
+      return { body: {} };
+    });
+    const gh = makeGitHub('t', 'org');
+    const res = await gh.pushFiles('app', [{ path: 'a.ts', content: 'x' }], 'msg');
+    expect(res.ok).toBe(true);
+    expect(res.commitSha).toBe('commit2');
+    expect(patches).toBe(2);
+    expect(commitParents).toEqual([['parent1'], ['parent2']]); // second attempt built on the re-read head
+  });
+
+  it('pushFiles gives up after three non-fast-forward rejections and says so (#60)', async () => {
+    let patches = 0;
+    mockFetch((url, init) => {
+      const method = init?.method ?? 'GET';
+      if (url.endsWith('/git/ref/heads/main') && method === 'GET') return { body: { object: { sha: 'p' } } };
+      if (url.endsWith('/git/commits/p')) return { body: { tree: { sha: 'bt' } } };
+      if (url.endsWith('/git/trees')) return { body: { sha: 't' } };
+      if (url.endsWith('/git/commits')) return { body: { sha: 'c' } };
+      if (url.endsWith('/git/refs/heads/main') && method === 'PATCH') {
+        patches++;
+        return { status: 422, body: { message: 'Update is not a fast forward' } };
+      }
+      return { body: {} };
+    });
+    const gh = makeGitHub('t', 'org');
+    const res = await gh.pushFiles('app', [{ path: 'a.ts', content: 'x' }], 'msg');
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain('ref update failed');
+    expect(res.error).toContain('after 3 attempts');
+    expect(patches).toBe(3);
+  });
+
+  it('pushFiles does NOT retry a ref update that fails for a non-race reason (#60)', async () => {
+    let patches = 0;
+    mockFetch((url, init) => {
+      const method = init?.method ?? 'GET';
+      if (url.endsWith('/git/ref/heads/main') && method === 'GET') return { body: { object: { sha: 'p' } } };
+      if (url.endsWith('/git/commits/p')) return { body: { tree: { sha: 'bt' } } };
+      if (url.endsWith('/git/trees')) return { body: { sha: 't' } };
+      if (url.endsWith('/git/commits')) return { body: { sha: 'c' } };
+      if (url.endsWith('/git/refs/heads/main') && method === 'PATCH') {
+        patches++;
+        return { status: 403, body: { message: 'Resource not accessible by personal access token' } };
+      }
+      return { body: {} };
+    });
+    const gh = makeGitHub('t', 'org');
+    const res = await gh.pushFiles('app', [{ path: 'a.ts', content: 'x' }], 'msg');
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain('Resource not accessible');
+    expect(patches).toBe(1);
+  });
+
   it('deployResult ignores advisory compliance failures when the deploy gate is green', async () => {
     const sha = 'a'.repeat(40);
     mockFetch((url) => {
