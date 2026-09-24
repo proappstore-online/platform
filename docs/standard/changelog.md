@@ -23,7 +23,11 @@ Testing, deployment, and operations (chapter `OPS`).
   verification-class table, and a platform-provides / app-must-add table.
 - **Changed** — none.
 - **Withdrawn** — none.
-- **Editorial** — PAS-DATA-017 and PAS-OPS-013 limits corrected: rooms have
+- **Editorial** — PAS-DATA-014 now names the platform's `verify` actions
+  (a scoped read, a platform-vetted verifier such as `chess.replay`, a write
+  guarded on the verdict) as the trusted path for logic SQL cannot express;
+  the clause's rule is unchanged (no app-owned Worker, no trusted client
+  claims). PAS-DATA-017 and PAS-OPS-013 limits corrected: rooms have
   no per-app room cap and no LRU (the previously published "64 rooms/app" was
   never enforced); a full room closes the 33rd join with code 4429
   `room_full`, and a room with live peers is never evicted. Machine-readable

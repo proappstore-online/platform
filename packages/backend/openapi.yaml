@@ -239,7 +239,7 @@ paths:
       - Actions
       summary: Create actions
       operationId: post_v1_apps_appId_actions_name
-      description: "Run a registered action. Auth: a PAS session JWT, OR a personal app token `Authorization: Bearer pas_at_…` minted for THIS app (#154; roles fixed to `user`, read tokens may call query actions only, action-scoped tokens only their actions). Public actions (requires_auth false) need no auth."
+      description: "Run a registered action. Auth: a PAS session JWT, OR a personal app token `Authorization: Bearer pas_at_…` minted for THIS app (#154; roles fixed to `user`, read tokens may call query actions only, action-scoped tokens only their actions). Public actions (requires_auth false) need no auth. A `verify` action (#148) runs its scoped SELECT, hands the rows to the platform verifier named in its manifest (e.g. `chess.replay`), and — when the verifier completes — runs its write statements in one transaction with the verdict bound as `:__verify_<output>`; it answers `{ ok, verifier, output, error?, writes? }` (200 with `ok: false` and no write when the input could not be verified)."
       responses:
         '200':
           description: Success

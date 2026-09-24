@@ -33,9 +33,11 @@ interface ToolParam {
 export interface ToolManifest {
   name: string;
   description: string;
-  operation: 'query' | 'execute' | 'batch';
+  /** `verify` (#148) runs a platform verifier and may write; it is gated as a mutation here. */
+  operation: 'query' | 'execute' | 'batch' | 'verify';
   sql?: string;
   statements?: string[];
+  verifier?: string;
   params: Record<string, ToolParam>;
   requires_auth?: boolean;
   auth?: {

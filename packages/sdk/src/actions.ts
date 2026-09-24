@@ -8,6 +8,20 @@ interface LoggerLike {
   capture(level: 'error', category: string, message: string, data?: Record<string, unknown>): void;
 }
 
+/**
+ * What a `verify` action returns (#148): the platform verifier's verdict, and
+ * the write results when the tool declared statements and the verifier ran.
+ * `ok: false` means the input could not be verified (no row, malformed data)
+ * and nothing was written.
+ */
+export interface ActionVerifyResult<TOutput = Record<string, string | number | boolean | null>> {
+  ok: boolean;
+  verifier: string;
+  output: TOutput;
+  error?: string;
+  writes?: { changes?: number; last_row_id?: number | null }[];
+}
+
 export class Actions {
   constructor(
     private readonly appId: string,

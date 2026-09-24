@@ -284,3 +284,122 @@ describe('POST /v1/apps/:appId/actions/:name — direct data-worker routing (#15
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('verify actions (#148): a trusted, platform-owned execution path', () => {
+  const claim = (overrides: Record<string, unknown> = {}) => manifest({
+    name: 'claim_game_over',
+    operation: 'verify',
+    verifier: 'chess.replay',
+    sql: 'SELECT moves FROM games WHERE id = :game_id AND (white_id = :__user_id OR black_id = :__user_id)',
+    statements: [
+      "UPDATE games SET status = 'finished', result = :__verify_result, end_reason = :__verify_reason, finished_at = :__now WHERE id = :game_id AND (white_id = :__user_id OR black_id = :__user_id) AND :__verify_over = 1",
+    ],
+    params: { game_id: { type: 'string' } },
+    ...overrides,
+  });
+  const call = (m: string, params: Record<string, unknown> = { game_id: 'g1' }, extra: Record<string, unknown> = {}) =>
+    app.request(
+      '/v1/apps/chess/actions/claim_game_over',
+      { method: 'POST', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) },
+      env(db(stmt({ first: { manifest: m } })), extra),
+    );
+  const hops = (fetchMock: ReturnType<typeof vi.fn>) =>
+    fetchMock.mock.calls.map(([url, init]) => [String(url).replace('https://pas-data-chess.serge-the-dev.workers.dev', ''), JSON.parse((init as RequestInit).body as string)]);
+
+  it('reads the scoped rows, replays them with the platform chess.js, and writes with the verdict bound — one query hop, one atomic batch hop', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ rows: [{ moves: '["f3","e5","g4","Qh4#"]' }], meta: {} }))
+      .mockResolvedValueOnce(Response.json({ results: [{ rows: [], meta: { changes: 1, last_row_id: 0 } }] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await call(claim(), { game_id: 'g1', __verify_over: 'true', __user_id: 'attacker' });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Cache-Control')).toBe('no-store');
+    const body = (await res.json()) as { ok: boolean; verifier: string; output: Record<string, unknown>; writes: unknown[] };
+    expect(body.ok).toBe(true);
+    expect(body.verifier).toBe('chess.replay');
+    expect(body.output).toMatchObject({ legal: true, over: true, result: '0-1', reason: 'checkmate', ply: 4 });
+    expect(body.writes).toEqual([{ changes: 1, last_row_id: 0 }]);
+
+    const [[readPath, readBody], [writePath, writeBody]] = hops(fetchMock) as [[string, { sql: string; params: unknown[] }], [string, { statements: { sql: string; params: unknown[] }[] }]];
+    expect(readPath).toBe('/query');
+    expect(readBody).toEqual({ sql: 'SELECT moves FROM games WHERE id = ? AND (white_id = ? OR black_id = ?)', params: ['g1', 'gh:1', 'gh:1'] });
+    expect(writePath).toBe('/batch');
+    expect(writeBody.statements).toHaveLength(1);
+    // The verdict comes from the verifier, not from the client's params.
+    expect(writeBody.statements[0]!.params).toEqual(['0-1', 'checkmate', expect.any(Number), 'g1', 'gh:1', 'gh:1', true]);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect((init as RequestInit).headers).toMatchObject({ 'X-Internal-Token': 'internal-secret' });
+    }
+  });
+
+  it('an in-progress game verifies as not over — the write still runs, guarded by :__verify_over = 0', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ rows: [{ moves: 'e4 e5' }], meta: {} }))
+      .mockResolvedValueOnce(Response.json({ results: [{ rows: [], meta: { changes: 0 } }] }));
+    vi.stubGlobal('fetch', fetchMock);
+    const body = (await (await call(claim())).json()) as { ok: boolean; output: Record<string, unknown>; writes: unknown[] };
+    expect(body.ok).toBe(true);
+    expect(body.output).toMatchObject({ over: false, result: null, reason: null, turn: 'w' });
+    expect(body.writes).toEqual([{ changes: 0 }]);
+    expect((hops(fetchMock)[1]![1] as { statements: { params: unknown[] }[] }).statements[0]!.params).toEqual([null, null, expect.any(Number), 'g1', 'gh:1', 'gh:1', false]);
+  });
+
+  it('no row (not the caller\'s game, or no such game) → ok:false with the reason, and NOTHING is written', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ rows: [], meta: {} }));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await call(claim());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      ok: false, verifier: 'chess.replay', error: 'no input row',
+      output: { legal: null, illegal_index: null, illegal_move: null, ply: null, over: null, result: null, reason: null, turn: null, in_check: null, fen: null },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a read-only verify tool (no statements) answers the verdict without a second hop', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ rows: [{ move: 'e4' }, { move: 'e5' }, { move: 'Ke2' }, { move: 'Ke7' }, { move: 'Qh5#' }], meta: {} }));
+    vi.stubGlobal('fetch', fetchMock);
+    const body = (await (await call(claim({ statements: undefined }))).json()) as { ok: boolean; output: Record<string, unknown>; writes?: unknown };
+    expect(body.ok).toBe(true);
+    expect(body.output).toMatchObject({ legal: false, illegal_index: 4, illegal_move: 'Qh5#', over: false });
+    expect(body).not.toHaveProperty('writes');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('data-worker failures pass through with their status; malformed upstream JSON is a 502; a missing param is a 400', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response('{"error":"no such table: games"}', { status: 500, headers: { 'Content-Type': 'application/json' } })));
+    const failedRead = await call(claim());
+    expect(failedRead.status).toBe(500);
+    expect(await failedRead.json()).toEqual({ error: 'no such table: games' });
+
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ rows: [{ moves: 'f3 e5 g4 Qh4#' }] }))
+      .mockResolvedValueOnce(new Response('{"error":"constraint failed"}', { status: 409, headers: { 'Content-Type': 'application/json' } })));
+    const failedWrite = await call(claim());
+    expect(failedWrite.status).toBe(409);
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response('not json', { status: 200 })));
+    expect((await call(claim())).status).toBe(502);
+
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ rows: [{ moves: 'f3 e5 g4 Qh4#' }] }))
+      .mockResolvedValueOnce(new Response('not json', { status: 200 })));
+    expect((await call(claim())).status).toBe(502);
+
+    const noFetch = vi.fn();
+    vi.stubGlobal('fetch', noFetch);
+    const missing = await call(claim(), {});
+    expect(missing.status).toBe(400);
+    expect(((await missing.json()) as { error: string }).error).toBe('Missing required parameter: game_id');
+    expect(noFetch).not.toHaveBeenCalled();
+  });
+
+  it('a stored manifest naming a verifier that no longer exists is a 500, before any upstream call', async () => {
+    const noFetch = vi.fn();
+    vi.stubGlobal('fetch', noFetch);
+    const res = await call(claim({ verifier: 'chess.legacy' }));
+    expect(res.status).toBe(500);
+    expect(noFetch).not.toHaveBeenCalled();
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { prepareActionBatch, prepareActionQuery, type ToolManifest } from './action-sql.js';
+import { prepareActionBatch, prepareActionQuery, prepareVerifyInput, prepareVerifyWrites, type ToolManifest } from './action-sql.js';
 
 const manifest: ToolManifest = {
   name: 'list_mine',
@@ -117,5 +117,41 @@ describe('prepareActionBatch', () => {
 
   it('prepareActionQuery rejects a manifest without sql', () => {
     expect(() => prepareActionQuery(batchManifest, { id: 't1' }, 'gh:9')).toThrow(/no sql/);
+  });
+});
+
+describe('verify tools (#148)', () => {
+  const verifyManifest: ToolManifest = {
+    name: 'claim_game_over',
+    description: 'Verify a game is over by replaying its moves',
+    operation: 'verify',
+    verifier: 'chess.replay',
+    sql: 'SELECT moves FROM games WHERE id = :game_id AND (white_id = :__user_id OR black_id = :__user_id)',
+    statements: [
+      "UPDATE games SET status = 'finished', result = :__verify_result, end_reason = :__verify_reason, finished_at = :__now WHERE id = :game_id AND status = 'active' AND :__verify_over = 1",
+      "INSERT INTO game_events (id, game_id, kind, at) VALUES (:__uuid, :game_id, 'verified', :__now)",
+    ],
+    params: { game_id: { type: 'string' } },
+    requires_auth: true,
+  };
+
+  it('prepareVerifyInput binds the scoped SELECT with the caller id, never the client one', () => {
+    const q = prepareVerifyInput(verifyManifest, { game_id: 'g1', __user_id: 'attacker' }, 'gh:1');
+    expect(q).toEqual({ sql: 'SELECT moves FROM games WHERE id = ? AND (white_id = ? OR black_id = ?)', params: ['g1', 'gh:1', 'gh:1'] });
+  });
+
+  it('prepareVerifyWrites binds :__verify_<output> from the verdict, shares :__now, and keeps :__uuid per occurrence', () => {
+    const writes = prepareVerifyWrites(verifyManifest, { game_id: 'g1' }, 'gh:1', { over: true, result: '0-1', reason: 'checkmate' });
+    expect(writes).toHaveLength(2);
+    expect(writes[0]!.sql).toBe("UPDATE games SET status = 'finished', result = ?, end_reason = ?, finished_at = ? WHERE id = ? AND status = 'active' AND ? = 1");
+    expect(writes[0]!.params).toEqual(['0-1', 'checkmate', expect.any(Number), 'g1', true]);
+    expect(typeof writes[1]!.params[0]).toBe('string'); // :__uuid (the file stubs randomUUID)
+    expect(writes[1]!.params[2]).toBe(writes[0]!.params[2]); // one clock reading for the whole write set
+  });
+
+  it('prepareVerifyWrites is empty for a read-only verify tool, and an unknown output is unresolved', () => {
+    expect(prepareVerifyWrites({ ...verifyManifest, statements: undefined }, { game_id: 'g1' }, 'gh:1', { over: true })).toEqual([]);
+    expect(() => prepareVerifyWrites(verifyManifest, { game_id: 'g1' }, 'gh:1', { over: true })).toThrow('Unresolved parameter: __verify_result');
+    expect(() => prepareVerifyInput({ ...verifyManifest, sql: undefined }, { game_id: 'g1' }, 'gh:1')).toThrow('has no sql');
   });
 });

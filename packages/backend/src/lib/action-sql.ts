@@ -14,17 +14,28 @@ export interface ToolAuth {
   caller_unscoped?: { reason: string };
 }
 
+export type ToolOperation = 'query' | 'execute' | 'batch' | 'verify';
+
+/** Prefix of the magic placeholders a verify action's write statements bind the verdict through (#148). */
+export const VERIFY_PARAM_PREFIX = '__verify_';
+
 export interface ToolManifest {
   name: string;
   description: string;
-  operation: 'query' | 'execute' | 'batch';
-  /** Single statement — query/execute tools. */
+  /** `verify` (#148): `sql` is a scoped SELECT whose rows feed the platform
+   *  verifier named by `verifier`; the optional `statements` then run atomically
+   *  with the verdict bound as `:__verify_<output>`. */
+  operation: ToolOperation;
+  /** Single statement — query/execute tools; the input SELECT of a verify tool. */
   sql?: string;
   /** Multiple statements sharing one params pool — batch tools. Executed
    *  ATOMICALLY (one D1 transaction via the data-worker /batch endpoint), so
    *  multi-step flows (tournament round creation, org create+membership,
-   *  cascading deletes) can't be left half-applied by a mid-sequence failure. */
+   *  cascading deletes) can't be left half-applied by a mid-sequence failure.
+   *  On a verify tool: the writes that run after a completed verification. */
   statements?: string[];
+  /** Id of the platform-vetted verifier a verify tool runs (lib/verifiers). */
+  verifier?: string;
   params: Record<string, ToolParam>;
   requires_auth?: boolean;
   auth?: ToolAuth;
@@ -70,17 +81,53 @@ export function prepareActionBatch(
   return manifest.statements.map((sql) => bindStatement(sql, resolved, userId, now));
 }
 
+/**
+ * Prepare the input SELECT of a verify tool (#148). Verdict placeholders are
+ * not available yet — registration refuses them in `sql`.
+ */
+export function prepareVerifyInput(
+  manifest: ToolManifest,
+  input: Record<string, unknown>,
+  userId: string,
+): PreparedQuery {
+  if (typeof manifest.sql !== 'string') {
+    throw new Error(`tool ${manifest.name} has no sql`);
+  }
+  return bindStatement(manifest.sql, resolveParams(manifest, input), userId);
+}
+
+/**
+ * Prepare the write statements of a verify tool with the verifier's verdict
+ * bound as `:__verify_<output>` (#148). Same pool rules as a batch: shared
+ * params and :__now, per-occurrence :__uuid. Returns [] when the tool declares
+ * no writes.
+ */
+export function prepareVerifyWrites(
+  manifest: ToolManifest,
+  input: Record<string, unknown>,
+  userId: string,
+  output: Record<string, unknown>,
+): PreparedQuery[] {
+  if (!Array.isArray(manifest.statements) || manifest.statements.length === 0) return [];
+  const resolved = resolveParams(manifest, input);
+  const verdict = Object.fromEntries(Object.entries(output).map(([k, v]) => [`${VERIFY_PARAM_PREFIX}${k}`, v]));
+  const now = Date.now();
+  return manifest.statements.map((sql) => bindStatement(sql, resolved, userId, now, verdict));
+}
+
 function bindStatement(
   rawSql: string,
   resolved: Record<string, unknown>,
   userId: string,
   now: number = Date.now(),
+  extraMagic: Record<string, unknown> = {},
 ): PreparedQuery {
   const magicValues: Record<string, () => unknown> = {
     __user_id: () => userId,
     __now: () => now,
     __uuid: () => crypto.randomUUID(),
   };
+  for (const [name, value] of Object.entries(extraMagic)) magicValues[name] = () => value;
 
   const names: string[] = [];
   const sql = rawSql.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (_match, name: string) => {

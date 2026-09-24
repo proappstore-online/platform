@@ -115,3 +115,30 @@ describe('POST /v1/apps/:appId/actions/:name with a pas_at_ token', () => {
     expect((recordOperationFailure.mock.calls[0] as unknown[])[1]).toMatchObject({ appId: 'leads', userId: 'gh:7', status: 403 });
   });
 });
+
+describe('read tokens and verify actions (#148)', () => {
+  const verify = (statements?: string[]) => manifest({
+    name: 'claim', operation: 'verify', verifier: 'chess.replay',
+    sql: 'SELECT moves FROM games WHERE id = :game_id AND white_id = :__user_id',
+    ...(statements ? { statements } : {}),
+    params: { game_id: { type: 'string' } },
+  });
+  const body = { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ params: { game_id: 'g1' } }) };
+
+  it('a read token may run a verify action that declares no writes', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ rows: [{ moves: 'e4' }] })));
+    const res = await app.request('/v1/apps/leads/actions/claim', body, makeEnv(mockD1(mockStmt({ first: { manifest: verify() } }), mockStmt({ first: tokenRow() }), usersRow())));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, output: { legal: true, over: false } });
+  });
+
+  it('a read token may NOT run a verify action that writes', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const writes = ["UPDATE games SET status = 'finished' WHERE id = :game_id AND white_id = :__user_id AND :__verify_over = 1"];
+    const res = await app.request('/v1/apps/leads/actions/claim', body, makeEnv(mockD1(mockStmt({ first: { manifest: verify(writes) } }), mockStmt({ first: tokenRow() }), usersRow())));
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe('token is read-only');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

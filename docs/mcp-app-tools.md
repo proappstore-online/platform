@@ -165,9 +165,10 @@ against your app's own D1 tables.
 |-------|---------|
 | `name` | lowercase `a-z0-9_`. Exposed under this name on `/mcp/apps/<app_id>`. |
 | `description` | what the tool does (the model reads this to decide when to call it). |
-| `operation` | `query` → a single `SELECT` (returns rows). `execute` → a single `INSERT`/`UPDATE`/`DELETE`. `batch` → multiple write statements in one D1 transaction. |
+| `operation` | `query` → a single `SELECT` (returns rows). `execute` → a single `INSERT`/`UPDATE`/`DELETE`. `batch` → multiple write statements in one D1 transaction. `verify` → a `SELECT` whose rows are checked by a platform-vetted verifier, then optional writes bound to the verdict (see [Verify actions](#verify-actions)). |
 | `sql` | required for `query` and `execute`. Bind values with `:name` placeholders; **no semicolons**, one statement only. |
-| `statements` | required for `batch`, max 25 statements. Batch tools use `statements`, not `sql`; each member is validated like an `execute` statement. |
+| `statements` | required for `batch`, max 25 statements. Batch tools use `statements`, not `sql`; each member is validated like an `execute` statement. Optional on `verify` (the writes that run after verification, same limits). |
+| `verifier` | required for `verify`: the id of the platform verifier that runs on the rows of `sql`. Currently `chess.replay`. |
 | `params` | declared inputs: `{ "name": { "type", "description?", "optional?", "default?", "max?" } }`. Types: `string`, `integer`, `number`, `boolean`. |
 | `requires_auth` | explicit `true` or `false`. `true` requires a session token. `false` is allowed only for constrained public `query` tools. SQL using `:__user_id` must require auth. |
 | `core` | optional boolean. On a large manifest (see below) `core: true` keeps this tool pre-loaded on the app's MCP session instead of deferring it to discovery. Ignored on a small manifest, where everything is pre-loaded anyway. |
@@ -186,10 +187,11 @@ These are injected by the platform — **do not** declare them in `params`:
 | `:__user_id` | the calling user's id (forces `requires_auth: true`). Scope per-user rows with `WHERE user_id = :__user_id`. |
 | `:__now` | current time, ms since epoch. |
 | `:__uuid` | a fresh UUID (use for inserting primary keys). |
+| `:__verify_<output>` | on a `verify` tool's `statements` only: an output of the verifier (`:__verify_over`, `:__verify_result`, …). Never accepted from the client. |
 
 ## Validation rules (enforced at register time)
 
-- `query` / `execute` tools use `sql`; `batch` tools use `statements`.
+- `query` / `execute` tools use `sql`; `batch` tools use `statements`; `verify` tools use `sql` (a `SELECT`) plus an optional `statements` (writes) and a known `verifier`.
 - SQL must start with `SELECT` / `INSERT` / `UPDATE` / `DELETE`.
 - No DDL (`CREATE`, `DROP`, `ALTER`, `PRAGMA`, ...) and no semicolons.
 - `UPDATE` and `DELETE` **must** have a `WHERE` clause.
@@ -205,9 +207,65 @@ These are injected by the platform — **do not** declare them in `params`:
   caller's id as a client param.
 - Max 500 tools per app (the rejection names both counts: `received 537, max 500`).
 - Tool names starting with `api_` are reserved for console-defined endpoints.
+- `verify` tools must `requires_auth: true`; `:__verify_*` may appear only in
+  their `statements`, only for outputs the named verifier declares, never in
+  the input `sql`.
 
 A manifest that violates any rule is rejected — the whole batch fails, so a bad
 tool never half-registers.
+
+## Verify actions
+
+Actions are SQL, and SQL cannot replay a chess game. A `verify` action is the
+trusted path for the logic SQL cannot express: the platform runs a **vetted,
+platform-owned verifier module** — not app code — between a scoped read and an
+optional write, so a stored fact can be derived on the server instead of
+trusted from a client's claim.
+
+```json
+{
+  "name": "claim_game_over",
+  "description": "Record the result of my game only if replaying its moves proves it is over",
+  "operation": "verify",
+  "verifier": "chess.replay",
+  "sql": "SELECT moves FROM games WHERE id = :game_id AND (white_id = :__user_id OR black_id = :__user_id)",
+  "statements": [
+    "UPDATE games SET status = 'finished', result = :__verify_result, end_reason = :__verify_reason, finished_at = :__now WHERE id = :game_id AND (white_id = :__user_id OR black_id = :__user_id) AND :__verify_over = 1"
+  ],
+  "params": { "game_id": { "type": "string" } },
+  "requires_auth": true
+}
+```
+
+How a call runs:
+
+1. `sql` runs on the app's data worker with the usual bindings (`:params`,
+   `:__user_id`) — it is the caller-scoped read that selects the input rows.
+2. The rows go to the verifier named by `verifier`, which runs inside the
+   platform API worker. Verifiers are pure and deterministic (no I/O, no clock,
+   no randomness), bounded (at most 5 000 input rows, plus the module's own
+   cap), and produce a flat record of scalar outputs.
+3. If the verifier **completed** (`ok: true`), `statements` run as ONE D1
+   transaction with every output bound as `:__verify_<output>`; the SQL guards
+   on the verdict (`AND :__verify_over = 1`). If it could not run (`ok: false`:
+   no row, missing column, malformed data), nothing is written.
+
+The response is `{ ok, verifier, output, error?, writes? }` — `output` holds
+every declared output (`null` where not applicable), `writes` the per-statement
+`meta` when statements ran. A verify tool with no `statements` is a read-only
+check (a read personal app token may call it; one with statements needs a
+`write` token). The MCP server treats every verify tool as mutating.
+
+### Verifiers
+
+| Id | Input rows (from `sql`) | Outputs |
+|----|-------------------------|---------|
+| `chess.replay` | one row with a `moves` column (JSON array or whitespace-separated SAN/UCI), or one row per move in a `move` / `san` / `uci` column in `ORDER BY` order; optional `fen` on the first row sets the start position; ≤ 1 000 plies | `legal` (bool), `illegal_index` (int|null), `illegal_move` (string|null), `ply` (int), `over` (bool), `result` (`1-0` / `0-1` / `1/2-1/2` / null), `reason` (`checkmate` / `stalemate` / `insufficient_material` / `threefold_repetition` / `fifty_moves` / null), `turn` (`w`/`b`), `in_check` (bool), `fen` (string) |
+
+Verifiers live in `packages/backend/src/lib/verifiers/` and are added by the
+platform, never by an app; an id the platform does not know is rejected at
+registration. Propose a new one in a platform issue with the input contract,
+the outputs and why SQL cannot do it.
 
 ## How tools get registered
 

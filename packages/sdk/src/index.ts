@@ -32,6 +32,7 @@ export type { DefaultRole, RoleAssignment } from './roles.js';
 export { DEFAULT_ROLES } from './roles.js';
 export type { Invite, InviteListItem, CreateInviteOptions, RedeemResult } from './invites.js';
 export { Actions } from './actions.js';
+export type { ActionVerifyResult } from './actions.js';
 export { Tokens } from './tokens.js';
 export type { AppToken, MintedAppToken, CreateTokenOptions, TokenAccess } from './tokens.js';
 

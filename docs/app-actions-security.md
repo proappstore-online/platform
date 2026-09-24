@@ -175,6 +175,18 @@ statements; `:__uuid` is per-occurrence, so ids that must correlate across
 statements are client-supplied params. Sequential single actions are fine only
 when every step is independently idempotent and safe to observe alone.
 
+## Verify tools (trusted non-SQL logic)
+
+`operation: "verify"` runs a **platform-owned** verifier — e.g. `chess.replay`,
+a chess.js replay — between a caller-scoped `sql` read and optional
+`statements`, binding the verdict as `:__verify_<output>` so a write can guard
+on a server-derived fact instead of a client claim (#148). The security
+boundary is unchanged: the app supplies SQL and a verifier *id*, never code;
+the input read and every write pass the same validators and the `:__user_id`
+scoping lint; the verifier is pure, deterministic and bounded; and nothing is
+written unless the verifier completed. See
+[Verify actions](./mcp-app-tools.md#verify-actions) for the shape.
+
 ## Registration and drift
 
 The manifest is registered from the committed `mcp.json` on every deploy: the

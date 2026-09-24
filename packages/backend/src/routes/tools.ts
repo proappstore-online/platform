@@ -13,8 +13,9 @@ import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { requireAppAccess, requireAppOwner } from '../lib/auth.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
-import type { ToolManifest, ToolParam } from '../lib/action-sql.js';
+import { VERIFY_PARAM_PREFIX, type ToolManifest, type ToolParam } from '../lib/action-sql.js';
 import { ENDPOINT_NAME_PREFIX } from '../lib/endpoint-sql.js';
+import { getVerifier, VERIFIERS } from '../lib/verifiers/index.js';
 
 export const toolsRoutes = new Hono<{ Bindings: Env }>();
 
@@ -178,11 +179,30 @@ function validateManifest(tool: ToolManifest, opts: { source: ToolSource } = { s
     return `the ${ENDPOINT_NAME_PREFIX} prefix is reserved for console-defined endpoints`;
   }
   if (!tool.description || typeof tool.description !== 'string') return 'description is required';
-  if (!['query', 'execute', 'batch'].includes(tool.operation)) return 'operation must be "query", "execute" or "batch"';
+  if (!['query', 'execute', 'batch', 'verify'].includes(tool.operation)) {
+    return 'operation must be "query", "execute", "batch" or "verify"';
+  }
   if (tool.requires_auth !== true && tool.requires_auth !== false) return 'requires_auth must be explicitly true or false';
+  if (tool.verifier !== undefined && tool.operation !== 'verify') return 'only verify tools may declare a verifier';
 
-  let sqlStatements: string[];
-  if (tool.operation === 'batch') {
+  // Every statement the tool will run, with the kind it is validated as.
+  let checks: { sql: string; kind: 'query' | 'execute' }[];
+  if (tool.operation === 'verify') {
+    // A verify tool (#148): a scoped SELECT feeds a platform-vetted verifier;
+    // optional writes then run with the verdict bound as :__verify_<output>.
+    if (tool.requires_auth !== true) return 'verify tools must require auth';
+    if (typeof tool.verifier !== 'string' || !getVerifier(tool.verifier)) {
+      return `verifier must be one of: ${Object.keys(VERIFIERS).join(', ')}`;
+    }
+    if (!tool.sql || typeof tool.sql !== 'string') return 'verify tools require sql (the SELECT that feeds the verifier)';
+    if (tool.statements !== undefined) {
+      if (!Array.isArray(tool.statements)) return 'statements must be an array';
+      if (tool.statements.length > 25) return 'max 25 statements per verify tool';
+      if (tool.statements.some((s) => !s || typeof s !== 'string')) return 'every statement must be a non-empty string';
+    }
+    if (new RegExp(`:${VERIFY_PARAM_PREFIX}`).test(tool.sql)) return 'the verify input sql cannot reference :__verify_* (the verifier has not run yet)';
+    checks = [{ sql: tool.sql, kind: 'query' }, ...(tool.statements ?? []).map((sql) => ({ sql, kind: 'execute' as const }))];
+  } else if (tool.operation === 'batch') {
     if (tool.sql !== undefined) return 'batch tools use statements, not sql';
     if (!Array.isArray(tool.statements) || tool.statements.length === 0) {
       return 'batch tools require a non-empty statements array';
@@ -191,16 +211,17 @@ function validateManifest(tool: ToolManifest, opts: { source: ToolSource } = { s
     if (tool.statements.some((s) => !s || typeof s !== 'string')) {
       return 'every statement must be a non-empty string';
     }
-    sqlStatements = tool.statements;
-  } else {
-    if (tool.statements !== undefined) return 'only batch tools may declare statements';
-    if (!tool.sql || typeof tool.sql !== 'string') return 'sql is required';
-    sqlStatements = [tool.sql];
-  }
-
-  for (const stmt of sqlStatements) {
     // Batch member statements are writes (queries have nowhere to return).
-    const sqlErr = validateSql(stmt, tool.operation === 'batch' ? 'execute' : tool.operation);
+    checks = tool.statements.map((sql) => ({ sql, kind: 'execute' }));
+  } else {
+    if (tool.statements !== undefined) return 'only batch and verify tools may declare statements';
+    if (!tool.sql || typeof tool.sql !== 'string') return 'sql is required';
+    checks = [{ sql: tool.sql, kind: tool.operation }];
+  }
+  const sqlStatements = checks.map((c) => c.sql);
+
+  for (const { sql, kind } of checks) {
+    const sqlErr = validateSql(sql, kind);
     if (sqlErr) return sqlErr;
   }
 
@@ -219,14 +240,22 @@ function validateManifest(tool: ToolManifest, opts: { source: ToolSource } = { s
   }
   const params = tool.params || {};
 
-  // All :paramName in SQL must be declared in params (except magic params)
+  // All :paramName in SQL must be declared in params (except magic params). A
+  // verify tool's writes may also bind the verifier's declared outputs.
   const magicParams = new Set(['__user_id', '__now', '__uuid']);
+  if (tool.operation === 'verify') {
+    for (const key of Object.keys(getVerifier(tool.verifier)!.outputs)) magicParams.add(`${VERIFY_PARAM_PREFIX}${key}`);
+  }
   const sqlParams = sqlStatements.flatMap((stmt) =>
     [...stmt.matchAll(/:([a-zA-Z_][a-zA-Z0-9_]*)/g)].map(m => m[1]!!),
   );
   const declaredParams = new Set([...Object.keys(params), ...magicParams]);
   for (const p of sqlParams) {
-    if (!declaredParams.has(p)) return `SQL references :${p} but it is not declared in params`;
+    if (!declaredParams.has(p)) {
+      return tool.operation === 'verify' && p.startsWith(VERIFY_PARAM_PREFIX)
+        ? `SQL references :${p} but verifier "${tool.verifier}" has no output "${p.slice(VERIFY_PARAM_PREFIX.length)}"`
+        : `SQL references :${p} but it is not declared in params`;
+    }
   }
 
   if (tool.auth !== undefined) {
@@ -251,6 +280,13 @@ function validateManifest(tool: ToolManifest, opts: { source: ToolSource } = { s
   }
 
   return null;
+}
+
+/** Every SQL statement a tool runs, in order: batch members; a verify tool's input SELECT then its writes; else the one `sql`. */
+export function toolStatements(tool: ToolManifest): string[] {
+  if (tool.operation === 'batch') return tool.statements ?? [];
+  if (tool.operation === 'verify') return [tool.sql ?? '', ...(tool.statements ?? [])];
+  return [tool.sql ?? ''];
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -278,7 +314,7 @@ export async function checkSchemaCoherence(
   // Flatten to individually-compilable statements, id'd back to their tool.
   const statements: { id: string; tool: string; sql: string; paramCount: number }[] = [];
   for (const tool of tools) {
-    const raws = tool.operation === 'batch' ? (tool.statements ?? []) : [tool.sql ?? ''];
+    const raws = toolStatements(tool);
     raws.forEach((raw, i) => {
       let paramCount = 0;
       const sql = raw.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, () => { paramCount += 1; return '?'; });
@@ -363,11 +399,11 @@ export async function validateToolSet(
       typeof tool.auth?.caller_unscoped?.reason === 'string' &&
       tool.auth.caller_unscoped.reason.trim().length > 0;
     if (hasCallerUnscoped) continue;
-    const stmts = tool.operation === 'batch' ? (tool.statements ?? []) : [tool.sql ?? ''];
+    const stmts = toolStatements(tool);
     stmts.forEach((stmt, idx) => {
       if (!stmt.includes(':__user_id')) {
         const location =
-          tool.operation === 'batch' ? `"${tool.name}" statement[${idx}]` : `"${tool.name}"`;
+          stmts.length > 1 ? `"${tool.name}" statement[${idx}]` : `"${tool.name}"`;
         scopeErrors.push(
           `${location}: statement has no :__user_id and no auth.caller_unscoped exemption`,
         );
@@ -499,6 +535,8 @@ function publicToolView(m: ToolManifest) {
     name: m.name,
     description: m.description,
     operation: m.operation,
+    // The platform verifier a verify tool runs (#148) — a public module id, not app SQL.
+    ...(m.verifier !== undefined ? { verifier: m.verifier } : {}),
     params: m.params,
     requires_auth: m.requires_auth,
     // Which tools stay resident on a large app's MCP session (#117) — not sensitive.

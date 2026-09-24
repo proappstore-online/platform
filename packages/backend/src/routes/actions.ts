@@ -2,8 +2,15 @@ import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireUser, type FasUser } from '../lib/auth.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
-import { prepareActionBatch, prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
+import {
+  prepareActionBatch,
+  prepareActionQuery,
+  prepareVerifyInput,
+  prepareVerifyWrites,
+  type ToolManifest,
+} from '../lib/action-sql.js';
 import { looksLikeAppToken, rememberTokenUser, touchLastUsed, verifyAppToken } from '../lib/app-tokens.js';
+import { getVerifier, runVerifier } from '../lib/verifiers/index.js';
 
 export const actionRoutes = new Hono<{ Bindings: Env }>();
 
@@ -38,7 +45,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
       // `users`), then the same role checks and :__user_id injection apply.
       const verified = await verifyAppToken(c.env.DB, appId, token);
       rememberTokenUser(c.req.raw, verified.user.id);
-      if (verified.scopes.access === 'read' && manifest.operation !== 'query') {
+      if (verified.scopes.access === 'read' && actionWrites(manifest)) {
         throw new HttpError('token is read-only', 403);
       }
       if (verified.scopes.actions && !verified.scopes.actions.includes(name)) {
@@ -68,6 +75,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
         ? body.params
         : null;
   if (!input) throw new HttpError('params must be an object', 400);
+  if (manifest.operation === 'verify') return runVerifyAction(c.env, appId, manifest, input, userId, token);
   let endpoint: string;
   let payload: unknown;
   try {
@@ -93,17 +101,29 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   // when the target data worker is healthy (#153). Reach the provisioned
   // worker's direct Workers URL — built from DATA_WORKER_HOST, never a literal
   // account subdomain — protected by the internal token.
-  const upstream = await fetch(dataWorkerUrl(c.env, appId, endpoint), {
+  const upstream = await forwardToDataWorker(c.env, appId, endpoint, payload, token);
+  return passThrough(upstream, await upstream.text());
+});
+
+function actionWrites(manifest: ToolManifest): boolean {
+  if (manifest.operation === 'query') return false;
+  if (manifest.operation === 'verify') return (manifest.statements?.length ?? 0) > 0;
+  return true;
+}
+
+async function forwardToDataWorker(env: Env, appId: string, endpoint: string, payload: unknown, token: string | null): Promise<Response> {
+  return fetch(dataWorkerUrl(env, appId, endpoint), {
     method: 'POST',
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(c.env.INTERNAL_TOKEN ? { 'X-Internal-Token': c.env.INTERNAL_TOKEN } : {}),
+      ...(env.INTERNAL_TOKEN ? { 'X-Internal-Token': env.INTERNAL_TOKEN } : {}),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
   });
+}
 
-  const text = await upstream.text();
+function passThrough(upstream: Response, text: string): Response {
   return new Response(text, {
     status: upstream.status,
     headers: {
@@ -111,7 +131,72 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
       'Content-Type': upstream.headers.get('Content-Type') ?? 'application/json; charset=utf-8',
     },
   });
-});
+}
+
+/**
+ * A verify action (#148): the trusted non-SQL execution path.
+ *
+ *   1. the tool's `sql` (a caller-scoped SELECT) runs on the app's data worker;
+ *   2. its rows go to the platform-vetted verifier the manifest names — code
+ *      that lives in THIS worker, never supplied by the app;
+ *   3. when the verifier completes, the tool's optional `statements` run as one
+ *      transaction with the verdict bound as `:__verify_<output>`, so the write
+ *      can guard on a fact the server derived (`AND :__verify_over = 1`).
+ *
+ * `ok: false` (no rows, malformed input) is a 200 with the error and no write:
+ * the app decides what "could not verify" means. Data-worker failures pass
+ * through with their status, as for every other action.
+ */
+async function runVerifyAction(
+  env: Env,
+  appId: string,
+  manifest: ToolManifest,
+  input: Record<string, unknown>,
+  userId: string,
+  token: string | null,
+): Promise<Response> {
+  const verifier = getVerifier(manifest.verifier);
+  if (!verifier) throw new HttpError('action manifest is invalid: unknown verifier', 500);
+
+  let query;
+  try {
+    query = prepareVerifyInput(manifest, input, userId);
+  } catch (e) {
+    throw new HttpError(e instanceof Error ? e.message : String(e), 400);
+  }
+  const read = await forwardToDataWorker(env, appId, 'query', query, token);
+  const readText = await read.text();
+  if (!read.ok) return passThrough(read, readText);
+  let rows: unknown;
+  try {
+    rows = (JSON.parse(readText) as { rows?: unknown }).rows;
+  } catch {
+    throw new HttpError('data worker returned an invalid query response', 502);
+  }
+
+  const outcome = runVerifier(verifier, rows);
+  const headers = { 'Cache-Control': 'no-store' };
+  if (!outcome.ok) {
+    return Response.json({ ok: false, verifier: verifier.id, error: outcome.error ?? 'verification failed', output: outcome.output }, { headers });
+  }
+
+  const writes = prepareVerifyWrites(manifest, input, userId, outcome.output);
+  if (writes.length === 0) return Response.json({ ok: true, verifier: verifier.id, output: outcome.output }, { headers });
+
+  const written = await forwardToDataWorker(env, appId, 'batch', { statements: writes }, token);
+  const writtenText = await written.text();
+  if (!written.ok) return passThrough(written, writtenText);
+  let results: { meta?: unknown }[] = [];
+  try {
+    results = (JSON.parse(writtenText) as { results?: { meta?: unknown }[] }).results ?? [];
+  } catch {
+    throw new HttpError('data worker returned an invalid batch response', 502);
+  }
+  return Response.json(
+    { ok: true, verifier: verifier.id, output: outcome.output, writes: results.map((r) => r.meta ?? {}) },
+    { headers },
+  );
+}
 
 function bearerToken(header: string | undefined): string | null {
   if (!header?.startsWith('Bearer ')) return null;

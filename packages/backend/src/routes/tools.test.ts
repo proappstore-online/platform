@@ -1130,3 +1130,101 @@ describe('PUT /v1/apps/:appId/tools — the core flag (#117)', () => {
     expect(((await res.json()) as { error: string }).error).toContain('core must be a boolean');
   });
 });
+
+describe('verify tools (#148)', () => {
+  const put = (tool: Record<string, unknown>) => app.request(
+    '/v1/apps/test-app/tools',
+    {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tools: [tool] }),
+    },
+    makeEnv({}, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }))),
+  );
+  const error = async (res: Response) => ((await res.json()) as { error: string }).error;
+  const claim = {
+    name: 'claim_game_over',
+    description: 'Verify a claimed result by replaying the stored moves',
+    operation: 'verify',
+    verifier: 'chess.replay',
+    sql: 'SELECT moves FROM games WHERE id = :game_id AND (white_id = :__user_id OR black_id = :__user_id)',
+    statements: [
+      "UPDATE games SET status = 'finished', result = :__verify_result, end_reason = :__verify_reason WHERE id = :game_id AND (white_id = :__user_id OR black_id = :__user_id) AND :__verify_over = 1",
+    ],
+    params: { game_id: { type: 'string' } },
+    requires_auth: true,
+  };
+
+  it('registers a verify tool: the input SELECT, the writes and the verifier id are all persisted; the verifier id is public', async () => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    const res = await app.request(
+      '/v1/apps/test-app/tools',
+      { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools: [claim] }) },
+      makeEnv({}, db),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, registered: 1 });
+    // The INSERT's bind carries the manifest JSON as its third argument.
+    const binds = db.prepare.mock.results.flatMap((r) => (r.value as ReturnType<typeof mockStmt>).bind.mock.calls as unknown[][]);
+    const inserted = JSON.parse(binds.find((c) => typeof c[2] === 'string' && (c[2] as string).startsWith('{'))![2] as string) as Record<string, unknown>;
+    expect(inserted).toMatchObject({ operation: 'verify', verifier: 'chess.replay', statements: claim.statements });
+
+    // The public listing exposes which platform verifier runs — but never the SQL.
+    const list = await app.request(
+      '/v1/apps/test-app/tools',
+      {},
+      makeEnv({}, mockD1(mockStmt({ all: { results: [{ name: 'claim_game_over', manifest: JSON.stringify(claim), updated_at: 1, source: 'code' }] } }))),
+    );
+    const { tools } = (await list.json()) as { tools: Record<string, unknown>[] };
+    expect(tools[0]).toMatchObject({ operation: 'verify', verifier: 'chess.replay' });
+    expect(tools[0]).not.toHaveProperty('sql');
+    expect(tools[0]).not.toHaveProperty('statements');
+  });
+
+  it('a read-only verify tool (no statements) registers too', async () => {
+    const { statements: _s, ...readOnly } = claim;
+    expect((await put(readOnly)).status).toBe(200);
+  });
+
+  it('the schema-coherence check compiles the input SELECT and every write, with :__verify_* counted as binds', async () => {
+    const seen: ValStmt[] = [];
+    validateResults = (stmts) => { seen.push(...stmts); return stmts.map((s) => ({ id: s.id, ok: true })); };
+    expect((await put(claim)).status).toBe(200);
+    expect(seen.map((s) => [s.id, s.paramCount])).toEqual([['claim_game_over#0', 3], ['claim_game_over#1', 6]]);
+    validateResults = (stmts) => stmts.map((s) => ({ id: s.id, ok: s.id.endsWith('#0'), error: 'no such column: end_reason' }));
+    const drift = await put(claim);
+    expect(drift.status).toBe(422);
+    expect(((await drift.json()) as { details: string[] }).details).toEqual(['tool "claim_game_over": no such column: end_reason']);
+  });
+
+  it('rejects an unknown verifier, a missing or non-SELECT input, and a verifier on a non-verify tool', async () => {
+    expect(await error(await put({ ...claim, verifier: 'app.code' }))).toBe('tool "claim_game_over": verifier must be one of: chess.replay');
+    expect(await error(await put({ ...claim, verifier: undefined }))).toBe('tool "claim_game_over": verifier must be one of: chess.replay');
+    expect(await error(await put({ ...claim, sql: undefined }))).toBe('tool "claim_game_over": verify tools require sql (the SELECT that feeds the verifier)');
+    expect(await error(await put({ ...claim, sql: 'DELETE FROM games WHERE id = :game_id AND white_id = :__user_id' }))).toBe('tool "claim_game_over": operation "query" must use SELECT');
+    expect(await error(await put({ ...claim, statements: ['SELECT 1 FROM games WHERE id = :game_id AND white_id = :__user_id'] }))).toBe('tool "claim_game_over": operation "execute" must not use SELECT (use "query" instead)');
+    expect(await error(await put({ ...claim, operation: 'query', statements: undefined }))).toBe('tool "claim_game_over": only verify tools may declare a verifier');
+    // Outside a verify tool the verdict placeholders are just undeclared params.
+    expect(await error(await put({ ...claim, operation: 'execute', verifier: undefined, statements: undefined, sql: "UPDATE games SET result = :__verify_result WHERE id = :game_id AND white_id = :__user_id" })))
+      .toBe('tool "claim_game_over": SQL references :__verify_result but it is not declared in params');
+  });
+
+  it('rejects a verdict placeholder the verifier does not produce, or one in the input SELECT, and a public verify tool', async () => {
+    expect(await error(await put({ ...claim, statements: ['UPDATE games SET winner = :__verify_winner WHERE id = :game_id AND white_id = :__user_id'] })))
+      .toBe('tool "claim_game_over": SQL references :__verify_winner but verifier "chess.replay" has no output "winner"');
+    expect(await error(await put({ ...claim, sql: 'SELECT moves FROM games WHERE id = :game_id AND white_id = :__user_id AND :__verify_over = 1' })))
+      .toBe('tool "claim_game_over": the verify input sql cannot reference :__verify_* (the verifier has not run yet)');
+    expect(await error(await put({ ...claim, requires_auth: false }))).toBe('tool "claim_game_over": verify tools must require auth');
+    expect(await error(await put({ ...claim, statements: Array(26).fill(claim.statements[0]) }))).toBe('tool "claim_game_over": max 25 statements per verify tool');
+    expect(await error(await put({ ...claim, statements: [''] }))).toBe('tool "claim_game_over": every statement must be a non-empty string');
+    expect(await error(await put({ ...claim, statements: 'nope' }))).toBe('tool "claim_game_over": statements must be an array');
+  });
+
+  it('the :__user_id scoping lint covers the input SELECT and every write, naming the index', async () => {
+    const res = await put({ ...claim, statements: ["UPDATE games SET status = 'finished' WHERE id = :game_id AND :__verify_over = 1"] });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { details: string[] }).details).toEqual([
+      '"claim_game_over" statement[1]: statement has no :__user_id and no auth.caller_unscoped exemption',
+    ]);
+  });
+});

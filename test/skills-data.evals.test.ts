@@ -85,7 +85,10 @@ describe('proappstore-data-migrations-actions: no fabricated APIs', () => {
 
   it('every magic parameter it names is one the executor injects', () => {
     const named = new Set([...allText.matchAll(/:__[a-z_]+/g)].map((m) => m[0]));
-    expect([...named].sort()).toEqual([...MAGIC].sort());
+    // `:__verify_<output>` is the verdict binding of a verify tool (#148): the executor
+    // injects it from the named verifier's outputs, so the family is allowed as a prefix.
+    const fixed = [...named].filter((n) => !n.startsWith(':__verify_'));
+    expect(fixed.sort()).toEqual([...MAGIC].sort());
   });
 
   it('every recipe it names is one the recipe tool serves', () => {

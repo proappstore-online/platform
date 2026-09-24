@@ -89,6 +89,10 @@ const tables = await app.db.tables()
 // User-facing reads/writes should use registered app actions:
 const { rows } = await app.actions.call<{ rows: Event[] }>('list_events', { city: 'SF' })
 await app.actions.call('create_event', { title: 'Meetup', city: 'SF' })
+// A verify action runs a platform verifier (e.g. chess.replay) between a scoped read
+// and a write guarded on the verdict — the trusted path for logic SQL cannot express:
+const v = await app.actions.call<ActionVerifyResult>('claim_game_over', { game_id })
+if (v.ok && v.output.over) { /* result + reason were derived server-side */ }
 \`\`\``,
     storage: `## File Storage (R2)
 \`\`\`tsx
