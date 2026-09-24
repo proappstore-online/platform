@@ -1,0 +1,14 @@
+{
+  "$comment": "DEMO DATA — fictional places for local development and tests only. Never load into a production app; names, addresses and coordinates are invented and the owners are fake ids.",
+  "categories": [
+    { "id": "demo-cafe", "name": "Cafés", "icon": "☕", "color": "#d86f4d", "sort_order": 0 },
+    { "id": "demo-park", "name": "Parks", "icon": "🌳", "color": "#4d9a6a", "sort_order": 1 },
+    { "id": "demo-tool", "name": "Tool libraries", "icon": "🔧", "color": "#4c97b5", "sort_order": 2 }
+  ],
+  "places": [
+    { "id": "demo-p1", "owner_id": "gh:demo-alice", "owner_name": "Demo Alice", "category_id": "demo-cafe", "name": "Corner Roasters (demo)", "address": "1 Example St, Sampleton", "lat": -37.8102, "lng": 144.9628, "description": "A fictional café used to demonstrate markers and detail panels." },
+    { "id": "demo-p2", "owner_id": "gh:demo-alice", "owner_name": "Demo Alice", "category_id": "demo-park", "name": "Riverside Park (demo)", "address": "Placeholder Rd, Sampleton", "lat": -37.8171, "lng": 144.9700, "description": "Invented park, invented river." },
+    { "id": "demo-p3", "owner_id": "gh:demo-bob", "owner_name": "Demo Bob", "category_id": "demo-tool", "name": "Northside Tool Library (demo)", "address": "2 Example St, Sampleton", "lat": -37.7940, "lng": 144.9450, "description": "Borrow fictional tools." },
+    { "id": "demo-p4", "owner_id": "gh:demo-bob", "owner_name": "Demo Bob", "category_id": "demo-cafe", "name": "Bay Kiosk (demo)", "address": "The Pier, Sampleton", "lat": -37.8600, "lng": 144.9800, "description": "Close to demo-p1 at low zoom, so the two cluster." }
+  ]
+}

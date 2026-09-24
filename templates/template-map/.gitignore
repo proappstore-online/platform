@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.cache/
+*.tsbuildinfo
+.env
+.env.local
+.env.production
+.vite/
+.vibe-check/
+.pas.json

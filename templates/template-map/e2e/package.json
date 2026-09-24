@@ -1,0 +1,11 @@
+{
+  "name": "APPNAME-e2e",
+  "private": true,
+  "description": "Behavioural gate: drives the LIVE deployed app in a real browser after deploy (the canonical deploy workflow runs this when e2e/ exists).",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
+  }
+}

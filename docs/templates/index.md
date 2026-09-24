@@ -91,6 +91,16 @@ events with RSVPs and a waitlist, a thread, an activity log, and app-wide modera
 gated by `auth.app_roles` — validated by `test/template-membership.test.ts`, and enters the
 catalogue once published as `proappstore-online/template-membership`.
 
+The map-centred template (#180) is staged at `templates/template-map/`. The
+archetype investigation recommended maps as a mode of the marketplace template
+rather than a fourth archetype; this template exists for apps where the map is
+the *primary workspace* and was written from the standard, not extracted from an
+app. Its `template.json` is the catalogue entry, validated by
+`test/template-map.test.ts` against `catalogue.schema.json`; it enters the
+catalogue once published as `proappstore-online/template-map`. Pick it only
+when every record is a point and users think in "where"; two-sided markets with
+a map belong to `template-marketplace` with `MAPS_ENABLED`.
+
 ## Adding, deprecating, withdrawing
 
 A template enters the catalogue only after it exists as a GitHub template

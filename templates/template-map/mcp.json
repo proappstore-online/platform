@@ -1,0 +1,482 @@
+{
+  "tools": [
+    {
+      "name": "list_places",
+      "description": "Places visible to the caller (every active place plus the caller's own in any status), optionally within a viewport and filtered by category / text. Newest first. The map and the list call this same action.",
+      "operation": "query",
+      "sql": "SELECT p.id, p.owner_id, p.owner_name, p.category_id, p.name, p.description, p.address, p.lat, p.lng, p.status, p.image_key, p.created_at, p.updated_at FROM places p WHERE (p.status = 'active' OR p.owner_id = :__user_id) AND (:category_id IS NULL OR p.category_id = :category_id) AND (:q IS NULL OR p.name LIKE '%' || :q || '%' OR p.description LIKE '%' || :q || '%' OR p.address LIKE '%' || :q || '%') AND (:south IS NULL OR :north IS NULL OR :west IS NULL OR :east IS NULL OR (p.lat BETWEEN :south AND :north AND ((:west <= :east AND p.lng BETWEEN :west AND :east) OR (:west > :east AND (p.lng >= :west OR p.lng <= :east))))) ORDER BY p.updated_at DESC LIMIT 500",
+      "params": {
+        "category_id": {
+          "type": "string",
+          "description": "Category id",
+          "optional": true
+        },
+        "q": {
+          "type": "string",
+          "description": "Search text (name, description, address)",
+          "optional": true
+        },
+        "south": {
+          "type": "number",
+          "description": "Viewport south latitude",
+          "optional": true
+        },
+        "north": {
+          "type": "number",
+          "description": "Viewport north latitude",
+          "optional": true
+        },
+        "west": {
+          "type": "number",
+          "description": "Viewport west longitude",
+          "optional": true
+        },
+        "east": {
+          "type": "number",
+          "description": "Viewport east longitude",
+          "optional": true
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "count_places",
+      "description": "How many places match the same visibility, filters and viewport as list_places (the list shows the total; the map shows the page).",
+      "operation": "query",
+      "sql": "SELECT COUNT(*) AS count FROM places p WHERE (p.status = 'active' OR p.owner_id = :__user_id) AND (:category_id IS NULL OR p.category_id = :category_id) AND (:q IS NULL OR p.name LIKE '%' || :q || '%' OR p.description LIKE '%' || :q || '%' OR p.address LIKE '%' || :q || '%') AND (:south IS NULL OR :north IS NULL OR :west IS NULL OR :east IS NULL OR (p.lat BETWEEN :south AND :north AND ((:west <= :east AND p.lng BETWEEN :west AND :east) OR (:west > :east AND (p.lng >= :west OR p.lng <= :east))))) LIMIT 1",
+      "params": {
+        "category_id": {
+          "type": "string",
+          "description": "Category id",
+          "optional": true
+        },
+        "q": {
+          "type": "string",
+          "description": "Search text (name, description, address)",
+          "optional": true
+        },
+        "south": {
+          "type": "number",
+          "description": "Viewport south latitude",
+          "optional": true
+        },
+        "north": {
+          "type": "number",
+          "description": "Viewport north latitude",
+          "optional": true
+        },
+        "west": {
+          "type": "number",
+          "description": "Viewport west longitude",
+          "optional": true
+        },
+        "east": {
+          "type": "number",
+          "description": "Viewport east longitude",
+          "optional": true
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "get_place",
+      "description": "One place, if the caller may see it (active, or their own).",
+      "operation": "query",
+      "sql": "SELECT p.id, p.owner_id, p.owner_name, p.category_id, p.name, p.description, p.address, p.lat, p.lng, p.status, p.image_key, p.created_at, p.updated_at FROM places p WHERE p.id = :id AND (p.status = 'active' OR p.owner_id = :__user_id) LIMIT 1",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Place id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_my_places",
+      "description": "The caller's own places in every status, newest first.",
+      "operation": "query",
+      "sql": "SELECT p.id, p.owner_id, p.owner_name, p.category_id, p.name, p.description, p.address, p.lat, p.lng, p.status, p.image_key, p.created_at, p.updated_at FROM places p WHERE p.owner_id = :__user_id ORDER BY p.updated_at DESC LIMIT 500",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "create_place",
+      "description": "Add a place owned by the caller. Idempotent by client id. Coordinates must be on the globe; the category, if given, must exist.",
+      "operation": "execute",
+      "sql": "INSERT OR IGNORE INTO places (id, owner_id, owner_name, category_id, name, description, address, lat, lng, status, image_key, created_at, updated_at) SELECT :id, :__user_id, :owner_name, :category_id, :name, :description, :address, :lat, :lng, 'active', :image_key, :__now, :__now WHERE :lat BETWEEN -90 AND 90 AND :lng BETWEEN -180 AND 180 AND (:category_id IS NULL OR EXISTS (SELECT 1 FROM categories c WHERE c.id = :category_id))",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Client-generated place id"
+        },
+        "owner_name": {
+          "type": "string",
+          "description": "Display name shown on the record"
+        },
+        "category_id": {
+          "type": "string",
+          "description": "Category id",
+          "optional": true
+        },
+        "name": {
+          "type": "string",
+          "description": "Name"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description",
+          "default": ""
+        },
+        "address": {
+          "type": "string",
+          "description": "Address or place text",
+          "default": ""
+        },
+        "lat": {
+          "type": "number",
+          "description": "Latitude"
+        },
+        "lng": {
+          "type": "number",
+          "description": "Longitude"
+        },
+        "image_key": {
+          "type": "string",
+          "description": "Public storage key of a photo",
+          "optional": true
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "update_place",
+      "description": "Edit one of the caller's own places.",
+      "operation": "execute",
+      "sql": "UPDATE places SET category_id = :category_id, name = :name, description = :description, address = :address, lat = :lat, lng = :lng, image_key = :image_key, updated_at = :__now WHERE id = :id AND owner_id = :__user_id AND :lat BETWEEN -90 AND 90 AND :lng BETWEEN -180 AND 180 AND (:category_id IS NULL OR EXISTS (SELECT 1 FROM categories c WHERE c.id = :category_id))",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Place id"
+        },
+        "category_id": {
+          "type": "string",
+          "description": "Category id",
+          "optional": true
+        },
+        "name": {
+          "type": "string",
+          "description": "Name"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description",
+          "default": ""
+        },
+        "address": {
+          "type": "string",
+          "description": "Address",
+          "default": ""
+        },
+        "lat": {
+          "type": "number",
+          "description": "Latitude"
+        },
+        "lng": {
+          "type": "number",
+          "description": "Longitude"
+        },
+        "image_key": {
+          "type": "string",
+          "description": "Photo key",
+          "optional": true
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "set_place_status",
+      "description": "Hide or re-activate one of the caller's own places (a hidden place is visible only to its owner).",
+      "operation": "execute",
+      "sql": "UPDATE places SET status = :status, updated_at = :__now WHERE id = :id AND owner_id = :__user_id AND :status IN ('active', 'hidden')",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Place id"
+        },
+        "status": {
+          "type": "string",
+          "description": "active | hidden"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "delete_place",
+      "description": "Delete one of the caller's own places.",
+      "operation": "execute",
+      "sql": "DELETE FROM places WHERE id = :id AND owner_id = :__user_id",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Place id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_categories",
+      "description": "All categories, in display order \u2014 the shared catalogue behind the filter bar.",
+      "operation": "query",
+      "sql": "SELECT id, name, color, icon, sort_order FROM categories ORDER BY sort_order, name LIMIT 200",
+      "params": {},
+      "requires_auth": true,
+      "auth": {
+        "caller_unscoped": {
+          "reason": "shared category catalogue: no per-user or per-tenant row data"
+        }
+      }
+    },
+    {
+      "name": "category_stats",
+      "description": "Active places per category, for the filter bar and the admin table.",
+      "operation": "query",
+      "sql": "SELECT c.id, c.name, COUNT(p.id) AS active_count FROM categories c LEFT JOIN places p ON p.category_id = c.id AND p.status = 'active' GROUP BY c.id ORDER BY c.sort_order, c.name LIMIT 200",
+      "params": {},
+      "requires_auth": true,
+      "auth": {
+        "caller_unscoped": {
+          "reason": "aggregate counts per category over active (public-to-members) places; no row data"
+        }
+      }
+    },
+    {
+      "name": "admin_create_category",
+      "description": "Create a category (app role admin or editor). Idempotent by client id.",
+      "operation": "execute",
+      "sql": "INSERT OR IGNORE INTO categories (id, name, color, icon, sort_order, created_at, updated_at) VALUES (:id, :name, :color, :icon, :sort_order, :__now, :__now)",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Client-generated id"
+        },
+        "name": {
+          "type": "string",
+          "description": "Name"
+        },
+        "color": {
+          "type": "string",
+          "description": "CSS colour",
+          "default": "#d86f4d"
+        },
+        "icon": {
+          "type": "string",
+          "description": "Emoji or short icon text",
+          "default": ""
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "Display order",
+          "default": 0
+        }
+      },
+      "requires_auth": true,
+      "auth": {
+        "app_roles": [
+          "admin",
+          "editor"
+        ],
+        "caller_unscoped": {
+          "reason": "app-role-gated management of the shared category catalogue"
+        }
+      }
+    },
+    {
+      "name": "admin_update_category",
+      "description": "Edit a category (app role admin or editor).",
+      "operation": "execute",
+      "sql": "UPDATE categories SET name = :name, color = :color, icon = :icon, sort_order = :sort_order, updated_at = :__now WHERE id = :id",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Category id"
+        },
+        "name": {
+          "type": "string",
+          "description": "Name"
+        },
+        "color": {
+          "type": "string",
+          "description": "CSS colour",
+          "default": "#d86f4d"
+        },
+        "icon": {
+          "type": "string",
+          "description": "Icon",
+          "default": ""
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "Display order",
+          "default": 0
+        }
+      },
+      "requires_auth": true,
+      "auth": {
+        "app_roles": [
+          "admin",
+          "editor"
+        ],
+        "caller_unscoped": {
+          "reason": "app-role-gated management of the shared category catalogue"
+        }
+      }
+    },
+    {
+      "name": "admin_delete_category",
+      "description": "Delete a category (app role admin or editor); places in it keep their record with no category.",
+      "operation": "batch",
+      "statements": [
+        "UPDATE places SET category_id = NULL, updated_at = :__now WHERE category_id = :id",
+        "DELETE FROM categories WHERE id = :id"
+      ],
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Category id"
+        }
+      },
+      "requires_auth": true,
+      "auth": {
+        "app_roles": [
+          "admin",
+          "editor"
+        ],
+        "caller_unscoped": {
+          "reason": "app-role-gated management of the shared category catalogue"
+        }
+      }
+    },
+    {
+      "name": "admin_list_places",
+      "description": "Every place in every status, for the management table (app role admin or editor).",
+      "operation": "query",
+      "sql": "SELECT p.id, p.owner_id, p.owner_name, p.category_id, p.name, p.description, p.address, p.lat, p.lng, p.status, p.image_key, p.created_at, p.updated_at FROM places p WHERE (:status IS NULL OR p.status = :status) AND (:category_id IS NULL OR p.category_id = :category_id) AND (:q IS NULL OR p.name LIKE '%' || :q || '%' OR p.owner_name LIKE '%' || :q || '%') ORDER BY p.updated_at DESC LIMIT 500",
+      "params": {
+        "status": {
+          "type": "string",
+          "description": "active | hidden",
+          "optional": true
+        },
+        "category_id": {
+          "type": "string",
+          "description": "Category id",
+          "optional": true
+        },
+        "q": {
+          "type": "string",
+          "description": "Search name or owner",
+          "optional": true
+        }
+      },
+      "requires_auth": true,
+      "auth": {
+        "app_roles": [
+          "admin",
+          "editor"
+        ],
+        "caller_unscoped": {
+          "reason": "app-role-gated management table over all records"
+        }
+      }
+    },
+    {
+      "name": "admin_set_place_status",
+      "description": "Hide or re-activate any place (app role admin or editor).",
+      "operation": "execute",
+      "sql": "UPDATE places SET status = :status, updated_at = :__now WHERE id = :id AND :status IN ('active', 'hidden')",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Place id"
+        },
+        "status": {
+          "type": "string",
+          "description": "active | hidden"
+        }
+      },
+      "requires_auth": true,
+      "auth": {
+        "app_roles": [
+          "admin",
+          "editor"
+        ],
+        "caller_unscoped": {
+          "reason": "app-role-gated moderation of any record"
+        }
+      }
+    },
+    {
+      "name": "admin_update_place",
+      "description": "Edit any place's category, name, description or address (app role admin or editor).",
+      "operation": "execute",
+      "sql": "UPDATE places SET category_id = :category_id, name = :name, description = :description, address = :address, updated_at = :__now WHERE id = :id AND (:category_id IS NULL OR EXISTS (SELECT 1 FROM categories c WHERE c.id = :category_id))",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Place id"
+        },
+        "category_id": {
+          "type": "string",
+          "description": "Category id",
+          "optional": true
+        },
+        "name": {
+          "type": "string",
+          "description": "Name"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description",
+          "default": ""
+        },
+        "address": {
+          "type": "string",
+          "description": "Address",
+          "default": ""
+        }
+      },
+      "requires_auth": true,
+      "auth": {
+        "app_roles": [
+          "admin",
+          "editor"
+        ],
+        "caller_unscoped": {
+          "reason": "app-role-gated moderation of any record"
+        }
+      }
+    },
+    {
+      "name": "admin_delete_place",
+      "description": "Delete any place (app role admin or editor).",
+      "operation": "execute",
+      "sql": "DELETE FROM places WHERE id = :id",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Place id"
+        }
+      },
+      "requires_auth": true,
+      "auth": {
+        "app_roles": [
+          "admin",
+          "editor"
+        ],
+        "caller_unscoped": {
+          "reason": "app-role-gated moderation of any record"
+        }
+      }
+    }
+  ]
+}

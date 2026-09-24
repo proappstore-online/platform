@@ -1,0 +1,42 @@
+{
+  "$comment": "Catalogue metadata (docs/templates/catalogue.schema.json #/$defs/template). The platform copies this into packages/build-core/src/template-catalogue.ts when the template is published; release.source_commit is the reviewed commit of the published repository.",
+  "id": "template-map",
+  "repo": "proappstore-online/template-map",
+  "ref": "main",
+  "title": "Map-centred app template",
+  "purpose": "Apps where the map is the primary workspace: places with a category, shown as markers with clustering, selection and a detail panel; search, filters, viewport and current-location behaviour; a keyboard-accessible list of the same records; owner-scoped add / edit / hide / delete; an admin table for records and categories. Maps through app.maps (geocoding, reverse geocoding, OpenStreetMap tiles), photos through app.storage. Not for two-sided markets (use template-marketplace with its map mode) or back-office records (template-workspace).",
+  "supported_categories": ["travel", "transport", "logistics", "lifestyle", "community", "business"],
+  "requires": {
+    "sdk": ">=1.16.47",
+    "cli": ">=2.6.0",
+    "node": ">=22",
+    "pnpm": "10.x"
+  },
+  "capabilities": [
+    "platform-auth", "registered-actions", "d1-migrations", "owner-scoping", "app-roles",
+    "map-primary", "marker-clustering", "viewport-search", "geolocation", "list-alternative",
+    "categories", "admin-table", "storage-uploads-optional", "pwa", "keyless-oidc-deploy", "e2e-suite"
+  ],
+  "security_compliance": {
+    "status": "reviewed",
+    "reviewed_at": "2026-09-24",
+    "known_deviations": [],
+    "notes": "Written from the Application Standard, not extracted from an existing app (the archetype investigation found no safe map-first source). Every statement is owner-scoped or visibility-scoped on :__user_id; management tools are gated by app roles admin / editor and declared caller_unscoped. No map provider key: tiles, geocoding and routing come from app.maps' OpenStreetMap backing. Fixes the base template's three known deviations (PAS-AUTH-001, PAS-UI-002, PAS-UI-007)."
+  },
+  "maintainer": {
+    "org": "proappstore-online",
+    "contact": "https://github.com/proappstore-online/platform/issues"
+  },
+  "release": {
+    "version": "2026.09.24",
+    "source_commit": "0000000000000000000000000000000000000000",
+    "released_at": "2026-09-24"
+  },
+  "preview": {
+    "docs": "https://docs.proappstore.online/templates/",
+    "screenshot": null
+  },
+  "status": "approved",
+  "deprecation": null,
+  "default": false
+}
