@@ -8,6 +8,10 @@ export const webhookConfigRoutes = new Hono<{ Bindings: Env }>();
 const SUPPORTED_EVENTS = [
   'notification.sent',
   'storage.uploaded',
+  // #107: an error-spike / action-failure / 5xx / QA alert for the app
+  // (payload: app id, kind, window, counts, top categories/operations/
+  // fingerprints, build metadata — never messages, bodies or user ids).
+  'app.alert',
 ];
 
 /** GET /v1/apps/:appId/webhooks — list registered webhooks. */

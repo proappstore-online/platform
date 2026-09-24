@@ -907,6 +907,206 @@ paths:
         required: true
         schema:
           type: string
+  /v1/apps/{appId}/alerts:
+    get:
+      tags:
+      - Logs
+      summary: Operational alerts for an app (#107)
+      description: 'Owner only. Spikes the scheduled evaluator recorded from app_logs (client runtime errors, server-side action failures and 5xx) and QA runs: kind, window, count, affected users (a count), the previous window''s baseline, top categories / operations / fingerprints and build metadata. Never messages, request bodies, tokens or user ids. Query: since (ms, default 7 days), limit (≤ 200), open=1 for unacknowledged only.'
+      operationId: get_v1_apps_appId_alerts
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  alerts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        app_id:
+                          type: string
+                        kind:
+                          type: string
+                          enum:
+                          - error_spike
+                          - action_failures
+                          - server_5xx
+                          - qa_failures
+                        window_start:
+                          type: integer
+                        window_end:
+                          type: integer
+                        count:
+                          type: integer
+                        affected_users:
+                          type: integer
+                          description: distinct sessions or anonymous client ids — a count, never a list
+                        baseline:
+                          type: integer
+                          description: the same measure in the previous window
+                        top:
+                          type: object
+                          properties:
+                            categories:
+                              type: array
+                              items:
+                                type: object
+                            operations:
+                              type: array
+                              items:
+                                type: object
+                            fingerprints:
+                              type: array
+                              items:
+                                type: object
+                        build:
+                          type: object
+                          nullable: true
+                        created_at:
+                          type: integer
+                        acknowledged_at:
+                          type: integer
+                          nullable: true
+                        acknowledged_by:
+                          type: string
+                          nullable: true
+                  since:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/alerts/evaluate:
+    post:
+      tags:
+      - Logs
+      summary: Evaluate the alert thresholds for an app now (#107)
+      description: Owner only. Runs the same evaluation the 15-minute cron runs, scoped to this app, records any spike (idempotent per window) and returns the report.
+      operationId: post_v1_apps_appId_alerts_evaluate
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  checkedAt:
+                    type: string
+                  windowMs:
+                    type: integer
+                  alerts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        app_id:
+                          type: string
+                        kind:
+                          type: string
+                          enum:
+                          - error_spike
+                          - action_failures
+                          - server_5xx
+                          - qa_failures
+                        window_start:
+                          type: integer
+                        window_end:
+                          type: integer
+                        count:
+                          type: integer
+                        affected_users:
+                          type: integer
+                          description: distinct sessions or anonymous client ids — a count, never a list
+                        baseline:
+                          type: integer
+                          description: the same measure in the previous window
+                        top:
+                          type: object
+                          properties:
+                            categories:
+                              type: array
+                              items:
+                                type: object
+                            operations:
+                              type: array
+                              items:
+                                type: object
+                            fingerprints:
+                              type: array
+                              items:
+                                type: object
+                        build:
+                          type: object
+                          nullable: true
+                        created_at:
+                          type: integer
+                        acknowledged_at:
+                          type: integer
+                          nullable: true
+                        acknowledged_by:
+                          type: string
+                          nullable: true
+                  recorded:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/alerts/{id}/ack:
+    post:
+      tags:
+      - Logs
+      summary: Acknowledge an alert (#107)
+      operationId: post_v1_apps_appId_alerts_id_ack
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Not found or already acknowledged
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
   /v1/apps/{appId}/logs:
     post:
       tags:

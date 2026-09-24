@@ -194,6 +194,13 @@ Consequence to accept honestly: console-only means **alerts are pull, not push**
 nobody is notified, someone has to look. That is acceptable pre-launch and is
 *not* acceptable once real users depend on these apps. Revisit at launch.
 
+*Implemented (#107):* the backend cron evaluates `app_logs` + QA runs every 15
+minutes (`lib/error-alerts.ts`) and records spikes in `app_alerts`, read by
+`GET /v1/apps/:id/alerts`. Push exists only as an owner opt-in: the payload is
+delivered on a registered `app.alert` webhook through `dispatchWebhook`, as this
+decision prescribes — no vendor, no egress unless an owner registers a URL.
+Thresholds and payload shape: `docs/monitoring-runbook.md` § Alerts.
+
 ### Third-party surface: none
 
 With decision 6, the design is entirely Cloudflare-native and adds no

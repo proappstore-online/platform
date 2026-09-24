@@ -35,6 +35,8 @@ import { toolsRoutes } from './routes/tools.js';
 import { endpointsRoutes } from './routes/endpoints.js';
 import { tokenRoutes } from './routes/tokens.js';
 import { oidcSessionRoutes } from './routes/oidc-session.js';
+import { alertRoutes } from './routes/alerts.js';
+import { evaluateErrorSpikes } from './lib/error-alerts.js';
 import { tokenUserFor } from './lib/app-tokens.js';
 import { actionRoutes } from './routes/actions.js';
 import { secretsRoutes } from './routes/secrets.js';
@@ -249,6 +251,7 @@ v1.route('/', toolsRoutes);
 v1.route('/', endpointsRoutes);
 v1.route('/', tokenRoutes);
 v1.route('/', oidcSessionRoutes);
+v1.route('/', alertRoutes);
 v1.route('/', actionRoutes);
 v1.route('/', secretsRoutes);
 v1.route('/', keysRoutes);
@@ -278,5 +281,8 @@ export default {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => app.fetch(request, env, ctx),
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(checkSessionKeyDrift({ env }));
+    // #107: aggregate app_logs + QA runs per app for the last window and record
+    // spikes (lib/error-alerts.ts). Failures here must not take the drift check down.
+    ctx.waitUntil(evaluateErrorSpikes({ env }).catch((e) => console.error(`[alert] evaluation failed: ${(e as Error).message}`)));
   },
 };
