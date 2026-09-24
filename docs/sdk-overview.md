@@ -287,9 +287,11 @@ not an SDK requirement.
 - Backend: `packages/backend`
 - Tests: one root `pnpm test` runs every test file across the packages
   with Vitest in Node; Cloudflare bindings (D1, KV, `fetch`) are mocked.
-  There is no `wrangler dev --local` integration suite — each Worker's
-  `wrangler dev` script is for local development only. CI runs the same
-  `pnpm test` in the `check` job and before every `deploy-*` workflow
-  deploys. Live coverage comes from the post-deploy health-endpoint smoke
+  Each Worker's `wrangler dev` script is for local development only. CI runs
+  the same `pnpm test` in the `check` job and before every `deploy-*` workflow
+  deploys. A separate `pnpm test:runtime` (`packages/runtime-tests`) runs the
+  backend and the data worker inside workerd with a real D1 built from the
+  root migrations, R2, the Room Durable Object and service bindings; CI runs it
+  in its own job and `deploy-backend.yml` runs it before applying migrations. Live coverage comes from the post-deploy health-endpoint smoke
   checks in those workflows and from the QA worker, which runs the stored
   browser flows on a cron and after each app deploy.

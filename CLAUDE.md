@@ -48,6 +48,7 @@ pnpm -r --filter './packages/*' build
 bash scripts/check-design-system.sh .              # banned CSS aliases, html.dark, theme storage key
 pnpm -r typecheck
 pnpm test                                          # vitest, from the workspace root
+pnpm test:runtime                                  # workerd + real D1: backend + data worker (packages/runtime-tests)
 node scripts/sync-template-workflow.mjs --check    # template-app deploy workflow drift
 ```
 

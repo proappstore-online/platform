@@ -25,7 +25,8 @@
     "test:watch": "vitest",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "test:runtime": "pnpm --filter @proappstore/runtime-tests test"
   },
   "devDependencies": {
     "mermaid": "^11.4.1",

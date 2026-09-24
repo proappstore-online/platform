@@ -30,6 +30,25 @@ jobs:
       - run: pnpm -r typecheck
       - run: pnpm test
 
+  # Cloudflare-runtime integration tests (#129): the backend and the data worker
+  # run in workerd (@cloudflare/vitest-pool-workers) with a real D1 built from
+  # the root migrations, R2, the Room Durable Object and service bindings — the
+  # paths the mocked unit suite above cannot prove. Separate job so a runtime
+  # failure is visible on its own and does not slow the fast suite.
+  runtime-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r --filter './packages/*' build
+      - name: Runtime integration tests (workerd + D1)
+        run: pnpm test:runtime
+
   # Release gate for the Agent Skills bundles (#176): every skills/<skill>/
   # bundle must validate (required files, no executables outside scripts/, no
   # binaries outside assets/, size caps, no secret-shaped strings, no dangling

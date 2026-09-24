@@ -1,0 +1,22 @@
+{
+  "name": "@proappstore/runtime-tests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare-runtime integration tests (#129): the backend and the data worker run in workerd with real D1, R2, Durable Objects and service bindings \u2014 the paths the mocked unit suite cannot prove.",
+  "scripts": {
+    "pretest": "node ../backend/scripts/embed-data-worker.mjs",
+    "test": "vitest run --config vitest.config-drift.ts && vitest run --config vitest.backend.ts && vitest run --config vitest.data-worker.ts",
+    "typecheck": "tsc --noEmit",
+    "test:backend": "vitest run --config vitest.backend.ts",
+    "test:data-worker": "vitest run --config vitest.data-worker.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.71",
+    "@cloudflare/workers-types": "^4.20250906.0",
+    "@proappstore/build-core": "workspace:*",
+    "miniflare": "4.20250906.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.9"
+  }
+}

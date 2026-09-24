@@ -56,6 +56,12 @@ jobs:
       - name: Tests
         run: pnpm test
 
+      # #129: the same migrations this workflow is about to apply to production
+      # run against a real D1 in workerd first, with the backend and data worker
+      # exercising their hot paths on top of them.
+      - name: Runtime integration tests (workerd + D1)
+        run: pnpm test:runtime
+
       - name: Apply D1 migrations
         working-directory: packages/backend
         run: pnpm exec wrangler d1 migrations apply pas --remote
