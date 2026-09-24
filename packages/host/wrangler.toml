@@ -24,6 +24,13 @@ enabled = true
 pattern = "*.proappstore.online/*"
 zone_name = "proappstore.online"
 
+[vars]
+# workers.dev host the per-app data workers live on (#153). data-<app>
+# requests on this zone are proxied to https://pas-data-<app>.<DATA_WORKER_HOST>.
+# The backend's internal callers bypass this proxy entirely (its own
+# DATA_WORKER_HOST in packages/backend/wrangler.toml).
+DATA_WORKER_HOST = "serge-the-dev.workers.dev"
+
 # Apex stays on the storefront's Pages project; this Worker handles subdomains only.
 
 [[r2_buckets]]

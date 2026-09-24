@@ -72,11 +72,17 @@ export default {
         new Request(`https://proappstore-dashboard.pages.dev${url.pathname}${url.search}`, request),
       );
 
-    // data-* → proxy to per-app D1 Workers (dynamically created, no static binding)
+    // data-* → proxy to per-app D1 Workers (dynamically created, no static
+    // binding). This is the BROWSER path only — cookie mediation lands here.
+    // Backend-internal calls (actions, /validate, provisioning) never come
+    // through this hop; they use DATA_WORKER_HOST directly (#153).
     if (slug?.startsWith("data-")) {
+      if (!env.DATA_WORKER_HOST) {
+        return new Response("DATA_WORKER_HOST is not configured", { status: 503 });
+      }
       return fetch(
         new Request(
-          `https://pas-${slug}.serge-the-dev.workers.dev${url.pathname}${url.search}`,
+          `https://pas-${slug}.${env.DATA_WORKER_HOST}${url.pathname}${url.search}`,
           request,
         ),
       );

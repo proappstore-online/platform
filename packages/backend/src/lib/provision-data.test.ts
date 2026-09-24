@@ -62,7 +62,7 @@ describe('provisionData', () => {
     expect(result.dbId).toBe('db-uuid-1');
     expect(result.dataWorkerUrl).toBe('https://data-test.proappstore.online');
 
-    expect(deployDataWorker).toHaveBeenCalledWith('test-app', 'db-uuid-1', 'tok', 'acct', 'sk', 'internal-secret');
+    expect(deployDataWorker).toHaveBeenCalledWith('test-app', 'db-uuid-1', 'tok', 'acct', 'sk', 'internal-secret', { dataWorkerHost: undefined });
   });
 
   it('skips D1 creation when database already exists', async () => {

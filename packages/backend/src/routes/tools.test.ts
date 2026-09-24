@@ -943,3 +943,20 @@ describe('PUT /v1/apps/:appId/tools — CTE-prefixed statements (#120)', () => {
     expect(res.status).toBe(400);
   });
 });
+
+// #153: registration-time schema validation is an internal call too.
+describe('PUT /v1/apps/:appId/tools — schema validation reaches the data worker directly (#153)', () => {
+  it('POSTs /validate to pas-data-<app>.<DATA_WORKER_HOST>, not the public data-* proxy', async () => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    const res = await app.request(
+      '/v1/apps/test-app/tools',
+      { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools: [validTool] }) },
+      makeEnv({ DATA_WORKER_HOST: 'acct.workers.dev' }, db),
+    );
+    expect(res.status).toBe(200);
+    const urls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map(([u]) => String(u instanceof Request ? u.url : u));
+    const validate = urls.find((u) => u.includes('/validate'));
+    expect(validate).toBe('https://pas-data-test-app.acct.workers.dev/validate');
+    expect(urls.some((u) => /data-[a-z0-9-]+\.proappstore\.online/.test(u))).toBe(false);
+  });
+});

@@ -63,9 +63,10 @@ describe('deployDataWorker', () => {
       { ok: true, body: { success: false, errors: [{ message: 'no permission' }] } },  // domain attach fails
     );
 
-    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk');
+    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk', '', { dataWorkerHost: 'acct.workers.dev' });
     expect(result.ok).toBe(false);
     expect(result.url).toBe(result.workersDevUrl);
+    expect(result.workersDevUrl).toBe('https://pas-data-my-app.acct.workers.dev');
     expect(result.customDomain).toBeUndefined();
     expect(result.detail).toContain('custom domain required');
     expect(result.detail).toContain('no permission');
@@ -94,11 +95,19 @@ describe('deployDataWorker', () => {
       { ok: true, body: { success: true } },    // domain attach
     );
 
-    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk');
+    const result = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', 'sk', '', { dataWorkerHost: 'acct.workers.dev' });
     expect(result.ok).toBe(true);
     expect(result.url).toBe('https://data-my-app.proappstore.online');
     expect(result.customDomain).toBe('data-my-app.proappstore.online');
-    expect(result.workersDevUrl).toContain('pas-data-my-app');
+    expect(result.workersDevUrl).toBe('https://pas-data-my-app.acct.workers.dev');
+  });
+
+  it('reports the workers.dev diagnostic only from DATA_WORKER_HOST — never a guessed account (#153)', async () => {
+    // The missing-session-key early return needs no Cloudflare calls.
+    const bare = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', '');
+    expect(bare.workersDevUrl).toBe('');
+    const configured = await deployDataWorker('my-app', 'db-123', 'cf-tok', 'acct-1', '', '', { dataWorkerHost: 'acct.workers.dev' });
+    expect(configured.workersDevUrl).toBe('https://pas-data-my-app.acct.workers.dev');
   });
 
   it('uploads the embedded bundle to the correct worker name', async () => {

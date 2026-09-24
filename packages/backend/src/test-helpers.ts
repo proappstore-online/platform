@@ -44,6 +44,7 @@ export function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType
     SESSION_SIGNING_KEY: TEST_SK,
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
+    DATA_WORKER_HOST: 'serge-the-dev.workers.dev',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
     VAPID_PRIVATE_KEY: 'test-vapid-private',
     ...overrides,

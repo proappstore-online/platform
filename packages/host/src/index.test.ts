@@ -603,8 +603,38 @@ function makeEnv(opts: { apiFetch?: (request: Request) => Promise<Response> } = 
     AGENTS: { fetch: vi.fn() },
     MCP: { fetch: vi.fn() },
     KB: { fetch: vi.fn() },
+    DATA_WORKER_HOST: "acct.workers.dev",
   } as unknown as Env;
 }
+
+// #153: data-<app> on this zone is the browser-facing proxy to the app's data
+// worker on the configured workers.dev host. Nothing in source names an account.
+describe("data-<app> proxy (#153)", () => {
+  it("proxies to https://pas-data-<app>.<DATA_WORKER_HOST> with path and query intact", async () => {
+    const upstream = vi.fn(async (_req: Request) => new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", upstream);
+    const env = makeEnv();
+    const res = await worker.fetch(
+      new Request("https://data-meetup.proappstore.online/v1/query?x=1", { method: "POST", body: "{}" }),
+      env,
+      ctx(),
+    );
+    expect(res.status).toBe(200);
+    const forwarded = upstream.mock.calls[0]![0] as Request;
+    expect(forwarded.url).toBe("https://pas-data-meetup.acct.workers.dev/v1/query?x=1");
+    expect(forwarded.method).toBe("POST");
+    expect(env.APPS.get).not.toHaveBeenCalled();
+  });
+
+  it("503s instead of guessing an account when DATA_WORKER_HOST is unset", async () => {
+    const upstream = vi.fn();
+    vi.stubGlobal("fetch", upstream);
+    const env = { ...makeEnv(), DATA_WORKER_HOST: "" } as Env;
+    const res = await worker.fetch(new Request("https://data-meetup.proappstore.online/v1/query"), env, ctx());
+    expect(res.status).toBe(503);
+    expect(upstream).not.toHaveBeenCalled();
+  });
+});
 
 function fakeRouteDb(): D1Database {
   return {

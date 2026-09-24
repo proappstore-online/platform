@@ -31,6 +31,13 @@ export interface Env {
   /** CF credentials for provisioning (D1, Pages, Workers). */
   CF_API_TOKEN: string;
   CF_ACCOUNT_ID: string;
+  /** workers.dev host the per-app data workers live on, e.g.
+   *  `serge-the-dev.workers.dev` (#153). Internal callers (action executor,
+   *  registration-time schema validation, provisioning) reach
+   *  `https://pas-data-<app>.<DATA_WORKER_HOST>` directly with the internal
+   *  token; browsers use cookie mediation via `data-<app>.proappstore.online`.
+   *  See lib/data-worker-url.ts. Missing → 503 at the call site. */
+  DATA_WORKER_HOST?: string;
   /** Access key id of the parent `pas-apps` R2 API token. Used to mint
    *  short-lived, prefix-scoped deploy credentials (see routes/deploy.ts).
    *  NOT a secret on its own — an access key id; minting also requires

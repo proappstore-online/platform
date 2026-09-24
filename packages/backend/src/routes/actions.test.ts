@@ -22,7 +22,7 @@ function db(...stmts: ReturnType<typeof stmt>[]) {
   return { prepare } as unknown as D1Database;
 }
 
-function env(database: D1Database) {
+function env(database: D1Database, overrides: Record<string, unknown> = {}) {
   return {
     DB: database,
     STORAGE: {} as R2Bucket,
@@ -32,8 +32,10 @@ function env(database: D1Database) {
     CF_API_TOKEN: 'cf_tok',
     CF_ACCOUNT_ID: 'cf_acct',
     INTERNAL_TOKEN: 'internal-secret',
+    DATA_WORKER_HOST: 'serge-the-dev.workers.dev',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
     VAPID_PRIVATE_KEY: 'test-vapid-private',
+    ...overrides,
   };
 }
 
@@ -239,5 +241,46 @@ describe('POST /v1/apps/:appId/actions/:name', () => {
 
     expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+// #153: registered actions are a server-to-server path. They must reach the
+// worker's direct workers.dev host (from DATA_WORKER_HOST) and never traverse
+// the public data-<app>.proappstore.online proxy, which is a browser-mediation
+// hop that surfaced HTTP 522 on a healthy worker.
+describe('POST /v1/apps/:appId/actions/:name — direct data-worker routing (#153)', () => {
+  const PUBLIC_DATA_HOST = /data-[a-z0-9-]+\.proappstore\.online/;
+  const call = (envOverrides: Record<string, unknown> = {}) =>
+    app.request(
+      '/v1/apps/interns/actions/list_mine',
+      { method: 'POST', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ params: { limit: 10 } }) },
+      env(db(stmt({ first: { manifest: manifest() } })), envOverrides),
+    );
+
+  it('builds the upstream URL from DATA_WORKER_HOST, never the public data-* proxy', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ rows: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await call({ DATA_WORKER_HOST: 'other-account.workers.dev' });
+    expect(res.status).toBe(200);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('https://pas-data-interns.other-account.workers.dev/query');
+    expect(String(url)).not.toMatch(PUBLIC_DATA_HOST);
+    expect((init as RequestInit).headers).toEqual(expect.objectContaining({ 'X-Internal-Token': 'internal-secret' }));
+  });
+
+  it('tolerates a scheme or trailing slash in the configured host', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ rows: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+    await call({ DATA_WORKER_HOST: 'https://acct.workers.dev/' });
+    expect(fetchMock.mock.calls[0]![0]).toBe('https://pas-data-interns.acct.workers.dev/query');
+  });
+
+  it('fails loud with 503 when DATA_WORKER_HOST is not configured — no fallback to a hard-coded account', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await call({ DATA_WORKER_HOST: undefined });
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain('DATA_WORKER_HOST');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

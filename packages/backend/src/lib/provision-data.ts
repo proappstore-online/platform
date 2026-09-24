@@ -19,6 +19,8 @@ export interface ProvisionDataArgs {
   templateId?: string;
   /** #178: exact source commit of the template that was copied (7–40 hex). */
   templateRev?: string;
+  /** `DATA_WORKER_HOST` — for the workers.dev diagnostic URL (#153). */
+  dataWorkerHost?: string | undefined;
 }
 
 /**
@@ -34,7 +36,7 @@ export interface ProvisionDataArgs {
 export async function provisionData(
   args: ProvisionDataArgs,
 ): Promise<{ steps: Step[]; dataWorkerUrl: string; dbId: string }> {
-  const { appId, creatorId, creatorLabel, cfToken, cfAccount, db, sessionSigningKey, internalToken, templateId, templateRev } = args;
+  const { appId, creatorId, creatorLabel, cfToken, cfAccount, db, sessionSigningKey, internalToken, templateId, templateRev, dataWorkerHost } = args;
   const steps: Step[] = [];
 
   // 1. Create D1 database (skip if it already exists)
@@ -77,7 +79,7 @@ export async function provisionData(
   let dataWorkerUrl = '';
   if (dbId) {
     try {
-      const result = await deployDataWorker(appId, dbId, cfToken, cfAccount, sessionSigningKey, internalToken ?? '');
+      const result = await deployDataWorker(appId, dbId, cfToken, cfAccount, sessionSigningKey, internalToken ?? '', { dataWorkerHost });
       dataWorkerUrl = result.url;
       steps.push({ name: 'deploy_worker', status: result.ok ? 'ok' : 'fail', detail: result.detail });
     } catch (e) {

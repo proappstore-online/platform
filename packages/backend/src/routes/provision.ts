@@ -216,6 +216,7 @@ provisionRoutes.post('/provision', async (c) => {
       db: c.env.DB,
       sessionSigningKey: c.env.SESSION_SIGNING_KEY,
       internalToken: c.env.INTERNAL_TOKEN ?? '',
+      dataWorkerHost: c.env.DATA_WORKER_HOST,
       ...(templateId ? { templateId } : {}),
       ...(templateRev ? { templateRev } : {}),
     });
@@ -283,6 +284,7 @@ provisionRoutes.post('/provision-data', async (c) => {
     db: c.env.DB,
     sessionSigningKey: c.env.SESSION_SIGNING_KEY,
     internalToken: c.env.INTERNAL_TOKEN ?? '',
+    dataWorkerHost: c.env.DATA_WORKER_HOST,
   });
   const success = !data.steps.some((s) => s.status === 'fail');
   return c.json({ appId: body.appId, steps: data.steps, dataWorkerUrl: data.dataWorkerUrl, success }, success ? 200 : 207);

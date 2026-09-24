@@ -212,6 +212,29 @@ needs its own data plane, the backend creates the app D1 database and deploys a
 PAS `SESSION_SIGNING_KEY` injected as a secret. The data worker verifies caller
 sessions locally; it does not call a separate auth service for every request.
 
+### Two paths to a data worker
+
+A data worker is reachable two ways, and they are deliberately not
+interchangeable (#153):
+
+- **Browser path — cookie mediation.** The app's page calls its own origin
+  (`/.pas/data/*`); the host worker swaps the HttpOnly session cookie for a
+  bearer and forwards to `data-<app>.proappstore.online`, which the wildcard
+  route brings back to the host worker, which proxies to
+  `https://pas-data-<app>.<DATA_WORKER_HOST>`. Every hop is a platform Worker.
+- **Backend path — direct and internal.** The action executor, registration-time
+  schema validation (`/validate`) and provisioning call
+  `https://pas-data-<app>.<DATA_WORKER_HOST>` straight away, authenticated with
+  `X-Internal-Token`. They never traverse the public `data-*` hostname: that
+  extra host-worker hop is a browser concern, and it surfaced HTTP 522 on a
+  healthy worker during the chess-academy incident.
+
+`DATA_WORKER_HOST` (the account's `*.workers.dev` host) is a plain `[vars]`
+setting on both the backend and the host worker — configuration, not a
+literal in shared source — and `packages/backend/src/lib/data-worker-url.ts`
+is the one place internal callers build the URL. A missing value fails loud
+(503) rather than falling back to any hard-coded account.
+
 Browser-facing app data uses registered app actions, not arbitrary raw SQL
 from the browser. Actions are declared in `mcp.json`, stored in the platform
 `app_tools` table, executed through `/v1/apps/:appId/actions/:name`, and then

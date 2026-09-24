@@ -12,6 +12,7 @@ import { Hono } from 'hono';
 import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { requireAppAccess, requireAppOwner } from '../lib/auth.js';
+import { dataWorkerUrl } from '../lib/data-worker-url.js';
 
 export const toolsRoutes = new Hono<{ Bindings: Env }>();
 
@@ -260,9 +261,13 @@ async function checkSchemaCoherence(
   }
   if (statements.length === 0) return [];
 
+  // Internal call: straight to the worker's workers.dev host (#153), not the
+  // public data-* proxy hop. A missing DATA_WORKER_HOST throws a 503 here on
+  // purpose — silently skipping validation would hide a platform misconfig.
+  const validateUrl = dataWorkerUrl(env, appId, '/validate');
   let results: { id: string; ok: boolean; error?: string }[];
   try {
-    const res = await fetch(`https://data-${appId}.proappstore.online/validate`, {
+    const res = await fetch(validateUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

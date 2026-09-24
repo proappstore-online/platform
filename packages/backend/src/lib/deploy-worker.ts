@@ -8,6 +8,7 @@
  */
 
 import { DATA_WORKER_BUNDLE } from '../generated/data-worker-bundle.js';
+import { dataWorkerName } from './data-worker-url.js';
 
 // PAS Worker custom domains all live under proappstore.online. The platform
 // is single-zone; if that ever changes, lift this to env.
@@ -35,6 +36,12 @@ export interface DeployDataWorkerOptions {
    * was originally added for.
    */
   forceRepoint?: boolean;
+  /**
+   * workers.dev host of data workers (`DATA_WORKER_HOST`, #153). Only used to
+   * report the diagnostic `workersDevUrl`; the deploy itself is by script name.
+   * Unset → the diagnostic is left empty rather than guessing an account.
+   */
+  dataWorkerHost?: string | undefined;
 }
 
 export async function deployDataWorker(
@@ -46,8 +53,8 @@ export async function deployDataWorker(
   internalToken = '',
   opts: DeployDataWorkerOptions = {},
 ): Promise<DeployResult> {
-  const workerName = `pas-data-${appId}`;
-  const workersDevUrl = `https://${workerName}.serge-the-dev.workers.dev`;
+  const workerName = dataWorkerName(appId);
+  const workersDevUrl = opts.dataWorkerHost ? `https://${workerName}.${opts.dataWorkerHost}` : '';
   if (!sessionSigningKey) {
     return {
       ok: false,

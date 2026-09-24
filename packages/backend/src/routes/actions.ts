@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireUser, type FasUser } from '../lib/auth.js';
+import { dataWorkerUrl } from '../lib/data-worker-url.js';
 import { prepareActionBatch, prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
 
 export const actionRoutes = new Hono<{ Bindings: Env }>();
@@ -67,9 +68,10 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   // still forward it for compatibility with un-redeployed data workers.
   // Actions are a server-to-server path. Going through the public data-* route
   // adds the host worker as an unnecessary proxy hop and can surface a 522 even
-  // when the target data worker is healthy. Reach the provisioned worker's
-  // direct Workers URL instead; it is still protected by the internal token.
-  const upstream = await fetch(`https://pas-data-${appId}.serge-the-dev.workers.dev/${endpoint}`, {
+  // when the target data worker is healthy (#153). Reach the provisioned
+  // worker's direct Workers URL — built from DATA_WORKER_HOST, never a literal
+  // account subdomain — protected by the internal token.
+  const upstream = await fetch(dataWorkerUrl(c.env, appId, endpoint), {
     method: 'POST',
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),

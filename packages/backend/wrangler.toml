@@ -29,6 +29,11 @@ command = "node scripts/embed-data-worker.mjs"
 [vars]
 # Public base URL of this API — used to build OAuth callback URLs (routes/auth.ts).
 APP_BASE = "https://api.proappstore.online"
+# workers.dev host of the per-app data workers (#153). Backend-internal calls
+# (actions, registration-time /validate, provisioning) go straight to
+# https://pas-data-<app>.<DATA_WORKER_HOST> with X-Internal-Token, never via
+# the public data-<app>.proappstore.online proxy hop (lib/data-worker-url.ts).
+DATA_WORKER_HOST = "serge-the-dev.workers.dev"
 # #196 kill switch — uncomment once every hosted app is rebuilt on
 # @proappstore/sdk >= 1.16.46 (watch for "[pas_session-fragment]" warnings to go
 # quiet). Stops delivering #pas_session= to app origins; first-party unaffected.
