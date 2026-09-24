@@ -24,6 +24,18 @@ is published at
 never renamed. These checks are hygiene scans, not a security audit — see
 [automation levels](https://docs.proappstore.online/standard/audit-model/#automation-levels).
 
+## What is scanned
+
+`fsFileSource(dir)` walks the working directory honouring every `.gitignore` it
+meets (nested files, `!` re-includes, last match wins) and, regardless of
+`.gitignore`, skips `.git`, `node_modules`, `dist`, `.next`, `.cache`,
+`.wrangler`, `.turbo` and the generated-report directories `.vibe-check`,
+`playwright-report`, `test-results`, `coverage`, `.vite`, `graphify-out`.
+`mapFileSource(map)` — the publish gate, fed with the files that are actually in
+the repository — applies only the directory skip list: ignore rules never
+governed tracked files, so honouring them there could only hide real source.
+There is no separate ignore configuration; `.gitignore` is it.
+
 ## Checks
 
 `runChecks(dir)` (and `runChecksFromFiles(map)`) runs the full suite below.

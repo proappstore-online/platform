@@ -107,6 +107,18 @@ gate (`POST /v1/provision`) returns the same structured failures on a `412`.
 The id → clause table is published at
 [`standard/compliance-checks.json`](./standard/compliance-checks.json).
 
+**What gets scanned.** The walker honours your repo's `.gitignore` files
+(including nested ones and `!` re-includes), so generated, git-ignored output
+is never treated as source. Independently of `.gitignore` it also skips
+`.git`, `node_modules`, `dist`, `.next`, `.cache`, `.wrangler`, `.turbo`, and
+the usual generated-report directories — `.vibe-check`, `playwright-report`,
+`test-results`, `coverage`, `.vite`, `graphify-out` — whose HTML output inlines
+CSS custom properties and webfonts and used to trip the brand checks. To keep
+anything else out of the scan, add it to `.gitignore`; that is the only
+configuration, and it is the same statement of "not source" git already uses.
+A tracked file stays in scope even if a `.gitignore` pattern matches it, and the
+publish gate scans the committed repository, where ignored files do not exist.
+
 **Limits.** These checks are source and PWA hygiene scans, not a security
 audit: none of them reads `mcp.json` scoping, `initPro` options, service-worker
 runtime caching, or the deployed app. Every check is at most *partial*
