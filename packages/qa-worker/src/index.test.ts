@@ -115,3 +115,99 @@ describe('qa-worker run claiming', () => {
     );
   });
 });
+
+// #62: a deploy batch must not run serially inside one invocation. With SELF
+// bound, each invocation takes one run and re-nudges itself while more wait.
+describe('qa-worker one-run-per-invocation chain (#62)', () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    mocks.launch.mockReset();
+  });
+
+  const row = (id: string) => ({ run_id: id, app_id: 'chess-academy', flow_id: id });
+  const flowSpec = { first: { spec: JSON.stringify({ id: 'f', name: 'F', steps: [{ op: 'expectText', text: 'x' }] }) } };
+
+  it('executes exactly one run, then re-nudges SELF for the same app because more are queued', async () => {
+    const browser = fakeBrowser();
+    mocks.launch.mockResolvedValue(browser);
+    const stale = stmt();
+    const queued = stmt({ all: { results: [row('run-1')] } }); // LIMIT 1 → one row back
+    const claim = stmt({ run: { meta: { changes: 1 } } });
+    const flow = stmt(flowSpec);
+    const finish = stmt();
+    const remaining = stmt({ all: { results: [row('run-2')] } });
+    const db = dbWithStatements([stale, queued, claim, flow, finish, remaining]);
+    const self = { fetch: vi.fn(async () => Response.json({ ok: true })) };
+    const { ctx, flush } = executionCtx();
+
+    await worker.fetch(new Request('https://qa-worker.internal/execute?app=chess-academy', { method: 'POST' }), {
+      DB: db as unknown as D1Database, BROWSER: {} as Fetcher, STORAGE: { put: vi.fn() } as unknown as R2Bucket, SELF: self as unknown as Fetcher,
+    }, ctx);
+    await flush();
+
+    expect(queued.bind).toHaveBeenCalledWith('chess-academy', 1); // one per invocation
+    expect(browser.createBrowserContext).toHaveBeenCalledTimes(1);
+    expect(self.fetch).toHaveBeenCalledTimes(1);
+    expect(self.fetch.mock.calls[0]![0]).toBe('https://qa-worker.internal/execute?app=chess-academy');
+    expect(self.fetch.mock.calls[0]![1]).toMatchObject({ method: 'POST' });
+    // The browser is closed BEFORE the next invocation is asked for.
+    expect(browser.close.mock.invocationCallOrder[0]!).toBeLessThan(self.fetch.mock.invocationCallOrder[0]!);
+  });
+
+  it('does not re-nudge when the queue is empty after its run', async () => {
+    const browser = fakeBrowser();
+    mocks.launch.mockResolvedValue(browser);
+    const db = dbWithStatements([stmt(), stmt({ all: { results: [row('run-1')] } }), stmt(), stmt(flowSpec), stmt(), stmt({ all: { results: [] } })]);
+    const self = { fetch: vi.fn() };
+    const { ctx, flush } = executionCtx();
+    await worker.fetch(new Request('https://qa-worker.internal/execute?app=chess-academy', { method: 'POST' }), {
+      DB: db as unknown as D1Database, BROWSER: {} as Fetcher, STORAGE: { put: vi.fn() } as unknown as R2Bucket, SELF: self as unknown as Fetcher,
+    }, ctx);
+    await flush();
+    expect(self.fetch).not.toHaveBeenCalled();
+  });
+
+  it('on the cron (no app) it takes one run from any app and re-nudges without an app filter', async () => {
+    const browser = fakeBrowser();
+    mocks.launch.mockResolvedValue(browser);
+    const queued = stmt({ all: { results: [row('run-1')] } });
+    const db = dbWithStatements([stmt(), queued, stmt(), stmt(flowSpec), stmt(), stmt({ all: { results: [row('run-2')] } })]);
+    const self = { fetch: vi.fn(async () => Response.json({ ok: true })) };
+    const ctx = executionCtx();
+    await worker.scheduled({} as ScheduledEvent, {
+      DB: db as unknown as D1Database, BROWSER: {} as Fetcher, STORAGE: { put: vi.fn() } as unknown as R2Bucket, SELF: self as unknown as Fetcher,
+    }, ctx.ctx);
+    await ctx.flush();
+    expect(queued.bind).toHaveBeenCalledWith(1);
+    expect(self.fetch.mock.calls[0]![0]).toBe('https://qa-worker.internal/execute');
+  });
+
+  it('a failed self-nudge is logged and leaves the run for the cron — never thrown', async () => {
+    const browser = fakeBrowser();
+    mocks.launch.mockResolvedValue(browser);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const db = dbWithStatements([stmt(), stmt({ all: { results: [row('run-1')] } }), stmt(), stmt(flowSpec), stmt(), stmt({ all: { results: [row('run-2')] } })]);
+    const self = { fetch: vi.fn(async () => { throw new Error('binding down'); }) };
+    const { ctx, flush } = executionCtx();
+    await worker.fetch(new Request('https://qa-worker.internal/execute?app=chess-academy', { method: 'POST' }), {
+      DB: db as unknown as D1Database, BROWSER: {} as Fetcher, STORAGE: { put: vi.fn() } as unknown as R2Bucket, SELF: self as unknown as Fetcher,
+    }, ctx);
+    await expect(flush()).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('self-nudge failed'));
+    warn.mockRestore();
+  });
+
+  it('without SELF it falls back to a short serial batch, so nothing is left queued', async () => {
+    const browser = fakeBrowser();
+    mocks.launch.mockResolvedValue(browser);
+    const queued = stmt({ all: { results: [row('run-1'), row('run-2')] } });
+    const db = dbWithStatements([stmt(), queued, stmt(), stmt(flowSpec), stmt(), stmt(), stmt(flowSpec), stmt()]);
+    const { ctx, flush } = executionCtx();
+    await worker.fetch(new Request('https://qa-worker.internal/execute?app=chess-academy', { method: 'POST' }), {
+      DB: db as unknown as D1Database, BROWSER: {} as Fetcher, STORAGE: { put: vi.fn() } as unknown as R2Bucket,
+    }, ctx);
+    await flush();
+    expect(queued.bind).toHaveBeenCalledWith('chess-academy', 3);
+    expect(browser.createBrowserContext).toHaveBeenCalledTimes(2);
+  });
+});

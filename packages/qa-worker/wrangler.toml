@@ -34,3 +34,10 @@ bucket_name = "pas-storage"
 [triggers]
 # Safety net for queued runs that missed their nudge, every 15 minutes.
 crons = ["*/15 * * * *"]
+
+# This worker bound to itself (#62): each invocation executes ONE run, then
+# re-nudges SELF while more are queued, so a deploy batch of N flows is N
+# invocations instead of one that outruns its lifetime and strands the tail.
+[[services]]
+binding = "SELF"
+service = "proappstore-qa-worker"

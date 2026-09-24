@@ -35,7 +35,14 @@ POST /qa/runs (backend)  ──nudge──▶  QA_WORKER /execute?app=<id>
   to R2 under `qa/<appId>/<runId>/`; served by the backend at
   `GET /v1/apps/:appId/qa/runs/:runId/artifacts[/:name]`.
 - **Trigger** — the backend service-binding nudge after `POST /qa/runs`, plus a
-  15-minute cron. Runs execute serially (Browser Rendering concurrency is scarce).
+  15-minute cron.
+- **One run per invocation** (#62) — each invocation claims and executes exactly
+  one queued run, then re-nudges itself over the `SELF` service binding while
+  more are queued. A deploy that queues N flows is N short invocations, not one
+  long one: the serial batch used to outrun the invocation's lifetime and leave
+  the tail `running` until stale recovery marked it `error`. Browser Rendering
+  concurrency stays one session per chain. Without `SELF` the worker falls back
+  to a short serial batch of 3.
 
 ## Bindings
 

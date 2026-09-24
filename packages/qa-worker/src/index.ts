@@ -7,8 +7,18 @@
  * orchestrates only navigation, injection, and screenshots.
  *
  * Trigger paths: backend service-binding nudge after POST /qa/runs, and a
- * 15-minute cron as the safety net. Runs execute serially (Browser Rendering
- * concurrency is a scarce resource).
+ * 15-minute cron as the safety net.
+ *
+ * ONE run per invocation (#62). A deploy queues every flow of an app at once,
+ * and running them serially inside one `ctx.waitUntil` (10 × ~40–60 s) outran
+ * the invocation's lifetime: the tail of the batch was left `running` until
+ * stale recovery marked it `error` ten minutes later — a "1 failing" on a deploy
+ * whose every flow passes in isolation. So each invocation claims and executes
+ * exactly one run, then re-nudges ITSELF over the SELF service binding when more
+ * are queued: every flow gets a fresh invocation budget, and the chain ends when
+ * the queue is empty. Browser Rendering concurrency stays one session per chain.
+ * Without the SELF binding (tests, a misconfigured deploy) it falls back to a
+ * short serial batch so nothing is left queued.
  */
 import puppeteer, { type Browser, type BrowserContext, type Page } from '@cloudflare/puppeteer';
 import { DOM_RUNNER_BUNDLE } from '@proappstore/qa-spec/browser-bundle';
@@ -18,6 +28,8 @@ interface Env {
   BROWSER: Fetcher;
   DB: D1Database;
   STORAGE: R2Bucket;
+  /** This worker, bound to itself (wrangler.toml) — the per-run re-nudge (#62). */
+  SELF?: Fetcher;
 }
 
 interface RunRow {
@@ -28,7 +40,9 @@ interface RunRow {
 
 const APP_BASE = (appId: string) => `https://${appId}.proappstore.online`;
 const STEP_TIMEOUT_MS = 10_000;
-const MAX_RUNS_PER_INVOCATION = 10;
+/** With SELF bound: one run, then re-nudge. Without it: a short serial batch (#62). */
+export const RUNS_PER_INVOCATION = 1;
+export const FALLBACK_RUNS_PER_INVOCATION = 3;
 // A run is claimed queued→running, then finished within ~a minute. If an
 // executor invocation dies mid-run (edge eviction, cancellation), the row is
 // left 'running' forever — processQueued only picks 'queued', so it never
@@ -52,6 +66,29 @@ export default {
   },
 };
 
+/** Queued, executor-run (not browser-run) rows, oldest first, for one app or any. */
+async function nextQueued(env: Env, appId: string | null, limit: number): Promise<RunRow[]> {
+  const queued = appId
+    ? await env.DB.prepare(
+        "SELECT run_id, app_id, flow_id FROM app_test_runs WHERE status = 'queued' AND trigger_kind != 'browser' AND app_id = ?1 ORDER BY started_at LIMIT ?2",
+      ).bind(appId, limit).all<RunRow>()
+    : await env.DB.prepare(
+        "SELECT run_id, app_id, flow_id FROM app_test_runs WHERE status = 'queued' AND trigger_kind != 'browser' ORDER BY started_at LIMIT ?1",
+      ).bind(limit).all<RunRow>();
+  return queued.results;
+}
+
+/** Continue the chain in a FRESH invocation (#62). Never throws: a failed nudge leaves the run for the cron. */
+async function nudgeSelf(env: Env, appId: string | null): Promise<void> {
+  if (!env.SELF) return;
+  const url = appId ? `https://qa-worker.internal/execute?app=${encodeURIComponent(appId)}` : 'https://qa-worker.internal/execute';
+  try {
+    await env.SELF.fetch(url, { method: 'POST' });
+  } catch (err) {
+    console.warn(`qa-worker: self-nudge failed, the cron will pick the queue up: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function processQueued(env: Env, appId: string | null): Promise<void> {
   // Recover runs abandoned in 'running' by a dead executor invocation.
   await env.DB.prepare(
@@ -59,19 +96,15 @@ async function processQueued(env: Env, appId: string | null): Promise<void> {
      WHERE status = 'running' AND COALESCE(claimed_at, started_at) < ?2`,
   ).bind(Date.now(), Date.now() - STALE_RUN_MS).run();
 
-  const queued = appId
-    ? await env.DB.prepare(
-        "SELECT run_id, app_id, flow_id FROM app_test_runs WHERE status = 'queued' AND trigger_kind != 'browser' AND app_id = ?1 ORDER BY started_at LIMIT ?2",
-      ).bind(appId, MAX_RUNS_PER_INVOCATION).all<RunRow>()
-    : await env.DB.prepare(
-        "SELECT run_id, app_id, flow_id FROM app_test_runs WHERE status = 'queued' AND trigger_kind != 'browser' ORDER BY started_at LIMIT ?1",
-      ).bind(MAX_RUNS_PER_INVOCATION).all<RunRow>();
-  if (queued.results.length === 0) return;
+  // One per invocation when this worker can re-nudge itself; a short batch otherwise.
+  const batch = env.SELF ? RUNS_PER_INVOCATION : FALLBACK_RUNS_PER_INVOCATION;
+  const queued = await nextQueued(env, appId, batch);
+  if (queued.length === 0) return;
 
   let browser: Browser | null = null;
   try {
     browser = await puppeteer.launch(env.BROWSER);
-    for (const run of queued.results) {
+    for (const run of queued) {
       // Claim: queued → running (skip if another invocation grabbed it).
       const claimedAt = Date.now();
       const claim = await env.DB.prepare(
@@ -82,6 +115,12 @@ async function processQueued(env: Env, appId: string | null): Promise<void> {
     }
   } finally {
     await browser?.close().catch(() => {});
+  }
+
+  // More waiting? Hand the rest to a fresh invocation rather than outrunning this one (#62).
+  if (env.SELF && (await nextQueued(env, appId, 1)).length > 0) {
+    console.log(`qa-worker: more runs queued${appId ? ` for ${appId}` : ''} — re-nudging self`);
+    await nudgeSelf(env, appId);
   }
 }
 
