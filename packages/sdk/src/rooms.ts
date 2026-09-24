@@ -7,12 +7,19 @@ import type { Unsubscribe } from './base-types.js';
  * Use cases: cursor presence, low-state multiplayer (Slither-style), chat-light.
  * Not a multiplayer game server. Messages are not persisted.
  *
- * Limits (enforced server-side):
- * - max 32 concurrent peers per room
+ * Limits (enforced server-side, ProAppStore):
+ * - max 32 concurrent peers per room (a 33rd join is closed with code 4429 `room_full`)
  * - max 100 messages/sec per peer
  * - max 4KB per message
- * - max 64 active rooms per app (LRU evicts the oldest)
- * - rooms idle for 24h are auto-evicted
+ * - rooms per app: **no platform cap** — every room is its own Durable Object.
+ *   There is no LRU and no eviction of a room that has peers connected (#119).
+ * - a room idle for 24h clears its (tiny) storage on the next join; that is the
+ *   only eviction, and it never disconnects anyone.
+ *
+ * When a join is refused the server completes the WebSocket upgrade and closes
+ * it with a readable code (see {@link ROOM_CLOSE_CODES}); subscribe with
+ * {@link Room.onClose} to tell capacity or auth from a network drop. The client
+ * reconnects with backoff only for the drops a retry can fix.
  */
 export interface RoomPeer {
   uid: string;
@@ -26,6 +33,39 @@ export interface RoomMessage<T = unknown> {
 }
 
 export type ConnectionState = 'connecting' | 'open' | 'closed' | 'error';
+
+/**
+ * Close codes the platform sends on a refused join (#119). Kept in sync by
+ * hand with packages/backend/src/do/room.ts.
+ */
+export const ROOM_CLOSE_CODES = {
+  /** The room already holds 32 peers. Retrying will not help until someone leaves. */
+  ROOM_FULL: 4429,
+  /** The session was missing or invalid. Sign in again. */
+  UNAUTHORIZED: 4401,
+} as const;
+
+export type RoomCloseKind = 'capacity' | 'auth' | 'network' | 'normal' | 'server';
+
+export interface RoomCloseInfo {
+  /** WebSocket close code (1006 = the connection dropped without a close frame). */
+  code: number;
+  /** Server-provided reason, e.g. `room_full`, `invalid_session`; empty when none. */
+  reason: string;
+  /** What the code means for the app. Only `network` and `server` are retried. */
+  kind: RoomCloseKind;
+  /** Whether the client will try to reconnect. */
+  willReconnect: boolean;
+  at: number;
+}
+
+export function classifyClose(code: number): RoomCloseKind {
+  if (code === ROOM_CLOSE_CODES.ROOM_FULL) return 'capacity';
+  if (code === ROOM_CLOSE_CODES.UNAUTHORIZED) return 'auth';
+  if (code === 1000 || code === 1001) return 'normal';
+  if (code === 1006 || code === 1005 || code === 1012 || code === 1013) return 'network';
+  return 'server';
+}
 
 export class Rooms {
   constructor(
@@ -47,6 +87,8 @@ export class Room {
   private listeners = new Set<(msg: RoomMessage) => void>();
   private peerListeners = new Set<(peers: RoomPeer[]) => void>();
   private stateListeners = new Set<(state: ConnectionState) => void>();
+  private closeListeners = new Set<(info: RoomCloseInfo) => void>();
+  private _lastClose: RoomCloseInfo | null = null;
   private _peers: RoomPeer[] = [];
   private connectionState: ConnectionState = 'connecting';
   private reconnectAttempt = 0;
@@ -112,6 +154,23 @@ export class Room {
     return () => this.stateListeners.delete(listener);
   }
 
+  /**
+   * Why the socket last closed, with the server's code and reason (#119):
+   * `capacity` (room full — retrying will not help until someone leaves),
+   * `auth` (sign in again), `network` (dropped; the client is reconnecting),
+   * `normal`, or `server`. Fires on every close, including the ones the client
+   * retries. `lastClose` holds the most recent one.
+   */
+  onClose(listener: (info: RoomCloseInfo) => void): Unsubscribe {
+    this.closeListeners.add(listener);
+    return () => this.closeListeners.delete(listener);
+  }
+
+  /** The most recent close, or null while the socket has never closed. */
+  get lastClose(): RoomCloseInfo | null {
+    return this._lastClose;
+  }
+
   /** Permanently close the room. Stops any pending reconnect. */
   close(): void {
     this.explicitlyClosed = true;
@@ -125,6 +184,7 @@ export class Room {
     this.listeners.clear();
     this.peerListeners.clear();
     this.stateListeners.clear();
+    this.closeListeners.clear();
   }
 
   private connect(): void {
@@ -174,8 +234,16 @@ export class Room {
       if (this.debug) console.log(`[rooms] closed (code=${ev.code} reason=${ev.reason || 'none'})`);
       if (this.socket === socket) this.socket = null;
       if (this.explicitlyClosed) return;
+      // Surface the server's verdict and only retry what a retry can fix: a full
+      // room stays full until someone leaves, and a bad session stays bad — a
+      // reconnect loop there is the thrash #119 describes, not a recovery.
+      const kind = classifyClose(ev.code);
+      const willReconnect = kind === 'network' || kind === 'server';
+      const info: RoomCloseInfo = { code: ev.code, reason: ev.reason ?? '', kind, willReconnect, at: Date.now() };
+      this._lastClose = info;
+      for (const l of this.closeListeners) l(info);
       this.setState('closed');
-      this.scheduleReconnect();
+      if (willReconnect) this.scheduleReconnect();
     });
 
     socket.addEventListener('error', () => {

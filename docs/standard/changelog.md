@@ -23,8 +23,11 @@ Testing, deployment, and operations (chapter `OPS`).
   verification-class table, and a platform-provides / app-must-add table.
 - **Changed** — none.
 - **Withdrawn** — none.
-- **Editorial** — machine-readable and AI-friendly forms published alongside
-  the HTML (no clause changes, so no version bump): `standard.json` (generated
+- **Editorial** — PAS-DATA-017 and PAS-OPS-013 limits corrected: rooms have
+  no per-app room cap and no LRU (the previously published "64 rooms/app" was
+  never enforced); a full room closes the 33rd join with code 4429
+  `room_full`, and a room with live peers is never evicted. Machine-readable
+  and AI-friendly forms published alongside the HTML (no clause changes, so no version bump): `standard.json` (generated
   from the markdown by `scripts/build-standard-data.mjs`, validated by
   `standard.schema.json`), `finding.schema.json` with
   `examples/audit.example.json`, `llms-full.txt`, `llms.txt` (site and

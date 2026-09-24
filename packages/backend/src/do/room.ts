@@ -6,6 +6,36 @@ const MAX_MESSAGE_BYTES = 4 * 1024;
 const MAX_MSGS_PER_SEC = 100;
 const IDLE_EVICT_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * WebSocket close codes a client can read (#119). A refused join is delivered
+ * as a completed upgrade followed by a close frame with one of these, because
+ * a browser cannot see the HTTP status of a failed upgrade — a 503 and a lost
+ * network both surface as code 1006. The SDK (packages/sdk/src/rooms.ts,
+ * ROOM_CLOSE_CODES — kept in sync by hand) maps them to a close kind and stops
+ * reconnecting on the ones that will not clear by retrying.
+ *
+ * Capacity model, published so apps can plan: there is NO per-app room cap and
+ * NO LRU eviction on ProAppStore — every room is its own Durable Object, and
+ * the only ceiling is per room (MAX_PEERS). A room whose storage sat idle for
+ * 24 h is cleared on its next join only when nobody is connected; a room with
+ * live peers is never evicted.
+ */
+export const ROOM_CLOSE_CODES = {
+  /** The room holds MAX_PEERS already. Retrying will not help until someone leaves. */
+  ROOM_FULL: 4429,
+  /** The session on the join was missing or invalid. Sign in again; do not retry blindly. */
+  UNAUTHORIZED: 4401,
+} as const;
+
+/** Complete the upgrade, then close with a readable code and reason. */
+export function refuseWebSocket(code: number, reason: string): Response {
+  const pair = new WebSocketPair();
+  const server = pair[1];
+  server.accept();
+  server.close(code, reason);
+  return new Response(null, { status: 101, webSocket: pair[0] });
+}
+
 interface Peer {
   socket: WebSocket;
   uid: string;
@@ -33,13 +63,16 @@ export class Room {
   }
 
   async fetch(request: Request): Promise<Response> {
-    if (Date.now() - this.lastActivity > IDLE_EVICT_MS) {
+    // Idle eviction clears the room's storage only — and only when the room is
+    // empty. Connected peers are never evicted (#119).
+    if (this.peers.size === 0 && Date.now() - this.lastActivity > IDLE_EVICT_MS) {
       await this.state.storage.deleteAll();
-      this.lastActivity = Date.now();
     }
+    this.lastActivity = Date.now();
+    void this.state.storage.put('lastActivity', this.lastActivity);
 
     if (this.peers.size >= MAX_PEERS) {
-      return new Response('room full', { status: 503 });
+      return refuseWebSocket(ROOM_CLOSE_CODES.ROOM_FULL, 'room_full');
     }
 
     const url = new URL(request.url);

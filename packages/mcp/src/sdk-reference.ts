@@ -51,7 +51,8 @@ room.onMessage(msg => console.log(msg))
 room.onPeers(peers => console.log(peers))
 room.close()
 \`\`\`
-Uncapped on Pro (32 peers/room, 64 rooms/app on Free).`,
+Limits: 32 peers/room, no per-app room cap, no LRU; a room with peers is never evicted (24 h with no peers clears its storage).
+Close codes: 4429 room_full (capacity, no retry), 4401 unauthorized (sign in again). room.onClose(info => info.kind) → 'capacity' | 'auth' | 'network' | 'normal' | 'server'; the SDK only auto-reconnects on network/server.`,
     proxy: `## Secret-injecting API Proxy
 \`\`\`tsx
 const res = await app.proxy.fetch('api.example.com/v1/data')

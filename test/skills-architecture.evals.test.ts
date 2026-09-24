@@ -79,7 +79,7 @@ describe('choose-proappstore-architecture: no fabricated APIs', () => {
 
   it('the decision tables list rejected substitutes in a "Do not use" column and name the platform limits', () => {
     expect(tables).toMatch(/\| Do not use \|/);
-    for (const limit of ['100 keys', '64 KB', '1 MB', '32 peers', '64 rooms', '4 KB', '50 MB', '10 000 req']) expect(tables, `limit ${limit}`).toContain(limit);
+    for (const limit of ['100 keys', '64 KB', '1 MB', '32 peers', 'no per-app room cap', '4 KB', '50 MB', '10 000 req']) expect(tables, `limit ${limit}`).toContain(limit);
   });
 
   it('unsupported requirements each carry an interim pattern and a citation, and never a substitute', () => {

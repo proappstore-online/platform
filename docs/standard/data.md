@@ -36,7 +36,7 @@ apps yet; the clauses say what to do meanwhile. Details:
 | One user's preferences or small drafts | **KV** (`app.kv`) | Per user, automatic | 100 keys, 64 KB/value, 1 MB/user | Anything another user must see; anything relational | [013](#pas-data-013) |
 | A file, image or document | **Storage** (`app.storage`, R2) | Per user; public URL only via `uploadPublic` | Object size; keep the key in D1 | Bytes in D1/KV | [013](#pas-data-013) |
 | A number many users bump | **Counters** (`app.counters`) | Any signed-in user increments; anyone reads | Atomic; not per user | Anything needing a join or history | [013](#pas-data-013) |
-| Live, ephemeral, multi-peer | **Rooms** (`app.rooms`, Durable Object) | Session identity on `from`; payload untrusted | 32 peers/room, 64 rooms/app, 100 msg/s, 4 KB/msg, 24 h idle | Durable or authoritative state | [017](#pas-data-017) |
+| Live, ephemeral, multi-peer | **Rooms** (`app.rooms`, Durable Object) | Session identity on `from`; payload untrusted | 32 peers/room (no per-app room cap, no LRU), 100 msg/s, 4 KB/msg, 24 h idle | Durable or authoritative state | [017](#pas-data-017) |
 
 ## Auditing `mcp.json` and `migrations.json`
 
@@ -632,7 +632,7 @@ await fetch('https://data-other-app.proappstore.online/query', { headers: { 'X-I
 
 ### PAS-DATA-017 — Rooms carry ephemeral, untrusted fan-out; durable state goes through actions {#pas-data-017}
 
-**Severity:** High · **Verification:** Manual · **Enforcement:** automated — the room Durable Object enforces 32 peers/room, 64 rooms/app, 100 msg/s/peer, 4 KB/message, 24 h idle eviction · **Since:** 1.3
+**Severity:** High · **Verification:** Manual · **Enforcement:** automated — the room Durable Object enforces 32 peers/room (a 33rd join is closed with code 4429 `room_full`; there is no per-app room cap and no LRU), 100 msg/s/peer, 4 KB/message, and clears the storage of a room only after 24 h with no peers — a room with live peers is never evicted · **Since:** 1.3
 
 **Rule.** `app.rooms` MUST be used only for presence, cursors, chat-light, signalling and low-state multiplayer. Anything that must survive a reload, be seen by a user who was not connected, or be authoritative MUST be written through a registered action; a room message MUST be treated as untrusted input from its `from` peer and MUST NOT be used to grant, score or settle anything without an action guard.
 

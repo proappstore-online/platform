@@ -3,6 +3,16 @@ import { app } from '../index.js';
 import { TEST_SK, testToken, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 import type { Env } from '../types.js';
 
+// Node has no WebSocketPair and its Response refuses status 101; the runtime suite
+// (packages/runtime-tests) exercises the real close frame. Here we only pin the code + reason.
+vi.mock('../do/room.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../do/room.js')>();
+  return {
+    ...real,
+    refuseWebSocket: vi.fn((code: number, reason: string) => new Response(reason, { status: 418, headers: { 'x-close-code': String(code) } })),
+  };
+});
+
 const TOK = await testToken('gh:room-user');
 
 function makeEnv(fetchRoom: (request: Request) => Response | Promise<Response>): Env {
@@ -58,7 +68,7 @@ describe('GET /v1/apps/:appId/rooms/:roomId', () => {
     expect(roomFetch).toHaveBeenCalledOnce();
   });
 
-  it('rejects websocket upgrades with no session token', async () => {
+  it('completes the upgrade and closes 4401 when the session is missing or invalid (#119)', async () => {
     const roomFetch = vi.fn(() => new Response('upgraded'));
 
     const res = await app.request(
@@ -67,8 +77,17 @@ describe('GET /v1/apps/:appId/rooms/:roomId', () => {
       makeEnv(roomFetch),
     );
 
-    expect(res.status).toBe(401);
-    expect(await res.text()).toContain('missing token');
+    expect(res.headers.get('x-close-code')).toBe('4401');
+    expect(await res.text()).toBe('missing_token');
+    expect(roomFetch).not.toHaveBeenCalled();
+
+    const bad = await app.request(
+      'https://api.proappstore.online/v1/apps/meetup/rooms/lobby?token=not-a-session',
+      { headers: { Upgrade: 'websocket' } },
+      makeEnv(roomFetch),
+    );
+    expect(bad.headers.get('x-close-code')).toBe('4401');
+    expect(await bad.text()).toBe('invalid_session');
     expect(roomFetch).not.toHaveBeenCalled();
   });
 });

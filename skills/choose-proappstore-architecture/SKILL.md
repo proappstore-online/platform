@@ -91,7 +91,7 @@ provenance), `list_app_tools` (its registered actions), `schema_status`
 Walk [references/decision-tables.md](references/decision-tables.md) row by
 row. For every requirement record: primitive, clause id + URL, the
 alternative you rejected and why. Check limits (KV 100 keys / 64 KB /
-1 MB per user; rooms 32 peers, 64 rooms, 4 KB messages, nothing persisted;
+1 MB per user; rooms 32 peers, no per-app room cap, 4 KB messages, nothing persisted;
 uploads 50 MB; proxy 10 000 requests/day) against the stated volume.
 
 ### 3. Identify unsupported requirements

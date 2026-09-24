@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { ROOM_CLOSE_CODES, refuseWebSocket } from '../do/room.js';
 import { verifySession } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 
@@ -7,10 +8,12 @@ export const roomRoutes = new Hono<{ Bindings: Env }>();
 roomRoutes.get('/apps/:appId/rooms/:roomId', async (c) => {
   if (c.req.header('upgrade') !== 'websocket') return c.text('expected websocket', 400);
 
+  // A bad session is answered on the socket (close 4401), not with an HTTP 401
+  // the browser cannot read: the SDK stops reconnecting and tells the app why (#119).
   const token = bearerToken(c.req.header('Authorization')) ?? c.req.query('token');
-  if (!token) return c.text('missing token', 401);
+  if (!token) return refuseWebSocket(ROOM_CLOSE_CODES.UNAUTHORIZED, 'missing_token');
   const session = await verifySession(token, c.env.SESSION_SIGNING_KEY);
-  if (!session) return c.text('invalid session', 401);
+  if (!session) return refuseWebSocket(ROOM_CLOSE_CODES.UNAUTHORIZED, 'invalid_session');
 
   const { appId, roomId } = c.req.param();
   const id = c.env.ROOM.idFromName(`${appId}:${roomId}`);

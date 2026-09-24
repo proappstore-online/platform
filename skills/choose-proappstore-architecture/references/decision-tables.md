@@ -25,7 +25,7 @@ platform's current, enforced ones. Clause URLs are stable.
 
 | Need | Use | Clause | Docs | Do not use |
 |---|---|---|---|---|
-| Presence, cursors, chat-light, signalling, lightweight multiplayer | **`app.rooms`** — 32 peers/room, 64 rooms/app, 100 msg/s, 4 KB/msg, 24 h idle, **nothing persisted**, payloads untrusted | [PAS-STACK-013](https://docs.proappstore.online/standard/stack/#pas-stack-013), [PAS-DATA-017](https://docs.proappstore.online/standard/data/#pas-data-017) | [recipe realtime-chat](https://docs.proappstore.online/recipes/) | Pusher/Ably/Socket.IO servers, Firebase RTDB |
+| Presence, cursors, chat-light, signalling, lightweight multiplayer | **`app.rooms`** — 32 peers/room, no per-app room cap, 100 msg/s, 4 KB/msg, 24 h idle, **nothing persisted**, payloads untrusted | [PAS-STACK-013](https://docs.proappstore.online/standard/stack/#pas-stack-013), [PAS-DATA-017](https://docs.proappstore.online/standard/data/#pas-data-017) | [recipe realtime-chat](https://docs.proappstore.online/recipes/) | Pusher/Ably/Socket.IO servers, Firebase RTDB |
 | State that must survive a reload or be seen by absent users | write it through an **action** | [PAS-DATA-017](https://docs.proappstore.online/standard/data/#pas-data-017) | — | trusting a room message as the record |
 | Server-authoritative game/world state, > 32 peers, persistent worlds | **unsupported for static apps** — see unsupported requirements | — | — | an own WebSocket server |
 
