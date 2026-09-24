@@ -112,6 +112,10 @@ jobs:
           [ -d "$out" ] || out=public
           cd "$out"
           find . -type f | while read -r f; do
-            curl -fsS -X PUT "https://kb.proappstore.online/_ingest/$APP/${f#./}" -H "Authorization: Bearer $OIDC" --data-binary "@$f" >/dev/null
+            # Encode each path segment (#195): a filename with a space or a
+            # reserved character would otherwise break the ingest URL. The slash
+            # is kept as the separator; jq's @uri escapes everything else.
+            enc=$(printf '%s' "${f#./}" | jq -sRr 'split("/") | map(@uri) | join("/")')
+            curl -fsS -X PUT "https://kb.proappstore.online/_ingest/$APP/$enc" -H "Authorization: Bearer $OIDC" --data-binary "@$f" >/dev/null
           done
           echo "Knowledge Base published → https://kb.proappstore.online/$APP/"

@@ -83,9 +83,17 @@ jobs:
       - name: Locate build output
         id: dist
         run: |
-          if [ -d web/dist ]; then echo "dir=web/dist" >> "$GITHUB_OUTPUT"
-          elif [ -d dist ]; then echo "dir=dist" >> "$GITHUB_OUTPUT"
+          if [ -d web/dist ]; then dir=web/dist
+          elif [ -d dist ]; then dir=dist
           else echo "::error::No build output (looked for ./dist and ./web/dist)"; exit 1; fi
+          # Guard (#195): "Upload to R2" runs aws s3 sync --delete, which mirrors
+          # this directory onto the app's live prefix. A present-but-empty build
+          # (or one without an entry page) would delete every object of the
+          # running app. Refuse to deploy instead.
+          if [ ! -f "$dir/index.html" ]; then
+            echo "::error::$dir has no index.html — refusing to deploy (sync --delete would wipe the live app)"; exit 1
+          fi
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
 
       - name: Code-health scan (VCQA, report-only)
         continue-on-error: true
@@ -361,7 +369,11 @@ jobs:
           [ -d "$out" ] || out=public
           cd "$out"
           find . -type f | while read -r f; do
-            curl -fsS -X PUT "https://kb.proappstore.online/_ingest/$APP/\${f#./}" -H "Authorization: Bearer $OIDC" --data-binary "@$f" >/dev/null
+            # Encode each path segment (#195): a filename with a space or a
+            # reserved character would otherwise break the ingest URL. The slash
+            # is kept as the separator; jq's @uri escapes everything else.
+            enc=$(printf '%s' "\${f#./}" | jq -sRr 'split("/") | map(@uri) | join("/")')
+            curl -fsS -X PUT "https://kb.proappstore.online/_ingest/$APP/$enc" -H "Authorization: Bearer $OIDC" --data-binary "@$f" >/dev/null
           done
           echo "Knowledge Base published → https://kb.proappstore.online/$APP/"
 `;

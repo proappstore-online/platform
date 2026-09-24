@@ -18,6 +18,13 @@ type Text = { content: { type: "text"; text: string }[] };
 // (/v1/apps/${appId}/qa/…) over a service binding, so reject anything that
 // isn't a plain slug to prevent path/endpoint injection.
 const APP_ID = z.string().regex(/^[a-z][a-z0-9-]*$/);
+// flowId / runId are interpolated into the same subrequest paths (#195). Lower
+// risk than appId — same-app namespace, and the backend re-validates — but
+// shape-checked here too so a path-shaped value never reaches the URL. The
+// patterns mirror the backend: FLOW_ID_RE in routes/qa.ts, and runs are
+// crypto.randomUUID().
+const FLOW_ID = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/, "flowId must be a slug: lowercase letters, digits and hyphens, max 64 chars");
+const RUN_ID = z.string().uuid("runId must be the UUID returned by qa_run / qa_list_runs");
 
 const text = (s: string): Text => ({ content: [{ type: "text" as const, text: s }] });
 const json = (v: unknown): Text => text(typeof v === "string" ? v : JSON.stringify(v, null, 2));
@@ -87,7 +94,7 @@ export function registerQaTools(
   server.tool(
     "qa_delete_flow",
     "Delete a browser e2e test flow (owner only).",
-    { appId: APP_ID, flowId: z.string() },
+    { appId: APP_ID, flowId: FLOW_ID },
     async ({ appId, flowId }) => {
       await gate("qa_delete_flow", { appId, flowId });
       return json(await qaCall(env, getUserContext().token, `/v1/apps/${appId}/qa/flows/${flowId}`, { method: "DELETE" }));
@@ -97,7 +104,7 @@ export function registerQaTools(
   server.tool(
     "qa_run",
     "Queue headless browser test run(s) for an app on the platform (Cloudflare Browser Rendering). Omit flowId to run every flow. Watch any flow live at https://<appId>.proappstore.online/__qa/?flow=<flowId>. Poll results with qa_list_runs.",
-    { appId: APP_ID, flowId: z.string().optional().describe("Run one flow; omit to run all.") },
+    { appId: APP_ID, flowId: FLOW_ID.optional().describe("Run one flow; omit to run all.") },
     async ({ appId, flowId }) => {
       await gate("qa_run", { appId, flowId });
       const body = flowId ? { flowId, trigger: "manual" } : { trigger: "manual" };
@@ -108,7 +115,7 @@ export function registerQaTools(
   server.tool(
     "qa_list_runs",
     "List an app's recent test runs (status, steps passed/total, failed step + error, trigger). Newest first.",
-    { appId: APP_ID, flowId: z.string().optional().describe("Filter to one flow.") },
+    { appId: APP_ID, flowId: FLOW_ID.optional().describe("Filter to one flow.") },
     async ({ appId, flowId }) =>
       json(await qaCall(env, getUserContext().token, `/v1/apps/${appId}/qa/runs${flowId ? `?flowId=${encodeURIComponent(flowId)}` : ""}`)),
   );
@@ -116,14 +123,14 @@ export function registerQaTools(
   server.tool(
     "qa_run_artifacts",
     "List a run's screenshot artifacts (name, size). Fetch the PNG bytes at GET /v1/apps/:appId/qa/runs/:runId/artifacts/:name with the same auth.",
-    { appId: APP_ID, runId: z.string() },
+    { appId: APP_ID, runId: RUN_ID },
     async ({ appId, runId }) => json(await qaCall(env, getUserContext().token, `/v1/apps/${appId}/qa/runs/${runId}/artifacts`)),
   );
 
   server.tool(
     "qa_flow_playwright",
     "Get a flow transpiled to a Playwright .spec.ts (for CI parity — run the same flow under Playwright).",
-    { appId: APP_ID, flowId: z.string() },
+    { appId: APP_ID, flowId: FLOW_ID },
     async ({ appId, flowId }) => json(await qaCall(env, getUserContext().token, `/v1/apps/${appId}/qa/flows/${flowId}/playwright`)),
   );
 

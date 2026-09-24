@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 /**
  * Tests for the QA MCP tools. A fake McpServer captures the registered
@@ -8,9 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type Handler = (args: Record<string, unknown>) => Promise<{ content: { type: string; text: string }[] }>;
 const tools = new Map<string, Handler>();
+const schemas = new Map<string, z.ZodRawShape>();
 const fakeServer = {
-  tool: (name: string, _desc: string, _schema: unknown, handler: Handler) => {
+  tool: (name: string, _desc: string, schema: z.ZodRawShape, handler: Handler) => {
     tools.set(name, handler);
+    schemas.set(name, schema);
   },
 };
 
@@ -121,5 +124,38 @@ describe('QA MCP tools', () => {
     await expect(call('qa_run', { appId: 'chess-academy' })).rejects.toThrow(/read-only/i);
     await expect(call('qa_save_flow', { appId: 'chess-academy', flow: { id: 'x', name: 'x', steps: [{ op: 'goto', path: '/' }] } })).rejects.toThrow(/read-only/i);
     expect(apiFetch).not.toHaveBeenCalled();
+  });
+});
+
+// #195: flowId / runId are interpolated into subrequest paths. The real
+// McpServer validates the zod shape before the handler runs, so the shape is
+// what keeps a path-shaped value out of the URL. Exercise the registered
+// schemas directly (the fake server above bypasses them).
+describe('QA MCP tools — flowId / runId are shape-validated (#195)', () => {
+  const parse = (tool: string, args: Record<string, unknown>) => z.object(schemas.get(tool)!).safeParse(args);
+  const RUN = '3f2b6c1e-8a4d-4c7b-9e1f-2d5a6b7c8d90';
+  const BAD_FLOWS = ['../secrets', 'sign in', 'Sign-In', 'a/b', '', '-lead', 'x'.repeat(65), 'flow?x=1', 'flow#frag'];
+  const BAD_RUNS = ['r1', '../x', 'not-a-uuid', '', RUN + '/artifacts'];
+
+  it.each(['qa_delete_flow', 'qa_flow_playwright'])('%s rejects a non-slug flowId', (tool) => {
+    for (const flowId of BAD_FLOWS) expect(parse(tool, { appId: 'chess-academy', flowId }).success, flowId).toBe(false);
+    expect(parse(tool, { appId: 'chess-academy', flowId: 'sign-in' }).success).toBe(true);
+    expect(parse(tool, { appId: 'chess-academy', flowId: '0-checkout-2' }).success).toBe(true);
+  });
+
+  it.each(['qa_run', 'qa_list_runs'])('%s rejects a non-slug flowId but still allows omitting it', (tool) => {
+    for (const flowId of BAD_FLOWS) expect(parse(tool, { appId: 'chess-academy', flowId }).success, flowId).toBe(false);
+    expect(parse(tool, { appId: 'chess-academy' }).success).toBe(true);
+    expect(parse(tool, { appId: 'chess-academy', flowId: 'sign-in' }).success).toBe(true);
+  });
+
+  it('qa_run_artifacts accepts only a UUID runId', () => {
+    for (const runId of BAD_RUNS) expect(parse('qa_run_artifacts', { appId: 'chess-academy', runId }).success, runId).toBe(false);
+    expect(parse('qa_run_artifacts', { appId: 'chess-academy', runId: RUN }).success).toBe(true);
+  });
+
+  it('the flowId shape matches the backend FLOW_ID_RE (64-char cap, leading alnum)', () => {
+    expect(parse('qa_delete_flow', { appId: 'chess-academy', flowId: 'a'.repeat(64) }).success).toBe(true);
+    expect(parse('qa_delete_flow', { appId: 'chess-academy', flowId: 'a'.repeat(65) }).success).toBe(false);
   });
 });

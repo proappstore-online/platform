@@ -234,6 +234,35 @@ describe("canonical deploy workflow — single source of truth", () => {
   });
 });
 
+describe("provisioning hygiene (#195)", () => {
+  const KB_YAML = ".github/workflows/kb.yml";
+
+  it("refuses to sync --delete when the build output has no index.html", () => {
+    // `aws s3 sync --delete` mirrors the dist dir onto the live prefix; an empty
+    // dir would delete every object of the running app. The guard must sit in
+    // the step that resolves the dir, before any upload step can run.
+    const yaml = deployWorkflowYaml(ENV);
+    const locate = yaml.indexOf("- name: Locate build output");
+    const upload = yaml.indexOf("- name: Upload to R2");
+    const guard = yaml.indexOf('if [ ! -f "$dir/index.html" ]');
+    expect(locate).toBeGreaterThan(-1);
+    expect(guard).toBeGreaterThan(locate);
+    expect(guard).toBeLessThan(upload);
+    expect(yaml).toContain("refusing to deploy (sync --delete would wipe the live app)");
+    // The output the upload step consumes is only written after the guard.
+    expect(yaml.indexOf('echo "dir=$dir" >> "$GITHUB_OUTPUT"')).toBeGreaterThan(guard);
+    expect(yaml).toContain("--delete --no-progress");
+  });
+
+  it("URL-encodes each KB upload path segment, keeping / as the separator", () => {
+    const kb = buildAgentBundle({}, ENV)[KB_YAML]!;
+    expect(kb).toContain(`jq -sRr 'split("/") | map(@uri) | join("/")'`);
+    expect(kb).toContain('"https://kb.proappstore.online/_ingest/$APP/$enc"');
+    // The raw, unencoded path must no longer be interpolated into the URL.
+    expect(kb).not.toContain("_ingest/$APP/${f#./}");
+  });
+});
+
 describe("KB ingest is keyless OIDC, never the shared INTERNAL_TOKEN (#57)", () => {
   // The shared INTERNAL_TOKEN is a repo-level secret handed to EVERY app's CI,
   // so kb-host cannot tell which app is calling: any holder could exfiltrate it
