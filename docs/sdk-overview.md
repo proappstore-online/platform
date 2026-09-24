@@ -285,5 +285,11 @@ not an SDK requirement.
 
 - Package: `packages/sdk`
 - Backend: `packages/backend`
-- Tests: `vitest` per package; integration tests run against
-  `wrangler dev --local` for the backend.
+- Tests: one root `pnpm test` runs every test file across the packages
+  with Vitest in Node; Cloudflare bindings (D1, KV, `fetch`) are mocked.
+  There is no `wrangler dev --local` integration suite — each Worker's
+  `wrangler dev` script is for local development only. CI runs the same
+  `pnpm test` in the `check` job and before every `deploy-*` workflow
+  deploys. Live coverage comes from the post-deploy health-endpoint smoke
+  checks in those workflows and from the QA worker, which runs the stored
+  browser flows on a cron and after each app deploy.
