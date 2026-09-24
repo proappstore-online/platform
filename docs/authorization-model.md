@@ -112,6 +112,14 @@ rows to the caller (`:__user_id`, membership sub-queries). See
 - **GitHub OIDC** (`repository == proappstore-online/<appId>`, `ref == main`) is
   the keyless, app-scoped identity for CI-initiated writes (tool registration,
   KB ingest, R2 creds).
+- **Keyless e2e sessions** (#146): a workflow can also exchange its OIDC token
+  for a *user* session — `POST /v1/auth/exchange/oidc` — but only through an
+  explicit grant a platform admin creates (`POST /v1/admin/oidc-session-grants`:
+  repository, optional workflow, ref → e2e account). The session lasts four
+  hours, carries `via: 'oidc-e2e'`, has roles `user` + `creator` and never
+  `admin`. The grant, not the workflow, is the authority; revoke it and the
+  next run gets 403. This is the last stored credential removed from CI: no
+  PAT, no device-flow token in a repo secret.
 
 ## Rule of thumb
 

@@ -2283,6 +2283,197 @@ paths:
           application/json:
             schema:
               type: object
+  /v1/auth/exchange/oidc:
+    post:
+      tags:
+      - Auth
+      summary: Exchange a GitHub Actions OIDC token for an e2e session (#146)
+      description: 'Keyless CI sessions. Bearer: the workflow''s OIDC token (audience https://api.proappstore.online), verified RS256 against GitHub''s JWKS with issuer, audience and expiry checks. A platform admin must first grant the repository (optionally one workflow, on one ref) the right to mint sessions for a designated e2e account; no grant → 403. The session lasts 4 hours, carries via: ''oidc-e2e'', has roles user + creator and never admin. Every mint is recorded.'
+      operationId: post_v1_auth_exchange_oidc
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionToken:
+                    type: string
+                  expiresAt:
+                    type: integer
+                  via:
+                    type: string
+                    enum:
+                    - oidc-e2e
+                  grant:
+                    type: object
+                  user:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      login:
+                        type: string
+                      avatarUrl:
+                        type: string
+                        nullable: true
+        '401':
+          description: Missing or invalid OIDC token
+        '403':
+          description: No matching grant (repository / workflow / ref), foreign org, or the granted account no longer exists
+      security:
+      - githubOidc: []
+  /v1/admin/oidc-session-grants:
+    get:
+      tags:
+      - Auth
+      summary: 'List e2e session grants (platform admin, #146)'
+      operationId: get_v1_admin_oidc_session_grants
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  grants:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        repository:
+                          type: string
+                        workflow:
+                          type: string
+                          nullable: true
+                        ref:
+                          type: string
+                        user_id:
+                          type: string
+                        label:
+                          type: string
+                          nullable: true
+                        created_by:
+                          type: string
+                        created_at:
+                          type: integer
+                        revoked_at:
+                          type: integer
+                          nullable: true
+                        last_minted_at:
+                          type: integer
+                          nullable: true
+                        mint_count:
+                          type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      security:
+      - bearerAuth: []
+    post:
+      tags:
+      - Auth
+      summary: 'Grant a repository the right to mint e2e sessions for an account (platform admin, #146)'
+      operationId: post_v1_admin_oidc_session_grants
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - repository
+              - user_id
+              properties:
+                repository:
+                  type: string
+                  description: proappstore-online/<repo>
+                user_id:
+                  type: string
+                  description: gh:<id> — must have signed in once
+                workflow:
+                  type: string
+                  description: .github/workflows/<file>.yml; omit for any workflow of the repo
+                ref:
+                  type: string
+                  default: refs/heads/main
+                label:
+                  type: string
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  grant:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      repository:
+                        type: string
+                      workflow:
+                        type: string
+                        nullable: true
+                      ref:
+                        type: string
+                      user_id:
+                        type: string
+                      label:
+                        type: string
+                        nullable: true
+                      created_by:
+                        type: string
+                      created_at:
+                        type: integer
+                      revoked_at:
+                        type: integer
+                        nullable: true
+                      last_minted_at:
+                        type: integer
+                        nullable: true
+                      mint_count:
+                        type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: The account does not exist
+      security:
+      - bearerAuth: []
+  /v1/admin/oidc-session-grants/{id}:
+    delete:
+      tags:
+      - Auth
+      summary: 'Revoke an e2e session grant (platform admin, #146)'
+      operationId: delete_v1_admin_oidc_session_grants_id
+      responses:
+        '200':
+          description: Success
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Grant not found or already revoked
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
   /v1/auth/exchange:
     post:
       tags:
@@ -3796,6 +3987,11 @@ paths:
               type: object
 components:
   securitySchemes:
+    githubOidc:
+      type: http
+      scheme: bearer
+      bearerFormat: GitHub Actions OIDC JWT
+      description: 'A GitHub Actions OIDC token (permissions: id-token: write; audience https://api.proappstore.online). Accepted by the keyless deploy routes and POST /v1/auth/exchange/oidc.'
     appToken:
       type: http
       scheme: bearer

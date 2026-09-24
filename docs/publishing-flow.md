@@ -36,6 +36,34 @@ never references a column that isn't there yet (§10; see
 fails the deploy. Additive-only (`CREATE`/`ALTER … ADD`/`INSERT`); destructive
 SQL is rejected with 422.
 
+## Keyless e2e sessions
+
+A workflow that drives the deployed app as a signed-in user (a nightly e2e
+suite) gets its session the same keyless way it gets its deploy credentials
+(#146). A platform admin grants the repository once:
+
+```
+POST /v1/admin/oidc-session-grants
+{ "repository": "proappstore-online/chess-academy",
+  "workflow": ".github/workflows/e2e-full.yml", "user_id": "gh:<e2e account>" }
+```
+
+Then the workflow (with `permissions: id-token: write`) exchanges its OIDC
+token — nothing stored in the repo:
+
+```bash
+OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+  "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.proappstore.online" | jq -r .value)
+SESSION=$(curl -sS -X POST https://api.proappstore.online/v1/auth/exchange/oidc \
+  -H "Authorization: Bearer $OIDC" | jq -r .sessionToken)
+```
+
+The session is a real platform session for the granted account (four hours,
+`via: 'oidc-e2e'`, roles `user` + `creator`, never `admin`). Every mint is
+recorded against the grant; revoking the grant stops the next run with 403.
+`POST /v1/auth/exchange` (device-flow token → session) stays for the CLI and
+laptop runs.
+
 ## Key properties
 
 - **Standalone.** The PAS backend has its own Cloudflare/GitHub credentials for

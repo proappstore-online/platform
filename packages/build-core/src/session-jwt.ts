@@ -25,6 +25,8 @@ export interface SessionClaims {
   avatarUrl?: string | null;
   /** Platform roles: 'user' | 'creator' | 'admin'. */
   roles: string[];
+  /** How the session was minted when not by a user signing in — e.g. 'oidc-e2e' (#146). Absent for ordinary sessions. */
+  via?: string;
   iat: number;
   exp: number;
 }
