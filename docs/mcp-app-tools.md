@@ -258,6 +258,33 @@ that app's tool set:
 }
 ```
 
+### Personal app tokens (HTTP only)
+
+Scripts and integrations call the same actions over plain HTTP with a
+**personal app token** — a long-lived, per-user, per-app, revocable bearer:
+
+```bash
+curl -X POST https://api.proappstore.online/v1/apps/<appId>/actions/<name> \
+  -H "Authorization: Bearer pas_at_…" -H "Content-Type: application/json" \
+  -d '{"params":{"status":"open"}}'
+```
+
+A signed-in user mints one from the app (`app.tokens.create({ label,
+expiresIn, access, actions })` in the SDK) or from the dashboard; the plaintext
+is shown once and only its hash is stored. `access: "read"` may call `query`
+actions only; `actions: [...]` limits the token to named actions. The lifetime is
+required and capped — 90 days when minted from an app origin, a year from the
+dashboard — and `GET /v1/me/tokens` lists every token a user holds across apps
+so any of them can be revoked from a surface the app doesn't control.
+
+The token runs as its user: `:__user_id` is injected and `auth.app_roles` are
+checked exactly as for a session, but platform roles are fixed to `user`, so an
+action gated on `auth.platform_roles` answers 403 for a token even when its
+holder is a creator. Tokens work on the HTTP actions route **only** — never on
+MCP (which authenticates with its own OAuth) and never on kv, storage or any
+other platform route. Routes: `POST | GET /v1/apps/:appId/tokens`,
+`DELETE …/tokens/:tokenId`, `GET /v1/me/tokens` (session only).
+
 ### Large manifests: progressive disclosure
 
 Every tool a session registers is in the model's context on every call, and

@@ -239,6 +239,7 @@ paths:
       - Actions
       summary: Create actions
       operationId: post_v1_apps_appId_actions_name
+      description: "Run a registered action. Auth: a PAS session JWT, OR a personal app token `Authorization: Bearer pas_at_…` minted for THIS app (#154; roles fixed to `user`, read tokens may call query actions only, action-scoped tokens only their actions). Public actions (requires_auth false) need no auth."
       responses:
         '200':
           description: Success
@@ -1433,6 +1434,224 @@ paths:
         required: true
         schema:
           type: string
+  /v1/apps/{appId}/tokens:
+    post:
+      tags:
+      - Tokens
+      summary: Mint a personal app token (#154)
+      description: Session only (a pas_at_ token can never manage tokens). Returns the plaintext `pas_at_…` token ONCE; only its SHA-256 is stored. `access` and `expires_in` (seconds) are required. Lifetime is capped at 90 days when the request Origin is an app origin, 365 days from a first-party origin or no Origin — no token is non-expiring. `actions` restricts the token to named actions, each of which must exist for the app.
+      operationId: post_v1_apps_appId_tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - access
+              - expires_in
+              properties:
+                label:
+                  type: string
+                expires_in:
+                  type: integer
+                  description: Lifetime in seconds (min 60)
+                access:
+                  type: string
+                  enum:
+                  - read
+                  - write
+                actions:
+                  type: array
+                  items:
+                    type: string
+                  maxItems: 50
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    description: pas_at_… — shown once
+                  token_id:
+                    type: string
+                  app_id:
+                    type: string
+                  label:
+                    type: string
+                    nullable: true
+                  access:
+                    type: string
+                  actions:
+                    type: array
+                    items:
+                      type: string
+                    nullable: true
+                  created_origin:
+                    type: string
+                    nullable: true
+                  created_at:
+                    type: integer
+                  expires_at:
+                    type: integer
+                  note:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: App not found
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags:
+      - Tokens
+      summary: List my tokens for an app (#154)
+      description: Never returns the token or its hash.
+      operationId: get_v1_apps_appId_tokens
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tokens:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        token_id:
+                          type: string
+                        app_id:
+                          type: string
+                        label:
+                          type: string
+                          nullable: true
+                        access:
+                          type: string
+                          enum:
+                          - read
+                          - write
+                        actions:
+                          type: array
+                          items:
+                            type: string
+                          nullable: true
+                        created_origin:
+                          type: string
+                          nullable: true
+                        created_at:
+                          type: integer
+                        last_used_at:
+                          type: integer
+                          nullable: true
+                        expires_at:
+                          type: integer
+                        expired:
+                          type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/tokens/{tokenId}:
+    delete:
+      tags:
+      - Tokens
+      summary: Revoke one of my tokens (#154)
+      description: Exact match on token id + caller + app; another user's token id is 404.
+      operationId: delete_v1_apps_appId_tokens_tokenId
+      responses:
+        '200':
+          description: Success
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Token not found
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: tokenId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/me/tokens:
+    get:
+      tags:
+      - Tokens
+      summary: Every token I hold across apps (#154)
+      description: 'For the dashboard: app id, label, scopes, origin, created / last used / expiry, so a token minted by an app can always be found and revoked from a surface the creator does not control.'
+      operationId: get_v1_me_tokens
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tokens:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        token_id:
+                          type: string
+                        app_id:
+                          type: string
+                        label:
+                          type: string
+                          nullable: true
+                        access:
+                          type: string
+                          enum:
+                          - read
+                          - write
+                        actions:
+                          type: array
+                          items:
+                            type: string
+                          nullable: true
+                        created_origin:
+                          type: string
+                          nullable: true
+                        created_at:
+                          type: integer
+                        last_used_at:
+                          type: integer
+                          nullable: true
+                        expires_at:
+                          type: integer
+                        expired:
+                          type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
   /v1/apps/{appId}/tools:
     put:
       tags:
@@ -1545,11 +1764,10 @@ paths:
                           type: string
         '403':
           $ref: '#/components/responses/Forbidden'
-      security: &id001
+      security:
       - bearerAuth: []
       parameters:
-      - &id002
-        name: appId
+      - name: appId
         in: path
         required: true
         schema:
@@ -1561,7 +1779,7 @@ paths:
       summary: Preview the manifest a config would generate (#155)
       description: Owner only. Reads the table schema from the app's data worker, generates the SQL and runs the same validators as mcp.json registration. Nothing is saved.
       operationId: post_v1_apps_appId_endpoints_preview
-      requestBody: &id003
+      requestBody:
         required: true
         content:
           application/json:
@@ -1593,9 +1811,14 @@ paths:
           description: 'Schema coherence: the generated SQL references a missing table or column'
         '503':
           description: The app schema could not be read from its data worker
-      security: *id001
+      security:
+      - bearerAuth: []
       parameters:
-      - *id002
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
   /v1/apps/{appId}/endpoints/{name}:
     put:
       tags:
@@ -1603,7 +1826,18 @@ paths:
       summary: Create or update a console-defined endpoint (#155)
       description: Owner only; a personal app token is rejected. Writes the app_tools row (source = 'console') and its app_endpoint_audit entry in one batch. Console endpoints survive deploys; max 30 per app.
       operationId: put_v1_apps_appId_endpoints_name
-      requestBody: *id003
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - config
+              properties:
+                config:
+                  type: object
+                  description: 'EndpointConfig: name (api_…), description, kind (read|insert), table, scope (own|all|public), owner_column, columns, filters, sort, page_size, paginate, generated, defaults, app_roles. Never SQL.'
       responses:
         '401':
           $ref: '#/components/responses/Unauthorized'
@@ -1626,11 +1860,15 @@ paths:
           description: Schema coherence failure
         '503':
           description: The app schema could not be read
-      security: *id001
+      security:
+      - bearerAuth: []
       parameters:
-      - *id002
-      - &id004
-        name: name
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: name
         in: path
         required: true
         schema:
@@ -1650,10 +1888,19 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           description: No console endpoint with that name
-      security: *id001
+      security:
+      - bearerAuth: []
       parameters:
-      - *id002
-      - *id004
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
   /v1/apps/{appId}/tools/internal:
     post:
       tags:
@@ -3549,6 +3796,11 @@ paths:
               type: object
 components:
   securitySchemes:
+    appToken:
+      type: http
+      scheme: bearer
+      bearerFormat: pas_at_…
+      description: 'Personal app token (#154): per-user, per-app, revocable; accepted by POST /v1/apps/{appId}/actions/{name} only. Never by MCP or any other route.'
     bearerAuth:
       type: http
       scheme: bearer

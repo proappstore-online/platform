@@ -3,6 +3,7 @@ import type { Env } from '../types.js';
 import { HttpError, requireUser, type FasUser } from '../lib/auth.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
 import { prepareActionBatch, prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
+import { looksLikeAppToken, rememberTokenUser, touchLastUsed, verifyAppToken } from '../lib/app-tokens.js';
 
 export const actionRoutes = new Hono<{ Bindings: Env }>();
 
@@ -31,9 +32,30 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   } else {
     token = bearerToken(c.req.header('Authorization'));
     if (!token) throw new HttpError('missing bearer token', 401);
-    const user = await requireUser(c);
-    userId = user.id;
-    await enforceActionAuth(c.env.DB, appId, manifest, user);
+    if (looksLikeAppToken(token)) {
+      // Personal app token (#154): verified here and nowhere else. The identity
+      // is rebuilt from the token row (roles fixed to ['user'], login from
+      // `users`), then the same role checks and :__user_id injection apply.
+      const verified = await verifyAppToken(c.env.DB, appId, token);
+      rememberTokenUser(c.req.raw, verified.user.id);
+      if (verified.scopes.access === 'read' && manifest.operation !== 'query') {
+        throw new HttpError('token is read-only', 403);
+      }
+      if (verified.scopes.actions && !verified.scopes.actions.includes(name)) {
+        throw new HttpError('token is not scoped to this action', 403);
+      }
+      userId = verified.user.id;
+      await enforceActionAuth(c.env.DB, appId, manifest, verified.user);
+      // Never forward the token upstream: the data worker can only verify
+      // session JWTs, and a long-lived credential must not travel a second hop.
+      token = null;
+      const touched = touchLastUsed(c.env.DB, verified.tokenHash);
+      try { c.executionCtx.waitUntil(touched); } catch { void touched; }
+    } else {
+      const user = await requireUser(c);
+      userId = user.id;
+      await enforceActionAuth(c.env.DB, appId, manifest, user);
+    }
   }
 
   const body = await c.req.json<ActionBody>().catch(() => {

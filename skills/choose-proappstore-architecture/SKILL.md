@@ -42,7 +42,7 @@ not create, provision, deploy or audit anything; hand those off.
    `app.counters`, `app.storage`, `app.rooms`, `app.roles`, `app.invites`,
    `app.proxy`, `app.ai`, `app.maps`, `app.notifications`, `app.email`,
    `app.sms`, `app.webhooks`, `app.subscription`, `app.license`,
-   `app.usage`, `app.logs`. Before citing a method, check it with
+   `app.usage`, `app.logs`, `app.tokens`. Before citing a method, check it with
    `sdk_reference` (feature: `auth`, `kv`, `counters`, `rooms`, `proxy`,
    `db`, `storage`, `maps`, `ai`, `notifications`, `sms`, `subscription`,
    `tenant`, `hooks`, `ui`, `recipes`, `design_system`) or `recipe`. If a

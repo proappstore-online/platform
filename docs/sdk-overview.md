@@ -228,7 +228,7 @@ retrying; on a 404 (unknown `appId`) it stops permanently.
 ### Recorded for you, with no SDK code
 
 Every failed app-scoped API operation is logged **server-side** — `app.actions`,
-`app.db`, `app.rooms`, `app.invites`, `app.roles`, `app.storage`, and credential
+`app.db`, `app.rooms`, `app.invites`, `app.roles`, `app.storage`, `app.tokens`, and credential
 provisioning. Nothing to opt into, and it covers apps already deployed.
 
 Each record carries the operation name, HTTP status, category, auth mode, route,

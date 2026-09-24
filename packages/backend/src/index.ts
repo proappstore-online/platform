@@ -33,6 +33,8 @@ import { logsRoutes } from './routes/logs.js';
 import { logsPruneRoutes } from './routes/logs-prune.js';
 import { toolsRoutes } from './routes/tools.js';
 import { endpointsRoutes } from './routes/endpoints.js';
+import { tokenRoutes } from './routes/tokens.js';
+import { tokenUserFor } from './lib/app-tokens.js';
 import { actionRoutes } from './routes/actions.js';
 import { secretsRoutes } from './routes/secrets.js';
 import { keysRoutes } from './routes/keys.js';
@@ -120,6 +122,9 @@ function background(c: Context<{ Bindings: Env }>, work: Promise<unknown>): void
 /** Caller id for an operation log, or null when unauthenticated. Must not throw:
  *  we are already on the error path. */
 async function userIdForLog(c: Context<{ Bindings: Env }>): Promise<string | null> {
+  // A personal app token (#154) has no session; the actions route noted its user.
+  const tokenUser = tokenUserFor(c.req.raw);
+  if (tokenUser) return tokenUser;
   const user = await optionalUser(c).catch(() => null);
   return user?.id ?? null;
 }
@@ -241,6 +246,7 @@ v1.route('/', logsRoutes);
 v1.route('/', logsPruneRoutes);
 v1.route('/', toolsRoutes);
 v1.route('/', endpointsRoutes);
+v1.route('/', tokenRoutes);
 v1.route('/', actionRoutes);
 v1.route('/', secretsRoutes);
 v1.route('/', keysRoutes);

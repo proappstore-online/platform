@@ -19,6 +19,7 @@ import { Email } from './email.js';
 import { Webhooks } from './webhooks.js';
 import { Invites } from './invites.js';
 import { Actions } from './actions.js';
+import { Tokens } from './tokens.js';
 import { Logs } from './logs.js';
 import type { ProInitOptions } from './types.js';
 
@@ -30,6 +31,8 @@ export type { DefaultRole, RoleAssignment } from './roles.js';
 export { DEFAULT_ROLES } from './roles.js';
 export type { Invite, InviteListItem, CreateInviteOptions, RedeemResult } from './invites.js';
 export { Actions } from './actions.js';
+export { Tokens } from './tokens.js';
+export type { AppToken, MintedAppToken, CreateTokenOptions, TokenAccess } from './tokens.js';
 
 export type {
   ProInitOptions,
@@ -96,6 +99,8 @@ export class ProAppStore {
   readonly webhooks: Webhooks;
   readonly invites: Invites;
   readonly actions: Actions;
+  /** Personal app tokens for the HTTP actions route (#154). */
+  readonly tokens: Tokens;
   /** Runtime error capture — auto-captures errors + records failed ops to app_logs. */
   readonly logs: Logs;
 
@@ -124,6 +129,7 @@ export class ProAppStore {
     // Constructed before Actions: Actions reports failed calls to the logger (#106).
     this.logs = new Logs(opts.appId, apiBase, this.auth, opts.monitoring ?? {});
     this.actions = new Actions(opts.appId, apiBase, this.auth, this.logs);
+    this.tokens = new Tokens(opts.appId, apiBase, this.auth);
     // Auto-start telemetry unless the app opts out. Wrapped in try-catch
     // because localStorage can throw in incognito, sandboxed iframes, or
     // when storage quota is exceeded.
