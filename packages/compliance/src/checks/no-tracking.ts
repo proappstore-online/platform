@@ -5,9 +5,10 @@ import type { CheckResult } from '../types.js';
 // Each tracker carries one or more patterns that should ONLY match real SDK
 // usage — never bare English words used as geometry / math / physics terms.
 //
-// Distinctive package names (mixpanel, plausible, posthog, hotjar) are safe
-// with word-boundary matching. Ambiguous English words (segment, amplitude)
-// require SDK-context patterns (scoped import, hostname, call site).
+// Distinctive package names (mixpanel, posthog, hotjar) are safe with
+// word-boundary matching. Ambiguous English words (segment, amplitude, and
+// plausible — #55) require SDK-context patterns (scoped import, hostname,
+// call site).
 type TrackerSpec = {
   name: string;
   patterns: RegExp[];
@@ -54,7 +55,19 @@ export const TRACKERS: TrackerSpec[] = [
     ],
   },
   { name: 'hotjar', patterns: [wb('hotjar')] },
-  { name: 'plausible', patterns: [wb('plausible')] },
+  // Plausible Analytics: the plausible.io script host, the `plausible-tracker`
+  // npm package (import, require or package.json dependency), the snippet's
+  // data-domain attribute, or the window.plausible() call. Bare `plausible`
+  // is an English adjective ("a plausible continuation") — #55.
+  {
+    name: 'plausible',
+    patterns: [
+      /plausible\.io/i,
+      /['"]plausible-tracker['"]/i,
+      /data-domain=/i,
+      /window\.plausible\b/i,
+    ],
+  },
   { name: 'posthog', patterns: [wb('posthog')] },
 ];
 

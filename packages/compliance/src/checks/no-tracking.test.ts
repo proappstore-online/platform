@@ -40,6 +40,34 @@ describe('checkNoTracking', () => {
     expect(r.detail).toMatch(/posthog/);
   });
 
+  it('does not flag the English adjective "plausible" in prose (#55)', async () => {
+    await writeFile(
+      join(dir, 'web', 'courses-seed.json'),
+      JSON.stringify({ lessons: ['Pick the most plausible continuation.', 'A plausible-sounding hallucination', 'physically plausible motion', 'Plausible, but wrong'] }),
+    );
+    await writeFile(join(dir, 'web', 'app.ts'), "const plausible = score > 0.5; // plausible enough\nexport { plausible };");
+    const r = await checkNoTracking(fsFileSource(dir));
+    expect(r.status).toBe('pass');
+  });
+
+  it('flags Plausible Analytics by script host, npm package, data-domain attribute and window.plausible call', async () => {
+    const cases: [string, string][] = [
+      ['index.html', '<script defer data-domain="example.com" src="https://plausible.io/js/script.js"></script>'],
+      ['index.html', '<script defer data-domain="example.com" src="/js/script.js"></script>'],
+      ['package.json', '{"dependencies":{"plausible-tracker":"0.3.9"}}'],
+      ['app.ts', "import Plausible from 'plausible-tracker';"],
+      ['app.ts', "window.plausible = window.plausible || function () {};"],
+    ];
+    for (const [file, content] of cases) {
+      await rm(join(dir, 'web'), { recursive: true, force: true });
+      await mkdir(join(dir, 'web'));
+      await writeFile(join(dir, 'web', file), content);
+      const r = await checkNoTracking(fsFileSource(dir));
+      expect(r.status, content).toBe('fail');
+      expect(r.detail, content).toMatch(/plausible/);
+    }
+  });
+
   it('does not scan dist or node_modules (skipped by walk)', async () => {
     await mkdir(join(dir, 'node_modules', 'posthog-js'), { recursive: true });
     await writeFile(join(dir, 'node_modules', 'posthog-js', 'index.js'), '// posthog stuff');
