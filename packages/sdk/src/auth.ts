@@ -39,6 +39,12 @@ interface Session {
 }
 
 /** OAuth authentication — sign in, sign out, session management. */
+/** Options for {@link Auth.register}. */
+export interface RegisterOptions {
+  /** Token from the Turnstile widget rendered with {@link Auth.turnstileSiteKey} (#26). Required when the platform enforces the bot check. */
+  turnstileToken?: string;
+}
+
 export class Auth {
   private session: Session | null = null;
   private listeners = new Set<(user: User | null) => void>();
@@ -174,8 +180,13 @@ export class Auth {
    *   when registration is disabled (403), when rate-limited (429), or when the
    *   sign-in that follows fails (401).
    */
-  async register(email: string, password: string, displayName?: string): Promise<User> {
-    const body = JSON.stringify({ email, password, ...(displayName ? { displayName } : {}) });
+  async register(email: string, password: string, displayName?: string, opts: RegisterOptions = {}): Promise<User> {
+    const body = JSON.stringify({
+      email,
+      password,
+      ...(displayName ? { displayName } : {}),
+      ...(opts.turnstileToken ? { turnstileToken: opts.turnstileToken } : {}),
+    });
     const res = this.authMode === 'platform-cookie'
       ? await fetch('/.pas/auth/credentials/register', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body })
       : await fetch(new URL('/v1/auth/credentials/register', this.apiBase), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
@@ -183,11 +194,31 @@ export class Auth {
       const text = await res.text().catch(() => '');
       let message = text;
       try { message = (JSON.parse(text) as { error?: string }).error ?? text; } catch { /* plain text body */ }
+      if (res.status === 403 && /bot check/i.test(message)) throw new Error(opts.turnstileToken ? 'Bot check failed — please try again.' : 'Bot check required — complete the challenge and try again.');
       if (res.status === 403) throw new Error('Registration is not enabled for this platform.');
+      if (res.status === 503 && /bot check/i.test(message)) throw new Error('Bot check unavailable — please try again in a moment.');
       if (res.status === 429) throw new Error('Too many registration attempts — please try again later.');
       throw new Error(message || `Registration failed (${res.status})`);
     }
     return this.signInWithCredentials(email, password);
+  }
+
+  /**
+   * The Turnstile site key sign-up forms must render, or null when the platform
+   * does not enforce the bot check (#26). Render the widget with
+   * `data-sitekey` = siteKey and `data-action` = action, then pass the token it
+   * yields as `register(..., { turnstileToken })`. Public, cacheable.
+   */
+  async turnstileSiteKey(): Promise<{ siteKey: string | null; action: string }> {
+    const res = this.authMode === 'platform-cookie'
+      ? await fetch('/.pas/auth/turnstile', { credentials: 'same-origin' })
+      : await fetch(new URL('/v1/auth/turnstile', this.apiBase));
+    if (!res.ok) return { siteKey: null, action: 'register' };
+    const data = (await res.json()) as { siteKey?: unknown; action?: unknown };
+    return {
+      siteKey: typeof data.siteKey === 'string' && data.siteKey ? data.siteKey : null,
+      action: typeof data.action === 'string' ? data.action : 'register',
+    };
   }
 
   /**

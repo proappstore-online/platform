@@ -194,12 +194,20 @@ path", with these controls:
 - **Abuse controls**: 10 attempts per client address per 15 minutes
   (`credential_login_attempts` under a `register-ip:` key, independent of the
   per-login lockout); `CREDENTIAL_SELF_REGISTRATION=0` turns the route off (403).
+- **Bot check** (#26): when `TURNSTILE_SITE_KEY` + `TURNSTILE_SECRET_KEY` are
+  set on the API, the request must carry a Turnstile token (`turnstileToken`
+  body field or `CF-Turnstile-Response` header) minted with action `register`;
+  it is verified before anything else and refused with 403 (missing/rejected)
+  or 503 (challenge service down). `GET /v1/auth/turnstile` (`/.pas/auth/turnstile`
+  on an app origin) tells a form whether to render the widget. See
+  [Bot protection with Turnstile](./turnstile.md).
 - `credential_email` stays an identifier for finding the row, never a proof; it
   is not verified.
 
-In platform-cookie mode the SDK's `auth.register(email, password, displayName?)`
-posts to `/.pas/auth/credentials/register` on the app origin (the host forwards
-it to the API with the visitor's address for rate limiting) and then signs in
+In platform-cookie mode the SDK's `auth.register(email, password, displayName?,
+{ turnstileToken? })` posts to `/.pas/auth/credentials/register` on the app origin
+(the host forwards it to the API with the visitor's address for rate limiting and
+the bot check) and then signs in
 through `/.pas/auth/credentials/login`, which sets the HttpOnly cookie. The
 password is sent once and never stored client-side.
 

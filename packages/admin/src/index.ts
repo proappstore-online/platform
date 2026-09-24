@@ -1,4 +1,4 @@
-import { internalTokenOk } from "@proappstore/build-core";
+import { internalTokenOk, turnstileEnabled, turnstileFailure, turnstileTokenFrom, verifyTurnstile } from "@proappstore/build-core";
 import { handleAuthMe, verifySession } from "./auth.js";
 import type { Env } from "./env.js";
 import { guardProvisionRequest } from "./provision-guard.js";
@@ -47,6 +47,30 @@ function safeGitHubLogin(login: string | null): string | null {
   return trimmed;
 }
 
+/** The widget's `data-action` on the console's publish form (#26). */
+export const TURNSTILE_PUBLISH_ACTION = "publish";
+
+/**
+ * Bot check on a browser-driven publish (#26). A request that carries an
+ * `Origin` header comes from a page (the console's publish form); when
+ * Turnstile is configured it must carry the widget's token. Requests with no
+ * Origin (the CLI's `pas publish`, curl) cannot render a widget and stay on
+ * the session + provision guard (#83); sibling Workers on INTERNAL_TOKEN never
+ * reach here. Null = pass; otherwise the response to answer with.
+ */
+async function publishBotCheck(request: Request, env: Env, body: unknown, internal: boolean): Promise<Response | null> {
+  if (internal || !turnstileEnabled(env) || !request.headers.get("Origin")) return null;
+  const result = await verifyTurnstile({
+    env,
+    token: turnstileTokenFrom(request.headers, body),
+    remoteIp: request.headers.get("CF-Connecting-IP"),
+    expectedAction: TURNSTILE_PUBLISH_ACTION,
+  });
+  if (result.ok) return null;
+  const failure = turnstileFailure(result);
+  return Response.json({ error: failure.error }, { status: failure.status });
+}
+
 async function verifyPublishLogin(request: Request, env: Env): Promise<string | null> {
   if (internalTokenOk(request.headers.get("X-Internal-Token"), env.INTERNAL_TOKEN)) {
     return safeGitHubLogin(request.headers.get("X-PAS-Login"));
@@ -73,6 +97,15 @@ export default {
       return handleAuthMe(request, env);
     }
 
+    // #26: public Turnstile config for the console's publish form. `siteKey` is
+    // null when the check is not enforced, so the form renders no widget.
+    if (url.pathname === "/api/turnstile" && request.method === "GET") {
+      return Response.json(
+        { siteKey: turnstileEnabled(env) ? env.TURNSTILE_SITE_KEY! : null, action: TURNSTILE_PUBLISH_ACTION },
+        { headers: { "Cache-Control": "public, max-age=300" } },
+      );
+    }
+
     if (url.pathname === "/api/publish-app" && request.method === "POST") {
       // Authenticated publish. Public callers use an Admin/PAS Bearer session;
       // sibling workers that have already authenticated and owner-gated the
@@ -88,6 +121,8 @@ export default {
         return Response.json({ error: "invalid JSON body" }, { status: 400 });
       }
       if (!body?.id) return Response.json({ error: "id required" }, { status: 400 });
+      const bot = await publishBotCheck(request, env, body, internalTokenOk(request.headers.get("X-Internal-Token"), env.INTERNAL_TOKEN));
+      if (bot) return bot;
 
       // SECURITY (#83): publishing is self-service — any signed-in GitHub
       // account may publish — so a session alone is not enough. Refuse an appId

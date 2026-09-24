@@ -25,7 +25,7 @@ import type { ProInitOptions } from './types.js';
 
 // Vendored base primitive types — one import for app authors.
 export type { User, Unsubscribe } from './base-types.js';
-export type { AuthMode, AuthProvider } from './auth.js';
+export type { AuthMode, AuthProvider, RegisterOptions } from './auth.js';
 export type { ConnectionState, Room, RoomMessage, RoomPeer, RoomCloseInfo, RoomCloseKind } from './rooms.js';
 export { ROOM_CLOSE_CODES, classifyClose } from './rooms.js';
 export type { DefaultRole, RoleAssignment } from './roles.js';

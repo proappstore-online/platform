@@ -32,6 +32,11 @@ export interface Env {
    *  '0' / 'false' makes POST /v1/auth/credentials/register answer 403.
    *  Unset = enabled. */
   CREDENTIAL_SELF_REGISTRATION?: string;
+  /** Cloudflare Turnstile (#26) on anonymous self-registration. Public widget
+   *  site key (var) + siteverify secret (secret). Enforced only when BOTH are
+   *  set; unset = inert. GET /v1/auth/turnstile publishes the site key. */
+  TURNSTILE_SITE_KEY?: string;
+  TURNSTILE_SECRET_KEY?: string;
   /** CF credentials for provisioning (D1, Pages, Workers). */
   CF_API_TOKEN: string;
   CF_ACCOUNT_ID: string;

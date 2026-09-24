@@ -15,7 +15,7 @@
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { Hono } from 'hono';
 import { setCookie, getCookie, deleteCookie } from 'hono/cookie';
-import { internalTokenOk, mintSession, verifySession, type NewSession, type SessionClaims } from '@proappstore/build-core';
+import { internalTokenOk, mintSession, verifySession, type NewSession, type SessionClaims, turnstileEnabled, turnstileFailure, turnstileTokenFrom, verifyTurnstile } from '@proappstore/build-core';
 import type { Context } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError } from '../lib/auth.js';
@@ -728,14 +728,41 @@ authRoutes.post('/auth/credentials/provision', async (c) => {
 //    like every credential account; credential_email is an identifier, never a
 //    proof (0042) and is not verified.
 export const REGISTER_RATE_LIMIT_PREFIX = 'register-ip:';
+/** The widget's `data-action` on sign-up forms; a token minted elsewhere is refused (#26). */
+export const TURNSTILE_REGISTER_ACTION = 'register';
+
+// ── GET /v1/auth/turnstile — public Turnstile config for sign-up forms (#26) ──
+// `siteKey` is null when the check is not enforced (either half unset), so a
+// form renders the widget only when the API will actually require its token.
+authRoutes.get('/auth/turnstile', (c) => {
+  c.header('Cache-Control', 'public, max-age=300');
+  return c.json({
+    siteKey: turnstileEnabled(c.env) ? c.env.TURNSTILE_SITE_KEY! : null,
+    action: TURNSTILE_REGISTER_ACTION,
+  });
+});
 
 authRoutes.post('/auth/credentials/register', async (c) => {
   if (c.env.CREDENTIAL_SELF_REGISTRATION === '0' || c.env.CREDENTIAL_SELF_REGISTRATION === 'false') {
     throw new HttpError('self-registration is disabled', 403);
   }
   const body = await c.req
-    .json<{ email?: unknown; password?: unknown; displayName?: unknown }>()
-    .catch(() => ({} as { email?: unknown; password?: unknown; displayName?: unknown }));
+    .json<{ email?: unknown; password?: unknown; displayName?: unknown; turnstileToken?: unknown }>()
+    .catch(() => ({} as { email?: unknown; password?: unknown; displayName?: unknown; turnstileToken?: unknown }));
+  // Bot check first (#26): when Turnstile is configured the widget's token must
+  // verify before the address is even looked at, so a scripted flood never
+  // reaches the password hash or the per-IP counter. Inert when unconfigured.
+  const bot = await verifyTurnstile({
+    env: c.env,
+    token: turnstileTokenFrom(c.req.raw.headers, body),
+    remoteIp: c.req.header('cf-connecting-ip') ?? null,
+    expectedAction: TURNSTILE_REGISTER_ACTION,
+  });
+  if (!bot.ok) {
+    const failure = turnstileFailure(bot);
+    await recordAuthFailure(c.env, { reason: `register_turnstile_${bot.reason}`, status: failure.status, cfRay: c.req.header('cf-ray') ?? null });
+    throw new HttpError(failure.error, failure.status);
+  }
   if (typeof body.email !== 'string' || body.email.trim() === '') throw new HttpError('email is required', 400);
   const email = normalizeEmail(body.email);
   if (!isValidEmail(email)) throw new HttpError('email must be a valid address', 400);

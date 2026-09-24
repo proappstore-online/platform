@@ -34,3 +34,15 @@ export {
   templateCatalogueJson,
 } from './template-catalogue.js';
 export type { TemplateEntry, TemplateSelection, TemplateStatus } from './template-catalogue.js';
+export {
+  TURNSTILE_TEST_SECRET_KEY,
+  TURNSTILE_TEST_SITE_KEY,
+  TURNSTILE_TOKEN_FIELD,
+  TURNSTILE_TOKEN_HEADER,
+  TURNSTILE_VERIFY_URL,
+  turnstileEnabled,
+  turnstileFailure,
+  turnstileTokenFrom,
+  verifyTurnstile,
+} from './turnstile.js';
+export type { TurnstileConfig, TurnstileReason, TurnstileResult } from './turnstile.js';

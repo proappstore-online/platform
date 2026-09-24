@@ -34,6 +34,11 @@ CF_ACCOUNT_ID = "c1089bfcc43c1c6c2aa89e584e86f0bc"
 PAS_ZONE_ID = "14928daaff60902cc89003a2ebeb99fe"
 PUBLISHERS_ORG = "proappstore-online"
 APPS_DOMAIN_BASE = "proappstore.online"
+# Turnstile widget site key (#26) — PUBLIC, so a var. Together with the
+# TURNSTILE_SECRET_KEY secret it requires a widget token on browser-driven
+# /api/publish-app calls (Origin header present; the console). Leave unset
+# until the console's publish form renders the widget: docs/turnstile.md.
+# TURNSTILE_SITE_KEY = "0x..."
 
 [[d1_databases]]
 binding = "DB"

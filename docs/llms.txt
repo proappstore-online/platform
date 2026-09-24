@@ -54,6 +54,7 @@
 - [App actions and data access security](https://docs.proappstore.online/app-actions-security/): Guard idioms — the SQL is the security boundary; batch tools; registration and drift.
 - [Architecture](https://docs.proappstore.online/architecture/): Control plane, worker-to-worker pattern (service bindings are mandatory), databases.
 - [Browser auth session model](https://docs.proappstore.online/auth-session-model/): Platform-cookie token handler, custom domains, app author rules.
+- [Bot protection with Cloudflare Turnstile](https://docs.proappstore.online/turnstile/): Turnstile on self-registration and browser publishes — where it applies, fail-closed rules, enabling it, rendering the widget.
 - [Authorization model](https://docs.proappstore.online/authorization-model/): The three role scopes and which check to use.
 - [Build and deploy](https://docs.proappstore.online/build-and-deploy/): Per-repo keyless workflow → R2 → host worker.
 - [Monitoring runbook](https://docs.proappstore.online/monitoring-runbook/): Signals, triage, thresholds.

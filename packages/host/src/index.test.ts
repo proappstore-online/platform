@@ -784,3 +784,37 @@ describe("host auth callback — one-time code (#87)", () => {
     expect(res.headers.get("Location")).toContain("auth_error=missing_session");
   });
 });
+
+describe("Turnstile on self-registration, mediated (#26)", () => {
+  it("forwards the widget token in the registration body and relays the public site key", async () => {
+    const apiFetch = vi.fn(async (request: Request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/v1/auth/turnstile") {
+        expect(request.method).toBe("GET");
+        return Response.json({ siteKey: "site-key", action: "register" });
+      }
+      expect(url.pathname).toBe("/v1/auth/credentials/register");
+      expect(JSON.parse(await request.text())).toEqual({ email: "alice@example.com", password: "correct-horse-battery", turnstileToken: "widget-token" });
+      return Response.json({ error: "bot check failed" }, { status: 403 });
+    });
+    const env = makeEnv({ apiFetch });
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/auth/credentials/register", {
+        method: "POST",
+        headers: { Origin: "https://meetup.proappstore.online", "Sec-Fetch-Site": "same-origin", "Content-Type": "application/json" },
+        body: JSON.stringify({ email: "alice@example.com", password: "correct-horse-battery", turnstileToken: "widget-token", extra: "dropped" }),
+      }),
+      env,
+      ctx(),
+    );
+    // The API's verdict passes through untouched.
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "bot check failed" });
+
+    const key = await worker.fetch(new Request("https://meetup.proappstore.online/.pas/auth/turnstile"), env, ctx());
+    expect(key.status).toBe(200);
+    expect(await key.json()).toEqual({ siteKey: "site-key", action: "register" });
+    expect(key.headers.get("Cache-Control")).toBe("public, max-age=300");
+    expect((await worker.fetch(new Request("https://meetup.proappstore.online/.pas/auth/turnstile", { method: "POST" }), env, ctx())).status).toBe(405);
+  });
+});

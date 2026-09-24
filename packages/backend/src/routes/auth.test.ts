@@ -1277,3 +1277,85 @@ describe('OAuth callback — #pas_session fragment retirement (#196)', () => {
     expect(new URL(res.headers.get('location')!).hash).toMatch(/^#pas_session=/);
   });
 });
+
+describe('Turnstile on self-registration (#26)', () => {
+  const TS = { TURNSTILE_SITE_KEY: 'site-key', TURNSTILE_SECRET_KEY: 'secret-key' };
+  const env = (db: ReturnType<typeof fakeDb>, over: Record<string, unknown> = {}) => ({ DB: db, SESSION_SIGNING_KEY: KEY, ...over }) as never;
+  const register = (body: unknown, db: ReturnType<typeof fakeDb>, over: Record<string, unknown> = {}, headers: Record<string, string> = {}) =>
+    app.request('/v1/auth/credentials/register', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': '203.0.113.7', ...headers }, body: JSON.stringify(body),
+    }, env(db, over));
+  const GOOD = { email: 'alice@example.com', password: 'correct-horse-battery-staple' };
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('is inert when unconfigured or half-configured: no siteverify call, registration proceeds', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    for (const over of [{}, { TURNSTILE_SECRET_KEY: 'secret-key' }, { TURNSTILE_SITE_KEY: 'site-key' }]) {
+      const db = fakeDb();
+      expect((await register(GOOD, db, over)).status).toBe(202);
+      expect(db._users).toHaveLength(1);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('configured: a request with no token is 403 before any hashing, and does not count against the per-IP limit', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const db = fakeDb();
+    const res = await register(GOOD, db, TS);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'bot check required' });
+    expect(db._users).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+    // The same address can still register with a good token afterwards.
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ success: true, action: 'register' })));
+    expect((await register({ ...GOOD, turnstileToken: 'ok-token' }, db, TS)).status).toBe(202);
+  });
+
+  it('configured: the token (body field or header) is verified at siteverify with the secret, the visitor IP and the register action', async () => {
+    const calls: URLSearchParams[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://challenges.cloudflare.com/turnstile/v0/siteverify');
+      calls.push(new URLSearchParams(String(init?.body)));
+      return Response.json({ success: true, action: 'register' });
+    }));
+    const db = fakeDb();
+    expect((await register({ ...GOOD, turnstileToken: 'body-token' }, db, TS)).status).toBe(202);
+    expect((await register({ ...GOOD, email: 'bob@example.com' }, db, TS, { 'CF-Turnstile-Response': 'header-token' })).status).toBe(202);
+    expect(calls.map((c) => Object.fromEntries(c))).toEqual([
+      { secret: 'secret-key', response: 'body-token', remoteip: '203.0.113.7' },
+      { secret: 'secret-key', response: 'header-token', remoteip: '203.0.113.7' },
+    ]);
+    expect(db._users).toHaveLength(2);
+  });
+
+  it('configured: a rejected token is 403, a token minted for another form is 403, and an unreachable challenge service is 503', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ success: false, 'error-codes': ['timeout-or-duplicate'] })));
+    let res = await register({ ...GOOD, turnstileToken: 'stale' }, fakeDb(), TS);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'bot check failed' });
+
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ success: true, action: 'publish' })));
+    res = await register({ ...GOOD, turnstileToken: 'publish-token' }, fakeDb(), TS);
+    expect(res.status).toBe(403);
+
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('fetch failed'); }));
+    res = await register({ ...GOOD, turnstileToken: 'tok' }, fakeDb(), TS);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'bot check unavailable — please try again' });
+  });
+
+  it('GET /v1/auth/turnstile publishes the site key only when enforcement is on', async () => {
+    const off = await app.request('/v1/auth/turnstile', {}, env(fakeDb()));
+    expect(off.status).toBe(200);
+    expect(await off.json()).toEqual({ siteKey: null, action: 'register' });
+    const half = await app.request('/v1/auth/turnstile', {}, env(fakeDb(), { TURNSTILE_SITE_KEY: 'site-key' }));
+    expect(await half.json()).toEqual({ siteKey: null, action: 'register' });
+    const on = await app.request('/v1/auth/turnstile', {}, env(fakeDb(), TS));
+    const text = await on.text();
+    expect(JSON.parse(text)).toEqual({ siteKey: 'site-key', action: 'register' });
+    expect(on.headers.get('Cache-Control')).toBe('public, max-age=300');
+    expect(text).not.toContain('secret-key');
+  });
+});

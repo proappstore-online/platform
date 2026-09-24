@@ -28,4 +28,10 @@ export type Env = {
    *  Worker calling /api/agent-deploy). Mirrors INTERNAL_TOKEN on agent-teams +
    *  proappstore-api. Set via `wrangler secret put INTERNAL_TOKEN`. */
   INTERNAL_TOKEN?: string;
+  /** Cloudflare Turnstile (#26) on browser-driven publishes (/api/publish-app
+   *  called with an Origin header, i.e. from the console). Public widget site
+   *  key (var) + siteverify secret (secret); enforced only when BOTH are set.
+   *  CLI publishes send no Origin and stay on session + provision guard. */
+  TURNSTILE_SITE_KEY?: string;
+  TURNSTILE_SECRET_KEY?: string;
 };

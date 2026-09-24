@@ -66,6 +66,7 @@ const mainSidebar = [
     items: [
       { text: "System Overview", link: "/architecture" },
       { text: "Browser Auth Sessions", link: "/auth-session-model" },
+      { text: "Bot Protection (Turnstile)", link: "/turnstile" },
       { text: "Publishing Flow", link: "/publishing-flow" },
       { text: "Approved Templates", link: "/templates/" },
       { text: "Stripe & Entitlements", link: "/stripe-entitlements" },

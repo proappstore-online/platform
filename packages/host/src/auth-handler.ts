@@ -24,6 +24,7 @@ export async function handleAuthRoute(
   if (url.pathname === `${AUTH_PREFIX}/recover`) return authRecover(request);
   if (url.pathname === `${AUTH_PREFIX}/credentials/login`) return authCredentialsLogin(request, env);
   if (url.pathname === `${AUTH_PREFIX}/credentials/register`) return authCredentialsRegister(request, env);
+  if (url.pathname === `${AUTH_PREFIX}/turnstile`) return authTurnstile(request, env);
   if (url.pathname === `${AUTH_PREFIX}/email/start`) return authEmailStart(request, env, route);
 
   return noStore(new Response("Not found", { status: 404 }));
@@ -169,23 +170,35 @@ async function authCredentialsRegister(request: Request, env: Env): Promise<Resp
   if (request.method !== "POST") return methodNotAllowed("POST");
   if (!isSameOriginMutation(request)) return noStore(new Response("Forbidden", { status: 403 }));
 
-  const body = (await request.json().catch(() => ({}))) as { email?: unknown; password?: unknown; displayName?: unknown };
+  const body = (await request.json().catch(() => ({}))) as { email?: unknown; password?: unknown; displayName?: unknown; turnstileToken?: unknown };
   const upstream = await env.API.fetch(
     new Request(`${API_BASE}/v1/auth/credentials/register`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        // The API rate-limits registration per client address; forward the visitor's.
+        // The API rate-limits registration per client address and Turnstile
+        // (#26) checks the token against it; forward the visitor's.
         ...(request.headers.get("cf-connecting-ip") ? { "cf-connecting-ip": request.headers.get("cf-connecting-ip")! } : {}),
       },
       body: JSON.stringify({
         email: typeof body.email === "string" ? body.email : "",
         password: typeof body.password === "string" ? body.password : "",
         ...(typeof body.displayName === "string" ? { displayName: body.displayName } : {}),
+        ...(typeof body.turnstileToken === "string" ? { turnstileToken: body.turnstileToken } : {}),
       }),
     }),
   );
   return noStore(upstream);
+}
+
+// #26: the public Turnstile site key for sign-up forms, so a platform-cookie
+// app never talks to the API from JS. `siteKey` is null when the API does not
+// enforce the check. Cacheable — it is public configuration.
+async function authTurnstile(request: Request, env: Env): Promise<Response> {
+  if (request.method !== "GET") return methodNotAllowed("GET");
+  const upstream = await env.API.fetch(new Request(`${API_BASE}/v1/auth/turnstile`, { method: "GET" }));
+  const headers = new Headers({ "Content-Type": "application/json", "Cache-Control": "public, max-age=300" });
+  return new Response(upstream.body, { status: upstream.status, headers });
 }
 
 async function authEmailStart(request: Request, env: Env, route: Route): Promise<Response> {

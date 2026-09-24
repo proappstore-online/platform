@@ -38,6 +38,11 @@ DATA_WORKER_HOST = "serge-the-dev.workers.dev"
 # @proappstore/sdk >= 1.16.46 (watch for "[pas_session-fragment]" warnings to go
 # quiet). Stops delivering #pas_session= to app origins; first-party unaffected.
 # RETIRE_FRAGMENT_DELIVERY = "1"
+# Turnstile widget site key (#26) — PUBLIC, so a var. Together with the
+# TURNSTILE_SECRET_KEY secret it requires a widget token on
+# POST /v1/auth/credentials/register. Leave unset until the sign-up forms read
+# GET /v1/auth/turnstile and send the token: docs/turnstile.md.
+# TURNSTILE_SITE_KEY = "0x..."
 # PAS GitHub OAuth App client id. PUBLIC by design — it is sent to the browser in
 # the authorize URL on every sign-in — so it lives here in git, NOT as a secret.
 #

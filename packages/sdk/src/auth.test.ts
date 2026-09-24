@@ -472,3 +472,37 @@ describe('Auth.init', () => {
     });
   });
 });
+
+describe('Turnstile on register (#26)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('sends the widget token with the registration and reads the site key from the app origin in cookie mode', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/.pas/auth/turnstile') return new Response(JSON.stringify({ siteKey: 'site-key', action: 'register' }), { status: 200 });
+      if (url === '/.pas/auth/credentials/register') {
+        expect(JSON.parse(String(init?.body))).toEqual({ email: 'alice@example.com', password: 'correct-horse-battery', turnstileToken: 'widget-token' });
+        return new Response(JSON.stringify({ error: 'bot check failed' }), { status: 403 });
+      }
+      return new Response('unexpected', { status: 500 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const auth = new Auth('interns', 'https://api.proappstore.online', 'platform-cookie');
+    expect(await auth.turnstileSiteKey()).toEqual({ siteKey: 'site-key', action: 'register' });
+    await expect(auth.register('alice@example.com', 'correct-horse-battery', undefined, { turnstileToken: 'widget-token' })).rejects.toThrow(/Bot check failed/);
+  });
+
+  it('distinguishes "bot check required" (no token sent), the unavailable case, and a disabled platform', async () => {
+    const answer = (status: number, body: string) => vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status })));
+    const auth = () => new Auth('interns', 'https://api.proappstore.online', 'platform-cookie');
+    answer(403, JSON.stringify({ error: 'bot check required' }));
+    await expect(auth().register('a@example.com', 'correct-horse-battery')).rejects.toThrow(/Bot check required/);
+    answer(503, JSON.stringify({ error: 'bot check unavailable — please try again' }));
+    await expect(auth().register('a@example.com', 'correct-horse-battery')).rejects.toThrow(/Bot check unavailable/);
+    answer(403, JSON.stringify({ error: 'self-registration is disabled' }));
+    await expect(auth().register('a@example.com', 'correct-horse-battery')).rejects.toThrow(/not enabled/);
+    // Site key lookup degrades to "no widget" on any failure.
+    answer(500, '');
+    expect(await auth().turnstileSiteKey()).toEqual({ siteKey: null, action: 'register' });
+  });
+});

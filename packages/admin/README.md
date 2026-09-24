@@ -36,6 +36,7 @@ and a durable Cloudflare Workflow variant (`/api/provision-workflow`).
 | `GITHUB_TOKEN` | Fine-grained PAT for `proappstore-online` org (Contents + Admin R/W) |
 | `SESSION_SIGNING_KEY` | HS256 key (shared with FAS auth) — verifies the Bearer session token on `/api/publish-app` |
 | `INTERNAL_TOKEN` | Shared secret for internal service-to-service calls (e.g. agent-teams → `/api/agent-deploy`) |
+| `TURNSTILE_SECRET_KEY` | Turnstile siteverify secret (#26) — with the `TURNSTILE_SITE_KEY` var, requires a widget token on browser-driven `/api/publish-app` calls (those with an `Origin` header). Unset = inert. See [docs/turnstile](../../docs/turnstile.md) |
 
 ## Usage
 
