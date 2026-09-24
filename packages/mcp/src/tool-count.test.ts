@@ -35,18 +35,18 @@ const { PasMcpAgent } = await import('./index.js');
 const { MCP_APP_SCOPED_FIXED, MCP_SHARED_TOOL_COUNT } = await import('./tool-count.js');
 const { invalidateCache } = await import('./tool-loader.js');
 
-function syntheticTools(n: number) {
-  return Array.from({ length: n }, (_, i) => ({ name: `tool_${i}`, description: `synthetic ${i}`, operation: 'query', params: {} }));
+function syntheticTools(n: number, descriptionBytes = 0) {
+  return Array.from({ length: n }, (_, i) => ({ name: `tool_${i}`, description: `synthetic ${i}${'x'.repeat(descriptionBytes)}`, operation: 'query', params: {} }));
 }
 
-async function boot(opts: { appScope?: string; appTools: number }) {
+async function boot(opts: { appScope?: string; appTools: number; descriptionBytes?: number }) {
   registered.names.length = 0;
   invalidateCache();
   const fetched: string[] = [];
   const api = {
     fetch: async (url: string) => {
       fetched.push(url);
-      return new Response(JSON.stringify({ tools: syntheticTools(opts.appTools) }), { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response(JSON.stringify({ tools: syntheticTools(opts.appTools, opts.descriptionBytes) }), { status: 200, headers: { 'content-type': 'application/json' } });
     },
   } as unknown as Fetcher;
   const agent = new PasMcpAgent({} as never, {} as never) as unknown as { env: Env; props: Record<string, unknown>; init(): Promise<void> };
@@ -90,6 +90,23 @@ describe('an app-scoped /mcp/apps/<id> surface (#157)', () => {
     expect(names).toEqual(expect.arrayContaining(['tool_0', 'tool_1', 'tool_2', 'whoami', 'mcp_audit_log']));
     for (const n of names) expect(n).not.toContain('/');
     expect(fetched).toEqual(['https://api.test/v1/apps/crm/tools']);
+    expect(names).not.toContain('list_app_tools');
+  });
+});
+
+describe('an app-scoped session with a LARGE manifest (#117 progressive disclosure)', () => {
+  it('registers the core (here none: no core flag, no get_/count_) plus the scoped discovery pair and the fixed tools — not the manifest', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { names } = await boot({ appScope: 'chess', appTools: 120, descriptionBytes: 400 }); // ~55 KB of tools/list
+    expect(names).toHaveLength(2 + MCP_APP_SCOPED_FIXED);
+    expect(names).toEqual(expect.arrayContaining(['list_app_tools', 'call_app_tool', 'whoami', 'mcp_audit_log']));
+    expect(names).not.toContain('tool_0');
+    vi.restoreAllMocks();
+  });
+
+  it('leaves a small manifest exactly as before', async () => {
+    const { names } = await boot({ appScope: 'chess', appTools: 40 }); // ~4 KB
+    expect(names).toHaveLength(40 + MCP_APP_SCOPED_FIXED);
     expect(names).not.toContain('list_app_tools');
   });
 });

@@ -5,7 +5,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 // Focus on fetchTools caching and the executeToolCall flow.
 
 // Re-export internals for testing by importing the module and inspecting behavior.
-import { checkPlatformRoles, executeToolCall, fetchTools, invalidateCache, registerAppDiscoveryTools, registerAppTools } from './tool-loader.js';
+import { CORE_TOOL_MAX, checkPlatformRoles, executeToolCall, fetchTools, invalidateCache, measureToolsListBytes, PROGRESSIVE_DISCLOSURE_THRESHOLD_BYTES, registerAppDiscoveryTools, registerAppTools, registerAppToolsProgressive, selectCoreTools, type AppTool } from './tool-loader.js';
 
 // The loader now calls the API over a service binding (Fetcher). Delegate to
 // globalThis.fetch so each test's stub keeps working unchanged.
@@ -438,5 +438,126 @@ describe('checkPlatformRoles', () => {
   it('does NOT enforce app_roles (left to the backend — session roles can be stale)', () => {
     // Only app_roles required, none in the session: still passes at the MCP edge.
     expect(checkPlatformRoles({ ...base, auth: { app_roles: ['owner'] } }, [])).toBeNull();
+  });
+});
+
+// #117: progressive disclosure on the app-scoped session.
+describe('progressive disclosure on /mcp/apps/<id> (#117)', () => {
+  const tool = (name: string, over: Partial<AppTool> = {}): AppTool => ({
+    app_id: 'chess', name, description: `Does ${name}`, operation: 'query', params: { id: { type: 'string' } }, ...over,
+  });
+  const fakeServer = () => {
+    const names: string[] = [];
+    const descriptions = new Map<string, string>();
+    const schemas = new Map<string, Record<string, unknown>>();
+    const handlers = new Map<string, (args: Record<string, unknown>) => Promise<{ content: { text: string }[] }>>();
+    return {
+      names, descriptions, schemas, handlers,
+      server: {
+        tool: (name: string, d: string, s: Record<string, unknown>, h: (args: Record<string, unknown>) => Promise<{ content: { text: string }[] }>) => {
+          names.push(name); descriptions.set(name, d); schemas.set(name, s); handlers.set(name, h);
+        },
+      },
+    };
+  };
+  const ctx = () => ({ userId: 'u1', token: 't', roles: [] as string[] });
+  /** ~1 KB of description each, so 60 of them clear the 40 KB threshold. */
+  const large = (n: number) => Array.from({ length: n }, (_, i) => tool(`list_things_${i}`, { description: `List things ${i}. ${'x'.repeat(1_000)}` }));
+
+  describe('selectCoreTools', () => {
+    it('takes core:true first, then get_/count_ reads, manifest order within each tier', () => {
+      const core = selectCoreTools([tool('list_a'), tool('get_b'), tool('update_c', { core: true, operation: 'execute' }), tool('count_d'), tool('get_e')]);
+      expect(core.map((t) => t.name)).toEqual(['update_c', 'get_b', 'count_d', 'get_e']);
+    });
+    it('caps at CORE_TOOL_MAX', () => {
+      const many = Array.from({ length: 30 }, (_, i) => tool(`get_${i}`));
+      expect(selectCoreTools(many)).toHaveLength(CORE_TOOL_MAX);
+      const marked = many.map((t) => ({ ...t, core: true }));
+      expect(selectCoreTools(marked).map((t) => t.name)).toEqual(many.slice(0, CORE_TOOL_MAX).map((t) => t.name));
+    });
+    it('is empty when nothing is marked and nothing is a cheap read', () => {
+      expect(selectCoreTools([tool('list_a'), tool('update_b', { operation: 'execute' })])).toEqual([]);
+    });
+  });
+
+  describe('measureToolsListBytes', () => {
+    it('counts what a session publishes — name, [app] description, inputSchema — never SQL', () => {
+      const a = measureToolsListBytes([tool('get_a')]);
+      const withSql = measureToolsListBytes([tool('get_a', { sql: `SELECT 1 ${'-- pad '.repeat(500)}` })]);
+      expect(withSql).toBe(a);
+      const longer = measureToolsListBytes([tool('get_a', { description: 'A much longer description of the same tool' })]);
+      expect(longer).toBeGreaterThan(a);
+      const moreParams = measureToolsListBytes([tool('get_a', { params: { id: { type: 'string' }, limit: { type: 'integer', optional: true, description: 'cap' } } })]);
+      expect(moreParams).toBeGreaterThan(a);
+      expect(measureToolsListBytes([])).toBe(2);
+    });
+  });
+
+  it('a small manifest is registered in full — no discovery pair, nothing deferred', () => {
+    const f = fakeServer();
+    const tools = [tool('list_a'), tool('get_b'), tool('update_c', { operation: 'execute' })];
+    const r = registerAppToolsProgressive(f.server as never, tools, 'chess', ctx, api, 'https://api.test', {});
+    expect(r.mode).toBe('full');
+    expect(r.bytes).toBeLessThan(PROGRESSIVE_DISCLOSURE_THRESHOLD_BYTES);
+    expect(f.names).toEqual(['list_a', 'get_b', 'update_c']);
+    expect(r.registered).toEqual(['list_a', 'get_b', 'update_c']);
+    expect(r.registeredBytes).toBe(r.bytes);
+  });
+
+  it('a large manifest registers only the core plus a scoped list_app_tools / call_app_tool', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const f = fakeServer();
+    const tools = [...large(60), tool('get_profile'), tool('count_games'), tool('start_puzzle', { core: true, operation: 'execute' })];
+    const r = registerAppToolsProgressive(f.server as never, tools, 'chess', ctx, api, 'https://api.test', {});
+    expect(r.mode).toBe('progressive');
+    expect(r.bytes).toBeGreaterThanOrEqual(PROGRESSIVE_DISCLOSURE_THRESHOLD_BYTES);
+    expect(r.total).toBe(63);
+    // core first (marked, then cheap reads), then the discovery pair — nothing else.
+    expect(f.names).toEqual(['start_puzzle', 'get_profile', 'count_games', 'list_app_tools', 'call_app_tool']);
+    expect(r.registered).toEqual(f.names);
+    expect(r.registeredBytes).toBeLessThan(r.bytes / 10);
+    // The scoped pair takes NO app_id argument and says what is pre-loaded vs deferred.
+    expect(f.schemas.get('list_app_tools')).not.toHaveProperty('app_id');
+    expect(f.schemas.get('call_app_tool')).not.toHaveProperty('app_id');
+    expect(f.descriptions.get('list_app_tools')).toContain('63 tools total; 3 are pre-loaded');
+    expect(f.descriptions.get('call_app_tool')).toContain('60 not pre-loaded');
+    expect(String(log.mock.calls[0]?.[0])).toMatch(/Progressive disclosure for chess: 63 tools/);
+    log.mockRestore();
+  });
+
+  it('the scoped list_app_tools lists the whole manifest for the fixed app, and call_app_tool invokes a deferred tool by name', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const f = fakeServer();
+    const tools = [...large(60), tool('get_profile')];
+    registerAppToolsProgressive(f.server as never, tools, 'chess', ctx, api, 'https://api.test', {});
+    globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.endsWith('/v1/apps/chess/tools')) return new Response(JSON.stringify({ tools }), { status: 200 });
+      if (url.includes('/v1/apps/chess/actions/list_things_7')) {
+        expect(init?.method).toBe('POST');
+        return new Response(JSON.stringify({ rows: [{ id: 7 }] }), { status: 200 });
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const listed = await f.handlers.get('list_app_tools')!({});
+    expect(listed.content[0]!.text).toContain('# chess: 61 tool(s)');
+    expect(listed.content[0]!.text).toContain('list_things_59');
+    expect(listed.content[0]!.text).toContain('call_app_tool({ tool: "<name>"');
+    expect(listed.content[0]!.text).not.toContain('app_id');
+    const called = await f.handlers.get('call_app_tool')!({ tool: 'list_things_7', params: { id: 'x' } });
+    expect(called.content[0]!.text).toMatch(/"id":\s*7/);
+    const unknown = await f.handlers.get('call_app_tool')!({ tool: 'nope' });
+    expect(unknown.content[0]!.text).toContain('Unknown tool nope for chess; call list_app_tools({})');
+    vi.restoreAllMocks();
+  });
+
+  it('a large manifest with no core candidates still gets the discovery pair, so nothing is unreachable', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const f = fakeServer();
+    const r = registerAppToolsProgressive(f.server as never, large(60), 'chess', ctx, api, 'https://api.test', {});
+    expect(r.mode).toBe('progressive');
+    expect(f.names).toEqual(['list_app_tools', 'call_app_tool']);
+    expect(f.descriptions.get('list_app_tools')).toContain('60 tools total; 0 are pre-loaded');
+    vi.restoreAllMocks();
   });
 });

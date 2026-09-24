@@ -42,6 +42,8 @@ export interface ToolManifest {
     platform_roles?: string[];
     app_roles?: string[];
   };
+  /** Always pre-loaded on an app-scoped session, even when the manifest is large (#117). */
+  core?: boolean;
 }
 
 export interface AppTool extends ToolManifest {
@@ -111,6 +113,61 @@ export async function fetchTools(api: Fetcher, apiBase: string, appId: string): 
 /** Clear the tool cache (e.g. after a publish) */
 export function invalidateCache(): void {
   cachedTools.clear();
+}
+
+// ── Progressive disclosure (#117) ────────────────────────────────────────────
+//
+// A per-app session used to register the whole manifest — chess-academy's 122 tools
+// are ~73 KB of `tools/list`, ~18k tokens in the model's context on EVERY call, and
+// tool selection degrades fastest among near-identical candidates (31 `list_*`
+// tools differing by table). Above the threshold the session registers a small
+// resident core plus the same discovery pair the shared endpoint uses, scoped to
+// the app, so context occupancy follows what a task uses, not what an app has ever
+// registered. Below it nothing changes. No `listChanged` promotion: clients that
+// cache `tools/list` would not see it, and the static core + discovery pair needs
+// no client cooperation.
+
+/** `tools/list` bytes above which an app-scoped session switches to core + discovery. */
+export const PROGRESSIVE_DISCLOSURE_THRESHOLD_BYTES = 40_000;
+/** How many tools stay resident on a progressive session. */
+export const CORE_TOOL_MAX = 10;
+/** Cheap reads that are useful in most tasks — resident unless the manifest says otherwise. */
+const CORE_NAME_RE = /^(get_|count_)/;
+
+/** The JSON Schema the SDK publishes for a manifest's params — mirrors `buildZodSchema`. */
+function inputSchemaFor(params: Record<string, ToolParam> | undefined): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+  const required: string[] = [];
+  for (const [name, def] of Object.entries(params ?? {})) {
+    const type = def.type === 'integer' ? 'integer' : def.type === 'number' ? 'number' : def.type === 'boolean' ? 'boolean' : 'string';
+    properties[name] = { type, description: def.description ?? name };
+    if (!def.optional && def.default === undefined) required.push(name);
+  }
+  return { type: 'object', properties, ...(required.length ? { required } : {}) };
+}
+
+/**
+ * Estimated `tools/list` bytes for these tools as an app-scoped session publishes
+ * them: name, `[app] description`, inputSchema. SQL is never published, so it is
+ * never counted — the same accounting the backend reports at registration.
+ */
+export function measureToolsListBytes(tools: AppTool[]): number {
+  const enc = new TextEncoder();
+  let bytes = 2; // the surrounding `[]`
+  for (const tool of tools) {
+    bytes += enc.encode(JSON.stringify({ name: tool.name, description: `[${tool.app_id}] ${tool.description}`, inputSchema: inputSchemaFor(tool.params) })).byteLength + 1;
+  }
+  return bytes;
+}
+
+/**
+ * The resident core: manifest-marked `core: true` first, then `get_*` / `count_*`
+ * reads, manifest order within each tier, capped at {@link CORE_TOOL_MAX}.
+ */
+export function selectCoreTools(tools: AppTool[]): AppTool[] {
+  const marked = tools.filter((t) => t.core === true);
+  const cheapReads = tools.filter((t) => t.core !== true && CORE_NAME_RE.test(t.name));
+  return [...marked, ...cheapReads].slice(0, CORE_TOOL_MAX);
 }
 
 /** Execute an app tool through the shared platform action executor. */
@@ -278,38 +335,82 @@ export function registerAppDiscoveryTools(
   apiBase: string,
   env: SafetyEnv,
 ): void {
+  registerDiscoveryPair(server, getUserContext, api, apiBase, env);
+}
+
+/** What a scoped discovery pair knows about its app (#117): fixed id, and the split it should explain. */
+interface DiscoveryScope {
+  appId: string;
+  total: number;
+  core: number;
+}
+
+/**
+ * The discovery pair, either app-agnostic (shared endpoint: `app_id` is an argument)
+ * or scoped to one app (a progressive per-app session: `app_id` is fixed and the
+ * descriptions say how many tools are pre-loaded and how many are one call away).
+ */
+function registerDiscoveryPair(
+  server: McpServer,
+  getUserContext: UserContext,
+  api: Fetcher,
+  apiBase: string,
+  env: SafetyEnv,
+  scope?: DiscoveryScope,
+): void {
+  const appIdArg: z.ZodRawShape = scope ? {} : { app_id: z.string().describe("The app id (its subdomain / repository name), e.g. 'crm'.") };
+  const resolveAppId = (args: { app_id?: string }): string | null => {
+    const id = scope ? scope.appId : args.app_id ?? '';
+    return APP_ID_RE.test(id) ? id : null;
+  };
+  const listDescription = scope
+    ? `This app (${scope.appId}) has ${scope.total} tools total; ${scope.core} are pre-loaded on this session. Call this tool to discover the rest — name, reads or writes, auth or public, description, and each tool's params with include_params — then use call_app_tool to invoke one by name. Never SQL.`
+    : "One app's registered data tools (its mcp.json), as the platform sees them: name, reads or writes, auth or public, description — and each tool's params with include_params. Never SQL. From the shared /mcp endpoint this is how you find what an app exposes; call one with call_app_tool, or connect to /mcp/apps/<app_id> to have them registered directly. An empty list means the app has no registered tools or does not exist.";
+  const callDescription = scope
+    ? `Call any of this app's (${scope.appId}) ${scope.total} registered data tools by name — including the ${scope.total - scope.core} not pre-loaded on this session — through the platform action executor, exactly as a pre-loaded tool runs: the executor enforces requires_auth and the manifest's platform / app roles, validates params against the manifest, and scopes rows in the tool's SQL. Query tools return rows; execute and batch tools mutate app data, are audited, and are refused in read-only mode. Runs as the connected account. Use list_app_tools first to see names and params.`
+    : "Call one app's registered data tool through the platform action executor, exactly as the app's own /mcp/apps/<app_id> endpoint and the browser SDK do: the executor enforces requires_auth and the manifest's platform / app roles, validates params against the manifest, and scopes rows in the tool's SQL. Query tools return rows; execute and batch tools mutate app data, are audited, and are refused in read-only mode. Runs as the connected account. Use list_app_tools first to see names and params.";
+
+  const listShape: z.ZodRawShape = {
+    ...appIdArg,
+    include_params: z.boolean().optional().describe("Append each tool's params (name, type, description). Off by default; ask for them when you are about to call one."),
+  };
   server.tool(
     'list_app_tools',
-    "One app's registered data tools (its mcp.json), as the platform sees them: name, reads or writes, auth or public, description — and each tool's params with include_params. Never SQL. From the shared /mcp endpoint this is how you find what an app exposes; call one with call_app_tool, or connect to /mcp/apps/<app_id> to have them registered directly. An empty list means the app has no registered tools or does not exist.",
-    {
-      app_id: z.string().describe("The app id (its subdomain / repository name), e.g. 'crm'."),
-      include_params: z.boolean().optional().describe("Append each tool's params (name, type, description). Off by default; ask for them when you are about to call one."),
-    },
-    async ({ app_id, include_params }) => {
-      if (!APP_ID_RE.test(app_id)) return { content: [{ type: 'text' as const, text: `Error: invalid app_id "${app_id}".` }] };
-      const tools = await fetchTools(api, apiBase, app_id);
+    listDescription,
+    listShape,
+    async (args) => {
+      const { app_id, include_params } = args as { app_id?: string; include_params?: boolean };
+      const id = resolveAppId({ app_id });
+      if (!id) return { content: [{ type: 'text' as const, text: `Error: invalid app_id "${app_id ?? ''}".` }] };
+      const tools = await fetchTools(api, apiBase, id);
       if (tools.length === 0) {
-        return { content: [{ type: 'text' as const, text: `${app_id} has no registered tools (or does not exist). Apps register tools by committing an mcp.json; list_apps shows the apps you can see.` }] };
+        return { content: [{ type: 'text' as const, text: `${id} has no registered tools (or does not exist). Apps register tools by committing an mcp.json; list_apps shows the apps you can see.` }] };
       }
       const lines = tools.map((t) => describeTool(t, include_params === true));
-      return { content: [{ type: 'text' as const, text: `# ${app_id}: ${tools.length} tool(s)\n\n${lines.join('\n')}\n\nCall one with call_app_tool({ app_id: "${app_id}", tool: "<name>", params: { … } }).` }] };
+      const call = scope ? `call_app_tool({ tool: "<name>", params: { … } })` : `call_app_tool({ app_id: "${id}", tool: "<name>", params: { … } })`;
+      return { content: [{ type: 'text' as const, text: `# ${id}: ${tools.length} tool(s)\n\n${lines.join('\n')}\n\nCall one with ${call}.` }] };
     },
   );
 
+  const callShape: z.ZodRawShape = {
+    ...(scope ? {} : { app_id: z.string().describe("The app id, e.g. 'crm'.") }),
+    tool: z.string().describe('The tool name from list_app_tools.'),
+    params: z.record(z.unknown()).optional().describe("The tool's params, by name."),
+  };
   server.tool(
     'call_app_tool',
-    "Call one app's registered data tool through the platform action executor, exactly as the app's own /mcp/apps/<app_id> endpoint and the browser SDK do: the executor enforces requires_auth and the manifest's platform / app roles, validates params against the manifest, and scopes rows in the tool's SQL. Query tools return rows; execute and batch tools mutate app data, are audited, and are refused in read-only mode. Runs as the connected account. Use list_app_tools first to see names and params.",
-    {
-      app_id: z.string().describe("The app id, e.g. 'crm'."),
-      tool: z.string().describe('The tool name from list_app_tools.'),
-      params: z.record(z.unknown()).optional().describe("The tool's params, by name."),
-    },
-    async ({ app_id, tool, params }) => {
-      if (!APP_ID_RE.test(app_id)) return { content: [{ type: 'text' as const, text: `Error: invalid app_id "${app_id}".` }] };
-      const tools = await fetchTools(api, apiBase, app_id);
+    callDescription,
+    callShape,
+    async (args) => {
+      const { app_id, tool, params } = args as { app_id?: string; tool: string; params?: Record<string, unknown> };
+      const id = resolveAppId({ app_id });
+      if (!id) return { content: [{ type: 'text' as const, text: `Error: invalid app_id "${app_id ?? ''}".` }] };
+      const app_idResolved = id;
+      const tools = await fetchTools(api, apiBase, app_idResolved);
       const manifest = tools.find((t) => t.name === tool);
       if (!manifest) {
-        return { content: [{ type: 'text' as const, text: `Unknown tool ${tool} for ${app_id}; call list_app_tools({ app_id: "${app_id}" }) for the names it exposes.` }] };
+        const hint = scope ? 'call list_app_tools({}) for the names it exposes' : `call list_app_tools({ app_id: "${app_idResolved}" }) for the names it exposes`;
+        return { content: [{ type: 'text' as const, text: `Unknown tool ${tool} for ${app_idResolved}; ${hint}.` }] };
       }
       const { userId, token, roles } = getUserContext();
       const roleErr = checkPlatformRoles(manifest, roles);
@@ -318,10 +419,52 @@ export function registerAppDiscoveryTools(
       // gated and audited. PAGS gates its invoker unconditionally because it cannot know the
       // side effect; PAS knows `operation`.
       if (manifest.operation !== 'query') {
-        await gateMutation({ env, subject: userId }, 'call_app_tool', { app_id, tool, scope: 'shared' });
+        await gateMutation({ env, subject: userId }, 'call_app_tool', { app_id: app_idResolved, tool, scope: scope ? 'app' : 'shared' });
       }
       const result = await executeToolCall(manifest, params ?? {}, token, api, apiBase);
       return { content: [{ type: 'text' as const, text: result }] };
     },
   );
+}
+
+export interface ProgressiveRegistration {
+  mode: 'full' | 'progressive';
+  /** Tool names registered on the session (core tools + the discovery pair when progressive). */
+  registered: string[];
+  total: number;
+  /** Estimated `tools/list` bytes of the whole manifest, and of what was actually registered. */
+  bytes: number;
+  registeredBytes: number;
+}
+
+/**
+ * Register an app's tools on its own session with progressive disclosure (#117).
+ *
+ * Below {@link PROGRESSIVE_DISCLOSURE_THRESHOLD_BYTES} this is exactly `registerAppTools`.
+ * Above it, only {@link selectCoreTools} are registered directly, plus `list_app_tools`
+ * and `call_app_tool` fixed to this app — every other tool is one discovery call away
+ * and callable by name, so nothing is hidden, only deferred.
+ */
+export function registerAppToolsProgressive(
+  server: McpServer,
+  tools: AppTool[],
+  appId: string,
+  getUserContext: UserContext,
+  api: Fetcher,
+  apiBase: string,
+  env: SafetyEnv,
+): ProgressiveRegistration {
+  const bytes = measureToolsListBytes(tools);
+  if (bytes < PROGRESSIVE_DISCLOSURE_THRESHOLD_BYTES) {
+    const registered = registerAppTools(server, tools, getUserContext, api, apiBase, env);
+    return { mode: 'full', registered, total: tools.length, bytes, registeredBytes: bytes };
+  }
+  const core = selectCoreTools(tools);
+  const registered = registerAppTools(server, core, getUserContext, api, apiBase, env);
+  registerDiscoveryPair(server, getUserContext, api, apiBase, env, { appId, total: tools.length, core: registered.length });
+  const registeredBytes = measureToolsListBytes(core.filter((t) => registered.includes(t.name)));
+  console.log(
+    `Progressive disclosure for ${appId}: ${tools.length} tools / ~${bytes} B of tools/list → ${registered.length} core + list_app_tools/call_app_tool (~${registeredBytes} B); ~${bytes - registeredBytes} B saved per call`,
+  );
+  return { mode: 'progressive', registered: [...registered, 'list_app_tools', 'call_app_tool'], total: tools.length, bytes, registeredBytes };
 }

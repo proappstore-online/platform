@@ -146,6 +146,8 @@ interface ToolManifest {
     app_roles?: string[];
     caller_unscoped?: { reason: string };
   };
+  /** Stay pre-loaded on a large app's MCP session instead of being deferred to discovery (#117). */
+  core?: boolean;
 }
 
 /** Above this many model-facing bytes the registration answers with a soft warning (#117). */
@@ -181,6 +183,7 @@ export function measureManifestCost(tools: ToolManifest[]): { bytes: number; byt
 
 function validateManifest(tool: ToolManifest): string | null {
   if (!tool.name || typeof tool.name !== 'string') return 'name is required';
+  if (tool.core !== undefined && typeof tool.core !== 'boolean') return 'core must be a boolean';
   if (!/^[a-z][a-z0-9_]*$/.test(tool.name)) return 'name must be lowercase alphanumeric with underscores';
   if (!tool.description || typeof tool.description !== 'string') return 'description is required';
   if (!['query', 'execute', 'batch'].includes(tool.operation)) return 'operation must be "query", "execute" or "batch"';
@@ -478,6 +481,8 @@ function publicToolView(m: ToolManifest) {
     operation: m.operation,
     params: m.params,
     requires_auth: m.requires_auth,
+    // Which tools stay resident on a large app's MCP session (#117) — not sensitive.
+    ...(m.core !== undefined ? { core: m.core } : {}),
     ...(m.auth
       ? { auth: { required: m.auth.required, platform_roles: m.auth.platform_roles, app_roles: m.auth.app_roles } }
       : {}),

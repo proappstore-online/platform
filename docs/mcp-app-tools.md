@@ -25,10 +25,12 @@ your app repo                 platform backend              platform MCP server
 1. Your app declares tools in an **`mcp.json`** manifest at the repo root.
 2. On publish, those tools are registered to the backend `app_tools` table.
 3. The platform MCP server exposes an app's tools on that app's own endpoint,
-   `/mcp/apps/<app_id>`, under their manifest names. The shared `/mcp`
-   endpoint does not register app tools. It offers `list_app_tools(app_id)`
-   and `call_app_tool(app_id, tool, params)` to reach any app's tools without
-   loading them all.
+   `/mcp/apps/<app_id>`, under their manifest names — all of them for a small
+   manifest, a resident core plus discovery for a large one (see
+   [Large manifests](#large-manifests-progressive-disclosure)). The shared
+   `/mcp` endpoint does not register app tools. It offers
+   `list_app_tools(app_id)` and `call_app_tool(app_id, tool, params)` to reach
+   any app's tools without loading them all.
 4. When called, the MCP server sends the request to the platform action
    executor (`/v1/apps/:appId/actions/:name`) with the caller's session. The
    platform validates auth, checks role metadata, injects magic params, and
@@ -168,6 +170,7 @@ against your app's own D1 tables.
 | `statements` | required for `batch`, max 25 statements. Batch tools use `statements`, not `sql`; each member is validated like an `execute` statement. |
 | `params` | declared inputs: `{ "name": { "type", "description?", "optional?", "default?", "max?" } }`. Types: `string`, `integer`, `number`, `boolean`. |
 | `requires_auth` | explicit `true` or `false`. `true` requires a session token. `false` is allowed only for constrained public `query` tools. SQL using `:__user_id` must require auth. |
+| `core` | optional boolean. On a large manifest (see below) `core: true` keeps this tool pre-loaded on the app's MCP session instead of deferring it to discovery. Ignored on a small manifest, where everything is pre-loaded anyway. |
 
 Use `requires_auth: true` for writes and user-scoped reads. Deliberately public
 read-only queries can use `requires_auth: false`, but registration constrains
@@ -235,6 +238,34 @@ that app's tool set:
   }
 }
 ```
+
+### Large manifests: progressive disclosure
+
+Every tool a session registers is in the model's context on every call, and
+tool selection degrades fastest among near-identical candidates (thirty
+`list_*` tools differing by table). So an app-scoped session does not register
+a large manifest whole (platform #117):
+
+- **Below 40 KB** of `tools/list` (`PROGRESSIVE_DISCLOSURE_THRESHOLD_BYTES`,
+  measured as the session publishes it — name, description, params; never SQL)
+  every tool is registered directly, as before.
+- **At or above 40 KB** the session registers a **resident core** of at most 10
+  tools — those marked `core: true` in `mcp.json` first, then `get_*` /
+  `count_*` reads, in manifest order — plus `list_app_tools` and
+  `call_app_tool` **scoped to the app** (no `app_id` argument). Their
+  descriptions state how many tools the app has and how many are pre-loaded.
+  Every other tool is one `list_app_tools({})` away and is invoked by name with
+  `call_app_tool({ tool, params })`, through the same executor, role checks,
+  audit and read-only gate as a pre-loaded tool. Nothing is hidden, only
+  deferred.
+
+Registration reports the manifest's model-facing byte cost (`bytes`,
+`estimatedTokens`) and warns above 50 KB, so the number is in the deploy log;
+the session's own log line records the split and the bytes saved per call.
+The core set is chosen without `listChanged` promotion on purpose: clients that
+cache `tools/list` would not see a mid-session change, and the static core plus
+discovery pair needs no client cooperation. To keep a tool resident on a large
+app, mark it `core: true`; to shrink the payload, shorten descriptions.
 
 Use the shared platform endpoint for ProAppStore builder/operator workflows
 (platform, project and QA tools). It reaches app tools only through

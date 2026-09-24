@@ -1031,3 +1031,27 @@ describe('PUT /v1/apps/:appId/tools — manifest byte cost (#117)', () => {
     expect(measureManifestCost([])).toEqual({ bytes: 0, bytesPerTool: 0, estimatedTokens: 0 });
   });
 });
+
+// #117: `core: true` marks a tool as resident on a large app's MCP session. It is
+// validated at registration and published in the public view (it is not sensitive).
+describe('PUT /v1/apps/:appId/tools — the core flag (#117)', () => {
+  const put = (tools: unknown[]) => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    return app.request(
+      '/v1/apps/test-app/tools',
+      { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools }) },
+      makeEnv({}, db),
+    );
+  };
+
+  it('accepts core: true / false', async () => {
+    expect((await put([{ ...validTool, core: true }])).status).toBe(200);
+    expect((await put([{ ...validTool, core: false }])).status).toBe(200);
+  });
+
+  it('rejects a non-boolean core', async () => {
+    const res = await put([{ ...validTool, core: 'yes' }]);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('core must be a boolean');
+  });
+});
