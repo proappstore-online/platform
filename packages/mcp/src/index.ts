@@ -292,7 +292,8 @@ export default {
   },
 };
 
-function extractAppScope(props: Record<string, unknown>): string | null {
+/** The app scope a scoped session was routed with (#149); null on the shared endpoint or for a malformed id. */
+export function extractAppScope(props: Record<string, unknown>): string | null {
   return typeof props.appScope === "string" && isValidAppId(props.appScope)
     ? props.appScope
     : null;
@@ -302,7 +303,13 @@ function isValidAppId(value: string): boolean {
   return /^[a-z][a-z0-9-]{0,57}$/.test(value);
 }
 
-function resolveMcpRoute(pathname: string): {
+/**
+ * Route table for the MCP worker (#149): `/mcp` is the shared platform
+ * endpoint, `/mcp/apps/:appId` an app-scoped one. Anything else is not a
+ * transport path; a malformed app id is a 400, never a fallthrough to the
+ * shared endpoint.
+ */
+export function resolveMcpRoute(pathname: string): {
   isTransport: boolean;
   appScope: string | null;
   error?: string;
