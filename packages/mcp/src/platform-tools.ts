@@ -14,6 +14,7 @@ import { getDeployStatus, pasApi } from "./api-helpers.js";
 import { buildSdkReferenceSections } from "./sdk-reference.js";
 import { getRecipe } from "../../agent-teams/src/recipes.js";
 import { TEMPLATE_CATALOGUE, DEFAULT_TEMPLATE_ID, TEMPLATE_CATALOGUE_VERSION } from "@proappstore/build-core";
+import { errText } from "./errors.js";
 
 export function registerPlatformTools(server: McpServer, env: Env) {
   // ── list_apps ──────────────────────────────────────────────
@@ -26,7 +27,7 @@ export function registerPlatformTools(server: McpServer, env: Env) {
         apps?: Array<{ id: string; name: string; category: string | null; description: string | null }>;
         error?: string;
       };
-      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+      if (data.error) return errText(`Error: ${data.error}`);
       const apps = data.apps ?? [];
       if (apps.length === 0) return { content: [{ type: "text" as const, text: "No apps yet. Use `pas create my-app` to get started." }] };
       const lines = apps.map(
@@ -43,7 +44,7 @@ export function registerPlatformTools(server: McpServer, env: Env) {
     { app_id: z.string().describe("App ID (e.g. 'meetup', 'kanban')") },
     async ({ app_id }) => {
       const runs = await getDeployStatus(env.GITHUB_ORG, app_id, env.GITHUB_TOKEN);
-      if ("error" in runs) return { content: [{ type: "text" as const, text: `Error: ${(runs as { error: string }).error}` }] };
+      if ("error" in runs) return errText(`Error: ${(runs as { error: string }).error}`);
       if ((runs as Array<unknown>).length === 0)
         return { content: [{ type: "text" as const, text: `No workflow runs found for ${app_id}.` }] };
       const lines = (runs as Array<{ name: string; status: string; updatedAt: string; sha: string; url: string }>).map(
@@ -65,7 +66,7 @@ export function registerPlatformTools(server: McpServer, env: Env) {
         history?: Array<{ source: string; status: string; applied: string[]; ranAt: number; detail: string | null }>;
         error?: string;
       };
-      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+      if (data.error) return errText(`Error: ${data.error}`);
       const history = data.history ?? [];
       if (history.length === 0) {
         return { content: [{ type: "text" as const, text: `No migration attempts recorded for **${app_id}** yet (app may predate migrations.json or have no database).` }] };
@@ -164,7 +165,7 @@ export function registerPlatformTools(server: McpServer, env: Env) {
     {},
     async () => {
       const res = await fetch("https://proappstore.online/skills.md");
-      if (!res.ok) return { content: [{ type: "text" as const, text: "Failed to fetch skills.md" }] };
+      if (!res.ok) return errText("Failed to fetch skills.md");
       const text = await res.text();
       // The clause-numbered Application Standard is what an audit cites; skills.md
       // is the capability guide. Point every guide reader at both (#159).

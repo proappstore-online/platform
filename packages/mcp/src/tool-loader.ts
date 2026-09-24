@@ -20,6 +20,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { gateMutation, type SafetyEnv } from './safety.js';
+import { errText } from './errors.js';
 
 interface ToolParam {
   type: string;
@@ -381,7 +382,7 @@ function registerDiscoveryPair(
     async (args) => {
       const { app_id, include_params } = args as { app_id?: string; include_params?: boolean };
       const id = resolveAppId({ app_id });
-      if (!id) return { content: [{ type: 'text' as const, text: `Error: invalid app_id "${app_id ?? ''}".` }] };
+      if (!id) return errText(`Error: invalid app_id "${app_id ?? ''}".`);
       const tools = await fetchTools(api, apiBase, id);
       if (tools.length === 0) {
         return { content: [{ type: 'text' as const, text: `${id} has no registered tools (or does not exist). Apps register tools by committing an mcp.json; list_apps shows the apps you can see.` }] };
@@ -404,7 +405,7 @@ function registerDiscoveryPair(
     async (args) => {
       const { app_id, tool, params } = args as { app_id?: string; tool: string; params?: Record<string, unknown> };
       const id = resolveAppId({ app_id });
-      if (!id) return { content: [{ type: 'text' as const, text: `Error: invalid app_id "${app_id ?? ''}".` }] };
+      if (!id) return errText(`Error: invalid app_id "${app_id ?? ''}".`);
       const app_idResolved = id;
       const tools = await fetchTools(api, apiBase, app_idResolved);
       const manifest = tools.find((t) => t.name === tool);

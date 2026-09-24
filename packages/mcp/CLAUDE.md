@@ -5,8 +5,12 @@ Remote MCP server for AI agents to interact with the ProAppStore platform.
 - Endpoint: `mcp.proappstore.online/mcp`
 - Dev: `npm install && npm run dev`
 - Deploy: `git push origin main` (auto-deploys via GitHub Actions)
+- Discovery docs (#114): `server.json` (registry manifest — kept equal to the
+  registered tool set by `src/server-json.test.ts`), `AGENTS.md` (rules for
+  agents), `README.md` (connect + tool tables), `llms.txt`. Explicit failure
+  returns go through `errText()` (`src/errors.ts`) so they carry `isError: true`.
 
-## Tools (39 static + dynamic per-app)
+## Tools (53 shared + dynamic per-app)
 
 ### Platform tools (no auth required unless noted)
 

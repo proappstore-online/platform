@@ -1,0 +1,21 @@
+# ProAppStore MCP server
+
+> Remote MCP server (streamable HTTP) for ProAppStore, the Pro app marketplace. Build Pro apps yourself or through an autonomous Agent Team, provision and deploy them, inspect deploys and D1 schema, author and run browser e2e flows, read the platform guide and SDK reference, and call any published app's registered data tools. 53 shared tools plus per-app tools on app endpoints.
+
+Endpoint: https://mcp.proappstore.online/mcp — per app: https://mcp.proappstore.online/mcp/apps/<app_id>
+Auth: OAuth 2.1 + PKCE (dynamic client registration at /register), or a PAS session JWT as the bearer.
+Safety: read-only mode, per-user audit log (mcp_audit_log), confirm gates on destructive tools, dry_run previews, structured isError failures.
+
+## Docs
+
+- [README](https://github.com/proappstore-online/platform/blob/main/packages/mcp/README.md): connect, full tool tables, safety
+- [AGENTS.md](https://github.com/proappstore-online/platform/blob/main/packages/mcp/AGENTS.md): rules for agents, workflow recipes, what is not supported
+- [server.json](https://github.com/proappstore-online/platform/blob/main/packages/mcp/server.json): MCP registry manifest with the tool list
+- [App tools and manifests](https://docs.proappstore.online/mcp-app-tools/): how apps register tools, auth rules, per-app endpoints
+- [Platform guide](https://proappstore.online/skills.md): building Pro apps on ProAppStore
+- [OAuth discovery](https://mcp.proappstore.online/.well-known/oauth-authorization-server): live authorization server metadata
+
+## Optional
+
+- [Maintainer notes](https://github.com/proappstore-online/platform/blob/main/packages/mcp/CLAUDE.md): security model, per-app tool registration, source layout
+- [Platform docs](https://docs.proappstore.online/): the Application Standard, SDK reference, templates

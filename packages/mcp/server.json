@@ -1,0 +1,347 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.proappstore-online/platform",
+  "description": "AI agent tools for ProAppStore (PAS), the Pro app marketplace: create and build Pro apps (direct file writes or the autonomous Agent Teams loop), provision and deploy, inspect deploys and D1 schema, author and run browser e2e flows, read the platform guide and SDK reference, and reach any published app's registered data tools. Per-app endpoints at https://mcp.proappstore.online/mcp/apps/<app_id> expose that app's own tools.",
+  "repository": {
+    "url": "https://github.com/proappstore-online/platform",
+    "source": "github",
+    "subfolder": "packages/mcp"
+  },
+  "version": "0.2.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.proappstore.online/mcp"
+    }
+  ],
+  "tools": [
+    {
+      "name": "whoami",
+      "description": "The account this connection is authenticated as — uid, login, email, provider, platform roles, token expiry."
+    },
+    {
+      "name": "mcp_audit_log",
+      "description": "Your recent MCP audit events (mutating calls, dry-runs, read-only denials), redacted, 90-day retention."
+    },
+    {
+      "name": "list_apps",
+      "description": "List your published apps on ProAppStore."
+    },
+    {
+      "name": "deploy_status",
+      "description": "Check the deploy status of a Pro app (last 5 GitHub Actions runs)."
+    },
+    {
+      "name": "schema_status",
+      "description": "Show an app's D1 migration status (#33) — recent deploy-time migration attempts and whether the latest one applied or FAILED."
+    },
+    {
+      "name": "list_templates",
+      "description": "List the approved ProAppStore app templates and the selection contract: id, purpose, supported categories, required SDK/CLI/Node, capabilities, sec…"
+    },
+    {
+      "name": "app_info",
+      "description": "Get info about any app on ProAppStore — live URL, repo, data worker, store listing."
+    },
+    {
+      "name": "platform_guide",
+      "description": "Get the ProAppStore platform guide (skills.md) for AI-assisted development."
+    },
+    {
+      "name": "sdk_reference",
+      "description": "Quick reference for @proappstore/sdk — imports, features, and usage patterns."
+    },
+    {
+      "name": "recipe",
+      "description": "Get a pre-built code recipe for common PAS app patterns (CRUD list, forms, modals, maps, AI chat, notifications, etc.)."
+    },
+    {
+      "name": "list_app_tools",
+      "description": "One app's registered tools (names, reads/writes, descriptions; params on request)."
+    },
+    {
+      "name": "call_app_tool",
+      "description": "Call one app's registered tool through the platform action executor (mutations audited; refused in read-only mode)."
+    },
+    {
+      "name": "provision_pas_app",
+      "description": "Operator workflow: create or reuse a PAS app GitHub repo from template-app, configure deploy credentials/placeholders, provision platform infrastru…"
+    },
+    {
+      "name": "scaffold_app",
+      "description": "Create a new PAS app."
+    },
+    {
+      "name": "write_file",
+      "description": "Create or overwrite a file in a PAS app's GitHub repo."
+    },
+    {
+      "name": "read_file",
+      "description": "Read a file from a PAS app's GitHub repo."
+    },
+    {
+      "name": "list_files",
+      "description": "List all files in a PAS app's GitHub repo."
+    },
+    {
+      "name": "delete_file",
+      "description": "Delete a file from a PAS app's GitHub repo."
+    },
+    {
+      "name": "search_files",
+      "description": "Search for text across all files in a PAS app's GitHub repo."
+    },
+    {
+      "name": "get_deploy_status",
+      "description": "Check the latest deploy status for a PAS app (GitHub Actions workflow runs)."
+    },
+    {
+      "name": "provision_app",
+      "description": "Provision platform resources for a PAS app (R2 route, D1 database, data worker)."
+    },
+    {
+      "name": "publish_app",
+      "description": "Publish a PAS app to the storefront."
+    },
+    {
+      "name": "batch_write_files",
+      "description": "Write multiple files in a single commit to a PAS app's GitHub repo."
+    },
+    {
+      "name": "create_app",
+      "description": "Create a new Agent Teams project (an app the AI team builds)."
+    },
+    {
+      "name": "list_projects",
+      "description": "List your Agent Teams projects (apps in progress)."
+    },
+    {
+      "name": "get_project",
+      "description": "Get one project's status (play state, cost, repo, etc.)."
+    },
+    {
+      "name": "build_knowledge_base",
+      "description": "Trigger the Architect to research the app (it has live web access) and write/refresh its Knowledge Base (KNOWLEDGE.md + docs/)."
+    },
+    {
+      "name": "chat_agent",
+      "description": "Send a message to a conversational agent."
+    },
+    {
+      "name": "list_tickets",
+      "description": "List the project's tickets (the kanban) with status + assignee — use to watch the build loop progress."
+    },
+    {
+      "name": "list_agents",
+      "description": "Show the project's agent team — each agent's identity, system prompt source, skills, and model (the resolved catalog)."
+    },
+    {
+      "name": "get_project_files",
+      "description": "List the project's working-tree files (and optionally read one)."
+    },
+    {
+      "name": "set_project_budget",
+      "description": "Set the project's monthly cost cap in USD (1–1000)."
+    },
+    {
+      "name": "set_project_running",
+      "description": "Play (start) or pause the autonomous build loop."
+    },
+    {
+      "name": "run_tests",
+      "description": "Trigger a Playwright E2E test run for a project."
+    },
+    {
+      "name": "set_model",
+      "description": "Set the AI model for a specific agent role (BA, Dev, or QA)."
+    },
+    {
+      "name": "add_ticket",
+      "description": "Add a ticket to the project's backlog directly (bypasses the PO chat)."
+    },
+    {
+      "name": "update_ticket",
+      "description": "Edit an existing backlog ticket's wording: its title and/or its description and reasoning (`rawIdea` — the full statement of what to build/fix and…"
+    },
+    {
+      "name": "write_project_files",
+      "description": "Directly write files into an Agent Teams project's working tree — agent-free build, for when YOUR client writes the code instead of the BYO-key age…"
+    },
+    {
+      "name": "delete_project_files",
+      "description": "Delete files from an Agent Teams project's working tree (agent-free)."
+    },
+    {
+      "name": "deploy_project",
+      "description": "Deploy the project's current working tree with NO agent/LLM — pushes to GitHub and runs CI."
+    },
+    {
+      "name": "agent_project_status",
+      "description": "Get the agent team's project status for an app — running/paused, monthly cost, budget cap."
+    },
+    {
+      "name": "agent_board",
+      "description": "Full Kanban board — all tickets with status, assignee, iteration count, cost."
+    },
+    {
+      "name": "agent_activity",
+      "description": "Activity log (audit trail) for an app's agent team."
+    },
+    {
+      "name": "agent_ticket_detail",
+      "description": "One ticket's full conversation — all agent messages."
+    },
+    {
+      "name": "agent_cost",
+      "description": "Cost breakdown for an app's agent team — per-role spend, token counts."
+    },
+    {
+      "name": "qa_list_flows",
+      "description": "List an app's browser e2e test flows."
+    },
+    {
+      "name": "qa_save_flow",
+      "description": "Create or update ONE browser e2e test flow (owner only)."
+    },
+    {
+      "name": "qa_delete_flow",
+      "description": "Delete a browser e2e test flow (owner only)."
+    },
+    {
+      "name": "qa_run",
+      "description": "Queue headless browser test run(s) for an app on the platform (Cloudflare Browser Rendering)."
+    },
+    {
+      "name": "qa_list_runs",
+      "description": "List an app's recent test runs (status, steps passed/total, failed step + error, trigger)."
+    },
+    {
+      "name": "qa_run_artifacts",
+      "description": "List a run's screenshot artifacts (name, size)."
+    },
+    {
+      "name": "qa_flow_playwright",
+      "description": "Get a flow transpiled to a Playwright .spec.ts (for CI parity — run the same flow under Playwright)."
+    },
+    {
+      "name": "qa_mint_key",
+      "description": "Mint a scoped QA API key for an app (owner only)."
+    }
+  ],
+  "_meta": {
+    "io.github.proappstore-online/platform": {
+      "auth": {
+        "type": "oauth2",
+        "flows": [
+          "authorization_code"
+        ],
+        "pkce": "S256",
+        "authorization_url": "https://mcp.proappstore.online/authorize",
+        "token_url": "https://mcp.proappstore.online/token",
+        "registration_url": "https://mcp.proappstore.online/register",
+        "alternative": "Authorization: Bearer <PAS session JWT>"
+      },
+      "app_scoped_endpoints": {
+        "pattern": "https://mcp.proappstore.online/mcp/apps/<app_id>",
+        "note": "Registers that app's mcp.json tools under their manifest names, plus whoami and mcp_audit_log. The shared /mcp endpoint never registers app tools; use list_app_tools then call_app_tool. Large manifests are exposed progressively (core tools resident, the rest via discover_tools / describe_tool)."
+      },
+      "dynamic_tools": "The tools list above is the fixed shared set (src/tool-count.ts). App endpoints add per-app tools that vary by app and are not enumerated here.",
+      "safety": {
+        "read_only_mode": "MCP_READ_ONLY=1 blocks every mutating tool server-wide; reads and dry-runs still work",
+        "confirm_required": [
+          "delete_file",
+          "provision_pas_app",
+          "publish_app",
+          "scaffold_app"
+        ],
+        "dry_run_supported": [
+          "delete_file",
+          "delete_project_files",
+          "deploy_project",
+          "provision_app",
+          "provision_pas_app",
+          "publish_app",
+          "scaffold_app"
+        ],
+        "audit": "every mutating call, dry-run and read-only denial is recorded per user (90 days, secrets redacted); read it with mcp_audit_log",
+        "errors": "failures return isError: true"
+      },
+      "tool_groups": {
+        "connection": [
+          "whoami",
+          "mcp_audit_log"
+        ],
+        "platform": [
+          "list_apps",
+          "deploy_status",
+          "schema_status",
+          "list_templates",
+          "app_info",
+          "platform_guide",
+          "sdk_reference",
+          "recipe"
+        ],
+        "app tools": [
+          "list_app_tools",
+          "call_app_tool"
+        ],
+        "project": [
+          "provision_pas_app",
+          "scaffold_app",
+          "write_file",
+          "read_file",
+          "list_files",
+          "delete_file",
+          "search_files",
+          "get_deploy_status",
+          "provision_app",
+          "publish_app",
+          "batch_write_files"
+        ],
+        "agent teams": [
+          "create_app",
+          "list_projects",
+          "get_project",
+          "build_knowledge_base",
+          "chat_agent",
+          "list_tickets",
+          "list_agents",
+          "get_project_files",
+          "set_project_budget",
+          "set_project_running",
+          "run_tests",
+          "set_model",
+          "add_ticket",
+          "update_ticket",
+          "write_project_files",
+          "delete_project_files",
+          "deploy_project"
+        ],
+        "agent introspection": [
+          "agent_project_status",
+          "agent_board",
+          "agent_activity",
+          "agent_ticket_detail",
+          "agent_cost"
+        ],
+        "qa": [
+          "qa_list_flows",
+          "qa_save_flow",
+          "qa_delete_flow",
+          "qa_run",
+          "qa_list_runs",
+          "qa_run_artifacts",
+          "qa_flow_playwright",
+          "qa_mint_key"
+        ]
+      },
+      "docs": {
+        "agents": "https://github.com/proappstore-online/platform/blob/main/packages/mcp/AGENTS.md",
+        "readme": "https://github.com/proappstore-online/platform/blob/main/packages/mcp/README.md",
+        "llms": "https://github.com/proappstore-online/platform/blob/main/packages/mcp/llms.txt",
+        "app_tools": "https://docs.proappstore.online/mcp-app-tools/",
+        "platform_guide": "https://proappstore.online/skills.md"
+      }
+    }
+  }
+}
