@@ -444,7 +444,7 @@ The app scaffold includes a design system in `src/index.css` with CSS custom pro
 | `var(--paper)` | Page background |
 | `var(--line)` | Border color |
 | `var(--panel-hover)` | Hover state for panels/rows |
-| `var(--error)` | Error/destructive state |
+| `var(--danger)` | Error/destructive state (`--danger-soft` for the background) |
 
 ### Layout
 

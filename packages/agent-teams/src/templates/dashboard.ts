@@ -364,7 +364,7 @@ export function ItemList({ userId }: { userId: string }) {
           {items.map((item) => (
             <a key={item.id} href={'#/item/' + item.id} className="card flex items-center gap-3 hover:border-[var(--accent)] transition-colors block">
               <div className={'w-2 h-2 rounded-full flex-shrink-0 ' +
-                (item.priority === 'high' ? 'bg-[var(--error)]' : item.priority === 'medium' ? 'bg-[var(--warning)]' : 'bg-[var(--muted)]')} />
+                (item.priority === 'high' ? 'bg-[var(--danger)]' : item.priority === 'medium' ? 'bg-[var(--warning)]' : 'bg-[var(--muted)]')} />
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-sm text-[var(--ink-strong)]">{item.title}</div>
                 {item.description && <div className="text-xs text-muted truncate">{item.description}</div>}
@@ -414,7 +414,7 @@ export function ItemDetail({ id, userId, onUpdate }: { id: string; userId: strin
         <span className="text-muted">{new Date(item.created_at).toLocaleDateString()}</span>
       </div>
       {item.description && <p className="text-[var(--ink)] leading-relaxed whitespace-pre-wrap">{item.description}</p>}
-      <button onClick={handleDelete} className="text-xs text-[var(--error)] hover:underline">Delete permanently</button>
+      <button onClick={handleDelete} className="text-xs text-[var(--danger)] hover:underline">Delete permanently</button>
     </div>
   )
 }

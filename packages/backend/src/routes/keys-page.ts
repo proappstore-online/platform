@@ -16,27 +16,27 @@ export function renderKeysPage(opts: { returnUrl: string; provider: string; appI
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>API Keys — ProAppStore</title>
   <style>
-    :root { --accent: #7c3aed; --bg: #ffffff; --surface: #f8fafc; --ink: #0f172a; --muted: #64748b; --border: #e2e8f0; --danger: #dc2626; --success: #16a34a; }
+    :root { --accent: #7c3aed; --paper: #ffffff; --panel: #f8fafc; --ink: #0f172a; --muted: #64748b; --line: #e2e8f0; --danger: #dc2626; --danger-soft: #fef2f2; --success: #16a34a; --success-soft: #f0fdf4; --warning: #ca8a04; --warning-soft: #fefce8; }
     @media (prefers-color-scheme: dark) {
-      :root { --bg: #0f172a; --surface: #1e293b; --ink: #f1f5f9; --muted: #94a3b8; --border: #334155; }
+      :root { --paper: #0f172a; --panel: #1e293b; --ink: #f1f5f9; --muted: #94a3b8; --line: #334155; --danger: #f87171; --danger-soft: #450a0a; --success: #4ade80; --success-soft: #052e16; --warning: #facc15; --warning-soft: #422006; }
     }
     *, *::before, *::after { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-size: 15px; line-height: 1.5; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-size: 15px; line-height: 1.5; }
     .wrap { max-width: 32rem; margin: 0 auto; padding: 2rem 1rem; }
     h1 { font-size: 1.5rem; font-weight: 800; margin: 0 0 0.25rem; }
     .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.5rem; }
-    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 0.75rem; padding: 1rem; margin-bottom: 0.75rem; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 0.75rem; padding: 1rem; margin-bottom: 0.75rem; }
     .card h3 { margin: 0 0 0.25rem; font-size: 0.95rem; font-weight: 700; }
     .card .meta { font-size: 0.75rem; color: var(--muted); }
     .row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
     .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 9999px; font-size: 0.7rem; font-weight: 700; }
-    .badge-on { background: #dcfce7; color: var(--success); }
-    .badge-off { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
-    input[type="password"], input[type="text"] { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: 0.5rem; background: var(--bg); color: var(--ink); font-size: 0.85rem; font-family: inherit; margin: 0.5rem 0; }
+    .badge-on { background: var(--success-soft); color: var(--success); }
+    .badge-off { background: var(--panel); color: var(--muted); border: 1px solid var(--line); }
+    input[type="password"], input[type="text"] { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid var(--line); border-radius: 0.5rem; background: var(--paper); color: var(--ink); font-size: 0.85rem; font-family: inherit; margin: 0.5rem 0; }
     input:focus { outline: none; border-color: var(--accent); }
     .btn { display: inline-block; padding: 0.45rem 1rem; border: none; border-radius: 0.5rem; font-size: 0.85rem; font-weight: 600; cursor: pointer; font-family: inherit; }
     .btn-primary { background: var(--accent); color: #fff; }
-    .btn-ghost { background: transparent; color: var(--ink); border: 1px solid var(--border); }
+    .btn-ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
     .btn-danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .actions { display: flex; gap: 0.5rem; margin-top: 0.5rem; }

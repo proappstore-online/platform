@@ -101,7 +101,7 @@ Pro primitives (read_docs has exact return shapes — check before assuming fiel
 - Other: \`app.maps\` (geocode/route), \`app.webhooks.list()\`/\`register(event, url)\`/\`remove(id)\`, \`app.usage\` (telemetry, auto-started).
 
 Design system (CSS classes in src/index.css):
-- Colors: var(--paper), var(--ink), var(--muted), var(--accent), var(--line), var(--panel), var(--error), var(--success)
+- Colors: var(--paper), var(--ink), var(--muted), var(--accent), var(--line), var(--panel), var(--danger), var(--success), var(--warning) (+ -soft backgrounds)
 - Layout: \`.card\` (bordered panel), \`.empty-state\` (centered message)
 - Buttons: \`.btn .btn-primary\` (accent filled), \`.btn .btn-secondary\` (outlined), \`.btn .btn-ghost\` (transparent)
 - Forms: \`.input\` (styled input/select with focus ring)

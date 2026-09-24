@@ -354,9 +354,13 @@ export default function App() {
   --line-strong: #d1d5db;
   --panel: rgba(255, 255, 255, 0.72);
   --panel-hover: rgba(0, 0, 0, 0.03);
-  --error: #dc2626;
+  /* Semantic status tokens (DESIGN-SYSTEM.md): solid + -soft background pair. */
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
   --success: #16a34a;
+  --success-soft: #f0fdf4;
   --warning: #ca8a04;
+  --warning-soft: #fefce8;
   --shadow: 0 1px 3px rgba(0,0,0,0.06);
   --shadow-lg: 0 4px 12px rgba(0,0,0,0.08);
   --radius: 12px;
@@ -380,6 +384,12 @@ export default function App() {
   --line-strong: #3a3a52;
   --panel: rgba(20, 20, 35, 0.72);
   --panel-hover: rgba(255, 255, 255, 0.04);
+  --danger: #f87171;
+  --danger-soft: #450a0a;
+  --success: #4ade80;
+  --success-soft: #052e16;
+  --warning: #facc15;
+  --warning-soft: #422006;
   --shadow: 0 1px 3px rgba(0,0,0,0.3);
   --shadow-lg: 0 4px 12px rgba(0,0,0,0.4);
 }
@@ -439,8 +449,9 @@ body {
   border-radius: 999px; font-size: 0.75rem; font-weight: 600;
 }
 .badge-accent { background: var(--accent-soft); color: var(--accent); }
-.badge-success { background: rgba(22,163,106,0.1); color: var(--success); }
-.badge-error { background: rgba(220,38,38,0.1); color: var(--error); }
+.badge-success { background: var(--success-soft); color: var(--success); }
+.badge-danger { background: var(--danger-soft); color: var(--danger); }
+.badge-warning { background: var(--warning-soft); color: var(--warning); }
 
 /* Empty state */
 .empty-state {

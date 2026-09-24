@@ -236,7 +236,7 @@ var(--muted)     /* Secondary text */
 var(--paper)     /* Background */
 var(--line)      /* Borders */
 var(--panel-hover) /* Hover state for panels */
-var(--error)     /* Error state */
+var(--danger)    /* Error / destructive state (with --danger-soft background) */
 \`\`\`
 
 ### Layout

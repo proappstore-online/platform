@@ -85,7 +85,7 @@ export function CreateItemForm({ onDone }: { onDone: () => void }) {
         <input value={title} onChange={e => setTitle(e.target.value)}
           className="input mt-1" placeholder="Enter title..." autoFocus />
       </label>
-      {error && <p className="text-sm text-[var(--error)]">{error}</p>}
+      {error && <p className="text-sm text-[var(--danger)]">{error}</p>}
       <div className="flex gap-2">
         <button type="submit" disabled={saving} className="btn btn-primary">
           <Save size={14} /> {saving ? 'Saving...' : 'Save'}

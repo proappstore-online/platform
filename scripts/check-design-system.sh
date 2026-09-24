@@ -8,9 +8,10 @@ FAIL=0
 # 1. Banned CSS variable names (old aliases)
 # Match --bg followed by : or ) but NOT --bg- (compound like --icon-bg)
 BANNED_VARS='var\(--bg\)|--bg\s*:|var\(--surface\b|--surface\s*:|var\(--border\b|--border\s*:|var\(--glass|--glass\s*:|var\(--dock|--dock\s*:|var\(--error\b|--error\s*:'
-# Scan CSS *and* inline styles in components (.tsx/.jsx). Generated theme strings
-# in *.ts scaffolds are intentionally self-contained and excluded.
-if grep -rn --include="*.css" --include="*.tsx" --include="*.jsx" -E "$BANNED_VARS" "${1:-.}" 2>/dev/null | grep -v node_modules | grep -v '.min.css' | grep -v 'prism' | grep -v 'test/fixtures' | grep -v '/dist/'; then
+# Scan CSS, inline styles in components (.tsx/.jsx) AND the generator / doc
+# strings in *.ts (#63): a theme a scaffold emits or a snippet the MCP serves is
+# what apps end up shipping. Test files may quote banned names as fixtures.
+if grep -rn --include="*.css" --include="*.tsx" --include="*.jsx" --include="*.ts" -E "$BANNED_VARS" "${1:-.}" 2>/dev/null | grep -v node_modules | grep -v '.min.css' | grep -v 'prism' | grep -v 'test/fixtures' | grep -v '/dist/' | grep -v '\.test\.tsx\?:' ; then
   echo "FAIL: Found banned CSS variable names. Use standard tokens from DESIGN-SYSTEM.md"
   echo "  --bg → --paper, --surface → --panel, --border → --line, --glass → --panel"
   FAIL=1
