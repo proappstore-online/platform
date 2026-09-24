@@ -20,6 +20,12 @@ const enc = new TextEncoder();
  * is rate-limited. Hashes are self-describing (`pbkdf2$<iter>$...`), so this
  * can be raised — or swapped for another KDF — later without breaking rows.
  */
+// #118 (self-registered adult accounts): kept at 100k. The Workers runtime caps
+// `deriveBits` at 100 000 iterations, so a real cost increase means a different
+// KDF (scrypt / Argon2 in WASM) — a separate change; the self-describing
+// "pbkdf2$<iter>$…" format lets rows migrate when it lands. Until then the
+// compensating controls are the 12-character floor and the common-password
+// denylist in lib/password-policy.ts.
 export const PBKDF2_ITERATIONS = 100_000;
 const SALT_BYTES = 16;
 const HASH_BYTES = 32; // 256-bit derived key

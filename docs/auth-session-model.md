@@ -171,6 +171,38 @@ Implemented foundation:
 The SDK uses these endpoints by default on every page the host serves (see
 "Default mode" below).
 
+### Self-service registration (#118)
+
+`POST /v1/auth/credentials/register` `{ email, password, displayName? }` creates
+an adult credential account (`id cred:<uuid>`, `provider credential`,
+`is_child 0`, `created_by NULL`, `roles ['user']` like every credential
+account). It is the deliberate reversal of "provision is the only creation
+path", with these controls:
+
+- **No enumeration.** The answer is always `202 { ok: true }`. A new address is
+  created; an already-registered address is left untouched and — when
+  `RESEND_API_KEY` is set — emailed a notice. Both paths hash the password. No
+  session is minted here: the caller signs in through `credentials/login` with
+  the email, so a duplicate registration by someone who does not hold the
+  existing password ends in the same `invalid login or password`.
+- **Password policy** (`lib/password-policy.ts`): 12 characters minimum (the
+  child `provision` path keeps 6), a common-password denylist with digit
+  padding stripped, no digits-only or single-repeated-character passwords, not
+  the email's local part. The KDF stays PBKDF2-SHA256 at 100 000 iterations —
+  the Workers runtime caps `deriveBits` there; a stronger KDF is a separate
+  change the self-describing hash format already allows.
+- **Abuse controls**: 10 attempts per client address per 15 minutes
+  (`credential_login_attempts` under a `register-ip:` key, independent of the
+  per-login lockout); `CREDENTIAL_SELF_REGISTRATION=0` turns the route off (403).
+- `credential_email` stays an identifier for finding the row, never a proof; it
+  is not verified.
+
+In platform-cookie mode the SDK's `auth.register(email, password, displayName?)`
+posts to `/.pas/auth/credentials/register` on the app origin (the host forwards
+it to the API with the visitor's address for rate limiting) and then signs in
+through `/.pas/auth/credentials/login`, which sets the HttpOnly cookie. The
+password is sent once and never stored client-side.
+
 ### Phase 3: Same-Origin API Mediation
 
 Status: started.

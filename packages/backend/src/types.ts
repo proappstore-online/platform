@@ -28,6 +28,10 @@ export interface Env {
    *  surfaces are never affected. Flip only after the hosted fleet is on
    *  @proappstore/sdk ≥ 1.16.46, where cookie mode is the default. */
   RETIRE_FRAGMENT_DELIVERY?: string;
+  /** Kill switch for anonymous credential self-registration (#118):
+   *  '0' / 'false' makes POST /v1/auth/credentials/register answer 403.
+   *  Unset = enabled. */
+  CREDENTIAL_SELF_REGISTRATION?: string;
   /** CF credentials for provisioning (D1, Pages, Workers). */
   CF_API_TOKEN: string;
   CF_ACCOUNT_ID: string;

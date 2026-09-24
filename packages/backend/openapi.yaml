@@ -2444,6 +2444,50 @@ paths:
           application/json:
             schema:
               type: object
+  /v1/auth/credentials/register:
+    post:
+      tags:
+      - Auth
+      summary: Self-service registration for a credential account (#118)
+      description: 'Anonymous. Creates an adult credential account (id cred:<uuid>, provider credential, is_child 0, created_by null) from an email + password. Always answers 202 { ok: true }: for a new address the account is created; for an already-registered address nothing changes and, when a sender is configured, that address is emailed a notice — no enumeration, and both paths hash the password. No session is minted: sign in through POST /v1/auth/credentials/login with the email. Policy: 12+ characters, common passwords refused. Rate-limited per client address (10 per 15 minutes) independently of the per-login lockout. Disabled when CREDENTIAL_SELF_REGISTRATION=0 (403). Browser apps use the SDK''s auth.register(), which goes through /.pas/auth/credentials/register on the app origin.'
+      operationId: post_v1_auth_credentials_register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - email
+              - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 12
+                  maxLength: 256
+                displayName:
+                  type: string
+                  maxLength: 80
+      responses:
+        '202':
+          description: Accepted — the account exists now, or existed already (indistinguishable by design)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        '400':
+          description: Invalid email, or the password fails the policy (the message says which)
+        '403':
+          description: Self-registration is disabled on this platform
+        '429':
+          description: Too many registrations from this address
+      security: []
   /v1/auth/credentials/reset-password:
     post:
       tags:

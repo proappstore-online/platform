@@ -252,6 +252,44 @@ describe('Auth.init', () => {
     });
   });
 
+  it('register: mediated 202 then the mediated sign-in; the password is never stored and errors carry the platform message (#118)', async () => {
+    const localStorage = {
+      getItem: vi.fn(() => { throw new Error('should not read storage'); }),
+      setItem: vi.fn(() => { throw new Error('should not write storage'); }),
+      removeItem: vi.fn(() => { throw new Error('should not clear storage'); }),
+    };
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/.pas/auth/credentials/register') {
+        expect(JSON.parse(String(init?.body))).toEqual({ email: 'alice@example.com', password: 'correct-horse-battery', displayName: 'Alice' });
+        return new Response(JSON.stringify({ ok: true }), { status: 202 });
+      }
+      if (url === '/.pas/auth/credentials/login') {
+        expect(JSON.parse(String(init?.body))).toEqual({ login: 'alice@example.com', password: 'correct-horse-battery' });
+        return new Response(JSON.stringify({ id: 'cred:1', login: 'Alice', roles: ['user'], appRoles: {} }), { status: 200 });
+      }
+      if (url === '/.pas/auth/me') return new Response(JSON.stringify({ id: 'cred:1', login: 'Alice', roles: ['user'], appRoles: {} }), { status: 200 });
+      return new Response('unexpected', { status: 500 });
+    });
+    vi.stubGlobal('window', { location: { hash: '', href: 'https://interns.proappstore.online/join', origin: 'https://interns.proappstore.online', pathname: '/join', search: '' }, localStorage });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const auth = new Auth('interns', 'https://api.proappstore.online', 'platform-cookie');
+    const user = await auth.register('alice@example.com', 'correct-horse-battery', 'Alice');
+    expect(user.login).toBe('Alice');
+    expect(auth.isSignedIn).toBe(true);
+    expect(auth.token).toBeNull();
+    expect(localStorage.setItem).not.toHaveBeenCalled();
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls.slice(0, 2)).toEqual(['/.pas/auth/credentials/register', '/.pas/auth/credentials/login']);
+    expect(urls.every((u) => u.startsWith('/.pas/'))).toBe(true);
+
+    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: 'that password is too common — pick something less guessable' }), { status: 400 }));
+    await expect(new Auth('interns', 'https://api.proappstore.online', 'platform-cookie').register('bob@example.com', 'password1234')).rejects.toThrow(/too common/);
+    fetchMock.mockImplementationOnce(async () => new Response('{}', { status: 429 }));
+    await expect(new Auth('interns', 'https://api.proappstore.online', 'platform-cookie').register('bob@example.com', 'a-long-enough-passphrase')).rejects.toThrow(/Too many registration attempts/);
+  });
+
   it('starts email sign-in through same-origin host auth in platform-cookie mode', async () => {
     const localStorage = {
       getItem: vi.fn(() => { throw new Error('should not read storage'); }),

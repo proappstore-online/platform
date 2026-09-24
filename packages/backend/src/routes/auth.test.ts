@@ -470,6 +470,94 @@ describe('POST /v1/auth/credentials/provision', () => {
   });
 });
 
+describe('POST /v1/auth/credentials/register (#118)', () => {
+  const env = (db: ReturnType<typeof fakeDb>, over: Record<string, unknown> = {}) => ({ DB: db, SESSION_SIGNING_KEY: KEY, ...over }) as never;
+  const register = (body: unknown, db: ReturnType<typeof fakeDb>, over: Record<string, unknown> = {}, ip = '203.0.113.7') =>
+    app.request('/v1/auth/credentials/register', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify(body),
+    }, env(db, over));
+  const login = (body: unknown, db: ReturnType<typeof fakeDb>) =>
+    app.request('/v1/auth/credentials/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, env(db));
+  const GOOD = { email: 'Alice@Example.com', password: 'correct-horse-battery-staple', displayName: 'Alice' };
+
+  it('creates an adult credential account (is_child 0, created_by null, normalized email) and answers 202 without a session', async () => {
+    const db = fakeDb();
+    const res = await register(GOOD, db);
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(db._users).toHaveLength(1);
+    const u = db._users[0]!;
+    expect(u).toMatchObject({ is_child: 0, created_by: null, credential_email: 'alice@example.com', login: 'Alice' });
+    expect(String(u.id)).toMatch(/^cred:/);
+    expect(String(u.password_hash)).toMatch(/^pbkdf2\$/);
+    expect(String(u.credential_login)).toMatch(/^[a-z]+-[a-z]+-[a-z]+$/);
+  });
+
+  it('the new account signs in by email through the unchanged login route, as a plain user', async () => {
+    const db = fakeDb();
+    await register(GOOD, db);
+    const res = await login({ login: 'alice@example.com', password: GOOD.password }, db);
+    expect(res.status).toBe(200);
+    const { token } = await res.json() as { token: string };
+    const me = await app.request('/v1/auth/me', { headers: { Authorization: `Bearer ${token}` } }, env(db));
+    expect((await me.json() as { roles: string[] }).roles).toEqual(['user']);
+    expect((await login({ login: 'alice@example.com', password: 'wrong-password-here' }, db)).status).toBe(401);
+  });
+
+  it('a duplicate email is indistinguishable from success (202, no second row) and notifies the address when a sender is configured', async () => {
+    const db = fakeDb();
+    await register(GOOD, db);
+    const sends: unknown[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('api.resend.com')) { sends.push(JSON.parse(String(init?.body))); return new Response('{}', { status: 200 }); }
+      throw new Error(`unexpected fetch ${String(input)}`);
+    }));
+    try {
+      const res = await register({ ...GOOD, password: 'another-long-passphrase' }, db, { RESEND_API_KEY: 're_test', EMAIL_FROM: 'ProAppStore <noreply@proappstore.online>' });
+      expect(res.status).toBe(202);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(db._users).toHaveLength(1);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(sends).toHaveLength(1);
+      expect(sends[0]).toMatchObject({ to: 'alice@example.com', subject: expect.stringMatching(/tried to register/) });
+      expect(JSON.stringify(sends[0])).not.toContain('another-long-passphrase');
+      // the original password still works; the attempt changed nothing
+      expect((await login({ login: 'alice@example.com', password: GOOD.password }, db)).status).toBe(200);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    // without a sender: still 202, nothing sent, nothing thrown
+    expect((await register(GOOD, db)).status).toBe(202);
+  });
+
+  it('enforces the adult password policy (12 chars, denylist) and email validity', async () => {
+    const db = fakeDb();
+    expect((await register({ email: 'a@example.com', password: 'short12345' }, db)).status).toBe(400);
+    const common = await register({ email: 'a@example.com', password: 'password1234' }, db);
+    expect(common.status).toBe(400);
+    expect(((await common.json()) as { error: string }).error).toMatch(/too common/);
+    expect((await register({ email: 'not-an-email', password: GOOD.password }, db)).status).toBe(400);
+    expect((await register({ password: GOOD.password }, db)).status).toBe(400);
+    expect(db._users).toHaveLength(0);
+    // the child provisioning path keeps its 6-character floor
+    const prov = await app.request('/v1/auth/credentials/provision', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await creatorToken()}` }, body: JSON.stringify({ password: 'abc123' }),
+    }, env(db));
+    expect(prov.status).toBe(200);
+  });
+
+  it('rate-limits per IP independently of the per-login lockout, and the kill switch answers 403', async () => {
+    const db = fakeDb();
+    for (let i = 0; i < 10; i++) expect((await register({ email: `u${i}@example.com`, password: GOOD.password }, db)).status).toBe(202);
+    const blocked = await register({ email: 'u11@example.com', password: GOOD.password }, db);
+    expect(blocked.status).toBe(429);
+    expect((await register({ email: 'u12@example.com', password: GOOD.password }, db, {}, '198.51.100.9')).status).toBe(202);
+    // the login lockout for one of those accounts is untouched by the registration counter
+    expect((await login({ login: 'u1@example.com', password: GOOD.password }, db)).status).toBe(200);
+    expect((await register(GOOD, fakeDb(), { CREDENTIAL_SELF_REGISTRATION: '0' })).status).toBe(403);
+  });
+});
+
 describe('POST /v1/auth/credentials/login', () => {
   const provision = async (body: unknown, db: ReturnType<typeof fakeDb>) =>
     app.request('/v1/auth/credentials/provision', {

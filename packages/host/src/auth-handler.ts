@@ -23,6 +23,7 @@ export async function handleAuthRoute(
   if (url.pathname === `${AUTH_PREFIX}/logout`) return authLogout(request);
   if (url.pathname === `${AUTH_PREFIX}/recover`) return authRecover(request);
   if (url.pathname === `${AUTH_PREFIX}/credentials/login`) return authCredentialsLogin(request, env);
+  if (url.pathname === `${AUTH_PREFIX}/credentials/register`) return authCredentialsRegister(request, env);
   if (url.pathname === `${AUTH_PREFIX}/email/start`) return authEmailStart(request, env, route);
 
   return noStore(new Response("Not found", { status: 404 }));
@@ -158,6 +159,33 @@ async function authCredentialsLogin(request: Request, env: Env): Promise<Respons
     "Set-Cookie": sessionCookie(token),
   });
   return new Response(user.body, { status: 200, headers });
+}
+
+// #118: self-registration, mediated so the app never talks to the API from JS.
+// The API answers 202 for a new account AND for an already-registered address
+// (no enumeration); no session is minted — the SDK signs in through
+// /credentials/login next, which sets the cookie. Status and body pass through.
+async function authCredentialsRegister(request: Request, env: Env): Promise<Response> {
+  if (request.method !== "POST") return methodNotAllowed("POST");
+  if (!isSameOriginMutation(request)) return noStore(new Response("Forbidden", { status: 403 }));
+
+  const body = (await request.json().catch(() => ({}))) as { email?: unknown; password?: unknown; displayName?: unknown };
+  const upstream = await env.API.fetch(
+    new Request(`${API_BASE}/v1/auth/credentials/register`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        // The API rate-limits registration per client address; forward the visitor's.
+        ...(request.headers.get("cf-connecting-ip") ? { "cf-connecting-ip": request.headers.get("cf-connecting-ip")! } : {}),
+      },
+      body: JSON.stringify({
+        email: typeof body.email === "string" ? body.email : "",
+        password: typeof body.password === "string" ? body.password : "",
+        ...(typeof body.displayName === "string" ? { displayName: body.displayName } : {}),
+      }),
+    }),
+  );
+  return noStore(upstream);
 }
 
 async function authEmailStart(request: Request, env: Env, route: Route): Promise<Response> {

@@ -157,6 +157,40 @@ export class Auth {
   }
 
   /**
+   * Self-service registration (#118): create a credential account for THIS
+   * person with an email + password, then sign them in. The platform answers
+   * the registration with 202 whether the address is new or already registered
+   * (no enumeration) and mints no session for it; the sign-in that follows is
+   * the ordinary credential login, so a duplicate registration by someone who
+   * does not know the existing password ends in the same "Invalid login or
+   * password" as any wrong password. The password is sent once and never
+   * stored client-side — only the resulting session is.
+   *
+   * Policy: 12+ characters, not a common password. In platform-cookie mode
+   * both calls go through the app origin (`/.pas/auth/credentials/*`), never
+   * to the API from JS.
+   *
+   * @throws on a policy / validation error (400, with the platform's message),
+   *   when registration is disabled (403), when rate-limited (429), or when the
+   *   sign-in that follows fails (401).
+   */
+  async register(email: string, password: string, displayName?: string): Promise<User> {
+    const body = JSON.stringify({ email, password, ...(displayName ? { displayName } : {}) });
+    const res = this.authMode === 'platform-cookie'
+      ? await fetch('/.pas/auth/credentials/register', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body })
+      : await fetch(new URL('/v1/auth/credentials/register', this.apiBase), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      let message = text;
+      try { message = (JSON.parse(text) as { error?: string }).error ?? text; } catch { /* plain text body */ }
+      if (res.status === 403) throw new Error('Registration is not enabled for this platform.');
+      if (res.status === 429) throw new Error('Too many registration attempts — please try again later.');
+      throw new Error(message || `Registration failed (${res.status})`);
+    }
+    return this.signInWithCredentials(email, password);
+  }
+
+  /**
    * Sign in with a provisioned username + password (no email, no OAuth).
    * These accounts are created by an adult via {@link provisionChild} — built
    * for students/children who don't have email. On success the platform mints

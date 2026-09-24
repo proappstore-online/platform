@@ -20,6 +20,8 @@ import type { Context } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError } from '../lib/auth.js';
 import { hashPassword, verifyPassword, dummyPasswordHash } from '../lib/password.js';
+import { checkSelfRegistrationPassword } from '../lib/password-policy.js';
+import { sendEmail } from '../lib/email.js';
 import { prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
 import {
   generateLogin, generatePassword, normalizeLogin, isValidLogin,
@@ -710,6 +712,87 @@ authRoutes.post('/auth/credentials/provision', async (c) => {
 // The `login` field takes either an animal-triple username or, for an adult
 // account provisioned with one, an email (0042). Both resolve to the same row
 // and the same session; the password check is unchanged.
+// ── POST /v1/auth/credentials/register — anonymous self-registration (#118) ──
+//
+// The deliberate policy reversal of the note above: anyone may create a
+// credential account for themselves with an email + password. Controls:
+//  - per-IP attempt limit, independent of the per-login lockout below
+//    (same store, namespaced key), and a kill switch (CREDENTIAL_SELF_REGISTRATION=0);
+//  - 12-character minimum + common-password denylist (lib/password-policy.ts);
+//  - NO enumeration: the answer is always 202 { ok: true }. A new account is
+//    created; an already-registered address is left untouched and, when a
+//    sender is configured, notified by email. Both paths hash the password, so
+//    timing does not tell them apart either. The caller signs in through
+//    /auth/credentials/login afterwards — no session is minted here;
+//  - the row is an adult's own: is_child = 0, created_by = NULL, roles ['user']
+//    like every credential account; credential_email is an identifier, never a
+//    proof (0042) and is not verified.
+export const REGISTER_RATE_LIMIT_PREFIX = 'register-ip:';
+
+authRoutes.post('/auth/credentials/register', async (c) => {
+  if (c.env.CREDENTIAL_SELF_REGISTRATION === '0' || c.env.CREDENTIAL_SELF_REGISTRATION === 'false') {
+    throw new HttpError('self-registration is disabled', 403);
+  }
+  const body = await c.req
+    .json<{ email?: unknown; password?: unknown; displayName?: unknown }>()
+    .catch(() => ({} as { email?: unknown; password?: unknown; displayName?: unknown }));
+  if (typeof body.email !== 'string' || body.email.trim() === '') throw new HttpError('email is required', 400);
+  const email = normalizeEmail(body.email);
+  if (!isValidEmail(email)) throw new HttpError('email must be a valid address', 400);
+  const policy = checkSelfRegistrationPassword(typeof body.password === 'string' ? body.password : '', email);
+  if (policy) throw new HttpError(policy, 400);
+  const password = body.password as string;
+  const displayName = typeof body.displayName === 'string' ? body.displayName.trim().slice(0, 80) : '';
+
+  // Per-IP limit: every attempt counts, successful or not, so a flood of
+  // registrations from one address stops at MAX_ATTEMPTS per window.
+  const store = d1AttemptStore(c.env.DB);
+  const now = Date.now();
+  const ipKey = `${REGISTER_RATE_LIMIT_PREFIX}${c.req.header('cf-connecting-ip') ?? 'unknown'}`;
+  if (await isBlocked(store, ipKey, now)) {
+    await recordAuthFailure(c.env, { reason: 'register_rate_limited', status: 429, cfRay: c.req.header('cf-ray') ?? null });
+    throw new HttpError('too many registrations from this address — please try again later', 429);
+  }
+  await recordFailure(store, ipKey, now);
+
+  const passwordHash = await hashPassword(password);
+  const uid = `cred:${crypto.randomUUID()}`;
+  const display = displayName || email.split('@')[0]!;
+  // The login triple is generated: an email account signs in by email, but the
+  // credential_login column is NOT NULL + unique, so it gets a fresh triple too.
+  for (let i = 0; i < 6; i++) {
+    const login = generateLogin();
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO users (id, provider, provider_id, login, email, avatar_url, is_child,
+           credential_login, credential_email, password_hash, created_by, created_at, last_login_at)
+         VALUES (?1, 'credential', ?1, ?2, NULL, NULL, ?3, ?4, ?8, ?5, ?6, ?7, ?7)`,
+      ).bind(uid, display, 0, login, passwordHash, null, now, email).run();
+      return c.json({ ok: true }, 202);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '';
+      const isUnique = /UNIQUE constraint failed/i.test(message);
+      if (isUnique && /credential_email/i.test(message)) {
+        // Registered already. Same answer as success; tell the address owner.
+        const apiKey = c.env.RESEND_API_KEY;
+        if (apiKey) {
+          const notice = sendEmail({ apiKey, from: c.env.EMAIL_FROM ?? 'ProAppStore <noreply@proappstore.online>' }, {
+            to: email,
+            subject: 'Someone tried to register with your email on ProAppStore',
+            text: 'A registration was just attempted with this email address, which already has a ProAppStore account. If that was you, sign in with your existing password or reset it. If it was not you, no action is needed — nothing was changed.',
+            html: '<p>A registration was just attempted with this email address, which already has a ProAppStore account.</p><p>If that was you, sign in with your existing password or reset it. If it was not you, no action is needed — nothing was changed.</p>',
+          }).catch(() => undefined);
+          try { c.executionCtx.waitUntil(notice); } catch { void notice; }
+        }
+        return c.json({ ok: true }, 202);
+      }
+      if (isUnique) continue; // generated login collision — try a fresh triple
+      throw err;
+    }
+  }
+  throw new HttpError('could not generate a unique login, please retry', 503);
+});
+
 authRoutes.post('/auth/credentials/login', async (c) => {
   const body = await c.req
     .json<{ login?: string; password?: string }>()

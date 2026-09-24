@@ -198,6 +198,40 @@ describe("host auth token-handler routes", () => {
     });
   });
 
+  it("mediates self-registration to the API without a session and passes the 202 through (#118)", async () => {
+    const apiFetch = vi.fn(async (request: Request) => {
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/v1/auth/credentials/register");
+      expect(request.method).toBe("POST");
+      expect(request.headers.get("Authorization")).toBeNull();
+      expect(request.headers.get("cf-connecting-ip")).toBe("203.0.113.7");
+      expect(JSON.parse(await request.text())).toEqual({ email: "alice@example.com", password: "correct-horse-battery", displayName: "Alice" });
+      return Response.json({ ok: true }, { status: 202 });
+    });
+    const env = makeEnv({ apiFetch });
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/auth/credentials/register", {
+        method: "POST",
+        headers: { Origin: "https://meetup.proappstore.online", "Sec-Fetch-Site": "same-origin", "Content-Type": "application/json", "cf-connecting-ip": "203.0.113.7" },
+        body: JSON.stringify({ email: "alice@example.com", password: "correct-horse-battery", displayName: "Alice" }),
+      }),
+      env,
+      ctx(),
+    );
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(res.headers.get("Set-Cookie")).toBeNull();
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    // cross-site POSTs are refused before reaching the API
+    const forbidden = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/auth/credentials/register", { method: "POST", headers: { Origin: "https://evil.example", "Sec-Fetch-Site": "cross-site", "Content-Type": "application/json" }, body: "{}" }),
+      env,
+      ctx(),
+    );
+    expect(forbidden.status).toBe(403);
+  });
+
   it("signs in credentials through the API and stores the session in an HttpOnly cookie", async () => {
     const apiFetch = vi.fn(async (request: Request) => {
       const url = new URL(request.url);
