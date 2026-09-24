@@ -203,3 +203,62 @@ describe('MCP transport auth', () => {
     expect(servedMock.calls).toEqual([]);
   });
 });
+
+// #112: a protocol client pointed at the origin instead of /mcp must get the
+// JSON-RPC 405 ("wrong number"), never a 200 with a non-stream body — which a
+// client reads as "stream opened, then dropped" and redials ~1/sec forever.
+// Every one of those redials is a 200, spends no tokens and never reaches the
+// audit log or the tool-call rate limiter, so nothing else would catch it.
+describe('landing page refuses MCP protocol clients (#112)', () => {
+  const ORIGIN = 'https://mcp.proappstore.online/';
+  const expect405 = async (res: Response) => {
+    expect(res.status).toBe(405);
+    expect(res.headers.get('content-type')).toBe('application/json');
+    expect(res.headers.get('allow')).toBe('GET, HEAD');
+    const body = await res.json() as { jsonrpc: string; id: null; error: { code: number; message: string } };
+    expect(body.jsonrpc).toBe('2.0');
+    expect(body.id).toBeNull();
+    expect(body.error.code).toBe(-32000);
+    expect(body.error.message).toContain('https://mcp.proappstore.online/mcp');
+    expect(servedMock.calls).toEqual([]);
+  };
+
+  it('405s the legacy SSE transport: GET / with Accept: text/event-stream', async () => {
+    const res = await worker.fetch(new Request(ORIGIN, { headers: { Accept: 'text/event-stream' } }), env, ctx);
+    await expect405(res);
+  });
+
+  it('405s a JSON-RPC POST to / (streamable transport probing the origin)', async () => {
+    const res = await worker.fetch(new Request(ORIGIN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize' }),
+    }), env, ctx);
+    await expect405(res);
+  });
+
+  it('405s a browser-ish Accept list that still includes the event stream', async () => {
+    const res = await worker.fetch(new Request(ORIGIN, { headers: { Accept: 'text/html, text/event-stream;q=0.9' } }), env, ctx);
+    await expect405(res);
+  });
+
+  it('still serves a plain GET as the human landing page', async () => {
+    const res = await worker.fetch(new Request(ORIGIN, { headers: { Accept: 'text/html' } }), env, ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('text/plain');
+    expect(await res.text()).toContain('ProAppStore MCP Server');
+  });
+
+  it('leaves HEAD and OPTIONS alone so CORS preflight is unaffected', async () => {
+    for (const method of ['HEAD', 'OPTIONS']) {
+      const res = await worker.fetch(new Request(ORIGIN, { method }), env, ctx);
+      expect(res.status, method).toBe(200);
+    }
+  });
+
+  it('does not touch /mcp itself — the transport keeps answering 401 + challenge', async () => {
+    const res = await worker.fetch(new Request('https://mcp.proappstore.online/mcp', { headers: { Accept: 'text/event-stream' } }), env, ctx);
+    expect(res.status).toBe(401);
+    expect(res.headers.get('WWW-Authenticate')).toContain('resource_metadata');
+  });
+});
