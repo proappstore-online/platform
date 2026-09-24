@@ -1,0 +1,81 @@
+name: Platform Compliance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  compliance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        # The template repo intentionally contains APPNAME placeholders.
+        # Build the web workspace directly so the normal app compliance
+        # prebuild runs only after pas create has substituted a real app id.
+        run: pnpm --filter @APPNAME/web build
+
+      - name: MIT License
+        run: grep -qi "MIT" LICENSE
+
+      - name: No .env.production in repo
+        run: test ! -f .env.production && test ! -f web/.env.production
+
+      - name: No tracking
+        run: |
+          FORBIDDEN="google-analytics|gtag|amplitude|mixpanel|segment|hotjar|plausible|posthog"
+          ! grep -rE "$FORBIDDEN" web/src/ 2>/dev/null
+          ! grep -E "$FORBIDDEN" web/package.json 2>/dev/null
+
+      - name: Brand fonts
+        run: |
+          CSS_FILE=$(find web/src -name "index.css" | head -1)
+          grep -qi "manrope" "$CSS_FILE"
+          grep -qi "fraunces" "$CSS_FILE"
+
+      - name: CSS variables
+        run: |
+          CSS_FILE=$(find web/src -name "index.css" | head -1)
+          grep -q "\-\-paper" "$CSS_FILE"
+          grep -q "\-\-ink" "$CSS_FILE"
+          grep -q "\-\-accent" "$CSS_FILE"
+
+      - name: HTML meta tags
+        run: |
+          grep -q 'lang=' web/index.html
+          grep -q 'viewport' web/index.html
+          grep -q '<title>' web/index.html
+
+      - name: PWA meta tags
+        run: grep -qi "apple-mobile-web-app-capable\|mobile-web-app-capable" web/index.html
+
+      - name: ProAppStore link
+        run: grep -r "proappstore.online" web/src/ | grep -q .
+
+      - name: Dark mode
+        run: grep -rE "prefers-color-scheme|data-theme|color-scheme" web/src/ | grep -q .
+
+      - name: pnpm workspace
+        run: |
+          grep -q "pnpm" package.json
+          test -f pnpm-workspace.yaml
+
+      - name: Bundle size
+        run: |
+          BUNDLE=$(find web/dist -name "*.js" -path "*/assets/*" | sort -rn | head -1)
+          if [ -n "$BUNDLE" ]; then
+            GZIP_SIZE=$(gzip -c "$BUNDLE" | wc -c)
+            echo "Bundle gzipped: $((GZIP_SIZE / 1024))KB"
+            test "$GZIP_SIZE" -lt 307200
+          fi

@@ -190,7 +190,7 @@ function hasUnsafeNotNullAddColumn(statement: string): boolean {
 type MigrationLintError = { statement: string; reason: string };
 
 /** Returns the first unsafe statement, or null if all pass. */
-function forbiddenMigrationStatement(sql: string): MigrationLintError | null {
+export function forbiddenMigrationStatement(sql: string): MigrationLintError | null {
   const statements = stripSqlComments(sql).split(';').map((s) => s.trim()).filter((s) => s.length > 0);
   for (const stmt of statements) {
     if (MIGRATE_FORBIDDEN.test(stmt) || !MIGRATE_ALLOWED_START.test(stmt)) {

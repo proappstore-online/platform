@@ -1,0 +1,28 @@
+{
+  "migrations": [
+    {
+      "name": "0001_listings",
+      "sql": "CREATE TABLE IF NOT EXISTS listings (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, owner_name TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active', title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '', location TEXT NOT NULL DEFAULT '', lat REAL, lng REAL, price REAL, price_unit TEXT NOT NULL DEFAULT '', images TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_listings_owner ON listings (owner_id, created_at DESC); CREATE INDEX IF NOT EXISTS idx_listings_public ON listings (status, created_at DESC)"
+    },
+    {
+      "name": "0002_favorites",
+      "sql": "CREATE TABLE IF NOT EXISTS favorites (user_id TEXT NOT NULL, listing_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (user_id, listing_id)); CREATE INDEX IF NOT EXISTS idx_favorites_listing ON favorites (listing_id)"
+    },
+    {
+      "name": "0003_requests",
+      "sql": "CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, requester_id TEXT NOT NULL, requester_name TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', note TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_requests_listing ON requests (listing_id, status); CREATE INDEX IF NOT EXISTS idx_requests_requester ON requests (requester_id, created_at DESC)"
+    },
+    {
+      "name": "0004_messages",
+      "sql": "CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, sender_id TEXT NOT NULL, sender_name TEXT NOT NULL DEFAULT '', recipient_id TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages (listing_id, sender_id, recipient_id, created_at); CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages (recipient_id, created_at DESC)"
+    },
+    {
+      "name": "0005_reviews",
+      "sql": "CREATE TABLE IF NOT EXISTS reviews (id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, request_id TEXT NOT NULL UNIQUE, author_id TEXT NOT NULL, author_name TEXT NOT NULL DEFAULT '', rating INTEGER NOT NULL, comment TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_reviews_listing ON reviews (listing_id, created_at DESC)"
+    },
+    {
+      "name": "0006_safety",
+      "sql": "CREATE TABLE IF NOT EXISTS blocks (blocker_id TEXT NOT NULL, blocked_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (blocker_id, blocked_id)); CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks (blocked_id); CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY, reporter_id TEXT NOT NULL, reported_id TEXT NOT NULL, listing_id TEXT, reason TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_reports_reported ON reports (reported_id, created_at DESC)"
+    }
+  ]
+}

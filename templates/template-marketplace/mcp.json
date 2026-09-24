@@ -1,0 +1,500 @@
+{
+  "tools": [
+    {
+      "name": "list_listings",
+      "description": "Public catalogue page, newest first. Only active listings; keyset pagination \u2014 pass the last row's created_at as `before` for the next page. No personal data beyond the owner's chosen display name.",
+      "operation": "query",
+      "sql": "SELECT id, owner_id, owner_name, status, title, description, category, location, lat, lng, price, price_unit, images, created_at, updated_at FROM listings WHERE status = 'active' AND (:category IS NULL OR category = :category) AND (:before IS NULL OR created_at < :before) ORDER BY created_at DESC LIMIT 24",
+      "params": {
+        "category": {
+          "type": "string",
+          "description": "Filter by category",
+          "optional": true
+        },
+        "before": {
+          "type": "integer",
+          "description": "created_at of the last row on the previous page (keyset cursor)",
+          "optional": true
+        }
+      },
+      "requires_auth": false
+    },
+    {
+      "name": "search_listings",
+      "description": "Public search over active listings by title, description or location (substring match, case-insensitive). Same columns as list_listings.",
+      "operation": "query",
+      "sql": "SELECT id, owner_id, owner_name, status, title, description, category, location, lat, lng, price, price_unit, images, created_at, updated_at FROM listings WHERE status = 'active' AND (title LIKE '%' || :q || '%' OR description LIKE '%' || :q || '%' OR location LIKE '%' || :q || '%') ORDER BY created_at DESC LIMIT 50",
+      "params": {
+        "q": {
+          "type": "string",
+          "description": "Search text (no wildcards needed)"
+        }
+      },
+      "requires_auth": false
+    },
+    {
+      "name": "get_listing",
+      "description": "Public listing detail. Only active listings are visible to the public; an archived or paused listing returns no row.",
+      "operation": "query",
+      "sql": "SELECT id, owner_id, owner_name, status, title, description, category, location, lat, lng, price, price_unit, images, created_at, updated_at FROM listings WHERE id = :id AND status = 'active' LIMIT 1",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Listing id"
+        }
+      },
+      "requires_auth": false
+    },
+    {
+      "name": "list_reviews",
+      "description": "Public reviews of a listing, newest first. Exposes the reviewer's display name, never their id.",
+      "operation": "query",
+      "sql": "SELECT id, listing_id, author_name, rating, comment, created_at FROM reviews WHERE listing_id = :listing_id ORDER BY created_at DESC LIMIT 100",
+      "params": {
+        "listing_id": {
+          "type": "string",
+          "description": "Listing id"
+        }
+      },
+      "requires_auth": false
+    },
+    {
+      "name": "listing_stats",
+      "description": "Public rating summary for a listing: review count and average rating.",
+      "operation": "query",
+      "sql": "SELECT COUNT(*) AS review_count, AVG(rating) AS avg_rating FROM reviews WHERE listing_id = :listing_id LIMIT 1",
+      "params": {
+        "listing_id": {
+          "type": "string",
+          "description": "Listing id"
+        }
+      },
+      "requires_auth": false
+    },
+    {
+      "name": "list_my_listings",
+      "description": "The caller's own listings in every status, newest first.",
+      "operation": "query",
+      "sql": "SELECT id, owner_id, owner_name, status, title, description, category, location, lat, lng, price, price_unit, images, created_at, updated_at FROM listings WHERE owner_id = :__user_id ORDER BY created_at DESC LIMIT 200",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "get_my_listing",
+      "description": "One of the caller's own listings, in any status (for the edit form).",
+      "operation": "query",
+      "sql": "SELECT id, owner_id, owner_name, status, title, description, category, location, lat, lng, price, price_unit, images, created_at, updated_at FROM listings WHERE id = :id AND owner_id = :__user_id LIMIT 1",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Listing id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "create_listing",
+      "description": "Publish a listing owned by the caller. Idempotent under retry: the client supplies the id and a repeat is ignored (meta.changes = 0).",
+      "operation": "execute",
+      "sql": "INSERT OR IGNORE INTO listings (id, owner_id, owner_name, status, title, description, category, location, lat, lng, price, price_unit, images, created_at, updated_at) VALUES (:id, :__user_id, :owner_name, 'active', :title, :description, :category, :location, :lat, :lng, :price, :price_unit, :images, :__now, :__now)",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Client-generated listing id (crypto.randomUUID())"
+        },
+        "owner_name": {
+          "type": "string",
+          "description": "Display name shown on the listing"
+        },
+        "title": {
+          "type": "string",
+          "description": "Title"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description",
+          "default": ""
+        },
+        "category": {
+          "type": "string",
+          "description": "Category",
+          "default": ""
+        },
+        "location": {
+          "type": "string",
+          "description": "Free-text location",
+          "default": ""
+        },
+        "lat": {
+          "type": "number",
+          "description": "Latitude (optional map capability)",
+          "optional": true
+        },
+        "lng": {
+          "type": "number",
+          "description": "Longitude (optional map capability)",
+          "optional": true
+        },
+        "price": {
+          "type": "number",
+          "description": "Price",
+          "optional": true
+        },
+        "price_unit": {
+          "type": "string",
+          "description": "e.g. night, hour, month, fixed",
+          "default": ""
+        },
+        "images": {
+          "type": "string",
+          "description": "JSON array of public image keys",
+          "default": "[]"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "update_listing",
+      "description": "Edit one of the caller's own listings.",
+      "operation": "execute",
+      "sql": "UPDATE listings SET title = :title, description = :description, category = :category, location = :location, lat = :lat, lng = :lng, price = :price, price_unit = :price_unit, images = :images, updated_at = :__now WHERE id = :id AND owner_id = :__user_id",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Listing id"
+        },
+        "title": {
+          "type": "string",
+          "description": "Title"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description",
+          "default": ""
+        },
+        "category": {
+          "type": "string",
+          "description": "Category",
+          "default": ""
+        },
+        "location": {
+          "type": "string",
+          "description": "Location",
+          "default": ""
+        },
+        "lat": {
+          "type": "number",
+          "description": "Latitude",
+          "optional": true
+        },
+        "lng": {
+          "type": "number",
+          "description": "Longitude",
+          "optional": true
+        },
+        "price": {
+          "type": "number",
+          "description": "Price",
+          "optional": true
+        },
+        "price_unit": {
+          "type": "string",
+          "description": "Price unit",
+          "default": ""
+        },
+        "images": {
+          "type": "string",
+          "description": "JSON array of public image keys",
+          "default": "[]"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "set_listing_status",
+      "description": "Pause, re-activate or archive one of the caller's own listings. Archiving is the soft delete: history (requests, reviews, messages) stays intact.",
+      "operation": "execute",
+      "sql": "UPDATE listings SET status = :status, updated_at = :__now WHERE id = :id AND owner_id = :__user_id AND :status IN ('active', 'paused', 'archived')",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Listing id"
+        },
+        "status": {
+          "type": "string",
+          "description": "active | paused | archived"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "add_favorite",
+      "description": "Save an active listing to the caller's favourites (idempotent).",
+      "operation": "execute",
+      "sql": "INSERT OR IGNORE INTO favorites (user_id, listing_id, created_at) SELECT :__user_id, :listing_id, :__now WHERE EXISTS (SELECT 1 FROM listings l WHERE l.id = :listing_id AND l.status = 'active')",
+      "params": {
+        "listing_id": {
+          "type": "string",
+          "description": "Listing id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "remove_favorite",
+      "description": "Remove a listing from the caller's favourites.",
+      "operation": "execute",
+      "sql": "DELETE FROM favorites WHERE user_id = :__user_id AND listing_id = :listing_id",
+      "params": {
+        "listing_id": {
+          "type": "string",
+          "description": "Listing id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_my_favorites",
+      "description": "The caller's saved listings that are still active, most recently saved first.",
+      "operation": "query",
+      "sql": "SELECT l.id, l.owner_id, l.owner_name, l.status, l.title, l.description, l.category, l.location, l.lat, l.lng, l.price, l.price_unit, l.images, l.created_at, l.updated_at FROM favorites f JOIN listings l ON l.id = f.listing_id WHERE f.user_id = :__user_id AND l.status = 'active' ORDER BY f.created_at DESC LIMIT 200",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "list_my_favorite_ids",
+      "description": "Ids of everything the caller has saved (to mark cards in the catalogue).",
+      "operation": "query",
+      "sql": "SELECT listing_id FROM favorites WHERE user_id = :__user_id LIMIT 500",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "create_request",
+      "description": "Ask for a listing (book / apply / enquire). Refused silently (meta.changes = 0) when: the listing is not active, the caller owns it, either side has blocked the other, or the caller already has an open request on it. Idempotent under retry by client id.",
+      "operation": "execute",
+      "sql": "INSERT OR IGNORE INTO requests (id, listing_id, requester_id, requester_name, status, note, created_at, updated_at) SELECT :id, :listing_id, :__user_id, :requester_name, 'pending', :note, :__now, :__now FROM listings l WHERE l.id = :listing_id AND l.status = 'active' AND l.owner_id != :__user_id AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id = :__user_id AND b.blocked_id = l.owner_id) OR (b.blocker_id = l.owner_id AND b.blocked_id = :__user_id)) AND NOT EXISTS (SELECT 1 FROM requests r WHERE r.listing_id = :listing_id AND r.requester_id = :__user_id AND r.status IN ('pending', 'accepted'))",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Client-generated request id"
+        },
+        "listing_id": {
+          "type": "string",
+          "description": "Listing id"
+        },
+        "requester_name": {
+          "type": "string",
+          "description": "Display name shown to the owner"
+        },
+        "note": {
+          "type": "string",
+          "description": "Message to the owner",
+          "default": ""
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_my_requests",
+      "description": "Requests the caller has made, with the listing title, newest first.",
+      "operation": "query",
+      "sql": "SELECT r.id, r.listing_id, r.requester_id, r.status, r.note, r.created_at, r.updated_at, l.title AS listing_title, l.owner_id, l.owner_name FROM requests r JOIN listings l ON l.id = r.listing_id WHERE r.requester_id = :__user_id ORDER BY r.created_at DESC LIMIT 200",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "cancel_request",
+      "description": "Withdraw one of the caller's own open requests.",
+      "operation": "execute",
+      "sql": "UPDATE requests SET status = 'cancelled', updated_at = :__now WHERE id = :id AND requester_id = :__user_id AND status IN ('pending', 'accepted')",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Request id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_incoming_requests",
+      "description": "Requests on the caller's listings (owner view), newest first.",
+      "operation": "query",
+      "sql": "SELECT r.id, r.listing_id, r.requester_id, r.requester_name, r.status, r.note, r.created_at, r.updated_at, l.title AS listing_title FROM requests r JOIN listings l ON l.id = r.listing_id WHERE l.owner_id = :__user_id ORDER BY r.created_at DESC LIMIT 200",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "set_request_status",
+      "description": "Owner moves a request along its lifecycle. Guarded transition: only applies when the request is currently in `from` (pending \u2192 accepted | declined; accepted \u2192 completed | declined). A stale client sees meta.changes = 0.",
+      "operation": "execute",
+      "sql": "UPDATE requests SET status = :to, updated_at = :__now WHERE id = :id AND status = :from AND ((:from = 'pending' AND :to IN ('accepted', 'declined')) OR (:from = 'accepted' AND :to IN ('completed', 'declined'))) AND EXISTS (SELECT 1 FROM listings l WHERE l.id = requests.listing_id AND l.owner_id = :__user_id)",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Request id"
+        },
+        "from": {
+          "type": "string",
+          "description": "Current status the caller last saw"
+        },
+        "to": {
+          "type": "string",
+          "description": "New status"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "send_message",
+      "description": "Send a message about a listing. Threads always run between the listing's owner and one other person; refused (meta.changes = 0) when neither party owns the listing, when messaging yourself, or when either side has blocked the other.",
+      "operation": "execute",
+      "sql": "INSERT INTO messages (id, listing_id, sender_id, sender_name, recipient_id, body, created_at) SELECT :__uuid, :listing_id, :__user_id, :sender_name, :recipient_id, :body, :__now WHERE :recipient_id != :__user_id AND EXISTS (SELECT 1 FROM listings l WHERE l.id = :listing_id AND (l.owner_id = :__user_id OR l.owner_id = :recipient_id)) AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id = :__user_id AND b.blocked_id = :recipient_id) OR (b.blocker_id = :recipient_id AND b.blocked_id = :__user_id))",
+      "params": {
+        "listing_id": {
+          "type": "string",
+          "description": "Listing id"
+        },
+        "recipient_id": {
+          "type": "string",
+          "description": "The other party's user id"
+        },
+        "sender_name": {
+          "type": "string",
+          "description": "Display name shown to the recipient"
+        },
+        "body": {
+          "type": "string",
+          "description": "Message text"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_messages",
+      "description": "The thread between the caller and one other person about a listing, oldest first. Only the two parties can read it.",
+      "operation": "query",
+      "sql": "SELECT id, listing_id, sender_id, sender_name, recipient_id, body, created_at FROM messages WHERE listing_id = :listing_id AND ((sender_id = :__user_id AND recipient_id = :other_id) OR (sender_id = :other_id AND recipient_id = :__user_id)) ORDER BY created_at ASC LIMIT 500",
+      "params": {
+        "listing_id": {
+          "type": "string",
+          "description": "Listing id"
+        },
+        "other_id": {
+          "type": "string",
+          "description": "The other party's user id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_conversations",
+      "description": "The caller's threads, most recent activity first: listing, the other party, last message time.",
+      "operation": "query",
+      "sql": "SELECT m.listing_id, l.title AS listing_title, CASE WHEN m.sender_id = :__user_id THEN m.recipient_id ELSE m.sender_id END AS other_id, COALESCE(MAX(CASE WHEN m.sender_id != :__user_id THEN m.sender_name END), l.owner_name) AS other_name, MAX(m.created_at) AS last_at FROM messages m JOIN listings l ON l.id = m.listing_id WHERE m.sender_id = :__user_id OR m.recipient_id = :__user_id GROUP BY m.listing_id, other_id ORDER BY last_at DESC LIMIT 100",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "can_review",
+      "description": "Requests the caller completed on a listing that have no review yet \u2014 the only thing a review can attach to.",
+      "operation": "query",
+      "sql": "SELECT r.id AS request_id FROM requests r WHERE r.listing_id = :listing_id AND r.requester_id = :__user_id AND r.status = 'completed' AND NOT EXISTS (SELECT 1 FROM reviews v WHERE v.request_id = r.id) LIMIT 10",
+      "params": {
+        "listing_id": {
+          "type": "string",
+          "description": "Listing id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "create_review",
+      "description": "Review a listing after a completed request. One review per request (a repeat is ignored); refused unless the request is the caller's and completed.",
+      "operation": "execute",
+      "sql": "INSERT OR IGNORE INTO reviews (id, listing_id, request_id, author_id, author_name, rating, comment, created_at) SELECT :__uuid, r.listing_id, r.id, :__user_id, :author_name, :rating, :comment, :__now FROM requests r WHERE r.id = :request_id AND r.requester_id = :__user_id AND r.status = 'completed' AND :rating BETWEEN 1 AND 5",
+      "params": {
+        "request_id": {
+          "type": "string",
+          "description": "The completed request being reviewed"
+        },
+        "author_name": {
+          "type": "string",
+          "description": "Display name shown on the review"
+        },
+        "rating": {
+          "type": "integer",
+          "description": "1\u20135",
+          "max": 5
+        },
+        "comment": {
+          "type": "string",
+          "description": "Review text",
+          "default": ""
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "block_user",
+      "description": "Block another user: they can no longer message the caller or request the caller's listings (and vice versa). Idempotent.",
+      "operation": "execute",
+      "sql": "INSERT OR IGNORE INTO blocks (blocker_id, blocked_id, created_at) SELECT :__user_id, :blocked_id, :__now WHERE :blocked_id != :__user_id",
+      "params": {
+        "blocked_id": {
+          "type": "string",
+          "description": "User id to block"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "unblock_user",
+      "description": "Remove a block the caller placed.",
+      "operation": "execute",
+      "sql": "DELETE FROM blocks WHERE blocker_id = :__user_id AND blocked_id = :blocked_id",
+      "params": {
+        "blocked_id": {
+          "type": "string",
+          "description": "User id to unblock"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_blocks",
+      "description": "User ids the caller has blocked.",
+      "operation": "query",
+      "sql": "SELECT blocked_id, created_at FROM blocks WHERE blocker_id = :__user_id ORDER BY created_at DESC LIMIT 500",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "report_user",
+      "description": "Report another user, optionally about a specific listing. Reports are reviewed by the app owner (read with the platform's owner tooling, never exposed in-app).",
+      "operation": "execute",
+      "sql": "INSERT INTO reports (id, reporter_id, reported_id, listing_id, reason, note, created_at) SELECT :__uuid, :__user_id, :reported_id, :listing_id, :reason, :note, :__now WHERE :reported_id != :__user_id",
+      "params": {
+        "reported_id": {
+          "type": "string",
+          "description": "User id being reported"
+        },
+        "listing_id": {
+          "type": "string",
+          "description": "Listing the report is about",
+          "optional": true
+        },
+        "reason": {
+          "type": "string",
+          "description": "Short reason (spam, scam, abuse, other)"
+        },
+        "note": {
+          "type": "string",
+          "description": "Details",
+          "default": ""
+        }
+      },
+      "requires_auth": true
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "APPNAME",
+  "private": true,
+  "packageManager": "pnpm@10.30.3",
+  "engines": { "node": ">=22" },
+  "pnpm": { "onlyBuiltDependencies": ["esbuild"] },
+  "scripts": {
+    "dev": "pnpm --filter @APPNAME/web dev",
+    "prebuild": "npx -y @proappstore/cli@latest check",
+    "build": "pnpm --filter @APPNAME/web build",
+    "preview": "pnpm --filter @APPNAME/web preview",
+    "typecheck": "pnpm --filter @APPNAME/web exec tsc -b",
+    "test": "pnpm --filter @APPNAME/web exec tsc -b && node --no-warnings qa/actions.mjs"
+  }
+}

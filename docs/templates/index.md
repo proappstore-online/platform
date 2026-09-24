@@ -72,6 +72,13 @@ scores, what to extract and what must not be copied:
 [Template archetypes](./archetypes.md). None is in the catalogue until it
 exists as a reviewed template repository.
 
+The marketplace template (#191) is built and staged in this repository at
+`templates/template-marketplace/` — manifest, migrations, UI and negative tests — and
+validated by `test/template-marketplace.test.ts` against the platform's own registration
+and migration rules. It enters the catalogue once it is published as the GitHub template
+repository `proappstore-online/template-marketplace` (an org-owner action, since
+repository creation is disabled for members) and its reviewed commit is recorded.
+
 ## Adding, deprecating, withdrawing
 
 A template enters the catalogue only after it exists as a GitHub template
