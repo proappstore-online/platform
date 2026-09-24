@@ -254,6 +254,23 @@ describe("provisioning hygiene (#195)", () => {
     expect(yaml).toContain("--delete --no-progress");
   });
 
+  it("registers app tools BEFORE the R2 upload so a rejected manifest blocks the deploy (#120)", () => {
+    // Registering after the upload shipped the new frontend with the previous
+    // revision's actions for three commits (chess-academy, 2026-08-10/11).
+    const yaml = deployWorkflowYaml(ENV);
+    const migrations = yaml.indexOf("- name: Apply D1 migrations");
+    const register = yaml.indexOf("- name: Register app tools");
+    const mint = yaml.indexOf("- name: Mint deploy credentials");
+    const upload = yaml.indexOf("- name: Upload to R2");
+    expect(register).toBeGreaterThan(migrations); // schema before actions (#33)
+    expect(register).toBeLessThan(mint);
+    expect(mint).toBeLessThan(upload);
+    // Still a hard gate: a rejection exits non-zero.
+    const block = yaml.slice(register, mint);
+    expect(block).toContain("tools registration failed");
+    expect(block).toContain("exit 1");
+  });
+
   it("URL-encodes each KB upload path segment, keeping / as the separator", () => {
     const kb = buildAgentBundle({}, ENV)[KB_YAML]!;
     expect(kb).toContain(`jq -sRr 'split("/") | map(@uri) | join("/")'`);

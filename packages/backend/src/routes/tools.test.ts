@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { mainStatementVerb } from './tools.js';
 import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1');
@@ -847,6 +848,98 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
       { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Internal-Token': 'secret' }, body: JSON.stringify({ tools: [] }) },
       makeEnv({ INTERNAL_TOKEN: 'secret' }),
     );
+    expect(res.status).toBe(400);
+  });
+});
+
+// #120: a leading WITH / WITH RECURSIVE clause is a prefix, not a verb. The
+// registrar must validate the statement the CTE prefixes.
+describe('mainStatementVerb (#120)', () => {
+  it('returns the first token when there is no CTE', () => {
+    expect(mainStatementVerb('SELECT 1')).toBe('SELECT');
+    expect(mainStatementVerb('  insert into t values (1)')).toBe('INSERT');
+    expect(mainStatementVerb('')).toBeNull();
+  });
+
+  it('skips a single CTE and a recursive one', () => {
+    expect(mainStatementVerb('WITH a AS (SELECT 1) SELECT * FROM a')).toBe('SELECT');
+    expect(mainStatementVerb(
+      'WITH RECURSIVE tok(i, head, rest) AS (SELECT 0, NULL, :line UNION ALL SELECT i+1, substr(rest,1,4), substr(rest,6) FROM tok WHERE rest <> \'\') INSERT INTO puzzle_attempt_moves (attempt_id, ply, san) SELECT :attempt_id, i, head FROM tok WHERE i = :ply',
+    )).toBe('INSERT');
+  });
+
+  it('skips several CTEs, nested parens, column lists and MATERIALIZED hints', () => {
+    expect(mainStatementVerb(
+      'WITH a(x) AS NOT MATERIALIZED (SELECT count(*) FROM (SELECT 1)), b AS MATERIALIZED (SELECT x FROM a WHERE x IN (1,2)) UPDATE t SET n = (SELECT x FROM b) WHERE id = :id',
+    )).toBe('UPDATE');
+  });
+
+  it('is not fooled by parentheses or keywords inside string literals or comments', () => {
+    expect(mainStatementVerb("WITH a AS (SELECT ')' AS s, 'it''s (' AS t) DELETE FROM t WHERE s = 'AS (' AND id = :id")).toBe('DELETE');
+    expect(mainStatementVerb('WITH a AS (SELECT 1 -- ) SELECT\n) /* ) DROP */ INSERT INTO t SELECT * FROM a')).toBe('INSERT');
+  });
+
+  it('returns null for an unterminated CTE', () => {
+    expect(mainStatementVerb('WITH a AS (SELECT 1 SELECT * FROM a')).toBeNull();
+    expect(mainStatementVerb('WITH a AS SELECT 1')).toBeNull();
+  });
+});
+
+describe('PUT /v1/apps/:appId/tools — CTE-prefixed statements (#120)', () => {
+  const put = (tool: Record<string, unknown>) => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    return app.request(
+      '/v1/apps/test-app/tools',
+      { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools: [tool] }) },
+      makeEnv({}, db),
+    );
+  };
+  const cteInsert =
+    'WITH RECURSIVE tok(i, head, rest) AS (SELECT 0, NULL, :line UNION ALL SELECT i+1, substr(rest,1,4), substr(rest,6) FROM tok WHERE rest <> \'\') '
+    + 'INSERT INTO puzzle_attempt_moves (attempt_id, user_id, ply, san) SELECT :attempt_id, :__user_id, i, head FROM tok WHERE i = :ply';
+  const params = { line: { type: 'string' }, attempt_id: { type: 'string' }, ply: { type: 'integer' } };
+
+  it('accepts an execute tool whose INSERT is prefixed by WITH RECURSIVE (the chess-academy case)', async () => {
+    const res = await put({ ...validTool, name: 'submit_puzzle_move', operation: 'execute', sql: cteInsert, params });
+    expect(res.status).toBe(200);
+  });
+
+  it('accepts a CTE-prefixed UPDATE with a WHERE clause', async () => {
+    const res = await put({
+      ...validTool, name: 'bump', operation: 'execute', params: { id: { type: 'string' } },
+      sql: 'WITH n AS (SELECT count(*) AS c FROM moves WHERE user_id = :__user_id) UPDATE attempts SET moves = (SELECT c FROM n) WHERE id = :id AND user_id = :__user_id',
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('still requires WHERE on a CTE-prefixed UPDATE', async () => {
+    const res = await put({
+      ...validTool, name: 'bump_all', operation: 'execute', params: {},
+      sql: 'WITH n AS (SELECT 1 AS c) UPDATE attempts SET moves = (SELECT c FROM n)',
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('WHERE');
+  });
+
+  it('still rejects a CTE-prefixed SELECT registered as execute', async () => {
+    const res = await put({
+      ...validTool, name: 'peek', operation: 'execute', params: {},
+      sql: 'WITH a AS (SELECT 1) SELECT * FROM a WHERE user_id = :__user_id',
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('must not use SELECT');
+  });
+
+  it('rejects a CTE that prefixes DDL or an unknown verb', async () => {
+    const ddl = await put({ ...validTool, name: 'x', operation: 'execute', params: {}, sql: 'WITH a AS (SELECT 1) DROP TABLE items' });
+    expect(ddl.status).toBe(400);
+    const values = await put({ ...validTool, name: 'y', operation: 'execute', params: {}, sql: 'WITH a AS (SELECT 1) VALUES (1)' });
+    expect(values.status).toBe(400);
+    expect(((await values.json()) as { error: string }).error).toContain('SQL must start with');
+  });
+
+  it('rejects an unterminated CTE instead of guessing', async () => {
+    const res = await put({ ...validTool, name: 'z', operation: 'execute', params: {}, sql: 'WITH a AS (SELECT 1 INSERT INTO t SELECT * FROM a' });
     expect(res.status).toBe(400);
   });
 });
