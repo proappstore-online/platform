@@ -28,7 +28,12 @@ jobs:
       - name: Design system lint
         run: bash scripts/check-design-system.sh .
       - run: pnpm -r typecheck
-      - run: pnpm test
+      # #128: the unit suite with V8 coverage. Vitest enforces the floors in
+      # vitest.config.ts (global + per high-risk area) and fails the job under
+      # them; scripts/coverage-gaps.mjs prints the least-covered backend routes,
+      # libraries, data-worker and SDK files here and in the step summary.
+      - name: Tests with coverage
+        run: pnpm test:coverage
 
   # Cloudflare-runtime integration tests (#129): the backend and the data worker
   # run in workerd (@cloudflare/vitest-pool-workers) with a real D1 built from

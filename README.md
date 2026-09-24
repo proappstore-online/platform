@@ -98,6 +98,7 @@ Browser App
 pnpm install
 pnpm build          # build all packages
 pnpm test           # run tests
+pnpm test:coverage  # tests + coverage summary, thresholds and a gaps report
 pnpm test:runtime   # Cloudflare-runtime integration tests (workerd + real D1)
 ```
 
