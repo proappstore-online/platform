@@ -1,0 +1,201 @@
+name: Deploy to R2
+
+on:
+  push:
+    branches: [main]
+
+# Keyless deploy: the runner mints a GitHub OIDC token (no stored secret) and
+# exchanges it at the platform for short-lived, prefix-scoped R2 credentials.
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    outputs:
+      has_e2e: ${{ steps.e2e-check.outputs.has_e2e }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for an E2E suite
+        id: e2e-check
+        run: echo "has_e2e=$([ -d e2e ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: pnpm install --no-frozen-lockfile
+
+      - name: Build
+        env:
+          VITE_COMMIT_SHA: ${{ github.sha }}
+        run: pnpm build || (cd web 2>/dev/null || true; npx vite build)
+
+      - name: Locate build output
+        id: dist
+        run: |
+          if [ -d web/dist ]; then dir=web/dist
+          elif [ -d dist ]; then dir=dist
+          else echo "::error::No build output (looked for ./dist and ./web/dist)"; exit 1; fi
+          # Guard (#195): "Upload to R2" runs aws s3 sync --delete, which mirrors
+          # this directory onto the app's live prefix. A present-but-empty build
+          # (or one without an entry page) would delete every object of the
+          # running app. Refuse to deploy instead.
+          if [ ! -f "$dir/index.html" ]; then
+            echo "::error::$dir has no index.html — refusing to deploy (sync --delete would wipe the live app)"; exit 1
+          fi
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+
+      - name: Code-health scan (VCQA, report-only)
+        continue-on-error: true
+        run: |
+          npx -y @vibecodeqa/cli@0.44.0 --skip-tests . || true
+          if [ -f .vibe-check/report.json ]; then
+            mkdir -p "${{ steps.dist.outputs.dir }}/.vcqa"
+            cp .vibe-check/report.json "${{ steps.dist.outputs.dir }}/.vcqa/report.json"
+            [ -f .vibe-check/badge.svg ] && cp .vibe-check/badge.svg "${{ steps.dist.outputs.dir }}/.vcqa/badge.svg" || true
+          fi
+
+      - name: Apply D1 migrations (migrations.json -> platform, keyless)
+        if: hashFiles('migrations.json') != '' && !startsWith(github.event.repository.name, 'template-')
+        run: |
+          # Schema before code: apply the committed, additive-only migrations to
+          # this app's D1 BEFORE the new frontend uploads and BEFORE mcp.json
+          # actions register — so no action SQL ever references a column that
+          # isn't there yet. Authorized by the same verified GitHub OIDC claims
+          # as the deploy-credentials mint; the platform rejects any non-additive
+          # (DROP/RENAME/DELETE/UPDATE) statement. Idempotent via _migrations.
+          # HARD GATE: a migration failure fails the deploy — nothing ships.
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.proappstore.online" | jq -r '.value')
+          if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then echo "::error::could not obtain OIDC token"; exit 1; fi
+          RESP=$(curl -sS -X POST \
+            "https://api.proappstore.online/v1/apps/${{ github.event.repository.name }}/migrate/oidc" \
+            -H "Authorization: Bearer $OIDC" -H "Content-Type: application/json" \
+            --data-binary @migrations.json)
+          if echo "$RESP" | jq -e '.ok == true' >/dev/null; then
+            echo "Applied migration(s): $(echo "$RESP" | jq -c '.applied // []'); already: $(echo "$RESP" | jq -c '.already // []')"
+          else
+            echo "::error::migration failed: $(echo "$RESP" | jq -c '.error // .')"; exit 1
+          fi
+
+      - name: Register app tools (mcp.json -> platform, keyless)
+        if: hashFiles('mcp.json') != '' && !startsWith(github.event.repository.name, 'template-')
+        run: |
+          # Registered actions must never drift from the committed manifest:
+          # re-register mcp.json on every deploy, authorized by the same
+          # verified GitHub OIDC claims as the deploy-credentials mint.
+          # ORDER MATTERS (#120): this runs BEFORE the R2 upload. A rejected
+          # manifest must block the deploy — registering after the upload left
+          # the new frontend live with the previous revision's actions.
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.proappstore.online" | jq -r '.value')
+          if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then echo "::error::could not obtain OIDC token"; exit 1; fi
+          RESP=$(curl -sS -X PUT \
+            "https://api.proappstore.online/v1/apps/${{ github.event.repository.name }}/tools/oidc" \
+            -H "Authorization: Bearer $OIDC" -H "Content-Type: application/json" \
+            --data-binary @mcp.json)
+          if echo "$RESP" | jq -e '.ok == true' >/dev/null; then
+            echo "Registered $(echo "$RESP" | jq -r '.registered') app tool(s)"
+            echo "$RESP" | jq -r '.warnings[]? | "::warning::mcp.json: " + .'
+          else
+            echo "::error::tools registration failed: $(echo "$RESP" | jq -c '.error // .')"
+            # Schema coherence (#33): name each action + the missing column/table.
+            echo "$RESP" | jq -r '.details[]? | "::error::" + .'
+            exit 1
+          fi
+
+      - name: Mint deploy credentials (keyless — GitHub OIDC → platform)
+        run: |
+          # 1. Ask GitHub for an OIDC token scoped to the platform audience.
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.proappstore.online" | jq -r '.value')
+          if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then echo "::error::could not obtain OIDC token"; exit 1; fi
+          # 2. Exchange it for short-lived, prefix-scoped R2 credentials.
+          RESP=$(curl -sS -X POST \
+            "https://api.proappstore.online/v1/apps/${{ github.event.repository.name }}/deploy-credentials" \
+            -H "Authorization: Bearer $OIDC")
+          AKID=$(echo "$RESP" | jq -r '.accessKeyId // empty')
+          if [ -z "$AKID" ]; then echo "::error::deploy-credentials failed: $(echo "$RESP" | jq -c '.error // .')"; exit 1; fi
+          # 3. Export masked, ephemeral creds for the upload step.
+          echo "::add-mask::$(echo "$RESP" | jq -r '.secretAccessKey')"
+          echo "::add-mask::$(echo "$RESP" | jq -r '.sessionToken')"
+          {
+            echo "AWS_ACCESS_KEY_ID=$AKID"
+            echo "AWS_SECRET_ACCESS_KEY=$(echo "$RESP" | jq -r '.secretAccessKey')"
+            echo "AWS_SESSION_TOKEN=$(echo "$RESP" | jq -r '.sessionToken')"
+            echo "R2_ENDPOINT=$(echo "$RESP" | jq -r '.endpoint')"
+          } >> "$GITHUB_ENV"
+
+      - name: Upload to R2
+        env:
+          AWS_DEFAULT_REGION: auto
+        run: |
+          aws s3 sync "${{ steps.dist.outputs.dir }}" "s3://pas-apps/apps/${{ github.event.repository.name }}/" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --delete --no-progress
+          echo "Deployed apps/${{ github.event.repository.name }} from ${{ github.sha }}"
+
+  # Behavioural gate: drive the LIVE app in a real browser (the thing tsc/build
+  # can't check). Runs after deploy; a failure fails the run, so the deploy
+  # gate routes the ticket back to Dev with the Playwright output. Auth uses a
+  # platform fixture session via the SDK's real sign-in path (no test bypass);
+  # auth-gated specs skip when PAS_E2E_SESSION_TOKEN is unset.
+  e2e:
+    needs: deploy
+    if: needs.deploy.outputs.has_e2e == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install E2E deps
+        working-directory: e2e
+        run: npm install
+      - name: Install Playwright browser
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+      - name: Run E2E against the live app
+        id: e2e
+        continue-on-error: true
+        working-directory: e2e
+        env:
+          E2E_BASE_URL: https://${{ github.event.repository.name }}.proappstore.online
+          E2E_SESSION_TOKEN: ${{ secrets.PAS_E2E_SESSION_TOKEN }}
+        run: npx playwright test
+      - name: Publish test results (kb.proappstore.online/<app>/.e2e/summary.json)
+        if: always()
+        working-directory: e2e
+        env:
+          APP: ${{ github.event.repository.name }}
+        run: |
+          node -e '
+            const fs=require("fs");
+            let r={}; try{ r=JSON.parse(fs.readFileSync("results.json","utf8")); }catch{}
+            const s=r.stats||{}, specs=[];
+            const walk=(su=[])=>su.forEach(x=>{ (x.specs||[]).forEach(sp=>specs.push({title:[x.title,sp.title].filter(Boolean).join(" > "),ok:sp.ok!==false})); walk(x.suites||[]); });
+            walk(r.suites||[]);
+            fs.writeFileSync("summary.json", JSON.stringify({ ranAt:new Date().toISOString(), passed:s.expected||0, failed:s.unexpected||0, flaky:s.flaky||0, skipped:s.skipped||0, ok:(s.unexpected||0)===0, specs }));
+          '
+          # Keyless (#57): mint an OIDC token bound to this repo instead of the
+          # shared INTERNAL_TOKEN. kb-host derives the app prefix from the
+          # `repository` claim, so this run can only write its own app's prefix.
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=proappstore-kb-host" | jq -r '.value')
+          # Non-fatal: test results are diagnostics, not a deploy gate.
+          if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then
+            echo "skipped results upload (could not obtain OIDC token)"
+          elif curl -fsS -X PUT "https://kb.proappstore.online/_ingest/$APP/.e2e/summary.json" -H "Authorization: Bearer $OIDC" --data-binary @summary.json >/dev/null; then
+            echo "results → kb.proappstore.online/$APP/.e2e/summary.json"
+          else
+            echo "skipped results upload (ingest rejected the write)"
+          fi
+      - name: Fail the run if E2E failed (bounces the ticket to Dev)
+        if: steps.e2e.outcome != 'success'
+        run: echo "::error::E2E tests failed — see the results above" && exit 1

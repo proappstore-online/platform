@@ -82,6 +82,27 @@ describe('prepareActionBatch', () => {
     expect(prepared[0].sql).not.toContain(':');
   });
 
+  it('reads the clock once per batch, so :__now is identical across statements and occurrences', () => {
+    const manifest: ToolManifest = {
+      ...batchManifest,
+      statements: [
+        'UPDATE things SET updated_at = :__now WHERE id = :id AND owner_id = :__user_id',
+        'INSERT INTO audit (thing_id, at, seen_at) SELECT :id, :__now, :__now FROM things WHERE id = :id AND updated_at = :__now',
+      ],
+    };
+    const clock = vi.spyOn(Date, 'now');
+    let t = 1_000;
+    clock.mockImplementation(() => t++); // every read ticks — the binder must read once
+    try {
+      const prepared = prepareActionBatch(manifest, { id: 't1' }, 'gh:9');
+      const nows = [prepared[0].params[0], ...prepared[1].params.filter((v, i) => i !== 0 && i !== 3 && typeof v === 'number')];
+      expect(new Set(nows).size).toBe(1);
+      expect(nows).toHaveLength(4);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('injects the verified caller id, ignoring a spoofed __user_id input', () => {
     const prepared = prepareActionBatch(batchManifest, { id: 't1', __user_id: 'attacker' }, 'gh:9');
     expect(prepared[0].params[1]).toBe('gh:9');

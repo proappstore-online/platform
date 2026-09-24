@@ -1,0 +1,24 @@
+{
+  "migrations": [
+    {
+      "name": "0001_workspaces",
+      "sql": "CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS members (workspace_id TEXT NOT NULL, user_id TEXT NOT NULL, display_name TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT 'member', joined_at INTEGER NOT NULL, PRIMARY KEY (workspace_id, user_id)); CREATE INDEX IF NOT EXISTS idx_members_user ON members (user_id); CREATE TABLE IF NOT EXISTS permissions (workspace_id TEXT NOT NULL, user_id TEXT NOT NULL, key TEXT NOT NULL, granted_by TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (workspace_id, user_id, key))"
+    },
+    {
+      "name": "0002_invitations",
+      "sql": "CREATE TABLE IF NOT EXISTS invitations (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, login TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT 'member', invited_by TEXT NOT NULL, created_at INTEGER NOT NULL, accepted_at INTEGER, accepted_by TEXT); CREATE INDEX IF NOT EXISTS idx_invitations_workspace ON invitations (workspace_id, accepted_at)"
+    },
+    {
+      "name": "0003_records",
+      "sql": "CREATE TABLE IF NOT EXISTS records (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, type TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'draft', amount REAL, assignee_id TEXT, notes TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted_at INTEGER); CREATE INDEX IF NOT EXISTS idx_records_workspace ON records (workspace_id, deleted_at, created_at DESC); CREATE INDEX IF NOT EXISTS idx_records_status ON records (workspace_id, status)"
+    },
+    {
+      "name": "0004_approvals",
+      "sql": "CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, record_id TEXT NOT NULL, requested_by TEXT NOT NULL, decision TEXT NOT NULL DEFAULT 'pending', decided_by TEXT, note TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, decided_at INTEGER); CREATE INDEX IF NOT EXISTS idx_approvals_queue ON approvals (workspace_id, decision, created_at)"
+    },
+    {
+      "name": "0005_activity_log",
+      "sql": "CREATE TABLE IF NOT EXISTS activity_log (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, user_id TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, action TEXT NOT NULL, changes TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_activity_workspace ON activity_log (workspace_id, created_at DESC); CREATE INDEX IF NOT EXISTS idx_activity_entity ON activity_log (workspace_id, entity_type, entity_id)"
+    }
+  ]
+}

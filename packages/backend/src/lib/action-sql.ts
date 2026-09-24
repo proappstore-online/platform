@@ -59,17 +59,22 @@ export function prepareActionBatch(
     throw new Error(`tool ${manifest.name} has no statements`);
   }
   const resolved = resolveParams(manifest, input);
-  return manifest.statements.map((sql) => bindStatement(sql, resolved, userId));
+  // One clock reading for the whole batch: a later statement may guard on the
+  // timestamp an earlier one wrote (`WHERE updated_at = :__now`), which must not
+  // depend on the millisecond ticking over between two occurrences.
+  const now = Date.now();
+  return manifest.statements.map((sql) => bindStatement(sql, resolved, userId, now));
 }
 
 function bindStatement(
   rawSql: string,
   resolved: Record<string, unknown>,
   userId: string,
+  now: number = Date.now(),
 ): PreparedQuery {
   const magicValues: Record<string, () => unknown> = {
     __user_id: () => userId,
-    __now: () => Date.now(),
+    __now: () => now,
     __uuid: () => crypto.randomUUID(),
   };
 

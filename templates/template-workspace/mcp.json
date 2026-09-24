@@ -1,0 +1,593 @@
+{
+  "tools": [
+    {
+      "name": "create_workspace",
+      "description": "Create a workspace with the caller as its first admin. Idempotent by client id: a retry changes nothing. Returns three results (workspace, member, audit).",
+      "operation": "batch",
+      "statements": [
+        "INSERT OR IGNORE INTO workspaces (id, name, created_by, created_at, updated_at) VALUES (:workspace_id, :name, :__user_id, :__now, :__now)",
+        "INSERT OR IGNORE INTO members (workspace_id, user_id, display_name, role, joined_at) SELECT :workspace_id, :__user_id, :display_name, 'admin', :__now FROM workspaces w WHERE w.id = :workspace_id AND w.created_by = :__user_id",
+        "INSERT INTO activity_log (id, workspace_id, user_id, entity_type, entity_id, action, changes, created_at) SELECT :__uuid, :workspace_id, :__user_id, 'workspace', :workspace_id, 'workspace.created', json_object('name', :name), :__now WHERE EXISTS (SELECT 1 FROM workspaces w WHERE w.id = :workspace_id AND w.created_by = :__user_id) AND NOT EXISTS (SELECT 1 FROM activity_log a WHERE a.workspace_id = :workspace_id AND a.action = 'workspace.created')"
+      ],
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "name": {
+          "type": "string",
+          "description": "Workspace name"
+        },
+        "display_name": {
+          "type": "string",
+          "description": "The caller's display name inside the workspace"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_my_workspaces",
+      "description": "Workspaces the caller belongs to, with their role. The active workspace is the caller's choice (kept in app.kv) but every statement re-checks membership.",
+      "operation": "query",
+      "sql": "SELECT w.id, w.name, w.created_at, m.role FROM workspaces w JOIN members m ON m.workspace_id = w.id WHERE m.user_id = :__user_id ORDER BY m.joined_at LIMIT 100",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "get_workspace",
+      "description": "One workspace the caller belongs to, with the caller's role and permission keys.",
+      "operation": "query",
+      "sql": "SELECT w.id, w.name, w.created_at, w.updated_at, m.role, (SELECT json_group_array(p.key) FROM permissions p WHERE p.workspace_id = w.id AND p.user_id = :__user_id) AS permissions FROM workspaces w JOIN members m ON m.workspace_id = w.id AND m.user_id = :__user_id WHERE w.id = :workspace_id LIMIT 1",
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "rename_workspace",
+      "description": "Rename the workspace (admin only), audited.",
+      "operation": "batch",
+      "statements": [
+        "UPDATE workspaces SET name = :name, updated_at = :__now WHERE id = :workspace_id AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND me.role = 'admin')",
+        "INSERT INTO activity_log (id, workspace_id, user_id, entity_type, entity_id, action, changes, created_at) SELECT :__uuid, :workspace_id, :__user_id, 'workspace', :workspace_id, 'workspace.renamed', json_object('name', :name), :__now WHERE EXISTS (SELECT 1 FROM workspaces w WHERE w.id = :workspace_id AND w.name = :name) AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND me.role = 'admin')"
+      ],
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "name": {
+          "type": "string",
+          "description": "New name"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_members",
+      "description": "Members of a workspace the caller belongs to, with their permission keys.",
+      "operation": "query",
+      "sql": "SELECT mm.user_id, mm.display_name, mm.role, mm.joined_at, (SELECT json_group_array(p.key) FROM permissions p WHERE p.workspace_id = mm.workspace_id AND p.user_id = mm.user_id) AS permissions FROM members mm WHERE mm.workspace_id = :workspace_id AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id) ORDER BY mm.joined_at LIMIT 500",
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "set_member_role",
+      "description": "Change a member's role (admin only; admin | manager | member). Admins cannot change their own role, so a workspace never loses its last admin by accident. Audited.",
+      "operation": "batch",
+      "statements": [
+        "UPDATE members SET role = :role WHERE workspace_id = :workspace_id AND user_id = :user_id AND user_id != :__user_id AND :role IN ('admin', 'manager', 'member') AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND me.role = 'admin')",
+        "INSERT INTO activity_log (id, workspace_id, user_id, entity_type, entity_id, action, changes, created_at) SELECT :__uuid, :workspace_id, :__user_id, 'member', :user_id, 'member.role_changed', json_object('role', :role), :__now WHERE EXISTS (SELECT 1 FROM members t WHERE t.workspace_id = :workspace_id AND t.user_id = :user_id AND t.role = :role AND t.user_id != :__user_id) AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND me.role = 'admin')"
+      ],
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "user_id": {
+          "type": "string",
+          "description": "Member's user id"
+        },
+        "role": {
+          "type": "string",
+          "description": "admin | manager | member"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "grant_permission",
+      "description": "Grant a permission key to a member (admin or manage_members). Keys: manage_members, approve, export. Idempotent; audited.",
+      "operation": "batch",
+      "statements": [
+        "INSERT OR IGNORE INTO permissions (workspace_id, user_id, key, granted_by, created_at) SELECT :workspace_id, :user_id, :key, :__user_id, :__now WHERE :key IN ('manage_members', 'approve', 'export') AND EXISTS (SELECT 1 FROM members t WHERE t.workspace_id = :workspace_id AND t.user_id = :user_id) AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND (me.role = 'admin' OR EXISTS (SELECT 1 FROM permissions p WHERE p.workspace_id = me.workspace_id AND p.user_id = me.user_id AND p.key = 'manage_members')))",
+        "INSERT INTO activity_log (id, workspace_id, user_id, entity_type, entity_id, action, changes, created_at) SELECT :__uuid, :workspace_id, :__user_id, 'member', :user_id, 'permission.granted', json_object('key', :key), :__now WHERE EXISTS (SELECT 1 FROM permissions p WHERE p.workspace_id = :workspace_id AND p.user_id = :user_id AND p.key = :key AND p.granted_by = :__user_id AND p.created_at = :__now) AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND (me.role = 'admin' OR EXISTS (SELECT 1 FROM permissions p WHERE p.workspace_id = me.workspace_id AND p.user_id = me.user_id AND p.key = 'manage_members')))"
+      ],
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "user_id": {
+          "type": "string",
+          "description": "Member's user id"
+        },
+        "key": {
+          "type": "string",
+          "description": "Permission key"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "revoke_permission",
+      "description": "Revoke a permission key from a member (admin or manage_members). Audited.",
+      "operation": "batch",
+      "statements": [
+        "DELETE FROM permissions WHERE workspace_id = :workspace_id AND user_id = :user_id AND key = :key AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND (me.role = 'admin' OR EXISTS (SELECT 1 FROM permissions p WHERE p.workspace_id = me.workspace_id AND p.user_id = me.user_id AND p.key = 'manage_members')))",
+        "INSERT INTO activity_log (id, workspace_id, user_id, entity_type, entity_id, action, changes, created_at) SELECT :__uuid, :workspace_id, :__user_id, 'member', :user_id, 'permission.revoked', json_object('key', :key), :__now WHERE NOT EXISTS (SELECT 1 FROM permissions p WHERE p.workspace_id = :workspace_id AND p.user_id = :user_id AND p.key = :key) AND EXISTS (SELECT 1 FROM members t WHERE t.workspace_id = :workspace_id AND t.user_id = :user_id) AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND (me.role = 'admin' OR EXISTS (SELECT 1 FROM permissions p WHERE p.workspace_id = me.workspace_id AND p.user_id = me.user_id AND p.key = 'manage_members')))"
+      ],
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "user_id": {
+          "type": "string",
+          "description": "Member's user id"
+        },
+        "key": {
+          "type": "string",
+          "description": "Permission key"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "remove_member",
+      "description": "Remove a member (admin only, never yourself). Their permissions go with them. Audited.",
+      "operation": "batch",
+      "statements": [
+        "DELETE FROM permissions WHERE workspace_id = :workspace_id AND user_id = :user_id AND user_id != :__user_id AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND me.role = 'admin')",
+        "DELETE FROM members WHERE workspace_id = :workspace_id AND user_id = :user_id AND user_id != :__user_id AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND me.role = 'admin')",
+        "INSERT INTO activity_log (id, workspace_id, user_id, entity_type, entity_id, action, changes, created_at) SELECT :__uuid, :workspace_id, :__user_id, 'member', :user_id, 'member.removed', '{}', :__now WHERE NOT EXISTS (SELECT 1 FROM members t WHERE t.workspace_id = :workspace_id AND t.user_id = :user_id) AND :user_id != :__user_id AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND me.role = 'admin')"
+      ],
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "user_id": {
+          "type": "string",
+          "description": "Member's user id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "leave_workspace",
+      "description": "Leave a workspace. The last admin cannot leave; transfer the role first.",
+      "operation": "execute",
+      "sql": "DELETE FROM members WHERE workspace_id = :workspace_id AND user_id = :__user_id AND (role != 'admin' OR EXISTS (SELECT 1 FROM members o WHERE o.workspace_id = :workspace_id AND o.role = 'admin' AND o.user_id != :__user_id))",
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "create_invitation",
+      "description": "Invite someone by login (admin or manage_members). The invitation id is the code you send them; it is single-use and carries the role. Idempotent by client id.",
+      "operation": "execute",
+      "sql": "INSERT OR IGNORE INTO invitations (id, workspace_id, login, role, invited_by, created_at) SELECT :id, :workspace_id, :login, :role, :__user_id, :__now WHERE :role IN ('manager', 'member') AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND (me.role = 'admin' OR EXISTS (SELECT 1 FROM permissions p WHERE p.workspace_id = me.workspace_id AND p.user_id = me.user_id AND p.key = 'manage_members')))",
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Client-generated invitation id \u2014 the code"
+        },
+        "login": {
+          "type": "string",
+          "description": "Invitee's login (informational)",
+          "default": ""
+        },
+        "role": {
+          "type": "string",
+          "description": "manager | member",
+          "default": "member"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_invitations",
+      "description": "Open invitations of a workspace the caller belongs to.",
+      "operation": "query",
+      "sql": "SELECT id, login, role, invited_by, created_at FROM invitations WHERE workspace_id = :workspace_id AND accepted_at IS NULL AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id) ORDER BY created_at DESC LIMIT 200",
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "revoke_invitation",
+      "description": "Delete an open invitation (admin or manage_members).",
+      "operation": "execute",
+      "sql": "DELETE FROM invitations WHERE id = :id AND workspace_id = :workspace_id AND accepted_at IS NULL AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND (me.role = 'admin' OR EXISTS (SELECT 1 FROM permissions p WHERE p.workspace_id = me.workspace_id AND p.user_id = me.user_id AND p.key = 'manage_members')))",
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Invitation id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "accept_invitation",
+      "description": "Join a workspace with an invitation code. Consumes the code; the role comes from the invitation. A used, unknown or already-joined code changes nothing.",
+      "operation": "batch",
+      "statements": [
+        "INSERT OR IGNORE INTO members (workspace_id, user_id, display_name, role, joined_at) SELECT i.workspace_id, :__user_id, :display_name, i.role, :__now FROM invitations i WHERE i.id = :code AND i.accepted_at IS NULL",
+        "UPDATE invitations SET accepted_at = :__now, accepted_by = :__user_id WHERE id = :code AND accepted_at IS NULL AND EXISTS (SELECT 1 FROM members m WHERE m.workspace_id = invitations.workspace_id AND m.user_id = :__user_id AND m.joined_at = :__now)",
+        "INSERT INTO activity_log (id, workspace_id, user_id, entity_type, entity_id, action, changes, created_at) SELECT :__uuid, i.workspace_id, :__user_id, 'member', :__user_id, 'member.joined', json_object('invitation', :code), :__now FROM invitations i WHERE i.id = :code AND i.accepted_by = :__user_id AND i.accepted_at = :__now"
+      ],
+      "params": {
+        "code": {
+          "type": "string",
+          "description": "Invitation code"
+        },
+        "display_name": {
+          "type": "string",
+          "description": "The caller's display name inside the workspace"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_records",
+      "description": "Records of a workspace, newest first, with optional type / status / text filters and keyset pagination (pass the last row's created_at as `before`).",
+      "operation": "query",
+      "sql": "SELECT id, workspace_id, type, title, status, amount, assignee_id, notes, created_by, created_at, updated_at FROM records WHERE workspace_id = :workspace_id AND deleted_at IS NULL AND (:type IS NULL OR type = :type) AND (:status IS NULL OR status = :status) AND (:q IS NULL OR title LIKE '%' || :q || '%' OR notes LIKE '%' || :q || '%') AND (:before IS NULL OR created_at < :before) AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id) ORDER BY created_at DESC LIMIT 50",
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "type": {
+          "type": "string",
+          "description": "Record type",
+          "optional": true
+        },
+        "status": {
+          "type": "string",
+          "description": "Status",
+          "optional": true
+        },
+        "q": {
+          "type": "string",
+          "description": "Search text",
+          "optional": true
+        },
+        "before": {
+          "type": "integer",
+          "description": "Keyset cursor",
+          "optional": true
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "get_record",
+      "description": "One record with its approval history.",
+      "operation": "query",
+      "sql": "SELECT id, workspace_id, type, title, status, amount, assignee_id, notes, created_by, created_at, updated_at, (SELECT json_group_array(json_object('id', a.id, 'requested_by', a.requested_by, 'decision', a.decision, 'decided_by', a.decided_by, 'note', a.note, 'created_at', a.created_at, 'decided_at', a.decided_at)) FROM approvals a WHERE a.record_id = records.id) AS approvals FROM records WHERE id = :id AND workspace_id = :workspace_id AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id) LIMIT 1",
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Record id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "create_record",
+      "description": "Create a draft record (any member). Idempotent by client id; audited.",
+      "operation": "batch",
+      "statements": [
+        "INSERT OR IGNORE INTO records (id, workspace_id, type, title, status, amount, assignee_id, notes, created_by, created_at, updated_at) SELECT :id, :workspace_id, :type, :title, 'draft', :amount, :assignee_id, :notes, :__user_id, :__now, :__now WHERE EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id)",
+        "INSERT INTO activity_log (id, workspace_id, user_id, entity_type, entity_id, action, changes, created_at) SELECT :__uuid, :workspace_id, :__user_id, 'record', :id, 'record.created', json_object('type', :type, 'title', :title), :__now WHERE EXISTS (SELECT 1 FROM records r WHERE r.id = :id AND r.workspace_id = :workspace_id AND r.created_by = :__user_id) AND NOT EXISTS (SELECT 1 FROM activity_log a WHERE a.workspace_id = :workspace_id AND a.entity_id = :id AND a.action = 'record.created')"
+      ],
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Client-generated record id"
+        },
+        "type": {
+          "type": "string",
+          "description": "Record type"
+        },
+        "title": {
+          "type": "string",
+          "description": "Title"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Amount",
+          "optional": true
+        },
+        "assignee_id": {
+          "type": "string",
+          "description": "Assigned member's user id",
+          "optional": true
+        },
+        "notes": {
+          "type": "string",
+          "description": "Notes",
+          "default": ""
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "update_record",
+      "description": "Edit a record while it is a draft or rejected (its creator, or a manager / admin). Audited.",
+      "operation": "batch",
+      "statements": [
+        "UPDATE records SET title = :title, amount = :amount, assignee_id = :assignee_id, notes = :notes, updated_at = :__now WHERE id = :id AND workspace_id = :workspace_id AND deleted_at IS NULL AND status IN ('draft', 'rejected') AND (created_by = :__user_id OR EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND me.role IN ('admin', 'manager')))",
+        "INSERT INTO activity_log (id, workspace_id, user_id, entity_type, entity_id, action, changes, created_at) SELECT :__uuid, :workspace_id, :__user_id, 'record', :id, 'record.updated', json_object('title', :title, 'amount', :amount), :__now WHERE EXISTS (SELECT 1 FROM records r WHERE r.id = :id AND r.workspace_id = :workspace_id AND r.updated_at = :__now AND r.title = :title) AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id)"
+      ],
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Record id"
+        },
+        "title": {
+          "type": "string",
+          "description": "Title"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Amount",
+          "optional": true
+        },
+        "assignee_id": {
+          "type": "string",
+          "description": "Assigned member's user id",
+          "optional": true
+        },
+        "notes": {
+          "type": "string",
+          "description": "Notes",
+          "default": ""
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "submit_record",
+      "description": "Send a draft or rejected record for approval: status \u2192 submitted and a pending approval opens. Guarded on the current status; audited.",
+      "operation": "batch",
+      "statements": [
+        "UPDATE records SET status = 'submitted', updated_at = :__now WHERE id = :id AND workspace_id = :workspace_id AND deleted_at IS NULL AND status IN ('draft', 'rejected') AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id)",
+        "INSERT INTO approvals (id, workspace_id, record_id, requested_by, decision, note, created_at) SELECT :approval_id, :workspace_id, :id, :__user_id, 'pending', :note, :__now FROM records r WHERE r.id = :id AND r.workspace_id = :workspace_id AND r.status = 'submitted' AND r.updated_at = :__now AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.record_id = :id AND a.decision = 'pending')",
+        "INSERT INTO activity_log (id, workspace_id, user_id, entity_type, entity_id, action, changes, created_at) SELECT :__uuid, :workspace_id, :__user_id, 'record', :id, 'record.submitted', json_object('approval', :approval_id), :__now WHERE EXISTS (SELECT 1 FROM approvals a WHERE a.id = :approval_id AND a.record_id = :id AND a.requested_by = :__user_id AND a.created_at = :__now)"
+      ],
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Record id"
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "Client-generated approval id"
+        },
+        "note": {
+          "type": "string",
+          "description": "Note for the approver",
+          "default": ""
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "decide_approval",
+      "description": "Approve or reject a pending approval (admin or approve permission; never your own submission). The record follows the decision. Audited.",
+      "operation": "batch",
+      "statements": [
+        "UPDATE approvals SET decision = :decision, decided_by = :__user_id, note = :note, decided_at = :__now WHERE id = :id AND workspace_id = :workspace_id AND decision = 'pending' AND requested_by != :__user_id AND :decision IN ('approved', 'rejected') AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND (me.role = 'admin' OR EXISTS (SELECT 1 FROM permissions p WHERE p.workspace_id = me.workspace_id AND p.user_id = me.user_id AND p.key = 'approve')))",
+        "UPDATE records SET status = :decision, updated_at = :__now WHERE workspace_id = :workspace_id AND status = 'submitted' AND id = (SELECT a.record_id FROM approvals a WHERE a.id = :id AND a.decided_by = :__user_id AND a.decided_at = :__now)",
+        "INSERT INTO activity_log (id, workspace_id, user_id, entity_type, entity_id, action, changes, created_at) SELECT :__uuid, :workspace_id, :__user_id, 'record', (SELECT a.record_id FROM approvals a WHERE a.id = :id), 'record.decided', json_object('decision', :decision, 'approval', :id, 'note', :note), :__now WHERE EXISTS (SELECT 1 FROM approvals a WHERE a.id = :id AND a.workspace_id = :workspace_id AND a.decided_by = :__user_id AND a.decided_at = :__now)"
+      ],
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Approval id"
+        },
+        "decision": {
+          "type": "string",
+          "description": "approved | rejected"
+        },
+        "note": {
+          "type": "string",
+          "description": "Decision note",
+          "default": ""
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "close_record",
+      "description": "Close an approved record (manager or admin). Audited.",
+      "operation": "batch",
+      "statements": [
+        "UPDATE records SET status = 'closed', updated_at = :__now WHERE id = :id AND workspace_id = :workspace_id AND deleted_at IS NULL AND status = 'approved' AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND me.role IN ('admin', 'manager'))",
+        "INSERT INTO activity_log (id, workspace_id, user_id, entity_type, entity_id, action, changes, created_at) SELECT :__uuid, :workspace_id, :__user_id, 'record', :id, 'record.closed', '{}', :__now WHERE EXISTS (SELECT 1 FROM records r WHERE r.id = :id AND r.workspace_id = :workspace_id AND r.status = 'closed' AND r.updated_at = :__now) AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id)"
+      ],
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Record id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "archive_record",
+      "description": "Soft-delete a record (its creator while a draft, or a manager / admin). History stays. Audited.",
+      "operation": "batch",
+      "statements": [
+        "UPDATE records SET deleted_at = :__now, updated_at = :__now WHERE id = :id AND workspace_id = :workspace_id AND deleted_at IS NULL AND ((created_by = :__user_id AND status = 'draft') OR EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND me.role IN ('admin', 'manager')))",
+        "INSERT INTO activity_log (id, workspace_id, user_id, entity_type, entity_id, action, changes, created_at) SELECT :__uuid, :workspace_id, :__user_id, 'record', :id, 'record.archived', '{}', :__now WHERE EXISTS (SELECT 1 FROM records r WHERE r.id = :id AND r.workspace_id = :workspace_id AND r.deleted_at = :__now) AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id)"
+      ],
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Record id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_pending_approvals",
+      "description": "The approvals queue: pending approvals of the workspace with the record's title, oldest first.",
+      "operation": "query",
+      "sql": "SELECT a.id, a.record_id, a.requested_by, a.note, a.created_at, r.type, r.title, r.amount, (SELECT m.display_name FROM members m WHERE m.workspace_id = a.workspace_id AND m.user_id = a.requested_by) AS requested_by_name FROM approvals a JOIN records r ON r.id = a.record_id WHERE a.workspace_id = :workspace_id AND a.decision = 'pending' AND r.deleted_at IS NULL AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id) ORDER BY a.created_at ASC LIMIT 200",
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "record_stats",
+      "description": "Dashboard numbers: records and total amount per status for the workspace.",
+      "operation": "query",
+      "sql": "SELECT status, COUNT(*) AS count, COALESCE(SUM(amount), 0) AS total FROM records WHERE workspace_id = :workspace_id AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id) GROUP BY status LIMIT 20",
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "export_records",
+      "description": "Scoped export (admin or export permission): the same rows and predicate as list_records, in one bounded page for CSV download (PAS-DATA-012).",
+      "operation": "query",
+      "sql": "SELECT id, workspace_id, type, title, status, amount, assignee_id, notes, created_by, created_at, updated_at FROM records WHERE workspace_id = :workspace_id AND deleted_at IS NULL AND (:type IS NULL OR type = :type) AND (:status IS NULL OR status = :status) AND (:before IS NULL OR created_at < :before) AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id AND (me.role = 'admin' OR EXISTS (SELECT 1 FROM permissions p WHERE p.workspace_id = me.workspace_id AND p.user_id = me.user_id AND p.key = 'export'))) ORDER BY created_at DESC LIMIT 500",
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "type": {
+          "type": "string",
+          "description": "Record type",
+          "optional": true
+        },
+        "status": {
+          "type": "string",
+          "description": "Status",
+          "optional": true
+        },
+        "before": {
+          "type": "integer",
+          "description": "Keyset cursor",
+          "optional": true
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_activity",
+      "description": "The workspace audit trail, newest first, optionally for one entity.",
+      "operation": "query",
+      "sql": "SELECT a.id, a.user_id, (SELECT m.display_name FROM members m WHERE m.workspace_id = a.workspace_id AND m.user_id = a.user_id) AS user_name, a.entity_type, a.entity_id, a.action, a.changes, a.created_at FROM activity_log a WHERE a.workspace_id = :workspace_id AND (:entity_id IS NULL OR a.entity_id = :entity_id) AND (:before IS NULL OR a.created_at < :before) AND EXISTS (SELECT 1 FROM members me WHERE me.workspace_id = :workspace_id AND me.user_id = :__user_id) ORDER BY a.created_at DESC LIMIT 100",
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "entity_id": {
+          "type": "string",
+          "description": "Only this entity",
+          "optional": true
+        },
+        "before": {
+          "type": "integer",
+          "description": "Keyset cursor",
+          "optional": true
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "update_my_profile",
+      "description": "Set the caller's display name inside a workspace they belong to.",
+      "operation": "execute",
+      "sql": "UPDATE members SET display_name = :display_name WHERE workspace_id = :workspace_id AND user_id = :__user_id",
+      "params": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace id"
+        },
+        "display_name": {
+          "type": "string",
+          "description": "Display name"
+        }
+      },
+      "requires_auth": true
+    }
+  ]
+}

@@ -79,6 +79,12 @@ and migration rules. It enters the catalogue once it is published as the GitHub 
 repository `proappstore-online/template-marketplace` (an org-owner action, since
 repository creation is disabled for members) and its reviewed commit is recorded.
 
+The back-office workspace template (#190) is staged the same way at
+`templates/template-workspace/` — workspaces, members, a `permissions` table, single-use
+invitations, records with a guarded lifecycle, approvals, and an audit row in every write's
+batch — validated by `test/template-workspace.test.ts`, and enters the catalogue once
+published as `proappstore-online/template-workspace`.
+
 ## Adding, deprecating, withdrawing
 
 A template enters the catalogue only after it exists as a GitHub template
