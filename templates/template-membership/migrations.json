@@ -1,0 +1,32 @@
+{
+  "migrations": [
+    {
+      "name": "0001_groups",
+      "sql": "CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', avatar_url TEXT, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+    },
+    {
+      "name": "0002_group_members",
+      "sql": "CREATE TABLE IF NOT EXISTS group_members (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, user_id TEXT NOT NULL, display_name TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT 'member', joined_at INTEGER NOT NULL, invited_by TEXT, UNIQUE (group_id, user_id)); CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members (user_id)"
+    },
+    {
+      "name": "0003_join_codes",
+      "sql": "CREATE TABLE IF NOT EXISTS join_codes (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, code TEXT NOT NULL UNIQUE, role TEXT NOT NULL DEFAULT 'member', created_by TEXT NOT NULL, expires_at INTEGER, used_at INTEGER, used_by TEXT, max_uses INTEGER NOT NULL DEFAULT 1, use_count INTEGER NOT NULL DEFAULT 0); CREATE INDEX IF NOT EXISTS idx_join_codes_group ON join_codes (group_id)"
+    },
+    {
+      "name": "0004_events",
+      "sql": "CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', location TEXT NOT NULL DEFAULT '', starts_at INTEGER NOT NULL, ends_at INTEGER, capacity INTEGER, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_events_group ON events (group_id, starts_at)"
+    },
+    {
+      "name": "0005_rsvps",
+      "sql": "CREATE TABLE IF NOT EXISTS rsvps (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, user_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'going', waitlist_position INTEGER, created_at INTEGER NOT NULL, UNIQUE (event_id, user_id)); CREATE INDEX IF NOT EXISTS idx_rsvps_event ON rsvps (event_id, status, waitlist_position)"
+    },
+    {
+      "name": "0006_messages",
+      "sql": "CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, user_id TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_messages_group ON messages (group_id, created_at DESC)"
+    },
+    {
+      "name": "0007_activity_log",
+      "sql": "CREATE TABLE IF NOT EXISTS activity_log (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, user_id TEXT NOT NULL, action TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_activity_group ON activity_log (group_id, created_at DESC)"
+    }
+  ]
+}

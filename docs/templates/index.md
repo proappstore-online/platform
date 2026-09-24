@@ -85,6 +85,12 @@ invitations, records with a guarded lifecycle, approvals, and an audit row in ev
 batch — validated by `test/template-workspace.test.ts`, and enters the catalogue once
 published as `proappstore-online/template-workspace`.
 
+The membership groups template (#189) completes the set at
+`templates/template-membership/` — groups, members with a role, consumable join codes,
+events with RSVPs and a waitlist, a thread, an activity log, and app-wide moderation tools
+gated by `auth.app_roles` — validated by `test/template-membership.test.ts`, and enters the
+catalogue once published as `proappstore-online/template-membership`.
+
 ## Adding, deprecating, withdrawing
 
 A template enters the catalogue only after it exists as a GitHub template

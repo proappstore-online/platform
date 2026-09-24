@@ -1,0 +1,605 @@
+{
+  "tools": [
+    {
+      "name": "create_group",
+      "description": "Create a group with the caller as its first admin. Idempotent by client id (a retry changes nothing). Three results: group, membership, activity.",
+      "operation": "batch",
+      "statements": [
+        "INSERT OR IGNORE INTO groups (id, slug, name, description, avatar_url, created_by, created_at, updated_at) VALUES (:group_id, :slug, :name, :description, :avatar_url, :__user_id, :__now, :__now)",
+        "INSERT OR IGNORE INTO group_members (id, group_id, user_id, display_name, role, joined_at, invited_by) SELECT :__uuid, :group_id, :__user_id, :display_name, 'admin', :__now, NULL FROM groups g WHERE g.id = :group_id AND g.created_by = :__user_id",
+        "INSERT INTO activity_log (id, group_id, user_id, action, metadata, created_at) SELECT :__uuid, :group_id, :__user_id, 'group.created', json_object('name', :name), :__now WHERE EXISTS (SELECT 1 FROM groups g WHERE g.id = :group_id AND g.created_by = :__user_id) AND NOT EXISTS (SELECT 1 FROM activity_log a WHERE a.group_id = :group_id AND a.action = 'group.created')"
+      ],
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "slug": {
+          "type": "string",
+          "description": "URL-safe unique slug"
+        },
+        "name": {
+          "type": "string",
+          "description": "Group name"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description",
+          "default": ""
+        },
+        "avatar_url": {
+          "type": "string",
+          "description": "Public avatar image URL",
+          "optional": true
+        },
+        "display_name": {
+          "type": "string",
+          "description": "The caller's display name in the group"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_my_groups",
+      "description": "Groups the caller belongs to, with their role and member count.",
+      "operation": "query",
+      "sql": "SELECT g.id, g.slug, g.name, g.description, g.avatar_url, g.created_by, g.created_at, g.updated_at, m.role, (SELECT COUNT(*) FROM group_members c WHERE c.group_id = g.id) AS member_count FROM groups g JOIN group_members m ON m.group_id = g.id WHERE m.user_id = :__user_id ORDER BY m.joined_at LIMIT 100",
+      "params": {},
+      "requires_auth": true
+    },
+    {
+      "name": "get_group",
+      "description": "One group the caller belongs to, with the caller's role.",
+      "operation": "query",
+      "sql": "SELECT g.id, g.slug, g.name, g.description, g.avatar_url, g.created_by, g.created_at, g.updated_at, m.role, (SELECT COUNT(*) FROM group_members c WHERE c.group_id = g.id) AS member_count FROM groups g JOIN group_members m ON m.group_id = g.id AND m.user_id = :__user_id WHERE g.id = :group_id LIMIT 1",
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "update_group",
+      "description": "Edit name, description or avatar (group admin). Audited.",
+      "operation": "batch",
+      "statements": [
+        "UPDATE groups SET name = :name, description = :description, avatar_url = :avatar_url, updated_at = :__now WHERE id = :group_id AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin'))",
+        "INSERT INTO activity_log (id, group_id, user_id, action, metadata, created_at) SELECT :__uuid, :group_id, :__user_id, 'group.updated', json_object('name', :name), :__now WHERE EXISTS (SELECT 1 FROM groups g WHERE g.id = :group_id AND g.updated_at = :__now) AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin'))"
+      ],
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "name": {
+          "type": "string",
+          "description": "Name"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description",
+          "default": ""
+        },
+        "avatar_url": {
+          "type": "string",
+          "description": "Avatar URL",
+          "optional": true
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_members",
+      "description": "Members of a group the caller belongs to.",
+      "operation": "query",
+      "sql": "SELECT gm.user_id, gm.display_name, gm.role, gm.joined_at, gm.invited_by FROM group_members gm WHERE gm.group_id = :group_id AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id) ORDER BY gm.joined_at LIMIT 500",
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "add_member",
+      "description": "Add a user directly by id (admin or moderator), as a member. Idempotent; audited.",
+      "operation": "batch",
+      "statements": [
+        "INSERT OR IGNORE INTO group_members (id, group_id, user_id, display_name, role, joined_at, invited_by) SELECT :__uuid, :group_id, :user_id, :display_name, 'member', :__now, :__user_id WHERE EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin', 'moderator'))",
+        "INSERT INTO activity_log (id, group_id, user_id, action, metadata, created_at) SELECT :__uuid, :group_id, :__user_id, 'member.added', json_object('user_id', :user_id), :__now WHERE EXISTS (SELECT 1 FROM group_members t WHERE t.group_id = :group_id AND t.user_id = :user_id AND t.invited_by = :__user_id AND t.joined_at = :__now)"
+      ],
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "user_id": {
+          "type": "string",
+          "description": "User id to add"
+        },
+        "display_name": {
+          "type": "string",
+          "description": "Their display name",
+          "default": ""
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "set_member_role",
+      "description": "Change a member's role (group admin only; admin | moderator | member). Never your own, so a group keeps its last admin. Audited.",
+      "operation": "batch",
+      "statements": [
+        "UPDATE group_members SET role = :role WHERE group_id = :group_id AND user_id = :user_id AND user_id != :__user_id AND :role IN ('admin', 'moderator', 'member') AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin'))",
+        "INSERT INTO activity_log (id, group_id, user_id, action, metadata, created_at) SELECT :__uuid, :group_id, :__user_id, 'member.role_changed', json_object('user_id', :user_id, 'role', :role), :__now WHERE EXISTS (SELECT 1 FROM group_members t WHERE t.group_id = :group_id AND t.user_id = :user_id AND t.role = :role AND t.user_id != :__user_id) AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin'))"
+      ],
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "user_id": {
+          "type": "string",
+          "description": "Member's user id"
+        },
+        "role": {
+          "type": "string",
+          "description": "admin | moderator | member"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "remove_member",
+      "description": "Remove a member: admins remove anyone but themselves; moderators remove plain members. Their RSVPs in the group go too. Audited.",
+      "operation": "batch",
+      "statements": [
+        "DELETE FROM rsvps WHERE user_id = :user_id AND event_id IN (SELECT e.id FROM events e WHERE e.group_id = :group_id) AND :user_id != :__user_id AND EXISTS (SELECT 1 FROM group_members t WHERE t.group_id = :group_id AND t.user_id = :user_id AND (t.role = 'member' OR EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin')))) AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin', 'moderator'))",
+        "DELETE FROM group_members WHERE group_id = :group_id AND user_id = :user_id AND user_id != :__user_id AND (role = 'member' OR EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin'))) AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin', 'moderator'))",
+        "INSERT INTO activity_log (id, group_id, user_id, action, metadata, created_at) SELECT :__uuid, :group_id, :__user_id, 'member.removed', json_object('user_id', :user_id), :__now WHERE NOT EXISTS (SELECT 1 FROM group_members t WHERE t.group_id = :group_id AND t.user_id = :user_id) AND :user_id != :__user_id AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin', 'moderator'))"
+      ],
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "user_id": {
+          "type": "string",
+          "description": "Member's user id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "leave_group",
+      "description": "Leave a group. The last admin cannot leave \u2014 hand the role over first.",
+      "operation": "execute",
+      "sql": "DELETE FROM group_members WHERE group_id = :group_id AND user_id = :__user_id AND (role != 'admin' OR EXISTS (SELECT 1 FROM group_members o WHERE o.group_id = :group_id AND o.role = 'admin' AND o.user_id != :__user_id))",
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "update_my_profile",
+      "description": "Set the caller's display name in a group they belong to.",
+      "operation": "execute",
+      "sql": "UPDATE group_members SET display_name = :display_name WHERE group_id = :group_id AND user_id = :__user_id",
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "display_name": {
+          "type": "string",
+          "description": "Display name"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "create_join_code",
+      "description": "Make a join code (admin or moderator). It grants the role you choose (member | moderator), for max_uses redemptions, until expires_at. Idempotent by client id.",
+      "operation": "execute",
+      "sql": "INSERT OR IGNORE INTO join_codes (id, group_id, code, role, created_by, expires_at, max_uses, use_count) SELECT :id, :group_id, :code, :role, :__user_id, :expires_at, :max_uses, 0 WHERE :role IN ('member', 'moderator') AND :max_uses >= 1 AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin', 'moderator'))",
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Client-generated id"
+        },
+        "code": {
+          "type": "string",
+          "description": "The code to share (unique)"
+        },
+        "role": {
+          "type": "string",
+          "description": "member | moderator",
+          "default": "member"
+        },
+        "expires_at": {
+          "type": "integer",
+          "description": "Expiry (ms since epoch)",
+          "optional": true
+        },
+        "max_uses": {
+          "type": "integer",
+          "description": "How many people may redeem it",
+          "default": 1,
+          "max": 1000
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_join_codes",
+      "description": "Live join codes of a group (admin or moderator).",
+      "operation": "query",
+      "sql": "SELECT id, code, role, created_by, expires_at, used_at, used_by, max_uses, use_count FROM join_codes WHERE group_id = :group_id AND use_count < max_uses AND (expires_at IS NULL OR expires_at > :__now) AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin', 'moderator')) ORDER BY id LIMIT 200",
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "revoke_join_code",
+      "description": "Delete a join code (admin or moderator).",
+      "operation": "execute",
+      "sql": "DELETE FROM join_codes WHERE id = :id AND group_id = :group_id AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin', 'moderator'))",
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Join code id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "join_group_by_code",
+      "description": "Redeem a join code: the membership is granted with the code's role and the use is consumed in the same batch. An expired, exhausted or unknown code \u2014 or an existing membership \u2014 changes nothing.",
+      "operation": "batch",
+      "statements": [
+        "INSERT OR IGNORE INTO group_members (id, group_id, user_id, display_name, role, joined_at, invited_by) SELECT :__uuid, j.group_id, :__user_id, :display_name, j.role, :__now, j.created_by FROM join_codes j WHERE j.code = :code AND j.use_count < j.max_uses AND (j.expires_at IS NULL OR j.expires_at > :__now)",
+        "UPDATE join_codes SET use_count = use_count + 1, used_at = :__now, used_by = :__user_id WHERE code = :code AND use_count < max_uses AND (expires_at IS NULL OR expires_at > :__now) AND EXISTS (SELECT 1 FROM group_members m WHERE m.group_id = join_codes.group_id AND m.user_id = :__user_id AND m.joined_at = :__now)",
+        "INSERT INTO activity_log (id, group_id, user_id, action, metadata, created_at) SELECT :__uuid, (SELECT j.group_id FROM join_codes j WHERE j.code = :code), :__user_id, 'member.joined', json_object('code', :code), :__now WHERE EXISTS (SELECT 1 FROM join_codes j WHERE j.code = :code AND j.used_by = :__user_id AND j.used_at = :__now)"
+      ],
+      "params": {
+        "code": {
+          "type": "string",
+          "description": "Join code"
+        },
+        "display_name": {
+          "type": "string",
+          "description": "The caller's display name in the group"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_events",
+      "description": "Events of a group the caller belongs to, soonest first; `past` = 1 lists finished ones instead. Includes counts and the caller's RSVP.",
+      "operation": "query",
+      "sql": "SELECT e.id, e.group_id, e.title, e.description, e.location, e.starts_at, e.ends_at, e.capacity, e.created_by, e.created_at, e.updated_at, (SELECT COUNT(*) FROM rsvps r WHERE r.event_id = e.id AND r.status = 'going') AS going_count, (SELECT COUNT(*) FROM rsvps r WHERE r.event_id = e.id AND r.status = 'waitlist') AS waitlist_count, (SELECT r.status FROM rsvps r WHERE r.event_id = e.id AND r.user_id = :__user_id) AS my_status FROM events e WHERE e.group_id = :group_id AND ((:past = 1 AND e.starts_at < :__now) OR (:past = 0 AND e.starts_at >= :__now)) AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id) ORDER BY CASE WHEN :past = 1 THEN -e.starts_at ELSE e.starts_at END LIMIT 100",
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "past": {
+          "type": "integer",
+          "description": "1 for past events",
+          "default": 0
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "get_event",
+      "description": "One event with counts and the caller's RSVP.",
+      "operation": "query",
+      "sql": "SELECT e.id, e.group_id, e.title, e.description, e.location, e.starts_at, e.ends_at, e.capacity, e.created_by, e.created_at, e.updated_at, (SELECT COUNT(*) FROM rsvps r WHERE r.event_id = e.id AND r.status = 'going') AS going_count, (SELECT COUNT(*) FROM rsvps r WHERE r.event_id = e.id AND r.status = 'waitlist') AS waitlist_count, (SELECT r.status FROM rsvps r WHERE r.event_id = e.id AND r.user_id = :__user_id) AS my_status FROM events e WHERE e.id = :id AND e.group_id = :group_id AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id) LIMIT 1",
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Event id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "create_event",
+      "description": "Create an event (admin or moderator). Idempotent by client id; audited.",
+      "operation": "batch",
+      "statements": [
+        "INSERT OR IGNORE INTO events (id, group_id, title, description, location, starts_at, ends_at, capacity, created_by, created_at, updated_at) SELECT :id, :group_id, :title, :description, :location, :starts_at, :ends_at, :capacity, :__user_id, :__now, :__now WHERE EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin', 'moderator'))",
+        "INSERT INTO activity_log (id, group_id, user_id, action, metadata, created_at) SELECT :__uuid, :group_id, :__user_id, 'event.created', json_object('event_id', :id, 'title', :title), :__now WHERE EXISTS (SELECT 1 FROM events e WHERE e.id = :id AND e.group_id = :group_id AND e.created_by = :__user_id AND e.created_at = :__now)"
+      ],
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Client-generated event id"
+        },
+        "title": {
+          "type": "string",
+          "description": "Title"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description",
+          "default": ""
+        },
+        "location": {
+          "type": "string",
+          "description": "Location",
+          "default": ""
+        },
+        "starts_at": {
+          "type": "integer",
+          "description": "Start (ms since epoch)"
+        },
+        "ends_at": {
+          "type": "integer",
+          "description": "End",
+          "optional": true
+        },
+        "capacity": {
+          "type": "integer",
+          "description": "Max attendees; empty = unlimited",
+          "optional": true
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "update_event",
+      "description": "Edit an event (its creator, or admin / moderator). Audited.",
+      "operation": "batch",
+      "statements": [
+        "UPDATE events SET title = :title, description = :description, location = :location, starts_at = :starts_at, ends_at = :ends_at, capacity = :capacity, updated_at = :__now WHERE id = :id AND group_id = :group_id AND (created_by = :__user_id OR EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin', 'moderator'))) AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id)",
+        "INSERT INTO activity_log (id, group_id, user_id, action, metadata, created_at) SELECT :__uuid, :group_id, :__user_id, 'event.updated', json_object('event_id', :id, 'title', :title), :__now WHERE EXISTS (SELECT 1 FROM events e WHERE e.id = :id AND e.group_id = :group_id AND e.updated_at = :__now) AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id)"
+      ],
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Event id"
+        },
+        "title": {
+          "type": "string",
+          "description": "Title"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description",
+          "default": ""
+        },
+        "location": {
+          "type": "string",
+          "description": "Location",
+          "default": ""
+        },
+        "starts_at": {
+          "type": "integer",
+          "description": "Start"
+        },
+        "ends_at": {
+          "type": "integer",
+          "description": "End",
+          "optional": true
+        },
+        "capacity": {
+          "type": "integer",
+          "description": "Capacity",
+          "optional": true
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "delete_event",
+      "description": "Delete an event and its RSVPs (its creator, or admin / moderator). Audited.",
+      "operation": "batch",
+      "statements": [
+        "DELETE FROM rsvps WHERE event_id = :id AND EXISTS (SELECT 1 FROM events e WHERE e.id = :id AND e.group_id = :group_id AND (e.created_by = :__user_id OR EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin', 'moderator'))))",
+        "DELETE FROM events WHERE id = :id AND group_id = :group_id AND (created_by = :__user_id OR EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin', 'moderator')))",
+        "INSERT INTO activity_log (id, group_id, user_id, action, metadata, created_at) SELECT :__uuid, :group_id, :__user_id, 'event.deleted', json_object('event_id', :id), :__now WHERE NOT EXISTS (SELECT 1 FROM events e WHERE e.id = :id) AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id)"
+      ],
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Event id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "rsvp_event",
+      "description": "RSVP going or not_going. Going lands on the waitlist when the event is full; a freed seat promotes the first waitlisted member in the same batch. Only for events of a group the caller belongs to. Audited.",
+      "operation": "batch",
+      "statements": [
+        "UPDATE rsvps SET status = CASE WHEN :status = 'not_going' THEN 'not_going' WHEN (e.capacity IS NULL OR (SELECT COUNT(*) FROM rsvps o WHERE o.event_id = e.id AND o.status = 'going' AND o.user_id != :__user_id) < e.capacity) THEN 'going' ELSE 'waitlist' END, waitlist_position = CASE WHEN :status != 'not_going' AND NOT (e.capacity IS NULL OR (SELECT COUNT(*) FROM rsvps o WHERE o.event_id = e.id AND o.status = 'going' AND o.user_id != :__user_id) < e.capacity) THEN (SELECT COALESCE(MAX(w.waitlist_position), 0) + 1 FROM rsvps w WHERE w.event_id = e.id AND w.status = 'waitlist') ELSE NULL END, created_at = :__now FROM events e WHERE e.id = rsvps.event_id AND rsvps.event_id = :event_id AND rsvps.user_id = :__user_id AND :status IN ('going', 'not_going') AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = e.group_id AND me.user_id = :__user_id)",
+        "INSERT OR IGNORE INTO rsvps (id, event_id, user_id, status, waitlist_position, created_at) SELECT :id, e.id, :__user_id, CASE WHEN :status = 'not_going' THEN 'not_going' WHEN (e.capacity IS NULL OR (SELECT COUNT(*) FROM rsvps o WHERE o.event_id = e.id AND o.status = 'going' AND o.user_id != :__user_id) < e.capacity) THEN 'going' ELSE 'waitlist' END, CASE WHEN :status != 'not_going' AND NOT (e.capacity IS NULL OR (SELECT COUNT(*) FROM rsvps o WHERE o.event_id = e.id AND o.status = 'going' AND o.user_id != :__user_id) < e.capacity) THEN (SELECT COALESCE(MAX(w.waitlist_position), 0) + 1 FROM rsvps w WHERE w.event_id = e.id AND w.status = 'waitlist') ELSE NULL END, :__now FROM events e WHERE e.id = :event_id AND :status IN ('going', 'not_going') AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = e.group_id AND me.user_id = :__user_id)",
+        "UPDATE rsvps SET status = 'going', waitlist_position = NULL WHERE id = (SELECT w.id FROM rsvps w JOIN events e ON e.id = w.event_id WHERE w.event_id = :event_id AND w.status = 'waitlist' AND (e.capacity IS NULL OR (SELECT COUNT(*) FROM rsvps o WHERE o.event_id = e.id AND o.status = 'going') < e.capacity) AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = e.group_id AND me.user_id = :__user_id) ORDER BY w.waitlist_position LIMIT 1)",
+        "INSERT INTO activity_log (id, group_id, user_id, action, metadata, created_at) SELECT :__uuid, (SELECT e.group_id FROM events e WHERE e.id = :event_id), :__user_id, 'event.rsvp', json_object('event_id', :event_id, 'status', (SELECT r.status FROM rsvps r WHERE r.event_id = :event_id AND r.user_id = :__user_id)), :__now WHERE EXISTS (SELECT 1 FROM rsvps r WHERE r.event_id = :event_id AND r.user_id = :__user_id AND r.created_at = :__now)"
+      ],
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "Client-generated RSVP id"
+        },
+        "event_id": {
+          "type": "string",
+          "description": "Event id"
+        },
+        "status": {
+          "type": "string",
+          "description": "going | not_going"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_rsvps",
+      "description": "Who is going and who is waitlisted, for members of the group.",
+      "operation": "query",
+      "sql": "SELECT r.user_id, (SELECT gm.display_name FROM group_members gm WHERE gm.group_id = e.group_id AND gm.user_id = r.user_id) AS display_name, r.status, r.waitlist_position, r.created_at FROM rsvps r JOIN events e ON e.id = r.event_id WHERE r.event_id = :event_id AND r.status != 'not_going' AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = e.group_id AND me.user_id = :__user_id) ORDER BY r.status, r.waitlist_position, r.created_at LIMIT 500",
+      "params": {
+        "event_id": {
+          "type": "string",
+          "description": "Event id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_messages",
+      "description": "The group thread, newest first, keyset-paginated (pass the last row's created_at as `before`).",
+      "operation": "query",
+      "sql": "SELECT m.id, m.user_id, (SELECT gm.display_name FROM group_members gm WHERE gm.group_id = m.group_id AND gm.user_id = m.user_id) AS display_name, m.content, m.created_at, m.updated_at FROM messages m WHERE m.group_id = :group_id AND (:before IS NULL OR m.created_at < :before) AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id) ORDER BY m.created_at DESC LIMIT 50",
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "before": {
+          "type": "integer",
+          "description": "Keyset cursor",
+          "optional": true
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "post_message",
+      "description": "Post to the group thread (any member). Idempotent by client id.",
+      "operation": "execute",
+      "sql": "INSERT OR IGNORE INTO messages (id, group_id, user_id, content, created_at, updated_at) SELECT :id, :group_id, :__user_id, :content, :__now, :__now WHERE EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id)",
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Client-generated message id"
+        },
+        "content": {
+          "type": "string",
+          "description": "Text"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "delete_message",
+      "description": "Delete a message: your own, or any as admin / moderator.",
+      "operation": "execute",
+      "sql": "DELETE FROM messages WHERE id = :id AND group_id = :group_id AND (user_id = :__user_id OR EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id AND me.role IN ('admin', 'moderator')))",
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "id": {
+          "type": "string",
+          "description": "Message id"
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "list_activity",
+      "description": "The group's activity log, newest first.",
+      "operation": "query",
+      "sql": "SELECT a.id, a.user_id, (SELECT gm.display_name FROM group_members gm WHERE gm.group_id = a.group_id AND gm.user_id = a.user_id) AS display_name, a.action, a.metadata, a.created_at FROM activity_log a WHERE a.group_id = :group_id AND (:before IS NULL OR a.created_at < :before) AND EXISTS (SELECT 1 FROM group_members me WHERE me.group_id = :group_id AND me.user_id = :__user_id) ORDER BY a.created_at DESC LIMIT 100",
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        },
+        "before": {
+          "type": "integer",
+          "description": "Keyset cursor",
+          "optional": true
+        }
+      },
+      "requires_auth": true
+    },
+    {
+      "name": "admin_list_groups",
+      "description": "App-wide moderation list of every group with member counts. Only for holders of the app's `admin` role (app.roles); unscoped by design.",
+      "operation": "query",
+      "sql": "SELECT g.id, g.slug, g.name, g.created_by, g.created_at, (SELECT COUNT(*) FROM group_members c WHERE c.group_id = g.id) AS member_count FROM groups g ORDER BY g.created_at DESC LIMIT 500",
+      "params": {},
+      "requires_auth": true,
+      "auth": {
+        "app_roles": [
+          "admin"
+        ],
+        "caller_unscoped": {
+          "reason": "app-wide moderation catalogue of groups with aggregate member counts, for the app's admin role only; no per-user row data"
+        }
+      }
+    },
+    {
+      "name": "admin_delete_group",
+      "description": "App-wide moderation: delete a group and everything in it. Only for holders of the app's `admin` role; the deletion is recorded in the app logs by the caller.",
+      "operation": "batch",
+      "statements": [
+        "DELETE FROM rsvps WHERE event_id IN (SELECT e.id FROM events e WHERE e.group_id = :group_id)",
+        "DELETE FROM events WHERE group_id = :group_id",
+        "DELETE FROM messages WHERE group_id = :group_id",
+        "DELETE FROM join_codes WHERE group_id = :group_id",
+        "DELETE FROM activity_log WHERE group_id = :group_id",
+        "DELETE FROM group_members WHERE group_id = :group_id",
+        "DELETE FROM groups WHERE id = :group_id"
+      ],
+      "params": {
+        "group_id": {
+          "type": "string",
+          "description": "Group id"
+        }
+      },
+      "requires_auth": true,
+      "auth": {
+        "app_roles": [
+          "admin"
+        ],
+        "caller_unscoped": {
+          "reason": "app-wide moderation delete across every table of one group, for the app's admin role only; the gate is auth.app_roles, not a membership predicate"
+        }
+      }
+    }
+  ]
+}
