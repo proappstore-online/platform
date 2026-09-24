@@ -32,7 +32,7 @@ apps yet; the clauses say what to do meanwhile. Details:
 
 | The data is… | Store | Authorization | Limits that matter | Do not use for | Clause |
 |---|---|---|---|---|---|
-| Shared between users, relational, queried, exported | **D1** via registered actions | Manifest roles + SQL scoping on `:__user_id` | Rows read per query; 120 actions/app; 25 statements/batch | Files, blobs, per-user preferences | [007](#pas-data-007), [010](#pas-data-010) |
+| Shared between users, relational, queried, exported | **D1** via registered actions | Manifest roles + SQL scoping on `:__user_id` | Rows read per query; 500 actions/app; 25 statements/batch | Files, blobs, per-user preferences | [007](#pas-data-007), [010](#pas-data-010) |
 | One user's preferences or small drafts | **KV** (`app.kv`) | Per user, automatic | 100 keys, 64 KB/value, 1 MB/user | Anything another user must see; anything relational | [013](#pas-data-013) |
 | A file, image or document | **Storage** (`app.storage`, R2) | Per user; public URL only via `uploadPublic` | Object size; keep the key in D1 | Bytes in D1/KV | [013](#pas-data-013) |
 | A number many users bump | **Counters** (`app.counters`) | Any signed-in user increments; anyone reads | Atomic; not per user | Anything needing a join or history | [013](#pas-data-013) |
@@ -55,7 +55,7 @@ per action and per table. Every step cites its clause.
 
 | Statement | Kind |
 |---|---|
-| Migration lint (additive-only, `NOT NULL` needs `DEFAULT`), `_migrations` idempotency by name, schema coherence at registration, manifest validation (explicit auth, declared params, no DDL/semicolons, `WHERE` on writes, `:__user_id` or `caller_unscoped`, public-tool constraints, 120 tools, 25 statements), data-worker role gates, batch transactions, room caps | Automated enforcement by the platform — the clause names the mechanism |
+| Migration lint (additive-only, `NOT NULL` needs `DEFAULT`), `_migrations` idempotency by name, schema coherence at registration, manifest validation (explicit auth, declared params, no DDL/semicolons, `WHERE` on writes, `:__user_id` or `caller_unscoped`, public-tool constraints, 500 tools, 25 statements), data-worker role gates, batch transactions, room caps | Automated enforcement by the platform — the clause names the mechanism |
 | Schema conventions, scoping idioms, idempotency, pagination, caching, failure handling, negative tests, service bindings, no app-owned Workers | Recommended conformity (`MUST`/`SHOULD`) |
 | KV, counters, storage, rooms, batch actions, public queries, tenant helpers | Optional capabilities — absent use is never a finding |
 

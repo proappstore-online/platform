@@ -53,7 +53,7 @@ with `sdk_reference` before quoting them.
 | Check | How | Clause |
 |---|---|---|
 | Migration applied | deploy step *Apply D1 migrations* lists the name under `applied`; `schema_status` shows no failed rows | [PAS-DATA-002](https://docs.proappstore.online/standard/data/#pas-data-002) |
-| Manifest registers | the deploy's *Register app tools* step passes: statements are SELECT/INSERT/UPDATE/DELETE only, no semicolons or DDL, every `:param` declared, ≤ 120 tools | [PAS-DATA-005](https://docs.proappstore.online/standard/data/#pas-data-005) |
+| Manifest registers | the deploy's *Register app tools* step passes: statements are SELECT/INSERT/UPDATE/DELETE only, no semicolons or DDL, every `:param` declared, ≤ 500 tools | [PAS-DATA-005](https://docs.proappstore.online/standard/data/#pas-data-005) |
 | Schema coherence | registration compiles every action against the live schema; a missing table or column fails the deploy naming the tool and column | [PAS-STACK-008](https://docs.proappstore.online/standard/stack/#pas-stack-008) |
 | Drift | `list_app_tools` lists exactly the committed `mcp.json`; every column an action uses exists in `migrations.json` | [PAS-DATA-002](https://docs.proappstore.online/standard/data/#pas-data-002) |
 | Negative tests in CI | per scoped action: as user B against A's ids → no rows / `meta.changes === 0`; positive for A; `member`-only → 403 per role gate; removing a predicate fails CI | [PAS-DATA-022](https://docs.proappstore.online/standard/data/#pas-data-022) |

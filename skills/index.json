@@ -479,7 +479,7 @@
       ],
       "mutating": false,
       "bytes": 59496,
-      "digest": "279cc4487919d6e99c4c76a11ce592b45fcb5041925279f9496f9b00b9e61822",
+      "digest": "52167a3051cb785841e70633d38a8a535c2ff5b35860ead8ecd4bf381ff19d02",
       "files": [
         {
           "path": "evals/cases.json",
@@ -509,7 +509,7 @@
         {
           "path": "references/decision-tables.md",
           "bytes": 12261,
-          "sha256": "f039e0bbd73e398cb1a00a9111cdb710c56fa71ec886424d78a6ffeb073dfd37"
+          "sha256": "701797621c73504128ca9a2e0a77fc4b685463c1e0ae1b0228753a5fa67e8dce"
         },
         {
           "path": "references/negative-cases.md",

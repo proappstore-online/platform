@@ -203,7 +203,7 @@ These are injected by the platform — **do not** declare them in `params`:
   tool must declare `"auth": { "caller_unscoped": { "reason": "..." } }` with a
   non-empty reason (shared catalog data, one-time codes). Never accept the
   caller's id as a client param.
-- Max 120 tools per app.
+- Max 500 tools per app (the rejection names both counts: `received 537, max 500`).
 
 A manifest that violates any rule is rejected — the whole batch fails, so a bad
 tool never half-registers.

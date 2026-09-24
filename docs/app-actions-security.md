@@ -185,7 +185,7 @@ deploy stage register through the same `replaceAppTools` path. Registered
 tools therefore cannot drift from the repo.
 
 Registration validates every statement (SELECT/INSERT/UPDATE/DELETE only, no
-semicolons, no DDL, every `:param` declared) and caps apps at 120 tools.
+semicolons, no DDL, every `:param` declared) and caps apps at 500 tools.
 
 **Schema coherence (#33).** Registration also compiles every action's SQL against
 the app's LIVE schema (data worker `/validate` → `EXPLAIN`, no execution). An

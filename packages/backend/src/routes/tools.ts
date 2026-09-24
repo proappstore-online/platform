@@ -154,6 +154,13 @@ interface ToolManifest {
 export const MANIFEST_BYTES_SOFT_LIMIT = 50_000;
 
 /**
+ * Hard cap on tools per app. An abuse bound, not a design target: 120 rejected
+ * real CRM/ERP-shaped manifests (#116). Payload cost is policed separately by
+ * MANIFEST_BYTES_SOFT_LIMIT and progressive disclosure on the MCP side.
+ */
+export const MAX_TOOLS_PER_APP = 500;
+
+/**
  * What a manifest costs the model, not the database (#117).
  *
  * The cap counts tools; the cost is bytes. And the bytes that matter are the ones an
@@ -349,9 +356,14 @@ export async function replaceAppTools(
     return { status: 400, payload: { error: 'tools array required' } };
   }
   // Abuse bound, not a design target. Data-heavy apps register one tool per
-  // parameterized statement (chess-academy needs ~80), so 50 was too tight.
-  if (tools.length > 120) {
-    return { status: 400, payload: { error: 'max 120 tools per app' } };
+  // parameterized statement (chess-academy needs ~80, a real CRM/ERP surface
+  // crosses 120), so the cap sits well above any legitimate manifest (#116).
+  // Payload size is bounded separately by the byte-cost soft warning above.
+  if (tools.length > MAX_TOOLS_PER_APP) {
+    return {
+      status: 400,
+      payload: { error: `too many tools: received ${tools.length}, max ${MAX_TOOLS_PER_APP} per app` },
+    };
   }
   for (const tool of tools as ToolManifest[]) {
     const err = validateManifest(tool);

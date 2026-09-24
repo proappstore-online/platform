@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
-import { mainStatementVerb, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT } from './tools.js';
+import { mainStatementVerb, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_TOOLS_PER_APP } from './tools.js';
 import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1');
@@ -1002,7 +1002,7 @@ describe('PUT /v1/apps/:appId/tools — manifest byte cost (#117)', () => {
   });
 
   it('warns softly — still 200, still registered — above the byte threshold', async () => {
-    // 60 tools with ~1 kB descriptions: well over the 50 kB soft limit, under the 120-tool cap.
+    // 60 tools with ~1 kB descriptions: well over the 50 kB soft limit, under the 500-tool cap.
     const tools = Array.from({ length: 60 }, (_, i) => ({
       ...validTool,
       name: `list_items_${i}`,
@@ -1017,6 +1017,27 @@ describe('PUT /v1/apps/:appId/tools — manifest byte cost (#117)', () => {
     expect(body.warnings[0]).toContain(`${body.bytes} bytes`);
     expect(body.warnings[0]).toContain(`~${body.estimatedTokens} tokens`);
     expect(body.warnings[0]).toMatch(/slimming descriptions|progressive disclosure/);
+  });
+
+  // #116: 120 rejected real CRM/ERP-shaped manifests. The cap is an abuse bound
+  // above any legitimate surface, and the rejection names both numbers so the
+  // deploy log says what was sent and what fits.
+  it('accepts a manifest above the old 120 cap', async () => {
+    const tools = Array.from({ length: 137 }, (_, i) => ({ ...validTool, name: `list_items_${i}` }));
+    const res = await put(tools);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as CostBody).registered).toBe(137);
+  });
+
+  it(`accepts exactly ${MAX_TOOLS_PER_APP} tools and rejects one more, naming both counts`, async () => {
+    const at = Array.from({ length: MAX_TOOLS_PER_APP }, (_, i) => ({ ...validTool, name: `list_items_${i}` }));
+    expect((await put(at)).status).toBe(200);
+    const over = [...at, { ...validTool, name: 'list_items_overflow' }];
+    const res = await put(over);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain(`received ${MAX_TOOLS_PER_APP + 1}, max ${MAX_TOOLS_PER_APP}`);
+    expect(MAX_TOOLS_PER_APP).toBe(500);
   });
 
   it('answers warnings: [] for a small manifest', async () => {

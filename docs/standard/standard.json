@@ -2744,7 +2744,7 @@
       "verification": "manual",
       "verification_detail": "Manual",
       "enforcement": "automated",
-      "enforcement_detail": "automated — platform limits: app logs 50 000 entries/day and 200/s burst per app (over-budget answers 202 and the SDK backs off 60 s); proxy 10 000 requests/day per app and 1 000 per user; credential sign-in 10 failures/15 min per login; license validation 10/min per caller; KV 1 MB and 100 keys per user; rooms 32 peers/room, 64 rooms/app, 100 msg/s, 4 KB; uploads 50 MB; 120 actions/app; 5 secrets and 5 proxy rules per app",
+      "enforcement_detail": "automated — platform limits: app logs 50 000 entries/day and 200/s burst per app (over-budget answers 202 and the SDK backs off 60 s); proxy 10 000 requests/day per app and 1 000 per user; credential sign-in 10 failures/15 min per login; license validation 10/min per caller; KV 1 MB and 100 keys per user; rooms 32 peers/room, 64 rooms/app, 100 msg/s, 4 KB; uploads 50 MB; 500 actions/app; 5 secrets and 5 proxy rules per app",
       "since": "1.5",
       "rule": "The app MUST handle 429/413/202 responses as terminal for the current attempt — show the state, do not loop — and MUST size its own usage under the platform quotas. It MUST NOT implement blind retry loops around actions, proxy calls or logs, and MUST NOT disable the SDK's cooldown. Where an app legitimately needs more than a quota it MUST file a platform request, not shard around it.\n\n*",
       "applicability": "All apps.\n\n*",
