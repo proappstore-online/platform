@@ -1441,7 +1441,11 @@ paths:
       operationId: put_v1_apps_appId_tools
       responses:
         '200':
-          description: Success
+          description: Registered. Reports the manifest's model-facing byte cost (name + description + params, never SQL) beside the count, and a soft warning above 50 000 bytes (#117).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolRegistrationResult'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1508,7 +1512,11 @@ paths:
       operationId: post_v1_apps_appId_tools_internal
       responses:
         '200':
-          description: Success
+          description: Registered — same result shape as PUT /v1/apps/{appId}/tools (#117).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolRegistrationResult'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -3415,6 +3423,29 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    ToolRegistrationResult:
+      type: object
+      required: [ok, registered, bytes, bytesPerTool, estimatedTokens, warnings]
+      properties:
+        ok:
+          type: boolean
+        registered:
+          type: integer
+          description: Number of tools now registered for the app.
+        bytes:
+          type: integer
+          description: Model-facing payload of the whole manifest — name, description and params per tool, never SQL — in UTF-8 bytes (#117).
+        bytesPerTool:
+          type: number
+          description: bytes / registered, rounded.
+        estimatedTokens:
+          type: integer
+          description: bytes / 4, rounded — a rule-of-thumb token occupancy per MCP call, not a tokenizer.
+        warnings:
+          type: array
+          items:
+            type: string
+          description: Empty when under the 50 000-byte soft threshold; otherwise one message naming the cost. Never a rejection.
     Error:
       type: object
       properties:

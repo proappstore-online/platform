@@ -148,6 +148,37 @@ interface ToolManifest {
   };
 }
 
+/** Above this many model-facing bytes the registration answers with a soft warning (#117). */
+export const MANIFEST_BYTES_SOFT_LIMIT = 50_000;
+
+/**
+ * What a manifest costs the model, not the database (#117).
+ *
+ * The cap counts tools; the cost is bytes. And the bytes that matter are the ones an
+ * MCP session publishes per tool — name, description and the params schema. SQL,
+ * `operation`, `requires_auth` and `auth` never reach the model (`tool-loader.ts`
+ * registers name + description + a zod shape built from `params`), so they are
+ * excluded here on purpose: measuring the stored manifest overstates the cost by
+ * roughly 60% (chess-academy: 115 kB stored vs ~73 kB on the wire).
+ *
+ * `estimatedTokens` is the usual ~4-bytes-per-token rule of thumb — good enough to
+ * make a 120-tool manifest's per-call occupancy visible at registration, which is the
+ * point; it is not a tokenizer.
+ */
+export function measureManifestCost(tools: ToolManifest[]): { bytes: number; bytesPerTool: number; estimatedTokens: number } {
+  const enc = new TextEncoder();
+  let bytes = 0;
+  for (const tool of tools) {
+    const modelFacing = { name: tool.name, description: tool.description, params: tool.params ?? {} };
+    bytes += enc.encode(JSON.stringify(modelFacing)).byteLength;
+  }
+  return {
+    bytes,
+    bytesPerTool: tools.length ? Math.round(bytes / tools.length) : 0,
+    estimatedTokens: Math.round(bytes / 4),
+  };
+}
+
 function validateManifest(tool: ToolManifest): string | null {
   if (!tool.name || typeof tool.name !== 'string') return 'name is required';
   if (!/^[a-z][a-z0-9_]*$/.test(tool.name)) return 'name must be lowercase alphanumeric with underscores';
@@ -385,9 +416,21 @@ export async function replaceAppTools(
     ),
   ];
   await db.batch(stmts);
+
+  // Report the model-facing cost beside the count (#117). A soft warning above the
+  // threshold — never a rejection: the deploy workflow prints `warnings[]` as
+  // `::warning::mcp.json: …`, so the author sees the number where the deploy is.
+  const cost = measureManifestCost(tools as ToolManifest[]);
+  const warnings: string[] =
+    cost.bytes > MANIFEST_BYTES_SOFT_LIMIT
+      ? [
+          `Manifest model-facing payload is ${cost.bytes} bytes (~${cost.estimatedTokens} tokens) across ${tools.length} tool(s); ` +
+            'every MCP session on this app carries it in context on every call — consider slimming descriptions or adopting progressive disclosure',
+        ]
+      : [];
   return {
     status: 200,
-    payload: { ok: true, registered: tools.length },
+    payload: { ok: true, registered: tools.length, ...cost, warnings },
   };
 }
 

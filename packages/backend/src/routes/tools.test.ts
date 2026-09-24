@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
-import { mainStatementVerb } from './tools.js';
+import { mainStatementVerb, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT } from './tools.js';
 import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1');
@@ -739,7 +739,7 @@ describe('PUT /v1/apps/:appId/tools — unscoped statement rejection (#150)', ()
       auth: { caller_unscoped: { reason: 'housekeeping: rows are selected by expiry, not identity' } },
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, registered: 1 });
+    expect(await res.json()).toMatchObject({ ok: true, registered: 1 });
   });
 
   it('rejects an exemption with an empty or whitespace reason', async () => {
@@ -819,14 +819,14 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
   it('registers valid tools with just the internal token', async () => {
     const { res, db } = await internalPost({ tools: [validTool] }, { 'X-Internal-Token': 'secret' });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, registered: 1 });
+    expect(await res.json()).toMatchObject({ ok: true, registered: 1 });
     expect(db.batch).toHaveBeenCalledTimes(1);
   });
 
   it('treats empty/missing tools as a clear (200, DELETE-only batch)', async () => {
     const { res, db } = await internalPost({ tools: [] }, { 'X-Internal-Token': 'secret' });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, registered: 0 });
+    expect(await res.json()).toMatchObject({ ok: true, registered: 0 });
     expect(db.batch.mock.calls[0]![0]).toHaveLength(1);
 
     const missing = await internalPost({}, { 'X-Internal-Token': 'secret' });
@@ -958,5 +958,76 @@ describe('PUT /v1/apps/:appId/tools — schema validation reaches the data worke
     const validate = urls.find((u) => u.includes('/validate'));
     expect(validate).toBe('https://pas-data-test-app.acct.workers.dev/validate');
     expect(urls.some((u) => /data-[a-z0-9-]+\.proappstore\.online/.test(u))).toBe(false);
+  });
+});
+
+// #117: the cap counts tools; the cost is bytes. Registration now reports the
+// model-facing payload — name + description + params, never SQL — and warns
+// softly above the threshold so an author sees the number in the deploy log.
+describe('PUT /v1/apps/:appId/tools — manifest byte cost (#117)', () => {
+  const put = (tools: unknown[]) => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    return app.request(
+      '/v1/apps/test-app/tools',
+      { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools }) },
+      makeEnv({}, db),
+    );
+  };
+  type CostBody = { ok: boolean; registered: number; bytes: number; bytesPerTool: number; estimatedTokens: number; warnings: string[] };
+
+  it('reports bytes, bytesPerTool and estimatedTokens beside the count', async () => {
+    const res = await put([validTool]);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as CostBody;
+    const expected = measureManifestCost([validTool as never]);
+    expect(body).toMatchObject({ ok: true, registered: 1, ...expected, warnings: [] });
+    expect(body.bytes).toBeGreaterThan(0);
+    expect(body.bytesPerTool).toBe(body.bytes);
+    expect(body.estimatedTokens).toBe(Math.round(body.bytes / 4));
+  });
+
+  it('counts only the model-facing view: SQL, operation, requires_auth and auth do not move the number', async () => {
+    const lean = { ...validTool, sql: 'SELECT id FROM items WHERE user_id = :__user_id LIMIT :limit' };
+    const heavy = {
+      ...validTool,
+      sql: `SELECT id FROM items WHERE user_id = :__user_id AND (:status IS NULL OR status = :status) ${'/* padding */ '.repeat(500)} LIMIT :limit`,
+      auth: { platform_roles: ['creator'], app_roles: ['manager'] },
+    };
+    expect(measureManifestCost([heavy as never]).bytes).toBe(measureManifestCost([lean as never]).bytes);
+    // …while what the model actually sees does.
+    const longer = { ...validTool, description: "List the signed-in user's items, newest first, with an optional status filter" };
+    expect(measureManifestCost([longer as never]).bytes).toBeGreaterThan(measureManifestCost([validTool as never]).bytes);
+    const res = await put([heavy]);
+    expect(((await res.json()) as CostBody).bytes).toBe(measureManifestCost([lean as never]).bytes);
+  });
+
+  it('warns softly — still 200, still registered — above the byte threshold', async () => {
+    // 60 tools with ~1 kB descriptions: well over the 50 kB soft limit, under the 120-tool cap.
+    const tools = Array.from({ length: 60 }, (_, i) => ({
+      ...validTool,
+      name: `list_items_${i}`,
+      description: `Tool ${i}: ${'x'.repeat(1_000)}`,
+    }));
+    const res = await put(tools);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as CostBody;
+    expect(body.registered).toBe(60);
+    expect(body.bytes).toBeGreaterThan(MANIFEST_BYTES_SOFT_LIMIT);
+    expect(body.warnings).toHaveLength(1);
+    expect(body.warnings[0]).toContain(`${body.bytes} bytes`);
+    expect(body.warnings[0]).toContain(`~${body.estimatedTokens} tokens`);
+    expect(body.warnings[0]).toMatch(/slimming descriptions|progressive disclosure/);
+  });
+
+  it('answers warnings: [] for a small manifest', async () => {
+    const res = await put([validTool, { ...validTool, name: 'list_items_b' }]);
+    const body = (await res.json()) as CostBody;
+    expect(body.warnings).toEqual([]);
+    expect(body.bytes).toBeLessThan(MANIFEST_BYTES_SOFT_LIMIT);
+    expect(body.registered).toBe(2);
+  });
+
+  it('measureManifestCost: an empty manifest is 0 bytes and 0 per tool, never NaN', () => {
+    expect(measureManifestCost([])).toEqual({ bytes: 0, bytesPerTool: 0, estimatedTokens: 0 });
   });
 });
