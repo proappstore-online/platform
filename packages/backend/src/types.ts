@@ -83,7 +83,11 @@ export interface Env {
    * Optional GitHub token used by the server-side compliance check at
    * /v1/provision (raises GitHub's unauth rate limit of 60/hr to 5000/hr).
    * A fine-grained PAT with read-only "Contents" + "Metadata" permissions
-   * on the storefront orgs is enough — no write scopes needed.
+   * on the storefront orgs is enough for that. The session-key drift check (#70,
+   * lib/session-key-drift.ts) additionally uses it to dispatch
+   * redeploy-data-workers.yml when a data worker holds a stale key, which needs
+   * "Actions: write" on proappstore-online/platform; without that permission the
+   * check reports drift and skips the dispatch.
    *   wrangler secret put GITHUB_TOKEN
    */
   GITHUB_TOKEN?: string;

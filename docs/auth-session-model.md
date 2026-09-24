@@ -50,6 +50,20 @@ sequenceDiagram
 > `__Host-pas_session` cookie on an **API-plane** 401 (the backend is the session
 > authority) — a **data-plane** 401 surfaces as a data error and never signs the
 > user out, so key drift can't cascade into a forced sign-out.
+>
+> **Prevention (#70).** Data workers are recorded as consumers of
+> `pas.SESSION_SIGNING_KEY` in the secrets inventory (the value reaches them through
+> `POST /v1/provision-data`, not a `wrangler secret put`), and the backend runs a
+> **drift check every 15 minutes** (`[triggers] crons`, `lib/session-key-drift.ts`):
+> it mints a probe session with the current key and presents it to a sample of data
+> workers on their direct host. A worker with the current key answers 403 (the probe
+> is nobody's member); a worker with a stale key answers 401 — that is drift, and the
+> check dispatches `redeploy-data-workers.yml` for that app when `GITHUB_TOKEN` has
+> `actions: write` (otherwise it reports and names the manual step). Every run logs a
+> `session-key-drift` line; `GET /v1/internal/session-key-drift` (internal token)
+> runs it on demand and answers 503 on drift. **Rotation procedure:** rotate the
+> backend key, then dispatch `redeploy-data-workers.yml` for the whole fleet — the
+> cron catches anything that slips through within 15 minutes.
 
 As of `@proappstore/sdk@1.16.23`, storage access is defensive. If
 `localStorage` is blocked, throws, or is unavailable, the SDK keeps the

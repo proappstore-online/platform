@@ -4,6 +4,7 @@ import { cors } from 'hono/cors';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Context } from 'hono';
 import { HttpError, optionalUser } from './lib/auth.js';
+import { checkSessionKeyDrift } from './lib/session-key-drift.js';
 import { recordServerError } from './lib/error-telemetry.js';
 import { recordOperationFailure, shouldLogOperationFailure } from './lib/operation-log.js';
 import type { Env } from './types.js';
@@ -257,4 +258,15 @@ app.route('/v1', v1);
 app.route('/', webhookRoutes);
 
 export { Room } from './do/room.js';
-export default app;
+
+/**
+ * Cron entry (#70): the session-key drift check. `[triggers] crons` in wrangler.toml
+ * schedules it; the same function answers GET /v1/internal/session-key-drift on demand.
+ * `fetch` stays the Hono app — tests and service-binding callers keep calling `app.fetch`.
+ */
+export default {
+  fetch: (request: Request, env: Env, ctx: ExecutionContext) => app.fetch(request, env, ctx),
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(checkSessionKeyDrift({ env }));
+  },
+};

@@ -63,6 +63,14 @@ VAPID_PUBLIC_KEY = "BPg6E92QAOhdcif_HckOEGY6mL03VKWNQ3CS1xQX5q59fXURI1xCGwwBr4Vs
 # Comma-separated `gh:<id>` strings allowed to approve/reject submissions.
 ADMIN_GITHUB_IDS = "gh:2824906"
 
+# Session-key drift check (#70): every 15 minutes, mint a probe session with the
+# CURRENT SESSION_SIGNING_KEY and present it to a sample of data workers; a 401
+# means a worker still holds a rotated-away key, and the check dispatches
+# redeploy-data-workers.yml for it (needs GITHUB_TOKEN with actions:write).
+# On demand: GET /v1/internal/session-key-drift with X-Internal-Token.
+[triggers]
+crons = ["*/15 * * * *"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "pas"
