@@ -1504,6 +1504,156 @@ paths:
         required: true
         schema:
           type: string
+  /v1/apps/{appId}/endpoints:
+    get:
+      tags:
+      - Tools
+      summary: List console-defined endpoints (#155)
+      description: 'Owner only. Endpoints built in the console (names api_*), stored beside code tools under source = ''console''. status re-runs schema coherence: a column dropped by a later migration reads ''broken'' with the error.'
+      operationId: get_v1_apps_appId_endpoints
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  endpoints:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        config:
+                          type: object
+                        manifest:
+                          type: object
+                        updated_at:
+                          type: integer
+                        updated_by:
+                          type: string
+                        status:
+                          type: string
+                          enum:
+                          - ok
+                          - broken
+                        error:
+                          type: string
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      security: &id001
+      - bearerAuth: []
+      parameters:
+      - &id002
+        name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/apps/{appId}/endpoints/preview:
+    post:
+      tags:
+      - Tools
+      summary: Preview the manifest a config would generate (#155)
+      description: Owner only. Reads the table schema from the app's data worker, generates the SQL and runs the same validators as mcp.json registration. Nothing is saved.
+      operationId: post_v1_apps_appId_endpoints_preview
+      requestBody: &id003
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - config
+              properties:
+                config:
+                  type: object
+                  description: 'EndpointConfig: name (api_…), description, kind (read|insert), table, scope (own|all|public), owner_column, columns, filters, sort, page_size, paginate, generated, defaults, app_roles. Never SQL.'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  manifest:
+                    type: object
+        '400':
+          description: 'Invalid config: { error, details }'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          description: 'Schema coherence: the generated SQL references a missing table or column'
+        '503':
+          description: The app schema could not be read from its data worker
+      security: *id001
+      parameters:
+      - *id002
+  /v1/apps/{appId}/endpoints/{name}:
+    put:
+      tags:
+      - Tools
+      summary: Create or update a console-defined endpoint (#155)
+      description: Owner only; a personal app token is rejected. Writes the app_tools row (source = 'console') and its app_endpoint_audit entry in one batch. Console endpoints survive deploys; max 30 per app.
+      operationId: put_v1_apps_appId_endpoints_name
+      requestBody: *id003
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  endpoint:
+                    type: object
+        '400':
+          description: Invalid config, prefix missing, or console cap reached
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The name is registered by the app's code (mcp.json)
+        '422':
+          description: Schema coherence failure
+        '503':
+          description: The app schema could not be read
+      security: *id001
+      parameters:
+      - *id002
+      - &id004
+        name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags:
+      - Tools
+      summary: Delete a console-defined endpoint (#155)
+      description: Owner only. Removes source = 'console' rows only, audited. Code tools are managed by deploys.
+      operationId: delete_v1_apps_appId_endpoints_name
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Success
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No console endpoint with that name
+      security: *id001
+      parameters:
+      - *id002
+      - *id004
   /v1/apps/{appId}/tools/internal:
     post:
       tags:

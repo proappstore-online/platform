@@ -10,6 +10,8 @@ export interface ToolAuth {
   required?: boolean;
   platform_roles?: string[];
   app_roles?: string[];
+  /** Registration-time exemption from the :__user_id scoping lint, with the reason. */
+  caller_unscoped?: { reason: string };
 }
 
 export interface ToolManifest {
@@ -26,6 +28,8 @@ export interface ToolManifest {
   params: Record<string, ToolParam>;
   requires_auth?: boolean;
   auth?: ToolAuth;
+  /** Stay pre-loaded on a large app's MCP session instead of being deferred to discovery (#117). */
+  core?: boolean;
 }
 
 interface PreparedQuery {

@@ -204,6 +204,7 @@ These are injected by the platform — **do not** declare them in `params`:
   non-empty reason (shared catalog data, one-time codes). Never accept the
   caller's id as a client param.
 - Max 500 tools per app (the rejection names both counts: `received 537, max 500`).
+- Tool names starting with `api_` are reserved for console-defined endpoints.
 
 A manifest that violates any rule is rejected — the whole batch fails, so a bad
 tool never half-registers.
@@ -221,7 +222,25 @@ There are two paths, both idempotent (re-registering replaces the app's tool set
   agent-built apps are MCP-callable **with no manual step**.
 
 > If an app ships no `mcp.json`, nothing is registered (no-op). Removing the
-> manifest and redeploying clears the app's tools.
+> manifest and redeploying clears the app's **code-defined** tools. Endpoints
+> created in the console (names starting `api_`) are stored separately and are
+> never touched by a deploy; manage them in Console → Data → API. The `api_`
+> prefix is reserved, and `mcp.json` tools may not use it.
+
+### Console-defined endpoints
+
+A creator can also expose a **read** or **insert** action without writing SQL:
+in the console, pick a table, columns, a scope (`own` rows, `all` rows behind an
+app role, or `public`) and optional filters, sort and page size. The platform
+reads the table schema from the app's data worker, generates the SQL (named
+columns, `:params`, a literal `LIMIT`, `:__user_id` for own-rows scope) and
+runs it through exactly the validators above before saving. The result is an
+ordinary registered action: `POST /v1/apps/:appId/actions/api_…` and the
+app-scoped MCP endpoint pick it up within a minute, and `GET /v1/apps/:appId/tools`
+lists it with `source: "console"` (code tools read `source: "code"`). Routes:
+`GET /v1/apps/:appId/endpoints`, `POST …/endpoints/preview`,
+`PUT …/endpoints/:name`, `DELETE …/endpoints/:name` — owner session only,
+every change audited, at most 30 per app.
 
 ## Calling an app's tools
 
@@ -379,6 +398,5 @@ tools, and are validated by `test/skills.test.ts`.
   or run business logic in a Worker route. That's a deliberate, safe surface.
   Use `operation: "batch"` for atomic multi-statement writes.
 - Existing agent-built apps register on their **next** deploy (or a `pas publish`).
-- Coming next: richer (non-SQL) tool handlers, raw-SQL migration gates, and
-  exposing per-app tools from the Console UI alongside
-  [agent customization](./agent-customization).
+- Coming next: richer (non-SQL) tool handlers and raw-SQL migration gates,
+  alongside [agent customization](./agent-customization).

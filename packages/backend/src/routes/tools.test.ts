@@ -781,6 +781,60 @@ describe('GET /v1/apps/:appId/tools — JSON.parse safety', () => {
   });
 });
 
+// #155: console-defined endpoints share app_tools under source = 'console'. A
+// deploy replaces the CODE rows only, and the api_ namespace belongs to the console.
+describe('console endpoints coexist with code tools (#155)', () => {
+  const put = (tools: unknown[]) => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    return app.request(
+      '/v1/apps/test-app/tools',
+      { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools }) },
+      makeEnv({}, db),
+    ).then(async (res) => ({ res, db }));
+  };
+
+  it('a code redeploy — even with an empty tools array — deletes only source = code rows', async () => {
+    const { res, db } = await put([]);
+    expect(res.status).toBe(200);
+    const sqls = db.prepare.mock.calls.map((c) => String(c[0]));
+    const del = sqls.find((s) => s.startsWith('DELETE FROM app_tools'))!;
+    expect(del).toBe("DELETE FROM app_tools WHERE app_id = ? AND source = 'code'");
+    const { db: db2 } = await put([validTool]);
+    const ins = db2.prepare.mock.calls.map((c) => String(c[0])).find((s) => s.startsWith('INSERT INTO app_tools'))!;
+    expect(ins).toContain("'code'");
+  });
+
+  it('rejects a code tool named api_* — the prefix is reserved for console-defined endpoints', async () => {
+    const { res } = await put([{ ...validTool, name: 'api_x' }]);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe('tool "api_x": the api_ prefix is reserved for console-defined endpoints');
+  });
+
+  it('the listing carries source for every row, in both the team and the public view', async () => {
+    const rows = [
+      { name: 'api_my_tasks', manifest: JSON.stringify({ ...validTool, name: 'api_my_tasks' }), updated_at: 1, source: 'console' },
+      { name: 'list_items', manifest: JSON.stringify(validTool), updated_at: 1, source: 'code' },
+      { name: 'legacy', manifest: JSON.stringify({ ...validTool, name: 'legacy' }), updated_at: 1, source: null },
+    ];
+    const team = await app.request('/v1/apps/test-app/tools', { headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({}, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ all: { results: rows } }))));
+    const teamTools = ((await team.json()) as { tools: { name: string; source: string; sql?: string }[] }).tools;
+    expect(teamTools.map((t) => [t.name, t.source])).toEqual([['api_my_tasks', 'console'], ['list_items', 'code'], ['legacy', 'code']]);
+    const pub = await app.request('/v1/apps/test-app/tools', {}, makeEnv({}, mockD1(mockStmt({ all: { results: rows } }))));
+    const pubTools = ((await pub.json()) as { tools: { name: string; source: string; sql?: string; config?: unknown }[] }).tools;
+    expect(pubTools.map((t) => t.source)).toEqual(['console', 'code', 'code']);
+    expect(pubTools.every((t) => t.sql === undefined && t.config === undefined)).toBe(true);
+  });
+
+  it('the owner delete routes touch code rows only', async () => {
+    const all = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt());
+    await app.request('/v1/apps/test-app/tools', { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({}, all));
+    expect(String(all.prepare.mock.calls[1]![0])).toBe("DELETE FROM app_tools WHERE app_id = ? AND source = 'code'");
+    const one = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt());
+    await app.request('/v1/apps/test-app/tools/api_my_tasks', { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({}, one));
+    expect(String(one.prepare.mock.calls[1]![0])).toContain("AND source = 'code'");
+  });
+});
+
 describe('DELETE /v1/apps/:appId/tools', () => {
   it('deletes all tools for an app', async () => {
     const ownerStmt = mockStmt({ first: { creator_id: 'gh:1' } });

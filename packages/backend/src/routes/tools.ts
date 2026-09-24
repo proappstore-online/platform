@@ -13,6 +13,8 @@ import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { requireAppAccess, requireAppOwner } from '../lib/auth.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
+import type { ToolManifest, ToolParam } from '../lib/action-sql.js';
+import { ENDPOINT_NAME_PREFIX } from '../lib/endpoint-sql.js';
 
 export const toolsRoutes = new Hono<{ Bindings: Env }>();
 
@@ -122,33 +124,7 @@ function literalLimit(sql: string): number | null {
   return Number(match[1]);
 }
 
-interface ToolParam {
-  type: string;
-  description?: string;
-  optional?: boolean;
-  default?: unknown;
-  max?: number;
-}
-
-interface ToolManifest {
-  name: string;
-  description: string;
-  operation: 'query' | 'execute' | 'batch';
-  sql?: string;
-  /** Batch tools: multiple statements, one shared params pool, executed
-   *  atomically in a single D1 transaction on the data-worker. */
-  statements?: string[];
-  params: Record<string, ToolParam>;
-  requires_auth?: boolean;
-  auth?: {
-    required?: boolean;
-    platform_roles?: string[];
-    app_roles?: string[];
-    caller_unscoped?: { reason: string };
-  };
-  /** Stay pre-loaded on a large app's MCP session instead of being deferred to discovery (#117). */
-  core?: boolean;
-}
+export type { ToolManifest, ToolParam };
 
 /** Above this many model-facing bytes the registration answers with a soft warning (#117). */
 export const MANIFEST_BYTES_SOFT_LIMIT = 50_000;
@@ -188,10 +164,19 @@ export function measureManifestCost(tools: ToolManifest[]): { bytes: number; byt
   };
 }
 
-function validateManifest(tool: ToolManifest): string | null {
+/** Where a manifest comes from: the repo's mcp.json, or a console-defined endpoint (#155). */
+export type ToolSource = 'code' | 'console';
+
+function validateManifest(tool: ToolManifest, opts: { source: ToolSource } = { source: 'code' }): string | null {
   if (!tool.name || typeof tool.name !== 'string') return 'name is required';
   if (tool.core !== undefined && typeof tool.core !== 'boolean') return 'core must be a boolean';
   if (!/^[a-z][a-z0-9_]*$/.test(tool.name)) return 'name must be lowercase alphanumeric with underscores';
+  // Console-defined endpoints own the api_ namespace (#155): a code tool can never
+  // shadow one, and a console endpoint can never take a code name — including the
+  // can_* names routes/auth.ts consults as permission oracles.
+  if (opts.source === 'code' && tool.name.startsWith(ENDPOINT_NAME_PREFIX)) {
+    return `the ${ENDPOINT_NAME_PREFIX} prefix is reserved for console-defined endpoints`;
+  }
   if (!tool.description || typeof tool.description !== 'string') return 'description is required';
   if (!['query', 'execute', 'batch'].includes(tool.operation)) return 'operation must be "query", "execute" or "batch"';
   if (tool.requires_auth !== true && tool.requires_auth !== false) return 'requires_auth must be explicitly true or false';
@@ -285,7 +270,7 @@ function isStringArray(value: unknown): value is string[] {
  * and lets registration proceed, so transient infra never bricks a deploy
  * (defense-in-depth, not a new single point of failure).
  */
-async function checkSchemaCoherence(
+export async function checkSchemaCoherence(
   env: Env,
   appId: string,
   tools: ToolManifest[],
@@ -346,27 +331,22 @@ async function checkSchemaCoherence(
  * schema-coherence check (#33) that blocks registration if an action references
  * a missing table/column. Returns a status + payload the caller hands back as JSON.
  */
-export async function replaceAppTools(
-  db: D1Database,
+/**
+ * Everything a tool set must pass before it is persisted — manifest rules, the
+ * :__user_id scoping lint and the schema-coherence check — shared by code
+ * registration (mcp.json) and console-defined endpoints (#155), so a generator
+ * bug is rejected by the same code that rejects a bad mcp.json. Resolves null
+ * when the set is valid, otherwise the status + payload to answer with
+ * (400 lint, 422 coherence).
+ */
+export async function validateToolSet(
+  tools: ToolManifest[],
+  env: Env | undefined,
   appId: string,
-  tools: unknown,
-  env?: Env,
-): Promise<{ status: number; payload: Record<string, unknown> }> {
-  if (!tools || !Array.isArray(tools)) {
-    return { status: 400, payload: { error: 'tools array required' } };
-  }
-  // Abuse bound, not a design target. Data-heavy apps register one tool per
-  // parameterized statement (chess-academy needs ~80, a real CRM/ERP surface
-  // crosses 120), so the cap sits well above any legitimate manifest (#116).
-  // Payload size is bounded separately by the byte-cost soft warning above.
-  if (tools.length > MAX_TOOLS_PER_APP) {
-    return {
-      status: 400,
-      payload: { error: `too many tools: received ${tools.length}, max ${MAX_TOOLS_PER_APP} per app` },
-    };
-  }
-  for (const tool of tools as ToolManifest[]) {
-    const err = validateManifest(tool);
+  opts: { source: ToolSource } = { source: 'code' },
+): Promise<{ status: number; payload: Record<string, unknown> } | null> {
+  for (const tool of tools) {
+    const err = validateManifest(tool, opts);
     if (err) return { status: 400, payload: { error: `tool "${tool?.name}": ${err}` } };
   }
 
@@ -377,7 +357,7 @@ export async function replaceAppTools(
   // (requires_auth: false) tools are exempt. Failure is a hard rejection, not a
   // warning, so a misconfigured tool cannot be registered at all.
   const scopeErrors: string[] = [];
-  for (const tool of tools as ToolManifest[]) {
+  for (const tool of tools) {
     if (tool.requires_auth === false) continue; // public query path — no user identity expected
     const hasCallerUnscoped =
       typeof tool.auth?.caller_unscoped?.reason === 'string' &&
@@ -409,7 +389,7 @@ export async function replaceAppTools(
   // (Phase 1 migrates before register). Skipped when env is absent (direct unit
   // tests of this fn) or when the check can't reach the data worker.
   if (env) {
-    const coherenceErrors = await checkSchemaCoherence(env, appId, tools as ToolManifest[]);
+    const coherenceErrors = await checkSchemaCoherence(env, appId, tools);
     if (coherenceErrors.length > 0) {
       return {
         status: 422,
@@ -420,13 +400,41 @@ export async function replaceAppTools(
       };
     }
   }
+  return null;
+}
 
+export async function replaceAppTools(
+  db: D1Database,
+  appId: string,
+  tools: unknown,
+  env?: Env,
+): Promise<{ status: number; payload: Record<string, unknown> }> {
+  if (!tools || !Array.isArray(tools)) {
+    return { status: 400, payload: { error: 'tools array required' } };
+  }
+  // Abuse bound, not a design target. Data-heavy apps register one tool per
+  // parameterized statement (chess-academy needs ~80, a real CRM/ERP surface
+  // crosses 120), so the cap sits well above any legitimate manifest (#116).
+  // Payload size is bounded separately by the byte-cost soft warning above.
+  // Counts the submitted code tools only; console endpoints have their own cap.
+  if (tools.length > MAX_TOOLS_PER_APP) {
+    return {
+      status: 400,
+      payload: { error: `too many tools: received ${tools.length}, max ${MAX_TOOLS_PER_APP} per app` },
+    };
+  }
+  const invalid = await validateToolSet(tools as ToolManifest[], env, appId, { source: 'code' });
+  if (invalid) return invalid;
+
+  // A deploy replaces the CODE tools only (#155): console-defined endpoints live
+  // in the same table under source = 'console' and are never touched here — a
+  // push with no mcp.json clears the code set and leaves the console's work.
   const now = Date.now();
   const stmts = [
-    db.prepare('DELETE FROM app_tools WHERE app_id = ?').bind(appId),
+    db.prepare("DELETE FROM app_tools WHERE app_id = ? AND source = 'code'").bind(appId),
     ...(tools as ToolManifest[]).map(tool =>
       db.prepare(
-        'INSERT INTO app_tools (app_id, name, manifest, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+        "INSERT INTO app_tools (app_id, name, manifest, created_at, updated_at, source) VALUES (?, ?, ?, ?, ?, 'code')",
       ).bind(appId, tool.name, JSON.stringify(tool), now, now),
     ),
   ];
@@ -511,9 +519,11 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
   const appId = c.req.param('appId')!;
   const teamMember = await requireAppAccess(c, appId, 'viewer').then(() => true, () => false);
 
+  // `source` tells the console which rows are code (mcp.json) and which are its
+  // own endpoints (#155). The console `config` column is never listed here.
   const result = await c.env.DB.prepare(
-    'SELECT name, manifest, updated_at FROM app_tools WHERE app_id = ? ORDER BY name',
-  ).bind(appId).all<{ name: string; manifest: string; updated_at: number }>();
+    'SELECT name, manifest, updated_at, source FROM app_tools WHERE app_id = ? ORDER BY name',
+  ).bind(appId).all<{ name: string; manifest: string; updated_at: number; source: ToolSource | null }>();
 
   const tools: unknown[] = [];
   for (const r of result.results ?? []) {
@@ -521,10 +531,11 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
     try {
       manifest = JSON.parse(r.manifest);
     } catch { continue; /* skip corrupted row */ }
+    const source: ToolSource = r.source === 'console' ? 'console' : 'code';
     tools.push(
       teamMember
-        ? { ...manifest, updated_at: r.updated_at }
-        : { ...publicToolView(manifest), updated_at: r.updated_at },
+        ? { ...manifest, updated_at: r.updated_at, source }
+        : { ...publicToolView(manifest), updated_at: r.updated_at, source },
     );
   }
 
@@ -537,7 +548,8 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
 toolsRoutes.delete('/apps/:appId/tools', async (c) => {
   const appId = c.req.param('appId')!;
   await requireAppOwner(c, appId);
-  await c.env.DB.prepare('DELETE FROM app_tools WHERE app_id = ?').bind(appId).run();
+  // Code rows only: console endpoints are removed through the audited endpoints route (#155).
+  await c.env.DB.prepare("DELETE FROM app_tools WHERE app_id = ? AND source = 'code'").bind(appId).run();
   return c.json({ ok: true });
 });
 
@@ -546,6 +558,6 @@ toolsRoutes.delete('/apps/:appId/tools/:name', async (c) => {
   const appId = c.req.param('appId')!;
   const name = c.req.param('name')!;
   await requireAppOwner(c, appId);
-  await c.env.DB.prepare('DELETE FROM app_tools WHERE app_id = ? AND name = ?').bind(appId, name).run();
+  await c.env.DB.prepare("DELETE FROM app_tools WHERE app_id = ? AND name = ? AND source = 'code'").bind(appId, name).run();
   return c.json({ ok: true });
 });
