@@ -368,6 +368,25 @@ describe('registerAppDiscoveryTools — list_app_tools / call_app_tool on the sh
     expect(withParams).not.toMatch(/SELECT|UPDATE|DELETE/);
   });
 
+  it('list_app_tools narrows a large listing with filter (name or description, case-insensitive) and says when nothing matches (#109)', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(() => Promise.resolve(listing()));
+    const h = setup();
+    const text = (await h.get('list_app_tools')!({ app_id: 'crm', filter: 'COMPAN' })).content[0].text;
+    expect(text).toContain('crm: 2 of 4 tool(s) matching "COMPAN"');
+    expect(text).toContain('list_companies');
+    expect(text).toContain('update_company');
+    expect(text).not.toContain('public_stats');
+    expect(text).not.toContain('admin_purge');
+    const byDescription = (await h.get('list_app_tools')!({ app_id: 'crm', filter: 'counts' })).content[0].text;
+    expect(byDescription).toContain('1 of 4');
+    expect(byDescription).toContain('public_stats');
+    const none = (await h.get('list_app_tools')!({ app_id: 'crm', filter: 'tournament_' })).content[0].text;
+    expect(none).toContain('0 of 4 tool(s) match "tournament_"');
+    expect(none).toContain('omit it to list all 4');
+    // No filter (or blank): the whole listing, as before.
+    expect((await h.get('list_app_tools')!({ app_id: 'crm', filter: '  ' })).content[0].text).toContain('crm: 4 tool(s)');
+  });
+
   it('list_app_tools says so, without erroring, for an app with no tools or an invalid id', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ tools: [] }), { status: 200 }));
     const h = setup();

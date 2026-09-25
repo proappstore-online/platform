@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
-import { mainStatementVerb, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_TOOLS_PER_APP } from './tools.js';
+import { mainStatementVerb, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from './tools.js';
 import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1');
@@ -1226,5 +1226,96 @@ describe('verify tools (#148)', () => {
     expect(((await res.json()) as { details: string[] }).details).toEqual([
       '"claim_game_over" statement[1]: statement has no :__user_id and no auth.caller_unscoped exemption',
     ]);
+  });
+});
+
+// #109: the pressure valve for mature apps — warn before the cap, keep every
+// guard at scale, and pin what a full-size registration costs.
+describe('large manifests (#109)', () => {
+  type Body = { registered?: number; warnings?: string[]; error?: string; details?: string[]; bytes?: number };
+  const put = (tools: unknown[]) => app.request(
+    '/v1/apps/test-app/tools',
+    { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools }) },
+    makeEnv({}, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }))),
+  );
+  const many = (n: number) => Array.from({ length: n }, (_, i) => ({ ...validTool, name: `list_items_${i}` }));
+  const countWarning = (w: string[] | undefined) => (w ?? []).find((x) => /of 500 tools/.test(x));
+
+  it(`warns from ${TOOLS_WARN_THRESHOLD} tools — naming count, cap and headroom — while registration succeeds; not one below`, async () => {
+    const at = await put(many(TOOLS_WARN_THRESHOLD));
+    expect(at.status).toBe(200);
+    const body = (await at.json()) as Body;
+    expect(body.registered).toBe(TOOLS_WARN_THRESHOLD);
+    const w = countWarning(body.warnings)!;
+    expect(w).toContain(`${TOOLS_WARN_THRESHOLD} of ${MAX_TOOLS_PER_APP} tools`);
+    expect(w).toContain('80% of the per-app cap');
+    expect(w).toContain(`${MAX_TOOLS_PER_APP - TOOLS_WARN_THRESHOLD} left`);
+    expect(w).toMatch(/consolidate|raise the cap/);
+
+    const below = (await (await put(many(TOOLS_WARN_THRESHOLD - 1))).json()) as Body;
+    expect(below.registered).toBe(TOOLS_WARN_THRESHOLD - 1);
+    expect(countWarning(below.warnings)).toBeUndefined();
+    expect(TOOLS_WARN_THRESHOLD).toBe(400);
+  });
+
+  it(`registers exactly ${MAX_TOOLS_PER_APP} (with the warning) and refuses ${MAX_TOOLS_PER_APP + 1} before validating anything`, async () => {
+    const full = (await (await put(many(MAX_TOOLS_PER_APP))).json()) as Body;
+    expect(full.registered).toBe(MAX_TOOLS_PER_APP);
+    expect(countWarning(full.warnings)).toContain('100% of the per-app cap, 0 left');
+    const fetchSpy = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchSpy.mockClear();
+    const over = await put(many(MAX_TOOLS_PER_APP + 1));
+    expect(over.status).toBe(400);
+    expect(((await over.json()) as Body).error).toBe(`too many tools: received ${MAX_TOOLS_PER_APP + 1}, max ${MAX_TOOLS_PER_APP} per app`);
+    expect(fetchSpy).not.toHaveBeenCalled(); // no schema-coherence round trip for a refused manifest
+  });
+
+  it('every security guarantee holds at 450 tools: one bad tool anywhere refuses the whole manifest, by name', async () => {
+    const base = many(450);
+    const cases: { tool: Record<string, unknown>; error: string | RegExp; details?: string }[] = [
+      { tool: { ...validTool, name: 'bad_param', sql: 'SELECT * FROM items WHERE user_id = :__user_id AND x = :undeclared LIMIT 5' }, error: 'tool "bad_param": SQL references :undeclared but it is not declared in params' },
+      { tool: { ...validTool, name: 'bad_semicolon', sql: 'SELECT * FROM items WHERE user_id = :__user_id LIMIT 5; DROP TABLE items' }, error: /semicolons|DROP/ },
+      { tool: { ...validTool, name: 'bad_ddl', sql: 'SELECT * FROM items WHERE user_id = :__user_id AND ALTER = 1 LIMIT 5' }, error: 'tool "bad_ddl": SQL must not contain ALTER' },
+      { tool: { ...validTool, name: 'bad_public', requires_auth: false, sql: 'SELECT id FROM items' }, error: 'tool "bad_public": public query tools must include a literal LIMIT of 500 or less' },
+      { tool: { ...validTool, name: 'bad_roles', requires_auth: false, sql: 'SELECT id FROM items LIMIT 10', auth: { app_roles: ['admin'] } }, error: 'tool "bad_roles": public query tools cannot declare auth roles' },
+      { tool: { ...validTool, name: 'bad_auth_flag', requires_auth: 'yes' }, error: 'tool "bad_auth_flag": requires_auth must be explicitly true or false' },
+      { tool: { ...validTool, name: 'unscoped_read', sql: 'SELECT * FROM items LIMIT 5' }, error: 'statements must include :__user_id or declare auth.caller_unscoped', details: '"unscoped_read": statement has no :__user_id and no auth.caller_unscoped exemption' },
+    ];
+    for (const c of cases) {
+      const at = 200 + cases.indexOf(c) * 30; // somewhere in the middle, not at either end
+      const tools = [...base.slice(0, at), c.tool, ...base.slice(at)];
+      const res = await put(tools);
+      expect(res.status, c.tool.name as string).toBe(400);
+      const body = (await res.json()) as Body;
+      if (typeof c.error === 'string') expect(body.error, c.tool.name as string).toBe(c.error); else expect(body.error).toMatch(c.error);
+      if (c.details) expect(body.details).toEqual([c.details]);
+    }
+    // Schema coherence still compiles EVERY statement, and a drift anywhere blocks the set by tool name.
+    validateResults = (stmts) => stmts.map((s) => ({ id: s.id, ok: s.id !== 'list_items_333#0', error: s.id === 'list_items_333#0' ? 'no such column: status' : undefined }));
+    const drift = await put(base);
+    expect(drift.status).toBe(422);
+    expect(((await drift.json()) as Body).details).toEqual(['tool "list_items_333": no such column: status']);
+  });
+
+  it('registration cost stays bounded across manifest sizes (50 / 100 / 250 / 500), one coherence round trip each', async () => {
+    const fetchSpy = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const timings: Record<number, number> = {};
+    for (const n of [50, 100, 250, 500]) {
+      fetchSpy.mockClear();
+      const t0 = performance.now();
+      const res = await put(many(n));
+      timings[n] = performance.now() - t0;
+      expect(res.status, `size ${n}`).toBe(200);
+      expect(((await res.json()) as Body).registered).toBe(n);
+      // The live-schema check is ONE batched /validate call carrying every statement — not one per tool.
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      const sent = JSON.parse(String((fetchSpy.mock.calls[0]![1] as RequestInit).body)) as { statements: unknown[] };
+      expect(sent.statements).toHaveLength(n);
+    }
+    // Generous absolute bound (CI runners vary); the point is a regression that
+    // makes registration quadratic or per-tool-networked shows up here, loudly.
+    for (const [n, ms] of Object.entries(timings)) expect(ms, `registering ${n} tools took ${ms.toFixed(0)} ms`).toBeLessThan(4_000);
+    // eslint-disable-next-line no-console
+    console.info(`[#109] registration timings ms: ${Object.entries(timings).map(([n, ms]) => `${n}=${ms.toFixed(0)}`).join(' ')}`);
   });
 });

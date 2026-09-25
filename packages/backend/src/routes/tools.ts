@@ -138,6 +138,14 @@ export const MANIFEST_BYTES_SOFT_LIMIT = 50_000;
 export const MAX_TOOLS_PER_APP = 500;
 
 /**
+ * Soft count threshold (#109): from here on registration still succeeds but
+ * warns, naming the count, the cap and the headroom, so an app team sees the
+ * limit coming in the deploy log long before a push fails at MAX_TOOLS_PER_APP.
+ * 80 % of the cap.
+ */
+export const TOOLS_WARN_THRESHOLD = 400;
+
+/**
  * What a manifest costs the model, not the database (#117).
  *
  * The cap counts tools; the cost is bytes. And the bytes that matter are the ones an
@@ -487,6 +495,15 @@ export async function replaceAppTools(
             'every MCP session on this app carries it in context on every call — consider slimming descriptions or adopting progressive disclosure',
         ]
       : [];
+  // Count headroom (#109): a second, independent warning as the manifest nears
+  // the hard cap, so the limit is announced while there is still room to plan.
+  if (tools.length >= TOOLS_WARN_THRESHOLD) {
+    warnings.push(
+      `Manifest registers ${tools.length} of ${MAX_TOOLS_PER_APP} tools (${Math.round((tools.length / MAX_TOOLS_PER_APP) * 100)}% of the per-app cap, ${MAX_TOOLS_PER_APP - tools.length} left); ` +
+        'registration fails above the cap — consolidate near-duplicate actions (one list_* with optional filters instead of one per column), ' +
+        'or open a platform issue with these numbers to raise the cap for this app (docs: mcp-app-tools → Budgeting for larger apps)',
+    );
+  }
   return {
     status: 200,
     payload: { ok: true, registered: tools.length, ...cost, warnings },

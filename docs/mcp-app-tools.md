@@ -206,6 +206,8 @@ These are injected by the platform — **do not** declare them in `params`:
   non-empty reason (shared catalog data, one-time codes). Never accept the
   caller's id as a client param.
 - Max 500 tools per app (the rejection names both counts: `received 537, max 500`).
+  From 400 tools registration still succeeds but warns with the count, the cap
+  and the headroom left (see [Budgeting for larger apps](#budgeting-for-larger-apps)).
 - Tool names starting with `api_` are reserved for console-defined endpoints.
 - `verify` tools must `requires_auth: true`; `:__verify_*` may appear only in
   their `statements`, only for outputs the named verifier declares, never in
@@ -370,6 +372,50 @@ The core set is chosen without `listChanged` promotion on purpose: clients that
 cache `tools/list` would not see a mid-session change, and the static core plus
 discovery pair needs no client cooperation. To keep a tool resident on a large
 app, mark it `core: true`; to shrink the payload, shorten descriptions.
+
+### Budgeting for larger apps
+
+A mature app can follow the registered-action model all the way — every
+browser and MCP call an action, RBAC in the SQL, raw SQL team-only — without
+running into a wall (platform #109). The limits, from soft to hard:
+
+| Signal | Threshold | What happens | What to do |
+|---|---|---|---|
+| Byte cost warning | manifest model-facing payload > 50 KB | registration succeeds; the deploy log warns with `bytes` / `estimatedTokens` | shorten descriptions; mark the resident set `core: true` |
+| Progressive disclosure | an app-scoped MCP session's `tools/list` ≥ 40 KB | the session pre-loads ≤ 10 core tools; the rest are reached through `list_app_tools` / `call_app_tool` | nothing — the split is automatic; use `list_app_tools({ filter })` to browse by group |
+| Count warning | ≥ 400 tools | registration succeeds; the deploy log warns with the count, the cap and the headroom | consolidate near-duplicates, or ask for a higher cap (below) |
+| Hard cap | > 500 tools | registration is refused; the deploy fails, naming both counts | consolidate, or ask for a higher cap before you need it |
+
+Every warning is a line in `warnings[]` of the registration response; the app's
+deploy workflow prints each as a `::warning::` annotation on the run, so the
+team sees it on the push that crossed the line, not on the push that failed.
+
+**Keep the manifest maintainable by grouping.** Name actions
+`<domain>_<verb>_<object>` and keep one domain per prefix —
+`tournament_list_pairings`, `tournament_set_result`, `puzzle_check_move`,
+`staff_adjudicate_game`. The prefix is what a model (or a reviewer) browses
+by: `list_app_tools({ filter: "tournament_" })` lists one group of a 500-tool
+app instead of all of it, and a manifest reads as a table of contents. A
+group that needs its own resident tools marks them `core: true` (at most 10
+across the app). Consolidate near-duplicates before adding: one
+`list_games` with optional `status` / `player_id` filters instead of one
+action per column; one `set_game_result` with a validated `result` param
+instead of three. Each consolidated action keeps the same guards — every
+statement still scopes on `:__user_id` (or declares `caller_unscoped`),
+every `:param` is declared, and the whole set is compiled against the live
+schema at registration — so consolidation never trades safety for count.
+
+**The extension path.** The 500 cap is an abuse bound, not a design target;
+it was 120 until real CRM/ERP-shaped manifests crossed it (#116). When a
+legitimate app nears it, open a platform issue with the numbers the deploy log
+already prints (tool count, `bytes`, `estimatedTokens`), what the next feature
+set adds, and which groups the manifest is organised into. Raising the cap is
+one constant (`MAX_TOOLS_PER_APP`) plus the registration-timing regression
+test that pins the cost of a full-size manifest, so it is a review, not a
+project. Nothing else in the registration path is sized by the cap: the
+validators, the `:__user_id` lint, the schema-coherence check and the
+public-query constraints run per statement, and progressive disclosure keeps
+MCP sessions the same size whatever the count.
 
 Use the shared platform endpoint for ProAppStore builder/operator workflows
 (platform, project and QA tools). It reaches app tools only through

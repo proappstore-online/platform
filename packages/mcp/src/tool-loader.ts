@@ -376,22 +376,30 @@ function registerDiscoveryPair(
   const listShape: z.ZodRawShape = {
     ...appIdArg,
     include_params: z.boolean().optional().describe("Append each tool's params (name, type, description). Off by default; ask for them when you are about to call one."),
+    filter: z.string().optional().describe("Only tools whose name or description contains this text (case-insensitive) — e.g. a group prefix like 'tournament_' on a large app, so the listing stays short."),
   };
   server.tool(
     'list_app_tools',
     listDescription,
     listShape,
     async (args) => {
-      const { app_id, include_params } = args as { app_id?: string; include_params?: boolean };
+      const { app_id, include_params, filter } = args as { app_id?: string; include_params?: boolean; filter?: string };
       const id = resolveAppId({ app_id });
       if (!id) return errText(`Error: invalid app_id "${app_id ?? ''}".`);
       const tools = await fetchTools(api, apiBase, id);
       if (tools.length === 0) {
         return { content: [{ type: 'text' as const, text: `${id} has no registered tools (or does not exist). Apps register tools by committing an mcp.json; list_apps shows the apps you can see.` }] };
       }
-      const lines = tools.map((t) => describeTool(t, include_params === true));
+      // #109: a large app (hundreds of tools) is browsed by group, not dumped whole.
+      const needle = (filter ?? '').trim().toLowerCase();
+      const matched = needle ? tools.filter((t) => t.name.toLowerCase().includes(needle) || (t.description ?? '').toLowerCase().includes(needle)) : tools;
       const call = scope ? `call_app_tool({ tool: "<name>", params: { … } })` : `call_app_tool({ app_id: "${id}", tool: "<name>", params: { … } })`;
-      return { content: [{ type: 'text' as const, text: `# ${id}: ${tools.length} tool(s)\n\n${lines.join('\n')}\n\nCall one with ${call}.` }] };
+      if (matched.length === 0) {
+        return { content: [{ type: 'text' as const, text: `# ${id}: 0 of ${tools.length} tool(s) match "${filter}". Try a shorter filter, or omit it to list all ${tools.length}.` }] };
+      }
+      const lines = matched.map((t) => describeTool(t, include_params === true));
+      const head = needle ? `# ${id}: ${matched.length} of ${tools.length} tool(s) matching "${filter}"` : `# ${id}: ${tools.length} tool(s)`;
+      return { content: [{ type: 'text' as const, text: `${head}\n\n${lines.join('\n')}\n\nCall one with ${call}.` }] };
     },
   );
 
