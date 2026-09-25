@@ -74,7 +74,10 @@ ADMIN_GITHUB_IDS = "gh:2824906"
 # redeploy-data-workers.yml for it (needs GITHUB_TOKEN with actions:write).
 # On demand: GET /v1/internal/session-key-drift with X-Internal-Token.
 [triggers]
-crons = ["*/15 * * * *"]
+# #123 needs a five-minute tick for durable registered-action schedules. The
+# handler keeps drift, alert evaluation and metering on their established
+# fifteen-minute/hourly cadence; do not add a second */15 trigger here.
+crons = ["*/5 * * * *"]
 
 [[d1_databases]]
 binding = "DB"

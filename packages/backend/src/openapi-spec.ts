@@ -3072,6 +3072,75 @@ export const openapiSpec: Record<string, unknown> = {
         ]
       }
     },
+    "/v1/apps/{appId}/scheduled-runs": {
+      "get": {
+        "tags": [
+          "Tools"
+        ],
+        "summary": "List scheduled registered-action runs (#123)",
+        "description": "Owner only. Returns recent platform-scheduled action history. Optional status is due, claimed, succeeded or failed; limit defaults to 50 and is capped at 200.",
+        "operationId": "get_v1_apps_appId_scheduled_runs",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "runs"
+                  ],
+                  "properties": {
+                    "runs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "run_id": { "type": "string" },
+                          "app_id": { "type": "string" },
+                          "action_name": { "type": "string" },
+                          "source": { "type": "string" },
+                          "due_at": { "type": "integer" },
+                          "claimed_at": { "type": "integer", "nullable": true },
+                          "finished_at": { "type": "integer", "nullable": true },
+                          "status": { "type": "string", "enum": ["due", "claimed", "succeeded", "failed"] },
+                          "changes": { "type": "integer", "nullable": true },
+                          "error": { "type": "string", "nullable": true }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        },
+        "security": [
+          { "bearerAuth": [] }
+        ],
+        "parameters": [
+          {
+            "name": "appId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["due", "claimed", "succeeded", "failed"] }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 200 }
+          }
+        ]
+      }
+    },
     "/v1/apps/{appId}/tools": {
       "put": {
         "tags": [

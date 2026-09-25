@@ -116,7 +116,7 @@
     },
     {
       "id": "background-work",
-      "title": "expiring tournament games: no cron \u2014 idempotent privileged sweep",
+      "title": "expiring tournament games: scheduled idempotent sweep",
       "requirements": "games idle 15 minutes must be marked abandoned even if nobody is watching",
       "expect": {
         "primitives": [
@@ -127,7 +127,6 @@
           "PAS-DATA-018"
         ],
         "unsupported": [
-          "Scheduled / background execution",
           "Trusted server-side app code"
         ],
         "rejected": [
@@ -139,23 +138,24 @@
       "class": "scenario"
     },
     {
-      "id": "blocker-unsupported-cron",
+      "id": "blocker-untrusted-scheduled-code",
       "class": "blocker",
       "blocker": "unsupported-requirement",
-      "title": "weekly digest: no cron \u2014 interim sweep action, cite #123",
-      "requirements": "send a digest every Monday",
+      "title": "weekly third-party digest needs app code — scheduled SQL cannot provide it",
+      "requirements": "call an external API every Monday and transform its response in app-owned JavaScript",
       "expect": {
         "unsupported": [
-          "Scheduled / background execution"
+          "Trusted server-side app code"
         ],
         "clauses": [
+          "PAS-DATA-014",
           "PAS-DATA-019"
         ],
         "rejected": [
           "browser timers",
-          "external cron"
-        ],
-        "issue": "#123"
+          "external cron",
+          "own Worker"
+        ]
       }
     },
     {

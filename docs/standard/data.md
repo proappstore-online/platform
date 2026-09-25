@@ -535,7 +535,7 @@ await app.actions.call('save_pdf', { data: base64 })                 // file in 
 
 **Applicability.** All apps.
 
-**Rationale.** The platform runs one Worker per app for data, provisioned and rebuilt by the platform (the bundle comes from `packages/data-worker`, not from the app). There is no app-code execution surface: the only trusted non-SQL path is the platform's own verifier registry (`verify` actions, #148), and there is no Pro cron yet (#123). An app-deployed Worker is outside the registry, unreachable by mediation, and drift by definition ([PAS-STACK-004](./stack.md#pas-stack-004)).
+**Rationale.** The platform runs one Worker per app for data, provisioned and rebuilt by the platform (the bundle comes from `packages/data-worker`, not from the app). There is no app-code execution surface: the only trusted non-SQL path is the platform's own verifier registry (`verify` actions, #148), plus bounded scheduled registered actions (#123). An app-deployed Worker is outside the registry, unreachable by mediation, and drift by definition ([PAS-STACK-004](./stack.md#pas-stack-004)).
 
 **Recommended implementation.** Express rules as SQL predicates ([PAS-DATA-008](#pas-data-008)); split multi-step logic into batch actions; where a platform verifier exists, use a `verify` action and guard the write on its output (`AND :__verify_over = 1`); for what neither can do, keep the client's result *advisory* (display, not authority) until a verifier exists.
 
@@ -700,38 +700,40 @@ room.send({ type: 'set_admin', uid: me })                                       
 
 **Supporting links.** [App actions security — batch tools](../app-actions-security.md#batch-tools-atomic-multi-statement-actions), [PAS-DATA-008](#pas-data-008).
 
-### PAS-DATA-019 — Background work is an idempotent, bounded, privileged action — and the absence of cron is recorded, not hidden {#pas-data-019}
+### PAS-DATA-019 — Background work uses a bounded scheduled registered action {#pas-data-019}
 
 **Severity:** Medium · **Verification:** Manual · **Enforcement:** none (recommended) · **Since:** 1.3
 
-**Rule.** Periodic maintenance (reaping stale rows, closing expired items, recomputing summaries) MUST be implemented as a registered action that is idempotent, bounded by `LIMIT`, scoped, gated to a privileged app role, and safe to run concurrently; it MAY be triggered from a privileged client session. The app MUST NOT rely on a browser timer, a third-party scheduler, or an app-owned Worker as a substitute for scheduled execution, and MUST document that the sweep is client-triggered until Pro cron exists.
+**Rule.** Periodic maintenance (reaping stale rows, closing expired items, recomputing summaries) MUST be an idempotent, `LIMIT`-bounded registered `execute` or `batch` action and, when it must run without a human, MAY declare its fixed `schedule` manifest field. A scheduled action MUST require auth, declare `auth.caller_unscoped.reason`, accept no caller input beyond fixed validated `schedule.params`, and remain safe under concurrent execution. The app MUST NOT use a browser timer, third-party scheduler, or app-owned Worker as a substitute.
 
 **Applicability.** Apps with time-based state.
 
-**Rationale.** There is no scheduled execution for static apps yet (#123). A sweep that runs when a coach opens the page is the honest interim; a `setInterval` in a background tab is not a scheduler, and an external cron hitting the app needs a credential the app must not hold.
+**Rationale.** The platform scheduler runs prepared registered actions under the synthetic `system:schedule` identity; it cannot impersonate an app user. D1 durable claims prevent duplicate execution, stale claims become failures, missed ticks do not backfill, and five consecutive failures disable the schedule and alert the owner. A browser timer is still not a scheduler, and an external cron adds credentials and loses platform run history.
 
-**Recommended implementation.** `reap_stale_games`: `UPDATE … WHERE status = 'active' AND updated_at < :__now - :idle_ms AND org_id IN (…caller's orgs…) LIMIT`-bounded via a sub-select; call it from the staff view on load; log what it changed.
+**Recommended implementation.** Keep a staff action with its human role guard for manual use. Add a separate parameterless or fixed-parameter `reap_stale_games_all` action for the scheduler: select only stale rows in an explicit `LIMIT`, declare why it is caller-unscoped, and use `schedule: { cron, params }`. Inspect `list_scheduled_runs` and alerts after deploy.
 
 **Conforming example.**
 
 ```json
-{ "name": "reap_stale_games", "operation": "execute", "requires_auth": true, "auth": { "app_roles": ["coach"] },
-  "sql": "UPDATE games SET status = 'abandoned', updated_at = :__now WHERE id IN (SELECT id FROM games WHERE status = 'active' AND updated_at < :__now - 900000 AND org_id IN (SELECT org_id FROM org_members WHERE user_id = :__user_id AND role = 'coach') LIMIT 100)",
-  "params": {} }
+{ "name": "reap_stale_games_all", "operation": "execute", "requires_auth": true,
+  "auth": { "caller_unscoped": { "reason": "Scheduled stale-game maintenance has no human caller." } },
+  "sql": "UPDATE games SET status = 'abandoned', updated_at = :__now WHERE id IN (SELECT id FROM games WHERE status = 'active' AND updated_at < :__now - :idle_ms LIMIT 100)",
+  "params": { "idle_ms": { "type": "integer" } },
+  "schedule": { "cron": "*/15 * * * *", "params": { "idle_ms": 900000 } } }
 ```
 
 **Non-conforming example.**
 
 ```ts
-setInterval(() => app.actions.call('reap_stale_games'), 60_000)     // a tab is not a scheduler
+setInterval(() => app.actions.call('reap_stale_games_all'), 60_000) // a tab is not a scheduler
 // or: an external cron service calling a public action that mutates
 ```
 
-**Evidence.** Configuration: sweep actions — guards, `LIMIT`, role; Source: timers or external triggers; README noting the interim.
+**Evidence.** Configuration: `schedule`, fixed params, unscoped reason and `LIMIT`; runtime: owner run history and alerts; Source: no timers or external triggers.
 
-**Remediation.** Rewrite the sweep as above; remove timers/external triggers; document.
+**Remediation.** Rewrite the sweep as above; remove timers/external triggers; register the manifest and verify its run history.
 
-**Tests.** Running the sweep twice in a row changes rows only once; a `member` cannot call it; the README states how it is triggered.
+**Tests.** Running the sweep twice changes rows only once; registration rejects sub-five-minute cron or non-fixed params; one stale claim recovers; five failed runs disable and alert; no missed minute is backfilled.
 
 **Supporting links.** [MCP app tools — limits and roadmap](../mcp-app-tools.md#limits-roadmap), [PAS-DATA-018](#pas-data-018), [PAS-AUTH-019](./auth.md#pas-auth-019).
 

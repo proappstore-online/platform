@@ -12,7 +12,7 @@
  */
 
 /** Tools on the shared /mcp endpoint. Independent of how many apps exist. */
-export const MCP_SHARED_TOOL_COUNT = 53;
+export const MCP_SHARED_TOOL_COUNT = 54;
 
 /** Fixed tools on /mcp/apps/<id> besides that app's own tools (`whoami`, `mcp_audit_log`). */
 export const MCP_APP_SCOPED_FIXED = 2;

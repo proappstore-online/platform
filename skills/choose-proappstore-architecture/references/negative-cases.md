@@ -1,9 +1,11 @@
 # Negative cases
 
 ## A need with no primitive
-"Send a digest every Monday" → Do not propose a browser timer, an external
-cron service or an app-owned Worker. Recommend the interim sweep action and
-cite #123. Blocker: **unsupported-requirement**.
+"Call a third-party API every Monday and run app-defined JavaScript over the
+result" → Do not propose a browser timer, an external cron service or an
+app-owned Worker. A scheduled registered action is bounded SQL only; record
+the result for manual review or propose a platform verifier. Blocker:
+**unsupported-requirement**.
 
 ## A surface that does not exist
 "Use `app.storage.resize()`" → `sdk_reference` (feature `storage`) shows no

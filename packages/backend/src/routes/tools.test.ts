@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
-import { mainStatementVerb, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from './tools.js';
+import { mainStatementVerb, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_SCHEDULED_ACTIONS_PER_APP, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from './tools.js';
 import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1');
@@ -748,6 +748,37 @@ describe('PUT /v1/apps/:appId/tools — unscoped statement rejection (#150)', ()
     expect((await put({ ...reapStale, auth: { caller_unscoped: {} } })).status).toBe(400);
   });
 
+  describe('scheduled registered actions (#123)', () => {
+    const scheduled = {
+      ...reapStale,
+      params: { idle_minutes: { type: 'integer' } },
+      auth: { caller_unscoped: { reason: 'maintenance has no human caller' } },
+      schedule: { cron: '*/15 * * * *', params: { idle_minutes: 30 } },
+    };
+
+    it('accepts a fixed, authenticated unscoped execute schedule and reports it for deploy logging', async () => {
+      const res = await put(scheduled);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ schedules: [{ name: 'reap_stale', cron: '*/15 * * * *' }] });
+    });
+
+    it('rejects query schedules, missing unscoped reasons, unresolved params and sub-five-minute cron', async () => {
+      expect((await put({ ...scheduled, operation: 'query', sql: 'SELECT 1 WHERE :__user_id = :__user_id LIMIT 1' })).status).toBe(400);
+      expect((await put({ ...scheduled, auth: {} })).status).toBe(400);
+      expect((await put({ ...scheduled, schedule: { cron: '*/15 * * * *', params: {} } })).status).toBe(400);
+      expect((await put({ ...scheduled, schedule: { cron: '*/2 * * * *', params: { idle_minutes: 30 } } })).status).toBe(400);
+    });
+
+    it('enforces the per-app scheduled-action cap', async () => {
+      const tools = Array.from({ length: MAX_SCHEDULED_ACTIONS_PER_APP + 1 }, (_, i) => ({ ...scheduled, name: `reap_stale_${i}` }));
+      const res = await app.request('/v1/apps/test-app/tools', {
+        method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools }),
+      }, makeEnv({}, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }))));
+      expect(res.status).toBe(400);
+      expect((await res.json() as { error: string }).error).toContain(`max ${MAX_SCHEDULED_ACTIONS_PER_APP} per app`);
+    });
+  });
+
   it('leaves the public requires_auth: false query path unaffected', async () => {
     const res = await put({
       name: 'get_org_by_slug',
@@ -877,11 +908,12 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
     expect(db.batch).toHaveBeenCalledTimes(1);
   });
 
-  it('treats empty/missing tools as a clear (200, DELETE-only batch)', async () => {
+  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset)', async () => {
     const { res, db } = await internalPost({ tools: [] }, { 'X-Internal-Token': 'secret' });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, registered: 0 });
-    expect(db.batch.mock.calls[0]![0]).toHaveLength(1);
+    expect(db.batch.mock.calls[0]![0]).toHaveLength(2);
+    expect(db.batch.mock.calls[0]![0][1]!.bind).toHaveBeenCalledWith('test-app');
 
     const missing = await internalPost({}, { 'X-Internal-Token': 'secret' });
     expect(missing.res.status).toBe(200);

@@ -85,6 +85,38 @@ export function registerPlatformTools(server: McpServer, env: Env) {
     }
   );
 
+  // ── list_scheduled_runs (#123) ─────────────────────────────
+  server.tool(
+    "list_scheduled_runs",
+    "List recent platform-scheduled registered-action runs for one app, including failures and the change count. Owner-only.",
+    {
+      app_id: z.string().describe("App ID (e.g. 'chess-academy')"),
+      token: z.string().describe("PAS session token"),
+      limit: z.number().int().min(1).max(200).optional().describe("Maximum history rows (default 50)"),
+      status: z.enum(["due", "claimed", "succeeded", "failed"]).optional().describe("Optional run status filter"),
+    },
+    async ({ app_id, token, limit, status }) => {
+      const query = new URLSearchParams();
+      if (limit !== undefined) query.set('limit', String(limit));
+      if (status) query.set('status', status);
+      const suffix = query.size ? `?${query}` : '';
+      const data = (await pasApi(env.API, env.API_BASE, `/v1/apps/${app_id}/scheduled-runs${suffix}`, token)) as {
+        runs?: Array<{ action_name: string; due_at: number; status: string; changes: number | null; error: string | null; finished_at: number | null }>;
+        error?: string;
+      };
+      if (data.error) return errText(`Error: ${data.error}`);
+      const runs = data.runs ?? [];
+      if (!runs.length) return { content: [{ type: "text" as const, text: `No scheduled-action runs recorded for **${app_id}**.` }] };
+      const lines = runs.map((run) => {
+        const when = new Date(run.due_at).toISOString();
+        const outcome = run.status === 'succeeded' ? '✅' : run.status === 'failed' ? '❌' : '⏳';
+        const detail = run.error ? ` — ${run.error}` : run.changes !== null ? ` — ${run.changes} change(s)` : '';
+        return `- ${outcome} ${when} **${run.action_name}** (${run.status})${detail}`;
+      });
+      return { content: [{ type: "text" as const, text: `Scheduled runs for **${app_id}**:\n\n${lines.join("\n")}` }] };
+    },
+  );
+
   // ── list_templates ─────────────────────────────────────────
   // #178: read-only discovery of the approved-template catalogue for the
   // create-app workflow. No auth, no side effects; the same data is public at

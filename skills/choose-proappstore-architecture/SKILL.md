@@ -47,8 +47,8 @@ not create, provision, deploy or audit anything; hand those off.
    `db`, `storage`, `maps`, `ai`, `notifications`, `sms`, `subscription`,
    `tenant`, `hooks`, `ui`, `recipes`, `design_system`) or `recipe`. If a
    surface is not there, say so — do not invent one.
-3. **Name the unsupported honestly.** Scheduled/background execution, trusted
-   server-side app code, server-authoritative realtime state, app-owned
+3. **Name the unsupported honestly.** Trusted server-side app code,
+   server-authoritative realtime state, app-owned
    Workers, per-app pricing, third-party identity and external databases are
    not platform features today; see
    [unsupported requirements](references/unsupported-requirements.md) for the

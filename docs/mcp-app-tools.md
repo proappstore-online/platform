@@ -171,6 +171,7 @@ against your app's own D1 tables.
 | `verifier` | required for `verify`: the id of the platform verifier that runs on the rows of `sql`. Currently `chess.replay`. |
 | `params` | declared inputs: `{ "name": { "type", "description?", "optional?", "default?", "max?" } }`. Types: `string`, `integer`, `number`, `boolean`. |
 | `requires_auth` | explicit `true` or `false`. `true` requires a session token. `false` is allowed only for constrained public `query` tools. SQL using `:__user_id` must require auth. |
+| `schedule` | optional platform schedule for an `execute` or `batch` action: `{ "cron": "*/15 * * * *", "params": { ... } }`. See [Scheduled actions](#scheduled-actions). |
 | `core` | optional boolean. On a large manifest (see below) `core: true` keeps this tool pre-loaded on the app's MCP session instead of deferring it to discovery. Ignored on a small manifest, where everything is pre-loaded anyway. |
 
 Use `requires_auth: true` for writes and user-scoped reads. Deliberately public
@@ -215,6 +216,49 @@ These are injected by the platform — **do not** declare them in `params`:
 
 A manifest that violates any rule is rejected — the whole batch fails, so a bad
 tool never half-registers.
+
+## Scheduled actions
+
+An `execute` or atomic `batch` action can run unattended on the platform's
+five-minute UTC scheduler. This is the bounded SQL alternative to app-owned
+Workers for reapers, expiries and summary maintenance; it is not arbitrary
+per-app compute.
+
+```json
+{
+  "name": "reap_stale_games_all",
+  "description": "Close stale active games across active tournaments",
+  "operation": "execute",
+  "sql": "UPDATE games SET status = 'abandoned', updated_at = :__now WHERE id IN (SELECT id FROM games WHERE status = 'active' AND updated_at < :__now - :idle_ms LIMIT 100)",
+  "params": { "idle_ms": { "type": "integer" } },
+  "requires_auth": true,
+  "auth": { "caller_unscoped": { "reason": "Scheduled maintenance has no human caller; rows are bounded by stale state." } },
+  "schedule": { "cron": "*/15 * * * *", "params": { "idle_ms": 1800000 } }
+}
+```
+
+Registration validates all of the following:
+
+- Five numeric cron fields in UTC (`*`, lists, ranges and steps), with no
+  interval below five minutes.
+- Only `execute` and `batch`; `requires_auth: true`; a non-empty
+  `auth.caller_unscoped.reason`. The executor binds `:__user_id` to the
+  synthetic `system:schedule`, which matches no app user. Never use a human
+  role guard for a scheduled action.
+- `schedule.params` is an object of declared parameters only and passes the
+  exact type/default validation used at runtime. There is no caller input.
+- At most five scheduled actions per app.
+
+Each due minute is first written and atomically claimed in the platform D1
+before the prepared action reaches the app data worker. Duplicate/overlapping
+ticks cannot run it twice; a stale claim is recovered as a failure. Missed
+minutes are never backfilled, and a still-claimed prior run suppresses the
+next due run rather than stacking work. Five consecutive failures disable that
+action until its manifest is re-registered and create an app alert.
+
+Owners can inspect `GET /v1/apps/:appId/scheduled-runs` (optional `status`,
+`limit`) or the MCP `list_scheduled_runs` tool. Registration/deploy logs print
+the action name and UTC cron.
 
 ## Verify actions
 

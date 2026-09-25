@@ -142,7 +142,7 @@ tables.
 
 | Class | Signal | What to say |
 |---|---|---|
-| **Unsupported requirement** | logic that is not bounded SQL, cron, an own Worker, cross-app data, destructive migrations | the interim pattern and the clause; the tracking issue (#123, #148) |
+| **Unsupported requirement** | logic that is not bounded SQL, an own Worker, cross-app data, destructive migrations | the interim pattern and the clause; the tracking issue (#148) |
 | **Product decision** | the tenancy model or who may see whose rows is undecided | ask; do not invent a scoping rule |
 | **Verification** | `sdk_reference` or the manifest reference lacks the key or method the user wants | say it does not exist; recommend the real one |
 | **Live schema** | `schema_status` shows a failed migration | stop designing on top of it; point at the runbook |

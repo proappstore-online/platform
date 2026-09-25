@@ -76,10 +76,10 @@ can complete, even if nobody is watching.
 
 | Need | Decision | Clause |
 |---|---|---|
-| the sweep | a `reap_stale_games` action: idempotent, `LIMIT`-bounded, gated to `coach`, scoped by club membership | [PAS-DATA-019](https://docs.proappstore.online/standard/data/#pas-data-019), [PAS-DATA-018](https://docs.proappstore.online/standard/data/#pas-data-018) |
-| trigger | run on load of the staff view; document in the README | [PAS-DATA-019](https://docs.proappstore.online/standard/data/#pas-data-019) |
-| the gap | scheduled execution is **unsupported** — cite #123; do not add browser timers or an external cron | [PAS-DATA-019](https://docs.proappstore.online/standard/data/#pas-data-019) |
+| the sweep | a separate `reap_stale_games_all` action: idempotent, `LIMIT`-bounded, caller-unscoped with a reason and fixed `idle_ms` | [PAS-DATA-019](https://docs.proappstore.online/standard/data/#pas-data-019), [PAS-DATA-018](https://docs.proappstore.online/standard/data/#pas-data-018) |
+| trigger | manifest `schedule: { cron: "*/15 * * * *", params: { idle_ms: 900000 } }`; inspect owner run history | [PAS-DATA-019](https://docs.proappstore.online/standard/data/#pas-data-019) |
+| boundary | no browser timers, external cron or app-owned Worker; scheduled actions are bounded SQL, not arbitrary compute | [PAS-DATA-019](https://docs.proappstore.online/standard/data/#pas-data-019) |
 
-Trade-off: the round completes only when a coach is present; that is the
-honest limit until Pro cron exists. Unsupported: cron (#123); verifying a
-checkmate claim server-side (#148).
+Trade-off: the scheduler cannot run arbitrary app code or impersonate a coach;
+the maintenance action must be safe under `system:schedule`. Unsupported:
+verifying a checkmate claim server-side (#148).

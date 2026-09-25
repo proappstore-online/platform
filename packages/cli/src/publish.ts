@@ -164,8 +164,11 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
           body: JSON.stringify({ tools: mcpManifest.tools }),
         });
         if (toolsRes.ok) {
-          const toolsData = (await toolsRes.json()) as { registered: number };
+          const toolsData = (await toolsRes.json()) as { registered: number; schedules?: Array<{ name: string; cron: string }> };
           process.stdout.write(`  [+] MCP tools: ${toolsData.registered} tool(s) registered\n`);
+          for (const schedule of toolsData.schedules ?? []) {
+            process.stdout.write(`  [+] Scheduled action: ${schedule.name} (${schedule.cron} UTC)\n`);
+          }
         } else {
           const errText = await toolsRes.text();
           process.stdout.write(`  [!] MCP tools: ${errText}\n`);

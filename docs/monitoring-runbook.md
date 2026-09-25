@@ -59,6 +59,7 @@ the implemented thresholds:
 | `action_failures` | `app_logs` `source = 'server'`, `category = 'action'` | ≥ 20 in the last 5 minutes (the "> 20 / 5 min" rule above) |
 | `server_5xx` | `app_logs` `source = 'server'`, `level = 'error'` (backend 5xx recorded by the operation-log hook) | ≥ 5 in the window ("sustained") |
 | `qa_failures` | `app_test_runs`, deploy/cron triggers | ≥ 2 consecutive failed runs with no pass since (the "2+ consecutive" rule; live now that #62 fixed stuck runs) |
+| `scheduled_action_failures` | scheduled registered-action runs | 5 consecutive failures disable that action until its manifest is re-registered; inspect `GET /v1/apps/:appId/scheduled-runs` or MCP `list_scheduled_runs` |
 
 The runbook's "5% of a route's sessions" is not computed yet (it needs session
 counts joined to routes); the absolute-plus-jump rule above is the starting

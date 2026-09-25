@@ -36,7 +36,9 @@ import { endpointsRoutes } from './routes/endpoints.js';
 import { tokenRoutes } from './routes/tokens.js';
 import { oidcSessionRoutes } from './routes/oidc-session.js';
 import { alertRoutes } from './routes/alerts.js';
+import { scheduledRunsRoutes } from './routes/scheduled-runs.js';
 import { evaluateErrorSpikes } from './lib/error-alerts.js';
+import { runScheduledActions } from './lib/scheduled-actions.js';
 import { tokenUserFor } from './lib/app-tokens.js';
 import { actionRoutes } from './routes/actions.js';
 import { secretsRoutes } from './routes/secrets.js';
@@ -44,7 +46,7 @@ import { keysRoutes } from './routes/keys.js';
 import { authRoutes } from './routes/auth.js';
 import { servicesRoutes } from './routes/services.js';
 import { engagementRoutes } from './routes/engagements.js';
-import { payoutCronRoutes } from './routes/payout-cron.js';
+import { payoutCronRoutes, runScheduledPayouts } from './routes/payout-cron.js';
 import { payoutMeteringRoutes, reconcileAiGateway } from './routes/payout-metering.js';
 import { teamRoutes } from './routes/teams.js';
 import { inviteRoutes } from './routes/invites.js';
@@ -253,6 +255,7 @@ v1.route('/', endpointsRoutes);
 v1.route('/', tokenRoutes);
 v1.route('/', oidcSessionRoutes);
 v1.route('/', alertRoutes);
+v1.route('/', scheduledRunsRoutes);
 v1.route('/', actionRoutes);
 v1.route('/', secretsRoutes);
 v1.route('/', keysRoutes);
@@ -281,15 +284,25 @@ export { Room } from './do/room.js';
  */
 export default {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => app.fetch(request, env, ctx),
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    // #123 runs on the five-minute platform tick. It is durable and has no
+    // backfill behaviour; a delayed/missed tick never turns into a burst.
+    ctx.waitUntil(runScheduledActions({ env, now: event.scheduledTime ?? Date.now() }).catch((e) => console.error(`[schedule] executor failed: ${(e as Error).message}`)));
+    // The pre-existing checks remain every fifteen minutes even though the
+    // Worker now receives a five-minute tick for scheduled app actions.
+    const tickAt = event.scheduledTime ?? Date.now();
+    if (new Date(tickAt).getUTCMinutes() % 15 !== 0) return;
     ctx.waitUntil(checkSessionKeyDrift({ env }));
+    // The long-standing payout route is idempotent but used to have no
+    // scheduler. Run the exact same internal-token-protected route here.
+    ctx.waitUntil(runScheduledPayouts(env).catch((e) => console.error(`[payout] scheduled run failed: ${(e as Error).message}`)));
     // #107: aggregate app_logs + QA runs per app for the last window and record
     // spikes (lib/error-alerts.ts). Failures here must not take the drift check down.
     ctx.waitUntil(evaluateErrorSpikes({ env }).catch((e) => console.error(`[alert] evaluation failed: ${(e as Error).message}`)));
     // Reconcile provider-authoritative token/cost rows once hourly. This is
     // independent of payout execution; operators can run the same endpoint on
     // demand before closing a month.
-    if (new Date().getUTCMinutes() === 0 && env.CF_AI_GATEWAY_API_TOKEN && env.AI_GATEWAY_ID) {
+    if (new Date(tickAt).getUTCMinutes() === 0 && env.CF_AI_GATEWAY_API_TOKEN && env.AI_GATEWAY_ID) {
       const today = new Date().toISOString().slice(0, 10);
       ctx.waitUntil(reconcileAiGateway(env, today, today).catch((e) => console.error(`[payout-meter] AI Gateway reconciliation failed: ${(e as Error).message}`)));
     }

@@ -65,6 +65,7 @@ checked against `server.json` by `src/server-json.test.ts`). Tools marked
 | `list_apps` | List your published apps on ProAppStore. |
 | `deploy_status` | Check the deploy status of a Pro app (last 5 GitHub Actions runs). |
 | `schema_status` | Show an app's D1 migration status (#33) — recent deploy-time migration attempts and whether the latest one applied or FAILED. |
+| `list_scheduled_runs` | List recent platform-scheduled registered-action runs for one app, including failures and the change count. Owner-only. |
 | `list_templates` | List the approved ProAppStore app templates and the selection contract: id, purpose, supported categories, required SDK/CLI/Node, capabilities, sec… |
 | `app_info` | Get info about any app on ProAppStore — live URL, repo, data worker, store listing. |
 | `platform_guide` | Get the ProAppStore platform guide (skills.md) for AI-assisted development. |

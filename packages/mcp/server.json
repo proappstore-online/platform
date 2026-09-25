@@ -36,6 +36,10 @@
       "description": "Show an app's D1 migration status (#33) — recent deploy-time migration attempts and whether the latest one applied or FAILED."
     },
     {
+      "name": "list_scheduled_runs",
+      "description": "List recent platform-scheduled registered-action runs for one app, including failures and the change count. Owner-only."
+    },
+    {
       "name": "list_templates",
       "description": "List the approved ProAppStore app templates and the selection contract: id, purpose, supported categories, required SDK/CLI/Node, capabilities, sec…"
     },
@@ -275,6 +279,7 @@
           "list_apps",
           "deploy_status",
           "schema_status",
+          "list_scheduled_runs",
           "list_templates",
           "app_info",
           "platform_guide",

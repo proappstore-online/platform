@@ -14,6 +14,12 @@ export interface ToolAuth {
   caller_unscoped?: { reason: string };
 }
 
+/** Fixed input carried by a platform schedule. Schedules never receive caller input. */
+export interface ToolSchedule {
+  cron: string;
+  params: Record<string, unknown>;
+}
+
 export type ToolOperation = 'query' | 'execute' | 'batch' | 'verify';
 
 /** Prefix of the magic placeholders a verify action's write statements bind the verdict through (#148). */
@@ -39,6 +45,8 @@ export interface ToolManifest {
   params: Record<string, ToolParam>;
   requires_auth?: boolean;
   auth?: ToolAuth;
+  /** Platform-owned periodic execution for an authenticated, explicitly unscoped write. */
+  schedule?: ToolSchedule;
   /** Stay pre-loaded on a large app's MCP session instead of being deferred to discovery (#117). */
   core?: boolean;
 }
@@ -56,7 +64,7 @@ export function prepareActionQuery(
   if (typeof manifest.sql !== 'string') {
     throw new Error(`tool ${manifest.name} has no sql`);
   }
-  return bindStatement(manifest.sql, resolveParams(manifest, input), userId);
+  return bindStatement(manifest.sql, resolveToolParams(manifest, input), userId);
 }
 
 /**
@@ -73,7 +81,7 @@ export function prepareActionBatch(
   if (!Array.isArray(manifest.statements) || manifest.statements.length === 0) {
     throw new Error(`tool ${manifest.name} has no statements`);
   }
-  const resolved = resolveParams(manifest, input);
+  const resolved = resolveToolParams(manifest, input);
   // One clock reading for the whole batch: a later statement may guard on the
   // timestamp an earlier one wrote (`WHERE updated_at = :__now`), which must not
   // depend on the millisecond ticking over between two occurrences.
@@ -93,7 +101,7 @@ export function prepareVerifyInput(
   if (typeof manifest.sql !== 'string') {
     throw new Error(`tool ${manifest.name} has no sql`);
   }
-  return bindStatement(manifest.sql, resolveParams(manifest, input), userId);
+  return bindStatement(manifest.sql, resolveToolParams(manifest, input), userId);
 }
 
 /**
@@ -109,7 +117,7 @@ export function prepareVerifyWrites(
   output: Record<string, unknown>,
 ): PreparedQuery[] {
   if (!Array.isArray(manifest.statements) || manifest.statements.length === 0) return [];
-  const resolved = resolveParams(manifest, input);
+  const resolved = resolveToolParams(manifest, input);
   const verdict = Object.fromEntries(Object.entries(output).map(([k, v]) => [`${VERIFY_PARAM_PREFIX}${k}`, v]));
   const now = Date.now();
   return manifest.statements.map((sql) => bindStatement(sql, resolved, userId, now, verdict));
@@ -144,7 +152,9 @@ function bindStatement(
   return { sql, params };
 }
 
-function resolveParams(
+/** Resolve and type-check an action input. Registration uses this for the
+ * schedule's fixed params; runtime preparation uses the exact same rules. */
+export function resolveToolParams(
   manifest: ToolManifest,
   input: Record<string, unknown>,
 ): Record<string, unknown> {

@@ -569,9 +569,12 @@ async function registerMcpTools(
       headers: { 'Content-Type': 'application/json', 'X-Internal-Token': env.INTERNAL_TOKEN },
       body: JSON.stringify({ tools }),
     }));
-    const r = await res.json().catch(() => ({})) as { registered?: number; error?: string };
+    const r = await res.json().catch(() => ({})) as { registered?: number; schedules?: Array<{ name: string; cron: string }>; error?: string };
     if (res.ok) {
       deps.logActivity('deploy', `MCP tools registered: ${r.registered ?? 0} tool(s) → callable at mcp.proappstore.online`, ticketId);
+      for (const schedule of r.schedules ?? []) {
+        deps.logActivity('deploy', `Scheduled action registered: ${schedule.name} (${schedule.cron} UTC)`, ticketId);
+      }
     } else {
       deps.logActivity('deploy', `MCP tools not registered (will retry next deploy): ${r.error ?? `backend ${res.status}`}`, ticketId);
     }

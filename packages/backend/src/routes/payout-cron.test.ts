@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
+import { runScheduledPayouts } from './payout-cron.js';
 import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1');
@@ -41,6 +42,14 @@ function env(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof moc
 }
 
 describe('POST /v1/internal/payouts/run', () => {
+  it('uses the same guarded payout route from the scheduler', async () => {
+    const database = mockD1(
+      mockStmt({ all: { results: [] } }), // unpaid aggregation query
+    );
+    await expect(runScheduledPayouts(env({}, database) as never)).resolves.toBeUndefined();
+    expect(database.prepare).toHaveBeenCalledWith(expect.stringContaining('FROM engagements'));
+  });
+
   it('returns 403 without INTERNAL_TOKEN', async () => {
     const res = await app.request('/v1/internal/payouts/run', {
       method: 'POST',

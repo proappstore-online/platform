@@ -26,6 +26,25 @@ import { checkSessionKeyDrift } from '../lib/session-key-drift.js';
 export const payoutCronRoutes = new Hono<{ Bindings: Env }>();
 
 /**
+ * Invoke the existing internal-only payout route from the platform scheduler.
+ * Keeping this on the route preserves its constant-time internal-token gate
+ * and gives manual and scheduled operation the identical idempotent path.
+ */
+export async function runScheduledPayouts(env: Env): Promise<void> {
+  if (!env.INTERNAL_TOKEN) {
+    console.error('[payout] scheduled run skipped: INTERNAL_TOKEN is not configured');
+    return;
+  }
+  const response = await payoutCronRoutes.fetch(new Request('https://internal.pas/internal/payouts/run', {
+    method: 'POST',
+    headers: { 'X-Internal-Token': env.INTERNAL_TOKEN },
+  }), env);
+  if (!response.ok) {
+    throw new Error(`internal payout run returned ${response.status}: ${(await response.text()).slice(0, 800)}`);
+  }
+}
+
+/**
  * GET /internal/session-key-drift — the #70 drift check, on demand (the cron runs the
  * same function). Internal-token only: the report names apps and the fan-out state.
  */

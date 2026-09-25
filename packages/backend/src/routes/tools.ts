@@ -13,7 +13,7 @@ import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { requireAppAccess, requireAppOwner } from '../lib/auth.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
-import { VERIFY_PARAM_PREFIX, type ToolManifest, type ToolParam } from '../lib/action-sql.js';
+import { VERIFY_PARAM_PREFIX, resolveToolParams, type ToolManifest, type ToolParam } from '../lib/action-sql.js';
 import { ENDPOINT_NAME_PREFIX } from '../lib/endpoint-sql.js';
 import { getVerifier, VERIFIERS } from '../lib/verifiers/index.js';
 
@@ -144,6 +144,8 @@ export const MAX_TOOLS_PER_APP = 500;
  * 80 % of the cap.
  */
 export const TOOLS_WARN_THRESHOLD = 400;
+/** A scheduled action is deliberately scarce: each is unattended platform work. */
+export const MAX_SCHEDULED_ACTIONS_PER_APP = 5;
 
 /**
  * What a manifest costs the model, not the database (#117).
@@ -287,7 +289,98 @@ function validateManifest(tool: ToolManifest, opts: { source: ToolSource } = { s
     }
   }
 
+  if (tool.schedule !== undefined) {
+    if (tool.operation !== 'execute' && tool.operation !== 'batch') return 'schedule is only allowed on execute or batch tools';
+    if (tool.requires_auth !== true) return 'scheduled tools must require auth';
+    if (typeof tool.auth?.caller_unscoped?.reason !== 'string' || !tool.auth.caller_unscoped.reason.trim()) {
+      return 'scheduled tools must declare a non-empty auth.caller_unscoped.reason';
+    }
+    const schedule = tool.schedule;
+    if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule)) return 'schedule must be an object';
+    if (typeof schedule.cron !== 'string' || !validScheduledCron(schedule.cron)) {
+      return 'schedule.cron must be a valid five-field UTC cron with a minimum interval of five minutes';
+    }
+    if (!schedule.params || typeof schedule.params !== 'object' || Array.isArray(schedule.params)) {
+      return 'schedule.params must be an object';
+    }
+    for (const key of Object.keys(schedule.params)) {
+      if (!(key in params)) return `schedule.params references undeclared param "${key}"`;
+    }
+    try {
+      // Defaults and optional params are deterministic fixed values too; required
+      // params must be supplied or this throws exactly as a real invocation would.
+      resolveToolParams(tool, schedule.params);
+    } catch (e) {
+      return `schedule.params are invalid: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
   return null;
+}
+
+/**
+ * The scheduler understands numeric five-field UTC cron only. Keeping the
+ * grammar deliberately compact means the validation and executor cannot drift:
+ * wildcard, lists, ranges and steps are enough for normal maintenance jobs.
+ */
+const CRON_FIELD_LIMITS: ReadonlyArray<readonly [number, number]> = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]];
+
+function cronFieldValues(raw: string, min: number, max: number): number[] | null {
+  const values = new Set<number>();
+  for (const part of raw.split(',')) {
+    if (!part) return null;
+    const [base, stepText] = part.split('/');
+    if (part.split('/').length > 2 || !base) return null;
+    const step = stepText === undefined ? 1 : Number(stepText);
+    if (!Number.isInteger(step) || step < 1 || step > max - min + 1) return null;
+    let start: number;
+    let end: number;
+    if (base === '*') { start = min; end = max; }
+    else if (/^\d+$/.test(base)) { start = end = Number(base); }
+    else {
+      const match = /^(\d+)-(\d+)$/.exec(base);
+      if (!match) return null;
+      start = Number(match[1]); end = Number(match[2]);
+    }
+    if (start < min || end > max || start > end) return null;
+    for (let value = start; value <= end; value += step) values.add(value);
+  }
+  return [...values].sort((a, b) => a - b);
+}
+
+/** Five-field numeric cron whose minute set never fires less than five minutes apart. */
+export function validScheduledCron(cron: string): boolean {
+  const fields = cron.trim().split(/\s+/);
+  if (fields.length !== 5) return false;
+  const values = fields.map((field, i) => cronFieldValues(field, CRON_FIELD_LIMITS[i]![0], CRON_FIELD_LIMITS[i]![1]));
+  if (values.some((v) => v === null)) return false;
+  const minutes = values[0]!;
+  for (let i = 0; i < minutes.length; i++) {
+    const next = i + 1 < minutes.length ? minutes[i + 1]! : minutes[0]! + 60;
+    if (next - minutes[i]! < 5) return false;
+  }
+  return true;
+}
+
+/** Does this validated five-field cron match a UTC minute? DOM/DOW follow the
+ * conventional cron OR rule when both fields are restricted. */
+export function scheduledCronMatches(cron: string, timestamp: number): boolean {
+  const fields = cron.trim().split(/\s+/);
+  if (fields.length !== 5) return false;
+  const values = fields.map((field, i) => cronFieldValues(field, CRON_FIELD_LIMITS[i]![0], CRON_FIELD_LIMITS[i]![1]));
+  if (values.some((v) => v === null)) return false;
+  const date = new Date(timestamp);
+  const minute = date.getUTCMinutes();
+  const hour = date.getUTCHours();
+  const day = date.getUTCDate();
+  const month = date.getUTCMonth() + 1;
+  const weekday = date.getUTCDay();
+  if (!values[0]!.includes(minute) || !values[1]!.includes(hour) || !values[3]!.includes(month)) return false;
+  const domRestricted = fields[2] !== '*';
+  const dowRestricted = fields[4] !== '*';
+  const dom = values[2]!.includes(day);
+  const dow = values[4]!.includes(weekday);
+  return domRestricted && dowRestricted ? dom || dow : dom && dow;
 }
 
 /** Every SQL statement a tool runs, in order: batch members; a verify tool's input SELECT then its writes; else the one `sql`. */
@@ -389,6 +482,10 @@ export async function validateToolSet(
   appId: string,
   opts: { source: ToolSource } = { source: 'code' },
 ): Promise<{ status: number; payload: Record<string, unknown> } | null> {
+  const scheduled = tools.filter((tool) => tool.schedule !== undefined);
+  if (scheduled.length > MAX_SCHEDULED_ACTIONS_PER_APP) {
+    return { status: 400, payload: { error: `too many scheduled actions: received ${scheduled.length}, max ${MAX_SCHEDULED_ACTIONS_PER_APP} per app` } };
+  }
   for (const tool of tools) {
     const err = validateManifest(tool, opts);
     if (err) return { status: 400, payload: { error: `tool "${tool?.name}": ${err}` } };
@@ -476,6 +573,9 @@ export async function replaceAppTools(
   const now = Date.now();
   const stmts = [
     db.prepare("DELETE FROM app_tools WHERE app_id = ? AND source = 'code'").bind(appId),
+    // Re-registration is the explicit breaker reset: a deploy confirms that
+    // the owner reviewed the manifest before unattended work resumes.
+    db.prepare("DELETE FROM scheduled_action_state WHERE app_id = ? AND source = 'code'").bind(appId),
     ...(tools as ToolManifest[]).map(tool =>
       db.prepare(
         "INSERT INTO app_tools (app_id, name, manifest, created_at, updated_at, source) VALUES (?, ?, ?, ?, ?, 'code')",
@@ -488,6 +588,10 @@ export async function replaceAppTools(
   // threshold — never a rejection: the deploy workflow prints `warnings[]` as
   // `::warning::mcp.json: …`, so the author sees the number where the deploy is.
   const cost = measureManifestCost(tools as ToolManifest[]);
+  const schedules = (tools as ToolManifest[])
+    .filter((tool) => tool.schedule)
+    .map((tool) => ({ name: tool.name, cron: tool.schedule!.cron }));
+  if (schedules.length) console.log(`[schedule] registered app=${appId} ${schedules.map((s) => `${s.name}@${s.cron}`).join(', ')}`);
   const warnings: string[] =
     cost.bytes > MANIFEST_BYTES_SOFT_LIMIT
       ? [
@@ -506,7 +610,7 @@ export async function replaceAppTools(
   }
   return {
     status: 200,
-    payload: { ok: true, registered: tools.length, ...cost, warnings },
+    payload: { ok: true, registered: tools.length, ...cost, schedules, warnings },
   };
 }
 

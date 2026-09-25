@@ -379,7 +379,8 @@ delivered earnings per developer and nets `developer_clawbacks` first:
 - [~] Dev payout — logic + endpoint built (`POST /v1/internal/payouts/run`,
   transfers `total_dev_earned_cents` to Stripe Connect, records `service_payouts`,
   stamps `payout_month`, nets refund debt and records zero-transfer months in
-  `clawback_settlements`); the scheduled cron trigger isn't wired yet (no cron in `wrangler.toml`)
+  `clawback_settlements`); the shared backend scheduler invokes the same
+  idempotent internal route every fifteen minutes
 - [ ] Wire engagement to agent-teams project (workspace link endpoints exist; no auto-provision service binding)
 - [ ] Push notifications for new messages (WebPush via existing infrastructure)
 

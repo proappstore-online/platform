@@ -111,7 +111,9 @@ function actionWrites(manifest: ToolManifest): boolean {
   return true;
 }
 
-async function forwardToDataWorker(env: Env, appId: string, endpoint: string, payload: unknown, token: string | null): Promise<Response> {
+/** Shared prepared-action forwarder. Scheduled actions use this exact trusted
+ * data-worker hop with a synthetic identity, never the public HTTP action route. */
+export async function forwardToDataWorker(env: Env, appId: string, endpoint: string, payload: unknown, token: string | null): Promise<Response> {
   return fetch(dataWorkerUrl(env, appId, endpoint), {
     method: 'POST',
     headers: {
