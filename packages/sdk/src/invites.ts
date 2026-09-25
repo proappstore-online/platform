@@ -45,6 +45,22 @@ export interface RedeemResult {
   appId: string;
 }
 
+/** A platform-managed mapping from a data role to a role it may invite. */
+export interface DelegatedInvitePolicy {
+  delegateRole: string;
+  grantableRole: string;
+  createdBy: string;
+  createdAt: number;
+}
+
+/** A platform-managed, app-local grant to administer one opaque group id. */
+export interface GroupAdminGrant {
+  userId: string;
+  group: string;
+  grantedBy: string;
+  grantedAt: number;
+}
+
 /**
  * Invite links — platform-level join codes with link + QR.
  *
@@ -73,13 +89,16 @@ export class Invites {
     private readonly auth: AuthLike,
   ) {}
 
-  /** Create an invite link. Caller must have developer-level app access. */
+  /**
+   * Create an invite link. App-team developers retain app-wide access. A
+   * delegated app user needs a matching policy and group-admin grant.
+   */
   async create(opts: CreateInviteOptions = {}): Promise<Invite> {
     const res = await this.post(`/v1/apps/${encodeURIComponent(this.appId)}/invites`, opts);
     return res as Invite;
   }
 
-  /** List all invites for this app. Caller must have developer-level app access. */
+  /** List all invites, or only the caller's administered groups when delegated. */
   async list(): Promise<InviteListItem[]> {
     const res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/invites`);
     if (res.status === 401) { this.auth.handleUnauthorized(); throw new Error('Not signed in.'); }
@@ -88,7 +107,7 @@ export class Invites {
     return data.invites;
   }
 
-  /** Revoke an invite. Caller must have developer-level app access. */
+  /** Revoke an invite, scoped to the caller's administered groups when delegated. */
   async revoke(inviteId: string): Promise<void> {
     const res = await this.auth.authenticatedFetch(
       `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/invites/${encodeURIComponent(inviteId)}`,
@@ -108,6 +127,59 @@ export class Invites {
   async redeem(code: string): Promise<RedeemResult> {
     const res = await this.post(`/v1/invites/${encodeURIComponent(code)}/redeem`, {});
     return res as RedeemResult;
+  }
+
+  /** List delegated-invite policy mappings. Requires app-team admin access. */
+  async listDelegatedPolicies(): Promise<DelegatedInvitePolicy[]> {
+    const res = await this.get('/invite-policies');
+    return (res as { policies: DelegatedInvitePolicy[] }).policies;
+  }
+
+  /** Allow a data role to create invites for one explicit app role. Team admin only. */
+  async addDelegatedPolicy(delegateRole: string, grantableRole: string): Promise<void> {
+    await this.post(`/v1/apps/${encodeURIComponent(this.appId)}/invite-policies`, { delegateRole, grantableRole });
+  }
+
+  /** Remove a delegated-invite policy mapping. Team admin only. */
+  async removeDelegatedPolicy(delegateRole: string, grantableRole: string): Promise<void> {
+    await this.del('/invite-policies', { delegateRole, grantableRole });
+  }
+
+  /** List platform-owned per-user group-administration grants. Team admin only. */
+  async listGroupAdminGrants(): Promise<GroupAdminGrant[]> {
+    const res = await this.get('/group-admin-grants');
+    return (res as { grants: GroupAdminGrant[] }).grants;
+  }
+
+  /** Grant one user administration of an opaque group id. Team admin only. */
+  async grantGroupAdmin(userId: string, group: string): Promise<void> {
+    await this.post(`/v1/apps/${encodeURIComponent(this.appId)}/group-admin-grants`, { userId, group });
+  }
+
+  /** Revoke one user's group-administration grant. Team admin only. */
+  async revokeGroupAdmin(userId: string, group: string): Promise<void> {
+    await this.del('/group-admin-grants', { userId, group });
+  }
+
+  private async get(path: string): Promise<unknown> {
+    const res = await this.auth.authenticatedFetch(
+      `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}${path}`,
+    );
+    if (res.status === 401) { this.auth.handleUnauthorized(); throw new Error('Not signed in.'); }
+    if (!res.ok) throw new Error(`invites${path} failed: ${res.status}`);
+    return res.json();
+  }
+
+  private async del(path: string, body: unknown): Promise<void> {
+    const res = await this.auth.authenticatedFetch(
+      `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}${path}`,
+      { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+    );
+    if (res.status === 401) { this.auth.handleUnauthorized(); throw new Error('Not signed in.'); }
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`invites${path} failed: ${res.status} ${text}`);
+    }
   }
 
   private async post(path: string, body: unknown): Promise<unknown> {

@@ -30,7 +30,10 @@ export type { ConnectionState, Room, RoomMessage, RoomPeer, RoomCloseInfo, RoomC
 export { ROOM_CLOSE_CODES, classifyClose } from './rooms.js';
 export type { DefaultRole, RoleAssignment } from './roles.js';
 export { DEFAULT_ROLES } from './roles.js';
-export type { Invite, InviteListItem, CreateInviteOptions, RedeemResult } from './invites.js';
+export type {
+  Invite, InviteListItem, CreateInviteOptions, RedeemResult,
+  DelegatedInvitePolicy, GroupAdminGrant,
+} from './invites.js';
 export { Actions } from './actions.js';
 export type { ActionVerifyResult } from './actions.js';
 export { Tokens } from './tokens.js';

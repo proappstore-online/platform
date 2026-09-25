@@ -56,6 +56,24 @@ owner?"). Both are fixed; the three scopes stay.
 | **Team roles** | `viewer` · `po` · `developer` · `admin` · `owner` | `team_members` table | "What can this user do to *this app's* build/data/config?" |
 | **App roles** | `owner` · `member` · `moderator` · `editor` · `viewer` (+ custom) | `app_roles` table | "What can this user do *inside the running app's* domain?" (RBAC the app itself uses) |
 
+## Delegated invite administration is a separate grant, not a fourth role system
+
+Multi-tenant apps can let an in-app administrator invite members without
+making them part of the development team. This does not change any of the three
+role systems above. Instead, the platform records two additional authorities:
+
+- `app_invite_policies` maps an app data role (for example `org_admin`) to the
+  specific app roles it may invite.
+- `app_group_admin_grants` gives one user administration of one opaque group id
+  within one app.
+
+Both are required for delegated create; delegated list and revoke are limited
+to the granted groups. App-team `developer`+ retains its historical app-wide
+invite access. A group-admin grant never adds an `app_roles` row or
+`team_members` row, and its `(app_id, group_id, user_id)` key prevents a grant
+in one app from applying to another. See [Delegated, group-scoped
+invites](./delegated-invites.md) for the SDK and management APIs.
+
 ### The collisions (read carefully)
 - **`admin`** is BOTH a platform role AND a team role. They are unrelated: a
   team `admin` is not a platform `admin`.

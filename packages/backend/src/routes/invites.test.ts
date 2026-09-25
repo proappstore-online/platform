@@ -3,6 +3,7 @@ import { app } from '../index.js';
 import { testToken, TEST_SK } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1');
+const DELEGATE_TOK = await testToken('gh:2', { login: 'delegate' });
 
 interface InviteRow {
   id: string; app_id: string; code: string; role: string; group_id: string | null;
@@ -13,11 +14,16 @@ interface InviteRow {
 function makeEnv(opts: {
   creatorId?: string;
   teamMembers?: { user_id: string; role: string }[];
+  appRoles?: { user_id: string; role_name: string }[];
+  policies?: { delegate_role: string; grantable_role: string }[];
+  groupGrants?: { user_id: string; group_id: string }[];
   invites?: InviteRow[];
 } = {}) {
   const members = opts.teamMembers ?? [];
+  const appRoles = opts.appRoles ?? [];
+  const policies = opts.policies ?? [];
+  const groupGrants = opts.groupGrants ?? [];
   const invites = opts.invites ?? [];
-  let lastInserted: Record<string, unknown> | null = null;
 
   return {
     DB: {
@@ -31,6 +37,18 @@ function makeEnv(opts: {
               const userId = args[1] ?? args[0];
               return members.find(m => m.user_id === userId) ?? null;
             }
+            if (sql.includes('app_invite_policies')) {
+              const appId = args[0];
+              if (sql.includes('p.grantable_role')) {
+                const [, group, userId, role] = args;
+                return groupGrants.some(g => g.group_id === group && g.user_id === userId)
+                  && policies.some(p => p.grantable_role === role && appRoles.some(r => r.user_id === userId && r.role_name === p.delegate_role))
+                  ? { 1: 1 } : null;
+              }
+              const [, userId] = args;
+              return policies.some(p => appRoles.some(r => r.user_id === userId && r.role_name === p.delegate_role))
+                ? { 1: 1 } : null;
+            }
             if (sql.includes('FROM invites') && sql.includes('code')) {
               const code = args[0];
               return invites.find(i => i.code === code) ?? null;
@@ -38,10 +56,24 @@ function makeEnv(opts: {
             return null;
           },
           all: async () => {
-            if (sql.includes('FROM invites')) return { results: invites };
+            if (sql.includes('FROM app_group_admin_grants')) {
+              const [, userId] = args;
+              return { results: groupGrants.filter(g => g.user_id === userId).map(g => ({ group_id: g.group_id })) };
+            }
+            if (sql.includes('FROM invites')) {
+              const groups = args.slice(1) as string[];
+              return { results: groups.length ? invites.filter(i => i.group_id !== null && groups.includes(i.group_id)) : invites };
+            }
             return { results: [] };
           },
-          run: async () => ({ meta: { changes: 1 } }),
+          run: async () => {
+            if (sql.startsWith('DELETE FROM invites') && sql.includes('group_id IN')) {
+              const [, , ...groups] = args as string[];
+              const id = args[0] as string;
+              return { meta: { changes: invites.some(i => i.id === id && i.group_id !== null && groups.includes(i.group_id)) ? 1 : 0 } };
+            }
+            return { meta: { changes: 1 } };
+          },
         }),
       }),
     } as unknown as D1Database,
@@ -56,10 +88,10 @@ function makeEnv(opts: {
   };
 }
 
-function req(method: string, path: string, body?: unknown) {
+function req(method: string, path: string, body?: unknown, token = TOK) {
   const init: RequestInit = {
     method,
-    headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
   };
   if (body) init.body = JSON.stringify(body);
   return new Request(`https://api.test.com${path}`, init);
@@ -84,6 +116,14 @@ describe('POST /v1/apps/:appId/invites', () => {
     const env = makeEnv({ creatorId: 'gh:99', teamMembers: [{ user_id: 'gh:1', role: 'developer' }] });
     const res = await app.fetch(req('POST', '/v1/apps/chess/invites', { role: 'admin' }), env);
     expect(res.status).toBe(403);
+  });
+
+  it('keeps normal developer invite access app-wide', async () => {
+    const env = makeEnv({ creatorId: 'gh:99', teamMembers: [{ user_id: 'gh:1', role: 'developer' }] });
+    const res = await app.fetch(req('POST', '/v1/apps/chess/invites', {
+      role: 'student', group: 'any-tenant',
+    }), env);
+    expect(res.status).toBe(200);
   });
 
   it('rejects a malformed role string', async () => {
@@ -112,6 +152,37 @@ describe('POST /v1/apps/:appId/invites', () => {
     );
     expect(res.status).toBe(401);
   });
+
+  it('allows a configured data-role delegate to invite only its policy role in its granted group', async () => {
+    const env = makeEnv({
+      creatorId: 'gh:99',
+      appRoles: [{ user_id: 'gh:2', role_name: 'org_admin' }],
+      policies: [{ delegate_role: 'org_admin', grantable_role: 'student' }],
+      groupGrants: [{ user_id: 'gh:2', group_id: 'school-a' }],
+    });
+    const res = await app.fetch(req('POST', '/v1/apps/chess/invites', {
+      role: 'student', group: 'school-a',
+    }, DELEGATE_TOK), env);
+    expect(res.status).toBe(200);
+  });
+
+  it('refuses a delegate outside its group or grantable-role policy', async () => {
+    const env = makeEnv({
+      creatorId: 'gh:99',
+      appRoles: [{ user_id: 'gh:2', role_name: 'org_admin' }],
+      policies: [{ delegate_role: 'org_admin', grantable_role: 'student' }],
+      groupGrants: [{ user_id: 'gh:2', group_id: 'school-a' }],
+    });
+    const foreign = await app.fetch(req('POST', '/v1/apps/chess/invites', {
+      role: 'student', group: 'school-b',
+    }, DELEGATE_TOK), env);
+    expect(foreign.status).toBe(403);
+
+    const escalated = await app.fetch(req('POST', '/v1/apps/chess/invites', {
+      role: 'teacher', group: 'school-a',
+    }, DELEGATE_TOK), env);
+    expect(escalated.status).toBe(403);
+  });
 });
 
 describe('GET /v1/apps/:appId/invites', () => {
@@ -130,6 +201,22 @@ describe('GET /v1/apps/:appId/invites', () => {
     expect(data.invites).toHaveLength(1);
     expect(data.invites[0]!.code).toBe('ABC123');
   });
+
+  it('lists only the delegate’s administered group invites', async () => {
+    const env = makeEnv({
+      creatorId: 'gh:99',
+      appRoles: [{ user_id: 'gh:2', role_name: 'org_admin' }],
+      policies: [{ delegate_role: 'org_admin', grantable_role: 'student' }],
+      groupGrants: [{ user_id: 'gh:2', group_id: 'school-a' }],
+      invites: [
+        { id: 'a', app_id: 'chess', code: 'SCHA01', role: 'student', group_id: 'school-a', metadata: null, max_uses: 1, used_count: 0, expires_at: Date.now() + 86400000, created_by: 'gh:2', created_at: Date.now() },
+        { id: 'b', app_id: 'chess', code: 'SCHB01', role: 'student', group_id: 'school-b', metadata: null, max_uses: 1, used_count: 0, expires_at: Date.now() + 86400000, created_by: 'gh:3', created_at: Date.now() },
+      ],
+    });
+    const res = await app.fetch(req('GET', '/v1/apps/chess/invites', undefined, DELEGATE_TOK), env);
+    expect(res.status).toBe(200);
+    expect((await res.json() as { invites: { id: string }[] }).invites.map(i => i.id)).toEqual(['a']);
+  });
 });
 
 describe('DELETE /v1/apps/:appId/invites/:id', () => {
@@ -139,6 +226,54 @@ describe('DELETE /v1/apps/:appId/invites/:id', () => {
     expect(res.status).toBe(200);
     const data = await res.json() as { ok: boolean };
     expect(data.ok).toBe(true);
+  });
+
+  it('does not reveal or revoke a different group’s invite to a delegate', async () => {
+    const env = makeEnv({
+      creatorId: 'gh:99',
+      appRoles: [{ user_id: 'gh:2', role_name: 'org_admin' }],
+      policies: [{ delegate_role: 'org_admin', grantable_role: 'student' }],
+      groupGrants: [{ user_id: 'gh:2', group_id: 'school-a' }],
+      invites: [{ id: 'foreign', app_id: 'chess', code: 'SCHB01', role: 'student', group_id: 'school-b', metadata: null, max_uses: 1, used_count: 0, expires_at: Date.now() + 86400000, created_by: 'gh:3', created_at: Date.now() }],
+    });
+    const res = await app.fetch(req('DELETE', '/v1/apps/chess/invites/foreign', undefined, DELEGATE_TOK), env);
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('delegated invite administration', () => {
+  it('lets a team admin set policy and group grants, without granting an app role', async () => {
+    const env = makeEnv({ creatorId: 'gh:1' });
+    const policy = await app.fetch(req('POST', '/v1/apps/chess/invite-policies', {
+      delegateRole: 'org_admin', grantableRole: 'student',
+    }), env);
+    expect(policy.status).toBe(200);
+    expect(await policy.json()).toMatchObject({ ok: true, delegateRole: 'org_admin', grantableRole: 'student' });
+
+    const grant = await app.fetch(req('POST', '/v1/apps/chess/group-admin-grants', {
+      userId: 'gh:2', group: 'school-a',
+    }), env);
+    expect(grant.status).toBe(200);
+    expect(await grant.json()).toMatchObject({ ok: true, userId: 'gh:2', group: 'school-a' });
+  });
+
+  it('does not let a group grant substitute for a policy-backed app role', async () => {
+    const env = makeEnv({
+      creatorId: 'gh:99',
+      groupGrants: [{ user_id: 'gh:2', group_id: 'school-a' }],
+    });
+    const res = await app.fetch(req('POST', '/v1/apps/chess/invites', {
+      role: 'student', group: 'school-a',
+    }, DELEGATE_TOK), env);
+    expect(res.status).toBe(403);
+  });
+
+  it('restricts policy and group-grant management to the app team', async () => {
+    const env = makeEnv({ creatorId: 'gh:99' });
+    const res = await app.fetch(req('POST', '/v1/apps/chess/invite-policies', {
+      delegateRole: 'org_admin', grantableRole: 'student',
+    }, DELEGATE_TOK), env);
+    expect(res.status).toBe(403);
   });
 });
 

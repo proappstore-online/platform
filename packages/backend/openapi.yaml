@@ -741,6 +741,160 @@ paths:
         required: true
         schema:
           type: string
+  /v1/apps/{appId}/invite-policies:
+    get:
+      tags:
+      - Invites
+      summary: List delegated invite policies
+      description: App-team admin only. Lists the data-role to invite-role mappings used for group-scoped delegation.
+      operationId: get_v1_apps_appId_invite_policies
+      responses:
+        '200':
+          description: Success
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags:
+      - Invites
+      summary: Add delegated invite policy
+      description: App-team admin only. Adds one delegateRole to grantableRole mapping; it does not grant either app role.
+      operationId: post_v1_apps_appId_invite_policies
+      responses:
+        '200':
+          description: Success
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [delegateRole, grantableRole]
+              properties:
+                delegateRole: { type: string }
+                grantableRole: { type: string }
+    delete:
+      tags:
+      - Invites
+      summary: Delete delegated invite policy
+      operationId: delete_v1_apps_appId_invite_policies
+      responses:
+        '200':
+          description: Success
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [delegateRole, grantableRole]
+              properties:
+                delegateRole: { type: string }
+                grantableRole: { type: string }
+  /v1/apps/{appId}/group-admin-grants:
+    get:
+      tags:
+      - Invites
+      summary: List group administration grants
+      description: App-team admin only. Lists platform-owned per-user grants for app-local groups.
+      operationId: get_v1_apps_appId_group_admin_grants
+      responses:
+        '200':
+          description: Success
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags:
+      - Invites
+      summary: Grant group administration
+      description: App-team admin only. This does not grant an app role or team membership.
+      operationId: post_v1_apps_appId_group_admin_grants
+      responses:
+        '200':
+          description: Success
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, group]
+              properties:
+                userId: { type: string }
+                group: { type: string }
+    delete:
+      tags:
+      - Invites
+      summary: Revoke group administration
+      operationId: delete_v1_apps_appId_group_admin_grants
+      responses:
+        '200':
+          description: Success
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: appId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, group]
+              properties:
+                userId: { type: string }
+                group: { type: string }
   /v1/apps/{appId}/kv:
     get:
       tags:
