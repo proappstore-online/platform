@@ -21,7 +21,9 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from '
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const SMOKE_REQUIRED = ['client', 'version', 'date', 'runner', 'tool_calls', 'outcome', 'session_id', 'audit_log_url'];
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const marketPath = join(ROOT, 'marketplace.json');
 const SKILLS = join(ROOT, 'skills');
 const INDEX = join(SKILLS, 'index.json');
 const SUMMARY = join(ROOT, 'docs', 'skills', 'evaluations.md');
@@ -130,7 +132,6 @@ for (const dir of readdirSync(SKILLS).filter((d) => statSync(join(SKILLS, d)).is
 {
   const names = entries.map((e) => e.name).sort();
   const pluginPath = join(ROOT, '.claude-plugin', 'plugin.json');
-  const marketPath = join(ROOT, 'marketplace.json');
   const claudeMarketPath = join(ROOT, '.claude-plugin', 'marketplace.json');
   for (const p of [pluginPath, marketPath, claudeMarketPath]) if (!existsSync(p)) fail(`missing package manifest ${relative(ROOT, p)}`);
   if (existsSync(pluginPath)) {
@@ -151,6 +152,22 @@ for (const dir of readdirSync(SKILLS).filter((d) => statSync(join(SKILLS, d)).is
     }
     if (!Array.isArray(market.clients) || market.clients.length < 3) fail('marketplace.json must list the supported clients');
     for (const c of market.clients ?? []) for (const k of ['client', 'install', 'update', 'uninstall', 'smoke_evidence']) if (!c[k]) fail(`marketplace.json client ${c.client ?? '?'} lacks ${k}`);
+    // #169: smoke evidence is a structured record, never free text. Awaiting rows
+    // are honest; a recorded row must carry every required field, non-empty.
+    for (const c of market.clients ?? []) {
+      const ev = c.smoke_evidence;
+      if (!ev || typeof ev !== 'object' || Array.isArray(ev)) { fail(`marketplace.json client ${c.client}: smoke_evidence must be an object`); continue; }
+      if (ev.status !== 'awaiting-run' && ev.status !== 'passed') fail(`marketplace.json client ${c.client}: smoke_evidence.status must be "awaiting-run" or "passed"`);
+      if (ev.client !== c.client) fail(`marketplace.json client ${c.client}: smoke_evidence.client must match the row`);
+      if (ev.status === 'passed') {
+        for (const k of SMOKE_REQUIRED) {
+          const v = ev[k];
+          const ok = k === 'tool_calls' ? Array.isArray(v) && v.length > 0 && v.every((t) => typeof t === 'string' && t) : typeof v === 'string' && v.trim() !== '';
+          if (!ok) fail(`marketplace.json client ${c.client}: passed smoke_evidence lacks ${k}`);
+        }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ev.date))) fail(`marketplace.json client ${c.client}: smoke_evidence.date must be YYYY-MM-DD`);
+      }
+    }
     if (market.mcp?.remote !== 'https://mcp.proappstore.online/mcp') fail('marketplace.json must point at the ProAppStore MCP endpoint');
   }
   if (existsSync(claudeMarketPath)) {
@@ -230,20 +247,24 @@ lines.push('## Install');
 lines.push('');
 lines.push('The plugin manifest is [`.claude-plugin/plugin.json`](https://github.com/proappstore-online/platform/blob/main/.claude-plugin/plugin.json) (skills + the MCP endpoint); the client-neutral discovery manifest with per-client install, update and uninstall steps is [`marketplace.json`](https://github.com/proappstore-online/platform/blob/main/marketplace.json); the human-readable version is [`skills/README.md`](https://github.com/proappstore-online/platform/blob/main/skills/README.md).');
 lines.push('');
-lines.push('## Supported-client smoke evidence — pending #169');
+lines.push('## Supported-client smoke evidence');
 lines.push('');
-lines.push('Everything above is machine-verified in this repository. Evidence that a real client loads and runs the skills is **not yet recorded**: it belongs to the plugin packaging and client smoke tests tracked in [#169](https://github.com/proappstore-online/platform/issues/169). Until that lands, no client is listed as supported here. When it does, each client row must carry exactly these fields, and a row with a missing field is not evidence:');
-lines.push('');
-lines.push('| Field | Meaning |');
-lines.push('|---|---|');
-lines.push('| client, version | the Agent Skills client and its version (e.g. Codex, Claude Code, Copilot) |');
-lines.push('| skill, digest | the skill name and the `Verified content digest` above at the time of the run |');
-lines.push('| prompt | the exact positive prompt from `evals/triggers.json` that was used |');
-lines.push('| triggered | whether the client selected this skill and no other |');
-lines.push('| tool calls | the MCP tools called, in order, as reported by `mcp_audit_log` |');
-lines.push('| outcome | the observed result against the output template (sections present) |');
-lines.push('| date, operator | when and who ran it |');
-lines.push('| run link | the CI job or session record |');
+{
+  const market = JSON.parse(readFileSync(marketPath, 'utf8'));
+  const rows = (market.clients ?? []).map((c) => c.smoke_evidence ?? {});
+  const passed = rows.filter((r) => r.status === 'passed');
+  lines.push(`Everything above is machine-verified in this repository. Evidence that a client loads and runs the skills is a structured record per client in [\`marketplace.json\`](https://github.com/proappstore-online/platform/blob/main/marketplace.json) (\`smoke_evidence\`), filled in by whoever performs the run and validated by the release gate: an \`awaiting-run\` row is honest, while a \`passed\` row must carry every required field. Currently **${passed.length} of ${rows.length}** client rows have passed smoke evidence.`);
+  lines.push('');
+  lines.push('| Client | Status | Date | Runner | Skill | Outcome |');
+  lines.push('|---|---|---|---|---|---|');
+  for (const r of rows) lines.push(`| ${r.client ?? '?'} | ${r.status ?? '?'} | ${r.date || '—'} | ${r.runner || '—'} | ${r.skill || '—'} | ${r.outcome || '—'} |`);
+  lines.push('');
+  lines.push('Required fields of a passed row (the gate refuses a passed row missing any):');
+  lines.push('');
+  lines.push('| Field | Meaning |');
+  lines.push('|---|---|');
+  for (const [k, v] of Object.entries(market.smoke_evidence_schema?.fields ?? {})) lines.push(`| \`${k}\`${(market.smoke_evidence_schema?.required ?? []).includes(k) ? '' : ' (recommended)'} | ${v} |`);
+}
 lines.push('');
 const summaryMd = `${lines.join('\n')}\n`;
 

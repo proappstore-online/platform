@@ -1,0 +1,27 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "proappstore",
+  "version": "1.0.0",
+  "description": "Portable ProAppStore Agent Skills and the ProAppStore MCP server for creating, securing, shipping, upgrading and auditing apps.",
+  "author": {
+    "name": "proappstore-online",
+    "url": "https://proappstore.online"
+  },
+  "homepage": "https://docs.proappstore.online/skills/",
+  "repository": "https://github.com/proappstore-online/platform",
+  "license": "MIT",
+  "keywords": ["proappstore", "agent-skills", "mcp", "cloudflare", "d1", "pwa"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "ProAppStore",
+        "shortDescription": "Workflows and MCP tools for ProAppStore apps.",
+        "longDescription": "Seven portable, security-reviewed Agent Skills with the ProAppStore MCP server. Read-only by default; provisioning is dry-run followed by explicit confirmation.",
+        "developerName": "proappstore-online",
+        "category": "Development",
+        "capabilities": ["Read", "Write"],
+        "websiteURL": "https://docs.proappstore.online/skills/"
+      }
+    }
+  }
+}

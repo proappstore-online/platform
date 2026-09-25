@@ -78,6 +78,7 @@ const mainSidebar = [
       { text: "MCP: App Tools", link: "/mcp-app-tools" },
       { text: "Agent Customization", link: "/agent-customization" },
       { text: "AI Gateway (Agent Teams)", link: "/ai-gateway" },
+      { text: "Agent Skills", link: "/skills/" },
     ],
   },
   {

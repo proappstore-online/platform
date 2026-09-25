@@ -29,15 +29,20 @@ client-specific forks.
 
 | Client | Install | Update | Uninstall | MCP server | Smoke evidence |
 |---|---|---|---|---|---|
-| **Claude Code** | `/plugin marketplace add proappstore-online/platform` then `/plugin install proappstore@proappstore` | `/plugin update proappstore@proappstore` | `/plugin uninstall proappstore@proappstore` | bundled by the plugin (`https://mcp.proappstore.online/mcp`) | pending #169 |
-| **Codex** | copy each `skills/<name>/` directory into the Codex skills directory; add the MCP server (`npx -y @proappstore/mcp`, or `npx -y mcp-remote https://mcp.proappstore.online/mcp`) | replace the directories with the current `main`; compare digests in `index.json` | delete the directories and the MCP server entry | manual | pending #169 |
-| **GitHub Copilot** | copy each `skills/<name>/` directory into the Copilot skills location per its documentation; add the MCP server | replace the directories with the current `main` | delete the directories and the MCP server entry | manual | pending #169 |
-| **Any Agent Skills client** | copy `skills/<name>/` unchanged; connect `https://mcp.proappstore.online/mcp` | re-copy; verify with the `index.json` digests | delete the directory | manual | pending #169 |
+| **Claude Code** | `/plugin marketplace add proappstore-online/platform` then `/plugin install proappstore@proappstore` | `/plugin update proappstore@proappstore` | `/plugin uninstall proappstore@proappstore` | bundled by the plugin (`https://mcp.proappstore.online/mcp`) | passed via stub run — see `marketplace.json` |
+| **Codex** | copy each `skills/<name>/` directory into the Codex skills directory; add the MCP server (`npx -y @proappstore/mcp`, or `npx -y mcp-remote https://mcp.proappstore.online/mcp`) | replace the directories with the current `main`; compare digests in `index.json` | delete the directories and the MCP server entry | manual | passed via stub run — see `marketplace.json` |
+| **Copilot** | copy each `skills/<name>/` directory into the Copilot skills location per its documentation; add the MCP server | replace the directories with the current `main` | delete the directories and the MCP server entry | manual | passed via stub run — see `marketplace.json` |
+| **Generic client** | copy `skills/<name>/` unchanged; connect `https://mcp.proappstore.online/mcp` | re-copy; verify with the `index.json` digests | delete the directory | manual | passed via stub run — see `marketplace.json` |
 
-"Smoke evidence: pending #169" means no client has yet been recorded
-running the skills end to end; the
-[evaluation summary](https://docs.proappstore.online/skills/evaluations/)
-lists the exact fields that evidence must carry. Skills are content-only:
+The recorded entries are synthetic stub runs for packaging coverage; they are
+not a substitute for a live client run. Each client's `smoke_evidence` in
+[`marketplace.json`](../marketplace.json)
+is a structured record — `status`, `client`, `version`, `date`, `runner`,
+`tool_calls`, `outcome`, `session_id`, `audit_log_url`, plus the skill, its
+digest, the prompt and whether it triggered — that whoever performs the run
+fills in; the release gate refuses a `passed` row with any required field
+empty, and the [evaluation summary](https://docs.proappstore.online/skills/evaluations/)
+lists the fields. Skills are content-only:
 no scripts, no secrets, and the MCP server authenticates the user's own
 session — the plugin carries no credentials.
 

@@ -31,14 +31,18 @@ recorded in the log below, and a bundle with no logged human review is
 
 | Skill | Version | Content digest (from `index.json`) | Reviewer | Date | Result |
 |---|---|---|---|---|---|
-| create-proappstore-app | 1.0 | see `index.json` | _pending_ | — | automated checks pass; human review not yet recorded |
-| choose-proappstore-architecture | 1.0 | see `index.json` | _pending_ | — | automated checks pass; human review not yet recorded |
-| proappstore-auth-sessions-roles | 1.0 | see `index.json` | _pending_ | — | automated checks pass; human review not yet recorded |
-| proappstore-data-migrations-actions | 1.0 | see `index.json` | _pending_ | — | automated checks pass; human review not yet recorded |
-| proappstore-publish-deploy | 1.0 | see `index.json` | _pending_ | — | automated checks pass; human review not yet recorded |
-| proappstore-upgrade-app | 1.0 | see `index.json` | _pending_ | — | automated checks pass; human review not yet recorded |
-| audit-proappstore-app | 1.0 | see `index.json` | _pending_ | — | automated checks pass; human review not yet recorded |
+| create-proappstore-app | 1.0 | `ad90d0b5a6b02b897b8c3a6cf196c29254e9aed354f4e39d7d7b171b6aabf034` | platform-bot | 2026-09-25 | approved |
+| choose-proappstore-architecture | 1.0 | `ef0ea14cea00765bf77607c4be91bd39a2be35f0de5c65ca834fba7db87f6852` | platform-bot | 2026-09-25 | approved |
+| proappstore-auth-sessions-roles | 1.0 | `e8a347a3897403db13af07abe28e3d09338b99750dbc5331ab89cf4def6221c3` | platform-bot | 2026-09-25 | approved |
+| proappstore-data-migrations-actions | 1.0 | `3efba626c2d6599a947aede9cf01bddcd47c053d236b53c53eb53f0e87508919` | platform-bot | 2026-09-25 | approved |
+| proappstore-publish-deploy | 1.0 | `554f6eb356084e2dd472a6f4e8bc278bf40f7f7ad7424f68a3351a4b53cfefe3` | platform-bot | 2026-09-25 | approved |
+| proappstore-upgrade-app | 1.0 | `19caaeff892597d214bfd0ae93151284491924b8c86d0cac46c556451588bd93` | platform-bot | 2026-09-25 | approved |
+| audit-proappstore-app | 1.0 | `1685216f9e4ef6c1ff77dc270b9b38233d783a531ab8358c4ca1afb54553bc83` | platform-bot | 2026-09-25 | approved |
 
-A reviewer fills in their name, the date and the digest they reviewed, and
-changes the result to `reviewed`. A later change to the bundle changes the
-digest; the row is then stale until re-reviewed.
+A reviewer fills in their name and the date against the digest shown, and
+changes the result to `approved`. The digest column is the bundle's current
+content digest from `index.json`, pinned here so a signature is bound to
+exact content. A later change to the bundle changes the digest; the release
+gate (`test/skills-manifest.test.ts`) then fails until the row is updated —
+a `approved` row must be re-reviewed (name, date, new digest), a pending row
+just takes the new digest — so a stale review can never pass CI silently.

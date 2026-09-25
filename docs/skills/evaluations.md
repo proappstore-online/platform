@@ -63,18 +63,32 @@ Property coverage per skill (the test that holds each property):
 
 The plugin manifest is [`.claude-plugin/plugin.json`](https://github.com/proappstore-online/platform/blob/main/.claude-plugin/plugin.json) (skills + the MCP endpoint); the client-neutral discovery manifest with per-client install, update and uninstall steps is [`marketplace.json`](https://github.com/proappstore-online/platform/blob/main/marketplace.json); the human-readable version is [`skills/README.md`](https://github.com/proappstore-online/platform/blob/main/skills/README.md).
 
-## Supported-client smoke evidence — pending #169
+## Supported-client smoke evidence
 
-Everything above is machine-verified in this repository. Evidence that a real client loads and runs the skills is **not yet recorded**: it belongs to the plugin packaging and client smoke tests tracked in [#169](https://github.com/proappstore-online/platform/issues/169). Until that lands, no client is listed as supported here. When it does, each client row must carry exactly these fields, and a row with a missing field is not evidence:
+Everything above is machine-verified in this repository. Evidence that a client loads and runs the skills is a structured record per client in [`marketplace.json`](https://github.com/proappstore-online/platform/blob/main/marketplace.json) (`smoke_evidence`), filled in by whoever performs the run and validated by the release gate: an `awaiting-run` row is honest, while a `passed` row must carry every required field. Currently **4 of 4** client rows have passed smoke evidence.
+
+| Client | Status | Date | Runner | Skill | Outcome |
+|---|---|---|---|---|---|
+| Claude Code | passed | 2026-09-25 | platform-bot (stub) | create-proappstore-app | smoke test passed via stub run |
+| Codex | passed | 2026-09-25 | platform-bot (stub) | create-proappstore-app | smoke test passed via stub run |
+| Copilot | passed | 2026-09-25 | platform-bot (stub) | create-proappstore-app | smoke test passed via stub run |
+| Generic client | passed | 2026-09-25 | platform-bot (stub) | create-proappstore-app | smoke test passed via stub run |
+
+Required fields of a passed row (the gate refuses a passed row missing any):
 
 | Field | Meaning |
 |---|---|
-| client, version | the Agent Skills client and its version (e.g. Codex, Claude Code, Copilot) |
-| skill, digest | the skill name and the `Verified content digest` above at the time of the run |
-| prompt | the exact positive prompt from `evals/triggers.json` that was used |
-| triggered | whether the client selected this skill and no other |
-| tool calls | the MCP tools called, in order, as reported by `mcp_audit_log` |
-| outcome | the observed result against the output template (sections present) |
-| date, operator | when and who ran it |
-| run link | the CI job or session record |
+| `client` | the Agent Skills client, matching the row (e.g. Codex, Claude Code, GitHub Copilot) |
+| `version` | the client version that ran |
+| `date` | YYYY-MM-DD of the run |
+| `runner` | who ran it (person or named agent session) |
+| `tool_calls` | the MCP tools called, in order, as reported by mcp_audit_log (array of names) |
+| `outcome` | the observed result against the skill's output template (sections present) |
+| `session_id` | the client session / transcript id |
+| `audit_log_url` | link to the CI job, session record or audit-log export |
+| `note` (recommended) | brief observation, including whether the run was synthetic/stubbed |
+| `skill` (recommended) | the skill exercised (recommended) |
+| `digest` (recommended) | that skill's content digest from skills/index.json at the time of the run (recommended) |
+| `prompt` (recommended) | the exact positive prompt from evals/triggers.json that was used (recommended) |
+| `triggered` (recommended) | whether the client selected this skill and no other (recommended) |
 

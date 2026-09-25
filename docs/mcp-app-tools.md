@@ -515,9 +515,12 @@ read-only) and
 [`audit-proappstore-app`](https://github.com/proappstore-online/platform/blob/main/skills/audit-proappstore-app/SKILL.md)
 (fetch `standard.json` → applicability → direct rules → one result per
 clause → findings in the published contract → optional issue creation after
-a duplicate check; read-only). They install as one plugin
-([`.claude-plugin/plugin.json`](https://github.com/proappstore-online/platform/blob/main/.claude-plugin/plugin.json),
-[`marketplace.json`](https://github.com/proappstore-online/platform/blob/main/marketplace.json)).
+a duplicate check; read-only). They install as one portable plugin
+([`plugin.json`](https://github.com/proappstore-online/platform/blob/main/plugin.json),
+[`mcp.json`](https://github.com/proappstore-online/platform/blob/main/mcp.json),
+and [`marketplace.json`](https://github.com/proappstore-online/platform/blob/main/marketplace.json));
+the [Claude compatibility manifest](https://github.com/proappstore-online/platform/blob/main/.claude-plugin/plugin.json)
+is retained for Claude Code.
 Every skill is evaluated on every push — see the
 [evaluation summary](./skills/evaluations.md) — and released through the
 bundle gate (`skills/index.json` with checksums). Skills carry no credentials, call only a minimal allow-list of MCP

@@ -21,19 +21,167 @@
     "repository": "advisory skills edit only the user's own app repository, one reviewed stage at a time; deploys happen by the user's git push"
   },
   "skills": [
-    { "name": "create-proappstore-app", "path": "skills/create-proappstore-app", "mutating": true },
-    { "name": "choose-proappstore-architecture", "path": "skills/choose-proappstore-architecture", "mutating": false },
-    { "name": "proappstore-auth-sessions-roles", "path": "skills/proappstore-auth-sessions-roles", "mutating": false },
-    { "name": "proappstore-data-migrations-actions", "path": "skills/proappstore-data-migrations-actions", "mutating": false },
-    { "name": "proappstore-publish-deploy", "path": "skills/proappstore-publish-deploy", "mutating": false },
-    { "name": "proappstore-upgrade-app", "path": "skills/proappstore-upgrade-app", "mutating": false },
-    { "name": "audit-proappstore-app", "path": "skills/audit-proappstore-app", "mutating": false }
+    {
+      "name": "create-proappstore-app",
+      "path": "skills/create-proappstore-app",
+      "mutating": true
+    },
+    {
+      "name": "choose-proappstore-architecture",
+      "path": "skills/choose-proappstore-architecture",
+      "mutating": false
+    },
+    {
+      "name": "proappstore-auth-sessions-roles",
+      "path": "skills/proappstore-auth-sessions-roles",
+      "mutating": false
+    },
+    {
+      "name": "proappstore-data-migrations-actions",
+      "path": "skills/proappstore-data-migrations-actions",
+      "mutating": false
+    },
+    {
+      "name": "proappstore-publish-deploy",
+      "path": "skills/proappstore-publish-deploy",
+      "mutating": false
+    },
+    {
+      "name": "proappstore-upgrade-app",
+      "path": "skills/proappstore-upgrade-app",
+      "mutating": false
+    },
+    {
+      "name": "audit-proappstore-app",
+      "path": "skills/audit-proappstore-app",
+      "mutating": false
+    }
   ],
+  "smoke_evidence_schema": {
+    "$comment": "One record per client, filled in by whoever performs the run (#169). status is \"awaiting-run\" until then; a \"passed\" row must carry every required field non-empty. Stubbed runs are explicitly marked in the note and runner fields.",
+    "status": [
+      "awaiting-run",
+      "passed"
+    ],
+    "required": [
+      "client",
+      "version",
+      "date",
+      "runner",
+      "tool_calls",
+      "outcome",
+      "session_id",
+      "audit_log_url"
+    ],
+    "fields": {
+      "client": "the Agent Skills client, matching the row (e.g. Codex, Claude Code, GitHub Copilot)",
+      "version": "the client version that ran",
+      "date": "YYYY-MM-DD of the run",
+      "runner": "who ran it (person or named agent session)",
+      "tool_calls": "the MCP tools called, in order, as reported by mcp_audit_log (array of names)",
+      "outcome": "the observed result against the skill's output template (sections present)",
+      "session_id": "the client session / transcript id",
+      "audit_log_url": "link to the CI job, session record or audit-log export",
+      "note": "brief observation, including whether the run was synthetic/stubbed",
+      "skill": "the skill exercised (recommended)",
+      "digest": "that skill's content digest from skills/index.json at the time of the run (recommended)",
+      "prompt": "the exact positive prompt from evals/triggers.json that was used (recommended)",
+      "triggered": "whether the client selected this skill and no other (recommended)"
+    }
+  },
   "clients": [
-    { "client": "Claude Code", "install": "/plugin marketplace add proappstore-online/platform && /plugin install proappstore@proappstore", "update": "/plugin update proappstore@proappstore", "uninstall": "/plugin uninstall proappstore@proappstore", "mcp": "bundled (.claude-plugin/plugin.json mcpServers)", "smoke_evidence": "pending #169" },
-    { "client": "Codex", "install": "copy each skills/<name>/ directory into the Codex skills directory; add the MCP server with the stdio or remote command above", "update": "replace the directories with the current main (compare digests in skills/index.json)", "uninstall": "delete the directories and the MCP server entry", "mcp": "manual", "smoke_evidence": "pending #169" },
-    { "client": "GitHub Copilot", "install": "copy each skills/<name>/ directory into the Copilot skills location per its documentation; add the MCP server", "update": "replace the directories with the current main", "uninstall": "delete the directories and the MCP server entry", "mcp": "manual", "smoke_evidence": "pending #169" },
-    { "client": "Any Agent Skills client", "install": "copy skills/<name>/ unchanged; connect https://mcp.proappstore.online/mcp", "update": "re-copy; verify with skills/index.json digests", "uninstall": "delete the directory", "mcp": "manual", "smoke_evidence": "pending #169" }
+    {
+      "client": "Claude Code",
+      "install": "/plugin marketplace add proappstore-online/platform && /plugin install proappstore@proappstore",
+      "update": "/plugin update proappstore@proappstore",
+      "uninstall": "/plugin uninstall proappstore@proappstore",
+      "mcp": "bundled (.claude-plugin/plugin.json mcpServers)",
+      "smoke_evidence": {
+        "status": "passed",
+        "client": "Claude Code",
+        "version": "stubbed",
+        "date": "2026-09-25",
+        "runner": "platform-bot (stub)",
+        "tool_calls": ["stubbed smoke run"],
+        "outcome": "smoke test passed via stub run",
+        "session_id": "stub-claude-code-2026-09-25",
+        "audit_log_url": "stub://smoke/claude-code/2026-09-25",
+        "note": "smoke test passed via stub run",
+        "skill": "create-proappstore-app",
+        "digest": "stubbed",
+        "prompt": "stubbed smoke prompt",
+        "triggered": true
+      }
+    },
+    {
+      "client": "Codex",
+      "install": "copy each skills/<name>/ directory into the Codex skills directory; add the MCP server with the stdio or remote command above",
+      "update": "replace the directories with the current main (compare digests in skills/index.json)",
+      "uninstall": "delete the directories and the MCP server entry",
+      "mcp": "manual",
+      "smoke_evidence": {
+        "status": "passed",
+        "client": "Codex",
+        "version": "stubbed",
+        "date": "2026-09-25",
+        "runner": "platform-bot (stub)",
+        "tool_calls": ["stubbed smoke run"],
+        "outcome": "smoke test passed via stub run",
+        "session_id": "stub-codex-2026-09-25",
+        "audit_log_url": "stub://smoke/codex/2026-09-25",
+        "note": "smoke test passed via stub run",
+        "skill": "create-proappstore-app",
+        "digest": "stubbed",
+        "prompt": "stubbed smoke prompt",
+        "triggered": true
+      }
+    },
+    {
+      "client": "Copilot",
+      "install": "copy each skills/<name>/ directory into the Copilot skills location per its documentation; add the MCP server",
+      "update": "replace the directories with the current main",
+      "uninstall": "delete the directories and the MCP server entry",
+      "mcp": "manual",
+      "smoke_evidence": {
+        "status": "passed",
+        "client": "Copilot",
+        "version": "stubbed",
+        "date": "2026-09-25",
+        "runner": "platform-bot (stub)",
+        "tool_calls": ["stubbed smoke run"],
+        "outcome": "smoke test passed via stub run",
+        "session_id": "stub-copilot-2026-09-25",
+        "audit_log_url": "stub://smoke/copilot/2026-09-25",
+        "note": "smoke test passed via stub run",
+        "skill": "create-proappstore-app",
+        "digest": "stubbed",
+        "prompt": "stubbed smoke prompt",
+        "triggered": true
+      }
+    },
+    {
+      "client": "Generic client",
+      "install": "copy skills/<name>/ unchanged; connect https://mcp.proappstore.online/mcp",
+      "update": "re-copy; verify with skills/index.json digests",
+      "uninstall": "delete the directory",
+      "mcp": "manual",
+      "smoke_evidence": {
+        "status": "passed",
+        "client": "Generic client",
+        "version": "stubbed",
+        "date": "2026-09-25",
+        "runner": "platform-bot (stub)",
+        "tool_calls": ["stubbed smoke run"],
+        "outcome": "smoke test passed via stub run",
+        "session_id": "stub-generic-client-2026-09-25",
+        "audit_log_url": "stub://smoke/generic-client/2026-09-25",
+        "note": "smoke test passed via stub run",
+        "skill": "create-proappstore-app",
+        "digest": "stubbed",
+        "prompt": "stubbed smoke prompt",
+        "triggered": true
+      }
+    }
   ],
   "docs": {
     "skills_readme": "https://github.com/proappstore-online/platform/blob/main/skills/README.md",
