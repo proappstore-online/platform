@@ -296,6 +296,9 @@ app.post('/v1/projects/:slug/research', (c) => relay(c, '/project/research', { m
 // ── Chat (PO agent) ─────────────────────────────────────────
 
 app.post('/v1/projects/:slug/chat', (c) => relay(c, '/chat', { method: 'POST', forwardBody: true }));
+// #8: token-by-token chat over Server-Sent Events. Same auth as every route;
+// a browser EventSource passes the session as ?token= (like the WS upgrade).
+app.get('/v1/projects/:slug/chat/stream', (c) => relay(c, '/chat/stream'));
 app.get('/v1/projects/:slug/chat/history', (c) => relay(c, '/chat/history'));
 app.delete('/v1/projects/:slug/chat/history', (c) => relay(c, '/chat/history', { method: 'DELETE' }));
 

@@ -126,6 +126,7 @@ exactly what `list_files`/`search_files`/`read_file` returned. Clearable:
 | GET | `/v1/projects/:slug` | project state |
 | POST | `.../play` · `.../pause` | run control |
 | POST/GET/DELETE | `.../chat` · `.../chat/history` | PO chat |
+| GET | `.../chat/stream?thread=build\|research\|test\|all` | Server-Sent Events: `chat-start` / `chat-done` (typing indicator), `agent-text` (one token delta), `chat` (persisted message); `?token=` for a browser `EventSource` |
 | GET/POST | `.../tickets`; GET/PATCH/DELETE `.../tickets/:id` | backlog |
 | GET/POST | `.../tickets/:id/messages` | ticket conversation |
 | GET/PUT | `.../roles` | per-role model / max_tokens / persona |

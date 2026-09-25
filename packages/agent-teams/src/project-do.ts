@@ -107,6 +107,37 @@ export function sanitizeListing(raw: unknown): { tagline: string; longDescriptio
   return { tagline: str(l.tagline, 120), longDescription: str(l.longDescription, 4000), category };
 }
 
+// ── Chat streaming (#8) ─────────────────────────────────────
+export const CHAT_THREADS = ['build', 'research', 'test'] as const;
+export type ChatThread = (typeof CHAT_THREADS)[number];
+/** The agent that answers each thread — what `chat-start` / `chat-done` report. */
+const CHAT_ROLE: Record<ChatThread, string> = { build: 'PO', research: 'Architect', test: 'QA' };
+const CHAT_STREAM_KEEPALIVE_MS = 15_000;
+
+interface ChatStreamSubscriber {
+  thread: ChatThread | 'all';
+  /** Returns false once the client is gone. */
+  write(chunk: string): boolean;
+}
+
+/**
+ * Which chat thread a broadcast event belongs to, or null when it is not a chat
+ * event (ticket runs carry a `ticketId`; board events are not chat at all).
+ * Thread comes from the event when present (`chat` on research/test, the
+ * `chat-start` / `chat-done` bracket), else from the agent role: the Architect
+ * answers research, QA answers test, the PO answers build.
+ */
+export function chatThreadOf(event: Record<string, unknown>): ChatThread | null {
+  const type = String(event.type ?? '');
+  if (!['chat', 'chat-start', 'chat-done', 'agent-text', 'agent-run-started', 'agent-heartbeat'].includes(type)) return null;
+  if (event.ticketId) return null;
+  if (typeof event.thread === 'string' && CHAT_THREADS.includes(event.thread as ChatThread)) return event.thread as ChatThread;
+  const role = String(event.role ?? '').toLowerCase();
+  if (role === 'architect') return 'research';
+  if (role === 'qa') return 'test';
+  return 'build';
+}
+
 export class ProjectDO implements DurableObject {
   private state: DurableObjectState;
   private env: Bindings;
@@ -123,6 +154,9 @@ export class ProjectDO implements DurableObject {
   private chatWindow: number[] = [];
   /** Cached official docs (skills.md), TTL'd, so read_docs doesn't refetch each call. */
   private docsCache: { text: string; at: number } | null = null;
+  /** Open `GET /chat/stream` subscribers (#8): each receives the chat events of
+   *  one thread (or all) as Server-Sent Events, token by token. */
+  private chatStreams = new Set<ChatStreamSubscriber>();
 
   constructor(state: DurableObjectState, env: Bindings) {
     this.state = state;
@@ -152,6 +186,7 @@ export class ProjectDO implements DurableObject {
         ws.send(data);
       } catch { /* dead socket, DO will clean up */ }
     }
+    this.publishChatEvent(event, data);
     // Push a notification to the owner on attention-worthy transitions, so they
     // don't have to watch the board while agents work. Fire-and-forget — the DO
     // outlives the request, so the fetch can complete; never blocks the broadcast.
@@ -321,7 +356,8 @@ export class ProjectDO implements DurableObject {
     if (path === '/agents' && request.method === 'GET') return this.getAgents();
     if (path === '/budget' && request.method === 'PUT') return this.setBudget(request);
 
-    if (path === '/chat' && request.method === 'POST') return this.handleChat(request);
+    if (path === '/chat' && request.method === 'POST') return this.handleChatTurn(request);
+    if (path === '/chat/stream' && request.method === 'GET') return this.openChatStream(request);
     if (path === '/chat/history' && request.method === 'GET') return this.getChatHistory(request);
     if (path === '/chat/history' && request.method === 'DELETE') return this.clearChat(request);
 
@@ -401,6 +437,67 @@ export class ProjectDO implements DurableObject {
 
   webSocketError(_ws: WebSocket): void {
     // DO runtime handles cleanup automatically with hibernation
+  }
+
+  // ── Chat streaming over Server-Sent Events (#8) ───────────
+  //
+  // The WebSocket already carries every agent event, chat token deltas
+  // included (`agent-text`). An SSE subscription is the lighter alternative
+  // for a client that only follows one chat thread: a browser `EventSource`
+  // (which cannot set headers, hence `?token=` like the WS upgrade), the CLI,
+  // an MCP client. Events are the same objects the WebSocket sends, filtered to
+  // the chat thread: `chat-start` / `chat-done` bracket every turn (the typing
+  // indicator), `agent-text` is one token delta, `chat` is a persisted message.
+
+  /** `GET /chat/stream?thread=build|research|test|all` — a text/event-stream. */
+  private openChatStream(request: Request): Response {
+    const requested = new URL(request.url).searchParams.get('thread') ?? 'build';
+    if (!CHAT_THREADS.includes(requested as ChatThread) && requested !== 'all') {
+      return json({ error: `thread must be one of: ${CHAT_THREADS.join(', ')}, all` }, 400);
+    }
+    const encoder = new TextEncoder();
+    const subscribers = this.chatStreams;
+    let subscriber: ChatStreamSubscriber;
+    let keepAlive: ReturnType<typeof setInterval> | undefined;
+    const stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        subscriber = {
+          thread: requested as ChatThread | 'all',
+          write: (chunk: string) => {
+            try { controller.enqueue(encoder.encode(chunk)); return true; } catch { return false; }
+          },
+        };
+        subscribers.add(subscriber);
+        subscriber.write(`retry: 3000\nevent: ready\ndata: ${JSON.stringify({ thread: requested, subscribers: subscribers.size })}\n\n`);
+        // A comment line every 15 s keeps proxies from closing an idle stream.
+        keepAlive = setInterval(() => { if (!subscriber.write(': ping\n\n')) subscribers.delete(subscriber); }, CHAT_STREAM_KEEPALIVE_MS);
+      },
+      cancel: () => {
+        if (keepAlive) clearInterval(keepAlive);
+        subscribers.delete(subscriber);
+      },
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-store',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    });
+  }
+
+  /** Fan a broadcast event out to the SSE subscribers of its chat thread. */
+  private publishChatEvent(event: Record<string, unknown>, data: string): void {
+    if (this.chatStreams.size === 0) return;
+    const thread = chatThreadOf(event);
+    if (!thread) return;
+    const frame = `event: ${String(event.type)}\ndata: ${data}\n\n`;
+    for (const sub of this.chatStreams) {
+      if (sub.thread !== 'all' && sub.thread !== thread) continue;
+      if (!sub.write(frame)) this.chatStreams.delete(sub);
+    }
   }
 
   // ── Project CRUD ──────────────────────────────────────────
@@ -1745,6 +1842,28 @@ export class ProjectDO implements DurableObject {
       }, request);
     } finally {
       this.architectChatBusy = false;
+    }
+  }
+
+  /**
+   * One chat turn, bracketed by `chat-start` / `chat-done` so every client (WS
+   * and SSE) can show a typing indicator from the moment the message is
+   * accepted until the reply is persisted — the token deltas in between are
+   * `agent-text`. `chat-done.ok` is false when the turn was refused (400/429)
+   * or failed, so the indicator never sticks.
+   */
+  private async handleChatTurn(request: Request): Promise<Response> {
+    const peek = await request.clone().json().catch(() => ({})) as { thread?: string };
+    const thread: ChatThread = peek.thread === 'research' ? 'research' : peek.thread === 'test' ? 'test' : 'build';
+    const role = CHAT_ROLE[thread];
+    this.broadcast({ type: 'chat-start', thread, role });
+    let ok = false;
+    try {
+      const res = await this.handleChat(request);
+      ok = res.ok;
+      return res;
+    } finally {
+      this.broadcast({ type: 'chat-done', thread, role, ok });
     }
   }
 
