@@ -57,3 +57,45 @@ describe('backend wrangler.toml matches the code', () => {
     expect(COMPATIBILITY_DATE <= prod).toBe(true);
   });
 });
+
+/**
+ * The same drift check for the other Workers the runtime suite now runs (#23):
+ * every binding, var or deploy-synced secret the Worker's Env type REQUIRES
+ * (no `?`) is declared in its wrangler.toml. A binding that exists in the type
+ * but not in the config is exactly the "works in the mocked suite, 500s in
+ * production" class this suite exists for.
+ */
+describe.each([
+  { pkg: 'agent-teams', envFile: 'src/bindings.ts', secrets: ['SESSION_SIGNING_KEY'] },
+  { pkg: 'host', envFile: 'src/env.ts', secrets: [] as string[] },
+  { pkg: 'admin', envFile: 'src/env.ts', secrets: ['CF_API_TOKEN', 'GITHUB_TOKEN', 'SESSION_SIGNING_KEY'] },
+])('$pkg wrangler.toml matches the code', ({ pkg, envFile, secrets }) => {
+  const cfg = readFileSync(root(`packages/${pkg}/wrangler.toml`), 'utf8');
+  const env = readFileSync(root(`packages/${pkg}/${envFile}`), 'utf8');
+  const blocks = (section: string) => [...cfg.matchAll(new RegExp(`\\[\\[?${section.replace(/\./g, '\\.')}\\]\\]?[^[]*`, 'g'))].map((m) => m[0]);
+  const named = (section: string, key: string) => blocks(section).flatMap((b) => [...b.matchAll(new RegExp(`${key}\\s*=\\s*"([A-Z_]+)"`, 'g'))].map((m) => m[1]!));
+
+  it('declares every required binding of Env', () => {
+    const required = [...env.matchAll(/^\s{2}([A-Z_]+):\s/gm)].map((m) => m[1]!);
+    expect(required.length).toBeGreaterThan(2);
+    const declared = new Set([
+      ...named('d1_databases', 'binding'), ...named('r2_buckets', 'binding'), ...named('services', 'binding'),
+      ...named('workflows', 'binding'), ...named('ai', 'binding'), ...named('durable_objects.bindings', 'name'),
+    ]);
+    const vars = new Set([...cfg.matchAll(/^([A-Z_]+)\s*=\s*"/gm)].map((m) => m[1]!));
+    for (const name of required) {
+      expect(declared.has(name) || vars.has(name) || secrets.includes(name), `${pkg}: Env.${name} is required but wrangler.toml declares no binding, var or synced secret for it`).toBe(true);
+    }
+  });
+
+  it('every Durable Object class it binds is exported by its entry module', () => {
+    const classes = [...cfg.matchAll(/class_name\s*=\s*"(\w+)"/g)].map((m) => m[1]!);
+    const entry = readFileSync(root(`packages/${pkg}/src/index.ts`), 'utf8');
+    for (const cls of classes) expect(entry, `${pkg}: ${cls} must be exported from src/index.ts`).toMatch(new RegExp(`export \\{[^}]*\\b${cls}\\b|export class ${cls}\\b`));
+  });
+
+  it('pins a compatibility date the runtime suite can run', () => {
+    const prod = /compatibility_date\s*=\s*"(\d{4}-\d{2}-\d{2})"/.exec(cfg)![1]!;
+    expect(prod >= '2024-12-01').toBe(true);
+  });
+});

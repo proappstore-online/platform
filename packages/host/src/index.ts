@@ -184,8 +184,11 @@ export default {
       }, `${url.origin}${url.pathname}`);
     }
 
-    // Edge cache: store the response so next request skips R2 + D1
-    if (!skipEdgeCache && !updateSensitive) {
+    // Edge cache: store the response so next request skips R2 + D1. GET only:
+    // the Cache API refuses a non-GET request ("Cannot cache response to
+    // non-GET request"), which surfaced on HEAD as an uncaught exception in
+    // waitUntil once the host ran under workerd in the runtime suite (#23).
+    if (!skipEdgeCache && !updateSensitive && request.method === "GET") {
       ctx.waitUntil(cache.put(request, response.clone()));
     }
 
