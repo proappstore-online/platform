@@ -64,6 +64,23 @@ describe('deploy status (#9)', () => {
     expect(types.indexOf('transition')).toBeLessThan(types.lastIndexOf('deploy-status'));
   });
 
+  it('selects the durable workflow only for a canaried slug (the inline path remains the rollback)', async () => {
+    const h = harness({
+      admin: (path) => {
+        expect(path).toBe('/api/provision-workflow/agent');
+        return resp(true, { id: 'wf-canary-1' }, 202);
+      },
+    });
+    (h.deps.env as { WORKFLOW_DEPLOY_SLUGS?: string }).WORKFLOW_DEPLOY_SLUGS = 'other, myapp';
+
+    await runDeployStage(h.deps, 't1');
+
+    expect(h.adminFetch).toHaveBeenCalledOnce();
+    expect(h.statuses()).toEqual([
+      expect.objectContaining({ state: 'building', detail: expect.stringContaining('wf-cana') }),
+    ]);
+  });
+
   it('a red build is a failed status carrying the reason (and the ticket goes back to Dev)', async () => {
     const h = harness({
       ticket: { deploy_pushed_at: Date.now(), deploy_pushed_sha: 'abc1234def' },

@@ -26,6 +26,7 @@ function harness(opts: {
 }) {
   const exec: { sql: string; args: unknown[] }[] = [];
   const events: unknown[] = [];
+  const activities: { type: string; detail: string; ticketId: string | null | undefined }[] = [];
   const infraFail = vi.fn();
   const fail = vi.fn();
   const adminFetch = vi.fn(async (_path: string, _body: unknown) => opts.agentDeploy ?? resp(true, { id: 'wf-abc' }, 202));
@@ -42,7 +43,10 @@ function harness(opts: {
     },
     env: {}, // no PAS_BACKEND → post-deploy steps no-op
     broadcast: (e: unknown) => events.push(e),
-    logActivity: () => 'log',
+    logActivity: (type: string, detail: string, ticketId?: string | null) => {
+      activities.push({ type, detail, ticketId });
+      return 'log';
+    },
     storeMessage: async () => 'msg',
     loadFiles: () => new Map<string, string>(),
   } as unknown as WorkflowDeployArgs['deps'];
@@ -58,19 +62,25 @@ function harness(opts: {
     infraFail,
     fail,
   };
-  return { args, exec, events, infraFail, fail, adminFetch, adminGet };
+  return { args, exec, events, activities, infraFail, fail, adminFetch, adminGet };
 }
 
 describe('runDeployViaWorkflow', () => {
   it('starts the workflow once and parks the instance id (first tick)', async () => {
-    const h = harness({ agentDeploy: resp(true, { id: 'wf-abc' }, 202) });
+    const instanceId = 'wf-0123456789abcdef';
+    const h = harness({ agentDeploy: resp(true, { id: instanceId }, 202) });
     await runDeployViaWorkflow(h.args);
 
     expect(h.adminFetch).toHaveBeenCalledOnce();
     expect(h.adminFetch.mock.calls[0]![0]).toBe('/api/provision-workflow/agent');
     // instance id parked in deploy_pushed_sha; not polled yet
     const upd = h.exec.find((e) => e.sql.includes('deploy_pushed_sha'));
-    expect(upd?.args).toContain('wf-abc');
+    expect(upd?.args).toContain(instanceId);
+    // The marker is cleared on failure/retry; the append-only activity row is
+    // the durable audit link back to the precise Cloudflare Workflow trace.
+    expect(h.activities).toContainEqual(expect.objectContaining({
+      type: 'deploy', ticketId: 't1', detail: expect.stringContaining(instanceId),
+    }));
     expect(h.adminGet).not.toHaveBeenCalled();
     expect(h.infraFail).not.toHaveBeenCalled();
     expect(h.fail).not.toHaveBeenCalled();

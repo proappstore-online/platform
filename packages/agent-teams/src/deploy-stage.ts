@@ -321,7 +321,12 @@ export async function runDeployViaWorkflow(a: WorkflowDeployArgs): Promise<void>
     }
     instanceId = body.id;
     sql.exec('UPDATE tickets SET deploy_pushed_at = ?, deploy_pushed_sha = ? WHERE id = ?', now, instanceId, ticketId);
-    deps.logActivity('deploy', `Deploy workflow started (${instanceId.slice(0, 8)}) — provisioning + building…`, ticketId);
+    // Keep the complete CF instance id in the append-only activity log. The
+    // ticket marker is deliberately cleared after terminal failure/retry, while
+    // the activity row remains the durable operator link to the Workflow trace.
+    // IDs are opaque identifiers rather than credentials, so retain the full
+    // value here; the user-facing deploy-status stays abbreviated below.
+    deps.logActivity('deploy', `Deploy workflow started (${instanceId}) — provisioning + building…`, ticketId);
     setDeployStatus(deps, proj.slug, 'building', { ticketId, detail: `deploy workflow ${instanceId.slice(0, 8)} — provisioning + building` });
     return; // poll on the next tick
   }

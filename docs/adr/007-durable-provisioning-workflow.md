@@ -73,6 +73,34 @@ Make the CI gate **self-contained** so the instance id can be unique per deploy:
 The inline `provisionApp` / `/api/agent-deploy` path remains the default. The
 Workflow is opt-in per app (canary) once the consumer cutover lands.
 
+## Agent Teams boundary and operations
+
+The Workflow owns the deploy's externally-visible, retry-sensitive sequence:
+repo/route/analytics provisioning, the source push, and the bounded CI gate.
+`ProjectDO` deliberately remains the owner of the conversational BA → Dev → QA
+loop, human replies/approvals, the shared working tree, WebSocket sessions, and
+ticket state. Moving those interactions into a Workflow now would split one
+interactive project's authority across two state machines without removing the
+DO's core responsibilities. Re-evaluate that boundary if long-running,
+non-conversational stages accumulate; do not migrate the conversational loop
+merely to mirror the deploy implementation.
+
+### Canary, audit, and rollback
+
+1. Set `WORKFLOW_DEPLOY_SLUGS = "<slug>"` on the Agent Teams Worker (or `*` only
+   after per-slug validation) and deploy it. An unset value keeps every app on
+   the inline path.
+2. Follow the ticket's `deploy` activity entry. It retains the full Cloudflare
+   Workflow instance ID even after a failure clears the retry marker; inspect
+   that ID in the Cloudflare Workflows dashboard for persisted steps, retries,
+   sleeps, output, and error tail.
+3. Verify a green run reaches `done` with the workflow output's commit SHA, and
+   that a red CI gate returns the ticket to Dev with its error tail.
+4. Roll back instantly by removing the slug from `WORKFLOW_DEPLOY_SLUGS` and
+   redeploying Agent Teams. In-flight Workflow instances remain auditable and
+   finish independently; subsequent deploy attempts use the established inline
+   push-and-poll path. No data migration or Workflow termination is required.
+
 ## Alternatives Considered
 
 | Alternative | Why Rejected |
