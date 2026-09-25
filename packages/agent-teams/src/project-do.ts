@@ -333,6 +333,13 @@ export class ProjectDO implements DurableObject {
       if (ownerErr) return ownerErr;
       const pair = new WebSocketPair();
       this.state.acceptWebSocket(pair[1]);
+      // #7: keepalive that never wakes a hibernated DO — a client "ping" text
+      // frame is answered "pong" by the runtime. Idempotent per instance.
+      try { this.state.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong')); } catch { /* older runtime */ }
+      // #7: a snapshot the moment the socket opens, so a (re)connecting console
+      // resyncs play state and deploy status without a REST round-trip and can
+      // tell a live socket from a dead one.
+      try { pair[1].send(JSON.stringify(this.helloFrame())); } catch { /* client gone already */ }
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
@@ -431,6 +438,21 @@ export class ProjectDO implements DurableObject {
     if (shareDeleteMatch && request.method === 'DELETE') return this.revokeShare(shareDeleteMatch[1]!);
 
     return json({ error: 'not_found' }, 404);
+  }
+
+  /** The first frame on every WebSocket: what a client needs to render before any event arrives. */
+  private helloFrame(): Record<string, unknown> {
+    const row = this.state.storage.sql.exec('SELECT * FROM project LIMIT 1').toArray()[0] as Record<string, unknown> | undefined;
+    return {
+      type: 'hello',
+      at: Date.now(),
+      project: row
+        ? { slug: row.slug, name: row.name, status: row.status ?? 'paused', deploy: deployStatusOf(row, String(row.slug)) }
+        : null,
+      // What the client may send: "ping" is answered "pong" without waking the DO.
+      keepalive: { ping: 'ping', pong: 'pong' },
+      sockets: this.state.getWebSockets().length,
+    };
   }
 
   // ── WebSocket hibernation callbacks ───────────────────────

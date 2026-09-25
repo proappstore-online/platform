@@ -38,11 +38,14 @@ describe('error-spike alerts against real D1', () => {
   });
 
   it('two consecutive failed QA runs raise qa_failures; a pass in between does not', async () => {
-    await seedUser('gh:1'); await seedApp('demo', 'gh:1');
+    // Its own app id + the evaluator's per-app mode: another file's deploy nudge
+    // can land a fresh `queued` run for 'demo' after this test's cleanup, which
+    // would sit in front of the two failures and hide them (order-dependent flake).
+    await seedUser('gh:1'); await seedApp('qa-demo', 'gh:1');
     const now = Date.now();
-    const run = (id: string, status: string, at: number) => env.DB.prepare("INSERT INTO app_test_runs (run_id, app_id, flow_id, trigger_kind, status, started_at, finished_at) VALUES (?, 'demo', 'f1', 'deploy', ?, ?, ?)").bind(id, status, at - 10, at);
+    const run = (id: string, status: string, at: number) => env.DB.prepare("INSERT INTO app_test_runs (run_id, app_id, flow_id, trigger_kind, status, started_at, finished_at) VALUES (?, 'qa-demo', 'f1', 'deploy', ?, ?, ?)").bind(id, status, at - 10, at);
     await env.DB.batch([run('r1', 'passed', now - 30_000), run('r2', 'failed', now - 20_000), run('r3', 'error', now - 10_000)]);
-    const r = await evaluateErrorSpikes({ env, now });
+    const r = await evaluateErrorSpikes({ env, now, appId: 'qa-demo' });
     expect(r.alerts.map((a) => [a.kind, a.count])).toEqual([['qa_failures', 2]]);
   });
 });

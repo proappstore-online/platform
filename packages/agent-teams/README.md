@@ -147,7 +147,7 @@ exactly what `list_files`/`search_files`/`read_file` returned. Clearable:
 | GET | `.../cost` | monthly cap/spent + per-role/top-ticket summary |
 | GET | `.../cost/detail` | full breakdown: per-ticket per-role + ledger history |
 | GET/DELETE | `.../activity` | audit trail |
-| GET (WS) | `.../ws?token=` | live updates (hibernation) |
+| GET (WS) | `.../ws?token=` | live updates (hibernation). First frame is `hello` `{ project: { slug, name, status, deploy }, keepalive, sockets }` (#7); a `ping` text frame is answered `pong` by the runtime without waking the DO; then every event the DO broadcasts: `play-state`, `transition`, `ticket-*`, `chat`, `message`, `agent-*`, `activity`, `deploy-status`, `cost-cap-reached`, … (the console's `useAgentWebSocket` reconnects with backoff) |
 
 ## Build / deploy
 

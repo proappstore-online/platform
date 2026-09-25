@@ -76,11 +76,25 @@ describe('project lifecycle through the router, the D1 index and the ProjectDO',
     const res = await SELF.fetch(`${BASE}/v1/projects/${slug}/ws`, { headers: { Upgrade: 'websocket', Authorization: `Bearer ${owner}` } });
     expect(res.status).toBe(101);
     const ws = res.webSocket!;
+    const frames: Record<string, unknown>[] = [];
+    const waiters: (() => void)[] = [];
+    ws.addEventListener('message', (ev) => { const d = String((ev as MessageEvent).data); frames.push(d.startsWith('{') ? JSON.parse(d) : { raw: d }); waiters.splice(0).forEach((w) => w()); });
+    const until = async (pred: () => boolean) => { while (!pred()) await new Promise<void>((r) => waiters.push(r)); };
     ws.accept();
-    const next = new Promise<unknown>((resolve) => ws.addEventListener('message', (ev) => resolve(JSON.parse(String((ev as MessageEvent).data))), { once: true }));
+    // #7: the first frame is a snapshot — play state + deploy status — so a (re)connecting client resyncs without REST.
+    await until(() => frames.length >= 1);
+    expect(frames[0]).toMatchObject({ type: 'hello', project: { slug, name: 'WS App', status: 'paused', deploy: { state: 'idle', appUrl: `https://${slug}.proappstore.online` } }, keepalive: { ping: 'ping', pong: 'pong' } });
+    // Keepalive is answered by the runtime (no DO wake): a "ping" text frame gets "pong".
+    ws.send('ping');
+    await until(() => frames.some((f) => f.raw === 'pong'));
+    // Events arrive as they happen: a created ticket, a play-state change.
     const ticket = await SELF.fetch(`${BASE}/v1/projects/${slug}/tickets`, json('POST', { title: 'First', rawIdea: 'do the thing' }, owner));
     expect(ticket.status).toBe(201);
-    expect(await next).toMatchObject({ type: 'ticket-created', ticket: expect.objectContaining({ title: 'First', status: 'inbox' }) });
+    await until(() => frames.some((f) => f.type === 'ticket-created'));
+    expect(frames.find((f) => f.type === 'ticket-created')).toMatchObject({ ticket: expect.objectContaining({ title: 'First', status: 'inbox' }) });
+    expect((await SELF.fetch(`${BASE}/v1/projects/${slug}/play`, json('POST', undefined, owner))).status).toBe(200);
+    await until(() => frames.some((f) => f.type === 'play-state'));
+    expect(frames.find((f) => f.type === 'play-state')).toMatchObject({ status: 'running' });
     ws.close();
 
     // A non-member's upgrade is refused by the DO's access check, not upgraded.
