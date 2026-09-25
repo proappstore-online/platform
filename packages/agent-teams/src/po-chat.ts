@@ -13,6 +13,7 @@ import { formatMemory, type MemoryEntry } from './memory.ts';
 import { buildPOSystemPrompt } from './prompts.ts';
 import { TOOL_SCHEMAS } from './tool-schemas.ts';
 import { resolveByoKey } from './byo-key.ts';
+import { fetchAnthropicMessages } from './runtimes/ai-gateway.ts';
 import { parseAnthropicStream } from './runtimes/cf-native-stream.ts';
 import { executeFileTool } from './spine.ts';
 import { toolActivityDetail } from './tool-activity.ts';
@@ -61,6 +62,9 @@ export function extractAllJsonObjects(text: string, startToken: string, cap = 25
   }
   return out;
 }
+
+/** The PO's model (priced in runtimes/pricing.ts). */
+export const PO_MODEL = 'claude-sonnet-4-6';
 
 export interface PoChatDeps {
   sql: SqlStorage;
@@ -227,21 +231,10 @@ export async function handlePOChat(deps: PoChatDeps, request: Request): Promise<
     // Tool loop: let the PO read/search the code, capped to keep it cheap.
     for (let turn = 0; turn < 8; turn++) { // room to research + self-verify before answering
       deps.broadcast({ type: 'agent-heartbeat', role: 'PO' }); // keep the UI's working indicator alive across LLM turns
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 2048,
-          system: systemPrompt,
-          tools: poTools,
-          messages,
-          stream: true,
-        }),
+      // Through AI Gateway when configured, else direct (#22) — one helper for every chat agent.
+      const { res } = await fetchAnthropicMessages(env, {
+        apiKey,
+        body: { model: PO_MODEL, max_tokens: 2048, system: systemPrompt, tools: poTools, messages, stream: true },
       });
 
       if (!res.ok) {

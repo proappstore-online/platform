@@ -15,6 +15,7 @@ import { formatMemory, type MemoryEntry } from './memory.ts';
 import { buildArchitectChatSystemPrompt } from './prompts.ts';
 import { TOOL_SCHEMAS } from './tool-schemas.ts';
 import { resolveByoKey } from './byo-key.ts';
+import { fetchAnthropicMessages } from './runtimes/ai-gateway.ts';
 import { executeFileTool } from './spine.ts';
 import { toolActivityDetail } from './tool-activity.ts';
 import { sliceDocs } from './platform-skill.ts';
@@ -26,7 +27,7 @@ import { parseAnthropicStream } from './runtimes/cf-native-stream.ts';
 export const RESEARCH_THREAD = 'research';
 
 /** The Architect's model — also used for spend estimation. */
-const ARCHITECT_MODEL = 'claude-sonnet-4-6';
+export const ARCHITECT_MODEL = 'claude-sonnet-4-6';
 
 /** Record the run's spend (like the build agents' 'cost' activity) so the
  *  Research tab shows what authoring the KB cost. No-op when nothing was spent. */
@@ -278,16 +279,11 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
   try {
     for (let turn = 0; turn < 25; turn++) { // room for reads + writes + follow-up tools
       deps.broadcast({ type: 'agent-heartbeat', role: 'Architect', costUsd: estimateCost(ARCHITECT_MODEL, totalIn, totalOut), tokensIn: totalIn, tokensOut: totalOut });
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
+      const { res } = await fetchAnthropicMessages(env, {
+        apiKey,
         signal: ac.signal,
-        headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-beta': 'web-fetch-2025-09-10',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ model: ARCHITECT_MODEL, max_tokens: 8192, system: systemPrompt, tools, messages, stream: true }),
+        extraHeaders: { 'anthropic-beta': 'web-fetch-2025-09-10' },
+        body: { model: ARCHITECT_MODEL, max_tokens: 8192, system: systemPrompt, tools, messages, stream: true },
       });
       if (!res.ok) {
         let detail = '';

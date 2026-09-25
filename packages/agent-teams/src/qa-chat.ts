@@ -11,6 +11,10 @@ import type { Bindings } from './bindings.ts';
 import { json, insertChatMessage } from './store.ts';
 import { TOOL_SCHEMAS } from './tool-schemas.ts';
 import { resolveByoKey } from './byo-key.ts';
+import { fetchAnthropicMessages } from './runtimes/ai-gateway.ts';
+
+/** The QA chat's model (priced in runtimes/pricing.ts). */
+export const QA_MODEL = 'claude-sonnet-4-6';
 import { parseAnthropicStream } from './runtimes/cf-native-stream.ts';
 import { executeFileTool } from './spine.ts';
 import { toolActivityDetail } from './tool-activity.ts';
@@ -132,10 +136,9 @@ Be concise. Write the files first, then briefly summarize what you wrote.`;
     let reply = '';
     for (let turn = 0; turn < 10; turn++) {
       deps.broadcast({ type: 'agent-heartbeat', role: 'QA' });
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 8192, system: systemPrompt, tools, messages, stream: true }),
+      const { res } = await fetchAnthropicMessages(deps.env, {
+        apiKey,
+        body: { model: QA_MODEL, max_tokens: 8192, system: systemPrompt, tools, messages, stream: true },
       });
 
       if (!res.ok) {

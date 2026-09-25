@@ -20,6 +20,7 @@ import { estimateCostCached } from './cf-native-pricing.ts';
 import { buildDefaultPrompt } from './cf-native-prompt.ts';
 import { messagesToAnthropic, nameToToolDef, trimConversation } from './cf-native-helpers.ts';
 import { parseAnthropicStream } from './cf-native-stream.ts';
+import { isGatewayOutage } from './ai-gateway.ts';
 
 const MAX_ITERATIONS = 25;
 
@@ -41,12 +42,13 @@ export class CFNativeRuntime implements AgentRuntime {
         // AI Gateway routing (falls back to the Anthropic public API when unset).
         baseUrl: ctx.gateway?.baseUrl ?? 'https://api.anthropic.com',
         gatewayHeaders: ctx.gateway?.headers ?? {},
+        fallbackBaseUrl: ctx.gateway?.fallbackBaseUrl ?? null,
       },
     };
   }
 
   async *run(handle: RuntimeHandle, messages: Message[], signal?: AbortSignal): AsyncIterable<StreamEvent> {
-    const { apiKey, model, maxTokens, systemPrompt, spineTools, baseUrl, gatewayHeaders } = handle.state as {
+    const state = handle.state as {
       apiKey: string;
       model: string;
       maxTokens: number;
@@ -54,7 +56,13 @@ export class CFNativeRuntime implements AgentRuntime {
       spineTools: string[];
       baseUrl: string;
       gatewayHeaders: Record<string, string>;
+      fallbackBaseUrl: string | null;
     };
+    const { apiKey, model, maxTokens, systemPrompt, spineTools } = state;
+    // Routing is mutable for the run: an unreachable gateway (#22) switches the
+    // rest of the run to the provider's direct API — once, logged, and without
+    // the gateway token — unless AI_GATEWAY_STRICT withheld the fallback target.
+    let { baseUrl, gatewayHeaders } = state;
 
     // True when this run is routed through Cloudflare AI Gateway (vs. the direct
     // Anthropic API). Used to disambiguate auth errors below — a 401 through the
@@ -119,18 +127,33 @@ export class CFNativeRuntime implements AgentRuntime {
       // Open the request, retrying transient failures (429, 5xx incl. CF 524).
       let res: Response | null = null;
       for (let attempt = 0; attempt < 3; attempt++) {
-        res = await fetch(`${baseUrl}/v1/messages`, {
-          method: 'POST',
-          headers: {
-            ...gatewayHeaders,
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-            'Content-Type': 'application/json',
-          },
-          body: reqBody(anthropicMessages),
-          signal: signal ?? null,
-        });
+        try {
+          res = await fetch(`${baseUrl}/v1/messages`, {
+            method: 'POST',
+            headers: {
+              ...gatewayHeaders,
+              'x-api-key': apiKey,
+              'anthropic-version': '2023-06-01',
+              'Content-Type': 'application/json',
+            },
+            body: reqBody(anthropicMessages),
+            signal: signal ?? null,
+          });
+        } catch (e) {
+          if (signal?.aborted) throw e;
+          if (state.fallbackBaseUrl && baseUrl !== state.fallbackBaseUrl) {
+            console.warn('[ai-gateway] gateway unreachable (network error); switching this run to Anthropic directly');
+            baseUrl = state.fallbackBaseUrl; gatewayHeaders = {};
+            continue;
+          }
+          throw e;
+        }
         if (res.ok) break;
+        if (isGatewayOutage(res.status) && state.fallbackBaseUrl && baseUrl !== state.fallbackBaseUrl) {
+          console.warn(`[ai-gateway] gateway unreachable (${res.status}); switching this run to Anthropic directly`);
+          baseUrl = state.fallbackBaseUrl; gatewayHeaders = {};
+          continue;
+        }
         const transient = res.status === 429 || res.status >= 500;
         if (!transient || attempt === 2) {
           // Extract the upstream error detail (Anthropic returns { error: { message } }).

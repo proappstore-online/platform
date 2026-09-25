@@ -112,6 +112,14 @@ managed-agents-vs-BYO rationale: `docs/agent-teams-runtime-and-billing.md`.
 | **File caps**: 512KB/file, 300 files, 12MB tree | `spine.ts` |
 | Run caps: 25 iters/run, wall-clock timeout, idle auto-pause | runtime / `autoAdvance` |
 
+## AI Gateway (#22)
+Every model call — build runs on both runtimes and the PO / Architect / QA /
+listing chats — goes through Cloudflare AI Gateway when `AI_GATEWAY_ACCOUNT_ID`
++ `AI_GATEWAY_ID` are set (BYO key and prompt caching unchanged), and falls
+back once to the provider's direct API on a gateway outage unless
+`AI_GATEWAY_STRICT=1`. Price tables in `runtimes/pricing.ts` are the live
+estimate; the gateway's analytics are the record. `docs/ai-gateway.md`.
+
 ## BYO API keys (#3)
 Every model call uses the project owner's own key from the platform key vault
 (`user_api_keys`, AES-256-GCM envelope encryption under `APP_SECRET_KEK` on

@@ -149,7 +149,7 @@ export type PrepareContext = {
   // Provider routing for this run. When the env has AI Gateway configured this
   // points provider calls at the gateway (BYO key + prompt-caching preserved);
   // when absent the runtime falls back to the provider's direct API.
-  gateway?: { baseUrl: string; headers: Record<string, string> } | undefined
+  gateway?: { baseUrl: string; headers: Record<string, string>; fallbackBaseUrl?: string | null | undefined } | undefined
 }
 
 export type RuntimeHandle = {

@@ -17,6 +17,8 @@ import type {
 import { dispatchTool, isAllowedTool } from '../tool-dispatch.ts';
 import { TOOL_SCHEMAS } from '../tool-schemas.ts';
 import { PLATFORM_CAPABILITIES } from '../platform-skill.ts';
+import { isGatewayOutage } from './ai-gateway.ts';
+import { priceFor } from './pricing.ts';
 
 interface OAIFunctionTool {
   type: 'function';
@@ -74,15 +76,8 @@ interface OAIResponse {
 
 const MAX_ITERATIONS = 25;
 
-// Pricing per 1M tokens (approximate, June 2026)
-const PRICING: Record<string, { input: number; output: number }> = {
-  'gpt-4o': { input: 2.5, output: 10 },
-  'gpt-4o-mini': { input: 0.15, output: 0.6 },
-  'o3-mini': { input: 1.1, output: 4.4 },
-};
-
 function estimateCost(model: string, tokensIn: number, tokensOut: number): number {
-  const pricing = PRICING[model] ?? PRICING['gpt-4o']!;
+  const pricing = priceFor('openai', model).price; // tables in runtimes/pricing.ts (#22)
   return (tokensIn * pricing.input + tokensOut * pricing.output) / 1_000_000;
 }
 
@@ -103,6 +98,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
         // AI Gateway routing (falls back to the OpenAI public API when unset).
         baseUrl: ctx.gateway?.baseUrl ?? 'https://api.openai.com/v1',
         gatewayHeaders: ctx.gateway?.headers ?? {},
+        fallbackBaseUrl: ctx.gateway?.fallbackBaseUrl ?? null,
       },
     };
   }
@@ -117,6 +113,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
       previousResponseId: string | null;
       baseUrl: string;
       gatewayHeaders: Record<string, string>;
+      fallbackBaseUrl: string | null;
     };
 
     const tools: OAIFunctionTool[] = s.spineTools.map(nameToOAITool);
@@ -156,16 +153,27 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
         body.previous_response_id = s.previousResponseId;
       }
 
-      const res = await fetch(`${s.baseUrl}/responses`, {
+      const post = (base: string, headers: Record<string, string>) => fetch(`${base}/responses`, {
         method: 'POST',
-        headers: {
-          ...s.gatewayHeaders,
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${s.apiKey}`,
-        },
+        headers: { ...headers, 'Content-Type': 'application/json', Authorization: `Bearer ${s.apiKey}` },
         body: JSON.stringify(body),
         signal: signal ?? null,
       });
+      let res: Response;
+      try {
+        res = await post(s.baseUrl, s.gatewayHeaders);
+      } catch (e) {
+        if (signal?.aborted || !s.fallbackBaseUrl || s.baseUrl === s.fallbackBaseUrl) throw e;
+        console.warn('[ai-gateway] gateway unreachable (network error); switching this run to OpenAI directly');
+        s.baseUrl = s.fallbackBaseUrl; s.gatewayHeaders = {};
+        res = await post(s.baseUrl, s.gatewayHeaders);
+      }
+      if (!res.ok && isGatewayOutage(res.status) && s.fallbackBaseUrl && s.baseUrl !== s.fallbackBaseUrl) {
+        // #22: the gateway did not relay the call — retry directly, without the gateway token.
+        console.warn(`[ai-gateway] gateway unreachable (${res.status}); switching this run to OpenAI directly`);
+        s.baseUrl = s.fallbackBaseUrl; s.gatewayHeaders = {};
+        res = await post(s.baseUrl, s.gatewayHeaders);
+      }
 
       if (!res.ok) {
         // Extract the upstream error detail (OpenAI returns { error: { message } }).

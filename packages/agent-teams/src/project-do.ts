@@ -39,6 +39,10 @@ import {
   insertChatMessage,
 } from './store.ts';
 import { runDeployStage, MAX_DEPLOY_ATTEMPTS, DEPLOY_RETRY_BACKOFF_MS, deployStatusOf } from './deploy-stage.ts';
+import { fetchAnthropicMessages } from './runtimes/ai-gateway.ts';
+
+/** The listing generator's model (priced in runtimes/pricing.ts). */
+export const LISTING_MODEL = 'claude-haiku-4-5';
 import { handlePOChat } from './po-chat.ts';
 import { handleArchitectChat, RESEARCH_THREAD, ARCHITECT_RUN_TIMEOUT_MS } from './architect-chat.ts';
 import { handleQAChat } from './qa-chat.ts';
@@ -2025,10 +2029,9 @@ ${fields.includes('tagline') ? '- "tagline": 1 sentence, max 60 chars, catchy â€
 Respond with ONLY the JSON object, no markdown fences, no explanation.`;
 
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'x-api-key': byoKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'claude-haiku-4-5', max_tokens: 1024, messages: [{ role: 'user', content: prompt }] }),
+      const { res } = await fetchAnthropicMessages(this.env, {
+        apiKey: byoKey,
+        body: { model: LISTING_MODEL, max_tokens: 1024, messages: [{ role: 'user', content: prompt }] },
       });
       if (!res.ok) {
         const t = await res.text().catch(() => '');

@@ -51,6 +51,7 @@
 - [Publishing flow](https://docs.proappstore.online/publishing-flow/): Provisioning sequence, key properties, failure modes.
 - [Approved templates](https://docs.proappstore.online/templates/): The governed template catalogue and selection contract; data at [templates/catalogue.json](https://docs.proappstore.online/templates/catalogue.json) (schema: [catalogue.schema.json](https://docs.proappstore.online/templates/catalogue.schema.json)). Unknown templates are refused; the copied source commit is recorded per app.
 - [MCP app tools](https://docs.proappstore.online/mcp-app-tools/): The mcp.json manifest, auth model, validation rules, security model.
+- [AI Gateway (Agent Teams)](https://docs.proappstore.online/ai-gateway/): Every Agent Teams LLM call routed through Cloudflare AI Gateway — configuration, auth-header rules, outage fallback and strict mode, cost tables vs gateway analytics, verification.
 - [App actions and data access security](https://docs.proappstore.online/app-actions-security/): Guard idioms — the SQL is the security boundary; batch tools; registration and drift.
 - [Architecture](https://docs.proappstore.online/architecture/): Control plane, worker-to-worker pattern (service bindings are mandatory), databases.
 - [Browser auth session model](https://docs.proappstore.online/auth-session-model/): Platform-cookie token handler, custom domains, app author rules.

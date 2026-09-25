@@ -36,6 +36,9 @@ export type Bindings = {
   AI_GATEWAY_ID?: string;
   /** Optional — only for an authenticated gateway. `wrangler secret put AI_GATEWAY_TOKEN`. */
   AI_GATEWAY_TOKEN?: string;
+  /** '1' = never fall back to the provider's direct API when the gateway is
+   *  unreachable (docs/ai-gateway.md). Unset = fall back, and log that it did. */
+  AI_GATEWAY_STRICT?: string;
   /**
    * Canary: route these projects' deploys through the durable provisioning
    * Workflow (admin /api/provision-workflow/agent) instead of the inline

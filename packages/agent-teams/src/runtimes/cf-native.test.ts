@@ -66,7 +66,7 @@ function mockAnthropic(responses: Resp[]) {
   return calls;
 }
 
-async function prepareHandle(opts?: { dispatch?: (c: ToolCall) => Promise<ToolResult>; maxTokens?: number; persona?: string; gateway?: { baseUrl: string; headers: Record<string, string> } }) {
+async function prepareHandle(opts?: { dispatch?: (c: ToolCall) => Promise<ToolResult>; maxTokens?: number; persona?: string; gateway?: { baseUrl: string; headers: Record<string, string>; fallbackBaseUrl?: string | null } }) {
   const ctx: PrepareContext = {
     projectId: 'proj',
     ticketId: 'tick',
@@ -217,3 +217,47 @@ describe('CFNativeRuntime run loop', () => {
     expect(calls.headers[0]!['x-api-key']).toBe('sk-test');
   });
 });
+
+// #22 — a gateway outage mid-run switches the rest of the run to the direct API,
+// without the gateway token; a relayed provider error never does.
+describe('CFNativeRuntime gateway fallback (#22)', () => {
+  const gateway = { baseUrl: 'https://gateway.ai.cloudflare.com/v1/acct/gw/anthropic', headers: { 'cf-aig-authorization': 'Bearer tok' }, fallbackBaseUrl: 'https://api.anthropic.com' };
+
+  it('503 from the gateway → the same request goes direct, keeps the BYO key, drops the gateway token, and the run completes', async () => {
+    const calls = { urls: [] as string[], headers: [] as Record<string, string>[] };
+    let n = 0;
+    globalThis.fetch = (async (url: string, init: { headers: Record<string, string> }) => {
+      calls.urls.push(url); calls.headers.push(init.headers);
+      n += 1;
+      if (n === 1) return { ok: false, status: 503, json: async () => ({}) };
+      return { ok: true, status: 200, body: sseFromResponse(textResp('done', 'end_turn')) };
+    }) as unknown as typeof fetch;
+    const events = await collect(await prepareHandle({ gateway }));
+    expect(calls.urls).toEqual(['https://gateway.ai.cloudflare.com/v1/acct/gw/anthropic/v1/messages', 'https://api.anthropic.com/v1/messages']);
+    expect(calls.headers[0]!['cf-aig-authorization']).toBe('Bearer tok');
+    expect(calls.headers[1]!['cf-aig-authorization']).toBeUndefined();
+    expect(calls.headers[1]!['x-api-key']).toBe('sk-test');
+    expect(events.filter((e) => e.type === 'done')).toHaveLength(1);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+  });
+
+  it('with no fallback target (strict routing) a 503 is retried at the gateway and then reported, never sent direct', async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string) => { urls.push(url); return { ok: false, status: 503, json: async () => ({}) }; }) as unknown as typeof fetch;
+    const events = await collect(await prepareHandle({ gateway: { ...gateway, fallbackBaseUrl: null } }));
+    expect(urls.every((u) => u.startsWith('https://gateway.ai.cloudflare.com/'))).toBe(true);
+    const err = events.find((e) => e.type === 'error') as { message: string } | undefined;
+    expect(err?.message).toContain('AI Gateway/Anthropic error 503');
+  });
+
+  it('a relayed 401 is an auth error via the gateway, not an outage — no direct retry', async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string) => { urls.push(url); return { ok: false, status: 401, json: async () => ({ error: { message: 'invalid x-api-key' } }) }; }) as unknown as typeof fetch;
+    const events = await collect(await prepareHandle({ gateway }));
+    expect(urls).toHaveLength(1);
+    const err = events.find((e) => e.type === 'error') as { message: string } | undefined;
+    expect(err?.message).toContain('via AI Gateway');
+    expect(err?.message).not.toContain('sk-test');
+  });
+});
+
