@@ -33,3 +33,14 @@ describe('validateRoleConfig', () => {
     expect(validateRoleConfig({ ...base, systemPromptOverride: 'x'.repeat(8193) })).toMatch(/systemPromptOverride too long/);
   });
 });
+
+describe('keyProvider (#3): which vault key a role uses', () => {
+  it('accepts the runtime\'s native provider and rejects an incompatible one, naming what is accepted', () => {
+    expect(validateRoleConfig({ ...base, keyProvider: 'anthropic' })).toBeNull();
+    expect(validateRoleConfig({ ...base, runtime: 'openai-responses', model: 'gpt-5', keyProvider: 'openai' })).toBeNull();
+    expect(validateRoleConfig({ ...base, keyProvider: 'openai' })).toBe('key provider "openai" cannot be used by runtime "cf-native" (accepts: anthropic)');
+    expect(validateRoleConfig({ ...base, runtime: 'openai-responses', model: 'gpt-5', keyProvider: 'anthropic' })).toMatch(/accepts: openai/);
+    expect(validateRoleConfig({ ...base, keyProvider: 'google-ai' })).toMatch(/cannot be used/);
+    expect(validateRoleConfig({ ...base, keyProvider: 7 as unknown as string })).toMatch(/cannot be used/);
+  });
+});

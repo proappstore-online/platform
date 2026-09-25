@@ -1494,10 +1494,11 @@ export class ProjectDO implements DurableObject {
 
     for (const rc of body.roles ?? []) {
       this.state.storage.sql.exec(
-        `INSERT OR REPLACE INTO role_configs (role, runtime, model, system_prompt_override, spine_tools, vendor_tools, max_tokens, persona)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO role_configs (role, runtime, model, system_prompt_override, spine_tools, vendor_tools, max_tokens, persona, key_provider)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         rc.role, rc.runtime, rc.model, rc.systemPromptOverride ?? null,
         JSON.stringify(rc.spineTools), JSON.stringify(rc.vendorTools), rc.maxTokens ?? null, rc.persona ?? null,
+        rc.keyProvider ?? null,
       );
     }
     return json({ ok: true });

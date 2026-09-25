@@ -37,6 +37,10 @@ export type RoleConfig = {
   systemPromptOverride?: string  // optional; default lives in role registry
   spineTools: string[]           // tool names round-tripped to spine
   vendorTools: string[]          // vendor-native tools (e.g. 'web_search')
+  // Which key-vault provider this role's runs draw their BYO key from (#3).
+  // Stored per role; defaults to the runtime's native provider (cf-native →
+  // anthropic, openai-responses → openai) and must stay compatible with it.
+  keyProvider?: string
 }
 
 // ─── Tickets ──────────────────────────────────────────────────────────────

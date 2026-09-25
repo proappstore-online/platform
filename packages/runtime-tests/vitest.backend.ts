@@ -43,6 +43,8 @@ export default defineWorkersConfig(async () => ({
             CF_ACCOUNT_ID: 'acct-runtime',
             VAPID_PUBLIC_KEY: 'vapid-public',
             VAPID_PRIVATE_KEY: 'vapid-private',
+            // The key vault's KEK (base64 32 bytes) so the BYO key round-trip runs on real WebCrypto + D1 (#3).
+            APP_SECRET_KEK: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
             TEST_MIGRATIONS: await readD1Migrations(here('../../migrations')),
           },
           workers: [

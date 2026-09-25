@@ -10,7 +10,7 @@ import type { Bindings } from './bindings.ts';
 import type { AgentRuntime, Role, TicketStatus, ToolCall, ToolResult } from './types.ts';
 import { rowToTicket, rowToRoleConfig, insertChatMessage } from './store.ts';
 import { MAX_RUN_MINUTES as DEFAULT_MAX_RUN_MINUTES, assigneeForStatus, isTerminal } from './ticket-machine.ts';
-import { runtimeToProvider, resolveByoKey } from './byo-key.ts';
+import { providerForRole, resolveByoKey } from './byo-key.ts';
 import { resolveGateway, type GatewayProvider } from './runtimes/ai-gateway.ts';
 import { CFNativeRuntime } from './runtimes/cf-native.ts';
 import { OpenAIResponsesRuntime } from './runtimes/openai-responses.ts';
@@ -81,8 +81,9 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
   // (union, no migration), matching the read_docs pattern above.
   if (role === 'QA' && !roleConfig.spineTools.includes('write_file')) roleConfig.spineTools = [...roleConfig.spineTools, 'write_file'];
 
-  // Resolve the owner's BYO key for this runtime's provider.
-  const provider = runtimeToProvider(roleConfig.runtime);
+  // Resolve the owner's BYO key for this role's provider (#3): the role's stored
+  // mapping, else the runtime's native provider.
+  const provider = providerForRole(roleConfig);
   const byoKey = await resolveByoKey(env, proj.owner_id, provider);
   if (!byoKey) {
     deps.blockForInput(

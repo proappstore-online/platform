@@ -20,6 +20,7 @@ declare module 'cloudflare:test' {
     TEST_HOST_MIGRATIONS: D1Migration[];
     SESSION_SIGNING_KEY: string;
     INTERNAL_TOKEN: string;
+    APP_SECRET_KEK: string;
     APP_ID: string;
     DATA_WORKER_HOST: string;
   }

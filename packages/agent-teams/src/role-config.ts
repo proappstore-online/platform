@@ -4,6 +4,7 @@
  * testable) instead of inline in ProjectDO.
  */
 import type { RoleConfig } from './types.ts';
+import { RUNTIME_KEY_PROVIDERS } from './byo-key.ts';
 
 export const VALID_ROLES = new Set(['Architect', 'BA', 'Dev', 'QA']);
 export const VALID_RUNTIMES = new Set(['cf-native', 'openai-responses']);
@@ -28,5 +29,11 @@ export function validateRoleConfig(rc: RoleConfig): string | null {
     return 'maxTokens must be an integer between 1024 and 64000';
   }
   if (rc.persona && rc.persona.length > 4096) return 'persona too long (max 4KB)';
+  if (rc.keyProvider != null) {
+    const accepted = RUNTIME_KEY_PROVIDERS[rc.runtime as keyof typeof RUNTIME_KEY_PROVIDERS] ?? [];
+    if (typeof rc.keyProvider !== 'string' || !accepted.includes(rc.keyProvider)) {
+      return `key provider "${String(rc.keyProvider)}" cannot be used by runtime "${rc.runtime}" (accepts: ${accepted.join(', ')})`;
+    }
+  }
   return null;
 }

@@ -9,7 +9,7 @@
  */
 
 import type { Bindings } from './bindings.ts';
-import type { RuntimeKind } from './types.ts';
+import type { RoleConfig, RuntimeKind } from './types.ts';
 
 /** Map a runtime adapter to its key-vault provider id. */
 export function runtimeToProvider(runtime: RuntimeKind): string {
@@ -19,6 +19,22 @@ export function runtimeToProvider(runtime: RuntimeKind): string {
     case 'openai-responses':
       return 'openai';
   }
+}
+
+/**
+ * The vault providers each runtime can be driven with (#3). An adapter speaks
+ * one wire protocol, so a role's `keyProvider` is a choice among the keys that
+ * protocol accepts — today exactly the runtime's native provider; listed here so
+ * a compatible alternative (a proxy, a reseller) is one entry, not a code path.
+ */
+export const RUNTIME_KEY_PROVIDERS: Record<RuntimeKind, readonly string[]> = {
+  'cf-native': ['anthropic'],
+  'openai-responses': ['openai'],
+};
+
+/** The provider a role's runs resolve their key from: its stored mapping, else the runtime's native one. */
+export function providerForRole(rc: Pick<RoleConfig, 'runtime' | 'keyProvider'>): string {
+  return rc.keyProvider ?? runtimeToProvider(rc.runtime);
 }
 
 /**

@@ -112,6 +112,19 @@ managed-agents-vs-BYO rationale: `docs/agent-teams-runtime-and-billing.md`.
 | **File caps**: 512KB/file, 300 files, 12MB tree | `spine.ts` |
 | Run caps: 25 iters/run, wall-clock timeout, idle auto-pause | runtime / `autoAdvance` |
 
+## BYO API keys (#3)
+Every model call uses the project owner's own key from the platform key vault
+(`user_api_keys`, AES-256-GCM envelope encryption under `APP_SECRET_KEK` on
+`proappstore-api`). Resolution is just-in-time and worker-to-worker:
+`GET /v1/keys/resolve/:provider` over the `PAS_BACKEND` binding with
+`INTERNAL_TOKEN` + `X-Owner-Id`; the plaintext lives for one run and is never
+logged or returned to a client. Which key a role uses is part of its config —
+`keyProvider` on `GET`/`PUT /roles`, defaulting to the runtime's native
+provider (`cf-native` → `anthropic`, `openai-responses` → `openai`) and
+validated against what that runtime can be driven with. No key: agent runs
+park the ticket in `needs-input` naming the provider; the PO chat falls back
+to its rule-based triage. Owners add keys at `api.proappstore.online/v1/keys`.
+
 ## Autonomy needs no user session
 An autonomous run holds no credential of the owner's (#2): the model key is
 resolved just-in-time from the platform key vault over the `PAS_BACKEND`

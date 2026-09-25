@@ -5,6 +5,7 @@
  */
 
 import type { BaSpec, Message, MessageAuthor, Role, RoleConfig, RuntimeKind, Ticket, TicketStatus } from './types.ts';
+import { runtimeToProvider } from './byo-key.ts';
 
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS project (
@@ -118,6 +119,9 @@ export const MIGRATIONS: string[][] = [
   [`ALTER TABLE project ADD COLUMN deploy_ci_url TEXT`],
   [`ALTER TABLE project ADD COLUMN deploy_ticket_id TEXT`],
   [`ALTER TABLE project ADD COLUMN deploy_detail TEXT`],
+  // Per-role BYO key provider (#3): which vault key a role's runs use. NULL →
+  // the runtime's native provider (see byo-key.ts runtimeToProvider).
+  [`ALTER TABLE role_configs ADD COLUMN key_provider TEXT`],
   // The Knowledge Base is no longer a ticket — it's authored in the Research-tab
   // conversation. Remove any legacy 'research' tickets so they vanish from the
   // Kanban (the board is build work only now).
@@ -227,5 +231,6 @@ export function rowToRoleConfig(row: Record<string, unknown>): RoleConfig {
     systemPromptOverride: (row.system_prompt_override as string) ?? undefined,
     spineTools: JSON.parse((row.spine_tools as string) || '[]'),
     vendorTools: JSON.parse((row.vendor_tools as string) || '[]'),
+    keyProvider: (row.key_provider as string | null) ?? runtimeToProvider(row.runtime as RuntimeKind),
   };
 }
