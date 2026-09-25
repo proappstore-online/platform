@@ -81,7 +81,7 @@ describe('GET /chat/stream (#8): chat over Server-Sent Events', () => {
     broadcast({ type: 'agent-text', role: 'PO', text: 'lo' });
     broadcast({ type: 'agent-text', role: 'Architect', text: 'KB…' });
     broadcast({ type: 'agent-text', role: 'Dev', ticketId: 't1', text: 'code' }); // a ticket run: not chat
-    broadcast({ type: 'ticket-created', ticket: { id: 't2' } });                 // board event: not chat
+    broadcast({ type: 'ticket-created', ticket: { id: 't2', title: 'T2' } });    // board event: not chat (its derived activity row is not chat either)
     broadcast({ type: 'chat', role: 'po', body: 'Hello', id: 'm1' });
     broadcast({ type: 'chat', role: 'QA', thread: 'test', body: 'tests', id: 'm2' });
 
@@ -96,7 +96,7 @@ describe('GET /chat/stream (#8): chat over Server-Sent Events', () => {
     const a = await all.readUntil((f) => f.length >= 6);
     expect(a.slice(1).map((f) => f.event)).toEqual(['agent-text', 'agent-text', 'agent-text', 'chat', 'chat']);
     // The WebSocket still gets everything.
-    expect(broadcasts.map((e) => e.type)).toEqual(['agent-text', 'agent-text', 'agent-text', 'agent-text', 'ticket-created', 'chat', 'chat']);
+    expect(broadcasts.map((e) => e.type)).toEqual(['agent-text', 'agent-text', 'agent-text', 'agent-text', 'ticket-created', 'activity', 'chat', 'chat']);
     await Promise.all([build.reader.cancel(), research.reader.cancel(), all.reader.cancel()]);
   });
 

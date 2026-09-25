@@ -48,7 +48,7 @@ import { validateRoleConfig } from './role-config.ts';
 import { buildAgentCatalog } from './agents-catalog.ts';
 import { loadFiles, saveFiles, recallMemory, upsertMemory } from './project-store.ts';
 import { listShares, createShare, revokeShare, accessKbViaShare, accessKbFileViaShare, type CreateShareInput } from './kb-shares.ts';
-import { insertActivity, updateActivityMeta, clearActivityLog, readActivity, costSummary, costDetail } from './activity-log.ts';
+import { insertActivity, updateActivityMeta, clearActivityLog, readActivity, costSummary, costDetail, activityFromBroadcast } from './activity-log.ts';
 import { DEFAULT_PERSONAS, type MemoryEntry } from './memory.ts';
 import { DOCS_SKILLS_URL, sliceDocs } from './platform-skill.ts';
 
@@ -187,6 +187,10 @@ export class ProjectDO implements DurableObject {
       } catch { /* dead socket, DO will clean up */ }
     }
     this.publishChatEvent(event, data);
+    // #6: every state-changing broadcast is also an audit row, so the activity
+    // trail survives a refresh. `activity` itself maps to null — no recursion.
+    const derived = activityFromBroadcast(event);
+    if (derived) this.logActivity(derived.type, derived.detail, derived.ticketId);
     // Push a notification to the owner on attention-worthy transitions, so they
     // don't have to watch the board while agents work. Fire-and-forget — the DO
     // outlives the request, so the fetch can complete; never blocks the broadcast.
@@ -964,7 +968,9 @@ export class ProjectDO implements DurableObject {
   }
 
   private forgetMemory(id: string): Response {
+    const row = this.state.storage.sql.exec('SELECT key FROM project_memory WHERE id = ?', id).toArray()[0] as { key: string } | undefined;
     this.state.storage.sql.exec('DELETE FROM project_memory WHERE id = ?', id);
+    if (row) this.logActivity('memory', `Forgot: ${row.key}`);
     this.broadcast({ type: 'memory-updated' });
     return json({ ok: true });
   }
@@ -1219,7 +1225,6 @@ export class ProjectDO implements DurableObject {
         JSON.stringify(spec), now, ticketId,
       );
       this.broadcast({ type: 'transition', ticketId, from: 'ba-refining', to: 'awaiting-approval', trigger: 'BA' });
-      this.logActivity('transition', 'BA finished spec → awaiting approval', ticketId);
     } else if (role === 'Dev') {
       // First pass → QA writes unit/integration tests. On a re-fix (Dev
       // addressing a failed CI build or test run) tests already exist, so
@@ -1230,15 +1235,13 @@ export class ProjectDO implements DurableObject {
           "UPDATE tickets SET status = 'deploying', assignee_role = NULL, deploy_pushed_at = NULL, deploy_pushed_sha = NULL, updated_at = ? WHERE id = ?",
           now, ticketId,
         );
-        this.broadcast({ type: 'transition', ticketId, from: 'dev-active', to: 'deploying', trigger: 'system' });
-        this.logActivity('transition', 'Dev finished (tests exist) → deploying', ticketId);
+        this.broadcast({ type: 'transition', ticketId, from: 'dev-active', to: 'deploying', trigger: 'system', reason: 'tests-exist' });
       } else {
         this.state.storage.sql.exec(
           "UPDATE tickets SET status = 'qa-active', assignee_role = 'QA', updated_at = ? WHERE id = ?",
           now, ticketId,
         );
         this.broadcast({ type: 'transition', ticketId, from: 'dev-active', to: 'qa-active', trigger: 'Dev' });
-        this.logActivity('transition', 'Dev finished → QA (write unit/integration tests)', ticketId);
       }
     } else if (role === 'QA') {
       // QA's job is to WRITE unit/integration tests (to tests/), not to opine.
@@ -1254,7 +1257,6 @@ export class ProjectDO implements DurableObject {
         now, ticketId,
       );
       this.broadcast({ type: 'transition', ticketId, from: 'qa-active', to: 'deploying', trigger: 'QA' });
-      this.logActivity('transition', 'QA wrote tests → deploying', ticketId);
     }
   }
 
@@ -1522,7 +1524,6 @@ export class ProjectDO implements DurableObject {
     };
 
     this.broadcast({ type: 'ticket-created', ticket });
-    this.logActivity('ticket', `Created: ${body.title}`, id);
     this.autoAdvance();
     return json(ticket, 201);
   }

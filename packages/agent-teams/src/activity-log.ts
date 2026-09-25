@@ -38,6 +38,51 @@ export function updateActivityMeta(sql: SqlStorage, id: string, meta: string): s
   return metaStr;
 }
 
+/**
+ * The activity row a broadcast event implies, or null when the event is not a
+ * state change worth an audit entry (#6). Every broadcast passes through this
+ * from ProjectDO.broadcast, so a ticket transition, a run ending, a ticket
+ * created / updated / failed is on disk the moment it is announced — the panel
+ * shows the same trail after a refresh as it did live. Events that a site
+ * already logs explicitly with richer text (tool calls with their output,
+ * deploy outcomes, play/pause, deletes) and pure UI signals (token deltas,
+ * heartbeats, chat, file-list refreshes) map to null.
+ */
+export function activityFromBroadcast(
+  event: Record<string, unknown>,
+): { type: string; detail: string; ticketId: string | null } | null {
+  const ticketId = typeof event.ticketId === 'string' ? event.ticketId : null;
+  const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
+  switch (event.type) {
+    case 'transition':
+    case 'ticket-transition': { // the manual PATCH-style route announces the same fact under this name
+      const to = str(event.to);
+      if (!to) return null;
+      const from = str(event.from) ?? '?';
+      const why = str(event.reason) ?? str(event.trigger) ?? (event.auto === true ? 'auto' : null);
+      return { type: 'transition', detail: `${from} → ${to}${why ? ` · ${why}` : ''}`, ticketId };
+    }
+    case 'agent-run-ended': {
+      if (!ticketId) return null; // chat turns (PO / Architect) have their own chat trail
+      const role = str(event.role) ?? 'Agent';
+      const error = str(event.error);
+      return { type: 'agent', detail: error ? `${role} failed: ${error.slice(0, 300)}` : `${role} finished`, ticketId };
+    }
+    case 'ticket-created': {
+      const ticket = (event.ticket ?? null) as { id?: unknown; title?: unknown } | null;
+      const id = str(ticket?.id);
+      if (!id) return null;
+      return { type: 'ticket', detail: `Created: ${str(ticket?.title) ?? '(untitled)'}`, ticketId: id };
+    }
+    case 'ticket-updated':
+      return ticketId ? { type: 'ticket', detail: 'Updated', ticketId } : null;
+    case 'ticket-failed':
+      return ticketId ? { type: 'ticket', detail: `Failed${str(event.reason) ? `: ${str(event.reason)}` : ''}`, ticketId } : null;
+    default:
+      return null;
+  }
+}
+
 export function clearActivityLog(sql: SqlStorage): void {
   sql.exec('DELETE FROM activity_log');
 }

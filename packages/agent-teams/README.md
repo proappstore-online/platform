@@ -113,7 +113,10 @@ managed-agents-vs-BYO rationale: `docs/agent-teams-runtime-and-billing.md`.
 | Run caps: 25 iters/run, wall-clock timeout, idle auto-pause | runtime / `autoAdvance` |
 
 ## Observability
-Everything is written to `activity_log` (survives refresh). Tool calls record
+Everything is written to `activity_log` (survives refresh): explicit entries
+(tool calls, deploys, control) plus one derived from every state-changing
+broadcast — ticket transitions, runs ending, tickets created / updated / failed
+(`activityFromBroadcast`, #6). Tool calls record
 their **output** in `meta` — the console makes each tool row clickable to inspect
 exactly what `list_files`/`search_files`/`read_file` returned. Clearable:
 `DELETE /chat/history`, `DELETE /activity`.

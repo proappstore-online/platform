@@ -377,19 +377,11 @@ app.post('/v1/projects/:slug/test-history', async (c) => {
 
 // ── Activity log (persisted audit trail) ────────────────────
 
-app.get('/v1/projects/:slug/activity', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, '/activity', user.id);
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
-
-app.delete('/v1/projects/:slug/activity', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, '/activity', user.id, { method: 'DELETE' });
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
+// Through `relay`, so a team member's D1 role reaches the DO (#6): any member
+// may read the trail, and clearing it stays an owner route (#79) answered 403
+// rather than not_found.
+app.get('/v1/projects/:slug/activity', (c) => relay(c, '/activity'));
+app.delete('/v1/projects/:slug/activity', (c) => relay(c, '/activity', { method: 'DELETE' }));
 
 // ── Project memory (durable decisions/facts) ────────────────
 

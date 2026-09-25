@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { insertActivity, updateActivityMeta, readActivity, costSummary, costDetail } from './activity-log.ts';
+import { insertActivity, updateActivityMeta, readActivity, costSummary, costDetail, activityFromBroadcast } from './activity-log.ts';
 
 // Minimal SqlStorage mock for testing the pure SQL functions.
 function mockSql() {
@@ -112,5 +112,38 @@ describe('costDetail', () => {
     expect(result.byTicket[0]!.title).toBe('Test ticket');
     expect(result.ledger).toHaveLength(1);
     expect(result.ledger[0]!.model).toBe('claude-sonnet');
+  });
+});
+
+describe('activityFromBroadcast (#6)', () => {
+  it('turns state-changing broadcasts into audit rows', () => {
+    expect(activityFromBroadcast({ type: 'transition', ticketId: 't1', from: 'inbox', to: 'ba-refining', auto: true }))
+      .toEqual({ type: 'transition', detail: 'inbox → ba-refining · auto', ticketId: 't1' });
+    expect(activityFromBroadcast({ type: 'transition', ticketId: 't1', from: 'deploying', to: 'dev-active', trigger: 'system', reason: 'deploy-failed' }))
+      .toEqual({ type: 'transition', detail: 'deploying → dev-active · deploy-failed', ticketId: 't1' });
+    expect(activityFromBroadcast({ type: 'transition', ticketId: 't1', from: 'qa-active', to: 'deploying', trigger: 'QA' }))
+      .toEqual({ type: 'transition', detail: 'qa-active → deploying · QA', ticketId: 't1' });
+    expect(activityFromBroadcast({ type: 'transition', ticketId: 't1', to: 'needs-input', reason: 'agent-blocked', role: 'Dev' }))
+      .toEqual({ type: 'transition', detail: '? → needs-input · agent-blocked', ticketId: 't1' });
+    expect(activityFromBroadcast({ type: 'ticket-transition', ticketId: 't1', from: 'inbox', to: 'cancelled', trigger: 'po' }))
+      .toEqual({ type: 'transition', detail: 'inbox → cancelled · po', ticketId: 't1' });
+    expect(activityFromBroadcast({ type: 'agent-run-ended', ticketId: 't1', role: 'Dev' })).toEqual({ type: 'agent', detail: 'Dev finished', ticketId: 't1' });
+    expect(activityFromBroadcast({ type: 'agent-run-ended', ticketId: 't1', role: 'Dev', error: 'boom' })).toEqual({ type: 'agent', detail: 'Dev failed: boom', ticketId: 't1' });
+    expect(activityFromBroadcast({ type: 'ticket-created', ticket: { id: 't9', title: 'Login page' } })).toEqual({ type: 'ticket', detail: 'Created: Login page', ticketId: 't9' });
+    expect(activityFromBroadcast({ type: 'ticket-updated', ticketId: 't1' })).toEqual({ type: 'ticket', detail: 'Updated', ticketId: 't1' });
+    expect(activityFromBroadcast({ type: 'ticket-failed', ticketId: 't1', reason: 'iteration_cap' })).toEqual({ type: 'ticket', detail: 'Failed: iteration_cap', ticketId: 't1' });
+  });
+
+  it('ignores UI signals, chat, and events whose site logs a richer row itself — and the activity events it produces', () => {
+    for (const e of [
+      { type: 'activity', entry: {} }, { type: 'activity-meta' }, { type: 'activity-cleared' },
+      { type: 'agent-text', role: 'Dev', ticketId: 't1', text: 'x' }, { type: 'agent-heartbeat', role: 'Dev' },
+      { type: 'agent-run-started', ticketId: 't1', role: 'Dev' }, { type: 'agent-run-ended', role: 'PO' },
+      { type: 'agent-tool-call', ticketId: 't1', name: 'read_file' }, { type: 'agent-tool-result', ticketId: 't1', ok: true },
+      { type: 'chat', role: 'po', body: 'hi' }, { type: 'chat-start' }, { type: 'chat-done' }, { type: 'chat-cleared' },
+      { type: 'files-synced', count: 3 }, { type: 'play-state', status: 'running' }, { type: 'memory-updated' },
+      { type: 'ticket-deleted', ticketId: 't1' }, { type: 'cost-cap-reached' }, { type: 'project-created' }, { type: 'message' },
+      { type: 'transition', ticketId: 't1' }, { type: 'ticket-created', ticket: {} }, { type: 'ticket-updated' },
+    ]) expect(activityFromBroadcast(e), JSON.stringify(e)).toBeNull();
   });
 });
