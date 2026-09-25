@@ -62,7 +62,7 @@ v1 scope: **no payments** (platform Marketplace API will broker later).
 
 **Memory pointer**: see `~/.claude/projects/-Users-serge-ivo-dev-stores/memory/doordrop-pas-port-shipped.md` for the cross-session summary.
 
-For per-area architecture, current file layout, and how to add a feature, see [`doordrop/CLAUDE.md`](./doordrop/CLAUDE.md).
+For per-area architecture, current file layout, and how to add a feature, see [the DoorDrop repository's `CLAUDE.md`](https://github.com/proappstore-online/doordrop/blob/main/CLAUDE.md).
 
 ---
 

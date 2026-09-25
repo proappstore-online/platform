@@ -175,4 +175,4 @@ same from the clause side.
 An audit report lists every clause in every chapter with its result state, the
 evidence considered, and — for `not-applicable` — the reason. Clauses marked
 *Withdrawn* in the [governance page](./governance.md#withdrawals) are listed
-with the result `not-applicable` and the reason "withdrawn in <version>".
+with the result `not-applicable` and the reason "withdrawn in &lt;version&gt;".

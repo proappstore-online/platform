@@ -77,7 +77,7 @@ never confused:
 | Enforcement line | Meaning |
 |---|---|
 | `Enforcement: none (recommended)` | Advisory only. The default. |
-| `Enforcement: automated — <check id>` | A named platform or compliance check enforces the clause at publish or deploy time. The check, not this document, is what blocks or flags the app. |
+| `Enforcement: automated — &lt;check id&gt;` | A named platform or compliance check enforces the clause at publish or deploy time. The check, not this document, is what blocks or flags the app. |
 | `Enforcement: optional capability` | Used with `MAY` clauses. |
 
 ## Clause template
@@ -161,7 +161,7 @@ was superseded — is **withdrawn**, not deleted or renumbered:
 - The withdrawal is listed in the [changelog](./changelog.md).
 
 An audit records a withdrawn clause as `not-applicable` with the reason
-"withdrawn in <version>".
+"withdrawn in &lt;version&gt;".
 
 ## Changelog policy
 
