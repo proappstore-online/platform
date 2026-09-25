@@ -99,7 +99,6 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
         previousResponseId: null,
         projectId: ctx.projectId,
         ticketId: ctx.ticketId,
-        userToken: ctx.userToken,
         dispatch: ctx.dispatch,
         // AI Gateway routing (falls back to the OpenAI public API when unset).
         baseUrl: ctx.gateway?.baseUrl ?? 'https://api.openai.com/v1',
@@ -274,7 +273,6 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
   async invokeTool(handle: RuntimeHandle, toolCall: ToolCall): Promise<ToolResult> {
     const s = handle.state as {
       spineTools: string[];
-      userToken?: string;
       dispatch?: (call: ToolCall) => Promise<ToolResult>;
     };
     if (!isAllowedTool(toolCall.name, s.spineTools)) {
@@ -286,7 +284,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
       };
     }
     if (s.dispatch) return s.dispatch(toolCall);
-    return dispatchTool(toolCall, s.userToken ?? null);
+    return dispatchTool(toolCall);
   }
 
   async terminate(_handle: RuntimeHandle): Promise<{ costUsd: number; tokensIn: number; tokensOut: number }> {

@@ -37,7 +37,6 @@ export class CFNativeRuntime implements AgentRuntime {
         spineTools: ctx.role.spineTools,
         projectId: ctx.projectId,
         ticketId: ctx.ticketId,
-        userToken: ctx.userToken,
         dispatch: ctx.dispatch,
         // AI Gateway routing (falls back to the Anthropic public API when unset).
         baseUrl: ctx.gateway?.baseUrl ?? 'https://api.anthropic.com',
@@ -230,7 +229,6 @@ export class CFNativeRuntime implements AgentRuntime {
   async invokeTool(handle: RuntimeHandle, toolCall: ToolCall): Promise<ToolResult> {
     const s = handle.state as {
       spineTools: string[];
-      userToken?: string;
       dispatch?: (call: ToolCall) => Promise<ToolResult>;
     };
     if (!isAllowedTool(toolCall.name, s.spineTools)) {
@@ -242,7 +240,7 @@ export class CFNativeRuntime implements AgentRuntime {
       };
     }
     if (s.dispatch) return s.dispatch(toolCall);
-    return dispatchTool(toolCall, s.userToken ?? null);
+    return dispatchTool(toolCall);
   }
 
   async terminate(_handle: RuntimeHandle): Promise<{ costUsd: number; tokensIn: number; tokensOut: number }> {

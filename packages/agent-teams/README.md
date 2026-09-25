@@ -112,6 +112,14 @@ managed-agents-vs-BYO rationale: `docs/agent-teams-runtime-and-billing.md`.
 | **File caps**: 512KB/file, 300 files, 12MB tree | `spine.ts` |
 | Run caps: 25 iters/run, wall-clock timeout, idle auto-pause | runtime / `autoAdvance` |
 
+## Autonomy needs no user session
+An autonomous run holds no credential of the owner's (#2): the model key is
+resolved just-in-time from the platform key vault over the `PAS_BACKEND`
+binding with `INTERNAL_TOKEN` + `X-Owner-Id`, tools execute inside the project
+DO (file tools on the working tree, `read_docs` on the docs cache), and the
+deploy stage goes over the `ADMIN` binding with `INTERNAL_TOKEN`. Nothing is
+captured at Play; an older deploy's stored session token is purged on wake.
+
 ## Observability
 Everything is written to `activity_log` (survives refresh): explicit entries
 (tool calls, deploys, control) plus one derived from every state-changing

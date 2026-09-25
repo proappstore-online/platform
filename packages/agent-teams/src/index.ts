@@ -39,8 +39,8 @@ app.use('*', cors({
 // Auth middleware — all /v1/* routes require a valid PAS session OR internal token.
 // Internal token (X-Internal-Token) is for service-to-service calls (MCP server,
 // admin). It resolves the project owner from the D1 index so the DO sees a valid
-// user context. Read-only — no userToken is set, so autonomous agent dispatch
-// (which needs the owner's session) won't fire from an internal-token call.
+// user context. Autonomous runs need no session at all (#2): model keys come
+// from the vault over PAS_BACKEND with INTERNAL_TOKEN, tools run inside the DO.
 app.use('/v1/*', async (c, next) => {
   // Internal token bypass — for MCP server and admin service calls
   const internalToken = c.req.header('X-Internal-Token');
@@ -68,7 +68,6 @@ app.use('/v1/*', async (c, next) => {
   if (!user) return c.json({ error: 'invalid or expired session' }, 401);
 
   c.set('user' as never, user);
-  c.set('userToken' as never, token);
   await next();
 });
 
@@ -102,29 +101,26 @@ export function forwardToDO(
   stub: DurableObjectStub,
   path: string,
   userId: string,
-  opts?: { method?: string; body?: string; raw?: Request; userToken?: string | undefined; teamRole?: string },
+  opts?: { method?: string; body?: string; raw?: Request; teamRole?: string },
 ): Promise<Response> {
   if (opts?.raw) {
     // For WebSocket upgrades, clone the request. SECURITY: strip any
     // caller-supplied trust headers first — only the router may set these, from
     // verified data. Otherwise a raw WS upgrade could smuggle `X-Team-Role:
     // owner` straight to the DO and read another tenant's private agent stream.
+    // (X-User-Token was the retired session forward, #2; still stripped.)
     const headers = new Headers(opts.raw.headers);
     headers.delete('X-User-Id');
     headers.delete('X-Team-Role');
     headers.delete('X-User-Token');
     headers.set('X-User-Id', userId);
     if (opts.teamRole) headers.set('X-Team-Role', opts.teamRole);
-    if (opts.userToken) headers.set('X-User-Token', opts.userToken);
     return stub.fetch(new Request(opts.raw.url, { headers, method: opts.raw.method }));
   }
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'X-User-Id': userId,
   };
-  // Forward the owner session token so the DO can authenticate autonomous
-  // agent tool dispatch (captured at play time).
-  if (opts?.userToken) headers['X-User-Token'] = opts.userToken;
   if (opts?.teamRole) headers['X-Team-Role'] = opts.teamRole;
   return stub.fetch(new Request(`https://do${path}`, {
     method: opts?.method ?? 'GET',
@@ -280,15 +276,7 @@ app.get('/v1/projects/:slug', async (c) => {
 });
 
 // ── Play/Pause ──────────────────────────────────────────────
-// Play forwards the owner session token so the DO can authenticate autonomous
-// agent tool dispatch — so it keeps its own forward (relay doesn't pass tokens).
-app.post('/v1/projects/:slug/play', async (c) => {
-  const user = c.get('user' as never) as { id: string };
-  const userToken = c.get('userToken' as never) as string | undefined;
-  const stub = c.env.PROJECT.get(c.env.PROJECT.idFromName(c.req.param('slug')));
-  const res = await forwardToDO(stub, '/project/play', user.id, { method: 'POST', userToken });
-  return new Response(res.body, { status: res.status, headers: res.headers });
-});
+app.post('/v1/projects/:slug/play', (c) => relay(c, '/project/play', { method: 'POST' }));
 
 app.post('/v1/projects/:slug/pause', (c) => relay(c, '/project/pause', { method: 'POST' }));
 app.post('/v1/projects/:slug/research', (c) => relay(c, '/project/research', { method: 'POST' }));

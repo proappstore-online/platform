@@ -1,80 +1,28 @@
 /**
- * Tool dispatcher — executes spine tools by calling the PAS MCP server.
- * Used by runtime adapters to actually execute tool calls.
+ * Tool dispatch for runtime adapters.
+ *
+ * Every autonomous run executes its tools through the executor the ProjectDO
+ * injects at prepare() time (`PrepareContext.dispatch`): file tools against the
+ * in-memory working tree, `read_docs` against the docs cache. Deployment is a
+ * deterministic system stage over the ADMIN service binding with INTERNAL_TOKEN
+ * (deploy-stage.ts), not an agent tool. So there is no second executor: runs
+ * never carry a user session, and no tool call ever leaves the Worker on the
+ * owner's behalf (#2, closes the "owner session token in the DO" follow-up).
+ *
+ * `dispatchTool` is the fallback a runtime reaches only when it was prepared
+ * without an executor — a programming error, answered as a failed tool result
+ * so the run surfaces it instead of hanging.
  */
 
 import type { ToolCall, ToolResult } from './types.ts';
 
-const MCP_BASE = 'https://mcp.proappstore.online';
-
-interface McpToolCallResponse {
-  content?: { type: string; text: string }[];
-  isError?: boolean;
-}
-
-/**
- * Execute a tool call via the PAS MCP server.
- * The MCP server handles GitHub API calls, provisioning, etc.
- */
-export async function dispatchTool(
-  toolCall: ToolCall,
-  userToken: string | null,
-): Promise<ToolResult> {
-  const start = Date.now();
-
-  try {
-    // Call the MCP server's tool endpoint directly
-    // The MCP server exposes tools via the standard MCP protocol,
-    // but we can also call them via a simple HTTP POST for server-to-server
-    const res = await fetch(`${MCP_BASE}/tool-call`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(userToken ? { Authorization: `Bearer ${userToken}` } : {}),
-      },
-      body: JSON.stringify({
-        name: toolCall.name,
-        arguments: toolCall.args,
-      }),
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      return {
-        callId: toolCall.id,
-        ok: false,
-        errorMessage: `MCP server error (${res.status}): ${errText}`,
-        durationMs: Date.now() - start,
-      };
-    }
-
-    const result = (await res.json()) as McpToolCallResponse;
-
-    if (result.isError) {
-      const errorText = result.content?.map((c) => c.text).join('\n') ?? 'Unknown error';
-      return {
-        callId: toolCall.id,
-        ok: false,
-        errorMessage: errorText,
-        durationMs: Date.now() - start,
-      };
-    }
-
-    const outputText = result.content?.map((c) => c.text).join('\n') ?? '';
-    return {
-      callId: toolCall.id,
-      ok: true,
-      data: outputText,
-      durationMs: Date.now() - start,
-    };
-  } catch (err) {
-    return {
-      callId: toolCall.id,
-      ok: false,
-      errorMessage: err instanceof Error ? err.message : String(err),
-      durationMs: Date.now() - start,
-    };
-  }
+export function dispatchTool(toolCall: ToolCall): Promise<ToolResult> {
+  return Promise.resolve({
+    callId: toolCall.id,
+    ok: false,
+    errorMessage: `Tool "${toolCall.name}" has no executor: the runtime was prepared without a dispatch function (autonomous runs execute tools inside the project DO)`,
+    durationMs: 0,
+  });
 }
 
 /**

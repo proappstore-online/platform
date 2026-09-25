@@ -172,6 +172,10 @@ export class ProjectDO implements DurableObject {
     for (const stmts of MIGRATIONS) {
       try { for (const s of stmts) this.state.storage.sql.exec(s); } catch { /* already applied */ }
     }
+    // #2 follow-up: autonomous runs no longer hold the owner's session. The
+    // column stays (migrations are append-only) but any token captured by an
+    // older deploy is purged, so no user credential rests in DO storage.
+    try { this.state.storage.sql.exec('UPDATE project SET owner_session_token = NULL WHERE owner_session_token IS NOT NULL'); } catch { /* pre-migration DO */ }
     this.initialized = true;
   }
 
@@ -351,7 +355,7 @@ export class ProjectDO implements DurableObject {
 
     // REST routes
     if (path === '/project' && request.method === 'GET') return this.getProject();
-    if (path === '/project/play' && request.method === 'POST') return this.setPlayState('running', request);
+    if (path === '/project/play' && request.method === 'POST') return this.setPlayState('running');
     if (path === '/project/pause' && request.method === 'POST') return this.setPlayState('paused');
     if (path === '/project/research' && request.method === 'POST') return this.buildKnowledgeBase();
 
@@ -530,7 +534,7 @@ export class ProjectDO implements DurableObject {
     });
   }
 
-  private setPlayState(newStatus: 'running' | 'paused', request?: Request): Response {
+  private setPlayState(newStatus: 'running' | 'paused'): Response {
     const now = Date.now();
     this.state.storage.sql.exec('UPDATE project SET status = ?', newStatus);
 
@@ -538,12 +542,6 @@ export class ProjectDO implements DurableObject {
       // Record when we started running (for idle timeout). The column is created
       // by a migration (store.ts), so no lazy ALTER needed.
       this.state.storage.sql.exec('UPDATE project SET last_user_activity = ?', now);
-
-      // Capture the owner's session token for autonomous tool dispatch.
-      const ownerToken = request?.headers.get('X-User-Token');
-      if (ownerToken) {
-        this.state.storage.sql.exec('UPDATE project SET owner_session_token = ?', ownerToken);
-      }
 
       // Retry tickets parked in needs-input. They were blocked on a system
       // condition (missing API key, a prior error) — Play means "go", so
@@ -714,6 +712,22 @@ export class ProjectDO implements DurableObject {
     // Run any already-active agents first (they're mid-flight — don't block them).
     this.runPendingAgents();
 
+    // Advance to a fixpoint (#2): one pass moves each ticket ONE step, but some
+    // steps chain without an agent in between — awaiting-approval auto-approves
+    // to ready, and ready must become dev-active before a Dev run can start.
+    // Left at one pass, that hand-off waited for the next watchdog alarm (up
+    // to a minute) or a user action. Bounded, so a bug can never spin here.
+    for (let pass = 0; pass < 4; pass++) {
+      if (!this.advanceOnce(now)) break;
+    }
+
+    // Kick off agent runs for any tickets now sitting in an active state.
+    this.runPendingAgents();
+  }
+
+  /** One pass over the movable tickets. Returns true when anything moved. */
+  private advanceOnce(now: number): boolean {
+    let moved = false;
     const tickets = this.state.storage.sql
       .exec("SELECT id, status, iterations FROM tickets WHERE status NOT IN ('done','failed','cancelled','needs-input','ba-refining','dev-active','qa-active') ORDER BY created_at")
       .toArray() as { id: string; status: string; iterations: number }[];
@@ -736,6 +750,7 @@ export class ProjectDO implements DurableObject {
             now, t.id,
           );
           this.broadcast({ type: 'transition', ticketId: t.id, from: 'inbox', to: 'ba-refining', auto: true });
+          moved = true;
           break;
 
         case 'awaiting-approval':
@@ -745,6 +760,7 @@ export class ProjectDO implements DurableObject {
             now, t.id,
           );
           this.broadcast({ type: 'transition', ticketId: t.id, from: 'awaiting-approval', to: 'ready', auto: true });
+          moved = true;
           break;
 
         case 'ready':
@@ -753,6 +769,7 @@ export class ProjectDO implements DurableObject {
             now, t.id,
           );
           this.broadcast({ type: 'transition', ticketId: t.id, from: 'ready', to: 'dev-active', auto: true });
+          moved = true;
           break;
 
         case 'qa-failed':
@@ -762,19 +779,19 @@ export class ProjectDO implements DurableObject {
               now, t.id,
             );
             this.broadcast({ type: 'transition', ticketId: t.id, from: 'qa-failed', to: 'dev-active', auto: true });
+            moved = true;
           } else {
             this.state.storage.sql.exec(
               "UPDATE tickets SET status = 'failed', stuck_reason = 'Iteration cap reached (5)', updated_at = ? WHERE id = ?",
               now, t.id,
             );
             this.broadcast({ type: 'transition', ticketId: t.id, from: 'qa-failed', to: 'failed', auto: true });
+            moved = true;
           }
           break;
       }
     }
-
-    // Kick off agent runs for any tickets now sitting in an active state.
-    this.runPendingAgents();
+    return moved;
   }
 
   // ── Agent dispatch ────────────────────────────────────────

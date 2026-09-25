@@ -51,8 +51,8 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
   if (!role) return;
 
   const proj = sql
-    .exec('SELECT owner_id, slug, owner_session_token FROM project LIMIT 1')
-    .toArray()[0] as { owner_id: string; slug: string; owner_session_token: string | null } | undefined;
+    .exec('SELECT owner_id, slug FROM project LIMIT 1')
+    .toArray()[0] as { owner_id: string; slug: string } | undefined;
   if (!proj) return;
   // max_run_minutes was added by a migration; read it separately so DOs that
   // haven't applied the migration yet don't crash the whole run.
@@ -155,7 +155,6 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
       ticketId,
       role: roleConfig,
       byoKey,
-      userToken: proj.owner_session_token ?? undefined,
       dispatch: deps.makeDispatch(files),
       // Route this provider's calls through AI Gateway when configured (no-op otherwise).
       gateway: resolveGateway(env, provider as GatewayProvider),

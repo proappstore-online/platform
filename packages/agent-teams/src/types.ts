@@ -138,10 +138,9 @@ export type PrepareContext = {
   ticketId: string
   role: RoleConfig
   byoKey: string  // decrypted just-in-time, never logged
-  userToken?: string | undefined  // owner session token, forwarded to the spine for tool dispatch
-  // Tool executor injected by the DO. When set, the runtime routes every tool
-  // call here (file tools → in-memory map, infra tools → provisioning) instead
-  // of the legacy MCP dispatch. Keeps stateful execution in the DO.
+  // Tool executor injected by the DO: every tool call runs here (file tools →
+  // the in-memory working tree, read_docs → the docs cache). Autonomous runs
+  // hold no user session — nothing else executes tools (#2).
   dispatch?: ((call: ToolCall) => Promise<ToolResult>) | undefined
   // Provider routing for this run. When the env has AI Gateway configured this
   // points provider calls at the gateway (BYO key + prompt-caching preserved);
