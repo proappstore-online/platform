@@ -108,6 +108,16 @@ export const MIGRATIONS: string[][] = [
   // SELECT then threw "no such column: last_user_activity" and 500'd every
   // agent/chat run. Now a real migration so the column always exists.
   [`ALTER TABLE project ADD COLUMN last_user_activity INTEGER DEFAULT 0`],
+  // Deploy status for the console's preview panel (#9): the latest deploy of
+  // the shared tree — deploying → building → live | failed — with the commit,
+  // the CI run and the ticket that drove it. Written by deploy-stage.ts,
+  // read back on GET /project, announced as `deploy-status`.
+  [`ALTER TABLE project ADD COLUMN deploy_state TEXT`],
+  [`ALTER TABLE project ADD COLUMN deploy_sha TEXT`],
+  [`ALTER TABLE project ADD COLUMN deploy_at INTEGER`],
+  [`ALTER TABLE project ADD COLUMN deploy_ci_url TEXT`],
+  [`ALTER TABLE project ADD COLUMN deploy_ticket_id TEXT`],
+  [`ALTER TABLE project ADD COLUMN deploy_detail TEXT`],
   // The Knowledge Base is no longer a ticket — it's authored in the Research-tab
   // conversation. Remove any legacy 'research' tickets so they vanish from the
   // Kanban (the board is build work only now).

@@ -127,6 +127,10 @@ describe('autoAdvance → runtime adapters (#2)', () => {
     expect(roles('agent-run-ended')).toEqual(['BA', 'Dev', 'QA']);
     expect(broadcasts.filter((b) => b.type === 'agent-text').map((b) => String(b.text))).toEqual(['BA output for this ticket. VERDICT: READY', 'Dev output for this ticket. VERDICT: READY', 'QA output for this ticket. VERDICT: READY']);
     expect(roles('chat').filter((r) => r !== 'po')).toEqual(['BA', 'Dev', 'QA']); // the PO's opening message precedes them
+    // #9: the project state carries the deploy status the console's preview panel renders, and it was announced.
+    const project = (await (await doInstance.fetch(new Request('http://do/project', { headers: H }))).json()) as { deploy: Record<string, unknown> };
+    expect(project.deploy).toMatchObject({ state: 'live', ticketId: id, appUrl: 'https://auto.proappstore.online' });
+    expect(broadcasts.filter((b) => b.type === 'deploy-status').map((b) => b.state)).toEqual(['live']);
     // The persisted trail records it all.
     const trail = (db.prepare('SELECT type, detail FROM activity_log ORDER BY created_at, rowid').all() as { type: string; detail: string }[]).map((r) => `${r.type}: ${r.detail}`);
     expect(trail).toEqual(expect.arrayContaining(['agent: BA started', 'agent: Dev started', 'agent: QA started', 'deploy: Deploy binding unavailable → done']));

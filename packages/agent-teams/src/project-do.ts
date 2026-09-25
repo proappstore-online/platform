@@ -38,7 +38,7 @@ import {
   uuid,
   insertChatMessage,
 } from './store.ts';
-import { runDeployStage, MAX_DEPLOY_ATTEMPTS, DEPLOY_RETRY_BACKOFF_MS } from './deploy-stage.ts';
+import { runDeployStage, MAX_DEPLOY_ATTEMPTS, DEPLOY_RETRY_BACKOFF_MS, deployStatusOf } from './deploy-stage.ts';
 import { handlePOChat } from './po-chat.ts';
 import { handleArchitectChat, RESEARCH_THREAD, ARCHITECT_RUN_TIMEOUT_MS } from './architect-chat.ts';
 import { handleQAChat } from './qa-chat.ts';
@@ -531,6 +531,9 @@ export class ProjectDO implements DurableObject {
       maxRunMinutes: (row.max_run_minutes as number) ?? 10,
       repoUrl: row.repo_url,
       status: row.status ?? 'paused',
+      // #9: the latest deploy of the shared tree + where the app is served, for
+      // the console's deploy-status / live-preview panel.
+      deploy: deployStatusOf(row, String(row.slug)),
     });
   }
 

@@ -36,6 +36,73 @@ function deployViaWorkflow(env: Bindings, slug: string): boolean {
   return list.includes("*") || list.includes(slug);
 }
 
+// ── Deploy status (#9) ───────────────────────────────────────
+// What the console's preview panel shows: the state of the latest deploy of the
+// shared tree, and where the app lives. Persisted on the project row so a
+// refreshed client reads the same thing a live one was told.
+export type DeployState = 'idle' | 'deploying' | 'building' | 'live' | 'failed';
+export interface DeployStatus {
+  state: DeployState;
+  sha: string | null;
+  at: number | null;
+  ciUrl: string | null;
+  ticketId: string | null;
+  detail: string | null;
+  /** Where the deployed app is served — the iframe target. */
+  appUrl: string;
+}
+
+/** The published app's origin. Framing it is allowed for the console by the host's CSP. */
+export function appUrlFor(slug: string): string {
+  return `https://${slug}.proappstore.online`;
+}
+
+/** The project's deploy status from its row (any older DO reads `idle`). */
+export function deployStatusOf(row: Record<string, unknown>, slug: string): DeployStatus {
+  const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
+  const state = str(row.deploy_state) as DeployState | null;
+  return {
+    state: state ?? 'idle',
+    sha: str(row.deploy_sha),
+    at: typeof row.deploy_at === 'number' ? row.deploy_at : null,
+    ciUrl: str(row.deploy_ci_url),
+    ticketId: str(row.deploy_ticket_id),
+    detail: str(row.deploy_detail),
+    appUrl: appUrlFor(slug),
+  };
+}
+
+/**
+ * Record a deploy state change and announce it as `deploy-status` (the same
+ * object GET /project returns under `deploy`). Called at every step of both
+ * deploy paths: deploying (push in flight) → building (CI running) → live, or
+ * failed with the reason.
+ */
+export function setDeployStatus(
+  deps: Pick<DeployDeps, 'sql' | 'broadcast'>,
+  slug: string,
+  state: DeployState,
+  info: { ticketId: string; sha?: string | null | undefined; ciUrl?: string | null | undefined; detail?: string | null | undefined },
+): DeployStatus {
+  const status: DeployStatus = {
+    state,
+    sha: info.sha ?? null,
+    at: Date.now(),
+    ciUrl: info.ciUrl ?? null,
+    ticketId: info.ticketId,
+    detail: info.detail ? info.detail.slice(0, 300) : null,
+    appUrl: appUrlFor(slug),
+  };
+  try {
+    deps.sql.exec(
+      'UPDATE project SET deploy_state = ?, deploy_sha = ?, deploy_at = ?, deploy_ci_url = ?, deploy_ticket_id = ?, deploy_detail = ?',
+      status.state, status.sha, status.at, status.ciUrl, status.ticketId, status.detail,
+    );
+  } catch { /* a DO that predates the columns: the event still goes out */ }
+  deps.broadcast({ type: 'deploy-status', ...status });
+  return status;
+}
+
 export interface DeployDeps {
   sql: SqlStorage;
   env: Bindings;
@@ -64,7 +131,9 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
   if (!env.ADMIN || !env.INTERNAL_TOKEN || files.size === 0) {
     sql.exec("UPDATE tickets SET status = 'done', updated_at = ? WHERE id = ?", now, ticketId);
     deps.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'done', trigger: 'system' });
-    deps.logActivity('deploy', files.size === 0 ? 'No files to deploy → done' : 'Deploy binding unavailable → done', ticketId);
+    const note = files.size === 0 ? 'No files to deploy → done' : 'Deploy binding unavailable → done';
+    deps.logActivity('deploy', note, ticketId);
+    setDeployStatus(deps, proj.slug, 'live', { ticketId, detail: `${note} (nothing was built)` });
     return;
   }
 
@@ -96,6 +165,7 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
     );
     deps.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'needs-input', trigger: 'system', reason: 'deploy-infra' });
     deps.logActivity('deploy', `Deploy BLOCKED (infra, not code) attempt ${attempts}/${MAX_DEPLOY_ATTEMPTS} → needs-input: ${reason.slice(0, 200)}`, ticketId);
+    setDeployStatus(deps, proj.slug, 'failed', { ticketId, sha: ticket.deploy_pushed_sha, detail: `blocked (infra): ${reason}` });
   };
 
   const fail = (reason: string) => {
@@ -112,6 +182,7 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
       deps.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'failed', trigger: 'system', reason: 'deploy-failed' });
       deps.logActivity('deploy', `Deploy FAILED (iteration cap) → failed: ${reason.slice(0, 200)}`, ticketId);
     }
+    setDeployStatus(deps, proj.slug, 'failed', { ticketId, sha: ticket.deploy_pushed_sha, detail: `build failed: ${reason}` });
   };
 
   // Canary: drive the deploy through the durable provisioning Workflow instead
@@ -136,6 +207,7 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
     //    this attempt and is recorded on the ticket.
     let sha = ticket.deploy_pushed_sha ?? undefined;
     if (!ticket.deploy_pushed_at) {
+      setDeployStatus(deps, proj.slug, 'deploying', { ticketId, detail: `pushing ${files.size} file(s)` });
       // Push with retry: if another ticket's deploy moved the branch (non-fast-forward),
       // sync from GitHub and retry once. This handles concurrent deploys gracefully.
       let pushRes = await adminFetch('/api/agent-deploy', { id: proj.slug, name: proj.name, files: Object.fromEntries(files) });
@@ -163,6 +235,7 @@ export async function runDeployStage(deps: DeployDeps, ticketId: string): Promis
       sha = push.commitSha;
       sql.exec('UPDATE tickets SET deploy_pushed_at = ?, deploy_pushed_sha = ? WHERE id = ?', now, sha ?? null, ticketId);
       deps.logActivity('deploy', `Pushed ${files.size} file(s) @ ${sha?.slice(0, 7) ?? '?'} → building…`, ticketId);
+      setDeployStatus(deps, proj.slug, 'building', { ticketId, sha, detail: `CI building ${sha?.slice(0, 7) ?? ''}`.trim() });
     }
 
     // We can only grade the CI run for a KNOWN commit. Without a sha,
@@ -249,6 +322,7 @@ export async function runDeployViaWorkflow(a: WorkflowDeployArgs): Promise<void>
     instanceId = body.id;
     sql.exec('UPDATE tickets SET deploy_pushed_at = ?, deploy_pushed_sha = ? WHERE id = ?', now, instanceId, ticketId);
     deps.logActivity('deploy', `Deploy workflow started (${instanceId.slice(0, 8)}) — provisioning + building…`, ticketId);
+    setDeployStatus(deps, proj.slug, 'building', { ticketId, detail: `deploy workflow ${instanceId.slice(0, 8)} — provisioning + building` });
     return; // poll on the next tick
   }
   if (!instanceId) return infraFail('Deploy workflow id missing — will restart the deploy.');
@@ -307,6 +381,7 @@ async function finishGreenDeploy(
   sql.exec("UPDATE tickets SET status = 'done', final_commit_sha = ?, updated_at = ? WHERE id = ?", sha ?? null, Date.now(), ticketId);
   deps.broadcast({ type: 'transition', ticketId, from: 'deploying', to: 'done', trigger: 'system' });
   deps.logActivity('deploy', `Deployed live ✓ ${sha?.slice(0, 7) ?? ''} ${url ?? ''}`.trim(), ticketId);
+  setDeployStatus(deps, proj.slug, 'live', { ticketId, sha, ciUrl: url, detail: `deployed ${sha?.slice(0, 7) ?? ''}`.trim() });
 
   // Mark siblings done (issue #29). Every ticket shares ONE working tree, so this
   // green deploy already shipped the code of any OTHER ticket that was queued to

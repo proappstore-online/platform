@@ -134,7 +134,7 @@ exactly what `list_files`/`search_files`/`read_file` returned. Clearable:
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/v1/projects` | create (seeds team + first ticket); per-account quota |
-| GET | `/v1/projects/:slug` | project state |
+| GET | `/v1/projects/:slug` | project state, incl. `deploy` — `{ state: idle\|deploying\|building\|live\|failed, sha, at, ciUrl, ticketId, detail, appUrl }` (#9); the same object is announced as a `deploy-status` event on every change, so the console's preview panel can show building → live and frame `appUrl` (the host's CSP allows the console to frame apps) |
 | POST | `.../play` · `.../pause` | run control |
 | POST/GET/DELETE | `.../chat` · `.../chat/history` | PO chat |
 | GET | `.../chat/stream?thread=build\|research\|test\|all` | Server-Sent Events: `chat-start` / `chat-done` (typing indicator), `agent-text` (one token delta), `chat` (persisted message); `?token=` for a browser `EventSource` |
