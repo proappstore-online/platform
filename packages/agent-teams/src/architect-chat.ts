@@ -281,6 +281,7 @@ export async function handleArchitectChat(deps: ArchitectChatDeps, request: Requ
       deps.broadcast({ type: 'agent-heartbeat', role: 'Architect', costUsd: estimateCost(ARCHITECT_MODEL, totalIn, totalOut), tokensIn: totalIn, tokensOut: totalOut });
       const { res } = await fetchAnthropicMessages(env, {
         apiKey,
+        metadata: { appId: proj?.slug ?? 'app', surface: 'architect-chat' },
         signal: ac.signal,
         extraHeaders: { 'anthropic-beta': 'web-fetch-2025-09-10' },
         body: { model: ARCHITECT_MODEL, max_tokens: 8192, system: systemPrompt, tools, messages, stream: true },

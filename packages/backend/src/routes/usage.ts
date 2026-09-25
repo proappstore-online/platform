@@ -4,6 +4,7 @@ import type { Env } from '../types.js';
 import { requireUser, requireAppOwner, HttpError } from '../lib/auth.js';
 import { APP_ID_RE } from './validation.js';
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
+import { payoutActorId, writePayoutUsagePoint } from '../lib/payout-meter.js';
 
 /**
  * Usage telemetry — powers usage-proportional creator payouts.
@@ -11,7 +12,9 @@ import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
  * Three endpoints:
  *
  *   - POST /v1/usage/ping    SDK heartbeat from inside a running Pro app.
- *                            Upserts the (app, user, day) row and bumps
+ *                            Writes an immutable Analytics Engine payout-meter
+ *                            event, while the legacy daily rollup remains for
+ *                            rate limiting and non-financial dashboard views.
  *                            session_seconds + api_calls. Clamps the per-ping
  *                            deltas so a misbehaving SDK can't inflate usage.
  *                            SECURITY (#58): attribution is bound to the app
@@ -27,9 +30,9 @@ import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
  *                            Signed-in user's own usage across all apps.
  *                            Powers the "where did my $9 go" view.
  *
- * Grain matches the payout math: the monthly cron sums these rows to compute
- * each creator's share of the subscriber pool. Anything finer than (app, user,
- * day) is throwaway detail; anything coarser loses per-user fairness.
+ * The payout calculation never reads `usage_daily`: Analytics Engine is its
+ * source of truth. The daily table is a legacy guard/dashboard projection and
+ * can be backfilled into the meter exactly once by the operator.
  */
 
 export const usageRoutes = new Hono<{ Bindings: Env }>();
@@ -178,6 +181,10 @@ usageRoutes.post('/usage/ping', async (c) => {
     const allowedApiCalls = prior ? elapsedSeconds * MAX_API_CALLS_PER_SECOND : MAX_DELTA_API_CALLS;
     const deltaApiCalls = Math.min(requestedApiCalls, allowedApiCalls);
 
+    // Fail closed before updating the legacy projection: a successful heartbeat
+    // that is absent from the financial ledger would make payouts unauditable.
+    const actor = await payoutActorId(user.id, c.env.PAYOUT_METER_SALT);
+
     // Upsert: insert a fresh row if this is the first ping for this
     // (app, user, day), otherwise add to the existing totals.
     await c.env.DB.prepare(
@@ -190,6 +197,19 @@ usageRoutes.post('/usage/ping', async (c) => {
     )
       .bind(appId, user.id, day, deltaSeconds, deltaApiCalls, now)
       .run();
+
+    // AE is append-only. A unique event key makes every accepted heartbeat an
+    // independently auditable delta; backfilled legacy rows use deterministic
+    // keys and the payout SQL deduplicates key replays.
+    writePayoutUsagePoint(c.env.PAYOUT_METER, {
+      appId,
+      actor,
+      eventKey: `sdk:${crypto.randomUUID()}`,
+      source: 'sdk',
+      occurredAt: now,
+      sessionSeconds: deltaSeconds,
+      apiCalls: deltaApiCalls,
+    });
 
     return c.json({
       ok: true,

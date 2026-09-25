@@ -114,6 +114,10 @@ export interface Env {
    * (queryable via the SQL API at /v1/apps/:id/analytics/stats).
    */
   ANALYTICS?: AnalyticsEngineDataset;
+  /** Immutable AE ledger for subscriber usage-share payouts and reconciled AI Gateway costs. */
+  PAYOUT_METER?: AnalyticsEngineDataset;
+  /** Secret, immutable salt used to pseudonymise subscriber ids in PAYOUT_METER. */
+  PAYOUT_METER_SALT?: string;
   /**
    * Analytics Engine dataset for error telemetry — 5xx and unhandled exceptions,
    * written by lib/error-telemetry.ts (ADR-008). Kept separate from ANALYTICS so
@@ -126,6 +130,10 @@ export interface Env {
    * /stats endpoint to query Analytics Engine via the SQL API.
    */
   CF_ANALYTICS_API_TOKEN?: string;
+  /** Account token with AI Gateway Read, used only by payout reconciliation. */
+  CF_AI_GATEWAY_API_TOKEN?: string;
+  /** Gateway whose logs are reconciled into PAYOUT_METER. */
+  AI_GATEWAY_ID?: string;
   /** Resend API key for transactional email. If unset, /v1/email/send returns 503. */
   RESEND_API_KEY?: string;
   /** Anthropic API key for Managed Agents. If unset, /v1/agent/* returns 503. */

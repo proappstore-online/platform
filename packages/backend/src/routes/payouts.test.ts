@@ -6,8 +6,14 @@ import { testToken, TEST_SK, mockStmt, mockD1, makeEnv as sharedMakeEnv } from '
 const TOK = await testToken('gh:1');
 
 function makeEnv(db?: ReturnType<typeof mockD1>) {
-  return sharedMakeEnv({ VAPID_PUBLIC_KEY: 'p', VAPID_PRIVATE_KEY: 'q' }, db);
+  return sharedMakeEnv({ VAPID_PUBLIC_KEY: 'p', VAPID_PRIVATE_KEY: 'q', CF_ANALYTICS_API_TOKEN: 'analytics-token' }, db);
 }
+
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response(JSON.stringify({ data: [] }), { status: 200 })));
+});
+
+afterEach(() => vi.unstubAllGlobals());
 
 // ── Pure-math unit tests on computeMonthPreview ─────────────────────────
 
@@ -131,8 +137,7 @@ describe('GET /v1/payouts/me/preview', () => {
 
   it('returns the requested number of months (clamped to [1, 12])', async () => {
     const apps1 = mockStmt({ all: { results: [{ id: 'meetup' }] } });
-    const usage = mockStmt({ all: { results: [] } });
-    const db = mockD1(apps1, usage, usage, usage); // owned + N month queries
+    const db = mockD1(apps1);
     const res = await app.request(
       '/v1/payouts/me/preview?months=100',
       { headers: { Authorization: `Bearer ${TOK}` } },
@@ -145,31 +150,28 @@ describe('GET /v1/payouts/me/preview', () => {
 
   it('aggregates real usage rows to a creator share', async () => {
     const ownedApps = mockStmt({ all: { results: [{ id: 'meetup' }] } });
-    // One subscriber, 100% in meetup.
-    const usage = mockStmt({
-      all: { results: [{ user_id: 'gh:99', app_id: 'meetup', sec: 1000 }] },
+    const db = mockD1(ownedApps);
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (_url: string, init: RequestInit) => {
+      const sql = String(init.body);
+      return new Response(JSON.stringify({ data: sql.includes("blob3 = 'usage'")
+        ? [{ actor: 'subscriber-hash', app_id: 'meetup', session_seconds: 1000 }]
+        : [{ app_id: 'meetup', provider: 'anthropic', model: 'claude-sonnet-4-6', cost_usd: 0.25, tokens_in: 100, tokens_out: 50 }] }), { status: 200 });
     });
-    const db = mockD1(ownedApps, usage);
     const res = await app.request(
       '/v1/payouts/me/preview?months=1',
       { headers: { Authorization: `Bearer ${TOK}` } },
       makeEnv(db),
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { months: { estimatedCents: number; perApp: { appId: string; estimatedCents: number }[] }[] };
+    const body = (await res.json()) as { months: { estimatedCents: number; perApp: { appId: string; estimatedCents: number }[]; aiCosts: { provider: string; costUsd: number }[] }[] };
     expect(body.months[0]!.estimatedCents).toBe(450);
     expect(body.months[0]!.perApp).toEqual([{ appId: 'meetup', estimatedCents: 450 }]);
+    expect(body.months[0]!.aiCosts).toEqual([expect.objectContaining({ provider: 'anthropic', costUsd: 0.25 })]);
   });
 
-  it('counts only active subscribers usage in the preview query (#58)', async () => {
-    // The pool is funded by subscriptions, so a non-subscriber's usage must not
-    // earn a share. /usage/ping gates writes the same way, but rows written
-    // before that gate — and rows whose subscription has since lapsed — are
-    // still in the table, so the read has to filter too. Asserted on the SQL
-    // because the D1 mock returns canned rows regardless of the query.
+  it('reads the immutable Analytics Engine ledger, not the legacy D1 meter', async () => {
     const ownedApps = mockStmt({ all: { results: [{ id: 'meetup' }] } });
-    const usage = mockStmt({ all: { results: [] } });
-    const db = mockD1(ownedApps, usage);
+    const db = mockD1(ownedApps);
 
     await app.request(
       '/v1/payouts/me/preview?months=1',
@@ -177,11 +179,10 @@ describe('GET /v1/payouts/me/preview', () => {
       makeEnv(db),
     );
 
-    const sql = (db.prepare as ReturnType<typeof vi.fn>).mock.calls
-      .map((call) => String(call[0]))
-      .find((s) => /FROM usage_daily/i.test(s));
-    expect(sql, 'preview must query usage_daily').toBeDefined();
-    expect(sql).toMatch(/subscriptions/i);
-    expect(sql).toMatch(/status\s*=\s*'active'/i);
+    const d1Sql = (db.prepare as ReturnType<typeof vi.fn>).mock.calls.map((call) => String(call[0]));
+    expect(d1Sql.some((sql) => /usage_daily/i.test(sql))).toBe(false);
+    const aeSql = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map((call) => String(call[1]?.body));
+    expect(aeSql.some((sql) => /pas_payout_meter/i.test(sql))).toBe(true);
+    expect(aeSql.some((sql) => /GROUP BY app_id, actor, event_key/i.test(sql))).toBe(true);
   });
 });

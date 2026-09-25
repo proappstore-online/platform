@@ -3,13 +3,16 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
+import { cfAnalyticsSql } from './analytics-shared.js';
+import { payoutAiCostSql, payoutUsageSql } from '../lib/payout-meter.js';
 
 /**
  * Creator payout preview — what would this month's payout be if usage froze
  * right now and the cron ran?
  *
  * The actual payout cron isn't wired yet; this endpoint computes the same
- * math from usage_daily so creators get a credible preview. Important
+ * math from the immutable Analytics Engine payout meter so creators get a
+ * credible preview. `usage_daily` is never a payout input. Important
  * caveats:
  *
  *   - Only ACTIVE SUBSCRIBERS' usage counts (#58). The pool is funded by
@@ -63,6 +66,7 @@ interface MonthPreview {
   activeUsers: number;
   estimatedCents: number;
   perApp: { appId: string; estimatedCents: number }[];
+  aiCosts: { provider: string; model: string; costUsd: number; tokensIn: number; tokensOut: number }[];
 }
 
 interface PreviewResponse {
@@ -103,7 +107,7 @@ function computeMonthBuckets(todayKey: string, count: number): MonthBucket[] {
 
 /**
  * Compute one month's preview for the given creator. Pure function over
- * (ownedAppIds, usage_daily rows in window). Exported for unit-testing the
+ * (ownedAppIds, Analytics Engine rows in window). Exported for unit-testing the
  * proportional-split logic without going through D1.
  */
 export function computeMonthPreview(
@@ -147,6 +151,7 @@ export function computeMonthPreview(
     activeUsers: users.size,
     estimatedCents: Math.round(totalCents),
     perApp,
+    aiCosts: [],
   };
 }
 
@@ -176,36 +181,28 @@ payoutsRoutes.get('/payouts/me/preview', async (c) => {
           activeUsers: 0,
           estimatedCents: 0,
           perApp: [],
+          aiCosts: [],
         });
       }
     } else {
       for (const bucket of buckets) {
-        const { results } = await c.env.DB.prepare(
-          // Only ACTIVE SUBSCRIBERS' usage funds the pool (#58). /usage/ping
-          // gates writes the same way, but that gate is newer than the table:
-          // rows written before it exist for non-subscribers, and rows persist
-          // after a subscription lapses. Filtering at read time makes the
-          // preview correct for both. EXISTS rather than a JOIN so the row
-          // count can't fan out (subscriptions.user_id is the PK today, but a
-          // filter is what is meant here, not a join).
-          `SELECT user_id, app_id, SUM(session_seconds) AS sec
-             FROM usage_daily
-            WHERE day >= ? AND day <= ?
-              AND EXISTS (
-                SELECT 1 FROM subscriptions s
-                 WHERE s.user_id = usage_daily.user_id AND s.status = 'active'
-              )
-            GROUP BY user_id, app_id`,
-        )
-          .bind(bucket.startDay, bucket.endDay)
-          .all<{ user_id: string; app_id: string; sec: number }>();
-        months.push(
-          computeMonthPreview(
-            bucket,
-            ownedAppIds,
-            (results ?? []).map((r) => ({ user_id: r.user_id, app_id: r.app_id, sec: Number(r.sec) })),
-          ),
+        const startMs = Date.parse(`${bucket.startDay}T00:00:00.000Z`);
+        const endMs = Date.parse(`${bucket.endDay}T00:00:00.000Z`) + 86_400_000;
+        const env = c.env as Env & { CF_ACCOUNT_ID?: string; CF_ANALYTICS_API_TOKEN?: string };
+        const [usageRows, aiRows] = await Promise.all([
+          cfAnalyticsSql<{ app_id: string; actor: string; session_seconds: number }>(env, payoutUsageSql(startMs, endMs)),
+          cfAnalyticsSql<{ app_id: string; provider: string; model: string; cost_usd: number; tokens_in: number; tokens_out: number }>(env, payoutAiCostSql(startMs, endMs)),
+        ]);
+        const preview = computeMonthPreview(
+          bucket,
+          ownedAppIds,
+          usageRows.map((r) => ({ user_id: r.actor, app_id: r.app_id, sec: Number(r.session_seconds) })),
         );
+        preview.aiCosts = aiRows
+          .filter((r) => ownedAppIds.has(r.app_id))
+          .map((r) => ({ provider: r.provider || 'unknown', model: r.model || 'unknown', costUsd: Number(r.cost_usd), tokensIn: Number(r.tokens_in), tokensOut: Number(r.tokens_out) }))
+          .sort((a, b) => b.costUsd - a.costUsd || a.provider.localeCompare(b.provider));
+        months.push(preview);
       }
     }
 

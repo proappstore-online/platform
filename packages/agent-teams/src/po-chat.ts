@@ -234,6 +234,7 @@ export async function handlePOChat(deps: PoChatDeps, request: Request): Promise<
       // Through AI Gateway when configured, else direct (#22) — one helper for every chat agent.
       const { res } = await fetchAnthropicMessages(env, {
         apiKey,
+        metadata: { appId: proj?.slug ?? 'app', surface: 'po-chat' },
         body: { model: PO_MODEL, max_tokens: 2048, system: systemPrompt, tools: poTools, messages, stream: true },
       });
 

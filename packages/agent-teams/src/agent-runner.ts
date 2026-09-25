@@ -158,7 +158,7 @@ export async function runAgentTurn(deps: AgentRunDeps, ticketId: string): Promis
       byoKey,
       dispatch: deps.makeDispatch(files),
       // Route this provider's calls through AI Gateway when configured (no-op otherwise).
-      gateway: resolveGateway(env, provider as GatewayProvider),
+      gateway: resolveGateway(env, provider as GatewayProvider, { appId: proj.slug, surface: 'agent-run' }),
     });
 
     // Consume the stream, but cap wall-clock time so a hung model call can't

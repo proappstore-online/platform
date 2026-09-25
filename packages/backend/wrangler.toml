@@ -111,6 +111,13 @@ dataset = "pas_analytics"
 binding = "ERRORS"
 dataset = "pas_app_errors"
 
+# Financial usage ledger for #25. Kept distinct from visitor analytics: rows
+# carry a different schema and are payout evidence. PAYOUT_METER_SALT and the
+# read tokens are secrets; see docs/payout-metering.md before enabling it.
+[[analytics_engine_datasets]]
+binding = "PAYOUT_METER"
+dataset = "pas_payout_meter"
+
 # Realtime rooms — Durable Object for WebSocket fan-out.
 [durable_objects]
 bindings = [

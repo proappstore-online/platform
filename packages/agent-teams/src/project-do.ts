@@ -2031,6 +2031,7 @@ Respond with ONLY the JSON object, no markdown fences, no explanation.`;
     try {
       const { res } = await fetchAnthropicMessages(this.env, {
         apiKey: byoKey,
+        metadata: { appId: proj.slug, surface: 'listing-generator' },
         body: { model: LISTING_MODEL, max_tokens: 1024, messages: [{ role: 'user', content: prompt }] },
       });
       if (!res.ok) {

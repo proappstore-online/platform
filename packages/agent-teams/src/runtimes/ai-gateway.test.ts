@@ -43,10 +43,14 @@ describe('ai-gateway', () => {
       expect(gatewayHeaders({})).toEqual({});
       expect(gatewayHeaders(ON)).toEqual({});
     });
-    it('carries cf-aig-authorization for an authenticated gateway', () => {
+  it('carries cf-aig-authorization for an authenticated gateway', () => {
       expect(gatewayHeaders({ ...ON, AI_GATEWAY_TOKEN: 'sek' }))
         .toEqual({ 'cf-aig-authorization': 'Bearer sek' });
     });
+  });
+  it('carries payout attribution metadata only on the gateway route', () => {
+    expect(gatewayHeaders(ON, { appId: 'meetup', surface: 'agent-run' }))
+      .toEqual({ 'cf-aig-metadata': JSON.stringify({ appId: 'meetup', surface: 'agent-run' }) });
   });
 
   describe('resolveGateway', () => {
@@ -99,6 +103,7 @@ describe('ai-gateway fallback (#22)', () => {
     expect(anthropicHeaders(GW, 'sk-byo', 'gateway', { 'anthropic-beta': 'x' })).toEqual({ 'cf-aig-authorization': 'Bearer gw-tok', 'x-api-key': 'sk-byo', 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json', 'anthropic-beta': 'x' });
     expect(anthropicHeaders(GW, 'sk-byo', 'gateway-fallback')).not.toHaveProperty('cf-aig-authorization');
     expect(anthropicHeaders(GW, 'sk-byo', 'direct')).not.toHaveProperty('cf-aig-authorization');
+    expect(anthropicHeaders(GW, 'sk-byo', 'gateway-fallback', {}, { appId: 'meetup' })).not.toHaveProperty('cf-aig-metadata');
   });
 
   it('fetchAnthropicMessages: gateway when configured, direct when not', async () => {

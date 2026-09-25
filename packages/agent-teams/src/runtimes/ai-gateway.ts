@@ -72,8 +72,11 @@ export function providerBaseUrl(env: GatewayEnv, provider: GatewayProvider): str
  * requests without `cf-aig-authorization`; set AI_GATEWAY_TOKEN to supply it.
  * Returns {} when unset (unauthenticated gateway or direct provider call).
  */
-export function gatewayHeaders(env: GatewayEnv): Record<string, string> {
-  return env.AI_GATEWAY_TOKEN ? { 'cf-aig-authorization': `Bearer ${env.AI_GATEWAY_TOKEN}` } : {};
+export function gatewayHeaders(env: GatewayEnv, metadata?: Record<string, string>): Record<string, string> {
+  return {
+    ...(env.AI_GATEWAY_TOKEN ? { 'cf-aig-authorization': `Bearer ${env.AI_GATEWAY_TOKEN}` } : {}),
+    ...(metadata ? { 'cf-aig-metadata': JSON.stringify(metadata) } : {}),
+  };
 }
 
 /** Resolved gateway routing for one provider, threaded through PrepareContext. */
@@ -87,11 +90,11 @@ export type GatewayConfig = {
 };
 
 /** Build the per-provider routing config from the Worker env. */
-export function resolveGateway(env: GatewayEnv, provider: GatewayProvider): GatewayConfig {
+export function resolveGateway(env: GatewayEnv, provider: GatewayProvider, metadata?: Record<string, string>): GatewayConfig {
   const viaGateway = gatewayEnabled(env);
   return {
     baseUrl: providerBaseUrl(env, provider),
-    headers: gatewayHeaders(env),
+    headers: gatewayHeaders(env, metadata),
     fallbackBaseUrl: viaGateway && gatewayFallbackAllowed(env) ? directBaseUrl(provider) : null,
   };
 }
@@ -110,15 +113,17 @@ export interface AnthropicCall {
   signal?: AbortSignal | undefined;
   /** e.g. an `anthropic-beta` header. Never auth. */
   extraHeaders?: Record<string, string> | undefined;
+  /** Payout attribution written to AI Gateway logs only; never sent direct. */
+  metadata?: Record<string, string> | undefined;
   fetchImpl?: typeof fetch | undefined;
 }
 
 export type AnthropicRoute = 'direct' | 'gateway' | 'gateway-fallback';
 
 /** The request headers for one Anthropic call on one route. */
-export function anthropicHeaders(env: GatewayEnv, apiKey: string, route: AnthropicRoute, extra: Record<string, string> = {}): Record<string, string> {
+export function anthropicHeaders(env: GatewayEnv, apiKey: string, route: AnthropicRoute, extra: Record<string, string> = {}, metadata?: Record<string, string>): Record<string, string> {
   return {
-    ...(route === 'gateway' ? gatewayHeaders(env) : {}),
+    ...(route === 'gateway' ? gatewayHeaders(env, metadata) : {}),
     'x-api-key': apiKey,
     'anthropic-version': '2023-06-01',
     'Content-Type': 'application/json',
@@ -134,11 +139,11 @@ export function anthropicHeaders(env: GatewayEnv, apiKey: string, route: Anthrop
  */
 export async function fetchAnthropicMessages(env: GatewayEnv, call: AnthropicCall): Promise<{ res: Response; route: AnthropicRoute }> {
   const fetchImpl = call.fetchImpl ?? fetch;
-  const cfg = resolveGateway(env, 'anthropic');
+  const cfg = resolveGateway(env, 'anthropic', call.metadata);
   const route: AnthropicRoute = gatewayEnabled(env) ? 'gateway' : 'direct';
   const init = (r: AnthropicRoute): RequestInit => ({
     method: 'POST',
-    headers: anthropicHeaders(env, call.apiKey, r, call.extraHeaders),
+    headers: anthropicHeaders(env, call.apiKey, r, call.extraHeaders, call.metadata),
     body: JSON.stringify(call.body),
     signal: call.signal ?? null,
   });

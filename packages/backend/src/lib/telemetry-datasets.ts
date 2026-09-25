@@ -19,3 +19,10 @@ export const ANALYTICS_DATASET = 'pas_analytics';
 
 /** Error telemetry — written by error-telemetry.ts (ADR-008 §1/§2). */
 export const ERRORS_DATASET = 'pas_app_errors';
+
+/**
+ * Immutable payout-meter ledger. This is deliberately separate from visitor
+ * analytics: its blobs have a different schema and its rows are financial
+ * evidence, not dashboard events. Do not rename it (AE has no rename).
+ */
+export const PAYOUT_METER_DATASET = 'pas_payout_meter';

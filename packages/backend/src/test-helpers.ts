@@ -47,6 +47,8 @@ export function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType
     DATA_WORKER_HOST: 'serge-the-dev.workers.dev',
     VAPID_PUBLIC_KEY: 'test-vapid-public',
     VAPID_PRIVATE_KEY: 'test-vapid-private',
+    PAYOUT_METER_SALT: 'test-payout-meter-salt',
+    PAYOUT_METER: { writeDataPoint: vi.fn() } as unknown as AnalyticsEngineDataset,
     ...overrides,
   };
 }

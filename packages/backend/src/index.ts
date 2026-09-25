@@ -45,6 +45,7 @@ import { authRoutes } from './routes/auth.js';
 import { servicesRoutes } from './routes/services.js';
 import { engagementRoutes } from './routes/engagements.js';
 import { payoutCronRoutes } from './routes/payout-cron.js';
+import { payoutMeteringRoutes, reconcileAiGateway } from './routes/payout-metering.js';
 import { teamRoutes } from './routes/teams.js';
 import { inviteRoutes } from './routes/invites.js';
 import { rolesRoutes } from './routes/roles.js';
@@ -258,6 +259,7 @@ v1.route('/', keysRoutes);
 v1.route('/', servicesRoutes);
 v1.route('/', engagementRoutes);
 v1.route('/', payoutCronRoutes);
+v1.route('/', payoutMeteringRoutes);
 v1.route('/', teamRoutes);
 v1.route('/', inviteRoutes);
 v1.route('/', rolesRoutes);
@@ -284,5 +286,12 @@ export default {
     // #107: aggregate app_logs + QA runs per app for the last window and record
     // spikes (lib/error-alerts.ts). Failures here must not take the drift check down.
     ctx.waitUntil(evaluateErrorSpikes({ env }).catch((e) => console.error(`[alert] evaluation failed: ${(e as Error).message}`)));
+    // Reconcile provider-authoritative token/cost rows once hourly. This is
+    // independent of payout execution; operators can run the same endpoint on
+    // demand before closing a month.
+    if (new Date().getUTCMinutes() === 0 && env.CF_AI_GATEWAY_API_TOKEN && env.AI_GATEWAY_ID) {
+      const today = new Date().toISOString().slice(0, 10);
+      ctx.waitUntil(reconcileAiGateway(env, today, today).catch((e) => console.error(`[payout-meter] AI Gateway reconciliation failed: ${(e as Error).message}`)));
+    }
   },
 };

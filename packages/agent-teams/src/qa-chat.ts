@@ -138,6 +138,7 @@ Be concise. Write the files first, then briefly summarize what you wrote.`;
       deps.broadcast({ type: 'agent-heartbeat', role: 'QA' });
       const { res } = await fetchAnthropicMessages(deps.env, {
         apiKey,
+        metadata: { appId: proj?.slug ?? 'app', surface: 'qa-chat' },
         body: { model: QA_MODEL, max_tokens: 8192, system: systemPrompt, tools, messages, stream: true },
       });
 
