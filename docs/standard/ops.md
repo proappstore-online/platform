@@ -168,7 +168,7 @@ flow sign-in-and-create: goto / → click "Sign in with GitHub" → expectVisibl
 
 **Applicability.** All apps.
 
-**Rationale.** The deploy runs on every push to `main` with `--no-frozen-lockfile`; CI is the only place a lockfile drift, a type error or a compliance regression is caught *before* it ships.
+**Rationale.** The deploy runs on every push to `main` and stops on a lockfile drift, a type error or a failed `pas check`, but it runs no tests and only fails after the push has landed; CI is where every gate, tests included, is caught on the commit.
 
 **Recommended implementation.** Keep the scaffold's `ci.yml` and `compliance.yml`; add `pnpm test` and `npx @proappstore/cli check` steps; protect `main` if the org plan allows.
 

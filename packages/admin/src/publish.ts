@@ -36,8 +36,11 @@ const KB_WORKFLOW_PATH = ".github/workflows/kb.yml";
  * correctly times out with "CI never started". Injected at deploy time.
  *
  * Layout-adaptive: agents author either a flat Vite app (build → `dist`) or
- * a `web/` sub-package (build → `web/dist`); this detects both. Uses
- * `--no-frozen-lockfile` because agents don't commit a lockfile. R2_* secrets
+ * a `web/` sub-package (build → `web/dist`); this detects both. The install is
+ * frozen when a lockfile is committed (template apps) and unfrozen when it is
+ * not (agents don't commit one). A failing `pnpm build` — its tsc or the
+ * `pas check` prebuild — fails the deploy; only a bundle with NO build script
+ * falls back to a bare `vite build` (#204, PAS-OPS-004). R2_* secrets
  * are org-level (set once on the publishers org). `\${{ }}` is escaped to
  * survive the template literal.
  */
@@ -60,6 +63,9 @@ concurrency:
 
 jobs:
   deploy:
+    # template-app itself is never served (no registry entry) and its build
+    # fails its own placeholder check by design; the apps copied from it deploy.
+    if: github.event.repository.name != 'template-app'
     runs-on: ubuntu-latest
     outputs:
       has_e2e: \${{ steps.e2e-check.outputs.has_e2e }}
@@ -73,12 +79,18 @@ jobs:
         with:
           node-version: 22
 
-      - run: pnpm install --no-frozen-lockfile
+      - name: Install
+        run: if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install --no-frozen-lockfile; fi
 
       - name: Build
         env:
           VITE_COMMIT_SHA: \${{ github.sha }}
-        run: pnpm build || (cd web 2>/dev/null || true; npx vite build)
+        run: |
+          # Fail closed (#204): a failing build script — its tsc, or the pas check
+          # prebuild — fails the deploy, and nothing is uploaded. Only a bundle with
+          # no build script at all falls back to a bare vite build.
+          if jq -e '.scripts.build' package.json >/dev/null 2>&1; then pnpm build
+          else (cd web 2>/dev/null || true; npx vite build); fi
 
       - name: Locate build output
         id: dist
@@ -184,6 +196,21 @@ jobs:
             --endpoint-url "$R2_ENDPOINT" \\
             --delete --no-progress
           echo "Deployed apps/\${{ github.event.repository.name }} from \${{ github.sha }}"
+
+      - name: Trigger post-deploy QA flows (keyless — GitHub OIDC)
+        continue-on-error: true
+        run: |
+          # Queue the platform's QA flows against the freshly deployed app. Specs
+          # live in the platform, never in this repo; execution happens in
+          # Cloudflare Browser Rendering. Same OIDC trust as the credential mint.
+          # Advisory: a failure here never blocks the deploy (results land in the
+          # platform QA run history).
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \\
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.proappstore.online" | jq -r '.value')
+          [ -n "$OIDC" ] && [ "$OIDC" != "null" ] || { echo "no OIDC token"; exit 0; }
+          curl -sS -X POST "https://api.proappstore.online/v1/apps/\${{ github.event.repository.name }}/qa/runs" \\
+            -H "Authorization: Bearer $OIDC" -H "Content-Type: application/json" \\
+            --data '{"trigger":"deploy"}' | head -c 400; echo
 
   # Behavioural gate: drive the LIVE app in a real browser (the thing tsc/build
   # can't check). Runs after deploy; a failure fails the run, so the deploy

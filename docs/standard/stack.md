@@ -266,7 +266,7 @@ gh repo create my-org/my-app --private
 
 **Severity:** High · **Verification:** Manual · **Enforcement:** none (recommended) · **Since:** 1.1
 
-**Rule.** The app MUST deploy with the template's `.github/workflows/deploy.yml` (build → apply `migrations.json` → mint OIDC deploy credentials → upload to R2 → register `mcp.json`) on push to `main`. The repository MUST NOT hold Cloudflare API tokens, R2 keys or platform internal tokens as secrets.
+**Rule.** The app MUST deploy with the template's `.github/workflows/deploy.yml` (build → apply `migrations.json` → register `mcp.json` → mint OIDC deploy credentials → upload to R2) on push to `main`. The repository MUST NOT hold Cloudflare API tokens, R2 keys or platform internal tokens as secrets.
 
 **Applicability.** All apps.
 

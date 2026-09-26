@@ -10,9 +10,12 @@ goes if we ever centralize. Decision record: [ADR-006](./adr/006-centralized-bui
 **Per-repo GitHub Actions → R2 → one host Worker (Path B).**
 
 1. **App repo** carries `.github/workflows/deploy.yml` (the canonical workflow).
-   On push to `main` it runs `pnpm install --no-frozen-lockfile` + `vite build`
-   (layout-adaptive: `dist/` or `web/dist/`) and `aws s3 sync`s the output to the
-   `pas-apps` R2 bucket under `apps/<app>/`.
+   On push to `main` it runs `pnpm install` (`--frozen-lockfile` when a lockfile is
+   committed) and the app's `build` script, which fails the deploy if its `tsc` or
+   `pas check` prebuild fails; only a bundle with no build script falls back to a
+   bare `vite build` (#204). The output (layout-adaptive: `dist/` or `web/dist/`)
+   is `aws s3 sync`ed to the `pas-apps` R2 bucket under `apps/<app>/`, after
+   `migrations.json` is applied and `mcp.json` is registered.
 2. **`proappstore-host`** (one Worker, route `*.proappstore.online/*`) serves every
    app from R2 by subdomain, and dispatches reserved subdomains (`api`, `admin`,
    `agents`, `mcp`, `kb`, `docs`) to sibling Workers via service bindings.

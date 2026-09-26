@@ -35,8 +35,9 @@ deploy successful on the strength of unit tests.
 ## Rules
 
 1. **One deploy path.** A push to `main` runs the template's `deploy.yml`
-   (build → apply `migrations.json` → mint OIDC credentials → upload to R2 →
-   register `mcp.json` → e2e). Nothing else deploys an app: no `wrangler`,
+   (frozen install → build, which fails the deploy if `pas check` or `tsc`
+   fails → apply `migrations.json` → register `mcp.json` → mint OIDC
+   credentials → upload to R2 → trigger platform QA → e2e). Nothing else deploys an app: no `wrangler`,
    no copying assets into R2, no editing the host, no `gh repo create`
    ([PAS-STACK-005](https://docs.proappstore.online/standard/stack/#pas-stack-005),
    [PAS-STACK-004](https://docs.proappstore.online/standard/stack/#pas-stack-004)).

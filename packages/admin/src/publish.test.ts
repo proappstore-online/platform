@@ -1,4 +1,7 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "./env.js";
 import { buildAgentBundle, deployWorkflowYaml, handleAgentDeploy, handlePublish, kbWorkflowYaml } from "./publish.js";
@@ -271,6 +274,23 @@ describe("provisioning hygiene (#195)", () => {
     expect(block).toContain("exit 1");
   });
 
+  it("triggers post-deploy QA after the upload, advisory only", () => {
+    const yaml = deployWorkflowYaml(ENV);
+    const upload = yaml.indexOf("- name: Upload to R2");
+    const qa = yaml.indexOf("- name: Trigger post-deploy QA flows");
+    expect(qa).toBeGreaterThan(upload);
+    const block = yaml.slice(qa, yaml.indexOf("\n  e2e:", qa));
+    expect(block).toContain("continue-on-error: true");
+    expect(block).toContain('/qa/runs"');
+    expect(block).toContain(`--data '{"trigger":"deploy"}'`);
+  });
+
+  it("never deploys the template source repo itself, whose own build fails its placeholder check", () => {
+    const yaml = deployWorkflowYaml(ENV);
+    expect(yaml).toContain("  deploy:\n    # template-app itself is never served");
+    expect(yaml).toContain("    if: github.event.repository.name != 'template-app'\n    runs-on: ubuntu-latest");
+  });
+
   it("URL-encodes each KB upload path segment, keeping / as the separator", () => {
     const kb = buildAgentBundle({}, ENV)[KB_YAML]!;
     expect(kb).toContain(`jq -sRr 'split("/") | map(@uri) | join("/")'`);
@@ -457,5 +477,82 @@ describe("canonical KB workflow — single source of truth (#57)", () => {
     expect(golden).toContain("audience=proappstore-kb-host");
     expect(golden).not.toContain("secrets.INTERNAL_TOKEN");
     expect(golden).not.toContain("x-internal-token");
+  });
+});
+
+/**
+ * #204: the Build step must fail closed. `pnpm build || npx vite build` shipped
+ * a fallback build whenever `pnpm build` failed — including when its `pas check`
+ * prebuild or `tsc -b` failed — so a red gate deployed green (PAS-OPS-004).
+ * These run the golden's actual Install/Build scripts under bash, with `pnpm`
+ * and `npx` stubbed to log how they were invoked.
+ */
+// Spawns bash per case (~1 s each locally), so allow headroom over the 5 s default.
+describe("deploy workflow build gate fails closed (#204)", { timeout: 30_000 }, () => {
+  const golden = () => readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
+
+  /** The `run:` script of a named step: a single line, or a `run: |` block. */
+  function stepScript(yaml: string, name: string): string {
+    const lines = yaml.slice(yaml.indexOf(`- name: ${name}\n`)).split("\n");
+    const at = lines.findIndex((l) => /^\s+run: /.test(l));
+    const run = lines[at]!;
+    if (!run.trimEnd().endsWith("run: |")) return run.replace(/^\s+run: /, "");
+    const indent = run.indexOf("run:") + 2;
+    const body: string[] = [];
+    for (const l of lines.slice(at + 1)) {
+      if (l.trim() !== "" && l.search(/\S/) < indent) break;
+      body.push(l.slice(indent));
+    }
+    return body.join("\n");
+  }
+
+  /** Run a step script in a scratch repo; pnpm runs the package's build script like the real one. */
+  function runStep(script: string, repo: Record<string, string>) {
+    const dir = mkdtempSync(join(tmpdir(), "deploy-gate-"));
+    const bin = join(dir, ".bin");
+    mkdirSync(bin);
+    const log = join(dir, "calls.log");
+    writeFileSync(join(bin, "pnpm"), `#!/bin/bash\necho "pnpm $*" >> "${log}"\n[ "$1" = build ] && exec bash -c "$(jq -r '.scripts.build' package.json)"\nexit 0\n`);
+    writeFileSync(join(bin, "npx"), `#!/bin/bash\necho "npx $* (in $(basename "$PWD"))" >> "${log}"\n`);
+    chmodSync(join(bin, "pnpm"), 0o755);
+    chmodSync(join(bin, "npx"), 0o755);
+    for (const [path, content] of Object.entries(repo)) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), content);
+    }
+    const res = spawnSync("bash", ["-e", "-c", script], { cwd: dir, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8" });
+    const calls = existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [];
+    rmSync(dir, { recursive: true, force: true });
+    return { status: res.status, calls };
+  }
+
+  const pkg = (scripts: Record<string, string>) => JSON.stringify({ name: "app", scripts });
+
+  it("a failing build script — e.g. a failed pas check — fails the step and never falls back", () => {
+    const { status, calls } = runStep(stepScript(golden(), "Build"), { "package.json": pkg({ build: "echo '✗ 1 failed'; exit 1" }) });
+    expect(status).not.toBe(0);
+    expect(calls).toEqual(["pnpm build"]);
+  });
+
+  it("a passing build script builds once, with no fallback", () => {
+    const { status, calls } = runStep(stepScript(golden(), "Build"), { "package.json": pkg({ build: "true" }) });
+    expect(status).toBe(0);
+    expect(calls).toEqual(["pnpm build"]);
+  });
+
+  it("only a bundle with no build script falls back to a bare vite build, in web/ when present", () => {
+    const withWeb = runStep(stepScript(golden(), "Build"), { "package.json": pkg({}), "web/index.html": "" });
+    expect(withWeb.status).toBe(0);
+    expect(withWeb.calls).toEqual(["npx vite build (in web)"]);
+    // An agent bundle with no root package.json at all still builds.
+    const flat = runStep(stepScript(golden(), "Build"), { "index.html": "" });
+    expect(flat.status).toBe(0);
+    expect(flat.calls).toEqual([expect.stringMatching(/^npx vite build \(in deploy-gate-/)]);
+  });
+
+  it("installs from a committed lockfile frozen, and unfrozen only when there is none", () => {
+    expect(runStep(stepScript(golden(), "Install"), { "pnpm-lock.yaml": "lockfileVersion: '9.0'\n" }).calls)
+      .toEqual(["pnpm install --frozen-lockfile"]);
+    expect(runStep(stepScript(golden(), "Install"), {}).calls).toEqual(["pnpm install --no-frozen-lockfile"]);
   });
 });
