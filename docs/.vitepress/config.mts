@@ -80,6 +80,7 @@ const mainSidebar = [
       { text: "Agent Customization", link: "/agent-customization" },
       { text: "AI Gateway (Agent Teams)", link: "/ai-gateway" },
       { text: "Agent Skills", link: "/skills/" },
+      { text: "Provisioning Operator", link: "/provisioning-operator" },
     ],
   },
   {

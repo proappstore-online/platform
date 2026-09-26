@@ -13,7 +13,7 @@ Per app:  https://mcp.proappstore.online/mcp/apps/<app_id>
 - Start by inspecting the tools you have (`whoami` tells you who you are and what roles you hold).
 - Prefer read-only tools (`app_info`, `list_files`, `read_file`, `deploy_status`, `schema_status`, `list_tickets`, `qa_list_runs`) unless the task requires a change.
 - Preview before committing: every expensive or irreversible tool accepts `dry_run: true` and returns the plan. Then call it for real.
-- Destructive or public-facing tools need `confirm: true` — `provision_pas_app`, `scaffold_app`, `publish_app`, `delete_file`. Ask the user before passing it.
+- Destructive, public-facing or infrastructure tools need `confirm: true` — `provision_pas_app`, `scaffold_app`, `provision_app`, `publish_app`, `delete_file`. Ask the user before passing it.
 - Never paste tokens, secrets or API keys into tool arguments other than the `token` argument the loop tools define. Vaulted keys stay on the platform.
 - A failure comes back with `isError: true`; treat it as a failure even if the text looks informative.
 - You act as the authenticated account. If `whoami` is not the person you expect, stop.

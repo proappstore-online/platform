@@ -700,7 +700,7 @@ describe('provision_app', () => {
         ],
       }),
     });
-    const result = await tools.get('provision_app')!({ app_id: 'app' });
+    const result = await tools.get('provision_app')!({ app_id: 'app', confirm: true });
     const out = getText(result);
     expect(out).toContain('+ route');
     expect(out).toContain('+ create_d1');
@@ -708,7 +708,7 @@ describe('provision_app', () => {
 
   it('handles provision network error', async () => {
     mockFetch.mockRejectedValue(new Error('network down'));
-    const result = await tools.get('provision_app')!({ app_id: 'app' });
+    const result = await tools.get('provision_app')!({ app_id: 'app', confirm: true });
     expect(getText(result)).toContain('provision error');
     expect(getText(result)).toContain('network down');
   });
@@ -716,8 +716,32 @@ describe('provision_app', () => {
   it('refuses to provision an app the caller does not own', async () => {
     mockOwnership.mockResolvedValue(false);
     // Unique app id — requireOwner caches per user/app for 60s across tests.
-    const result = await tools.get('provision_app')!({ app_id: 'notown-prov' });
+    const result = await tools.get('provision_app')!({ app_id: 'notown-prov', confirm: true });
     expect(getText(result)).toContain("don't own");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  // #132: a live re-provision changes production infrastructure, so an operator
+  // agent must get explicit approval, as with provision_pas_app and scaffold_app.
+  it('refuses a live run without confirm: true, before calling the provision API', async () => {
+    for (const confirm of [undefined, false]) {
+      const result = await tools.get('provision_app')!({ app_id: 'app', confirm });
+      expect(getText(result)).toContain('Refused: provision_app changes production infrastructure');
+      expect(getText(result)).toContain('confirm: true');
+    }
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('checks ownership before the confirm gate, so a stranger learns nothing new', async () => {
+    mockOwnership.mockResolvedValue(false);
+    const result = await tools.get('provision_app')!({ app_id: 'notown-noconfirm' });
+    expect(getText(result)).toContain("don't own");
+    expect(getText(result)).not.toContain('Refused: provision_app');
+  });
+
+  it('dry_run still previews without confirm', async () => {
+    const result = await tools.get('provision_app')!({ app_id: 'app', dry_run: true });
+    expect(getText(result)).toContain('DRY RUN');
     expect(mockFetch).not.toHaveBeenCalled();
   });
 });

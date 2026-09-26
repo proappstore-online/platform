@@ -658,15 +658,19 @@ export function registerProjectTools(
   // ── provision_app ─────────────────────────────────────────
   server.tool(
     "provision_app",
-    "Provision platform resources for a PAS app (R2 route, D1 database, data worker). Idempotent — safe to call on already-provisioned apps.",
-    { app_id: APP_ID, dry_run: DRY_RUN },
-    async ({ app_id, dry_run }) => {
+    "Provision platform resources for a PAS app (R2 route, D1 database, data worker). Idempotent — safe to call on already-provisioned apps. A live run changes production infrastructure: preview with dry_run, then re-call with confirm: true.",
+    { app_id: APP_ID, confirm: CONFIRM, dry_run: DRY_RUN },
+    async ({ app_id, confirm, dry_run }) => {
       // Ownership-gated: re-provisioning an app rebinds its route/D1/data-worker,
       // so a bare requireAuth would let any authed user target another owner's app.
       const auth = await requireOwner(app_id);
       if ('content' in auth) return auth;
       const preview = await dry("provision_app", dry_run, `- provision R2 route + D1 database + data worker for ${app_id} (idempotent; skips existing resources)`, { app_id });
       if (preview) return text(preview);
+      // #132: a live re-provision is approved explicitly, like provision_pas_app
+      // and scaffold_app — an operator agent must not retry it unprompted.
+      if (confirm !== true)
+        return text(`Refused: provision_app changes production infrastructure (route, D1, data worker) for "${app_id}". Preview with dry_run: true, then re-call with confirm: true to proceed.`);
       await gate("provision_app", { app_id });
       const result = await provision(app_id, auth.token);
       return text(result || "Provisioning complete (no steps reported).");

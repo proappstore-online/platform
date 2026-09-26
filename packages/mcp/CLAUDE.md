@@ -46,7 +46,7 @@ Tools marked **confirm** need `confirm: true` to execute; **dry_run** tools acce
 | `search_files` | Search file contents in an app's repo |
 | `batch_write_files` | Write multiple files in one commit |
 | `get_deploy_status` | Check deploy status for a specific app |
-| `provision_app` | Provision platform resources (CF Pages, D1, DNS, data worker) — **dry_run** |
+| `provision_app` | Provision platform resources (route, D1, data worker) — **confirm**, **dry_run** |
 | `publish_app` | Provision + list the app on the public storefront — **confirm**, **dry_run** |
 
 ### Agent Teams loop (drive the autonomous build over MCP)
@@ -127,8 +127,8 @@ from the reference is present:
   KV binding or an authenticated subject; reads aren't logged.
 - **Read-only mode** — set `MCP_READ_ONLY=1` (server-wide) to block every mutating
   tool (they throw, so a caller can't misreport success). Reads + dry-runs still work.
-- **confirm** — irreversible/public tools (`provision_pas_app`, `scaffold_app`, `delete_file`,
-  `publish_app`) refuse unless called with `confirm: true`.
+- **confirm** — irreversible/public/infrastructure tools (`provision_pas_app`, `scaffold_app`,
+  `provision_app`, `delete_file`, `publish_app`) refuse unless called with `confirm: true`.
 - **dry_run** — expensive/irreversible tools accept `dry_run: true` to audit +
   return the plan they *would* execute and make no changes. A preview needs no
   `confirm` and is allowed even in read-only mode. Tools: `scaffold_app`,

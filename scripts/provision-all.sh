@@ -1,4 +1,24 @@
 #!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────────
+# LEGACY — do not use to provision apps (#132). Kept for reference only.
+#
+# To create and provision a PAS app, use the ProAppStore MCP server from an
+# owner-authenticated session:
+#   - tool `provision_pas_app` — repo from an approved template, deploy
+#     variables, route + D1 + data worker, verification. Call it with
+#     dry_run: true, review the plan, then confirm: true.
+#   - skill `create-proappstore-app` (skills/create-proappstore-app/) — the
+#     operator playbook that drives that flow end to end.
+# Re-provision an existing app with `provision_app` (dry_run, then confirm).
+# See docs/provisioning-operator.md.
+#
+# Why not this script: it needs a pasted human session token
+# (FAS_SESSION_TOKEN), its prerequisites below (fas/admin zone id, wrangler
+# deploys) no longer apply, and its hard-coded APPS array is not a source of
+# truth for app definitions (the apps / app_listings tables and each app's repo
+# are).
+# ─────────────────────────────────────────────────────────────────────────────
+#
 # Provision (or re-provision, idempotently) all real PAS apps via the new
 # delegated provisioner. Run this AFTER:
 #

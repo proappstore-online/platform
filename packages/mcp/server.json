@@ -254,6 +254,7 @@
         "read_only_mode": "MCP_READ_ONLY=1 blocks every mutating tool server-wide; reads and dry-runs still work",
         "confirm_required": [
           "delete_file",
+          "provision_app",
           "provision_pas_app",
           "publish_app",
           "scaffold_app"

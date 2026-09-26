@@ -99,7 +99,7 @@ found with `discover_tools` / `describe_tool` on the app endpoint).
 | `delete_file` | Delete a file from a PAS app's GitHub repo. — **confirm**, **dry_run** |
 | `search_files` | Search for text across all files in a PAS app's GitHub repo. |
 | `get_deploy_status` | Check the latest deploy status for a PAS app (GitHub Actions workflow runs). |
-| `provision_app` | Provision platform resources for a PAS app (R2 route, D1 database, data worker). — **dry_run** |
+| `provision_app` | Provision platform resources for a PAS app (R2 route, D1 database, data worker). — **confirm**, **dry_run** |
 | `publish_app` | Publish a PAS app to the storefront. — **confirm**, **dry_run** |
 | `batch_write_files` | Write multiple files in a single commit to a PAS app's GitHub repo. |
 
