@@ -110,8 +110,32 @@ export class Storage {
     return data.files;
   }
 
-  /** Delete a file. */
+  /** Delete one of your own private files. A missing file is not an error. */
   async delete(path: string): Promise<void> {
+    return this.remove(path, true);
+  }
+
+  /**
+   * Delete one of YOUR user-public files — the `path` you passed to uploadUserPublic(),
+   * not the returned `u/<userId>/…` key. The server scopes it to the caller's id, so
+   * nobody can delete another user's upload this way. Throws if there is no such file.
+   */
+  async deleteUserPublic(path: string): Promise<void> {
+    return this.remove(`_userpub/${path}`, false);
+  }
+
+  /**
+   * Delete a public file by its key, for the app team: a user upload's returned key
+   * (`u/<userId>/…`, team admin+, for takedowns) or an owner-curated uploadPublic()
+   * path (app owner). Browsers may keep serving a deleted public file from cache for
+   * up to a year, so upload each version under a fresh path when takedown speed matters.
+   * Throws if there is no such file, so a wrong key is never a silent success.
+   */
+  async deletePublic(key: string): Promise<void> {
+    return this.remove(`_public/${key}`, false);
+  }
+
+  private async remove(path: string, missingOk: boolean): Promise<void> {
     const url = `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/storage/${path}`;
     const response = await this.auth.authenticatedFetch(url, {
       method: 'DELETE',
@@ -121,7 +145,10 @@ export class Storage {
       this.auth.handleUnauthorized();
       throw new Error('Not signed in.');
     }
-    if (!response.ok && response.status !== 404) {
+    if (response.status === 404 && missingOk) return;
+    if (response.status === 404) throw new Error('File not found.');
+    if (response.status === 403) throw new Error('Not allowed to delete this file.');
+    if (!response.ok) {
       throw new Error(`storage.delete failed: ${response.status}`);
     }
   }

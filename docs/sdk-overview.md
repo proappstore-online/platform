@@ -53,8 +53,9 @@ app.db.tenant(tenantId) → tx.find() / .findMany() / .insert() / .update() / .d
 // separate from team + platform roles. See docs/authorization-model.md)
 app.roles.assign(userId, role) / .revoke(userId, role) / .check(role) / .myRoles() / .listAll()
 
-// File storage (R2)
-app.storage.upload() / .uploadPublic() / .publicUrl() / .download() / .list() / .delete()
+// File storage (R2) — see "File storage deletion" below
+app.storage.upload() / .uploadPublic() / .uploadUserPublic() / .publicUrl() / .download() / .list()
+app.storage.delete(path) / .deleteUserPublic(path) / .deletePublic(key)
 
 // Maps + geocoding + routing (OpenStreetMap, no Google keys)
 app.maps.geocode(query) / .reverseGeocode(lat, lng) / .route(from, to) / .embedUrl() / .staticUrl()
@@ -165,6 +166,31 @@ platform MCP server.
 APIs for controlled migration and trusted tooling. They require a PAS session,
 but browser-supplied raw SQL is not the target authorization boundary. See
 [App actions and data access security](/app-actions-security).
+
+## File storage deletion
+
+Each delete method addresses the same namespace its upload wrote to (#207):
+
+| Method | Deletes | Who may call it |
+|---|---|---|
+| `delete(path)` | your own private file (`upload`) | any signed-in user, own files only |
+| `deleteUserPublic(path)` | your own user-public file; pass the `path` you gave `uploadUserPublic`, not the returned key | any signed-in user, own files only (the id comes from the session) |
+| `deletePublic('u/<userId>/…')` | any user's public upload, by the `key` `uploadUserPublic` returned, for takedowns | app team `admin` or above |
+| `deletePublic(path)` | an owner-curated `uploadPublic` asset | app owner |
+
+`deleteUserPublic` and `deletePublic` throw `File not found.` for a key that does
+not exist and `Not allowed to delete this file.` on a 403, so a takedown with a
+wrong key is never reported as a success. `delete` still resolves for a missing
+file. App-role moderators who are not on the app team cannot delete public files
+directly; route their takedowns through the team (see #208).
+
+**Deleted public files can outlive the delete in browser caches.** Public files
+are served with `Cache-Control: public, max-age=31536000, immutable`, so a browser
+that already fetched one may keep showing it for up to a year after deletion. When
+prompt takedown matters, upload each version under a fresh path (for example
+`logos/<id>-<timestamp>.png`) and never overwrite a path in place: removing the
+key from your data then stops new page loads from referencing it, and the delete
+removes the bytes from the server.
 
 ## ProShell component
 

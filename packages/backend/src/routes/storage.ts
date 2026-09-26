@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
-import { requireUser, requireAppOwner, HttpError } from '../lib/auth.js';
+import { requireUser, requireAppAccess, requireAppOwner, HttpError } from '../lib/auth.js';
 import { dispatchWebhook } from '../lib/webhook-dispatch.js';
 
 /**
@@ -167,16 +167,39 @@ storageRoutes.get('/apps/:appId/files', async (c) => {
   }
 });
 
-/** Delete a file. Auth required (own files only). */
+/**
+ * Delete a file. Namespacing mirrors the PUT route (#207):
+ *   _userpub/<path>          → the caller's own user-public file; the id comes from the session.
+ *   _public/u/<uid>/<path>   → any user's public upload, for team takedowns (team admin+).
+ *   _public/<path>           → an owner-curated public asset (app owner).
+ *   <path>                   → the caller's own private file.
+ * A missing object is a 404, never a silent 204, so a wrong key is visible.
+ */
 storageRoutes.delete('/apps/:appId/storage/*', async (c) => {
   try {
-    const user = await requireUser(c);
     const appId = c.req.param('appId');
     const filePath = c.req.path.replace(`/v1/apps/${appId}/storage/`, '');
 
     if (!filePath) return c.text('file path required', 400);
 
-    const key = `${appId}/${user.id}/${filePath}`;
+    let key: string;
+    if (filePath.startsWith('_userpub/')) {
+      const user = await requireUser(c);
+      const rest = filePath.slice('_userpub/'.length);
+      if (!rest) return c.text('file path required', 400);
+      key = `${appId}/_public/u/${user.id}/${rest}`;
+    } else if (filePath.startsWith('_public/u/')) {
+      await requireAppAccess(c, appId, 'admin');
+      key = `${appId}/${filePath}`;
+    } else if (filePath.startsWith('_public/')) {
+      await requireAppOwner(c, appId);
+      key = `${appId}/${filePath}`;
+    } else {
+      const user = await requireUser(c);
+      key = `${appId}/${user.id}/${filePath}`;
+    }
+
+    if (!(await c.env.STORAGE.head(key))) return c.text('not found', 404);
     await c.env.STORAGE.delete(key);
 
     return c.body(null, 204);
