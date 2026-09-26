@@ -261,8 +261,12 @@ listingsRoutes.put('/apps/:id/listing-assets/:kind', async (c) => {
         return c.text('content-type must be text/markdown', 400);
       }
     } else {
+      if (contentType === 'image/svg+xml') {
+        // #216: refused explicitly so the owner learns why, not just "wrong type".
+        return c.text('SVG is not accepted for listing images: it can run script when opened. Upload PNG, JPEG or WebP.', 422);
+      }
       if (!IMAGE_TYPES.has(contentType)) {
-        return c.text('content-type must be an image (png/jpeg/webp/svg)', 400);
+        return c.text('content-type must be an image (png/jpeg/webp)', 400);
       }
     }
 

@@ -576,3 +576,45 @@ describe('review uploads — _review namespace, reviewer roles, audit (#208)', (
     expect((await req('GET', '/v1/apps/myapp/storage/notes/a.txt', TOK)).headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
   });
 });
+
+// #216: objects already stored with an active-document type (e.g. an SVG
+// listing icon uploaded before the rule) are served sandboxed, so opening one
+// directly cannot run script on the API origin. Raster files are unchanged.
+describe('GET /v1/apps/:appId/public/* — active documents are sandboxed (#216)', () => {
+  const serve = (key: string, contentType: string) => {
+    const storage = makeStorage({
+      get: vi.fn(async (k: string) => (k === `myapp/_public/${key}` ? {
+        body: new Uint8Array([1]), httpEtag: '"e"', writeHttpMetadata: (h: Headers) => h.set('content-type', contentType),
+      } : null)) as unknown as R2Bucket['get'],
+    });
+    return app.request(`/v1/apps/myapp/public/${key}`, {}, makeEnv({ STORAGE: storage }));
+  };
+  const SANDBOX = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+
+  it('serves stored SVG, XML, XHTML and HTML with a sandboxing CSP', async () => {
+    for (const [key, type] of [
+      ['listing/icon-1.svg', 'image/svg+xml'],
+      ['u/gh:1/feed.xml', 'application/xml'],
+      ['u/gh:1/page.xml', 'text/xml; charset=utf-8'],
+      ['legacy/page.xhtml', 'application/xhtml+xml'],
+      ['legacy/page.html', 'text/html'],
+    ] as const) {
+      const res = await serve(key, type);
+      expect(res.status, key).toBe(200);
+      expect(res.headers.get('content-security-policy'), key).toBe(SANDBOX);
+      expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    }
+  });
+
+  it('sandboxes a .svg key even when its stored type is generic', async () => {
+    expect((await serve('listing/icon-2.svg', 'application/octet-stream')).headers.get('content-security-policy')).toBe(SANDBOX);
+  });
+
+  it('leaves raster images and PDFs as they were (no sandbox, still cached)', async () => {
+    for (const [key, type] of [['listing/icon-3.png', 'image/png'], ['u/gh:1/doc.pdf', 'application/pdf']] as const) {
+      const res = await serve(key, type);
+      expect(res.headers.get('content-security-policy'), key).toBeNull();
+      expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    }
+  });
+});

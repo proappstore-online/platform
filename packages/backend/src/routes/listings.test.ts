@@ -396,3 +396,39 @@ describe('PUT /v1/apps/:id/listing-assets — markdown moderation (#215)', () =>
     expect(r2put).toHaveBeenCalledTimes(1);
   });
 });
+
+// #216: listing images are served publicly from the API origin, so an SVG
+// (a document that can run script) is refused; raster types keep working.
+describe('PUT /v1/apps/:id/listing-assets — SVG refused (#216)', () => {
+  let r2put: ReturnType<typeof vi.fn>;
+  beforeEach(() => { r2put = vi.fn(async () => ({})); });
+  const upload = (kind: string, contentType: string) => app.request(
+    `/v1/apps/meetup/listing-assets/${kind}`,
+    { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': contentType }, body: new Uint8Array([60, 115, 118, 103]) },
+    sharedMakeEnv({ STORAGE: { put: r2put } as unknown as R2Bucket, VAPID_PUBLIC_KEY: 'p', VAPID_PRIVATE_KEY: 'q' }, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }))),
+  );
+
+  it('an SVG icon or screenshot is a 422 that says why, and nothing is stored', async () => {
+    for (const [kind, type] of [['icon', 'image/svg+xml'], ['screenshot-0', 'image/svg+xml'], ['icon', 'image/SVG+XML; charset=utf-8']] as const) {
+      const res = await upload(kind, type);
+      expect(res.status, `${kind} ${type}`).toBe(422);
+      expect(await res.text()).toMatch(/SVG is not accepted.*PNG, JPEG or WebP/);
+    }
+    expect(r2put).not.toHaveBeenCalled();
+  });
+
+  it('PNG, JPEG and WebP are still accepted and stored with their extension', async () => {
+    for (const [type, ext] of [['image/png', 'png'], ['image/jpeg', 'jpg'], ['image/webp', 'webp']] as const) {
+      const res = await upload('icon', type);
+      expect(res.status, type).toBe(200);
+      expect(((await res.json()) as { key: string }).key).toMatch(new RegExp(`^meetup/_public/listing/icon-\\d+\\.${ext}$`));
+    }
+    expect(r2put).toHaveBeenCalledTimes(3);
+  });
+
+  it('other non-image types keep their 400', async () => {
+    const res = await upload('icon', 'application/pdf');
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe('content-type must be an image (png/jpeg/webp)');
+  });
+});

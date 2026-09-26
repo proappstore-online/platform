@@ -173,6 +173,14 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
   }
 });
 
+/**
+ * Content types a browser renders as an active document when opened directly:
+ * served from the API origin they could run script there (#216). Uploads refuse
+ * most of these, but objects stored before a rule (or by another path) are
+ * neutralised at read time instead.
+ */
+const ACTIVE_DOCUMENT_TYPES = new Set(['image/svg+xml', 'text/html', 'application/xhtml+xml', 'application/xml', 'text/xml']);
+
 /** Download a public file. No auth required. Key: {appId}/_public/{path} */
 storageRoutes.get('/apps/:appId/public/*', async (c) => {
   const appId = c.req.param('appId');
@@ -190,6 +198,12 @@ storageRoutes.get('/apps/:appId/public/*', async (c) => {
   // Never let the browser sniff a user-uploaded blob into an executable type
   // (e.g. HTML/JS) on the API origin.
   headers.set('x-content-type-options', 'nosniff');
+  // #216: an active-document type opened directly renders with no script, no
+  // plugins and an opaque origin. <img src> of an SVG is unaffected.
+  const type = (headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
+  if (ACTIVE_DOCUMENT_TYPES.has(type) || /\.svg$/i.test(filePath)) {
+    headers.set('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+  }
   return new Response(object.body, { headers });
 });
 
