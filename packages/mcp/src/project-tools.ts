@@ -44,15 +44,6 @@ const text = (s: string): Text => ({ content: [{ type: "text" as const, text: s 
 
 const APP_ID = z.string().max(58).regex(/^[a-z][a-z0-9-]*$/).describe("App ID (lowercase, max 58 chars, e.g. 'chess-academy')");
 const OWNERSHIP_CACHE_TTL_MS = 60_000;
-const TEMPLATE_PLACEHOLDER_FILES = [
-  "CLAUDE.md",
-  "README.md",
-  "package.json",
-  "web/index.html",
-  "web/package.json",
-  "web/src/App.tsx",
-  "web/vite.config.ts",
-] as const;
 
 interface ProvisionStep {
   name: string;
@@ -249,18 +240,36 @@ export function registerProjectTools(
     }
   }
 
-  async function patchTemplatePlaceholders(appId: string): Promise<string[]> {
-    const files: { path: string; content: string }[] = [];
-    for (const filePath of TEMPLATE_PLACEHOLDER_FILES) {
-      const file = await gh.getFile(appId, filePath);
-      if (!file.ok || file.content === undefined) continue;
-      const patched = file.content.replaceAll("APPNAME", appId);
-      if (patched !== file.content) files.push({ path: filePath, content: patched });
-    }
-    if (files.length === 0) return ["~ Template placeholders: no APPNAME placeholders found"];
+  /** Text files in the app repo that still contain the template's APPNAME placeholder. */
+  async function filesWithPlaceholder(appId: string): Promise<{ files: Record<string, string>; error?: string }> {
+    const pulled = await gh.pullText(appId);
+    if (!pulled.ok || !pulled.files) return { files: {}, error: pulled.error ?? "could not read the repo" };
+    if (pulled.truncated) return { files: {}, error: "the repo is too large to check every file" };
+    return { files: Object.fromEntries(Object.entries(pulled.files).filter(([, content]) => content.includes("APPNAME"))) };
+  }
+
+  /**
+   * Replace APPNAME in EVERY text file of the new repo, as `pas create` does, then
+   * re-read the repo and fail if any survived (#205). A hard-coded file list went
+   * stale the moment the template grew a placeholder elsewhere (compliance.yml).
+   */
+  async function patchTemplatePlaceholders(appId: string): Promise<{ ok: boolean; lines: string[] }> {
+    const found = await filesWithPlaceholder(appId);
+    if (found.error) return { ok: false, lines: [`! Template placeholders: ${found.error}`] };
+    const files = Object.entries(found.files).map(([path, content]) => ({ path, content: content.replaceAll("APPNAME", appId) }));
+    if (files.length === 0) return { ok: true, lines: ["~ Template placeholders: no APPNAME placeholders found"] };
+
     const res = await gh.pushFiles(appId, files, `chore: configure ${appId} template`, { initIfEmpty: false });
-    if (!res.ok) return [`! Template placeholders: ${res.error ?? "failed to commit replacements"}`];
-    return [`+ Template placeholders: replaced APPNAME in ${files.length} file(s)${res.commitSha ? ` (${res.commitSha.slice(0, 7)})` : ""}`];
+    if (!res.ok) return { ok: false, lines: [`! Template placeholders: ${res.error ?? "failed to commit replacements"}`] };
+    const lines = [`+ Template placeholders: replaced APPNAME in ${files.length} file(s)${res.commitSha ? ` (${res.commitSha.slice(0, 7)})` : ""}`];
+
+    const after = await filesWithPlaceholder(appId);
+    const remaining = Object.keys(after.files);
+    if (after.error) return { ok: false, lines: [...lines, `! Template placeholders: could not verify the replacement (${after.error})`] };
+    if (remaining.length > 0) {
+      return { ok: false, lines: [...lines, `! Template placeholders: APPNAME is still present in ${remaining.join(", ")} — re-run provision_pas_app to re-patch`] };
+    }
+    return { ok: true, lines };
   }
 
   async function verifyProvision(appId: string, provisionResult: ProvisionResult): Promise<string[]> {
@@ -416,7 +425,8 @@ export function registerProjectTools(
         ? "+ R2 deploy variables: configured"
         : `! R2 deploy variables: ${r2Errors.join(", ")}`);
 
-      steps.push(...await patchTemplatePlaceholders(app_id));
+      const placeholders = await patchTemplatePlaceholders(app_id);
+      steps.push(...placeholders.lines);
 
       // #178: record the exact template revision that was copied (or, for an
       // adopted/reused repo, the template's current head — the best available
@@ -438,7 +448,7 @@ export function registerProjectTools(
       }
 
       return text([
-        `${prov.ok ? "PAS app provisioned" : "PAS app provisioning finished with issues"}: **${name}** (${app_id})`,
+        `${prov.ok && placeholders.ok ? "PAS app provisioned" : "PAS app provisioning finished with issues"}: **${name}** (${app_id})`,
         `Repo: https://github.com/${org}/${app_id}`,
         `Live URL: ${prov.data.appUrl ?? `https://${app_id}.proappstore.online`}`,
         `Data worker: ${prov.data.dataWorkerUrl ?? `https://data-${app_id}.proappstore.online`}`,
@@ -500,14 +510,7 @@ export function registerProjectTools(
 
         // 2. Replace APPNAME placeholders (wait for GitHub to finish template copy)
         await new Promise((r) => setTimeout(r, 4000));
-        for (const filePath of ["web/index.html", "web/package.json", "CLAUDE.md"]) {
-          const file = await gh.getFile(app_id, filePath);
-          if (!file.ok || file.content === undefined || !file.sha) continue;
-          const patched = file.content.replaceAll("APPNAME", app_id);
-          if (patched !== file.content) {
-            await gh.putFile(app_id, filePath, patched, `chore: replace APPNAME with ${app_id}`, file.sha);
-          }
-        }
+        steps.push(...(await patchTemplatePlaceholders(app_id)).lines);
 
         // 3. Set R2 deploy credentials
         const r2Errors = await setR2Variables(app_id);

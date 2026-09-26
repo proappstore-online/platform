@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  */
 const mockGh = {
   api: vi.fn(), createRepoFromTemplate: vi.fn(), repoExists: vi.fn(), getFile: vi.fn(), putFile: vi.fn(),
-  deleteFile: vi.fn(), listFiles: vi.fn(), searchCode: vi.fn(), pushFiles: vi.fn(), getDeployStatus: vi.fn(), setRepoVariable: vi.fn(),
+  deleteFile: vi.fn(), listFiles: vi.fn(), searchCode: vi.fn(), pushFiles: vi.fn(), pullText: vi.fn(), getDeployStatus: vi.fn(), setRepoVariable: vi.fn(),
 };
 vi.mock('@proappstore/build-core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@proappstore/build-core')>()),
@@ -49,6 +49,7 @@ function applyMocks(m: Case['mocks']) {
   mockGh.repoExists.mockResolvedValue(m.repoExists ?? false);
   mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
   mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
+  mockGh.pullText.mockResolvedValue({ ok: true, sha: 'head', files: {} });
   mockGh.pushFiles.mockResolvedValue({ ok: true, commitSha: 'abcdef1234567890' });
   mockGh.api.mockResolvedValue(m.templateHeadSha === null ? { ok: false, status: 500, data: {} } : { ok: true, status: 200, data: { sha: m.templateHeadSha ?? 'd8c2e08f32b8e30847b27c7092fd4b0e64341d2f' } });
   mockOwnership.mockResolvedValue(m.ownsApp ?? true);

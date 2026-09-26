@@ -21,10 +21,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build
-        # The template repo intentionally contains APPNAME placeholders.
-        # Build the web workspace directly so the normal app compliance
-        # prebuild runs only after pas create has substituted a real app id.
-        run: pnpm --filter @APPNAME/web build
+        # A path filter, not a package name: it matches the web workspace both
+        # here in the template (whose package name is still a placeholder) and in every
+        # app, so this workflow never depends on placeholder substitution (#205).
+        run: pnpm --filter ./web build
 
       - name: MIT License
         run: grep -qi "MIT" LICENSE

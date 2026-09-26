@@ -22,6 +22,7 @@ const mockGh = {
   listFiles: vi.fn(),
   searchCode: vi.fn(),
   pushFiles: vi.fn(),
+  pullText: vi.fn(),
   getDeployStatus: vi.fn(),
   setRepoVariable: vi.fn(),
 };
@@ -82,7 +83,37 @@ beforeEach(() => {
   vi.clearAllMocks();
   userCtx = { userId: 'u1', login: 'alice', token: 'tok-1' };
   mockOwnership.mockResolvedValue(true);
+  mockGh.pullText.mockResolvedValue({ ok: true, sha: 'head', files: {} });
 });
+
+/**
+ * The template-app files that carry APPNAME (#205), including the workflow the
+ * old hard-coded allow-list missed. Deliberately includes a file no list named.
+ */
+const TEMPLATE_FILES: Record<string, string> = {
+  '.github/workflows/compliance.yml': 'jobs:\n  build:\n    steps:\n      - run: pnpm --filter @APPNAME/web build\n',
+  'CLAUDE.md': '# APPNAME\nSubdomain: APPNAME.proappstore.online',
+  'README.md': '# APPNAME',
+  'package.json': '{"name":"APPNAME"}',
+  'web/index.html': '<title>APPNAME</title>',
+  'web/package.json': '{"name":"@APPNAME/web"}',
+  'web/src/App.tsx': "initPro({ appId: 'APPNAME' })",
+  'web/vite.config.ts': "base: '/APPNAME/'",
+  'web/src/some-future-file.ts': "export const id = 'APPNAME';",
+  'LICENSE': 'MIT',
+};
+
+/** A stateful app repo: pullText reads what pushFiles last wrote. */
+function fakeRepo(initial: Record<string, string> = TEMPLATE_FILES, opts: { dropWrites?: boolean } = {}) {
+  const files = { ...initial };
+  mockGh.pullText.mockImplementation(async () => ({ ok: true, sha: 'head', files: { ...files } }));
+  mockGh.pushFiles.mockImplementation(async (_id: string, changed: { path: string; content: string }[]) => {
+    if (!opts.dropWrites) for (const f of changed) files[f.path] = f.content;
+    return { ok: true, commitSha: 'abcdef1234567890' };
+  });
+  return files;
+}
+const withPlaceholder = (files: Record<string, string>) => Object.keys(files).filter((path) => files[path]!.includes('APPNAME'));
 
 describe('provision_pas_app — template selection contract (#178)', () => {
   beforeEach(() => { vi.useFakeTimers(); });
@@ -193,12 +224,7 @@ describe('provision_pas_app', () => {
   it('creates a private template repo, patches placeholders, provisions infra, and reports links', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: { id: 1 } });
     mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
-    mockGh.getFile.mockImplementation(async (_id: string, path: string) => {
-      if (path === 'package.json') return { ok: true, status: 200, content: '{"name":"APPNAME"}', sha: 'pkg' };
-      if (path === 'web/src/App.tsx') return { ok: true, status: 200, content: "initPro({ appId: 'APPNAME' })", sha: 'app' };
-      return { ok: false, status: 404 };
-    });
-    mockGh.pushFiles.mockResolvedValue({ ok: true, commitSha: 'abcdef1234567890' });
+    const repo = fakeRepo({ 'package.json': '{"name":"APPNAME"}', 'web/src/App.tsx': "initPro({ appId: 'APPNAME' })" });
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
@@ -231,6 +257,7 @@ describe('provision_pas_app', () => {
       'chore: configure school-clubs template',
       { initIfEmpty: false },
     );
+    expect(withPlaceholder(repo)).toEqual([]);
     expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toMatchObject({
       appId: 'school-clubs',
       skipCompliance: false,
@@ -241,6 +268,63 @@ describe('provision_pas_app', () => {
     expect(out).toContain('Repo: https://github.com/test-org/school-clubs');
     expect(out).toContain('+ Template placeholders: replaced APPNAME in 2 file(s)');
     expect(out).toContain('+ route');
+  });
+
+  describe('template placeholders (#205)', () => {
+    const provisionOk = () => {
+      mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: { id: 1 } });
+      mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
+      mockFetch.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({ success: true, steps: [] }) });
+    };
+
+    it('leaves no APPNAME anywhere in the provisioned repo, the compliance workflow included', async () => {
+      provisionOk();
+      const repo = fakeRepo();
+
+      const out = getText(await runProvisionPas());
+
+      expect(withPlaceholder(repo)).toEqual([]);
+      expect(repo['.github/workflows/compliance.yml']).toContain('pnpm --filter @school-clubs/web build');
+      expect(repo['web/src/some-future-file.ts']).toBe("export const id = 'school-clubs';");
+      expect(repo['LICENSE']).toBe('MIT');
+      // Only files that carried the placeholder are rewritten.
+      const pushed = (mockGh.pushFiles.mock.calls[0]![1] as { path: string }[]).map((f) => f.path);
+      expect(pushed).not.toContain('LICENSE');
+      expect(out).toContain('+ Template placeholders: replaced APPNAME in 9 file(s)');
+      expect(out).toContain('PAS app provisioned');
+    });
+
+    it('fails the provision loudly when APPNAME survives the patch commit', async () => {
+      provisionOk();
+      fakeRepo(TEMPLATE_FILES, { dropWrites: true });
+
+      const out = getText(await runProvisionPas());
+
+      expect(out).toContain('! Template placeholders: APPNAME is still present in .github/workflows/compliance.yml');
+      expect(out).toContain('PAS app provisioning finished with issues');
+      expect(out).not.toContain('PAS app provisioned:');
+    });
+
+    it('fails the provision when the repo cannot be read to find placeholders', async () => {
+      provisionOk();
+      mockGh.pullText.mockResolvedValue({ ok: false, error: 'repo has no commits or is unreachable' });
+
+      const out = getText(await runProvisionPas());
+
+      expect(out).toContain('! Template placeholders: repo has no commits or is unreachable');
+      expect(out).toContain('PAS app provisioning finished with issues');
+      expect(mockGh.pushFiles).not.toHaveBeenCalled();
+    });
+
+    it('treats a truncated read as unverifiable rather than clean', async () => {
+      provisionOk();
+      mockGh.pullText.mockResolvedValue({ ok: true, sha: 'head', files: {}, truncated: true });
+
+      const out = getText(await runProvisionPas());
+
+      expect(out).toContain('! Template placeholders: the repo is too large to check every file');
+      expect(out).toContain('PAS app provisioning finished with issues');
+    });
   });
 
   it('blocks reuse of a repo whose app record belongs to another account', async () => {
@@ -419,24 +503,18 @@ describe('scaffold_app', () => {
     expect(mockGh.setRepoVariable).toHaveBeenCalledTimes(3);
   });
 
-  it('replaces APPNAME in template files', async () => {
+  it('replaces APPNAME in every template file, workflows included (#205)', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
-    mockGh.getFile.mockImplementation(async (_id: string, path: string) => {
-      if (path === 'CLAUDE.md') return { ok: true, status: 200, content: '# APPNAME\nSubdomain: APPNAME.proappstore.online', sha: 'sha1' };
-      return { ok: false, status: 404 };
-    });
-    mockGh.putFile.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ steps: [] }) });
+    const repo = fakeRepo();
 
-    await runScaffold({ app_id: 'chess', name: 'Chess', description: 'test' });
+    const out = getText(await runScaffold({ app_id: 'chess', name: 'Chess', description: 'test' }));
 
-    expect(mockGh.putFile).toHaveBeenCalledWith(
-      'chess', 'CLAUDE.md',
-      '# chess\nSubdomain: chess.proappstore.online',
-      expect.stringContaining('replace APPNAME'),
-      'sha1',
-    );
+    expect(withPlaceholder(repo)).toEqual([]);
+    expect(repo['CLAUDE.md']).toBe('# chess\nSubdomain: chess.proappstore.online');
+    expect(repo['.github/workflows/compliance.yml']).toContain('pnpm --filter @chess/web build');
+    expect(out).toContain('+ Template placeholders: replaced APPNAME in 9 file(s)');
   });
 
   it('handles existing repo (422 + repoExists=true)', async () => {
