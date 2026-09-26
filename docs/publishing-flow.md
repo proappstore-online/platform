@@ -93,6 +93,18 @@ is **moderated by Workers AI** (Llama Guard) before it is written (#214):
 - Each decision is logged as `listing_moderation` (app, actor, changed fields,
   verdict), never with the text.
 
+The privacy-policy and terms documents
+(`PUT /v1/apps/:id/listing-assets/{privacy-policy|terms}`, markdown up to 200 KB)
+are moderated the same way before they are stored as public files (#215):
+
+- Long documents are split into paragraph-aligned chunks of at most 8,000
+  characters, with at most 4 model calls at a time. Checking stops at the first
+  unsafe chunk.
+- Unsafe text is a `422`; a moderation failure is a `503` with `Retry-After: 5`.
+  In both cases nothing is stored.
+- Each decision is logged as `listing_asset_moderation`.
+- Icons and screenshots are images and are not moderated.
+
 ## Failure modes
 
 | Symptom | Cause | Recovery |
@@ -100,8 +112,8 @@ is **moderated by Workers AI** (Llama Guard) before it is written (#214):
 | `repo already exists` | Retry after partial failure | Safe if state matches; otherwise abort |
 | Compliance `412` | A hard compliance rule failed on the fetched repo | Fix the flagged rule and re-run; the step lists each failure |
 | `D1 quota exceeded` | Account-level D1 limit reached | Block provisioning, alert |
-| Listing edit `422` | The new tagline or long description failed content moderation | Rewrite the copy; nothing was saved |
-| Listing edit `503` | Workers AI moderation unavailable | Retry after `Retry-After`; nothing was saved |
+| Listing edit or document upload `422` | The new tagline, long description, privacy policy or terms failed content moderation | Rewrite the copy; nothing was saved |
+| Listing edit or document upload `503` | Workers AI moderation unavailable | Retry after `Retry-After`; nothing was saved |
 
 ## Testing
 

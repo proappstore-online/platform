@@ -323,3 +323,76 @@ describe('PUT /v1/apps/:id/listing — Workers AI moderation of tagline / longDe
     expect(ai.run).toHaveBeenCalledTimes(1);
   });
 });
+
+// #215 (child of #27): privacy-policy / terms markdown is moderated (chunked)
+// before it is stored as a public object; images are not moderated.
+describe('PUT /v1/apps/:id/listing-assets — markdown moderation (#215)', () => {
+  let ai: { run: ReturnType<typeof vi.fn> };
+  let r2put: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    ai = { run: vi.fn(async () => ({ response: 'safe' })) };
+    r2put = vi.fn(async () => ({}));
+  });
+  const upload = (kind: string, body: string | Uint8Array, contentType = 'text/markdown', withAi = true) => app.request(
+    `/v1/apps/meetup/listing-assets/${kind}`,
+    { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': contentType }, body },
+    sharedMakeEnv(
+      { STORAGE: { put: r2put } as unknown as R2Bucket, VAPID_PUBLIC_KEY: 'p', VAPID_PRIVATE_KEY: 'q', AI: withAi ? ai : undefined },
+      mockD1(mockStmt({ first: { creator_id: 'gh:1' } })),
+    ),
+  );
+
+  it('unsafe markdown is a 422 with categories, and nothing is stored', async () => {
+    ai.run.mockResolvedValue({ response: 'unsafe\nS7' });
+    const res = await upload('privacy-policy', '# Privacy\n\nWe sell your data to…');
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({ error: 'document rejected by content moderation', categories: ['S7'] });
+    expect(r2put).not.toHaveBeenCalled();
+  });
+
+  it('fails closed: a model error or a missing binding is a 503 with Retry-After 5, nothing stored', async () => {
+    ai.run.mockRejectedValueOnce(new Error('3040: capacity exceeded'));
+    const err = await upload('terms', '# Terms');
+    expect(err.status).toBe(503);
+    expect(err.headers.get('Retry-After')).toBe('5');
+    expect((await upload('terms', '# Terms', 'text/markdown', false)).status).toBe(503);
+    expect(r2put).not.toHaveBeenCalled();
+  });
+
+  it('safe markdown is stored as before, with a content-free audit line', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const res = await upload('terms', '# Terms\n\nBe kind.');
+    expect(res.status).toBe(200);
+    expect(r2put).toHaveBeenCalledTimes(1);
+    expect(ai.run).toHaveBeenCalledWith('@cf/meta/llama-guard-3-8b', { messages: [{ role: 'user', content: '# Terms\n\nBe kind.' }] });
+    const audit = log.mock.calls.map((call) => String(call[0])).find((l) => l.includes('listing_asset_moderation'))!;
+    expect(JSON.parse(audit)).toEqual({ event: 'listing_asset_moderation', app_id: 'meetup', actor: 'gh:1', kind: 'terms', chunks: 1, verdict: 'safe' });
+    expect(audit).not.toContain('Be kind');
+    log.mockRestore();
+  });
+
+  it('a long document is moderated in bounded chunks; one unsafe chunk rejects the whole document', async () => {
+    const paragraph = 'Lorem ipsum dolor sit amet. '.repeat(100); // ~2.8 KB
+    const doc = Array.from({ length: 60 }, () => paragraph).join('\n\n'); // ~168 KB
+    const ok = await upload('privacy-policy', doc);
+    expect(ok.status).toBe(200);
+    const calls = ai.run.mock.calls.length;
+    expect(calls).toBeGreaterThan(1);
+    for (const [, input] of ai.run.mock.calls) expect((input as { messages: { content: string }[] }).messages[0]!.content.length).toBeLessThanOrEqual(8_000);
+
+    ai.run.mockClear();
+    r2put.mockClear();
+    ai.run.mockImplementation(async (_m: string, input: { messages: { content: string }[] }) =>
+      input.messages[0]!.content.includes('FORBIDDEN') ? { response: 'unsafe\nS1' } : { response: 'safe' });
+    const bad = await upload('privacy-policy', `${doc}\n\nFORBIDDEN clause`);
+    expect(bad.status).toBe(422);
+    expect(r2put).not.toHaveBeenCalled();
+  });
+
+  it('image uploads never call the model', async () => {
+    const res = await upload('icon', new Uint8Array([137, 80, 78, 71]), 'image/png', false);
+    expect(res.status).toBe(200);
+    expect(ai.run).not.toHaveBeenCalled();
+    expect(r2put).toHaveBeenCalledTimes(1);
+  });
+});

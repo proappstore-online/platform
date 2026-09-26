@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MODERATION_MODEL, moderateText, parseLlamaGuard } from './moderation.js';
+import { chunkText, MODERATION_CHUNK_CHARS, MODERATION_CONCURRENCY, MODERATION_MAX_CHUNKS, MODERATION_MODEL, moderateChunks, moderateText, parseLlamaGuard } from './moderation.js';
 
 // #213: portability across Llama Guard's output shapes, and every failure path
 // resolving to an explicit error (callers fail closed), never to "safe".
@@ -45,5 +45,48 @@ describe('moderateText', () => {
     const pending = moderateText({ run: () => new Promise(() => {}) }, 'x', 1_000);
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(pending).resolves.toEqual({ verdict: 'error', reason: 'moderation timed out after 1000 ms' });
+  });
+});
+
+describe('chunkText / moderateChunks (#215)', () => {
+  it('packs paragraphs up to the size, hard-splits an overlong one, and keeps every character of content', () => {
+    const chunks = chunkText(['a'.repeat(30), 'b'.repeat(30), 'c'.repeat(90)].join('\n\n'), 64);
+    expect(chunks.every((c) => c.length <= 64)).toBe(true);
+    expect(chunks.join('').replace(/\n/g, '')).toBe('a'.repeat(30) + 'b'.repeat(30) + 'c'.repeat(90));
+    expect(chunkText('')).toEqual([]);
+  });
+
+  it(`covers the largest listing markdown (200 KB) within ${MODERATION_MAX_CHUNKS} chunks, even in the worst packing`, () => {
+    // Paragraphs just over half a chunk: packing can fit only one per chunk.
+    const para = 'x'.repeat(MODERATION_CHUNK_CHARS / 2 + 1);
+    const doc = Array.from({ length: Math.ceil((200 * 1024) / (para.length + 2)) }, () => para).join('\n\n');
+    expect(doc.length).toBeGreaterThanOrEqual(200 * 1024 - para.length);
+    expect(chunkText(doc).length).toBeLessThanOrEqual(MODERATION_MAX_CHUNKS);
+  });
+
+  it('runs at most MODERATION_CONCURRENCY calls at once and stops at the first unsafe batch', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const run = vi.fn(async (_m: string, input: Record<string, unknown>) => {
+      inFlight++; peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 1));
+      inFlight--;
+      const text = (input.messages as { content: string }[])[0]!.content;
+      return text.startsWith('BAD') ? { response: 'unsafe\nS1' } : { response: 'safe' };
+    });
+    const parts = Array.from({ length: 12 }, (_, i) => (i === 5 ? 'BAD' : 'ok') + 'y'.repeat(MODERATION_CHUNK_CHARS - 10));
+    const result = await moderateChunks({ run }, parts.join('\n\n'));
+    expect(result).toEqual({ verdict: 'unsafe', categories: ['S1'], chunks: 12 });
+    expect(peak).toBeLessThanOrEqual(MODERATION_CONCURRENCY);
+    expect(run).toHaveBeenCalledTimes(8); // two batches of 4: the second holds the unsafe chunk
+  });
+
+  it('is an error, never safe, when any chunk fails or the text is too long to cover', async () => {
+    const run = vi.fn(async () => { throw new Error('boom'); });
+    await expect(moderateChunks({ run }, 'hello')).resolves.toEqual({ verdict: 'error', reason: 'boom', chunks: 1 });
+    const huge = Array.from({ length: MODERATION_MAX_CHUNKS + 1 }, () => 'z'.repeat(MODERATION_CHUNK_CHARS)).join('\n\n');
+    const tooLong = await moderateChunks({ run: vi.fn() }, huge);
+    expect(tooLong.verdict).toBe('error');
+    await expect(moderateChunks({ run: vi.fn() }, '')).resolves.toEqual({ verdict: 'safe', chunks: 0 });
   });
 });

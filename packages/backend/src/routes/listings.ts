@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireAppOwner, HttpError } from '../lib/auth.js';
-import { auditModeration, moderateText } from '../lib/moderation.js';
+import { auditModeration, moderateChunks, moderateText } from '../lib/moderation.js';
 import type { ListingRow, ListingPatch } from './listing-types.js';
 import { rowToDto, emptyDto } from './listing-types.js';
 import {
@@ -250,7 +250,7 @@ listingsRoutes.put('/apps/:id/listing-assets/:kind', async (c) => {
     if (!ALLOWED_KINDS.has(kind) && !SCREENSHOT_KIND.test(kind)) {
       return c.text('invalid asset kind', 400);
     }
-    await requireAppOwner(c, appId);
+    const actor = await requireAppOwner(c, appId);
 
     const contentType = (c.req.header('Content-Type') ?? '').split(';')[0]!.trim().toLowerCase();
     const isMd = kind === 'privacy-policy' || kind === 'terms';
@@ -275,6 +275,21 @@ listingsRoutes.put('/apps/:id/listing-assets/:kind', async (c) => {
 
     const ext = extFor(contentType);
     if (!ext) return c.text('unsupported content-type', 400);
+
+    // #215: the privacy policy and terms are public, storefront-linked documents
+    // that owner edits publish without review. Moderate the markdown (chunked:
+    // up to 200 KB) before it is stored; fail closed. Images are not moderated
+    // (Llama Guard is text-only).
+    if (isMd) {
+      const moderation = await moderateChunks(c.env.AI, new TextDecoder().decode(body));
+      auditModeration('listing_asset_moderation', { app_id: appId, actor: actor.id, kind, chunks: moderation.chunks }, moderation);
+      if (moderation.verdict === 'unsafe') {
+        return c.json({ error: 'document rejected by content moderation', categories: moderation.categories }, 422);
+      }
+      if (moderation.verdict === 'error') {
+        return c.text('document content moderation is unavailable; try again shortly', 503, { 'Retry-After': '5' });
+      }
+    }
 
     // Cache-bust by timestamping the path. The listing row stores the
     // returned URL so older versions are still reachable for any cached

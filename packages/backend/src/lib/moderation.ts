@@ -70,3 +70,57 @@ export async function moderateText(ai: AiBinding, text: string, timeoutMs = MODE
     clearTimeout(timer);
   }
 }
+
+export const MODERATION_CHUNK_CHARS = 8_000;
+// Covers the largest listing markdown (MAX_MD, 200 KB): paragraph packing closes
+// a chunk only when the next piece would overflow it, so any two consecutive
+// chunks exceed MODERATION_CHUNK_CHARS and a 200 KB text needs at most ~53.
+export const MODERATION_MAX_CHUNKS = 64;
+export const MODERATION_CONCURRENCY = 4;
+
+/**
+ * Split long text into chunks of at most `size` characters, at paragraph
+ * boundaries where possible (a paragraph longer than `size` is hard-split).
+ */
+export function chunkText(text: string, size = MODERATION_CHUNK_CHARS): string[] {
+  const chunks: string[] = [];
+  let current = '';
+  for (const paragraph of text.split(/\n{2,}/)) {
+    const pieces = paragraph.length > size ? paragraph.match(new RegExp(`[\\s\\S]{1,${size}}`, 'g')) ?? [] : [paragraph];
+    for (const piece of pieces) {
+      if (current && current.length + 2 + piece.length > size) {
+        chunks.push(current);
+        current = '';
+      }
+      current = current ? `${current}\n\n${piece}` : piece;
+    }
+  }
+  if (current.trim()) chunks.push(current);
+  return chunks;
+}
+
+/**
+ * Moderate long text (#215) in bounded calls: chunks of MODERATION_CHUNK_CHARS,
+ * at most MODERATION_MAX_CHUNKS, MODERATION_CONCURRENCY in flight, stopping at
+ * the first unsafe or error. Unsafe if any chunk is (categories combined), error
+ * if any call fails or the text is too long to cover — never an implicit safe.
+ */
+export async function moderateChunks(ai: AiBinding, text: string, timeoutMs = MODERATION_TIMEOUT_MS): Promise<ModerationResult & { chunks: number }> {
+  const chunks = chunkText(text);
+  if (chunks.length === 0) return { verdict: 'safe', chunks: 0 };
+  if (chunks.length > MODERATION_MAX_CHUNKS) {
+    return { verdict: 'error', reason: `text too long to moderate (${chunks.length} chunks, max ${MODERATION_MAX_CHUNKS})`, chunks: chunks.length };
+  }
+  const categories = new Set<string>();
+  let unsafe = false;
+  for (let i = 0; i < chunks.length; i += MODERATION_CONCURRENCY) {
+    const batch = await Promise.all(chunks.slice(i, i + MODERATION_CONCURRENCY).map((chunk) => moderateText(ai, chunk, timeoutMs)));
+    const failed = batch.find((r) => r.verdict === 'error');
+    if (failed && failed.verdict === 'error') return { verdict: 'error', reason: failed.reason, chunks: chunks.length };
+    for (const r of batch) {
+      if (r.verdict === 'unsafe') { unsafe = true; r.categories.forEach((c) => categories.add(c)); }
+    }
+    if (unsafe) break;
+  }
+  return unsafe ? { verdict: 'unsafe', categories: [...categories], chunks: chunks.length } : { verdict: 'safe', chunks: chunks.length };
+}
