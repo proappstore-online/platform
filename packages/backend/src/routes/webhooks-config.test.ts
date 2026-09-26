@@ -275,3 +275,100 @@ describe('GET /v1/apps/:appId/webhooks — list', () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe('POST /v1/apps/:appId/webhooks/:id/test — fire a test event (#226)', () => {
+  const HOOK_URL = 'https://hooks.example.com/in';
+
+  function hookDb() {
+    return mockD1(
+      mockStmt({ first: { creator_id: 'gh:1' } }),
+      mockStmt({ first: { url: HOOK_URL, secret: 's3cret', event: 'storage.uploaded' } }),
+    );
+  }
+
+  /** Route the receiver URL to `receiver`; anything else gets the default mock. */
+  function mockReceiver(receiver: (init: RequestInit) => Promise<Response>) {
+    const fallback = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === HOOK_URL ? receiver(init ?? {}) : fallback(input, init));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    return fetchMock;
+  }
+
+  function receiverCalls(fetchMock: ReturnType<typeof vi.fn>) {
+    return fetchMock.mock.calls.filter(([input]) => String(input) === HOOK_URL);
+  }
+
+  function fireTest(db = hookDb()) {
+    return app.request(
+      '/v1/apps/myapp/webhooks/hook-1/test',
+      { method: 'POST', headers: { Authorization: `Bearer ${TOK}` } },
+      makeEnv({}, db),
+    );
+  }
+
+  it('returns the receiver status and body, truncated to 1000 chars', async () => {
+    const fetchMock = mockReceiver(async () => new Response('x'.repeat(5000), { status: 200 }));
+    const res = await fireTest();
+    expect(res.status).toBe(200);
+    const data = await res.json() as { status: number; body: string };
+    expect(data.status).toBe(200);
+    expect(data.body).toHaveLength(1000);
+    expect(receiverCalls(fetchMock)).toHaveLength(1);
+  });
+
+  it('never follows a redirect: sends redirect "manual" and reports the 3xx', async () => {
+    const fetchMock = mockReceiver(async (init) => {
+      expect(init.redirect).toBe('manual');
+      return new Response('', { status: 302, headers: { Location: 'https://internal.proappstore.online/secret' } });
+    });
+    const res = await fireTest();
+    const data = await res.json() as { status: number; body: string };
+    expect(data.status).toBe(302);
+    // Only the registered URL was ever fetched — the Location target was not.
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('internal.proappstore.online'))).toBe(false);
+    expect(receiverCalls(fetchMock)).toHaveLength(1);
+  });
+
+  it('bounds the call with an abort signal and reports a timeout as status 0', async () => {
+    let signal: AbortSignal | undefined;
+    mockReceiver(async (init) => {
+      signal = init.signal ?? undefined;
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    });
+    const res = await fireTest();
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(await res.json()).toEqual({ status: 0, body: 'timed out after 10000 ms' });
+  });
+
+  it('reports other network errors as status 0 with the message', async () => {
+    mockReceiver(async () => { throw new TypeError('connection refused'); });
+    const res = await fireTest();
+    expect(await res.json()).toEqual({ status: 0, body: 'connection refused' });
+  });
+
+  it('signs the payload and sends the event header', async () => {
+    const fetchMock = mockReceiver(async () => new Response('ok', { status: 200 }));
+    await fireTest();
+    const [, init] = receiverCalls(fetchMock)[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers['X-Webhook-Event']).toBe('storage.uploaded');
+    expect(headers['X-Webhook-Signature']).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(init.body as string)).toMatchObject({ test: true, event: 'storage.uploaded', appId: 'myapp' });
+  });
+
+  it('returns 404 for an unknown webhook without calling out', async () => {
+    const fetchMock = mockReceiver(async () => new Response('ok'));
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ first: null }));
+    const res = await fireTest(db);
+    expect(res.status).toBe(404);
+    expect(receiverCalls(fetchMock)).toHaveLength(0);
+  });
+
+  it('returns 403 for a non-owner without calling out', async () => {
+    const fetchMock = mockReceiver(async () => new Response('ok'));
+    const res = await fireTest(mockD1(mockStmt({ first: { creator_id: 'gh:other' } })));
+    expect(res.status).toBe(403);
+    expect(receiverCalls(fetchMock)).toHaveLength(0);
+  });
+});

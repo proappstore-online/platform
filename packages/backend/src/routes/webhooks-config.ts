@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireAppOwner, HttpError } from '../lib/auth.js';
+import { WEBHOOK_TIMEOUT_MS } from '../lib/webhook-dispatch.js';
 
 export const webhookConfigRoutes = new Hono<{ Bindings: Env }>();
 
@@ -125,6 +126,9 @@ webhookConfigRoutes.post('/apps/:appId/webhooks/:id/test', async (c) => {
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
 
+    // Same bounds as delivery (#224, #226): never follow a redirect — the SSRF
+    // guard only checked the registered URL, and this route echoes the body
+    // back — and give the receiver WEBHOOK_TIMEOUT_MS to answer.
     let status: number;
     let responseBody: string;
     try {
@@ -136,10 +140,15 @@ webhookConfigRoutes.post('/apps/:appId/webhooks/:id/test', async (c) => {
           'X-Webhook-Event': hook.event,
         },
         body,
+        redirect: 'manual',
+        signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
       });
       status = res.status;
       responseBody = await res.text().catch(() => '');
     } catch (err: any) {
+      if (err?.name === 'TimeoutError') {
+        return c.json({ status: 0, body: `timed out after ${WEBHOOK_TIMEOUT_MS} ms` });
+      }
       return c.json({ status: 0, body: err?.message ?? 'network error' });
     }
 

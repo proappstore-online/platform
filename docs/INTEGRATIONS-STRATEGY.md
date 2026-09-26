@@ -53,6 +53,7 @@ Delivery rules (#224):
 - **Redirects are never followed:** a 3xx is recorded as the delivery status. The URL checks (HTTPS only, no private or internal hosts) run at registration, so following a redirect would bypass them. Register the final URL.
 - **Timeout:** a receiver has 10 seconds to answer. Otherwise the delivery is recorded with no status.
 - **Logging:** each failed delivery is logged as `webhook_delivery_failed` with app, webhook id, event, and status or reason. The log never includes the payload or the secret.
+- **Test button** (`POST /v1/apps/:appId/webhooks/:id/test`, #226): the same redirect and timeout rules apply. It returns `{ status, body }`: a 3xx is reported as-is, and a timeout is `status: 0`.
 
 | Event | Payload | Use case |
 |---|---|---|
