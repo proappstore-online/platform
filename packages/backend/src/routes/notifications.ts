@@ -7,6 +7,7 @@ import { requireUser, HttpError } from '../lib/auth.js';
 import { dispatchWebhook } from '../lib/webhook-dispatch.js';
 import { isLikelyEmail, sendEmail } from '../lib/email.js';
 import { isAppOriginUrl, renderNotifyEmail, signUnsubscribeToken, verifyUnsubscribeToken } from '../lib/notify-email.js';
+import { moderateText } from '../lib/moderation.js';
 
 export const notificationRoutes = new Hono<{ Bindings: Env }>();
 
@@ -239,6 +240,26 @@ notificationRoutes.post('/notifications/notify-user', async (c) => {
     await c.env.DB.prepare(
       'INSERT INTO notification_log (sender_id, app_id, target_user_id, sent_at) VALUES (?1, ?2, ?3, ?4)',
     ).bind(user.id, appId, targetUserId, now).run();
+
+    // #213: caller-written text leaves under the platform's sending domain, so it
+    // is moderated before anything is sent. Only when an email will really go out
+    // (cost), after the attempt is logged above (so rejected attempts still count
+    // toward the per-minute limits), and fail-closed: a model error is a 503,
+    // never an implicit "safe". Push-only calls never reach this.
+    if (emailTo) {
+      const moderation = await moderateText(c.env.AI, `${title}\n\n${body}`);
+      console.log(JSON.stringify({
+        event: 'notify_user_moderation', app_id: appId, sender_id: user.id, target_user_id: targetUserId, verdict: moderation.verdict,
+        ...(moderation.verdict === 'unsafe' && { categories: moderation.categories }),
+        ...(moderation.verdict === 'error' && { reason: moderation.reason }),
+      }));
+      if (moderation.verdict === 'unsafe') {
+        return c.json({ error: 'message rejected by content moderation', categories: moderation.categories }, 422);
+      }
+      if (moderation.verdict === 'error') {
+        return c.text('email content moderation is unavailable; try again later', 503, { 'Retry-After': '60' });
+      }
+    }
 
     let result = { sent: 0, failed: 0 };
     if (wantsPush) {

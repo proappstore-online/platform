@@ -265,6 +265,16 @@ your `url` or the app's home page. `url` must be `https` on the app's own origin
 is a `400`. Every email carries a one-click unsubscribe (`List-Unsubscribe`)
 that applies to this app only.
 
+**Moderation.** Email content (title and body) is checked by Workers AI (Llama
+Guard) before anything is sent (#213):
+
+- Unsafe content is a `422` listing the categories, and nothing is sent. For
+  `'both'`, that includes the push.
+- If moderation is unavailable, the answer is a `503` with `Retry-After`. It
+  fails closed, so retry later.
+- A push-only call is never moderated.
+- Rejected attempts still count toward the per-minute limits.
+
 **Limits.** Every channel shares 30/min per sender and 10/min per recipient.
 Email also has 100/day per app (shared with `app.email.send`) and 10/day per
 recipient. A limit is a `429` and nothing is sent; with `'both'`, the push is

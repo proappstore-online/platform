@@ -454,7 +454,10 @@ describe('POST /v1/notifications/notify-user — push unchanged, email channel (
       }),
     } as unknown as ReturnType<typeof mockD1>;
   }
-  const env = (overrides: Record<string, unknown> = {}) => sharedMakeEnv({ RESEND_API_KEY: 're_test', ...overrides }, db());
+  // #213: email content is moderated on Workers AI; a clean verdict by default.
+  let ai: { run: ReturnType<typeof vi.fn> };
+  beforeEach(() => { ai = { run: vi.fn(async () => ({ response: 'safe' })) }; });
+  const env = (overrides: Record<string, unknown> = {}) => sharedMakeEnv({ RESEND_API_KEY: 're_test', AI: ai, ...overrides }, db());
   const notify = (payload: Record<string, unknown>, e = env(), token = TOK) => app.request('/v1/notifications/notify-user', {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -576,5 +579,74 @@ describe('POST /v1/notifications/notify-user — push unchanged, email channel (
     resend.mockResolvedValue(new Response('down', { status: 500 }));
     expect((await notify({ channel: 'email' })).status).toBe(502);
     expect(state.usage).toEqual([]);
+
+  });
+
+  // #213 (child of #27): Workers AI content moderation of the email channel.
+  describe('Workers AI content moderation (#213)', () => {
+    const unsafe = () => ai.run.mockResolvedValue({ response: 'unsafe\nS2,S10' });
+
+    it('unsafe content → 422 with the categories; nothing sent, no quota spent, audit line without content', async () => {
+      unsafe();
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      state.subs.add('u2');
+      const res = await notify({ channel: 'both', title: 'Verify your account', body: 'click here: evil.example' });
+      expect(res.status).toBe(422);
+      expect(await res.json()).toEqual({ error: 'message rejected by content moderation', categories: ['S2', 'S10'] });
+      expect(resend).not.toHaveBeenCalled();
+      expect(webpush.sendNotification).not.toHaveBeenCalled(); // `both`: refused before anything is sent
+      expect(state.usage).toEqual([]);
+      const audit = log.mock.calls.map((c) => String(c[0])).find((l) => l.includes('notify_user_moderation'))!;
+      expect(JSON.parse(audit)).toEqual({ event: 'notify_user_moderation', app_id: 'myapp', sender_id: 'gh:1', target_user_id: 'u2', verdict: 'unsafe', categories: ['S2', 'S10'] });
+      expect(audit).not.toContain('evil.example');
+      log.mockRestore();
+    });
+
+    it('moderates title and body together with Llama Guard on the existing binding', async () => {
+      await notify({ channel: 'email', title: 'New inquiry', body: 'Bob asked about pumps' });
+      expect(ai.run).toHaveBeenCalledTimes(1);
+      expect(ai.run).toHaveBeenCalledWith('@cf/meta/llama-guard-3-8b', { messages: [{ role: 'user', content: 'New inquiry\n\nBob asked about pumps' }] });
+      expect(resend).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails closed with 503 when Workers AI errors, answers unrecognisably, or the binding is missing', async () => {
+      ai.run.mockRejectedValueOnce(new Error('3040: capacity exceeded'));
+      expect((await notify({ channel: 'email' })).status).toBe(503);
+      ai.run.mockResolvedValueOnce({ response: 'maybe?' });
+      expect((await notify({ channel: 'email' })).status).toBe(503);
+      const missing = await notify({ channel: 'email' }, env({ AI: undefined }));
+      expect(missing.status).toBe(503);
+      expect(missing.headers.get('Retry-After')).toBe('60');
+      expect(resend).not.toHaveBeenCalled();
+      expect(state.usage).toEqual([]);
+    });
+
+    it('push-only is unaffected: never moderated, delivered even with no AI binding', async () => {
+      state.subs.add('u2');
+      const res = await notify({ channel: 'push' }, env({ AI: undefined }));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ sent: 1, failed: 0 });
+      expect(ai.run).not.toHaveBeenCalled();
+    });
+
+    it('cost: skipped recipients and limit refusals never call the model', async () => {
+      state.optouts.add('myapp:u2');
+      expect(await (await notify({ channel: 'email' })).json()).toMatchObject({ skipped: 'unsubscribed' });
+      state.members.add('cred:kid');
+      expect(await (await notify({ channel: 'email', targetUserId: 'cred:kid' })).json()).toMatchObject({ skipped: 'no_address' });
+      expect(await (await notify({ channel: 'email', targetUserId: 'u9' })).json()).toMatchObject({ skipped: 'not_member' });
+      expect((await notify({ channel: 'email', url: 'https://evil.example/' })).status).toBe(400);
+      state.optouts.clear();
+      state.usage = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, target: 'u2' }));
+      expect((await notify({ channel: 'email' })).status).toBe(429);
+      expect(ai.run).not.toHaveBeenCalled();
+    });
+
+    it('cost: rejected attempts still count toward the per-minute limits, bounding model calls', async () => {
+      unsafe();
+      for (let i = 0; i < 10; i++) expect((await notify({ channel: 'email' })).status).toBe(422);
+      expect((await notify({ channel: 'email' })).status).toBe(429); // 11th to the same recipient in a minute
+      expect(ai.run).toHaveBeenCalledTimes(10);
+    });
   });
 });
