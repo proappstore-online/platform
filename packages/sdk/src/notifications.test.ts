@@ -35,6 +35,25 @@ describe('Notifications', () => {
     globalThis.fetch = originalFetch;
   });
 
+  describe('notifyUser (#209)', () => {
+    it('sends no channel by default (push, unchanged) and passes an email channel through', async () => {
+      mockFetch.mockResolvedValue(new Response(JSON.stringify({ sent: 1, failed: 0 }), { status: 200 }));
+      const n = new Notifications('myapp', 'https://api.test', fakeAuth('tok') as never);
+      await expect(n.notifyUser('u2', { title: 'T', body: 'B' })).resolves.toEqual({ sent: 1, failed: 0 });
+      expect(JSON.parse(mockFetch.mock.calls[0][1].body)).not.toHaveProperty('channel');
+
+      mockFetch.mockResolvedValue(new Response(JSON.stringify({ sent: 0, failed: 0, email: 'skipped', skipped: 'unsubscribed' }), { status: 200 }));
+      await expect(n.notifyUser('u2', { title: 'T', body: 'B' }, { channel: 'email' })).resolves.toEqual({ sent: 0, failed: 0, email: 'skipped', skipped: 'unsubscribed' });
+      expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toMatchObject({ appId: 'myapp', targetUserId: 'u2', channel: 'email' });
+    });
+
+    it('names the limit the server hit on a 429', async () => {
+      mockFetch.mockResolvedValue(new Response('daily email limit reached for this recipient (10/day)', { status: 429 }));
+      const n = new Notifications('myapp', 'https://api.test', fakeAuth('tok') as never);
+      await expect(n.notifyUser('u2', { title: 'T', body: 'B' }, { channel: 'email' })).rejects.toThrow('daily email limit reached for this recipient');
+    });
+  });
+
   describe('getVapidKey', () => {
     it('fetches and returns the public key', async () => {
       const auth = fakeAuth('tok');

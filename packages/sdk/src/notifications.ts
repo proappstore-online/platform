@@ -14,9 +14,17 @@ export interface NotificationPayload {
 }
 
 export interface SendResult {
+  /** Push deliveries (0 for an email-only notifyUser). */
   sent: number;
   failed: number;
+  /** notifyUser with an email channel (#209): what happened to the email. */
+  email?: 'sent' | 'skipped' | 'failed';
+  /** Why the email was not sent. The recipient's address is never returned. */
+  skipped?: 'unsubscribed' | 'no_address' | 'not_member';
 }
+
+/** notifyUser delivery channel (#209). Default `push`. */
+export type NotifyChannel = 'push' | 'email' | 'both';
 
 /**
  * Web Push notifications — subscribe users, send targeted or broadcast pushes.
@@ -129,11 +137,16 @@ export class Notifications {
   }
 
   /**
-   * Peer-to-peer push: notify another user in the same app.
-   * Caller must be subscribed to the app (no creator check).
-   * Rate-limited: 30 per minute per app.
+   * Peer-to-peer notification: notify another user in the same app.
+   * `channel: 'push'` (default): the caller must be subscribed to the app.
+   * `'email'` / `'both'` (#209): the caller must be a member; the platform emails
+   * the recipient's verified address (never returned) with a fixed template and a
+   * one-click unsubscribe. `url` must be on the app's own origin. The result says
+   * `skipped: 'unsubscribed' | 'no_address' | 'not_member'` when no email went out.
+   * Limits: 30/min per sender, 10/min per recipient; email also 100/day per app
+   * (shared with app.email.send) and 10/day per recipient.
    */
-  async notifyUser(userId: string, payload: NotificationPayload): Promise<SendResult> {
+  async notifyUser(userId: string, payload: NotificationPayload, opts: { channel?: NotifyChannel } = {}): Promise<SendResult> {
     const res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/notifications/notify-user`, {
       method: 'POST',
       headers: {
@@ -147,6 +160,7 @@ export class Notifications {
         url: payload.url,
         icon: payload.icon,
         tag: payload.tag,
+        ...(opts.channel && { channel: opts.channel }),
       }),
     });
 
@@ -154,7 +168,7 @@ export class Notifications {
       this.auth.handleUnauthorized();
       throw new Error('Not signed in.');
     }
-    if (res.status === 429) throw new Error('Rate limit exceeded: max 30 notifications per minute.');
+    if (res.status === 429) throw new Error(`notifyUser rate limit exceeded: ${await res.text()}`);
     if (!res.ok) throw new Error(`notifyUser failed: ${res.status}`);
 
     return (await res.json()) as SendResult;

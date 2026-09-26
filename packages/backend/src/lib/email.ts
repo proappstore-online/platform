@@ -16,6 +16,8 @@ export interface SendEmailOpts {
   html: string;
   text: string;
   replyTo?: string;
+  /** Extra message headers, e.g. List-Unsubscribe (#209). */
+  headers?: Record<string, string>;
 }
 
 export interface EmailConfig {
@@ -37,6 +39,7 @@ export async function sendEmail(cfg: EmailConfig, opts: SendEmailOpts): Promise<
       html: opts.html,
       text: opts.text,
       ...(opts.replyTo && { reply_to: opts.replyTo }),
+      ...(opts.headers && { headers: opts.headers }),
     }),
   });
   if (!res.ok) {

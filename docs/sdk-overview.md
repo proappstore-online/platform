@@ -61,7 +61,7 @@ app.storage.delete(path) / .deleteUserPublic(path) / .deletePublic(key)
 app.maps.geocode(query) / .reverseGeocode(lat, lng) / .route(from, to) / .embedUrl() / .staticUrl()
 
 // Push notifications (Web Push + VAPID)
-app.notifications.subscribe() / .unsubscribe() / .isSubscribed() / .send(userId, payload) / .broadcast(payload) / .notifyUser(userId, payload)
+app.notifications.subscribe() / .unsubscribe() / .isSubscribed() / .send(userId, payload) / .broadcast(payload) / .notifyUser(userId, payload, { channel })  // see "Notifying another user" below
 
 // SMS (Twilio-backed, creator-only)
 app.sms.send(to, message) / .broadcast(numbers, message)
@@ -191,6 +191,39 @@ prompt takedown matters, upload each version under a fresh path (for example
 `logos/<id>-<timestamp>.png`) and never overwrite a path in place: removing the
 key from your data then stops new page loads from referencing it, and the delete
 removes the bytes from the server.
+
+## Notifying another user (push or email)
+
+`app.notifications.notifyUser(userId, { title, body, url? }, { channel })` lets
+one user of an app tell another that something happened to them, for example
+"you have a new inquiry" (#209).
+
+| `channel` | Delivers | Caller must |
+|---|---|---|
+| `'push'` (default) | Web Push to the recipient's subscribed devices | hold a push subscription for the app |
+| `'email'` | one email to the recipient's verified address | be a member of the app (signed in to it) |
+| `'both'` | both | be a member of the app |
+
+**The app never sees an address.** The platform looks up the recipient's
+provider-verified email itself and returns only what happened:
+`{ sent, failed, email: 'sent' | 'skipped' | 'failed', skipped? }`, where
+`skipped` is one of:
+
+- `unsubscribed`: the recipient opted out of this app's emails;
+- `no_address`: no verified address, e.g. a credential or child account;
+- `not_member`: the recipient has never signed in to this app.
+
+**The email is a fixed platform template.** The subject is
+`<app id>: <title>`, the body is your text (escaped, no HTML), and the link is
+your `url` or the app's home page. `url` must be `https` on the app's own origin
+(its `proappstore.online` subdomain or an active custom domain); anything else
+is a `400`. Every email carries a one-click unsubscribe (`List-Unsubscribe`)
+that applies to this app only.
+
+**Limits.** Every channel shares 30/min per sender and 10/min per recipient.
+Email also has 100/day per app (shared with `app.email.send`) and 10/day per
+recipient. A limit is a `429` and nothing is sent; with `'both'`, the push is
+not sent either. Title is at most 150 characters and body 2,000 for email.
 
 ## ProShell component
 

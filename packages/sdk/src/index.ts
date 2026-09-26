@@ -48,7 +48,7 @@ export type {
 } from './types.js';
 
 export type { QueryResult, ExecuteResult, Migration, MigrateResult } from './db.js';
-export type { NotificationPayload, SendResult } from './notifications.js';
+export type { NotificationPayload, NotifyChannel, SendResult } from './notifications.js';
 export type { SmsSendResult } from './sms.js';
 export type {
   TextModelAlias,
