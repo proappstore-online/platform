@@ -172,31 +172,162 @@ deployRoutes.put('/apps/:appId/tools/oidc', async (c) => {
  * a compromised repo can't DROP/RENAME its way through history via CI. Destructive
  * changes stay on the in-browser OWNER path (`app.db.migrate`), which is a human.
  */
-const MIGRATE_ALLOWED_START = /^(CREATE\s+(TABLE|(UNIQUE\s+)?INDEX|VIEW|TRIGGER)\b|ALTER\s+TABLE\b|INSERT\s+INTO\b)/i;
+// An FTS5 index is the one virtual table allowed (#206): any other module (rtree,
+// extension modules) stays refused. The index is kept in sync by the app's batch
+// actions, not triggers, so the trigger rules below are unchanged.
+const IDENT = String.raw`(?:"[^"]+"|` + '`[^`]+`' + String.raw`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*)`;
+const MIGRATE_ALLOWED_START = new RegExp(
+  String.raw`^(CREATE\s+(TABLE|(UNIQUE\s+)?INDEX|VIEW|TRIGGER)\b|ALTER\s+TABLE\b|INSERT\s+INTO\b|` +
+    String.raw`CREATE\s+VIRTUAL\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?${IDENT}\s+USING\s+fts5\s*\()`,
+  'i',
+);
 const MIGRATE_FORBIDDEN = /\b(DROP|DELETE|UPDATE|RENAME|PRAGMA|ATTACH|DETACH|VACUUM|REINDEX|REPLACE)\b/i;
 const MIGRATE_ADD_COLUMN = /^ALTER\s+TABLE\s+(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|\S+)\s+ADD(?:\s+COLUMN)?\s+/i;
 
-function stripSqlComments(sql: string): string {
-  return sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n\r]*/g, ' ');
+/**
+ * Split a migration body on TOP-LEVEL semicolons exactly as the data worker's
+ * `/migrate` does (packages/data-worker/src/index.ts `splitSqlStatements`, a
+ * verbatim copy — keep them identical). The lint must see the same statements
+ * the executor runs, or text judged harmless here could run as its own statement
+ * there. Honors '…' "…" `…` [ … ] quoting, -- and block comments, BEGIN/END nesting.
+ */
+export function splitMigrationStatements(sql: string): string[] {
+  const out: string[] = [];
+  let buf = '';
+  let i = 0;
+  let beginDepth = 0;
+  const n = sql.length;
+  while (i < n) {
+    const ch = sql[i]!;
+    if (ch === '-' && sql[i + 1] === '-') {
+      const nl = sql.indexOf('\n', i);
+      const end = nl === -1 ? n : nl;
+      buf += sql.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === '/' && sql[i + 1] === '*') {
+      const close = sql.indexOf('*/', i + 2);
+      const end = close === -1 ? n : close + 2;
+      buf += sql.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch;
+      buf += ch;
+      i++;
+      while (i < n) {
+        const c = sql[i]!;
+        buf += c;
+        if (c === quote) {
+          if (sql[i + 1] === quote) { buf += quote; i += 2; continue; }
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (ch === '[') {
+      const close = sql.indexOf(']', i + 1);
+      const end = close === -1 ? n : close + 1;
+      buf += sql.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === 'b' || ch === 'B' || ch === 'e' || ch === 'E') {
+      const prev = buf.length ? buf[buf.length - 1]! : ' ';
+      if (/[^a-zA-Z0-9_]/.test(prev)) {
+        const rest = sql.slice(i);
+        const beginM = /^begin\b/i.exec(rest);
+        if (beginM) { beginDepth++; buf += beginM[0]; i += beginM[0].length; continue; }
+        const endM = /^end\b/i.exec(rest);
+        if (endM) { if (beginDepth > 0) beginDepth--; buf += endM[0]; i += endM[0].length; continue; }
+      }
+    }
+    if (ch === ';' && beginDepth === 0) {
+      const trimmed = buf.trim();
+      if (trimmed) out.push(trimmed);
+      buf = '';
+      i++;
+      continue;
+    }
+    buf += ch;
+    i++;
+  }
+  const tail = buf.trim();
+  if (tail) out.push(tail);
+  return out;
 }
 
-function hasUnsafeNotNullAddColumn(statement: string): boolean {
-  const normalized = stripSqlComments(statement).trim();
-  if (!MIGRATE_ADD_COLUMN.test(normalized)) return false;
-  if (!/\bNOT\s+NULL\b/i.test(normalized)) return false;
-  return !/\bDEFAULT\b/i.test(normalized) || /\bDEFAULT\s*(?:\(\s*)?NULL\b/i.test(normalized);
+/**
+ * One statement as code only: each '…' string literal becomes '' and each comment a
+ * space, in one quote-aware pass — so seed text ('Vacuum Pumps') never trips the
+ * keyword guard, and a `--` inside a literal can't hide the code after it. Quoted
+ * identifiers are kept verbatim (a table named "drop" is still refused).
+ */
+function sqlCode(stmt: string): string {
+  let out = '';
+  let i = 0;
+  const n = stmt.length;
+  while (i < n) {
+    const ch = stmt[i]!;
+    if (ch === '-' && stmt[i + 1] === '-') {
+      const nl = stmt.indexOf('\n', i);
+      i = nl === -1 ? n : nl;
+      out += ' ';
+      continue;
+    }
+    if (ch === '/' && stmt[i + 1] === '*') {
+      const close = stmt.indexOf('*/', i + 2);
+      i = close === -1 ? n : close + 2;
+      out += ' ';
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      let j = i + 1;
+      while (j < n) {
+        if (stmt[j] === ch) {
+          if (stmt[j + 1] === ch) { j += 2; continue; }
+          break;
+        }
+        j++;
+      }
+      out += ch === "'" ? "''" : stmt.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
+    if (ch === '[') {
+      const close = stmt.indexOf(']', i + 1);
+      const end = close === -1 ? n : close + 1;
+      out += stmt.slice(i, end);
+      i = end;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out.trim();
+}
+
+function hasUnsafeNotNullAddColumn(code: string): boolean {
+  if (!MIGRATE_ADD_COLUMN.test(code)) return false;
+  if (!/\bNOT\s+NULL\b/i.test(code)) return false;
+  return !/\bDEFAULT\b/i.test(code) || /\bDEFAULT\s*(?:\(\s*)?NULL\b/i.test(code);
 }
 
 type MigrationLintError = { statement: string; reason: string };
 
 /** Returns the first unsafe statement, or null if all pass. */
 export function forbiddenMigrationStatement(sql: string): MigrationLintError | null {
-  const statements = stripSqlComments(sql).split(';').map((s) => s.trim()).filter((s) => s.length > 0);
-  for (const stmt of statements) {
-    if (MIGRATE_FORBIDDEN.test(stmt) || !MIGRATE_ALLOWED_START.test(stmt)) {
-      return { statement: stmt.slice(0, 80), reason: 'the deploy path allows CREATE / ALTER … ADD / INSERT only' };
+  for (const stmt of splitMigrationStatements(sql)) {
+    const code = sqlCode(stmt);
+    if (!code) continue; // a comment-only fragment runs nothing
+    if (MIGRATE_FORBIDDEN.test(code) || !MIGRATE_ALLOWED_START.test(code)) {
+      return { statement: stmt.slice(0, 80), reason: 'the deploy path allows CREATE / ALTER … ADD / INSERT / CREATE VIRTUAL TABLE … USING fts5 only' };
     }
-    if (hasUnsafeNotNullAddColumn(stmt)) {
+    if (hasUnsafeNotNullAddColumn(code)) {
       return {
         statement: stmt.slice(0, 80),
         reason: 'ALTER TABLE … ADD COLUMN … NOT NULL must include a non-null DEFAULT so existing rows stay valid',

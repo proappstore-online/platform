@@ -46,6 +46,30 @@ describe('data worker with a real D1', () => {
     ]);
   });
 
+  it('FTS5 (#206): the documented migration applies, batch-synced rows index, and MATCH search finds them', async () => {
+    const migrate = await SELF.fetch('https://data/migrate', internal({ migrations: [
+      { name: '0001_products', sql: "CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, title TEXT NOT NULL, body TEXT, created_at INTEGER NOT NULL, updated_at INTEGER); INSERT INTO products (id, owner_id, title, body, created_at) VALUES ('seed', 'gh:seed', 'Vacuum Pumps; Drop Shipping', 'seed text', 0)" },
+      { name: '0007_products_fts', sql: 'CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(product_id UNINDEXED, title, body)' },
+    ] }));
+    expect(migrate.status, await migrate.clone().text()).toBe(200);
+    // The seed's `;` stayed inside its literal: one row, not a split statement.
+    expect((await env.DB.prepare('SELECT title FROM products').first<{ title: string }>())?.title).toBe('Vacuum Pumps; Drop Shipping');
+
+    // create_product, as the executor binds it: one atomic batch, row + index entry.
+    const create = await SELF.fetch('https://data/batch', internal({ statements: [
+      { sql: 'INSERT INTO products (id, owner_id, title, body, created_at) VALUES (?, ?, ?, ?, ?)', params: ['p1', 'gh:owner', 'Rotary vane pump', 'oil sealed, two stage', 1] },
+      { sql: 'INSERT INTO products_fts (product_id, title, body) SELECT id, title, body FROM products WHERE id = ? AND owner_id = ?', params: ['p1', 'gh:owner'] },
+    ] }));
+    expect(create.status, await create.clone().text()).toBe(200);
+
+    const search = await SELF.fetch('https://data/query', internal({
+      sql: 'SELECT p.id, p.title FROM products_fts JOIN products p ON p.id = products_fts.product_id WHERE products_fts MATCH ? ORDER BY rank LIMIT 20',
+      params: ['vane'],
+    }));
+    expect(search.status, await search.clone().text()).toBe(200);
+    expect(await search.json()).toMatchObject({ rows: [{ id: 'p1', title: 'Rotary vane pump' }] });
+  });
+
   it('the additive-only rule is the backend\'s, not the worker\'s: a raw internal migrate can DROP — which is why deploys go through the backend lint', async () => {
     await SELF.fetch('https://data/migrate', internal({ migrations: MIGRATIONS }));
     const res = await SELF.fetch('https://data/migrate', internal({ migrations: [{ name: '0003_drop', sql: 'DROP INDEX IF EXISTS idx_items_owner' }] }));

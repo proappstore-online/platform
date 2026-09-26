@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
 import { mainStatementVerb, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_SCHEDULED_ACTIONS_PER_APP, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from './tools.js';
@@ -700,6 +701,23 @@ describe('PUT /v1/apps/:appId/tools — requires_auth enforcement', () => {
     for (const ttl of [0, 301, 1.5, '60']) {
       expect((await put({ ...publicQuery, cache_ttl: ttl })).status, String(ttl)).toBe(400);
     }
+  });
+});
+
+// #206: the FTS5 worked example in docs/mcp-app-tools.md must register as written,
+// user-scoped statements (#150) included. Parsed from the doc so it cannot drift.
+describe('the documented FTS5 sync actions register (#206)', () => {
+  it('registers the docs example unchanged', async () => {
+    const doc = readFileSync(new URL('../../../../docs/mcp-app-tools.md', import.meta.url), 'utf8');
+    const section = doc.slice(doc.indexOf('## Full-text search (FTS5)'), doc.indexOf('## How tools get registered'));
+    const tools = JSON.parse(/```json\n(\[[\s\S]*?\])\n```/.exec(section)![1]!) as { name: string }[];
+    expect(tools.map((t) => t.name)).toEqual(['create_product', 'update_product', 'search_products']);
+    const res = await app.request(
+      '/v1/apps/test-app/tools',
+      { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools }) },
+      makeEnv({}, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }))),
+    );
+    expect(res.status, await res.clone().text()).toBe(200);
   });
 });
 

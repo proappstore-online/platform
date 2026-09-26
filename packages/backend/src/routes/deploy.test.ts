@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { deployRoutes } from './deploy.js';
+import { deployRoutes, forbiddenMigrationStatement, splitMigrationStatements } from './deploy.js';
+import { splitSqlStatements } from '../../../data-worker/src/index.js';
 import { _resetJwksCache } from '../lib/github-oidc.js';
 import { testToken, TEST_SK } from '../test-helpers.js';
 
@@ -557,5 +558,86 @@ describe('POST /apps/:appId/migrate/admin', () => {
     const body = await res.json() as { error: string };
     expect(body.error).toContain('NOT NULL must include a non-null DEFAULT');
     expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+  });
+});
+
+// #206: the additive-only lint reads SQL the way the data worker executes it —
+// statements split on top-level semicolons, keywords checked in code, never in
+// string literals — and admits FTS5 virtual tables only.
+describe('forbiddenMigrationStatement — literal-aware, FTS5-only virtual tables (#206)', () => {
+  const ok = (sql: string) => expect(forbiddenMigrationStatement(sql), sql).toBeNull();
+  const refused = (sql: string, statement?: string) => {
+    const bad = forbiddenMigrationStatement(sql);
+    expect(bad, sql).not.toBeNull();
+    if (statement) expect(bad!.statement).toBe(statement);
+  };
+
+  it('allows seed rows whose TEXT contains a guarded keyword', () => {
+    ok("INSERT INTO categories (id, name) VALUES ('c1', 'Vacuum Pumps')");
+    ok("INSERT INTO categories (id, name) VALUES ('c2', 'Drop Shipping'), ('c3', 'Update Services'), ('c4', 'It''s a DELETE')");
+  });
+
+  it('allows an FTS5 virtual table, with or without IF NOT EXISTS and a quoted name', () => {
+    ok("CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(title, body, content='')");
+    ok("CREATE VIRTUAL TABLE products_fts USING fts5(title, body, content='products', content_rowid='rowid', tokenize = 'porter unicode61')");
+    ok('create virtual table "search idx" using FTS5 (name)');
+  });
+
+  it('still refuses every other virtual table module', () => {
+    refused('CREATE VIRTUAL TABLE x USING rtree(id, a, b)');
+    refused('CREATE VIRTUAL TABLE v USING fts5vocab(products_fts, row)');
+    refused('CREATE VIRTUAL TABLE x USING fts4(a)');
+    refused("CREATE VIRTUAL TABLE x USING csv(filename='/etc/passwd')");
+  });
+
+  it('still refuses destructive statements', () => {
+    refused('DROP TABLE x');
+    refused('UPDATE t SET a = 1 WHERE 1');
+    refused('DELETE FROM t');
+    refused('ALTER TABLE t RENAME TO u');
+    refused('PRAGMA foreign_keys = OFF');
+    refused('REPLACE INTO t VALUES (1)');
+    refused("CREATE VIRTUAL TABLE f USING fts5(a); DROP TABLE t", 'DROP TABLE t');
+  });
+
+  it('refuses the literal-then-DROP injection on the second statement', () => {
+    refused("INSERT INTO t VALUES ('a'); DROP TABLE t", 'DROP TABLE t');
+  });
+
+  it('a -- or /* inside a literal cannot hide the code after it', () => {
+    // The old lint stripped comments with a regex before splitting, so it saw only
+    // `INSERT INTO t VALUES ('` while the data worker ran the DROP.
+    refused("INSERT INTO t VALUES ('--'); DROP TABLE t", 'DROP TABLE t');
+    refused("INSERT INTO t VALUES ('/*'); DROP TABLE t; -- */", 'DROP TABLE t');
+  });
+
+  it('a ; inside a literal does not split the statement', () => {
+    expect(splitMigrationStatements("INSERT INTO t VALUES ('a;b'); INSERT INTO t VALUES ('c')"))
+      .toEqual(["INSERT INTO t VALUES ('a;b')", "INSERT INTO t VALUES ('c')"]);
+    ok("INSERT INTO t (note) VALUES ('first; then DROP TABLE t; --')");
+  });
+
+  it('keeps refusing triggers whose body or event names a guarded operation', () => {
+    refused('CREATE TRIGGER s AFTER UPDATE ON products BEGIN INSERT INTO log VALUES (new.id); END');
+    refused('CREATE TRIGGER s AFTER INSERT ON products BEGIN DELETE FROM products_fts WHERE rowid = new.rowid; END');
+  });
+
+  it('still requires a non-null DEFAULT on an added NOT NULL column, literals aside', () => {
+    refused("ALTER TABLE t ADD COLUMN status TEXT NOT NULL");
+    refused("ALTER TABLE t ADD COLUMN status TEXT NOT NULL DEFAULT NULL");
+    ok("ALTER TABLE t ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+    ok("ALTER TABLE t ADD COLUMN note TEXT DEFAULT 'NOT NULL is fine here'");
+  });
+
+  it('splits exactly like the data worker that executes the migration', () => {
+    const corpus = [
+      "INSERT INTO t VALUES ('a;b'); INSERT INTO t VALUES ('c')",
+      "INSERT INTO t VALUES ('--'); DROP TABLE t",
+      "CREATE TRIGGER a AFTER INSERT ON x BEGIN INSERT INTO y VALUES (1); INSERT INTO z VALUES (2); END; CREATE TABLE q (id)",
+      'CREATE TABLE "a;b" (id); CREATE TABLE `c;d` (id); CREATE TABLE [e;f] (id)',
+      "-- note; still a comment\nCREATE TABLE r (id); /* x; y */ CREATE TABLE s (id)",
+      "INSERT INTO t VALUES ('it''s; fine'); BEGIN TRANSACTION; DROP TABLE t",
+    ];
+    for (const sql of corpus) expect(splitMigrationStatements(sql), sql).toEqual(splitSqlStatements(sql));
   });
 });

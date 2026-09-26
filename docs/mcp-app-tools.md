@@ -337,6 +337,59 @@ platform, never by an app; an id the platform does not know is rejected at
 registration. Propose a new one in a platform issue with the input contract,
 the outputs and why SQL cannot do it.
 
+## Full-text search (FTS5)
+
+A deploy migration may create an SQLite **FTS5** virtual table (#206); no other
+virtual table module is accepted. Seed rows may contain any text: the
+additive-only lint checks keywords in code, never inside string literals.
+
+```json
+{ "name": "0007_products_fts", "sql": "CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(product_id UNINDEXED, title, body)" }
+```
+
+**Keep the index in sync in your batch actions, not with triggers.** A trigger
+that updates or deletes is refused by the deploy lint (an `AFTER UPDATE` event
+included), because the automated path is additive-only. Write the row and its
+index entry in the same atomic batch, scoped like any other statement. A
+correlated id must be a client-supplied param, because `:__uuid` is generated
+separately for each statement.
+
+```json
+[
+  {
+    "name": "create_product", "description": "Create a product and index it", "operation": "batch",
+    "statements": [
+      "INSERT INTO products (id, owner_id, title, body, created_at) VALUES (:id, :__user_id, :title, :body, :__now)",
+      "INSERT INTO products_fts (product_id, title, body) SELECT id, title, body FROM products WHERE id = :id AND owner_id = :__user_id"
+    ],
+    "params": { "id": { "type": "string" }, "title": { "type": "string" }, "body": { "type": "string" } },
+    "requires_auth": true
+  },
+  {
+    "name": "update_product", "description": "Edit a product and re-index it", "operation": "batch",
+    "statements": [
+      "UPDATE products SET title = :title, body = :body, updated_at = :__now WHERE id = :id AND owner_id = :__user_id",
+      "DELETE FROM products_fts WHERE product_id = :id AND EXISTS (SELECT 1 FROM products WHERE id = :id AND owner_id = :__user_id)",
+      "INSERT INTO products_fts (product_id, title, body) SELECT id, title, body FROM products WHERE id = :id AND owner_id = :__user_id"
+    ],
+    "params": { "id": { "type": "string" }, "title": { "type": "string" }, "body": { "type": "string" } },
+    "requires_auth": true
+  },
+  {
+    "name": "search_products", "description": "Full-text product search", "operation": "query",
+    "sql": "SELECT p.id, p.title FROM products_fts JOIN products p ON p.id = products_fts.product_id WHERE products_fts MATCH :q ORDER BY rank LIMIT 20",
+    "params": { "q": { "type": "string" } },
+    "requires_auth": false
+  }
+]
+```
+
+**D1 cannot export a database that contains a virtual table.** Cloudflare's
+workaround is to drop the virtual tables, export, then recreate them. The
+platform does not export app databases, but an owner running
+`wrangler d1 export` must do this first. The FTS5 index is derived data, so it
+can be rebuilt from the base table.
+
 ## How tools get registered
 
 There are two paths, both idempotent (re-registering replaces the app's tool set):
