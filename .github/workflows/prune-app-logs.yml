@@ -3,6 +3,8 @@ name: Prune app logs
 # Retention for app_logs (ADR-008). The table had no retention and nothing that
 # deleted from it — harmless while unused, a growth problem in the shared `pas`
 # D1 once automatic SDK capture is on.
+# It also prunes the append-only rate-limit ledgers (maps_usage, sms_usage,
+# notification_log) past their windows (#223).
 #
 # Follows the payout-cron convention: an internal endpoint driven by a scheduled
 # workflow rather than a Worker cron trigger. The trade-off is that retention now
@@ -45,20 +47,29 @@ jobs:
 
             overdue="$(echo "$body" | jq -r '.stillOverdue // 0')"
             deleted="$(echo "$body" | jq -r '.deleted // 0')"
+            # Rate-limit ledgers (#223): per-table failures and a full-batch backlog.
+            ledger_errors="$(echo "$body" | jq -c '.ledgerErrors // {}')"
+            ledger_backlog="$(echo "$body" | jq -r '.ledgerBacklog // false')"
 
-            if [ "$overdue" = "0" ]; then
+            if [ "$ledger_errors" != "{}" ]; then
+              echo "::error::rate-limit ledger prune failed: $ledger_errors"
+              exit 1
+            fi
+
+            if [ "$overdue" = "0" ] && [ "$ledger_backlog" != "true" ]; then
               echo "Retention up to date after $attempt call(s)."
               exit 0
             fi
 
             # No progress but work remains — retrying will not help, and silently
-            # succeeding here is how retention stops working unnoticed.
-            if [ "$deleted" = "0" ]; then
+            # succeeding here is how retention stops working unnoticed. A ledger
+            # backlog always made progress (it means a full batch was deleted).
+            if [ "$overdue" != "0" ] && [ "$deleted" = "0" ] && [ "$ledger_backlog" != "true" ]; then
               echo "::error::prune made no progress with $overdue rows still overdue"
               exit 1
             fi
 
-            echo "$overdue rows still overdue; continuing."
+            echo "$overdue app-log rows still overdue, ledger backlog: $ledger_backlog; continuing."
           done
 
           echo "::error::prune did not drain the backlog in 20 calls"

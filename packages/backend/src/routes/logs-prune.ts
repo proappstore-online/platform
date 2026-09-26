@@ -31,6 +31,18 @@ export const USAGE_RETENTION_DAYS = 90;
 /** Bound each run so one call cannot exceed D1 statement limits on a large table. */
 export const PRUNE_BATCH_LIMIT = 10_000;
 
+/**
+ * Append-only rate-limit ledgers (#223): one row per request, only ever read
+ * inside a short window, never deleted before. Each lists its time column's
+ * unit — a unit mix-up would delete live window rows and bypass the limit.
+ */
+export const LEDGER_RETENTION_DAYS = 2; // > every window read: 1 h maps, UTC day SMS, 60 s push
+export const RATE_LIMIT_LEDGERS = [
+  { table: 'maps_usage', column: 'ts', unit: 's' },
+  { table: 'sms_usage', column: 'sent_at', unit: 'ms' },
+  { table: 'notification_log', column: 'sent_at', unit: 's' },
+] as const;
+
 export function cutoffMs(nowMs: number, days: number): number {
   return nowMs - days * 24 * 60 * 60 * 1000;
 }
@@ -65,6 +77,26 @@ logsPruneRoutes.post('/internal/logs/prune', async (c) => {
     .first<{ n: number }>();
 
   const overdue = remaining?.n ?? 0;
+
+  // Batch-bounded per table, in rowid (AUTOINCREMENT = insertion) order, so the
+  // expired rows are found first without an index on the time column. One
+  // ledger failing never blocks app-log retention or the others.
+  const ledgerCutoffMs = cutoffMs(now, LEDGER_RETENTION_DAYS);
+  const ledgerRowsDeleted: Record<string, number> = {};
+  const ledgerErrors: Record<string, string> = {};
+  for (const { table, column, unit } of RATE_LIMIT_LEDGERS) {
+    const cutoff = unit === 's' ? Math.floor(ledgerCutoffMs / 1000) : ledgerCutoffMs;
+    try {
+      const res = await c.env.DB.prepare(
+        `DELETE FROM ${table} WHERE id IN (SELECT id FROM ${table} WHERE ${column} < ? LIMIT ?)`,
+      ).bind(cutoff, PRUNE_BATCH_LIMIT).run();
+      ledgerRowsDeleted[table] = res.meta?.changes ?? 0;
+    } catch (err) {
+      ledgerErrors[table] = err instanceof Error ? err.message.slice(0, 200) : 'prune failed';
+      console.error(`[logs-prune] ledger prune failed table=${table}`, ledgerErrors[table]);
+    }
+  }
+
   return c.json({
     ok: true,
     retentionDays: RETENTION_DAYS,
@@ -73,5 +105,10 @@ logsPruneRoutes.post('/internal/logs/prune', async (c) => {
     // >0 means one run did not catch up. The caller should run again rather than
     // wait a day, otherwise the backlog compounds silently.
     stillOverdue: overdue,
+    ledgerRetentionDays: LEDGER_RETENTION_DAYS,
+    ledgerRowsDeleted,
+    // A full batch may have left expired rows behind: the caller runs again.
+    ledgerBacklog: Object.values(ledgerRowsDeleted).some((n) => n >= PRUNE_BATCH_LIMIT),
+    ledgerErrors,
   });
 });
