@@ -416,6 +416,32 @@ describe('registerAppDiscoveryTools — list_app_tools / call_app_tool on the sh
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
+  describe('scheduled actions are platform-only (#203)', () => {
+    const scheduled = { name: 'reap_stale_games_all', description: 'Reap stale games', operation: 'execute', params: { idle_ms: { type: 'integer' } }, requires_auth: true, scheduled: true };
+    const withScheduled = () => new Response(JSON.stringify({ tools: [...crmTools, scheduled] }), { status: 200 });
+
+    it('fetchTools drops a scheduled tool, so no session registers it', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(withScheduled());
+      const names = (await fetchTools(api, 'https://api.test', 'crm')).map((t) => t.name);
+      expect(names).not.toContain('reap_stale_games_all');
+      expect(names).toContain('update_company');
+    });
+
+    it('list_app_tools does not list it', async () => {
+      globalThis.fetch = vi.fn().mockImplementation(() => Promise.resolve(withScheduled()));
+      const text = (await setup().get('list_app_tools')!({ app_id: 'crm' })).content[0].text;
+      expect(text).toContain('crm: 4 tool(s)');
+      expect(text).not.toContain('reap_stale_games_all');
+    });
+
+    it('call_app_tool refuses it by name without reaching the executor', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(withScheduled());
+      const res = await setup().get('call_app_tool')!({ app_id: 'crm', tool: 'reap_stale_games_all', params: { idle_ms: 0 } });
+      expect(res.content[0].text).toContain('Unknown tool reap_stale_games_all for crm');
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1); // the listing only — no /actions/ call
+    });
+  });
+
   it('call_app_tool: under MCP_READ_ONLY a query still runs and an execute is refused before the executor', async () => {
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce(listing())

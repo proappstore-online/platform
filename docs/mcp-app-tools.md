@@ -266,6 +266,13 @@ Registration validates all of the following:
   exact type/default validation used at runtime. There is no caller input.
 - At most five scheduled actions per app.
 
+**A scheduled action is not callable over HTTP or MCP.** `POST
+/v1/apps/:appId/actions/<name>` answers `403 scheduled actions run only on the
+platform scheduler` to every caller (session users, app tokens, the owner and
+platform admins alike), and MCP sessions neither list nor register it. Its
+`caller_unscoped` reason is only true for the schedule's fixed params. For
+manual runs, register a separate user-invoked action with a role guard.
+
 Each due minute is first written and atomically claimed in the platform D1
 before the prepared action reaches the app data worker. Duplicate/overlapping
 ticks cannot run it twice; a stale claim is recovered as a failure. Missed

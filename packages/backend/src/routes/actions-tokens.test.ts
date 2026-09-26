@@ -64,6 +64,23 @@ describe('POST /v1/apps/:appId/actions/:name with a pas_at_ token', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('refuses a scheduled action even for a write token scoped to it, before the token is checked (#203)', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const scheduled = manifest({
+      name: 'reap_stale', operation: 'execute', sql: 'UPDATE games SET status = \'abandoned\' WHERE updated_at < :__now - :idle_ms',
+      params: { idle_ms: { type: 'integer' } },
+      auth: { caller_unscoped: { reason: 'bounded by stale state' } },
+      schedule: { cron: '*/15 * * * *', params: { idle_ms: 3_600_000 } },
+    });
+    const db = mockD1(mockStmt({ first: { manifest: scheduled } }), mockStmt({ first: tokenRow({ scopes: '{"access":"write","actions":["reap_stale"]}' }) }), usersRow());
+    const res = await app.request('/v1/apps/leads/actions/reap_stale', call('reap_stale'), makeEnv(db));
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe('scheduled actions run only on the platform scheduler');
+    expect(db.prepare).toHaveBeenCalledTimes(1); // the manifest read only
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('a read token may call query actions only', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ meta: { changes: 1 } })));
     const exec = manifest({ name: 'add_item', operation: 'execute', sql: 'INSERT INTO items (id, user_id) VALUES (:__uuid, :__user_id)' });

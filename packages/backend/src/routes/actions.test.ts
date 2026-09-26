@@ -257,6 +257,59 @@ describe('POST /v1/apps/:appId/actions/:name', () => {
   });
 });
 
+// #203: a scheduled action takes only its schedule's fixed params, and its
+// caller_unscoped reason holds only for those. No HTTP caller may run it.
+describe('POST /v1/apps/:appId/actions/:name — scheduled actions are platform-only (#203)', () => {
+  const scheduled = manifest({
+    name: 'reap_stale_games_all',
+    operation: 'execute',
+    sql: "UPDATE games SET status = 'abandoned' WHERE status = 'active' AND updated_at < :__now - :idle_ms",
+    params: { idle_ms: { type: 'integer' } },
+    auth: { caller_unscoped: { reason: 'bounded by stale state' } },
+    schedule: { cron: '*/15 * * * *', params: { idle_ms: 3_600_000 } },
+  });
+  const call = (token: string) => app.request(
+    '/v1/apps/interns/actions/reap_stale_games_all',
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ params: { idle_ms: 0 } }),
+    },
+    env(db(stmt({ first: { manifest: scheduled } }))),
+  );
+
+  it('refuses a signed-in user with caller-chosen params, and never reaches the data worker', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await call(MANAGER_TOK);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: 'scheduled actions run only on the platform scheduler' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses the app creator and a platform admin alike', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const admin = await testToken('gh:9', { login: 'root', roles: ['user', 'admin'] });
+    for (const token of [TOK, admin]) expect((await call(token)).status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('leaves the same action runnable when it carries no schedule', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ meta: { changes: 1 } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const unscheduled = JSON.parse(scheduled) as Record<string, unknown>;
+    delete unscheduled.schedule;
+    const res = await app.request(
+      '/v1/apps/interns/actions/reap_stale_games_all',
+      { method: 'POST', headers: { Authorization: `Bearer ${MANAGER_TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ params: { idle_ms: 5 } }) },
+      env(db(stmt({ first: { manifest: JSON.stringify(unscheduled) } }))),
+    );
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 // #211: public actions are an unauthenticated path to two D1 databases. They
 // are limited per (app, client IP) and may opt into a short edge cache.
 describe('POST /v1/apps/:appId/actions/:name — public action limits and cache (#211)', () => {

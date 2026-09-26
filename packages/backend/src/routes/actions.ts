@@ -38,6 +38,11 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   }
 
   const manifest = await loadManifest(c.env.DB, appId, name);
+  // #203: a scheduled action takes no caller input — its params are the schedule's
+  // fixed values — and its caller_unscoped reason holds only for those. The
+  // platform scheduler reaches the data worker directly (forwardToDataWorker),
+  // never this route, so no session or app token may run one here.
+  if (manifest.schedule !== undefined) throw new HttpError('scheduled actions run only on the platform scheduler', 403);
   const publicAction = manifest.requires_auth === false;
   let token: string | null = null;
   let userId = '';

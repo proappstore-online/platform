@@ -47,6 +47,8 @@ export interface ToolManifest {
   };
   /** Always pre-loaded on an app-scoped session, even when the manifest is large (#117). */
   core?: boolean;
+  /** Runs only on the platform scheduler; the executor refuses it over HTTP/MCP (#203). */
+  scheduled?: boolean;
 }
 
 export interface AppTool extends ToolManifest {
@@ -108,7 +110,9 @@ export async function fetchTools(api: Fetcher, apiBase: string, appId: string): 
   }
 
   const data = (await res.json()) as ToolsResponse;
-  const tools = (data.tools ?? []).map((tool) => ({ ...tool, app_id: appId }));
+  // #203: a scheduled action is platform-only — the executor 403s it — so no
+  // session registers, lists or resolves it by name.
+  const tools = (data.tools ?? []).filter((tool) => !tool.scheduled).map((tool) => ({ ...tool, app_id: appId }));
   cachedTools.set(cacheKey, { tools, time: now });
   return tools;
 }

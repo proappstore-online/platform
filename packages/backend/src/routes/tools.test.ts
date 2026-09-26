@@ -423,6 +423,15 @@ describe('GET tool listings — SQL only to the app team (#158)', () => {
     expect(res.headers.get('Cache-Control')).toBeNull();
   });
 
+  it('anonymous: a scheduled tool is flagged `scheduled` so MCP can hide it, never its cron or fixed params (#203)', async () => {
+    const scheduledTool = { ...unscopedTool, schedule: { cron: '*/15 * * * *', params: { now: 42 } } };
+    const { tools } = await list({}, mockD1(rows(scheduledTool, validTool)));
+    expect(tools[0]).toMatchObject({ name: 'reap_stale', scheduled: true });
+    expect(tools[0]).not.toHaveProperty('schedule');
+    expect(JSON.stringify(tools[0])).not.toContain('*/15');
+    expect(tools[1]).not.toHaveProperty('scheduled');
+  });
+
   it('anonymous: auth keeps roles but drops the caller_unscoped reason', async () => {
     const { tools } = await list({}, mockD1(rows(unscopedTool)));
     expect(tools[0].auth).toEqual({ required: undefined, platform_roles: ['admin'], app_roles: undefined });

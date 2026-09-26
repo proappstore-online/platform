@@ -667,6 +667,8 @@ function publicToolView(m: ToolManifest) {
     requires_auth: m.requires_auth,
     // Which tools stay resident on a large app's MCP session (#117) — not sensitive.
     ...(m.core !== undefined ? { core: m.core } : {}),
+    // Only that one is scheduled, so MCP can hide it (#203) — never its cron or fixed params.
+    ...(m.schedule !== undefined ? { scheduled: true } : {}),
     ...(m.auth
       ? { auth: { required: m.auth.required, platform_roles: m.auth.platform_roles, app_roles: m.auth.app_roles } }
       : {}),
