@@ -461,3 +461,90 @@ describe('listing moderation call bound (#218)', () => {
     expect(counted.limit).toHaveBeenCalledWith({ key: 'mod:gh:1' });
   });
 });
+
+// #221: superseded listing-asset versions are pruned (newest 3 + referenced),
+// best-effort, so repeated uploads cannot grow R2 without bound.
+describe('PUT /v1/apps/:id/listing-assets — version pruning (#221)', () => {
+  const ORIGIN = 'https://api.test.com';
+  let objects: Set<string>;
+  let row: Record<string, unknown> | null;
+  const r2 = (opts: { failList?: boolean; failDelete?: boolean } = {}) => ({
+    put: vi.fn(async (key: string) => { objects.add(key); }),
+    list: vi.fn(async ({ prefix }: { prefix: string }) => {
+      if (opts.failList) throw new Error('R2 list unavailable');
+      return { objects: [...objects].filter((k) => k.startsWith(prefix)).map((key) => ({ key })) };
+    }),
+    delete: vi.fn(async (keys: string[]) => {
+      if (opts.failDelete) throw new Error('R2 delete unavailable');
+      for (const k of keys) objects.delete(k);
+    }),
+  });
+  const db = () => ({
+    prepare: (sql: string) => ({ bind: () => ({
+      first: async () => (sql.includes('SELECT creator_id FROM apps') ? { creator_id: 'gh:1' } : sql.includes('FROM app_listings') ? row : null),
+    }) }),
+  }) as unknown as ReturnType<typeof mockD1>;
+  const upload = (storage: ReturnType<typeof r2>, kind = 'icon') => app.request(
+    `${ORIGIN}/v1/apps/meetup/listing-assets/${kind}`,
+    { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'image/png' }, body: new Uint8Array([1]) },
+    sharedMakeEnv({ STORAGE: storage as unknown as R2Bucket, VAPID_PUBLIC_KEY: 'p', VAPID_PRIVATE_KEY: 'q' }, db()),
+  );
+  const icons = () => [...objects].filter((k) => k.startsWith('meetup/_public/listing/icon-')).sort();
+  beforeEach(() => {
+    objects = new Set([1, 2, 3, 4, 5].map((t) => `meetup/_public/listing/icon-${t}.png`));
+    objects.add('meetup/_public/listing/screenshot-0-1.png');
+    objects.add('other/_public/listing/icon-1.png');
+    row = { icon_url: null, privacy_policy_url: null, terms_url: null, screenshots_json: '[]' };
+  });
+
+  it('keeps only the newest 3 versions of the kind after an upload', async () => {
+    const storage = r2();
+    expect((await upload(storage)).status).toBe(200);
+    expect(icons()).toEqual([expect.stringMatching(/icon-\d{13}\.png$/), 'meetup/_public/listing/icon-4.png', 'meetup/_public/listing/icon-5.png']);
+    expect(storage.delete).toHaveBeenCalledTimes(1); // one batch delete
+  });
+
+  it('never deletes a version the listing row references, however old (icon, docs, screenshots)', async () => {
+    row = {
+      icon_url: `${ORIGIN}/v1/apps/meetup/public/listing/icon-1.png`,
+      privacy_policy_url: null, terms_url: null,
+      screenshots_json: JSON.stringify([`${ORIGIN}/v1/apps/meetup/public/listing/icon-2.png?v=1`]),
+    };
+    await upload(r2());
+    expect(icons()).toContain('meetup/_public/listing/icon-1.png');
+    expect(icons()).toContain('meetup/_public/listing/icon-2.png');
+    expect(icons()).not.toContain('meetup/_public/listing/icon-3.png');
+    expect(icons()).toHaveLength(5); // newest 3 + 2 referenced
+  });
+
+  it('leaves other kinds and other apps untouched', async () => {
+    await upload(r2());
+    expect(objects.has('meetup/_public/listing/screenshot-0-1.png')).toBe(true);
+    expect(objects.has('other/_public/listing/icon-1.png')).toBe(true);
+  });
+
+  it('cost: with 3 or fewer versions, no listing-row read and no delete', async () => {
+    objects = new Set(['meetup/_public/listing/icon-1.png']);
+    const storage = r2();
+    await upload(storage);
+    expect(storage.list).toHaveBeenCalledTimes(1);
+    expect(storage.delete).not.toHaveBeenCalled();
+  });
+
+  it('is best-effort: a list or delete failure still returns 200 and keeps the new upload', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const storage of [r2({ failList: true }), r2({ failDelete: true })]) {
+      const res = await upload(storage);
+      expect(res.status).toBe(200);
+      expect(objects.has(((await res.json()) as { key: string }).key)).toBe(true);
+    }
+    expect(log.mock.calls.some((c) => String(c[0]).includes('[listing-assets] prune failed'))).toBe(true);
+    log.mockRestore();
+  });
+
+  it('tolerates a malformed screenshots_json (prunes by recency alone)', async () => {
+    row = { icon_url: null, privacy_policy_url: null, terms_url: null, screenshots_json: 'not json' };
+    expect((await upload(r2())).status).toBe(200);
+    expect(icons()).toHaveLength(3);
+  });
+});

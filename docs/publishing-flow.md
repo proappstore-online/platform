@@ -105,6 +105,14 @@ are moderated the same way before they are stored as public files (#215):
 - Each decision is logged as `listing_asset_moderation`.
 - Icons and screenshots are images and are not moderated.
 
+Every listing-asset upload writes a new, timestamped file. After each successful
+upload, older versions of that same kind (`icon`, `privacy-policy`, `terms`,
+`screenshot-N`) are pruned (#221). The newest 3 are kept, plus any version the
+listing still references. Pruning costs one R2 list per upload; the listing row
+is read and one batch delete is issued only when more than 3 versions exist.
+It is best-effort: if pruning fails, the upload still succeeds and the failure
+is logged as `[listing-assets] prune failed`.
+
 ## Failure modes
 
 | Symptom | Cause | Recovery |

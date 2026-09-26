@@ -247,6 +247,46 @@ listingsRoutes.put('/apps/:id/listing', async (c) => {
   }
 });
 
+/** Versions of one listing-asset kind kept on every upload, besides referenced ones (#221). */
+export const LISTING_ASSET_VERSIONS_KEPT = 3;
+
+/** The R2 key a stored listing URL points at (`…/public/listing/<file>`), or null. */
+function listingKeyFromUrl(appId: string, url: string | null | undefined): string | null {
+  const m = typeof url === 'string' ? /\/public\/listing\/([^?#]+)/.exec(url) : null;
+  return m ? `${appId}/_public/listing/${m[1]}` : null;
+}
+
+/**
+ * #221: every upload writes a new timestamped object, so superseded versions of
+ * a kind are pruned — keep the newest LISTING_ASSET_VERSIONS_KEPT (they cover
+ * cached storefront pages) and anything the listing row still references.
+ * Best-effort: returns how many were deleted and never throws.
+ */
+async function pruneListingAssetVersions(env: Env, appId: string, kind: string): Promise<number> {
+  try {
+    const listed = await env.STORAGE.list({ prefix: `${appId}/_public/listing/${kind}-`, limit: 1000 });
+    const byNewest = listed.objects
+      .map((o) => ({ key: o.key, at: Number(/-(\d+)\.[a-z0-9]+$/.exec(o.key)?.[1] ?? 0) }))
+      .sort((a, b) => b.at - a.at);
+    if (byNewest.length <= LISTING_ASSET_VERSIONS_KEPT) return 0;
+    const row = await env.DB.prepare('SELECT icon_url, privacy_policy_url, terms_url, screenshots_json FROM app_listings WHERE app_id = ?')
+      .bind(appId).first<Pick<ListingRow, 'icon_url' | 'privacy_policy_url' | 'terms_url' | 'screenshots_json'>>();
+    let screenshots: unknown = [];
+    try { screenshots = JSON.parse(row?.screenshots_json ?? '[]'); } catch { /* keep none */ }
+    const referenced = new Set(
+      [row?.icon_url, row?.privacy_policy_url, row?.terms_url, ...(Array.isArray(screenshots) ? screenshots : [])]
+        .map((u) => listingKeyFromUrl(appId, u as string))
+        .filter((k): k is string => k !== null),
+    );
+    const doomed = byNewest.slice(LISTING_ASSET_VERSIONS_KEPT).map((o) => o.key).filter((k) => !referenced.has(k));
+    if (doomed.length > 0) await env.STORAGE.delete(doomed);
+    return doomed.length;
+  } catch (err) {
+    console.error(`[listing-assets] prune failed app=${appId} kind=${kind}`, err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
 /** Owner-only listing-asset upload. Returns the public URL. */
 listingsRoutes.put('/apps/:id/listing-assets/:kind', async (c) => {
   try {
@@ -316,6 +356,7 @@ listingsRoutes.put('/apps/:id/listing-assets/:kind', async (c) => {
     const publicUrl = `${new URL(c.req.url).origin}/v1/apps/${appId}/public/listing/${key.slice(
       key.indexOf('_public/') + '_public/'.length,
     )}`;
+    await pruneListingAssetVersions(c.env, appId, kind);
     return c.json({ url: publicUrl, key, size: body.byteLength });
   } catch (err) {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
