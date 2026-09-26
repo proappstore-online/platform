@@ -142,16 +142,20 @@ describe('dispatchWebhook hardening (#224)', () => {
       return ac.signal;
     });
     try {
+      let hungSignal: AbortSignal | undefined;
       mockFetch.mockImplementation((url: string, init: RequestInit) => {
         if (url.includes('hung')) {
+          hungSignal = init.signal!;
           return new Promise((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason)));
         }
         return Promise.resolve(new Response('ok'));
       });
       const db = fakeDb([{ ...hook, id: 'hung', url: 'https://hung.example/hook' }, { ...hook, id: 'ok', url: 'https://ok.example/hook' }]);
       const done = dispatchWebhook(db, 'app1', 'test', {});
-      await vi.waitFor(() => expect(timeouts).toHaveLength(2));
-      timeouts[0]!.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+      // Hooks sign in parallel, so the timeouts are created in no fixed order:
+      // abort the one the hung fetch actually received.
+      await vi.waitFor(() => { expect(timeouts).toHaveLength(2); expect(hungSignal).toBeDefined(); });
+      timeouts.find((ac) => ac.signal === hungSignal)!.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
       await done;
       const byId = Object.fromEntries(db.deliveries.map((d) => [d.webhook_id, d.status]));
       expect(byId).toEqual({ hung: null, ok: 200 });
