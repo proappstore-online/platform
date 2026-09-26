@@ -32,6 +32,31 @@ describe('GET /v1/apps/:appId/scheduled-runs (#123)', () => {
     expect(database.DB.prepare).toHaveBeenLastCalledWith(expect.stringContaining('AND status = ?'));
   });
 
+  it('refuses a signed-in user who does not own the app, before reading any run', async () => {
+    // chess is owned by gh:9; gh:1 is not on its team.
+    const database = env(stmt({ creator_id: 'gh:9' }), stmt(null));
+    const res = await app.request('/v1/apps/chess/scheduled-runs', { headers: { Authorization: `Bearer ${TOK}` } }, database);
+    expect(res.status).toBe(403);
+    expect(database.DB.prepare).not.toHaveBeenCalledWith(expect.stringContaining('scheduled_action_runs'));
+  });
+
+  it("refuses another app's owner: owning one app grants nothing on another", async () => {
+    // gh:1 owns `bingo`, then asks for `chess` (owned by gh:9).
+    const own = env(stmt({ creator_id: 'gh:1' }));
+    expect((await app.request('/v1/apps/bingo/scheduled-runs', { headers: { Authorization: `Bearer ${TOK}` } }, own)).status).toBe(200);
+    const other = env(stmt({ creator_id: 'gh:9' }), stmt(null));
+    expect((await app.request('/v1/apps/chess/scheduled-runs', { headers: { Authorization: `Bearer ${TOK}` } }, other)).status).toBe(403);
+  });
+
+  it('scopes the history query to the requested app', async () => {
+    const runs = stmt(null, { results: [] });
+    const database = env(stmt({ creator_id: 'gh:1' }), runs);
+    const res = await app.request('/v1/apps/bingo/scheduled-runs', { headers: { Authorization: `Bearer ${TOK}` } }, database);
+    expect(res.status).toBe(200);
+    expect(database.DB.prepare).toHaveBeenLastCalledWith(expect.stringContaining('FROM scheduled_action_runs WHERE app_id = ?'));
+    expect(runs.bind.mock.calls[0]![0]).toBe('bingo');
+  });
+
   it('rejects invalid statuses after authenticating the owner', async () => {
     const res = await app.request('/v1/apps/chess/scheduled-runs?status=nope', { headers: { Authorization: `Bearer ${TOK}` } }, env(stmt({ creator_id: 'gh:1' })));
     expect(res.status).toBe(400);
