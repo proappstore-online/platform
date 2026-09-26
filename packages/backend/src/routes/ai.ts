@@ -1,7 +1,8 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { HttpError, requireUser } from '../lib/auth.js';
 import type { Env } from '../types.js';
+import { AI_DAILY_UNITS, chargeAiBudget, embedUnits, generateUnits, secondsUntilUtcMidnight, withinAiRate } from '../lib/ai-budget.js';
 
 export const aiRoutes = new Hono<{ Bindings: Env }>();
 
@@ -45,9 +46,37 @@ interface EmbedRequest {
   model?: EmbedModelAlias;
 }
 
+/**
+ * #218: bound Workers AI spend before any model call — 20 requests per minute
+ * per user (fail-open without the binding), then an atomic charge against the
+ * user's 200-unit daily budget (fail-closed if D1 is unavailable). Returns the
+ * refusal, or null to proceed.
+ */
+async function aiSpendRefusal(c: Context<{ Bindings: Env }>, userId: string, units: number): Promise<Response | null> {
+  if (!(await withinAiRate(c.env, userId))) {
+    return c.json({ error: 'rate_limited', message: 'too many AI requests: max 20 per minute' }, 429, { 'Retry-After': '60' });
+  }
+  const now = Date.now();
+  let charged: boolean;
+  try {
+    charged = await chargeAiBudget(c.env.DB, userId, units, now);
+  } catch (err) {
+    console.error('[ai-budget] charge failed', err instanceof Error ? err.message : err);
+    return c.json({ error: 'budget_unavailable', message: 'AI budget check is unavailable; try again shortly' }, 503, { 'Retry-After': '5' });
+  }
+  if (!charged) {
+    return c.json(
+      { error: 'quota_exceeded', message: `daily AI budget used (${AI_DAILY_UNITS} units per day; smart = 5, fast = 1, embeddings = 1 per 10 items)` },
+      429,
+      { 'Retry-After': String(secondsUntilUtcMidnight(now)) },
+    );
+  }
+  return null;
+}
+
 aiRoutes.post('/ai/generate', async (c) => {
   try {
-    await requireUser(c);
+    const user = await requireUser(c);
 
     const body = await c.req.json<GenerateRequest>().catch(() => null);
     if (!body) return c.text('invalid JSON body', 400);
@@ -98,6 +127,9 @@ aiRoutes.post('/ai/generate', async (c) => {
       inputs.temperature = Math.min(Math.max(body.temperature, 0), 2);
     }
 
+    const refusal = await aiSpendRefusal(c, user.id, generateUnits(alias));
+    if (refusal) return refusal;
+
     const result = (await c.env.AI.run(model, inputs)) as { response?: string } | string;
     const text = typeof result === 'string' ? result : (result.response ?? '');
 
@@ -119,7 +151,7 @@ aiRoutes.post('/ai/generate', async (c) => {
 
 aiRoutes.post('/ai/embed', async (c) => {
   try {
-    await requireUser(c);
+    const user = await requireUser(c);
 
     const body = await c.req.json<EmbedRequest>().catch(() => null);
     if (!body) return c.text('invalid JSON body', 400);
@@ -143,6 +175,9 @@ aiRoutes.post('/ai/embed', async (c) => {
     if (!model) {
       return c.text(`unknown model alias: ${alias}. Allowed: ${Object.keys(EMBED_MODELS).join(', ')}`, 400);
     }
+
+    const refusal = await aiSpendRefusal(c, user.id, embedUnits(texts.length));
+    if (refusal) return refusal;
 
     const result = (await c.env.AI.run(model, { text: texts })) as
       | { data?: number[][]; shape?: number[] }

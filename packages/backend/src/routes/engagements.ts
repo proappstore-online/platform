@@ -4,7 +4,8 @@ import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
 import { PLATFORM_FEE_BPS, developerShareCents } from '../lib/platform-fee.js';
 import { sendEmail } from '../lib/email.js';
-import { auditModeration, moderateChunks } from '../lib/moderation.js';
+import { auditModeration, chunkText, moderateChunks } from '../lib/moderation.js';
+import { withinModerationRate } from '../lib/ai-budget.js';
 
 /**
  * Services Phase 2: engagements + service chat with per-prompt billing.
@@ -407,7 +408,12 @@ engagementRoutes.post('/services/requests', async (c) => {
     // (GET /services/requests, proappstore.online/services). Moderate the text
     // before it is stored — chunked, since the description can exceed one
     // chunk — and fail closed.
-    const moderation = await moderateChunks(c.env.AI, `${body.title.trim()}\n\n${body.description.trim()}`);
+    const requestText = `${body.title.trim()}\n\n${body.description.trim()}`;
+    // #218: bound moderation model calls per user — refusals would otherwise be unlimited.
+    if (!(await withinModerationRate(c.env, user.id, Math.max(1, chunkText(requestText).length)))) {
+      return c.json({ error: 'moderation_rate_limited', message: 'too many moderated submissions: try again in a minute' }, 429, { 'Retry-After': '60' });
+    }
+    const moderation = await moderateChunks(c.env.AI, requestText);
     auditModeration('service_request_moderation', { actor: user.id, chunks: moderation.chunks }, moderation);
     if (moderation.verdict === 'unsafe') {
       return c.json({ error: 'request rejected by content moderation', categories: moderation.categories }, 422);

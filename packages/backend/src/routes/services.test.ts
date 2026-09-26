@@ -196,3 +196,20 @@ describe('PUT /v1/services/profile — Workers AI moderation of bioServices (#21
     expect(ai.run).not.toHaveBeenCalled();
   });
 });
+
+// #218: bio moderation is bounded per user too.
+describe('PUT /v1/services/profile — moderation call bound (#218)', () => {
+  it('over the bound → 429 before any model call, profile not written', async () => {
+    const rate = { limit: vi.fn(async () => ({ success: false })) };
+    const ai = { run: vi.fn() };
+    const db = mockD1(mockStmt({ first: { bio_services: 'old bio' } }));
+    const res = await app.request('/v1/services/profile', {
+      method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bioServices: 'new bio' }),
+    }, env({ AI: ai, MODERATION_RATE_LIMIT: rate }, db));
+    expect(res.status).toBe(429);
+    expect(rate.limit).toHaveBeenCalledWith({ key: 'mod:gh:1' });
+    expect(ai.run).not.toHaveBeenCalled();
+    expect(db.prepare.mock.calls.some((c) => String(c[0]).includes('INSERT INTO dev_profiles'))).toBe(false);
+  });
+});

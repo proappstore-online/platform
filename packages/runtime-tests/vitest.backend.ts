@@ -27,7 +27,11 @@ export default defineWorkersConfig(async () => ({
           d1Databases: ['DB'],
           r2Buckets: ['STORAGE'],
           durableObjects: { ROOM: 'Room' },
-          ratelimits: { PUBLIC_ACTION_RATE_LIMIT: { simple: { limit: 120, period: 60 } } },
+          ratelimits: {
+            PUBLIC_ACTION_RATE_LIMIT: { simple: { limit: 120, period: 60 } },
+            AI_RATE_LIMIT: { simple: { limit: 20, period: 60 } },
+            MODERATION_RATE_LIMIT: { simple: { limit: 60, period: 60 } },
+          },
           // kCurrentWorker binds SELF to this worker. The cast is type-only: the
           // `miniflare` package here and the one the pool bundles are the same
           // runtime instance but declare distinct `unique symbol` types.

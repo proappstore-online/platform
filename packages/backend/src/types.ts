@@ -10,6 +10,10 @@ export interface Env {
   /** Per-(app, client IP) limit on anonymous registered-action calls (#211):
    *  120 per 60 s, declared as an unsafe `ratelimit` binding in wrangler.toml. */
   PUBLIC_ACTION_RATE_LIMIT: RateLimit;
+  /** /v1/ai/* requests: 20 per minute per user (#218). Callers fail open if absent. */
+  AI_RATE_LIMIT: RateLimit;
+  /** Moderation model calls: 60 per minute per user, key `mod:{userId}` (#218). Callers fail open if absent. */
+  MODERATION_RATE_LIMIT: RateLimit;
   /** Durable Object namespace for realtime rooms. */
   ROOM: DurableObjectNamespace;
   STRIPE_SECRET_KEY: string;

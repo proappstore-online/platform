@@ -4,9 +4,44 @@ import { testToken, TEST_SK, makeEnv as sharedMakeEnv } from '../test-helpers.js
 
 const TOK = await testToken('gh:1');
 
-function makeEnv(aiRun?: (model: string, inputs: Record<string, unknown>) => Promise<unknown>) {
+/**
+ * A D1 fake for the #218 daily budget, matching the real statement's semantics:
+ * insert, or increment only while the result stays within the cap (RETURNING
+ * nothing when it would not). `fail` makes D1 throw.
+ */
+function budgetDb(opts: { fail?: boolean } = {}) {
+  const used = new Map<string, number>();
+  const prepare = vi.fn((sql: string) => ({
+    bind: (...args: unknown[]) => ({
+      first: async () => {
+        if (opts.fail) throw new Error('D1_ERROR: database unavailable');
+        if (!sql.includes('INSERT INTO ai_daily_budget')) return null;
+        const [userId, date, units, cap] = args as [string, string, number, number];
+        const key = `${userId}|${date}`;
+        const current = used.get(key);
+        if (current === undefined) { used.set(key, units); return { units_used: units }; }
+        if (current + units > cap) return null;
+        used.set(key, current + units);
+        return { units_used: current + units };
+      },
+    }),
+  }));
+  return { prepare, used } as unknown as D1Database & { prepare: typeof prepare; used: Map<string, number> };
+}
+
+/** The ratelimit binding contract: `limit` successes per key, then refusals. */
+function limiter(limit: number) {
+  const counts = new Map<string, number>();
+  return { limit: vi.fn(async ({ key }: { key: string }) => {
+    const n = (counts.get(key) ?? 0) + 1;
+    counts.set(key, n);
+    return { success: n <= limit };
+  }) };
+}
+
+function makeEnv(aiRun?: (model: string, inputs: Record<string, unknown>) => Promise<unknown>, overrides: Record<string, unknown> = {}) {
   return sharedMakeEnv({
-    DB: { prepare: vi.fn() } as unknown as D1Database,
+    DB: budgetDb(),
     STRIPE_SECRET_KEY: 'sk',
     STRIPE_WEBHOOK_SECRET: 'whsec',
     CF_API_TOKEN: 'tok',
@@ -16,6 +51,7 @@ function makeEnv(aiRun?: (model: string, inputs: Record<string, unknown>) => Pro
     AI: {
       run: aiRun ?? (async () => ({ response: 'default mock response' })),
     },
+    ...overrides,
   });
 }
 
@@ -308,5 +344,105 @@ describe('POST /v1/ai/embed', () => {
       makeEnv(aiRun),
     );
     expect(aiRun).toHaveBeenCalledWith('@cf/baai/bge-base-en-v1.5', expect.any(Object));
+  });
+});
+
+// #218 (child of #27): Workers AI spend bounds on /v1/ai/*.
+describe('Workers AI spend bounds (#218)', () => {
+  const generate = (body: Record<string, unknown>, env: ReturnType<typeof makeEnv>, token = TOK) => app.request(
+    '/v1/ai/generate',
+    { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+    env,
+  );
+  const embed = (items: number, env: ReturnType<typeof makeEnv>) => app.request(
+    '/v1/ai/embed',
+    { method: 'POST', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ text: Array.from({ length: items }, (_, i) => `t${i}`) }) },
+    env,
+  );
+  afterEach(() => vi.useRealTimers());
+
+  it('per-minute: the 20th call passes, the 21st is 429 with Retry-After 60 and never reaches the model', async () => {
+    const run = vi.fn(async () => ({ response: 'ok' }));
+    const env = makeEnv(run, { AI_RATE_LIMIT: limiter(20) });
+    for (let i = 0; i < 20; i++) expect((await generate({ prompt: 'hi' }, env)).status).toBe(200);
+    const over = await generate({ prompt: 'hi' }, env);
+    expect(over.status).toBe(429);
+    expect(over.headers.get('Retry-After')).toBe('60');
+    expect(await over.json()).toMatchObject({ error: 'rate_limited' });
+    expect(run).toHaveBeenCalledTimes(20);
+  });
+
+  it('per-minute limit is keyed per user', async () => {
+    const env = makeEnv(undefined, { AI_RATE_LIMIT: limiter(1) });
+    expect((await generate({ prompt: 'a' }, env)).status).toBe(200);
+    expect((await generate({ prompt: 'a' }, env)).status).toBe(429);
+    expect((await generate({ prompt: 'a' }, env, await testToken('gh:2'))).status).toBe(200);
+  });
+
+  it('daily budget applies the weights: smart = 5, fast = 1, embed = 1 per 10 items (min 1)', async () => {
+    const env = makeEnv();
+    const db = env.DB as unknown as { used: Map<string, number> };
+    const today = new Date().toISOString().slice(0, 10);
+    await generate({ prompt: 'x', model: 'smart' }, env);
+    expect(db.used.get(`gh:1|${today}`)).toBe(5);
+    await generate({ prompt: 'x', model: 'fast' }, env);
+    expect(db.used.get(`gh:1|${today}`)).toBe(6);
+    await embed(1, env);
+    expect(db.used.get(`gh:1|${today}`)).toBe(7);
+    await embed(25, env);
+    expect(db.used.get(`gh:1|${today}`)).toBe(10);
+  });
+
+  it('over the daily budget → 429 quota_exceeded with Retry-After until UTC midnight, and the model is not called', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-26T23:00:00Z'));
+    const run = vi.fn(async () => ({ response: 'ok' }));
+    const env = makeEnv(run);
+    for (let i = 0; i < 40; i++) expect((await generate({ prompt: 'x', model: 'smart' }, env)).status).toBe(200); // 200 units
+    const over = await generate({ prompt: 'x', model: 'fast' }, env);
+    expect(over.status).toBe(429);
+    expect(await over.json()).toMatchObject({ error: 'quota_exceeded' });
+    expect(over.headers.get('Retry-After')).toBe('3600');
+    expect(run).toHaveBeenCalledTimes(40);
+  });
+
+  it('a new UTC day resets the budget', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-26T23:59:00Z'));
+    const env = makeEnv();
+    for (let i = 0; i < 40; i++) await generate({ prompt: 'x', model: 'smart' }, env);
+    expect((await generate({ prompt: 'x' }, env)).status).toBe(429);
+    vi.setSystemTime(new Date('2026-09-27T00:00:30Z'));
+    expect((await generate({ prompt: 'x' }, env)).status).toBe(200);
+  });
+
+  it('fails closed with 503 when D1 is unavailable, and never calls the model', async () => {
+    const run = vi.fn(async () => ({ response: 'ok' }));
+    const res = await generate({ prompt: 'x' }, makeEnv(run, { DB: budgetDb({ fail: true }) }));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ error: 'budget_unavailable' });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('fails open without the AI_RATE_LIMIT binding (the daily budget still applies)', async () => {
+    const env = makeEnv(undefined, { AI_RATE_LIMIT: undefined });
+    expect((await generate({ prompt: 'x' }, env)).status).toBe(200);
+  });
+
+  it('invalid requests are refused before any limit or charge', async () => {
+    const rate = limiter(20);
+    const env = makeEnv(undefined, { AI_RATE_LIMIT: rate });
+    expect((await generate({}, env)).status).toBe(400);
+    expect((await generate({ prompt: 'x', model: 'giant' }, env)).status).toBe(400);
+    expect(rate.limit).not.toHaveBeenCalled();
+    expect((env.DB as unknown as { used: Map<string, number> }).used.size).toBe(0);
+  });
+
+  it('unaffected routes: model discovery never touches the limiter or the budget', async () => {
+    const rate = limiter(0);
+    const env = makeEnv(undefined, { AI_RATE_LIMIT: rate });
+    expect((await app.request('/v1/ai/models', {}, env)).status).toBe(200);
+    expect((await app.request('/v1/pricing', {}, env)).status).toBe(200);
+    expect(rate.limit).not.toHaveBeenCalled();
   });
 });

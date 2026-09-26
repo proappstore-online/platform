@@ -2,7 +2,8 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireAppOwner, HttpError } from '../lib/auth.js';
-import { auditModeration, moderateChunks, moderateText } from '../lib/moderation.js';
+import { auditModeration, chunkText, moderateChunks, moderateText } from '../lib/moderation.js';
+import { withinModerationRate } from '../lib/ai-budget.js';
 import type { ListingRow, ListingPatch } from './listing-types.js';
 import { rowToDto, emptyDto } from './listing-types.js';
 import {
@@ -196,6 +197,10 @@ listingsRoutes.put('/apps/:id/listing', async (c) => {
         .first<Pick<ListingRow, 'tagline' | 'long_description'>>();
       const changed = textFields.filter((k) => patch[k] !== (current?.[k] ?? null));
       if (changed.length > 0) {
+        // #218: bound moderation model calls per user.
+        if (!(await withinModerationRate(c.env, actor.id))) {
+          return c.json({ error: 'moderation_rate_limited', message: 'too many moderated submissions: try again in a minute' }, 429, { 'Retry-After': '60' });
+        }
         const moderation = await moderateText(c.env.AI, changed.map((k) => patch[k]).join('\n\n'));
         auditModeration('listing_moderation', { app_id: appId, actor: actor.id, changed_fields: changed }, moderation);
         if (moderation.verdict === 'unsafe') {
@@ -285,7 +290,12 @@ listingsRoutes.put('/apps/:id/listing-assets/:kind', async (c) => {
     // up to 200 KB) before it is stored; fail closed. Images are not moderated
     // (Llama Guard is text-only).
     if (isMd) {
-      const moderation = await moderateChunks(c.env.AI, new TextDecoder().decode(body));
+      const text = new TextDecoder().decode(body);
+      // #218: one moderation token per model call (per chunk).
+      if (!(await withinModerationRate(c.env, actor.id, Math.max(1, chunkText(text).length)))) {
+        return c.json({ error: 'moderation_rate_limited', message: 'too many moderated submissions: try again in a minute' }, 429, { 'Retry-After': '60' });
+      }
+      const moderation = await moderateChunks(c.env.AI, text);
       auditModeration('listing_asset_moderation', { app_id: appId, actor: actor.id, kind, chunks: moderation.chunks }, moderation);
       if (moderation.verdict === 'unsafe') {
         return c.json({ error: 'document rejected by content moderation', categories: moderation.categories }, 422);

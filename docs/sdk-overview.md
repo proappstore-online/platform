@@ -68,7 +68,7 @@ app.notifications.subscribe() / .unsubscribe() / .isSubscribed() / .send(userId,
 app.sms.send(to, message) / .broadcast(numbers, message)
 
 // AI (Workers AI — text, chat, embeddings)
-app.ai.generate(prompt, opts) / .chat(messages, opts) / .embed(text, opts)
+app.ai.generate(prompt, opts) / .chat(messages, opts) / .embed(text, opts)  // limits: see "Workers AI limits" below
 
 // Subscription (Stripe)
 app.subscription.status() / .openCheckout(opts) / .openPortal(returnUrl)
@@ -236,6 +236,23 @@ request. The team admin reads the trail at
 **Expiry.** A file stays until its uploader or a reviewer deletes it
 (`deleteForReview`). Delete the document once the review is decided, so the
 evidence is kept no longer than the review needs (PAS-OPS-016).
+
+## Workers AI limits
+
+`app.ai` runs Workers AI on the platform's account, so each user is bounded (#218):
+
+- **Per minute:** at most 20 `generate`/`chat`/`embed` calls per user. The 21st is a
+  `429` (`rate_limited`) with `Retry-After: 60`.
+- **Per day:** 200 weighted units per user per UTC day. `smart` (70B) costs 5, `fast`
+  costs 1, and embeddings cost 1 per 10 items (minimum 1). Over budget is a `429`
+  (`quota_exceeded`) with `Retry-After` set to the seconds until UTC midnight.
+- The budget is charged only for a valid request, just before the model runs. If
+  the budget check is unavailable, the call is a `503` (`budget_unavailable`),
+  fail-closed.
+
+Platform content moderation (listings, the services marketplace) is bounded
+separately, at 60 model calls per user per minute (`429` `moderation_rate_limited`).
+It never uses your app's AI budget.
 
 ## Notifying another user (push or email)
 

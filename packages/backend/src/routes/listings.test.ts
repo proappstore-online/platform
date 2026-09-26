@@ -432,3 +432,32 @@ describe('PUT /v1/apps/:id/listing-assets — SVG refused (#216)', () => {
     expect(await res.text()).toBe('content-type must be an image (png/jpeg/webp)');
   });
 });
+
+// #218: listing text and document moderation are bounded per user.
+describe('listing moderation call bound (#218)', () => {
+  const refuse = { limit: vi.fn(async () => ({ success: false })) };
+  const env = (ai: unknown, rate: unknown) => sharedMakeEnv(
+    { STORAGE: { put: vi.fn() } as unknown as R2Bucket, VAPID_PUBLIC_KEY: 'p', VAPID_PRIVATE_KEY: 'q', AI: ai, MODERATION_RATE_LIMIT: rate },
+    mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ first: { tagline: 'old', long_description: null } })),
+  );
+
+  it('a tagline change over the bound → 429, no model call, nothing written', async () => {
+    const ai = { run: vi.fn() };
+    const res = await app.request('/v1/apps/meetup/listing', {
+      method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tagline: 'new' }),
+    }, env(ai, refuse));
+    expect(res.status).toBe(429);
+    expect(ai.run).not.toHaveBeenCalled();
+  });
+
+  it('a document upload takes one token per chunk', async () => {
+    const counted = { limit: vi.fn(async () => ({ success: true })) };
+    const doc = Array.from({ length: 30 }, () => 'Lorem ipsum dolor sit amet. '.repeat(100)).join('\n\n'); // ~84 KB
+    const res = await app.request('/v1/apps/meetup/listing-assets/terms', {
+      method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'text/markdown' }, body: doc,
+    }, env({ run: vi.fn(async () => ({ response: 'safe' })) }, counted));
+    expect(res.status).toBe(200);
+    expect(counted.limit.mock.calls.length).toBeGreaterThan(1);
+    expect(counted.limit).toHaveBeenCalledWith({ key: 'mod:gh:1' });
+  });
+});

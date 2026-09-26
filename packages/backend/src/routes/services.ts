@@ -5,6 +5,7 @@ import { requireUser, HttpError } from '../lib/auth.js';
 import { internalTokenOk } from '@proappstore/build-core';
 import { Stripe } from '../lib/stripe.js';
 import { auditModeration, moderateText } from '../lib/moderation.js';
+import { withinModerationRate } from '../lib/ai-budget.js';
 
 /**
  * Services marketplace — Phase 1: developer profiles + client balances.
@@ -163,6 +164,10 @@ servicesRoutes.put('/services/profile', async (c) => {
       const current = await c.env.DB.prepare('SELECT bio_services FROM dev_profiles WHERE creator_id = ?')
         .bind(user.id).first<{ bio_services: string | null }>();
       if (body.bioServices !== (current?.bio_services ?? null)) {
+        // #218: bound moderation model calls per user.
+        if (!(await withinModerationRate(c.env, user.id))) {
+          return c.json({ error: 'moderation_rate_limited', message: 'too many moderated submissions: try again in a minute' }, 429, { 'Retry-After': '60' });
+        }
         const moderation = await moderateText(c.env.AI, body.bioServices);
         auditModeration('dev_profile_moderation', { actor: user.id }, moderation);
         if (moderation.verdict === 'unsafe') {

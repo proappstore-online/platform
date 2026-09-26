@@ -462,3 +462,47 @@ describe('POST /v1/services/requests — Workers AI moderation (#217)', () => {
     expect(ai.run).not.toHaveBeenCalled();
   });
 });
+
+// #218: moderation model calls are bounded per user (key mod:{userId}), so
+// refused build requests can no longer generate unlimited model calls.
+describe('POST /v1/services/requests — moderation call bound (#218)', () => {
+  const bound = (limit: number) => {
+    const counts = new Map<string, number>();
+    return { limit: vi.fn(async ({ key }: { key: string }) => { const n = (counts.get(key) ?? 0) + 1; counts.set(key, n); return { success: n <= limit }; }) };
+  };
+  const post = (description: string, rate: unknown) => {
+    const db = mockD1(mockStmt({ first: { c: 0 } }));
+    const ai = { run: vi.fn(async () => ({ response: 'unsafe\nS1' })) };
+    return { ai, db, res: app.request('/v1/services/requests', {
+      method: 'POST', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'T', description }),
+    }, env({ AI: ai, MODERATION_RATE_LIMIT: rate }, db)) };
+  };
+
+  it('over the bound → 429 with Retry-After 60 before any model call; keyed mod:{userId}', async () => {
+    const rate = bound(3);
+    for (let i = 0; i < 3; i++) expect((await post('spam', rate).res).status).toBe(422); // refused by moderation, but counted
+    const { ai, res } = post('spam', rate);
+    const over = await res;
+    expect(over.status).toBe(429);
+    expect(over.headers.get('Retry-After')).toBe('60');
+    expect(await over.json()).toMatchObject({ error: 'moderation_rate_limited' });
+    expect(ai.run).not.toHaveBeenCalled();
+    expect(rate.limit.mock.calls.every(([arg]) => (arg as { key: string }).key === 'mod:gh:1')).toBe(true);
+  });
+
+  it('a chunked description takes exactly one token per model call', async () => {
+    const rate = bound(60);
+    const { ai, res } = post('Calendar and payments. '.repeat(430), rate); // ~9.9K chars → several chunks
+    ai.run.mockResolvedValue({ response: 'safe' }); // every chunk is checked
+    expect((await res).status).toBe(201);
+    expect(ai.run.mock.calls.length).toBeGreaterThan(1);
+    expect(rate.limit).toHaveBeenCalledTimes(ai.run.mock.calls.length);
+  });
+
+  it('fails open without the MODERATION_RATE_LIMIT binding', async () => {
+    const { ai, res } = post('spam', undefined);
+    expect((await res).status).toBe(422); // moderation still runs
+    expect(ai.run).toHaveBeenCalled();
+  });
+});

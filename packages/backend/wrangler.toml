@@ -139,6 +139,21 @@ type = "ratelimit"
 namespace_id = "1000"
 simple = { limit = 120, period = 60 }
 
+# Workers AI spend bounds (#218). /v1/ai/*: 20 requests per minute per user.
+# namespace_id is account-unique; PWS holds 0, 2 and 1001; PAS holds 1000-1003.
+[[unsafe.bindings]]
+name = "AI_RATE_LIMIT"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 20, period = 60 }
+
+# Moderation model calls (#214/#215/#217): 60 per minute per user, key mod:{userId}.
+[[unsafe.bindings]]
+name = "MODERATION_RATE_LIMIT"
+type = "ratelimit"
+namespace_id = "1003"
+simple = { limit = 60, period = 60 }
+
 [[routes]]
 pattern = "api.proappstore.online/*"
 zone_name = "proappstore.online"
