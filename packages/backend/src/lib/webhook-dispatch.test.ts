@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
-const { dispatchWebhook, WEBHOOK_TIMEOUT_MS } = await import('./webhook-dispatch.js');
+const { dispatchWebhook, MAX_WEBHOOKS_PER_APP, WEBHOOK_TIMEOUT_MS } = await import('./webhook-dispatch.js');
 
 function fakeDb(hooks: { id: string; url: string; secret: string }[] = []) {
   const deliveries: { id: string; webhook_id: string; event: string; status: number | null }[] = [];
@@ -35,6 +35,17 @@ describe('dispatchWebhook', () => {
     const db = fakeDb([]);
     await dispatchWebhook(db, 'app1', 'notification.sent', { id: '1' });
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('dispatch is bounded at MAX_WEBHOOKS_PER_APP hooks, oldest first (#27)', async () => {
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => ({ all: async () => ({ results: [] }), run: async () => ({}) })),
+      sql,
+    }));
+    await dispatchWebhook({ prepare } as unknown as D1Database, 'app1', 'storage.uploaded', {});
+    const select = prepare.mock.results[0]!.value as { sql: string; bind: ReturnType<typeof vi.fn> };
+    expect(select.sql).toMatch(/ORDER BY created_at, id LIMIT \?3/);
+    expect(select.bind).toHaveBeenCalledWith('app1', 'storage.uploaded', MAX_WEBHOOKS_PER_APP);
   });
 
   it('delivers to registered hooks with HMAC signature', async () => {

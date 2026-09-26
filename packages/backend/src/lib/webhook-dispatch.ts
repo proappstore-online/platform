@@ -13,6 +13,14 @@
 
 export const WEBHOOK_TIMEOUT_MS = 10_000;
 
+/**
+ * Webhooks per app (#27). Every event fans out to all of an app's matching
+ * hooks, so an uncapped list turns one end-user upload into that many signed
+ * POSTs. Registration refuses past it; dispatch also stops at it, which bounds
+ * any app that registered more before the cap existed (oldest hooks win).
+ */
+export const MAX_WEBHOOKS_PER_APP = 10;
+
 export async function dispatchWebhook(
   db: D1Database,
   appId: string,
@@ -21,8 +29,9 @@ export async function dispatchWebhook(
 ): Promise<void> {
   try {
     const { results: hooks } = await db.prepare(
-      'SELECT id, url, secret FROM app_webhooks WHERE app_id = ?1 AND event = ?2 AND active = 1',
-    ).bind(appId, event).all<{ id: string; url: string; secret: string }>();
+      `SELECT id, url, secret FROM app_webhooks WHERE app_id = ?1 AND event = ?2 AND active = 1
+       ORDER BY created_at, id LIMIT ?3`,
+    ).bind(appId, event, MAX_WEBHOOKS_PER_APP).all<{ id: string; url: string; secret: string }>();
 
     if (!hooks.length) return;
 

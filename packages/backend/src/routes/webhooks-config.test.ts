@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
 import { testToken, TEST_SK, mockStmt, mockD1, makeEnv } from '../test-helpers.js';
+import { MAX_WEBHOOKS_PER_APP } from '../lib/webhook-dispatch.js';
 
 const TOK = await testToken('gh:1');
 
@@ -190,6 +191,59 @@ describe('POST /v1/apps/:appId/webhooks — register', () => {
       makeEnv({}, db),
     );
     expect(res.status).toBe(200);
+  });
+});
+
+// #27: at most MAX_WEBHOOKS_PER_APP webhooks per app, checked atomically.
+describe('POST /v1/apps/:appId/webhooks — per-app cap (#27)', () => {
+  function register(db: ReturnType<typeof mockD1>) {
+    return app.request(
+      '/v1/apps/myapp/webhooks',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event: 'storage.uploaded', url: 'https://example.com/hook' }),
+      },
+      makeEnv({}, db),
+    );
+  }
+  const capDb = (insert: ReturnType<typeof mockStmt>) => mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), insert);
+
+  it('the cap is 10', () => {
+    expect(MAX_WEBHOOKS_PER_APP).toBe(10);
+  });
+
+  it('counts and inserts in one statement, bound to the app and the cap', async () => {
+    const insert = mockStmt({ run: { meta: { changes: 1 } } });
+    const db = capDb(insert);
+    expect((await register(db)).status).toBe(200);
+    const sql = String(db.prepare.mock.calls[1]![0]);
+    expect(sql).toMatch(/INSERT INTO app_webhooks[\s\S]*SELECT[\s\S]*WHERE \(SELECT COUNT\(\*\) FROM app_webhooks WHERE app_id = \?2\) < \?6/);
+    const bind = insert.bind.mock.calls[0] as unknown[];
+    expect(bind[1]).toBe('myapp');
+    expect(bind[5]).toBe(MAX_WEBHOOKS_PER_APP);
+    expect(db.prepare).toHaveBeenCalledTimes(2); // no separate COUNT query to race
+  });
+
+  it('under the cap (the row is inserted) returns 200 with id and secret', async () => {
+    const res = await register(capDb(mockStmt({ run: { meta: { changes: 1 } } })));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ id: expect.any(String), secret: expect.any(String) });
+  });
+
+  it('at the cap (the conditional insert changes nothing) returns 422 webhook_cap_exceeded', async () => {
+    const res = await register(capDb(mockStmt({ run: { meta: { changes: 0 } } })));
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({ error: 'webhook_cap_exceeded', limit: 10 });
+  });
+
+  it('a D1 failure on the capped insert is a 500, never 200 or 422', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const insert = mockStmt();
+    insert.run.mockRejectedValue(new Error('D1_ERROR: database unavailable'));
+    const res = await register(capDb(insert));
+    expect(res.status).toBe(500);
+    vi.restoreAllMocks();
   });
 });
 

@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireAppOwner, HttpError } from '../lib/auth.js';
-import { WEBHOOK_TIMEOUT_MS } from '../lib/webhook-dispatch.js';
+import { MAX_WEBHOOKS_PER_APP, WEBHOOK_TIMEOUT_MS } from '../lib/webhook-dispatch.js';
 
 export const webhookConfigRoutes = new Hono<{ Bindings: Env }>();
 
@@ -68,9 +68,16 @@ webhookConfigRoutes.post('/apps/:appId/webhooks', async (c) => {
     const id = crypto.randomUUID();
     const secret = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
 
-    await c.env.DB.prepare(
-      'INSERT INTO app_webhooks (id, app_id, event, url, secret) VALUES (?1, ?2, ?3, ?4, ?5)',
-    ).bind(id, appId, event, url, secret).run();
+    // Count and insert in one statement: D1 has no interactive transactions, and
+    // a separate COUNT would let concurrent registrations all pass the check.
+    const inserted = await c.env.DB.prepare(
+      `INSERT INTO app_webhooks (id, app_id, event, url, secret)
+       SELECT ?1, ?2, ?3, ?4, ?5
+       WHERE (SELECT COUNT(*) FROM app_webhooks WHERE app_id = ?2) < ?6`,
+    ).bind(id, appId, event, url, secret, MAX_WEBHOOKS_PER_APP).run();
+    if (!inserted.meta.changes) {
+      return c.json({ error: 'webhook_cap_exceeded', limit: MAX_WEBHOOKS_PER_APP }, 422);
+    }
 
     return c.json({ id, secret });
   } catch (err) {
