@@ -3,6 +3,7 @@ import { app } from '../index.js';
 import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1');
+const TOK2 = await testToken('gh:2');
 
 function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
   const prepare = vi.fn();
@@ -200,5 +201,116 @@ describe('GET /v1/maps/reverse', () => {
     const body = await res.json() as { lat: number; lng: number; displayName: string; address: unknown };
     expect(body.displayName).toBe('London, England');
     expect(body.address).toEqual(nominatimResponse.address);
+  });
+});
+
+// #222: successful upstream answers are edge-cached, keyed on the upstream
+// query only, so repeated lookups never reach the shared Nominatim/OSRM servers.
+describe('maps edge cache (#222)', () => {
+  const place = [{ lat: '51.5', lon: '-0.12', display_name: 'London', address: {}, type: 'city', importance: 0.9 }];
+  const osrm = { code: 'Ok', routes: [{ geometry: { type: 'LineString', coordinates: [[0, 0], [1, 1]] }, distance: 10, duration: 5 }] };
+  const reverse = { lat: '51.5', lon: '-0.12', display_name: 'London', address: {} };
+
+  let store: Map<string, Response>;
+  const stubCache = (opts: { failMatch?: boolean; failPut?: boolean } = {}) => {
+    store = new Map();
+    const cache = {
+      match: vi.fn(async (req: Request) => {
+        if (opts.failMatch) throw new Error('cache unavailable');
+        return store.get(req.url)?.clone();
+      }),
+      put: vi.fn(async (req: Request, res: Response) => {
+        if (opts.failPut) throw new Error('cache write refused');
+        store.set(req.url, res);
+      }),
+    };
+    vi.stubGlobal('caches', { default: cache });
+    return cache;
+  };
+  const ctx = () => {
+    const pending: Promise<unknown>[] = [];
+    return { pending, waitUntil: (p: Promise<unknown>) => { pending.push(p); }, passThroughOnException: () => {} } as unknown as ExecutionContext & { pending: Promise<unknown>[] };
+  };
+  const get = async (path: string, tok = TOK, env = makeEnv()) => {
+    const x = ctx();
+    const res = await app.request(path, { headers: { Authorization: `Bearer ${tok}` } }, env, x);
+    await Promise.all(x.pending);
+    return res;
+  };
+  const upstream = (body: unknown, status = 200) => {
+    const f = vi.fn(async () => new Response(JSON.stringify(body), { status }));
+    vi.stubGlobal('fetch', f);
+    return f;
+  };
+  let log: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => { log = vi.spyOn(console, 'error').mockImplementation(() => {}); });
+  afterEach(() => { vi.unstubAllGlobals(); log.mockRestore(); });
+
+  it.each([
+    ['geocode', '/v1/maps/geocode?q=London', place],
+    ['route', '/v1/maps/route?from=51.5,-0.12&to=51.6,-0.1', osrm],
+    ['reverse', '/v1/maps/reverse?lat=51.5&lng=-0.12', reverse],
+  ])('%s: a repeated identical lookup makes one upstream request and answers identically', async (kind, path, body) => {
+    const f = upstream(body);
+    const cache = stubCache();
+    const a = await get(path);
+    const b = await get(path);
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(await b.json()).toEqual(await a.json());
+    expect(f).toHaveBeenCalledTimes(1);
+    const [key, stored] = cache.put.mock.calls[0] as [Request, Response];
+    expect(key.url).toMatch(new RegExp(`/__maps-cache/${kind}/[0-9a-f]{64}$`));
+    expect(stored.headers.get('Cache-Control')).toMatch(/^public, max-age=\d+$/);
+  });
+
+  it('keys on the query, not the user: another user gets the cached answer; another query does not', async () => {
+    const f = upstream(place);
+    stubCache();
+    await get('/v1/maps/geocode?q=London');
+    await get('/v1/maps/geocode?q=London', TOK2);
+    expect(f).toHaveBeenCalledTimes(1);
+    for (const key of store.keys()) expect(key).not.toContain('gh:');
+    await get('/v1/maps/geocode?q=Paris');
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it('never stores an upstream error or a no-route answer', async () => {
+    const cache = stubCache();
+    upstream({}, 503);
+    expect((await get('/v1/maps/geocode?q=London')).status).toBe(502);
+    upstream({ code: 'NoRoute' });
+    expect((await get('/v1/maps/route?from=1,1&to=2,2')).status).toBe(404);
+    expect(cache.put).not.toHaveBeenCalled();
+  });
+
+  it('the rate limit still applies on a cache hit', async () => {
+    upstream(place);
+    stubCache();
+    await get('/v1/maps/geocode?q=London');
+    const limited = makeEnv({}, mockD1(mockStmt({ first: { n: 100 } })));
+    expect((await get('/v1/maps/geocode?q=London', TOK, limited)).status).toBe(429);
+  });
+
+  it('portability: without a Cache API it proxies upstream every time', async () => {
+    const f = upstream(place);
+    vi.stubGlobal('caches', undefined);
+    expect((await get('/v1/maps/geocode?q=London')).status).toBe(200);
+    expect((await get('/v1/maps/geocode?q=London')).status).toBe(200);
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it('a failing cache read or write never fails the request', async () => {
+    const f = upstream(place);
+    stubCache({ failMatch: true });
+    expect((await get('/v1/maps/geocode?q=London')).status).toBe(200);
+    stubCache({ failPut: true });
+    const res = await get('/v1/maps/geocode?q=London');
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { results: unknown[] }).results).toHaveLength(1);
+    expect(f).toHaveBeenCalledTimes(2);
+    expect(log.mock.calls.map((c) => String(c[0]))).toEqual(expect.arrayContaining([
+      expect.stringContaining('[maps] cache read failed'), expect.stringContaining('[maps] cache write failed'),
+    ]));
   });
 });

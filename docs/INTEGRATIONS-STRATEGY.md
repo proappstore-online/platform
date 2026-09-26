@@ -22,6 +22,8 @@ Platform owns the credentials. One account serves all apps. Devs call an SDK met
 | Image processing | Planned | `app.images.resize/optimize` | Cloudflare Images |
 | Full-text search | Planned | `app.search.index/query` | D1 FTS5 |
 
+Maps answers are shared through the Cloudflare edge cache (#222). Geocode and reverse answers are cached for 7 days and routes for 1 day. The cache key is the upstream query only, never the user, because answers are not user-specific. Only successful answers are stored. This keeps the platform within Nominatim's usage policy, which requires caching, and every PAS app shares one upstream identity. The per-user limit of 100 requests per hour still counts cache hits. If the Cache API is missing or fails, the request goes to upstream instead.
+
 ### Tier 2: User-key vault (proxy)
 
 Dev or user brings their own API key. Platform stores it encrypted, injects it server-side. The browser never sees the key.

@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { requireUser } from '../lib/auth.js';
 import type { Env } from '../types.js';
 
@@ -6,6 +6,8 @@ import type { Env } from '../types.js';
  * Maps API — geocoding, routing, reverse geocoding proxied through the platform.
  * Uses Nominatim (OpenStreetMap) + OSRM — free, no API key needed.
  * Auth required. Rate-limited: 100 requests per user per hour.
+ * Successful answers are edge-cached (#222): Nominatim's usage policy requires
+ * caching, and every PAS app shares one upstream identity.
  */
 
 const NOMINATIM_BASE = 'https://nominatim.openstreetmap.org';
@@ -13,7 +15,49 @@ const USER_AGENT = 'ProAppStore-Platform/1.0 (https://proappstore.online)';
 const MAPS_RATE_LIMIT = 100; // per user per hour
 const MAPS_RATE_WINDOW = 3600; // seconds
 
+/** Edge-cache TTLs (#222). Places and addresses change slowly; roads a little faster. */
+export const MAPS_CACHE_TTL = { geocode: 7 * 24 * 3600, reverse: 7 * 24 * 3600, route: 24 * 3600 } as const;
+
 export const mapsRoutes = new Hono<{ Bindings: Env }>();
+
+/**
+ * Serve `produce()` from the Workers Cache API, keyed on the upstream URL only:
+ * answers are not user-specific, so one user's lookup serves the next. Only a
+ * 200 is stored. A missing or failing cache falls through to upstream — the
+ * cache saves requests, it never fails one.
+ */
+async function edgeCached(
+  c: Context<{ Bindings: Env }>,
+  kind: keyof typeof MAPS_CACHE_TTL,
+  upstreamUrl: string,
+  produce: () => Promise<Response>,
+): Promise<Response> {
+  const cache = typeof caches === 'undefined' ? undefined : caches.default;
+  let key: Request | undefined;
+  if (cache) {
+    try {
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(upstreamUrl));
+      const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+      key = new Request(`${new URL(c.req.url).origin}/__maps-cache/${kind}/${hash}`);
+      const hit = await cache.match(key);
+      // Re-wrapped: a cache match has immutable headers, and CORS middleware appends to them.
+      if (hit) return new Response(hit.body, hit);
+    } catch (err) {
+      console.error(`[maps] cache read failed kind=${kind}`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  const res = await produce();
+  if (res.status !== 200 || !cache || !key) return res;
+  const stored = new Response(await res.text(), {
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${MAPS_CACHE_TTL[kind]}` },
+  });
+  const put = cache.put(key, stored.clone()).catch((err: unknown) => {
+    console.error(`[maps] cache write failed kind=${kind}`, err instanceof Error ? err.message : err);
+  });
+  try { c.executionCtx.waitUntil(put); } catch { await put; }
+  return stored;
+}
 
 /** Rate-limit check for maps endpoints. Returns true if over limit. */
 async function isRateLimited(db: D1Database, userId: string): Promise<boolean> {
@@ -56,33 +100,35 @@ mapsRoutes.get('/maps/geocode', async (c) => {
   url.searchParams.set('limit', String(limit));
   url.searchParams.set('addressdetails', '1');
 
-  const response = await fetch(url.toString(), {
-    headers: { 'User-Agent': USER_AGENT },
+  return edgeCached(c, 'geocode', url.toString(), async () => {
+    const response = await fetch(url.toString(), {
+      headers: { 'User-Agent': USER_AGENT },
+    });
+
+    if (!response.ok) {
+      return c.json({ error: `Nominatim error: ${response.status}` }, 502);
+    }
+
+    const data = (await response.json()) as Array<{
+      lat: string;
+      lon: string;
+      display_name: string;
+      address: Record<string, string>;
+      type: string;
+      importance: number;
+    }>;
+
+    const results = data.map((r) => ({
+      lat: parseFloat(r.lat),
+      lng: parseFloat(r.lon),
+      displayName: r.display_name,
+      address: r.address,
+      type: r.type,
+      importance: r.importance,
+    }));
+
+    return c.json({ results });
   });
-
-  if (!response.ok) {
-    return c.json({ error: `Nominatim error: ${response.status}` }, 502);
-  }
-
-  const data = (await response.json()) as Array<{
-    lat: string;
-    lon: string;
-    display_name: string;
-    address: Record<string, string>;
-    type: string;
-    importance: number;
-  }>;
-
-  const results = data.map((r) => ({
-    lat: parseFloat(r.lat),
-    lng: parseFloat(r.lon),
-    displayName: r.display_name,
-    address: r.address,
-    type: r.type,
-    importance: r.importance,
-  }));
-
-  return c.json({ results });
 });
 
 /**
@@ -121,29 +167,31 @@ mapsRoutes.get('/maps/route', async (c) => {
   url.searchParams.set('overview', 'full');
   url.searchParams.set('geometries', 'geojson');
 
-  const response = await fetch(url.toString(), { headers: { 'User-Agent': USER_AGENT } });
-  if (!response.ok) {
-    return c.json({ error: `OSRM error: ${response.status}` }, 502);
-  }
+  return edgeCached(c, 'route', url.toString(), async () => {
+    const response = await fetch(url.toString(), { headers: { 'User-Agent': USER_AGENT } });
+    if (!response.ok) {
+      return c.json({ error: `OSRM error: ${response.status}` }, 502);
+    }
 
-  const data = (await response.json()) as {
-    code: string;
-    routes?: Array<{
-      geometry: { type: 'LineString'; coordinates: [number, number][] };
-      distance: number;
-      duration: number;
-    }>;
-  };
+    const data = (await response.json()) as {
+      code: string;
+      routes?: Array<{
+        geometry: { type: 'LineString'; coordinates: [number, number][] };
+        distance: number;
+        duration: number;
+      }>;
+    };
 
-  if (data.code !== 'Ok' || !data.routes?.[0]) {
-    return c.json({ error: 'No route found' }, 404);
-  }
+    if (data.code !== 'Ok' || !data.routes?.[0]) {
+      return c.json({ error: 'No route found' }, 404);
+    }
 
-  const route = data.routes[0];
-  return c.json({
-    geometry: route.geometry,
-    distanceMeters: route.distance,
-    durationSeconds: route.duration,
+    const route = data.routes[0];
+    return c.json({
+      geometry: route.geometry,
+      distanceMeters: route.distance,
+      durationSeconds: route.duration,
+    });
   });
 });
 
@@ -165,25 +213,27 @@ mapsRoutes.get('/maps/reverse', async (c) => {
   url.searchParams.set('format', 'json');
   url.searchParams.set('addressdetails', '1');
 
-  const response = await fetch(url.toString(), {
-    headers: { 'User-Agent': USER_AGENT },
-  });
+  return edgeCached(c, 'reverse', url.toString(), async () => {
+    const response = await fetch(url.toString(), {
+      headers: { 'User-Agent': USER_AGENT },
+    });
 
-  if (!response.ok) {
-    return c.json({ error: `Nominatim error: ${response.status}` }, 502);
-  }
+    if (!response.ok) {
+      return c.json({ error: `Nominatim error: ${response.status}` }, 502);
+    }
 
-  const r = (await response.json()) as {
-    lat: string;
-    lon: string;
-    display_name: string;
-    address: Record<string, string>;
-  };
+    const r = (await response.json()) as {
+      lat: string;
+      lon: string;
+      display_name: string;
+      address: Record<string, string>;
+    };
 
-  return c.json({
-    lat: parseFloat(r.lat),
-    lng: parseFloat(r.lon),
-    displayName: r.display_name,
-    address: r.address,
+    return c.json({
+      lat: parseFloat(r.lat),
+      lng: parseFloat(r.lon),
+      displayName: r.display_name,
+      address: r.address,
+    });
   });
 });
