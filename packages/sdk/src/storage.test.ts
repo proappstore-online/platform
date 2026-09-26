@@ -35,3 +35,23 @@ describe('Storage deletion', () => {
     await expect(storageWith(404).storage.delete('notes/a.txt')).resolves.toBeUndefined();
   });
 });
+
+// #208: review uploads address the server's _review namespace.
+describe('Storage review uploads', () => {
+  it('uploadForReview writes to _review/<path>', async () => {
+    const authenticatedFetch = vi.fn(async () => Response.json({ key: '_review/u/gh:1/cert.pdf', size: 4, contentType: 'application/pdf', url: '/x' }));
+    const storage = new Storage('myapp', 'https://api.proappstore.online', { token: 't', handleUnauthorized: vi.fn(), authenticatedFetch });
+    await storage.uploadForReview('cert.pdf', new Uint8Array([1]), 'application/pdf');
+    expect(authenticatedFetch.mock.calls[0]![0]).toBe('https://api.proappstore.online/v1/apps/myapp/storage/_review/cert.pdf');
+  });
+
+  it('downloadForReview and deleteForReview address _review/u/<userId>/<path> and name refusals', async () => {
+    const { storage, authenticatedFetch } = storageWith(403);
+    expect(storage.reviewUrl('gh:1', 'cert.pdf')).toBe('https://api.proappstore.online/v1/apps/myapp/storage/_review/u/gh%3A1/cert.pdf');
+    await expect(storage.downloadForReview('gh:1', 'cert.pdf')).rejects.toThrow('Not allowed to read this file.');
+    expect(authenticatedFetch).toHaveBeenCalledWith('https://api.proappstore.online/v1/apps/myapp/storage/_review/u/gh%3A1/cert.pdf');
+    await expect(storage.deleteForReview('gh:1', 'cert.pdf')).rejects.toThrow('Not allowed to delete this file.');
+    await expect(storageWith(404).storage.deleteForReview('gh:1', 'x.pdf')).rejects.toThrow('File not found.');
+    await expect(storageWith(204).storage.deleteForReview('gh:1', 'cert.pdf')).resolves.toBeUndefined();
+  });
+});

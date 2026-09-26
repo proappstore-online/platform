@@ -379,3 +379,200 @@ describe('DELETE /v1/apps/:appId/storage/* — namespaced deletion (#207)', () =
     expect(storage.delete).not.toHaveBeenCalled();
   });
 });
+
+// #208: review uploads. Readers are the uploader and live holders of the app's
+// declared review roles — never the team, never 'member', never cached.
+describe('review uploads — _review namespace, reviewer roles, audit (#208)', () => {
+  const CERT = 'myapp/_review/u/gh:1/cert.pdf';
+  type State = {
+    objects: Map<string, Uint8Array>; config: string[] | null; roles: Map<string, string[]>;
+    team: Map<string, string>; creator: string; audit: unknown[][]; auditFails: boolean;
+  };
+  let state: State;
+  beforeEach(() => {
+    state = {
+      objects: new Map(), config: ['moderator'], roles: new Map([['gh:2', ['moderator']]]),
+      team: new Map([['gh:9', 'admin']]), creator: 'gh:8', audit: [], auditFails: false,
+    };
+  });
+
+  function storage(): R2Bucket {
+    return makeStorage({
+      put: vi.fn(async (key: string, body: ArrayBuffer) => { state.objects.set(key, new Uint8Array(body)); }) as unknown as R2Bucket['put'],
+      head: vi.fn(async (key: string) => (state.objects.has(key) ? { key } : null)) as unknown as R2Bucket['head'],
+      get: vi.fn(async (key: string) => {
+        const bytes = state.objects.get(key);
+        return bytes ? { body: bytes, httpEtag: '"e"', writeHttpMetadata: (h: Headers) => h.set('content-type', 'application/pdf') } : null;
+      }) as unknown as R2Bucket['get'],
+      delete: vi.fn(async (key: string) => { state.objects.delete(key); }) as unknown as R2Bucket['delete'],
+    });
+  }
+  function db() {
+    const answer = (sql: string, args: unknown[]): { first?: unknown; all?: unknown; run?: unknown } => {
+      if (sql.includes('SELECT creator_id FROM apps')) return { first: { creator_id: state.creator } };
+      if (sql.includes('FROM team_members')) return { first: state.team.has(args[1] as string) ? { role: state.team.get(args[1] as string) } : null };
+      if (sql.includes('INSERT INTO app_storage_config')) { state.config = JSON.parse(args[1] as string); return { run: {} }; }
+      if (sql.includes('FROM app_storage_config')) return { first: state.config ? { review_roles: JSON.stringify(state.config) } : null };
+      if (sql.includes('FROM app_roles')) {
+        const [, id, , ...wanted] = args as string[];
+        return { first: (state.roles.get(id) ?? []).some((r) => wanted.includes(r)) ? { 1: 1 } : null };
+      }
+      if (sql.includes('INSERT INTO storage_review_access')) {
+        if (state.auditFails) throw new Error('D1 unavailable');
+        state.audit.push(args); return { run: {} };
+      }
+      if (sql.includes('FROM storage_review_access')) {
+        return { all: { results: state.audit.map(([, owner_id, path, actor_id, action, created_at]) => ({ owner_id, path, actor_id, action, created_at })) } };
+      }
+      return {};
+    };
+    return {
+      prepare: (sql: string) => ({
+        bind: (...args: unknown[]) => ({
+          first: async () => answer(sql, args).first ?? null,
+          all: async () => answer(sql, args).all ?? { results: [] },
+          run: async () => answer(sql, args).run ?? { meta: {} },
+        }),
+      }),
+    } as unknown as ReturnType<typeof mockD1>;
+  }
+  const env = () => makeEnv({ STORAGE: storage() }, db());
+  const req = (method: string, path: string, token?: string, init: RequestInit = {}) =>
+    app.request(path, { method, ...init, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init.headers as Record<string, string> ?? {}) } }, env());
+  const upload = (type = 'application/pdf', path = '_review/cert.pdf') =>
+    req('PUT', `/v1/apps/myapp/storage/${path}`, TOK, { body: new Uint8Array([37, 80, 68, 70]), headers: { 'Content-Type': type } });
+  const read = (token?: string, path = '_review/u/gh:1/cert.pdf') => req('GET', `/v1/apps/myapp/storage/${path}`, token);
+
+  it('stores an upload privately under the uploader and returns its review path; documents only', async () => {
+    const res = await upload();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ key: '_review/u/gh:1/cert.pdf', url: '/v1/apps/myapp/storage/_review/u/gh:1/cert.pdf' });
+    expect(state.objects.has(CERT)).toBe(true);
+    for (const type of ['text/html', 'application/xml', 'image/svg+xml', 'application/octet-stream']) {
+      expect((await upload(type, '_review/x')).status, type).toBe(400);
+    }
+  });
+
+  it('a user without the role gets 403; the declared reviewer gets 200, private no-store, and is audited', async () => {
+    await upload();
+    const denied = await read(OUTSIDER);
+    expect(denied.status).toBe(403);
+    expect(state.audit).toEqual([]);
+
+    const ok = await read(TOK_B);
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get('cache-control')).toBe('private, no-store');
+    expect(ok.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(ok.headers.get('content-security-policy')).toBe("default-src 'none'; frame-ancestors 'none'");
+    expect(new Uint8Array(await ok.arrayBuffer())).toEqual(new Uint8Array([37, 80, 68, 70]));
+    expect(state.audit).toEqual([['myapp', 'gh:1', 'cert.pdf', 'gh:2', 'read', expect.any(Number)]]);
+  });
+
+  it('revocation is immediate: revoking the role, or removing it from the config, denies the next read', async () => {
+    await upload();
+    expect((await read(TOK_B)).status).toBe(200);
+    state.roles.set('gh:2', []);
+    expect((await read(TOK_B)).status).toBe(403);
+    state.roles.set('gh:2', ['moderator']);
+    state.config = ['verifier'];
+    expect((await read(TOK_B)).status).toBe(403);
+    state.config = null; // no config at all: nobody but the uploader
+    expect((await read(TOK_B)).status).toBe(403);
+  });
+
+  it('the uploader reads their own upload without an audit row', async () => {
+    await upload();
+    const res = await read(TOK);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(state.audit).toEqual([]);
+  });
+
+  it('the app team and the app creator are not reviewers', async () => {
+    await upload();
+    state.team.set('gh:3', 'admin');
+    state.creator = 'gh:3';
+    expect((await read(OUTSIDER)).status).toBe(403);
+  });
+
+  it("a stale config naming 'member' grants nothing", async () => {
+    await upload();
+    state.config = ['member'];
+    state.roles.set('gh:3', ['member']);
+    expect((await read(OUTSIDER)).status).toBe(403);
+  });
+
+  it('is never public: unauthenticated /public/_review is 404 and unauthenticated /storage/_review is 401', async () => {
+    await upload();
+    expect((await req('GET', '/v1/apps/myapp/public/_review/u/gh:1/cert.pdf')).status).toBe(404);
+    expect((await req('GET', '/v1/apps/myapp/public/u/gh:1/cert.pdf')).status).toBe(404);
+    expect((await read()).status).toBe(401);
+  });
+
+  it('an encoded user id (as the SDK sends it) addresses the same file for the uploader and the reviewer', async () => {
+    await upload();
+    expect((await read(TOK, '_review/u/gh%3A1/cert.pdf')).status).toBe(200);
+    expect((await read(TOK_B, '_review/u/gh%3A1/cert.pdf')).status).toBe(200);
+    expect(state.audit).toEqual([['myapp', 'gh:1', 'cert.pdf', 'gh:2', 'read', expect.any(Number)]]);
+    expect((await read(TOK, '_review/u/%E0%A4%A/cert.pdf')).status).toBe(400);
+  });
+
+  it('refuses a malformed review path and answers 404 for a missing file only after authorization', async () => {
+    expect((await read(TOK, '_review/cert.pdf')).status).toBe(400);
+    expect((await read(OUTSIDER, '_review/u/gh:1/nope.pdf')).status).toBe(403); // no existence oracle for strangers
+    expect((await read(TOK_B, '_review/u/gh:1/nope.pdf')).status).toBe(404);
+  });
+
+  it('fails closed when the audit cannot be written: nothing is served or deleted', async () => {
+    await upload();
+    state.auditFails = true;
+    expect((await read(TOK_B)).status).toBe(500);
+    expect((await req('DELETE', '/v1/apps/myapp/storage/_review/u/gh:1/cert.pdf', TOK_B)).status).toBe(500);
+    expect(state.objects.has(CERT)).toBe(true);
+  }, 10_000);
+
+  it('the uploader or a reviewer may delete (the reviewer audited); anyone else gets 403', async () => {
+    await upload();
+    expect((await req('DELETE', '/v1/apps/myapp/storage/_review/u/gh:1/cert.pdf', OUTSIDER)).status).toBe(403);
+    expect(state.objects.has(CERT)).toBe(true);
+    expect((await req('DELETE', '/v1/apps/myapp/storage/_review/u/gh:1/cert.pdf', TOK_B)).status).toBe(204);
+    expect(state.objects.has(CERT)).toBe(false);
+    expect(state.audit).toEqual([['myapp', 'gh:1', 'cert.pdf', 'gh:2', 'delete', expect.any(Number)]]);
+    await upload();
+    state.audit = [];
+    expect((await req('DELETE', '/v1/apps/myapp/storage/_review/u/gh:1/cert.pdf', TOK)).status).toBe(204);
+    expect(state.audit).toEqual([]);
+  });
+
+  it('storage-config: team admin declares roles; member and malformed roles are refused; others get 403', async () => {
+    const put = (token: string, review_roles: unknown) =>
+      req('PUT', '/v1/apps/myapp/storage-config', token, { body: JSON.stringify({ review_roles }), headers: { 'Content-Type': 'application/json' } });
+    const ADMIN = await testToken('gh:9');
+    const ok = await put(ADMIN, ['verifier', 'verifier', 'moderator']);
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ review_roles: ['verifier', 'moderator'] });
+    expect(state.config).toEqual(['verifier', 'moderator']);
+    expect((await put(ADMIN, ['member'])).status).toBe(400);
+    expect((await put(ADMIN, ['Bad Role'])).status).toBe(400);
+    expect((await put(ADMIN, 'moderator')).status).toBe(400);
+    expect((await put(TOK_B, ['moderator'])).status).toBe(403); // a reviewer is not the team
+    const got = await req('GET', '/v1/apps/myapp/storage-config', ADMIN);
+    expect(await got.json()).toEqual({ review_roles: ['verifier', 'moderator'] });
+  });
+
+  it('storage-review-access: the team admin reads the audit trail; a reviewer cannot', async () => {
+    await upload();
+    await read(TOK_B);
+    const trail = await req('GET', '/v1/apps/myapp/storage-review-access', await testToken('gh:9'));
+    expect(trail.status).toBe(200);
+    expect(await trail.json()).toEqual({ access: [{ owner_id: 'gh:1', path: 'cert.pdf', actor_id: 'gh:2', action: 'read', created_at: expect.any(Number) }] });
+    expect((await req('GET', '/v1/apps/myapp/storage-review-access', TOK_B)).status).toBe(403);
+  });
+
+  it('leaves the existing private namespace unchanged', async () => {
+    const put = await req('PUT', '/v1/apps/myapp/storage/notes/a.txt', TOK, { body: 'hi', headers: { 'Content-Type': 'text/plain' } });
+    expect(put.status).toBe(200);
+    expect(state.objects.has('myapp/gh:1/notes/a.txt')).toBe(true);
+    expect((await req('GET', '/v1/apps/myapp/storage/notes/a.txt', TOK)).headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+  });
+});

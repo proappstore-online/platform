@@ -56,6 +56,7 @@ app.roles.assign(userId, role) / .revoke(userId, role) / .check(role) / .myRoles
 // File storage (R2) — see "File storage deletion" below
 app.storage.upload() / .uploadPublic() / .uploadUserPublic() / .publicUrl() / .download() / .list()
 app.storage.delete(path) / .deleteUserPublic(path) / .deletePublic(key)
+app.storage.uploadForReview(path, file) / .downloadForReview(userId, path) / .reviewUrl(userId, path) / .deleteForReview(userId, path)
 
 // Maps + geocoding + routing (OpenStreetMap, no Google keys)
 app.maps.geocode(query) / .reverseGeocode(lat, lng) / .route(from, to) / .embedUrl() / .staticUrl()
@@ -191,6 +192,50 @@ prompt takedown matters, upload each version under a fresh path (for example
 `logos/<id>-<timestamp>.png`) and never overwrite a path in place: removing the
 key from your data then stops new page loads from referencing it, and the delete
 removes the bytes from the server.
+
+## Review uploads (documents for verification)
+
+Some documents should be seen by the uploader and the app's reviewers only:
+business-registration certificates, ID evidence, dispute evidence (#208).
+`app.storage.uploadForReview(path, file)` stores one privately under the
+uploader.
+
+**Who may read or delete it:**
+
+- the uploader;
+- any user who holds one of the app's **review roles**, checked live against
+  `app.roles` on every request.
+
+Nobody else can, including the app team, the app creator and platform admins.
+
+**Declaring review roles.** A team admin sets them once per app:
+
+```
+PUT /v1/apps/<appId>/storage-config   { "review_roles": ["moderator"] }
+```
+
+`member` is refused, because every signed-in user holds it. Assign the role
+itself with `app.roles.assign`. Revoking the role, or removing it from
+`review_roles`, denies the next read.
+
+**Reading.** `uploadForReview` returns `key` = `_review/u/<userId>/<path>`. Store
+it on the row under review; a reviewer then calls
+`downloadForReview(userId, path)`.
+
+**Serving.** Responses are `Cache-Control: private, no-store` with `nosniff` and a
+`default-src 'none'` CSP. There are no signed or public URLs, so access ends when
+the role does, and `/public/...` never serves these files.
+
+**Allowed types.** PDF, PNG, JPEG, WebP and HEIC only; anything else is a `400`.
+
+**Audit.** Every read or delete by someone other than the uploader is recorded
+*before* the file is served or removed. If the audit write fails, so does the
+request. The team admin reads the trail at
+`GET /v1/apps/<appId>/storage-review-access?owner=<userId>&limit=50`.
+
+**Expiry.** A file stays until its uploader or a reviewer deletes it
+(`deleteForReview`). Delete the document once the review is decided, so the
+evidence is kept no longer than the review needs (PAS-OPS-016).
 
 ## Notifying another user (push or email)
 

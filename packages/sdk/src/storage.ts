@@ -85,6 +85,44 @@ export class Storage {
     return this.upload(`_userpub/${path}`, data, contentType);
   }
 
+  /**
+   * Upload a private document for review (#208) — e.g. a registration
+   * certificate. Only you and holders of the app's declared review roles can
+   * read it; it is never public or cached. PDF, PNG, JPEG, WebP or HEIC only.
+   * The returned `key` (`_review/u/<userId>/<path>`) is what reviewers pass to
+   * downloadForReview(); store it on the row under review.
+   */
+  async uploadForReview(path: string, data: Blob | ArrayBuffer | Uint8Array, contentType?: string): Promise<UploadResult> {
+    return this.upload(`_review/${path}`, data, contentType);
+  }
+
+  /** The authenticated URL of a review upload (send the session; never usable in a bare <img src>). */
+  reviewUrl(userId: string, path: string): string {
+    return this.url(`_review/u/${encodeURIComponent(userId)}/${path}`);
+  }
+
+  /**
+   * Download a review upload — as its uploader, or as a holder of a review role.
+   * Every reviewer read is recorded in the app's audit trail. Throws
+   * 'Not allowed to read this file.' for anyone else.
+   */
+  async downloadForReview(userId: string, path: string): Promise<Response> {
+    const response = await this.auth.authenticatedFetch(this.reviewUrl(userId, path));
+    if (response.status === 401) {
+      this.auth.handleUnauthorized();
+      throw new Error('Not signed in.');
+    }
+    if (response.status === 403) throw new Error('Not allowed to read this file.');
+    if (response.status === 404) throw new Error('File not found.');
+    if (!response.ok) throw new Error(`storage.downloadForReview failed: ${response.status}`);
+    return response;
+  }
+
+  /** Delete a review upload — its uploader or a reviewer. Throws if there is no such file or you may not. */
+  async deleteForReview(userId: string, path: string): Promise<void> {
+    return this.remove(`_review/u/${encodeURIComponent(userId)}/${path}`, false);
+  }
+
   /** Get a public URL for a file (no auth needed, usable in <img src>). File must have been uploaded with uploadPublic(). */
   publicUrl(path: string): string {
     return `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/public/${path}`;
