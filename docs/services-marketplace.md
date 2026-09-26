@@ -91,6 +91,27 @@ For Tier 2+ status, publishers should commit to:
 None of this exists in v0. It lands when the catalog is big enough that
 trust signals matter (~10+ Tailored templates).
 
+## Content moderation
+
+Two parts of the marketplace are public and written by any signed-in user: open
+**build requests** (`POST /v1/services/requests`: title and description, listed by
+`GET /v1/services/requests`) and **developer bios** (`PUT /v1/services/profile`:
+`bioServices`, shown by `GET /v1/services/developers`). Both are checked by Workers AI
+(Llama Guard) before they are stored (#217):
+
+- A request's title and description are moderated together. Long descriptions are
+  split into chunks of at most 8,000 characters. Validation and the
+  five-open-requests cap run first and never reach the model.
+- A bio is moderated only when it changes to a new, non-empty value. Rate and
+  availability updates never reach the model.
+- Unsafe text is a `422` with the categories. A moderation failure is a `503` with
+  `Retry-After: 5`. It fails closed, and nothing is written in either case.
+- Each decision is logged (`service_request_moderation`, `dev_profile_moderation`),
+  never with the text.
+
+Rating comments and engagement messages stay private between client and developer,
+so they are not moderated.
+
 ## Decisions still open
 
 - Should the platform host any kind of escrow or hold for services

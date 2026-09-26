@@ -4,6 +4,7 @@ import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
 import { internalTokenOk } from '@proappstore/build-core';
 import { Stripe } from '../lib/stripe.js';
+import { auditModeration, moderateText } from '../lib/moderation.js';
 
 /**
  * Services marketplace — Phase 1: developer profiles + client balances.
@@ -154,6 +155,24 @@ servicesRoutes.put('/services/profile', async (c) => {
     const rate = Math.round(body.promptRateCents ?? 100);
     if (!Number.isFinite(rate) || rate < 10 || rate > 5000) return c.json({ error: 'promptRateCents must be an integer 10-5000' }, 400);
     if (body.bioServices && body.bioServices.length > 2000) return c.json({ error: 'bioServices too long (max 2000)' }, 400);
+
+    // #217: the bio is public (GET /services/developers, searchable). Moderate it
+    // only when it changes to a new non-empty value; rate/availability updates
+    // never call the model. Fail closed; nothing is written on refusal.
+    if (body.bioServices?.trim()) {
+      const current = await c.env.DB.prepare('SELECT bio_services FROM dev_profiles WHERE creator_id = ?')
+        .bind(user.id).first<{ bio_services: string | null }>();
+      if (body.bioServices !== (current?.bio_services ?? null)) {
+        const moderation = await moderateText(c.env.AI, body.bioServices);
+        auditModeration('dev_profile_moderation', { actor: user.id }, moderation);
+        if (moderation.verdict === 'unsafe') {
+          return c.json({ error: 'bio rejected by content moderation', categories: moderation.categories }, 422);
+        }
+        if (moderation.verdict === 'error') {
+          return c.text('content moderation is unavailable; try again shortly', 503, { 'Retry-After': '5' });
+        }
+      }
+    }
 
     const now = Date.now();
     await c.env.DB.prepare(

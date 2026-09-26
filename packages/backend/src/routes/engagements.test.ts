@@ -414,3 +414,51 @@ describe('DELETE /v1/services/requests/:id', () => {
     expect(res.status).toBe(401);
   });
 });
+
+// #217 (child of #27): public build requests are moderated before they are stored.
+describe('POST /v1/services/requests — Workers AI moderation (#217)', () => {
+  const post = (body: Record<string, unknown>, ai: unknown, openCount = 0) => {
+    const db = mockD1(mockStmt({ first: { c: openCount } }));
+    return { db, res: app.request('/v1/services/requests', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }, env({ AI: ai }, db)) };
+  };
+  const inserted = (db: ReturnType<typeof mockD1>) => db.sqlSeen.some((q) => q.includes('INSERT INTO build_requests'));
+
+  it('unsafe title/description → 422 with categories, and no request row', async () => {
+    const ai = { run: vi.fn(async () => ({ response: 'unsafe\nS1' })) };
+    const { db, res } = post({ title: 'Need an app', description: 'threatening text' }, ai);
+    expect((await res).status).toBe(422);
+    expect(await (await res).json()).toEqual({ error: 'request rejected by content moderation', categories: ['S1'] });
+    expect(inserted(db)).toBe(false);
+  });
+
+  it('fails closed: a model error or missing binding → 503 + Retry-After 5, no row', async () => {
+    const failing = post({ title: 'T', description: 'D' }, { run: vi.fn(async () => { throw new Error('down'); }) });
+    const r1 = await failing.res;
+    expect(r1.status).toBe(503);
+    expect(r1.headers.get('Retry-After')).toBe('5');
+    expect(inserted(failing.db)).toBe(false);
+    const missing = post({ title: 'T', description: 'D' }, undefined);
+    expect((await missing.res).status).toBe(503);
+    expect(inserted(missing.db)).toBe(false);
+  });
+
+  it('safe → 201 and stored; a long description is moderated in bounded chunks', async () => {
+    const ai = { run: vi.fn(async () => ({ response: 'safe' })) };
+    const { db, res } = post({ title: 'Booking app', description: 'Calendar and payments. '.repeat(430) }, ai); // ~9.9K chars
+    expect((await res).status).toBe(201);
+    expect(inserted(db)).toBe(true);
+    expect(ai.run.mock.calls.length).toBeGreaterThan(1);
+    for (const [, input] of ai.run.mock.calls) expect((input as { messages: { content: string }[] }).messages[0]!.content.length).toBeLessThanOrEqual(8_000);
+  });
+
+  it('cheap checks first: validation and the open-requests cap never call the model', async () => {
+    const ai = { run: vi.fn() };
+    expect((await post({ title: '', description: 'x' }, ai).res).status).toBe(400);
+    expect((await post({ title: 'T', description: 'D' }, ai, 5).res).status).toBe(429);
+    expect(ai.run).not.toHaveBeenCalled();
+  });
+});

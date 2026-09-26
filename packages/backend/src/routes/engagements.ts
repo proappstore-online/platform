@@ -4,6 +4,7 @@ import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
 import { PLATFORM_FEE_BPS, developerShareCents } from '../lib/platform-fee.js';
 import { sendEmail } from '../lib/email.js';
+import { auditModeration, moderateChunks } from '../lib/moderation.js';
 
 /**
  * Services Phase 2: engagements + service chat with per-prompt billing.
@@ -401,6 +402,19 @@ engagementRoutes.post('/services/requests', async (c) => {
       "SELECT COUNT(*) AS c FROM build_requests WHERE client_id = ? AND status = 'open'",
     ).bind(user.id).first<{ c: number }>();
     if ((openCount?.c ?? 0) >= 5) return c.json({ error: 'Too many open requests (max 5). Cancel one first.' }, 429);
+
+    // #217: any signed-in user can post, and open requests are listed publicly
+    // (GET /services/requests, proappstore.online/services). Moderate the text
+    // before it is stored — chunked, since the description can exceed one
+    // chunk — and fail closed.
+    const moderation = await moderateChunks(c.env.AI, `${body.title.trim()}\n\n${body.description.trim()}`);
+    auditModeration('service_request_moderation', { actor: user.id, chunks: moderation.chunks }, moderation);
+    if (moderation.verdict === 'unsafe') {
+      return c.json({ error: 'request rejected by content moderation', categories: moderation.categories }, 422);
+    }
+    if (moderation.verdict === 'error') {
+      return c.text('content moderation is unavailable; try again shortly', 503, { 'Retry-After': '5' });
+    }
 
     const id = crypto.randomUUID();
     const now = Date.now();
