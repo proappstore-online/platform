@@ -43,6 +43,12 @@ The proxy already exists (`app.proxy.fetch`). The key vault already exists (`app
 
 Platform fires HTTP POST on events. Devs configure webhook URLs per app in the console. Zapier, Make, n8n, and any HTTP endpoint work natively.
 
+Delivery rules (#224):
+- **Signing:** each delivery is signed (`X-Webhook-Signature`, HMAC-SHA256 of the body).
+- **Redirects are never followed:** a 3xx is recorded as the delivery status. The URL checks (HTTPS only, no private or internal hosts) run at registration, so following a redirect would bypass them. Register the final URL.
+- **Timeout:** a receiver has 10 seconds to answer. Otherwise the delivery is recorded with no status.
+- **Logging:** each failed delivery is logged as `webhook_delivery_failed` with app, webhook id, event, and status or reason. The log never includes the payload or the secret.
+
 | Event | Payload | Use case |
 |---|---|---|
 | `user.signed_up` | `{ userId, appId, login, provider }` | CRM, welcome email |

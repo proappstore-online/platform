@@ -3,7 +3,15 @@
  *
  * Fire-and-forget: callers should use `ctx.waitUntil(dispatchWebhook(...))`
  * so the response isn't blocked by delivery latency.
+ *
+ * Hardened (#224): redirects are never followed — the SSRF guard in
+ * routes/webhooks-config.ts checks the URL only at registration, so a 3xx to an
+ * internal host would bypass it — and a receiver gets WEBHOOK_TIMEOUT_MS to
+ * answer, so a hung endpoint cannot stall a caller (the scheduled-actions tick
+ * awaits delivery inline).
  */
+
+export const WEBHOOK_TIMEOUT_MS = 10_000;
 
 export async function dispatchWebhook(
   db: D1Database,
@@ -26,6 +34,7 @@ export async function dispatchWebhook(
       hooks.map(async (hook) => {
         const deliveryId = crypto.randomUUID();
         let status: number | null = null;
+        let reason: string | undefined;
 
         try {
           // HMAC-SHA256 signature
@@ -49,10 +58,24 @@ export async function dispatchWebhook(
               'X-Webhook-Event': event,
             },
             body,
+            redirect: 'manual',
+            signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
           });
           status = res.status;
-        } catch {
-          // Network error — status stays null
+          // Only the status is recorded; release the connection now.
+          await res.body?.cancel().catch(() => {});
+        } catch (err) {
+          // Network error or timeout — status stays null
+          reason = err instanceof Error && err.name === 'TimeoutError'
+            ? `timed out after ${WEBHOOK_TIMEOUT_MS} ms`
+            : (err instanceof Error ? err.message : 'network error').slice(0, 200);
+        }
+        if (status === null || status >= 300) {
+          // Never the payload or the secret.
+          console.error(JSON.stringify({
+            event: 'webhook_delivery_failed', app_id: appId, webhook_id: hook.id, webhook_event: event,
+            ...(status === null ? { reason } : { status }),
+          }));
         }
 
         // Log delivery

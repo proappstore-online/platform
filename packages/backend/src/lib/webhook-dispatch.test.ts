@@ -1,9 +1,9 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
-const { dispatchWebhook } = await import('./webhook-dispatch.js');
+const { dispatchWebhook, WEBHOOK_TIMEOUT_MS } = await import('./webhook-dispatch.js');
 
 function fakeDb(hooks: { id: string; url: string; secret: string }[] = []) {
   const deliveries: { id: string; webhook_id: string; event: string; status: number | null }[] = [];
@@ -27,7 +27,8 @@ function fakeDb(hooks: { id: string; url: string; secret: string }[] = []) {
   } as unknown as D1Database;
 }
 
-beforeEach(() => mockFetch.mockReset());
+// Block body: returning the mock would make vitest call it as a cleanup hook.
+beforeEach(() => { mockFetch.mockReset(); });
 
 describe('dispatchWebhook', () => {
   it('does nothing when no hooks are registered', async () => {
@@ -100,5 +101,85 @@ describe('dispatchWebhook', () => {
     expect(db.deliveries).toHaveLength(2);
     expect(db.deliveries[0]!.status).toBe(200);
     expect(db.deliveries[1]!.status).toBeNull();
+  });
+});
+
+// #224: never follow a redirect past the registration-time SSRF guard, and never
+// let a hung receiver stall the caller.
+describe('dispatchWebhook hardening (#224)', () => {
+  const hook = { id: 'h1', url: 'https://example.com/hook', secret: 'whsec_secret_value' };
+  let log: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => { log = vi.spyOn(console, 'error').mockImplementation(() => {}); });
+  afterEach(() => { log.mockRestore(); });
+
+  it('does not follow redirects: a 302 to an internal host is recorded, not re-POSTed', async () => {
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 302, headers: { Location: 'https://127.0.0.1/admin' } }));
+    const db = fakeDb([hook]);
+    await dispatchWebhook(db, 'app1', 'test', { x: 1 });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect((mockFetch.mock.calls[0] as [string, RequestInit])[1].redirect).toBe('manual');
+    expect(db.deliveries[0]!.status).toBe(302);
+    expect(JSON.parse(String(log.mock.calls[0]![0]))).toEqual({
+      event: 'webhook_delivery_failed', app_id: 'app1', webhook_id: 'h1', webhook_event: 'test', status: 302,
+    });
+  });
+
+  it('bounds each delivery with a timeout signal', async () => {
+    mockFetch.mockResolvedValueOnce(new Response('ok'));
+    await dispatchWebhook(fakeDb([hook]), 'app1', 'test', {});
+    const init = (mockFetch.mock.calls[0] as [string, RequestInit])[1];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(WEBHOOK_TIMEOUT_MS).toBe(10_000);
+  });
+
+  it('a hung receiver is aborted and recorded as null; the other hooks still deliver', async () => {
+    // The timeout signal is driven by hand: fire it as AbortSignal.timeout would.
+    const timeouts: AbortController[] = [];
+    const spy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      expect(ms).toBe(WEBHOOK_TIMEOUT_MS);
+      const ac = new AbortController();
+      timeouts.push(ac);
+      return ac.signal;
+    });
+    try {
+      mockFetch.mockImplementation((url: string, init: RequestInit) => {
+        if (url.includes('hung')) {
+          return new Promise((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason)));
+        }
+        return Promise.resolve(new Response('ok'));
+      });
+      const db = fakeDb([{ ...hook, id: 'hung', url: 'https://hung.example/hook' }, { ...hook, id: 'ok', url: 'https://ok.example/hook' }]);
+      const done = dispatchWebhook(db, 'app1', 'test', {});
+      await vi.waitFor(() => expect(timeouts).toHaveLength(2));
+      timeouts[0]!.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+      await done;
+      const byId = Object.fromEntries(db.deliveries.map((d) => [d.webhook_id, d.status]));
+      expect(byId).toEqual({ hung: null, ok: 200 });
+      const line = JSON.parse(String(log.mock.calls.find((c) => String(c[0]).includes('"hung"'))![0]));
+      expect(line).toMatchObject({ webhook_id: 'hung', reason: `timed out after ${WEBHOOK_TIMEOUT_MS} ms` });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('releases the response body after reading the status', async () => {
+    const res = new Response('a large body the platform never reads');
+    const cancel = vi.spyOn(res.body!, 'cancel');
+    mockFetch.mockResolvedValueOnce(res);
+    await dispatchWebhook(fakeDb([hook]), 'app1', 'test', {});
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('failure logs never contain the payload or the secret; success logs nothing', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
+    await dispatchWebhook(fakeDb([hook]), 'app1', 'test', { private_note: 'do-not-log' });
+    const text = log.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(text).toContain('connect ECONNREFUSED');
+    expect(text).not.toContain('do-not-log');
+    expect(text).not.toContain('whsec_secret_value');
+    log.mockClear();
+    mockFetch.mockResolvedValueOnce(new Response('ok'));
+    await dispatchWebhook(fakeDb([hook]), 'app1', 'test', {});
+    expect(log).not.toHaveBeenCalled();
   });
 });
