@@ -5,6 +5,8 @@ name: Prune app logs
 # D1 once automatic SDK capture is on.
 # It also prunes the append-only rate-limit ledgers (maps_usage, sms_usage,
 # notification_log) past their windows (#223).
+# And the per-day / per-window counters (app_proxy_usage, app_proxy_usage_user,
+# ai_daily_budget, license_validate_attempts, provision_attempts) the same way (#27).
 # And the webhook delivery log (webhook_deliveries): 7 days, plus rows whose
 # webhook was deleted (#27). Reported under ledgerRowsDeleted/ledgerErrors.
 #

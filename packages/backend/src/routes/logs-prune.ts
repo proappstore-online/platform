@@ -32,16 +32,29 @@ export const USAGE_RETENTION_DAYS = 90;
 export const PRUNE_BATCH_LIMIT = 10_000;
 
 /**
- * Append-only rate-limit ledgers (#223): one row per request, only ever read
- * inside a short window, never deleted before. Each lists its time column's
- * unit — a unit mix-up would delete live window rows and bypass the limit.
+ * Rate-limit ledgers and counters, only ever read inside their current window
+ * and never deleted before: the append-only per-request ledgers (#223), and the
+ * per-day / per-window counters (#27) whose migrations added a pruning index
+ * but no prune. Each lists its time column's unit — `day` is a UTC YYYY-MM-DD
+ * string — because a unit mix-up would delete live window rows and bypass the
+ * limit.
  */
-export const LEDGER_RETENTION_DAYS = 2; // > every window read: 1 h maps, UTC day SMS, 60 s push
+export const LEDGER_RETENTION_DAYS = 2; // > every window read: 60 s … 24 h, and the UTC day
 export const RATE_LIMIT_LEDGERS = [
   { table: 'maps_usage', column: 'ts', unit: 's' },
   { table: 'sms_usage', column: 'sent_at', unit: 'ms' },
   { table: 'notification_log', column: 'sent_at', unit: 's' },
+  { table: 'app_proxy_usage', column: 'day', unit: 'day' },
+  { table: 'app_proxy_usage_user', column: 'day', unit: 'day' },
+  { table: 'ai_daily_budget', column: 'date', unit: 'day' },
+  { table: 'license_validate_attempts', column: 'window_start', unit: 'ms' }, // key = caller IP
+  { table: 'provision_attempts', column: 'window_start', unit: 'ms' },
 ] as const;
+
+function ledgerCutoff(cutoffMs: number, unit: (typeof RATE_LIMIT_LEDGERS)[number]['unit']): number | string {
+  if (unit === 'day') return new Date(cutoffMs).toISOString().slice(0, 10);
+  return unit === 's' ? Math.floor(cutoffMs / 1000) : cutoffMs;
+}
 
 /**
  * Webhook delivery log (#27): one row per hook per event, holding the full
@@ -98,18 +111,17 @@ logsPruneRoutes.post('/internal/logs/prune', async (c) => {
 
   const overdue = remaining?.n ?? 0;
 
-  // Batch-bounded per table, in rowid (AUTOINCREMENT = insertion) order, so the
-  // expired rows are found first without an index on the time column. One
-  // ledger failing never blocks app-log retention or the others.
+  // Batch-bounded per table by rowid (the AUTOINCREMENT id on the ledgers; the
+  // counters have composite or text keys). One ledger failing never blocks
+  // app-log retention or the others.
   const ledgerCutoffMs = cutoffMs(now, LEDGER_RETENTION_DAYS);
   const ledgerRowsDeleted: Record<string, number> = {};
   const ledgerErrors: Record<string, string> = {};
   for (const { table, column, unit } of RATE_LIMIT_LEDGERS) {
-    const cutoff = unit === 's' ? Math.floor(ledgerCutoffMs / 1000) : ledgerCutoffMs;
     try {
       const res = await c.env.DB.prepare(
-        `DELETE FROM ${table} WHERE id IN (SELECT id FROM ${table} WHERE ${column} < ? LIMIT ?)`,
-      ).bind(cutoff, PRUNE_BATCH_LIMIT).run();
+        `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE ${column} < ? LIMIT ?)`,
+      ).bind(ledgerCutoff(ledgerCutoffMs, unit), PRUNE_BATCH_LIMIT).run();
       ledgerRowsDeleted[table] = res.meta?.changes ?? 0;
     } catch (err) {
       ledgerErrors[table] = err instanceof Error ? err.message.slice(0, 200) : 'prune failed';

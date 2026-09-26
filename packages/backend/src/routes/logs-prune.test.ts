@@ -120,6 +120,56 @@ describe('POST /v1/internal/logs/prune — rate-limit ledgers (#223)', () => {
     for (const t of ['maps_usage', 'sms_usage', 'notification_log']) expect(ledgerCall(db, t).sql).toContain('LIMIT ?');
   });
 
+  it('prunes the per-day and per-window counters (#27) on their own column and unit, by rowid', async () => {
+    const db = ledgerDb();
+    expect((await prune('internal-tok', db)).status).toBe(200);
+    const cutoff = cutoffMs(NOW, LEDGER_RETENTION_DAYS);
+    const cutoffDay = new Date(cutoff).toISOString().slice(0, 10); // UTC YYYY-MM-DD
+    expect(cutoffDay).toBe('2027-01-13'); // NOW = 2027-01-15T08:00Z, minus 2 days
+    for (const [table, column, bound] of [
+      ['app_proxy_usage', 'day', cutoffDay],
+      ['app_proxy_usage_user', 'day', cutoffDay],
+      ['ai_daily_budget', 'date', cutoffDay],
+      ['license_validate_attempts', 'window_start', cutoff], // milliseconds
+      ['provision_attempts', 'window_start', cutoff], // milliseconds
+    ] as const) {
+      const { sql, bind } = ledgerCall(db, table);
+      expect(sql).toBe(`DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE ${column} < ? LIMIT ?)`);
+      expect(bind).toEqual([bound, PRUNE_BATCH_LIMIT]);
+    }
+  });
+
+  it('keeps every counter window: retention outlives the 24 h provision window and the UTC day', () => {
+    // A day-string cutoff two days back never reaches today's or yesterday's row.
+    const cutoffDay = new Date(cutoffMs(NOW, LEDGER_RETENTION_DAYS)).toISOString().slice(0, 10);
+    const today = new Date(NOW).toISOString().slice(0, 10);
+    const yesterday = new Date(NOW - 86_400_000).toISOString().slice(0, 10);
+    expect(yesterday < cutoffDay || today < cutoffDay).toBe(false);
+    expect(LEDGER_RETENTION_DAYS * 86_400_000).toBeGreaterThan(24 * 3_600_000);
+  });
+
+  it('reports counter deletions and backlog alongside the ledgers', async () => {
+    let body = await (await prune('internal-tok', ledgerDb({ app_proxy_usage_user: 300, license_validate_attempts: 41 }))).json();
+    expect(body).toMatchObject({
+      ledgerRowsDeleted: { app_proxy_usage_user: 300, license_validate_attempts: 41, ai_daily_budget: 0, provision_attempts: 0, app_proxy_usage: 0 },
+      ledgerBacklog: false, ledgerErrors: {},
+    });
+    body = await (await prune('internal-tok', ledgerDb({ ai_daily_budget: PRUNE_BATCH_LIMIT }))).json();
+    expect(body).toMatchObject({ ledgerBacklog: true });
+  });
+
+  it('a counter failing never blocks the ledgers or the other counters', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const body = await (await prune('internal-tok', ledgerDb({
+      provision_attempts: new Error('no such table: provision_attempts'), maps_usage: 2, ai_daily_budget: 5,
+    }))).json();
+    expect(body).toMatchObject({
+      deleted: 5,
+      ledgerRowsDeleted: { maps_usage: 2, ai_daily_budget: 5 },
+      ledgerErrors: { provision_attempts: 'no such table: provision_attempts' },
+    });
+  });
+
   it('reports rows deleted per ledger; a full batch flags a backlog', async () => {
     let body = await (await prune('internal-tok', ledgerDb({ maps_usage: 40, sms_usage: 2, notification_log: 7 }))).json();
     expect(body).toMatchObject({

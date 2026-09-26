@@ -26,6 +26,8 @@ Maps answers are shared through the Cloudflare edge cache (#222). Geocode and re
 
 The per-request rate-limit ledgers are `maps_usage` (1-hour window), `sms_usage` (UTC day, in milliseconds) and `notification_log` (60 seconds). The daily `prune-app-logs` workflow deletes their rows once they are 2 days old (#223), well past every window. It deletes at most 10,000 rows per table per call. The endpoint reports rows deleted per table and whether a backlog remains. The workflow keeps draining the backlog and fails on a per-table error.
 
+The same prune covers the per-day and per-window rate-limit counters (#27), which are also read only for their current window: `app_proxy_usage` and `app_proxy_usage_user` (UTC day), `ai_daily_budget` (UTC day), `license_validate_attempts` (60 seconds, keyed by caller IP) and `provision_attempts` (1 hour or 1 day). Rows older than 2 days are deleted, so the current window is never touched.
+
 ### Tier 2: User-key vault (proxy)
 
 Dev or user brings their own API key. Platform stores it encrypted, injects it server-side. The browser never sees the key.

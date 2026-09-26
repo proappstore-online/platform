@@ -5,12 +5,14 @@ import { BASE, mockNetwork } from './helpers';
 // #223: the daily prune deletes expired rate-limit ledger rows on real D1 and
 // keeps every row a rate-limit check still reads. Units differ per table.
 const LEDGERS = ['maps_usage', 'sms_usage', 'notification_log'] as const;
+// #27: per-day / per-window rate-limit counters, pruned with the ledgers.
+const COUNTERS = ['app_proxy_usage', 'app_proxy_usage_user', 'ai_daily_budget', 'license_validate_attempts', 'provision_attempts'] as const;
 const count = async (t: string) => (await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${t}`).first<{ n: number }>())!.n;
 const prune = () => SELF.fetch(`${BASE}/v1/internal/logs/prune`, { method: 'POST', headers: { 'X-Internal-Token': env.INTERNAL_TOKEN } });
 
 beforeEach(async () => {
   mockNetwork();
-  for (const t of [...LEDGERS, 'webhook_deliveries', 'app_webhooks']) await env.DB.prepare(`DELETE FROM ${t}`).run();
+  for (const t of [...LEDGERS, ...COUNTERS, 'webhook_deliveries', 'app_webhooks']) await env.DB.prepare(`DELETE FROM ${t}`).run();
 });
 
 describe('rate-limit ledger retention against real D1', () => {
@@ -46,6 +48,7 @@ describe('rate-limit ledger retention against real D1', () => {
     const body = await (await prune()).json() as { ledgerRowsDeleted: Record<string, number> };
     expect(body.ledgerRowsDeleted).toEqual({
       maps_usage: 0, sms_usage: 0, notification_log: 0, webhook_deliveries: 0, webhook_deliveries_orphaned: 0,
+      app_proxy_usage: 0, app_proxy_usage_user: 0, ai_daily_budget: 0, license_validate_attempts: 0, provision_attempts: 0,
     });
     expect(await count('maps_usage')).toBe(1);
   });
@@ -93,5 +96,47 @@ describe('webhook delivery log retention against real D1', () => {
     // Idempotent: nothing left to delete.
     const again = await (await prune()).json() as { ledgerRowsDeleted: Record<string, number> };
     expect(again.ledgerRowsDeleted).toMatchObject({ webhook_deliveries: 0, webhook_deliveries_orphaned: 0 });
+  });
+});
+
+// #27: counters are read only for today / the current window. Past-retention
+// rows go; today's, yesterday's and every live window keep their counts.
+describe('rate-limit counter retention against real D1', () => {
+  it('deletes counters older than 2 days and keeps live windows with their counts', async () => {
+    const nowMs = Date.now();
+    const day = (daysAgo: number) => new Date(nowMs - daysAgo * 86_400_000).toISOString().slice(0, 10);
+    for (const [d, n] of [[0, 7], [1, 5], [3, 9], [10, 1]] as const) {
+      await env.DB.prepare('INSERT INTO app_proxy_usage (app_id, day, count) VALUES (?, ?, ?)').bind('demo', day(d), n).run();
+      await env.DB.prepare('INSERT INTO app_proxy_usage_user (app_id, user_id, day, count) VALUES (?, ?, ?, ?)').bind('demo', 'gh:1', day(d), n).run();
+      await env.DB.prepare('INSERT INTO ai_daily_budget (user_id, date, units_used) VALUES (?, ?, ?)').bind('gh:1', day(d), n).run();
+    }
+    const windows: [string, number, number][] = [
+      ['ip:live', nowMs - 30_000, 4], // inside its 60 s / 1 h window
+      ['user:gh:1:d', nowMs - 20 * 3_600_000, 3], // inside the 24 h window
+      ['ip:gone', nowMs - 3 * 86_400_000, 8],
+    ];
+    for (const [key, start, n] of windows) {
+      await env.DB.prepare('INSERT INTO license_validate_attempts (key, window_start, count) VALUES (?, ?, ?)').bind(key, start, n).run();
+      await env.DB.prepare('INSERT INTO provision_attempts (key, window_start, count) VALUES (?, ?, ?)').bind(key, start, n).run();
+    }
+
+    const res = await prune();
+    expect(res.status).toBe(200);
+    const body = await res.json() as { ledgerRowsDeleted: Record<string, number>; ledgerErrors: Record<string, string>; ledgerBacklog: boolean };
+    expect(body.ledgerRowsDeleted).toMatchObject({
+      app_proxy_usage: 2, app_proxy_usage_user: 2, ai_daily_budget: 2, license_validate_attempts: 1, provision_attempts: 1,
+    });
+    expect(body.ledgerErrors).toEqual({});
+    expect(body.ledgerBacklog).toBe(false);
+
+    // Today's and yesterday's counts are untouched, so the limiters still see them.
+    const today = await env.DB.prepare('SELECT count FROM app_proxy_usage_user WHERE app_id = ? AND user_id = ? AND day = ?').bind('demo', 'gh:1', day(0)).first<{ count: number }>();
+    expect(today?.count).toBe(7);
+    const budget = await env.DB.prepare('SELECT date, units_used FROM ai_daily_budget ORDER BY date DESC').all<{ date: string; units_used: number }>();
+    expect(budget.results).toEqual([{ date: day(0), units_used: 7 }, { date: day(1), units_used: 5 }]);
+    for (const t of ['license_validate_attempts', 'provision_attempts']) {
+      const rows = await env.DB.prepare(`SELECT key, count FROM ${t} ORDER BY key`).all<{ key: string; count: number }>();
+      expect(rows.results).toEqual([{ key: 'ip:live', count: 4 }, { key: 'user:gh:1:d', count: 3 }]);
+    }
   });
 });
