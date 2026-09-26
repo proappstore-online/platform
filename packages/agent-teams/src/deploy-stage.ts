@@ -554,9 +554,12 @@ async function registerMcpTools(
   if (!env.PAS_BACKEND || !env.INTERNAL_TOKEN) return; // no backend binding (dev)
 
   let tools: unknown;
+  let site: { page_meta?: unknown; sitemap?: unknown } = {};
   try {
-    const parsed = JSON.parse(raw) as { tools?: unknown };
+    const parsed = JSON.parse(raw) as { tools?: unknown; page_meta?: unknown; sitemap?: unknown };
     tools = Array.isArray(parsed?.tools) ? parsed.tools : [];
+    // page_meta / sitemap register with the tools and are replaced with them (#210).
+    site = { page_meta: parsed?.page_meta, sitemap: parsed?.sitemap };
   } catch {
     deps.logActivity('deploy', 'mcp.json is not valid JSON — skipped tool registration', ticketId);
     return;
@@ -567,7 +570,7 @@ async function registerMcpTools(
     const res = await env.PAS_BACKEND.fetch(new Request(`https://api.proappstore.online/v1/apps/${proj.slug}/tools/internal`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Internal-Token': env.INTERNAL_TOKEN },
-      body: JSON.stringify({ tools }),
+      body: JSON.stringify({ tools, ...site }),
     }));
     const r = await res.json().catch(() => ({})) as { registered?: number; schedules?: Array<{ name: string; cron: string }>; error?: string };
     if (res.ok) {

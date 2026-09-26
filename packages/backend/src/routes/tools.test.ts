@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
-import { mainStatementVerb, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_SCHEDULED_ACTIONS_PER_APP, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from './tools.js';
+import { mainStatementVerb, measureManifestCost, selectsColumn, MANIFEST_BYTES_SOFT_LIMIT, MAX_SCHEDULED_ACTIONS_PER_APP, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from './tools.js';
 import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 
 const TOK = await testToken('gh:1');
@@ -721,6 +721,98 @@ describe('the documented FTS5 sync actions register (#206)', () => {
   });
 });
 
+// #210: per-route link-preview meta and the sitemap register with the tools,
+// and only public queries that select the fields the host reads are accepted.
+describe('PUT /v1/apps/:appId/tools — page_meta and sitemap (#210)', () => {
+  const productMeta = {
+    name: 'public_product_meta', description: 'Product preview', operation: 'query', requires_auth: false,
+    sql: 'SELECT p.title, p.summary AS description, p.photo AS image_url FROM products p WHERE p.id = :id LIMIT 1',
+    params: { id: { type: 'string' } },
+  };
+  const sitemapUrls = {
+    name: 'public_sitemap_urls', description: 'Sitemap', operation: 'query', requires_auth: false,
+    sql: "SELECT '/p/' || id AS path, updated_at FROM products WHERE '/p/' || id > :cursor ORDER BY path LIMIT 500",
+    params: { cursor: { type: 'string', optional: true, default: '' } },
+  };
+  const put = (body: Record<string, unknown>, db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }))) =>
+    app.request(
+      '/v1/apps/test-app/tools',
+      { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+      makeEnv({}, db),
+    ).then(async (res) => ({ res, db, body: (await res.json()) as { error?: string; page_meta?: number; sitemap?: boolean } }));
+  const refused = async (body: Record<string, unknown>, error: string) => {
+    const r = await put({ tools: [productMeta, sitemapUrls, validTool], ...body });
+    expect(r.res.status, error).toBe(400);
+    expect(r.body.error).toContain(error);
+    expect(r.db.batch).not.toHaveBeenCalled();
+  };
+
+  it('stores valid page_meta routes and the sitemap in the same batch as the tools', async () => {
+    const { res, db, body } = await put({
+      tools: [productMeta, sitemapUrls, validTool],
+      page_meta: [{ path: '/p/:id', action: 'public_product_meta', param: 'id' }],
+      sitemap: { action: 'public_sitemap_urls' },
+    });
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({ page_meta: 1, sitemap: true });
+    expect(db.batch).toHaveBeenCalledTimes(1);
+    const sqls = db.prepare.mock.calls.map((c) => String(c[0]));
+    const insert = sqls.findIndex((q) => q.startsWith('INSERT INTO app_page_meta'));
+    expect(sqls.indexOf('DELETE FROM app_page_meta WHERE app_id = ?')).toBeGreaterThan(-1);
+    expect(sqls.indexOf('DELETE FROM app_page_meta WHERE app_id = ?')).toBeLessThan(insert);
+    expect(db.prepare.mock.results[insert]!.value.bind).toHaveBeenCalledWith('test-app', 0, '/p/:id', 'public_product_meta', 'id', expect.any(Number));
+    expect(sqls.some((q) => q.startsWith('INSERT INTO app_sitemap'))).toBe(true);
+  });
+
+  it('refuses a page_meta action that requires auth (link previews are signed out)', async () => {
+    await refused(
+      { page_meta: [{ path: '/p/:id', action: 'list_items', param: 'id' }] },
+      'page_meta[0]: action "list_items" must be a public query',
+    );
+  });
+
+  it('refuses an unknown action, a missing placeholder, an undeclared param, and missing output columns', async () => {
+    await refused({ page_meta: [{ path: '/p/:id', action: 'nope', param: 'id' }] }, 'action "nope" is not a tool in this manifest');
+    await refused({ page_meta: [{ path: '/p/list', action: 'public_product_meta', param: 'id' }] }, 'exactly one placeholder, :id');
+    await refused({ page_meta: [{ path: '/p/:id/:x', action: 'public_product_meta', param: 'id' }] }, 'exactly one placeholder, :id');
+    await refused({ page_meta: [{ path: '/p/:slug', action: 'public_product_meta', param: 'slug' }] }, 'does not declare param "slug"');
+    await refused({ page_meta: [{ path: 'p/:id', action: 'public_product_meta', param: 'id' }] }, 'path must start with /');
+    await refused({ page_meta: [{ path: '/p/<b>/:id', action: 'public_product_meta', param: 'id' }] }, 'path segments are literals');
+    const noImage = { ...productMeta, name: 'thin_meta', sql: 'SELECT title, summary AS description FROM products WHERE id = :id LIMIT 1' };
+    const r = await put({ tools: [noImage], page_meta: [{ path: '/p/:id', action: 'thin_meta', param: 'id' }] });
+    expect(r.res.status).toBe(400);
+    expect(r.body.error).toContain('must select image_url');
+  });
+
+  it('refuses a sitemap action without a cursor param, without path/updated_at, or that requires auth', async () => {
+    const noCursor = { ...sitemapUrls, name: 'no_cursor', params: {}, sql: "SELECT '/p/' || id AS path, updated_at FROM products LIMIT 500" };
+    const r = await put({ tools: [noCursor], sitemap: { action: 'no_cursor' } });
+    expect(r.res.status).toBe(400);
+    expect(r.body.error).toContain('must declare a cursor param');
+    const noUpdated = { ...sitemapUrls, name: 'no_updated', sql: "SELECT '/p/' || id AS path FROM products WHERE id > :cursor LIMIT 500" };
+    const r2 = await put({ tools: [noUpdated], sitemap: { action: 'no_updated' } });
+    expect(r2.body.error).toContain('must select updated_at');
+    await refused({ sitemap: { action: 'list_items' } }, 'sitemap: action "list_items" must be a public query');
+  });
+
+  it('registers the docs example as written', async () => {
+    const doc = readFileSync(new URL('../../../../docs/mcp-app-tools.md', import.meta.url), 'utf8');
+    const section = doc.slice(doc.indexOf('## Link previews and sitemap'), doc.indexOf('## How tools get registered'));
+    const manifest = JSON.parse(/```json\n(\{[\s\S]*?\})\n```/.exec(section)![1]!) as Record<string, unknown>;
+    const { res, body } = await put(manifest);
+    expect(res.status, body.error).toBe(200);
+    expect(body).toMatchObject({ page_meta: 1, sitemap: true });
+  });
+
+  it('selectsColumn is a light check over the SELECT list, ignoring string literals', () => {
+    expect(selectsColumn('SELECT a AS title, b FROM t', 'title')).toBe(true);
+    expect(selectsColumn('SELECT p.title FROM t p', 'title')).toBe(true);
+    expect(selectsColumn('SELECT id, title FROM t', 'title')).toBe(true);
+    expect(selectsColumn("SELECT 'title, x' AS other FROM t", 'title')).toBe(false);
+    expect(selectsColumn('SELECT subtitle FROM t', 'title')).toBe(false);
+  });
+});
+
 describe('PUT /v1/apps/:appId/tools — unscoped statement rejection (#150)', () => {
   const put = (tool: Record<string, unknown>) => app.request(
     '/v1/apps/test-app/tools',
@@ -960,11 +1052,11 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
     expect(db.batch).toHaveBeenCalledTimes(1);
   });
 
-  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset)', async () => {
+  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap reset)', async () => {
     const { res, db } = await internalPost({ tools: [] }, { 'X-Internal-Token': 'secret' });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: true, registered: 0 });
-    expect(db.batch.mock.calls[0]![0]).toHaveLength(2);
+    expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false });
+    expect(db.batch.mock.calls[0]![0]).toHaveLength(4);
     expect(db.batch.mock.calls[0]![0][1]!.bind).toHaveBeenCalledWith('test-app');
 
     const missing = await internalPost({}, { 'X-Internal-Token': 'secret' });

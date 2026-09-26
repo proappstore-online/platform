@@ -18,10 +18,14 @@ import {
   contentType,
   etagsMatch,
   getListingMeta,
+  getPageMeta,
+  getSitemapAction,
+  getSitemapUrls,
   getTenantMeta,
   isBlockedAssetPath,
   isUpdateSensitivePath,
   r2KeyFor,
+  renderSitemap,
   resolveRouteForHostname,
   securityHeaders,
   slugFromHostname,
@@ -130,6 +134,24 @@ export default {
       if (cached) return cached;
     }
 
+    // Generated sitemap (#210) when the app declares one; otherwise fall through,
+    // so an app that ships a static sitemap.xml keeps serving it.
+    if (url.pathname === "/sitemap.xml") {
+      const action = await getSitemapAction(env.DB, route.slug);
+      if (action) {
+        const urls = await getSitemapUrls(env.API, route.slug, action);
+        if (!urls) {
+          // A failing action must not publish, or cache, an empty sitemap.
+          return new Response("Sitemap temporarily unavailable", { status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "300" } });
+        }
+        const sitemap = new Response(request.method === "HEAD" ? null : renderSitemap(url.origin, urls), {
+          headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "public, max-age=3600", "X-Content-Type-Options": "nosniff" },
+        });
+        if (request.method === "GET") ctx.waitUntil(cache.put(request, sitemap.clone()));
+        return sitemap;
+      }
+    }
+
     // Compute the R2 key
     let key = r2KeyFor(route, url.pathname);
     let object = await env.APPS.get(key);
@@ -172,15 +194,20 @@ export default {
     let response = new Response(body, { status: 200, headers });
 
     // Inject crawler-visible metadata. App HTML remains the title source by
-    // default; app listing metadata supplies fallback image/description, and
-    // wildcard tenant hosts can override title/image from public org branding.
+    // default; app listing metadata supplies fallback image/description,
+    // wildcard tenant hosts can override title/image from public org branding,
+    // and a declared page_meta route overrides all three for its path (#210).
+    // Each lookup fails open; the result is cached with the page below.
     if (isHtml && request.method === "GET") {
-      const listing = await getListingMeta(env.DB, route.slug);
-      const tenant = await getTenantMeta(env.API, route.slug, route.tenant);
+      const [listing, tenant, page] = await Promise.all([
+        getListingMeta(env.DB, route.slug),
+        getTenantMeta(env.API, route.slug, route.tenant),
+        getPageMeta(env.DB, env.API, route.slug, url.pathname),
+      ]);
       response = rewriteMetaTags(response, {
-        title: tenant?.title ?? null,
-        tagline: listing?.tagline ?? null,
-        icon_url: tenant?.icon_url ?? listing?.icon_url ?? null,
+        title: page?.title ?? tenant?.title ?? null,
+        tagline: page?.description ?? listing?.tagline ?? null,
+        icon_url: page?.image_url ?? tenant?.icon_url ?? listing?.icon_url ?? null,
       }, `${url.origin}${url.pathname}`);
     }
 

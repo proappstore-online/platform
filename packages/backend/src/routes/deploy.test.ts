@@ -641,3 +641,41 @@ describe('forbiddenMigrationStatement — literal-aware, FTS5-only virtual table
     for (const sql of corpus) expect(splitMigrationStatements(sql), sql).toEqual(splitSqlStatements(sql));
   });
 });
+
+// #210: the deploy workflow sends the whole mcp.json; page_meta / sitemap must
+// reach registration, not be dropped with everything that is not `tools`.
+describe('PUT /apps/:appId/tools/oidc — page_meta is registered with the tools (#210)', () => {
+  beforeEach(async () => {
+    _resetJwksCache();
+    await makeKey();
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/.well-known/jwks')) return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
+      if (String(input).includes('/validate')) {
+        // Schema coherence (#33): every statement compiles.
+        const { statements } = JSON.parse(init!.body as string) as { statements: { id: string }[] };
+        return Response.json({ results: statements.map((st) => ({ id: st.id, ok: true })) });
+      }
+      throw new Error(`unexpected fetch: ${String(input)}`);
+    }));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('refuses page_meta naming a signed-in action, which a tools-only pass-through would have accepted', async () => {
+    const tools = [{
+      name: 'product_meta', description: 'x', operation: 'query', requires_auth: true,
+      sql: 'SELECT title, description, image_url FROM products WHERE id = :id AND owner_id = :__user_id LIMIT 1',
+      params: { id: { type: 'string' } },
+    }];
+    const res = await deployRoutes.request(
+      '/apps/aiuniversity/tools/oidc',
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await signToken()}` },
+        body: JSON.stringify({ tools, page_meta: [{ path: '/p/:id', action: 'product_meta', param: 'id' }] }),
+      },
+      { DB: mockDB, DATA_WORKER_HOST: 'acct.workers.dev', INTERNAL_TOKEN: 'internal-secret' } as never,
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('page_meta[0]: action "product_meta" must be a public query');
+  });
+});

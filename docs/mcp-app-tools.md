@@ -390,6 +390,68 @@ platform does not export app databases, but an owner running
 `wrangler d1 export` must do this first. The FTS5 index is derived data, so it
 can be rebuilt from the base table.
 
+## Link previews and sitemap (`page_meta`, `sitemap`)
+
+Link unfurlers (LinkedIn, Slack, WhatsApp) and non-rendering crawlers never run
+your JavaScript, so a title set by the SPA is invisible to them. Declare which
+paths have their own preview, and the host rewrites `<title>`, `og:title`,
+`og:description` and `og:image` for them from one of your **public** query
+actions (#210). Both keys sit at the top level of `mcp.json`, next to `tools`,
+and are registered and replaced with them.
+
+```json
+{
+  "tools": [
+    {
+      "name": "public_product_meta", "description": "Product link preview", "operation": "query",
+      "sql": "SELECT p.title, p.summary AS description, p.photo_url AS image_url FROM products p WHERE p.id = :id AND p.status = 'live' LIMIT 1",
+      "params": { "id": { "type": "string" } },
+      "requires_auth": false, "cache_ttl": 300
+    },
+    {
+      "name": "public_sitemap_urls", "description": "Sitemap URLs", "operation": "query",
+      "sql": "SELECT '/p/' || id AS path, updated_at FROM products WHERE status = 'live' AND '/p/' || id > :cursor ORDER BY path LIMIT 500",
+      "params": { "cursor": { "type": "string", "optional": true, "default": "" } },
+      "requires_auth": false, "cache_ttl": 300
+    }
+  ],
+  "page_meta": [{ "path": "/p/:id", "action": "public_product_meta", "param": "id" }],
+  "sitemap": { "action": "public_sitemap_urls" }
+}
+```
+
+**`page_meta`** is up to 20 routes; the first that matches a request path wins.
+
+- `path` is literal segments plus exactly one `:placeholder`, named by `param`.
+- `action` must be a `requires_auth: false` query in the same manifest that
+  declares `param` and selects `title`, `description` and `image_url` (as
+  columns or aliases). Registration answers `400` otherwise. The check is a
+  light scan of the SELECT list, not a parser.
+- On an uncached HTML GET for a matching path, the host calls the action with
+  the path value. Any field it returns overrides the app-level listing and
+  tenant metadata. `image_url` must be an absolute `http(s)` URL.
+- **Fail-open:** an error, an empty row, or no answer within 1.5 s serves the
+  page with app-level meta and a `200`. The rewritten page is cached with the
+  page at the edge.
+
+**`sitemap`** names a public query that returns `path` and `updated_at` and
+declares a `cursor` param. The host serves `/sitemap.xml` from it:
+
+- It pages with `cursor` set to the last row's `path` (`''` first): keyset
+  paging, `WHERE path > :cursor ORDER BY path`. It stops at an empty page, a
+  cursor that does not advance, or 20 pages.
+- `path` must be same-origin (starts with `/`). `updated_at` is epoch ms or an
+  ISO date and becomes `<lastmod>`.
+- The sitemap is cached for an hour. If the action fails, the host answers
+  `503` rather than publish an empty sitemap. With no `sitemap` declared, a
+  static `sitemap.xml` in your build is served as before.
+
+Every uncached HTML hit on a matching path costs one action call, so declare
+`cache_ttl` on these actions (see
+[Public actions: rate limit and cache](#public-actions-rate-limit-and-cache)).
+Host calls use a service binding and are not subject to the anonymous rate
+limit.
+
 ## How tools get registered
 
 There are two paths, both idempotent (re-registering replaces the app's tool set):

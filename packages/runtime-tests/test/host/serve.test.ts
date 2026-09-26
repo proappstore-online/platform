@@ -16,7 +16,7 @@ async function seedRoute(slug: string): Promise<void> {
 }
 
 beforeEach(async () => {
-  for (const t of ['routes', 'app_listings', 'apps', 'users']) await env.DB.prepare(`DELETE FROM ${t}`).run();
+  for (const t of ['routes', 'app_listings', 'apps', 'users', 'app_page_meta', 'app_sitemap']) await env.DB.prepare(`DELETE FROM ${t}`).run();
   const listed = await env.APPS.list();
   await Promise.all(listed.objects.map((o) => env.APPS.delete(o.key)));
 });
@@ -88,5 +88,76 @@ describe('host: serving a published app from R2', () => {
     expect(echo.headers['cf-connecting-ip']).toBe('203.0.113.7');
     expect(JSON.parse(echo.body)).toEqual({ email: 'a@example.com', password: 'correct-horse-battery', turnstileToken: 'tok' });
     expect(res.headers.get('Cache-Control')).toBe('no-store');
+  });
+});
+
+// #210: per-route link-preview meta and a generated sitemap, from public actions
+// the app declared — on the real rewriter, R2, D1 and edge cache. The API binding
+// answers `fixture_*` actions (stubs/echo-stub.js); anything else 500s.
+describe('host: per-route page meta and sitemap (#210)', () => {
+  const pageMeta = (slug: string, path: string, action: string, param: string, position = 0) =>
+    env.DB.prepare('INSERT INTO app_page_meta (app_id, position, path_pattern, action_name, param_name, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(slug, position, path, action, param, Date.now()).run();
+  const shell = '<!doctype html><html><head><title>Trade Port</title><meta property="og:title" content="Trade Port"></head><body></body></html>';
+
+  it('rewrites title and og tags for a matching path; the root keeps the app title', async () => {
+    await seedRoute('pm1');
+    await env.APPS.put('apps/pm1/index.html', shell);
+    await pageMeta('pm1', '/p/:id', 'fixture_product_meta', 'id');
+
+    const product = await SELF.fetch('https://pm1.proappstore.online/p/abc');
+    expect(product.status).toBe(200);
+    const html = await product.text();
+    expect(html).toContain('<title>Product abc</title>');
+    expect(html).toContain('<meta property="og:title" content="Product abc">');
+    expect(html).toContain('content="A fine product"');
+    expect(html).toContain('content="https://cdn.test/p.png"');
+
+    const root = await (await SELF.fetch('https://pm1.proappstore.online/')).text();
+    expect(root).toContain('<title>Trade Port</title>');
+    expect(root).not.toContain('Product');
+  });
+
+  it('fails open to app-level meta with a 200 when the action errors or returns no row', async () => {
+    await seedRoute('pm2');
+    await env.APPS.put('apps/pm2/index.html', shell);
+    await pageMeta('pm2', '/p/:id', 'fixture_product_meta', 'id', 0);
+    await pageMeta('pm2', '/b/:id', 'broken_meta', 'id', 1);
+    for (const path of ['/p/missing', '/b/x']) {
+      const res = await SELF.fetch(`https://pm2.proappstore.online${path}`);
+      expect(res.status, path).toBe(200);
+      const html = await res.text();
+      expect(html, path).toContain('<title>Trade Port</title>');
+      expect(html, path).not.toContain('Product');
+    }
+  });
+
+  it('serves /sitemap.xml from the declared action, paged by cursor, cached for an hour', async () => {
+    await seedRoute('sm1');
+    await env.DB.prepare('INSERT INTO app_sitemap (app_id, action_name, created_at) VALUES (?, ?, ?)').bind('sm1', 'fixture_sitemap', Date.now()).run();
+    const res = await SELF.fetch('https://sm1.proappstore.online/sitemap.xml');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toContain('application/xml');
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=3600');
+    const body = await res.text();
+    expect(body).toContain('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
+    expect(body).toContain('<loc>https://sm1.proappstore.online/p/a</loc><lastmod>2026-09-01T00:00:00.000Z</lastmod>');
+    expect(body).toContain('<loc>https://sm1.proappstore.online/p/b</loc>');
+    expect(body).toContain('<loc>https://sm1.proappstore.online/p/c&amp;d</loc>');
+  });
+
+  it('answers 503 (never an empty, cached sitemap) when the action fails; serves a static file when none is declared', async () => {
+    await seedRoute('sm2');
+    await env.DB.prepare('INSERT INTO app_sitemap (app_id, action_name, created_at) VALUES (?, ?, ?)').bind('sm2', 'broken_sitemap', Date.now()).run();
+    const broken = await SELF.fetch('https://sm2.proappstore.online/sitemap.xml');
+    expect(broken.status).toBe(503);
+    expect(broken.headers.get('Cache-Control')).toBe('no-store');
+    await broken.text();
+
+    await seedRoute('sm3');
+    await env.APPS.put('apps/sm3/sitemap.xml', '<urlset>static</urlset>');
+    const stat = await SELF.fetch('https://sm3.proappstore.online/sitemap.xml');
+    expect(stat.status).toBe(200);
+    expect(await stat.text()).toBe('<urlset>static</urlset>');
   });
 });

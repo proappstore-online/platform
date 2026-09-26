@@ -549,11 +549,87 @@ export async function validateToolSet(
   return null;
 }
 
+/** The non-tool parts of an app's mcp.json that register with it (#210). */
+export interface SiteManifest {
+  page_meta?: unknown;
+  sitemap?: unknown;
+}
+
+interface PageMetaRoute { path: string; action: string; param: string }
+
+export const MAX_PAGE_META_ROUTES = 20;
+const PATH_LITERAL = /^[A-Za-z0-9._~-]+$/;
+const PATH_PARAM = /^:([a-z_][a-z0-9_]*)$/;
+
+/**
+ * Light check that a query's SELECT list outputs `name`: as an alias (`x AS name`)
+ * or a bare / table-qualified column (`name`, `p.name`) followed by `,` or FROM.
+ * Not a SQL parser — the host tolerates a missing field at runtime (fail-open).
+ */
+export function selectsColumn(sql: string, name: string): boolean {
+  const code = sql.replace(/'(?:[^']|'')*'/g, "''");
+  return new RegExp(String.raw`(?:\bAS\s+["\x60]?${name}["\x60]?|[\s.,(]${name})\s*(?:,|\bFROM\b)`, 'i').test(code);
+}
+
+/** A public query action in this manifest, or why the reference is refused. */
+function publicQueryAction(tools: ToolManifest[], action: unknown, where: string): ToolManifest | string {
+  if (typeof action !== 'string' || !action) return `${where}: action is required`;
+  const tool = tools.find((t) => t.name === action);
+  if (!tool) return `${where}: action "${action}" is not a tool in this manifest`;
+  if (tool.requires_auth !== false || tool.operation !== 'query') {
+    return `${where}: action "${action}" must be a public query (requires_auth false) — link previews and crawlers are signed out`;
+  }
+  return tool;
+}
+
+/** Validate `page_meta` and `sitemap` against the (already validated) tools. */
+function validateSiteManifest(
+  tools: ToolManifest[],
+  site: SiteManifest,
+): { error: string } | { routes: PageMetaRoute[]; sitemap: string | null } {
+  const routes: PageMetaRoute[] = [];
+  const pageMeta = site.page_meta ?? [];
+  if (!Array.isArray(pageMeta)) return { error: 'page_meta must be an array' };
+  if (pageMeta.length > MAX_PAGE_META_ROUTES) return { error: `page_meta: max ${MAX_PAGE_META_ROUTES} routes` };
+  const seen = new Set<string>();
+  for (const [i, raw] of pageMeta.entries()) {
+    const where = `page_meta[${i}]`;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: `${where} must be an object` };
+    const { path, action, param } = raw as Record<string, unknown>;
+    if (typeof path !== 'string' || path.length > 200 || !path.startsWith('/')) return { error: `${where}: path must start with / (max 200 chars)` };
+    if (typeof param !== 'string' || !param) return { error: `${where}: param is required` };
+    const segments = path.split('/').slice(1);
+    const placeholders = segments.map((seg) => PATH_PARAM.exec(seg)?.[1]).filter((name): name is string => Boolean(name));
+    if (segments.some((seg) => !PATH_LITERAL.test(seg) && !PATH_PARAM.test(seg))) {
+      return { error: `${where}: path segments are literals ([A-Za-z0-9._~-]) or one :placeholder` };
+    }
+    if (placeholders.length !== 1 || placeholders[0] !== param) return { error: `${where}: path must contain exactly one placeholder, :${param}` };
+    if (seen.has(path)) return { error: `${where}: duplicate path ${path}` };
+    seen.add(path);
+    const tool = publicQueryAction(tools, action, where);
+    if (typeof tool === 'string') return { error: tool };
+    if (!tool.params?.[param]) return { error: `${where}: action "${tool.name}" does not declare param "${param}"` };
+    const missing = ['title', 'description', 'image_url'].filter((col) => !selectsColumn(tool.sql ?? '', col));
+    if (missing.length) return { error: `${where}: action "${tool.name}" must select ${missing.join(', ')}` };
+    routes.push({ path, action: tool.name, param });
+  }
+
+  if (site.sitemap === undefined || site.sitemap === null) return { routes, sitemap: null };
+  if (typeof site.sitemap !== 'object' || Array.isArray(site.sitemap)) return { error: 'sitemap must be an object' };
+  const tool = publicQueryAction(tools, (site.sitemap as Record<string, unknown>).action, 'sitemap');
+  if (typeof tool === 'string') return { error: tool };
+  if (!tool.params?.cursor) return { error: `sitemap: action "${tool.name}" must declare a cursor param (keyset paging: WHERE path > :cursor ORDER BY path)` };
+  const missing = ['path', 'updated_at'].filter((col) => !selectsColumn(tool.sql ?? '', col));
+  if (missing.length) return { error: `sitemap: action "${tool.name}" must select ${missing.join(', ')}` };
+  return { routes, sitemap: tool.name };
+}
+
 export async function replaceAppTools(
   db: D1Database,
   appId: string,
   tools: unknown,
   env?: Env,
+  site: SiteManifest = {},
 ): Promise<{ status: number; payload: Record<string, unknown> }> {
   if (!tools || !Array.isArray(tools)) {
     return { status: 400, payload: { error: 'tools array required' } };
@@ -571,6 +647,8 @@ export async function replaceAppTools(
   }
   const invalid = await validateToolSet(tools as ToolManifest[], env, appId, { source: 'code' });
   if (invalid) return invalid;
+  const siteResult = validateSiteManifest(tools as ToolManifest[], site);
+  if ('error' in siteResult) return { status: 400, payload: { error: siteResult.error } };
 
   // A deploy replaces the CODE tools only (#155): console-defined endpoints live
   // in the same table under source = 'console' and are never touched here — a
@@ -586,6 +664,18 @@ export async function replaceAppTools(
         "INSERT INTO app_tools (app_id, name, manifest, created_at, updated_at, source) VALUES (?, ?, ?, ?, ?, 'code')",
       ).bind(appId, tool.name, JSON.stringify(tool), now, now),
     ),
+    // Page meta and sitemap are part of the manifest (#210): replaced with it,
+    // so they can never name an action the app no longer registers.
+    db.prepare('DELETE FROM app_page_meta WHERE app_id = ?').bind(appId),
+    db.prepare('DELETE FROM app_sitemap WHERE app_id = ?').bind(appId),
+    ...siteResult.routes.map((r, i) =>
+      db.prepare(
+        'INSERT INTO app_page_meta (app_id, position, path_pattern, action_name, param_name, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ).bind(appId, i, r.path, r.action, r.param, now),
+    ),
+    ...(siteResult.sitemap
+      ? [db.prepare('INSERT INTO app_sitemap (app_id, action_name, created_at) VALUES (?, ?, ?)').bind(appId, siteResult.sitemap, now)]
+      : []),
   ];
   await db.batch(stmts);
 
@@ -615,7 +705,7 @@ export async function replaceAppTools(
   }
   return {
     status: 200,
-    payload: { ok: true, registered: tools.length, ...cost, schedules, warnings },
+    payload: { ok: true, registered: tools.length, ...cost, schedules, page_meta: siteResult.routes.length, sitemap: siteResult.sitemap !== null, warnings },
   };
 }
 
@@ -624,8 +714,8 @@ toolsRoutes.put('/apps/:appId/tools', async (c) => {
   const appId = c.req.param('appId')!;
   await requireAppOwner(c, appId);
 
-  const body = await c.req.json<{ tools?: ToolManifest[] }>().catch(() => null);
-  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools, c.env);
+  const body = await c.req.json<{ tools?: ToolManifest[] } & SiteManifest>().catch(() => null);
+  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools, c.env, { page_meta: body?.page_meta, sitemap: body?.sitemap });
   return c.json(payload, status as 200 | 400 | 422);
 });
 
@@ -642,8 +732,8 @@ toolsRoutes.post('/apps/:appId/tools/internal', async (c) => {
   if (!/^[a-z][a-z0-9-]*$/.test(appId) || appId.length > 58) {
     return c.json({ error: 'invalid app id' }, 400);
   }
-  const body = await c.req.json<{ tools?: ToolManifest[] }>().catch(() => null);
-  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools ?? [], c.env);
+  const body = await c.req.json<{ tools?: ToolManifest[] } & SiteManifest>().catch(() => null);
+  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools ?? [], c.env, { page_meta: body?.page_meta, sitemap: body?.sitemap });
   return c.json(payload, status as 200 | 400 | 422);
 });
 
@@ -715,7 +805,12 @@ toolsRoutes.delete('/apps/:appId/tools', async (c) => {
   const appId = c.req.param('appId')!;
   await requireAppOwner(c, appId);
   // Code rows only: console endpoints are removed through the audited endpoints route (#155).
-  await c.env.DB.prepare("DELETE FROM app_tools WHERE app_id = ? AND source = 'code'").bind(appId).run();
+  // Page meta and sitemap go with the code manifest that declared them (#210).
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM app_tools WHERE app_id = ? AND source = 'code'").bind(appId),
+    c.env.DB.prepare('DELETE FROM app_page_meta WHERE app_id = ?').bind(appId),
+    c.env.DB.prepare('DELETE FROM app_sitemap WHERE app_id = ?').bind(appId),
+  ]);
   return c.json({ ok: true });
 });
 

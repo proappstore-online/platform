@@ -154,14 +154,15 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
   if (data.success) {
     // ── Register MCP tools from mcp.json (if present) ──────────
     const mcpManifestPath = resolve(cwd, 'mcp.json');
-    const mcpManifest = readJsonIfExists<{ tools?: unknown[] }>(mcpManifestPath);
+    const mcpManifest = readJsonIfExists<{ tools?: unknown[]; page_meta?: unknown; sitemap?: unknown }>(mcpManifestPath);
     if (mcpManifest?.tools && Array.isArray(mcpManifest.tools) && mcpManifest.tools.length > 0) {
       process.stdout.write(`\n  Registering ${mcpManifest.tools.length} MCP tool(s)...\n`);
       try {
         const toolsRes = await fetch(`${PAS_API}/v1/apps/${appId}/tools`, {
           method: 'PUT',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tools: mcpManifest.tools }),
+          // page_meta / sitemap register with the tools and are replaced with them (#210).
+          body: JSON.stringify({ tools: mcpManifest.tools, page_meta: mcpManifest.page_meta, sitemap: mcpManifest.sitemap }),
         });
         if (toolsRes.ok) {
           const toolsData = (await toolsRes.json()) as { registered: number; schedules?: Array<{ name: string; cron: string }> };

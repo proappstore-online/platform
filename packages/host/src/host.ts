@@ -167,6 +167,144 @@ export async function getTenantMeta(
   }
 }
 
+/** Per-route link-preview metadata from an app's declared `page_meta` action (#210). */
+export interface PageMeta {
+  title: string | null;
+  description: string | null;
+  image_url: string | null;
+}
+
+export interface SitemapUrl {
+  path: string;
+  lastmod: string | null;
+}
+
+/** Page meta sits on the HTML hot path: a slow app action must not hold the page. */
+export const PAGE_META_TIMEOUT_MS = 1500;
+/** Pages fetched per sitemap build (each at most the public LIMIT of 500 rows). */
+export const SITEMAP_MAX_PAGES = 20;
+
+/** The value of the pattern's one `:param` segment if `pathname` matches it, else null. */
+export function matchPagePath(pattern: string, pathname: string): string | null {
+  const want = pattern.split("/");
+  const got = (pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname).split("/");
+  if (want.length !== got.length) return null;
+  let value: string | null = null;
+  for (let i = 0; i < want.length; i++) {
+    if (want[i]!.startsWith(":")) {
+      try {
+        value = decodeURIComponent(got[i]!);
+      } catch {
+        return null;
+      }
+      if (!value || value.length > 200) return null;
+    } else if (want[i] !== got[i]) {
+      return null;
+    }
+  }
+  return value;
+}
+
+/** POST a public action over the API binding with a timeout; its rows, or null on any failure. */
+async function callPublicAction(api: Fetcher, appId: string, action: string, params: Record<string, unknown>): Promise<Record<string, unknown>[] | null> {
+  try {
+    const res = await api.fetch(new Request(
+      `https://api.proappstore.online/v1/apps/${encodeURIComponent(appId)}/actions/${encodeURIComponent(action)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ params }),
+        signal: AbortSignal.timeout(PAGE_META_TIMEOUT_MS),
+      },
+    ));
+    if (!res.ok) return null;
+    const data = await res.json() as { rows?: unknown };
+    return Array.isArray(data.rows) ? data.rows as Record<string, unknown>[] : null;
+  } catch {
+    return null;
+  }
+}
+
+const text = (v: unknown, max: number): string | null =>
+  typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null;
+const httpUrl = (v: unknown): string | null => {
+  const s = text(v, 2000);
+  return s && /^https?:\/\//i.test(s) ? s : null;
+};
+
+/**
+ * Link-preview metadata for this path from the app's first matching `page_meta`
+ * route. Fails open like getTenantMeta: any error, timeout or empty row → null,
+ * and the page is served with app-level meta.
+ */
+export async function getPageMeta(db: D1Database, api: Fetcher, appId: string, pathname: string): Promise<PageMeta | null> {
+  let routes: { path_pattern: string; action_name: string; param_name: string }[];
+  try {
+    routes = (await db
+      .prepare("SELECT path_pattern, action_name, param_name FROM app_page_meta WHERE app_id = ?1 ORDER BY position")
+      .bind(appId)
+      .all<{ path_pattern: string; action_name: string; param_name: string }>()).results ?? [];
+  } catch {
+    return null;
+  }
+  for (const route of routes) {
+    const value = matchPagePath(route.path_pattern, pathname);
+    if (value === null) continue;
+    const row = (await callPublicAction(api, appId, route.action_name, { [route.param_name]: value }))?.[0];
+    if (!row) return null;
+    const meta = { title: text(row.title, 200), description: text(row.description, 500), image_url: httpUrl(row.image_url) };
+    return meta.title || meta.description || meta.image_url ? meta : null;
+  }
+  return null;
+}
+
+/** The app's declared sitemap action, or null when it declares none (or on error). */
+export async function getSitemapAction(db: D1Database, appId: string): Promise<string | null> {
+  try {
+    const row = await db.prepare("SELECT action_name FROM app_sitemap WHERE app_id = ?1").bind(appId).first<{ action_name: string }>();
+    return row?.action_name ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every sitemap URL from the app's action, keyset-paged by `cursor` (the last
+ * row's path) until an empty page, a cursor that does not advance, or
+ * SITEMAP_MAX_PAGES. Null when any page fails, so a broken action is never
+ * published (and cached) as an empty sitemap.
+ */
+export async function getSitemapUrls(api: Fetcher, appId: string, action: string): Promise<SitemapUrl[] | null> {
+  const urls = new Map<string, SitemapUrl>();
+  let cursor = "";
+  for (let page = 0; page < SITEMAP_MAX_PAGES; page++) {
+    const rows = await callPublicAction(api, appId, action, { cursor });
+    if (!rows) return null;
+    if (rows.length === 0) break;
+    let last = cursor;
+    for (const row of rows) {
+      const path = text(row.path, 2000);
+      // Same-origin paths only: "//host" would be protocol-relative.
+      if (!path || !path.startsWith("/") || path.startsWith("//")) continue;
+      last = path;
+      const at = typeof row.updated_at === "number" || typeof row.updated_at === "string" ? new Date(row.updated_at) : null;
+      urls.set(path, { path, lastmod: at && !Number.isNaN(at.getTime()) ? at.toISOString() : null });
+    }
+    if (last === cursor) break;
+    cursor = last;
+  }
+  return [...urls.values()];
+}
+
+const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+
+/** A sitemaps.org urlset for this origin. */
+export function renderSitemap(origin: string, urls: SitemapUrl[]): string {
+  const entries = urls.map((u) =>
+    `  <url><loc>${xml(origin + u.path)}</loc>${u.lastmod ? `<lastmod>${u.lastmod}</lastmod>` : ""}</url>`);
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries.join("\n")}${entries.length ? "\n" : ""}</urlset>\n`;
+}
+
 /**
  * Paths never served from an app's R2 prefix, whatever was uploaded.
  *
