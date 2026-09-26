@@ -5,7 +5,7 @@
 > script and commit. `node scripts/build-skills-manifest.mjs --check` is the
 > release gate: it fails CI on any drift or bundle violation.
 
-Standard version: **1.5** · MCP endpoint: `https://mcp.proappstore.online/mcp` · Manifest: [`skills/index.json`](https://github.com/proappstore-online/platform/blob/main/skills/index.json)
+Standard version: **1.6** · MCP endpoint: `https://mcp.proappstore.online/mcp` · Manifest: [`skills/index.json`](https://github.com/proappstore-online/platform/blob/main/skills/index.json)
 
 ## What is evaluated
 
@@ -28,13 +28,13 @@ Every skill is checked, deterministically and on every push, for the ten propert
 
 | Skill | Version | Mutating | Cases (by class) | Trigger prompts (+ / − / sibling) | SKILL.md | References | Bundle | Verified content digest |
 |---|---|---|---|---|---|---|---|---|
-| [`audit-proappstore-app`](https://github.com/proappstore-online/platform/blob/main/skills/audit-proappstore-app/SKILL.md) | 1.0 | no | 11 (scenario 6, blocker 5) | 5 / 5 / 3 | 9.0 KB of 12.0 KB | 17.1 KB of 32.0 KB | 44.2 KB of 64.0 KB | `1685216f9e4e` |
-| [`choose-proappstore-architecture`](https://github.com/proappstore-online/platform/blob/main/skills/choose-proappstore-architecture/SKILL.md) | 1.0 | no | 8 (scenario 5, blocker 3) | 6 / 5 / 3 | 9.2 KB of 12.0 KB | 23.0 KB of 32.0 KB | 41.1 KB of 48.0 KB | `93d3a161930d` |
-| [`create-proappstore-app`](https://github.com/proappstore-online/platform/blob/main/skills/create-proappstore-app/SKILL.md) | 1.0 | yes (dry-run → confirm) | 12 (happy 3, template 2, confirm 1, rerun 1, blocker 5) | 5 / 5 / 3 | 9.4 KB of 12.0 KB | 8.9 KB of 16.0 KB | 28.8 KB of 36.0 KB | `ad90d0b5a6b0` |
-| [`proappstore-auth-sessions-roles`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-auth-sessions-roles/SKILL.md) | 1.0 | no | 13 (scenario 9, blocker 4) | 6 / 5 / 3 | 9.2 KB of 12.0 KB | 30.2 KB of 40.0 KB | 49.5 KB of 60.0 KB | `e8a347a38974` |
-| [`proappstore-data-migrations-actions`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-data-migrations-actions/SKILL.md) | 1.0 | no | 15 (scenario 10, blocker 5) | 6 / 5 / 3 | 10.0 KB of 12.0 KB | 38.0 KB of 48.0 KB | 59.0 KB of 68.0 KB | `32e61f9a88f9` |
-| [`proappstore-publish-deploy`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-publish-deploy/SKILL.md) | 1.0 | no | 11 (scenario 6, blocker 5) | 6 / 5 / 3 | 11.1 KB of 12.0 KB | 28.0 KB of 40.0 KB | 47.9 KB of 60.0 KB | `54dd344636fc` |
-| [`proappstore-upgrade-app`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-upgrade-app/SKILL.md) | 1.0 | no | 14 (scenario 8, blocker 6) | 6 / 5 / 3 | 10.5 KB of 12.0 KB | 34.1 KB of 48.0 KB | 54.9 KB of 68.0 KB | `19caaeff8925` |
+| [`audit-proappstore-app`](https://github.com/proappstore-online/platform/blob/main/skills/audit-proappstore-app/SKILL.md) | 1.0 | no | 11 (scenario 6, blocker 5) | 5 / 5 / 3 | 9.0 KB of 12.0 KB | 17.1 KB of 32.0 KB | 44.2 KB of 64.0 KB | `a9824993e69f` |
+| [`choose-proappstore-architecture`](https://github.com/proappstore-online/platform/blob/main/skills/choose-proappstore-architecture/SKILL.md) | 1.0 | no | 8 (scenario 5, blocker 3) | 6 / 5 / 3 | 9.2 KB of 12.0 KB | 23.1 KB of 32.0 KB | 41.2 KB of 48.0 KB | `33411d9623ec` |
+| [`create-proappstore-app`](https://github.com/proappstore-online/platform/blob/main/skills/create-proappstore-app/SKILL.md) | 1.0 | yes (dry-run → confirm) | 12 (happy 3, template 2, confirm 1, rerun 1, blocker 5) | 5 / 5 / 3 | 9.4 KB of 12.0 KB | 8.9 KB of 16.0 KB | 28.8 KB of 36.0 KB | `6537637d505a` |
+| [`proappstore-auth-sessions-roles`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-auth-sessions-roles/SKILL.md) | 1.0 | no | 13 (scenario 9, blocker 4) | 6 / 5 / 3 | 9.2 KB of 12.0 KB | 30.3 KB of 40.0 KB | 49.6 KB of 60.0 KB | `9e60ae62f403` |
+| [`proappstore-data-migrations-actions`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-data-migrations-actions/SKILL.md) | 1.0 | no | 15 (scenario 10, blocker 5) | 6 / 5 / 3 | 10.0 KB of 12.0 KB | 38.1 KB of 48.0 KB | 59.1 KB of 68.0 KB | `9e46347749a1` |
+| [`proappstore-publish-deploy`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-publish-deploy/SKILL.md) | 1.0 | no | 11 (scenario 6, blocker 5) | 6 / 5 / 3 | 11.1 KB of 12.0 KB | 28.0 KB of 40.0 KB | 47.9 KB of 60.0 KB | `f742937fc195` |
+| [`proappstore-upgrade-app`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-upgrade-app/SKILL.md) | 1.0 | no | 14 (scenario 8, blocker 6) | 6 / 5 / 3 | 10.5 KB of 12.0 KB | 34.1 KB of 48.0 KB | 54.9 KB of 68.0 KB | `94167bcbc32b` |
 
 Property coverage per skill (the test that holds each property):
 

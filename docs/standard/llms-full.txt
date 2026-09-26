@@ -1,6 +1,6 @@
 # ProAppStore Recommended Application Standard — full text
 
-Version 1.5. Canonical HTML: https://docs.proappstore.online/standard/ · Data: https://docs.proappstore.online/standard/standard.json · Audit instructions: https://docs.proappstore.online/standard/audit-instructions/
+Version 1.6. Canonical HTML: https://docs.proappstore.online/standard/ · Data: https://docs.proappstore.online/standard/standard.json · Audit instructions: https://docs.proappstore.online/standard/audit-instructions/
 Clause URLs are stable: https://docs.proappstore.online/standard/<chapter page>/#<clause id in lower case>. Findings must cite them.
 
 ## Chapter STACK — Stack and platform services
@@ -652,9 +652,16 @@ Supporting links: [SDK overview — surfaces](../sdk-overview.md#surfaces), [Rec
 
 ### PAS-STACK-014 — In-app permissions use app.roles and manifest role gates
 URL: https://docs.proappstore.online/standard/stack/#pas-stack-014
-Severity: high · Verification: manual (Manual) · Enforcement: none (recommended) · Since: 1.1
+Severity: high · Verification: manual (Manual) · Enforcement: none (recommended) · Since: 1.6
 
-Rule: The app MUST manage its own users' roles with `app.roles` (`assign`, `revoke`, `check`, `myRoles`, `listAll`) and gate actions with `auth.app_roles` in `mcp.json` plus row scoping. It MUST NOT treat a role list hard-coded in the client, or a `role` column the client can set, as the authorization decision.
+Rule: The app MUST manage **app-wide** roles (capabilities that apply across the whole app, such as a site moderator) with `app.roles` (`assign`, `revoke`, `check`, `myRoles`, `listAll`) and gate the actions they unlock with `auth.app_roles` in `mcp.json` plus row scoping. Roles **scoped to a tenant row** (an organisation, company, workspace or project that end users administer themselves) MAY instead live in the app's own membership table (`<tenant>_members(tenant_id, user_id, role, …)`), provided that:
+
+- (a) every statement that depends on the role checks it in SQL against `:__user_id`;
+- (b) the role column is written only by actions whose SQL requires an `owner`/`admin` membership of the same tenant, or derives the role from a server row (an invite) in the same batch;
+- (c) the last owner of a tenant cannot be demoted, removed or leave;
+- (d) the README documents the tenant role table next to the app role table.
+
+The app MUST NOT treat a role list hard-coded in the client, or a role column the client can set directly, as the authorization decision.
 
 *
 
@@ -692,7 +699,7 @@ Remediation: Add `auth.app_roles` to each privileged action and scope its SQL; m
 
 *
 
-Tests: A user without the role gets a 403 from the action on the live app even when calling it directly through the SDK.
+Tests: A user without the role gets a 403 from the action on the live app even when calling it directly through the SDK. For a tenant role table: a member of tenant A with `admin` in A cannot change rows of tenant B; a `member` cannot write a role; the last `owner` cannot be demoted.
 
 *
 
@@ -1752,9 +1759,9 @@ Supporting links: [Browser auth session model — target model](../auth-session-
 
 ### PAS-AUTH-013 — In-app permissions use app roles, not team or platform roles
 URL: https://docs.proappstore.online/standard/auth/#pas-auth-013
-Severity: high · Verification: manual (Manual) · Enforcement: none (recommended) · Since: 1.2
+Severity: high · Verification: manual (Manual) · Enforcement: none (recommended) · Since: 1.6
 
-Rule: The app MUST gate its own users' capabilities with **app roles** (`app.roles`, `auth.app_roles` in `mcp.json`). It MUST NOT gate in-app features on **team** membership or role (who may build the app) or on **platform** roles (`creator`/`admin`), and code MUST name which scope a check belongs to.
+Rule: The app MUST gate its own users' capabilities with **app roles** (`app.roles`, `auth.app_roles` in `mcp.json`). It MUST NOT gate in-app features on **team** membership or role (who may build the app) or on **platform** roles (`creator`/`admin`), and code MUST name which scope a check belongs to. Tenant-scoped roles held in the app's own membership tables under the conditions of [PAS-STACK-014](./stack.md#pas-stack-014) are app roles for the purpose of this clause; the prohibition on team and platform roles is unchanged.
 
 *
 

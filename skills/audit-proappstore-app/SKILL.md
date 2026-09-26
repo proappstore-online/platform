@@ -7,7 +7,7 @@ metadata:
   author: proappstore-online
   version: "1.0"
   mcp-endpoint: https://mcp.proappstore.online/mcp
-  standard-version: "1.5"
+  standard-version: "1.6"
   issue: proappstore-online/platform#172
   triggers: audit, compliance, conformance, findings, clause by clause, ProAppStore
 allowed-tools: whoami app_info list_app_tools schema_status deploy_status qa_list_runs platform_guide

@@ -7,7 +7,7 @@ metadata:
   author: proappstore-online
   version: "1.0"
   mcp-endpoint: https://mcp.proappstore.online/mcp
-  standard-version: "1.5"
+  standard-version: "1.6"
   issue: proappstore-online/platform#175
   triggers: migrations, migration, registered actions, registered action, tenant, data access, ProAppStore
 allowed-tools: whoami sdk_reference recipe platform_guide app_info list_app_tools schema_status

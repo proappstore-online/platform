@@ -1,6 +1,6 @@
 # Stack and platform services
 
-**Standard version 1.5** · Chapter `STACK` · Part of the [Application Standard](./index.md)
+**Standard version 1.6** · Chapter `STACK` · Part of the [Application Standard](./index.md)
 
 **Scope.** Supported runtime and toolchain; SDK and CLI use; the platform service to use for each application need, and the substitutes that are unsupported.
 
@@ -580,9 +580,16 @@ const pusher = new Pusher('app-key', { cluster: 'ap4' })       // third-party ch
 
 ### PAS-STACK-014 — In-app permissions use app.roles and manifest role gates {#pas-stack-014}
 
-**Severity:** High · **Verification:** Manual · **Enforcement:** none (recommended) · **Since:** 1.1
+**Severity:** High · **Verification:** Manual · **Enforcement:** none (recommended) · **Since:** 1.6
 
-**Rule.** The app MUST manage its own users' roles with `app.roles` (`assign`, `revoke`, `check`, `myRoles`, `listAll`) and gate actions with `auth.app_roles` in `mcp.json` plus row scoping. It MUST NOT treat a role list hard-coded in the client, or a `role` column the client can set, as the authorization decision.
+**Rule.** The app MUST manage **app-wide** roles (capabilities that apply across the whole app, such as a site moderator) with `app.roles` (`assign`, `revoke`, `check`, `myRoles`, `listAll`) and gate the actions they unlock with `auth.app_roles` in `mcp.json` plus row scoping. Roles **scoped to a tenant row** (an organisation, company, workspace or project that end users administer themselves) MAY instead live in the app's own membership table (`<tenant>_members(tenant_id, user_id, role, …)`), provided that:
+
+- (a) every statement that depends on the role checks it in SQL against `:__user_id`;
+- (b) the role column is written only by actions whose SQL requires an `owner`/`admin` membership of the same tenant, or derives the role from a server row (an invite) in the same batch;
+- (c) the last owner of a tenant cannot be demoted, removed or leave;
+- (d) the README documents the tenant role table next to the app role table.
+
+The app MUST NOT treat a role list hard-coded in the client, or a role column the client can set directly, as the authorization decision.
 
 **Applicability.** Apps where some users can do more than others.
 
@@ -608,7 +615,7 @@ if (ADMINS.includes(app.auth.user!.id)) await app.actions.call('delete_any_post'
 
 **Remediation.** Add `auth.app_roles` to each privileged action and scope its SQL; move role membership into `app.roles`; keep client checks for UX only.
 
-**Tests.** A user without the role gets a 403 from the action on the live app even when calling it directly through the SDK.
+**Tests.** A user without the role gets a 403 from the action on the live app even when calling it directly through the SDK. For a tenant role table: a member of tenant A with `admin` in A cannot change rows of tenant B; a `member` cannot write a role; the last `owner` cannot be demoted.
 
 **Supporting links.** [Authorization model](../authorization-model.md), [MCP app tools — roles and permissions](../mcp-app-tools.md#roles-and-permissions), [Identity chapter](./auth.md).
 

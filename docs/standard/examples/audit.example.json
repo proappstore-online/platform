@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.proappstore.online/standard/finding.schema.json",
-  "standard_version": "1.5",
+  "standard_version": "1.6",
   "app_id": "tasks-demo",
   "repository": "proappstore-online/tasks-demo",
   "commit_sha": "3f9c2e1",

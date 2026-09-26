@@ -7,7 +7,7 @@ metadata:
   author: proappstore-online
   version: "1.0"
   mcp-endpoint: https://mcp.proappstore.online/mcp
-  standard-version: "1.5"
+  standard-version: "1.6"
   issue: proappstore-online/platform#171
   triggers: choose, architecture, platform services, which ProAppStore service, structure a ProAppStore, D1, KV, storage, counters, rooms
 allowed-tools: whoami sdk_reference recipe platform_guide list_templates app_info list_app_tools schema_status

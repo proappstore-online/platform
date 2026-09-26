@@ -7,7 +7,7 @@ metadata:
   author: proappstore-online
   version: "1.0"
   mcp-endpoint: https://mcp.proappstore.online/mcp
-  standard-version: "1.5"
+  standard-version: "1.6"
   issue: proappstore-online/platform#174
   triggers: publish, deploy, verify, roll back, ship, release, ProAppStore
 allowed-tools: whoami app_info list_apps deploy_status get_deploy_status schema_status list_app_tools qa_list_flows qa_run qa_list_runs qa_run_artifacts qa_flow_playwright platform_guide

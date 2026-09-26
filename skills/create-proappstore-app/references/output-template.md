@@ -6,7 +6,7 @@ section only if it is genuinely empty.
 ```markdown
 ## <App name> (`<app_id>`) — provisioned on ProAppStore
 
-**Session:** <login> (<roles>) · **Standard:** 1.5 · **Report time:** <date>
+**Session:** <login> (<roles>) · **Standard:** 1.6 · **Report time:** <date>
 
 ### Created
 - Repository: https://github.com/<org>/<app_id> (<private|public>)

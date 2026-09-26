@@ -1,6 +1,6 @@
 # Audit instructions
 
-**Standard version 1.5** · Part of the [Application Standard](./index.md) · Machine-readable: [standard.json](./standard.json) · [finding.schema.json](./finding.schema.json) · [full text](./llms-full.txt)
+**Standard version 1.6** · Part of the [Application Standard](./index.md) · Machine-readable: [standard.json](./standard.json) · [finding.schema.json](./finding.schema.json) · [full text](./llms-full.txt)
 
 This page is the reusable, tool-agnostic procedure for auditing an application
 repository against the standard. It is written to be fetched and followed by an
@@ -119,7 +119,7 @@ a follow-up to that repository — until then, copy this body.
 ### Clause
 - **Clause:** PAS-XXXX-NNN — <clause title>
 - **Clause URL:** https://docs.proappstore.online/standard/<chapter>/#pas-xxxx-nnn
-- **Standard version:** 1.5
+- **Standard version:** 1.6
 - **Severity:** critical | high | medium | low | info
 - **Verification:** automated | manual | human
 - **State:** fail | manual-review

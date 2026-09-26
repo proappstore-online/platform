@@ -3,7 +3,7 @@
 ```markdown
 ## Data plan: <app name>
 
-**Category:** <Tailored | Ready> · **Scope unit:** <user | project | org | tenant> · **Standard:** 1.5
+**Category:** <Tailored | Ready> · **Scope unit:** <user | project | org | tenant> · **Standard:** 1.6
 
 ### Stores
 | Data | Store | Why | Clause |

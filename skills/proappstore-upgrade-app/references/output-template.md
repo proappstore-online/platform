@@ -5,7 +5,7 @@
 ```markdown
 ## Upgrade report: <app> — dry run, nothing changed
 
-**Hostnames:** <…> · **Template:** <template_id @ template_rev | unknown> · **Standard:** 1.5 · **Date:** <date>
+**Hostnames:** <…> · **Template:** <template_id @ template_rev | unknown> · **Standard:** 1.6 · **Date:** <date>
 
 ### Inventory
 | Area | Current | Baseline | Drift | Clause |

@@ -1,6 +1,6 @@
 # Template archetypes — evidence and recommendation
 
-**Investigation #179** · related: [template catalogue](./index.md) (#178), Agent Skills epic #168 · standard version 1.5 · investigated 2026-09-23
+**Investigation #179** · related: [template catalogue](./index.md) (#178), Agent Skills epic #168 · standard version 1.6 · investigated 2026-09-23
 
 Machine-readable evidence: [`archetype-evidence.json`](./archetype-evidence.json) (validated by `test/docs-archetypes.test.ts`). This page is the narrative and the recommendation.
 

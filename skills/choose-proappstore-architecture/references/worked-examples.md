@@ -26,7 +26,7 @@ CSV export, a manager-only delete.
 | Need | Decision | Clause |
 |---|---|---|
 | org isolation | every statement scoped with `org_id IN (SELECT org_id FROM org_members WHERE user_id = :__user_id)`; `org_members` in `migrations.json` | [PAS-DATA-007](https://docs.proappstore.online/standard/data/#pas-data-007), [PAS-STACK-011](https://docs.proappstore.online/standard/stack/#pas-stack-011) |
-| roles | `app.roles` for app-wide roles; org role in `org_members.role`, checked in SQL; `auth.app_roles` on privileged actions | [PAS-AUTH-013](https://docs.proappstore.online/standard/auth/#pas-auth-013), [PAS-AUTH-014](https://docs.proappstore.online/standard/auth/#pas-auth-014) |
+| roles | `app.roles` for app-wide roles; org role in `org_members.role`, checked in SQL; `auth.app_roles` on privileged actions | [PAS-STACK-014](https://docs.proappstore.online/standard/stack/#pas-stack-014), [PAS-AUTH-013](https://docs.proappstore.online/standard/auth/#pas-auth-013), [PAS-AUTH-014](https://docs.proappstore.online/standard/auth/#pas-auth-014) |
 | onboarding | `app.invites.create({ role, group })` | [PAS-AUTH-015](https://docs.proappstore.online/standard/auth/#pas-auth-015) |
 | org create + first membership | one **batch** action | [PAS-DATA-009](https://docs.proappstore.online/standard/data/#pas-data-009) |
 | export | scoped, paginated `export_org_leads` | [PAS-DATA-012](https://docs.proappstore.online/standard/data/#pas-data-012) |

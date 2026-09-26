@@ -42,7 +42,7 @@ current standard. Verify before quoting.
 | MCP tools | `mcp.json` descriptions; `list_app_tools` | every action described for agents; the same manifest serves the app and MCP | actions without descriptions; a second agent API | [PAS-STACK-023](https://docs.proappstore.online/standard/stack/#pas-stack-023) |
 | Tests | `pnpm typecheck`, `pnpm test`, e2e / QA flows | typecheck + unit + manifest negative tests + a smoke flow in CI | missing suites; no negative tests; no smoke | [PAS-OPS-001](https://docs.proappstore.online/standard/ops/#pas-ops-001), [PAS-OPS-002](https://docs.proappstore.online/standard/ops/#pas-ops-002), [PAS-OPS-010](https://docs.proappstore.online/standard/ops/#pas-ops-010) |
 | Monitoring | `initPro` `monitoring` options | auto-capture on, build-stamped with `VITE_COMMIT_SHA` | disabled; no build stamp | [PAS-OPS-012](https://docs.proappstore.online/standard/ops/#pas-ops-012) |
-| Standard version | the app's last audit / README | the current version (`1.5`) and its [changelog](https://docs.proappstore.online/standard/changelog/) | clauses added since the last audit not yet reviewed | [PAS-OPS-020](https://docs.proappstore.online/standard/ops/#pas-ops-020) |
+| Standard version | the app's last audit / README | the current version (`1.6`) and its [changelog](https://docs.proappstore.online/standard/changelog/) | clauses added since the last audit not yet reviewed | [PAS-OPS-020](https://docs.proappstore.online/standard/ops/#pas-ops-020) |
 
 ## Staged plan — order, scope, proof, rollback
 

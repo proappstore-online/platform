@@ -1,6 +1,6 @@
 # Identity, sessions, and permissions
 
-**Standard version 1.5** · Chapter `AUTH` · Part of the [Application Standard](./index.md)
+**Standard version 1.6** · Chapter `AUTH` · Part of the [Application Standard](./index.md)
 
 **Scope.** Platform-cookie authentication, sign-in and sign-out, platform/team/app RBAC, and permissions UI.
 
@@ -470,9 +470,9 @@ document.cookie = `pas_user=${user.id}; domain=.proappstore.online; path=/`
 
 ### PAS-AUTH-013 — In-app permissions use app roles, not team or platform roles {#pas-auth-013}
 
-**Severity:** High · **Verification:** Manual · **Enforcement:** none (recommended) · **Since:** 1.2
+**Severity:** High · **Verification:** Manual · **Enforcement:** none (recommended) · **Since:** 1.6
 
-**Rule.** The app MUST gate its own users' capabilities with **app roles** (`app.roles`, `auth.app_roles` in `mcp.json`). It MUST NOT gate in-app features on **team** membership or role (who may build the app) or on **platform** roles (`creator`/`admin`), and code MUST name which scope a check belongs to.
+**Rule.** The app MUST gate its own users' capabilities with **app roles** (`app.roles`, `auth.app_roles` in `mcp.json`). It MUST NOT gate in-app features on **team** membership or role (who may build the app) or on **platform** roles (`creator`/`admin`), and code MUST name which scope a check belongs to. Tenant-scoped roles held in the app's own membership tables under the conditions of [PAS-STACK-014](./stack.md#pas-stack-014) are app roles for the purpose of this clause; the prohibition on team and platform roles is unchanged.
 
 **Applicability.** All apps where users differ in capability.
 

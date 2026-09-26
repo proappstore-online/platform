@@ -4,6 +4,26 @@ Part of the [Application Standard](./index.md). One entry per version, newest
 first; the [changelog policy](./governance.md#changelog-policy) defines the
 sections.
 
+## 1.6
+
+Tenant-scoped roles (#212).
+
+- **Added** — none.
+- **Changed** — PAS-STACK-014: `app.roles` is required for **app-wide**
+  roles; a role **scoped to a tenant row** (organisation, company, workspace,
+  project) MAY live in the app's own `<tenant>_members.role` column when
+  (a) every dependent statement checks it in SQL against `:__user_id`,
+  (b) only an owner/admin of the same tenant, or a server row such as an
+  invite in the same batch, writes it, (c) the last owner cannot be demoted,
+  removed or leave, and (d) the README documents it; a role column the client
+  can set directly still fails. Tests gained the tenant-isolation, member-
+  cannot-write-a-role and last-owner cases. PAS-AUTH-013: tenant-scoped roles
+  held under those conditions count as app roles; the prohibition on team and
+  platform roles is unchanged.
+- **Withdrawn** — none.
+- **Editorial** — the architecture, auth and data-migration skills cite
+  PAS-STACK-014 for the tenant-role pattern.
+
 ## 1.5
 
 Testing, deployment, and operations (chapter `OPS`).

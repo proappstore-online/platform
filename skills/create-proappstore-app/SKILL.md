@@ -7,7 +7,7 @@ metadata:
   author: proappstore-online
   version: "1.0"
   mcp-endpoint: https://mcp.proappstore.online/mcp
-  standard-version: "1.5"
+  standard-version: "1.6"
   issue: proappstore-online/platform#170
   triggers: create, scaffold, provision, new ProAppStore app
 allowed-tools: whoami list_templates app_info deploy_status get_deploy_status schema_status list_app_tools qa_run qa_list_runs list_apps platform_guide sdk_reference provision_pas_app scaffold_app
