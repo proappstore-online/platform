@@ -10,7 +10,7 @@ const prune = () => SELF.fetch(`${BASE}/v1/internal/logs/prune`, { method: 'POST
 
 beforeEach(async () => {
   mockNetwork();
-  for (const t of LEDGERS) await env.DB.prepare(`DELETE FROM ${t}`).run();
+  for (const t of [...LEDGERS, 'webhook_deliveries', 'app_webhooks']) await env.DB.prepare(`DELETE FROM ${t}`).run();
 });
 
 describe('rate-limit ledger retention against real D1', () => {
@@ -28,7 +28,7 @@ describe('rate-limit ledger retention against real D1', () => {
     const res = await prune();
     expect(res.status).toBe(200);
     const body = await res.json() as { ledgerRowsDeleted: Record<string, number>; ledgerBacklog: boolean; ledgerErrors: Record<string, string> };
-    expect(body.ledgerRowsDeleted).toEqual({ maps_usage: 2, sms_usage: 2, notification_log: 2 });
+    expect(body.ledgerRowsDeleted).toMatchObject({ maps_usage: 2, sms_usage: 2, notification_log: 2 });
     expect(body.ledgerBacklog).toBe(false);
     expect(body.ledgerErrors).toEqual({});
     for (const t of LEDGERS) expect(await count(t)).toBe(2);
@@ -44,7 +44,54 @@ describe('rate-limit ledger retention against real D1', () => {
     await env.DB.prepare('INSERT INTO maps_usage (user_id, ts) VALUES (?, ?)').bind('gh:1', Math.floor(Date.now() / 1000) - 10).run();
     await prune();
     const body = await (await prune()).json() as { ledgerRowsDeleted: Record<string, number> };
-    expect(body.ledgerRowsDeleted).toEqual({ maps_usage: 0, sms_usage: 0, notification_log: 0 });
+    expect(body.ledgerRowsDeleted).toEqual({
+      maps_usage: 0, sms_usage: 0, notification_log: 0, webhook_deliveries: 0, webhook_deliveries_orphaned: 0,
+    });
     expect(await count('maps_usage')).toBe(1);
+  });
+});
+
+// #27: the webhook delivery log (full payloads, never read) keeps 7 days and
+// drops rows whose webhook was deleted.
+describe('webhook delivery log retention against real D1', () => {
+  const addHook = (id: string) => env.DB.prepare(
+    'INSERT INTO app_webhooks (id, app_id, event, url, secret) VALUES (?, ?, ?, ?, ?)',
+  ).bind(id, 'demo', 'storage.uploaded', 'https://hooks.example.com/in', 's3cret').run();
+  const addDelivery = (id: string, webhookId: string, createdAt: number) => env.DB.prepare(
+    `INSERT INTO webhook_deliveries (id, webhook_id, event, payload, status, attempts, last_attempt_at, created_at)
+     VALUES (?, ?, 'storage.uploaded', '{"userId":"gh:2"}', 200, 1, ?, ?)`,
+  ).bind(id, webhookId, createdAt, createdAt).run();
+  const remaining = async () => (await env.DB.prepare('SELECT id FROM webhook_deliveries ORDER BY id').all<{ id: string }>()).results.map((r) => r.id);
+
+  it('deletes rows past 7 days and keeps rows just inside it', async () => {
+    const nowS = Math.floor(Date.now() / 1000);
+    const week = 7 * 86_400;
+    await addHook('hook-live');
+    await addDelivery('a-past', 'hook-live', nowS - week - 60);
+    await addDelivery('b-past-far', 'hook-live', nowS - 30 * 86_400);
+    await addDelivery('c-inside', 'hook-live', nowS - week + 60);
+    await addDelivery('d-recent', 'hook-live', nowS - 5);
+
+    const body = await (await prune()).json() as { webhookDeliveryRetentionDays: number; ledgerRowsDeleted: Record<string, number>; ledgerErrors: Record<string, string> };
+    expect(body.webhookDeliveryRetentionDays).toBe(7);
+    expect(body.ledgerRowsDeleted).toMatchObject({ webhook_deliveries: 2, webhook_deliveries_orphaned: 0 });
+    expect(body.ledgerErrors).toEqual({});
+    expect(await remaining()).toEqual(['c-inside', 'd-recent']);
+  });
+
+  it("deletes a deleted webhook's rows, however recent, and keeps live webhooks' rows", async () => {
+    const nowS = Math.floor(Date.now() / 1000);
+    await addHook('hook-live');
+    await addDelivery('live-1', 'hook-live', nowS - 60);
+    await addDelivery('gone-1', 'hook-gone', nowS - 60);
+    await addDelivery('gone-2', 'hook-gone', nowS - 5);
+
+    const body = await (await prune()).json() as { ledgerRowsDeleted: Record<string, number> };
+    expect(body.ledgerRowsDeleted).toMatchObject({ webhook_deliveries: 0, webhook_deliveries_orphaned: 2 });
+    expect(await remaining()).toEqual(['live-1']);
+
+    // Idempotent: nothing left to delete.
+    const again = await (await prune()).json() as { ledgerRowsDeleted: Record<string, number> };
+    expect(again.ledgerRowsDeleted).toMatchObject({ webhook_deliveries: 0, webhook_deliveries_orphaned: 0 });
   });
 });

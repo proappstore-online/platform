@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
 import { mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
-import { LEDGER_RETENTION_DAYS, PRUNE_BATCH_LIMIT, RATE_LIMIT_LEDGERS, RETENTION_DAYS, cutoffMs } from './logs-prune.js';
+import {
+  LEDGER_RETENTION_DAYS, PRUNE_BATCH_LIMIT, RATE_LIMIT_LEDGERS, RETENTION_DAYS, WEBHOOK_DELIVERY_RETENTION_DAYS, cutoffMs,
+} from './logs-prune.js';
 
 function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
   const prepare = vi.fn();
@@ -144,5 +146,89 @@ describe('POST /v1/internal/logs/prune — rate-limit ledgers (#223)', () => {
     const db = ledgerDb();
     expect((await prune(null, db)).status).toBe(403);
     expect(db.prepare).not.toHaveBeenCalled();
+  });
+});
+
+// #27: the webhook delivery log (full payloads, never read) is pruned too.
+describe('POST /v1/internal/logs/prune — webhook deliveries (#27)', () => {
+  const NOW = 1_800_000_000_000;
+  const isExpired = (sql: string) => sql.startsWith('DELETE FROM webhook_deliveries ') && sql.includes('created_at < ?');
+  const isOrphaned = (sql: string) => sql.startsWith('DELETE FROM webhook_deliveries ') && sql.includes('NOT EXISTS');
+  const deliveriesDb = (r: { expired?: number | Error; orphaned?: number | Error; maps?: number } = {}) => {
+    const db = pruneDb({ deleted: 5 });
+    const base = db.prepare.getMockImplementation();
+    db.prepare.mockImplementation((sql: string) => {
+      const v = isExpired(sql) ? r.expired ?? 0 : isOrphaned(sql) ? r.orphaned ?? 0
+        : sql.startsWith('DELETE FROM maps_usage ') ? r.maps : undefined;
+      if (v === undefined) return base ? base(sql) : mockStmt();
+      const stmt = mockStmt({ run: { meta: { changes: v instanceof Error ? 0 : v } } });
+      if (v instanceof Error) stmt.run.mockRejectedValue(v);
+      return stmt;
+    });
+    return db;
+  };
+  const call = (db: ReturnType<typeof deliveriesDb>, match: (sql: string) => boolean) => {
+    const i = db.prepare.mock.calls.findIndex((c) => match(String(c[0])));
+    expect(i).toBeGreaterThanOrEqual(0);
+    return { sql: String(db.prepare.mock.calls[i][0]), bind: db.prepare.mock.results[i].value.bind.mock.calls[0] as unknown[] };
+  };
+  beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(NOW); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('deletes rows older than 7 days on created_at, in seconds, batch-bounded', async () => {
+    const db = deliveriesDb();
+    expect((await prune('internal-tok', db)).status).toBe(200);
+    const expired = call(db, isExpired);
+    expect(WEBHOOK_DELIVERY_RETENTION_DAYS).toBe(7);
+    expect(expired.bind).toEqual([Math.floor(cutoffMs(NOW, 7) / 1000), PRUNE_BATCH_LIMIT]);
+    expect(expired.sql).toContain('LIMIT ?');
+  });
+
+  it('deletes rows whose webhook no longer exists, batch-bounded', async () => {
+    const db = deliveriesDb();
+    await prune('internal-tok', db);
+    const orphaned = call(db, isOrphaned);
+    expect(orphaned.sql).toContain('FROM app_webhooks w WHERE w.id = webhook_deliveries.webhook_id');
+    expect(orphaned.bind).toEqual([PRUNE_BATCH_LIMIT]);
+  });
+
+  it('reports both counts with the retention; a full batch flags a backlog', async () => {
+    let body = await (await prune('internal-tok', deliveriesDb({ expired: 12, orphaned: 3 }))).json();
+    expect(body).toMatchObject({
+      webhookDeliveryRetentionDays: 7,
+      ledgerRowsDeleted: { webhook_deliveries: 12, webhook_deliveries_orphaned: 3 },
+      ledgerBacklog: false, ledgerErrors: {},
+    });
+    body = await (await prune('internal-tok', deliveriesDb({ expired: PRUNE_BATCH_LIMIT }))).json();
+    expect(body).toMatchObject({ ledgerBacklog: true });
+    body = await (await prune('internal-tok', deliveriesDb({ orphaned: PRUNE_BATCH_LIMIT }))).json();
+    expect(body).toMatchObject({ ledgerBacklog: true });
+  });
+
+  it('a delivery-log failure is reported and never blocks the other prunes', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await prune('internal-tok', deliveriesDb({ expired: new Error('D1_ERROR: database locked'), orphaned: 2, maps: 9 }));
+    expect(res.status).toBe(200);
+    const body = await res.json() as { ledgerRowsDeleted: Record<string, number> };
+    expect(body).toMatchObject({
+      deleted: 5,
+      ledgerRowsDeleted: { maps_usage: 9, webhook_deliveries_orphaned: 2 },
+      ledgerErrors: { webhook_deliveries: 'D1_ERROR: database locked' },
+    });
+    expect(body.ledgerRowsDeleted).not.toHaveProperty('webhook_deliveries');
+  });
+
+  it('a ledger failure does not stop the delivery-log prune', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const db = deliveriesDb({ expired: 4 });
+    const base = db.prepare.getMockImplementation()!;
+    db.prepare.mockImplementation((sql: string) => {
+      if (!sql.startsWith('DELETE FROM sms_usage ')) return base(sql);
+      const stmt = mockStmt();
+      stmt.run.mockRejectedValue(new Error('no such table: sms_usage'));
+      return stmt;
+    });
+    const body = await (await prune('internal-tok', db)).json();
+    expect(body).toMatchObject({ ledgerRowsDeleted: { webhook_deliveries: 4 }, ledgerErrors: { sms_usage: 'no such table: sms_usage' } });
   });
 });

@@ -43,6 +43,26 @@ export const RATE_LIMIT_LEDGERS = [
   { table: 'notification_log', column: 'sent_at', unit: 's' },
 ] as const;
 
+/**
+ * Webhook delivery log (#27): one row per hook per event, holding the full
+ * payload (a `storage.uploaded` row carries the uploader's user id and key).
+ * Nothing reads it back; keep a week for debugging a delivery, and drop rows
+ * whose webhook was deleted. `created_at` is in seconds.
+ */
+export const WEBHOOK_DELIVERY_RETENTION_DAYS = 7;
+const WEBHOOK_DELIVERY_PRUNES = [
+  {
+    key: 'webhook_deliveries',
+    where: 'created_at < ?',
+    binds: (nowMs: number) => [Math.floor(cutoffMs(nowMs, WEBHOOK_DELIVERY_RETENTION_DAYS) / 1000)],
+  },
+  {
+    key: 'webhook_deliveries_orphaned',
+    where: 'NOT EXISTS (SELECT 1 FROM app_webhooks w WHERE w.id = webhook_deliveries.webhook_id)',
+    binds: () => [],
+  },
+] as const;
+
 export function cutoffMs(nowMs: number, days: number): number {
   return nowMs - days * 24 * 60 * 60 * 1000;
 }
@@ -96,6 +116,19 @@ logsPruneRoutes.post('/internal/logs/prune', async (c) => {
       console.error(`[logs-prune] ledger prune failed table=${table}`, ledgerErrors[table]);
     }
   }
+  // Same batching and isolation; reported alongside the ledgers so the prune
+  // workflow's existing error and backlog checks cover it.
+  for (const { key, where, binds } of WEBHOOK_DELIVERY_PRUNES) {
+    try {
+      const res = await c.env.DB.prepare(
+        `DELETE FROM webhook_deliveries WHERE id IN (SELECT id FROM webhook_deliveries WHERE ${where} LIMIT ?)`,
+      ).bind(...binds(now), PRUNE_BATCH_LIMIT).run();
+      ledgerRowsDeleted[key] = res.meta?.changes ?? 0;
+    } catch (err) {
+      ledgerErrors[key] = err instanceof Error ? err.message.slice(0, 200) : 'prune failed';
+      console.error(`[logs-prune] webhook delivery prune failed key=${key}`, ledgerErrors[key]);
+    }
+  }
 
   return c.json({
     ok: true,
@@ -106,6 +139,7 @@ logsPruneRoutes.post('/internal/logs/prune', async (c) => {
     // wait a day, otherwise the backlog compounds silently.
     stillOverdue: overdue,
     ledgerRetentionDays: LEDGER_RETENTION_DAYS,
+    webhookDeliveryRetentionDays: WEBHOOK_DELIVERY_RETENTION_DAYS,
     ledgerRowsDeleted,
     // A full batch may have left expired rows behind: the caller runs again.
     ledgerBacklog: Object.values(ledgerRowsDeleted).some((n) => n >= PRUNE_BATCH_LIMIT),
