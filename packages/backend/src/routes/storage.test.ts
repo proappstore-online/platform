@@ -618,3 +618,74 @@ describe('GET /v1/apps/:appId/public/* — active documents are sandboxed (#216)
     }
   });
 });
+
+// #219: the documented 1000-files-per-user-per-app limit is enforced per
+// namespace, before the body is read; replacements and owner assets are free.
+describe('PUT /v1/apps/:appId/storage/* — file limit (#219)', () => {
+  function bucket(opts: { existing?: number; exists?: boolean } = {}) {
+    return makeStorage({
+      head: vi.fn(async () => (opts.exists ? { key: 'x' } : null)) as unknown as R2Bucket['head'],
+      list: vi.fn(async ({ limit }: { limit: number }) => ({
+        objects: Array.from({ length: Math.min(opts.existing ?? 0, limit) }, (_, i) => ({ key: `k${i}` })),
+      })) as unknown as R2Bucket['list'],
+    });
+  }
+  const upload = (path: string, storage: R2Bucket, type = 'image/png', db?: ReturnType<typeof mockD1>) => app.request(
+    `/v1/apps/myapp/storage/${path}`,
+    { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': type }, body: new Uint8Array([1, 2, 3]) },
+    makeEnv({ STORAGE: storage }, db),
+  );
+
+  it('the 1,001st new file in a namespace is a 403 that says what to do, and nothing is stored', async () => {
+    const storage = bucket({ existing: 1000 });
+    const res = await upload('notes/new.png', storage);
+    expect(res.status).toBe(403);
+    expect(await res.text()).toMatch(/file limit reached \(1000 files per user per app here\); delete files/);
+    expect(storage.put).not.toHaveBeenCalled();
+  });
+
+  it('under the limit (999 files) uploads as before', async () => {
+    const storage = bucket({ existing: 999 });
+    expect((await upload('notes/new.png', storage)).status).toBe(200);
+    expect(storage.put).toHaveBeenCalledTimes(1);
+  });
+
+  it('replacing an existing key at the limit is allowed, without a list (cost)', async () => {
+    const storage = bucket({ existing: 1000, exists: true });
+    expect((await upload('notes/old.png', storage)).status).toBe(200);
+    expect(storage.list).not.toHaveBeenCalled();
+  });
+
+  it('counts each namespace separately, on the caller-scoped prefix, with one bounded list', async () => {
+    for (const [path, prefix] of [
+      ['notes/a.png', 'myapp/gh:1/'],
+      ['_userpub/p/a.png', 'myapp/_public/u/gh:1/'],
+      ['_review/cert.pdf', 'myapp/_review/u/gh:1/'],
+    ] as const) {
+      const storage = bucket();
+      await upload(path, storage, path.endsWith('.pdf') ? 'application/pdf' : 'image/png');
+      expect(storage.list, path).toHaveBeenCalledTimes(1);
+      expect(storage.list, path).toHaveBeenCalledWith({ prefix, limit: 1000 });
+    }
+  });
+
+  it("owner-curated _public assets are not counted", async () => {
+    const storage = bucket({ existing: 5000 });
+    const res = await upload('_public/banner.png', storage, 'image/png', mockD1(mockStmt({ first: { creator_id: 'gh:1' } })));
+    expect(res.status).toBe(200);
+    expect(storage.list).not.toHaveBeenCalled();
+  });
+
+  it('is checked before the body and content type: at the limit even a blocked type is a 403, not a 400', async () => {
+    const storage = bucket({ existing: 1000 });
+    expect((await upload('notes/page.html', storage, 'text/html')).status).toBe(403);
+  });
+
+  it('an unauthenticated upload is refused before any storage call', async () => {
+    const storage = bucket();
+    const res = await app.request('/v1/apps/myapp/storage/notes/a.png', { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: new Uint8Array([1]) }, makeEnv({ STORAGE: storage }));
+    expect(res.status).toBe(401);
+    expect(storage.head).not.toHaveBeenCalled();
+    expect(storage.list).not.toHaveBeenCalled();
+  });
+});

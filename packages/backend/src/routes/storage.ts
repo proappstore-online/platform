@@ -14,9 +14,24 @@ import { dispatchWebhook } from '../lib/webhook-dispatch.js';
  *
  * Limits:
  * - 50MB max file size
- * - 1000 files per user per app
+ * - 1000 files per user per app in each namespace — private, _userpub,
+ *   _review (enforced since #219; owner-curated _public is not counted)
  */
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+export const MAX_FILES_PER_NAMESPACE = 1000;
+
+/**
+ * #219: refuse a NEW file once the caller's namespace holds MAX_FILES_PER_NAMESPACE.
+ * A replacement (the key already exists) is always allowed. The count is an R2
+ * list on the prefix — authoritative, no counter to backfill or drift. Returns
+ * the refusal message, or null to proceed.
+ */
+async function fileQuotaRefusal(bucket: R2Bucket, key: string, prefix: string): Promise<string | null> {
+  if (await bucket.head(key)) return null;
+  const listed = await bucket.list({ prefix, limit: MAX_FILES_PER_NAMESPACE });
+  if (listed.objects.length < MAX_FILES_PER_NAMESPACE) return null;
+  return `file limit reached (${MAX_FILES_PER_NAMESPACE} files per user per app here); delete files to upload more`;
+}
 
 export const storageRoutes = new Hono<{ Bindings: Env }>();
 
@@ -106,6 +121,7 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
     let user;
     let storageKey: string;
     let returnedKey: string;
+    let quotaPrefix: string | null = null; // #219: the caller's namespace; null = not counted
     if (filePath.startsWith('_review/')) {
       user = await requireUser(c);
       const rest = filePath.slice('_review/'.length);
@@ -114,12 +130,14 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
       if (!REVIEW_CONTENT_TYPES.has(type)) return c.text(`review uploads must be one of: ${[...REVIEW_CONTENT_TYPES].join(', ')}`, 400);
       storageKey = `${appId}/_review/u/${user.id}/${rest}`;
       returnedKey = `_review/u/${user.id}/${rest}`;
+      quotaPrefix = `${appId}/_review/u/${user.id}/`;
     } else if (filePath.startsWith('_userpub/')) {
       user = await requireUser(c);
       const rest = filePath.slice('_userpub/'.length);
       if (!rest) return c.text('file path required', 400);
       storageKey = `${appId}/_public/u/${user.id}/${rest}`;
       returnedKey = `u/${user.id}/${rest}`;
+      quotaPrefix = `${appId}/_public/u/${user.id}/`;
     } else if (filePath.startsWith('_public/')) {
       user = await requireAppOwner(c, appId);
       storageKey = `${appId}/${filePath}`;
@@ -128,6 +146,13 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
       user = await requireUser(c);
       storageKey = `${appId}/${user.id}/${filePath}`;
       returnedKey = filePath;
+      quotaPrefix = `${appId}/${user.id}/`;
+    }
+
+    // Before the body is read, so a refused upload is never buffered.
+    if (quotaPrefix) {
+      const refusal = await fileQuotaRefusal(c.env.STORAGE, storageKey, quotaPrefix);
+      if (refusal) return c.text(refusal, 403);
     }
 
     const body = await c.req.arrayBuffer();

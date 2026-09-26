@@ -53,7 +53,7 @@ app.db.tenant(tenantId) → tx.find() / .findMany() / .insert() / .update() / .d
 // separate from team + platform roles. See docs/authorization-model.md)
 app.roles.assign(userId, role) / .revoke(userId, role) / .check(role) / .myRoles() / .listAll()
 
-// File storage (R2) — see "File storage deletion" below
+// File storage (R2) — 50 MB per file; 1,000 files per user per app in each of private / user-public / review (403 at the limit; replacing a file is free). See "File storage deletion" below
 app.storage.upload() / .uploadPublic() / .uploadUserPublic() / .publicUrl() / .download() / .list()
 app.storage.delete(path) / .deleteUserPublic(path) / .deletePublic(key)
 app.storage.uploadForReview(path, file) / .downloadForReview(userId, path) / .reviewUrl(userId, path) / .deleteForReview(userId, path)
