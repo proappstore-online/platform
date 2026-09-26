@@ -573,7 +573,8 @@ describe('review uploads — _review namespace, reviewer roles, audit (#208)', (
     const put = await req('PUT', '/v1/apps/myapp/storage/notes/a.txt', TOK, { body: 'hi', headers: { 'Content-Type': 'text/plain' } });
     expect(put.status).toBe(200);
     expect(state.objects.has('myapp/gh:1/notes/a.txt')).toBe(true);
-    expect((await req('GET', '/v1/apps/myapp/storage/notes/a.txt', TOK)).headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    // #220: a private download is never cached (it used to be `public, immutable`).
+    expect((await req('GET', '/v1/apps/myapp/storage/notes/a.txt', TOK)).headers.get('cache-control')).toBe('private, no-store');
   });
 });
 
@@ -687,5 +688,60 @@ describe('PUT /v1/apps/:appId/storage/* — file limit (#219)', () => {
     expect(res.status).toBe(401);
     expect(storage.head).not.toHaveBeenCalled();
     expect(storage.list).not.toHaveBeenCalled();
+  });
+});
+
+// #220: the private download URL carries no user id, so a cacheable answer let
+// a browser serve one user's file to the next account on the same browser.
+describe('GET /v1/apps/:appId/storage/* — cache headers and isolation (#220)', () => {
+  // Two users with a file at the SAME path, plus a public and a review object.
+  const objects = new Map<string, string>([
+    ['myapp/gh:1/notes/contract.pdf', 'alice-contract'],
+    ['myapp/gh:2/notes/contract.pdf', 'bob-contract'],
+    ['myapp/_public/banner.png', 'banner'],
+    ['myapp/_review/u/gh:1/cert.pdf', 'cert'],
+  ]);
+  const storage = () => makeStorage({
+    get: vi.fn(async (key: string) => {
+      const body = objects.get(key);
+      return body === undefined ? null : {
+        body: new TextEncoder().encode(body), httpEtag: `"${key}"`,
+        // A stored cache-control must not leak through on a private read.
+        writeHttpMetadata: (h: Headers) => { h.set('content-type', 'application/pdf'); h.set('cache-control', 'public, max-age=31536000, immutable'); },
+      };
+    }) as unknown as R2Bucket['get'],
+  });
+  const get = (path: string, token?: string) => app.request(path, token ? { headers: { Authorization: `Bearer ${token}` } } : {}, makeEnv({ STORAGE: storage() }));
+
+  it('a private download is `private, no-store` with Vary: Authorization — never public or immutable', async () => {
+    const res = await get('/v1/apps/myapp/storage/notes/contract.pdf', TOK);
+    expect(res.status).toBe(200);
+    const cc = res.headers.get('cache-control')!;
+    expect(cc).toBe('private, no-store');
+    expect(cc).not.toMatch(/public|immutable|max-age/);
+    // The CORS layer appends Origin; Authorization must be among the keys.
+    expect(res.headers.get('vary')!.split(',').map((v) => v.trim())).toContain('Authorization');
+    expect(res.headers.get('etag')).toBe('"myapp/gh:1/notes/contract.pdf"');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+
+  it('two users requesting the same path each get their own object', async () => {
+    const alice = await get('/v1/apps/myapp/storage/notes/contract.pdf', TOK);
+    const bob = await get('/v1/apps/myapp/storage/notes/contract.pdf', TOK_B);
+    expect(await alice.text()).toBe('alice-contract');
+    expect(await bob.text()).toBe('bob-contract');
+    expect((await get('/v1/apps/myapp/storage/notes/contract.pdf', OUTSIDER)).status).toBe(404);
+  });
+
+  it('public downloads are unchanged: public, max-age=31536000, immutable', async () => {
+    const res = await get('/v1/apps/myapp/public/banner.png');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+  });
+
+  it('_review downloads are unchanged: private, no-store', async () => {
+    const res = await get('/v1/apps/myapp/storage/_review/u/gh:1/cert.pdf', TOK);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
   });
 });

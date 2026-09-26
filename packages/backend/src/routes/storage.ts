@@ -264,7 +264,12 @@ storageRoutes.get('/apps/:appId/storage/*', async (c) => {
     const headers = new Headers();
     object.writeHttpMetadata(headers);
     headers.set('etag', object.httpEtag);
-    headers.set('cache-control', 'public, max-age=31536000, immutable');
+    // #220: this is the CALLER's private file, and the URL carries no user id, so
+    // two users' files at the same path share a URL. A `public`/`immutable` answer
+    // let a browser cache serve one user's file to the next account on that
+    // browser, and kept replaced or deleted files alive for a year. Never cached.
+    headers.set('cache-control', 'private, no-store');
+    headers.set('vary', 'Authorization');
     headers.set('x-content-type-options', 'nosniff');
 
     return new Response(object.body, { headers });
