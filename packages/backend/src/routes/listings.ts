@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireAppOwner, HttpError } from '../lib/auth.js';
+import { auditModeration, moderateText } from '../lib/moderation.js';
 import type { ListingRow, ListingPatch } from './listing-types.js';
 import { rowToDto, emptyDto } from './listing-types.js';
 import {
@@ -144,7 +145,7 @@ listingsRoutes.get('/apps/:id/listing', async (c) => {
 listingsRoutes.put('/apps/:id/listing', async (c) => {
   try {
     const appId = c.req.param('id');
-    await requireAppOwner(c, appId);
+    const actor = await requireAppOwner(c, appId);
     let body: ListingPatch;
     try {
       body = await c.req.json<ListingPatch>();
@@ -181,6 +182,29 @@ listingsRoutes.put('/apps/:id/listing', async (c) => {
         .filter((s): s is string => typeof s === 'string' && URL_LIKE.test(s))
         .slice(0, MAX_SCREENSHOTS);
       patch.screenshots_json = JSON.stringify(cleaned);
+    }
+
+    // #214: the tagline and long description are published under the platform's
+    // name (storefront pages, every app page's og:description) and owner edits
+    // skip the submission review. Moderate a text field only when it changes to
+    // a new non-empty value — one model call for both — before anything is
+    // written; fail closed.
+    const textFields = (['tagline', 'long_description'] as const).filter((k) => patch[k]);
+    if (textFields.length > 0) {
+      const current = await c.env.DB.prepare('SELECT tagline, long_description FROM app_listings WHERE app_id = ?')
+        .bind(appId)
+        .first<Pick<ListingRow, 'tagline' | 'long_description'>>();
+      const changed = textFields.filter((k) => patch[k] !== (current?.[k] ?? null));
+      if (changed.length > 0) {
+        const moderation = await moderateText(c.env.AI, changed.map((k) => patch[k]).join('\n\n'));
+        auditModeration('listing_moderation', { app_id: appId, actor: actor.id, changed_fields: changed }, moderation);
+        if (moderation.verdict === 'unsafe') {
+          return c.json({ error: 'listing text rejected by content moderation', categories: moderation.categories }, 422);
+        }
+        if (moderation.verdict === 'error') {
+          return c.text('listing content moderation is unavailable; try again shortly', 503, { 'Retry-After': '5' });
+        }
+      }
     }
 
     const now = Date.now();

@@ -7,7 +7,7 @@ import { requireUser, HttpError } from '../lib/auth.js';
 import { dispatchWebhook } from '../lib/webhook-dispatch.js';
 import { isLikelyEmail, sendEmail } from '../lib/email.js';
 import { isAppOriginUrl, renderNotifyEmail, signUnsubscribeToken, verifyUnsubscribeToken } from '../lib/notify-email.js';
-import { moderateText } from '../lib/moderation.js';
+import { auditModeration, moderateText } from '../lib/moderation.js';
 
 export const notificationRoutes = new Hono<{ Bindings: Env }>();
 
@@ -248,11 +248,7 @@ notificationRoutes.post('/notifications/notify-user', async (c) => {
     // never an implicit "safe". Push-only calls never reach this.
     if (emailTo) {
       const moderation = await moderateText(c.env.AI, `${title}\n\n${body}`);
-      console.log(JSON.stringify({
-        event: 'notify_user_moderation', app_id: appId, sender_id: user.id, target_user_id: targetUserId, verdict: moderation.verdict,
-        ...(moderation.verdict === 'unsafe' && { categories: moderation.categories }),
-        ...(moderation.verdict === 'error' && { reason: moderation.reason }),
-      }));
+      auditModeration('notify_user_moderation', { app_id: appId, sender_id: user.id, target_user_id: targetUserId }, moderation);
       if (moderation.verdict === 'unsafe') {
         return c.json({ error: 'message rejected by content moderation', categories: moderation.categories }, 422);
       }

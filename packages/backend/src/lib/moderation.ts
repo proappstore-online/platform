@@ -37,6 +37,19 @@ export function parseLlamaGuard(output: unknown): { safe: boolean; categories: s
   return null;
 }
 
+/**
+ * One structured audit line per moderation decision: the event, its context
+ * (who, where, which fields), the verdict and the categories or error reason.
+ * Never the moderated text itself.
+ */
+export function auditModeration(event: string, context: Record<string, unknown>, result: ModerationResult): void {
+  console.log(JSON.stringify({
+    event, ...context, verdict: result.verdict,
+    ...(result.verdict === 'unsafe' && { categories: result.categories }),
+    ...(result.verdict === 'error' && { reason: result.reason }),
+  }));
+}
+
 /** One Llama Guard call over `text` as a user turn. Never throws. */
 export async function moderateText(ai: AiBinding, text: string, timeoutMs = MODERATION_TIMEOUT_MS): Promise<ModerationResult> {
   if (!ai?.run) return { verdict: 'error', reason: 'Workers AI binding not configured' };
