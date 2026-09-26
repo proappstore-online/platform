@@ -39,6 +39,11 @@ Dev or user brings their own API key. Platform stores it encrypted, injects it s
 
 The proxy already exists (`app.proxy.fetch`). The key vault already exists (`app.keys`). Any REST API in the world works through this pattern today.
 
+Outbound bounds (#225):
+- **No redirects:** the proxy never follows a redirect, either for the upstream call or for the OAuth2 client-credentials token exchange. The injected secret, or the Basic `client_id:client_secret`, is never re-sent to another host. For the upstream call, the 3xx is returned to the caller.
+- **Timeouts:** an upstream has 30 seconds and a token endpoint 10 seconds.
+- **Errors:** a timeout is a `504`. A failed or redirecting token exchange is a `502` that carries no upstream body. After a failed exchange, the next request retries it.
+
 ### Tier 3: Webhooks (events out)
 
 Platform fires HTTP POST on events. Devs configure webhook URLs per app in the console. Zapier, Make, n8n, and any HTTP endpoint work natively.

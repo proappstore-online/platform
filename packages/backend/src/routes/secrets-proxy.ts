@@ -7,8 +7,13 @@ import { HttpError, requireUser } from '../lib/auth.js';
 import { openSecret, type SealedSecret } from '../lib/encryption.js';
 import { AllowlistError, injectSecret, pickRule } from '../lib/proxy-allowlist.js';
 import { checkAndBump, d1UsageStore } from '../lib/proxy-rate-limit.js';
-import { getOAuth2Token } from '../lib/proxy-oauth2.js';
+import { OAUTH2_TOKEN_TIMEOUT_MS, getOAuth2Token } from '../lib/proxy-oauth2.js';
 import type { Env } from '../types.js';
+
+/** Bound on the upstream call, headers and body (#225). */
+export const PROXY_UPSTREAM_TIMEOUT_MS = 30_000;
+
+const isTimeout = (err: unknown) => err instanceof Error && err.name === 'TimeoutError';
 import { type AllowlistRow, rowToRule } from './secrets-allowlist-row.js';
 import {
   DAILY_PROXY_REQUESTS,
@@ -198,12 +203,21 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
 
           // Get cached or fresh OAuth2 bearer token
           const cacheKey = `${appId}:${rule.secretName}`;
-          const bearerToken = await getOAuth2Token({
-            cacheKey,
-            tokenUrl: rule.tokenUrl,
-            clientId: plaintext,
-            clientSecret,
-          });
+          let bearerToken: string;
+          try {
+            bearerToken = await getOAuth2Token({
+              cacheKey,
+              tokenUrl: rule.tokenUrl,
+              clientId: plaintext,
+              clientSecret,
+            });
+          } catch (err) {
+            // Details are logged by getOAuth2Token; never the upstream body or secret here.
+            if (isTimeout(err)) {
+              return c.json({ error: `OAuth2 token endpoint timed out after ${OAUTH2_TOKEN_TIMEOUT_MS} ms` }, 504);
+            }
+            return c.json({ error: 'OAuth2 token exchange failed' }, 502);
+          }
           forwardHeaders.set('Authorization', `Bearer ${bearerToken}`);
           injectedUrl = upstreamUrl;
           injectedHeaders = forwardHeaders;
@@ -234,16 +248,26 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
       // attacker-controlled or internal host would otherwise re-send the secret
       // off-allowlist (SSRF + secret exfiltration). `manual` returns the 3xx to
       // the caller instead of following it.
-      const upstreamRes = await fetch(injectedUrl, {
-        method: c.req.method,
-        headers: injectedHeaders,
-        body: forwardBody,
-        redirect: 'manual',
-      });
+      let upstreamRes: Response;
+      let respBuf: ArrayBuffer;
+      try {
+        upstreamRes = await fetch(injectedUrl, {
+          method: c.req.method,
+          headers: injectedHeaders,
+          body: forwardBody,
+          redirect: 'manual',
+          signal: AbortSignal.timeout(PROXY_UPSTREAM_TIMEOUT_MS),
+        });
 
-      // Cap response size by reading bytes ourselves; a streaming passthrough
-      // would let a hostile upstream chew our CPU minutes.
-      const respBuf = await upstreamRes.arrayBuffer();
+        // Cap response size by reading bytes ourselves; a streaming passthrough
+        // would let a hostile upstream chew our CPU minutes.
+        respBuf = await upstreamRes.arrayBuffer();
+      } catch (err) {
+        if (isTimeout(err)) {
+          return c.json({ error: `upstream timed out after ${PROXY_UPSTREAM_TIMEOUT_MS} ms` }, 504);
+        }
+        throw err;
+      }
       if (respBuf.byteLength > MAX_RESPONSE_BODY_BYTES) {
         return c.json({ error: 'upstream response too large' }, 502);
       }

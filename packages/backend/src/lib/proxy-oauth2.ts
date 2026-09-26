@@ -11,6 +11,10 @@ interface CachedToken {
   expiresAt: number; // epoch ms
 }
 
+/** A token endpoint that does not answer in time fails the exchange (#225):
+ *  refreshes are shared per key, so a hung endpoint would hang every caller. */
+export const OAUTH2_TOKEN_TIMEOUT_MS = 10_000;
+
 // Per-isolate in-memory cache keyed by "appId:secretName"
 const tokenCache = new Map<string, CachedToken>();
 
@@ -71,6 +75,10 @@ async function refreshToken(
       Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
     },
     body: 'grant_type=client_credentials',
+    // SECURITY (#225): the client secret rides on this request, and tokenUrl is
+    // checked only at registration — a 3xx is a failed exchange, never followed.
+    redirect: 'manual',
+    signal: AbortSignal.timeout(OAUTH2_TOKEN_TIMEOUT_MS),
   });
 
   if (!res.ok) {

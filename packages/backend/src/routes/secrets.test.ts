@@ -1,6 +1,9 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
 import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
+import { sealSecret } from '../lib/encryption.js';
+import { OAUTH2_TOKEN_TIMEOUT_MS } from '../lib/proxy-oauth2.js';
+import { PROXY_UPSTREAM_TIMEOUT_MS } from './secrets-proxy.js';
 
 const TOK = await testToken('gh:1');
 
@@ -374,5 +377,108 @@ describe('ALL /v1/apps/:appId/proxy/* — app context (#80)', () => {
     const body = (await res.json()) as { error?: string };
     expect(body.error).toContain("app's own origin");
     expect(db.prepare).not.toHaveBeenCalled();
+  });
+});
+
+// #225: the proxy's outbound calls are bounded; a timeout is a 504 and a failed
+// OAuth2 exchange a 502, never an unhandled 500 or a hung request.
+describe('ALL /v1/apps/:appId/proxy/* — outbound bounds (#225)', () => {
+  const KEK = btoa(String.fromCharCode(...new Uint8Array(32).fill(7)));
+  let seq = 0;
+  const setup = async (kind: 'header' | 'oauth2_cc') => {
+    const appId = `app${++seq}`; // distinct OAuth2 token-cache key per test
+    const sealed = {
+      KEY: await sealSecret('client-id-or-key', KEK),
+      KEY2: await sealSecret('client-secret-value', KEK),
+    };
+    const rule = {
+      pattern: 'https://api.example.com/', inject_kind: kind, inject_name: kind === 'header' ? 'X-Api-Key' : null,
+      secret_name: 'KEY', secret_name_2: kind === 'oauth2_cc' ? 'KEY2' : null,
+      token_url: kind === 'oauth2_cc' ? 'https://auth.example.com/token' : null,
+      methods: 'GET', created_at: 1,
+    };
+    const db = {
+      prepare: (sql: string) => ({
+        bind: (...args: unknown[]) => ({
+          all: async () => ({ results: sql.includes('FROM app_proxy_allowlist') ? [rule] : [] }),
+          first: async () => {
+            if (sql.includes('FROM app_secrets')) {
+              const s = sealed[args[1] as 'KEY' | 'KEY2'];
+              return { key_ciphertext: s.keyCiphertext, dek_wrapped: s.dekWrapped, iv: s.iv };
+            }
+            return sql.includes('SELECT count') ? { count: 0 } : null;
+          },
+          run: async () => ({ meta: { changes: 1 } }),
+        }),
+      }),
+      batch: async () => [],
+    };
+    const call = () => app.request(`/v1/apps/${appId}/proxy/api.example.com/v1/thing`, {
+      method: 'GET', headers: { Authorization: `Bearer ${TOK}`, 'X-PAS-App': appId },
+    }, sharedMakeEnv({ APP_SECRET_KEK: KEK }, db as never));
+    return call;
+  };
+  const hang = (_url: string, init: RequestInit) =>
+    new Promise<Response>((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason)));
+  const timeoutControl = () => {
+    const signals: { ms: number; ac: AbortController }[] = [];
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      const ac = new AbortController();
+      signals.push({ ms, ac });
+      return ac.signal;
+    });
+    const fire = (ms: number) => signals.find((s) => s.ms === ms)!.ac.abort(new DOMException('timeout', 'TimeoutError'));
+    return { signals, fire };
+  };
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it('success path unchanged: injects the key, bounded by the upstream timeout, never follows redirects', async () => {
+    const f = vi.fn(async () => Response.json({ ok: true }));
+    vi.stubGlobal('fetch', f);
+    const res = await (await setup('header'))();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    const init = (f.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect(new Headers(init.headers).get('X-Api-Key')).toBe('client-id-or-key');
+    expect(init.redirect).toBe('manual');
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('an upstream that never answers is a 504 after PROXY_UPSTREAM_TIMEOUT_MS', async () => {
+    const t = timeoutControl();
+    vi.stubGlobal('fetch', vi.fn(hang));
+    const pending = (await setup('header'))();
+    await vi.waitFor(() => expect(t.signals.map((s) => s.ms)).toContain(PROXY_UPSTREAM_TIMEOUT_MS));
+    t.fire(PROXY_UPSTREAM_TIMEOUT_MS);
+    const res = await pending;
+    expect(res.status).toBe(504);
+    expect(await res.json()).toEqual({ error: `upstream timed out after ${PROXY_UPSTREAM_TIMEOUT_MS} ms` });
+  });
+
+  it('a hung OAuth2 token endpoint is a 504 and the upstream is never called', async () => {
+    const t = timeoutControl();
+    const f = vi.fn(hang);
+    vi.stubGlobal('fetch', f);
+    const pending = (await setup('oauth2_cc'))();
+    await vi.waitFor(() => expect(t.signals.map((s) => s.ms)).toContain(OAUTH2_TOKEN_TIMEOUT_MS));
+    t.fire(OAUTH2_TOKEN_TIMEOUT_MS);
+    const res = await pending;
+    expect(res.status).toBe(504);
+    expect(await res.json()).toEqual({ error: `OAuth2 token endpoint timed out after ${OAUTH2_TOKEN_TIMEOUT_MS} ms` });
+    expect(f).toHaveBeenCalledTimes(1); // only the token endpoint
+  });
+
+  it('a redirecting token endpoint is a 502: the secret is not re-sent and nothing leaks to the caller', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const f = vi.fn(async () => new Response('secret-ish upstream detail', { status: 307, headers: { Location: 'https://attacker.example/' } }));
+    vi.stubGlobal('fetch', f);
+    const res = await (await setup('oauth2_cc'))();
+    expect(res.status).toBe(502);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({ error: 'OAuth2 token exchange failed' });
+    expect(text).not.toContain('client-secret-value');
+    expect(text).not.toContain('upstream detail');
+    expect(f).toHaveBeenCalledTimes(1);
+    expect((f.mock.calls[0] as unknown as [string, RequestInit])[1].redirect).toBe('manual');
   });
 });

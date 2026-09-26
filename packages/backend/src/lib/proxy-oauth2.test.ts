@@ -6,6 +6,7 @@ vi.stubGlobal('fetch', mockFetch);
 // Must import after stubbing fetch. The module has global state (tokenCache),
 // so we reimport fresh for each test via resetModules.
 let getOAuth2Token: typeof import('./proxy-oauth2.js')['getOAuth2Token'];
+let OAUTH2_TOKEN_TIMEOUT_MS: number;
 
 beforeEach(async () => {
   mockFetch.mockReset();
@@ -14,6 +15,7 @@ beforeEach(async () => {
   vi.stubGlobal('fetch', mockFetch);
   const mod = await import('./proxy-oauth2.js');
   getOAuth2Token = mod.getOAuth2Token;
+  OAUTH2_TOKEN_TIMEOUT_MS = mod.OAUTH2_TOKEN_TIMEOUT_MS;
 });
 
 function mockTokenResponse(accessToken: string, expiresIn = 3600) {
@@ -93,5 +95,45 @@ describe('getOAuth2Token', () => {
     expect(a).toBe('tok-a');
     expect(b).toBe('tok-b');
     expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+// #225: the client secret never follows a redirect, and a hung token endpoint
+// cannot hold the shared in-flight refresh forever.
+describe('getOAuth2Token hardening (#225)', () => {
+  it('refuses a redirect: one fetch, redirect manual, nothing cached, next call retries', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 307, headers: { Location: 'https://attacker.example/steal' } }));
+    await expect(getOAuth2Token(opts)).rejects.toThrow('OAuth2 token request failed (307)');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect((mockFetch.mock.calls[0] as [string, RequestInit])[1].redirect).toBe('manual');
+    mockTokenResponse('tok-after');
+    await expect(getOAuth2Token(opts)).resolves.toBe('tok-after');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds the exchange with a timeout; a hung endpoint rejects and clears the in-flight refresh', async () => {
+    const timeouts: AbortController[] = [];
+    const spy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      expect(ms).toBe(OAUTH2_TOKEN_TIMEOUT_MS);
+      const ac = new AbortController();
+      timeouts.push(ac);
+      return ac.signal;
+    });
+    try {
+      mockFetch.mockImplementationOnce((_url: string, init: RequestInit) =>
+        new Promise((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason))));
+      // Two concurrent callers share the one hung refresh.
+      const a = getOAuth2Token(opts);
+      const b = getOAuth2Token(opts);
+      await vi.waitFor(() => expect(timeouts).toHaveLength(1));
+      timeouts[0]!.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+      await expect(a).rejects.toMatchObject({ name: 'TimeoutError' });
+      await expect(b).rejects.toMatchObject({ name: 'TimeoutError' });
+      mockTokenResponse('tok-retry');
+      await expect(getOAuth2Token(opts)).resolves.toBe('tok-retry');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
