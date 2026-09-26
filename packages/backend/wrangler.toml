@@ -131,6 +131,14 @@ bindings = [
 tag = "v1"
 new_classes = ["Room"]
 
+# Anonymous registered-action calls (#211): 120 per 60 s per (app, client IP).
+# namespace_id is account-unique; PWS holds 0, 2 and 1001.
+[[unsafe.bindings]]
+name = "PUBLIC_ACTION_RATE_LIMIT"
+type = "ratelimit"
+namespace_id = "1000"
+simple = { limit = 120, period = 60 }
+
 [[routes]]
 pattern = "api.proappstore.online/*"
 zone_name = "proappstore.online"

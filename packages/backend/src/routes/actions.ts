@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
-import { HttpError, requireUser, type FasUser } from '../lib/auth.js';
+import { HttpError, optionalUser, requireUser, type FasUser } from '../lib/auth.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
 import {
   prepareActionBatch,
@@ -28,6 +28,15 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
     throw new HttpError('invalid action name', 400);
   }
 
+  // #211: an anonymous call is limited per (app, client IP) BEFORE the platform
+  // D1 manifest read, so a flood costs no database work. Service-binding calls
+  // (the host's tenant-meta lookup) arrive without cf-connecting-ip, which the
+  // edge sets on every public request, and are exempt.
+  const clientIp = c.req.header('cf-connecting-ip');
+  if (clientIp && !c.req.header('Authorization') && !(await withinPublicLimit(c.env, appId, clientIp))) {
+    return rateLimited();
+  }
+
   const manifest = await loadManifest(c.env.DB, appId, name);
   const publicAction = manifest.requires_auth === false;
   let token: string | null = null;
@@ -36,6 +45,12 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   if (publicAction) {
     const stalePublicError = validatePublicManifestForExecution(manifest);
     if (stalePublicError) throw new HttpError(`public action manifest is invalid: ${stalePublicError}`, 500);
+    // A public action never checks the bearer, so an unverifiable one must not
+    // buy its way past the anonymous limit.
+    if (clientIp && c.req.header('Authorization') && !(await optionalUser(c))
+      && !(await withinPublicLimit(c.env, appId, clientIp))) {
+      return rateLimited();
+    }
   } else {
     token = bearerToken(c.req.header('Authorization'));
     if (!token) throw new HttpError('missing bearer token', 401);
@@ -101,9 +116,56 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   // when the target data worker is healthy (#153). Reach the provisioned
   // worker's direct Workers URL — built from DATA_WORKER_HOST, never a literal
   // account subdomain — protected by the internal token.
+  if (publicAction && manifest.cache_ttl) {
+    return cachedPublicQuery(c.env, c.req.url, appId, name, payload, manifest.cache_ttl, (p) => c.executionCtx.waitUntil(p));
+  }
   const upstream = await forwardToDataWorker(c.env, appId, endpoint, payload, token);
   return passThrough(upstream, await upstream.text());
 });
+
+async function withinPublicLimit(env: Env, appId: string, ip: string): Promise<boolean> {
+  return (await env.PUBLIC_ACTION_RATE_LIMIT.limit({ key: `${appId}:${ip}` })).success;
+}
+
+function rateLimited(): Response {
+  return Response.json(
+    { error: 'rate limit exceeded: max 120 anonymous action calls per minute' },
+    { status: 429, headers: { 'Retry-After': '60', 'Cache-Control': 'no-store' } },
+  );
+}
+
+/** #211: serve a public query from the edge cache for `ttl` seconds. The key is
+ * the PREPARED statement (sql + positional params), so it is canonical for the
+ * caller's params and changes when the app re-registers different SQL. Only a
+ * 200 is stored; anything else passes through as no-store. */
+async function cachedPublicQuery(
+  env: Env,
+  requestUrl: string,
+  appId: string,
+  name: string,
+  payload: unknown,
+  ttl: number,
+  waitUntil: (p: Promise<unknown>) => void,
+): Promise<Response> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(payload)));
+  const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const key = new Request(`${new URL(requestUrl).origin}/__action-cache/${appId}/${name}/${hash}`);
+  const hit = await caches.default.match(key);
+  // Re-wrapped: a cache match has immutable headers, and CORS middleware appends to them.
+  if (hit) return new Response(hit.body, hit);
+
+  const upstream = await forwardToDataWorker(env, appId, 'query', payload, null);
+  const text = await upstream.text();
+  if (upstream.status !== 200) return passThrough(upstream, text);
+  const res = new Response(text, {
+    headers: {
+      'Cache-Control': `public, max-age=${ttl}`,
+      'Content-Type': upstream.headers.get('Content-Type') ?? 'application/json; charset=utf-8',
+    },
+  });
+  waitUntil(caches.default.put(key, res.clone()));
+  return res;
+}
 
 function actionWrites(manifest: ToolManifest): boolean {
   if (manifest.operation === 'query') return false;

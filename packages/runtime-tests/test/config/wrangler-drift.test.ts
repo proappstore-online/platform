@@ -20,7 +20,9 @@ describe('backend wrangler.toml matches the code', () => {
   it('declares every required binding of Env', () => {
     const required = [...types.matchAll(/^\s{2}([A-Z_]+):\s/gm)].map((m) => m[1]!);
     const declared = new Set([...bindings('d1_databases'), ...bindings('r2_buckets'), ...bindings('services'), ...bindings('analytics_engine_datasets'), ...bindings('ai'),
-      ...[...toml.matchAll(/name\s*=\s*"([A-Z_]+)",\s*class_name/g)].map((m) => m[1]!)]);
+      ...[...toml.matchAll(/name\s*=\s*"([A-Z_]+)",\s*class_name/g)].map((m) => m[1]!),
+      // [[unsafe.bindings]] (the ratelimit binding, #211) name their binding with `name =`.
+      ...[...toml.matchAll(/\[\[unsafe\.bindings\]\]\s*name\s*=\s*"([A-Z_]+)"/g)].map((m) => m[1]!)]);
     const vars = new Set([...toml.matchAll(/^([A-Z_]+)\s*=\s*"/gm)].map((m) => m[1]!));
     const secretsSyncedByDeploy = new Set(['SESSION_SIGNING_KEY', 'INTERNAL_TOKEN', 'R2_PARENT_ACCESS_KEY_ID', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'CF_API_TOKEN', 'VAPID_PRIVATE_KEY']);
     for (const name of required) {

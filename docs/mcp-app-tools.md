@@ -171,6 +171,7 @@ against your app's own D1 tables.
 | `verifier` | required for `verify`: the id of the platform verifier that runs on the rows of `sql`. Currently `chess.replay`. |
 | `params` | declared inputs: `{ "name": { "type", "description?", "optional?", "default?", "max?" } }`. Types: `string`, `integer`, `number`, `boolean`. |
 | `requires_auth` | explicit `true` or `false`. `true` requires a session token. `false` is allowed only for constrained public `query` tools. SQL using `:__user_id` must require auth. |
+| `cache_ttl` | optional integer, 1–300 seconds, **public `query` tools only**. The platform caches a `200` response at the edge for this long, keyed by the prepared statement and params, and serves it with `Cache-Control: public, max-age=<ttl>`. Registration rejects it on any tool that requires auth. See [Public actions: rate limit and cache](#public-actions-rate-limit-and-cache). |
 | `schedule` | optional platform schedule for an `execute` or `batch` action: `{ "cron": "*/15 * * * *", "params": { ... } }`. See [Scheduled actions](#scheduled-actions). |
 | `core` | optional boolean. On a large manifest (see below) `core: true` keeps this tool pre-loaded on the app's MCP session instead of deferring it to discovery. Ignored on a small manifest, where everything is pre-loaded anyway. |
 
@@ -178,6 +179,21 @@ Use `requires_auth: true` for writes and user-scoped reads. Deliberately public
 read-only queries can use `requires_auth: false`, but registration constrains
 them: they must be `query` tools, must not reference `:__user_id`, must not
 declare roles, and must include a literal `LIMIT 500` or lower.
+
+### Public actions: rate limit and cache
+
+Any caller can reach a public action, so the platform bounds what one caller can
+cost the app's D1 and the platform's (#211):
+
+- **Rate limit.** Anonymous calls to `POST /v1/apps/:appId/actions/:name` are
+  limited to **120 per 60 seconds per (app, client IP)**. The next call returns
+  `429` with `Retry-After: 60`, before any database read. A call carrying a valid
+  session is not limited. A bearer that does not verify counts as anonymous.
+  Platform service-binding calls (the host's tenant-meta lookup) are exempt.
+- **Cache.** Without `cache_ttl`, every response is `Cache-Control: no-store`.
+  With it, identical params within the TTL are answered from the edge cache
+  without a data-worker request. Only `200` responses are stored. Cached rows
+  can be up to `cache_ttl` seconds stale, so declare it only on data that may be.
 
 ### Magic placeholders
 
@@ -201,6 +217,7 @@ These are injected by the platform — **do not** declare them in `params`:
 - `requires_auth` must be explicitly `true` or `false`.
 - `requires_auth: false` is only allowed for public `query` tools with no
   `:__user_id`, no roles, and a literal `LIMIT 500` or lower.
+- `cache_ttl` is only allowed on those public `query` tools, as an integer from 1 to 300.
 - Every statement of a `requires_auth: true` tool — reads included — must
   reference `:__user_id` (own rows, or an `EXISTS` on a membership table), or the
   tool must declare `"auth": { "caller_unscoped": { "reason": "..." } }` with a

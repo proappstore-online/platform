@@ -22,9 +22,22 @@ function db(...stmts: ReturnType<typeof stmt>[]) {
   return { prepare } as unknown as D1Database;
 }
 
+/** The Workers rate-limit binding's contract: `limit` per key, then refusal. */
+function limiter(limit = 120) {
+  const counts = new Map<string, number>();
+  return {
+    limit: vi.fn(async ({ key }: { key: string }) => {
+      const n = (counts.get(key) ?? 0) + 1;
+      counts.set(key, n);
+      return { success: n <= limit };
+    }),
+  };
+}
+
 function env(database: D1Database, overrides: Record<string, unknown> = {}) {
   return {
     DB: database,
+    PUBLIC_ACTION_RATE_LIMIT: limiter(),
     STORAGE: {} as R2Bucket,
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
@@ -241,6 +254,122 @@ describe('POST /v1/apps/:appId/actions/:name', () => {
 
     expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+// #211: public actions are an unauthenticated path to two D1 databases. They
+// are limited per (app, client IP) and may opt into a short edge cache.
+describe('POST /v1/apps/:appId/actions/:name — public action limits and cache (#211)', () => {
+  const publicManifest = (overrides: Record<string, unknown> = {}) => manifest({
+    name: 'get_org_by_slug',
+    sql: 'SELECT id, name FROM orgs WHERE slug = :slug LIMIT 1',
+    params: { slug: { type: 'string' } },
+    requires_auth: false,
+    ...overrides,
+  });
+  // Every prepare() answers with the manifest, so each call can reach the data worker.
+  const manifestDb = (m = publicManifest()) => {
+    const prepare = vi.fn(() => stmt({ first: { manifest: m } }));
+    return { prepare } as unknown as D1Database & { prepare: typeof prepare };
+  };
+  const call = (e: Record<string, unknown>, headers: Record<string, string> = {}, slug = 'chessideas', ctx?: ExecutionContext) =>
+    app.request(
+      '/v1/apps/interns/actions/get_org_by_slug',
+      { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ params: { slug } }) },
+      e,
+      ctx,
+    );
+  const ip = { 'cf-connecting-ip': '203.0.113.7' };
+
+  it('answers the 121st anonymous call from one IP in a window with 429 + Retry-After, before any D1 read', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ rows: [] })));
+    const database = manifestDb();
+    const e = env(database);
+    for (let i = 0; i < 120; i++) expect((await call(e, ip)).status).toBe(200);
+    database.prepare.mockClear();
+
+    const res = await call(e, ip);
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe('60');
+    expect(database.prepare).not.toHaveBeenCalled();
+    expect(e.PUBLIC_ACTION_RATE_LIMIT.limit).toHaveBeenLastCalledWith({ key: 'interns:203.0.113.7' });
+    // Another IP has its own budget.
+    expect((await call(e, { 'cf-connecting-ip': '203.0.113.8' })).status).toBe(200);
+  });
+
+  it('never limits a signed-in call, but a bearer that does not verify gets no bypass', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ rows: [] })));
+    const e = env(manifestDb(), { PUBLIC_ACTION_RATE_LIMIT: limiter(0) });
+
+    const signedIn = await call(e, { ...ip, Authorization: `Bearer ${TOK}` });
+    expect(signedIn.status).toBe(200);
+    expect(e.PUBLIC_ACTION_RATE_LIMIT.limit).not.toHaveBeenCalled();
+
+    const forged = await call(e, { ...ip, Authorization: 'Bearer not-a-session' });
+    expect(forged.status).toBe(429);
+  });
+
+  it('exempts service-binding calls, which carry no cf-connecting-ip (host tenant meta)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ rows: [] })));
+    const e = env(manifestDb(), { PUBLIC_ACTION_RATE_LIMIT: limiter(0) });
+    expect((await call(e)).status).toBe(200);
+    expect(e.PUBLIC_ACTION_RATE_LIMIT.limit).not.toHaveBeenCalled();
+  });
+
+  describe('cache_ttl', () => {
+    const stubCache = () => {
+      const store = new Map<string, Response>();
+      const cache = {
+        match: vi.fn(async (req: Request) => store.get(req.url)?.clone()),
+        put: vi.fn(async (req: Request, res: Response) => { store.set(req.url, res); }),
+      };
+      vi.stubGlobal('caches', { default: cache });
+      return cache;
+    };
+    const ctx = () => {
+      const pending: Promise<unknown>[] = [];
+      return { pending, waitUntil: (p: Promise<unknown>) => { pending.push(p); }, passThroughOnException: () => {} } as unknown as ExecutionContext & { pending: Promise<unknown>[] };
+    };
+
+    it('serves identical params from the cache: one data-worker request, public max-age', async () => {
+      const fetchMock = vi.fn(async () => Response.json({ rows: [{ id: 'org-1' }] }));
+      vi.stubGlobal('fetch', fetchMock);
+      stubCache();
+      const e = env(manifestDb(publicManifest({ cache_ttl: 60 })));
+
+      const first = ctx();
+      const a = await call(e, ip, 'chessideas', first);
+      await Promise.all(first.pending);
+      const b = await call(e, ip, 'chessideas', ctx());
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(a.headers.get('Cache-Control')).toBe('public, max-age=60');
+      expect(b.headers.get('Cache-Control')).toBe('public, max-age=60');
+      expect(await b.json()).toEqual({ rows: [{ id: 'org-1' }] });
+
+      await call(e, ip, 'other-org', ctx());
+      expect(fetchMock).toHaveBeenCalledTimes(2); // different params, different key
+    });
+
+    it('does not store a failed upstream answer', async () => {
+      const fetchMock = vi.fn(async () => Response.json({ error: 'boom' }, { status: 500 }));
+      vi.stubGlobal('fetch', fetchMock);
+      const cache = stubCache();
+      const e = env(manifestDb(publicManifest({ cache_ttl: 60 })));
+
+      const res = await call(e, ip, 'chessideas', ctx());
+      expect(res.status).toBe(500);
+      expect(res.headers.get('Cache-Control')).toBe('no-store');
+      expect(cache.put).not.toHaveBeenCalled();
+    });
+
+    it('keeps no-store for a public query without cache_ttl', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => Response.json({ rows: [] })));
+      const cache = stubCache();
+      const res = await call(env(manifestDb()), ip);
+      expect(res.headers.get('Cache-Control')).toBe('no-store');
+      expect(cache.match).not.toHaveBeenCalled();
+    });
   });
 });
 

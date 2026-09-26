@@ -243,6 +243,11 @@ function validateManifest(tool: ToolManifest, opts: { source: ToolSource } = { s
     if (limit === null) return 'public query tools must include a literal LIMIT of 500 or less';
     if (limit > 500) return 'public query tools must use LIMIT 500 or less';
   }
+  if (tool.cache_ttl !== undefined) {
+    // A cached response is served to every caller, so only a public query may declare one (PAS-DATA-020).
+    if (tool.requires_auth !== false || tool.operation !== 'query') return 'cache_ttl is only allowed on public (requires_auth false) query tools';
+    if (!Number.isInteger(tool.cache_ttl) || tool.cache_ttl < 1 || tool.cache_ttl > 300) return 'cache_ttl must be an integer from 1 to 300 seconds';
+  }
 
   // params must be an object (default to empty)
   if (tool.params !== undefined && tool.params !== null && typeof tool.params !== 'object') {

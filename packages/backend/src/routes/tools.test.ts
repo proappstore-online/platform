@@ -667,6 +667,31 @@ describe('PUT /v1/apps/:appId/tools — requires_auth enforcement', () => {
     expect((await put('SELECT * FROM orgs LIMIT 10000')).status).toBe(400);
     expect((await put('SELECT * FROM orgs LIMIT 10, 20')).status).toBe(400);
   });
+
+  it('allows cache_ttl only on public queries, from 1 to 300 seconds (#211)', async () => {
+    const put = (tool: Record<string, unknown>) => app.request(
+      '/v1/apps/test-app/tools',
+      {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tools: [tool] }),
+      },
+      makeEnv({}, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }))),
+    );
+    const publicQuery = {
+      name: 'public_orgs', description: 'Public orgs', operation: 'query',
+      sql: 'SELECT * FROM orgs LIMIT 10', params: {}, requires_auth: false,
+    };
+
+    expect((await put({ ...publicQuery, cache_ttl: 60 })).status).toBe(200);
+    // A private response must never be cacheable (PAS-DATA-020).
+    const privateRes = await put({ ...validTool, cache_ttl: 60 });
+    expect(privateRes.status).toBe(400);
+    expect(((await privateRes.json()) as { error: string }).error).toBe('tool "list_items": cache_ttl is only allowed on public (requires_auth false) query tools');
+    for (const ttl of [0, 301, 1.5, '60']) {
+      expect((await put({ ...publicQuery, cache_ttl: ttl })).status, String(ttl)).toBe(400);
+    }
+  });
 });
 
 describe('PUT /v1/apps/:appId/tools — unscoped statement rejection (#150)', () => {

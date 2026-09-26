@@ -44,6 +44,9 @@ export interface ToolManifest {
   verifier?: string;
   params: Record<string, ToolParam>;
   requires_auth?: boolean;
+  /** Seconds (1–300) the platform may edge-cache a public query's 200 response (#211).
+   *  Registration rejects it on any tool a signed-out caller cannot run. */
+  cache_ttl?: number;
   auth?: ToolAuth;
   /** Platform-owned periodic execution for an authenticated, explicitly unscoped write. */
   schedule?: ToolSchedule;

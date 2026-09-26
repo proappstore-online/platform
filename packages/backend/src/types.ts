@@ -7,6 +7,9 @@ export interface Env {
   STORAGE: R2Bucket;
   /** Optional service binding to the headless QA executor (packages/qa-worker). */
   QA_WORKER?: Fetcher;
+  /** Per-(app, client IP) limit on anonymous registered-action calls (#211):
+   *  120 per 60 s, declared as an unsafe `ratelimit` binding in wrangler.toml. */
+  PUBLIC_ACTION_RATE_LIMIT: RateLimit;
   /** Durable Object namespace for realtime rooms. */
   ROOM: DurableObjectNamespace;
   STRIPE_SECRET_KEY: string;
