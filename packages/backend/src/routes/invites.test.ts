@@ -275,6 +275,28 @@ describe('delegated invite administration', () => {
     }, DELEGATE_TOK), env);
     expect(res.status).toBe(403);
   });
+
+  it('keeps a fully configured delegate out of team-only surfaces, even with a data role named admin', async () => {
+    const env = makeEnv({
+      creatorId: 'gh:99',
+      appRoles: [{ user_id: 'gh:2', role_name: 'org_admin' }, { user_id: 'gh:2', role_name: 'admin' }],
+      policies: [{ delegate_role: 'org_admin', grantable_role: 'student' }],
+      groupGrants: [{ user_id: 'gh:2', group_id: 'school-a' }],
+    });
+    const attempts: [string, string, unknown?][] = [
+      ['GET', '/v1/apps/chess/invite-policies'],
+      ['POST', '/v1/apps/chess/invite-policies', { delegateRole: 'org_admin', grantableRole: 'teacher' }],
+      ['GET', '/v1/apps/chess/group-admin-grants'],
+      ['POST', '/v1/apps/chess/group-admin-grants', { userId: 'gh:2', group: 'school-b' }],
+      ['GET', '/v1/apps/chess/roles'],
+      ['POST', '/v1/apps/chess/roles', { userId: 'gh:3', role: 'teacher' }],
+      ['PUT', '/v1/apps/chess/team/gh:2', { role: 'developer' }],
+    ];
+    for (const [method, path, body] of attempts) {
+      const res = await app.fetch(req(method, path, body, DELEGATE_TOK), env);
+      expect(res.status, `${method} ${path}`).toBe(403);
+    }
+  });
 });
 
 describe('POST /v1/invites/:code/redeem', () => {
