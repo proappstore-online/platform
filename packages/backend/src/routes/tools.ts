@@ -553,6 +553,7 @@ export async function validateToolSet(
 export interface SiteManifest {
   page_meta?: unknown;
   sitemap?: unknown;
+  operator?: unknown;
 }
 
 interface PageMetaRoute { path: string; action: string; param: string }
@@ -624,6 +625,29 @@ function validateSiteManifest(
   return { routes, sitemap: tool.name };
 }
 
+interface OperatorGate { prefix: string; role: string }
+
+const OPERATOR_PREFIX = /^(\/[a-z0-9][a-z0-9_-]*)+$/;
+const OPERATOR_ROLE = /^[a-z][a-z0-9_-]{0,49}$/;
+
+/**
+ * Validate `operator` (#229): a path prefix the host serves only to holders of
+ * one app role. Segments start with [a-z0-9], so the platform's own `/.pas` and
+ * `/__qa` paths can never be declared. `member` is refused — every signed-in
+ * user holds it.
+ */
+function validateOperatorGate(operator: unknown): { error: string } | { gate: OperatorGate | null } {
+  if (operator === undefined || operator === null) return { gate: null };
+  if (typeof operator !== 'object' || Array.isArray(operator)) return { error: 'operator must be an object' };
+  const { prefix, role } = operator as Record<string, unknown>;
+  if (typeof prefix !== 'string' || prefix.length > 100 || !OPERATOR_PREFIX.test(prefix)) {
+    return { error: 'operator.prefix must be a path like /admin (lowercase segments [a-z0-9_-], max 100 chars)' };
+  }
+  if (typeof role !== 'string' || !OPERATOR_ROLE.test(role)) return { error: 'operator.role must be an app role name ([a-z][a-z0-9_-], max 50 chars)' };
+  if (role === 'member') return { error: "operator.role cannot be 'member' (every signed-in user holds it)" };
+  return { gate: { prefix, role } };
+}
+
 export async function replaceAppTools(
   db: D1Database,
   appId: string,
@@ -649,6 +673,8 @@ export async function replaceAppTools(
   if (invalid) return invalid;
   const siteResult = validateSiteManifest(tools as ToolManifest[], site);
   if ('error' in siteResult) return { status: 400, payload: { error: siteResult.error } };
+  const operatorResult = validateOperatorGate(site.operator);
+  if ('error' in operatorResult) return { status: 400, payload: { error: operatorResult.error } };
 
   // A deploy replaces the CODE tools only (#155): console-defined endpoints live
   // in the same table under source = 'console' and are never touched here — a
@@ -675,6 +701,11 @@ export async function replaceAppTools(
     ),
     ...(siteResult.sitemap
       ? [db.prepare('INSERT INTO app_sitemap (app_id, action_name, created_at) VALUES (?, ?, ?)').bind(appId, siteResult.sitemap, now)]
+      : []),
+    // The operator gate (#229) is part of the manifest too: replaced with it.
+    db.prepare('DELETE FROM app_operator_gate WHERE app_id = ?').bind(appId),
+    ...(operatorResult.gate
+      ? [db.prepare('INSERT INTO app_operator_gate (app_id, path_prefix, role_name, created_at) VALUES (?, ?, ?, ?)').bind(appId, operatorResult.gate.prefix, operatorResult.gate.role, now)]
       : []),
   ];
   await db.batch(stmts);
@@ -705,7 +736,7 @@ export async function replaceAppTools(
   }
   return {
     status: 200,
-    payload: { ok: true, registered: tools.length, ...cost, schedules, page_meta: siteResult.routes.length, sitemap: siteResult.sitemap !== null, warnings },
+    payload: { ok: true, registered: tools.length, ...cost, schedules, page_meta: siteResult.routes.length, sitemap: siteResult.sitemap !== null, operator: operatorResult.gate, warnings },
   };
 }
 
@@ -715,7 +746,7 @@ toolsRoutes.put('/apps/:appId/tools', async (c) => {
   await requireAppOwner(c, appId);
 
   const body = await c.req.json<{ tools?: ToolManifest[] } & SiteManifest>().catch(() => null);
-  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools, c.env, { page_meta: body?.page_meta, sitemap: body?.sitemap });
+  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools, c.env, { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator });
   return c.json(payload, status as 200 | 400 | 422);
 });
 
@@ -733,7 +764,7 @@ toolsRoutes.post('/apps/:appId/tools/internal', async (c) => {
     return c.json({ error: 'invalid app id' }, 400);
   }
   const body = await c.req.json<{ tools?: ToolManifest[] } & SiteManifest>().catch(() => null);
-  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools ?? [], c.env, { page_meta: body?.page_meta, sitemap: body?.sitemap });
+  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools ?? [], c.env, { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator });
   return c.json(payload, status as 200 | 400 | 422);
 });
 
@@ -805,11 +836,12 @@ toolsRoutes.delete('/apps/:appId/tools', async (c) => {
   const appId = c.req.param('appId')!;
   await requireAppOwner(c, appId);
   // Code rows only: console endpoints are removed through the audited endpoints route (#155).
-  // Page meta and sitemap go with the code manifest that declared them (#210).
+  // Page meta, sitemap and the operator gate go with the code manifest that declared them (#210, #229).
   await c.env.DB.batch([
     c.env.DB.prepare("DELETE FROM app_tools WHERE app_id = ? AND source = 'code'").bind(appId),
     c.env.DB.prepare('DELETE FROM app_page_meta WHERE app_id = ?').bind(appId),
     c.env.DB.prepare('DELETE FROM app_sitemap WHERE app_id = ?').bind(appId),
+    c.env.DB.prepare('DELETE FROM app_operator_gate WHERE app_id = ?').bind(appId),
   ]);
   return c.json({ ok: true });
 });

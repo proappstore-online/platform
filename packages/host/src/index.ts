@@ -14,6 +14,7 @@ import type { Env } from "./env.js";
 import { handleAuthRoute } from "./auth-handler.js";
 import { handlePlatformMediation } from "./platform-mediation.js";
 import { handleQaRunner } from "./qa-runner.js";
+import { getOperatorGate, isUnderPrefix, refuseUnlessOperator } from "./operator-gate.js";
 import {
   contentType,
   etagsMatch,
@@ -126,9 +127,19 @@ export default {
       return new Response("Not found", { status: 404 });
     }
 
+    // Operator gate (#229): an app's declared operator prefix is served only to
+    // holders of its app role. Checked before the edge cache and R2, and never
+    // cached, so the operator bundle cannot be replayed to a refused caller.
+    const gate = await getOperatorGate(env.DB, route.slug);
+    const operatorPath = gate !== null && isUnderPrefix(url.pathname, gate.prefix);
+    if (operatorPath) {
+      const refusal = await refuseUnlessOperator(request, env, route, gate);
+      if (refusal) return refusal;
+    }
+
     // Edge cache check — serve from cache if available (avoids R2 + D1 on every hit)
     const cache = (caches as unknown as { default: Cache }).default;
-    const skipEdgeCache = isUpdateSensitivePath(url.pathname);
+    const skipEdgeCache = operatorPath || isUpdateSensitivePath(url.pathname);
     if (request.method === "GET" && !skipEdgeCache) {
       const cached = await cache.match(request);
       if (cached) return cached;
@@ -160,8 +171,16 @@ export default {
     // fall back to index.html (React Router, etc.)
     const hasExtension = url.pathname.split("/").pop()?.includes(".") ?? false;
     if (!object && !hasExtension) {
-      key = `${route.r2_prefix}/index.html`;
-      object = await env.APPS.get(key);
+      // An operator console built under its own prefix owns its deep links;
+      // without one, the gated path falls back to the app's index as before.
+      if (operatorPath) {
+        key = `${route.r2_prefix}${gate.prefix}/index.html`;
+        object = await env.APPS.get(key);
+      }
+      if (!object) {
+        key = `${route.r2_prefix}/index.html`;
+        object = await env.APPS.get(key);
+      }
     }
 
     if (!object) {
@@ -180,6 +199,7 @@ export default {
     const headers = securityHeaders(isHtml, updateSensitive);
     headers.set("Content-Type", contentType(key));
     headers.set("ETag", etag);
+    if (operatorPath) headers.set("Cache-Control", "private, no-store");
     if (!isHtml && object.size !== undefined) headers.set("Content-Length", String(object.size));
 
     // The console's Code Health panel fetches /.vcqa/report.json (+ badge.svg)

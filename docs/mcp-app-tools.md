@@ -454,6 +454,51 @@ Every uncached HTML hit on a matching path costs one action call, so declare
 Host calls use a service binding and are not subject to the anonymous rate
 limit.
 
+## Operator console gate (`operator`)
+
+An app with an operator or admin console declares the path prefix it lives under
+and the app role that may load it (#229):
+
+```json
+{
+  "tools": [],
+  "operator": { "prefix": "/admin", "role": "operator" }
+}
+```
+
+The host then serves `/admin` and everything under `/admin/` only to a signed-in
+user who holds the `operator` app role. It asks the backend on every request, so
+revoking the role takes effect on the next request.
+
+- **No session:** a page navigation is redirected to sign-in
+  (`/.pas/auth/start?return_to=<path>`). Any other request gets `403`.
+- **Signed in without the role:** `403`.
+- **Role lookup failed:** `503`. The host never serves the path when it cannot
+  check the role.
+- **Caching:** gated responses are `Cache-Control: private, no-store` and never
+  go into the edge cache.
+- **Deep links:** an extension-less path under the prefix falls back to
+  `<prefix>/index.html` if the build has one, otherwise to the app's own
+  `index.html`.
+
+`prefix` is lowercase path segments (`[a-z0-9_-]`, each starting with a letter or
+digit), not `/`. `role` is an app role name and cannot be `member`, because every
+signed-in user holds it. One gate per app. Like `page_meta`, it is replaced with
+the manifest on every registration. Removing it from `mcp.json` removes the gate.
+
+**What the gate protects is the bundle, not the data.** Only files under the
+prefix are protected. A console that is lazy-loaded routes in the main SPA ships
+its code in `/assets/`, which stays public. To keep the console code private,
+build it under the prefix, for example a second Vite entry with
+`base: '/admin/'` output to `dist/admin/`. Either way, every operator read or
+write must still be a registered action with `auth.app_roles: ["operator"]` and
+row-scoped SQL ([App Actions and Data Access Security](./app-actions-security.md)).
+
+If the app is a PWA, keep the prefix out of the service worker: add it to
+`navigateFallbackDenylist` and to workbox `globIgnores`. Otherwise precaching
+would request gated files for every visitor, and the refusals would fail the
+service worker install.
+
 ## How tools get registered
 
 There are two paths, both idempotent (re-registering replaces the app's tool set):

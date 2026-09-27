@@ -813,6 +813,61 @@ describe('PUT /v1/apps/:appId/tools — page_meta and sitemap (#210)', () => {
   });
 });
 
+// #229: the operator gate registers with the tools — a path prefix the host
+// serves only to holders of one app role.
+describe('PUT /v1/apps/:appId/tools — operator gate (#229)', () => {
+  const put = (body: Record<string, unknown>, db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }))) =>
+    app.request(
+      '/v1/apps/test-app/tools',
+      { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools: [validTool], ...body }) },
+      makeEnv({}, db),
+    ).then(async (res) => ({ res, db, body: (await res.json()) as { error?: string; operator?: unknown } }));
+  const sqlsOf = (db: ReturnType<typeof mockD1>) => (db.prepare as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0] as string);
+
+  it('stores the gate in the same batch as the tools, replacing any previous one', async () => {
+    const { res, db, body } = await put({ operator: { prefix: '/admin', role: 'operator' } });
+    expect(res.status, body.error).toBe(200);
+    expect(body.operator).toEqual({ prefix: '/admin', role: 'operator' });
+    expect(db.batch).toHaveBeenCalledOnce();
+    const sqls = sqlsOf(db);
+    const del = sqls.indexOf('DELETE FROM app_operator_gate WHERE app_id = ?');
+    const ins = sqls.findIndex((q) => q.startsWith('INSERT INTO app_operator_gate'));
+    expect(del).toBeGreaterThan(-1);
+    expect(ins).toBeGreaterThan(del);
+  });
+
+  it('clears the gate when the manifest no longer declares one', async () => {
+    const { res, db, body } = await put({});
+    expect(res.status, body.error).toBe(200);
+    expect(body.operator).toBeNull();
+    const sqls = sqlsOf(db);
+    expect(sqls).toContain('DELETE FROM app_operator_gate WHERE app_id = ?');
+    expect(sqls.some((q) => q.startsWith('INSERT INTO app_operator_gate'))).toBe(false);
+  });
+
+  it('refuses a malformed, reserved or everyone-holds-it gate without writing anything', async () => {
+    const cases: Array<[unknown, string]> = [
+      [[], 'operator must be an object'],
+      [{ prefix: 'admin', role: 'operator' }, 'operator.prefix must be a path'],
+      [{ prefix: '/', role: 'operator' }, 'operator.prefix must be a path'],
+      [{ prefix: '/admin/', role: 'operator' }, 'operator.prefix must be a path'],
+      [{ prefix: '/Admin', role: 'operator' }, 'operator.prefix must be a path'],
+      [{ prefix: '/.pas', role: 'operator' }, 'operator.prefix must be a path'],
+      [{ prefix: '/admin/../x', role: 'operator' }, 'operator.prefix must be a path'],
+      [{ prefix: '/__qa', role: 'operator' }, 'operator.prefix must be a path'],
+      [{ prefix: '/admin' }, 'operator.role must be an app role name'],
+      [{ prefix: '/admin', role: 'Operator' }, 'operator.role must be an app role name'],
+      [{ prefix: '/admin', role: 'member' }, "operator.role cannot be 'member'"],
+    ];
+    for (const [operator, error] of cases) {
+      const { res, db, body } = await put({ operator });
+      expect(res.status, JSON.stringify(operator)).toBe(400);
+      expect(body.error, JSON.stringify(operator)).toContain(error);
+      expect(db.batch).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe('PUT /v1/apps/:appId/tools — unscoped statement rejection (#150)', () => {
   const put = (tool: Record<string, unknown>) => app.request(
     '/v1/apps/test-app/tools',
@@ -1052,11 +1107,11 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
     expect(db.batch).toHaveBeenCalledTimes(1);
   });
 
-  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap reset)', async () => {
+  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate reset)', async () => {
     const { res, db } = await internalPost({ tools: [] }, { 'X-Internal-Token': 'secret' });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false });
-    expect(db.batch.mock.calls[0]![0]).toHaveLength(4);
+    expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false, operator: null });
+    expect(db.batch.mock.calls[0]![0]).toHaveLength(5);
     expect(db.batch.mock.calls[0]![0][1]!.bind).toHaveBeenCalledWith('test-app');
 
     const missing = await internalPost({}, { 'X-Internal-Token': 'secret' });

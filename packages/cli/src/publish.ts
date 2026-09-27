@@ -154,15 +154,15 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
   if (data.success) {
     // ── Register MCP tools from mcp.json (if present) ──────────
     const mcpManifestPath = resolve(cwd, 'mcp.json');
-    const mcpManifest = readJsonIfExists<{ tools?: unknown[]; page_meta?: unknown; sitemap?: unknown }>(mcpManifestPath);
+    const mcpManifest = readJsonIfExists<{ tools?: unknown[]; page_meta?: unknown; sitemap?: unknown; operator?: unknown }>(mcpManifestPath);
     if (mcpManifest?.tools && Array.isArray(mcpManifest.tools) && mcpManifest.tools.length > 0) {
       process.stdout.write(`\n  Registering ${mcpManifest.tools.length} MCP tool(s)...\n`);
       try {
         const toolsRes = await fetch(`${PAS_API}/v1/apps/${appId}/tools`, {
           method: 'PUT',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          // page_meta / sitemap register with the tools and are replaced with them (#210).
-          body: JSON.stringify({ tools: mcpManifest.tools, page_meta: mcpManifest.page_meta, sitemap: mcpManifest.sitemap }),
+          // page_meta / sitemap (#210) and operator (#229) register with the tools and are replaced with them.
+          body: JSON.stringify({ tools: mcpManifest.tools, page_meta: mcpManifest.page_meta, sitemap: mcpManifest.sitemap, operator: mcpManifest.operator }),
         });
         if (toolsRes.ok) {
           const toolsData = (await toolsRes.json()) as { registered: number; schedules?: Array<{ name: string; cron: string }> };

@@ -155,9 +155,9 @@ deployRoutes.put('/apps/:appId/tools/oidc', async (c) => {
     return c.json({ error: `ref ${claims.ref ?? '(none)'} not authorized — deploys must run from ${DEPLOY_REF}` }, 403);
   }
 
-  // The deploy workflow sends the whole mcp.json: tools plus page_meta / sitemap (#210).
-  const body = await c.req.json<{ tools?: unknown; page_meta?: unknown; sitemap?: unknown }>().catch(() => null);
-  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools ?? [], c.env, { page_meta: body?.page_meta, sitemap: body?.sitemap });
+  // The deploy workflow sends the whole mcp.json: tools plus page_meta / sitemap (#210) and operator (#229).
+  const body = await c.req.json<{ tools?: unknown; page_meta?: unknown; sitemap?: unknown; operator?: unknown }>().catch(() => null);
+  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools ?? [], c.env, { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator });
   return c.json(payload, status as 200 | 400 | 422);
 });
 
