@@ -39,6 +39,14 @@ APPS_DOMAIN_BASE = "proappstore.online"
 # /api/publish-app calls (Origin header present; the console). Leave unset
 # until the console's publish form renders the widget: docs/turnstile.md.
 # TURNSTILE_SITE_KEY = "0x..."
+# Cloudflare Access (#233). With BOTH set, every request except /health must
+# carry a valid Cf-Access-Jwt-Assertion (signature, issuer, audience, expiry);
+# sibling Workers on INTERNAL_TOKEN are exempt. Unset = observe-only, as before.
+# Values come from the Access application provisioned in #234. Before setting
+# them, give non-browser callers (the CLI's `pas publish`) an Access path — a
+# service token or bypass policy — or they will be refused.
+# ACCESS_TEAM_DOMAIN = "<team>.cloudflareaccess.com"
+# ACCESS_AUD = "<application AUD tag>"
 
 [[d1_databases]]
 binding = "DB"

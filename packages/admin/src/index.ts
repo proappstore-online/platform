@@ -1,4 +1,5 @@
 import { internalTokenOk, turnstileEnabled, turnstileFailure, turnstileTokenFrom, verifyTurnstile } from "@proappstore/build-core";
+import { AccessKeysUnavailable, isValidTeamDomain, verifyAccessJwt } from "./access-jwt.js";
 import { handleAuthMe, verifySession } from "./auth.js";
 import type { Env } from "./env.js";
 import { guardProvisionRequest } from "./provision-guard.js";
@@ -14,28 +15,55 @@ import {
 } from "./publish.js";
 
 /**
- * Cloudflare Access is expected in front of `admin.proappstore.online` (#83).
+ * Cloudflare Access in front of `admin.proappstore.online` (#83, #233).
  *
  * This worker mints org repos and Cloudflare resources, so the session check on
  * each route should not be the only thing between the internet and that
  * machinery. Access terminates at the edge and stamps `Cf-Access-Jwt-Assertion`
  * on requests it forwards.
  *
- * Observed, NOT enforced, on purpose. A Worker cannot make Access exist, and
- * hard-blocking on a missing header would take publishing down in any
- * environment where Access is not configured — including local `wrangler dev`
- * and any preview deployment. The warning makes an unprotected deployment
- * visible in logs instead of silent; enforcement is a deploy-time decision.
+ * Enforced only when BOTH `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are set (the
+ * Access application is human-provisioned, #234). Then every request except
+ * /health must carry an Access JWT that verifies — signature against the team's
+ * keys, issuer, audience, expiry — or it is refused with 401; if the keys cannot
+ * be fetched, 503. Sibling Workers presenting INTERNAL_TOKEN are exempt: they
+ * reach this worker over service bindings, which never cross the Access edge.
  *
- * Only sampled on mutating routes: a warning per health check would be noise.
+ * Unconfigured, the check stays observe-only as before: a Worker cannot make
+ * Access exist, and hard-blocking would take publishing down wherever Access is
+ * not set up (local `wrangler dev`, previews). Mutating requests without the
+ * header are logged so an unprotected deployment is visible.
  */
-function observeAccessEdge(request: Request, pathname: string): void {
-  if (request.method === "GET" || pathname === "/health") return;
-  if (request.headers.get("Cf-Access-Jwt-Assertion")) return;
-  console.warn(
-    `[#83] ${pathname} reached without Cf-Access-Jwt-Assertion — ` +
-      "Cloudflare Access does not appear to be in front of this worker",
-  );
+async function checkAccessEdge(request: Request, env: Env, pathname: string): Promise<Response | null> {
+  if (pathname === "/health") return null;
+  const assertion = request.headers.get("Cf-Access-Jwt-Assertion");
+
+  if (!env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) {
+    if (request.method !== "GET" && !assertion) {
+      console.warn(
+        `[#83] ${pathname} reached without Cf-Access-Jwt-Assertion — ` +
+          "Cloudflare Access does not appear to be in front of this worker",
+      );
+    }
+    return null;
+  }
+
+  if (internalTokenOk(request.headers.get("X-Internal-Token"), env.INTERNAL_TOKEN)) return null;
+  if (!isValidTeamDomain(env.ACCESS_TEAM_DOMAIN)) {
+    console.error(`[#233] ACCESS_TEAM_DOMAIN "${env.ACCESS_TEAM_DOMAIN}" is not <team>.cloudflareaccess.com`);
+    return Response.json({ error: "Cloudflare Access verification unavailable" }, { status: 503 });
+  }
+  if (!assertion) return Response.json({ error: "Cloudflare Access authentication required" }, { status: 401 });
+  try {
+    await verifyAccessJwt(assertion, { teamDomain: env.ACCESS_TEAM_DOMAIN, audience: env.ACCESS_AUD });
+    return null;
+  } catch (e) {
+    if (e instanceof AccessKeysUnavailable) {
+      console.error(`[#233] ${e.message}`);
+      return Response.json({ error: "Cloudflare Access verification unavailable" }, { status: 503 });
+    }
+    return Response.json({ error: "invalid Cloudflare Access token" }, { status: 401 });
+  }
 }
 
 function safeGitHubLogin(login: string | null): string | null {
@@ -84,7 +112,8 @@ async function verifyPublishLogin(request: Request, env: Env): Promise<string | 
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    observeAccessEdge(request, url.pathname);
+    const accessRefusal = await checkAccessEdge(request, env, url.pathname);
+    if (accessRefusal) return accessRefusal;
 
     if (url.pathname === "/health") {
       return Response.json({ ok: true, worker: "proappstore-admin", version: "0.3.0" });

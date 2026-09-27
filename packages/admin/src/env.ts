@@ -34,4 +34,10 @@ export type Env = {
    *  CLI publishes send no Origin and stay on session + provision guard. */
   TURNSTILE_SITE_KEY?: string;
   TURNSTILE_SECRET_KEY?: string;
+  /** Cloudflare Access (#233): the team domain (`<team>.cloudflareaccess.com`)
+   *  and the Access application's AUD tag (vars). When BOTH are set, every
+   *  request except /health must carry a valid Access JWT (INTERNAL_TOKEN
+   *  callers exempt); unset, Access is only observed. Provisioned in #234. */
+  ACCESS_TEAM_DOMAIN?: string;
+  ACCESS_AUD?: string;
 };
