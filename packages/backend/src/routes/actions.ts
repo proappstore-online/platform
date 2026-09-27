@@ -14,6 +14,30 @@ import { getVerifier, runVerifier } from '../lib/verifiers/index.js';
 
 export const actionRoutes = new Hono<{ Bindings: Env }>();
 
+/**
+ * Success audit of role-gated actions (#232). `enforceActionAuth` marks the
+ * request when an `auth.app_roles` gate grants it; this middleware writes one
+ * `app_action_audit` row once the action has answered with a success. Failures
+ * never reach the row: they are thrown, answered by onError, and recorded in
+ * app_logs by operation-log.ts as before.
+ */
+const roleGrants = new WeakMap<Request, { actorId: string; role: string }>();
+
+actionRoutes.use('/apps/:appId/actions/:name', async (c, next) => {
+  await next();
+  const grant = roleGrants.get(c.req.raw);
+  if (!grant || c.res.status >= 400) return;
+  try {
+    await c.env.DB.prepare(
+      'INSERT INTO app_action_audit (app_id, action_name, actor_id, role_name, status, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).bind(c.req.param('appId'), c.req.param('name'), grant.actorId, grant.role, c.res.status, Date.now()).run();
+  } catch (e) {
+    // The action has already run; an audit write failing must not turn its
+    // success into an error. Logged so a gap in the trail is visible.
+    console.error('[action-audit] write failed', { appId: c.req.param('appId'), action: c.req.param('name'), err: String(e) });
+  }
+});
+
 interface ActionBody {
   params?: Record<string, unknown>;
 }
@@ -72,7 +96,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
         throw new HttpError('token is not scoped to this action', 403);
       }
       userId = verified.user.id;
-      await enforceActionAuth(c.env.DB, appId, manifest, verified.user);
+      await enforceActionAuth(c.env.DB, appId, manifest, verified.user, c.req.raw);
       // Never forward the token upstream: the data worker can only verify
       // session JWTs, and a long-lived credential must not travel a second hop.
       token = null;
@@ -81,7 +105,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
     } else {
       const user = await requireUser(c);
       userId = user.id;
-      await enforceActionAuth(c.env.DB, appId, manifest, user);
+      await enforceActionAuth(c.env.DB, appId, manifest, user, c.req.raw);
     }
   }
 
@@ -311,6 +335,7 @@ async function enforceActionAuth(
   appId: string,
   manifest: ToolManifest,
   user: FasUser,
+  req: Request,
 ): Promise<void> {
   const platformRoles = manifest.auth?.platform_roles ?? [];
   if (platformRoles.length > 0 && !platformRoles.some((role) => user.roles.includes(role))) {
@@ -329,7 +354,9 @@ async function enforceActionAuth(
     .bind(appId, user.id, user.login)
     .all<{ role_name: string }>();
   const assigned = new Set((rows.results ?? []).map((row) => row.role_name));
-  if (!appRoles.some((role) => assigned.has(role))) {
+  const granted = appRoles.find((role) => assigned.has(role));
+  if (!granted) {
     throw new HttpError('requires app role', 403);
   }
+  roleGrants.set(req, { actorId: user.id, role: granted });
 }

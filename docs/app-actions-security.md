@@ -100,6 +100,19 @@ UPDATE onboarding_items SET done = :done WHERE id = :id
 The unsafe query lets any authenticated user update any row if they know or can
 guess an id.
 
+### Success audit of role-gated actions (#232)
+
+Every successful call of an action that declares `auth.app_roles` writes one row
+to `app_action_audit`. Nothing needs to be added to the action.
+
+- **Recorded:** app, action name, the caller's user id, the app role that granted
+  the call, the response status, and the time.
+- **Not recorded:** params, SQL or results. The trail shows what was done, not
+  with which data.
+- **Not audited:** actions without `auth.app_roles`, calls refused at the gate,
+  and calls that fail downstream. Refusals are still logged to `app_logs` as
+  operation failures (`source = 'server'`), as before.
+
 ## Guard idioms (the SQL IS the security boundary)
 
 Registered actions are directly POSTable by any signed-in PAS user — the guard
