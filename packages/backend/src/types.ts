@@ -22,6 +22,8 @@ export interface Env {
   STRIPE_PRO_MONTHLY_PRICE_ID?: string;
   /** Signs + verifies PAS session JWTs (build-core/session-jwt). */
   SESSION_SIGNING_KEY: string;
+  /** Step-up window for `step_up` actions, seconds (#231). Default 300. */
+  STEP_UP_MAX_AGE_SECONDS?: string;
   /** Public base URL of this API, for building OAuth callback URLs. e.g. https://api.proappstore.online */
   APP_BASE?: string;
   /** PAS OAuth app credentials — set as secrets to enable browser sign-in. */

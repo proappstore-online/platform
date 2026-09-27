@@ -294,6 +294,11 @@ function validateManifest(tool: ToolManifest, opts: { source: ToolSource } = { s
     }
   }
 
+  if (tool.step_up !== undefined) {
+    if (typeof tool.step_up !== 'boolean') return 'step_up must be a boolean';
+    if (tool.step_up && tool.requires_auth !== true) return 'step_up is only allowed on tools that require auth';
+    if (tool.step_up && tool.schedule !== undefined) return 'scheduled tools cannot declare step_up (no one signs in)';
+  }
   if (tool.schedule !== undefined) {
     if (tool.operation !== 'execute' && tool.operation !== 'batch') return 'schedule is only allowed on execute or batch tools';
     if (tool.requires_auth !== true) return 'scheduled tools must require auth';
@@ -790,6 +795,8 @@ function publicToolView(m: ToolManifest) {
     ...(m.core !== undefined ? { core: m.core } : {}),
     // Only that one is scheduled, so MCP can hide it (#203) — never its cron or fixed params.
     ...(m.schedule !== undefined ? { scheduled: true } : {}),
+    // Lets a client or MCP host step up before calling, rather than after a refusal (#231).
+    ...(m.step_up ? { step_up: true } : {}),
     ...(m.auth
       ? { auth: { required: m.auth.required, platform_roles: m.auth.platform_roles, app_roles: m.auth.app_roles } }
       : {}),

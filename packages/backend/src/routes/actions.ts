@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
-import { HttpError, optionalUser, requireUser, type FasUser } from '../lib/auth.js';
+import { HttpError, optionalUser, requireRecentAuth, requireUser, type FasUser } from '../lib/auth.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
 import {
   prepareActionBatch,
@@ -97,6 +97,8 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
       }
       userId = verified.user.id;
       await enforceActionAuth(c.env.DB, appId, manifest, verified.user, c.req.raw);
+      // #231: an app token has no auth_time and can never step up.
+      if (manifest.step_up) throw new HttpError('this action requires a recent sign-in and cannot be called with an app token', 403);
       // Never forward the token upstream: the data worker can only verify
       // session JWTs, and a long-lived credential must not travel a second hop.
       token = null;
@@ -106,6 +108,9 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
       const user = await requireUser(c);
       userId = user.id;
       await enforceActionAuth(c.env.DB, appId, manifest, user, c.req.raw);
+      // #231: after the role check, so a caller without the role is told that,
+      // not invited to re-authenticate for an action they could never run.
+      if (manifest.step_up) requireRecentAuth(user, c.env);
     }
   }
 

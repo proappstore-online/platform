@@ -139,7 +139,7 @@ async function userIdForLog(c: Context<{ Bindings: Env }>): Promise<string | nul
 app.onError(async (err, c) => {
   const status = err instanceof HttpError ? err.status as ContentfulStatusCode : 500;
   const body = err instanceof HttpError
-    ? { error: err.message }
+    ? { ...err.body, error: err.message }
     : { error: 'Internal server error' };
 
   if (!(err instanceof HttpError)) console.error('Unhandled error:', err);

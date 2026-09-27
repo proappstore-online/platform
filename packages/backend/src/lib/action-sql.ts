@@ -52,6 +52,9 @@ export interface ToolManifest {
   schedule?: ToolSchedule;
   /** Stay pre-loaded on a large app's MCP session instead of being deferred to discovery (#117). */
   core?: boolean;
+  /** Require a recent authentication (session `auth_time` within STEP_UP_MAX_AGE_SECONDS) before
+   *  the action runs (#231) — e.g. viewing an ID document. A stale caller gets `step_up_required`. */
+  step_up?: boolean;
 }
 
 interface PreparedQuery {

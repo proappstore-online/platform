@@ -6,6 +6,8 @@ export class HttpError extends Error {
   constructor(
     message: string,
     public readonly status: number,
+    /** Extra fields for the JSON error body, beside `error` (e.g. step_up_required's `message`). */
+    public readonly body?: Record<string, unknown>,
   ) {
     super(message);
   }
@@ -17,6 +19,8 @@ export interface FasUser {
   avatarUrl: string | null;
   /** Platform-level roles from session token: 'user', 'creator', 'admin'. */
   roles: string[];
+  /** Session `auth_time` (#230): when the user last actively authenticated, epoch seconds. */
+  authTime?: number;
   /** Per-app roles: { appId: ['moderator', ...] }. */
 }
 
@@ -38,7 +42,33 @@ export async function requireUser(c: Context<{ Bindings: Env }>): Promise<FasUse
     login: claims.login ?? claims.uid,
     avatarUrl: claims.avatarUrl ?? null,
     roles: claims.roles ?? ['user'],
+    ...(typeof claims.auth_time === 'number' ? { authTime: claims.auth_time } : {}),
   };
+}
+
+export const DEFAULT_STEP_UP_MAX_AGE_SECONDS = 300;
+
+/** The step-up window: STEP_UP_MAX_AGE_SECONDS when a positive integer, else 300. */
+export function stepUpMaxAgeSeconds(env: Pick<Env, 'STEP_UP_MAX_AGE_SECONDS'>): number {
+  const configured = Number(env.STEP_UP_MAX_AGE_SECONDS);
+  return Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_STEP_UP_MAX_AGE_SECONDS;
+}
+
+/**
+ * Require that the caller authenticated recently (#231) — for step_up actions.
+ * A session without `auth_time` (minted before #230) is never recent.
+ *
+ * 403, not 401: the caller IS authenticated, and the host treats a 401 from the
+ * API as a dead session and clears the cookie — which would sign the user out
+ * instead of letting the client run the passkey step-up
+ * (`/.pas/auth/passkey/step-up`) and retry.
+ */
+export function requireRecentAuth(user: FasUser, env: Pick<Env, 'STEP_UP_MAX_AGE_SECONDS'>): void {
+  const maxAge = stepUpMaxAgeSeconds(env);
+  const age = user.authTime === undefined ? Infinity : Math.floor(Date.now() / 1000) - user.authTime;
+  if (!(age <= maxAge)) {
+    throw new HttpError('step_up_required', 403, { message: 'Recent authentication required', max_age: maxAge });
+  }
 }
 
 /**

@@ -868,6 +868,39 @@ describe('PUT /v1/apps/:appId/tools — operator gate (#229)', () => {
   });
 });
 
+// #231: step_up registers only on tools a signed-in person calls.
+describe('PUT /v1/apps/:appId/tools — step_up (#231)', () => {
+  const put = (tool: Record<string, unknown>) => app.request(
+    '/v1/apps/test-app/tools',
+    { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools: [tool] }) },
+    makeEnv({}, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }))),
+  ).then(async (res) => ({ status: res.status, body: (await res.json()) as { error?: string } }));
+
+  it('accepts step_up true or false on an authenticated tool', async () => {
+    expect((await put({ ...validTool, step_up: true })).status).toBe(200);
+    expect((await put({ ...validTool, step_up: false })).status).toBe(200);
+  });
+
+  it('refuses a non-boolean, a public tool, and a scheduled tool', async () => {
+    const r1 = await put({ ...validTool, step_up: 'yes' });
+    expect(r1.status).toBe(400);
+    expect(r1.body.error).toContain('step_up must be a boolean');
+    const r2 = await put({
+      name: 'public_count', description: 'Count', operation: 'query', requires_auth: false, step_up: true,
+      sql: 'SELECT COUNT(*) AS n FROM items LIMIT 1', params: {},
+    });
+    expect(r2.status).toBe(400);
+    expect(r2.body.error).toContain('step_up is only allowed on tools that require auth');
+    const r3 = await put({
+      name: 'reap', description: 'Reap', operation: 'execute', requires_auth: true, step_up: true,
+      sql: 'DELETE FROM sessions WHERE expires_at < :__now', params: {},
+      auth: { caller_unscoped: { reason: 'Scheduled maintenance has no human caller.' } }, schedule: { cron: '0 3 * * *' },
+    });
+    expect(r3.status).toBe(400);
+    expect(r3.body.error).toContain('scheduled tools cannot declare step_up');
+  });
+});
+
 describe('PUT /v1/apps/:appId/tools — unscoped statement rejection (#150)', () => {
   const put = (tool: Record<string, unknown>) => app.request(
     '/v1/apps/test-app/tools',

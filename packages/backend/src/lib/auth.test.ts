@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mintSession } from '@proappstore/build-core';
-import { requireUser, requireAdmin, requireRole, requireAppOwner, HttpError } from './auth.js';
+import { requireUser, requireAdmin, requireRole, requireAppOwner, requireRecentAuth, stepUpMaxAgeSeconds, HttpError } from './auth.js';
 
 const SK = 'test-signing-key';
 
@@ -133,5 +133,47 @@ describe('role escalation prevention', () => {
     user.roles.push('admin');
     const user2 = await requireUser(makeContext(t));
     expect(user2.roles).not.toContain('admin');
+  });
+});
+
+// #231: the step-up window for step_up actions.
+describe('requireRecentAuth / stepUpMaxAgeSeconds', () => {
+  afterEach(() => vi.useRealTimers());
+  const user = (authTime?: number) => ({ id: 'gh:1', login: 'u', avatarUrl: null, roles: ['user'], ...(authTime === undefined ? {} : { authTime }) });
+
+  it('requireUser exposes the session auth_time, and omits it for sessions without one', async () => {
+    const withTime = await mintSession({ uid: 'gh:1', roles: ['user'], auth_time: 1_800_000_000, auth_method: 'passkey' }, SK);
+    expect((await requireUser(makeContext(withTime))).authTime).toBe(1_800_000_000);
+    expect((await requireUser(makeContext(await tok('gh:1')))).authTime).toBeUndefined();
+  });
+
+  it('defaults to 300 seconds and honours a positive integer STEP_UP_MAX_AGE_SECONDS', () => {
+    expect(stepUpMaxAgeSeconds({})).toBe(300);
+    expect(stepUpMaxAgeSeconds({ STEP_UP_MAX_AGE_SECONDS: '120' })).toBe(120);
+    for (const bad of ['0', '-5', 'abc', '1.5', '']) expect(stepUpMaxAgeSeconds({ STEP_UP_MAX_AGE_SECONDS: bad }), bad).toBe(300);
+  });
+
+  it('passes inside the window, including its last second, and refuses one second past it', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-27T12:00:00Z'));
+    const now = Math.floor(Date.now() / 1000);
+    expect(() => requireRecentAuth(user(now - 300), {})).not.toThrow();
+    expect(() => requireRecentAuth(user(now - 60), { STEP_UP_MAX_AGE_SECONDS: '60' })).not.toThrow();
+    expect(() => requireRecentAuth(user(now - 61), { STEP_UP_MAX_AGE_SECONDS: '60' })).toThrow('step_up_required');
+  });
+
+  it('refuses with a 403 step_up_required carrying the message and window, and refuses a missing auth_time', () => {
+    const now = Math.floor(Date.now() / 1000);
+    for (const u of [user(now - 301), user()]) {
+      try {
+        requireRecentAuth(u, {});
+        expect.unreachable('should have thrown');
+      } catch (e) {
+        expect(e).toBeInstanceOf(HttpError);
+        expect((e as HttpError).status).toBe(403);
+        expect((e as HttpError).message).toBe('step_up_required');
+        expect((e as HttpError).body).toEqual({ message: 'Recent authentication required', max_age: 300 });
+      }
+    }
   });
 });
