@@ -282,7 +282,9 @@ action until its manifest is re-registered and create an app alert.
 
 Owners can inspect `GET /v1/apps/:appId/scheduled-runs` (optional `status`,
 `limit`) or the MCP `list_scheduled_runs` tool. Registration/deploy logs print
-the action name and UTC cron.
+the action name and UTC cron. Run history is kept for 30 days
+(#27): the daily prune deletes runs that were due more than 30 days ago, except
+a run still `claimed`.
 
 ## Verify actions
 

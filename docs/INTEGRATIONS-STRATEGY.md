@@ -28,6 +28,8 @@ The per-request rate-limit ledgers are `maps_usage` (1-hour window), `sms_usage`
 
 The same prune covers the per-day and per-window rate-limit counters (#27), which are also read only for their current window: `app_proxy_usage` and `app_proxy_usage_user` (UTC day), `ai_daily_budget` (UTC day), `license_validate_attempts` (60 seconds, keyed by caller IP) and `provision_attempts` (1 hour or 1 day). Rows older than 2 days are deleted, so the current window is never touched.
 
+The same prune keeps 30 days of scheduled-action run history (`scheduled_action_runs`, #27). It never deletes a `claimed` run, which is the live-claim overlap guard. The failure breaker lives in `scheduled_action_state` and is unaffected.
+
 ### Tier 2: User-key vault (proxy)
 
 Dev or user brings their own API key. Platform stores it encrypted, injects it server-side. The browser never sees the key.

@@ -12,7 +12,7 @@ const prune = () => SELF.fetch(`${BASE}/v1/internal/logs/prune`, { method: 'POST
 
 beforeEach(async () => {
   mockNetwork();
-  for (const t of [...LEDGERS, ...COUNTERS, 'webhook_deliveries', 'app_webhooks']) await env.DB.prepare(`DELETE FROM ${t}`).run();
+  for (const t of [...LEDGERS, ...COUNTERS, 'webhook_deliveries', 'app_webhooks', 'scheduled_action_runs', 'scheduled_action_state']) await env.DB.prepare(`DELETE FROM ${t}`).run();
 });
 
 describe('rate-limit ledger retention against real D1', () => {
@@ -49,6 +49,7 @@ describe('rate-limit ledger retention against real D1', () => {
     expect(body.ledgerRowsDeleted).toEqual({
       maps_usage: 0, sms_usage: 0, notification_log: 0, webhook_deliveries: 0, webhook_deliveries_orphaned: 0,
       app_proxy_usage: 0, app_proxy_usage_user: 0, ai_daily_budget: 0, license_validate_attempts: 0, provision_attempts: 0,
+      scheduled_action_runs: 0,
     });
     expect(await count('maps_usage')).toBe(1);
   });
@@ -138,5 +139,43 @@ describe('rate-limit counter retention against real D1', () => {
       const rows = await env.DB.prepare(`SELECT key, count FROM ${t} ORDER BY key`).all<{ key: string; count: number }>();
       expect(rows.results).toEqual([{ key: 'ip:live', count: 4 }, { key: 'user:gh:1:d', count: 3 }]);
     }
+  });
+});
+
+// #27: scheduled-action run history keeps 30 days. A claimed run is never
+// deleted (the live-claim overlap guard), and the breaker state is separate.
+describe('scheduled-action run retention against real D1', () => {
+  const addRun = (runId: string, dueAt: number, status: string) => env.DB.prepare(
+    `INSERT INTO scheduled_action_runs (run_id, app_id, action_name, source, due_at, claimed_at, finished_at, status)
+     VALUES (?, 'demo', ?, 'code', ?, ?, ?, ?)`,
+  ).bind(runId, `act-${runId}`, dueAt, dueAt, status === 'succeeded' || status === 'failed' ? dueAt + 1000 : null, status).run();
+  const remaining = async () => (await env.DB.prepare('SELECT run_id FROM scheduled_action_runs ORDER BY run_id').all<{ run_id: string }>()).results.map((r) => r.run_id);
+
+  it('deletes runs due past 30 days, keeps runs just inside it and any claimed run', async () => {
+    const nowMs = Date.now();
+    const month = 30 * 86_400_000;
+    await addRun('a-past-succeeded', nowMs - month - 60_000, 'succeeded');
+    await addRun('b-old-failed', nowMs - 45 * 86_400_000, 'failed');
+    await addRun('c-old-stranded-due', nowMs - 45 * 86_400_000, 'due');
+    await addRun('d-old-claimed', nowMs - 45 * 86_400_000, 'claimed');
+    await addRun('e-inside', nowMs - month + 60_000, 'succeeded');
+    await addRun('f-recent', nowMs - 5 * 60_000, 'failed');
+    await env.DB.prepare(
+      "INSERT INTO scheduled_action_state (app_id, action_name, source, consecutive_failures, schedule_disabled_at) VALUES ('demo', 'act-b-old-failed', 'code', 3, NULL)",
+    ).run();
+
+    const body = await (await prune()).json() as { scheduledRunRetentionDays: number; ledgerRowsDeleted: Record<string, number>; ledgerErrors: Record<string, string> };
+    expect(body.scheduledRunRetentionDays).toBe(30);
+    expect(body.ledgerRowsDeleted).toMatchObject({ scheduled_action_runs: 3 });
+    expect(body.ledgerErrors).toEqual({});
+    expect(await remaining()).toEqual(['d-old-claimed', 'e-inside', 'f-recent']);
+
+    // The failure breaker is untouched by pruning its runs.
+    const state = await env.DB.prepare("SELECT consecutive_failures FROM scheduled_action_state WHERE app_id = 'demo'").first<{ consecutive_failures: number }>();
+    expect(state?.consecutive_failures).toBe(3);
+
+    // Idempotent.
+    const again = await (await prune()).json() as { ledgerRowsDeleted: Record<string, number> };
+    expect(again.ledgerRowsDeleted).toMatchObject({ scheduled_action_runs: 0 });
   });
 });

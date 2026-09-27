@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
 import { mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 import {
-  LEDGER_RETENTION_DAYS, PRUNE_BATCH_LIMIT, RATE_LIMIT_LEDGERS, RETENTION_DAYS, WEBHOOK_DELIVERY_RETENTION_DAYS, cutoffMs,
+  LEDGER_RETENTION_DAYS, PRUNE_BATCH_LIMIT, RATE_LIMIT_LEDGERS, RETENTION_DAYS, SCHEDULED_RUN_RETENTION_DAYS,
+  WEBHOOK_DELIVERY_RETENTION_DAYS, cutoffMs,
 } from './logs-prune.js';
 
 function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
@@ -280,5 +281,59 @@ describe('POST /v1/internal/logs/prune — webhook deliveries (#27)', () => {
     });
     const body = await (await prune('internal-tok', db)).json();
     expect(body).toMatchObject({ ledgerRowsDeleted: { webhook_deliveries: 4 }, ledgerErrors: { sms_usage: 'no such table: sms_usage' } });
+  });
+});
+
+// #27: scheduled-action run history keeps 30 days; a live claim is never deleted.
+describe('POST /v1/internal/logs/prune — scheduled-action runs (#27)', () => {
+  const NOW = 1_800_000_000_000;
+  const isRuns = (sql: string) => sql.startsWith('DELETE FROM scheduled_action_runs ');
+  const runsDb = (r: { runs?: number | Error; maps?: number } = {}) => {
+    const db = pruneDb({ deleted: 5 });
+    const base = db.prepare.getMockImplementation();
+    db.prepare.mockImplementation((sql: string) => {
+      const v = isRuns(sql) ? r.runs ?? 0 : sql.startsWith('DELETE FROM maps_usage ') ? r.maps ?? 0 : undefined;
+      if (v === undefined) return base ? base(sql) : mockStmt();
+      const stmt = mockStmt({ run: { meta: { changes: v instanceof Error ? 0 : v } } });
+      if (v instanceof Error) stmt.run.mockRejectedValue(v);
+      return stmt;
+    });
+    return db;
+  };
+  beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(NOW); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('deletes runs due more than 30 days ago (ms), never a claimed run, batch-bounded by rowid', async () => {
+    const db = runsDb();
+    expect((await prune('internal-tok', db)).status).toBe(200);
+    const i = db.prepare.mock.calls.findIndex((c) => isRuns(String(c[0])));
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(String(db.prepare.mock.calls[i]![0])).toBe(
+      "DELETE FROM scheduled_action_runs WHERE rowid IN (SELECT rowid FROM scheduled_action_runs WHERE due_at < ? AND status <> 'claimed' LIMIT ?)",
+    );
+    expect(SCHEDULED_RUN_RETENTION_DAYS).toBe(30);
+    expect(db.prepare.mock.results[i]!.value.bind.mock.calls[0]).toEqual([NOW - 30 * 86_400_000, PRUNE_BATCH_LIMIT]);
+  });
+
+  it('reports the count and retention; a full batch flags a backlog', async () => {
+    let body = await (await prune('internal-tok', runsDb({ runs: 640 }))).json();
+    expect(body).toMatchObject({
+      scheduledRunRetentionDays: 30,
+      ledgerRowsDeleted: { scheduled_action_runs: 640 },
+      ledgerBacklog: false, ledgerErrors: {},
+    });
+    body = await (await prune('internal-tok', runsDb({ runs: PRUNE_BATCH_LIMIT }))).json();
+    expect(body).toMatchObject({ ledgerBacklog: true });
+  });
+
+  it('a run-history failure is reported and never blocks the other prunes', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const body = await (await prune('internal-tok', runsDb({ runs: new Error('D1_ERROR: database locked'), maps: 3 }))).json() as { ledgerRowsDeleted: Record<string, number> };
+    expect(body).toMatchObject({
+      deleted: 5,
+      ledgerRowsDeleted: { maps_usage: 3 },
+      ledgerErrors: { scheduled_action_runs: 'D1_ERROR: database locked' },
+    });
+    expect(body.ledgerRowsDeleted).not.toHaveProperty('scheduled_action_runs');
   });
 });

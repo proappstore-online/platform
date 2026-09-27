@@ -63,16 +63,33 @@ function ledgerCutoff(cutoffMs: number, unit: (typeof RATE_LIMIT_LEDGERS)[number
  * whose webhook was deleted. `created_at` is in seconds.
  */
 export const WEBHOOK_DELIVERY_RETENTION_DAYS = 7;
-const WEBHOOK_DELIVERY_PRUNES = [
+/**
+ * Scheduled-action run history (#27): one row per run, forever, while owners
+ * see at most the latest 200 per app. Keep 30 days, like app logs. Safe for the
+ * executor: due minutes come only from the current tick (no backfill), and the
+ * failure breaker lives in `scheduled_action_state`, not in these rows. A
+ * `claimed` row is never deleted — it is the live-claim overlap guard, and
+ * stale-claim recovery finishes it within minutes. `due_at` is in ms.
+ */
+export const SCHEDULED_RUN_RETENTION_DAYS = 30;
+const RETENTION_PRUNES = [
   {
     key: 'webhook_deliveries',
+    table: 'webhook_deliveries',
     where: 'created_at < ?',
     binds: (nowMs: number) => [Math.floor(cutoffMs(nowMs, WEBHOOK_DELIVERY_RETENTION_DAYS) / 1000)],
   },
   {
     key: 'webhook_deliveries_orphaned',
+    table: 'webhook_deliveries',
     where: 'NOT EXISTS (SELECT 1 FROM app_webhooks w WHERE w.id = webhook_deliveries.webhook_id)',
     binds: () => [],
+  },
+  {
+    key: 'scheduled_action_runs',
+    table: 'scheduled_action_runs',
+    where: "due_at < ? AND status <> 'claimed'",
+    binds: (nowMs: number) => [cutoffMs(nowMs, SCHEDULED_RUN_RETENTION_DAYS)],
   },
 ] as const;
 
@@ -129,16 +146,16 @@ logsPruneRoutes.post('/internal/logs/prune', async (c) => {
     }
   }
   // Same batching and isolation; reported alongside the ledgers so the prune
-  // workflow's existing error and backlog checks cover it.
-  for (const { key, where, binds } of WEBHOOK_DELIVERY_PRUNES) {
+  // workflow's existing error and backlog checks cover them.
+  for (const { key, table, where, binds } of RETENTION_PRUNES) {
     try {
       const res = await c.env.DB.prepare(
-        `DELETE FROM webhook_deliveries WHERE id IN (SELECT id FROM webhook_deliveries WHERE ${where} LIMIT ?)`,
+        `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE ${where} LIMIT ?)`,
       ).bind(...binds(now), PRUNE_BATCH_LIMIT).run();
       ledgerRowsDeleted[key] = res.meta?.changes ?? 0;
     } catch (err) {
       ledgerErrors[key] = err instanceof Error ? err.message.slice(0, 200) : 'prune failed';
-      console.error(`[logs-prune] webhook delivery prune failed key=${key}`, ledgerErrors[key]);
+      console.error(`[logs-prune] retention prune failed key=${key}`, ledgerErrors[key]);
     }
   }
 
@@ -152,6 +169,7 @@ logsPruneRoutes.post('/internal/logs/prune', async (c) => {
     stillOverdue: overdue,
     ledgerRetentionDays: LEDGER_RETENTION_DAYS,
     webhookDeliveryRetentionDays: WEBHOOK_DELIVERY_RETENTION_DAYS,
+    scheduledRunRetentionDays: SCHEDULED_RUN_RETENTION_DAYS,
     ledgerRowsDeleted,
     // A full batch may have left expired rows behind: the caller runs again.
     ledgerBacklog: Object.values(ledgerRowsDeleted).some((n) => n >= PRUNE_BATCH_LIMIT),
