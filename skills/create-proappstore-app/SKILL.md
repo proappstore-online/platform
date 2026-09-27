@@ -120,8 +120,9 @@ post-deploy smoke once a flow exists. Record each item as passed, pending
 Render [references/output-template.md](references/output-template.md): what
 was created, the template and **copied revision** (the `Template revision:`
 step), verification results, the day-one follow-ups from the template's known
-deviations, and any blockers. Do not call `publish_app`; storefront listing is
-a separate decision the user makes later.
+deviations, the build hand-off (below), and any blockers.
+Do not call `publish_app`; storefront listing is a separate decision the user
+makes later.
 
 ## Idempotent reruns
 
@@ -158,6 +159,18 @@ are Application Standard clauses the new app fails on day one. For
 boot key to `stores-theme` (https://docs.proappstore.online/standard/ui/#pas-ui-002),
 and remove `user-scalable=no` (https://docs.proappstore.online/standard/ui/#pas-ui-007).
 List them as the first three tasks, with the clause URLs.
+
+Then hand off the build. The successful `provision_pas_app` result ends with a
+"Next — build the app on ProShell" block; carry it into **Next steps**:
+- wrap the whole app in `<ProShell app={app} nav={[…]}>` **first**, listing
+  every screen in `nav`. The shell renders `<nav aria-label="Main">`, so there
+  is no navigation on a page and no second navbar;
+- build the screens from the SDK components (`PageHeader`, `Button`, `Card`,
+  `Input`, `Modal`, `Tabs`, `EmptyState`, `useToast`), not hand-rolled chrome.
+
+Point to `sdk_reference` with feature `shell` (a complete minimal app) and
+`components` (every component). Never hand off a plan for an app without
+ProShell or without `nav`.
 
 ## Examples and negative cases
 

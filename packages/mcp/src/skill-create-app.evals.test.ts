@@ -107,3 +107,63 @@ describe('create-proappstore-app — end-to-end evaluations', () => {
     for (const b of ['credentials', 'ownership', 'template', 'compliance']) expect(blockers.has(b), b).toBe(true);
   });
 });
+
+/**
+ * #237: the building AI learns the app frame from this output alone, so a
+ * provisioned app must come with "wrap it in ProShell with real nav items". An
+ * eval that would accept output without it — i.e. guidance that yields a
+ * nav-less app — fails here, not in production.
+ */
+const SHELL_WITH_NAV = [
+  /<ProShell app=\{app\}[^>]*\bnav=\{/,          // the frame, with nav, as the first step
+  /<nav aria-label="Main">/,                        // the landmark it renders
+  /sdk_reference\(\{ feature: 'shell' \}\)/,        // where the complete minimal app lives
+  /sdk_reference\(\{ feature: 'components' \}\)/,   // where the components are listed
+];
+const teachesShellWithNav = (text: string) => SHELL_WITH_NAV.every((re) => re.test(text));
+
+describe('create-proappstore-app — ProShell with a nav landmark (#237)', () => {
+  const asserted = (c: Case) => [...(c.expect.contains ?? []), ...(c.expect.containsRegex ?? [])].join('\n');
+
+  it('every case that ends in a provisioned app asserts ProShell with nav in its expected output', () => {
+    const provisioned = fixture.cases.filter((c) => (c.expect.contains ?? []).includes('PAS app provisioned'));
+    expect(provisioned.map((c) => c.id).sort()).toEqual(['rerun-existing-owned', 'success-verified']);
+    for (const c of provisioned) {
+      expect(c.expect.containsRegex ?? [], c.id).toContain(SHELL_WITH_NAV[0]!.source);
+      for (const marker of ['<nav aria-label="Main">', "sdk_reference({ feature: 'shell' })", "sdk_reference({ feature: 'components' })"]) {
+        expect(asserted(c), `${c.id} must assert ${marker}`).toContain(marker);
+      }
+    }
+  });
+
+  it('the dry-run plan already names the ProShell-with-nav build step', () => {
+    const dry = fixture.cases.find((c) => c.id === 'dry-run-plan')!;
+    expect(asserted(dry)).toContain('then: build the app on ProShell');
+  });
+
+  it('treats nav-less guidance as failing', () => {
+    // What the old guidance amounted to: the shell, but no navigation to hand it.
+    expect(teachesShellWithNav('Wrap the app in <ProShell app={app} appName="My App">. See sdk_reference.')).toBe(false);
+    expect(teachesShellWithNav('Add <nav aria-label="Main"> to your Home page.')).toBe(false);
+  });
+
+  it('the skill and its report template hand the build off as ProShell with nav, never without', () => {
+    const skill = readFileSync(resolve(__dirname, '../../../skills/create-proappstore-app/SKILL.md'), 'utf8');
+    const template = readFileSync(resolve(__dirname, '../../../skills/create-proappstore-app/references/output-template.md'), 'utf8');
+    for (const doc of [skill, template]) {
+      expect(doc).toContain('<ProShell app={app} nav={[…]}>');
+      expect(doc).toContain('<nav aria-label="Main">');
+      expect(doc).toMatch(/`sdk_reference`[^\n]*`?shell`?/);
+    }
+    expect(skill).toContain('Never hand off a plan for an app without\nProShell or without `nav`.');
+  });
+
+  it('the real success output teaches ProShell with nav, and so does scaffold_app', async () => {
+    const { BUILD_WITH_PROSHELL } = await import('./sdk-reference.js');
+    expect(teachesShellWithNav(BUILD_WITH_PROSHELL)).toBe(true);
+    expect(BUILD_WITH_PROSHELL).toMatch(/1\. First, wrap the whole app in `<ProShell/);
+    // scaffold_app returns the same block (project-tools.ts); pin that it is wired.
+    const src = readFileSync(resolve(__dirname, 'project-tools.ts'), 'utf8');
+    expect(src.match(/\bBUILD_WITH_PROSHELL,\n/g)).toHaveLength(2);
+  });
+});

@@ -263,13 +263,13 @@
         "scaffold_app"
       ],
       "mutating": true,
-      "bytes": 29442,
-      "digest": "af0d89da9693a6eff25367db219db1b278643508e1f487c1087b6c2726f0f31d",
+      "bytes": 30937,
+      "digest": "a0ed573cd8701672a41a398abee543954f1e891a41e434bb77ff925d509cad2e",
       "files": [
         {
           "path": "evals/cases.json",
-          "bytes": 6848,
-          "sha256": "d2b32d2c91624d9fe1f9eafdabdccd3eedf7e0f17ba1c30e740c7e82005f1183"
+          "bytes": 7369,
+          "sha256": "72735633e962a51a30be0befb910f83692e776e32cec20aaf41988013a411485"
         },
         {
           "path": "evals/contract.json",
@@ -293,8 +293,8 @@
         },
         {
           "path": "references/output-template.md",
-          "bytes": 1543,
-          "sha256": "1f62452618087d05e24e40416b2bae35053e83c9c5864e5ee76eb67eabe1e345"
+          "bytes": 1795,
+          "sha256": "9f8577a8bc94fa0c744134b0b306b2c77e5ddca6654a78edc2d27c9ae3c1c11f"
         },
         {
           "path": "references/provisioning-tools.md",
@@ -308,8 +308,8 @@
         },
         {
           "path": "SKILL.md",
-          "bytes": 9651,
-          "sha256": "db31a6da64001a8615feda7f678c49ca0764bccd6112760126e8f54904f86c30"
+          "bytes": 10373,
+          "sha256": "b1c46a766e325b3900036d1fb8ed68b01e13c0d3e18952a2e9f4b1ccd6ae434e"
         }
       ],
       "evaluations": {
@@ -332,9 +332,9 @@
           "bundle_bytes": 36864
         },
         "actual": {
-          "skill_md_bytes": 9651,
-          "references_bytes": 9163,
-          "bundle_bytes": 29442
+          "skill_md_bytes": 10373,
+          "references_bytes": 9415,
+          "bundle_bytes": 30937
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",

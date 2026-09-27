@@ -49,11 +49,11 @@
     },
     {
       "name": "platform_guide",
-      "description": "Get the ProAppStore platform guide (skills.md) for AI-assisted development."
+      "description": "Get the ProAppStore platform guide (skills.md) for AI-assisted development, with current instructions for building the UI on ProShell with nav."
     },
     {
       "name": "sdk_reference",
-      "description": "Quick reference for @proappstore/sdk — imports, features, and usage patterns."
+      "description": "Quick reference for @proappstore/sdk. Start with feature 'shell' (wrap the app in <ProShell app={app} nav={…}>, how to add navigation, a complete minimal app) and 'components' (every UI component), then auth, db, storage, maps, AI and hooks."
     },
     {
       "name": "recipe",

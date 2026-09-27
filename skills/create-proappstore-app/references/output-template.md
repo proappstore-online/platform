@@ -29,6 +29,7 @@ section only if it is genuinely empty.
 3. Remove `user-scalable=no` — https://docs.proappstore.online/standard/ui/#pas-ui-007
 
 ### Next steps
+- Build on ProShell. Wrap the whole app in `<ProShell app={app} nav={[…]}>` first, with every screen in `nav` (the shell renders `<nav aria-label="Main">`). Build the screens from the SDK components; see `sdk_reference` → `shell` and `components`.
 - `git clone` the repo, `pnpm install`, build the first feature; every push to `main` deploys.
 - When ready for the storefront: ask for `publish_app` (name, category, description) — not run by this skill.
 

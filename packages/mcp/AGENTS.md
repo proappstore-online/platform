@@ -17,6 +17,7 @@ Per app:  https://mcp.proappstore.online/mcp/apps/<app_id>
 - Never paste tokens, secrets or API keys into tool arguments other than the `token` argument the loop tools define. Vaulted keys stay on the platform.
 - A failure comes back with `isError: true`; treat it as a failure even if the text looks informative.
 - You act as the authenticated account. If `whoami` is not the person you expect, stop.
+- Build every app's UI on ProShell. Wrap the whole app in `<ProShell app={app} nav={[…]}>` first, with every screen in `nav`: the shell renders the `<nav aria-label="Main">`. Build the screens from the SDK components; don't hand-roll a header, navbar or profile menu. `sdk_reference` with feature `shell` gives a complete minimal app; feature `components` lists every component.
 
 ## Setup
 
@@ -62,7 +63,7 @@ Project-local `.mcp.json`:
 1. list_templates              — pick the template (default: template-app)
 2. provision_pas_app           — dry_run: true first, then confirm: true
 3. list_files / read_file      — read the scaffold (web/src/App.tsx, mcp.json, migrations.json)
-4. sdk_reference / recipe      — before writing platform code
+4. sdk_reference               — feature 'shell' first: wrap the app in <ProShell app={app} nav={…}>; then 'components', and recipe
 5. batch_write_files           — write; each commit deploys (migrations → actions → R2)
 6. deploy_status / schema_status — confirm the deploy and the D1 migrations
 7. qa_save_flow + qa_run       — add a browser flow; it reruns after every deploy

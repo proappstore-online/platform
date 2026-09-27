@@ -22,8 +22,8 @@ Remote MCP server for AI agents to interact with the ProAppStore platform.
 | `schema_status` | Session token | Show an app's D1 migration status (#33) — recent migrate attempts + whether the latest applied or FAILED (surfaces schema drift). Owner-only |
 | `app_info` | None | Get app URLs, repo, data worker, status |
 | `list_templates` | None | Approved-template catalogue + selection contract (#178) — read-only; the same data as https://docs.proappstore.online/templates/catalogue.json. Pass an id as `template_repo` to `provision_pas_app`; unknown/withdrawn ids are refused, deprecated ones warn, and the copied source commit is recorded on the app |
-| `platform_guide` | None | Fetch skills.md (full platform guide) |
-| `sdk_reference` | None | Quick SDK reference (auth, db, storage, maps, AI, subscriptions, hooks, UI, recipes, design_system) |
+| `platform_guide` | None | Fetch skills.md (full platform guide), with the current build-on-ProShell block appended (#237) |
+| `sdk_reference` | None | Quick SDK reference. `shell` first: the ProShell-with-`nav` app frame and a complete minimal app. `components`: every UI component. Then auth, db, storage, maps, AI, subscriptions, hooks, UI, recipes, design_system. |
 | `list_app_tools` | Connection | One app's registered tools (names, reads/writes, descriptions; params on request). Never SQL |
 | `call_app_tool` | Connection | Call one app's tool through the platform action executor (mutations audited; refused in read-only mode) |
 | `recipe` | None | Get a pre-built code recipe (19 available). No name = list all, with name = full code |

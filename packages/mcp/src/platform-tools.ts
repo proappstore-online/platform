@@ -11,7 +11,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Env } from "./env.js";
 import { getDeployStatus, pasApi } from "./api-helpers.js";
-import { buildSdkReferenceSections } from "./sdk-reference.js";
+import { BUILD_WITH_PROSHELL, buildSdkReferenceSections } from "./sdk-reference.js";
 import { getRecipe } from "../../agent-teams/src/recipes.js";
 import { TEMPLATE_CATALOGUE, DEFAULT_TEMPLATE_ID, TEMPLATE_CATALOGUE_VERSION } from "@proappstore/build-core";
 import { errText } from "./errors.js";
@@ -209,6 +209,13 @@ export function registerPlatformTools(server: McpServer, env: Env) {
         "- Audit procedure: https://docs.proappstore.online/standard/audit-instructions/",
         "- Clauses as data: https://docs.proappstore.online/standard/standard.json · finding contract: https://docs.proappstore.online/standard/finding.schema.json",
         "- Hosted apps set `initPro({ appId, authMode: 'platform-cookie' })` (PAS-AUTH-001).",
+        "",
+        "---",
+        // #237: skills.md is served by the storefront repo and can lag the SDK; this
+        // section is the current, authoritative way to build an app's UI.
+        "This section is current and supersedes any older ProShell or navigation guidance above.",
+        "",
+        BUILD_WITH_PROSHELL,
       ].join("\n");
       return { content: [{ type: "text" as const, text: text + standard }] };
     }
@@ -217,13 +224,13 @@ export function registerPlatformTools(server: McpServer, env: Env) {
   // ── sdk_reference ──────────────────────────────────────────
   server.tool(
     "sdk_reference",
-    "Quick reference for @proappstore/sdk — imports, features, and usage patterns. Covers auth, db, storage, maps, AI, subscriptions, rooms, hooks, and UI components.",
+    "Quick reference for @proappstore/sdk. Start with feature 'shell': every app is wrapped in <ProShell app={app} nav={…}> (the app frame with built-in main navigation) — how to add navigation and a complete minimal app. 'components' lists every UI component (Button, Card, Input, Modal, Tabs, EmptyState, PageHeader, useToast, …). Also covers auth, db, storage, maps, AI, subscriptions, rooms and hooks.",
     {
       feature: z.enum([
-        "all", "auth", "kv", "counters", "rooms", "proxy",
+        "all", "shell", "components", "auth", "kv", "counters", "rooms", "proxy",
         "db", "storage", "maps", "ai", "notifications", "sms",
         "subscription", "tenant", "hooks", "ui", "recipes", "design_system"
-      ]).optional().describe("Specific feature or 'all'")
+      ]).optional().describe("Specific feature, or 'all' (the default, which starts with 'shell' and 'components'). Building an app? Read 'shell' first.")
     },
     async ({ feature }) => {
       const sections = buildSdkReferenceSections();

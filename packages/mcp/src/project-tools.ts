@@ -12,6 +12,7 @@ import { z } from "zod";
 import { makeGitHub, verifyAppOwnership } from "@proappstore/build-core";
 import { selectTemplate, getTemplate, DEFAULT_TEMPLATE_ID } from "@proappstore/build-core";
 import { gateMutation, dryRun } from "./safety.js";
+import { BUILD_WITH_PROSHELL } from "./sdk-reference.js";
 
 interface ProjectToolsEnv {
   GITHUB_ORG: string;
@@ -354,6 +355,7 @@ export function registerProjectTools(
           "- replace APPNAME placeholders in template files",
           "- call /v1/provision for R2 route + D1 database + data worker + app record",
           verify === false ? "- skip live verification" : "- verify repo, provision result, deploy status, and host response",
+          "- then: build the app on ProShell — <ProShell app={app} nav={[…]}> first, SDK components for the screens (full instructions come with the result; sdk_reference({ feature: 'shell' }))",
         ].join("\n"),
         { app_id, name, template: templateId, template_repo: templateRepoName },
       );
@@ -455,6 +457,8 @@ export function registerProjectTools(
         `Repo action: ${repoCreated ? "created" : "reused"}`,
         "",
         ...steps,
+        "",
+        BUILD_WITH_PROSHELL,
       ].join("\n"));
     },
   );
@@ -543,6 +547,8 @@ export function registerProjectTools(
         `Data worker: https://data-${app_id}.proappstore.online`,
         "",
         ...steps,
+        "",
+        BUILD_WITH_PROSHELL,
       ].join("\n"));
     },
   );
