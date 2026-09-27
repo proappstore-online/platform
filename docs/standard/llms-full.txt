@@ -1,6 +1,6 @@
 # ProAppStore Recommended Application Standard — full text
 
-Version 1.6. Canonical HTML: https://docs.proappstore.online/standard/ · Data: https://docs.proappstore.online/standard/standard.json · Audit instructions: https://docs.proappstore.online/standard/audit-instructions/
+Version 1.7. Canonical HTML: https://docs.proappstore.online/standard/ · Data: https://docs.proappstore.online/standard/standard.json · Audit instructions: https://docs.proappstore.online/standard/audit-instructions/
 Clause URLs are stable: https://docs.proappstore.online/standard/<chapter page>/#<clause id in lower case>. Findings must cite them.
 
 ## Chapter STACK — Stack and platform services
@@ -3358,14 +3358,18 @@ Rationale: Screen-reader users navigate by landmark and heading; a page that is 
 
 *
 
-Recommended implementation: In `ProShell`, put route navigation in a `<nav aria-label="Main">` inside the shell's children; set the title in a route effect; add `<a href="#main" class="skip-link">`.
+Recommended implementation: Declare the app's screens with ProShell's `nav` prop: the shell renders them as a `<nav aria-label="Main">` in its topbar, with the current route marked `aria-current="page"`. Do not put navigation inside the shell's children. A custom `renderTopbar` places `ctx.nav`, and a `hideTopbar` app renders its own `<nav aria-label="Main">` (or the exported `NavBar`). Set the title in a route effect; add `<a href="#main" class="skip-link">`.
 
 *
 
 Conforming example: ```tsx
+<ProShell app={app} nav={[{ label: 'Tasks', href: '/tasks' }]}>   {/* header, nav, main */}
+  <TaskPage />
+</ProShell>
+
+// TaskPage
 useEffect(() => { document.title = `${task.title} — My App` }, [task.title])
-<nav aria-label="Main"><NavLink to="/tasks">Tasks</NavLink></nav>
-<main id="main"><h1>{task.title}</h1>…</main>
+<h1>{task.title}</h1>…
 ```
 
 *

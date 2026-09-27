@@ -38,3 +38,7 @@ export type {
   ButtonProps, ButtonVariant, CardProps, InputProps, SpinnerProps, ModalProps,
   EmptyStateProps, TabItem, TabsProps, ToastProps, ToastVariant,
 } from './ui-base.js';
+
+// NavBar (#235) — the app's main navigation; ProShell renders it from its `nav` prop
+export { NavBar } from './navbar.js';
+export type { NavBarProps, NavItem } from './navbar.js';

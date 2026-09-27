@@ -169,19 +169,30 @@ const { isSubscribed, subscribe, unsubscribe } = useProNotifications(app)
 \`\`\`tsx
 import { initPro, ProShell, Avatar, SignInButton, ProBadge, ProfileMenu, ProProfilePage } from '@proappstore/sdk'
 
-// Zero-config shell (handles auth gate, subscription gate, topbar, avatar menu):
-<ProShell app={app} appName="My App" menuItems={[{ label: 'Profile', onClick: () => navigate('/profile') }]}>
-  {children}
-</ProShell>
-
-// Custom app navigation with ProShell gates and platform account controls:
+// The app frame: auth gate, subscription gate, topbar, avatar menu — and the app's
+// main navigation. Every multi-screen app declares its screens with \`nav\`: the shell
+// renders <nav aria-label="Main"> in the topbar, marks the current route
+// (aria-current), and collapses to a menu button on small screens. Items are links;
+// render the screen for location.pathname, or pass onNavigate={navigate} with a router.
 <ProShell
   app={app}
   appName="My App"
-  renderTopbar={({ appName, profileMenu, textSizeToggle }) => (
+  nav={[{ label: 'Home', href: '/' }, { label: 'Cases', href: '/cases' }]}
+  menuItems={[{ label: 'Profile', onClick: () => navigate('/profile') }]}
+>
+  {children}
+</ProShell>
+
+// Custom topbar, keeping the gates: place the rendered \`nav\` with the account controls.
+// (renderNav={({ items, currentPath, onNavigate }) => …} replaces only the navbar.)
+<ProShell
+  app={app}
+  appName="My App"
+  nav={NAV}
+  renderTopbar={({ appName, nav, profileMenu, textSizeToggle }) => (
     <header className="top-nav">
       <a href="/">{appName}</a>
-      <nav>{/* app navigation */}</nav>
+      {nav}
       {textSizeToggle}
       {profileMenu}
     </header>
@@ -190,7 +201,8 @@ import { initPro, ProShell, Avatar, SignInButton, ProBadge, ProfileMenu, ProProf
   {children}
 </ProShell>
 
-// Fully custom shell chrome, while keeping auth/subscription gates:
+// Fully custom shell chrome, while keeping auth/subscription gates (render your own
+// <nav aria-label="Main">, e.g. the exported <NavBar items={NAV} />):
 <ProShell app={app} appName="My App" hideTopbar hideFooter>
   {children}
 </ProShell>

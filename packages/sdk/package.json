@@ -22,7 +22,8 @@
     "./ui": {
       "types": "./dist/ui.d.ts",
       "import": "./dist/ui.js"
-    }
+    },
+    "./shell.css": "./dist/shell.css"
   },
   "repository": {
     "type": "git",
@@ -34,7 +35,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/emit-shell-css.mjs",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
@@ -47,7 +48,9 @@
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.3.0",
     "react": "^19.0.0",
+    "react-dom": "19.2.6",
     "typescript": "^5.7.0"
   },
   "sideEffects": false

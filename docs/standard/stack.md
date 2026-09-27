@@ -1,6 +1,6 @@
 # Stack and platform services
 
-**Standard version 1.6** · Chapter `STACK` · Part of the [Application Standard](./index.md)
+**Standard version 1.7** · Chapter `STACK` · Part of the [Application Standard](./index.md)
 
 **Scope.** Supported runtime and toolchain; SDK and CLI use; the platform service to use for each application need, and the substitutes that are unsupported.
 

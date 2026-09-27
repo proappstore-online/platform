@@ -42,11 +42,15 @@ Identity (free, platform-provided — the platform runs the OAuth; no client sec
 - Everything — hooks, components, \`initPro\`, types — imports from \`'@proappstore/sdk'\`:
   \`import { initPro, useProAuth, ProShell, Avatar } from '@proappstore/sdk'\`.
   Subpath imports (\`@proappstore/sdk/hooks\`, \`@proappstore/sdk/ui\`) also work but are not required.
-- ProShell can wrap your entire app — handles auth gate, subscription gate, provider context, topbar, avatar menu, theme:
-  \`<ProShell app={app} appName="My App" menuItems={[{label:'Profile', onClick}]}>{children}</ProShell>\`.
-- If the app needs its own primary navigation, do NOT stack a second navbar under ProShell. Use
-  \`renderTopbar={({ profileMenu, textSizeToggle }) => <YourNav>{textSizeToggle}{profileMenu}</YourNav>}\`,
-  or \`hideTopbar hideFooter\` and compose SDK primitives directly.
+- ProShell wraps your entire app — handles auth gate, subscription gate, provider context, topbar, avatar menu, theme,
+  AND the app's main navigation. Every app with more than one screen passes its screens as \`nav\`:
+  \`<ProShell app={app} appName="My App" nav={[{label:'Home', href:'/'}, {label:'Cases', href:'/cases'}]}>{children}</ProShell>\`.
+  The shell renders them as a \`<nav aria-label="Main">\` in its topbar, marks the current route (\`aria-current\`),
+  and collapses to a menu button on small screens. Render the screen for \`location.pathname\`; with a router,
+  also pass \`onNavigate={navigate}\`. Do NOT put navigation on a Home page or stack a second navbar under ProShell.
+- For custom chrome keep the gates: \`renderNav\` replaces just the navbar; \`renderTopbar={({ nav, profileMenu,
+  textSizeToggle }) => <header>{nav}{textSizeToggle}{profileMenu}</header>}\` must place \`nav\`; with
+  \`hideTopbar hideFooter\` the app renders its own \`<nav aria-label="Main">\` (the exported \`NavBar\` does this).
 - \`<SignInButton>\` props are \`{ app, label?, provider? }\`, where provider is \`'github'\` (default) or \`'google'\`.
 
 Free primitives (capped): \`app.kv\` (per-user key/value), realtime \`app.rooms\`

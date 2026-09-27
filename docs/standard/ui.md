@@ -1,6 +1,6 @@
 # UI, browser security, and PWA
 
-**Standard version 1.6** · Chapter `UI` · Part of the [Application Standard](./index.md)
+**Standard version 1.7** · Chapter `UI` · Part of the [Application Standard](./index.md)
 
 **Scope.** UI components, browser security headers and storage, accessibility, responsive and mobile behaviour, PWA.
 
@@ -71,7 +71,7 @@ From `@proappstore/sdk/ui` and `/shell` (see [UI components](../ui.md)):
 
 | Component | Provides | Still on the app |
 |---|---|---|
-| `ProShell` | `<header>`, `<main>`, auth and subscription gates, topbar | `<nav>` landmark, headings, titles ([003](#pas-ui-003)) |
+| `ProShell` | `<header>`, `<main>`, auth and subscription gates, topbar, and — from its `nav` prop — the `<nav aria-label="Main">` landmark with `aria-current="page"`, a keyboard-operable menu button below 640 px and 44 px targets | declaring `nav`; headings, titles ([003](#pas-ui-003)); its own `<nav>` when it replaces the topbar with `hideTopbar` |
 | `Modal` | `role="dialog"`, `aria-modal`, `aria-label` from `title`, Escape to close, labelled close button | focus return to the opener; initial focus placement ([005](#pas-ui-005)) |
 | `Tabs` | `tablist` / `tab` / `aria-selected` / `tabpanel` | arrow-key navigation between tabs |
 | `Toast` | `role="status"`, `aria-live="polite"`, labelled dismiss | — |
@@ -174,14 +174,18 @@ h1 { font-family: "Comic Sans MS"; }
 
 **Rationale.** Screen-reader users navigate by landmark and heading; a page that is one `<div>` soup has no structure to navigate. `ProShell` provides `<header>` and `<main>` but not `<nav>`; composable layouts provide none.
 
-**Recommended implementation.** In `ProShell`, put route navigation in a `<nav aria-label="Main">` inside the shell's children; set the title in a route effect; add `<a href="#main" class="skip-link">`.
+**Recommended implementation.** Declare the app's screens with ProShell's `nav` prop: the shell renders them as a `<nav aria-label="Main">` in its topbar, with the current route marked `aria-current="page"`. Do not put navigation inside the shell's children. A custom `renderTopbar` places `ctx.nav`, and a `hideTopbar` app renders its own `<nav aria-label="Main">` (or the exported `NavBar`). Set the title in a route effect; add `<a href="#main" class="skip-link">`.
 
 **Conforming example.**
 
 ```tsx
+<ProShell app={app} nav={[{ label: 'Tasks', href: '/tasks' }]}>   {/* header, nav, main */}
+  <TaskPage />
+</ProShell>
+
+// TaskPage
 useEffect(() => { document.title = `${task.title} — My App` }, [task.title])
-<nav aria-label="Main"><NavLink to="/tasks">Tasks</NavLink></nav>
-<main id="main"><h1>{task.title}</h1>…</main>
+<h1>{task.title}</h1>…
 ```
 
 **Non-conforming example.**

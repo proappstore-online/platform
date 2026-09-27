@@ -299,26 +299,73 @@ not sent either. Title is at most 150 characters and body 2,000 for email.
 
 ## ProShell component
 
-Import from `@proappstore/sdk/shell`:
+`ProShell` is the app frame. It handles the sign-in gate, subscription wall,
+provider context, topbar (app name, text size, profile menu), footer, and the
+**main navigation**. Import it from `@proappstore/sdk` (or `@proappstore/sdk/shell`).
+
+### Navigation: pass `nav` (every app with more than one screen)
+
+Declare the app's screens once. The shell renders them in its topbar as the
+app's main navigation. Do not build navigation into a page, and do not add a
+second bar below the shell.
 
 ```tsx
-<ProShell app={app} appName="My App">
-  <MyAppContent />
+<ProShell
+  app={app}
+  appName="Cases"
+  nav={[
+    { label: 'Home', href: '/' },
+    { label: 'Cases', href: '/cases' },
+    { label: 'Settings', href: '/settings' },
+  ]}
+>
+  <Screens />
 </ProShell>
 ```
 
-Handles sign-in gate, subscription wall, provider context, topbar with avatar + menu, text size control, and footer.
+The built-in `NavBar` provides:
 
-For simple apps, use the default shell. For apps with their own primary navigation, do not add a second navbar below ProShell. Replace the platform topbar while keeping auth/subscription gates:
+- A `<nav aria-label="Main">` landmark ([PAS-UI-003](./standard/ui.md#pas-ui-003)).
+- The current screen marked with `aria-current="page"`. It follows `location.pathname`, including back and forward, and a nested route such as `/cases/42` marks `/cases`.
+- A menu button below 640 px (`aria-expanded` / `aria-controls`; Escape or a click outside closes it).
+- 44 px targets ([PAS-UI-009](./standard/ui.md#pas-ui-009)) and visible focus rings.
+- Styling from the canonical tokens only, so it follows the app's light and dark themes.
+
+The styles are injected when the navbar renders, so no setup is needed. They
+are also published as `@proappstore/sdk/shell.css` for apps that prefer to
+import them.
+
+**Links.** By default each item is an ordinary link: a click loads that path,
+and the platform serves the app for it. Render the screen for
+`location.pathname`. With a router, pass `onNavigate` so clicks navigate
+client-side:
+
+```tsx
+const navigate = useNavigate()
+<ProShell app={app} nav={NAV} onNavigate={navigate}>…</ProShell>
+```
+
+**Custom navigation.** `renderNav({ items, currentPath, onNavigate })` replaces
+the built-in NavBar and still places the result in the topbar. Render a
+`<nav aria-label="Main">`. `NavBar` and the `NavItem` type are exported for
+custom layouts.
+
+### Custom topbar
+
+`renderTopbar(ctx)` replaces the topbar while keeping the gates. The context
+provides `nav` (the rendered navigation), `profileMenu`, `textSizeToggle` and
+`proBadge`. Place all of them so navigation and account controls stay
+consistent:
 
 ```tsx
 <ProShell
   app={app}
   appName="My App"
-  renderTopbar={({ appName, profileMenu, textSizeToggle }) => (
+  nav={NAV}
+  renderTopbar={({ appName, nav, profileMenu, textSizeToggle }) => (
     <header className="top-nav">
       <a href="/">{appName}</a>
-      <nav>{/* app navigation */}</nav>
+      {nav}
       {textSizeToggle}
       {profileMenu}
     </header>
@@ -328,7 +375,9 @@ For simple apps, use the default shell. For apps with their own primary navigati
 </ProShell>
 ```
 
-Use `hideTopbar` and `hideFooter` when the app owns all chrome but still wants ProShell gates and provider context.
+Use `hideTopbar` and `hideFooter` only when the app owns all the chrome and
+still wants the ProShell gates and provider context. The app then provides its
+own `<nav aria-label="Main">`.
 
 ## Error observability
 

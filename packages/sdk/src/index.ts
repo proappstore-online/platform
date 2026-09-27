@@ -74,7 +74,9 @@ export { useProAuth, useProSubscription, useProGate, useProNotifications } from 
 export { ProProvider, useApp } from './provider.js';
 export type { ProProviderProps } from './provider.js';
 export { ProShell } from './shell.js';
-export type { ProShellProps, ProShellRenderContext, MenuItem } from './shell.js';
+export type { ProShellProps, ProShellRenderContext, ProShellNavContext, MenuItem } from './shell.js';
+export { NavBar } from './navbar.js';
+export type { NavBarProps, NavItem } from './navbar.js';
 export {
   Avatar, ThemeToggle, TextSizeToggle, SignInButton, ProfileMenu,
   ProBadge, SubscriptionStatus, UpgradeCard, BillingButton, GateScreen,

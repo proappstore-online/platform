@@ -4,6 +4,21 @@ Part of the [Application Standard](./index.md). One entry per version, newest
 first; the [changelog policy](./governance.md#changelog-policy) defines the
 sections.
 
+## 1.7
+
+Built-in main navigation in ProShell (#235).
+
+- **Added** — none.
+- **Changed** — none.
+- **Withdrawn** — none.
+- **Editorial** — PAS-UI-003: the recommended implementation and conforming
+  example now declare the app's screens with ProShell's `nav` prop, which
+  renders the `<nav aria-label="Main">` landmark (with `aria-current="page"`, a
+  keyboard-operable menu button below 640 px and 44 px targets). They no longer
+  place navigation inside the shell's children. The rule is unchanged. The
+  SDK components table records that ProShell now provides the landmark when
+  `nav` is declared.
+
 ## 1.6
 
 Tenant-scoped roles (#212).

@@ -45,7 +45,7 @@
 
 - [Getting started](https://docs.proappstore.online/getting-started/): Quick start, tech stack, monorepo layout.
 - [SDK overview](https://docs.proappstore.online/sdk-overview/): initPro, every SDK surface, monitoring, auth session storage.
-- [UI components](https://docs.proappstore.online/ui/): ProShell, composable components, hooks, design tokens.
+- [UI components](https://docs.proappstore.online/ui/): ProShell (app frame with built-in main navigation from its `nav` prop), composable components, hooks, design tokens.
 - [Recipes](https://docs.proappstore.online/recipes/): CRUD, forms, tables, UI patterns, SDK features.
 - [CLI overview](https://docs.proappstore.online/cli-overview/): pas create / check / publish / secret / proxy / domain.
 - [Publishing flow](https://docs.proappstore.online/publishing-flow/): Provisioning sequence, key properties, failure modes.

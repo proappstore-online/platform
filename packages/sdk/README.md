@@ -571,17 +571,23 @@ Pass `{ allowFree: true }` to skip the subscription check (lets free users throu
 
 ## ProShell Component
 
-A React component that handles auth gates, subscription checks, provider context, and optional platform chrome with topbar, user menu, text size control, and footer.
+The app frame. It handles the auth gates, subscription checks, provider context, the topbar (app name, text size control, user menu), the footer, and the **main navigation**.
 
 ```tsx
-import { initPro } from '@proappstore/sdk'
-import { ProShell } from '@proappstore/sdk/shell'
+import { initPro, ProShell } from '@proappstore/sdk'
 
 const app = initPro({ appId: 'meetup' })
 
 export default function App() {
   return (
-    <ProShell app={app} appName="Meetup">
+    <ProShell
+      app={app}
+      appName="Meetup"
+      nav={[
+        { label: 'Events', href: '/' },
+        { label: 'Groups', href: '/groups' },
+      ]}
+    >
       <MeetupApp />
     </ProShell>
   )
@@ -595,32 +601,40 @@ Props:
 | `app` | `ProAppStore` | SDK instance from `initPro()` |
 | `children` | `ReactNode` | App content (rendered only when gates pass) |
 | `appName` | `string?` | Name shown in the topbar |
+| `nav` | `{ label: string; href: string; icon?: ReactNode }[]` | **The app's screens**, rendered as the main navigation in the topbar |
+| `onNavigate` | `(href: string) => void` | Client-side navigation for nav clicks (e.g. a router's `navigate`); without it items are links |
+| `renderNav` | `(ctx) => ReactNode` | Replace the built-in NavBar (`ctx`: `items`, `currentPath`, `onNavigate`) |
 | `allowFree` | `boolean?` | Skip subscription gate (default: `true` until platform billing is live) |
 | `showThemeToggle` | `boolean?` | Show theme toggle in the profile menu |
 | `menuItems` | `{ label: string; onClick: () => void }[]` | Extra profile dropdown items |
-| `hideTopbar` | `boolean?` | Omit the default topbar |
+| `hideTopbar` | `boolean?` | Omit the default topbar (and the navigation) |
 | `hideFooter` | `boolean?` | Omit the default footer |
-| `renderTopbar` | `(ctx) => ReactNode` | Replace the default topbar |
+| `renderTopbar` | `(ctx) => ReactNode` | Replace the default topbar; place `ctx.nav` in it |
 | `renderFooter` | `(ctx) => ReactNode` | Replace the default footer |
 
 ProShell handles:
-- Auth initialization and sign-in gate
-- Subscription check and upgrade wall (unless `allowFree=true`)
-- Topbar with avatar, app name, text size toggle, and user menu (sign out, manage billing, delete account)
+- Auth initialization and the sign-in gate
+- The subscription check and upgrade wall (unless `allowFree=true`)
+- The topbar with app name, text size toggle and user menu (sign out, manage billing, delete account)
+- The main navigation from `nav`:
+  - a `<nav aria-label="Main">` landmark;
+  - `aria-current="page"` on the current route, following `location.pathname` and back/forward;
+  - a menu button below 640 px (`aria-expanded`, Escape to close);
+  - 44 px targets and visible focus.
 
-Apps with their own primary navigation should not stack a second navbar under the default shell. Replace the topbar while keeping ProShell gates:
+  Its styles are injected when the navbar renders, so no setup is needed. They are also available as `@proappstore/sdk/shell.css`.
+
+Do not build navigation into a page, and do not stack a second navbar under the shell. A custom topbar keeps the gates and places the rendered `nav`:
 
 ```tsx
 <ProShell
   app={app}
   appName="Chess Academy"
-  renderTopbar={({ appName, profileMenu, textSizeToggle }) => (
+  nav={[{ label: 'Students', href: '/students' }, { label: 'Tournaments', href: '/tournaments' }]}
+  renderTopbar={({ appName, nav, profileMenu, textSizeToggle }) => (
     <header className="top-nav">
       <a href="/">{appName}</a>
-      <nav>
-        <a href="/students">Students</a>
-        <a href="/tournaments">Tournaments</a>
-      </nav>
+      {nav}
       {textSizeToggle}
       {profileMenu}
     </header>
@@ -630,7 +644,7 @@ Apps with their own primary navigation should not stack a second navbar under th
 </ProShell>
 ```
 
-For a fully custom layout, use `<ProShell app={app} hideTopbar hideFooter>` and compose `ProfileMenu`, `SignInButton`, `GateScreen`, and hooks from `@proappstore/sdk/ui` and `@proappstore/sdk/hooks`.
+For a fully custom layout, use `<ProShell app={app} hideTopbar hideFooter>` and compose `NavBar`, `ProfileMenu`, `SignInButton`, `GateScreen`, and hooks from `@proappstore/sdk/ui` and `@proappstore/sdk/hooks`.
 
 ## UI Components
 

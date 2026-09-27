@@ -4,6 +4,9 @@ import type { User } from './base-types.js';
 import type { Subscription } from './types.js';
 import { ProfileMenu, ProBadge, GateScreen, TextSizeToggle } from './ui.js';
 import { ProProvider } from './provider.js';
+import { NavBar, useCurrentPath, type NavItem } from './navbar.js';
+
+export type { NavItem } from './navbar.js';
 
 export interface MenuItem {
   label: string;
@@ -25,6 +28,17 @@ export interface ProShellRenderContext {
   profileMenu: ReactNode;
   /** PRO badge when the current subscription is active; otherwise null. */
   proBadge: ReactNode;
+  /** The app's main navigation (`nav` / `renderNav`), or null when none is declared.
+   *  A custom `renderTopbar` should place it. */
+  nav: ReactNode;
+}
+
+export interface ProShellNavContext {
+  items: NavItem[];
+  /** The path the shell considers current (`location.pathname`, following back/forward). */
+  currentPath: string;
+  /** Navigate to `href`: the shell's `onNavigate`, else a full page load. */
+  onNavigate: (href: string) => void;
 }
 
 export interface ProShellProps {
@@ -34,6 +48,23 @@ export interface ProShellProps {
   children: ReactNode;
   /** App name shown in the topbar. */
   appName?: string;
+  /**
+   * The app's screens — the standard way to give an app navigation (#235).
+   * ProShell renders them as a `<nav aria-label="Main">` in its topbar, marks
+   * the current route, and collapses to a menu button on small screens.
+   *
+   * ```tsx
+   * <ProShell app={app} appName="Cases" nav={[{ label: 'Home', href: '/' }, { label: 'Cases', href: '/cases' }]}>
+   * ```
+   */
+  nav?: NavItem[];
+  /** Replace the built-in NavBar (still placed in the topbar) with your own. */
+  renderNav?: (ctx: ProShellNavContext) => ReactNode;
+  /**
+   * Client-side navigation for nav clicks (e.g. your router's `navigate`).
+   * Without it, nav items are ordinary links (full page load).
+   */
+  onNavigate?: (href: string) => void;
   /**
    * If true, allow free users to see the app (no subscription gate).
    *
@@ -45,7 +76,7 @@ export interface ProShellProps {
   showThemeToggle?: boolean;
   /** Custom items added to the profile dropdown (above sign-out). */
   menuItems?: MenuItem[];
-  /** Hide the default ProShell topbar. Use when the app renders its own navigation. */
+  /** Hide the default ProShell topbar. Prefer `nav`; this also hides the navigation. */
   hideTopbar?: boolean;
   /** Hide the default ProShell footer. */
   hideFooter?: boolean;
@@ -69,6 +100,7 @@ type Gate = 'loading' | 'signed-out' | 'no-subscription' | 'ready';
  * - Auth initialization + sign-in gate
  * - Subscription check + upgrade wall (unless allowFree=true)
  * - Topbar with avatar, app name, menu (sign out, delete account, manage billing)
+ * - Main navigation from the `nav` prop (<nav aria-label="Main">, current route, mobile menu)
  * - Theme support via CSS custom properties
  * - Only renders children when all gates pass
  *
@@ -81,7 +113,7 @@ type Gate = 'loading' | 'signed-out' | 'no-subscription' | 'ready';
  *
  * export default function App() {
  *   return (
- *     <ProShell app={app} appName="Meetup">
+ *     <ProShell app={app} appName="Meetup" nav={[{ label: 'Events', href: '/' }, { label: 'Groups', href: '/groups' }]}>
  *       <MeetupApp />
  *     </ProShell>
  *   )
@@ -92,6 +124,9 @@ export function ProShell({
   app,
   children,
   appName,
+  nav,
+  renderNav,
+  onNavigate,
   allowFree = true,
   showThemeToggle = true,
   menuItems,
@@ -103,6 +138,7 @@ export function ProShell({
   const [user, setUser] = useState(app.auth.user);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [gate, setGate] = useState<Gate>('loading');
+  const [currentPath, setCurrentPath] = useCurrentPath();
 
   useEffect(() => {
     app.auth.init();
@@ -145,6 +181,19 @@ export function ProShell({
     </ProfileMenu>
   );
 
+  const navItems = nav ?? [];
+  const navNode = navItems.length === 0 ? null : renderNav
+    ? renderNav({
+      items: navItems,
+      currentPath,
+      onNavigate: (href) => {
+        if (!onNavigate) { window.location.assign(href); return; }
+        onNavigate(href);
+        setCurrentPath(href);
+      },
+    })
+    : <NavBar items={navItems} {...(onNavigate ? { onNavigate } : {})} />;
+
   const shellContext: ProShellRenderContext = {
     app,
     appName,
@@ -153,6 +202,7 @@ export function ProShell({
     textSizeToggle: <TextSizeToggle />,
     profileMenu,
     proBadge: subscription?.status === 'active' ? <ProBadge /> : null,
+    nav: navNode,
   };
 
   const topbar = renderTopbar ? renderTopbar(shellContext) : hideTopbar ? null : (
@@ -162,6 +212,7 @@ export function ProShell({
         {appName && <span style={styles.appName}>{appName}</span>}
         {shellContext.proBadge}
       </div>
+      {shellContext.nav}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
         {shellContext.textSizeToggle}
         {shellContext.profileMenu}
