@@ -27,6 +27,15 @@ export interface SessionClaims {
   roles: string[];
   /** How the session was minted when not by a user signing in — e.g. 'oidc-e2e' (#146). Absent for ordinary sessions. */
   via?: string;
+  /**
+   * When the user last actively authenticated, in epoch seconds (#230). Unlike
+   * `iat`, a token re-minted without the user present must carry the original
+   * value forward. Absent on sessions minted before #230 and on non-interactive
+   * ones (`via`): treat absent as "not recently authenticated".
+   */
+  auth_time?: number;
+  /** How that authentication happened: 'github' | 'google' | 'password' | 'passkey' (#230). */
+  auth_method?: string;
   iat: number;
   exp: number;
 }
@@ -72,7 +81,10 @@ async function hmac(data: string, signingKey: string): Promise<string> {
   return b64urlBytes(new Uint8Array(sig));
 }
 
-/** Mint a signed, FAS-compatible session token. */
+/**
+ * Mint a signed, FAS-compatible session token. `ttlSeconds` shortens the life of
+ * privileged sessions — e.g. the one a passkey step-up issues (#230).
+ */
 export async function mintSession(claims: NewSession, signingKey: string, ttlSeconds = DEFAULT_TTL_SECONDS): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const payload: SessionClaims = { ...claims, iat: now, exp: now + ttlSeconds };

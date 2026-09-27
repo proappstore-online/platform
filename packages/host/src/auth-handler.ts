@@ -26,6 +26,7 @@ export async function handleAuthRoute(
   if (url.pathname === `${AUTH_PREFIX}/credentials/register`) return authCredentialsRegister(request, env);
   if (url.pathname === `${AUTH_PREFIX}/turnstile`) return authTurnstile(request, env);
   if (url.pathname === `${AUTH_PREFIX}/email/start`) return authEmailStart(request, env, route);
+  if (url.pathname.startsWith(`${AUTH_PREFIX}/passkey/`)) return authPasskey(request, env, route, url.pathname.slice(`${AUTH_PREFIX}/passkey/`.length));
 
   return noStore(new Response("Not found", { status: 404 }));
 }
@@ -160,6 +161,45 @@ async function authCredentialsLogin(request: Request, env: Env): Promise<Respons
     "Set-Cookie": sessionCookie(token),
   });
   return new Response(user.body, { status: 200, headers });
+}
+
+// #230: passkey registration and step-up, mediated like credentials/login. The
+// host asserts the app (X-PAS-App) and hostname (X-PAS-Host, the WebAuthn
+// relying-party id) — the page cannot. A verified step-up swaps the cookie for
+// the short-lived session the API minted, carrying a fresh auth_time; the token
+// never reaches page JS, only its auth_time and expiry do.
+const PASSKEY_OPS = new Set(["register/options", "register", "step-up/options", "step-up"]);
+
+async function authPasskey(request: Request, env: Env, route: Route, op: string): Promise<Response> {
+  if (!PASSKEY_OPS.has(op)) return noStore(new Response("Not found", { status: 404 }));
+  if (request.method !== "POST") return methodNotAllowed("POST");
+  if (!isSameOriginMutation(request)) return noStore(new Response("Forbidden", { status: 403 }));
+  const token = readCookie(request.headers.get("Cookie"), SESSION_COOKIE_NAME);
+  if (!token) return noStore(Response.json({ error: "not signed in" }, { status: 401 }));
+
+  const upstream = await env.API.fetch(
+    new Request(`${API_BASE}/v1/auth/passkey/${op}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "X-PAS-App": route.slug,
+        "X-PAS-Host": new URL(request.url).hostname,
+      },
+      body: await request.text(),
+    }),
+  );
+  if (op !== "step-up" || !upstream.ok) return noStore(upstream);
+
+  const body = (await upstream.json().catch(() => null)) as { token?: unknown; auth_time?: unknown; expires_at?: unknown } | null;
+  if (typeof body?.token !== "string" || !body.token || typeof body.expires_at !== "number") {
+    return noStore(Response.json({ error: "invalid session response" }, { status: 502 }));
+  }
+  const maxAge = Math.max(0, body.expires_at - Math.floor(Date.now() / 1000));
+  return new Response(JSON.stringify({ ok: true, auth_time: body.auth_time, expires_at: body.expires_at }), {
+    status: 200,
+    headers: { "Cache-Control": "no-store", "Content-Type": "application/json; charset=utf-8", "Set-Cookie": sessionCookie(body.token, maxAge) },
+  });
 }
 
 // #118: self-registration, mediated so the app never talks to the API from JS.
@@ -344,10 +384,11 @@ export function readCookie(header: string | null, name: string): string | null {
   return null;
 }
 
-export function sessionCookie(token: string): string {
+/** `maxAge` defaults to the ordinary 30 days; a step-up session passes its own shorter life (#230). */
+export function sessionCookie(token: string, maxAge = SESSION_TTL_SECONDS): string {
   return [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
-    `Max-Age=${SESSION_TTL_SECONDS}`,
+    `Max-Age=${maxAge}`,
     "Path=/",
     "Secure",
     "HttpOnly",

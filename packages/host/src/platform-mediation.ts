@@ -80,6 +80,10 @@ function forwardedHeaders(source: Headers, token: string, route: Route): Headers
   // stays the session below.
   headers.delete("X-PAS-App");
   headers.set("X-PAS-App", route.slug);
+  // X-PAS-Host is set only by the host's own /.pas/auth/passkey handler (#230):
+  // the passkey routes refuse a request without it, so they are unreachable
+  // here — a step-up through this path would hand page JS the minted token.
+  headers.delete("X-PAS-Host");
   // Never let a browser-supplied internal token reach the data-worker's trusted
   // path — this cookie-mediation route is the browser data plane, so the
   // internal path must only ever be reachable from the backend actions-executor.

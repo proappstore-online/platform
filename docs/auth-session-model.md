@@ -211,6 +211,48 @@ the bot check) and then signs in
 through `/.pas/auth/credentials/login`, which sets the HttpOnly cookie. The
 password is sent once and never stored client-side.
 
+### Passkey step-up and short-lived privileged sessions (#230)
+
+Sessions carry two claims that record the last active sign-in:
+
+- `auth_time`: epoch seconds.
+- `auth_method`: `github`, `google`, `password` or `passkey`.
+
+They are stamped at the OAuth callback, at credentials login and at
+`/v1/auth/exchange`. Sessions minted before #230, and non-interactive ones
+(`via`), have neither. Treat that as "not recently authenticated".
+
+A user can register a passkey on an app origin and later re-authenticate with
+it (step-up). All four routes are `POST` and same-origin only, and the host
+forwards them with the cookie session:
+
+| Host route | API route | |
+|---|---|---|
+| `/.pas/auth/passkey/register/options` | `/v1/auth/passkey/register/options` | creation options |
+| `/.pas/auth/passkey/register` | `/v1/auth/passkey/register` | stores the credential |
+| `/.pas/auth/passkey/step-up/options` | `/v1/auth/passkey/step-up/options` | request options; `404 no_passkey` when none |
+| `/.pas/auth/passkey/step-up` | `/v1/auth/passkey/step-up` | verifies and swaps the session |
+
+- **Relying party.** The relying-party id is the app hostname. The host asserts it
+  in `X-PAS-Host` and strips any client-supplied copy, on `/.pas/api` and on direct
+  `api.*` dispatch alike. The API refuses a passkey request that lacks it, so the
+  routes work only through `/.pas/auth/passkey/*`.
+- **Registration.** The browser sends `getPublicKey()` (SPKI) and
+  `getPublicKeyAlgorithm()`; ES256 and RS256 are accepted. It needs a sign-in
+  within the last 10 minutes. Once the user has a passkey on that host, adding
+  another needs a passkey step-up within the last 10 minutes, so a stolen
+  long-lived cookie cannot enroll the thief's own passkey.
+- **Step-up checks.** One-use challenge with a 5-minute life; `origin` must be
+  `https://<host>`; the user must be present and verified (UP and UV); the
+  signature must verify; the signature counter must not go backwards.
+- **Step-up result.** The API mints a session with `auth_time = now`,
+  `auth_method = 'passkey'` and a **1-hour** life. The host puts it in the cookie
+  with `Max-Age` equal to its remaining life, and returns only
+  `{ ok, auth_time, expires_at }` to the page.
+
+Attestation is `none`, so this proves the same authenticator was used again, not
+what kind of authenticator it is.
+
 ### Phase 3: Same-Origin API Mediation
 
 Status: started.

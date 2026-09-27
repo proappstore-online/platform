@@ -18,3 +18,10 @@
  * "unverified" — acceptable for logs, refused by the secret proxy.
  */
 export const APP_CONTEXT_HEADER = 'X-PAS-App';
+
+/**
+ * The app hostname the request was mediated from (#230), set by the host next
+ * to `X-PAS-App` and stripped on direct API dispatch the same way. Passkeys use
+ * it as the WebAuthn relying-party id, so it must never come from the page.
+ */
+export const APP_HOST_HEADER = 'X-PAS-Host';

@@ -54,6 +54,8 @@ export default {
       // say it for us.
       const direct = new Request(request);
       direct.headers.delete("X-PAS-App");
+      // Same for the hostname passkeys use as their relying-party id (#230).
+      direct.headers.delete("X-PAS-Host");
       return env.API.fetch(direct);
     }
     if (slug === "admin") return env.ADMIN.fetch(request);

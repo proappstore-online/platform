@@ -587,6 +587,16 @@ describe('POST /v1/auth/credentials/login', () => {
     expect(meBody.roles).toEqual(['user']); // never creator/admin
   });
 
+  it('stamps auth_time and auth_method password on the minted session (#230)', async () => {
+    const db = fakeDb();
+    const prov = await (await provision({ login: 'lynx-lynx-owl' }, db)).json() as { password: string };
+    const before = Math.floor(Date.now() / 1000);
+    const { token } = await (await login({ login: 'lynx-lynx-owl', password: prov.password }, db)).json() as { token: string };
+    const claims = await verifySession(token, KEY);
+    expect(claims?.auth_method).toBe('password');
+    expect(claims?.auth_time).toBeGreaterThanOrEqual(before);
+  });
+
   it('401s on a wrong password and on an unknown login (no enumeration)', async () => {
     const db = fakeDb();
     await provision({ login: 'duck-duck-goose' }, db);
@@ -1157,6 +1167,18 @@ describe('OAuth callback — issues a code, never a token in the query (#87, #11
     expect(claims.uid).toBe('gh:4242');
     // An unexchanged code creates no session at all: this is not a token.
     expect(await verifySession(claimsJson, TEST_SK)).toBeNull();
+  });
+
+  it('stamps auth_time and auth_method (the provider) on the claims at sign-in (#230)', async () => {
+    stubGithub();
+    const db = codeIssuingDb();
+    const before = Math.floor(Date.now() / 1000);
+    await callback('https://console.proappstore.online/cb', 'query', db);
+    const [, claimsJson] = db.inserts[0]! as [string, string, number, number];
+    const claims = JSON.parse(claimsJson) as { auth_time: number; auth_method: string };
+    expect(claims.auth_method).toBe('github');
+    expect(claims.auth_time).toBeGreaterThanOrEqual(before);
+    expect(claims.auth_time).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
   });
 
   it('applies #56 role scoping at redirect time, where the destination is known', async () => {

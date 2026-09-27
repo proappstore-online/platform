@@ -37,7 +37,7 @@ export const authRoutes = new Hono<{ Bindings: Env }>();
  * Returns the claims or throws 401. Shared by /auth/me, the date-of-birth
  * patch, and credential provisioning.
  */
-async function requireClaims(c: Context<{ Bindings: Env }>): Promise<SessionClaims> {
+export async function requireClaims(c: Context<{ Bindings: Env }>): Promise<SessionClaims> {
   const header = c.req.header('Authorization');
   if (!header?.startsWith('Bearer ')) throw new HttpError('missing bearer token', 401);
   const claims = await verifySession(header.slice(7), c.env.SESSION_SIGNING_KEY);
@@ -418,7 +418,7 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
     // keep working with a plain `user` token. Only first-party PAS surfaces
     // (console/dashboard/admin/agents/apex/localhost) receive elevated roles.
     const roles = isFirstPartyHost(dest.hostname) ? rolesFor(userId, c.env) : ['user'];
-    const claims: NewSession = { uid: userId, login: profile.login, avatarUrl: profile.avatarUrl, roles };
+    const claims: NewSession = { uid: userId, login: profile.login, avatarUrl: profile.avatarUrl, roles, auth_time: Math.floor(Date.now() / 1000), auth_method: provider };
 
     // SECURITY (#87, #110): `query` no longer means "the token, in the query
     // string". It means "a one-time code, redeemed server-to-server". A query
@@ -903,7 +903,7 @@ authRoutes.post('/auth/credentials/login', async (c) => {
   await c.env.DB.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').bind(now, row.id).run();
 
   // Credential accounts are plain users (never 'creator'/'admin').
-  const session: NewSession = { uid: row.id, login: row.login, avatarUrl: null, roles: ['user'] };
+  const session: NewSession = { uid: row.id, login: row.login, avatarUrl: null, roles: ['user'], auth_time: Math.floor(now / 1000), auth_method: 'password' };
   const token = await mintSession(session, c.env.SESSION_SIGNING_KEY);
   return c.json({ token });
 });
@@ -1031,7 +1031,7 @@ authRoutes.post('/auth/exchange', async (c) => {
        avatar_url = excluded.avatar_url, last_login_at = excluded.last_login_at`,
   ).bind(userId, String(ghUser.id), ghUser.login, ghUser.email ?? null, ghUser.avatar_url ?? null, now).run();
 
-  const claims: NewSession = { uid: userId, login: ghUser.login, avatarUrl: ghUser.avatar_url ?? null, roles: rolesFor(userId, c.env) };
+  const claims: NewSession = { uid: userId, login: ghUser.login, avatarUrl: ghUser.avatar_url ?? null, roles: rolesFor(userId, c.env), auth_time: Math.floor(now / 1000), auth_method: 'github' };
   const sessionToken = await mintSession(claims, c.env.SESSION_SIGNING_KEY);
   return c.json({ sessionToken, user: { id: userId, login: ghUser.login, avatarUrl: ghUser.avatar_url ?? null } });
 });

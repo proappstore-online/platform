@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mintSession, verifySession } from './session-jwt.js';
 
 const KEY = 'test-signing-key-please-change';
@@ -66,5 +66,41 @@ describe('session-jwt', () => {
   it('defaults roles', async () => {
     const claims = await verifySession(await mintSession({ uid: 'x', roles: [] }, KEY), KEY);
     expect(claims!.roles).toEqual([]);
+  });
+});
+
+// #230: auth_time / auth_method record the last active authentication, and a
+// privileged session can be minted with a short life.
+describe('session auth_time, auth_method and short TTL (#230)', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('carries auth_time and auth_method through mint and verify', async () => {
+    const claims = await verifySession(await mintSession({ ...base, auth_time: 1_700_000_000, auth_method: 'passkey' }, KEY), KEY);
+    expect(claims).toMatchObject({ auth_time: 1_700_000_000, auth_method: 'passkey' });
+  });
+
+  it('leaves them absent on sessions minted without them (pre-#230 tokens stay valid)', async () => {
+    const claims = await verifySession(await mintSession(base, KEY), KEY);
+    expect(claims).not.toBeNull();
+    expect(claims!.auth_time).toBeUndefined();
+    expect(claims!.auth_method).toBeUndefined();
+  });
+
+  it('a short-TTL session is valid until its exp and rejected one second after', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-27T12:00:00Z'));
+    const token = await mintSession({ ...base, auth_time: Math.floor(Date.now() / 1000), auth_method: 'passkey' }, KEY, 3600);
+    const claims = await verifySession(token, KEY);
+    expect(claims!.exp - claims!.iat).toBe(3600);
+
+    vi.setSystemTime(new Date('2026-09-27T13:00:00Z'));
+    expect(await verifySession(token, KEY)).not.toBeNull();
+    vi.setSystemTime(new Date('2026-09-27T13:00:01Z'));
+    expect(await verifySession(token, KEY)).toBeNull();
+  });
+
+  it('the default TTL is unchanged at 30 days', async () => {
+    const claims = await verifySession(await mintSession(base, KEY), KEY);
+    expect(claims!.exp - claims!.iat).toBe(30 * 24 * 60 * 60);
   });
 });

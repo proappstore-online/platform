@@ -625,6 +625,90 @@ describe("direct api.* dispatch — app context (#80)", () => {
   });
 });
 
+// #230: passkey registration and step-up are mediated on the app origin. The
+// host asserts the app and hostname (the WebAuthn relying party); a step-up
+// swaps the cookie for the API's short-lived session and never exposes it.
+describe("passkey mediation (#230)", () => {
+  const sameOrigin = { Origin: "https://meetup.proappstore.online", "Sec-Fetch-Site": "same-origin", "Content-Type": "application/json" };
+  const post = (path: string, headers: Record<string, string>, env: Env, body = "{}") =>
+    worker.fetch(new Request(`https://meetup.proappstore.online/.pas/auth/passkey/${path}`, { method: "POST", headers, body }), env, ctx());
+
+  it("forwards with the cookie session and the host-asserted app + hostname, overriding the page's", async () => {
+    const apiFetch = vi.fn(async (request: Request) => {
+      expect(request.url).toBe("https://api.proappstore.online/v1/auth/passkey/register/options");
+      expect(request.headers.get("Authorization")).toBe("Bearer cookie-token");
+      expect(request.headers.get("X-PAS-App")).toBe("meetup");
+      expect(request.headers.get("X-PAS-Host")).toBe("meetup.proappstore.online");
+      return Response.json({ challenge: "c" });
+    });
+    const res = await post("register/options", { ...sameOrigin, Cookie: "__Host-pas_session=cookie-token", "X-PAS-Host": "other.proappstore.online", "X-PAS-App": "other" }, makeEnv({ apiFetch }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ challenge: "c" });
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("a verified step-up sets the short-lived session cookie and returns only auth_time and expiry", async () => {
+    const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+    const apiFetch = vi.fn(async () => Response.json({ token: "stepped-up-token", auth_time: expiresAt - 3600, expires_at: expiresAt }));
+    const res = await post("step-up", { ...sameOrigin, Cookie: "__Host-pas_session=cookie-token" }, makeEnv({ apiFetch }), JSON.stringify({ id: "x" }));
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).not.toContain("stepped-up-token");
+    expect(JSON.parse(text)).toEqual({ ok: true, auth_time: expiresAt - 3600, expires_at: expiresAt });
+    const cookie = res.headers.get("Set-Cookie")!;
+    expect(cookie).toContain("__Host-pas_session=stepped-up-token");
+    expect(cookie).toContain("HttpOnly");
+    const maxAge = Number(/Max-Age=(\d+)/.exec(cookie)![1]);
+    expect(maxAge).toBeGreaterThan(3590);
+    expect(maxAge).toBeLessThanOrEqual(3600);
+  });
+
+  it("a failed step-up passes the error through and leaves the cookie alone", async () => {
+    const apiFetch = vi.fn(async () => Response.json({ error: "passkey signature is invalid" }, { status: 403 }));
+    const res = await post("step-up", { ...sameOrigin, Cookie: "__Host-pas_session=cookie-token" }, makeEnv({ apiFetch }));
+    expect(res.status).toBe(403);
+    expect(res.headers.get("Set-Cookie")).toBeNull();
+  });
+
+  it("refuses no session, cross-site, GET, and unknown operations before reaching the API", async () => {
+    const apiFetch = vi.fn(async () => Response.json({}));
+    const env = makeEnv({ apiFetch });
+    expect((await post("step-up", sameOrigin, env)).status).toBe(401);
+    expect((await post("step-up", { Origin: "https://evil.example", "Sec-Fetch-Site": "cross-site", Cookie: "__Host-pas_session=cookie-token" }, env)).status).toBe(403);
+    const get = await worker.fetch(new Request("https://meetup.proappstore.online/.pas/auth/passkey/step-up", { headers: { Cookie: "__Host-pas_session=cookie-token" } }), env, ctx());
+    expect(get.status).toBe(405);
+    expect((await post("delete-all", { ...sameOrigin, Cookie: "__Host-pas_session=cookie-token" }, env)).status).toBe(404);
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
+  it("strips a page-supplied X-PAS-Host on /.pas/api, so passkey routes are unreachable there", async () => {
+    const apiFetch = vi.fn(async (request: Request) => {
+      expect(request.headers.get("X-PAS-Host")).toBeNull();
+      return Response.json({ error: "passkeys are only available on an app origin" }, { status: 400 });
+    });
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/api/v1/auth/passkey/step-up", {
+        method: "POST",
+        headers: { ...sameOrigin, Cookie: "__Host-pas_session=cookie-token", "X-PAS-Host": "meetup.proappstore.online" },
+        body: "{}",
+      }),
+      makeEnv({ apiFetch }),
+      ctx(),
+    );
+    expect(res.status).toBe(400);
+    expect(apiFetch).toHaveBeenCalledOnce();
+  });
+
+  it("strips a caller-supplied X-PAS-Host on direct api.* dispatch", async () => {
+    const apiFetch = vi.fn(async (request: Request) => {
+      expect(request.headers.get("X-PAS-Host")).toBeNull();
+      return Response.json({});
+    });
+    await worker.fetch(new Request("https://api.proappstore.online/v1/auth/passkey/step-up", { method: "POST", headers: { "X-PAS-Host": "meetup.proappstore.online" } }), makeEnv({ apiFetch }), ctx());
+    expect(apiFetch).toHaveBeenCalledOnce();
+  });
+});
+
 function makeEnv(opts: { apiFetch?: (request: Request) => Promise<Response> } = {}): Env {
   const apiFetch =
     opts.apiFetch ??
