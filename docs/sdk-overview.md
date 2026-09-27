@@ -379,6 +379,44 @@ Use `hideTopbar` and `hideFooter` only when the app owns all the chrome and
 still wants the ProShell gates and provider context. The app then provides its
 own `<nav aria-label="Main">`.
 
+### Resilience and feedback (built in)
+
+ProShell also provides the parts every app would otherwise build, or ship
+without. Nothing needs enabling; the props below only customise them.
+
+| What | How you use it |
+|---|---|
+| **Error boundary** around the content: a screen that throws while rendering shows a fallback with **Try again**, not a white screen. The chrome stays. Navigating to another route clears it. | Nothing. The error is recorded via `app.logs` (category `react.error-boundary`, with the component stack). `renderError={({ error, reset }) => …}` replaces the fallback. |
+| **Loading fallback**: a shell-level `<Suspense>` shows the SDK spinner while a lazy screen loads. | `const Cases = lazy(() => import('./Cases'))`. `renderLoading={() => …}` replaces the spinner. |
+| **Toasts**: one polite live region, mounted once. Messages queue (newest four) and dismiss themselves (default 4 s; `duration: 0` stays until dismissed). | `const toast = useToast(); toast.show('Saved', { variant: 'success' })`. Variants are `info`, `success` and `error`. `toast.dismiss(id)`. Must be inside ProShell. |
+| **Offline banner** under the topbar while the connection is down: announced politely, dismissible, cleared on reconnect. | Nothing. Data screens read `useOnline()` for their own offline state ([PAS-UI-019](./standard/ui.md#pas-ui-019)). |
+| **Tab title per route** ([PAS-UI-003](./standard/ui.md#pas-ui-003)). | A `title` on a nav item, or `useDocumentTitle('Case 42 — Cases')` in the screen, which wins. |
+| **One `h1` per screen.** | `<PageHeader title="Cases" description="…" actions={<Button>New</Button>} />` |
+| **Skip link**: "Skip to content", hidden until focused, the first focusable element. It moves focus to `<main id="main">`. | Nothing. |
+| **Route changes** (with `onNavigate`): forward navigation lands at the top, back/forward restores where the route was left, and focus moves to the new screen's `PageHeader` heading (else `<main>`). | Pass `onNavigate` (client-side routing). With plain links, every navigation is a page load and the browser handles scroll and focus itself. |
+
+```tsx
+import { lazy } from 'react'
+import { ProShell, PageHeader, useDocumentTitle, useToast } from '@proappstore/sdk'
+
+const Cases = lazy(() => import('./Cases'))
+
+function CasesScreen() {
+  useDocumentTitle('Cases — Support')
+  const toast = useToast()
+  return (
+    <>
+      <PageHeader title="Cases" actions={<button onClick={() => toast.show('Exported')}>Export</button>} />
+      <Cases />
+    </>
+  )
+}
+```
+
+An app that uses none of these renders as before. The only additions are
+hidden: the skip link, `id="main"` on the shell's `<main>`, and two empty live
+regions.
+
 ## Error observability
 
 What the platform records when an app operation fails, and what apps must not
@@ -395,6 +433,11 @@ const app = initPro({ appId: 'my-app', monitoring: { build: { sha } } })
 app.logs.error('checkout failed', { step: 'confirm' })   // deliberate
 // window.onerror + unhandledrejection are captured automatically
 ```
+
+A render error inside `ProShell` is caught by the shell's error boundary.
+React does not rethrow it to `window.onerror`, so the boundary records it
+itself: level `error`, category `react.error-boundary`, with the stack,
+component stack and path.
 
 Uploads work **signed out** — a failure before sign-in has no session, and that is
 the report most worth keeping. Anonymous entries carry a rotating per-install

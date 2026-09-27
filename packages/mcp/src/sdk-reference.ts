@@ -207,6 +207,13 @@ import { initPro, ProShell, Avatar, SignInButton, ProBadge, ProfileMenu, ProProf
   {children}
 </ProShell>
 
+// Built into ProShell: error boundary (renderError), Suspense spinner for lazy screens
+// (renderLoading), offline banner, skip link to <main id="main">, and — with onNavigate —
+// scroll + focus on route changes. In screens:
+useDocumentTitle('Cases — Support')            // or a \`title\` on the nav item
+<PageHeader title="Cases" actions={<Button>New</Button>} />   // the screen's one h1
+const toast = useToast(); toast.show('Saved', { variant: 'success' })
+
 // Individual components:
 <Avatar user={user} size={32} />
 <ProBadge size="md" />

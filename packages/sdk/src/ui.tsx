@@ -42,3 +42,9 @@ export type {
 // NavBar (#235) — the app's main navigation; ProShell renders it from its `nav` prop
 export { NavBar } from './navbar.js';
 export type { NavBarProps, NavItem } from './navbar.js';
+
+// Shell feedback + page helpers (#236) — useToast needs <ProShell>; the rest work anywhere
+export { useToast, useOnline } from './shell-resilience.js';
+export type { ToastApi, ToastOptions, ShellToastVariant } from './shell-resilience.js';
+export { PageHeader, useDocumentTitle } from './page.js';
+export type { PageHeaderProps } from './page.js';

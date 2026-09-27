@@ -265,7 +265,7 @@ import { ProShell } from '@proappstore/sdk'
 | `app` | `ProAppStore` | - | SDK instance |
 | `children` | `ReactNode` | - | App content |
 | `appName` | `string?` | - | Topbar name |
-| `nav` | `{ label: string; href: string; icon?: ReactNode }[]` | - | **The app's screens.** Rendered as the main navigation in the topbar |
+| `nav` | `{ label: string; href: string; icon?: ReactNode; title?: string }[]` | - | **The app's screens.** Rendered as the main navigation in the topbar |
 | `onNavigate` | `(href: string) => void` | - | Client-side navigation for nav clicks (e.g. a router's `navigate`); without it, items are links |
 | `renderNav` | `(ctx) => ReactNode` | - | Replace the built-in NavBar (`ctx`: `items`, `currentPath`, `onNavigate`) |
 | `allowFree` | `boolean` | `true` | Skip subscription gate |
@@ -275,6 +275,17 @@ import { ProShell } from '@proappstore/sdk'
 | `hideFooter` | `boolean` | `false` | Omit the default footer |
 | `renderTopbar` | `(ctx) => ReactNode` | - | Replace the default topbar; place `ctx.nav` in it |
 | `renderFooter` | `(ctx) => ReactNode` | - | Replace the default footer |
+| `renderError` | `({ error, reset }) => ReactNode` | - | Replace the error-boundary fallback (the error is already recorded via `app.logs`) |
+| `renderLoading` | `() => ReactNode` | - | Replace the spinner shown while a lazy screen loads |
+
+The shell also provides the following without configuration. See the [SDK overview](./sdk-overview.md#resilience-and-feedback-built-in):
+- an error boundary and a Suspense fallback;
+- `useToast()` for messages in one polite live region;
+- an offline banner, plus `useOnline()` for data screens;
+- per-route tab titles (a nav item's `title` or `useDocumentTitle`);
+- `PageHeader` for the one `h1`;
+- a skip link to `<main id="main">`;
+- with `onNavigate`, scroll and focus handling on route changes.
 
 ### Navigation (`nav`)
 

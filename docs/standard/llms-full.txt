@@ -1,6 +1,6 @@
 # ProAppStore Recommended Application Standard — full text
 
-Version 1.7. Canonical HTML: https://docs.proappstore.online/standard/ · Data: https://docs.proappstore.online/standard/standard.json · Audit instructions: https://docs.proappstore.online/standard/audit-instructions/
+Version 1.8. Canonical HTML: https://docs.proappstore.online/standard/ · Data: https://docs.proappstore.online/standard/standard.json · Audit instructions: https://docs.proappstore.online/standard/audit-instructions/
 Clause URLs are stable: https://docs.proappstore.online/standard/<chapter page>/#<clause id in lower case>. Findings must cite them.
 
 ## Chapter STACK — Stack and platform services
@@ -3354,22 +3354,22 @@ Applicability: All apps with a user interface.
 
 *
 
-Rationale: Screen-reader users navigate by landmark and heading; a page that is one `<div>` soup has no structure to navigate. `ProShell` provides `<header>` and `<main>` but not `<nav>`; composable layouts provide none.
+Rationale: Screen-reader users navigate by landmark and heading; a page that is one `<div>` soup has no structure to navigate. `ProShell` provides `<header>`, `<main id="main">`, the skip link and — when the app declares `nav` — the `<nav>` landmark; the single `h1` and the per-route title still come from the screen. Composable layouts provide none of these.
 
 *
 
-Recommended implementation: Declare the app's screens with ProShell's `nav` prop: the shell renders them as a `<nav aria-label="Main">` in its topbar, with the current route marked `aria-current="page"`. Do not put navigation inside the shell's children. A custom `renderTopbar` places `ctx.nav`, and a `hideTopbar` app renders its own `<nav aria-label="Main">` (or the exported `NavBar`). Set the title in a route effect; add `<a href="#main" class="skip-link">`.
+Recommended implementation: Declare the app's screens with ProShell's `nav` prop: the shell renders them as a `<nav aria-label="Main">` in its topbar, with the current route marked `aria-current="page"`. Do not put navigation inside the shell's children. A custom `renderTopbar` places `ctx.nav`, and a `hideTopbar` app renders its own `<nav aria-label="Main">` (or the exported `NavBar`). Give each screen its heading with `PageHeader` (the one `h1`) and its tab title with `useDocumentTitle` (or a `title` on its nav item). The shell's built-in skip link is the first focusable element and targets `<main id="main">`; an app outside ProShell adds its own `<a href="#main">`.
 
 *
 
 Conforming example: ```tsx
-<ProShell app={app} nav={[{ label: 'Tasks', href: '/tasks' }]}>   {/* header, nav, main */}
+<ProShell app={app} nav={[{ label: 'Tasks', href: '/tasks', title: 'Tasks — My App' }]}>   {/* skip link, header, nav, main */}
   <TaskPage />
 </ProShell>
 
 // TaskPage
-useEffect(() => { document.title = `${task.title} — My App` }, [task.title])
-<h1>{task.title}</h1>…
+useDocumentTitle(`${task.title} — My App`)
+<PageHeader title={task.title} />…
 ```
 
 *
@@ -3744,7 +3744,7 @@ Rationale: A blank screen during a fetch reads as broken; an error rendered as "
 
 *
 
-Recommended implementation: Model `{ kind: 'loading' | 'ok' | 'empty' | 'error' }` per query; render the SDK components; keep the error message actionable.
+Recommended implementation: Model `{ kind: 'loading' | 'ok' | 'empty' | 'error' }` per query; render the SDK components; keep the error message actionable. ProShell's Suspense spinner and error boundary are the screen-level floor (a lazy screen loading, a render crash); they do not replace these per-query states.
 
 *
 
@@ -4127,7 +4127,7 @@ Rationale: The platform mandates installable PWAs; an installed app that white-s
 
 *
 
-Recommended implementation: Keep the template precache; detect `navigator.onLine`/fetch failure and render the offline state; for drafts, save to `app.kv` when back online rather than replaying writes.
+Recommended implementation: Keep the template precache; ProShell shows an app-wide offline banner, and data screens use `useOnline()` (or a fetch failure) to render their own offline state; for drafts, save to `app.kv` when back online rather than replaying writes.
 
 *
 

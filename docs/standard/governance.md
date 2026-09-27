@@ -1,6 +1,6 @@
 # Governance, clause IDs, and versioning
 
-**Standard version 1.7** · Part of the [Application Standard](./index.md)
+**Standard version 1.8** · Part of the [Application Standard](./index.md)
 
 This page is the rulebook for the standard itself: how chapters are organised,
 how clauses are identified and written, what the normative keywords mean, and

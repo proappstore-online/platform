@@ -74,7 +74,11 @@ export { useProAuth, useProSubscription, useProGate, useProNotifications } from 
 export { ProProvider, useApp } from './provider.js';
 export type { ProProviderProps } from './provider.js';
 export { ProShell } from './shell.js';
-export type { ProShellProps, ProShellRenderContext, ProShellNavContext, MenuItem } from './shell.js';
+export type { ProShellProps, ProShellRenderContext, ProShellNavContext, MenuItem, ShellErrorContext } from './shell.js';
+export { useToast, useOnline } from './shell-resilience.js';
+export type { ToastApi, ToastOptions, ShellToastVariant } from './shell-resilience.js';
+export { PageHeader, useDocumentTitle } from './page.js';
+export type { PageHeaderProps } from './page.js';
 export { NavBar } from './navbar.js';
 export type { NavBarProps, NavItem } from './navbar.js';
 export {

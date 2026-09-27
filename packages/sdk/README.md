@@ -601,7 +601,7 @@ Props:
 | `app` | `ProAppStore` | SDK instance from `initPro()` |
 | `children` | `ReactNode` | App content (rendered only when gates pass) |
 | `appName` | `string?` | Name shown in the topbar |
-| `nav` | `{ label: string; href: string; icon?: ReactNode }[]` | **The app's screens**, rendered as the main navigation in the topbar |
+| `nav` | `{ label: string; href: string; icon?: ReactNode; title?: string }[]` | **The app's screens**, rendered as the main navigation in the topbar |
 | `onNavigate` | `(href: string) => void` | Client-side navigation for nav clicks (e.g. a router's `navigate`); without it items are links |
 | `renderNav` | `(ctx) => ReactNode` | Replace the built-in NavBar (`ctx`: `items`, `currentPath`, `onNavigate`) |
 | `allowFree` | `boolean?` | Skip subscription gate (default: `true` until platform billing is live) |
@@ -611,6 +611,8 @@ Props:
 | `hideFooter` | `boolean?` | Omit the default footer |
 | `renderTopbar` | `(ctx) => ReactNode` | Replace the default topbar; place `ctx.nav` in it |
 | `renderFooter` | `(ctx) => ReactNode` | Replace the default footer |
+| `renderError` | `({ error, reset }) => ReactNode` | Replace the error-boundary fallback (errors are recorded via `app.logs`) |
+| `renderLoading` | `() => ReactNode` | Replace the spinner shown while a lazy screen loads |
 
 ProShell handles:
 - Auth initialization and the sign-in gate
@@ -623,6 +625,14 @@ ProShell handles:
   - 44 px targets and visible focus.
 
   Its styles are injected when the navbar renders, so no setup is needed. They are also available as `@proappstore/sdk/shell.css`.
+- Resilience and feedback:
+  - an error boundary (with a Try again fallback, errors recorded via `app.logs`) and a Suspense spinner around the content;
+  - `useToast()` for messages in one polite live region;
+  - an offline banner, plus `useOnline()`;
+  - tab titles from a nav item's `title` or `useDocumentTitle`;
+  - `PageHeader` for each screen's one `h1`;
+  - a skip link to `<main id="main">`;
+  - with `onNavigate`, scroll to top or restore on back/forward, and focus moved to the new screen's heading.
 
 Do not build navigation into a page, and do not stack a second navbar under the shell. A custom topbar keeps the gates and places the rendered `nav`:
 

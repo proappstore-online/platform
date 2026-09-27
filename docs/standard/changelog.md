@@ -4,6 +4,27 @@ Part of the [Application Standard](./index.md). One entry per version, newest
 first; the [changelog policy](./governance.md#changelog-policy) defines the
 sections.
 
+## 1.8
+
+ProShell resilience and feedback layer (#236).
+
+- **Added** — none.
+- **Changed** — none.
+- **Withdrawn** — none.
+- **Editorial** —
+  - PAS-UI-003: the recommended implementation and example use `PageHeader`
+    for the single `h1`, and `useDocumentTitle` or a nav item's `title` for
+    the per-route title. They point to ProShell's built-in skip link to
+    `<main id="main">`. The rationale no longer says the shell lacks `<nav>`.
+  - PAS-UI-011: ProShell's Suspense spinner and error boundary are noted as
+    the screen-level floor, not a replacement for per-query states.
+  - PAS-UI-019: the shell's offline banner and `useOnline()` are noted.
+  - The SDK components table adds what ProShell now provides (skip link,
+    error boundary, Suspense, toast region, offline banner, route titles,
+    scroll and focus handling on client-side navigation) and adds rows for
+    `PageHeader`, `useDocumentTitle` and `useOnline`.
+  - The rules are unchanged.
+
 ## 1.7
 
 Built-in main navigation in ProShell (#235).

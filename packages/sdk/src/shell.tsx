@@ -1,12 +1,22 @@
-import { useState, useEffect, type ReactNode } from 'react';
+import { Suspense, useEffect, useInsertionEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { ProAppStore } from './index.js';
 import type { User } from './base-types.js';
 import type { Subscription } from './types.js';
-import { ProfileMenu, ProBadge, GateScreen, TextSizeToggle } from './ui.js';
+import { ProfileMenu, ProBadge, GateScreen, TextSizeToggle, Spinner } from './ui.js';
 import { ProProvider } from './provider.js';
-import { NavBar, useCurrentPath, type NavItem } from './navbar.js';
+import { activeHref, NavBar, useCurrentPath, type NavItem } from './navbar.js';
+import { SHELL_CSS } from './shell-css.js';
+import {
+  OfflineBanner,
+  ShellErrorBoundary,
+  SkipLink,
+  ToastProvider,
+  useRouteChangeEffects,
+  type ShellErrorContext,
+} from './shell-resilience.js';
 
 export type { NavItem } from './navbar.js';
+export type { ShellErrorContext } from './shell-resilience.js';
 
 export interface MenuItem {
   label: string;
@@ -89,6 +99,13 @@ export interface ProShellProps {
   renderTopbar?: (ctx: ProShellRenderContext) => ReactNode;
   /** Replace the default footer. Return null to omit it. */
   renderFooter?: (ctx: ProShellRenderContext) => ReactNode;
+  /**
+   * Replace the fallback shown when a screen throws while rendering (#236).
+   * The error is already recorded via `app.logs`; call `reset` to retry.
+   */
+  renderError?: (ctx: ShellErrorContext) => ReactNode;
+  /** Replace the spinner shown while a lazy-loaded screen loads (#236). */
+  renderLoading?: () => ReactNode;
 }
 
 type Gate = 'loading' | 'signed-out' | 'no-subscription' | 'ready';
@@ -101,6 +118,9 @@ type Gate = 'loading' | 'signed-out' | 'no-subscription' | 'ready';
  * - Subscription check + upgrade wall (unless allowFree=true)
  * - Topbar with avatar, app name, menu (sign out, delete account, manage billing)
  * - Main navigation from the `nav` prop (<nav aria-label="Main">, current route, mobile menu)
+ * - Resilience and feedback (#236): error boundary + Suspense around the content,
+ *   `useToast` region, offline banner, skip link, nav-item titles, and scroll +
+ *   focus handling on client-side route changes
  * - Theme support via CSS custom properties
  * - Only renders children when all gates pass
  *
@@ -134,11 +154,32 @@ export function ProShell({
   hideFooter = false,
   renderTopbar,
   renderFooter,
+  renderError,
+  renderLoading,
 }: ProShellProps) {
   const [user, setUser] = useState(app.auth.user);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [gate, setGate] = useState<Gate>('loading');
   const [currentPath, setCurrentPath] = useCurrentPath();
+  const mainRef = useRef<HTMLElement>(null);
+  const beforeNavigate = useRouteChangeEffects(currentPath, mainRef, onNavigate !== undefined);
+
+  useInsertionEffect(() => {
+    if (document.getElementById('pas-shell-css')) return;
+    const style = document.createElement('style');
+    style.id = 'pas-shell-css';
+    style.textContent = SHELL_CSS;
+    document.head.appendChild(style);
+  }, []);
+
+  // A nav item's `title` becomes the tab title on its route. A layout effect runs
+  // before every passive effect, so a screen's own useDocumentTitle still wins.
+  const navItems = nav ?? [];
+  const activeItem = navItems.find((item) => item.href === activeHref(navItems, currentPath));
+  const navTitle = activeItem?.title;
+  useLayoutEffect(() => {
+    if (navTitle) document.title = navTitle;
+  }, [navTitle, currentPath]);
 
   useEffect(() => {
     app.auth.init();
@@ -181,18 +222,24 @@ export function ProShell({
     </ProfileMenu>
   );
 
-  const navItems = nav ?? [];
+  // Client-side navigation goes through the shell, so it knows the route changed
+  // (scroll, focus, titles). Without onNavigate, items are plain links.
+  const navigate = onNavigate
+    ? (href: string) => {
+      beforeNavigate();
+      onNavigate(href);
+      setCurrentPath(href);
+    }
+    : undefined;
   const navNode = navItems.length === 0 ? null : renderNav
     ? renderNav({
       items: navItems,
       currentPath,
-      onNavigate: (href) => {
-        if (!onNavigate) { window.location.assign(href); return; }
-        onNavigate(href);
-        setCurrentPath(href);
-      },
+      onNavigate: navigate ?? ((href) => window.location.assign(href)),
     })
-    : <NavBar items={navItems} {...(onNavigate ? { onNavigate } : {})} />;
+    : navigate
+      ? <NavBar items={navItems} currentPath={currentPath} onNavigate={navigate} />
+      : <NavBar items={navItems} />;
 
   const shellContext: ProShellRenderContext = {
     app,
@@ -229,18 +276,30 @@ export function ProShell({
     </footer>
   );
 
+  const loading = renderLoading ? renderLoading() : (
+    <div className="pas-shell-loading flex flex-1 items-center justify-center px-4 py-12">
+      <Spinner size={28} />
+    </div>
+  );
+
   // --- Ready: render app with topbar ---
   return (
     <ProProvider app={app}>
+    <ToastProvider>
     <div style={styles.shell}>
+      <SkipLink mainRef={mainRef} />
       {topbar}
+      <OfflineBanner />
 
-      <main style={styles.main}>
-        {children}
+      <main id="main" ref={mainRef} tabIndex={-1} className="pas-main" style={styles.main}>
+        <ShellErrorBoundary app={app} renderError={renderError} resetKey={currentPath}>
+          <Suspense fallback={loading}>{children}</Suspense>
+        </ShellErrorBoundary>
       </main>
 
       {footer}
     </div>
+    </ToastProvider>
     </ProProvider>
   );
 }

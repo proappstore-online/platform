@@ -1,6 +1,6 @@
 # UI, browser security, and PWA
 
-**Standard version 1.7** · Chapter `UI` · Part of the [Application Standard](./index.md)
+**Standard version 1.8** · Chapter `UI` · Part of the [Application Standard](./index.md)
 
 **Scope.** UI components, browser security headers and storage, accessibility, responsive and mobile behaviour, PWA.
 
@@ -71,7 +71,10 @@ From `@proappstore/sdk/ui` and `/shell` (see [UI components](../ui.md)):
 
 | Component | Provides | Still on the app |
 |---|---|---|
-| `ProShell` | `<header>`, `<main>`, auth and subscription gates, topbar, and — from its `nav` prop — the `<nav aria-label="Main">` landmark with `aria-current="page"`, a keyboard-operable menu button below 640 px and 44 px targets | declaring `nav`; headings, titles ([003](#pas-ui-003)); its own `<nav>` when it replaces the topbar with `hideTopbar` |
+| `ProShell` | `<header>`, `<main id="main">`, auth and subscription gates, topbar; from its `nav` prop, the `<nav aria-label="Main">` landmark with `aria-current="page"`, a keyboard-operable menu button below 640 px and 44 px targets; a skip-to-content link as the first focusable element; nav-item `title`s as the tab title; an error boundary (fallback with retry, error recorded via `app.logs`) and a Suspense spinner around the content; a polite toast region (`useToast`); an offline banner; with `onNavigate`, scroll to top / restore on back-forward and focus moved to the new screen's heading or `<main>` | declaring `nav`; one `h1` per screen (`PageHeader`) and per-screen titles (`useDocumentTitle`) ([003](#pas-ui-003)); per-query loading/empty/error states ([011](#pas-ui-011)); its own `<nav>` when it replaces the topbar with `hideTopbar` |
+| `PageHeader` | the screen's single `<h1>` (focus target after navigation), optional description and actions | one per screen |
+| `useDocumentTitle` | sets `document.title` for the screen, overriding a nav item's `title` | calling it in each routed screen |
+| `useOnline` | `navigator.onLine`, kept current by online/offline events | the offline state on data screens ([019](#pas-ui-019)) |
 | `Modal` | `role="dialog"`, `aria-modal`, `aria-label` from `title`, Escape to close, labelled close button | focus return to the opener; initial focus placement ([005](#pas-ui-005)) |
 | `Tabs` | `tablist` / `tab` / `aria-selected` / `tabpanel` | arrow-key navigation between tabs |
 | `Toast` | `role="status"`, `aria-live="polite"`, labelled dismiss | — |
@@ -172,20 +175,20 @@ h1 { font-family: "Comic Sans MS"; }
 
 **Applicability.** All apps with a user interface.
 
-**Rationale.** Screen-reader users navigate by landmark and heading; a page that is one `<div>` soup has no structure to navigate. `ProShell` provides `<header>` and `<main>` but not `<nav>`; composable layouts provide none.
+**Rationale.** Screen-reader users navigate by landmark and heading; a page that is one `<div>` soup has no structure to navigate. `ProShell` provides `<header>`, `<main id="main">`, the skip link and — when the app declares `nav` — the `<nav>` landmark; the single `h1` and the per-route title still come from the screen. Composable layouts provide none of these.
 
-**Recommended implementation.** Declare the app's screens with ProShell's `nav` prop: the shell renders them as a `<nav aria-label="Main">` in its topbar, with the current route marked `aria-current="page"`. Do not put navigation inside the shell's children. A custom `renderTopbar` places `ctx.nav`, and a `hideTopbar` app renders its own `<nav aria-label="Main">` (or the exported `NavBar`). Set the title in a route effect; add `<a href="#main" class="skip-link">`.
+**Recommended implementation.** Declare the app's screens with ProShell's `nav` prop: the shell renders them as a `<nav aria-label="Main">` in its topbar, with the current route marked `aria-current="page"`. Do not put navigation inside the shell's children. A custom `renderTopbar` places `ctx.nav`, and a `hideTopbar` app renders its own `<nav aria-label="Main">` (or the exported `NavBar`). Give each screen its heading with `PageHeader` (the one `h1`) and its tab title with `useDocumentTitle` (or a `title` on its nav item). The shell's built-in skip link is the first focusable element and targets `<main id="main">`; an app outside ProShell adds its own `<a href="#main">`.
 
 **Conforming example.**
 
 ```tsx
-<ProShell app={app} nav={[{ label: 'Tasks', href: '/tasks' }]}>   {/* header, nav, main */}
+<ProShell app={app} nav={[{ label: 'Tasks', href: '/tasks', title: 'Tasks — My App' }]}>   {/* skip link, header, nav, main */}
   <TaskPage />
 </ProShell>
 
 // TaskPage
-useEffect(() => { document.title = `${task.title} — My App` }, [task.title])
-<h1>{task.title}</h1>…
+useDocumentTitle(`${task.title} — My App`)
+<PageHeader title={task.title} />…
 ```
 
 **Non-conforming example.**
@@ -448,7 +451,7 @@ manifest: { orientation: 'any', min_viewport_width: 360, display: 'standalone', 
 
 **Rationale.** A blank screen during a fetch reads as broken; an error rendered as "no items" hides outages; an empty state with no action strands new users.
 
-**Recommended implementation.** Model `{ kind: 'loading' | 'ok' | 'empty' | 'error' }` per query; render the SDK components; keep the error message actionable.
+**Recommended implementation.** Model `{ kind: 'loading' | 'ok' | 'empty' | 'error' }` per query; render the SDK components; keep the error message actionable. ProShell's Suspense spinner and error boundary are the screen-level floor (a lazy screen loading, a render crash); they do not replace these per-query states.
 
 **Conforming example.**
 
@@ -719,7 +722,7 @@ registerType: 'prompt'  // + no prompt UI: old shell forever
 
 **Rationale.** The platform mandates installable PWAs; an installed app that white-screens offline fails the promise, and one that replays a non-idempotent write on reconnect duplicates it.
 
-**Recommended implementation.** Keep the template precache; detect `navigator.onLine`/fetch failure and render the offline state; for drafts, save to `app.kv` when back online rather than replaying writes.
+**Recommended implementation.** Keep the template precache; ProShell shows an app-wide offline banner, and data screens use `useOnline()` (or a fetch failure) to render their own offline state; for drafts, save to `app.kv` when back online rather than replaying writes.
 
 **Conforming example.**
 

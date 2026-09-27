@@ -8,6 +8,11 @@ export interface NavItem {
   href: string;
   /** Optional icon, rendered before the label (mark it `aria-hidden`). */
   icon?: ReactNode;
+  /**
+   * Tab title while this item's route is current (#236, PAS-UI-003). ProShell
+   * applies it; a screen's own `useDocumentTitle` overrides it.
+   */
+  title?: string;
 }
 
 export interface NavBarProps {
