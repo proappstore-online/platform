@@ -28,6 +28,8 @@ describe('template catalogue', () => {
       expect(t.id).toMatch(/^[a-z][a-z0-9-]*$/);
       expect(t.repo).toMatch(/^proappstore-online\/[A-Za-z0-9_.-]+$/);
       expect(t.release.source_commit).toMatch(/^[0-9a-f]{40}$/);
+      // A staged templates/*/template.json carries all zeros until its repository is published (#199).
+      expect(t.release.source_commit, `${t.id} has the unpublished placeholder commit`).not.toMatch(/^0{40}$/);
       expect(t.security_compliance.reviewed_at).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       for (const d of t.security_compliance.known_deviations) expect(d).toMatch(/^PAS-(STACK|AUTH|DATA|INT|UI|OPS)-\d{3}$/);
       if (t.status === 'deprecated' || t.status === 'withdrawn') expect(t.deprecation, `${t.id} needs a deprecation record`).not.toBeNull();

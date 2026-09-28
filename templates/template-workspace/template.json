@@ -1,0 +1,52 @@
+{
+  "$comment": "Catalogue metadata (docs/templates/catalogue.schema.json #/$defs/template). The platform copies this into packages/build-core/src/template-catalogue.ts when the template is published; release.source_commit is the reviewed commit of the published repository.",
+  "id": "template-workspace",
+  "repo": "proappstore-online/template-workspace",
+  "ref": "main",
+  "title": "Back-office records workspace template",
+  "purpose": "A company runs its operations in one workspace: members with roles and a permissions table, single-use invitations, records with a lifecycle (draft → submitted → approved → closed, or rejected), an approvals queue, reports and a scoped CSV export, and an audit trail written in the same transaction as every change. Not for public catalogues or two-sided markets (template-marketplace) or community groups (template-membership).",
+  "supported_categories": [
+    "productivity",
+    "business"
+  ],
+  "requires": {
+    "sdk": ">=1.16.61",
+    "cli": ">=2.6.0",
+    "node": ">=22",
+    "pnpm": "10.x"
+  },
+  "capabilities": [
+    "platform-auth",
+    "registered-actions",
+    "d1-migrations",
+    "workspace-scoping",
+    "permissions",
+    "audit-log",
+    "approvals",
+    "exports",
+    "pwa",
+    "keyless-oidc-deploy"
+  ],
+  "security_compliance": {
+    "status": "reviewed",
+    "reviewed_at": "2026-09-25",
+    "known_deviations": [],
+    "notes": "Static audit at staging (b53c63a, #190): pas check passes every hard check once APPNAME is replaced (re-run 2026-09-28; in the template itself only the placeholder check fails, by design); the manifest registers through the platform's own validation (manifest rules, :__user_id scoping, schema coherence) and the migrations pass the additive-only lint (test/template-workspace.test.ts). All 27 actions are authenticated and scoped through a workspace-membership sub-query; privileged writes check the role or a permission key in SQL; every state-changing write is a batch ending in its guarded audit row (PAS-AUTH-019). Fixes the base template's three known deviations (PAS-AUTH-001, PAS-UI-002, PAS-UI-007)."
+  },
+  "maintainer": {
+    "org": "proappstore-online",
+    "contact": "https://github.com/proappstore-online/platform/issues"
+  },
+  "release": {
+    "version": "2026.09.25",
+    "source_commit": "0000000000000000000000000000000000000000",
+    "released_at": "2026-09-25"
+  },
+  "preview": {
+    "docs": "https://docs.proappstore.online/templates/",
+    "screenshot": null
+  },
+  "status": "approved",
+  "deprecation": null,
+  "default": false
+}

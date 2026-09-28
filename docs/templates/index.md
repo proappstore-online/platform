@@ -95,11 +95,27 @@ The map-centred template (#180) is staged at `templates/template-map/`. The
 archetype investigation recommended maps as a mode of the marketplace template
 rather than a fourth archetype; this template exists for apps where the map is
 the *primary workspace* and was written from the standard, not extracted from an
-app. Its `template.json` is the catalogue entry, validated by
-`test/template-map.test.ts` against `catalogue.schema.json`; it enters the
-catalogue once published as `proappstore-online/template-map`. Pick it only
-when every record is a point and users think in "where"; two-sided markets with
-a map belong to `template-marketplace` with `MAPS_ENABLED`.
+app. It enters the catalogue once published as `proappstore-online/template-map`.
+Pick it only when every record is a point and users think in "where"; two-sided
+markets with a map belong to `template-marketplace` with `MAPS_ENABLED`.
+
+### Publishing a staged template
+
+Each staged template ships its catalogue entry as `template.json`, validated against
+`catalogue.schema.json` by its test. The entry stays out of the catalogue until the
+template repository exists, because the provisioner copies from `repo` (#199). Its
+`release.source_commit` is all zeros until then, and the catalogue test refuses that
+placeholder. To publish one (an org owner creates the repository, since members cannot):
+
+1. Create `proappstore-online/template-<name>`, mark it as a GitHub template repository, and
+   push `templates/template-<name>/` as its root
+   (`git subtree split --prefix templates/template-<name>`).
+2. Confirm its `ci.yml` and `compliance.yml` are green. Its deploy workflow skips only
+   `template-app`, so its Deploy job runs in the template repository itself and fails at
+   Build on the unreplaced placeholders; nothing is uploaded.
+3. Copy `template.json` (without `$comment`) into `packages/build-core/src/template-catalogue.ts`
+   with `release.source_commit` set to the pushed commit, then run
+   `node scripts/build-template-catalogue.mjs` to regenerate `catalogue.json`.
 
 ## Adding, deprecating, withdrawing
 

@@ -12,6 +12,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../packages/backend/src/index.js';
 import { forbiddenMigrationStatement } from '../packages/backend/src/routes/deploy.js';
 import { testToken, mockStmt, makeEnv } from '../packages/backend/src/test-helpers.js';
+import { stagedTemplateErrors } from './lib/template-metadata.js';
 
 const ROOT = new URL('../templates/template-membership/', import.meta.url);
 const read = (p: string) => JSON.parse(readFileSync(new URL(p, ROOT), 'utf8'));
@@ -141,6 +142,15 @@ describe('template-membership: registration (#189)', () => {
 
   it('migrations are additive-only under the deploy lint', () => {
     for (const m of MIGRATIONS.migrations) expect(forbiddenMigrationStatement(m.sql), m.name).toBeNull();
+  });
+
+  it('template.json is a catalogue entry per catalogue.schema.json (#199)', () => {
+    const meta = read('template.json') as Record<string, unknown>;
+    expect(stagedTemplateErrors(meta)).toEqual([]);
+    expect(meta).toMatchObject({ id: 'template-membership', repo: 'proappstore-online/template-membership', status: 'approved', default: false });
+    expect((meta.security_compliance as { known_deviations: string[] }).known_deviations).toEqual([]);
+    expect(meta.supported_categories).toEqual(['social', 'education', 'community']);
+    expect(meta.capabilities).toEqual(expect.arrayContaining(['membership-scoping', 'join-codes', 'events-rsvp', 'group-thread']));
   });
 });
 

@@ -14,6 +14,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../packages/backend/src/index.js';
 import { forbiddenMigrationStatement } from '../packages/backend/src/routes/deploy.js';
 import { testToken, mockStmt, makeEnv } from '../packages/backend/src/test-helpers.js';
+import { stagedTemplateErrors } from './lib/template-metadata.js';
 
 const ROOT = new URL('../templates/template-map/', import.meta.url);
 const read = (p: string) => JSON.parse(readFileSync(new URL(p, ROOT), 'utf8'));
@@ -123,16 +124,8 @@ describe('template-map: registration and metadata (#180)', () => {
   });
 
   it('template.json is a catalogue entry per catalogue.schema.json', () => {
-    const schema = JSON.parse(readFileSync(new URL('../docs/templates/catalogue.schema.json', import.meta.url), 'utf8')) as { $defs: { template: { required: string[]; properties: Record<string, { pattern?: string; enum?: string[]; properties?: Record<string, unknown>; required?: string[] }> } } };
-    const def = schema.$defs.template;
     const meta = read('template.json') as Record<string, unknown>;
-    for (const key of def.required) expect(meta, key).toHaveProperty(key);
-    for (const [key, rule] of Object.entries(def.properties)) {
-      const value = meta[key];
-      if (rule.pattern && typeof value === 'string') expect(value, key).toMatch(new RegExp(rule.pattern));
-      if (rule.enum) expect(rule.enum, key).toContain(value);
-      if (rule.required && value && typeof value === 'object') for (const k of rule.required) expect(value, `${key}.${k}`).toHaveProperty(k);
-    }
+    expect(stagedTemplateErrors(meta)).toEqual([]);
     expect(meta).toMatchObject({ id: 'template-map', repo: 'proappstore-online/template-map', status: 'approved', default: false });
     expect((meta.security_compliance as { known_deviations: string[] }).known_deviations).toEqual([]);
     expect(meta.capabilities).toEqual(expect.arrayContaining(['map-primary', 'list-alternative', 'owner-scoping', 'app-roles']));
