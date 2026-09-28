@@ -1,6 +1,6 @@
 # ProAppStore Recommended Application Standard — full text
 
-Version 1.8. Canonical HTML: https://docs.proappstore.online/standard/ · Data: https://docs.proappstore.online/standard/standard.json · Audit instructions: https://docs.proappstore.online/standard/audit-instructions/
+Version 1.9. Canonical HTML: https://docs.proappstore.online/standard/ · Data: https://docs.proappstore.online/standard/standard.json · Audit instructions: https://docs.proappstore.online/standard/audit-instructions/
 Clause URLs are stable: https://docs.proappstore.online/standard/<chapter page>/#<clause id in lower case>. Findings must cite them.
 
 ## Chapter STACK — Stack and platform services
@@ -1055,13 +1055,17 @@ Rationale: The shared design system is what makes the store feel like one produc
 
 *
 
-Recommended implementation: Level 1: `<ProShell app={app}>…</ProShell>`. Level 2: compose the exported components. Level 3: hooks only, but keep tokens and dark mode. Never override the `--md-*`/brand CSS variables.
+Recommended implementation: Wrap the whole app in `<ProShell app={app} nav={…}>…</ProShell>`, listing every screen in `nav`. The shell provides the gates, the topbar, the main navigation and the resilience layer. Customise its chrome with `renderTopbar` and the exported components. Use the components and hooks inside screens, keeping the tokens and dark mode. Never override the `--md-*`/brand CSS variables.
 
 *
 
-Conforming example: ```ts
-import { ProShell } from '@proappstore/sdk/ui'
-export default () => <ProShell app={app}><Routes /></ProShell>
+Conforming example: ```tsx
+import { ProShell } from '@proappstore/sdk'
+export default () => (
+  <ProShell app={app} appName="Tasks" nav={[{ label: 'Tasks', href: '/' }, { label: 'Settings', href: '/settings' }]}>
+    <Screens />
+  </ProShell>
+)
 ```
 
 *
@@ -3260,7 +3264,7 @@ Rationale: One design system is what makes the store feel like one product and l
 
 *
 
-Recommended implementation: Level 1: `<ProShell app={app}>`; Level 2: compose `Avatar`, `ProfileMenu`, `ThemeToggle`, `Button`, `Card`, `Input`, `Modal`, `Tabs`, `Toast`, `EmptyState`; Level 3: hooks only, still on the tokens. Use `var(--accent)` etc. in app CSS; never assign to them.
+Recommended implementation: Wrap the whole app in `<ProShell app={app} nav={…}>`. It provides the topbar, the main navigation, the gates and the resilience layer. Build screens from `PageHeader`, `Button`, `Card`, `Input`, `Modal`, `Tabs`, `EmptyState` and `useToast`. For custom chrome, use ProShell's `renderTopbar` and compose `ProfileMenu`, `ThemeToggle` and `Avatar` in it. Use hooks inside screens, still on the tokens. Use `var(--accent)` etc. in app CSS; never assign to them.
 
 *
 
@@ -3277,7 +3281,7 @@ h1 { font-family: "Comic Sans MS"; }
 
 *
 
-Evidence: Source: `@proappstore/sdk/ui` imports; token assignments and `font-family` declarations in `web/src/**/*.css` and inline styles; `pas check` output for the four checks. The template's own `index.css` still *defines* the banned aliases as compatibility mappings — an app MUST NOT reference them.
+Evidence: Source: `@proappstore/sdk` / `@proappstore/sdk/ui` imports; token assignments and `font-family` declarations in `web/src/**/*.css` and inline styles; `pas check` output for the four checks. Apps scaffolded before `template-app` `1297e90` still *define* the banned aliases in `index.css` as compatibility mappings. Delete them; an app MUST NOT reference them.
 
 *
 

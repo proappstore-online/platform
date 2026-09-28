@@ -1,6 +1,6 @@
 # Stack and platform services
 
-**Standard version 1.8** · Chapter `STACK` · Part of the [Application Standard](./index.md)
+**Standard version 1.9** · Chapter `STACK` · Part of the [Application Standard](./index.md)
 
 **Scope.** Supported runtime and toolchain; SDK and CLI use; the platform service to use for each application need, and the substitutes that are unsupported.
 
@@ -865,13 +865,17 @@ initPro({ appId: 'my-app', monitoring: { auto: false } })
 
 **Rationale.** The shared design system is what makes the store feel like one product; the components carry the auth, subscription and profile behaviour the standard expects, so re-implementing them re-implements those bugs.
 
-**Recommended implementation.** Level 1: `<ProShell app={app}>…</ProShell>`. Level 2: compose the exported components. Level 3: hooks only, but keep tokens and dark mode. Never override the `--md-*`/brand CSS variables.
+**Recommended implementation.** Wrap the whole app in `<ProShell app={app} nav={…}>…</ProShell>`, listing every screen in `nav`. The shell provides the gates, the topbar, the main navigation and the resilience layer. Customise its chrome with `renderTopbar` and the exported components. Use the components and hooks inside screens, keeping the tokens and dark mode. Never override the `--md-*`/brand CSS variables.
 
 **Conforming example.**
 
-```ts
-import { ProShell } from '@proappstore/sdk/ui'
-export default () => <ProShell app={app}><Routes /></ProShell>
+```tsx
+import { ProShell } from '@proappstore/sdk'
+export default () => (
+  <ProShell app={app} appName="Tasks" nav={[{ label: 'Tasks', href: '/' }, { label: 'Settings', href: '/settings' }]}>
+    <Screens />
+  </ProShell>
+)
 ```
 
 **Non-conforming example.**

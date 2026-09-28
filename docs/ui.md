@@ -2,49 +2,50 @@
 
 > **App requirements** for UI, accessibility, browser security and PWA behaviour are clauses in the [Application Standard — UI chapter](./standard/ui.md), which also lists what each SDK component provides for accessibility. This page is the component reference those clauses cite.
 
-Drop-in React components for ProAppStore apps. Composable primitives, design tokens, and a zero-config shell.
+Drop-in React components for ProAppStore apps: the `ProShell` app frame, composable primitives, and design tokens.
+
+Every app starts the same way: wrap the whole app in [`ProShell`](#proshell) and list its screens in `nav`. The components and hooks on this page build the screens *inside* the shell, or a custom topbar for it. They do not replace it. New to the shell? Start with [Getting Started](./getting-started.md#build-your-app-inside-proshell).
 
 ## Choose your level
 
-Pick the abstraction that fits your needs:
+Every level runs inside ProShell. The level only decides how much of the chrome you customise:
 
-#### Level 1: ProShell
+#### Level 1: ProShell (every app)
 
-Zero-config. Auth gates, subscription checks, topbar, and the app's main navigation from `nav`.
+The default. Auth gates, subscription checks, topbar, the app's main navigation from `nav`, and the resilience layer (error boundary, loading fallback, toasts, offline banner, skip link).
 
-```
-<ProShell app={app} nav={[{ label: 'Home', href: '/' }, { label: 'Reports', href: '/reports' }]}>
-  <MyApp />
+```tsx
+<ProShell app={app} appName="My App" nav={[{ label: 'Home', href: '/' }, { label: 'Reports', href: '/reports' }]}>
+  <Screens />
 </ProShell>
 ```
 
-#### Level 2: Composable
+#### Level 2: Composable chrome
 
-Custom layout with SDK components.
+Your own topbar, built from the SDK components, still inside ProShell. Use `renderTopbar` and place `ctx.nav`, `ctx.profileMenu` and `ctx.textSizeToggle` in it. For a completely different frame, use `hideTopbar` with the exported `NavBar`.
 
+```tsx
+<ProShell app={app} nav={NAV} renderTopbar={({ appName, proBadge, nav, textSizeToggle, profileMenu }) => (
+  <header className="top-nav">{appName}{proBadge}{nav}{textSizeToggle}{profileMenu}</header>
+)}>…</ProShell>
 ```
-import { Avatar, ProfileMenu,
-  ThemeToggle } from
-  '@proappstore/sdk/ui'
-```
 
-#### Level 3: Hooks only
+#### Level 3: Hooks in screens
 
-Full control. Build your own UI.
+Read identity, subscription and theme state inside a screen.
 
-```
-import { useProAuth, useTheme }
-  from '@proappstore/sdk/hooks'
+```tsx
+import { useProAuth, useTheme } from '@proappstore/sdk/hooks'
 ```
 
 #### Level 4: Profile page
 
-Dedicated settings page for any route.
+A dedicated settings screen, listed in `nav` like any other.
 
-```
-<Route path="/profile"
-  element={<ProfilePage
-    app={app} />} />
+```tsx
+<ProShell app={app} nav={[{ label: 'Home', href: '/' }, { label: 'Profile', href: '/profile' }]}>
+  {location.pathname === '/profile' ? <ProProfilePage app={app} /> : <Home />}
+</ProShell>
 ```
 
 ## Design Tokens
@@ -212,16 +213,17 @@ import { BillingButton } from '@proappstore/sdk/ui'
 
 ## GateScreen
 
-Renders the appropriate gate screen based on state: loading spinner, sign-in prompt, or upgrade card. Used internally by ProShell, but available for custom layouts.
+Renders the appropriate gate screen based on state: loading spinner, sign-in prompt, or upgrade card. ProShell renders it for the whole app, so you do not need it at the root. Use it for one Pro-only screen in an app whose shell allows free users:
 
-```
+```tsx
 import { GateScreen } from '@proappstore/sdk/ui'
 import { useProGate } from '@proappstore/sdk/hooks'
 
-function App() {
-  const { gate, ...rest } = useProGate(app)
-  if (gate !== 'ready') return <GateScreen gate={gate} app={app} appName="My App" />
-  return <MyApp />
+// A screen inside <ProShell app={app} nav={NAV}> (allowFree defaults to true)
+function ReportsScreen() {
+  const { gate } = useProGate(app, { allowFree: false })
+  if (gate !== 'ready') return <GateScreen gate={gate} app={app} appName="Reports" />
+  return <Reports />
 }
 ```
 
@@ -387,33 +389,39 @@ const { gate, user, signIn, upgrade } = useProGate(app)
 
 #### Custom topbar with Pro badge
 
-```
-import { Avatar, ThemeToggle, ProBadge } from '@proappstore/sdk/ui'
-import { useProAuth, useProSubscription } from '@proappstore/sdk/hooks'
+Replace the topbar through ProShell, not with a header of your own above or inside it. The shell keeps the gates and hands you the rendered navigation and account controls:
 
-function MyHeader() {
-  const { user } = useProAuth(app)
-  const { isPro } = useProSubscription(app)
-  return (
-    <header>
-      <h1>My App {isPro && <ProBadge />}</h1>
-      <ThemeToggle />
-      {user && <Avatar user={user} />}
+```tsx
+import { ProShell } from '@proappstore/sdk'
+
+<ProShell
+  app={app}
+  appName="My App"
+  nav={NAV}
+  renderTopbar={({ appName, nav, proBadge, profileMenu, textSizeToggle }) => (
+    <header className="top-nav">
+      <span className="brand">{appName} {proBadge}</span>
+      {nav}
+      {textSizeToggle}
+      {profileMenu}
     </header>
-  )
-}
+  )}
+>
+  <Screens />
+</ProShell>
 ```
 
-#### Custom gate with GateScreen
+#### Pro-only screen with GateScreen
 
-```
+```tsx
 import { GateScreen } from '@proappstore/sdk/ui'
 import { useProGate } from '@proappstore/sdk/hooks'
 
-function App() {
-  const { gate } = useProGate(app)
+// Inside <ProShell app={app} nav={NAV}>, which lets free users in
+function ReportsScreen() {
+  const { gate } = useProGate(app, { allowFree: false })
   if (gate !== 'ready') return <GateScreen gate={gate} app={app} />
-  return <MyApp />
+  return <Reports />
 }
 ```
 
@@ -448,10 +456,11 @@ import { ThemeToggle } from '@proappstore/sdk/ui'
 
 | Import path | What you get |
 | --- | --- |
-| `@proappstore/sdk` | `initPro`, `ProAppStore`, types |
-| `@proappstore/sdk/hooks` | `useProAuth`, `useProSubscription`, `useProGate`, `useProNotifications`, `useTheme` |
+| `@proappstore/sdk` | `initPro`, `ProAppStore`, types; `ProShell`, `NavBar`, `PageHeader`, `useDocumentTitle`, `useToast`, `useOnline`; the hooks; the account components (`Avatar` … `ProProfilePage`). The base components (`Button`, `Card`, `Input`, `Spinner`, `Modal`, `EmptyState`, `Tabs`, `Toast`) are exported only from `/ui`. |
 | `@proappstore/sdk/shell` | `ProShell` |
-| `@proappstore/sdk/ui` | `Avatar`, `SignInButton`, `ThemeToggle`, `ProBadge`, `ProfileMenu`, `SubscriptionStatus`, `UpgradeCard`, `BillingButton`, `GateScreen`, `ProProfilePage` |
+| `@proappstore/sdk/shell.css` | The NavBar and shell styles as a stylesheet. Optional: ProShell injects them at render. |
+| `@proappstore/sdk/hooks` | `useProAuth`, `useProSubscription`, `useProGate`, `useProNotifications`, `useTheme` |
+| `@proappstore/sdk/ui` | `NavBar`, `PageHeader`, `useDocumentTitle`, `useToast`, `useOnline`, `Avatar`, `SignInButton`, `ThemeToggle`, `TextSizeToggle`, `ProBadge`, `ProfileMenu`, `SubscriptionStatus`, `UpgradeCard`, `BillingButton`, `GateScreen`, `ProProfilePage`, `Button`, `Card`, `Input`, `Spinner`, `Modal`, `EmptyState`, `Tabs`, `Toast` |
 
 ## CSS Classes (Design System)
 

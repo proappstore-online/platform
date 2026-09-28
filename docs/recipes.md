@@ -4,6 +4,11 @@
 
 Pre-built code patterns for ProAppStore apps. Copy, paste, and adapt — each recipe uses the PAS SDK, the design system CSS classes, and pre-installed libraries (lucide-react, date-fns, react-i18next).
 
+Every recipe is a component for a screen *inside* `ProShell`. The app is wrapped
+in `<ProShell app={app} nav={…}>` first (see [Getting Started](./getting-started.md#build-your-app-inside-proshell)),
+so no recipe builds its own header, navbar, sign-in screen or top-level error
+boundary.
+
 AI agents: use the `recipe` MCP tool to fetch any recipe programmatically.
 
 ## Data & CRUD
@@ -201,6 +206,44 @@ export function DataTable<T extends Record<string, unknown>>({ data, columns, pa
 ```
 
 ## UI Patterns
+
+**app-shell** — The app frame with navigation (start here)
+
+Wrap the whole app once and list every screen in `nav`. Each screen starts with
+a `PageHeader` and reports results with `useToast`. The shell provides the
+`<nav aria-label="Main">`, the skip link, the error boundary, the loading
+fallback and the offline banner.
+
+```
+// web/src/App.tsx
+import { initPro, ProShell, PageHeader, useToast, type NavItem } from '@proappstore/sdk'
+
+export const app = initPro({ appId: 'my-app', authMode: 'platform-cookie' })
+
+const NAV: NavItem[] = [
+  { label: 'Items', href: '/', title: 'Items — My App' },
+  { label: 'Settings', href: '/settings', title: 'Settings — My App' },
+]
+
+export default function App() {
+  return (
+    <ProShell app={app} appName="My App" nav={NAV}>
+      {window.location.pathname === '/settings' ? <Settings /> : <Items />}
+    </ProShell>
+  )
+}
+
+function Items() {
+  const toast = useToast()
+  return (
+    <div className="mx-auto w-full max-w-3xl px-6 py-10">
+      <PageHeader title="Items" actions={<button className="btn btn-primary" onClick={() => toast.show('Created', { variant: 'success' })}>New</button>} />
+      <ItemList />
+    </div>
+  )
+}
+```
+
 
 **search-filter** — Search + Filter + Sort
 

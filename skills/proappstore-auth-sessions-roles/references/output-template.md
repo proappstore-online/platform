@@ -3,7 +3,7 @@
 ```markdown
 ## Auth & permissions plan: <app name>
 
-**Hosting:** <subdomain | custom domain(s)> · **Category:** <Tailored | Ready> · **Standard:** 1.8
+**Hosting:** <subdomain | custom domain(s)> · **Category:** <Tailored | Ready> · **Standard:** 1.9
 
 ### Decisions
 | Need | Decision | Clause |

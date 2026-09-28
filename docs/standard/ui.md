@@ -1,6 +1,6 @@
 # UI, browser security, and PWA
 
-**Standard version 1.8** · Chapter `UI` · Part of the [Application Standard](./index.md)
+**Standard version 1.9** · Chapter `UI` · Part of the [Application Standard](./index.md)
 
 **Scope.** UI components, browser security headers and storage, accessibility, responsive and mobile behaviour, PWA.
 
@@ -50,12 +50,16 @@ statically and needs a browser test or a person ([PAS-UI-023](#pas-ui-023)).
 
 ## Known scaffold defects this chapter detects
 
-| Defect | Where | Clause |
-|---|---|---|
-| `user-scalable=no` in the viewport meta (blocks zoom, WCAG 1.4.4) | `template-app/web/index.html` | [PAS-UI-007](#pas-ui-007) |
-| Theme boot script reads `fas:theme`; SDK and design system use `stores-theme` | `template-app/web/index.html` vs `@proappstore/sdk` `useTheme` | [PAS-UI-002](#pas-ui-002) |
-| Banned token aliases (`--bg`, `--surface`, `--border`, `--glass`, `--dock`) defined as compatibility mappings | `template-app/web/src/index.css` | [PAS-UI-001](#pas-ui-001) |
-| Platform CSP allows `script-src 'unsafe-inline'` | host worker header | [PAS-UI-013](#pas-ui-013) (app-level tightening) |
+The first three were fixed in `template-app` at `1297e90` (#239). Apps
+scaffolded before that commit still carry them. Check for them when auditing or
+upgrading an older app.
+
+| Defect | Where | Clause | Status |
+|---|---|---|---|
+| `user-scalable=no` in the viewport meta (blocks zoom, WCAG 1.4.4) | `template-app/web/index.html` | [PAS-UI-007](#pas-ui-007) | fixed in the template; present in older apps |
+| Theme boot script reads `fas:theme`; SDK and design system use `stores-theme` | `template-app/web/index.html` vs `@proappstore/sdk` `useTheme` | [PAS-UI-002](#pas-ui-002) | fixed in the template; present in older apps |
+| Banned token aliases (`--bg`, `--surface`, `--border`, `--glass`, `--dock`) defined as compatibility mappings | `template-app/web/src/index.css` | [PAS-UI-001](#pas-ui-001) | fixed in the template; present in older apps |
+| Platform CSP allows `script-src 'unsafe-inline'` | host worker header | [PAS-UI-013](#pas-ui-013) (app-level tightening) | open |
 
 ## Security versus quality
 
@@ -107,7 +111,7 @@ provides and are not restated here.
 
 **Rationale.** One design system is what makes the store feel like one product and lets the components carry accessible behaviour the app would otherwise re-implement. Aliases split the token set and defeat the lint; overrides change the brand per app.
 
-**Recommended implementation.** Level 1: `<ProShell app={app}>`; Level 2: compose `Avatar`, `ProfileMenu`, `ThemeToggle`, `Button`, `Card`, `Input`, `Modal`, `Tabs`, `Toast`, `EmptyState`; Level 3: hooks only, still on the tokens. Use `var(--accent)` etc. in app CSS; never assign to them.
+**Recommended implementation.** Wrap the whole app in `<ProShell app={app} nav={…}>`. It provides the topbar, the main navigation, the gates and the resilience layer. Build screens from `PageHeader`, `Button`, `Card`, `Input`, `Modal`, `Tabs`, `EmptyState` and `useToast`. For custom chrome, use ProShell's `renderTopbar` and compose `ProfileMenu`, `ThemeToggle` and `Avatar` in it. Use hooks inside screens, still on the tokens. Use `var(--accent)` etc. in app CSS; never assign to them.
 
 **Conforming example.**
 
@@ -122,7 +126,7 @@ provides and are not restated here.
 h1 { font-family: "Comic Sans MS"; }
 ```
 
-**Evidence.** Source: `@proappstore/sdk/ui` imports; token assignments and `font-family` declarations in `web/src/**/*.css` and inline styles; `pas check` output for the four checks. The template's own `index.css` still *defines* the banned aliases as compatibility mappings — an app MUST NOT reference them.
+**Evidence.** Source: `@proappstore/sdk` / `@proappstore/sdk/ui` imports; token assignments and `font-family` declarations in `web/src/**/*.css` and inline styles; `pas check` output for the four checks. Apps scaffolded before `template-app` `1297e90` still *define* the banned aliases in `index.css` as compatibility mappings. Delete them; an app MUST NOT reference them.
 
 **Remediation.** Adopt the components; delete overrides and alias references; run `pas check` and `bash scripts/check-design-system.sh web` until clean.
 

@@ -1,6 +1,6 @@
 # Identity, sessions, and permissions
 
-**Standard version 1.8** · Chapter `AUTH` · Part of the [Application Standard](./index.md)
+**Standard version 1.9** · Chapter `AUTH` · Part of the [Application Standard](./index.md)
 
 **Scope.** Platform-cookie authentication, sign-in and sign-out, platform/team/app RBAC, and permissions UI.
 

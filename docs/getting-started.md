@@ -31,6 +31,69 @@ git add -A && git commit -m "first feature" && git push
 
 Your app is live at `https://my-app.proappstore.online` in under 2 minutes.
 
+## Build your app inside ProShell
+
+Every PAS app is wrapped in `ProShell`, the standard app frame. Wrap the whole
+app in it first, before you write any screen, and list the app's screens in its
+`nav` prop. The shell provides:
+
+- the sign-in and subscription gates;
+- the topbar (app name, text size, profile menu) and the footer;
+- the app's main navigation;
+- an error boundary, a loading fallback, toasts, an offline banner and a skip link.
+
+Do not hand-roll a header, navbar or profile menu, and never put navigation on a
+page.
+
+`pas create` scaffolds `web/src/App.tsx` in this shape:
+
+```tsx
+import { initPro, ProShell, PageHeader, useAuth, type NavItem } from '@proappstore/sdk'
+
+const app = initPro({ appId: 'my-app', authMode: 'platform-cookie' })
+
+// Every screen, once. ProShell renders these as <nav aria-label="Main"> in its
+// topbar, marks the current one, collapses to a menu on small screens, and uses
+// each `title` as the tab title.
+const NAV: NavItem[] = [
+  { label: 'Home', href: '/', title: 'My App' },
+  { label: 'About', href: '/about', title: 'About — My App' },
+]
+
+export default function App() {
+  return (
+    <ProShell app={app} appName="My App" nav={NAV}>
+      <Screens />
+    </ProShell>
+  )
+}
+
+// Nav items are plain links: a click loads the path and the platform serves the app for it.
+function Screens() {
+  switch (window.location.pathname) {
+    case '/about': return <About />
+    default: return <Home />
+  }
+}
+
+function Home() {
+  const { user } = useAuth()
+  return <PageHeader title="My App" description={`Signed in as ${user?.name ?? 'you'}.`} />
+}
+
+function About() {
+  return <PageHeader title="About" description="What My App is for." />
+}
+```
+
+To add a screen, add it to `NAV` and to `Screens`, and start it with a
+`PageHeader` (its one `h1`). If you use a router, pass
+`onNavigate={navigate}`. The complete shell API, the routing rules and what
+renders before sign-in are covered in
+[SDK overview — ProShell](./sdk-overview.md#proshell-component). Moving an
+existing app off its own header or navbar is covered in
+[migrating a hand-rolled shell](./sdk-overview.md#migrating-a-hand-rolled-shell).
+
 ## Tech stack
 
 - **TypeScript**, Node 22, pnpm workspaces
@@ -105,7 +168,9 @@ No need to import both SDKs. `initPro()` initializes everything.
 
 - **Using an AI client?** Install the [ProAppStore Agent Skills plugin](./skills/) — seven workflows (create, architecture, auth and roles, data, publish and roll back, upgrade, audit) that drive this platform's MCP server. Codex: `codex plugin marketplace add proappstore-online/platform`; Claude Code: `/plugin marketplace add proappstore-online/platform`. What they are evaluated for: [evaluation summary](./skills/evaluations.md).
 
+- [SDK overview — ProShell](/sdk-overview#proshell-component) — the app frame, navigation, and the built-in resilience layer
 - [SDK overview](/sdk-overview) — all modules and their APIs
+- [UI components](/ui) — the SDK components to build screens from
 - [App actions and data access security](/app-actions-security) — recommended app-data pattern
 - [CLI overview](/cli-overview) — every command explained
 - [Publishing flow](/publishing-flow) — what `pas publish` does under the hood

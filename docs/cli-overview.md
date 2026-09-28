@@ -60,6 +60,11 @@ pas --version
 replaces `APPNAME` placeholders, runs `pnpm install`, initializes git,
 and optionally provisions D1 + Data Worker.
 
+The scaffolded `web/src/App.tsx` wraps the app in `<ProShell app={app} nav={NAV}>`
+with two starter screens, Home and About. Its navigation, gates and resilience
+layer work from the first render. Add screens to `NAV`; see
+[Getting Started](./getting-started.md#build-your-app-inside-proshell).
+
 The `--repo` flag creates a GitHub repo and pushes in one step:
 
 ```bash

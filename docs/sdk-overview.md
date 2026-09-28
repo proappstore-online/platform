@@ -18,6 +18,9 @@ const app = initPro({
 The init call is synchronous and cheap. It does not fetch anything; the
 first network call happens when you read auth state or call an API.
 
+In a React app, pass `app` to [`ProShell`](#proshell-component), which wraps
+the whole UI and calls `app.auth.init()` for you.
+
 ## Surfaces
 
 ```ts
@@ -113,6 +116,9 @@ Import from `@proappstore/sdk/hooks`:
 - `useProAuth(app)` — auth state + actions
 - `useProSubscription(app)` — subscription state + upgrade/manage
 - `useProGate(app, opts)` — combined auth + subscription gate
+
+ProShell already gates the whole app. Use these inside its screens, for
+example `useProGate(app, { allowFree: false })` on a single Pro-only screen.
 
 ## Auth session storage
 
@@ -303,6 +309,13 @@ not sent either. Title is at most 150 characters and body 2,000 for email.
 provider context, topbar (app name, text size, profile menu), footer, and the
 **main navigation**. Import it from `@proappstore/sdk` (or `@proappstore/sdk/shell`).
 
+Every PAS app is wrapped in ProShell, and `pas create` scaffolds it that way
+(see [Getting Started](./getting-started.md#build-your-app-inside-proshell)).
+Before building on it, read
+[what renders before sign-in](#what-renders-before-sign-in-first-render) and
+[routing](#routing-which-route-changes-the-shell-sees). To move an existing app
+onto it, see [migrating a hand-rolled shell](#migrating-a-hand-rolled-shell).
+
 ### Navigation: pass `nav` (every app with more than one screen)
 
 Declare the app's screens once. The shell renders them in its topbar as the
@@ -416,6 +429,113 @@ function CasesScreen() {
 An app that uses none of these renders as before. The only additions are
 hidden: the skip link, `id="main"` on the shell's `<main>`, and two empty live
 regions.
+
+### What renders before sign-in (first render)
+
+ProShell renders the app, and with it the topbar, navigation, skip link, toast
+region and `<main>`, only once its gates pass. Until then it renders
+`GateScreen` alone. Plan for these:
+
+- **Every load waits for two checks.** First the gate spinner
+  shows. Then ProShell calls `app.subscription.status()` once the user is known,
+  and renders the app when that returns. The wait happens on every load, even
+  with `allowFree` (the default, `true`). If the check fails, an `allowFree` app
+  still opens.
+- **A signed-out visitor sees only the sign-in screen**, with no topbar and no
+  navigation. Nothing inside ProShell is public: a screen meant for signed-out
+  visitors cannot be one of its children.
+- **`platform-cookie` apps show the sign-in screen for a moment to returning
+  users.** The session is hydrated from the cookie after the first render, and
+  the shell treats "no user yet" as signed out. The app appears as soon as
+  hydration finishes. Do not start sign-in or redirect because of that first
+  signed-out state. `legacy-bearer` apps restore a stored session
+  synchronously, so they skip this step.
+- **Hooks that need the shell work only in its children.** `useToast` throws
+  outside `<ProShell>`, and the gate screens have no toast region.
+  `useOnline`, `PageHeader` and `useDocumentTitle` work anywhere.
+- **`allowFree` defaults to `true`.** Pass `allowFree={false}` to require an
+  active subscription. The upgrade screen then replaces the whole app, not one
+  screen.
+
+### Routing: which route changes the shell sees
+
+The shell tracks the current path to mark the active nav item, apply a nav
+item's `title`, clear the error boundary and move scroll and focus. It updates
+that path on three events:
+
+- the first render (`location.pathname`);
+- back and forward (`popstate`);
+- nav-item clicks that go through `onNavigate`.
+
+So:
+
+- **Plain links (no `onNavigate`).** Every navigation is a page load, so the shell
+  is always current. This is the scaffold's default.
+- **A router with `onNavigate`.** A navigation started elsewhere, such as a
+  link or `navigate()` call inside a screen, is not seen: the nav's
+  `aria-current` and the nav-item title stay on the old route until the next
+  nav click or back/forward. Set each screen's title with `useDocumentTitle`,
+  which does not depend on the shell's path. For the active item, render the
+  built-in `NavBar` from `renderNav` with your router's location:
+
+  ```tsx
+  const location = useLocation()
+  const navigate = useNavigate()
+  <ProShell
+    app={app}
+    nav={NAV}
+    onNavigate={navigate}
+    renderNav={({ items, onNavigate }) => (
+      <NavBar items={items} currentPath={location.pathname} onNavigate={onNavigate} />
+    )}
+  >…</ProShell>
+  ```
+
+- **Hash routing** (`#/cases`). The shell matches `location.pathname`, which a
+  hash router never changes. In `renderNav`, render `NavBar` with the current
+  hash route as `currentPath`, kept current on `hashchange`, as the approved
+  staged templates do. Their nav hrefs are `#/…`. Nav-item titles do not apply
+  here either, so set titles with `useDocumentTitle`.
+
+### Migrating a hand-rolled shell
+
+If an app already builds its own frame, such as a `Shell.tsx` or `Layout.tsx`,
+a `<header>` with links, a navbar, or navigation on the Home page, move it onto
+ProShell:
+
+1. **Wrap the app.** Make `<ProShell app={app} appName="…" nav={NAV}>` the
+   root of `App.tsx`. Keep your screen routing inside it.
+2. **Move navigation into `nav`.** Put every link from the hand-rolled navbar,
+   or from the Home page, into `NAV` as `{ label, href, title? }`. Delete the
+   old navbar, and remove the nav buttons from the pages. If you use a router,
+   pass `onNavigate={navigate}`.
+3. **Delete what the shell now provides:**
+   - the header or topbar, the logo and app-name link, and the avatar or
+     profile menu;
+   - the theme and text-size toggles;
+   - sign-in and upgrade screens (`useProGate` + `GateScreen` at the root);
+   - your own skip link, and a nested `<main id="main">`;
+   - offline badges, and top-level error boundaries and `<Suspense>`
+     wrappers;
+   - `document.title` effects that a nav item's `title` covers.
+4. **Keep what is app-specific.** Profile-menu entries become `menuItems`. A
+   branded topbar becomes `renderTopbar`; place `ctx.nav`, `ctx.profileMenu`
+   and `ctx.textSizeToggle` in it. A custom footer becomes `renderFooter`.
+5. **Adopt the screen helpers.** Start each screen with `PageHeader` as its
+   one `h1`. Replace hand-rolled toasts or snackbars with `useToast`. Replace
+   per-screen titles with `useDocumentTitle`.
+6. **Check it.** In the browser, check that:
+   - the topbar shows one `<nav aria-label="Main">` with the current screen
+     marked `aria-current="page"`;
+   - Tab reaches "Skip to content" first;
+   - below 640 px the navigation collapses into the menu button.
+
+   Then run `pas check`.
+
+Use `hideTopbar` only when the design needs a fundamentally different frame,
+such as a full-screen map or an editor. The app then renders its own
+`<nav aria-label="Main">`, usually the exported `NavBar`, and still gets the
+gates, provider context and resilience layer.
 
 ## Error observability
 

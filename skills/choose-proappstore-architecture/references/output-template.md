@@ -3,7 +3,7 @@
 ```markdown
 ## Architecture decision: <app name>
 
-**Category:** <Tailored | Ready> · **Standard:** 1.8 · **Decided:** <date>
+**Category:** <Tailored | Ready> · **Standard:** 1.9 · **Decided:** <date>
 
 ### Requirements → platform services
 | Need | Service | Why (one line) | Clause |

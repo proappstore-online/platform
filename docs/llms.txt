@@ -2,6 +2,11 @@
 
 > Developer documentation and knowledge base for ProAppStore (https://proappstore.online), the paid app marketplace on Cloudflare Workers + D1: SDK, CLI, architecture, security model, and the clause-numbered Recommended Application Standard that says how an app should use the platform and how a human or an AI copilot audits one. The storefront's own index is at https://proappstore.online/llms.txt; the AI agent guide is https://proappstore.online/skills.md.
 
+## Build an app (start here)
+
+- [Getting started — build your app inside ProShell](https://docs.proappstore.online/getting-started/#build-your-app-inside-proshell): the canonical first step. Wrap the whole app in `<ProShell app={app} appName="…" nav={[…]}>` from `@proappstore/sdk` and list every screen in `nav`. The shell renders the main navigation (`<nav aria-label="Main">`), the gates, the topbar, and the error boundary, loading fallback, toasts, offline banner and skip link. Never hand-roll a header or navbar, and never put navigation on a page.
+- [SDK overview — ProShell](https://docs.proappstore.online/sdk-overview/#proshell-component): the full shell API. Covers `nav`, `onNavigate`, `renderNav`, `renderTopbar`, the resilience layer, what renders before sign-in, routing caveats, and migrating a hand-rolled shell.
+
 ## Agent Skills (workflows for AI clients)
 
 - [create-proappstore-app](https://github.com/proappstore-online/platform/blob/main/skills/create-proappstore-app/SKILL.md): Open Agent Skills workflow to create, scaffold and provision a new ProAppStore app through the MCP server — gather inputs, pick an approved template, dry-run `provision_pas_app`, confirm, provision, verify. Index: [skills/README.md](https://github.com/proappstore-online/platform/blob/main/skills/README.md).
@@ -43,8 +48,8 @@
 
 ## Platform docs
 
-- [Getting started](https://docs.proappstore.online/getting-started/): Quick start, tech stack, monorepo layout.
-- [SDK overview](https://docs.proappstore.online/sdk-overview/): initPro, every SDK surface, monitoring, auth session storage.
+- [Getting started](https://docs.proappstore.online/getting-started/): Quick start, building the app inside ProShell with `nav`, tech stack, monorepo layout.
+- [SDK overview](https://docs.proappstore.online/sdk-overview/): initPro, every SDK surface, ProShell (navigation, resilience layer, first-render and routing caveats, migration), monitoring, auth session storage.
 - [UI components](https://docs.proappstore.online/ui/): ProShell (app frame with built-in main navigation from its `nav` prop), composable components, hooks, design tokens.
 - [Recipes](https://docs.proappstore.online/recipes/): CRUD, forms, tables, UI patterns, SDK features.
 - [CLI overview](https://docs.proappstore.online/cli-overview/): pas create / check / publish / secret / proxy / domain.

@@ -43,6 +43,11 @@ tools.
 
 ## Start here
 
+**Building an app?** Wrap the whole app in `ProShell` first and list its screens
+in `nav`. The shell renders the main navigation, the sign-in gate and the
+resilience layer. See
+[Getting Started — build your app inside ProShell](./getting-started.md#build-your-app-inside-proshell).
+
 - [Getting Started](./getting-started.md)
 - [Application Standard and Audit Guide](./standard/index.md) — how an app
   should use the platform, clause by clause, and how a human or an AI copilot

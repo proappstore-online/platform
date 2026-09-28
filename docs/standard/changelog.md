@@ -4,6 +4,28 @@ Part of the [Application Standard](./index.md). One entry per version, newest
 first; the [changelog policy](./governance.md#changelog-policy) defines the
 sections.
 
+## 1.9
+
+Documentation sweep for the upgraded ProShell (#238).
+
+- **Added** — none.
+- **Changed** — none.
+- **Withdrawn** — none.
+- **Editorial** —
+  - PAS-STACK-022: the recommended implementation and conforming example
+    wrap the whole app in ProShell with `nav`, and import it from
+    `@proappstore/sdk`. The old example imported it from
+    `@proappstore/sdk/ui`, which does not export it. Components and hooks are
+    placed inside the shell.
+  - PAS-UI-001: the recommended implementation leads with
+    `<ProShell app={app} nav={…}>`, uses `renderTopbar` for custom chrome, and
+    puts the components in screens. The evidence note says the banned token
+    aliases remain only in apps scaffolded before `template-app` `1297e90`.
+  - The known scaffold defects table gains a Status column. The viewport,
+    theme-key and token-alias defects are fixed in `template-app` `1297e90`
+    (#239) but remain in older apps.
+  - The rules are unchanged.
+
 ## 1.8
 
 ProShell resilience and feedback layer (#236).

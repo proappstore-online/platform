@@ -18,6 +18,8 @@ import { initPro } from '@proappstore/sdk'
 const app = initPro({ appId: 'my-app' })
 ```
 
+Then wrap the whole app in `<ProShell app={app} appName="…" nav={[…]}>`, the standard app frame with the gates, topbar, main navigation and resilience layer. See [ProShell Component](#proshell-component).
+
 Options:
 
 | Option | Default | Description |
@@ -508,9 +510,9 @@ const all = await app.roles.listAll()
 // [{ userId: 'user-456', role: 'moderator' }, ...]
 ```
 
-## React Hooks (recommended)
+## React Hooks
 
-Hooks give you full control over your UI while the platform handles auth, subscriptions, and gating. Import from `@proappstore/sdk/hooks`.
+Every app is wrapped in [`ProShell`](#proshell-component), which already runs the sign-in and subscription gates. Use these hooks inside its screens to read identity and subscription state, or to gate a single screen. Import from `@proappstore/sdk` or `@proappstore/sdk/hooks`.
 
 ### useProAuth
 
@@ -522,11 +524,10 @@ import { useProAuth } from '@proappstore/sdk/hooks'
 
 const app = initPro({ appId: 'my-app' })
 
-function App() {
-  const { user, loading, signIn, signOut, deleteAccount } = useProAuth(app)
-  if (loading) return <p>Loading...</p>
-  if (!user) return <button onClick={signIn}>Sign in with GitHub</button>
-  return <p>Welcome, {user.login}! <button onClick={signOut}>Sign out</button></p>
+// A screen inside <ProShell>: the shell has already signed the user in.
+function Welcome() {
+  const { user, signOut } = useProAuth(app)
+  return <p>Welcome, {user?.login}! <button onClick={signOut}>Sign out</button></p>
 }
 ```
 
@@ -547,7 +548,7 @@ function Billing() {
 
 ### useProGate
 
-Combined auth + subscription gate. Returns a single `gate` state for easy conditional rendering.
+Combined auth + subscription gate. Returns a single `gate` state for easy conditional rendering. ProShell gates the whole app; use this for one Pro-only screen in an app that otherwise allows free users.
 
 ```tsx
 import { initPro } from '@proappstore/sdk'
@@ -555,19 +556,19 @@ import { useProGate } from '@proappstore/sdk/hooks'
 
 const app = initPro({ appId: 'my-app' })
 
-function App() {
-  const { gate, user, signIn, upgrade } = useProGate(app, { allowFree: true })
+// A screen inside <ProShell allowFree>: only this screen needs a subscription.
+function ReportsScreen() {
+  const { gate, upgrade } = useProGate(app, { allowFree: false })
 
   if (gate === 'loading') return <p>Loading...</p>
-  if (gate === 'signed-out') return <button onClick={signIn}>Sign in</button>
   if (gate === 'no-subscription') return <button onClick={() => upgrade()}>Upgrade</button>
-  return <p>Welcome, {user?.login}!</p>
+  return <Reports />
 }
 ```
 
 Gate states: `'loading'` | `'signed-out'` | `'no-subscription'` | `'ready'`
 
-Pass `{ allowFree: true }` to skip the subscription check (lets free users through).
+`allowFree` defaults to `true` (free users pass); pass `{ allowFree: false }` to require an active subscription.
 
 ## ProShell Component
 
@@ -655,6 +656,8 @@ Do not build navigation into a page, and do not stack a second navbar under the 
 ```
 
 For a fully custom layout, use `<ProShell app={app} hideTopbar hideFooter>` and compose `NavBar`, `ProfileMenu`, `SignInButton`, `GateScreen`, and hooks from `@proappstore/sdk/ui` and `@proappstore/sdk/hooks`.
+
+The children render only after the gates pass: signed-out visitors see the sign-in screen with no topbar or navigation, and `platform-cookie` apps show it briefly to returning users while the session hydrates. Routing caveats (routers, hash routing) and a step-by-step guide to replacing a hand-rolled header or navbar are in the [SDK overview](https://docs.proappstore.online/sdk-overview/#proshell-component).
 
 ## UI Components
 
