@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -234,6 +234,21 @@ describe("canonical deploy workflow — single source of truth", () => {
     const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
     expect(golden).toContain("hashFiles('migrations.json') != '' && github.event.repository.name != 'template-app'");
     expect(golden).toContain("hashFiles('mcp.json') != '' && github.event.repository.name != 'template-app'");
+  });
+
+  // #204: the staged templates (templates/template-*) are copied into new apps
+  // just like template-app, so their workflow must be the golden too — they had
+  // silently kept the fail-open `pnpm build || vite build` fallback.
+  const templatesDir = new URL("../../../templates/", import.meta.url);
+  const staged = readdirSync(templatesDir).filter((name) => existsSync(new URL(`${name}/.github/workflows/deploy.yml`, templatesDir)));
+
+  it("finds the staged templates", () => {
+    expect(staged).toEqual(expect.arrayContaining(["template-map", "template-marketplace", "template-membership", "template-workspace"]));
+  });
+
+  it.each(staged)("staged %s ships the golden workflow", (name) => {
+    const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
+    expect(readFileSync(new URL(`${name}/.github/workflows/deploy.yml`, templatesDir), "utf8")).toBe(golden);
   });
 });
 
