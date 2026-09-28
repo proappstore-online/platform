@@ -2,10 +2,13 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { activeHref, NavBar, type NavItem } from '../navbar.js';
 import { NAVBAR_CSS } from '../navbar-css.js';
 import { ProShell } from '../shell.js';
+import { SHELL_CSS } from '../shell-css.js';
 import type { ProAppStore } from '../index.js';
 
 /**
@@ -191,5 +194,46 @@ describe('NavBar behaviour', () => {
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
     expect(container.querySelector('[aria-current="page"]')?.getAttribute('href')).toBe('/settings');
+  });
+});
+
+describe('ProShell styling (#235): Tailwind + canonical tokens, no inline styles', () => {
+  const FRAME: Array<[selector: string, cls: string, tailwind: string]> = [
+    ['div.pas-shell', 'pas-shell', 'min-h-dvh'],
+    ['header.pas-topbar', 'pas-topbar', 'bg-[var(--panel)]'],
+    ['.pas-topbar__brand', 'pas-topbar__brand', 'gap-3'],
+    ['a.pas-topbar__logo', 'pas-topbar__logo', 'text-[var(--accent)]'],
+    ['span.pas-topbar__app', 'pas-topbar__app', 'text-[var(--muted)]'],
+    ['.pas-topbar__account', 'pas-topbar__account', 'gap-2'],
+    ['main.pas-main', 'pas-main', 'flex-1'],
+    ['footer.pas-footer', 'pas-footer', 'border-[var(--line)]'],
+    ['a.pas-footer__link', 'pas-footer__link', 'text-[var(--accent)]'],
+  ];
+
+  it('REGRESSION: the frame carries pas-* classes with Tailwind token utilities, and no style attributes', async () => {
+    await mount(<ProShell app={fakeApp()} appName="Demo" nav={ITEMS}><p>content</p></ProShell>);
+    for (const [selector, cls, tailwind] of FRAME) {
+      const el = container.querySelector(selector);
+      expect(el, selector).not.toBeNull();
+      expect(el!.classList.contains(tailwind), `${cls} mirrors ${tailwind}`).toBe(true);
+      expect(el!.hasAttribute('style'), `${cls} has an inline style`).toBe(false);
+    }
+    expect(container.querySelector('header nav[aria-label="Main"]')).not.toBeNull();
+  });
+
+  it('SHELL_CSS styles every frame class on the canonical tokens only', () => {
+    for (const [, cls] of FRAME) expect(SHELL_CSS, cls).toMatch(new RegExp(`\\.${cls}\\{`));
+    expect(SHELL_CSS).toContain('.pas-menu-item{');
+    expect(SHELL_CSS).toContain('.pas-topbar{position:sticky;top:0');
+    expect(SHELL_CSS).toContain('.pas-shell{display:flex;flex-direction:column;min-height:100dvh}');
+    expect(SHELL_CSS).not.toMatch(/#[0-9a-f]{3,6}\b/i);
+    expect(SHELL_CSS).not.toMatch(/\b100vh\b/);
+    expect(SHELL_CSS).not.toMatch(/var\(--(bg|surface|border|glass|dock|error)\b/);
+  });
+
+  it('the shell source has no inline style objects left', () => {
+    const src = readFileSync(join(__dirname, '..', 'shell.tsx'), 'utf8');
+    expect(src).not.toMatch(/\bstyle=\{/);
+    expect(src).not.toMatch(/CSSProperties/);
   });
 });

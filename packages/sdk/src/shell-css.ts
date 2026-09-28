@@ -1,10 +1,22 @@
 /**
- * ProShell's resilience and feedback layer styles (#236): skip link, offline
- * banner, toast region, error and loading fallbacks, PageHeader. Same model as
- * navbar-css.ts: canonical tokens only (PAS-UI-001), injected by ProShell at
- * render so an app needs no configuration, and appended to dist/shell.css.
+ * ProShell's styles: the frame itself — wrapper, sticky topbar, main, footer,
+ * profile-menu items (#235) — and the resilience and feedback layer (#236):
+ * skip link, offline banner, toast region, error and loading fallbacks,
+ * PageHeader. Same model as navbar-css.ts: canonical tokens only (PAS-UI-001),
+ * mirrored by Tailwind classes on the elements, injected by ProShell at render
+ * so an app needs no configuration, and appended to dist/shell.css.
  */
-export const SHELL_CSS = `.pas-skip-link:not(:focus){position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
+export const SHELL_CSS = `.pas-shell{display:flex;flex-direction:column;min-height:100dvh}
+.pas-topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:.5rem 1rem;border-bottom:1px solid var(--line);background:var(--panel)}
+.pas-topbar__brand{display:flex;align-items:center;gap:.75rem}
+.pas-topbar__logo{color:var(--accent);font-size:1rem;font-weight:800;text-decoration:none}
+.pas-topbar__app{color:var(--muted);font-size:.85rem;font-weight:600}
+.pas-topbar__account{display:flex;align-items:center;gap:.5rem}
+.pas-main{display:flex;flex:1;flex-direction:column}
+.pas-footer{padding:1rem;border-top:1px solid var(--line);color:var(--muted);font-size:.75rem;text-align:center}
+.pas-footer__link{color:var(--accent);font-weight:600;text-decoration:none}
+.pas-menu-item{display:block;width:100%;padding:.5rem 1rem;border:0;background:none;color:var(--ink);font:inherit;font-size:.85rem;text-align:left;cursor:pointer}
+.pas-skip-link:not(:focus){position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
 .pas-skip-link:focus{position:fixed;top:.5rem;left:.5rem;z-index:1200;padding:.7rem 1rem;border:2px solid var(--accent);border-radius:10px;background:var(--paper);color:var(--ink);font-weight:600;text-decoration:none;outline:2px solid var(--accent);outline-offset:2px}
 .pas-main:focus{outline:none}
 .pas-offline{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.25rem .5rem .25rem 1rem;background:var(--panel);color:var(--ink);border-bottom:1px solid var(--line);border-left:3px solid var(--warning);font-size:.875rem}

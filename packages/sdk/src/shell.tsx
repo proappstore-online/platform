@@ -217,7 +217,7 @@ export function ProShell({
   const profileMenu = (
     <ProfileMenu app={app} showThemeToggle={showThemeToggle}>
       {menuItems?.map((item, i) => (
-        <button key={i} onClick={item.onClick} style={menuItemStyle}>{item.label}</button>
+        <button key={i} type="button" onClick={item.onClick} className="pas-menu-item block w-full cursor-pointer border-0 bg-transparent px-4 py-2 text-left text-[0.85rem] text-[var(--ink)]">{item.label}</button>
       ))}
     </ProfileMenu>
   );
@@ -253,14 +253,14 @@ export function ProShell({
   };
 
   const topbar = renderTopbar ? renderTopbar(shellContext) : hideTopbar ? null : (
-    <header style={styles.topbar}>
-      <div style={styles.topbarLeft}>
-        <a href="https://proappstore.online" style={styles.logoLink}>Pro</a>
-        {appName && <span style={styles.appName}>{appName}</span>}
+    <header className="pas-topbar sticky top-0 z-50 flex items-center justify-between border-b border-[var(--line)] bg-[var(--panel)] px-4 py-2">
+      <div className="pas-topbar__brand flex items-center gap-3">
+        <a href="https://proappstore.online" className="pas-topbar__logo text-base font-extrabold text-[var(--accent)] no-underline">Pro</a>
+        {appName && <span className="pas-topbar__app text-[0.85rem] font-semibold text-[var(--muted)]">{appName}</span>}
         {shellContext.proBadge}
       </div>
       {shellContext.nav}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+      <div className="pas-topbar__account flex items-center gap-2">
         {shellContext.textSizeToggle}
         {shellContext.profileMenu}
       </div>
@@ -268,9 +268,9 @@ export function ProShell({
   );
 
   const footer = renderFooter ? renderFooter(shellContext) : hideFooter ? null : (
-    <footer style={styles.footer}>
+    <footer className="pas-footer border-t border-[var(--line)] p-4 text-center text-xs text-[var(--muted)]">
       Part of{' '}
-      <a href="https://proappstore.online" style={{ color: 'var(--accent)', fontWeight: 600, textDecoration: 'none' }}>
+      <a href="https://proappstore.online" className="pas-footer__link font-semibold text-[var(--accent)] no-underline">
         ProAppStore
       </a>
     </footer>
@@ -286,12 +286,12 @@ export function ProShell({
   return (
     <ProProvider app={app}>
     <ToastProvider>
-    <div style={styles.shell}>
+    <div className="pas-shell flex min-h-dvh flex-col">
       <SkipLink mainRef={mainRef} />
       {topbar}
       <OfflineBanner />
 
-      <main id="main" ref={mainRef} tabIndex={-1} className="pas-main" style={styles.main}>
+      <main id="main" ref={mainRef} tabIndex={-1} className="pas-main flex flex-1 flex-col">
         <ShellErrorBoundary app={app} renderError={renderError} resetKey={currentPath}>
           <Suspense fallback={loading}>{children}</Suspense>
         </ShellErrorBoundary>
@@ -303,30 +303,3 @@ export function ProShell({
     </ProProvider>
   );
 }
-
-const menuItemStyle: React.CSSProperties = {
-  display: 'block', width: '100%', padding: '0.5rem 1rem',
-  background: 'none', border: 'none', textAlign: 'left',
-  fontSize: '0.85rem', cursor: 'pointer',
-  color: 'var(--ink)', fontFamily: 'inherit',
-};
-
-const styles: Record<string, React.CSSProperties> = {
-  shell: { minHeight: '100dvh', display: 'flex', flexDirection: 'column' },
-  topbar: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '0.5rem 1rem',
-    borderBottom: '1px solid var(--line)',
-    background: 'var(--panel)',
-    position: 'sticky', top: 0, zIndex: 50,
-  },
-  topbarLeft: { display: 'flex', alignItems: 'center', gap: '0.75rem' },
-  logoLink: { fontWeight: 800, fontSize: '1rem', color: 'var(--accent)', textDecoration: 'none' },
-  appName: { fontSize: '0.85rem', fontWeight: 600, color: 'var(--muted)' },
-  main: { flex: 1, display: 'flex', flexDirection: 'column' },
-  footer: {
-    padding: '1rem', textAlign: 'center', fontSize: '0.75rem',
-    color: 'var(--muted)',
-    borderTop: '1px solid var(--line)',
-  },
-};
