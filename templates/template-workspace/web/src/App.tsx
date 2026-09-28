@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { ProShell } from '@proappstore/sdk'
+import { NavBar, ProShell, type NavItem } from '@proappstore/sdk'
 import { app } from './api'
 import { WorkspaceProvider, useWorkspace } from './workspace'
 import { Onboarding } from './pages/Onboarding'
@@ -61,9 +61,11 @@ function useRoute(): Route {
   return route
 }
 
-const NAV: [string, string][] = [
-  ['#/', 'Dashboard'], ['#/records', 'Records'], ['#/approvals', 'Approvals'], ['#/reports', 'Reports'],
-  ['#/team', 'Team'], ['#/activity', 'Activity'], ['#/settings', 'Settings'],
+/** The app's screens. ProShell renders them as its main navigation (<nav aria-label="Main">). */
+const NAV: NavItem[] = [
+  { label: 'Dashboard', href: '#/' }, { label: 'Records', href: '#/records' }, { label: 'Approvals', href: '#/approvals' },
+  { label: 'Reports', href: '#/reports' }, { label: 'Team', href: '#/team' }, { label: 'Activity', href: '#/activity' },
+  { label: 'Settings', href: '#/settings' },
 ]
 
 export default function App() {
@@ -71,7 +73,9 @@ export default function App() {
     <ProShell
       app={app}
       appName="APPNAME"
-      renderTopbar={({ profileMenu, textSizeToggle, proBadge }) => <Header right={<>{proBadge}{textSizeToggle}{profileMenu}</>} />}
+      nav={NAV}
+      renderNav={({ items }) => <HashNav items={items} />}
+      renderTopbar={({ nav, profileMenu, textSizeToggle, proBadge }) => <Header nav={nav} right={<>{proBadge}{textSizeToggle}{profileMenu}</>} />}
       renderFooter={() => (
         <footer className="border-t border-[var(--line)] px-6 py-4 text-center text-xs text-[var(--muted)]">
           <a href="https://proappstore.online" className="font-semibold text-[var(--accent)] underline-offset-4 hover:underline">Built for ProAppStore</a>
@@ -79,7 +83,7 @@ export default function App() {
       )}
     >
       <WorkspaceProvider>
-        <main id="main" className="flex-1"><Routed /></main>
+        <div className="flex-1"><Routed /></div>
       </WorkspaceProvider>
     </ProShell>
   )
@@ -104,17 +108,13 @@ function Routed() {
   }
 }
 
-function Header({ right }: { right: ReactNode }) {
+/** A custom topbar only to add the workspace switcher; the navigation is ProShell's (`nav`), placed here. */
+function Header({ nav, right }: { nav: ReactNode; right: ReactNode }) {
   return (
     <header className="sticky top-0 z-10 border-b border-[var(--line)] bg-[var(--panel-strong)] backdrop-blur">
-      <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:rounded focus:bg-[var(--paper)] focus:px-2 focus:py-1">Skip to content</a>
       <div className="mx-auto flex max-w-5xl items-center gap-4 px-4 py-3 sm:px-6">
         <a href="#/" className="display-font text-lg font-bold text-[var(--ink)]">APPNAME</a>
-        <nav aria-label="Main" className="flex flex-1 gap-3 overflow-x-auto text-sm">
-          {NAV.map(([href, label]) => (
-            <a key={href} href={href} className="whitespace-nowrap font-medium text-[var(--muted)] hover:text-[var(--ink)]">{label}</a>
-          ))}
-        </nav>
+        {nav}
         <WorkspaceSwitcher />
         <div className="flex items-center gap-2">{right}</div>
       </div>
@@ -149,4 +149,19 @@ function WorkspaceSwitcher() {
       {ws.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
     </select>
   )
+}
+
+/** ProShell's NavBar, marking the current screen: this app routes by hash, the NavBar by default by path. */
+function HashNav({ items }: { items: NavItem[] }) {
+  const [hash, setHash] = useState(currentHash)
+  useEffect(() => {
+    const onHash = () => setHash(currentHash())
+    addEventListener('hashchange', onHash)
+    return () => removeEventListener('hashchange', onHash)
+  }, [])
+  return <NavBar items={items} currentPath={hash} />
+}
+
+function currentHash(): string {
+  return (location.hash || '#/').split('?')[0]!
 }

@@ -1,7 +1,7 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { ProShell } from '@proappstore/sdk'
+import { useEffect, useState } from 'react'
+import { NavBar, ProShell, type NavItem } from '@proappstore/sdk'
 import { app, RECORD } from './api'
-import { useOnline, useRoles } from './hooks'
+import { useRoles } from './hooks'
 import { MapPage } from './pages/MapPage'
 import { ListPage } from './pages/ListPage'
 import { PlacePage } from './pages/PlacePage'
@@ -53,19 +53,28 @@ function useRoute(): Route {
   return route
 }
 
+/** The app's screens. ProShell renders them as its main navigation (<nav aria-label="Main">). */
+const NAV: NavItem[] = [
+  { label: 'Map', href: '#/' },
+  { label: 'List', href: '#/list' },
+  { label: `My ${RECORD.plural}`, href: '#/mine' },
+  { label: 'Settings', href: '#/settings' },
+]
+
 export default function App() {
   return (
     <ProShell
       app={app}
       appName="APPNAME"
-      renderTopbar={({ profileMenu, textSizeToggle, proBadge }) => <Header right={<>{proBadge}{textSizeToggle}{profileMenu}</>} />}
+      nav={NAV}
+      renderNav={({ items }) => <MainNav items={items} />}
       renderFooter={() => (
         <footer className="border-t border-[var(--line)] px-6 py-3 text-center text-xs text-[var(--muted)]">
           <a href="https://proappstore.online" className="font-semibold text-[var(--accent)] underline-offset-4 hover:underline">Built for ProAppStore</a>
         </footer>
       )}
     >
-      <main id="main" className="flex flex-1 flex-col"><Routed /></main>
+      <div className="flex flex-1 flex-col"><Routed /></div>
     </ProShell>
   )
 }
@@ -84,22 +93,23 @@ function Routed() {
   }
 }
 
-function Header({ right }: { right: ReactNode }) {
-  const online = useOnline()
+/** Managers also get Admin. Rendered inside ProShell, after sign-in, so the role lookup has a session. */
+function MainNav({ items }: { items: NavItem[] }) {
   const { manager } = useRoles()
-  const links: [string, string][] = [['#/', 'Map'], ['#/list', 'List'], ['#/mine', `My ${RECORD.plural}`], ['#/settings', 'Settings']]
-  if (manager) links.splice(3, 0, ['#/admin', 'Admin'])
-  return (
-    <header className="sticky top-0 z-20 border-b border-[var(--line)] bg-[var(--panel-strong)] backdrop-blur">
-      <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:rounded focus:bg-[var(--paper)] focus:px-2 focus:py-1">Skip to content</a>
-      <div className="mx-auto flex max-w-6xl items-center gap-4 px-4 py-3 sm:px-6">
-        <a href="#/" className="display-font text-lg font-bold text-[var(--ink)]">APPNAME</a>
-        <nav aria-label="Main" className="flex flex-1 gap-3 overflow-x-auto text-sm">
-          {links.map(([href, label]) => <a key={href} href={href} className="whitespace-nowrap font-medium text-[var(--muted)] hover:text-[var(--ink)]">{label}</a>)}
-        </nav>
-        {!online ? <span role="status" className="rounded-full bg-[var(--warning-soft)] px-2 py-0.5 text-xs font-semibold text-[var(--warning)]">Offline</span> : null}
-        <div className="flex items-center gap-2">{right}</div>
-      </div>
-    </header>
-  )
+  return <HashNav items={manager ? [...items.slice(0, 3), { label: 'Admin', href: '#/admin' }, ...items.slice(3)] : items} />
+}
+
+/** ProShell's NavBar, marking the current screen: this app routes by hash, the NavBar by default by path. */
+function HashNav({ items }: { items: NavItem[] }) {
+  const [hash, setHash] = useState(currentHash)
+  useEffect(() => {
+    const onHash = () => setHash(currentHash())
+    addEventListener('hashchange', onHash)
+    return () => removeEventListener('hashchange', onHash)
+  }, [])
+  return <NavBar items={items} currentPath={hash} />
+}
+
+function currentHash(): string {
+  return (location.hash || '#/').split('?')[0]!
 }

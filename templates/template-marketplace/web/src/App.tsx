@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { ProShell, useAuth } from '@proappstore/sdk'
+import { NavBar, ProShell, useAuth, type NavItem } from '@proappstore/sdk'
 import { SignInButton } from '@proappstore/sdk/ui'
 import { app, REQUEST } from './api'
 import { Browse, Saved } from './pages/Browse'
@@ -87,14 +87,8 @@ export default function App() {
   }
 
   return (
-    <ProShell
-      app={app}
-      appName="APPNAME"
-      renderTopbar={({ profileMenu, textSizeToggle, proBadge }) => (
-        <Header signedIn right={<>{proBadge}{textSizeToggle}{profileMenu}</>} />
-      )}
-    >
-      <main id="main" className="flex-1"><Page route={route} /></main>
+    <ProShell app={app} appName="APPNAME" nav={NAV} renderNav={({ items }) => <HashNav items={items} />}>
+      <div className="flex-1"><Page route={route} /></div>
     </ProShell>
   )
 }
@@ -118,7 +112,7 @@ function Page({ route }: { route: Route }) {
 function PublicShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-dvh flex-col">
-      <Header signedIn={false} right={<SignInButton app={app} label="Sign in" />} />
+      <Header right={<SignInButton app={app} label="Sign in" />} />
       <main id="main" className="flex-1">{children}</main>
       <footer className="border-t border-[var(--line)] px-6 py-4 text-center text-xs text-[var(--muted)]">
         <a href="https://proappstore.online" className="font-semibold text-[var(--accent)] underline-offset-4 hover:underline">Built for ProAppStore</a>
@@ -127,22 +121,42 @@ function PublicShell({ children }: { children: ReactNode }) {
   )
 }
 
-function Header({ signedIn, right }: { signedIn: boolean; right: ReactNode }) {
-  const links: [string, string][] = signedIn
-    ? [['#/', 'Browse'], ['#/saved', 'Saved'], ['#/requests', REQUEST.plural[0]!.toUpperCase() + REQUEST.plural.slice(1)], ['#/inbox', 'Inbox'], ['#/mine', 'My listings'], ['#/messages', 'Messages'], ['#/settings', 'Settings']]
-    : [['#/', 'Browse']]
+/** The signed-in screens. ProShell renders them as its main navigation (<nav aria-label="Main">). */
+const NAV: NavItem[] = [
+  { label: 'Browse', href: '#/' },
+  { label: 'Saved', href: '#/saved' },
+  { label: REQUEST.plural[0]!.toUpperCase() + REQUEST.plural.slice(1), href: '#/requests' },
+  { label: 'Inbox', href: '#/inbox' },
+  { label: 'My listings', href: '#/mine' },
+  { label: 'Messages', href: '#/messages' },
+  { label: 'Settings', href: '#/settings' },
+]
+
+/** Signed out, only browsing is public — this frame renders outside ProShell, so it carries its own landmarks. */
+function Header({ right }: { right: ReactNode }) {
   return (
     <header className="sticky top-0 z-10 border-b border-[var(--line)] bg-[var(--panel-strong)] backdrop-blur">
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:rounded focus:bg-[var(--paper)] focus:px-2 focus:py-1">Skip to content</a>
       <div className="mx-auto flex max-w-5xl items-center gap-4 px-4 py-3 sm:px-6">
         <a href="#/" className="display-font text-lg font-bold text-[var(--ink)]">APPNAME</a>
-        <nav aria-label="Main" className="flex flex-1 gap-3 overflow-x-auto text-sm">
-          {links.map(([href, label]) => (
-            <a key={href} href={href} className="whitespace-nowrap font-medium text-[var(--muted)] hover:text-[var(--ink)]">{label}</a>
-          ))}
-        </nav>
+        <HashNav items={[{ label: 'Browse', href: '#/' }]} />
         <div className="flex items-center gap-2">{right}</div>
       </div>
     </header>
   )
+}
+
+/** ProShell's NavBar, marking the current screen: this app routes by hash, the NavBar by default by path. */
+function HashNav({ items }: { items: NavItem[] }) {
+  const [hash, setHash] = useState(currentHash)
+  useEffect(() => {
+    const onHash = () => setHash(currentHash())
+    addEventListener('hashchange', onHash)
+    return () => removeEventListener('hashchange', onHash)
+  }, [])
+  return <NavBar items={items} currentPath={hash} />
+}
+
+function currentHash(): string {
+  return (location.hash || '#/').split('?')[0]!
 }
