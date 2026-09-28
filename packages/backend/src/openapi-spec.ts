@@ -4633,6 +4633,130 @@ export const openapiSpec: Record<string, unknown> = {
         ]
       }
     },
+    "/v1/apps/{appId}/operator/users": {
+      "get": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "An app's platform-held users",
+        "description": "Owner only (#240, #246). Every user who holds one of the app's roles or has recorded activity in it, from the platform's own records, whether or not the app declares an operator contract: platform user id, login, avatar, app roles, join date (earliest role grant or first active day), last activity and `activity` (`active` within 30 days, `inactive`, `never_seen`). Never email. 50 per page, ordered by user id; `next_cursor` continues. `q` is a login prefix or an exact user id. Each read is recorded on the operator audit trail as `read:platform-users`, without its results.",
+        "operationId": "get_v1_apps_appId_operator_users",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "users",
+                    "next_cursor"
+                  ],
+                  "properties": {
+                    "users": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "user_id": {
+                            "type": "string"
+                          },
+                          "login": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "avatar_url": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "roles": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "join_date": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "epoch ms"
+                          },
+                          "last_active": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "epoch ms"
+                          },
+                          "activity": {
+                            "type": "string",
+                            "enum": [
+                              "active",
+                              "inactive",
+                              "never_seen"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Not the app's owner"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Login prefix or exact user id (max 100 chars)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/v1/apps/{appId}/tools": {
       "put": {
         "tags": [

@@ -29,6 +29,7 @@ const ROUTES: Route[] = [
   { method: 'GET', pattern: '/apps/:appId/operator/metrics/:resourceId', path: '/v1/apps/stash/operator/metrics/growth' },
   { method: 'POST', pattern: '/apps/:appId/operator/entries', path: '/v1/apps/stash/operator/entries', body: { visit: 'visit-0001' } },
   { method: 'GET', pattern: '/apps/:appId/operator/audit', path: '/v1/apps/stash/operator/audit' },
+  { method: 'GET', pattern: '/apps/:appId/operator/users', path: '/v1/apps/stash/operator/users' },
 ];
 
 /** stash is created by gh:9; the callers below are all gh:1 unless a team row says otherwise. */

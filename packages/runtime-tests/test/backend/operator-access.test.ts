@@ -17,6 +17,7 @@ const ROUTES: { method: 'GET' | 'POST'; path: string; body?: unknown }[] = [
   { method: 'GET', path: '/v1/apps/stash/operator/metrics/growth' },
   { method: 'POST', path: '/v1/apps/stash/operator/entries', body: { visit: 'visit-0001' } },
   { method: 'GET', path: '/v1/apps/stash/operator/audit' },
+  { method: 'GET', path: '/v1/apps/stash/operator/users' },
 ];
 
 afterEach(() => fetchMock.assertNoPendingInterceptors());
@@ -44,7 +45,7 @@ async function expectRefusedEverywhere(token: string | undefined, status: 401 | 
     const res = await SELF.fetch(`${BASE}${route.path}`, json(route.method, route.body, token));
     const text = await res.text();
     expect(res.status, `${route.method} ${route.path}: ${text}`).toBe(status);
-    expect(text, route.path).not.toMatch(/usersWithRoles|"contract"|"rows"|"record"|"series"/);
+    expect(text, route.path).not.toMatch(/usersWithRoles|"contract"|"rows"|"record"|"series"|"users"/);
   }
   const trail = await env.DB.prepare("SELECT COUNT(*) AS n FROM app_action_audit WHERE app_id = 'stash'").first<{ n: number }>();
   expect(trail?.n).toBe(0);

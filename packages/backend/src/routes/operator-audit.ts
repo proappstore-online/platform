@@ -35,8 +35,10 @@ const KINDS = ['enter', 'audit', 'read', 'detail', 'evidence', 'series', 'action
 type Kind = (typeof KINDS)[number];
 const PREFIXED: Kind[] = ['read', 'detail', 'evidence', 'series'];
 const VISIT = /^[A-Za-z0-9_-]{8,64}$/;
+/** The platform-held users list (#246). Contract resource ids cannot contain '-', so this never collides with one. */
+export const PLATFORM_USERS_READ = 'read:platform-users';
 
-async function writeRow(
+export async function writeRow(
   db: D1Database,
   row: { appId: string; actorId: string; role: string; status: number; operatorAction: string; target: string | null },
 ): Promise<void> {
@@ -65,6 +67,7 @@ function attempted(path: string): { operatorAction: string; target: string | nul
   const [a, id, b, key, c, field] = seg;
   if (!a || a === 'entries') return { operatorAction: 'enter', target: null };
   if (a === 'audit') return { operatorAction: 'audit', target: null };
+  if (a === 'users' && !id) return { operatorAction: PLATFORM_USERS_READ, target: null };
   if (a === 'metrics' && id) return { operatorAction: `series:${id}`, target: null };
   if (a === 'actions' && id) return { operatorAction: id, target: null };
   if (a === 'resources' && id && !b) return { operatorAction: `read:${id}`, target: null };

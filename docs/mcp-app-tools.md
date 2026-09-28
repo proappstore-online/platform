@@ -503,7 +503,14 @@ service worker install.
 
 The app's owner oversees it from the Creator Console: **Operator** tab,
 `console.proappstore.online/#/apps/<app-id>/operator` (#240). Every owned app
-gets a baseline there: users holding app roles and 30-day activity. An app
+gets a baseline there: users holding app roles and 30-day activity, plus the
+app's **platform-held users** (#246). `GET /v1/apps/<app-id>/operator/users`
+returns every user with an app role or recorded activity: platform user id,
+login, avatar, roles, join date, last activity and `activity`
+(`active` within 30 days, `inactive`, `never_seen`). It never includes email.
+It returns 50 per page, `q` matches a login prefix or an exact id, and each read
+is audited as `read:platform-users`. The platform has no user suspension of its
+own; an app's suspensions are its contract's `suspensions` resource. An app
 adds its own operator data and actions by declaring an `operator_view`
 contract in `mcp.json`. The console renders it with generic code; there is no
 per-app console code.
