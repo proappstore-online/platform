@@ -3777,7 +3777,7 @@ export const openapiSpec: Record<string, unknown> = {
           "Apps"
         ],
         "summary": "Rows of a declared operator resource",
-        "description": "Owner only (#240). Runs the resource's query action with the caller's session through the same role gate, step_up and success audit as the actions route, and returns only the declared columns. `q` requires `search`, `cursor` requires `page`, `status` requires `status.param` (and a declared state), `related` requires `related`. A resource with `series` is refused here (400): read it from the metrics route.",
+        "description": "Owner only (#240). Runs the resource's query action with the caller's session through the same role gate, step_up and success audit as the actions route, and returns only the declared columns. `q` requires `search`, `cursor` requires `page`, `status` requires `status.param` (and a declared state), `related` requires `related`. A resource with `series` is refused here (400): read it from the metrics route. A `metrics` resource without `series` (#245) returns at most one row, the declared columns as finite numbers or null.",
         "operationId": "get_v1_apps_appId_operator_resources_resourceId",
         "responses": {
           "200": {

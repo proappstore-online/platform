@@ -85,6 +85,15 @@ function project(row: Record<string, unknown>, keys: { key: string }[]): Record<
   return Object.fromEntries(keys.map(({ key }) => [key, row[key] ?? null]));
 }
 
+/** A KPI row: the declared columns as finite numbers (numeric strings parsed); anything else is null. */
+export function kpiRow(row: Record<string, unknown>, keys: { key: string }[]): Record<string, number | null> {
+  return Object.fromEntries(keys.map(({ key }) => {
+    const v = row[key];
+    const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+    return [key, Number.isFinite(n) ? n : null];
+  }));
+}
+
 /** An optional bounded text query parameter; empty means absent. */
 function textParam(value: string | undefined, max: number, name: string): string | null {
   const v = value?.trim() ?? '';
@@ -135,11 +144,14 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId', async (c) => {
     c.env, appId, resource.action, input, owner, sessionToken(c.req.header('Authorization')),
     { operatorAction: `read:${resource.id}`, target: related, request: c.req.raw },
   );
+  c.header('Cache-Control', 'private, no-store');
+  // A KPI panel (#245) is one row of aggregate numbers, whatever the app's query
+  // returns: never a second row, never a string (an email, a name) in a tile.
+  if (resource.kind === 'metrics') return c.json({ rows: rows.slice(0, 1).map((row) => kpiRow(row, resource.columns)), next_cursor: null });
   const page = resource.page;
   const bounded = rows.slice(0, page?.size ?? rows.length);
   const last = bounded[bounded.length - 1];
   const next = page && last && bounded.length >= page.size ? last[page.column] : null;
-  c.header('Cache-Control', 'private, no-store');
   return c.json({
     rows: bounded.map((row) => project(row, resource.columns)),
     next_cursor: next === null || next === undefined ? null : String(next),

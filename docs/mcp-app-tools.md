@@ -560,8 +560,12 @@ per-app console code.
   names one of the app's registered **query** actions, called with no params.
   `columns` (1 to 12) are the fields shown, each one selected by that query. The
   column `format` is `text` (the default), `number`, `datetime`, `boolean` or
-  `badge`. A `metrics` resource shows its first row as KPI tiles; every other
-  kind shows a table.
+  `badge`. A `metrics` resource shows KPI tiles; every other kind shows a
+  table. A `metrics` resource without `series` is an aggregate (#245). Every
+  column must be `number`, and its read returns at most one row, with each value
+  a finite number or `null`. Extra rows and non-numeric values (an email, a
+  name) never leave the platform: `caller_unscoped` is for aggregates that
+  return no row data (PAS-AUTH-016).
 - **An action** is a row button on one resource. `action` names a registered
   **write** action (`execute`, `batch` or `verify`). `params` maps each of its
   params to a column of the row, and every required param must be mapped.

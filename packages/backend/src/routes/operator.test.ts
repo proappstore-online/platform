@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
+import { kpiRow } from './operator.js';
 import { mintSession } from '@proappstore/build-core';
 import { TEST_SK, makeEnv, mockD1, mockStmt, testToken } from '../test-helpers.js';
 import { validateOperatorView } from '../lib/operator-contract.js';
@@ -208,6 +209,29 @@ describe('GET /v1/apps/:appId/operator/resources/* (#240 slice 3)', () => {
     const cross = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ first: { contract: JSON.stringify(contractOf(PARENTS_CLUBS)) } }));
     expect((await list('parents-clubs', 'members', cross)).status).toBe(404);
     expect(dataCalls).toHaveLength(0);
+  });
+
+  it('a KPI metrics read is one row of numbers, whatever the query returns — no row-level data (#245)', async () => {
+    // The app's query misbehaves: several rows, an email in a numeric column, a numeric string, extra columns.
+    dataWorker([
+      { open_reports: 'ada@x.test', suspended_users: '3', email: 'ada@x.test', user_id: 'u1' },
+      { open_reports: 7, suspended_users: 1, email: 'bo@x.test', user_id: 'u2' },
+    ]);
+    const { d, audit } = db({ action: 'op_report_metrics' });
+    const res = await list('stash', 'moderation', d);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store');
+    const body = await res.json();
+    expect(body).toEqual({ rows: [{ open_reports: null, suspended_users: 3 }], next_cursor: null });
+    expect(JSON.stringify(body)).not.toMatch(/@|u1|u2/);
+    // Audited like every operator read.
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_report_metrics', 'gh:1', 'operator', 200, expect.any(Number), 'read:moderation', null);
+  });
+
+  it('kpiRow keeps finite numbers and numeric strings; everything else is null', () => {
+    const cols = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((key) => ({ key }));
+    expect(kpiRow({ a: 1.5, b: '42', c: 'x@y.z', d: '', e: null, f: Infinity, g: true }, cols))
+      .toEqual({ a: 1.5, b: 42, c: null, d: null, e: null, f: null, g: null });
   });
 
   it('a failing data worker is a 502, not a pass-through of its body', async () => {

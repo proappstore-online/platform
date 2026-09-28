@@ -75,6 +75,13 @@ function validateResource(tools: ToolManifest[], raw: unknown, where: string): O
     if (typeof s === 'string') return s;
     series = s;
   }
+  // A KPI panel is an aggregate (#245): one row of numbers, never per-user rows
+  // (PAS-AUTH-016: caller_unscoped only for aggregates that return no row data).
+  // The route returns at most that one row, numbers only, whatever the query does.
+  if (raw.kind === 'metrics' && !series) {
+    const notNumber = columns.find((c) => c.format !== 'number');
+    if (notNumber) return `${where}: column "${notNumber.key}" must have format "number" — a metrics resource without series is one row of aggregate numbers`;
+  }
   return { id: raw.id, kind: raw.kind as OperatorResourceKind, title, description, action: tool.name, columns, ...lists, series };
 }
 

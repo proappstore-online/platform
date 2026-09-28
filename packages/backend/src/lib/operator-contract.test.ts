@@ -158,6 +158,26 @@ describe('validateOperatorView (#240)', () => {
     }
   });
 
+  it('a KPI metrics resource is aggregate numbers only (#245); a series keeps its time and breakdown columns', () => {
+    const moderation = () => {
+      const v = clone(STASH.operator_view);
+      return { v, r: v.resources.find((r) => r.id === 'moderation') as { columns: { key: string; label: string; format?: string }[] } };
+    };
+    for (const format of ['text', 'badge', 'datetime', 'boolean', undefined]) {
+      const { v, r } = moderation();
+      r.columns[1] = { key: 'suspended_users', label: 'Suspended', ...(format ? { format } : {}) };
+      expect(errorOf(stashTools, v), String(format)).toContain('column "suspended_users" must have format "number"');
+    }
+    // A per-user query dressed as a KPI: its identifying column is not a number.
+    const tools = [...stashTools, { ...stashTools.find((t) => t.name === 'op_report_metrics')!, name: 'op_leaky', sql: 'SELECT email, COUNT(*) AS n FROM members GROUP BY email' }];
+    const leaky = clone(STASH.operator_view);
+    leaky.resources.push({ id: 'leaky', kind: 'metrics', title: 'Leaky', action: 'op_leaky', columns: [{ key: 'email', label: 'Email' }, { key: 'n', label: 'N', format: 'number' }] } as never);
+    expect(errorOf(tools as ToolManifest[], leaky)).toContain('column "email" must have format "number"');
+    // Both samples, including their series (day, plan, week_start), still register.
+    expect(errorOf(stashTools, STASH.operator_view)).toBeNull();
+    expect(errorOf(PARENTS_CLUBS.tools as ToolManifest[], PARENTS_CLUBS.operator_view)).toBeNull();
+  });
+
   it('keeps list capabilities off metrics resources', () => {
     const v = clone(STASH.operator_view);
     (v.resources[4] as Record<string, unknown>).search = { param: 'q' };
