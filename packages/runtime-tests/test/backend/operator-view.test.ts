@@ -132,3 +132,79 @@ describe('operator-view contract (#240)', () => {
     expect(audit.results).toEqual([{ actor_id: 'gh:1', role_name: 'operator' }]);
   });
 });
+
+// #240 slice 3: the users view on real D1 — registered through the real PUT,
+// the real app_roles gate and app_action_audit, the data worker intercepted.
+describe('operator users view (#240 slice 3)', () => {
+  const validates = (appId: string) =>
+    fetchMock.get(`https://pas-data-${appId}.${env.DATA_WORKER_HOST}`).intercept({ path: '/validate', method: 'POST' })
+      .reply(200, (req) => ({ results: (JSON.parse(String(req.body)) as { statements: { id: string }[] }).statements.map((st) => ({ id: st.id, ok: true })) }));
+  let queried: { app: string; params: unknown[] }[] = [];
+  const answers = (appId: string, rows: Record<string, unknown>[]) =>
+    fetchMock.get(`https://pas-data-${appId}.${env.DATA_WORKER_HOST}`).intercept({ path: '/query', method: 'POST' })
+      .reply(200, (req) => { queried.push({ app: appId, params: (JSON.parse(String(req.body)) as { params: unknown[] }).params }); return { rows, meta: {} }; });
+  const get = async (path: string, uid: string | null = 'gh:1') =>
+    SELF.fetch(`${BASE}/v1/apps/${path}`, json('GET', undefined, uid ? await session(uid) : undefined));
+  const grant = (appId: string) => env.DB.prepare("INSERT INTO app_roles (app_id, user_id, role_name) VALUES (?, 'gh:1', 'operator')").bind(appId).run();
+
+  beforeEach(async () => {
+    queried = [];
+    await seedApp('parents-clubs', 'gh:1');
+    for (const [appId, sample] of [['stash', STASH], ['parents-clubs', PARENTS_CLUBS]] as const) {
+      validates(appId);
+      const res = await SELF.fetch(`${BASE}/v1/apps/${appId}/tools`, json('PUT', sample, await session('gh:1')));
+      expect(res.status, await res.clone().text()).toBe(200);
+    }
+  });
+
+  it('pages and searches with only declared columns; every granted read is audited', async () => {
+    await grant('stash');
+    answers('stash', Array.from({ length: 50 }, (_, i) => ({ user_id: `u${i + 10}`, display_name: `M${i}`, created_at: 1, suspended: 0, email: 'x@y', password_hash: 'h' })));
+    const first = await get('stash/operator/resources/members?q=M');
+    expect(first.status, await first.clone().text()).toBe(200);
+    const page1 = (await first.json()) as { rows: Record<string, unknown>[]; next_cursor: string };
+    expect(page1.next_cursor).toBe('u59');
+    expect(Object.keys(page1.rows[0]!)).toEqual(['display_name', 'user_id', 'created_at', 'suspended']);
+
+    answers('stash', [{ user_id: 'u60', display_name: 'Last', created_at: 1, suspended: 1, password_hash: 'h' }]);
+    const page2 = (await (await get(`stash/operator/resources/members?q=M&cursor=${page1.next_cursor}`)).json()) as { rows: unknown[]; next_cursor: unknown };
+    expect(page2).toEqual({ rows: [{ display_name: 'Last', user_id: 'u60', created_at: 1, suspended: 1 }], next_cursor: null });
+    expect(queried.map((q) => q.params)).toEqual([expect.arrayContaining(['M']), expect.arrayContaining(['M', 'u59'])]);
+
+    const audit = await env.DB.prepare("SELECT action_name, actor_id, role_name FROM app_action_audit WHERE app_id = 'stash'").all();
+    expect(audit.results).toEqual([
+      { action_name: 'op_list_users', actor_id: 'gh:1', role_name: 'operator' },
+      { action_name: 'op_list_users', actor_id: 'gh:1', role_name: 'operator' },
+    ]);
+  });
+
+  it('detail returns the declared fields only', async () => {
+    await grant('stash');
+    answers('stash', [{ user_id: 'u10', display_name: 'Ada', email: 'ada@x', pocket_count: 3, created_at: 1, password_hash: 'h' }]);
+    const res = await get('stash/operator/resources/members/records/u10');
+    expect(await res.json()).toEqual({ record: { display_name: 'Ada', user_id: 'u10', email: 'ada@x', pocket_count: 3, created_at: 1 } });
+    expect(queried[0]!.params).toEqual(['u10']);
+  });
+
+  it('refuses signed-out callers, other owners, and the owner until they hold the declared role', async () => {
+    expect((await get('stash/operator/resources/members', null)).status).toBe(401);
+    expect((await get('stash/operator/resources/members', 'gh:2')).status).toBe(403);
+    expect((await get('stash/operator/resources/members/records/u10', 'gh:2')).status).toBe(403);
+    const noRole = await get('stash/operator/resources/members');
+    expect(noRole.status).toBe(403);
+    expect(await noRole.text()).toContain('requires app role');
+    expect(queried).toHaveLength(0);
+    expect((await env.DB.prepare('SELECT COUNT(*) AS n FROM app_action_audit').first<{ n: number }>())!.n).toBe(0);
+  });
+
+  it('isolates apps and keeps the baseline: other-app, undeclared and contract-less resources are 404', async () => {
+    await grant('parents-clubs');
+    expect((await get('parents-clubs/operator/resources/members')).status).toBe(404); // Stash's resource id
+    expect((await get('bingo/operator/resources/members', 'gh:2')).status).toBe(404); // bingo declares nothing
+    answers('parents-clubs', [{ user_id: 'p1', full_name: 'Grace', club_name: 'Chess', verified: 1, phone: '555' }]);
+    const parents = await get('parents-clubs/operator/resources/parents?q=gra');
+    expect(await parents.json()).toEqual({ rows: [{ full_name: 'Grace', club_name: 'Chess', verified: 1, user_id: 'p1' }], next_cursor: null });
+    expect(queried).toEqual([{ app: 'parents-clubs', params: expect.arrayContaining(['gra']) }]);
+  });
+});
+

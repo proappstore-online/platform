@@ -567,14 +567,56 @@ per-app console code.
   `page_meta`, the contract is replaced with the manifest, and removing it
   returns the app to the baseline.
 
-**The contract grants nothing.** The console runs each resource and action
-through `POST /v1/apps/:appId/actions/:name` with the owner's own session. Each
-call gets the ordinary checks: sign-in, the action's `auth.app_roles`, `step_up`
-(the console shows a re-authentication message), and the success audit of
-role-gated actions (#232). The owner must hold the role themselves (grant it in
-the console under **Settings → Access**). Only the app's owner can read the
-contract, through `GET /v1/apps/:appId/operator`. It is not part of the public
-tool listing or MCP discovery. The actions it names stay ordinary MCP tools.
+### Users: search, paging and a detail page
+
+A `users` resource may also declare search, keyset paging and a per-user detail
+page. Each is optional, and each is backed by the app's own role-gated query
+actions:
+
+```json
+{
+  "id": "members", "kind": "users", "title": "Members", "action": "op_list_users",
+  "columns": [{ "key": "display_name", "label": "Name" }, { "key": "user_id", "label": "User ID" }],
+  "search": { "param": "q" },
+  "page": { "param": "after", "column": "user_id" },
+  "detail": {
+    "action": "op_member_detail", "param": "user_id", "key": "user_id",
+    "fields": [{ "key": "display_name", "label": "Name" }, { "key": "email", "label": "Email" }]
+  }
+}
+```
+
+- **`search.param`** is an optional string param of the list action. It receives
+  the owner's search text (up to 100 characters). The app's SQL decides what it
+  matches, for example `WHERE (:q IS NULL OR display_name LIKE '%' || :q || '%')`.
+- **`page`** is keyset paging. `param` is an optional string param that receives
+  the last row's `column`, which must be a declared column, for example
+  `AND (:after IS NULL OR id > :after) ORDER BY id`. The list query must `ORDER BY`
+  and end with a literal `LIMIT` of 1 to 200, which is the page size. A full page
+  returns a `next_cursor`; a short page ends paging.
+- **`detail`** runs `action` with `param` set to the row's `key` column. `key`
+  must be a declared column. `fields` (1 to 24) are what the detail page shows,
+  each one selected by that query. The detail action may take no other required
+  params. Declare `step_up` on it when opening a record should need a recent
+  sign-in.
+- Search, paging and detail are refused on other kinds for now.
+
+**Only declared columns and fields leave the platform.** A query may select
+more (an internal id, a hash): the operator read routes return only the
+declared keys, in declared order, and a declared key the row lacks comes back
+as `null`.
+
+**The contract grants nothing.** The console reads through
+`GET /v1/apps/:appId/operator/resources/:id` (with `?q=` and `?cursor=`) and
+`GET /v1/apps/:appId/operator/resources/:id/records/:key`. Both are owner-only
+and run the app's query action with the same checks as
+`POST /v1/apps/:appId/actions/:name`: the owner's own session, the action's
+`auth.app_roles`, `step_up` and the success audit of role-gated actions (#232).
+The console's row actions run through that actions route directly. The owner
+must hold the role themselves (grant it in the console under **Settings →
+Access**). Only the app's owner can read the contract, through
+`GET /v1/apps/:appId/operator`. It is not part of the public tool listing or MCP
+discovery. The actions it names stay ordinary MCP tools.
 
 ## How tools get registered
 

@@ -5,16 +5,20 @@
  *
  *   "operator_view": {
  *     "version": 1,
- *     "resources": [{ "id", "kind", "title", "description"?, "action", "columns": [{ "key", "label", "format"? }] }],
+ *     "resources": [{ "id", "kind", "title", "description"?, "action", "columns": [{ "key", "label", "format"? }],
+ *                     users only (#240 slice 3): "search"?: { "param" }, "page"?: { "param", "column" },
+ *                     "detail"?: { "action", "param", "key", "fields": [{ "key", "label", "format"? }] } }],
  *     "actions":   [{ "id", "title", "resource", "action", "params": { <action param>: <resource column> }, "confirm" }]
  *   }
  *
  * A resource is a table (or, for `metrics`, one row of KPIs) read by one of the
  * app's registered query actions; an action is a row action on a resource that
  * runs one of its registered write actions with params taken from the row.
- * Nothing here grants access: the console runs both through the ordinary
- * `/v1/apps/:appId/actions/:name` route, so the caller's session, the action's
- * `auth.app_roles`, `step_up` and the #232 success audit all apply per request.
+ * Nothing here grants access. Reads run through the owner-only
+ * `/v1/apps/:appId/operator/resources/*` routes, which apply the action's
+ * `auth.app_roles`, `step_up` and the #232 audit exactly as the actions route
+ * does and return only the declared columns/fields; writes run through the
+ * ordinary `/v1/apps/:appId/actions/:name` route.
  *
  * Validation is strict so the console can trust a stored contract: unknown
  * versions, kinds, fields and formats are rejected, and every referenced action
@@ -22,7 +26,7 @@
  * scheduled action). Versioning is additive: a future version adds fields or
  * kinds; version 1 contracts keep validating and rendering as they are.
  */
-import { selectsColumn, type ToolManifest } from './action-sql.js';
+import { literalLimit, selectsColumn, type ToolManifest } from './action-sql.js';
 
 const OPERATOR_VIEW_VERSIONS = [1] as const;
 const OPERATOR_RESOURCE_KINDS = ['users', 'reports', 'suspensions', 'verification', 'metrics'] as const;
@@ -30,19 +34,29 @@ const OPERATOR_COLUMN_FORMATS = ['text', 'number', 'datetime', 'boolean', 'badge
 const MAX_OPERATOR_RESOURCES = 20;
 const MAX_OPERATOR_ACTIONS = 20;
 const MAX_OPERATOR_COLUMNS = 12;
+const MAX_OPERATOR_DETAIL_FIELDS = 24;
+const MAX_OPERATOR_PAGE_SIZE = 200; // a paged resource's page size is its query's literal LIMIT
 
 type OperatorResourceKind = (typeof OPERATOR_RESOURCE_KINDS)[number];
 type OperatorColumnFormat = (typeof OPERATOR_COLUMN_FORMATS)[number];
 
 interface OperatorColumn { key: string; label: string; format: OperatorColumnFormat }
 
-interface OperatorResource {
+/** Per-record read of a users resource: `action` runs with `param` = the row's `key` column. */
+interface OperatorDetail { action: string; param: string; key: string; fields: OperatorColumn[]; step_up: boolean }
+
+export interface OperatorResource {
   id: string;
   kind: OperatorResourceKind;
   title: string;
   description: string | null;
   action: string;
   columns: OperatorColumn[];
+  /** Users only: the action param that receives the search text. Absent on contracts stored before slice 3. */
+  search?: { param: string } | null;
+  /** Users only: keyset paging. `param` receives the last row's `column`; `size` is the query's literal LIMIT. */
+  page?: { param: string; column: string; size: number } | null;
+  detail?: OperatorDetail | null;
 }
 
 interface OperatorAction {
@@ -94,13 +108,13 @@ function gatedTool(tools: ToolManifest[], name: unknown, where: string): ToolMan
 const required = (tool: ToolManifest) =>
   Object.entries(tool.params ?? {}).filter(([, p]) => !p.optional && p.default === undefined).map(([k]) => k);
 
-function validateColumns(tool: ToolManifest, value: unknown, where: string): OperatorColumn[] | string {
-  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_OPERATOR_COLUMNS) {
-    return `${where}: columns must be an array of 1-${MAX_OPERATOR_COLUMNS}`;
+function validateColumns(tool: ToolManifest, value: unknown, where: string, name = 'columns', max = MAX_OPERATOR_COLUMNS): OperatorColumn[] | string {
+  if (!Array.isArray(value) || value.length === 0 || value.length > max) {
+    return `${where}: ${name} must be an array of 1-${max}`;
   }
   const columns: OperatorColumn[] = [];
   for (const [i, col] of value.entries()) {
-    const at = `${where}.columns[${i}]`;
+    const at = `${where}.${name}[${i}]`;
     if (!isObj(col)) return `${at} must be an object`;
     const colExtra = unknownField(col, ['key', 'label', 'format'], at);
     if (colExtra) return colExtra;
@@ -120,7 +134,7 @@ function validateColumns(tool: ToolManifest, value: unknown, where: string): Ope
 
 function validateResource(tools: ToolManifest[], raw: unknown, where: string): OperatorResource | string {
   if (!isObj(raw)) return `${where} must be an object`;
-  const extra = unknownField(raw, ['id', 'kind', 'title', 'description', 'action', 'columns'], where);
+  const extra = unknownField(raw, ['id', 'kind', 'title', 'description', 'action', 'columns', 'search', 'page', 'detail'], where);
   if (extra) return extra;
   if (typeof raw.id !== 'string' || !ID.test(raw.id)) return `${where}: id must match [a-z][a-z0-9_] (max 50 chars)`;
   if (!OPERATOR_RESOURCE_KINDS.includes(raw.kind as OperatorResourceKind)) {
@@ -138,7 +152,79 @@ function validateResource(tools: ToolManifest[], raw: unknown, where: string): O
 
   const columns = validateColumns(tool, raw.columns, where);
   if (typeof columns === 'string') return columns;
-  return { id: raw.id, kind: raw.kind as OperatorResourceKind, title, description, action: tool.name, columns };
+  const users = validateUsersCapability(tools, tool, columns, raw, where);
+  if (typeof users === 'string') return users;
+  return { id: raw.id, kind: raw.kind as OperatorResourceKind, title, description, action: tool.name, columns, ...users };
+}
+
+/** An optional string param of `tool` (a resource is always called without required input). */
+function optionalParam(tool: ToolManifest, param: unknown, where: string): string | null {
+  if (typeof param !== 'string' || !tool.params?.[param]) return `${where}: action "${tool.name}" has no param "${String(param)}"`;
+  if (tool.params[param]!.type !== 'string') return `${where}: param "${param}" of "${tool.name}" must be type string`;
+  return null;
+}
+
+/**
+ * The users capability (#240 slice 3): search, keyset paging and a per-record
+ * detail read, each backed by the app's own role-gated query actions. Only
+ * `users` resources declare them today; other kinds keep the plain table.
+ */
+function validateUsersCapability(
+  tools: ToolManifest[],
+  tool: ToolManifest,
+  columns: OperatorColumn[],
+  raw: Obj,
+  where: string,
+): Pick<OperatorResource, 'search' | 'page' | 'detail'> | string {
+  const declared = (['search', 'page', 'detail'] as const).filter((k) => raw[k] !== undefined);
+  if (declared.length === 0) return { search: null, page: null, detail: null };
+  if (raw.kind !== 'users') return `${where}: ${declared.join(', ')} are only supported on users resources`;
+
+  let search: OperatorResource['search'] = null;
+  if (raw.search !== undefined) {
+    if (!isObj(raw.search)) return `${where}.search must be an object`;
+    const extra = unknownField(raw.search, ['param'], `${where}.search`) ?? optionalParam(tool, raw.search.param, `${where}.search`);
+    if (extra) return extra;
+    search = { param: raw.search.param as string };
+  }
+
+  let page: OperatorResource['page'] = null;
+  if (raw.page !== undefined) {
+    if (!isObj(raw.page)) return `${where}.page must be an object`;
+    const at = `${where}.page`;
+    const extra = unknownField(raw.page, ['param', 'column'], at) ?? optionalParam(tool, raw.page.param, at);
+    if (extra) return extra;
+    if (raw.page.param === search?.param) return `${at}: param must differ from search.param`;
+    const cursor = raw.page.column;
+    if (!columns.some((c) => c.key === cursor)) return `${at}: column must be a declared column (the cursor is shown to the console)`;
+    const size = literalLimit(tool.sql ?? '');
+    if (size === null || size < 1 || size > MAX_OPERATOR_PAGE_SIZE) {
+      return `${at}: action "${tool.name}" must end with a literal LIMIT of 1-${MAX_OPERATOR_PAGE_SIZE} (the page size)`;
+    }
+    if (!/\bORDER\s+BY\b/i.test(tool.sql ?? '')) return `${at}: action "${tool.name}" must ORDER BY the cursor column for keyset paging`;
+    page = { param: raw.page.param as string, column: cursor as string, size };
+  }
+
+  let detail: OperatorResource['detail'] = null;
+  if (raw.detail !== undefined) {
+    const at = `${where}.detail`;
+    if (!isObj(raw.detail)) return `${at} must be an object`;
+    const extra = unknownField(raw.detail, ['action', 'param', 'key', 'fields'], at);
+    if (extra) return extra;
+    const read = gatedTool(tools, raw.detail.action, at);
+    if (typeof read === 'string') return read;
+    if (read.operation !== 'query') return `${at}: action "${read.name}" must be a query`;
+    const param = raw.detail.param;
+    if (typeof param !== 'string' || !read.params?.[param]) return `${at}: action "${read.name}" has no param "${String(param)}"`;
+    const others = required(read).filter((p) => p !== param);
+    if (others.length) return `${at}: action "${read.name}" has required params besides "${param}" (${others.join(', ')})`;
+    const key = raw.detail.key;
+    if (!columns.some((c) => c.key === key)) return `${at}: key must be a declared column of the resource`;
+    const fields = validateColumns(read, raw.detail.fields, at, 'fields', MAX_OPERATOR_DETAIL_FIELDS);
+    if (typeof fields === 'string') return fields;
+    detail = { action: read.name, param, key: key as string, fields, step_up: read.step_up === true };
+  }
+  return { search, page, detail };
 }
 
 function validateAction(tools: ToolManifest[], resources: OperatorResource[], raw: unknown, where: string): OperatorAction | string {

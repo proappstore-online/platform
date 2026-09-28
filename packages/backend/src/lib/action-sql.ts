@@ -67,6 +67,18 @@ export function selectsColumn(sql: string, name: string): boolean {
   return new RegExp(String.raw`(?:\bAS\s+["\x60]?${name}["\x60]?|[\s.,(]${name})\s*(?:,|\bFROM\b)`, 'i').test(code);
 }
 
+/** The literal `LIMIT n` of a statement, or null when there is none (or it uses comma syntax). */
+export function literalLimit(sql: string): number | null {
+  const withoutComments = sql
+    .replace(/--.*$/gm, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ');
+  const match = /\bLIMIT\s+(\d+)\b/i.exec(withoutComments);
+  if (!match) return null;
+  const tail = withoutComments.slice(match.index + match[0].length).trim();
+  if (tail.startsWith(',')) return null;
+  return Number(match[1]);
+}
+
 interface PreparedQuery {
   sql: string;
   params: unknown[];

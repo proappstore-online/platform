@@ -27,16 +27,60 @@ actionRoutes.use('/apps/:appId/actions/:name', async (c, next) => {
   await next();
   const grant = roleGrants.get(c.req.raw);
   if (!grant || c.res.status >= 400) return;
+  await recordActionSuccess(c.env.DB, c.req.param('appId')!, c.req.param('name')!, grant, c.res.status);
+});
+
+async function recordActionSuccess(db: D1Database, appId: string, action: string, grant: { actorId: string; role: string }, status: number): Promise<void> {
   try {
-    await c.env.DB.prepare(
+    await db.prepare(
       'INSERT INTO app_action_audit (app_id, action_name, actor_id, role_name, status, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).bind(c.req.param('appId'), c.req.param('name'), grant.actorId, grant.role, c.res.status, Date.now()).run();
+    ).bind(appId, action, grant.actorId, grant.role, status, Date.now()).run();
   } catch (e) {
     // The action has already run; an audit write failing must not turn its
     // success into an error. Logged so a gap in the trail is visible.
-    console.error('[action-audit] write failed', { appId: c.req.param('appId'), action: c.req.param('name'), err: String(e) });
+    console.error('[action-audit] write failed', { appId, action, err: String(e) });
   }
-});
+}
+
+/**
+ * Run one of an app's registered query actions for the console operator view
+ * (#240) and return its rows. The same gates as POST /apps/:appId/actions/:name
+ * for a session caller — platform/app role check from D1, then step_up — and a
+ * role-granted success is audited the same way. The caller's app ownership is
+ * checked by the operator route before this runs; ownership grants nothing here.
+ */
+export async function runOperatorQuery(
+  env: Env,
+  appId: string,
+  name: string,
+  input: Record<string, unknown>,
+  user: FasUser,
+  token: string,
+): Promise<Record<string, unknown>[]> {
+  const manifest = await loadManifest(env.DB, appId, name);
+  if (manifest.operation !== 'query' || manifest.requires_auth === false || manifest.schedule !== undefined) {
+    throw new HttpError(`action ${name} is not an operator query`, 409);
+  }
+  const role = await enforceActionAuth(env.DB, appId, manifest, user);
+  if (manifest.step_up) requireRecentAuth(user, env);
+  let payload;
+  try {
+    payload = prepareActionQuery(manifest, input, user.id);
+  } catch (e) {
+    throw new HttpError(e instanceof Error ? e.message : String(e), 400);
+  }
+  const upstream = await forwardToDataWorker(env, appId, 'query', payload, token);
+  const text = await upstream.text();
+  if (!upstream.ok) throw new HttpError(`action ${name} failed (${upstream.status})`, upstream.status >= 500 ? 502 : upstream.status);
+  let rows: unknown;
+  try {
+    rows = (JSON.parse(text) as { rows?: unknown }).rows;
+  } catch {
+    throw new HttpError('data worker returned an invalid query response', 502);
+  }
+  if (role) await recordActionSuccess(env.DB, appId, name, { actorId: user.id, role }, 200);
+  return Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
+}
 
 interface ActionBody {
   params?: Record<string, unknown>;
@@ -96,7 +140,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
         throw new HttpError('token is not scoped to this action', 403);
       }
       userId = verified.user.id;
-      await enforceActionAuth(c.env.DB, appId, manifest, verified.user, c.req.raw);
+      grantRole(c.req.raw, verified.user, await enforceActionAuth(c.env.DB, appId, manifest, verified.user));
       // #231: an app token has no auth_time and can never step up.
       if (manifest.step_up) throw new HttpError('this action requires a recent sign-in and cannot be called with an app token', 403);
       // Never forward the token upstream: the data worker can only verify
@@ -107,7 +151,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
     } else {
       const user = await requireUser(c);
       userId = user.id;
-      await enforceActionAuth(c.env.DB, appId, manifest, user, c.req.raw);
+      grantRole(c.req.raw, user, await enforceActionAuth(c.env.DB, appId, manifest, user));
       // #231: after the role check, so a caller without the role is told that,
       // not invited to re-authenticate for an action they could never run.
       if (manifest.step_up) requireRecentAuth(user, c.env);
@@ -335,20 +379,25 @@ async function loadManifest(db: D1Database, appId: string, name: string): Promis
   }
 }
 
+/** Mark the request for the success audit when an app-role gate granted it. */
+function grantRole(req: Request, user: FasUser, role: string | null): void {
+  if (role) roleGrants.set(req, { actorId: user.id, role });
+}
+
+/** Throws unless `user` passes the action's role gates; returns the app role that granted it, if one did. */
 async function enforceActionAuth(
   db: D1Database,
   appId: string,
   manifest: ToolManifest,
   user: FasUser,
-  req: Request,
-): Promise<void> {
+): Promise<string | null> {
   const platformRoles = manifest.auth?.platform_roles ?? [];
   if (platformRoles.length > 0 && !platformRoles.some((role) => user.roles.includes(role))) {
     throw new HttpError('requires platform role', 403);
   }
 
   const appRoles = manifest.auth?.app_roles ?? [];
-  if (appRoles.length === 0) return;
+  if (appRoles.length === 0) return null;
 
   // #121: the session-claim fast path that used to sit here read `appRoles`,
   // which was never populated — so it never hit, and the DB query below was
@@ -363,5 +412,5 @@ async function enforceActionAuth(
   if (!granted) {
     throw new HttpError('requires app role', 403);
   }
-  roleGrants.set(req, { actorId: user.id, role: granted });
+  return granted;
 }

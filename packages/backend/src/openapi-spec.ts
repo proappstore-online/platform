@@ -3300,6 +3300,114 @@ export const openapiSpec: Record<string, unknown> = {
                                         }
                                       }
                                     }
+                                  },
+                                  "search": {
+                                    "description": "Users only (#240 slice 3): the list action param that receives ?q=.",
+                                    "oneOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "object",
+                                        "required": [
+                                          "param"
+                                        ],
+                                        "properties": {
+                                          "param": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "page": {
+                                    "description": "Users only: keyset paging; `param` receives the last row's `column`; `size` is the query's literal LIMIT (max 200).",
+                                    "oneOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "object",
+                                        "required": [
+                                          "param",
+                                          "column",
+                                          "size"
+                                        ],
+                                        "properties": {
+                                          "param": {
+                                            "type": "string"
+                                          },
+                                          "column": {
+                                            "type": "string"
+                                          },
+                                          "size": {
+                                            "type": "integer",
+                                            "maximum": 200
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "detail": {
+                                    "description": "Users only: per-record read; `action` runs with `param` = the row's `key` column.",
+                                    "oneOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "object",
+                                        "required": [
+                                          "action",
+                                          "param",
+                                          "key",
+                                          "fields",
+                                          "step_up"
+                                        ],
+                                        "properties": {
+                                          "action": {
+                                            "type": "string"
+                                          },
+                                          "param": {
+                                            "type": "string"
+                                          },
+                                          "key": {
+                                            "type": "string"
+                                          },
+                                          "fields": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "required": [
+                                                "key",
+                                                "label",
+                                                "format"
+                                              ],
+                                              "properties": {
+                                                "key": {
+                                                  "type": "string"
+                                                },
+                                                "label": {
+                                                  "type": "string"
+                                                },
+                                                "format": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "text",
+                                                    "number",
+                                                    "datetime",
+                                                    "boolean",
+                                                    "badge"
+                                                  ]
+                                                }
+                                              }
+                                            }
+                                          },
+                                          "step_up": {
+                                            "type": "boolean"
+                                          }
+                                        }
+                                      }
+                                    ]
                                   }
                                 }
                               }
@@ -3379,6 +3487,177 @@ export const openapiSpec: Record<string, unknown> = {
             "required": true,
             "schema": {
               "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/apps/{appId}/operator/resources/{resourceId}": {
+      "get": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "Rows of a declared operator resource",
+        "description": "Owner only (#240). Runs the resource's query action with the caller's session through the same role gate, step_up and success audit as the actions route, and returns only the declared columns. `q` requires the resource to declare `search`; `cursor` requires `page`.",
+        "operationId": "get_v1_apps_appId_operator_resources_resourceId",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "rows",
+                    "next_cursor"
+                  ],
+                  "properties": {
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Not the app's owner, or the owner lacks the action's app role (`requires app role`), or `step_up_required`"
+          },
+          "404": {
+            "description": "App not found, resource not declared (including apps with no contract), no detail declared, or record not found"
+          },
+          "502": {
+            "description": "The app's data worker failed"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resourceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          }
+        ]
+      }
+    },
+    "/v1/apps/{appId}/operator/resources/{resourceId}/records/{key}": {
+      "get": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "One record of a declared operator resource",
+        "description": "Owner only (#240). Runs the resource's detail action with its declared param set to `key`, under the same checks as the actions route, and returns only the declared fields.",
+        "operationId": "get_v1_apps_appId_operator_resources_resourceId_records_key",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "record"
+                  ],
+                  "properties": {
+                    "record": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Not the app's owner, or the owner lacks the action's app role (`requires app role`), or `step_up_required`"
+          },
+          "404": {
+            "description": "App not found, resource not declared (including apps with no contract), no detail declared, or record not found"
+          },
+          "502": {
+            "description": "The app's data worker failed"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resourceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 200
             }
           }
         ]

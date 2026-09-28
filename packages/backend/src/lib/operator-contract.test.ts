@@ -35,7 +35,7 @@ describe('validateOperatorView (#240)', () => {
   it('a second app with different kinds validates through the same code', () => {
     const r = validateOperatorView(PARENTS_CLUBS.tools as ToolManifest[], PARENTS_CLUBS.operator_view);
     if (!('contract' in r) || !r.contract) throw new Error(JSON.stringify(r));
-    expect(r.contract.resources.map((x) => x.kind)).toEqual(['verification', 'suspensions', 'metrics']);
+    expect(r.contract.resources.map((x) => x.kind)).toEqual(['users', 'verification', 'suspensions', 'metrics']);
     expect(r.contract.actions[0]).toMatchObject({ id: 'approve', step_up: true });
   });
 
@@ -114,5 +114,52 @@ describe('validateOperatorView (#240)', () => {
     expect(errorOf(stashTools, many)).toContain('at most 20');
     expect(errorOf(stashTools, [])).toBe('operator_view must be an object');
     expect(errorOf(stashTools, { version: 1, resources: {} })).toContain('resources must be an array');
+  });
+
+  it('normalizes the users capability: search, keyset page sized by the literal LIMIT, detail with step_up copied', () => {
+    const r = validateOperatorView(stashTools, STASH.operator_view);
+    if (!('contract' in r) || !r.contract) throw new Error(JSON.stringify(r));
+    const members = r.contract.resources[0]!;
+    expect(members.search).toEqual({ param: 'q' });
+    expect(members.page).toEqual({ param: 'after', column: 'user_id', size: 50 });
+    expect(members.detail).toMatchObject({ action: 'op_member_detail', param: 'user_id', key: 'user_id', step_up: false });
+    expect(members.detail!.fields.map((f) => f.key)).toEqual(['display_name', 'user_id', 'email', 'pocket_count', 'created_at']);
+    // Resources without the capability carry explicit nulls.
+    expect(r.contract.resources[1]).toMatchObject({ search: null, page: null, detail: null });
+    const parents = validateOperatorView(PARENTS_CLUBS.tools as ToolManifest[], PARENTS_CLUBS.operator_view);
+    if (!('contract' in parents) || !parents.contract) throw new Error(JSON.stringify(parents));
+    expect(parents.contract.resources[0]!.page).toEqual({ param: 'cursor', column: 'user_id', size: 25 });
+  });
+
+  it('refuses an unsafe or malformed users capability', () => {
+    type Members = (typeof STASH.operator_view.resources)[0] & Record<string, unknown>;
+    const withTool = (name: string, patch: Record<string, unknown>) =>
+      stashTools.map((t) => (t.name === name ? { ...t, ...patch } : t)) as ToolManifest[];
+    const cases: Array<[(m: Members) => void, string, ToolManifest[]?]> = [
+      [(m) => { m.search = { param: 'nope' }; }, 'has no param "nope"'],
+      [(m) => { m.search = { param: 'q', like: true }; }, 'search: unknown field "like"'],
+      [(m) => { m.page = { param: 'after', column: 'email' }; }, 'column must be a declared column'],
+      [(m) => { m.page = { param: 'q', column: 'user_id' }; }, 'param must differ from search.param'],
+      [(m) => void m, 'literal LIMIT of 1-200', withTool('op_list_users', { sql: "SELECT m.id AS user_id, m.display_name, m.created_at, m.suspended FROM members m WHERE (:q IS NULL OR m.display_name LIKE :q) AND (:after IS NULL OR m.id > :after) ORDER BY m.id LIMIT 500" })],
+      [(m) => void m, 'must ORDER BY', withTool('op_list_users', { sql: "SELECT m.id AS user_id, m.display_name, m.created_at, m.suspended FROM members m WHERE (:q IS NULL OR m.display_name LIKE :q) AND (:after IS NULL OR m.id > :after) LIMIT 50" })],
+      [(m) => { m.detail!.fields.push({ key: 'ssn', label: 'SSN' }); }, 'does not select column "ssn"'],
+      [(m) => { m.detail!.key = 'email'; }, 'key must be a declared column of the resource'],
+      [(m) => { m.detail!.param = 'nope'; }, 'has no param "nope"'],
+      [(m) => { m.detail!.action = 'op_suspend_user'; }, 'must be a query'],
+      [(m) => void m, 'must be gated by auth.app_roles', withTool('op_member_detail', { auth: undefined })],
+      [(m) => void m, 'is public', withTool('op_member_detail', { requires_auth: false })],
+      [(m) => { (m.detail as Record<string, unknown>).sql = 'x'; }, 'detail: unknown field "sql"'],
+    ];
+    for (const [mutate, error, tools] of cases) {
+      const v = clone(STASH.operator_view);
+      mutate(v.resources[0] as Members);
+      expect(errorOf(tools ?? stashTools, v), error).toContain(error);
+    }
+  });
+
+  it('keeps the users capability on users resources', () => {
+    const v = clone(STASH.operator_view);
+    (v.resources[1] as Record<string, unknown>).search = { param: 'status' };
+    expect(errorOf(stashTools, v)).toContain('search are only supported on users resources');
   });
 });

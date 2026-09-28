@@ -9,9 +9,17 @@ const operator = (reason: string) => ({ app_roles: ['operator'], caller_unscoped
 export const STASH = {
   tools: [
     {
-      name: 'op_list_users', description: 'Every member across pockets', operation: 'query', requires_auth: true, params: {},
-      sql: 'SELECT m.id AS user_id, m.display_name, m.created_at, m.suspended FROM members m ORDER BY m.created_at DESC LIMIT 200',
+      name: 'op_list_users', description: 'Every member across pockets', operation: 'query', requires_auth: true,
+      params: { q: { type: 'string', optional: true }, after: { type: 'string', optional: true } },
+      sql: "SELECT m.id AS user_id, m.display_name, m.created_at, m.suspended FROM members m WHERE (:q IS NULL OR m.display_name LIKE '%' || :q || '%') AND (:after IS NULL OR m.id > :after) ORDER BY m.id LIMIT 50",
       auth: operator('Operators see every member across pockets.'),
+    },
+    {
+      // Selects password_hash on purpose: the detail declares fewer fields, and only those may leave the platform.
+      name: 'op_member_detail', description: 'One member', operation: 'query', requires_auth: true,
+      params: { user_id: { type: 'string' } },
+      sql: 'SELECT m.id AS user_id, m.display_name, m.email, m.pocket_count, m.created_at, m.password_hash FROM members m WHERE m.id = :user_id LIMIT 1',
+      auth: operator('Operators open any member.'),
     },
     {
       name: 'op_list_reports', description: 'Problem reports by status', operation: 'query', requires_auth: true,
@@ -48,6 +56,18 @@ export const STASH = {
           { key: 'created_at', label: 'Joined', format: 'datetime' },
           { key: 'suspended', label: 'Suspended', format: 'boolean' },
         ],
+        search: { param: 'q' },
+        page: { param: 'after', column: 'user_id' },
+        detail: {
+          action: 'op_member_detail', param: 'user_id', key: 'user_id',
+          fields: [
+            { key: 'display_name', label: 'Name' },
+            { key: 'user_id', label: 'User ID' },
+            { key: 'email', label: 'Email' },
+            { key: 'pocket_count', label: 'Pockets', format: 'number' },
+            { key: 'created_at', label: 'Joined', format: 'datetime' },
+          ],
+        },
       },
       {
         id: 'open_reports', kind: 'reports', title: 'Open reports', description: 'Reports waiting for review.', action: 'op_list_reports',
@@ -75,9 +95,21 @@ export const STASH = {
   },
 };
 
-/** Parents Clubs: an ID-verification queue with a step-up approval, suspensions, club KPIs. */
+/** Parents Clubs: parents (users, differently shaped), an ID-verification queue with a step-up approval, suspensions, club KPIs. */
 export const PARENTS_CLUBS = {
   tools: [
+    {
+      name: 'op_list_parents', description: 'Parents across clubs', operation: 'query', requires_auth: true,
+      params: { search: { type: 'string', optional: true }, cursor: { type: 'string', optional: true } },
+      sql: "SELECT p.user_id, p.full_name, p.club_name, p.verified FROM parents p WHERE (:search IS NULL OR p.full_name LIKE '%' || :search || '%') AND (:cursor IS NULL OR p.user_id > :cursor) ORDER BY p.user_id LIMIT 25",
+      auth: operator('Operators see parents across clubs.'),
+    },
+    {
+      name: 'op_parent_detail', description: 'One parent', operation: 'query', requires_auth: true,
+      params: { id: { type: 'string' } },
+      sql: 'SELECT p.user_id, p.full_name, p.phone, p.club_name, p.joined_at FROM parents p WHERE p.user_id = :id LIMIT 1',
+      auth: operator('Operators open any parent.'),
+    },
     {
       name: 'op_pending_verifications', description: 'Pending ID checks', operation: 'query', requires_auth: true, params: {},
       sql: "SELECT v.id AS request_id, v.parent_name, v.submitted_at FROM verification_requests v WHERE v.state = 'pending' ORDER BY v.submitted_at LIMIT 100",
@@ -103,6 +135,25 @@ export const PARENTS_CLUBS = {
   operator_view: {
     version: 1,
     resources: [
+      {
+        id: 'parents', kind: 'users', title: 'Parents', action: 'op_list_parents',
+        columns: [
+          { key: 'full_name', label: 'Parent' },
+          { key: 'club_name', label: 'Club' },
+          { key: 'verified', label: 'Verified', format: 'boolean' },
+          { key: 'user_id', label: 'User' },
+        ],
+        search: { param: 'search' },
+        page: { param: 'cursor', column: 'user_id' },
+        detail: {
+          action: 'op_parent_detail', param: 'id', key: 'user_id',
+          fields: [
+            { key: 'full_name', label: 'Parent' },
+            { key: 'club_name', label: 'Club' },
+            { key: 'joined_at', label: 'Joined', format: 'datetime' },
+          ],
+        },
+      },
       {
         id: 'id_checks', kind: 'verification', title: 'ID checks', action: 'op_pending_verifications',
         columns: [

@@ -13,7 +13,7 @@ import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { requireAppAccess, requireAppOwner } from '../lib/auth.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
-import { VERIFY_PARAM_PREFIX, resolveToolParams, selectsColumn, type ToolManifest, type ToolParam } from '../lib/action-sql.js';
+import { VERIFY_PARAM_PREFIX, literalLimit, resolveToolParams, selectsColumn, type ToolManifest, type ToolParam } from '../lib/action-sql.js';
 import { ENDPOINT_NAME_PREFIX } from '../lib/endpoint-sql.js';
 import { getVerifier, VERIFIERS } from '../lib/verifiers/index.js';
 import { validateOperatorView } from '../lib/operator-contract.js';
@@ -113,17 +113,6 @@ function validateSql(sql: string, operation: string): string | null {
   }
 
   return null; // valid
-}
-
-function literalLimit(sql: string): number | null {
-  const withoutComments = sql
-    .replace(/--.*$/gm, ' ')
-    .replace(/\/\*[\s\S]*?\*\//g, ' ');
-  const match = /\bLIMIT\s+(\d+)\b/i.exec(withoutComments);
-  if (!match) return null;
-  const tail = withoutComments.slice(match.index + match[0].length).trim();
-  if (tail.startsWith(',')) return null;
-  return Number(match[1]);
 }
 
 export type { ToolManifest, ToolParam };
