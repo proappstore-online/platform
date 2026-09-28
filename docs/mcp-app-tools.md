@@ -499,6 +499,83 @@ If the app is a PWA, keep the prefix out of the service worker: add it to
 would request gated files for every visitor, and the refusals would fail the
 service worker install.
 
+## Console operator view (`operator_view`)
+
+The app's owner oversees it from the Creator Console: **Operator** tab,
+`console.proappstore.online/#/apps/<app-id>/operator` (#240). Every owned app
+gets a baseline there: users holding app roles and 30-day activity. An app
+adds its own operator data and actions by declaring an `operator_view`
+contract in `mcp.json`. The console renders it with generic code; there is no
+per-app console code.
+
+```json
+{
+  "tools": [
+    {
+      "name": "op_list_reports", "description": "Open problem reports", "operation": "query", "requires_auth": true,
+      "sql": "SELECT r.id AS report_id, r.reported_user_id, r.reason, r.created_at FROM reports r WHERE r.status = 'open' ORDER BY r.created_at DESC LIMIT 200",
+      "params": {},
+      "auth": { "app_roles": ["operator"], "caller_unscoped": { "reason": "Operators triage every report." } }
+    },
+    {
+      "name": "op_suspend_user", "description": "Suspend a user", "operation": "execute", "requires_auth": true,
+      "sql": "UPDATE members SET suspended = 1 WHERE id = :user_id",
+      "params": { "user_id": { "type": "string" } },
+      "auth": { "app_roles": ["operator"], "caller_unscoped": { "reason": "Operators suspend any member." } }
+    }
+  ],
+  "operator_view": {
+    "version": 1,
+    "resources": [
+      {
+        "id": "open_reports", "kind": "reports", "title": "Open reports", "action": "op_list_reports",
+        "columns": [
+          { "key": "reason", "label": "Reason" },
+          { "key": "reported_user_id", "label": "Reported user" },
+          { "key": "created_at", "label": "Filed", "format": "datetime" }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "suspend", "title": "Suspend user", "resource": "open_reports", "action": "op_suspend_user",
+        "params": { "user_id": "reported_user_id" }, "confirm": "Suspend the reported user?"
+      }
+    ]
+  }
+}
+```
+
+- **`version`** is required. `1` is the only version today. A later version adds
+  fields or kinds and keeps accepting `1`.
+- **A resource** is a panel. `kind` is `users`, `reports`, `suspensions`,
+  `verification` or `metrics`, and the console groups panels by kind. `action`
+  names one of the app's registered **query** actions, called with no params.
+  `columns` (1 to 12) are the fields shown, each one selected by that query. The
+  column `format` is `text` (the default), `number`, `datetime`, `boolean` or
+  `badge`. A `metrics` resource shows its first row as KPI tiles; every other
+  kind shows a table.
+- **An action** is a row button on one resource. `action` names a registered
+  **write** action (`execute`, `batch` or `verify`). `params` maps each of its
+  params to a column of the row, and every required param must be mapped.
+  `confirm` is the question the owner confirms before it runs.
+- **Every referenced action** must require sign-in and declare `auth.app_roles`
+  without `member`. Public, `member`-gated and scheduled actions are refused, so
+  operator data is never readable by every signed-in user.
+- **Strict validation.** Unknown fields, kinds, formats and versions are
+  refused at registration, with the registration failing as a whole. Like
+  `page_meta`, the contract is replaced with the manifest, and removing it
+  returns the app to the baseline.
+
+**The contract grants nothing.** The console runs each resource and action
+through `POST /v1/apps/:appId/actions/:name` with the owner's own session. Each
+call gets the ordinary checks: sign-in, the action's `auth.app_roles`, `step_up`
+(the console shows a re-authentication message), and the success audit of
+role-gated actions (#232). The owner must hold the role themselves (grant it in
+the console under **Settings → Access**). Only the app's owner can read the
+contract, through `GET /v1/apps/:appId/operator`. It is not part of the public
+tool listing or MCP discovery. The actions it names stay ordinary MCP tools.
+
 ## How tools get registered
 
 There are two paths, both idempotent (re-registering replaces the app's tool set):

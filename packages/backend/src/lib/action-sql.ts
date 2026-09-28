@@ -57,6 +57,16 @@ export interface ToolManifest {
   step_up?: boolean;
 }
 
+/**
+ * Light check that a query's SELECT list outputs `name`: as an alias (`x AS name`)
+ * or a bare / table-qualified column (`name`, `p.name`) followed by `,` or FROM.
+ * Not a SQL parser — the host tolerates a missing field at runtime (fail-open).
+ */
+export function selectsColumn(sql: string, name: string): boolean {
+  const code = sql.replace(/'(?:[^']|'')*'/g, "''");
+  return new RegExp(String.raw`(?:\bAS\s+["\x60]?${name}["\x60]?|[\s.,(]${name})\s*(?:,|\bFROM\b)`, 'i').test(code);
+}
+
 interface PreparedQuery {
   sql: string;
   params: unknown[];

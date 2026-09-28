@@ -3147,7 +3147,7 @@ export const openapiSpec: Record<string, unknown> = {
           "Apps"
         ],
         "summary": "Operator view context for an owned app",
-        "description": "Owner only (#240): the baseline context the Creator Console's operator view renders for one owned app. Refused with 401 when signed out and 403 for anyone who is not the app's owner (another app's owner or a team role below owner).",
+        "description": "Owner only (#240): the context the Creator Console's operator view renders for one owned app: the baseline plus the app's declared operator-view contract. Refused with 401 when signed out and 403 for anyone who is not the app's owner (another app's owner or a team role below owner).",
         "operationId": "get_v1_apps_appId_operator",
         "responses": {
           "200": {
@@ -3159,7 +3159,8 @@ export const openapiSpec: Record<string, unknown> = {
                   "required": [
                     "app",
                     "operator",
-                    "baseline"
+                    "baseline",
+                    "contract"
                   ],
                   "properties": {
                     "app": {
@@ -3211,6 +3212,145 @@ export const openapiSpec: Record<string, unknown> = {
                           }
                         }
                       }
+                    },
+                    "contract": {
+                      "description": "The app's operator-view contract (#240), or null when it declares none (baseline only). Declared in mcp.json as `operator_view`; see docs/mcp-app-tools.md.",
+                      "oneOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "object",
+                          "required": [
+                            "version",
+                            "resources",
+                            "actions"
+                          ],
+                          "properties": {
+                            "version": {
+                              "type": "integer",
+                              "enum": [
+                                1
+                              ]
+                            },
+                            "resources": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "id",
+                                  "kind",
+                                  "title",
+                                  "description",
+                                  "action",
+                                  "columns"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "users",
+                                      "reports",
+                                      "suspensions",
+                                      "verification",
+                                      "metrics"
+                                    ]
+                                  },
+                                  "title": {
+                                    "type": "string"
+                                  },
+                                  "description": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "action": {
+                                    "type": "string",
+                                    "description": "A registered query action, run through POST /v1/apps/{appId}/actions/{name}."
+                                  },
+                                  "columns": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "required": [
+                                        "key",
+                                        "label",
+                                        "format"
+                                      ],
+                                      "properties": {
+                                        "key": {
+                                          "type": "string"
+                                        },
+                                        "label": {
+                                          "type": "string"
+                                        },
+                                        "format": {
+                                          "type": "string",
+                                          "enum": [
+                                            "text",
+                                            "number",
+                                            "datetime",
+                                            "boolean",
+                                            "badge"
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "actions": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "id",
+                                  "title",
+                                  "resource",
+                                  "action",
+                                  "params",
+                                  "confirm",
+                                  "step_up"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "title": {
+                                    "type": "string"
+                                  },
+                                  "resource": {
+                                    "type": "string",
+                                    "description": "Id of the resource whose rows carry this action."
+                                  },
+                                  "action": {
+                                    "type": "string",
+                                    "description": "A registered write action, run through POST /v1/apps/{appId}/actions/{name}."
+                                  },
+                                  "params": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                      "type": "string"
+                                    },
+                                    "description": "Action param -> resource column."
+                                  },
+                                  "confirm": {
+                                    "type": "string"
+                                  },
+                                  "step_up": {
+                                    "type": "boolean"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
                     }
                   }
                 }

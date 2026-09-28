@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
-import { mainStatementVerb, measureManifestCost, selectsColumn, MANIFEST_BYTES_SOFT_LIMIT, MAX_SCHEDULED_ACTIONS_PER_APP, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from './tools.js';
+import { selectsColumn } from '../lib/action-sql.js';
+import { mainStatementVerb, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_SCHEDULED_ACTIONS_PER_APP, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from './tools.js';
 import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
+import { PARENTS_CLUBS, STASH } from '../__fixtures__/operator-view.js';
 
 const TOK = await testToken('gh:1');
 
@@ -868,6 +870,104 @@ describe('PUT /v1/apps/:appId/tools — operator gate (#229)', () => {
   });
 });
 
+// #240: the console operator-view contract registers with the tools — validated
+// against them, stored in the same batch, replaced and cleared with them.
+describe('PUT /v1/apps/:appId/tools — operator_view (#240)', () => {
+  // A fresh statement per prepare(), so each INSERT's bind arguments can be read back.
+  const ownerDb = () => {
+    const db = mockD1();
+    db.prepare.mockReset();
+    db.prepare.mockReturnValueOnce(mockStmt({ first: { creator_id: 'gh:1' } })).mockImplementation(() => mockStmt());
+    return db;
+  };
+  const put = (body: Record<string, unknown>, appId = 'stash', db = ownerDb()) =>
+    app.request(
+      `/v1/apps/${appId}/tools`,
+      { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+      makeEnv({}, db),
+    ).then(async (res) => ({ res, db, body: (await res.json()) as { error?: string; operator_view?: unknown } }));
+  const sqlsOf = (db: ReturnType<typeof mockD1>) => (db.prepare as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0] as string);
+  const insertOf = (db: ReturnType<typeof mockD1>) => {
+    const i = sqlsOf(db).findIndex((q) => q.startsWith('INSERT INTO app_operator_view'));
+    return i < 0 ? null : ((db.prepare as ReturnType<typeof vi.fn>).mock.results[i]!.value.bind.mock.calls[0] as unknown[]);
+  };
+
+  it('two different apps register their contracts through the same path, stored normalized in the tools batch', async () => {
+    for (const [appId, sample, summary] of [
+      ['stash', STASH, { version: 1, resources: 3, actions: 3 }],
+      ['parents-clubs', PARENTS_CLUBS, { version: 1, resources: 3, actions: 1 }],
+    ] as const) {
+      const { res, db, body } = await put(sample, appId);
+      expect(res.status, body.error).toBe(200);
+      expect(body.operator_view).toEqual(summary);
+      expect(db.batch).toHaveBeenCalledOnce();
+      const sqls = sqlsOf(db);
+      expect(sqls.indexOf('DELETE FROM app_operator_view WHERE app_id = ?')).toBeLessThan(sqls.findIndex((q) => q.startsWith('INSERT INTO app_operator_view')));
+      const [boundApp, version, contract] = insertOf(db)!;
+      expect([boundApp, version]).toEqual([appId, 1]);
+      expect(JSON.parse(contract as string).resources[0].columns[0].format).toBe('text');
+    }
+  });
+
+  it('an app that declares nothing keeps the baseline: any previous contract is cleared', async () => {
+    const { res, db, body } = await put({ tools: STASH.tools });
+    expect(res.status, body.error).toBe(200);
+    expect(body.operator_view).toBeNull();
+    expect(sqlsOf(db)).toContain('DELETE FROM app_operator_view WHERE app_id = ?');
+    expect(insertOf(db)).toBeNull();
+  });
+
+  it('refuses an unsafe or unknown contract without writing anything', async () => {
+    const publicUsers = STASH.tools.map((t) => (t.name === 'op_list_users' ? { ...t, requires_auth: false, auth: undefined } : t));
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ tools: STASH.tools, operator_view: { ...STASH.operator_view, version: 99 } }, 'operator_view.version must be one of 1'],
+      [{ tools: STASH.tools, operator_view: { ...STASH.operator_view, script: 'alert(1)' } }, 'unknown field "script"'],
+      [{ tools: STASH.tools.filter((t) => t.name !== 'op_suspend_user'), operator_view: STASH.operator_view }, 'action "op_suspend_user" is not a tool in this manifest'],
+      [{ tools: publicUsers, operator_view: STASH.operator_view }, 'public'],
+    ];
+    for (const [body, error] of cases) {
+      const r = await put(body);
+      expect(r.res.status, error).toBe(400);
+      expect(r.body.error, error).toContain(error);
+      expect(r.db.batch).not.toHaveBeenCalled();
+    }
+  });
+
+  it('only the app owner may register one', async () => {
+    const { res, db } = await put(STASH, 'stash', mockD1(mockStmt({ first: { creator_id: 'gh:9' } }), mockStmt({ first: null })));
+    expect(res.status).toBe(403);
+    expect(db.batch).not.toHaveBeenCalled();
+  });
+
+  it('the Agent Teams internal path forwards it too', async () => {
+    const db = mockD1();
+    db.prepare.mockImplementation(() => mockStmt());
+    const res = await app.request(
+      '/v1/apps/stash/tools/internal',
+      { method: 'POST', headers: { 'X-Internal-Token': 'internal-secret', 'Content-Type': 'application/json' }, body: JSON.stringify(STASH) },
+      makeEnv({ INTERNAL_TOKEN: 'internal-secret' }, db),
+    );
+    expect(res.status).toBe(200);
+    expect(insertOf(db)![0]).toBe('stash');
+  });
+
+  it('removing all tools removes the contract with them', async () => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    const res = await app.request('/v1/apps/stash/tools', { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({}, db));
+    expect(res.status).toBe(200);
+    expect(sqlsOf(db)).toContain('DELETE FROM app_operator_view WHERE app_id = ?');
+  });
+
+  it('the documented example registers', async () => {
+    const doc = readFileSync(new URL('../../../../docs/mcp-app-tools.md', import.meta.url), 'utf8');
+    const section = doc.slice(doc.indexOf('## Console operator view (`operator_view`)'), doc.indexOf('## How tools get registered'));
+    const manifest = JSON.parse(/```json\n(\{[\s\S]*?\})\n```/.exec(section)![1]!) as Record<string, unknown>;
+    const { res, body } = await put(manifest);
+    expect(res.status, body.error).toBe(200);
+    expect(body.operator_view).toMatchObject({ version: 1 });
+  });
+});
+
 // #231: step_up registers only on tools a signed-in person calls.
 describe('PUT /v1/apps/:appId/tools — step_up (#231)', () => {
   const put = (tool: Record<string, unknown>) => app.request(
@@ -1140,11 +1240,11 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
     expect(db.batch).toHaveBeenCalledTimes(1);
   });
 
-  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate reset)', async () => {
+  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view reset)', async () => {
     const { res, db } = await internalPost({ tools: [] }, { 'X-Internal-Token': 'secret' });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false, operator: null });
-    expect(db.batch.mock.calls[0]![0]).toHaveLength(5);
+    expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false, operator: null, operator_view: null });
+    expect(db.batch.mock.calls[0]![0]).toHaveLength(6);
     expect(db.batch.mock.calls[0]![0][1]!.bind).toHaveBeenCalledWith('test-app');
 
     const missing = await internalPost({}, { 'X-Internal-Token': 'secret' });

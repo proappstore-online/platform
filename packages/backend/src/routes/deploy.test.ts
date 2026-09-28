@@ -678,4 +678,21 @@ describe('PUT /apps/:appId/tools/oidc — page_meta is registered with the tools
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toContain('page_meta[0]: action "product_meta" must be a public query');
   });
+  it('passes operator_view (#240) to validation: a contract naming an unregistered action is refused', async () => {
+    const tools = [{
+      name: 'list_mine', description: 'x', operation: 'query', requires_auth: true,
+      sql: 'SELECT id FROM items WHERE owner_id = :__user_id LIMIT 50', params: {},
+    }];
+    const res = await deployRoutes.request(
+      '/apps/aiuniversity/tools/oidc',
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await signToken()}` },
+        body: JSON.stringify({ tools, operator_view: { version: 1, resources: [{ id: 'u', kind: 'users', title: 'Users', action: 'missing', columns: [{ key: 'id', label: 'ID' }] }] } }),
+      },
+      { DB: mockDB, DATA_WORKER_HOST: 'acct.workers.dev', INTERNAL_TOKEN: 'internal-secret' } as never,
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('operator_view.resources[0]: action "missing" is not a tool in this manifest');
+  });
 });

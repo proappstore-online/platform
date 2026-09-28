@@ -13,9 +13,10 @@ import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { requireAppAccess, requireAppOwner } from '../lib/auth.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
-import { VERIFY_PARAM_PREFIX, resolveToolParams, type ToolManifest, type ToolParam } from '../lib/action-sql.js';
+import { VERIFY_PARAM_PREFIX, resolveToolParams, selectsColumn, type ToolManifest, type ToolParam } from '../lib/action-sql.js';
 import { ENDPOINT_NAME_PREFIX } from '../lib/endpoint-sql.js';
 import { getVerifier, VERIFIERS } from '../lib/verifiers/index.js';
+import { validateOperatorView } from '../lib/operator-contract.js';
 
 export const toolsRoutes = new Hono<{ Bindings: Env }>();
 
@@ -559,6 +560,13 @@ export interface SiteManifest {
   page_meta?: unknown;
   sitemap?: unknown;
   operator?: unknown;
+  /** The console operator-view contract (#240): lib/operator-contract.ts. */
+  operator_view?: unknown;
+}
+
+/** The site-manifest fields of a submitted mcp.json body, for every registration path. */
+export function siteManifestFrom(body: SiteManifest | null | undefined): SiteManifest {
+  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view };
 }
 
 interface PageMetaRoute { path: string; action: string; param: string }
@@ -566,16 +574,6 @@ interface PageMetaRoute { path: string; action: string; param: string }
 export const MAX_PAGE_META_ROUTES = 20;
 const PATH_LITERAL = /^[A-Za-z0-9._~-]+$/;
 const PATH_PARAM = /^:([a-z_][a-z0-9_]*)$/;
-
-/**
- * Light check that a query's SELECT list outputs `name`: as an alias (`x AS name`)
- * or a bare / table-qualified column (`name`, `p.name`) followed by `,` or FROM.
- * Not a SQL parser — the host tolerates a missing field at runtime (fail-open).
- */
-export function selectsColumn(sql: string, name: string): boolean {
-  const code = sql.replace(/'(?:[^']|'')*'/g, "''");
-  return new RegExp(String.raw`(?:\bAS\s+["\x60]?${name}["\x60]?|[\s.,(]${name})\s*(?:,|\bFROM\b)`, 'i').test(code);
-}
 
 /** A public query action in this manifest, or why the reference is refused. */
 function publicQueryAction(tools: ToolManifest[], action: unknown, where: string): ToolManifest | string {
@@ -680,6 +678,8 @@ export async function replaceAppTools(
   if ('error' in siteResult) return { status: 400, payload: { error: siteResult.error } };
   const operatorResult = validateOperatorGate(site.operator);
   if ('error' in operatorResult) return { status: 400, payload: { error: operatorResult.error } };
+  const operatorView = validateOperatorView(tools as ToolManifest[], site.operator_view);
+  if ('error' in operatorView) return { status: 400, payload: { error: operatorView.error } };
 
   // A deploy replaces the CODE tools only (#155): console-defined endpoints live
   // in the same table under source = 'console' and are never touched here — a
@@ -712,6 +712,11 @@ export async function replaceAppTools(
     ...(operatorResult.gate
       ? [db.prepare('INSERT INTO app_operator_gate (app_id, path_prefix, role_name, created_at) VALUES (?, ?, ?, ?)').bind(appId, operatorResult.gate.prefix, operatorResult.gate.role, now)]
       : []),
+    // So is the console operator-view contract (#240): it can only name actions this manifest registers.
+    db.prepare('DELETE FROM app_operator_view WHERE app_id = ?').bind(appId),
+    ...(operatorView.contract
+      ? [db.prepare('INSERT INTO app_operator_view (app_id, version, contract, created_at) VALUES (?, ?, ?, ?)').bind(appId, operatorView.contract.version, JSON.stringify(operatorView.contract), now)]
+      : []),
   ];
   await db.batch(stmts);
 
@@ -741,7 +746,11 @@ export async function replaceAppTools(
   }
   return {
     status: 200,
-    payload: { ok: true, registered: tools.length, ...cost, schedules, page_meta: siteResult.routes.length, sitemap: siteResult.sitemap !== null, operator: operatorResult.gate, warnings },
+    payload: { ok: true, registered: tools.length, ...cost, schedules, page_meta: siteResult.routes.length, sitemap: siteResult.sitemap !== null, operator: operatorResult.gate,
+      operator_view: operatorView.contract
+        ? { version: operatorView.contract.version, resources: operatorView.contract.resources.length, actions: operatorView.contract.actions.length }
+        : null,
+      warnings },
   };
 }
 
@@ -751,7 +760,7 @@ toolsRoutes.put('/apps/:appId/tools', async (c) => {
   await requireAppOwner(c, appId);
 
   const body = await c.req.json<{ tools?: ToolManifest[] } & SiteManifest>().catch(() => null);
-  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools, c.env, { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator });
+  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools, c.env, siteManifestFrom(body));
   return c.json(payload, status as 200 | 400 | 422);
 });
 
@@ -769,7 +778,7 @@ toolsRoutes.post('/apps/:appId/tools/internal', async (c) => {
     return c.json({ error: 'invalid app id' }, 400);
   }
   const body = await c.req.json<{ tools?: ToolManifest[] } & SiteManifest>().catch(() => null);
-  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools ?? [], c.env, { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator });
+  const { status, payload } = await replaceAppTools(c.env.DB, appId, body?.tools ?? [], c.env, siteManifestFrom(body));
   return c.json(payload, status as 200 | 400 | 422);
 });
 
@@ -843,12 +852,13 @@ toolsRoutes.delete('/apps/:appId/tools', async (c) => {
   const appId = c.req.param('appId')!;
   await requireAppOwner(c, appId);
   // Code rows only: console endpoints are removed through the audited endpoints route (#155).
-  // Page meta, sitemap and the operator gate go with the code manifest that declared them (#210, #229).
+  // Page meta, sitemap, the operator gate and the operator view go with the code manifest that declared them (#210, #229, #240).
   await c.env.DB.batch([
     c.env.DB.prepare("DELETE FROM app_tools WHERE app_id = ? AND source = 'code'").bind(appId),
     c.env.DB.prepare('DELETE FROM app_page_meta WHERE app_id = ?').bind(appId),
     c.env.DB.prepare('DELETE FROM app_sitemap WHERE app_id = ?').bind(appId),
     c.env.DB.prepare('DELETE FROM app_operator_gate WHERE app_id = ?').bind(appId),
+    c.env.DB.prepare('DELETE FROM app_operator_view WHERE app_id = ?').bind(appId),
   ]);
   return c.json({ ok: true });
 });

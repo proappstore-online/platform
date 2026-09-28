@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { app } from '../index.js';
 import { makeEnv, mockD1, mockStmt, testToken } from '../test-helpers.js';
+import { validateOperatorView } from '../lib/operator-contract.js';
+import type { ToolManifest } from '../lib/action-sql.js';
+import { PARENTS_CLUBS, STASH } from '../__fixtures__/operator-view.js';
 
 // #240: the console operator view is owner-only. Every refusal must happen
 // before any of the app's data is read.
@@ -11,7 +14,7 @@ const get = (appId: string, init: RequestInit, db: ReturnType<typeof mockD1>) =>
   app.request(`/v1/apps/${appId}/operator`, init, makeEnv({}, db));
 
 const readsAppData = (db: ReturnType<typeof mockD1>) =>
-  db.prepare.mock.calls.some(([sql]) => /app_roles|usage_daily|SELECT id, created_at/.test(String(sql)));
+  db.prepare.mock.calls.some(([sql]) => /app_roles|usage_daily|app_operator_view|SELECT id, created_at/.test(String(sql)));
 
 describe('GET /v1/apps/:appId/operator (#240)', () => {
   it('returns the baseline context to the app owner, private and uncached', async () => {
@@ -30,6 +33,7 @@ describe('GET /v1/apps/:appId/operator (#240)', () => {
         usersWithRoles: 4,
         activity: { days: 30, activeUsers: 7, sessionSeconds: 3600, apiCalls: 120 },
       },
+      contract: null,
     });
     // Every data query is scoped to the requested app.
     for (const stmt of [appRow, roles, usage]) expect(stmt.bind.mock.calls[0]![0]).toBe('stash');
@@ -71,5 +75,25 @@ describe('GET /v1/apps/:appId/operator (#240)', () => {
     const res = await get('ghost', auth(OWNER), db);
     expect(res.status).toBe(404);
     expect(readsAppData(db)).toBe(false);
+  });
+
+  it("returns each app's own stored contract to its owner, so the console renders any app generically", async () => {
+    for (const [appId, sample] of [['stash', STASH], ['parents-clubs', PARENTS_CLUBS]] as const) {
+      const stored = validateOperatorView(sample.tools as ToolManifest[], sample.operator_view);
+      if (!('contract' in stored)) throw new Error(stored.error);
+      const view = mockStmt({ first: { contract: JSON.stringify(stored.contract) } });
+      const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt(), mockStmt(), mockStmt(), view);
+      const res = await get(appId, auth(OWNER), db);
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { contract: unknown }).contract).toEqual(stored.contract);
+      expect(view.bind.mock.calls[0]![0]).toBe(appId);
+    }
+  });
+
+  it('falls back to the baseline when a stored contract is unreadable', async () => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt(), mockStmt(), mockStmt(), mockStmt({ first: { contract: '{not json' } }));
+    const res = await get('stash', auth(OWNER), db);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { contract: unknown }).contract).toBeNull();
   });
 });

@@ -554,12 +554,12 @@ async function registerMcpTools(
   if (!env.PAS_BACKEND || !env.INTERNAL_TOKEN) return; // no backend binding (dev)
 
   let tools: unknown;
-  let site: { page_meta?: unknown; sitemap?: unknown; operator?: unknown } = {};
+  let site: { page_meta?: unknown; sitemap?: unknown; operator?: unknown; operator_view?: unknown } = {};
   try {
-    const parsed = JSON.parse(raw) as { tools?: unknown; page_meta?: unknown; sitemap?: unknown; operator?: unknown };
+    const parsed = JSON.parse(raw) as { tools?: unknown; page_meta?: unknown; sitemap?: unknown; operator?: unknown; operator_view?: unknown };
     tools = Array.isArray(parsed?.tools) ? parsed.tools : [];
-    // page_meta / sitemap (#210) and operator (#229) register with the tools and are replaced with them.
-    site = { page_meta: parsed?.page_meta, sitemap: parsed?.sitemap, operator: parsed?.operator };
+    // page_meta / sitemap (#210), operator (#229) and operator_view (#240) register with the tools and are replaced with them.
+    site = { page_meta: parsed?.page_meta, sitemap: parsed?.sitemap, operator: parsed?.operator, operator_view: parsed?.operator_view };
   } catch {
     deps.logActivity('deploy', 'mcp.json is not valid JSON — skipped tool registration', ticketId);
     return;
