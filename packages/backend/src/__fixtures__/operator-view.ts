@@ -7,7 +7,8 @@ const operator = (reason: string) => ({ app_roles: ['operator'], caller_unscoped
 
 /**
  * Stash: cross-pocket members, problem reports with a review workflow, a
- * suspension history per member, suspend (destructive, step-up) and lift.
+ * suspension history per member, suspend (destructive, step-up) and lift, and
+ * an identity-check (KYC) queue with ID-document and selfie evidence.
  */
 export const STASH = {
   tools: [
@@ -65,6 +66,25 @@ export const STASH = {
       ],
       auth: operator('Operators lift any suspension.'),
     },
+    {
+      name: 'op_list_kyc', description: 'Identity checks', operation: 'query', requires_auth: true,
+      params: { status: { type: 'string', optional: true }, q: { type: 'string', optional: true }, after: { type: 'string', optional: true } },
+      sql: "SELECT k.request_id, k.full_name, k.document_type, k.status, k.submitted_at FROM kyc_requests k WHERE (:status IS NULL OR k.status = :status) AND (:q IS NULL OR k.full_name LIKE '%' || :q || '%') AND (:after IS NULL OR k.request_id > :after) ORDER BY k.request_id LIMIT 50",
+      auth: operator('Operators review every identity check.'),
+    },
+    {
+      // Selects internal_score on purpose: it is not a declared field, so it never leaves the platform.
+      name: 'op_kyc_detail', description: 'One identity check', operation: 'query', requires_auth: true, step_up: true,
+      params: { request_id: { type: 'string' } },
+      sql: 'SELECT k.request_id, k.user_id, k.full_name, k.document_type, k.status, k.submitted_at, k.document_path, k.selfie_path, k.internal_score FROM kyc_requests k WHERE k.request_id = :request_id LIMIT 1',
+      auth: operator('Operators open any identity check.'),
+    },
+    ...(['approve', 'reject'] as const).map((verb) => ({
+      name: `op_${verb}_kyc`, description: `${verb} an identity check`, operation: 'execute', requires_auth: true, step_up: true,
+      params: { request_id: { type: 'string' }, from_status: { type: 'string' } },
+      sql: `UPDATE kyc_requests SET status = '${verb === 'approve' ? 'approved' : 'rejected'}', decided_by = :__user_id, decided_at = :__now WHERE request_id = :request_id AND status = :from_status`,
+      auth: { app_roles: ['operator'] },
+    })),
     ...(['review', 'resolve', 'dismiss'] as const).map((verb) => ({
       name: `op_${verb}_report`, description: `${verb} a report`, operation: 'execute', requires_auth: true,
       params: { report_id: { type: 'string' }, from_status: { type: 'string' } },
@@ -143,6 +163,36 @@ export const STASH = {
         status: { column: 'status', states: [{ value: 'active', label: 'Active' }, { value: 'lifted', label: 'Lifted' }] },
       },
       {
+        id: 'kyc', kind: 'verification', title: 'Identity checks', action: 'op_list_kyc',
+        columns: [
+          { key: 'full_name', label: 'Name' },
+          { key: 'document_type', label: 'Document' },
+          { key: 'status', label: 'Status', format: 'badge' },
+          { key: 'submitted_at', label: 'Submitted', format: 'datetime' },
+          { key: 'request_id', label: 'Request' },
+        ],
+        search: { param: 'q' },
+        page: { param: 'after', column: 'request_id' },
+        status: {
+          column: 'status', param: 'status',
+          states: [{ value: 'pending', label: 'Pending' }, { value: 'approved', label: 'Approved' }, { value: 'rejected', label: 'Rejected' }],
+        },
+        detail: {
+          action: 'op_kyc_detail', param: 'request_id', key: 'request_id',
+          fields: [
+            { key: 'full_name', label: 'Name' },
+            { key: 'user_id', label: 'User' },
+            { key: 'document_type', label: 'Document' },
+            { key: 'status', label: 'Status', format: 'badge' },
+            { key: 'submitted_at', label: 'Submitted', format: 'datetime' },
+            { key: 'request_id', label: 'Request' },
+            { key: 'document_path', label: 'ID document' },
+            { key: 'selfie_path', label: 'Selfie' },
+          ],
+          evidence: [{ field: 'document_path', label: 'ID document' }, { field: 'selfie_path', label: 'Selfie' }],
+        },
+      },
+      {
         id: 'moderation', kind: 'metrics', title: 'Moderation', action: 'op_report_metrics',
         columns: [
           { key: 'open_reports', label: 'Open reports', format: 'number' },
@@ -168,6 +218,11 @@ export const STASH = {
         params: { report_id: 'report_id', from_status: 'status' }, confirm: 'Dismiss this report?',
         transition: { from: ['open', 'reviewing'], to: 'dismissed' },
       },
+      ...(['approve', 'reject'] as const).map((verb) => ({
+        id: `${verb}_kyc`, title: verb === 'approve' ? 'Approve' : 'Reject', resource: 'kyc', action: `op_${verb}_kyc`, target: 'request_id',
+        params: { request_id: 'request_id', from_status: 'status' }, confirm: `${verb === 'approve' ? 'Approve' : 'Reject'} this identity check?`,
+        transition: { from: ['pending'], to: verb === 'approve' ? 'approved' : 'rejected' },
+      })),
       {
         id: 'lift', title: 'Lift', resource: 'suspension_history', action: 'op_lift_suspension', target: 'user_id',
         params: { suspension_id: 'suspension_id', from_status: 'status', user_id: 'user_id' }, confirm: 'Lift this suspension?',
@@ -180,7 +235,7 @@ export const STASH = {
 /**
  * Parents Clubs, shaped differently: parents (users), flagged posts (reports)
  * with a new → upheld/rejected workflow, suspensions per parent, an
- * ID-verification queue with a step-up approval, club KPIs.
+ * ID-verification queue (licence evidence, approve/decline), club KPIs.
  */
 export const PARENTS_CLUBS = {
   tools: [
@@ -209,16 +264,23 @@ export const PARENTS_CLUBS = {
       auth: { app_roles: ['moderator', 'operator'] },
     })),
     {
-      name: 'op_pending_verifications', description: 'Pending ID checks', operation: 'query', requires_auth: true, params: {},
-      sql: "SELECT v.id AS request_id, v.parent_name, v.submitted_at FROM verification_requests v WHERE v.state = 'pending' ORDER BY v.submitted_at LIMIT 100",
-      auth: operator('Operators review every pending check.'),
+      name: 'op_pending_verifications', description: 'ID checks', operation: 'query', requires_auth: true,
+      params: { state: { type: 'string', optional: true } },
+      sql: 'SELECT v.id AS request_id, v.parent_name, v.state, v.submitted_at FROM verification_requests v WHERE (:state IS NULL OR v.state = :state) ORDER BY v.submitted_at LIMIT 100',
+      auth: operator('Operators review every ID check.'),
     },
     {
-      name: 'op_approve_verification', description: 'Approve an ID check', operation: 'execute', requires_auth: true, step_up: true,
-      params: { request_id: { type: 'string' } },
-      sql: "UPDATE verification_requests SET state = 'approved', reviewed_by = :__user_id WHERE id = :request_id",
-      auth: { app_roles: ['operator'] },
+      name: 'op_verification_detail', description: 'One ID check', operation: 'query', requires_auth: true, step_up: true,
+      params: { id: { type: 'string' } },
+      sql: 'SELECT v.id AS request_id, v.parent_name, v.state, v.submitted_at, v.licence_path FROM verification_requests v WHERE v.id = :id LIMIT 1',
+      auth: operator('Operators open any ID check.'),
     },
+    ...(['approve', 'decline'] as const).map((verb) => ({
+      name: `op_${verb}_verification`, description: `${verb} an ID check`, operation: 'execute', requires_auth: true, step_up: true,
+      params: { request_id: { type: 'string' }, was: { type: 'string' } },
+      sql: `UPDATE verification_requests SET state = '${verb === 'approve' ? 'approved' : 'declined'}', reviewed_by = :__user_id WHERE id = :request_id AND state = :was`,
+      auth: { app_roles: ['operator'] },
+    })),
     {
       name: 'op_list_suspensions', description: 'Suspended parents', operation: 'query', requires_auth: true,
       params: { parent: { type: 'string', optional: true } },
@@ -284,9 +346,25 @@ export const PARENTS_CLUBS = {
         id: 'id_checks', kind: 'verification', title: 'ID checks', action: 'op_pending_verifications',
         columns: [
           { key: 'parent_name', label: 'Parent' },
+          { key: 'state', label: 'State', format: 'badge' },
           { key: 'submitted_at', label: 'Submitted', format: 'datetime' },
           { key: 'request_id', label: 'Request' },
         ],
+        status: {
+          column: 'state', param: 'state',
+          states: [{ value: 'pending', label: 'Pending' }, { value: 'approved', label: 'Approved' }, { value: 'declined', label: 'Declined' }],
+        },
+        detail: {
+          action: 'op_verification_detail', param: 'id', key: 'request_id',
+          fields: [
+            { key: 'parent_name', label: 'Parent' },
+            { key: 'state', label: 'State', format: 'badge' },
+            { key: 'submitted_at', label: 'Submitted', format: 'datetime' },
+            { key: 'request_id', label: 'Request' },
+            { key: 'licence_path', label: "Driver's licence" },
+          ],
+          evidence: [{ field: 'licence_path', label: "Driver's licence" }],
+        },
       },
       {
         id: 'suspended', kind: 'suspensions', title: 'Suspended parents', action: 'op_list_suspensions',
@@ -308,7 +386,11 @@ export const PARENTS_CLUBS = {
       },
     ],
     actions: [
-      { id: 'approve', title: 'Approve', resource: 'id_checks', action: 'op_approve_verification', params: { request_id: 'request_id' }, confirm: 'Approve this ID check?' },
+      ...(['approve', 'decline'] as const).map((verb) => ({
+        id: verb, title: verb === 'approve' ? 'Approve' : 'Decline', resource: 'id_checks', action: `op_${verb}_verification`, target: 'request_id',
+        params: { request_id: 'request_id', was: 'state' }, confirm: `${verb === 'approve' ? 'Approve' : 'Decline'} this ID check?`,
+        transition: { from: ['pending'], to: verb === 'approve' ? 'approved' : 'declined' },
+      })),
       {
         id: 'uphold', title: 'Uphold', resource: 'flags', action: 'op_uphold_flag', target: 'flag_id',
         params: { flag: 'flag_id', was: 'state' }, confirm: 'Uphold this flag?', transition: { from: ['new'], to: 'upheld' },

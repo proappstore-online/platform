@@ -6,7 +6,7 @@
  *   "operator_view": {
  *     "version": 1,
  *     "resources": [{ "id", "kind", "title", "description"?, "action", "columns": [{ "key", "label", "format"? }],
- *                     users/reports/suspensions only: "search"?, "page"?, "detail"?, "status"?, "related"? }],
+ *                     users/reports/suspensions/verification only: "search"?, "page"?, "detail"?, "status"?, "related"? }],
  *     "actions":   [{ "id", "title", "resource", "action", "params": { <action param>: <resource column> }, "confirm",
  *                     "transition"?: { "from": [<state>], "to": <state> }, "destructive"?: true, "target"?: <column> }]
  *   }
@@ -144,6 +144,33 @@ function validateAction(tools: ToolManifest[], resources: OperatorResource[], ra
 }
 
 /**
+ * The identity-verification rules (#240): a verification queue is a status
+ * workflow with a detail page, and every read of that page and every decision
+ * needs a recent sign-in. Decisions are guarded transitions whose params (and
+ * the status) are detail fields, so they can be taken on the record page after
+ * the evidence has been looked at.
+ */
+function validateVerification(resources: OperatorResource[], actions: OperatorAction[]): string | null {
+  for (const [i, r] of resources.entries()) {
+    if (r.kind !== 'verification') continue;
+    const at = `operator_view.resources[${i}]`;
+    if (!r.status || !r.detail) return `${at}: a verification resource must declare status and detail`;
+    if (!r.detail.step_up) return `${at}.detail: action "${r.detail.action}" must declare step_up (identity data needs a recent sign-in)`;
+    const fields = new Set(r.detail.fields.map((f) => f.key));
+    if (!fields.has(r.status.column)) return `${at}.detail: fields must include the status column "${r.status.column}"`;
+    for (const [j, a] of actions.entries()) {
+      if (a.resource !== r.id) continue;
+      const aat = `operator_view.actions[${j}]`;
+      if (!a.transition) return `${aat}: decisions on a verification resource must be status transitions`;
+      if (!a.step_up) return `${aat}: action "${a.action}" must declare step_up (every verification decision needs a recent sign-in)`;
+      const missing = [...Object.values(a.params), ...(a.target ? [a.target] : [])].find((col) => !fields.has(col));
+      if (missing) return `${aat}: column "${missing}" must also be a detail field of "${r.id}" (decisions are taken on the record page)`;
+    }
+  }
+  return null;
+}
+
+/**
  * Validate `operator_view` against the app's (already validated) tools.
  * Absent or null is the baseline: `{ contract: null }`.
  */
@@ -183,5 +210,7 @@ export function validateOperatorView(tools: ToolManifest[], raw: unknown): { err
     ids.add(result.id);
     actions.push(result);
   }
+  const verification = validateVerification(resources, actions);
+  if (verification) return { error: verification };
   return { contract: { version: 1, resources, actions } };
 }

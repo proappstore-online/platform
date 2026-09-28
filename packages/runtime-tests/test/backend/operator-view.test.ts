@@ -305,3 +305,76 @@ describe('operator reports & suspensions (#240)', () => {
   });
 });
 
+// #240 ID verification on real D1 + R2: the app's review-role configuration
+// (#208), real review objects, and both audit trails (app_action_audit and
+// storage_review_access).
+describe('operator ID verification (#240)', () => {
+  const worker = (appId: string) => fetchMock.get(`https://pas-data-${appId}.${env.DATA_WORKER_HOST}`);
+  const rows = (appId: string, reply: Record<string, unknown>[]) => worker(appId).intercept({ path: '/query', method: 'POST' }).reply(200, { rows: reply, meta: {} });
+  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 5, auth_method: 'passkey' } as never, env.SESSION_SIGNING_KEY);
+  const get = async (path: string, token?: string) => SELF.fetch(`${BASE}/v1/apps/${path}`, json('GET', undefined, token ?? await fresh()));
+  const kyc = { request_id: 'k1', user_id: 'gh:10', full_name: 'Ada', document_type: 'passport', status: 'pending', submitted_at: 1, document_path: '_review/u/gh:10/id.png', selfie_path: null, internal_score: 97 };
+
+  beforeEach(async () => {
+    for (const t of ['app_storage_config', 'storage_review_access']) await env.DB.prepare(`DELETE FROM ${t}`).run();
+    await seedApp('parents-clubs', 'gh:1');
+    for (const [appId, sample] of [['stash', STASH], ['parents-clubs', PARENTS_CLUBS]] as const) {
+      worker(appId).intercept({ path: '/validate', method: 'POST' })
+        .reply(200, (req) => ({ results: (JSON.parse(String(req.body)) as { statements: { id: string }[] }).statements.map((st) => ({ id: st.id, ok: true })) }));
+      const res = await SELF.fetch(`${BASE}/v1/apps/${appId}/tools`, json('PUT', sample, await session('gh:1')));
+      expect(res.status, await res.clone().text()).toBe(200);
+      await env.DB.prepare("INSERT INTO app_roles (app_id, user_id, role_name) VALUES (?, 'gh:1', 'operator')").bind(appId).run();
+      // The #208 review roles, set through the real route.
+      const cfg = await SELF.fetch(`${BASE}/v1/apps/${appId}/storage-config`, json('PUT', { review_roles: ['operator'] }, await session('gh:1')));
+      expect(cfg.status).toBe(200);
+    }
+    await env.STORAGE.put('stash/_review/u/gh:10/id.png', 'PNGDATA', { httpMetadata: { contentType: 'image/png' } });
+    await env.STORAGE.put('parents-clubs/_review/u/p7/licence.pdf', '%PDF-1', { httpMetadata: { contentType: 'application/pdf' } });
+  });
+
+  it('the record page needs a recent sign-in and flags documents without their paths', async () => {
+    expect((await get('stash/operator/resources/kyc/records/k1', await session('gh:1'))).status).toBe(403);
+    rows('stash', [kyc]);
+    const res = await get('stash/operator/resources/kyc/records/k1');
+    const body = (await res.json()) as { record: Record<string, unknown> };
+    expect(body.record).toMatchObject({ document_path: true, selfie_path: false, status: 'pending' });
+    expect(JSON.stringify(body)).not.toMatch(/_review|internal_score/);
+  });
+
+  it('serves the evidence to a reviewer and writes both audit trails; nothing without the review role', async () => {
+    rows('stash', [kyc]);
+    const res = await get('stash/operator/resources/kyc/records/k1/evidence/document_path');
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(await res.text()).toBe('PNGDATA');
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect((await env.DB.prepare("SELECT owner_id, path, actor_id, action FROM storage_review_access WHERE app_id = 'stash'").all()).results)
+      .toEqual([{ owner_id: 'gh:10', path: 'id.png', actor_id: 'gh:1', action: 'read' }]);
+    expect((await env.DB.prepare("SELECT action_name, operator_action, target FROM app_action_audit WHERE app_id = 'stash'").all()).results)
+      .toEqual([{ action_name: 'op_kyc_detail', operator_action: 'evidence:kyc.document_path', target: 'k1' }]);
+
+    await env.DB.prepare("UPDATE app_storage_config SET review_roles = '[\"reviewer\"]' WHERE app_id = 'stash'").run();
+    const refused = await get('stash/operator/resources/kyc/records/k1/evidence/document_path');
+    expect(refused.status).toBe(403);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM storage_review_access").first<{ n: number }>())!.n).toBe(1);
+  });
+
+  it('approves with a recent sign-in under the guard, audited; refuses a stale session', async () => {
+    const row = { request_id: 'k1', status: 'pending', full_name: 'Ada' };
+    expect((await SELF.fetch(`${BASE}/v1/apps/stash/operator/actions/approve_kyc`, json('POST', { row }, await session('gh:1')))).status).toBe(403);
+    worker('stash').intercept({ path: '/execute', method: 'POST' }).reply(200, { meta: { changes: 1 } });
+    const ok = await SELF.fetch(`${BASE}/v1/apps/stash/operator/actions/approve_kyc`, json('POST', { row }, await fresh()));
+    expect(ok.status, await ok.clone().text()).toBe(200);
+    expect((await env.DB.prepare("SELECT action_name, status, operator_action, target FROM app_action_audit WHERE app_id = 'stash'").all()).results)
+      .toEqual([{ action_name: 'op_approve_kyc', status: 200, operator_action: 'approve_kyc', target: 'k1' }]);
+  });
+
+  it("a second app (Parents Clubs) serves its licence PDF through the same route; other owners get nothing", async () => {
+    rows('parents-clubs', [{ request_id: 'v1', parent_name: 'Grace', state: 'pending', submitted_at: 1, licence_path: '_review/u/p7/licence.pdf' }]);
+    const res = await get('parents-clubs/operator/resources/id_checks/records/v1/evidence/licence_path');
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/pdf');
+    expect(await res.text()).toBe('%PDF-1');
+    expect((await get('parents-clubs/operator/resources/id_checks/records/v1/evidence/licence_path', await session('gh:2'))).status).toBe(403);
+  });
+});
+

@@ -569,8 +569,9 @@ per-app console code.
 
 ### Lists: search, paging, detail, status and related
 
-A `users`, `reports` or `suspensions` resource may also declare search, keyset
-paging, a per-record detail page, a status workflow and a related list. Each is optional, and each is backed by the app's own role-gated query
+A `users`, `reports`, `suspensions` or `verification` resource may also declare
+search, keyset paging, a per-record detail page, a status workflow and a
+related list. Each is optional, and each is backed by the app's own role-gated query
 actions:
 
 ```json
@@ -607,7 +608,7 @@ actions:
   resource that has a detail page. The console shows it on that record's page,
   passing the record's key to `param`. For example, a `suspensions` resource
   related to `members` is each member's suspension history.
-- These are refused on `verification` and `metrics` resources for now.
+- These are refused on `metrics` resources.
 
 **Row actions** (`actions[]`) may also declare:
 
@@ -633,6 +634,50 @@ actions:
 - **`target`** is the resource column whose value the audit records as the
   record acted on. It defaults to the first mapped column.
 - An action's registered action must be an `execute` or `batch` write.
+
+### Identity verification
+
+A `verification` resource is an ID-check queue. Its rules are stricter than
+other lists, because identity data and decisions are sensitive:
+
+- It must declare `status` (for example pending, approved, rejected) and
+  `detail`.
+- Its detail action must declare `step_up`, so opening a check needs a recent
+  sign-in.
+- The detail fields must include the status column and every column its
+  decisions map, so decisions can be taken on the record page.
+- Every row action on it must be a guarded `transition` whose action declares
+  `step_up`. There are no unguarded or unauthenticated decisions.
+- `detail.evidence` (1 to 6 `{ field, label }`) names detail fields that hold
+  a document path in the app's review storage, `_review/u/<uid>/<path>` (the
+  #208 namespace: `pas.storage` uploads under `_review/`).
+
+```json
+"detail": {
+  "action": "op_kyc_detail", "param": "request_id", "key": "request_id",
+  "fields": [{ "key": "full_name", "label": "Name" }, { "key": "status", "label": "Status" },
+             { "key": "request_id", "label": "Request" }, { "key": "document_path", "label": "ID document" }],
+  "evidence": [{ "field": "document_path", "label": "ID document" }]
+}
+```
+
+**How evidence is served.** The record route never returns a document path;
+each evidence field comes back as `true` or `false` (is a document there). The
+console fetches a document from
+`GET /v1/apps/:appId/operator/resources/:id/records/:key/evidence/:field`,
+which:
+
+- runs the detail action again (role gate, `step_up`, audit) and takes the
+  path from that fresh row, never from the client;
+- serves only a `_review/u/<uid>/<path>` object in this app's own storage, so
+  no other namespace, app or storage path is reachable;
+- requires the caller to hold one of the app's review roles
+  (`PUT /v1/apps/:appId/storage-config`), so the operator view never widens
+  who may open review documents;
+- serves PDF and image types only, `private, no-store`, `nosniff`, with
+  `default-src 'none'`;
+- records the read in `storage_review_access` (the #208 trail) and in
+  `app_action_audit` as `evidence:<resource>.<field>`.
 
 **Only declared columns and fields leave the platform.** A query may select
 more (an internal id, a hash): the operator read routes return only the

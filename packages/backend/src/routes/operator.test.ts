@@ -396,3 +396,162 @@ describe('operator reports & suspensions (#240)', () => {
   });
 });
 
+// #240 ID verification: the queue's detail and every decision need a recent
+// sign-in; evidence documents are served by the platform from the record's own
+// `_review/` path (never a client-supplied one), only to a review-role holder,
+// only as document types, uncached, and on both audit trails.
+describe('operator ID verification (#240)', () => {
+  const stored = (sample: typeof STASH | typeof PARENTS_CLUBS) => {
+    const r = validateOperatorView(sample.tools as ToolManifest[], sample.operator_view);
+    if (!('contract' in r)) throw new Error(r.error);
+    return JSON.stringify(r.contract);
+  };
+  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 10, auth_method: 'passkey' } as never, TEST_SK);
+  let calls: string[] = [];
+  function dataWorker(rows: Record<string, unknown>[], changes = 1) {
+    calls = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(String(url));
+      return Response.json(String(url).endsWith('/query') ? { rows, meta: {} } : { meta: { changes } });
+    }));
+  }
+  afterEach(() => vi.unstubAllGlobals());
+  const kycRow = {
+    request_id: 'k1', user_id: 'gh:10', full_name: 'Ada', document_type: 'passport', status: 'pending', submitted_at: 1,
+    document_path: '_review/u/gh:10/id.png', selfie_path: '_review/u/gh:10/../../other', internal_score: 97,
+  };
+  /** owner → contract → [review roles → review-role holder] → manifest → app role → audit → [review access]. */
+  function db(sample: typeof STASH | typeof PARENTS_CLUBS, action: string, opts: { reviewer?: boolean; evidence?: boolean } = {}) {
+    const audit = mockStmt();
+    const access = mockStmt();
+    const tool = sample.tools.find((t) => t.name === action)!;
+    const review = opts.evidence
+      ? [mockStmt({ first: { review_roles: '["operator"]' } }), mockStmt({ first: opts.reviewer === false ? null : { 1: 1 } })]
+      : [];
+    const d = mockD1(
+      mockStmt({ first: { creator_id: 'gh:1' } }),
+      mockStmt({ first: { contract: stored(sample) } }),
+      ...review,
+      mockStmt({ first: { manifest: JSON.stringify(tool) } }),
+      mockStmt({ all: { results: [{ role_name: 'operator' }] } }),
+      audit,
+      access,
+    );
+    return { d, audit, access };
+  }
+  function storage(contentType = 'image/png') {
+    return { get: vi.fn(async () => ({ body: new Blob(['PNGDATA']).stream(), httpMetadata: { contentType } })) };
+  }
+  const get = (path: string, d: ReturnType<typeof mockD1>, token: string, bucket = storage()) =>
+    app.request(`/v1/apps/${path}`, { headers: { Authorization: `Bearer ${token}` } }, makeEnv({ STORAGE: bucket }, d));
+
+  it('the record needs a recent sign-in, drops undeclared fields and never returns document paths', async () => {
+    dataWorker([kycRow]);
+    const stale = await get('stash/operator/resources/kyc/records/k1', db(STASH, 'op_kyc_detail').d, OWNER);
+    expect(stale.status).toBe(403);
+    expect(await stale.text()).toContain('step_up_required');
+    expect(calls).toHaveLength(0);
+    const { d, audit } = db(STASH, 'op_kyc_detail');
+    const res = await get('stash/operator/resources/kyc/records/k1', d, await fresh());
+    const body = (await res.json()) as { record: Record<string, unknown> };
+    expect(body.record).toMatchObject({ full_name: 'Ada', status: 'pending', document_path: true, selfie_path: false });
+    expect(JSON.stringify(body)).not.toMatch(/_review|id\.png|internal_score|97/);
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_kyc_detail', 'gh:1', 'operator', 200, expect.any(Number), 'detail:kyc', 'k1');
+  });
+
+  it("serves the record's own document to a reviewer, uncached and locked down, on both audit trails", async () => {
+    dataWorker([kycRow]);
+    const bucket = storage('image/png');
+    const { d, audit, access } = db(STASH, 'op_kyc_detail', { evidence: true });
+    const res = await get('stash/operator/resources/kyc/records/k1/evidence/document_path', d, await fresh(), bucket);
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(await res.text()).toBe('PNGDATA');
+    expect(res.headers.get('content-type')).toBe('image/png');
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res.headers.get('content-security-policy')).toBe("default-src 'none'; frame-ancestors 'none'");
+    expect(bucket.get).toHaveBeenCalledWith('stash/_review/u/gh:10/id.png');
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_kyc_detail', 'gh:1', 'operator', 200, expect.any(Number), 'evidence:kyc.document_path', 'k1');
+    expect(access.bind).toHaveBeenCalledWith('stash', 'gh:10', 'id.png', 'gh:1', 'read', expect.any(Number));
+  });
+
+  it('refuses evidence to non-reviewers and stale sessions before any read', async () => {
+    dataWorker([kycRow]);
+    const bucket = storage();
+    const notReviewer = await get('stash/operator/resources/kyc/records/k1/evidence/document_path', db(STASH, 'op_kyc_detail', { evidence: true, reviewer: false }).d, await fresh(), bucket);
+    expect(notReviewer.status).toBe(403);
+    expect(await notReviewer.text()).toContain('not a reviewer for this app');
+    const stale = await get('stash/operator/resources/kyc/records/k1/evidence/document_path', db(STASH, 'op_kyc_detail', { evidence: true }).d, OWNER, bucket);
+    expect(stale.status).toBe(403);
+    expect(await stale.text()).toContain('step_up_required');
+    expect(calls).toHaveLength(0);
+    expect(bucket.get).not.toHaveBeenCalled();
+  });
+
+  it('never opens anything outside the app\'s own review namespace, nor undeclared fields', async () => {
+    for (const path of ['_review/u/gh:10/../../secrets.png', '_public/logo.png', 'gh:10/private.png', '/_review/u/gh:10/id.png', '_review/u/../id.png', 'otherapp/_review/u/gh:10/id.png']) {
+      dataWorker([{ ...kycRow, document_path: path }]);
+      const bucket = storage();
+      const { d, access } = db(STASH, 'op_kyc_detail', { evidence: true });
+      const res = await get('stash/operator/resources/kyc/records/k1/evidence/document_path', d, await fresh(), bucket);
+      expect(res.status, path).toBe(404);
+      expect(bucket.get, path).not.toHaveBeenCalled();
+      expect(access.bind, path).not.toHaveBeenCalled();
+    }
+    for (const field of ['internal_score', 'full_name', 'selfie']) {
+      dataWorker([kycRow]);
+      const res = await get(`stash/operator/resources/kyc/records/k1/evidence/${field}`, db(STASH, 'op_kyc_detail', { evidence: true }).d, await fresh());
+      expect(res.status, field).toBe(404);
+      expect(calls, field).toHaveLength(0);
+    }
+  });
+
+  it('refuses a stored object that is not a document type, without logging a read', async () => {
+    dataWorker([kycRow]);
+    const { d, access } = db(STASH, 'op_kyc_detail', { evidence: true });
+    const res = await get('stash/operator/resources/kyc/records/k1/evidence/document_path', d, await fresh(), storage('text/html'));
+    expect(res.status).toBe(415);
+    expect(access.bind).not.toHaveBeenCalled();
+  });
+
+  it('refuses signed-out callers and other owners', async () => {
+    const anon = mockD1();
+    expect((await app.request('/v1/apps/stash/operator/resources/kyc/records/k1/evidence/document_path', {}, makeEnv({ STORAGE: storage() }, anon))).status).toBe(401);
+    expect(anon.prepare).not.toHaveBeenCalled();
+    const other = mockD1(mockStmt({ first: { creator_id: 'gh:9' } }), mockStmt({ first: null }));
+    expect((await get('stash/operator/resources/kyc/records/k1/evidence/document_path', other, await fresh())).status).toBe(403);
+  });
+
+  it('decisions need a recent sign-in and the current state, and are audited', async () => {
+    const act = (id: string, row: unknown, d: ReturnType<typeof mockD1>, token: string) => app.request(`/v1/apps/stash/operator/actions/${id}`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ row }),
+    }, makeEnv({}, d));
+    const row = { request_id: 'k1', status: 'pending', full_name: 'Ada' };
+    dataWorker([]);
+    const stale = await act('approve_kyc', row, db(STASH, 'op_approve_kyc').d, OWNER);
+    expect(stale.status).toBe(403);
+    expect(await stale.text()).toContain('step_up_required');
+    expect((await act('reject_kyc', { ...row, status: 'approved' }, db(STASH, 'op_reject_kyc').d, await fresh())).status).toBe(409);
+    expect(calls).toHaveLength(0);
+    const { d, audit } = db(STASH, 'op_approve_kyc');
+    const ok = await act('approve_kyc', row, d, await fresh());
+    expect(ok.status, await ok.clone().text()).toBe(200);
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_approve_kyc', 'gh:1', 'operator', 200, expect.any(Number), 'approve_kyc', 'k1');
+    dataWorker([], 0);
+    const raced = db(STASH, 'op_approve_kyc');
+    expect((await act('approve_kyc', row, raced.d, await fresh())).status).toBe(409);
+    expect(raced.audit.bind).toHaveBeenCalledWith('stash', 'op_approve_kyc', 'gh:1', 'operator', 409, expect.any(Number), 'approve_kyc', 'k1');
+  });
+
+  it("a second app (Parents Clubs) serves its licence through the same route", async () => {
+    dataWorker([{ request_id: 'v1', parent_name: 'Grace', state: 'pending', submitted_at: 1, licence_path: '_review/u/p7/licence.pdf' }]);
+    const bucket = storage('application/pdf');
+    const { d, audit } = db(PARENTS_CLUBS, 'op_verification_detail', { evidence: true });
+    const res = await get('parents-clubs/operator/resources/id_checks/records/v1/evidence/licence_path', d, await fresh(), bucket);
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/pdf');
+    expect(bucket.get).toHaveBeenCalledWith('parents-clubs/_review/u/p7/licence.pdf');
+    expect(audit.bind).toHaveBeenCalledWith('parents-clubs', 'op_verification_detail', 'gh:1', 'operator', 200, expect.any(Number), 'evidence:id_checks.licence_path', 'v1');
+  });
+});
+

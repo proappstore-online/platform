@@ -14,8 +14,19 @@ type OperatorColumnFormat = (typeof OPERATOR_COLUMN_FORMATS)[number];
 
 export interface OperatorColumn { key: string; label: string; format: OperatorColumnFormat }
 
-/** Per-record read: `action` runs with `param` = the row's `key` column. */
-interface OperatorDetail { action: string; param: string; key: string; fields: OperatorColumn[]; step_up: boolean }
+/**
+ * Per-record read: `action` runs with `param` = the row's `key` column.
+ * `evidence` (verification only) names detail fields holding a `_review/`
+ * document path, served by the platform — never the path itself.
+ */
+interface OperatorDetail {
+  action: string;
+  param: string;
+  key: string;
+  fields: OperatorColumn[];
+  step_up: boolean;
+  evidence?: { field: string; label: string }[] | null;
+}
 
 /** A status workflow: the column holding a row's state, the states, and the optional filter param. */
 export interface OperatorStatus { column: string; states: { value: string; label: string }[]; param: string | null }

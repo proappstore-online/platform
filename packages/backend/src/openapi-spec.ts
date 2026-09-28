@@ -3302,7 +3302,7 @@ export const openapiSpec: Record<string, unknown> = {
                                     }
                                   },
                                   "search": {
-                                    "description": "Users, reports and suspensions only: the list action param that receives ?q=.",
+                                    "description": "Users, reports, suspensions and verification only: the list action param that receives ?q=.",
                                     "oneOf": [
                                       {
                                         "type": "null"
@@ -3321,7 +3321,7 @@ export const openapiSpec: Record<string, unknown> = {
                                     ]
                                   },
                                   "page": {
-                                    "description": "Users, reports and suspensions only: keyset paging; `param` receives the last row's `column`; `size` is the query's literal LIMIT (max 200).",
+                                    "description": "Users, reports, suspensions and verification only: keyset paging; `param` receives the last row's `column`; `size` is the query's literal LIMIT (max 200).",
                                     "oneOf": [
                                       {
                                         "type": "null"
@@ -3349,7 +3349,7 @@ export const openapiSpec: Record<string, unknown> = {
                                     ]
                                   },
                                   "detail": {
-                                    "description": "Users, reports and suspensions only: per-record read; `action` runs with `param` = the row's `key` column.",
+                                    "description": "Users, reports, suspensions and verification only: per-record read; `action` runs with `param` = the row's `key` column.",
                                     "oneOf": [
                                       {
                                         "type": "null"
@@ -3404,13 +3404,39 @@ export const openapiSpec: Record<string, unknown> = {
                                           },
                                           "step_up": {
                                             "type": "boolean"
+                                          },
+                                          "evidence": {
+                                            "description": "Verification only: detail fields holding a `_review/u/<uid>/<path>` document, served by the evidence route (the record returns only true/false).",
+                                            "oneOf": [
+                                              {
+                                                "type": "null"
+                                              },
+                                              {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "required": [
+                                                    "field",
+                                                    "label"
+                                                  ],
+                                                  "properties": {
+                                                    "field": {
+                                                      "type": "string"
+                                                    },
+                                                    "label": {
+                                                      "type": "string"
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            ]
                                           }
                                         }
                                       }
                                     ]
                                   },
                                   "status": {
-                                    "description": "Users, reports and suspensions only: a status workflow. `param` filters by state (?status=).",
+                                    "description": "Users, reports, suspensions and verification only: a status workflow. `param` filters by state (?status=).",
                                     "oneOf": [
                                       {
                                         "type": "null"
@@ -3716,7 +3742,7 @@ export const openapiSpec: Record<string, unknown> = {
           "Apps"
         ],
         "summary": "One record of a declared operator resource",
-        "description": "Owner only (#240). Runs the resource's detail action with its declared param set to `key`, under the same checks as the actions route, and returns only the declared fields.",
+        "description": "Owner only (#240). Runs the resource's detail action with its declared param set to `key`, under the same checks as the actions route, and returns only the declared fields. Evidence fields (verification) are returned as true/false, never as paths.",
         "operationId": "get_v1_apps_appId_operator_resources_resourceId_records_key",
         "responses": {
           "200": {
@@ -3782,6 +3808,86 @@ export const openapiSpec: Record<string, unknown> = {
             "schema": {
               "type": "string",
               "maxLength": 200
+            }
+          }
+        ]
+      }
+    },
+    "/v1/apps/{appId}/operator/resources/{resourceId}/records/{key}/evidence/{field}": {
+      "get": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "One evidence document of a verification record",
+        "description": "Owner only (#240). Re-runs the resource's detail action (role gate, step_up, audit) and serves the declared evidence field's `_review/u/<uid>/<path>` document from this app's storage. The caller must also hold one of the app's review roles (#208). PDF and image types only; private, no-store, nosniff, CSP default-src 'none'. Recorded in storage_review_access and app_action_audit.",
+        "operationId": "get_v1_apps_appId_operator_resources_resourceId_records_key_evidence_field",
+        "responses": {
+          "200": {
+            "description": "The document",
+            "content": {
+              "application/pdf": {},
+              "image/png": {},
+              "image/jpeg": {},
+              "image/webp": {},
+              "image/heic": {},
+              "image/heif": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Not the app's owner, not a reviewer, lacks the action's app role, or `step_up_required`"
+          },
+          "404": {
+            "description": "Evidence not declared, record not found, or no document"
+          },
+          "415": {
+            "description": "The stored object is not a viewable document type"
+          },
+          "502": {
+            "description": "The app's data worker failed"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resourceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "field",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
             }
           }
         ]

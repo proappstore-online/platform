@@ -23,7 +23,7 @@ describe('validateOperatorView (#240)', () => {
     const r = validateOperatorView(stashTools, STASH.operator_view);
     if (!('contract' in r) || !r.contract) throw new Error(JSON.stringify(r));
     expect(r.contract.version).toBe(1);
-    expect(r.contract.resources.map((x) => [x.id, x.kind])).toEqual([['members', 'users'], ['open_reports', 'reports'], ['suspension_history', 'suspensions'], ['moderation', 'metrics']]);
+    expect(r.contract.resources.map((x) => [x.id, x.kind])).toEqual([['members', 'users'], ['open_reports', 'reports'], ['suspension_history', 'suspensions'], ['kyc', 'verification'], ['moderation', 'metrics']]);
     expect(r.contract.resources[0]!.columns[0]).toEqual({ key: 'display_name', label: 'Name', format: 'text' });
     expect(r.contract.resources[0]!.description).toBeNull();
     expect(r.contract.actions[1]).toEqual({
@@ -126,7 +126,7 @@ describe('validateOperatorView (#240)', () => {
     expect(members.detail).toMatchObject({ action: 'op_member_detail', param: 'user_id', key: 'user_id', step_up: false });
     expect(members.detail!.fields.map((f) => f.key)).toEqual(['display_name', 'user_id', 'email', 'pocket_count', 'created_at']);
     // Resources without the capability carry explicit nulls.
-    expect(r.contract.resources[3]).toMatchObject({ search: null, page: null, detail: null, status: null, related: null });
+    expect(r.contract.resources[4]).toMatchObject({ search: null, page: null, detail: null, status: null, related: null });
     const parents = validateOperatorView(PARENTS_CLUBS.tools as ToolManifest[], PARENTS_CLUBS.operator_view);
     if (!('contract' in parents) || !parents.contract) throw new Error(JSON.stringify(parents));
     expect(parents.contract.resources[0]!.page).toEqual({ param: 'cursor', column: 'user_id', size: 25 });
@@ -158,10 +158,10 @@ describe('validateOperatorView (#240)', () => {
     }
   });
 
-  it('keeps list capabilities on users, reports and suspensions resources', () => {
+  it('keeps list capabilities off metrics resources', () => {
     const v = clone(STASH.operator_view);
-    (v.resources[3] as Record<string, unknown>).search = { param: 'q' };
-    expect(errorOf(stashTools, v)).toContain('search are only supported on users, reports, suspensions resources');
+    (v.resources[4] as Record<string, unknown>).search = { param: 'q' };
+    expect(errorOf(stashTools, v)).toContain('search are only supported on users, reports, suspensions, verification resources');
   });
 
   it('normalizes the reports & suspensions capabilities for both sample apps', () => {
@@ -224,6 +224,45 @@ describe('validateOperatorView (#240)', () => {
       mutate(byId(v, id));
       expect(errorOf(tools ?? stashTools, v), `${id}: ${error}`).toContain(error);
     }
+  });
+
+  it('normalizes the verification queues of both sample apps', () => {
+    const r = validateOperatorView(stashTools, STASH.operator_view);
+    if (!('contract' in r) || !r.contract) throw new Error(JSON.stringify(r));
+    const kyc = r.contract.resources.find((x) => x.id === 'kyc')!;
+    expect(kyc.detail).toMatchObject({ step_up: true, evidence: [{ field: 'document_path', label: 'ID document' }, { field: 'selfie_path', label: 'Selfie' }] });
+    expect(r.contract.actions.find((a) => a.id === 'approve_kyc')).toMatchObject({ step_up: true, transition: { from: ['pending'], to: 'approved' }, target: 'request_id' });
+    const pc = validateOperatorView(PARENTS_CLUBS.tools as ToolManifest[], PARENTS_CLUBS.operator_view);
+    if (!('contract' in pc) || !pc.contract) throw new Error(JSON.stringify(pc));
+    expect(pc.contract.resources.find((x) => x.id === 'id_checks')!.detail!.evidence).toEqual([{ field: 'licence_path', label: "Driver's licence" }]);
+    expect(pc.contract.actions.filter((a) => a.resource === 'id_checks').map((a) => [a.id, a.step_up, a.transition?.to])).toEqual([['approve', true, 'approved'], ['decline', true, 'declined']]);
+  });
+
+  it('refuses a verification queue without the workflow, the detail page or the recent-sign-in requirement', () => {
+    type Res = Record<string, unknown> & { detail?: Record<string, unknown> & { fields: { key: string }[] } };
+    const kycIndex = STASH.operator_view.resources.findIndex((x) => x.id === 'kyc');
+    const withTool = (name: string, patch: Record<string, unknown>) => stashTools.map((t) => (t.name === name ? { ...t, ...patch } : t)) as ToolManifest[];
+    const cases: Array<[(r: Res, v: typeof STASH.operator_view) => void, string, ToolManifest[]?]> = [
+      [(r, v) => { delete r.status; v.actions = v.actions.filter((a) => a.resource !== 'kyc'); }, 'a verification resource must declare status and detail'],
+      [(r, v) => { delete r.detail; v.actions = v.actions.filter((a) => a.resource !== 'kyc'); }, 'a verification resource must declare status and detail'],
+      [(r) => void r, 'action "op_kyc_detail" must declare step_up (identity data needs a recent sign-in)', withTool('op_kyc_detail', { step_up: undefined })],
+      [(r) => { r.detail!.fields = r.detail!.fields.filter((f) => f.key !== 'status'); }, 'fields must include the status column "status"'],
+      [(r) => void r, 'action "op_approve_kyc" must declare step_up (every verification decision needs a recent sign-in)', withTool('op_approve_kyc', { step_up: undefined })],
+      [(r, v) => { delete (v.actions.find((a) => a.id === 'approve_kyc') as Record<string, unknown>).transition; }, 'decisions on a verification resource must be status transitions'],
+      [(r) => { r.detail!.fields = r.detail!.fields.filter((f) => f.key !== 'request_id'); }, 'column "request_id" must also be a detail field of "kyc"'],
+      [(r) => { r.detail!.evidence = [{ field: 'internal_score', label: 'Score' }]; }, 'field must be a declared detail field'],
+      [(r) => { r.detail!.evidence = [{ field: 'document_path', label: 'A' }, { field: 'document_path', label: 'B' }]; }, 'duplicate field "document_path"'],
+      [(r) => { r.detail!.evidence = [{ field: 'document_path', label: 'ID', url: 'https://x' }]; }, 'evidence[0]: unknown field "url"'],
+      [(r) => { r.detail!.evidence = []; }, 'evidence must be an array of 1-6'],
+    ];
+    for (const [mutate, error, tools] of cases) {
+      const v = clone(STASH.operator_view);
+      mutate(v.resources[kycIndex] as Res, v);
+      expect(errorOf(tools ?? stashTools, v), error).toContain(error);
+    }
+    const members = clone(STASH.operator_view);
+    (members.resources[0]!.detail as Record<string, unknown>).evidence = [{ field: 'email', label: 'Email' }];
+    expect(errorOf(stashTools, members)).toContain('evidence: only verification resources declare evidence');
   });
 });
 

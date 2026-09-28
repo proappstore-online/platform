@@ -17,6 +17,7 @@ import type { Env } from '../types.js';
 import { HttpError, requireAppOwner } from '../lib/auth.js';
 import type { OperatorResource, OperatorViewContract } from '../lib/operator-contract.js';
 import { runOperatorQuery, runOperatorWrite } from './operator-exec.js';
+import { REVIEW_CONTENT_TYPES, holdsReviewRole, recordReviewAccess } from './storage.js';
 
 export const operatorRoutes = new Hono<{ Bindings: Env }>();
 
@@ -160,8 +161,62 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId/records/:key', a
     { operatorAction: `detail:${resource.id}`, target: key },
   );
   if (rows.length === 0) throw new HttpError('record not found', 404);
+  const record = project(rows[0]!, resource.detail.fields);
+  // Evidence fields hold storage paths: the console gets only whether a document is there.
+  for (const { field } of resource.detail.evidence ?? []) record[field] = reviewPath(record[field]) !== null;
   c.header('Cache-Control', 'private, no-store');
-  return c.json({ record: project(rows[0]!, resource.detail.fields) });
+  return c.json({ record });
+});
+
+/** A `_review/u/<uid>/<path>` document path from an app row, or null for anything else. */
+function reviewPath(value: unknown): { ownerId: string; path: string } | null {
+  if (typeof value !== 'string' || value.length > 300) return null;
+  const m = /^_review\/u\/([^/]+)\/(.+)$/.exec(value);
+  const ownerId = m?.[1];
+  const path = m?.[2];
+  if (!ownerId || !path) return null;
+  if ([ownerId, ...path.split('/')].some((seg) => !seg || seg === '.' || seg === '..') || /[\\\u0000]/.test(value)) return null;
+  return { ownerId, path };
+}
+
+// ── One evidence document of a verification record (#240) ─────────
+// The document path is never taken from the client: the record's detail action
+// runs again (its role gate, step_up and audit apply) and the named evidence
+// field of the fresh row must be a `_review/u/<uid>/<path>` path in THIS app's
+// storage. The caller must also hold one of the app's review roles (#208), so
+// the operator view never widens who may open review documents. Only document
+// types are served, never cached, and the read joins the #208 access trail.
+operatorRoutes.get('/apps/:appId/operator/resources/:resourceId/records/:key/evidence/:field', async (c) => {
+  const appId = c.req.param('appId');
+  const owner = await requireAppOwner(c, appId);
+  const resource = await declaredResource(c.env.DB, appId, c.req.param('resourceId'));
+  const field = c.req.param('field');
+  const detail = resource.detail;
+  if (!detail?.evidence?.some((e) => e.field === field)) throw new HttpError('evidence not declared', 404);
+  const key = textParam(c.req.param('key'), MAX_KEY, 'key');
+  if (key === null) throw new HttpError('key is required', 400);
+  if (!(await holdsReviewRole(c.env.DB, appId, owner))) throw new HttpError('not a reviewer for this app', 403);
+
+  const rows = await runOperatorQuery(
+    c.env, appId, detail.action, { [detail.param]: key }, owner, sessionToken(c.req.header('Authorization')),
+    { operatorAction: `evidence:${resource.id}.${field}`, target: key },
+  );
+  const doc = rows.length ? reviewPath(rows[0]![field]) : null;
+  if (!doc) throw new HttpError('no document for this record', 404);
+  const object = await c.env.STORAGE.get(`${appId}/_review/u/${doc.ownerId}/${doc.path}`);
+  if (!object) throw new HttpError('no document for this record', 404);
+  const type = object.httpMetadata?.contentType ?? '';
+  if (!REVIEW_CONTENT_TYPES.has(type)) throw new HttpError('document type is not viewable', 415);
+  await recordReviewAccess(c.env.DB, appId, doc.ownerId, doc.path, owner.id, 'read');
+  return new Response(object.body, {
+    headers: {
+      'content-type': type,
+      'cache-control': 'private, no-store',
+      'x-content-type-options': 'nosniff',
+      'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
+      'content-disposition': 'inline',
+    },
+  });
 });
 
 /** A row value the console may send back as an action param: a bounded scalar. */

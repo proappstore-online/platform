@@ -41,7 +41,7 @@ export const storageRoutes = new Hono<{ Bindings: Env }>();
 // delete it at `_review/u/<uid>/<path>`; nobody else, the app team included.
 
 /** Documents only: a reviewer opens these on the API origin, so no active content. */
-const REVIEW_CONTENT_TYPES = new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif']);
+export const REVIEW_CONTENT_TYPES = new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif']);
 const ROLE_NAME = /^[a-z][a-z0-9_-]{0,49}$/;
 const MAX_REVIEW_ROLES = 10;
 
@@ -54,6 +54,23 @@ async function reviewRoles(db: D1Database, appId: string): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+/** Whether `user` holds one of the app's declared review roles right now. */
+export async function holdsReviewRole(db: D1Database, appId: string, user: { id: string; login: string }): Promise<boolean> {
+  const roles = await reviewRoles(db, appId);
+  if (roles.length === 0) return false;
+  return Boolean(await db.prepare(
+    `SELECT 1 FROM app_roles WHERE app_id = ?1 AND (user_id = ?2 OR user_id = ?3)
+       AND role_name IN (${roles.map((_, i) => `?${i + 4}`).join(', ')}) LIMIT 1`,
+  ).bind(appId, user.id, user.login, ...roles).first());
+}
+
+/** One row of the reviewer access trail (#208): who read or deleted whose review document. */
+export async function recordReviewAccess(db: D1Database, appId: string, ownerId: string, path: string, actorId: string, action: 'read' | 'delete'): Promise<void> {
+  await db.prepare(
+    'INSERT INTO storage_review_access (app_id, owner_id, path, actor_id, action, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)',
+  ).bind(appId, ownerId, path, actorId, action, Date.now()).run();
 }
 
 /**
@@ -83,20 +100,8 @@ async function authorizeReview(
   const key = `${appId}/_review/u/${ownerId}/${path}`;
   if (ownerId === user.id) return { key, audit: async () => {} };
 
-  const roles = await reviewRoles(c.env.DB, appId);
-  const held = roles.length > 0 && await c.env.DB.prepare(
-    `SELECT 1 FROM app_roles WHERE app_id = ?1 AND (user_id = ?2 OR user_id = ?3)
-       AND role_name IN (${roles.map((_, i) => `?${i + 4}`).join(', ')}) LIMIT 1`,
-  ).bind(appId, user.id, user.login, ...roles).first();
-  if (!held) throw new HttpError('not a reviewer for this app', 403);
-  return {
-    key,
-    audit: async (action) => {
-      await c.env.DB.prepare(
-        'INSERT INTO storage_review_access (app_id, owner_id, path, actor_id, action, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)',
-      ).bind(appId, ownerId, path, user.id, action, Date.now()).run();
-    },
-  };
+  if (!(await holdsReviewRole(c.env.DB, appId, user))) throw new HttpError('not a reviewer for this app', 403);
+  return { key, audit: (action) => recordReviewAccess(c.env.DB, appId, ownerId, path, user.id, action) };
 }
 
 /** Upload a file. Auth required. App owner required for _public/ writes. */

@@ -3,7 +3,8 @@
  * a per-record detail read, a status workflow and "related" listing (a
  * resource listed per record of another, e.g. a user's suspension history).
  * Each is optional and backed by the app's own role-gated query actions.
- * Declared on users, reports and suspensions; other kinds keep the plain table.
+ * Declared on users, reports, suspensions and verification (whose detail may
+ * also name `evidence` documents); metrics keep the plain KPI row.
  */
 import { literalLimit, type ToolManifest } from './action-sql.js';
 import {
@@ -11,7 +12,8 @@ import {
   type Obj, type OperatorColumn, type OperatorResource, type OperatorStatus,
 } from './operator-contract-shared.js';
 
-const LIST_KINDS = ['users', 'reports', 'suspensions'];
+const LIST_KINDS = ['users', 'reports', 'suspensions', 'verification'];
+const MAX_EVIDENCE = 6;
 const CAPABILITIES = ['search', 'page', 'detail', 'status', 'related'] as const;
 const MAX_DETAIL_FIELDS = 24;
 const MAX_PAGE_SIZE = 200; // a paged resource's page size is its query's literal LIMIT
@@ -90,9 +92,9 @@ export function validateListCapabilities(
   }
 
   if (raw.detail !== undefined) {
-    const s = shape('detail', ['action', 'param', 'key', 'fields']);
+    const s = shape('detail', ['action', 'param', 'key', 'fields', 'evidence']);
     if (typeof s === 'string') return s;
-    const detail = validateDetail(tools, columns, s.value, s.at);
+    const detail = validateDetail(tools, columns, s.value, s.at, raw.kind === 'verification');
     if (typeof detail === 'string') return detail;
     out.detail = detail;
   }
@@ -130,7 +132,13 @@ function validateStatus(
   return { column: value.column as string, states, param };
 }
 
-function validateDetail(tools: ToolManifest[], columns: OperatorColumn[], value: Obj, at: string): NonNullable<OperatorResource['detail']> | string {
+function validateDetail(
+  tools: ToolManifest[],
+  columns: OperatorColumn[],
+  value: Obj,
+  at: string,
+  verification: boolean,
+): NonNullable<OperatorResource['detail']> | string {
   const read = gatedTool(tools, value.action, at);
   if (typeof read === 'string') return read;
   if (read.operation !== 'query') return `${at}: action "${read.name}" must be a query`;
@@ -142,7 +150,32 @@ function validateDetail(tools: ToolManifest[], columns: OperatorColumn[], value:
   if (!columns.some((c) => c.key === key)) return `${at}: key must be a declared column of the resource`;
   const fields = validateColumns(read, value.fields, at, 'fields', MAX_DETAIL_FIELDS);
   if (typeof fields === 'string') return fields;
-  return { action: read.name, param, key: key as string, fields, step_up: read.step_up === true };
+  let evidence: { field: string; label: string }[] | null = null;
+  if (value.evidence !== undefined) {
+    if (!verification) return `${at}.evidence: only verification resources declare evidence`;
+    const e = validateEvidence(fields, value.evidence, `${at}.evidence`);
+    if (typeof e === 'string') return e;
+    evidence = e;
+  }
+  return { action: read.name, param, key: key as string, fields, step_up: read.step_up === true, evidence };
+}
+
+/** Detail fields that hold a `_review/u/<uid>/<path>` document path, each with the label the console shows. */
+function validateEvidence(fields: OperatorColumn[], value: unknown, at: string): { field: string; label: string }[] | string {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_EVIDENCE) return `${at} must be an array of 1-${MAX_EVIDENCE}`;
+  const out: { field: string; label: string }[] = [];
+  for (const [i, item] of value.entries()) {
+    const e = `${at}[${i}]`;
+    if (!isObj(item)) return `${e} must be an object`;
+    const extra = unknownField(item, ['field', 'label'], e);
+    if (extra) return extra;
+    if (!fields.some((f) => f.key === item.field)) return `${e}: field must be a declared detail field`;
+    if (out.some((x) => x.field === item.field)) return `${e}: duplicate field "${String(item.field)}"`;
+    const label = text(item.label, 40);
+    if (!label) return `${e}: label is required (max 40 chars)`;
+    out.push({ field: item.field as string, label });
+  }
+  return out;
 }
 
 /** Once every resource is known: a `related` resource must name another resource that has a detail page. */
