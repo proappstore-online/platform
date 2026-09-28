@@ -7,8 +7,11 @@
  * (STEP_UP_SESSION_TTL_SECONDS). The host swaps it into the HttpOnly cookie
  * (`/.pas/auth/passkey/*`), so page JS never sees a token.
  *
- * Reachable only through the host's mediation: the relying-party id is the app
- * hostname the host asserts in `X-PAS-Host`, which a direct caller cannot set.
+ * On an app origin, reachable only through the host's mediation: the
+ * relying-party id is the app hostname the host asserts in `X-PAS-Host`, which a
+ * direct caller cannot set. The Creator Console (legacy-bearer, no mediation)
+ * has its own relying party, CONSOLE_RP_ID (#244); its step-up returns the token
+ * to the console page, which holds it in memory for step-up-guarded reads.
  *
  * Registration uses `attestation: 'none'`. The browser sends the SPKI public key
  * (`AuthenticatorAttestationResponse.getPublicKey()`), so there is no CBOR to
@@ -75,11 +78,30 @@ function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-/** The relying party: the app hostname the host mediated this request from. */
+/**
+ * The Creator Console's relying party (#244). The console is a legacy-bearer page
+ * that calls this API directly, so it has no host mediation; its passkeys are
+ * bound to its own hostname instead. verifyClientData requires the ceremony's
+ * origin to be exactly `https://${CONSOLE_RP_ID}` and verifyAuthenticatorData
+ * the matching rpIdHash, so no other page can complete one.
+ */
+export const CONSOLE_RP_ID = 'console.proappstore.online';
+const CONSOLE_ORIGIN = `https://${CONSOLE_RP_ID}`;
+
+/**
+ * The relying party: the app hostname the host mediated this request from, or
+ * — for a direct call from the console page, which carries neither host
+ * header — the console. A mediated request always carries X-PAS-App, so the
+ * cookie data plane (which strips X-PAS-Host so page JS never receives a
+ * step-up token) still gets no relying party. The console path also requires
+ * the browser's Origin to be the console: an app page holding a fresh session
+ * cannot enroll a key of its own for the console.
+ */
 function relyingParty(c: Context<{ Bindings: Env }>): { appId: string; rpId: string } {
   const appId = c.req.header(APP_CONTEXT_HEADER);
   const rpId = c.req.header(APP_HOST_HEADER)?.toLowerCase();
-  if (!appId || !rpId || !HOSTNAME.test(rpId)) throw new HttpError('passkeys are only available on an app origin', 400);
+  if (!appId && !rpId && c.req.header('Origin') === CONSOLE_ORIGIN) return { appId: 'console', rpId: CONSOLE_RP_ID };
+  if (!appId || !rpId || !HOSTNAME.test(rpId)) throw new HttpError('passkeys are only available on an app origin or the console', 400);
   return { appId, rpId };
 }
 

@@ -2,6 +2,7 @@ import { SELF, env, fetchMock } from 'cloudflare:test';
 import { mintSession } from '@proappstore/build-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BASE, json, mockNetwork, seedApp, seedUser, session, resetTables } from './helpers';
+import { Authenticator } from './webauthn';
 import { PARENTS_CLUBS, STASH } from '../../../backend/src/__fixtures__/operator-view';
 
 // #240: the console operator view is owner-only, on real D1 with the root
@@ -321,7 +322,7 @@ describe('operator ID verification (#240)', () => {
   const kyc = { request_id: 'k1', user_id: 'gh:10', full_name: 'Ada', document_type: 'passport', status: 'pending', submitted_at: 1, document_path: '_review/u/gh:10/id.png', selfie_path: null, internal_score: 97 };
 
   beforeEach(async () => {
-    for (const t of ['app_storage_config', 'storage_review_access']) await env.DB.prepare(`DELETE FROM ${t}`).run();
+    for (const t of ['app_storage_config', 'storage_review_access', 'passkey_credentials', 'passkey_challenges']) await env.DB.prepare(`DELETE FROM ${t}`).run();
     await seedApp('parents-clubs', 'gh:1');
     for (const [appId, sample] of [['stash', STASH], ['parents-clubs', PARENTS_CLUBS]] as const) {
       worker(appId).intercept({ path: '/validate', method: 'POST' })
@@ -361,6 +362,47 @@ describe('operator ID verification (#240)', () => {
     const refused = await get('stash/operator/resources/kyc/records/k1/evidence/document_path');
     expect(refused.status).toBe(403);
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM storage_review_access").first<{ n: number }>())!.n).toBe(1);
+  });
+
+  it('a document needs the console passkey step-up (#244): a fresh OAuth sign-in is refused, the step-up token opens it', async () => {
+    const githubFresh = await mintSession({ uid: 'gh:1', login: 'owner', avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 5, auth_method: 'github' } as never, env.SESSION_SIGNING_KEY);
+    const refused = await get('stash/operator/resources/kyc/records/k1/evidence/document_path', githubFresh);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ error: 'step_up_required', method: 'passkey' });
+    expect((await env.DB.prepare('SELECT COUNT(*) AS n FROM storage_review_access').first<{ n: number }>())!.n).toBe(0);
+
+    // The console's own ceremony: register a passkey (fresh sign-in), then step up with it.
+    const passkey = (path: string, token: string, body: unknown = {}) => SELF.fetch(`${BASE}/v1/auth/passkey/${path}`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Origin: 'https://console.proappstore.online' }, body: JSON.stringify(body),
+    });
+    const auth = await Authenticator.create('console.proappstore.online');
+    const reg = (await (await passkey('register/options', githubFresh)).json()) as { challenge: string };
+    expect((await passkey('register', githubFresh, await auth.attest(reg.challenge))).status).toBe(200);
+    const opts = (await (await passkey('step-up/options', githubFresh)).json()) as { challenge: string };
+    const stepped = await passkey('step-up', githubFresh, await auth.assert(opts.challenge));
+    expect(stepped.status, await stepped.clone().text()).toBe(200);
+    const { token } = (await stepped.json()) as { token: string };
+
+    rows('stash', [kyc]);
+    const doc = await get('stash/operator/resources/kyc/records/k1/evidence/document_path', token);
+    expect(doc.status, await doc.clone().text()).toBe(200);
+    expect(await doc.text()).toBe('PNGDATA');
+    // Never cacheable, never sniffed, never scriptable.
+    expect(doc.headers.get('cache-control')).toBe('private, no-store');
+    expect(doc.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(doc.headers.get('content-security-policy')).toBe("default-src 'none'; frame-ancestors 'none'");
+    expect(doc.headers.get('etag')).toBeNull();
+    expect((await env.DB.prepare("SELECT actor_id, action FROM storage_review_access WHERE app_id = 'stash'").all()).results).toEqual([{ actor_id: 'gh:1', action: 'read' }]);
+
+    // A decision with the same step-up is audited with its target.
+    worker('stash').intercept({ path: '/execute', method: 'POST' }).reply(200, { meta: { changes: 1 } });
+    const reject = await SELF.fetch(`${BASE}/v1/apps/stash/operator/actions/reject_kyc`, json('POST', { row: { request_id: 'k1', status: 'pending', full_name: 'Ada' } }, token));
+    expect(reject.status, await reject.clone().text()).toBe(200);
+    expect((await env.DB.prepare("SELECT action_name, status, operator_action, target FROM app_action_audit WHERE app_id = 'stash' ORDER BY id").all()).results).toEqual([
+      { action_name: '', status: 403, operator_action: 'evidence:kyc.document_path', target: 'k1' }, // the refused OAuth attempt
+      { action_name: 'op_kyc_detail', status: 200, operator_action: 'evidence:kyc.document_path', target: 'k1' },
+      { action_name: 'op_reject_kyc', status: 200, operator_action: 'reject_kyc', target: 'k1' },
+    ]);
   });
 
   it('approves with a recent sign-in under the guard, audited; refuses a stale session', async () => {

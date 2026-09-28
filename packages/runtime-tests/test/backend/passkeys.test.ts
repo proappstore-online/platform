@@ -2,43 +2,15 @@ import { SELF, env } from 'cloudflare:test';
 import { mintSession, verifySession } from '@proappstore/build-core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BASE } from './helpers';
+import { Authenticator } from './webauthn';
 
 // #230 (part of #228): passkey registration and step-up on real D1 and real
-// WebCrypto. The "authenticator" is a P-256 key made here, producing the exact
+// WebCrypto. The "authenticator" (./webauthn) is a P-256 key producing the exact
 // bytes a browser would: clientDataJSON, authenticatorData, a DER signature.
 
 const RP = 'demo.proappstore.online';
-const ORIGIN = `https://${RP}`;
 const UID = 'gh:7';
-const enc = new TextEncoder();
 const now = () => Math.floor(Date.now() / 1000);
-
-const b64url = (bytes: Uint8Array) => {
-  let bin = '';
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-};
-const sha256 = async (b: Uint8Array) => new Uint8Array(await crypto.subtle.digest('SHA-256', b));
-const concat = (...parts: Uint8Array[]) => {
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let o = 0;
-  for (const p of parts) { out.set(p, o); o += p.length; }
-  return out;
-};
-const u32 = (n: number) => new Uint8Array([n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]);
-
-/** Raw r||s → DER, as authenticators encode ES256 signatures. */
-function rawToDer(raw: Uint8Array): Uint8Array {
-  const int = (x: Uint8Array) => {
-    let i = 0;
-    while (i < x.length - 1 && x[i] === 0) i++;
-    const v = x.slice(i);
-    return v[0]! & 0x80 ? concat(new Uint8Array([0]), v) : v;
-  };
-  const r = int(raw.slice(0, 32));
-  const s = int(raw.slice(32));
-  return concat(new Uint8Array([0x30, r.length + s.length + 4, 0x02, r.length]), r, new Uint8Array([0x02, s.length]), s);
-}
 
 /** A session like the backend mints at sign-in. */
 function signIn(opts: { authTime?: number; method?: string } = {}): Promise<string> {
@@ -57,37 +29,6 @@ function call(path: string, token: string, body: unknown = {}, host: string | nu
   });
 }
 
-class Authenticator {
-  counter = 0;
-  readonly credId = crypto.getRandomValues(new Uint8Array(16));
-  private constructor(readonly keys: CryptoKeyPair) {}
-  static async create() {
-    return new Authenticator((await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])) as CryptoKeyPair);
-  }
-  async authData(flags: number, withCredential: boolean) {
-    const head = concat(await sha256(enc.encode(RP)), new Uint8Array([flags]), u32(this.counter));
-    if (!withCredential) return head;
-    return concat(head, new Uint8Array(16), new Uint8Array([0, this.credId.length]), this.credId);
-  }
-  async attest(challenge: string, o: { origin?: string } = {}) {
-    const clientData = enc.encode(JSON.stringify({ type: 'webauthn.create', challenge, origin: o.origin ?? ORIGIN }));
-    return {
-      id: b64url(this.credId),
-      clientDataJSON: b64url(clientData),
-      authenticatorData: b64url(await this.authData(0x45, true)),
-      publicKey: b64url(new Uint8Array(await crypto.subtle.exportKey('spki', this.keys.publicKey) as ArrayBuffer)),
-      publicKeyAlgorithm: -7,
-    };
-  }
-  async assert(challenge: string, o: { flags?: number; signer?: CryptoKey; bumpCounter?: boolean } = {}) {
-    if (o.bumpCounter !== false) this.counter++;
-    const clientData = enc.encode(JSON.stringify({ type: 'webauthn.get', challenge, origin: ORIGIN }));
-    const authData = await this.authData(o.flags ?? 0x05, false);
-    const raw = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, o.signer ?? this.keys.privateKey, concat(authData, await sha256(clientData))));
-    return { id: b64url(this.credId), clientDataJSON: b64url(clientData), authenticatorData: b64url(authData), signature: b64url(rawToDer(raw)) };
-  }
-}
-
 async function challengeFor(path: 'register/options' | 'step-up/options', token: string): Promise<string> {
   const res = await call(path, token);
   expect(res.status, await res.clone().text()).toBe(200);
@@ -96,7 +37,7 @@ async function challengeFor(path: 'register/options' | 'step-up/options', token:
 
 async function registered(): Promise<{ auth: Authenticator; token: string }> {
   const token = await signIn({ authTime: now() });
-  const auth = await Authenticator.create();
+  const auth = await Authenticator.create(RP);
   const res = await call('register', token, await auth.attest(await challengeFor('register/options', token)));
   expect(res.status, await res.clone().text()).toBe(200);
   return { auth, token };
@@ -133,7 +74,7 @@ describe('passkey registration (#230)', () => {
 
   it('refuses a ceremony from another origin, and a request the host did not mediate', async () => {
     const token = await signIn({ authTime: now() });
-    const auth = await Authenticator.create();
+    const auth = await Authenticator.create(RP);
     const wrongOrigin = await call('register', token, await auth.attest(await challengeFor('register/options', token), { origin: 'https://evil.example' }));
     expect(wrongOrigin.status).toBe(400);
     expect((await call('register/options', token, {}, null)).status).toBe(400);
@@ -170,7 +111,7 @@ describe('passkey step-up (#230)', () => {
 
   it('refuses a signature from another key, a missing user verification, and a counter that does not advance', async () => {
     const { auth, token } = await registered();
-    const other = await Authenticator.create();
+    const other = await Authenticator.create(RP);
     const forged = await call('step-up', token, await auth.assert(await challengeFor('step-up/options', token), { signer: other.keys.privateKey }));
     expect(forged.status).toBe(403);
 
@@ -188,5 +129,68 @@ describe('passkey step-up (#230)', () => {
     const stranger = await mintSession({ uid: 'gh:8', login: 'x', avatarUrl: null, roles: ['user'] }, env.SESSION_SIGNING_KEY);
     expect((await call('step-up/options', stranger)).status).toBe(404);
     expect((await call('step-up', stranger, await auth.assert(challenge))).status).toBe(400);
+  });
+});
+
+// #244: the Creator Console is a legacy-bearer page on its own origin that calls
+// the API directly — no host mediation — so its passkeys are bound to its own
+// hostname, and only a ceremony from that origin can complete.
+describe('console relying party (#244)', () => {
+  const CONSOLE = 'console.proappstore.online';
+  const direct = (path: string, token: string, body: unknown = {}, headers: Record<string, string> = { Origin: `https://${CONSOLE}` }) =>
+    SELF.fetch(`${BASE}/v1/auth/passkey/${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+  const challenge = async (path: string, token: string) => {
+    const res = await direct(path, token);
+    expect(res.status, await res.clone().text()).toBe(200);
+    return (await res.json()) as { challenge: string; rp?: { id: string }; rpId?: string };
+  };
+
+  it('registers and steps up from the console origin, bound to the console hostname', async () => {
+    const token = await signIn({ authTime: now() });
+    const auth = await Authenticator.create(CONSOLE);
+    const reg = await challenge('register/options', token);
+    expect(reg.rp?.id).toBe(CONSOLE);
+    expect((await direct('register', token, await auth.attest(reg.challenge))).status).toBe(200);
+    expect(await env.DB.prepare('SELECT rp_id FROM passkey_credentials WHERE user_id = ?').bind(UID).first()).toEqual({ rp_id: CONSOLE });
+
+    const stale = await signIn({ authTime: now() - 7200 });
+    const opts = await challenge('step-up/options', stale);
+    expect(opts.rpId).toBe(CONSOLE);
+    const res = await direct('step-up', stale, await auth.assert(opts.challenge));
+    expect(res.status, await res.clone().text()).toBe(200);
+    const claims = await verifySession(((await res.json()) as { token: string }).token, env.SESSION_SIGNING_KEY);
+    expect(claims).toMatchObject({ uid: UID, auth_method: 'passkey' });
+    expect(now() - claims!.auth_time!).toBeLessThanOrEqual(2);
+  });
+
+  it('refuses a direct call without the console Origin, from an app page, or through host mediation', async () => {
+    const token = await signIn({ authTime: now() });
+    expect((await direct('register/options', token, {}, {})).status).toBe(400);
+    expect((await direct('register/options', token, {}, { Origin: 'https://stash.proappstore.online' })).status).toBe(400);
+    expect((await direct('register/options', token, {}, { Origin: 'https://proappstore.online' })).status).toBe(400);
+    // The cookie data plane sets X-PAS-App and strips X-PAS-Host: still no relying party, so page JS never gets a token.
+    expect((await direct('register/options', token, {}, { Origin: `https://${CONSOLE}`, 'X-PAS-App': 'stash' })).status).toBe(400);
+  });
+
+  it("an app page's key or ceremony cannot enroll or step up on the console", async () => {
+    const token = await signIn({ authTime: now() });
+    // A key for an app hostname: wrong rpIdHash.
+    const appKey = await Authenticator.create('stash.proappstore.online');
+    expect((await direct('register', token, await appKey.attest((await challenge('register/options', token)).challenge))).status).toBe(400);
+    // The console's rpId but an app origin in clientDataJSON.
+    const auth = await Authenticator.create(CONSOLE);
+    const wrongOrigin = await direct('register', token, await auth.attest((await challenge('register/options', token)).challenge, { origin: 'https://stash.proappstore.online' }));
+    expect(wrongOrigin.status).toBe(400);
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM passkey_credentials').first()).toEqual({ n: 0 });
+
+    // Registered on the console, a passkey is not accepted for an app's step-up, nor the reverse.
+    expect((await direct('register', token, await auth.attest((await challenge('register/options', token)).challenge))).status).toBe(200);
+    expect((await call('step-up/options', token)).status).toBe(404); // demo app: no passkey there
+    const opts = await challenge('step-up/options', token);
+    expect((await direct('step-up', token, await auth.assert(opts.challenge, { origin: 'https://stash.proappstore.online' }))).status).toBe(400);
   });
 });

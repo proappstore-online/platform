@@ -2630,7 +2630,8 @@ paths:
       tags:
       - Apps
       summary: One evidence document of a verification record
-      description: Owner only (#240). Re-runs the resource's detail action (role gate, step_up, audit) and
+      description: Owner only (#240). Only within a recent passkey step-up (#244); any other session, including a fresh OAuth sign-in, is refused with 403 `step_up_required` (method `passkey`) before anything is read.
+        Re-runs the resource's detail action (role gate, step_up, audit) and
         serves the declared evidence field's `_review/u/<uid>/<path>` document from this app's storage.
         The caller must also hold one of the app's review roles (#208). PDF and image types only; private,
         no-store, nosniff, CSP default-src 'none'. Recorded in storage_review_access and app_action_audit.

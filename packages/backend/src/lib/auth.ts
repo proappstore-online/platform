@@ -21,6 +21,8 @@ export interface FasUser {
   roles: string[];
   /** Session `auth_time` (#230): when the user last actively authenticated, epoch seconds. */
   authTime?: number;
+  /** Session `auth_method` (#230): how they did — 'github', 'google', 'password', 'passkey'. */
+  authMethod?: string;
   /** Per-app roles: { appId: ['moderator', ...] }. */
 }
 
@@ -43,6 +45,7 @@ export async function requireUser(c: Context<{ Bindings: Env }>): Promise<FasUse
     avatarUrl: claims.avatarUrl ?? null,
     roles: claims.roles ?? ['user'],
     ...(typeof claims.auth_time === 'number' ? { authTime: claims.auth_time } : {}),
+    ...(typeof claims.auth_method === 'string' ? { authMethod: claims.auth_method } : {}),
   };
 }
 
@@ -63,11 +66,23 @@ export function stepUpMaxAgeSeconds(env: Pick<Env, 'STEP_UP_MAX_AGE_SECONDS'>): 
  * instead of letting the client run the passkey step-up
  * (`/.pas/auth/passkey/step-up`) and retry.
  */
-export function requireRecentAuth(user: FasUser, env: Pick<Env, 'STEP_UP_MAX_AGE_SECONDS'>): void {
+export function requireRecentAuth(
+  user: FasUser,
+  env: Pick<Env, 'STEP_UP_MAX_AGE_SECONDS'>,
+  opts: { method?: 'passkey' } = {},
+): void {
   const maxAge = stepUpMaxAgeSeconds(env);
   const age = user.authTime === undefined ? Infinity : Math.floor(Date.now() / 1000) - user.authTime;
-  if (!(age <= maxAge)) {
-    throw new HttpError('step_up_required', 403, { message: 'Recent authentication required', max_age: maxAge });
+  // `method: 'passkey'` (#244): only a passkey step-up counts — a fresh OAuth or
+  // password sign-in does not. The body says so, so the client runs the passkey
+  // ceremony rather than a sign-in that would be refused again.
+  const wrongMethod = opts.method !== undefined && user.authMethod !== opts.method;
+  if (!(age <= maxAge) || wrongMethod) {
+    throw new HttpError('step_up_required', 403, {
+      message: opts.method ? 'Recent passkey verification required' : 'Recent authentication required',
+      max_age: maxAge,
+      ...(opts.method ? { method: opts.method } : {}),
+    });
   }
 }
 

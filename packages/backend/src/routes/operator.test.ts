@@ -489,6 +489,23 @@ describe('operator ID verification (#240)', () => {
     expect(bucket.get).not.toHaveBeenCalled();
   });
 
+  it('a document needs a recent PASSKEY step-up (#244): a fresh OAuth sign-in or a stale passkey is refused before any read', async () => {
+    const recentGithub = await mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 10, auth_method: 'github' } as never, TEST_SK);
+    const stalePasskey = await mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 3600, auth_method: 'passkey' } as never, TEST_SK);
+    for (const [name, token] of [['recent github sign-in', recentGithub], ['stale passkey', stalePasskey]] as const) {
+      dataWorker([kycRow]);
+      const bucket = storage();
+      const { d, access } = db(STASH, 'op_kyc_detail', { evidence: true });
+      const res = await get('stash/operator/resources/kyc/records/k1/evidence/document_path', d, token, bucket);
+      expect(res.status, name).toBe(403);
+      expect(await res.json(), name).toMatchObject({ error: 'step_up_required', method: 'passkey' });
+      expect(d.prepare.mock.calls.some(([sql]) => /review_roles|app_roles|app_tools/.test(String(sql))), name).toBe(false);
+      expect(calls, name).toHaveLength(0);
+      expect(bucket.get, name).not.toHaveBeenCalled();
+      expect(access.bind, name).not.toHaveBeenCalled();
+    }
+  });
+
   it('never opens anything outside the app\'s own review namespace, nor undeclared fields', async () => {
     for (const path of ['_review/u/gh:10/../../secrets.png', '_public/logo.png', 'gh:10/private.png', '/_review/u/gh:10/id.png', '_review/u/../id.png', 'otherapp/_review/u/gh:10/id.png']) {
       dataWorker([{ ...kycRow, document_path: path }]);

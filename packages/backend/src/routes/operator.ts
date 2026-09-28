@@ -14,7 +14,7 @@
  */
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
-import { HttpError } from '../lib/auth.js';
+import { HttpError, requireRecentAuth } from '../lib/auth.js';
 import { requireOperatorOwner } from '../lib/operator-audit-marks.js';
 import type { OperatorResource, OperatorViewContract } from '../lib/operator-contract.js';
 import { runOperatorQuery, runOperatorWrite } from './operator-exec.js';
@@ -182,12 +182,13 @@ function reviewPath(value: unknown): { ownerId: string; path: string } | null {
 }
 
 // ── One evidence document of a verification record (#240) ─────────
-// The document path is never taken from the client: the record's detail action
-// runs again (its role gate, step_up and audit apply) and the named evidence
-// field of the fresh row must be a `_review/u/<uid>/<path>` path in THIS app's
-// storage. The caller must also hold one of the app's review roles (#208), so
-// the operator view never widens who may open review documents. Only document
-// types are served, never cached, and the read joins the #208 access trail.
+// Only after a recent passkey step-up (#244). The document path is never taken
+// from the client: the record's detail action runs again (its role gate,
+// step_up and audit apply) and the named evidence field of the fresh row must
+// be a `_review/u/<uid>/<path>` path in THIS app's storage. The caller must
+// also hold one of the app's review roles (#208), so the operator view never
+// widens who may open review documents. Only document types are served, never
+// cached, and the read joins the #208 access trail.
 operatorRoutes.get('/apps/:appId/operator/resources/:resourceId/records/:key/evidence/:field', async (c) => {
   const appId = c.req.param('appId');
   const owner = await requireOperatorOwner(c, appId);
@@ -197,6 +198,9 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId/records/:key/evi
   if (!detail?.evidence?.some((e) => e.field === field)) throw new HttpError('evidence not declared', 404);
   const key = textParam(c.req.param('key'), MAX_KEY, 'key');
   if (key === null) throw new HttpError('key is required', 400);
+  // An identity document needs a recent passkey step-up (#244), not just a recent
+  // sign-in — before the review role is read, the record re-run or R2 touched.
+  requireRecentAuth(owner, c.env, { method: 'passkey' });
   if (!(await holdsReviewRole(c.env.DB, appId, owner))) throw new HttpError('not a reviewer for this app', 403);
 
   const rows = await runOperatorQuery(
