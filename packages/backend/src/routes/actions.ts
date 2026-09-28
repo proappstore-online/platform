@@ -30,56 +30,23 @@ actionRoutes.use('/apps/:appId/actions/:name', async (c, next) => {
   await recordActionSuccess(c.env.DB, c.req.param('appId')!, c.req.param('name')!, grant, c.res.status);
 });
 
-async function recordActionSuccess(db: D1Database, appId: string, action: string, grant: { actorId: string; role: string }, status: number): Promise<void> {
+export async function recordActionSuccess(
+  db: D1Database,
+  appId: string,
+  action: string,
+  grant: { actorId: string; role: string },
+  status: number,
+  operator?: { operatorAction: string; target: string | null },
+): Promise<void> {
   try {
     await db.prepare(
-      'INSERT INTO app_action_audit (app_id, action_name, actor_id, role_name, status, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).bind(appId, action, grant.actorId, grant.role, status, Date.now()).run();
+      'INSERT INTO app_action_audit (app_id, action_name, actor_id, role_name, status, created_at, operator_action, target) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).bind(appId, action, grant.actorId, grant.role, status, Date.now(), operator?.operatorAction ?? null, operator?.target ?? null).run();
   } catch (e) {
     // The action has already run; an audit write failing must not turn its
     // success into an error. Logged so a gap in the trail is visible.
     console.error('[action-audit] write failed', { appId, action, err: String(e) });
   }
-}
-
-/**
- * Run one of an app's registered query actions for the console operator view
- * (#240) and return its rows. The same gates as POST /apps/:appId/actions/:name
- * for a session caller — platform/app role check from D1, then step_up — and a
- * role-granted success is audited the same way. The caller's app ownership is
- * checked by the operator route before this runs; ownership grants nothing here.
- */
-export async function runOperatorQuery(
-  env: Env,
-  appId: string,
-  name: string,
-  input: Record<string, unknown>,
-  user: FasUser,
-  token: string,
-): Promise<Record<string, unknown>[]> {
-  const manifest = await loadManifest(env.DB, appId, name);
-  if (manifest.operation !== 'query' || manifest.requires_auth === false || manifest.schedule !== undefined) {
-    throw new HttpError(`action ${name} is not an operator query`, 409);
-  }
-  const role = await enforceActionAuth(env.DB, appId, manifest, user);
-  if (manifest.step_up) requireRecentAuth(user, env);
-  let payload;
-  try {
-    payload = prepareActionQuery(manifest, input, user.id);
-  } catch (e) {
-    throw new HttpError(e instanceof Error ? e.message : String(e), 400);
-  }
-  const upstream = await forwardToDataWorker(env, appId, 'query', payload, token);
-  const text = await upstream.text();
-  if (!upstream.ok) throw new HttpError(`action ${name} failed (${upstream.status})`, upstream.status >= 500 ? 502 : upstream.status);
-  let rows: unknown;
-  try {
-    rows = (JSON.parse(text) as { rows?: unknown }).rows;
-  } catch {
-    throw new HttpError('data worker returned an invalid query response', 502);
-  }
-  if (role) await recordActionSuccess(env.DB, appId, name, { actorId: user.id, role }, 200);
-  return Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
 }
 
 interface ActionBody {
@@ -366,7 +333,7 @@ function validatePublicManifestForExecution(manifest: ToolManifest): string | nu
   return null;
 }
 
-async function loadManifest(db: D1Database, appId: string, name: string): Promise<ToolManifest> {
+export async function loadManifest(db: D1Database, appId: string, name: string): Promise<ToolManifest> {
   const row = await db.prepare('SELECT manifest FROM app_tools WHERE app_id = ? AND name = ?')
     .bind(appId, name)
     .first<{ manifest: string }>();
@@ -385,7 +352,7 @@ function grantRole(req: Request, user: FasUser, role: string | null): void {
 }
 
 /** Throws unless `user` passes the action's role gates; returns the app role that granted it, if one did. */
-async function enforceActionAuth(
+export async function enforceActionAuth(
   db: D1Database,
   appId: string,
   manifest: ToolManifest,

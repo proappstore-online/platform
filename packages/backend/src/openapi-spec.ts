@@ -3302,7 +3302,7 @@ export const openapiSpec: Record<string, unknown> = {
                                     }
                                   },
                                   "search": {
-                                    "description": "Users only (#240 slice 3): the list action param that receives ?q=.",
+                                    "description": "Users, reports and suspensions only: the list action param that receives ?q=.",
                                     "oneOf": [
                                       {
                                         "type": "null"
@@ -3321,7 +3321,7 @@ export const openapiSpec: Record<string, unknown> = {
                                     ]
                                   },
                                   "page": {
-                                    "description": "Users only: keyset paging; `param` receives the last row's `column`; `size` is the query's literal LIMIT (max 200).",
+                                    "description": "Users, reports and suspensions only: keyset paging; `param` receives the last row's `column`; `size` is the query's literal LIMIT (max 200).",
                                     "oneOf": [
                                       {
                                         "type": "null"
@@ -3349,7 +3349,7 @@ export const openapiSpec: Record<string, unknown> = {
                                     ]
                                   },
                                   "detail": {
-                                    "description": "Users only: per-record read; `action` runs with `param` = the row's `key` column.",
+                                    "description": "Users, reports and suspensions only: per-record read; `action` runs with `param` = the row's `key` column.",
                                     "oneOf": [
                                       {
                                         "type": "null"
@@ -3408,6 +3408,74 @@ export const openapiSpec: Record<string, unknown> = {
                                         }
                                       }
                                     ]
+                                  },
+                                  "status": {
+                                    "description": "Users, reports and suspensions only: a status workflow. `param` filters by state (?status=).",
+                                    "oneOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "object",
+                                        "required": [
+                                          "column",
+                                          "states",
+                                          "param"
+                                        ],
+                                        "properties": {
+                                          "column": {
+                                            "type": "string"
+                                          },
+                                          "states": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "required": [
+                                                "value",
+                                                "label"
+                                              ],
+                                              "properties": {
+                                                "value": {
+                                                  "type": "string"
+                                                },
+                                                "label": {
+                                                  "type": "string"
+                                                }
+                                              }
+                                            }
+                                          },
+                                          "param": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "related": {
+                                    "description": "Listed per record of another resource (?related=<key>), e.g. a user's suspension history.",
+                                    "oneOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "object",
+                                        "required": [
+                                          "resource",
+                                          "param"
+                                        ],
+                                        "properties": {
+                                          "resource": {
+                                            "type": "string"
+                                          },
+                                          "param": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      }
+                                    ]
                                   }
                                 }
                               }
@@ -3417,13 +3485,16 @@ export const openapiSpec: Record<string, unknown> = {
                               "items": {
                                 "type": "object",
                                 "required": [
-                                  "id",
-                                  "title",
-                                  "resource",
                                   "action",
-                                  "params",
                                   "confirm",
-                                  "step_up"
+                                  "destructive",
+                                  "id",
+                                  "params",
+                                  "resource",
+                                  "step_up",
+                                  "target",
+                                  "title",
+                                  "transition"
                                 ],
                                 "properties": {
                                   "id": {
@@ -3452,6 +3523,43 @@ export const openapiSpec: Record<string, unknown> = {
                                   },
                                   "step_up": {
                                     "type": "boolean"
+                                  },
+                                  "transition": {
+                                    "description": "Offered only on rows whose status is in `from`; the app's SQL guards it with the mapped status param.",
+                                    "oneOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "object",
+                                        "required": [
+                                          "from",
+                                          "to"
+                                        ],
+                                        "properties": {
+                                          "from": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "to": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "destructive": {
+                                    "type": "boolean",
+                                    "description": "Irreversible or account-affecting; its action declares step_up."
+                                  },
+                                  "target": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "description": "The resource column the audit records as the target."
                                   }
                                 }
                               }
@@ -3498,7 +3606,7 @@ export const openapiSpec: Record<string, unknown> = {
           "Apps"
         ],
         "summary": "Rows of a declared operator resource",
-        "description": "Owner only (#240). Runs the resource's query action with the caller's session through the same role gate, step_up and success audit as the actions route, and returns only the declared columns. `q` requires the resource to declare `search`; `cursor` requires `page`.",
+        "description": "Owner only (#240). Runs the resource's query action with the caller's session through the same role gate, step_up and success audit as the actions route, and returns only the declared columns. `q` requires `search`, `cursor` requires `page`, `status` requires `status.param` (and a declared state), `related` requires `related`.",
         "operationId": "get_v1_apps_appId_operator_resources_resourceId",
         "responses": {
           "200": {
@@ -3582,6 +3690,22 @@ export const openapiSpec: Record<string, unknown> = {
               "type": "string",
               "maxLength": 200
             }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "related",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
           }
         ]
       }
@@ -3658,6 +3782,99 @@ export const openapiSpec: Record<string, unknown> = {
             "schema": {
               "type": "string",
               "maxLength": 200
+            }
+          }
+        ]
+      }
+    },
+    "/v1/apps/{appId}/operator/actions/{actionId}": {
+      "post": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "Run a declared operator row action",
+        "description": "Owner only (#240). Body `{ row }`: only the declared columns the action maps are read, each a bounded scalar. A transition is refused (409) unless the row's status is in its `from`; the write runs under the action's own role gate and step_up (destructive actions require a recent sign-in), and a guarded transition that changes nothing is a 409. Audited with the contract action id and target.",
+        "operationId": "post_v1_apps_appId_operator_actions_actionId",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "row"
+                ],
+                "properties": {
+                  "row": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "changes"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "changes": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Not the app's owner, the owner lacks the action's app role, or `step_up_required`"
+          },
+          "404": {
+            "description": "App not found or action not declared"
+          },
+          "409": {
+            "description": "Transition not available from the row's status, or the record changed since it was loaded"
+          },
+          "502": {
+            "description": "The app's data worker failed"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "actionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
             }
           }
         ]

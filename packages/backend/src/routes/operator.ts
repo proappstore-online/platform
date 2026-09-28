@@ -16,7 +16,7 @@ import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireAppOwner } from '../lib/auth.js';
 import type { OperatorResource, OperatorViewContract } from '../lib/operator-contract.js';
-import { runOperatorQuery } from './actions.js';
+import { runOperatorQuery, runOperatorWrite } from './operator-exec.js';
 
 export const operatorRoutes = new Hono<{ Bindings: Env }>();
 
@@ -94,10 +94,12 @@ function textParam(value: string | undefined, max: number, name: string): string
 /** requireAppOwner has already verified the `Bearer` session; the data worker gets the same token the actions route forwards. */
 const sessionToken = (header: string | undefined) => (header ?? '').slice(7).trim();
 
-// ── Rows of one declared resource (#240 slice 3) ─────────────────
-// ?q= searches (resource.search) and ?cursor= continues (resource.page); both
-// are refused on a resource that does not declare them. `next_cursor` is the
-// last row's cursor column when the page came back full, else null.
+// ── Rows of one declared resource (#240) ─────────────────────────
+// ?q= searches (resource.search), ?cursor= continues (resource.page), ?status=
+// filters by a declared state (resource.status.param) and ?related= lists the
+// rows for one record of another resource (resource.related, e.g. a user's
+// suspension history). Each is refused on a resource that does not declare it.
+// `next_cursor` is the last row's cursor column when the page came back full.
 operatorRoutes.get('/apps/:appId/operator/resources/:resourceId', async (c) => {
   const appId = c.req.param('appId');
   const owner = await requireAppOwner(c, appId);
@@ -114,8 +116,22 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId', async (c) => {
     if (!resource.page) throw new HttpError('resource is not paged', 400);
     input[resource.page.param] = cursor;
   }
+  const status = textParam(c.req.query('status'), MAX_KEY, 'status');
+  if (status !== null) {
+    if (!resource.status?.param) throw new HttpError('resource has no status filter', 400);
+    if (!resource.status.states.some((s) => s.value === status)) throw new HttpError('unknown status', 400);
+    input[resource.status.param] = status;
+  }
+  const related = textParam(c.req.query('related'), MAX_KEY, 'related');
+  if (related !== null) {
+    if (!resource.related) throw new HttpError('resource is not listed per record', 400);
+    input[resource.related.param] = related;
+  }
 
-  const rows = await runOperatorQuery(c.env, appId, resource.action, input, owner, sessionToken(c.req.header('Authorization')));
+  const rows = await runOperatorQuery(
+    c.env, appId, resource.action, input, owner, sessionToken(c.req.header('Authorization')),
+    { operatorAction: `read:${resource.id}`, target: related },
+  );
   const page = resource.page;
   const bounded = rows.slice(0, page?.size ?? rows.length);
   const last = bounded[bounded.length - 1];
@@ -141,8 +157,57 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId/records/:key', a
 
   const rows = await runOperatorQuery(
     c.env, appId, resource.detail.action, { [resource.detail.param]: key }, owner, sessionToken(c.req.header('Authorization')),
+    { operatorAction: `detail:${resource.id}`, target: key },
   );
   if (rows.length === 0) throw new HttpError('record not found', 404);
   c.header('Cache-Control', 'private, no-store');
   return c.json({ record: project(rows[0]!, resource.detail.fields) });
+});
+
+/** A row value the console may send back as an action param: a bounded scalar. */
+function scalar(value: unknown, column: string): string | number | boolean | null {
+  if (value === null || typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.length <= MAX_KEY) return value;
+  throw new HttpError(`row.${column} must be a string (max ${MAX_KEY} chars), number, boolean or null`, 400);
+}
+
+// ── Run one declared row action (#240 reports & suspensions) ────────
+// Body: { row } — the row as the console displayed it. Only the declared
+// columns the action maps are read from it; everything else is ignored. A
+// transition is refused unless the row's status is one it leaves from, and the
+// app's SQL re-checks that status (a guard that matches nothing is a 409). The
+// write runs under the action's own role gate, step_up and audit, and the audit
+// row names the contract action and its target.
+operatorRoutes.post('/apps/:appId/operator/actions/:actionId', async (c) => {
+  const appId = c.req.param('appId');
+  const owner = await requireAppOwner(c, appId);
+  const contract = await loadContract(c.env.DB, appId);
+  const action = contract?.actions.find((a) => a.id === c.req.param('actionId'));
+  const resource = contract?.resources.find((r) => r.id === action?.resource);
+  if (!action || !resource) throw new HttpError('action not declared', 404);
+
+  const body = await c.req.json<{ row?: unknown }>().catch(() => null);
+  const row = body?.row;
+  if (!row || typeof row !== 'object' || Array.isArray(row)) throw new HttpError('row must be an object', 400);
+  const cells = row as Record<string, unknown>;
+  const input: Record<string, unknown> = {};
+  for (const [param, column] of Object.entries(action.params)) {
+    if (!(column in cells)) throw new HttpError(`row.${column} is required`, 400);
+    input[param] = scalar(cells[column], column);
+  }
+  if (action.transition) {
+    const current = resource.status ? cells[resource.status.column] : undefined;
+    if (typeof current !== 'string' || !action.transition.from.includes(current)) {
+      throw new HttpError(`"${action.title}" is not available from status ${JSON.stringify(current ?? null)}`, 409);
+    }
+  }
+  const target = action.target ? scalar(cells[action.target] ?? null, action.target) : null;
+
+  const changes = await runOperatorWrite(
+    c.env, appId, action.action, input, owner, sessionToken(c.req.header('Authorization')),
+    { operatorAction: action.id, target: target === null ? null : String(target) }, Boolean(action.transition),
+  );
+  c.header('Cache-Control', 'no-store');
+  return c.json({ ok: true, changes });
 });

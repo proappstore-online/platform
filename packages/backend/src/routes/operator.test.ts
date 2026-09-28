@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
-import { makeEnv, mockD1, mockStmt, testToken } from '../test-helpers.js';
+import { mintSession } from '@proappstore/build-core';
+import { TEST_SK, makeEnv, mockD1, mockStmt, testToken } from '../test-helpers.js';
 import { validateOperatorView } from '../lib/operator-contract.js';
 import type { ToolManifest } from '../lib/action-sql.js';
 import { PARENTS_CLUBS, STASH } from '../__fixtures__/operator-view.js';
@@ -149,7 +150,7 @@ describe('GET /v1/apps/:appId/operator/resources/* (#240 slice 3)', () => {
     expect(body.next_cursor).toBe('u050');
     expect(dataCalls[0]!.url).toContain('pas-data-stash.');
     // Role-granted success is audited like the actions route.
-    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_list_users', 'gh:1', 'operator', 200, expect.any(Number));
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_list_users', 'gh:1', 'operator', 200, expect.any(Number), 'read:members', null);
   });
 
   it('passes search text and cursor to the declared params; a short page ends paging', async () => {
@@ -251,3 +252,147 @@ describe('GET /v1/apps/:appId/operator/resources/* (#240 slice 3)', () => {
     expect(await detail.json()).toEqual({ record: { full_name: 'Grace', club_name: 'Chess', joined_at: 5 } });
   });
 });
+
+// #240 reports & suspensions: status filters, related history, and declared row
+// actions through POST /operator/actions/:id — owner-only, params from declared
+// columns only, transitions checked here and guarded in the app's SQL, the
+// action's own roles and step_up, and an audit row naming action and target.
+describe('operator reports & suspensions (#240)', () => {
+  const stored = (sample: typeof STASH | typeof PARENTS_CLUBS) => {
+    const r = validateOperatorView(sample.tools as ToolManifest[], sample.operator_view);
+    if (!('contract' in r)) throw new Error(r.error);
+    return JSON.stringify(r.contract);
+  };
+  /** owner check → contract → action manifest → app-role lookup → audit insert. */
+  function db(sample: typeof STASH | typeof PARENTS_CLUBS, action: string, opts: { creator?: string; roles?: string[] } = {}) {
+    const audit = mockStmt();
+    const tool = sample.tools.find((t) => t.name === action)!;
+    const d = mockD1(
+      mockStmt({ first: { creator_id: opts.creator ?? 'gh:1' } }),
+      mockStmt({ first: { contract: stored(sample) } }),
+      mockStmt({ first: { manifest: JSON.stringify(tool) } }),
+      mockStmt({ all: { results: (opts.roles ?? ['operator']).map((role_name) => ({ role_name })) } }),
+      audit,
+    );
+    return { d, audit };
+  }
+  let calls: { url: string; body: Record<string, unknown> }[] = [];
+  function dataWorker(reply: unknown) {
+    calls = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), body: JSON.parse(String(init.body)) });
+      return Response.json(reply);
+    }));
+  }
+  afterEach(() => vi.unstubAllGlobals());
+  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 10, auth_method: 'passkey' } as never, TEST_SK);
+  const act = (appId: string, id: string, row: unknown, d: ReturnType<typeof mockD1>, token: string = OWNER) =>
+    app.request(`/v1/apps/${appId}/operator/actions/${id}`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ row }),
+    }, makeEnv({}, d));
+  const report = { report_id: 'r1', reported_user_id: 'u9', reason: 'spam', status: 'open', created_at: 1, secret: 'never sent' };
+
+  it('runs a transition with params from declared columns only, audited with action and target', async () => {
+    dataWorker({ meta: { changes: 1 } });
+    const { d, audit } = db(STASH, 'op_resolve_report');
+    const res = await act('stash', 'resolve', report, d);
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, changes: 1 });
+    expect(calls[0]!.url).toContain('pas-data-stash.');
+    expect(calls[0]!.url).toContain('/execute');
+    expect(JSON.stringify(calls[0]!.body.params)).not.toContain('never sent');
+    expect(calls[0]!.body.params).toEqual(expect.arrayContaining(['r1', 'open']));
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_resolve_report', 'gh:1', 'operator', 200, expect.any(Number), 'resolve', 'r1');
+  });
+
+  it('refuses a transition the row status does not allow, before the data worker', async () => {
+    dataWorker({ meta: { changes: 1 } });
+    const res = await act('stash', 'review', { ...report, status: 'resolved' }, db(STASH, 'op_review_report').d);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe('"Start review" is not available from status "resolved"');
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a transition the app's SQL guard matched to nothing is a 409, audited as such", async () => {
+    dataWorker({ meta: { changes: 0 } });
+    const { d, audit } = db(STASH, 'op_resolve_report');
+    const res = await act('stash', 'resolve', report, d);
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain('the record changed since it was loaded');
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_resolve_report', 'gh:1', 'operator', 409, expect.any(Number), 'resolve', 'r1');
+  });
+
+  it('a destructive action needs a recent sign-in: a stale session is refused before the data worker', async () => {
+    dataWorker({ results: [{ meta: { changes: 1 } }, { meta: { changes: 1 } }] });
+    const stale = await act('stash', 'suspend_member', { user_id: 'u9', display_name: 'X' }, db(STASH, 'op_suspend_user').d);
+    expect(stale.status).toBe(403);
+    expect(await stale.text()).toContain('step_up_required');
+    expect(calls).toHaveLength(0);
+    const { d, audit } = db(STASH, 'op_suspend_user');
+    const ok = await act('stash', 'suspend_member', { user_id: 'u9', display_name: 'X' }, d, await fresh());
+    expect(ok.status, await ok.clone().text()).toBe(200);
+    expect(await ok.json()).toEqual({ ok: true, changes: 2 });
+    expect(calls[0]!.url).toContain('/batch');
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_suspend_user', 'gh:1', 'operator', 200, expect.any(Number), 'suspend_member', 'u9');
+  });
+
+  it('refuses callers and inputs that are not allowed', async () => {
+    dataWorker({ meta: { changes: 1 } });
+    const anon = mockD1();
+    expect((await app.request('/v1/apps/stash/operator/actions/resolve', { method: 'POST', body: '{}' }, makeEnv({}, anon))).status).toBe(401);
+    expect(anon.prepare).not.toHaveBeenCalled();
+    const other = mockD1(mockStmt({ first: { creator_id: 'gh:9' } }), mockStmt({ first: null }));
+    expect((await act('stash', 'resolve', report, other)).status).toBe(403);
+    expect(readsAppData(other)).toBe(false);
+    const noRole = db(STASH, 'op_resolve_report', { roles: [] });
+    const refused = await act('stash', 'resolve', report, noRole.d);
+    expect(refused.status).toBe(403);
+    expect(await refused.text()).toContain('requires app role');
+    expect(noRole.audit.bind).not.toHaveBeenCalled();
+    expect((await act('stash', 'drop_tables', report, db(STASH, 'op_resolve_report').d)).status).toBe(404);
+    const baseline = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ first: null }));
+    expect((await act('stash', 'resolve', report, baseline)).status).toBe(404);
+    const missing = await act('stash', 'resolve', { status: 'open' }, db(STASH, 'op_resolve_report').d);
+    expect(missing.status).toBe(400);
+    expect(await missing.text()).toContain('row.report_id is required');
+    const object = await act('stash', 'resolve', { ...report, report_id: { $ne: 1 } }, db(STASH, 'op_resolve_report').d);
+    expect(object.status).toBe(400);
+    expect((await act('stash', 'resolve', 'r1', db(STASH, 'op_resolve_report').d)).status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('filters by a declared status and lists history per record, refusing undeclared filters', async () => {
+    const list = (qs: string, d: ReturnType<typeof mockD1>) => app.request(`/v1/apps/stash/operator/resources/${qs}`, auth(OWNER), makeEnv({}, d));
+    dataWorker({ rows: [report] });
+    const byStatus = await list('open_reports?status=reviewing', db(STASH, 'op_list_reports').d);
+    expect(byStatus.status).toBe(200);
+    expect(calls[0]!.body.params).toEqual(expect.arrayContaining(['reviewing']));
+    expect(JSON.stringify(await byStatus.json())).not.toContain('never sent');
+    dataWorker({ rows: [] });
+    expect((await list('open_reports?status=archived', db(STASH, 'op_list_reports').d)).status).toBe(400);
+    expect((await list('members?status=open', db(STASH, 'op_list_users').d)).status).toBe(400);
+    expect((await list('open_reports?related=u9', db(STASH, 'op_list_reports').d)).status).toBe(400);
+    expect(calls).toHaveLength(0);
+
+    dataWorker({ rows: [{ suspension_id: 's1', user_id: 'u9', reason: 'spam', status: 'active', created_at: 1, lifted_at: null }] });
+    const { d, audit } = db(STASH, 'op_list_suspensions');
+    const history = await list('suspension_history?related=u9', d);
+    expect(history.status).toBe(200);
+    expect(calls[0]!.body.params).toEqual(expect.arrayContaining(['u9']));
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_list_suspensions', 'gh:1', 'operator', 200, expect.any(Number), 'read:suspension_history', 'u9');
+  });
+
+  it('a second app (Parents Clubs) runs its own workflow through the same route and roles', async () => {
+    dataWorker({ meta: { changes: 1 } });
+    const flag = { flag_id: 'f1', post_title: 'Hi', flagged_by: 'p2', state: 'new', flagged_at: 1 };
+    const { d, audit } = db(PARENTS_CLUBS, 'op_uphold_flag', { roles: ['moderator'] });
+    const res = await act('parents-clubs', 'uphold', flag, d);
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(calls[0]!.url).toContain('pas-data-parents-clubs.');
+    expect(calls[0]!.body.params).toEqual(expect.arrayContaining(['f1', 'new']));
+    expect(audit.bind).toHaveBeenCalledWith('parents-clubs', 'op_uphold_flag', 'gh:1', 'moderator', 200, expect.any(Number), 'uphold', 'f1');
+    // Stash's action ids mean nothing on Parents Clubs.
+    expect((await act('parents-clubs', 'resolve', report, db(PARENTS_CLUBS, 'op_uphold_flag').d)).status).toBe(404);
+  });
+});
+

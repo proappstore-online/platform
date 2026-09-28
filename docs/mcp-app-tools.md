@@ -567,10 +567,10 @@ per-app console code.
   `page_meta`, the contract is replaced with the manifest, and removing it
   returns the app to the baseline.
 
-### Users: search, paging and a detail page
+### Lists: search, paging, detail, status and related
 
-A `users` resource may also declare search, keyset paging and a per-user detail
-page. Each is optional, and each is backed by the app's own role-gated query
+A `users`, `reports` or `suspensions` resource may also declare search, keyset
+paging, a per-record detail page, a status workflow and a related list. Each is optional, and each is backed by the app's own role-gated query
 actions:
 
 ```json
@@ -599,20 +599,61 @@ actions:
   each one selected by that query. The detail action may take no other required
   params. Declare `step_up` on it when opening a record should need a recent
   sign-in.
-- Search, paging and detail are refused on other kinds for now.
+- **`status`** declares a workflow: `column` (a declared column holding the
+  row's state), `states` (1 to 12 `{ value, label }`), and optionally `param`,
+  a string param of the list action that filters by state (`?status=`, which
+  must be a declared state).
+- **`related: { resource, param }`** lists this resource per record of another
+  resource that has a detail page. The console shows it on that record's page,
+  passing the record's key to `param`. For example, a `suspensions` resource
+  related to `members` is each member's suspension history.
+- These are refused on `verification` and `metrics` resources for now.
+
+**Row actions** (`actions[]`) may also declare:
+
+```json
+{
+  "id": "resolve", "title": "Resolve", "resource": "open_reports", "action": "op_resolve_report",
+  "params": { "report_id": "report_id", "from_status": "status" }, "confirm": "Mark this report resolved?",
+  "transition": { "from": ["open", "reviewing"], "to": "resolved" }, "target": "report_id"
+}
+```
+
+- **`transition`** makes the action a status change. It is offered only on rows
+  whose status is in `from`, and `to` must be a declared state. The app's SQL
+  must enforce it: one param must be mapped to the status column and used by
+  the write, for example `UPDATE reports SET status = 'resolved' WHERE id =
+  :report_id AND status = :from_status`. The platform refuses a row whose status
+  is not in `from` with a 409. A write that changes nothing (someone else moved
+  the record first) is also a 409, and is audited with status 409.
+- **`destructive: true`** marks an irreversible or account-affecting action,
+  such as a suspension. Its registered action must declare `step_up`, so it
+  needs a recent sign-in. The console styles it as dangerous and offers a
+  re-sign-in when it is refused.
+- **`target`** is the resource column whose value the audit records as the
+  record acted on. It defaults to the first mapped column.
+- An action's registered action must be an `execute` or `batch` write.
 
 **Only declared columns and fields leave the platform.** A query may select
 more (an internal id, a hash): the operator read routes return only the
 declared keys, in declared order, and a declared key the row lacks comes back
 as `null`.
 
-**The contract grants nothing.** The console reads through
-`GET /v1/apps/:appId/operator/resources/:id` (with `?q=` and `?cursor=`) and
-`GET /v1/apps/:appId/operator/resources/:id/records/:key`. Both are owner-only
-and run the app's query action with the same checks as
+**The contract grants nothing.** The console uses three owner-only routes:
+
+- `GET /v1/apps/:appId/operator/resources/:id` reads rows, with `?q=`,
+  `?cursor=`, `?status=` and `?related=`.
+- `GET /v1/apps/:appId/operator/resources/:id/records/:key` reads one record.
+- `POST /v1/apps/:appId/operator/actions/:id` with `{ row }` runs a row action.
+  Only the declared columns its params map are read from the row, and each must
+  be a scalar.
+
+Each runs the app's registered action with the same checks as
 `POST /v1/apps/:appId/actions/:name`: the owner's own session, the action's
-`auth.app_roles`, `step_up` and the success audit of role-gated actions (#232).
-The console's row actions run through that actions route directly. The owner
+`auth.app_roles`, `step_up`, and the success audit of role-gated actions (#232).
+For these calls the audit row also records `operator_action` (the contract
+action id, or `read:<resource>` / `detail:<resource>`) and `target` (the
+record's key). It still records no other params and no results. The owner
 must hold the role themselves (grant it in the console under **Settings →
 Access**). Only the app's owner can read the contract, through
 `GET /v1/apps/:appId/operator`. It is not part of the public tool listing or MCP

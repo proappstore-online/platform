@@ -74,8 +74,10 @@ describe('success audit of role-gated actions (#232)', () => {
     const row = rows[0]!;
     expect(row).toMatchObject({ app_id: 'ops', action_name: 'lookup_case', actor_id: 'gh:2', role_name: 'operator', status: 200 });
     expect(row.created_at as number).toBeGreaterThanOrEqual(before);
-    // Least privilege: nothing from the request or the result is kept.
-    expect(Object.keys(row).sort()).toEqual(['action_name', 'actor_id', 'app_id', 'created_at', 'id', 'role_name', 'status']);
+    // Least privilege: nothing from the request or the result is kept. The operator
+    // columns (#240, migration 0064) are only filled for console operator calls.
+    expect(Object.keys(row).sort()).toEqual(['action_name', 'actor_id', 'app_id', 'created_at', 'id', 'operator_action', 'role_name', 'status', 'target']);
+    expect(row).toMatchObject({ operator_action: null, target: null });
     expect(JSON.stringify(row)).not.toContain('c-secret-42');
     expect(JSON.stringify(row)).not.toContain('id document');
   });

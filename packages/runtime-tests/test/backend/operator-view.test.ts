@@ -1,4 +1,5 @@
 import { SELF, env, fetchMock } from 'cloudflare:test';
+import { mintSession } from '@proappstore/build-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BASE, json, mockNetwork, seedApp, seedUser, session, resetTables } from './helpers';
 import { PARENTS_CLUBS, STASH } from '../../../backend/src/__fixtures__/operator-view';
@@ -119,7 +120,7 @@ describe('operator-view contract (#240)', () => {
 
   it('grants nothing: the owner runs its actions under the ordinary role check, audited once granted', async () => {
     expect((await register('stash', STASH)).status).toBe(200);
-    const run = async () => SELF.fetch(`${BASE}/v1/apps/stash/actions/op_suspend_user`, json('POST', { params: { user_id: 'gh:10' } }, await session('gh:1')));
+    const run = async () => SELF.fetch(`${BASE}/v1/apps/stash/actions/op_resolve_report`, json('POST', { params: { report_id: 'r1', from_status: 'open' } }, await session('gh:1')));
     const denied = await run();
     expect(denied.status).toBe(403);
     expect(await denied.text()).toContain('requires app role');
@@ -128,7 +129,7 @@ describe('operator-view contract (#240)', () => {
     fetchMock.get(`https://pas-data-stash.${env.DATA_WORKER_HOST}`).intercept({ path: '/execute', method: 'POST' }).reply(200, { meta: { changes: 1 } });
     const granted = await run();
     expect(granted.status, await granted.clone().text()).toBe(200);
-    const audit = await env.DB.prepare("SELECT actor_id, role_name FROM app_action_audit WHERE app_id = 'stash' AND action_name = 'op_suspend_user'").all();
+    const audit = await env.DB.prepare("SELECT actor_id, role_name FROM app_action_audit WHERE app_id = 'stash' AND action_name = 'op_resolve_report'").all();
     expect(audit.results).toEqual([{ actor_id: 'gh:1', role_name: 'operator' }]);
   });
 });
@@ -205,6 +206,102 @@ describe('operator users view (#240 slice 3)', () => {
     const parents = await get('parents-clubs/operator/resources/parents?q=gra');
     expect(await parents.json()).toEqual({ rows: [{ full_name: 'Grace', club_name: 'Chess', verified: 1, user_id: 'p1' }], next_cursor: null });
     expect(queried).toEqual([{ app: 'parents-clubs', params: expect.arrayContaining(['gra']) }]);
+  });
+});
+
+// #240 reports & suspensions on real D1: migration 0064's audit columns, the
+// real app_roles gate, transitions guarded by the app's SQL (data worker
+// intercepted), step-up on destructive actions, related history, two apps.
+describe('operator reports & suspensions (#240)', () => {
+  const worker = (appId: string) => fetchMock.get(`https://pas-data-${appId}.${env.DATA_WORKER_HOST}`);
+  let sent: { app: string; path: string; params: unknown }[] = [];
+  const answer = (appId: string, path: string, reply: unknown) => worker(appId).intercept({ path, method: 'POST' })
+    .reply(200, (req) => {
+      const body = JSON.parse(String(req.body)) as { params?: unknown; statements?: { params: unknown }[] };
+      sent.push({ app: appId, path, params: body.params ?? body.statements?.map((s) => s.params) });
+      return reply;
+    });
+  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 5, auth_method: 'passkey' } as never, env.SESSION_SIGNING_KEY);
+  const act = async (appId: string, id: string, row: unknown, token?: string) =>
+    SELF.fetch(`${BASE}/v1/apps/${appId}/operator/actions/${id}`, json('POST', { row }, token ?? await session('gh:1')));
+  const audit = (appId: string) => env.DB.prepare('SELECT action_name, actor_id, role_name, status, operator_action, target FROM app_action_audit WHERE app_id = ? ORDER BY id').bind(appId).all();
+  const report = { report_id: 'r1', reported_user_id: 'u9', reason: 'spam', status: 'open', created_at: 1 };
+
+  beforeEach(async () => {
+    sent = [];
+    await seedApp('parents-clubs', 'gh:1');
+    for (const [appId, sample] of [['stash', STASH], ['parents-clubs', PARENTS_CLUBS]] as const) {
+      worker(appId).intercept({ path: '/validate', method: 'POST' })
+        .reply(200, (req) => ({ results: (JSON.parse(String(req.body)) as { statements: { id: string }[] }).statements.map((st) => ({ id: st.id, ok: true })) }));
+      const res = await SELF.fetch(`${BASE}/v1/apps/${appId}/tools`, json('PUT', sample, await session('gh:1')));
+      expect(res.status, await res.clone().text()).toBe(200);
+    }
+    await env.DB.prepare("INSERT INTO app_roles (app_id, user_id, role_name) VALUES ('stash', 'gh:1', 'operator'), ('parents-clubs', 'gh:1', 'moderator')").run();
+  });
+
+  it('migration 0064 adds the operator audit columns', async () => {
+    const cols = (await env.DB.prepare('PRAGMA table_info(app_action_audit)').all<{ name: string; notnull: number }>()).results ?? [];
+    expect(cols.filter((c) => ['operator_action', 'target'].includes(c.name))).toEqual([
+      expect.objectContaining({ name: 'operator_action', notnull: 0 }), expect.objectContaining({ name: 'target', notnull: 0 }),
+    ]);
+  });
+
+  it('runs a guarded transition, refuses a stale one, and audits both with action and target', async () => {
+    answer('stash', '/execute', { meta: { changes: 1 } });
+    const ok = await act('stash', 'resolve', { ...report, extra: 'ignored' });
+    expect(ok.status, await ok.clone().text()).toBe(200);
+    expect(sent[0]!.params).toEqual(expect.arrayContaining(['r1', 'open']));
+    expect(JSON.stringify(sent)).not.toContain('ignored');
+
+    answer('stash', '/execute', { meta: { changes: 0 } });
+    expect((await act('stash', 'dismiss', report)).status).toBe(409);
+    expect((await act('stash', 'review', { ...report, status: 'dismissed' })).status).toBe(409);
+    expect(sent).toHaveLength(2); // the disallowed transition never reached the data worker
+
+    expect((await audit('stash')).results).toEqual([
+      { action_name: 'op_resolve_report', actor_id: 'gh:1', role_name: 'operator', status: 200, operator_action: 'resolve', target: 'r1' },
+      { action_name: 'op_dismiss_report', actor_id: 'gh:1', role_name: 'operator', status: 409, operator_action: 'dismiss', target: 'r1' },
+    ]);
+  });
+
+  it('a destructive suspension needs a recent sign-in, then runs as one batch and is audited', async () => {
+    const stale = await act('stash', 'suspend_reported', report);
+    expect(stale.status).toBe(403);
+    expect(await stale.text()).toContain('step_up_required');
+    answer('stash', '/batch', { results: [{ meta: { changes: 1 } }, { meta: { changes: 1 } }] });
+    const ok = await act('stash', 'suspend_reported', report, await fresh());
+    expect(ok.status, await ok.clone().text()).toBe(200);
+    expect(await ok.json()).toEqual({ ok: true, changes: 2 });
+    expect(sent).toHaveLength(1);
+    expect((await audit('stash')).results).toEqual([
+      { action_name: 'op_suspend_user', actor_id: 'gh:1', role_name: 'operator', status: 200, operator_action: 'suspend_reported', target: 'u9' },
+    ]);
+  });
+
+  it("lists a member's suspension history and filters reports by status", async () => {
+    answer('stash', '/query', { rows: [{ suspension_id: 's1', user_id: 'u9', reason: 'spam', status: 'active', created_at: 1, lifted_at: null, internal: 'x' }] });
+    const history = await SELF.fetch(`${BASE}/v1/apps/stash/operator/resources/suspension_history?related=u9`, json('GET', undefined, await session('gh:1')));
+    expect(await history.json()).toEqual({ rows: [{ user_id: 'u9', reason: 'spam', status: 'active', created_at: 1, lifted_at: null, suspension_id: 's1' }], next_cursor: null });
+    answer('stash', '/query', { rows: [] });
+    expect((await SELF.fetch(`${BASE}/v1/apps/stash/operator/resources/open_reports?status=reviewing`, json('GET', undefined, await session('gh:1')))).status).toBe(200);
+    expect(sent.map((s) => s.params)).toEqual([expect.arrayContaining(['u9']), expect.arrayContaining(['reviewing'])]);
+    expect((await audit('stash')).results).toEqual([
+      expect.objectContaining({ action_name: 'op_list_suspensions', operator_action: 'read:suspension_history', target: 'u9' }),
+      expect.objectContaining({ action_name: 'op_list_reports', operator_action: 'read:open_reports', target: null }),
+    ]);
+  });
+
+  it('refuses signed-out callers and other owners; Parents Clubs runs its own workflow under its own role', async () => {
+    expect((await SELF.fetch(`${BASE}/v1/apps/stash/operator/actions/resolve`, json('POST', { row: report }))).status).toBe(401);
+    expect((await act('stash', 'resolve', report, await session('gh:2'))).status).toBe(403);
+    expect(sent).toHaveLength(0);
+    answer('parents-clubs', '/execute', { meta: { changes: 1 } });
+    const ok = await act('parents-clubs', 'uphold', { flag_id: 'f1', post_title: 'Hi', flagged_by: 'p2', state: 'new', flagged_at: 1 });
+    expect(ok.status, await ok.clone().text()).toBe(200);
+    expect((await audit('parents-clubs')).results).toEqual([
+      { action_name: 'op_uphold_flag', actor_id: 'gh:1', role_name: 'moderator', status: 200, operator_action: 'uphold', target: 'f1' },
+    ]);
+    expect((await act('parents-clubs', 'resolve', report)).status).toBe(404);
   });
 });
 

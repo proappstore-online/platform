@@ -5,7 +5,10 @@
  */
 const operator = (reason: string) => ({ app_roles: ['operator'], caller_unscoped: { reason } });
 
-/** Stash: cross-pocket users, problem reports, suspensions from a report, KPIs. */
+/**
+ * Stash: cross-pocket members, problem reports with a review workflow, a
+ * suspension history per member, suspend (destructive, step-up) and lift.
+ */
 export const STASH = {
   tools: [
     {
@@ -22,10 +25,16 @@ export const STASH = {
       auth: operator('Operators open any member.'),
     },
     {
-      name: 'op_list_reports', description: 'Problem reports by status', operation: 'query', requires_auth: true,
-      params: { status: { type: 'string', default: 'open' } },
-      sql: 'SELECT r.id AS report_id, r.reported_user_id, r.reason, r.status, r.created_at FROM reports r WHERE r.status = :status ORDER BY r.created_at DESC LIMIT 200',
+      name: 'op_list_reports', description: 'Problem reports', operation: 'query', requires_auth: true,
+      params: { status: { type: 'string', optional: true }, q: { type: 'string', optional: true }, after: { type: 'string', optional: true } },
+      sql: "SELECT r.id AS report_id, r.reported_user_id, r.reason, r.status, r.created_at FROM reports r WHERE (:status IS NULL OR r.status = :status) AND (:q IS NULL OR r.reason LIKE '%' || :q || '%') AND (:after IS NULL OR r.id > :after) ORDER BY r.id LIMIT 100",
       auth: operator('Operators triage every report.'),
+    },
+    {
+      name: 'op_report_detail', description: 'One report', operation: 'query', requires_auth: true,
+      params: { report_id: { type: 'string' } },
+      sql: 'SELECT r.id AS report_id, r.reason, r.details, r.reporter_id, r.reported_user_id, r.status, r.created_at FROM reports r WHERE r.id = :report_id LIMIT 1',
+      auth: operator('Operators open any report.'),
     },
     {
       name: 'op_report_metrics', description: 'Moderation KPIs', operation: 'query', requires_auth: true, params: {},
@@ -33,17 +42,35 @@ export const STASH = {
       auth: operator('App-wide moderation counts.'),
     },
     {
-      name: 'op_suspend_user', description: 'Suspend a member', operation: 'execute', requires_auth: true,
+      name: 'op_list_suspensions', description: 'Suspension history', operation: 'query', requires_auth: true,
+      params: { user: { type: 'string', optional: true }, after: { type: 'string', optional: true } },
+      sql: 'SELECT s.id AS suspension_id, s.user_id, s.reason, s.status, s.created_at, s.lifted_at FROM suspensions s WHERE (:user IS NULL OR s.user_id = :user) AND (:after IS NULL OR s.id > :after) ORDER BY s.id LIMIT 100',
+      auth: operator('Operators see every suspension.'),
+    },
+    {
+      name: 'op_suspend_user', description: 'Suspend a member', operation: 'batch', requires_auth: true, step_up: true,
       params: { user_id: { type: 'string' } },
-      sql: 'UPDATE members SET suspended = 1 WHERE id = :user_id',
+      statements: [
+        'UPDATE members SET suspended = 1 WHERE id = :user_id AND suspended = 0',
+        "INSERT INTO suspensions (id, user_id, reason, status, created_at, created_by) VALUES (:__uuid, :user_id, 'operator', 'active', :__now, :__user_id)",
+      ],
       auth: operator('Operators suspend any member.'),
     },
     {
-      name: 'op_resolve_report', description: 'Resolve a report', operation: 'execute', requires_auth: true,
-      params: { report_id: { type: 'string' } },
-      sql: "UPDATE reports SET status = 'resolved' WHERE id = :report_id",
-      auth: operator('Operators resolve any report.'),
+      name: 'op_lift_suspension', description: 'Lift a suspension', operation: 'batch', requires_auth: true,
+      params: { suspension_id: { type: 'string' }, from_status: { type: 'string' }, user_id: { type: 'string' } },
+      statements: [
+        "UPDATE suspensions SET status = 'lifted', lifted_at = :__now, lifted_by = :__user_id WHERE id = :suspension_id AND status = :from_status",
+        'UPDATE members SET suspended = 0 WHERE id = :user_id',
+      ],
+      auth: operator('Operators lift any suspension.'),
     },
+    ...(['review', 'resolve', 'dismiss'] as const).map((verb) => ({
+      name: `op_${verb}_report`, description: `${verb} a report`, operation: 'execute', requires_auth: true,
+      params: { report_id: { type: 'string' }, from_status: { type: 'string' } },
+      sql: `UPDATE reports SET status = '${{ review: 'reviewing', resolve: 'resolved', dismiss: 'dismissed' }[verb]}', reviewer_id = :__user_id WHERE id = :report_id AND status = :from_status`,
+      auth: { app_roles: ['operator'] },
+    })),
   ],
   operator_view: {
     version: 1,
@@ -70,7 +97,7 @@ export const STASH = {
         },
       },
       {
-        id: 'open_reports', kind: 'reports', title: 'Open reports', description: 'Reports waiting for review.', action: 'op_list_reports',
+        id: 'open_reports', kind: 'reports', title: 'Reports', description: 'Problem reports from members.', action: 'op_list_reports',
         columns: [
           { key: 'reason', label: 'Reason' },
           { key: 'reported_user_id', label: 'Reported user' },
@@ -78,6 +105,42 @@ export const STASH = {
           { key: 'created_at', label: 'Filed', format: 'datetime' },
           { key: 'report_id', label: 'Report' },
         ],
+        search: { param: 'q' },
+        page: { param: 'after', column: 'report_id' },
+        status: {
+          column: 'status', param: 'status',
+          states: [
+            { value: 'open', label: 'Open' },
+            { value: 'reviewing', label: 'In review' },
+            { value: 'resolved', label: 'Resolved' },
+            { value: 'dismissed', label: 'Dismissed' },
+          ],
+        },
+        detail: {
+          action: 'op_report_detail', param: 'report_id', key: 'report_id',
+          fields: [
+            { key: 'reason', label: 'Reason' },
+            { key: 'details', label: 'Details' },
+            { key: 'reporter_id', label: 'Reported by' },
+            { key: 'reported_user_id', label: 'Reported user' },
+            { key: 'status', label: 'Status', format: 'badge' },
+            { key: 'created_at', label: 'Filed', format: 'datetime' },
+          ],
+        },
+      },
+      {
+        id: 'suspension_history', kind: 'suspensions', title: 'Suspensions', action: 'op_list_suspensions',
+        columns: [
+          { key: 'user_id', label: 'User' },
+          { key: 'reason', label: 'Reason' },
+          { key: 'status', label: 'Status', format: 'badge' },
+          { key: 'created_at', label: 'Suspended', format: 'datetime' },
+          { key: 'lifted_at', label: 'Lifted', format: 'datetime' },
+          { key: 'suspension_id', label: 'Suspension' },
+        ],
+        page: { param: 'after', column: 'suspension_id' },
+        related: { resource: 'members', param: 'user' },
+        status: { column: 'status', states: [{ value: 'active', label: 'Active' }, { value: 'lifted', label: 'Lifted' }] },
       },
       {
         id: 'moderation', kind: 'metrics', title: 'Moderation', action: 'op_report_metrics',
@@ -88,14 +151,37 @@ export const STASH = {
       },
     ],
     actions: [
-      { id: 'suspend_member', title: 'Suspend', resource: 'members', action: 'op_suspend_user', params: { user_id: 'user_id' }, confirm: 'Suspend this member?' },
-      { id: 'suspend_reported', title: 'Suspend user', resource: 'open_reports', action: 'op_suspend_user', params: { user_id: 'reported_user_id' }, confirm: 'Suspend the reported user?' },
-      { id: 'resolve', title: 'Resolve', resource: 'open_reports', action: 'op_resolve_report', params: { report_id: 'report_id' }, confirm: 'Mark this report resolved?' },
+      { id: 'suspend_member', title: 'Suspend', resource: 'members', action: 'op_suspend_user', params: { user_id: 'user_id' }, confirm: 'Suspend this member?', destructive: true },
+      { id: 'suspend_reported', title: 'Suspend user', resource: 'open_reports', action: 'op_suspend_user', params: { user_id: 'reported_user_id' }, confirm: 'Suspend the reported user?', destructive: true },
+      {
+        id: 'review', title: 'Start review', resource: 'open_reports', action: 'op_review_report', target: 'report_id',
+        params: { report_id: 'report_id', from_status: 'status' }, confirm: 'Start reviewing this report?',
+        transition: { from: ['open'], to: 'reviewing' },
+      },
+      {
+        id: 'resolve', title: 'Resolve', resource: 'open_reports', action: 'op_resolve_report', target: 'report_id',
+        params: { report_id: 'report_id', from_status: 'status' }, confirm: 'Mark this report resolved?',
+        transition: { from: ['open', 'reviewing'], to: 'resolved' },
+      },
+      {
+        id: 'dismiss', title: 'Dismiss', resource: 'open_reports', action: 'op_dismiss_report', target: 'report_id',
+        params: { report_id: 'report_id', from_status: 'status' }, confirm: 'Dismiss this report?',
+        transition: { from: ['open', 'reviewing'], to: 'dismissed' },
+      },
+      {
+        id: 'lift', title: 'Lift', resource: 'suspension_history', action: 'op_lift_suspension', target: 'user_id',
+        params: { suspension_id: 'suspension_id', from_status: 'status', user_id: 'user_id' }, confirm: 'Lift this suspension?',
+        transition: { from: ['active'], to: 'lifted' },
+      },
     ],
   },
 };
 
-/** Parents Clubs: parents (users, differently shaped), an ID-verification queue with a step-up approval, suspensions, club KPIs. */
+/**
+ * Parents Clubs, shaped differently: parents (users), flagged posts (reports)
+ * with a new → upheld/rejected workflow, suspensions per parent, an
+ * ID-verification queue with a step-up approval, club KPIs.
+ */
 export const PARENTS_CLUBS = {
   tools: [
     {
@@ -111,6 +197,18 @@ export const PARENTS_CLUBS = {
       auth: operator('Operators open any parent.'),
     },
     {
+      name: 'op_list_flags', description: 'Flagged posts', operation: 'query', requires_auth: true,
+      params: { state: { type: 'string', optional: true }, cursor: { type: 'string', optional: true } },
+      sql: 'SELECT f.flag_id, f.post_title, f.flagged_by, f.state, f.flagged_at FROM flags f WHERE (:state IS NULL OR f.state = :state) AND (:cursor IS NULL OR f.flag_id > :cursor) ORDER BY f.flag_id LIMIT 30',
+      auth: operator('Operators see every flag.'),
+    },
+    ...(['uphold', 'reject'] as const).map((verb) => ({
+      name: `op_${verb}_flag`, description: `${verb} a flag`, operation: 'execute', requires_auth: true,
+      params: { flag: { type: 'string' }, was: { type: 'string' } },
+      sql: `UPDATE flags SET state = '${verb === 'uphold' ? 'upheld' : 'rejected'}', decided_by = :__user_id WHERE flag_id = :flag AND state = :was`,
+      auth: { app_roles: ['moderator', 'operator'] },
+    })),
+    {
       name: 'op_pending_verifications', description: 'Pending ID checks', operation: 'query', requires_auth: true, params: {},
       sql: "SELECT v.id AS request_id, v.parent_name, v.submitted_at FROM verification_requests v WHERE v.state = 'pending' ORDER BY v.submitted_at LIMIT 100",
       auth: operator('Operators review every pending check.'),
@@ -122,9 +220,22 @@ export const PARENTS_CLUBS = {
       auth: { app_roles: ['operator'] },
     },
     {
-      name: 'op_list_suspensions', description: 'Suspended parents', operation: 'query', requires_auth: true, params: {},
-      sql: 'SELECT s.user_id, s.reason, s.until FROM suspensions s ORDER BY s.until DESC LIMIT 100',
+      name: 'op_list_suspensions', description: 'Suspended parents', operation: 'query', requires_auth: true,
+      params: { parent: { type: 'string', optional: true } },
+      sql: 'SELECT s.user_id, s.reason, s.until, s.state FROM suspensions s WHERE (:parent IS NULL OR s.user_id = :parent) ORDER BY s.until DESC LIMIT 100',
       auth: operator('Operators see every suspension.'),
+    },
+    {
+      name: 'op_suspend_parent', description: 'Suspend a parent for a week', operation: 'execute', requires_auth: true, step_up: true,
+      params: { id: { type: 'string' } },
+      sql: "INSERT INTO suspensions (user_id, reason, until, state, created_by) VALUES (:id, 'operator', :__now + 604800000, 'active', :__user_id)",
+      auth: { app_roles: ['operator'] },
+    },
+    {
+      name: 'op_end_suspension', description: 'End a suspension', operation: 'execute', requires_auth: true,
+      params: { parent: { type: 'string' }, state: { type: 'string' } },
+      sql: "UPDATE suspensions SET state = 'ended' WHERE user_id = :parent AND state = :state",
+      auth: operator('Operators end any suspension.'),
     },
     {
       name: 'op_club_metrics', description: 'Club KPIs', operation: 'query', requires_auth: true, params: {},
@@ -155,6 +266,21 @@ export const PARENTS_CLUBS = {
         },
       },
       {
+        id: 'flags', kind: 'reports', title: 'Flagged posts', action: 'op_list_flags',
+        columns: [
+          { key: 'post_title', label: 'Post' },
+          { key: 'flagged_by', label: 'Flagged by' },
+          { key: 'state', label: 'State', format: 'badge' },
+          { key: 'flagged_at', label: 'Flagged', format: 'datetime' },
+          { key: 'flag_id', label: 'Flag' },
+        ],
+        page: { param: 'cursor', column: 'flag_id' },
+        status: {
+          column: 'state', param: 'state',
+          states: [{ value: 'new', label: 'New' }, { value: 'upheld', label: 'Upheld' }, { value: 'rejected', label: 'Rejected' }],
+        },
+      },
+      {
         id: 'id_checks', kind: 'verification', title: 'ID checks', action: 'op_pending_verifications',
         columns: [
           { key: 'parent_name', label: 'Parent' },
@@ -168,7 +294,10 @@ export const PARENTS_CLUBS = {
           { key: 'user_id', label: 'User' },
           { key: 'reason', label: 'Reason' },
           { key: 'until', label: 'Until', format: 'datetime' },
+          { key: 'state', label: 'State', format: 'badge' },
         ],
+        related: { resource: 'parents', param: 'parent' },
+        status: { column: 'state', states: [{ value: 'active', label: 'Active' }, { value: 'ended', label: 'Ended' }] },
       },
       {
         id: 'clubs', kind: 'metrics', title: 'Clubs', action: 'op_club_metrics',
@@ -180,6 +309,19 @@ export const PARENTS_CLUBS = {
     ],
     actions: [
       { id: 'approve', title: 'Approve', resource: 'id_checks', action: 'op_approve_verification', params: { request_id: 'request_id' }, confirm: 'Approve this ID check?' },
+      {
+        id: 'uphold', title: 'Uphold', resource: 'flags', action: 'op_uphold_flag', target: 'flag_id',
+        params: { flag: 'flag_id', was: 'state' }, confirm: 'Uphold this flag?', transition: { from: ['new'], to: 'upheld' },
+      },
+      {
+        id: 'reject', title: 'Reject', resource: 'flags', action: 'op_reject_flag', target: 'flag_id',
+        params: { flag: 'flag_id', was: 'state' }, confirm: 'Reject this flag?', transition: { from: ['new'], to: 'rejected' },
+      },
+      { id: 'suspend', title: 'Suspend', resource: 'parents', action: 'op_suspend_parent', params: { id: 'user_id' }, confirm: 'Suspend this parent for a week?', destructive: true },
+      {
+        id: 'end_suspension', title: 'End', resource: 'suspended', action: 'op_end_suspension', target: 'user_id',
+        params: { parent: 'user_id', state: 'state' }, confirm: 'End this suspension?', transition: { from: ['active'], to: 'ended' },
+      },
     ],
   },
 };

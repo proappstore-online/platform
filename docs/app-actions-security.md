@@ -110,6 +110,12 @@ to `app_action_audit`. Nothing needs to be added to the action.
   the call, the response status, and the time.
 - **Not recorded:** params, SQL or results. The trail shows what was done, not
   with which data.
+- **Operator view calls (#240):** calls made from the Creator Console operator
+  view also record `operator_action` (the contract action id, or
+  `read:<resource>` / `detail:<resource>`) and `target` (the key of the record
+  acted on, such as the suspended user's id). A status transition that the
+  app's SQL guard matched to nothing is recorded with status 409. These columns
+  are `NULL` for every other call.
 - **Not audited:** actions without `auth.app_roles`, calls refused at the gate,
   and calls that fail downstream. Refusals are still logged to `app_logs` as
   operation failures (`source = 'server'`), as before.
