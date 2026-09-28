@@ -725,6 +725,36 @@ declared measures. The query runs under its own `auth.app_roles` and
 (`2026-09-01..2026-09-30/day`), never a value. A series resource cannot be
 read through the plain resource route.
 
+### Operator audit trail
+
+The console's **Audit trail** panel lists what the app's owner did in the
+operator view:
+
+- entering the view, once per visit (a console tab session per app);
+- list, record, document and metric reads;
+- row actions, and every refused attempt with its status.
+
+Each row shows who, when, what, which record (`target`), the role that
+allowed it, and the outcome. It never shows tokens, action params, document
+paths or query results.
+
+`GET /v1/apps/:appId/operator/audit` returns 50 rows a page, newest first,
+with `?cursor=` and these filters:
+
+- `?kind=` is one of `enter`, `audit`, `read`, `detail`, `evidence`,
+  `series`, `action`.
+- `?outcome=` is `success` or `refused`.
+- `?actor=` and `?target=` match exactly.
+- `?from=` and `?to=` are dates spanning at most 366 days.
+
+Targets of identity-verification reads and document views are hidden (with
+`target_hidden: true`) until the owner has signed in recently. Reading the
+trail is itself recorded.
+
+The trail is owner-only. An app can require more by declaring
+`"audit": { "app_roles": ["operator"] }` at the top level of `operator_view`:
+the owner must then also hold one of those roles (never `member`).
+
 **Only declared columns and fields leave the platform.** A query may select
 more (an internal id, a hash): the operator read routes return only the
 declared keys, in declared order, and a declared key the row lacks comes back

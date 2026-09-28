@@ -73,6 +73,8 @@ export interface OperatorViewContract {
   version: 1;
   resources: OperatorResource[];
   actions: OperatorAction[];
+  /** Who may read the operator audit trail besides being the owner: one of these app roles. Absent: the owner alone. */
+  audit?: { app_roles: string[] } | null;
 }
 
 export const ID = /^[a-z][a-z0-9_]{0,49}$/;

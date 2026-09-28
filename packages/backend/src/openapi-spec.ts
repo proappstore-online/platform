@@ -3711,6 +3711,29 @@ export const openapiSpec: Record<string, unknown> = {
                                   }
                                 }
                               }
+                            },
+                            "audit": {
+                              "description": "Who may read the operator audit trail besides being the owner: one of these app roles (never member). Null: the owner alone.",
+                              "oneOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "app_roles"
+                                  ],
+                                  "properties": {
+                                    "app_roles": {
+                                      "type": "array",
+                                      "maxItems": 5,
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
                             }
                           }
                         }
@@ -4317,6 +4340,294 @@ export const openapiSpec: Record<string, unknown> = {
                 "week",
                 "month"
               ]
+            }
+          }
+        ]
+      }
+    },
+    "/v1/apps/{appId}/operator/entries": {
+      "post": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "Record entering the operator view (once per visit)",
+        "description": "Owner only (#240). Records `enter` in the operator audit trail once per `visit` (the console's per-tab-session id): a repeated call for the same visit writes nothing (`recorded: false`).",
+        "operationId": "post_v1_apps_appId_operator_entries",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "visit"
+                ],
+                "properties": {
+                  "visit": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{8,64}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "recorded"
+                  ],
+                  "properties": {
+                    "recorded": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Not the app's owner"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/apps/{appId}/operator/audit": {
+      "get": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "The operator audit trail",
+        "description": "Owner only (#240), plus one of the contract's `audit.app_roles` when declared. 50 rows per page, newest first; `next_cursor` continues. Never tokens, params, document paths or query results; targets of verification reads and document views are hidden until a recent sign-in (`target_hidden`). Reading the trail is recorded.",
+        "operationId": "get_v1_apps_appId_operator_audit",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "rows",
+                    "next_cursor",
+                    "targets_hidden"
+                  ],
+                  "properties": {
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer"
+                          },
+                          "at": {
+                            "type": "integer",
+                            "description": "epoch ms"
+                          },
+                          "actor": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "login": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            }
+                          },
+                          "role": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "enter",
+                              "audit",
+                              "read",
+                              "detail",
+                              "evidence",
+                              "series",
+                              "action"
+                            ]
+                          },
+                          "resource": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "field": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "operation": {
+                            "type": "string"
+                          },
+                          "action": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "target": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "target_hidden": {
+                            "type": "boolean"
+                          },
+                          "status": {
+                            "type": "integer"
+                          },
+                          "outcome": {
+                            "type": "string",
+                            "enum": [
+                              "success",
+                              "refused"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "targets_hidden": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Not the app's owner, or lacks the declared audit role"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "enter",
+                "audit",
+                "read",
+                "detail",
+                "evidence",
+                "series",
+                "action"
+              ]
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "success",
+                "refused"
+              ]
+            }
+          },
+          {
+            "name": "actor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
             }
           }
         ]

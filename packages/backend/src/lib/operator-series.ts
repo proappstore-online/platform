@@ -129,9 +129,7 @@ export function rollupSeries(series: OperatorSeries, rows: Record<string, unknow
   }
 
   // Without a breakdown there is always exactly one series, all-null when the range is empty.
-  if (!series.dimension && !groups.has(null)) {
-    groups.set(null, { buckets: series.measures.map(() => buckets.map(() => undefined)), total: series.measures.map(() => undefined) });
-  }
+  if (!series.dimension && !groups.has(null)) groups.set(null, { buckets: series.measures.map(() => buckets.map(() => undefined)), total: series.measures.map(() => undefined) });
   // Bound the breakdown: the largest values by magnitude of the (single) measure.
   const ranked = [...groups.entries()].sort((a, b) => (b[1].total[0]?.abs ?? 0) - (a[1].total[0]?.abs ?? 0));
   const kept = series.dimension ? ranked.slice(0, series.dimension.max_values) : ranked;

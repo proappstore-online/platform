@@ -331,5 +331,33 @@ describe('validateOperatorView (#240)', () => {
     (members.resources[0] as Record<string, unknown>).series = clone((STASH.operator_view.resources[at] as Record<string, unknown>).series);
     expect(errorOf(stashTools, members)).toContain('series is only supported on metrics resources');
   });
+
+  it('normalizes the audit declaration: absent for Stash (owner alone), roles for Parents Clubs', () => {
+    const r = validateOperatorView(stashTools, STASH.operator_view);
+    if (!('contract' in r) || !r.contract) throw new Error(JSON.stringify(r));
+    expect(r.contract.audit).toBeNull();
+    const pc = validateOperatorView(PARENTS_CLUBS.tools as ToolManifest[], PARENTS_CLUBS.operator_view);
+    if (!('contract' in pc) || !pc.contract) throw new Error(JSON.stringify(pc));
+    expect(pc.contract.audit).toEqual({ app_roles: ['operator'] });
+    const dup = clone(STASH.operator_view) as Record<string, unknown>;
+    dup.audit = { app_roles: ['auditor', 'auditor', 'operator'] };
+    const d = validateOperatorView(stashTools, dup);
+    expect('contract' in d && d.contract?.audit).toEqual({ app_roles: ['auditor', 'operator'] });
+  });
+
+  it('refuses a malformed or everyone-holds-it audit declaration', () => {
+    for (const [audit, error] of [
+      [[], 'operator_view.audit must be an object'],
+      [{ app_roles: [] }, 'app_roles must be 1-5 app role names'],
+      [{ app_roles: ['a', 'b', 'c', 'd', 'e', 'f'] }, 'app_roles must be 1-5 app role names'],
+      [{ app_roles: ['Operator'] }, 'app_roles must be 1-5 app role names'],
+      [{ app_roles: ['member'] }, "cannot include 'member'"],
+      [{ app_roles: ['operator'], public: true }, 'audit: unknown field "public"'],
+    ] as const) {
+      const v = clone(STASH.operator_view) as Record<string, unknown>;
+      v.audit = audit;
+      expect(errorOf(stashTools, v), error).toContain(error);
+    }
+  });
 });
 

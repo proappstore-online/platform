@@ -189,14 +189,15 @@ describe('GET /v1/apps/:appId/operator/resources/* (#240 slice 3)', () => {
     expect(dataCalls).toHaveLength(0);
   });
 
-  it("enforces the app's declared role: an owner without it is refused, unaudited, before the data worker", async () => {
+  it("enforces the app's declared role: an owner without it is refused before the data worker, recorded as a refusal", async () => {
     dataWorker([member(1)]);
     const { d, audit } = db({ action: 'op_list_users', roles: [] });
     const res = await list('stash', 'members', d);
     expect(res.status).toBe(403);
     expect(await res.text()).toContain('requires app role');
     expect(dataCalls).toHaveLength(0);
-    expect(audit.bind).not.toHaveBeenCalled();
+    // The refused attempt joins the operator trail — no role, status 403, never a success row.
+    expect(audit.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 403, expect.any(Number), 'read:members', null);
   });
 
   it('keeps the baseline and isolates apps: no contract, undeclared or other-app resources are 404', async () => {
@@ -348,7 +349,7 @@ describe('operator reports & suspensions (#240)', () => {
     const refused = await act('stash', 'resolve', report, noRole.d);
     expect(refused.status).toBe(403);
     expect(await refused.text()).toContain('requires app role');
-    expect(noRole.audit.bind).not.toHaveBeenCalled();
+    expect(noRole.audit.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 403, expect.any(Number), 'resolve', null);
     expect((await act('stash', 'drop_tables', report, db(STASH, 'op_resolve_report').d)).status).toBe(404);
     const baseline = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ first: null }));
     expect((await act('stash', 'resolve', report, baseline)).status).toBe(404);

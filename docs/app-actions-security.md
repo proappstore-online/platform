@@ -116,6 +116,14 @@ to `app_action_audit`. Nothing needs to be added to the action.
   acted on, such as the suspended user's id). A status transition that the
   app's SQL guard matched to nothing is recorded with status 409. These columns
   are `NULL` for every other call.
+- **Operator view entries and refusals (#240):** entering the operator view
+  is recorded once per visit (`operator_action = 'enter'`). An operator-view
+  request by the app's owner that is refused (missing app role, step-up,
+  conflict, validation) is recorded once with its status, an empty
+  `role_name` and `action_name`, and the operation it attempted. Callers who
+  are not the owner are never recorded, so they cannot fill an app's trail.
+  Owners read the trail in the console; see
+  [MCP app tools → Operator audit trail](./mcp-app-tools.md).
 - **Not audited:** actions without `auth.app_roles`, calls refused at the gate,
   and calls that fail downstream. Refusals are still logged to `app_logs` as
   operation failures (`source = 'server'`), as before.

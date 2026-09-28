@@ -9,9 +9,15 @@ import type { Env } from '../types.js';
 import { HttpError, requireRecentAuth, type FasUser } from '../lib/auth.js';
 import { prepareActionBatch, prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
 import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from './actions.js';
+import { markAudited } from '../lib/operator-audit-marks.js';
 
 /** What an operator-view call adds to its audit row (#240): the contract action or read, and its target record. */
-export interface OperatorAudit { operatorAction: string; target: string | null }
+export interface OperatorAudit {
+  operatorAction: string;
+  target: string | null;
+  /** The operator request: marked once its audit row is written, so a later refusal is not recorded twice. */
+  request: Request;
+}
 
 /**
  * Run one of an app's registered query actions for the console operator view
@@ -30,7 +36,7 @@ export async function runOperatorQuery(
   audit: OperatorAudit,
 ): Promise<Record<string, unknown>[]> {
   const { body, role } = await runOperatorCall(env, appId, name, input, user, token, ['query']);
-  if (role) await recordActionSuccess(env.DB, appId, name, { actorId: user.id, role }, 200, audit);
+  if (role) { await recordActionSuccess(env.DB, appId, name, { actorId: user.id, role }, 200, audit); markAudited(audit.request); }
   const rows = (body as { rows?: unknown }).rows;
   return Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
 }
@@ -58,7 +64,7 @@ export async function runOperatorWrite(
     ? result.results.reduce((n, r) => n + Number(r.meta?.changes ?? 0), 0)
     : Number(result.meta?.changes ?? 0);
   const refused = mustChange && changes === 0;
-  if (role) await recordActionSuccess(env.DB, appId, name, { actorId: user.id, role }, refused ? 409 : 200, audit);
+  if (role) { await recordActionSuccess(env.DB, appId, name, { actorId: user.id, role }, refused ? 409 : 200, audit); markAudited(audit.request); }
   if (refused) throw new HttpError('the record changed since it was loaded; reload and try again', 409);
   return changes;
 }

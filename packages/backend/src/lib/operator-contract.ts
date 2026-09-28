@@ -9,7 +9,8 @@
  *                     users/reports/suspensions/verification only: "search"?, "page"?, "detail"?, "status"?, "related"?,
  *                     metrics only: "series"? }],
  *     "actions":   [{ "id", "title", "resource", "action", "params": { <action param>: <resource column> }, "confirm",
- *                     "transition"?: { "from": [<state>], "to": <state> }, "destructive"?: true, "target"?: <column> }]
+ *                     "transition"?: { "from": [<state>], "to": <state> }, "destructive"?: true, "target"?: <column> }],
+ *     "audit"?:    { "app_roles": [<role>] }     // the owner must also hold one to read the audit trail
  *   }
  *
  * A resource is a table (or, for `metrics`, one row of KPIs) read by one of the
@@ -39,6 +40,8 @@ export type { OperatorResource, OperatorViewContract } from './operator-contract
 const OPERATOR_VIEW_VERSIONS = [1] as const;
 const MAX_OPERATOR_RESOURCES = 20;
 const MAX_OPERATOR_ACTIONS = 20;
+const MAX_AUDIT_ROLES = 5;
+const ROLE = /^[a-z][a-z0-9_-]{0,49}$/;
 
 const RESOURCE_FIELDS = ['id', 'kind', 'title', 'description', 'action', 'columns', 'search', 'page', 'detail', 'status', 'related', 'series'];
 const ACTION_FIELDS = ['id', 'title', 'resource', 'action', 'params', 'confirm', 'transition', 'destructive', 'target'];
@@ -179,6 +182,20 @@ function validateVerification(resources: OperatorResource[], actions: OperatorAc
   return null;
 }
 
+/** `audit: { app_roles }` — app roles, never the every-user `member`. */
+function validateAudit(raw: unknown): { app_roles: string[] } | null | string {
+  if (raw === undefined) return null;
+  if (!isObj(raw)) return 'operator_view.audit must be an object';
+  const extra = unknownField(raw, ['app_roles'], 'operator_view.audit');
+  if (extra) return extra;
+  const roles = raw.app_roles;
+  if (!Array.isArray(roles) || roles.length === 0 || roles.length > MAX_AUDIT_ROLES || roles.some((r) => typeof r !== 'string' || !ROLE.test(r))) {
+    return `operator_view.audit.app_roles must be 1-${MAX_AUDIT_ROLES} app role names`;
+  }
+  if (roles.includes('member')) return "operator_view.audit.app_roles cannot include 'member' (every signed-in user holds it)";
+  return { app_roles: [...new Set(roles as string[])] };
+}
+
 /**
  * Validate `operator_view` against the app's (already validated) tools.
  * Absent or null is the baseline: `{ contract: null }`.
@@ -186,7 +203,7 @@ function validateVerification(resources: OperatorResource[], actions: OperatorAc
 export function validateOperatorView(tools: ToolManifest[], raw: unknown): { error: string } | { contract: OperatorViewContract | null } {
   if (raw === undefined || raw === null) return { contract: null };
   if (!isObj(raw)) return { error: 'operator_view must be an object' };
-  const extra = unknownField(raw, ['version', 'resources', 'actions'], 'operator_view');
+  const extra = unknownField(raw, ['version', 'resources', 'actions', 'audit'], 'operator_view');
   if (extra) return { error: extra };
   if (!OPERATOR_VIEW_VERSIONS.includes(raw.version as 1)) {
     return { error: `operator_view.version must be one of ${OPERATOR_VIEW_VERSIONS.join(', ')}` };
@@ -221,5 +238,7 @@ export function validateOperatorView(tools: ToolManifest[], raw: unknown): { err
   }
   const verification = validateVerification(resources, actions);
   if (verification) return { error: verification };
-  return { contract: { version: 1, resources, actions } };
+  const audit = validateAudit(raw.audit);
+  if (typeof audit === 'string') return { error: audit };
+  return { contract: { version: 1, resources, actions, audit } };
 }

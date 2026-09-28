@@ -14,7 +14,8 @@
  */
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
-import { HttpError, requireAppOwner } from '../lib/auth.js';
+import { HttpError } from '../lib/auth.js';
+import { requireOperatorOwner } from '../lib/operator-audit-marks.js';
 import { resolveSeriesRequest, rollupSeries } from '../lib/operator-series.js';
 import { runOperatorQuery } from './operator-exec.js';
 import { declaredResource, sessionToken } from './operator.js';
@@ -23,7 +24,7 @@ export const operatorMetricsRoutes = new Hono<{ Bindings: Env }>();
 
 operatorMetricsRoutes.get('/apps/:appId/operator/metrics/:resourceId', async (c) => {
   const appId = c.req.param('appId');
-  const owner = await requireAppOwner(c, appId);
+  const owner = await requireOperatorOwner(c, appId);
   const resource = await declaredResource(c.env.DB, appId, c.req.param('resourceId'));
   const series = resource.series;
   if (!series) throw new HttpError('resource is not a time series', 404);
@@ -32,7 +33,7 @@ operatorMetricsRoutes.get('/apps/:appId/operator/metrics/:resourceId', async (c)
   const rows = await runOperatorQuery(
     c.env, appId, resource.action, { [series.range.from_param]: req.from, [series.range.to_param]: req.to }, owner,
     sessionToken(c.req.header('Authorization')),
-    { operatorAction: `series:${resource.id}`, target: `${req.from}..${req.to}/${req.grain}` },
+    { operatorAction: `series:${resource.id}`, target: `${req.from}..${req.to}/${req.grain}`, request: c.req.raw },
   );
   c.header('Cache-Control', 'private, no-store');
   return c.json(rollupSeries(series, rows, req));

@@ -101,7 +101,7 @@ describe('GET /v1/apps/:appId/operator/metrics/:id (#240)', () => {
     const refused = await get('stash/operator/metrics/growth', noRole.d);
     expect(refused.status).toBe(403);
     expect(await refused.text()).toContain('requires app role');
-    expect(noRole.audit.bind).not.toHaveBeenCalled();
+    expect(noRole.audit.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 403, expect.any(Number), 'series:growth', null);
     expect((await get('stash/operator/metrics/moderation', db(STASH, 'op_report_metrics').d)).status).toBe(404); // a KPI row, not a series
     expect((await get('stash/operator/metrics/ghost', db(STASH, 'op_daily_signups').d)).status).toBe(404);
     expect((await get('parents-clubs/operator/metrics/growth', db(PARENTS_CLUBS, 'op_weekly_clubs').d)).status).toBe(404); // Stash's id

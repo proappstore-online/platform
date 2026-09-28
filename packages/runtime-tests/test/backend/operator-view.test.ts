@@ -195,7 +195,9 @@ describe('operator users view (#240 slice 3)', () => {
     expect(noRole.status).toBe(403);
     expect(await noRole.text()).toContain('requires app role');
     expect(queried).toHaveLength(0);
-    expect((await env.DB.prepare('SELECT COUNT(*) AS n FROM app_action_audit').first<{ n: number }>())!.n).toBe(0);
+    // Only the owner's own refused attempt is on the trail — never a success, never the stranger's.
+    expect((await env.DB.prepare('SELECT actor_id, role_name, status, operator_action FROM app_action_audit').all()).results)
+      .toEqual([{ actor_id: 'gh:1', role_name: '', status: 403, operator_action: 'read:members' }]);
   });
 
   it('isolates apps and keeps the baseline: other-app, undeclared and contract-less resources are 404', async () => {
@@ -261,6 +263,8 @@ describe('operator reports & suspensions (#240)', () => {
     expect((await audit('stash')).results).toEqual([
       { action_name: 'op_resolve_report', actor_id: 'gh:1', role_name: 'operator', status: 200, operator_action: 'resolve', target: 'r1' },
       { action_name: 'op_dismiss_report', actor_id: 'gh:1', role_name: 'operator', status: 409, operator_action: 'dismiss', target: 'r1' },
+      // The transition refused before the data worker is a refusal row: no role granted, no target read from the row.
+      { action_name: '', actor_id: 'gh:1', role_name: '', status: 409, operator_action: 'review', target: null },
     ]);
   });
 
@@ -274,6 +278,7 @@ describe('operator reports & suspensions (#240)', () => {
     expect(await ok.json()).toEqual({ ok: true, changes: 2 });
     expect(sent).toHaveLength(1);
     expect((await audit('stash')).results).toEqual([
+      { action_name: '', actor_id: 'gh:1', role_name: '', status: 403, operator_action: 'suspend_reported', target: null },
       { action_name: 'op_suspend_user', actor_id: 'gh:1', role_name: 'operator', status: 200, operator_action: 'suspend_reported', target: 'u9' },
     ]);
   });
@@ -365,7 +370,10 @@ describe('operator ID verification (#240)', () => {
     const ok = await SELF.fetch(`${BASE}/v1/apps/stash/operator/actions/approve_kyc`, json('POST', { row }, await fresh()));
     expect(ok.status, await ok.clone().text()).toBe(200);
     expect((await env.DB.prepare("SELECT action_name, status, operator_action, target FROM app_action_audit WHERE app_id = 'stash'").all()).results)
-      .toEqual([{ action_name: 'op_approve_kyc', status: 200, operator_action: 'approve_kyc', target: 'k1' }]);
+      .toEqual([
+        { action_name: '', status: 403, operator_action: 'approve_kyc', target: null }, // the stale attempt
+        { action_name: 'op_approve_kyc', status: 200, operator_action: 'approve_kyc', target: 'k1' },
+      ]);
   });
 
   it("a second app (Parents Clubs) serves its licence PDF through the same route; other owners get nothing", async () => {
@@ -442,6 +450,99 @@ describe('operator metric time series (#240)', () => {
       ['Attendance', null, [null, null]], ['Events', null, [null, null]], ['Fees collected', null, [null, null]],
     ]);
     expect(sent).toEqual([expect.arrayContaining(['2026-09-07', '2026-09-20'])]);
+  });
+});
+
+// #240 operator audit trail on real D1: entry exactly once per visit, owner
+// refusals recorded once, strangers never, and a paged, filtered, redacted trail.
+describe('operator audit trail (#240)', () => {
+  const worker = (appId: string) => fetchMock.get(`https://pas-data-${appId}.${env.DATA_WORKER_HOST}`);
+  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 5, auth_method: 'passkey' } as never, env.SESSION_SIGNING_KEY);
+  const call = async (path: string, init: { method?: string; body?: unknown; uid?: string | null; token?: string } = {}) =>
+    SELF.fetch(`${BASE}/v1/apps/${path}`, json(init.method ?? 'GET', init.body, init.token ?? (init.uid === null ? undefined : await session(init.uid ?? 'gh:1'))));
+  const rows = async (appId: string) => (await env.DB.prepare('SELECT actor_id, role_name, status, operator_action, target FROM app_action_audit WHERE app_id = ? ORDER BY id').bind(appId).all()).results;
+  type Trail = { rows: { kind: string; target: string | null; target_hidden: boolean; outcome: string; status: number }[]; next_cursor: string | null; targets_hidden: boolean };
+
+  beforeEach(async () => {
+    await seedApp('parents-clubs', 'gh:1');
+    for (const [appId, sample] of [['stash', STASH], ['parents-clubs', PARENTS_CLUBS]] as const) {
+      worker(appId).intercept({ path: '/validate', method: 'POST' })
+        .reply(200, (req) => ({ results: (JSON.parse(String(req.body)) as { statements: { id: string }[] }).statements.map((st) => ({ id: st.id, ok: true })) }));
+      const res = await SELF.fetch(`${BASE}/v1/apps/${appId}/tools`, json('PUT', sample, await session('gh:1')));
+      expect(res.status, await res.clone().text()).toBe(200);
+    }
+    await env.DB.prepare("INSERT INTO app_roles (app_id, user_id, role_name) VALUES ('stash', 'gh:1', 'operator')").run();
+    await env.DB.prepare('DELETE FROM app_action_audit').run();
+  });
+
+  it('records entry exactly once per visit, however often the console repeats it', async () => {
+    const enter = (visit: string, uid = 'gh:1') => call('stash/operator/entries', { method: 'POST', body: { visit }, uid });
+    const answers = await Promise.all([enter('visit-aaaaaaaa'), enter('visit-aaaaaaaa'), enter('visit-aaaaaaaa')]);
+    expect(answers.map((r) => r.status)).toEqual([200, 200, 200]);
+    expect(await enter('visit-aaaaaaaa').then((r) => r.json())).toEqual({ recorded: false });
+    expect(await enter('visit-bbbbbbbb').then((r) => r.json())).toEqual({ recorded: true });
+    expect((await enter('visit-cccccccc', 'gh:2')).status).toBe(403); // a stranger is refused and not written
+    expect((await call('stash/operator/entries', { method: 'POST', body: { visit: 'visit-dddddddd' }, uid: null })).status).toBe(401);
+    expect(await rows('stash')).toEqual([
+      { actor_id: 'gh:1', role_name: '', status: 200, operator_action: 'enter', target: 'visit-aaaaaaaa' },
+      { actor_id: 'gh:1', role_name: '', status: 200, operator_action: 'enter', target: 'visit-bbbbbbbb' },
+    ]);
+  });
+
+  it('shows reads, decisions and refusals, pages them, filters them, and hides identity targets until a recent sign-in', async () => {
+    await call('stash/operator/entries', { method: 'POST', body: { visit: 'visit-aaaaaaaa' } });
+    worker('stash').intercept({ path: '/query', method: 'POST' }).reply(200, { rows: [], meta: {} });
+    await call('stash/operator/resources/members');
+    expect((await call('stash/operator/resources/kyc/records/k1')).status).toBe(403); // stale: refused, recorded
+    worker('stash').intercept({ path: '/query', method: 'POST' }).reply(200, { rows: [{ request_id: 'k1', user_id: 'gh:10', full_name: 'Ada', document_type: 'passport', status: 'pending', submitted_at: 1 }], meta: {} });
+    expect((await call('stash/operator/resources/kyc/records/k1', { token: await fresh() })).status).toBe(200);
+    expect((await call('stash/operator/actions/review', { method: 'POST', body: { row: { report_id: 'r1', status: 'resolved' } } })).status).toBe(409);
+
+    const stale = await (await call('stash/operator/audit')).json() as Trail;
+    expect(stale.rows.map((r) => [r.kind, r.outcome, r.status, r.target, r.target_hidden])).toEqual([
+      ['action', 'refused', 409, null, false],
+      ['detail', 'success', 200, null, true],
+      ['detail', 'refused', 403, null, true],
+      ['read', 'success', 200, null, false],
+      ['enter', 'success', 200, 'visit-aaaaaaaa', false],
+    ]);
+    expect(stale.targets_hidden).toBe(true);
+    const text = JSON.stringify(stale);
+    expect(text).not.toMatch(/Ada|passport|gh:10|Bearer|_review/);
+
+    const revealed = await (await call('stash/operator/audit?kind=detail', { token: await fresh() })).json() as Trail;
+    expect(revealed.rows.map((r) => [r.target, r.target_hidden])).toEqual([['k1', false], ['k1', false]]);
+    const refused = await (await call('stash/operator/audit?outcome=refused')).json() as Trail;
+    expect(refused.rows.map((r) => r.status)).toEqual([409, 403]);
+    // The three trail reads above are on the trail too.
+    expect((await rows('stash'))!.filter((r) => (r as { operator_action: string }).operator_action === 'audit')).toHaveLength(3);
+  });
+
+  it('pages 50 at a time with a working cursor', async () => {
+    const now = Date.now();
+    for (let i = 0; i < 60; i++) {
+      await env.DB.prepare("INSERT INTO app_action_audit (app_id, action_name, actor_id, role_name, status, created_at, operator_action, target) VALUES ('stash', 'op_list_users', 'gh:1', 'operator', 200, ?, 'read:members', NULL)").bind(now + i).run();
+    }
+    const first = await (await call('stash/operator/audit?kind=read')).json() as Trail;
+    expect(first.rows).toHaveLength(50);
+    expect(first.next_cursor).not.toBeNull();
+    const second = await (await call(`stash/operator/audit?kind=read&cursor=${first.next_cursor}`)).json() as Trail;
+    expect(second.rows).toHaveLength(10);
+    expect(second.next_cursor).toBeNull();
+    expect((await call('stash/operator/audit?from=2020-01-01&to=2026-09-01')).status).toBe(400);
+  });
+
+  it('Parents Clubs declares an audit role: the owner needs it to read the trail; other owners never read it', async () => {
+    const without = await call('parents-clubs/operator/audit');
+    expect(without.status).toBe(403);
+    expect(await without.text()).toContain('requires app role');
+    await env.DB.prepare("INSERT INTO app_roles (app_id, user_id, role_name) VALUES ('parents-clubs', 'gh:1', 'operator')").run();
+    expect((await call('parents-clubs/operator/audit')).status).toBe(200);
+    expect((await call('parents-clubs/operator/audit', { uid: 'gh:2' })).status).toBe(403);
+    expect(await rows('parents-clubs')).toEqual([
+      { actor_id: 'gh:1', role_name: '', status: 403, operator_action: 'audit', target: null },
+      { actor_id: 'gh:1', role_name: 'operator', status: 200, operator_action: 'audit', target: null },
+    ]);
   });
 });
 
