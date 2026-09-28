@@ -80,8 +80,10 @@ function fakeApp(): ProAppStore {
     appId: 'demo',
     auth: {
       user,
+      status: 'signed-in',
       init: async () => {},
       onChange: () => () => {},
+      onStatus: (listener: (status: string, u: unknown) => void) => { listener('signed-in', user); return () => {}; },
       signIn: () => {},
       signOut: async () => {},
     },

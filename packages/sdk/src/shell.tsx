@@ -104,7 +104,7 @@ export interface ProShellProps {
    * The error is already recorded via `app.logs`; call `reset` to retry.
    */
   renderError?: (ctx: ShellErrorContext) => ReactNode;
-  /** Replace the spinner shown while a lazy-loaded screen loads (#236). */
+  /** Replace the spinner shown while auth resolves (#241) and while a lazy-loaded screen loads (#236). */
   renderLoading?: () => ReactNode;
 }
 
@@ -181,12 +181,18 @@ export function ProShell({
     if (navTitle) document.title = navTitle;
   }, [navTitle, currentPath]);
 
+  // #241: gate on the auth status, not on "no user". While it is `pending` (the
+  // platform-cookie session not yet answered) the gate stays `loading` — a
+  // neutral state — so a signed-in refresh never flashes the sign-in screen.
+  // Only a resolved signed-out (no session, a sign-out, an expired session)
+  // shows it.
   useEffect(() => {
-    app.auth.init();
-    return app.auth.onChange((u) => {
+    const unsubscribe = app.auth.onStatus((status, u) => {
       setUser(u);
-      if (!u) setGate('signed-out');
+      if (status === 'signed-out') setGate('signed-out');
     });
+    void app.auth.init();
+    return unsubscribe;
   }, [app]);
 
   // Check subscription after auth.
@@ -206,6 +212,7 @@ export function ProShell({
   }, [user, app, allowFree]);
 
   // --- Gates ---
+  if (gate === 'loading' && renderLoading) return <>{renderLoading()}</>;
   if (gate !== 'ready') {
     return <GateScreen gate={gate} app={app} appName={appName} />;
   }

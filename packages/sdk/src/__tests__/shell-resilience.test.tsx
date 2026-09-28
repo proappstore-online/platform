@@ -24,8 +24,10 @@ function fakeApp() {
     appId: 'demo',
     auth: {
       user: { id: 'gh:1', name: 'Op', login: 'op', avatarUrl: null },
+      status: 'signed-in',
       init: async () => {},
       onChange: () => () => {},
+      onStatus: (listener: (status: string, u: unknown) => void) => { listener('signed-in', { id: 'gh:1', name: 'Op', login: 'op', avatarUrl: null }); return () => {}; },
       signIn: () => {},
       signOut: async () => {},
     },

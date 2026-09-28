@@ -17,9 +17,10 @@ export interface GateScreenProps {
 /** Renders the appropriate gate screen (loading, sign-in, or upgrade). */
 export function GateScreen({ gate, app, appName }: GateScreenProps) {
   if (gate === 'loading') {
+    // Neutral while auth (or the subscription) resolves (#241): never sign-in content.
     return (
-      <div style={{ minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <p style={{ color: 'var(--muted)' }}>Loading...</p>
+      <div className="pas-gate-loading" style={{ minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <p role="status" aria-live="polite" style={{ color: 'var(--muted)' }}>Loading...</p>
       </div>
     );
   }

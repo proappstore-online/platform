@@ -21,11 +21,39 @@ first network call happens when you read auth state or call an API.
 In a React app, pass `app` to [`ProShell`](#proshell-component), which wraps
 the whole UI and calls `app.auth.init()` for you.
 
+## Auth status
+
+A missing user is not the same as a signed-out user. With the platform cookie
+the SDK only knows who the user is once `/.pas/auth/me` answers, and a legacy
+page may still be capturing a sign-in callback. Until then `app.auth.status`
+is `pending` (#241):
+
+- **`pending`**: render a neutral loading state, never the sign-in screen.
+- **`signed-in`**: there is a user.
+- **`signed-out`**: auth resolved without a user, the user signed out, or an
+  expired session was cleared (an API 401 signs out at once).
+
+`ProShell`, `useAuth()` (`status`, and `loading` while pending) and
+`useGate()` already wait for it, so a signed-in refresh never flashes the
+sign-in screen. `ProShell`'s `renderLoading` replaces the neutral state. If
+you gate on auth yourself, check `loading` (or `status`) before `user`:
+
+```tsx
+const { user, loading } = useAuth()
+if (loading) return <Loading />       // pending: not signed out
+if (!user) return <SignIn />          // resolved: really signed out
+```
+
+The session check runs once per page load. Later `init()` calls only act on a
+new sign-in callback in the URL.
+
 ## Surfaces
 
 ```ts
 // Auth
 app.auth.init() / .signIn() / .signOut() / .onChange(cb)
+app.auth.status  // 'pending' | 'signed-in' | 'signed-out' — see "Auth status" below
+app.auth.onStatus((status, user) => …)
 // Provisioned credential accounts (no email/OAuth — for kids/students):
 app.auth.provisionChild({ displayName }) // adult-only → { login, password } once
 app.auth.signInWithCredentials(login, password) // child sign-in

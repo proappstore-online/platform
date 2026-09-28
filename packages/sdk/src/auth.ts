@@ -3,6 +3,19 @@ import type { Unsubscribe, User } from './base-types.js';
 export type AuthProvider = 'github' | 'google' | 'email';
 export type AuthMode = 'legacy-bearer' | 'platform-cookie';
 
+/**
+ * Where the SDK is in knowing who the user is (#241).
+ *
+ * - `pending`: not known yet. With the platform cookie the user is only known
+ *   once `/.pas/auth/me` answers; a legacy page may still be capturing a
+ *   `#pas_session=` callback. Render a neutral loading state — never the
+ *   signed-out UI.
+ * - `signed-in`: there is a user.
+ * - `signed-out`: known to have no user — auth resolved without one, the user
+ *   signed out, or an expired session was cleared (a 401 signs out).
+ */
+export type AuthStatus = 'pending' | 'signed-in' | 'signed-out';
+
 /** `<meta name>` the PAS host stamps on every page it serves (host meta-rewriter). */
 export const AUTH_MODE_META_NAME = 'pas-auth-mode';
 
@@ -48,7 +61,13 @@ export interface RegisterOptions {
 export class Auth {
   private session: Session | null = null;
   private listeners = new Set<(user: User | null) => void>();
+  private statusListeners = new Set<(status: AuthStatus, user: User | null) => void>();
   private lastAuthError: string | null = null;
+  /** True once the SDK has an answer about the user: init() settled, or an explicit sign-out. */
+  private resolved = false;
+  private initializing: Promise<void> | null = null;
+  /** init() has run to completion once on this page. */
+  private initialized = false;
 
   constructor(
     private readonly appId: string,
@@ -56,7 +75,16 @@ export class Auth {
     private readonly authMode: AuthMode = 'legacy-bearer',
   ) {
     this.session = this.authMode === 'legacy-bearer' ? this.readStorage() : null;
+    // A cached session that names its user is already an answer; a token-only
+    // restore (or the platform cookie) is not until init() has hydrated it.
+    this.resolved = Boolean(this.session?.user);
     if (this.session) this.ensureMember();
+  }
+
+  /** Where the SDK is in knowing who the user is. Render nothing signed-out while this is `pending`. */
+  get status(): AuthStatus {
+    if (this.session?.user) return 'signed-in';
+    return this.resolved ? 'signed-out' : 'pending';
   }
 
   /** Current signed-in user, or null if not authenticated. */
@@ -87,11 +115,24 @@ export class Auth {
     return this.authMode === 'platform-cookie';
   }
 
-  /** Subscribe to auth state changes. Fires immediately with current user, then on every change. */
+  /**
+   * Subscribe to auth state changes. Fires immediately with current user, then on every change.
+   * A `null` user may still be `pending` (not yet known): gate UI on {@link onStatus} instead.
+   */
   onChange(listener: (user: User | null) => void): Unsubscribe {
     this.listeners.add(listener);
     listener(this.user);
     return () => this.listeners.delete(listener);
+  }
+
+  /**
+   * Subscribe to the auth status and user (#241). Fires immediately, then whenever
+   * either changes — including the move from `pending` to a resolved state.
+   */
+  onStatus(listener: (status: AuthStatus, user: User | null) => void): Unsubscribe {
+    this.statusListeners.add(listener);
+    listener(this.status, this.user);
+    return () => this.statusListeners.delete(listener);
   }
 
   /**
@@ -358,9 +399,10 @@ export class Auth {
     }
   }
 
-  /** Clear the session and notify listeners. */
+  /** Clear the session and notify listeners. A sign-out is a definite answer: the status becomes `signed-out` at once. */
   signOut(): void {
     this.session = null;
+    this.resolved = true;
     if (this.authMode === 'platform-cookie') {
       if (typeof fetch !== 'undefined') {
         fetch('/.pas/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
@@ -393,7 +435,31 @@ export class Auth {
    *   await app.auth.init();
    *   render();
    */
-  async init(): Promise<void> {
+  init(): Promise<void> {
+    // Every useAuth and ProShell calls init(). The session check runs once per
+    // page (concurrent callers share it); later calls only act on a new auth
+    // callback in the URL — so a component mounting mid-session never re-asks
+    // /.pas/auth/me, and a transient failure there cannot sign the user out.
+    if (this.initialized && !this.callbackInUrl()) return Promise.resolve();
+    this.initializing ??= this.runInit().finally(() => {
+      this.initializing = null;
+      this.initialized = true;
+      // The status leaves `pending` when the check settles, whatever the outcome.
+      if (!this.resolved) {
+        this.resolved = true;
+        this.emit();
+      }
+    });
+    return this.initializing;
+  }
+
+  private callbackInUrl(): boolean {
+    if (typeof window === 'undefined') return false;
+    const hash = window.location.hash;
+    return hash.startsWith(SESSION_HASH) || hash.startsWith('#auth_error=');
+  }
+
+  private async runInit(): Promise<void> {
     if (typeof window === 'undefined') return;
     const hash = window.location.hash;
 
@@ -595,6 +661,7 @@ export class Auth {
 
   private emit(): void {
     for (const listener of this.listeners) listener(this.user);
+    for (const listener of this.statusListeners) listener(this.status, this.user);
   }
 }
 

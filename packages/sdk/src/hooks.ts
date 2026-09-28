@@ -93,6 +93,10 @@ export function useTheme() {
 /**
  * Auth state + actions. The primary way apps interact with platform identity.
  *
+ * `status` is `pending` until the SDK knows who the user is (#241) — with the
+ * platform cookie that is only once `/.pas/auth/me` answers — so `!user` alone
+ * does not mean signed out. `loading` is `status === 'pending'`.
+ *
  * Usage:
  * ```tsx
  * const { user, loading, signIn, signOut, deleteAccount } = useAuth()
@@ -103,13 +107,15 @@ export function useTheme() {
  */
 export function useAuth(app?: ProAppStore) {
   app = resolveApp(app);
-  const [user, setUser] = useState(app.auth.user);
-  const [loading, setLoading] = useState(true);
+  const [state, setState] = useState(() => ({ status: app.auth.status, user: app.auth.user }));
 
   useEffect(() => {
-    app.auth.init().finally(() => setLoading(false));
-    return app.auth.onChange(setUser);
+    const unsubscribe = app.auth.onStatus((status, user) => setState({ status, user }));
+    void app.auth.init();
+    return unsubscribe;
   }, [app]);
+  const { status, user } = state;
+  const loading = status === 'pending';
 
   const signIn = useCallback(() => app.auth.signIn(), [app]);
   const signOut = useCallback(() => app.auth.signOut(), [app]);
@@ -124,7 +130,7 @@ export function useAuth(app?: ProAppStore) {
     app.auth.signOut();
   }, [app]);
 
-  return { user, loading, signIn, signOut, deleteAccount };
+  return { user, status, loading, signIn, signOut, deleteAccount };
 }
 
 /**
