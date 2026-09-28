@@ -4,6 +4,7 @@
  * operator-contract-lists.ts (search, paging, detail, status, related).
  */
 import { selectsColumn, type ToolManifest } from './action-sql.js';
+import type { OperatorSeries } from './operator-contract-series.js';
 
 export const OPERATOR_RESOURCE_KINDS = ['users', 'reports', 'suspensions', 'verification', 'metrics'] as const;
 const OPERATOR_COLUMN_FORMATS = ['text', 'number', 'datetime', 'boolean', 'badge'] as const;
@@ -47,6 +48,8 @@ export interface OperatorResource {
   status?: OperatorStatus | null;
   /** Listed per record of another resource: `param` receives that record's detail key (e.g. a user's suspension history). */
   related?: { resource: string; param: string } | null;
+  /** Metrics only: a time series read through the metrics route (operator-contract-series.ts). */
+  series?: OperatorSeries | null;
 }
 
 export interface OperatorAction {

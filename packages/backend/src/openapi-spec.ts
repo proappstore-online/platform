@@ -3502,6 +3502,128 @@ export const openapiSpec: Record<string, unknown> = {
                                         }
                                       }
                                     ]
+                                  },
+                                  "series": {
+                                    "description": "Metrics only: an app-wide time series read through GET /operator/metrics/{resourceId}.",
+                                    "oneOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "object",
+                                        "required": [
+                                          "time",
+                                          "range",
+                                          "measures",
+                                          "dimension"
+                                        ],
+                                        "properties": {
+                                          "time": {
+                                            "type": "object",
+                                            "properties": {
+                                              "column": {
+                                                "type": "string"
+                                              },
+                                              "grain": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "day",
+                                                  "week",
+                                                  "month"
+                                                ]
+                                              }
+                                            }
+                                          },
+                                          "range": {
+                                            "type": "object",
+                                            "properties": {
+                                              "from_param": {
+                                                "type": "string"
+                                              },
+                                              "to_param": {
+                                                "type": "string"
+                                              },
+                                              "default_days": {
+                                                "type": "integer"
+                                              },
+                                              "max_days": {
+                                                "type": "integer",
+                                                "maximum": 731
+                                              }
+                                            }
+                                          },
+                                          "measures": {
+                                            "type": "array",
+                                            "maxItems": 4,
+                                            "items": {
+                                              "type": "object",
+                                              "required": [
+                                                "column",
+                                                "label",
+                                                "unit",
+                                                "currency",
+                                                "aggregation"
+                                              ],
+                                              "properties": {
+                                                "column": {
+                                                  "type": "string"
+                                                },
+                                                "label": {
+                                                  "type": "string"
+                                                },
+                                                "unit": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "count",
+                                                    "percent",
+                                                    "seconds",
+                                                    "bytes",
+                                                    "currency"
+                                                  ]
+                                                },
+                                                "currency": {
+                                                  "type": [
+                                                    "string",
+                                                    "null"
+                                                  ]
+                                                },
+                                                "aggregation": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "sum",
+                                                    "avg",
+                                                    "min",
+                                                    "max"
+                                                  ]
+                                                }
+                                              }
+                                            }
+                                          },
+                                          "dimension": {
+                                            "oneOf": [
+                                              {
+                                                "type": "null"
+                                              },
+                                              {
+                                                "type": "object",
+                                                "properties": {
+                                                  "column": {
+                                                    "type": "string"
+                                                  },
+                                                  "label": {
+                                                    "type": "string"
+                                                  },
+                                                  "max_values": {
+                                                    "type": "integer",
+                                                    "maximum": 8
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
                                   }
                                 }
                               }
@@ -3632,7 +3754,7 @@ export const openapiSpec: Record<string, unknown> = {
           "Apps"
         ],
         "summary": "Rows of a declared operator resource",
-        "description": "Owner only (#240). Runs the resource's query action with the caller's session through the same role gate, step_up and success audit as the actions route, and returns only the declared columns. `q` requires `search`, `cursor` requires `page`, `status` requires `status.param` (and a declared state), `related` requires `related`.",
+        "description": "Owner only (#240). Runs the resource's query action with the caller's session through the same role gate, step_up and success audit as the actions route, and returns only the declared columns. `q` requires `search`, `cursor` requires `page`, `status` requires `status.param` (and a declared state), `related` requires `related`. A resource with `series` is refused here (400): read it from the metrics route.",
         "operationId": "get_v1_apps_appId_operator_resources_resourceId",
         "responses": {
           "200": {
@@ -3981,6 +4103,220 @@ export const openapiSpec: Record<string, unknown> = {
             "required": true,
             "schema": {
               "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/apps/{appId}/operator/metrics/{resourceId}": {
+      "get": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "An app-wide metric time series",
+        "description": "Owner only (#240). The resource must be a metrics resource declaring `series`. `from`/`to` (YYYY-MM-DD, defaults: the declared default window ending today) and `grain` (default: the declared grain; never finer) are validated before the query runs: no malformed dates, from after to, future to, or range over max_days. The query runs under its own role gate and step_up with the range bound to its declared params; rows are rolled up into every bucket of the range (null when a bucket has no rows) with each measure's aggregation, the breakdown capped at max_values (`omitted` counts the rest). Audited as `series:<id>` with the range, never a value.",
+        "operationId": "get_v1_apps_appId_operator_metrics_resourceId",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "from",
+                    "to",
+                    "grain",
+                    "buckets",
+                    "dimension",
+                    "omitted",
+                    "measures"
+                  ],
+                  "properties": {
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "grain": {
+                      "type": "string",
+                      "enum": [
+                        "day",
+                        "week",
+                        "month"
+                      ]
+                    },
+                    "buckets": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "dimension": {
+                      "oneOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "column": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "omitted": {
+                      "type": "integer"
+                    },
+                    "measures": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "column": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "unit": {
+                            "type": "string",
+                            "enum": [
+                              "count",
+                              "percent",
+                              "seconds",
+                              "bytes",
+                              "currency"
+                            ]
+                          },
+                          "currency": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "aggregation": {
+                            "type": "string",
+                            "enum": [
+                              "sum",
+                              "avg",
+                              "min",
+                              "max"
+                            ]
+                          },
+                          "summary": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "series": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "dimension": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "summary": {
+                                  "type": [
+                                    "number",
+                                    "null"
+                                  ]
+                                },
+                                "values": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": [
+                                      "number",
+                                      "null"
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Not the app's owner, lacks the query's app role, or `step_up_required`"
+          },
+          "404": {
+            "description": "App not found, or the resource is not a declared time series"
+          },
+          "502": {
+            "description": "The app's data worker failed"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resourceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "grain",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "day",
+                "week",
+                "month"
+              ]
             }
           }
         ]

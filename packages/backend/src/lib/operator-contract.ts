@@ -6,7 +6,8 @@
  *   "operator_view": {
  *     "version": 1,
  *     "resources": [{ "id", "kind", "title", "description"?, "action", "columns": [{ "key", "label", "format"? }],
- *                     users/reports/suspensions/verification only: "search"?, "page"?, "detail"?, "status"?, "related"? }],
+ *                     users/reports/suspensions/verification only: "search"?, "page"?, "detail"?, "status"?, "related"?,
+ *                     metrics only: "series"? }],
  *     "actions":   [{ "id", "title", "resource", "action", "params": { <action param>: <resource column> }, "confirm",
  *                     "transition"?: { "from": [<state>], "to": <state> }, "destructive"?: true, "target"?: <column> }]
  *   }
@@ -27,6 +28,7 @@
  */
 import type { ToolManifest } from './action-sql.js';
 import { resolveRelated, validateListCapabilities } from './operator-contract-lists.js';
+import { validateSeries } from './operator-contract-series.js';
 import {
   ID, OPERATOR_RESOURCE_KINDS, gatedTool, isObj, required, text, unknownField, validateColumns,
   type OperatorAction, type OperatorResource, type OperatorResourceKind, type OperatorViewContract,
@@ -38,7 +40,7 @@ const OPERATOR_VIEW_VERSIONS = [1] as const;
 const MAX_OPERATOR_RESOURCES = 20;
 const MAX_OPERATOR_ACTIONS = 20;
 
-const RESOURCE_FIELDS = ['id', 'kind', 'title', 'description', 'action', 'columns', 'search', 'page', 'detail', 'status', 'related'];
+const RESOURCE_FIELDS = ['id', 'kind', 'title', 'description', 'action', 'columns', 'search', 'page', 'detail', 'status', 'related', 'series'];
 const ACTION_FIELDS = ['id', 'title', 'resource', 'action', 'params', 'confirm', 'transition', 'destructive', 'target'];
 
 function validateResource(tools: ToolManifest[], raw: unknown, where: string): OperatorResource | string {
@@ -63,7 +65,14 @@ function validateResource(tools: ToolManifest[], raw: unknown, where: string): O
   if (typeof columns === 'string') return columns;
   const lists = validateListCapabilities(tools, tool, columns, raw, where);
   if (typeof lists === 'string') return lists;
-  return { id: raw.id, kind: raw.kind as OperatorResourceKind, title, description, action: tool.name, columns, ...lists };
+  let series: OperatorResource['series'] = null;
+  if (raw.series !== undefined) {
+    if (raw.kind !== 'metrics') return `${where}: series is only supported on metrics resources`;
+    const s = validateSeries(tool, columns, raw.series, where);
+    if (typeof s === 'string') return s;
+    series = s;
+  }
+  return { id: raw.id, kind: raw.kind as OperatorResourceKind, title, description, action: tool.name, columns, ...lists, series };
 }
 
 /** Params come only from declared columns of the action's resource, and cover every required param. */

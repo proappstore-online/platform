@@ -378,3 +378,70 @@ describe('operator ID verification (#240)', () => {
   });
 });
 
+// #240 metric time series on real D1: registered through the real PUT, the
+// real app_roles gate, the data worker intercepted; the audit row carries the
+// range, never a value.
+describe('operator metric time series (#240)', () => {
+  const worker = (appId: string) => fetchMock.get(`https://pas-data-${appId}.${env.DATA_WORKER_HOST}`);
+  let sent: unknown[] = [];
+  const rows = (appId: string, reply: Record<string, unknown>[]) => worker(appId).intercept({ path: '/query', method: 'POST' })
+    .reply(200, (req) => { sent.push((JSON.parse(String(req.body)) as { params: unknown }).params); return { rows: reply, meta: {} }; });
+  const get = async (path: string, uid: string | null = 'gh:1') => SELF.fetch(`${BASE}/v1/apps/${path}`, json('GET', undefined, uid ? await session(uid) : undefined));
+
+  beforeEach(async () => {
+    sent = [];
+    await seedApp('parents-clubs', 'gh:1');
+    for (const [appId, sample] of [['stash', STASH], ['parents-clubs', PARENTS_CLUBS]] as const) {
+      worker(appId).intercept({ path: '/validate', method: 'POST' })
+        .reply(200, (req) => ({ results: (JSON.parse(String(req.body)) as { statements: { id: string }[] }).statements.map((st) => ({ id: st.id, ok: true })) }));
+      const res = await SELF.fetch(`${BASE}/v1/apps/${appId}/tools`, json('PUT', sample, await session('gh:1')));
+      expect(res.status, await res.clone().text()).toBe(200);
+      await env.DB.prepare("INSERT INTO app_roles (app_id, user_id, role_name) VALUES (?, 'gh:1', 'operator')").bind(appId).run();
+    }
+  });
+
+  it('serves a bounded, rolled-up series and audits only the range', async () => {
+    rows('stash', [
+      { day: '2026-09-01', plan: 'free', signups: 41 },
+      { day: '2026-09-01', plan: 'pro', signups: 17 },
+      { day: '2026-09-03', plan: 'team', signups: 3 },
+      { day: '2026-09-03', plan: 'edu', signups: 2 },
+    ]);
+    const res = await get('stash/operator/metrics/growth?from=2026-09-01&to=2026-09-03');
+    expect(res.status, await res.clone().text()).toBe(200);
+    const body = await res.json() as { buckets: string[]; omitted: number; measures: { summary: number; series: { dimension: string; values: unknown[] }[] }[] };
+    expect(body.buckets).toEqual(['2026-09-01', '2026-09-02', '2026-09-03']);
+    expect(body.measures[0]!.summary).toBe(63);
+    expect(body.measures[0]!.series.map((s) => [s.dimension, s.values])).toEqual([['free', [41, null, null]], ['pro', [17, null, null]], ['team', [null, null, 3]]]);
+    expect(body.omitted).toBe(1);
+    expect(sent).toEqual([expect.arrayContaining(['2026-09-01', '2026-09-03'])]);
+    const audit = await env.DB.prepare("SELECT * FROM app_action_audit WHERE app_id = 'stash'").all<Record<string, unknown>>();
+    expect(audit.results).toHaveLength(1);
+    expect(audit.results![0]).toMatchObject({ action_name: 'op_daily_signups', operator_action: 'series:growth', target: '2026-09-01..2026-09-03/day', status: 200 });
+    // No result value anywhere in the row: only who, what, the range and when.
+    const { id, created_at: when, ...rest } = audit.results![0]!;
+    void id; void when;
+    for (const value of [41, 17, 63, 'free', 'pro']) expect(Object.values(rest), String(value)).not.toContain(value);
+  });
+
+  it('refuses oversized ranges before the query, other owners, and owners without the role', async () => {
+    expect((await get('stash/operator/metrics/growth?from=2024-01-01&to=2026-09-01')).status).toBe(400);
+    expect((await get('stash/operator/metrics/growth', null)).status).toBe(401);
+    expect((await get('stash/operator/metrics/growth', 'gh:2')).status).toBe(403);
+    await env.DB.prepare("DELETE FROM app_roles WHERE app_id = 'stash'").run();
+    expect((await get('stash/operator/metrics/growth?from=2026-09-01&to=2026-09-03')).status).toBe(403);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('Parents Clubs gets its weekly measures through the same route; an empty range stays null', async () => {
+    rows('parents-clubs', []);
+    const res = await get('parents-clubs/operator/metrics/club_trends?from=2026-09-07&to=2026-09-20');
+    const body = await res.json() as { grain: string; measures: { label: string; summary: unknown; series: { values: unknown[] }[] }[] };
+    expect(body.grain).toBe('week');
+    expect(body.measures.map((m) => [m.label, m.summary, m.series[0]!.values])).toEqual([
+      ['Attendance', null, [null, null]], ['Events', null, [null, null]], ['Fees collected', null, [null, null]],
+    ]);
+    expect(sent).toEqual([expect.arrayContaining(['2026-09-07', '2026-09-20'])]);
+  });
+});
+

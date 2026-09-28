@@ -23,7 +23,7 @@ describe('validateOperatorView (#240)', () => {
     const r = validateOperatorView(stashTools, STASH.operator_view);
     if (!('contract' in r) || !r.contract) throw new Error(JSON.stringify(r));
     expect(r.contract.version).toBe(1);
-    expect(r.contract.resources.map((x) => [x.id, x.kind])).toEqual([['members', 'users'], ['open_reports', 'reports'], ['suspension_history', 'suspensions'], ['kyc', 'verification'], ['moderation', 'metrics']]);
+    expect(r.contract.resources.map((x) => [x.id, x.kind])).toEqual([['members', 'users'], ['open_reports', 'reports'], ['suspension_history', 'suspensions'], ['kyc', 'verification'], ['moderation', 'metrics'], ['growth', 'metrics']]);
     expect(r.contract.resources[0]!.columns[0]).toEqual({ key: 'display_name', label: 'Name', format: 'text' });
     expect(r.contract.resources[0]!.description).toBeNull();
     expect(r.contract.actions[1]).toEqual({
@@ -36,7 +36,7 @@ describe('validateOperatorView (#240)', () => {
   it('a second app with different kinds validates through the same code', () => {
     const r = validateOperatorView(PARENTS_CLUBS.tools as ToolManifest[], PARENTS_CLUBS.operator_view);
     if (!('contract' in r) || !r.contract) throw new Error(JSON.stringify(r));
-    expect(r.contract.resources.map((x) => x.kind)).toEqual(['users', 'reports', 'verification', 'suspensions', 'metrics']);
+    expect(r.contract.resources.map((x) => x.kind)).toEqual(['users', 'reports', 'verification', 'suspensions', 'metrics', 'metrics']);
     expect(r.contract.actions[0]).toMatchObject({ id: 'approve', step_up: true });
   });
 
@@ -263,6 +263,73 @@ describe('validateOperatorView (#240)', () => {
     const members = clone(STASH.operator_view);
     (members.resources[0]!.detail as Record<string, unknown>).evidence = [{ field: 'email', label: 'Email' }];
     expect(errorOf(stashTools, members)).toContain('evidence: only verification resources declare evidence');
+  });
+
+  it('normalizes the metric time series of both sample apps', () => {
+    const r = validateOperatorView(stashTools, STASH.operator_view);
+    if (!('contract' in r) || !r.contract) throw new Error(JSON.stringify(r));
+    expect(r.contract.resources.find((x) => x.id === 'growth')!.series).toEqual({
+      time: { column: 'day', grain: 'day' },
+      range: { from_param: 'from', to_param: 'to', default_days: 30, max_days: 366 },
+      measures: [{ column: 'signups', label: 'Sign-ups', unit: 'count', currency: null, aggregation: 'sum' }],
+      dimension: { column: 'plan', label: 'Plan', max_values: 3 },
+    });
+    expect(r.contract.resources.find((x) => x.id === 'moderation')!.series).toBeNull();
+    const pc = validateOperatorView(PARENTS_CLUBS.tools as ToolManifest[], PARENTS_CLUBS.operator_view);
+    if (!('contract' in pc) || !pc.contract) throw new Error(JSON.stringify(pc));
+    const trends = pc.contract.resources.find((x) => x.id === 'club_trends')!.series!;
+    expect(trends.time.grain).toBe('week');
+    expect(trends.measures.map((m) => [m.unit, m.currency, m.aggregation])).toEqual([['percent', null, 'avg'], ['count', null, 'sum'], ['currency', 'GBP', 'sum']]);
+    expect(trends.dimension).toBeNull();
+  });
+
+  it('refuses malformed or unbounded series declarations', () => {
+    type Series = Record<string, unknown> & { time: Record<string, unknown>; range: Record<string, unknown>; measures: Record<string, unknown>[]; dimension?: Record<string, unknown> };
+    const at = STASH.operator_view.resources.findIndex((x) => x.id === 'growth');
+    const withSql = (sql: string) => stashTools.map((t) => (t.name === 'op_daily_signups' ? { ...t, sql } : t)) as ToolManifest[];
+    const cases: Array<[(s: Series) => void, string, ToolManifest[]?]> = [
+      [(s) => { s.colour = 'red'; }, 'series: unknown field "colour"'],
+      [(s) => { s.time.column = 'created_at'; }, 'time: column must be a declared column'],
+      [(s) => { s.time.grain = 'hour'; }, 'grain must be one of day, week, month'],
+      [(s) => { s.range.from_param = 'since'; }, 'has no param "since"'],
+      [(s) => { s.range.to_param = 'from'; }, 'from_param and to_param must differ'],
+      [(s) => { s.range.max_days = 0; }, 'max_days must be an integer from 1 to 731'],
+      [(s) => { s.range.max_days = 5000; }, 'max_days must be an integer from 1 to 731'],
+      [(s) => { s.range.max_days = 30.5; }, 'max_days must be an integer from 1 to 731'],
+      [(s) => { s.range.default_days = 400; }, 'default_days must be an integer from 1 to max_days'],
+      [(s) => void s, 'must end with a literal LIMIT of 1-5000', withSql('SELECT d.day, d.plan, d.signups FROM daily_signups d WHERE d.day >= :from AND d.day <= :to')],
+      [(s) => void s, 'must end with a literal LIMIT of 1-5000', withSql('SELECT d.day, d.plan, d.signups FROM daily_signups d WHERE d.day >= :from AND d.day <= :to LIMIT 9000')],
+      [(s) => { s.measures = []; }, 'measures must be an array of 1-4'],
+      [(s) => { s.measures[0]!.unit = 'furlongs'; }, 'unit must be one of count, percent, seconds, bytes, currency'],
+      [(s) => { s.measures[0]!.unit = 'currency'; }, 'currency must be an ISO 4217 code'],
+      [(s) => { s.measures[0]!.unit = 'currency'; s.measures[0]!.currency = 'euro'; }, 'currency must be an ISO 4217 code'],
+      [(s) => { s.measures[0]!.currency = 'EUR'; }, 'currency is only allowed when unit is currency'],
+      [(s) => { s.measures[0]!.aggregation = 'median'; }, 'aggregation must be one of sum, avg, min, max'],
+      [(s) => { s.measures[0]!.column = 'day'; }, 'column "day" is already used'],
+      [(s) => { s.measures[0]!.label = ''; }, 'label is required'],
+      [(s) => { s.measures[0]!.sql = 'x'; }, 'measures[0]: unknown field "sql"'],
+      [(s) => { s.measures.push({ column: 'plan', label: 'Plan', unit: 'count', aggregation: 'sum' }); delete s.dimension; s.measures.push({ column: 'day', label: 'x', unit: 'count', aggregation: 'sum' }); }, 'column "day" is already used'],
+      [(s) => { s.dimension!.max_values = 9; }, 'max_values must be an integer from 1 to 8'],
+      [(s) => { s.dimension!.column = 'signups'; }, 'dimension: column "signups" is already used'],
+      [(s) => { s.dimension!.column = 'region'; }, 'dimension: column must be a declared column'],
+    ];
+    for (const [mutate, error, tools] of cases) {
+      const v = clone(STASH.operator_view);
+      mutate((v.resources[at] as Record<string, unknown>).series as Series);
+      expect(errorOf(tools ?? stashTools, v), error).toContain(error);
+    }
+    // A breakdown takes exactly one measure.
+    const pc = clone(PARENTS_CLUBS.operator_view);
+    const trends = pc.resources.find((x) => x.id === 'club_trends') as Record<string, unknown> & { series: Record<string, unknown> };
+    trends.series.dimension = { column: 'events', label: 'Events', max_values: 3 };
+    expect(errorOf(PARENTS_CLUBS.tools as ToolManifest[], pc)).toContain('dimension: column "events" is already used');
+    (trends.columns as unknown[]).push({ key: 'club', label: 'Club' });
+    trends.series.dimension = { column: 'club', label: 'Club', max_values: 3 };
+    expect(errorOf(PARENTS_CLUBS.tools as ToolManifest[], pc)).toContain('does not select column "club"');
+    // Series only on metrics resources.
+    const members = clone(STASH.operator_view);
+    (members.resources[0] as Record<string, unknown>).series = clone((STASH.operator_view.resources[at] as Record<string, unknown>).series);
+    expect(errorOf(stashTools, members)).toContain('series is only supported on metrics resources');
   });
 });
 

@@ -67,6 +67,12 @@ export const STASH = {
       auth: operator('Operators lift any suspension.'),
     },
     {
+      name: 'op_daily_signups', description: 'Daily sign-ups by plan', operation: 'query', requires_auth: true,
+      params: { from: { type: 'string', optional: true }, to: { type: 'string', optional: true } },
+      sql: 'SELECT d.day, d.plan, d.signups FROM daily_signups d WHERE d.day >= :from AND d.day <= :to ORDER BY d.day LIMIT 3000',
+      auth: operator('App-wide daily sign-up counts.'),
+    },
+    {
       name: 'op_list_kyc', description: 'Identity checks', operation: 'query', requires_auth: true,
       params: { status: { type: 'string', optional: true }, q: { type: 'string', optional: true }, after: { type: 'string', optional: true } },
       sql: "SELECT k.request_id, k.full_name, k.document_type, k.status, k.submitted_at FROM kyc_requests k WHERE (:status IS NULL OR k.status = :status) AND (:q IS NULL OR k.full_name LIKE '%' || :q || '%') AND (:after IS NULL OR k.request_id > :after) ORDER BY k.request_id LIMIT 50",
@@ -199,6 +205,20 @@ export const STASH = {
           { key: 'suspended_users', label: 'Suspended', format: 'number' },
         ],
       },
+      {
+        id: 'growth', kind: 'metrics', title: 'Sign-ups', action: 'op_daily_signups',
+        columns: [
+          { key: 'day', label: 'Day', format: 'datetime' },
+          { key: 'plan', label: 'Plan' },
+          { key: 'signups', label: 'Sign-ups', format: 'number' },
+        ],
+        series: {
+          time: { column: 'day', grain: 'day' },
+          range: { from_param: 'from', to_param: 'to', default_days: 30, max_days: 366 },
+          measures: [{ column: 'signups', label: 'Sign-ups', unit: 'count', aggregation: 'sum' }],
+          dimension: { column: 'plan', label: 'Plan', max_values: 3 },
+        },
+      },
     ],
     actions: [
       { id: 'suspend_member', title: 'Suspend', resource: 'members', action: 'op_suspend_user', params: { user_id: 'user_id' }, confirm: 'Suspend this member?', destructive: true },
@@ -300,6 +320,12 @@ export const PARENTS_CLUBS = {
       auth: operator('Operators end any suspension.'),
     },
     {
+      name: 'op_weekly_clubs', description: 'Weekly club activity', operation: 'query', requires_auth: true,
+      params: { since: { type: 'string', optional: true }, until: { type: 'string', optional: true } },
+      sql: 'SELECT w.week_start, w.attendance_rate, w.events, w.fees FROM weekly_club_stats w WHERE w.week_start >= :since AND w.week_start <= :until ORDER BY w.week_start LIMIT 200',
+      auth: operator('App-wide weekly club activity.'),
+    },
+    {
       name: 'op_club_metrics', description: 'Club KPIs', operation: 'query', requires_auth: true, params: {},
       sql: 'SELECT COUNT(*) AS clubs, SUM(member_count) AS members FROM clubs',
       auth: operator('App-wide club counts.'),
@@ -383,6 +409,24 @@ export const PARENTS_CLUBS = {
           { key: 'clubs', label: 'Clubs', format: 'number' },
           { key: 'members', label: 'Members', format: 'number' },
         ],
+      },
+      {
+        id: 'club_trends', kind: 'metrics', title: 'Club trends', action: 'op_weekly_clubs',
+        columns: [
+          { key: 'week_start', label: 'Week', format: 'datetime' },
+          { key: 'attendance_rate', label: 'Attendance', format: 'number' },
+          { key: 'events', label: 'Events', format: 'number' },
+          { key: 'fees', label: 'Fees', format: 'number' },
+        ],
+        series: {
+          time: { column: 'week_start', grain: 'week' },
+          range: { from_param: 'since', to_param: 'until', default_days: 84, max_days: 366 },
+          measures: [
+            { column: 'attendance_rate', label: 'Attendance', unit: 'percent', aggregation: 'avg' },
+            { column: 'events', label: 'Events', unit: 'count', aggregation: 'sum' },
+            { column: 'fees', label: 'Fees collected', unit: 'currency', currency: 'GBP', aggregation: 'sum' },
+          ],
+        },
       },
     ],
     actions: [

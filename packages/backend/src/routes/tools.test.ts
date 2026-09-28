@@ -894,8 +894,8 @@ describe('PUT /v1/apps/:appId/tools — operator_view (#240)', () => {
 
   it('two different apps register their contracts through the same path, stored normalized in the tools batch', async () => {
     for (const [appId, sample, summary] of [
-      ['stash', STASH, { version: 1, resources: 5, actions: 8 }],
-      ['parents-clubs', PARENTS_CLUBS, { version: 1, resources: 5, actions: 6 }],
+      ['stash', STASH, { version: 1, resources: 6, actions: 8 }],
+      ['parents-clubs', PARENTS_CLUBS, { version: 1, resources: 6, actions: 6 }],
     ] as const) {
       const { res, db, body } = await put(sample, appId);
       expect(res.status, body.error).toBe(200);

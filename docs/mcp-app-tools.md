@@ -679,6 +679,52 @@ which:
 - records the read in `storage_review_access` (the #208 trail) and in
   `app_action_audit` as `evidence:<resource>.<field>`.
 
+### Metric time series
+
+A `metrics` resource shows one row of KPI tiles by default. With `series` it
+becomes an app-wide time series, with a summary value per measure and a chart
+and data table per breakdown value:
+
+```json
+{
+  "id": "growth", "kind": "metrics", "title": "Sign-ups", "action": "op_daily_signups",
+  "columns": [{ "key": "day", "label": "Day" }, { "key": "plan", "label": "Plan" }, { "key": "signups", "label": "Sign-ups" }],
+  "series": {
+    "time": { "column": "day", "grain": "day" },
+    "range": { "from_param": "from", "to_param": "to", "default_days": 30, "max_days": 366 },
+    "measures": [{ "column": "signups", "label": "Sign-ups", "unit": "count", "aggregation": "sum" }],
+    "dimension": { "column": "plan", "label": "Plan", "max_values": 5 }
+  }
+}
+```
+
+- **`time`**: the column holding each row's date (`YYYY-MM-DD`, an ISO
+  date-time, or epoch seconds or milliseconds), and the grain the query
+  returns: `day`, `week` (weeks start on Monday) or `month`.
+- **`range`**: two optional string params of the query that receive the
+  requested dates, for example `WHERE day >= :from AND day <= :to`.
+  `max_days` (1 to 731) caps any request, and `default_days` is the window
+  shown first. The query must end with a literal `LIMIT` of at most 5000.
+- **`measures`** (1 to 4): each is a declared column with an explicit `label`,
+  a `unit` (`count`, `percent`, `seconds`, `bytes`, or `currency` with an ISO
+  `currency` code), and an `aggregation` (`sum`, `avg`, `min` or `max`). The
+  aggregation applies when rows are rolled into a bucket and to the summary
+  over the whole range.
+- **`dimension`** (optional, one measure only): a breakdown column. The
+  `max_values` (1 to 8) largest values are shown, and the response says how
+  many were left out.
+
+The console reads it from
+`GET /v1/apps/:appId/operator/metrics/:id?from=&to=&grain=`. Before the query
+runs, the platform refuses malformed dates, `from` after `to`, a future `to`,
+a range longer than `max_days`, and a grain finer than the declared one. It
+passes the range to the two params, rolls the rows up into every bucket of
+the range (a bucket with no rows is `null`, not `0`), and returns only the
+declared measures. The query runs under its own `auth.app_roles` and
+`step_up`. The audit row records `series:<id>` and the range
+(`2026-09-01..2026-09-30/day`), never a value. A series resource cannot be
+read through the plain resource route.
+
 **Only declared columns and fields leave the platform.** A query may select
 more (an internal id, a hash): the operator read routes return only the
 declared keys, in declared order, and a declared key the row lacks comes back

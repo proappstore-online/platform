@@ -73,7 +73,7 @@ async function loadContract(db: D1Database, appId: string): Promise<OperatorView
 }
 
 /** The declared resource, or 404: an app without a contract keeps the baseline and has no resources. */
-async function declaredResource(db: D1Database, appId: string, id: string): Promise<OperatorResource> {
+export async function declaredResource(db: D1Database, appId: string, id: string): Promise<OperatorResource> {
   const resource = (await loadContract(db, appId))?.resources.find((r) => r.id === id);
   if (!resource) throw new HttpError('resource not declared', 404);
   return resource;
@@ -93,7 +93,7 @@ function textParam(value: string | undefined, max: number, name: string): string
 }
 
 /** requireAppOwner has already verified the `Bearer` session; the data worker gets the same token the actions route forwards. */
-const sessionToken = (header: string | undefined) => (header ?? '').slice(7).trim();
+export const sessionToken = (header: string | undefined) => (header ?? '').slice(7).trim();
 
 // ── Rows of one declared resource (#240) ─────────────────────────
 // ?q= searches (resource.search), ?cursor= continues (resource.page), ?status=
@@ -105,6 +105,7 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId', async (c) => {
   const appId = c.req.param('appId');
   const owner = await requireAppOwner(c, appId);
   const resource = await declaredResource(c.env.DB, appId, c.req.param('resourceId'));
+  if (resource.series) throw new HttpError('this metric is a time series: read it from /operator/metrics/:id', 400);
 
   const input: Record<string, unknown> = {};
   const q = textParam(c.req.query('q'), MAX_SEARCH, 'q');
