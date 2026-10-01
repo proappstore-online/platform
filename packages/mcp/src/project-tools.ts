@@ -75,9 +75,18 @@ export const GITHUB_DIR_REFUSAL = ".github/ is platform-managed; workflows are g
  * become `/`, leading `./` and `/` are stripped, `//` and `.` segments
  * collapse, and any `..` segment is refused outright. The `.github` comparison
  * is case-insensitive (a case-insensitive checkout would treat `.GITHUB/` as
- * `.github/`).
+ * `.github/`). Control characters and `%` are refused outright, before
+ * normalising: both are ways to spell a path that the URL parser or GitHub
+ * rewrites after this check has looked at it.
  */
 export function refusedRepoPath(path: string): string | null {
+  // Refused before normalising: these are spellings, not names. The URL parser
+  // strips tab/newline (`..<TAB>` → `..`) and resolves `%2e` as `.`, and GitHub
+  // percent-decodes `%2F`/`%2e` — so `%2e/.github/…`, `src/%2e%2e/.github/…`
+  // and `.github%2Fworkflows%2Fx.yml` all reached `.github/`. build-core now
+  // encodes each segment as well; this keeps the check honest on its own.
+  if (/[\x00-\x1f\x7f]/.test(path)) return `path "${JSON.stringify(path).slice(1, -1)}" may not contain control characters`;
+  if (path.includes("%")) return `path "${path}" may not contain "%" (percent-encoding is not accepted)`;
   const segments = path.replace(/\\/g, "/").split("/").filter((seg) => seg !== "" && seg !== ".");
   if (segments.some((seg) => seg === "..")) return `path "${path}" may not contain ".." segments`;
   if (segments[0]?.toLowerCase() === ".github") return GITHUB_DIR_REFUSAL;

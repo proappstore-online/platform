@@ -720,6 +720,40 @@ describe('.github/ is platform-managed (#280)', () => {
     noGitHubWrites();
   });
 
+  // Review of #283: spellings the URL parser or GitHub rewrites into
+  // `.github/…` AFTER the check has looked at them. Each passed the first
+  // version of refusedRepoPath and reached .github/workflows/x.yml.
+  const BYPASSES: [string, string][] = [
+    ['%2e/.github/workflows/x.yml', '"%"'],
+    ['src/%2e%2e/.github/workflows/x.yml', '"%"'],
+    ['src/%2E%2E/.github/workflows/x.yml', '"%"'],
+    ['src/.%2e/.github/workflows/x.yml', '"%"'],
+    ['%2egithub/workflows/x.yml', '"%"'],
+    ['.github%2Fworkflows%2Fx.yml', '"%"'],
+    ['src/..\t/.github/workflows/x.yml', 'control characters'],
+    ['src/..\n/.github/workflows/x.yml', 'control characters'],
+    ['src/..\r/.github/workflows/x.yml', 'control characters'],
+  ];
+
+  it.each(BYPASSES)('write_file refuses the encoded/control spelling %j, with no GitHub call', async (path, why) => {
+    const result = await tools.get('write_file')!({ app_id: 'app', path, content: 'on: push' });
+    expect(result.isError).toBe(true);
+    expect(getText(result)).toContain(why);
+    noGitHubWrites();
+  });
+
+  it.each(BYPASSES)('delete_file and batch_write_files refuse %j too', async (path, why) => {
+    const del = await tools.get('delete_file')!({ app_id: 'app', path, confirm: true });
+    expect(del.isError).toBe(true);
+    expect(getText(del)).toContain(why);
+    const batch = await tools.get('batch_write_files')!({
+      app_id: 'app', files: [{ path: 'src/a.ts', content: 'a' }, { path, content: 'on: push' }], message: 'm',
+    });
+    expect(batch.isError).toBe(true);
+    expect(getText(batch)).toContain(why);
+    noGitHubWrites();
+  });
+
   it('delete_file refuses .github/workflows/deploy.yml, even with confirm and dry_run', async () => {
     for (const extra of [{ confirm: true }, { dry_run: true }]) {
       const result = await tools.get('delete_file')!({ app_id: 'app', path: '.github/workflows/deploy.yml', ...extra });
@@ -744,7 +778,7 @@ describe('.github/ is platform-managed (#280)', () => {
   it('still writes ordinary paths, including ones that merely contain "github"', async () => {
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
     mockGh.putFile.mockResolvedValue({ ok: true, status: 201, data: {} });
-    for (const path of ['src/app.ts', 'docs/.github-notes.md', 'web/.github/not-root.md']) {
+    for (const path of ['src/app.ts', 'docs/.github-notes.md', 'web/.github/not-root.md', 'docs/my notes/café ✓.md']) {
       const result = await tools.get('write_file')!({ app_id: 'app', path, content: 'x' });
       expect(result.isError).toBeUndefined();
       expect(getText(result)).toBe(`Created ${path}`);
