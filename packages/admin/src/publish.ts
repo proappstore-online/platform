@@ -482,10 +482,11 @@ async function addCollaborator(env: Env, id: string, username: string): Promise<
   };
 }
 
-// NOTE: app repos hold no Cloudflare or R2 credential. Deploys mint scoped R2
-// credentials through OIDC (`POST /v1/apps/<id>/deploy-credentials`, see
-// deployWorkflowYaml). The workflow's CLOUDFLARE_API_TOKEN is not an app-repo
-// secret (#279).
+// NOTE: the publish paths place no deploy secrets in app repos. Deploys mint
+// scoped R2 credentials through OIDC (`POST /v1/apps/<id>/deploy-credentials`,
+// see deployWorkflowYaml), and the workflow's CLOUDFLARE_API_TOKEN is not an
+// app-repo secret (#279). The MCP `setR2Variables` still writes `R2_*` repo
+// variables on provision_pas_app / scaffold_app (#285).
 
 /** addToRegistry: attempts at the registry.json read-modify-write before giving up (#60). */
 const REGISTRY_WRITE_ATTEMPTS = 3;

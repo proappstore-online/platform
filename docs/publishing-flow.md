@@ -22,7 +22,7 @@ publisher                  PAS backend (api.proappstore.online)
   |                                       |
   | <---- result + URL ---------------    |
   |
-  +-- register mcp.json tools (PUT /v1/apps/{id}/tools) + dispatch R2 deploy-secret reconcile
+  +-- register mcp.json tools (PUT /v1/apps/{id}/tools)
   |
   +-- git push origin main
      GitHub Actions deploy (keyless OIDC), in order:
