@@ -645,7 +645,7 @@ function validateOperatorGate(operator: unknown): { error: string } | { gate: Op
 
 /**
  * Validate `visibility` (#259): a private app is served — origin, data, MCP — only
- * to its owner and to holders of up to five app roles. `member` is refused for the
+ * to its team (creator, team members, platform admins) and to holders of up to five app roles. `member` is refused for the
  * reason the operator gate refuses it. A private app cannot register a public
  * (requires_auth false) action: an anonymous data path would defeat the gate.
  */
@@ -856,7 +856,7 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
       WHERE t.app_id = ? ORDER BY t.name`,
   ).bind(appId).all<{ name: string; manifest: string; updated_at: number; source: ToolSource | null; visibility_mode?: string | null; visibility_roles?: string | null }>();
 
-  // A private app's tool list is part of the app: its owner and allowed roles only.
+  // A private app's tool list is part of the app: its team and allowed roles only.
   const first = result.results?.[0];
   const visibility = visibilityFromRow(first?.visibility_mode ?? null, first?.visibility_roles ?? null);
   if (visibility.mode === 'private') {

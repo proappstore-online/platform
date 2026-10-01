@@ -871,7 +871,7 @@ describe('PUT /v1/apps/:appId/tools — operator gate (#229)', () => {
 });
 
 // #259: visibility registers with the tools — a private app is served (origin,
-// data, MCP) only to its owner and up to five declared app roles.
+// data, MCP) only to its team and up to five declared app roles.
 describe('PUT /v1/apps/:appId/tools — visibility (#259)', () => {
   const publicTool = {
     name: 'list_public',

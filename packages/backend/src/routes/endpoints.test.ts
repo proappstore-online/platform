@@ -127,9 +127,17 @@ describe('PUT /v1/apps/:appId/endpoints/:name', () => {
     const all = await app.request('/v1/apps/test-app/endpoints/api_my_tasks', json('PUT', '', { config: { ...CONFIG, scope: 'all', owner_column: undefined, app_roles: ['admin'] } }), makeEnv(mockD1(owner(), mockStmt({ first: null }), mockStmt({ first: { n: 0 } }))));
     expect(all.status).toBe(200);
     expect(((await all.json()) as { endpoint: { manifest: { auth: unknown } } }).endpoint.manifest.auth).toMatchObject({ app_roles: ['admin'] });
-    const pub = await app.request('/v1/apps/test-app/endpoints/api_my_tasks', json('PUT', '', { config: { ...CONFIG, scope: 'public', owner_column: undefined, page_size: 500 } }), makeEnv(mockD1(owner(), mockStmt({ first: null }), mockStmt({ first: { n: 0 } }))));
+    // owner → app_visibility (none: public) → existing row → count
+    const pub = await app.request('/v1/apps/test-app/endpoints/api_my_tasks', json('PUT', '', { config: { ...CONFIG, scope: 'public', owner_column: undefined, page_size: 500 } }), makeEnv(mockD1(owner(), mockStmt({ first: null }), mockStmt({ first: null }), mockStmt({ first: { n: 0 } }))));
     expect(pub.status).toBe(200);
     expect(((await pub.json()) as { endpoint: { manifest: { requires_auth: boolean; sql: string } } }).endpoint.manifest).toMatchObject({ requires_auth: false, sql: 'SELECT "id","title" FROM "tasks" LIMIT 500' });
+  });
+  it('400 for a public endpoint on a private app (#259) — the executor would refuse it anyway, so nothing is stored', async () => {
+    const db = mockD1(owner(), mockStmt({ first: { mode: 'private', roles: '["viewer"]' } }));
+    const res = await app.request('/v1/apps/test-app/endpoints/api_my_tasks', json('PUT', '', { config: { ...CONFIG, scope: 'public', owner_column: undefined, page_size: 500 } }), makeEnv(db));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/private app cannot have a public endpoint/);
+    expect(db.batch).not.toHaveBeenCalled();
   });
   it('400 at the console cap', async () => {
     const db = mockD1(owner(), mockStmt({ first: null }), mockStmt({ first: { n: 30 } }));

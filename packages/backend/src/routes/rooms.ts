@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { ROOM_CLOSE_CODES, refuseWebSocket } from '../do/room.js';
 import { verifySession } from '@proappstore/build-core';
 import type { Env } from '../types.js';
+import { getAppVisibility, visibilityAllows } from '../lib/visibility.js';
 
 export const roomRoutes = new Hono<{ Bindings: Env }>();
 
@@ -16,6 +17,13 @@ roomRoutes.get('/apps/:appId/rooms/:roomId', async (c) => {
   if (!session) return refuseWebSocket(ROOM_CLOSE_CODES.UNAUTHORIZED, 'invalid_session');
 
   const { appId, roomId } = c.req.param();
+  // #259: a private app's rooms admit only callers its visibility gate allows.
+  // Refused on the socket like a bad session (4401 stops the SDK reconnecting),
+  // with its own reason so the app can tell the two apart.
+  const visibility = await getAppVisibility(c.env.DB, appId);
+  if (!(await visibilityAllows(c.env.DB, appId, visibility, { id: session.uid, login: session.login ?? session.uid, roles: session.roles ?? ['user'] }))) {
+    return refuseWebSocket(ROOM_CLOSE_CODES.UNAUTHORIZED, 'app_private');
+  }
   const id = c.env.ROOM.idFromName(`${appId}:${roomId}`);
   const stub = c.env.ROOM.get(id);
   const url = new URL(c.req.raw.url);
