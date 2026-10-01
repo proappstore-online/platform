@@ -1,5 +1,6 @@
 import type { FileSource } from '../lib/file-source.js';
 import type { CheckResult } from '../types.js';
+import { extOf } from '../lib/source-text.js';
 
 const REQUIRED_FONTS = ['Manrope', 'Fraunces'];
 
@@ -39,10 +40,4 @@ export async function checkBrandFonts(source: FileSource): Promise<CheckResult> 
       'Use them as your body / display fonts in CSS so storefront and apps feel consistent.',
     ],
   };
-}
-
-function extOf(path: string): string {
-  const dot = path.lastIndexOf('.');
-  const slash = path.lastIndexOf('/');
-  return dot > slash ? path.slice(dot).toLowerCase() : '';
 }

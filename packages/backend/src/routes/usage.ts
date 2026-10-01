@@ -4,6 +4,7 @@ import type { Env } from '../types.js';
 import { requireUser, requireAppOwner, HttpError } from '../lib/auth.js';
 import { APP_ID_RE } from './validation.js';
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
+import { utcDayKey } from '../lib/day-key.js';
 import { payoutActorId, writePayoutUsagePoint } from '../lib/payout-meter.js';
 
 /**
@@ -63,11 +64,6 @@ interface PingBody {
   appId?: unknown;
   deltaSeconds?: unknown;
   deltaApiCalls?: unknown;
-}
-
-/** Today's UTC day key, YYYY-MM-DD. */
-function utcDayKey(now: number = Date.now()): string {
-  return new Date(now).toISOString().slice(0, 10);
 }
 
 /** Subtract `n` days from a YYYY-MM-DD key, returning a new YYYY-MM-DD key. */

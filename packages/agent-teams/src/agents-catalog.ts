@@ -49,9 +49,8 @@ export interface AgentDescriptor {
   editable: { fields: string[]; via: string };
 }
 
-/** Fixed tool sets for the two conversational agents (see po-chat / architect-chat). */
+/** Fixed tool set for the PO chat agent (see po-chat). */
 const PO_CHAT_TOOLS = ['list_files', 'read_file', 'search_files', 'remember', 'create_ticket'];
-const ARCHITECT_CHAT_TOOLS = ['list_files', 'read_file', 'search_files', 'write_file', 'batch_write_files', 'remember', 'read_docs'];
 
 const PUT_ROLES = 'PUT /v1/projects/:slug/roles';
 

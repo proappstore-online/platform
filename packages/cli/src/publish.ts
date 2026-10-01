@@ -1,7 +1,7 @@
-import { readFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { resolveToken } from './lib/config.js';
+import { readJsonIfExists } from './lib/json-file.js';
 
 interface PublishOptions {
   name?: string;
@@ -14,15 +14,6 @@ interface PublishOptions {
 }
 
 const PAS_API = 'https://api.proappstore.online';
-
-function readJsonIfExists<T = unknown>(path: string): T | null {
-  if (!existsSync(path)) return null;
-  try {
-    return JSON.parse(readFileSync(path, 'utf8')) as T;
-  } catch {
-    return null;
-  }
-}
 
 function toTitleCase(id: string): string {
   return id

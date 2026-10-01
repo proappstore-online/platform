@@ -58,17 +58,8 @@ export function isValidLogin(login: string): boolean {
   return /^[a-z0-9]+(-[a-z0-9]+)*$/.test(login) && login.length >= 3 && login.length <= 64;
 }
 
-/**
- * Normalize an email for storage/lookup: trim + lowercase.
- *
- * Lowercasing the local part is technically lossy — RFC 5321 lets `A@x.com`
- * and `a@x.com` be different mailboxes — but no provider anyone signs in with
- * treats them that way, and the unique index in 0042 is byte-wise, so the
- * alternative is two separately-loginable rows for one human's address.
- */
-export function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
-}
+// Re-exported so credential callers keep one import site; defined in email.ts.
+export { normalizeEmail } from './email.js';
 
 // Applied to an already-normalized (lowercased) address, so no case classes.
 // Deliberately stricter than RFC 5322: no quoted local parts, no bare-hostname

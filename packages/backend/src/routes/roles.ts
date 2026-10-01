@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { requireUser, requireAppAccess, HttpError } from '../lib/auth.js';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 /**
  * App-level RBAC endpoints. Vendored from FAS, adapted for PAS auth.

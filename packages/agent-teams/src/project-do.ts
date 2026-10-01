@@ -23,9 +23,6 @@ import {
   baVerdict,
 } from './ticket-machine.ts';
 import { executeFileTool, isFileTool } from './spine.ts';
-import { TOOL_SCHEMAS } from './tool-schemas.ts';
-import { toolActivityDetail } from './tool-activity.ts';
-import { parseAnthropicStream } from './runtimes/cf-native-stream.ts';
 import { seedFiles, type TemplateType } from './template-seed.ts';
 import { RECIPES, getRecipe } from './recipes.ts';
 import {
@@ -40,9 +37,6 @@ import {
 } from './store.ts';
 import { runDeployStage, MAX_DEPLOY_ATTEMPTS, DEPLOY_RETRY_BACKOFF_MS, deployStatusOf } from './deploy-stage.ts';
 import { fetchAnthropicMessages } from './runtimes/ai-gateway.ts';
-
-/** The listing generator's model (priced in runtimes/pricing.ts). */
-export const LISTING_MODEL = 'claude-haiku-4-5';
 import { handlePOChat } from './po-chat.ts';
 import { handleArchitectChat, RESEARCH_THREAD, ARCHITECT_RUN_TIMEOUT_MS } from './architect-chat.ts';
 import { handleQAChat } from './qa-chat.ts';
@@ -55,6 +49,21 @@ import { listShares, createShare, revokeShare, accessKbViaShare, accessKbFileVia
 import { insertActivity, updateActivityMeta, clearActivityLog, readActivity, costSummary, costDetail, activityFromBroadcast } from './activity-log.ts';
 import { DEFAULT_PERSONAS, type MemoryEntry } from './memory.ts';
 import { DOCS_SKILLS_URL, sliceDocs } from './platform-skill.ts';
+import { TEAM_ROLES, minRoleFor, type TeamRole } from './role-gate.ts';
+import { LISTING_MODEL, sanitizeListing } from './listing.ts';
+import {
+  CHAT_THREADS,
+  CHAT_ROLE,
+  CHAT_STREAM_KEEPALIVE_MS,
+  chatThreadOf,
+  type ChatThread,
+  type ChatStreamSubscriber,
+} from './chat-thread.ts';
+
+// Re-exported: these lived here before being split out, and callers import them from this module.
+export { minRoleFor } from './role-gate.ts';
+export { LISTING_MODEL, sanitizeListing } from './listing.ts';
+export { CHAT_THREADS, chatThreadOf, type ChatThread } from './chat-thread.ts';
 
 /**
  * Watchdog interval. While a project is running, an alarm fires on this cadence
@@ -63,84 +72,6 @@ import { DOCS_SKILLS_URL, sliceDocs } from './platform-skill.ts';
  * in-memory run flag was lost on hibernation.
  */
 const WATCHDOG_MS = 60_000;
-
-// Team role ladder (mirrors the backend's TEAM_ROLES). Index = privilege rank.
-const TEAM_ROLES = ['viewer', 'po', 'developer', 'admin', 'owner'] as const;
-type TeamRole = (typeof TEAM_ROLES)[number];
-
-/**
- * Minimum team role required for a DO route. Destructive, spend-config, and
- * deploy routes require `owner`; other mutations require `developer`; reads
- * allow any member (`viewer`). Keep in sync with the fetch() dispatch table.
- */
-export function minRoleFor(path: string, method: string): TeamRole {
-  const ownerRoutes: ReadonlyArray<readonly [string, string]> = [
-    ['/project/play', 'POST'], ['/project/pause', 'POST'],
-    ['/roles', 'PUT'], ['/budget', 'PUT'],
-    ['/files', 'POST'], ['/files', 'DELETE'],
-    ['/deploy', 'POST'],
-    ['/chat/history', 'DELETE'], ['/activity', 'DELETE'],
-    ['/shares', 'POST'], ['/generate-listing', 'POST'],
-  ];
-  if (ownerRoutes.some(([p, m]) => p === path && m === method)) return 'owner';
-  // Destructive ticket/memory sub-routes.
-  if (method === 'DELETE' && (/^\/tickets\/[a-f0-9-]+$/.test(path) || /^\/memory\/[a-f0-9-]+$/.test(path))) {
-    return 'owner';
-  }
-  if (method === 'GET') return 'viewer';
-  return 'developer';
-}
-
-/** Store-listing categories (must match the storefront allow-list). */
-const LISTING_CATEGORIES = [
-  'productivity', 'social', 'marketplace', 'transport', 'finance',
-  'health', 'education', 'entertainment', 'tools', 'other',
-] as const;
-
-/**
- * Coerce untrusted model output (#91) into a safe listing: only the known
- * fields, category validated against the allow-list (else 'other'), lengths
- * clamped. Prevents prompt-injected repo content from poisoning the public card.
- */
-export function sanitizeListing(raw: unknown): { tagline: string; longDescription: string; category: string } {
-  const l = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {};
-  const str = (v: unknown, max: number) => (typeof v === 'string' ? v : '').slice(0, max);
-  const category = typeof l.category === 'string' && (LISTING_CATEGORIES as readonly string[]).includes(l.category)
-    ? l.category
-    : 'other';
-  return { tagline: str(l.tagline, 120), longDescription: str(l.longDescription, 4000), category };
-}
-
-// ── Chat streaming (#8) ─────────────────────────────────────
-export const CHAT_THREADS = ['build', 'research', 'test'] as const;
-export type ChatThread = (typeof CHAT_THREADS)[number];
-/** The agent that answers each thread — what `chat-start` / `chat-done` report. */
-const CHAT_ROLE: Record<ChatThread, string> = { build: 'PO', research: 'Architect', test: 'QA' };
-const CHAT_STREAM_KEEPALIVE_MS = 15_000;
-
-interface ChatStreamSubscriber {
-  thread: ChatThread | 'all';
-  /** Returns false once the client is gone. */
-  write(chunk: string): boolean;
-}
-
-/**
- * Which chat thread a broadcast event belongs to, or null when it is not a chat
- * event (ticket runs carry a `ticketId`; board events are not chat at all).
- * Thread comes from the event when present (`chat` on research/test, the
- * `chat-start` / `chat-done` bracket), else from the agent role: the Architect
- * answers research, QA answers test, the PO answers build.
- */
-export function chatThreadOf(event: Record<string, unknown>): ChatThread | null {
-  const type = String(event.type ?? '');
-  if (!['chat', 'chat-start', 'chat-done', 'agent-text', 'agent-run-started', 'agent-heartbeat'].includes(type)) return null;
-  if (event.ticketId) return null;
-  if (typeof event.thread === 'string' && CHAT_THREADS.includes(event.thread as ChatThread)) return event.thread as ChatThread;
-  const role = String(event.role ?? '').toLowerCase();
-  if (role === 'architect') return 'research';
-  if (role === 'qa') return 'test';
-  return 'build';
-}
 
 export class ProjectDO implements DurableObject {
   private state: DurableObjectState;

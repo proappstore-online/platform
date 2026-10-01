@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { type CheckResult, runChecks } from '@proappstore/compliance';
 import { Command } from 'commander';
+import { bold, dim, green, red, yellow } from './lib/ansi.js';
 
 /**
  * Find the app's repo root by walking up from `start` looking for the
@@ -26,14 +27,6 @@ function findAppRoot(start: string): string {
   }
   return resolve(start);
 }
-
-const isTTY = Boolean(process.stdout.isTTY) && process.env.NO_COLOR !== '1';
-const c = (open: string) => (s: string) => (isTTY ? `\x1b[${open}m${s}\x1b[39m` : s);
-const green = c('32');
-const yellow = c('33');
-const red = c('31');
-const dim = (s: string) => (isTTY ? `\x1b[2m${s}\x1b[22m` : s);
-const bold = (s: string) => (isTTY ? `\x1b[1m${s}\x1b[22m` : s);
 
 const ICON: Record<CheckResult['status'], string> = {
   pass: '✓',

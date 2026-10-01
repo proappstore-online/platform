@@ -12,8 +12,8 @@
 // knows which records to add at their registrar.
 
 import { type Context, Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { HttpError, requireAppOwner } from '../lib/auth.js';
+import { wrap } from '../lib/route-wrap.js';
 import type { Env } from '../types.js';
 
 export const domainRoutes = new Hono<{ Bindings: Env }>();
@@ -383,17 +383,6 @@ async function assertNoCrossAppDomainConflict(db: D1Database, appId: string, dom
       : `${domain} is already attached to another app`,
     409,
   );
-}
-
-function wrap(handler: (c: Ctx) => Promise<Response>) {
-  return async (c: Ctx) => {
-    try {
-      return await handler(c);
-    } catch (err) {
-      if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-      throw err;
-    }
-  };
 }
 
 // POST /v1/apps/:appId/domains — attach a custom domain. Idempotent: if the

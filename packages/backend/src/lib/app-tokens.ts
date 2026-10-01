@@ -7,8 +7,6 @@
 import { HttpError, type FasUser } from './auth.js';
 
 export const TOKEN_PREFIX = 'pas_at_';
-/** Names shown to the user: a random id, never derived from the token. */
-export const TOKEN_ID_RE = /^[a-f0-9]{32}$/;
 export const MAX_SCOPED_ACTIONS = 50;
 export const ACTION_NAME_RE = /^[a-z][a-z0-9_]*$/;
 /** A token minted from a first-party origin (dashboard) may live a year; from an app origin, 90 days (#154 review §3). */

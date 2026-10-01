@@ -44,5 +44,3 @@ export function dataWorkerUrl(env: { DATA_WORKER_HOST?: string }, appId: string,
   return `https://${dataWorkerName(appId)}.${dataWorkerHost(env)}${suffix}`;
 }
 
-/** The public, host-mediated hostname — what browsers use, never the backend. */
-export const PUBLIC_DATA_HOST_RE = /^https?:\/\/data-[a-z0-9-]+\.proappstore\.online(\/|$)/i;

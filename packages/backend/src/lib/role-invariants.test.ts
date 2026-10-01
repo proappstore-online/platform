@@ -26,7 +26,7 @@ describe('role-system invariants', () => {
     // Vendored copies (separate packages that depend on nothing at runtime).
     for (const rel of [
       '../../../data-worker/src/index.ts',
-      '../../../agent-teams/src/project-do.ts',
+      '../../../agent-teams/src/role-gate.ts',
     ]) {
       expect(extract(read(rel)), rel).toBe(canonical);
     }

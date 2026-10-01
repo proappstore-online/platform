@@ -24,6 +24,7 @@ import type { Context } from 'hono';
 import { mintSession, type NewSession, type SessionClaims } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { HttpError } from '../lib/auth.js';
+import { timingSafeEqual } from '../lib/bytes.js';
 import { APP_CONTEXT_HEADER, APP_HOST_HEADER } from '../lib/app-context.js';
 import { requireClaims } from './auth.js';
 
@@ -65,13 +66,6 @@ function fromB64url(value: unknown, field: string): Uint8Array {
 
 async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as BufferSource));
-}
-
-function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a[i]! ^ b[i]!;
-  return diff === 0;
 }
 
 function nowSeconds(): number {
@@ -163,7 +157,7 @@ async function verifyClientData(
 /** Check rpIdHash and the UP + UV flags; return the flags and the signature counter. */
 async function verifyAuthenticatorData(authData: Uint8Array, rpId: string): Promise<{ flags: number; signCount: number }> {
   if (authData.length < 37) throw new HttpError('authenticatorData is too short', 400);
-  if (!equalBytes(authData.slice(0, 32), await sha256(enc.encode(rpId)))) throw new HttpError('authenticatorData is for another relying party', 400);
+  if (!timingSafeEqual(authData.slice(0, 32), await sha256(enc.encode(rpId)))) throw new HttpError('authenticatorData is for another relying party', 400);
   const flags = authData[32]!;
   if (!(flags & FLAG_UP) || !(flags & FLAG_UV)) throw new HttpError('the passkey must verify the user (PIN or biometric)', 400);
   const signCount = new DataView(authData.buffer, authData.byteOffset + 33, 4).getUint32(0);
@@ -237,7 +231,7 @@ passkeyRoutes.post('/auth/passkey/register', async (c) => {
   if (!(flags & FLAG_AT) || authData.length < 55) throw new HttpError('authenticatorData carries no credential', 400);
   const idLength = new DataView(authData.buffer, authData.byteOffset + 53, 2).getUint16(0);
   const credentialId = authData.slice(55, 55 + idLength);
-  if (credentialId.length !== idLength || !equalBytes(credentialId, fromB64url(body.id, 'id'))) {
+  if (credentialId.length !== idLength || !timingSafeEqual(credentialId, fromB64url(body.id, 'id'))) {
     throw new HttpError('credential id does not match authenticatorData', 400);
   }
 

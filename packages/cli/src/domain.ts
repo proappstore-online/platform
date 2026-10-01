@@ -1,17 +1,10 @@
-import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Command } from 'commander';
+import { bold, dim, green, red, yellow } from './lib/ansi.js';
 import { resolveToken } from './lib/config.js';
+import { readJsonIfExists } from './lib/json-file.js';
 
 const PAS_API = 'https://api.proappstore.online';
-
-const isTTY = Boolean(process.stdout.isTTY) && process.env.NO_COLOR !== '1';
-const ansi = (open: string) => (s: string) => (isTTY ? `\x1b[${open}m${s}\x1b[39m` : s);
-const green = ansi('32');
-const yellow = ansi('33');
-const red = ansi('31');
-const dim = (s: string) => (isTTY ? `\x1b[2m${s}\x1b[22m` : s);
-const bold = (s: string) => (isTTY ? `\x1b[1m${s}\x1b[22m` : s);
 
 // Adaptive attach: 'worker' = the domain's zone is already on Cloudflare (instant,
 // no DNS records for the owner); 'saas' = external DNS, so `instructions` carries the
@@ -32,15 +25,6 @@ interface DomainDto {
   instructions: DomainInstructions | null;
   addedAt: number;
   verifiedAt: number | null;
-}
-
-function readJsonIfExists<T = unknown>(path: string): T | null {
-  if (!existsSync(path)) return null;
-  try {
-    return JSON.parse(readFileSync(path, 'utf8')) as T;
-  } catch {
-    return null;
-  }
 }
 
 function getAppId(): string {

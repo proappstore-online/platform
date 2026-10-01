@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
-import { PLATFORM_FEE_BPS, developerShareCents } from '../lib/platform-fee.js';
+import { developerShareCents } from '../lib/platform-fee.js';
 import { sendEmail } from '../lib/email.js';
 import { auditModeration, chunkText, moderateChunks } from '../lib/moderation.js';
 import { withinModerationRate } from '../lib/ai-budget.js';

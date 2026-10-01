@@ -18,10 +18,11 @@
 // (full-power + 30-day expiry). Key mint/revoke is owner-bearer only.
 
 import { type Context, Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { MAX_FLOWS_PER_APP, toPlaywright, validateFlow, type TestFlow } from '@proappstore/qa-spec';
 import { HttpError, requireAppOwner } from '../lib/auth.js';
 import { verifyGithubOidc } from '../lib/github-oidc.js';
+import { sha256Hex } from '../lib/app-tokens.js';
+import { wrap } from '../lib/route-wrap.js';
 import type { Env } from '../types.js';
 
 // Same trust model as deploy-credentials (routes/deploy.ts): the VERIFIED
@@ -40,22 +41,6 @@ type Ctx = Context<{ Bindings: Env }>;
 const FLOW_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const RUN_TRIGGERS = new Set(['manual', 'deploy', 'cron', 'browser']);
 const QA_KEY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-
-function wrap(handler: (c: Ctx) => Promise<Response>) {
-  return async (c: Ctx) => {
-    try {
-      return await handler(c);
-    } catch (err) {
-      if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-      throw err;
-    }
-  };
-}
-
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
 
 function b64urlJsonPart(part: string): Record<string, unknown> | null {
   try {

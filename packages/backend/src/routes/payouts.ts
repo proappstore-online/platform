@@ -5,6 +5,7 @@ import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
 import { cfAnalyticsSql } from './analytics-shared.js';
 import { payoutAiCostSql, payoutUsageSql } from '../lib/payout-meter.js';
+import { utcDayKey } from '../lib/day-key.js';
 
 /**
  * Creator payout preview — what would this month's payout be if usage froze
@@ -74,10 +75,6 @@ interface PreviewResponse {
   platformFeeBps: number;
   perSubscriberPoolCents: number;
   months: MonthPreview[];
-}
-
-function utcDayKey(now: number = Date.now()): string {
-  return new Date(now).toISOString().slice(0, 10);
 }
 
 function daysInMonth(year: number, month1Based: number): number {

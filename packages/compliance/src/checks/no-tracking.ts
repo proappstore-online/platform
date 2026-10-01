@@ -1,6 +1,7 @@
 import type { FileSource } from '../lib/file-source.js';
 import { stripCommentsForExt } from '../lib/strip.js';
 import type { CheckResult } from '../types.js';
+import { extOf } from '../lib/source-text.js';
 
 // Each tracker carries one or more patterns that should ONLY match real SDK
 // usage — never bare English words used as geometry / math / physics terms.
@@ -139,10 +140,4 @@ export async function checkNoTracking(source: FileSource): Promise<CheckResult> 
       'For private-by-design metrics, CF edge analytics already counts requests anonymously.',
     ],
   };
-}
-
-function extOf(path: string): string {
-  const dot = path.lastIndexOf('.');
-  const slash = path.lastIndexOf('/');
-  return dot > slash ? path.slice(dot).toLowerCase() : '';
 }

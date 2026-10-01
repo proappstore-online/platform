@@ -3,7 +3,6 @@
 // wiring; logic is unchanged.
 
 import type { Context } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { HttpError } from '../lib/auth.js';
 import { ANALYTICS_DATASET } from '../lib/telemetry-datasets.js';
 import type { Env } from '../types.js';
@@ -57,16 +56,7 @@ export function normalize(v: string | null | undefined): string | null {
   return trimmed === '' ? null : trimmed;
 }
 
-export function wrap(handler: (c: Ctx) => Promise<Response>) {
-  return async (c: Ctx) => {
-    try {
-      return await handler(c);
-    } catch (err) {
-      if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-      throw err;
-    }
-  };
-}
+export { wrap } from '../lib/route-wrap.js';
 
 // -----------------------------------------------------------------------------
 // Stats query shared bits: aggregates from Workers Analytics Engine via the

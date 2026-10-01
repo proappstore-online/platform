@@ -48,7 +48,14 @@ export async function sendEmail(cfg: EmailConfig, opts: SendEmailOpts): Promise<
   }
 }
 
-/** Normalize for storage + dedup: trim + lowercase. No validation here. */
+/**
+ * Normalize an email for storage/lookup/dedup: trim + lowercase. No validation here.
+ *
+ * Lowercasing the local part is technically lossy — RFC 5321 lets `A@x.com`
+ * and `a@x.com` be different mailboxes — but no provider anyone signs in with
+ * treats them that way, and the unique index in 0042 is byte-wise, so the
+ * alternative is two separately-loginable rows for one human's address.
+ */
 export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }

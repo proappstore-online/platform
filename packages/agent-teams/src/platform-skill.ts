@@ -129,7 +129,6 @@ Rules:
 
 /** Canonical, user-facing docs the agents should read + cite. */
 export const DOCS_SKILLS_URL = 'https://proappstore.online/skills.md';
-export const DOCS_SITE_URL = 'https://docs.proappstore.online/';
 
 /**
  * Return the doc section(s) relevant to `topic`, or the whole doc (capped) when
