@@ -1183,6 +1183,27 @@ describe('PUT /v1/apps/:appId/tools — unscoped statement rejection (#150)', ()
       expect((await put({ ...scheduled, schedule: { cron: '*/2 * * * *', params: { idle_minutes: 30 } } })).status).toBe(400);
     });
 
+    it('rejects a cron minute that is not a multiple of 5 — the platform ticks every 5 minutes, so it would never fire (#281)', async () => {
+      for (const cron of ['7 * * * *', '3-59/10 * * * *', '0,32 * * * *', '58 2 * * 1']) {
+        const res = await put({ ...scheduled, schedule: { cron, params: { idle_minutes: 30 } } });
+        expect(res.status, cron).toBe(400);
+        expect((await res.json() as { error: string }).error, cron).toContain('cron minutes must be multiples of 5');
+      }
+    });
+
+    it('accepts cron minutes on the 5-minute tick (#281)', async () => {
+      for (const cron of ['10 * * * *', '*/15 * * * *', '0,30 * * * *', '*/5 * * * *', '55 23 * * 0']) {
+        const res = await put({ ...scheduled, schedule: { cron, params: { idle_minutes: 30 } } });
+        expect(res.status, cron).toBe(200);
+      }
+    });
+
+    it('keeps the spacing rule: every-minute cron is still a 400 with the interval message', async () => {
+      const res = await put({ ...scheduled, schedule: { cron: '* * * * *', params: { idle_minutes: 30 } } });
+      expect(res.status).toBe(400);
+      expect((await res.json() as { error: string }).error).toContain('minimum interval of five minutes');
+    });
+
     it('enforces the per-app scheduled-action cap', async () => {
       const tools = Array.from({ length: MAX_SCHEDULED_ACTIONS_PER_APP + 1 }, (_, i) => ({ ...scheduled, name: `reap_stale_${i}` }));
       const res = await app.request('/v1/apps/test-app/tools', {

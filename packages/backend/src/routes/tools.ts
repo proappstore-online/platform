@@ -298,9 +298,9 @@ function validateManifest(tool: ToolManifest, opts: { source: ToolSource } = { s
     }
     const schedule = tool.schedule;
     if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule)) return 'schedule must be an object';
-    if (typeof schedule.cron !== 'string' || !validScheduledCron(schedule.cron)) {
-      return 'schedule.cron must be a valid five-field UTC cron with a minimum interval of five minutes';
-    }
+    const cronError = typeof schedule.cron === 'string' ? scheduledCronError(schedule.cron) : 'not a string';
+    if (cronError === CRON_MINUTES_NOT_ON_TICK) return `schedule.cron ${CRON_MINUTES_NOT_ON_TICK}`;
+    if (cronError) return 'schedule.cron must be a valid five-field UTC cron with a minimum interval of five minutes';
     if (!schedule.params || typeof schedule.params !== 'object' || Array.isArray(schedule.params)) {
       return 'schedule.params must be an object';
     }
@@ -349,18 +349,35 @@ function cronFieldValues(raw: string, min: number, max: number): number[] | null
   return [...values].sort((a, b) => a - b);
 }
 
-/** Five-field numeric cron whose minute set never fires less than five minutes apart. */
-export function validScheduledCron(cron: string): boolean {
+/** The platform's only cron trigger fires every 5 minutes (backend wrangler.toml `[triggers]`). */
+export const SCHEDULER_TICK_MINUTES = 5;
+export const CRON_MINUTES_NOT_ON_TICK = 'cron minutes must be multiples of 5 (the platform ticks every 5 minutes)';
+
+/**
+ * Why a scheduled-action cron is invalid, or null when it is valid: five numeric
+ * fields, a minute set that never fires less than five minutes apart, and (#281)
+ * every minute a multiple of {@link SCHEDULER_TICK_MINUTES}. The scheduler only
+ * ever runs at :00, :05 … :55 and matches the minute exactly
+ * ({@link scheduledCronMatches}), so a minute like :07 would be accepted and then
+ * never fire — reject it here, where the owner sees the error.
+ */
+export function scheduledCronError(cron: string): string | null {
   const fields = cron.trim().split(/\s+/);
-  if (fields.length !== 5) return false;
+  if (fields.length !== 5) return 'must have five fields';
   const values = fields.map((field, i) => cronFieldValues(field, CRON_FIELD_LIMITS[i]![0], CRON_FIELD_LIMITS[i]![1]));
-  if (values.some((v) => v === null)) return false;
+  if (values.some((v) => v === null)) return 'has an invalid field';
   const minutes = values[0]!;
   for (let i = 0; i < minutes.length; i++) {
     const next = i + 1 < minutes.length ? minutes[i + 1]! : minutes[0]! + 60;
-    if (next - minutes[i]! < 5) return false;
+    if (next - minutes[i]! < 5) return 'fires less than five minutes apart';
   }
-  return true;
+  if (minutes.some((m) => m % SCHEDULER_TICK_MINUTES !== 0)) return CRON_MINUTES_NOT_ON_TICK;
+  return null;
+}
+
+/** Five-field numeric cron the scheduler will actually fire (see {@link scheduledCronError}). */
+export function validScheduledCron(cron: string): boolean {
+  return scheduledCronError(cron) === null;
 }
 
 /** Does this validated five-field cron match a UTC minute? DOM/DOW follow the

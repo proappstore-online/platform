@@ -258,6 +258,11 @@ Registration validates all of the following:
 
 - Five numeric cron fields in UTC (`*`, lists, ranges and steps), with no
   interval below five minutes.
+- **Every minute value is a multiple of 5** (`0`, `5`, … `55`). The platform
+  ticks every five minutes and matches the minute exactly, so `"7 * * * *"` or
+  `"3-59/10 * * * *"` would never fire; registration rejects them with
+  `cron minutes must be multiples of 5 (the platform ticks every 5 minutes)`.
+  Write `"10 * * * *"`, `"*/15 * * * *"` or `"0,30 * * * *"` instead.
 - Only `execute` and `batch`; `requires_auth: true`; a non-empty
   `auth.caller_unscoped.reason`. The executor binds `:__user_id` to the
   synthetic `system:schedule`, which matches no app user. Never use a human
