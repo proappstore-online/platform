@@ -90,31 +90,78 @@ interface ToolsResponse {
 const cachedTools = new Map<string, { tools: AppTool[]; time: number }>();
 const CACHE_TTL = 60_000;
 
-/** One app's registered tools, from `GET /v1/apps/:appId/tools` (public view — never SQL). */
-export async function fetchTools(api: Fetcher, apiBase: string, appId: string): Promise<AppTool[]> {
+/**
+ * One app's registered tools, from `GET /v1/apps/:appId/tools` (public view — never SQL).
+ *
+ * Fetched signed out first, which is what the shared per-app cache holds. A
+ * private app (#259) refuses that: its list is then asked for AS the caller, and
+ * never cached — it is per-caller, and a cached copy would outlive a revoked
+ * role. A refusal also drops any cached copy from before the app went private.
+ */
+export async function fetchTools(api: Fetcher, apiBase: string, appId: string, token?: string | null): Promise<AppTool[]> {
   const now = Date.now();
   const cacheKey = `app:${appId}`;
   const cached = cachedTools.get(cacheKey);
   if (cached && now - cached.time < CACHE_TTL) return cached.tools;
 
+  const url = `${apiBase}/v1/apps/${encodeURIComponent(appId)}/tools`;
   let res: Response;
   try {
-    res = await api.fetch(`${apiBase}/v1/apps/${encodeURIComponent(appId)}/tools`);
+    res = await api.fetch(url);
   } catch (err) {
     console.error(`Failed to fetch tools (network):`, err);
     return cached?.tools ?? [];
+  }
+  if (res.status === 401 || res.status === 403) {
+    cachedTools.delete(cacheKey);
+    if (!token) return [];
+    try {
+      res = await api.fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    } catch (err) {
+      console.error(`Failed to fetch tools (network):`, err);
+      return [];
+    }
+    if (!res.ok) return [];
+    return toolsFrom((await res.json()) as ToolsResponse, appId).map(publicToolFields);
   }
   if (!res.ok) {
     console.error(`Failed to fetch tools: ${res.status}`);
     return cached?.tools ?? [];
   }
 
-  const data = (await res.json()) as ToolsResponse;
-  // #203: a scheduled action is platform-only — the executor 403s it — so no
-  // session registers, lists or resolves it by name.
-  const tools = (data.tools ?? []).filter((tool) => !tool.scheduled).map((tool) => ({ ...tool, app_id: appId }));
+  const tools = toolsFrom((await res.json()) as ToolsResponse, appId);
   cachedTools.set(cacheKey, { tools, time: now });
   return tools;
+}
+
+function toolsFrom(data: ToolsResponse, appId: string): AppTool[] {
+  // #203: a scheduled action is platform-only — the executor 403s it — so no
+  // session registers, lists or resolves it by name. (`scheduled` on the public
+  // view; `schedule` on the full manifest a team member receives.)
+  return (data.tools ?? [])
+    .filter((tool) => !tool.scheduled && !(tool as { schedule?: unknown }).schedule)
+    .map((tool) => ({ ...tool, app_id: appId }));
+}
+
+/**
+ * A caller asking as themselves may be on the app's team and receive the full
+ * manifest. The session keeps only the fields of the backend's public view
+ * (publicToolView, #158) — an allowlist, so no SQL is registered into an MCP
+ * session or echoed back to a model.
+ */
+function publicToolFields(tool: AppTool): AppTool {
+  return {
+    app_id: tool.app_id,
+    name: tool.name,
+    description: tool.description,
+    operation: tool.operation,
+    ...(tool.verifier !== undefined ? { verifier: tool.verifier } : {}),
+    params: tool.params,
+    requires_auth: tool.requires_auth,
+    ...(tool.core !== undefined ? { core: tool.core } : {}),
+    ...((tool as { step_up?: boolean }).step_up ? { step_up: true } : {}),
+    ...(tool.auth ? { auth: { required: tool.auth.required, platform_roles: tool.auth.platform_roles, app_roles: tool.auth.app_roles } } : {}),
+  } as AppTool;
 }
 
 /** Clear the tool cache (e.g. after a publish) */
@@ -390,7 +437,7 @@ function registerDiscoveryPair(
       const { app_id, include_params, filter } = args as { app_id?: string; include_params?: boolean; filter?: string };
       const id = resolveAppId({ app_id });
       if (!id) return errText(`Error: invalid app_id "${app_id ?? ''}".`);
-      const tools = await fetchTools(api, apiBase, id);
+      const tools = await fetchTools(api, apiBase, id, getUserContext().token);
       if (tools.length === 0) {
         return { content: [{ type: 'text' as const, text: `${id} has no registered tools (or does not exist). Apps register tools by committing an mcp.json; list_apps shows the apps you can see.` }] };
       }
@@ -421,7 +468,7 @@ function registerDiscoveryPair(
       const id = resolveAppId({ app_id });
       if (!id) return errText(`Error: invalid app_id "${app_id ?? ''}".`);
       const app_idResolved = id;
-      const tools = await fetchTools(api, apiBase, app_idResolved);
+      const tools = await fetchTools(api, apiBase, app_idResolved, getUserContext().token);
       const manifest = tools.find((t) => t.name === tool);
       if (!manifest) {
         const hint = scope ? 'call list_app_tools({}) for the names it exposes' : `call list_app_tools({ app_id: "${app_idResolved}" }) for the names it exposes`;

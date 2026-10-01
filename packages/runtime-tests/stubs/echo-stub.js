@@ -28,6 +28,16 @@ function fixtureRoles(authorization) {
   return Response.json({ error: 'fixture failure' }, { status: 500 });
 }
 
+// Visibility fixtures for the host's private-app gate (#259): the session token
+// names what GET /v1/apps/:id/visibility/me answers.
+function fixtureVisibility(authorization) {
+  const token = (authorization ?? '').replace(/^Bearer /, '');
+  if (token === 'owner-token' || token === 'viewer-token') return Response.json({ mode: 'private', allowed: true });
+  if (token === 'member-token') return Response.json({ mode: 'private', allowed: false });
+  if (token === 'expired-token') return Response.json({ error: 'invalid session' }, { status: 401 });
+  return Response.json({ error: 'fixture failure' }, { status: 500 });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -37,6 +47,7 @@ export default {
     const fixture = /\/actions\/(fixture_[a-z_]+)$/.exec(url.pathname);
     if (fixture) return fixtureAction(fixture[1], JSON.parse(body || '{}').params ?? {});
     if (env.STUB_NAME === 'api-echo' && /^\/v1\/apps\/gate-[a-z0-9-]+\/roles\/me$/.test(url.pathname)) return fixtureRoles(headers.authorization);
+    if (env.STUB_NAME === 'api-echo' && /^\/v1\/apps\/vis-[a-z0-9-]+\/visibility\/me$/.test(url.pathname)) return fixtureVisibility(headers.authorization);
     return Response.json(
       { worker: env.STUB_NAME, method: request.method, host: url.host, path: url.pathname + url.search, headers, body },
       { headers: { 'X-Stub-Worker': env.STUB_NAME } },

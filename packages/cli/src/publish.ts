@@ -145,15 +145,15 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
   if (data.success) {
     // ── Register MCP tools from mcp.json (if present) ──────────
     const mcpManifestPath = resolve(cwd, 'mcp.json');
-    const mcpManifest = readJsonIfExists<{ tools?: unknown[]; page_meta?: unknown; sitemap?: unknown; operator?: unknown; operator_view?: unknown }>(mcpManifestPath);
+    const mcpManifest = readJsonIfExists<{ tools?: unknown[]; page_meta?: unknown; sitemap?: unknown; operator?: unknown; operator_view?: unknown; visibility?: unknown }>(mcpManifestPath);
     if (mcpManifest?.tools && Array.isArray(mcpManifest.tools) && mcpManifest.tools.length > 0) {
       process.stdout.write(`\n  Registering ${mcpManifest.tools.length} MCP tool(s)...\n`);
       try {
         const toolsRes = await fetch(`${PAS_API}/v1/apps/${appId}/tools`, {
           method: 'PUT',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          // page_meta / sitemap (#210), operator (#229) and operator_view (#240) register with the tools and are replaced with them.
-          body: JSON.stringify({ tools: mcpManifest.tools, page_meta: mcpManifest.page_meta, sitemap: mcpManifest.sitemap, operator: mcpManifest.operator, operator_view: mcpManifest.operator_view }),
+          // page_meta / sitemap (#210), operator (#229), operator_view (#240) and visibility (#259) register with the tools and are replaced with them.
+          body: JSON.stringify({ tools: mcpManifest.tools, page_meta: mcpManifest.page_meta, sitemap: mcpManifest.sitemap, operator: mcpManifest.operator, operator_view: mcpManifest.operator_view, visibility: mcpManifest.visibility }),
         });
         if (toolsRes.ok) {
           const toolsData = (await toolsRes.json()) as { registered: number; schedules?: Array<{ name: string; cron: string }> };

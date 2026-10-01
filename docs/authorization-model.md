@@ -120,6 +120,46 @@ metadata is a coarse gate, not the whole model** — the tool SQL must *also* sc
 rows to the caller (`:__user_id`, membership sub-queries). See
 [App Actions and Data Access Security](./app-actions-security.md).
 
+### Private apps (`visibility: private`) — who may use the app at all
+
+An app can declare itself private in `mcp.json` (#259):
+`"visibility": { "mode": "private", "roles": ["viewer"] }`. This is a gate on the
+**whole app**, in front of every check above. It mixes two of the three systems on
+purpose, so it is spelled out here:
+
+- **The owner always passes** — exactly `requireAppAccess(c, appId, 'owner')`:
+  the creator, a `team_members` row with role `owner`, or a platform admin. A team
+  `developer`/`admin`/`po`/`viewer` is *not* the owner and needs one of the roles
+  below like anyone else.
+- **Anyone else needs one of the declared app roles** (`app_roles`, 0–5 names),
+  granted through the ordinary invite flow (`routes/invites.ts`). `member` can
+  never be declared: every signed-in user can self-grant it (`ensure-member`),
+  the same reason the operator gate refuses it.
+
+`lib/visibility.ts` (`visibilityAllows`) is the single implementation; `GET
+/v1/apps/:id/visibility/me` exposes it to the host and the MCP. Where it is
+enforced:
+
+| Surface | Enforcement |
+|---|---|
+| App origin (`/`, assets, `/__qa`) | host `visibility-gate.ts`, after `/.pas/auth/*` and before mediation, the edge cache and R2; navigation → sign-in, else 403; never edge-cached |
+| `/.pas/api/*`, `/.pas/data/*` | the same host gate (they are on the app origin) |
+| `data-<app>.proappstore.online` | host gate, by Bearer; 401 / 403 |
+| Registered actions | `routes/actions.ts`: a public (`requires_auth: false`) action is refused at registration and at execution; every session or app-token caller must pass `visibilityAllows` |
+| Tool list / per-app MCP | `GET /v1/apps/:id/tools` refuses non-allowed callers; `mcp.proappstore.online/mcp/apps/<id>` refuses the session with 403 |
+| Storefront | private apps are absent from `/v1/storefront/apps` and 404 on `/v1/storefront/apps/:id` |
+
+System identities (`system:schedule`, and the `system:worker` / `system:hook`
+callers #251 adds) never pass through the gate: the scheduler forwards to the data
+worker directly. A lookup that fails is a 503, never an allow. Public apps cost the
+host one indexed D1 read (the operator gate's) and no backend call.
+
+**Not covered** (each called directly at `api.proappstore.online` with a session,
+bypassing the host): app-scoped platform services such as KV, storage, rooms and
+the secrets proxy, and the data worker's own `workers.dev` URL. The data worker's
+raw-SQL path already requires team `developer` or above, so no app-role holder and
+no outsider reaches it; a non-owner team member without a declared role still can.
+
 ## Trust boundaries that are NOT roles
 
 - **`INTERNAL_TOKEN`** proves "a trusted *platform worker* is calling"

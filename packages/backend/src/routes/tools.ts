@@ -11,7 +11,8 @@
 import { Hono } from 'hono';
 import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
-import { requireAppAccess, requireAppOwner } from '../lib/auth.js';
+import { requireAppAccess, requireAppOwner, requireUser } from '../lib/auth.js';
+import { MAX_VISIBILITY_ROLES, PUBLIC_VISIBILITY, requireVisible, visibilityFromRow, type AppVisibility } from '../lib/visibility.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
 import { VERIFY_PARAM_PREFIX, literalLimit, resolveToolParams, selectsColumn, type ToolManifest, type ToolParam } from '../lib/action-sql.js';
 import { ENDPOINT_NAME_PREFIX } from '../lib/endpoint-sql.js';
@@ -551,11 +552,13 @@ export interface SiteManifest {
   operator?: unknown;
   /** The console operator-view contract (#240): lib/operator-contract.ts. */
   operator_view?: unknown;
+  /** Private apps (#259): `{ mode: 'public' | 'private', roles?: string[] }` — lib/visibility.ts. */
+  visibility?: unknown;
 }
 
 /** The site-manifest fields of a submitted mcp.json body, for every registration path. */
 export function siteManifestFrom(body: SiteManifest | null | undefined): SiteManifest {
-  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view };
+  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility };
 }
 
 interface PageMetaRoute { path: string; action: string; param: string }
@@ -640,6 +643,30 @@ function validateOperatorGate(operator: unknown): { error: string } | { gate: Op
   return { gate: { prefix, role } };
 }
 
+/**
+ * Validate `visibility` (#259): a private app is served — origin, data, MCP — only
+ * to its owner and to holders of up to five app roles. `member` is refused for the
+ * reason the operator gate refuses it. A private app cannot register a public
+ * (requires_auth false) action: an anonymous data path would defeat the gate.
+ */
+function validateVisibility(visibility: unknown, tools: ToolManifest[]): { error: string } | { visibility: AppVisibility | null } {
+  if (visibility === undefined || visibility === null) return { visibility: null };
+  if (typeof visibility !== 'object' || Array.isArray(visibility)) return { error: 'visibility must be an object' };
+  const { mode, roles = [] } = visibility as Record<string, unknown>;
+  if (mode !== 'public' && mode !== 'private') return { error: "visibility.mode must be 'public' or 'private'" };
+  if (!Array.isArray(roles) || roles.length > MAX_VISIBILITY_ROLES) return { error: `visibility.roles must be an array of at most ${MAX_VISIBILITY_ROLES} app role names` };
+  for (const role of roles) {
+    if (typeof role !== 'string' || !OPERATOR_ROLE.test(role)) return { error: 'visibility.roles entries must be app role names ([a-z][a-z0-9_-], max 50 chars)' };
+    if (role === 'member') return { error: "visibility.roles cannot include 'member' (every signed-in user holds it)" };
+  }
+  if (new Set(roles).size !== roles.length) return { error: 'visibility.roles must not repeat a role' };
+  if (mode === 'private') {
+    const open = tools.find((t) => t.requires_auth === false);
+    if (open) return { error: `visibility: a private app cannot register public action "${open.name}" (requires_auth false)` };
+  }
+  return { visibility: { mode, roles: roles as string[] } };
+}
+
 export async function replaceAppTools(
   db: D1Database,
   appId: string,
@@ -669,6 +696,8 @@ export async function replaceAppTools(
   if ('error' in operatorResult) return { status: 400, payload: { error: operatorResult.error } };
   const operatorView = validateOperatorView(tools as ToolManifest[], site.operator_view);
   if ('error' in operatorView) return { status: 400, payload: { error: operatorView.error } };
+  const visibilityResult = validateVisibility(site.visibility, tools as ToolManifest[]);
+  if ('error' in visibilityResult) return { status: 400, payload: { error: visibilityResult.error } };
 
   // A deploy replaces the CODE tools only (#155): console-defined endpoints live
   // in the same table under source = 'console' and are never touched here — a
@@ -706,6 +735,11 @@ export async function replaceAppTools(
     ...(operatorView.contract
       ? [db.prepare('INSERT INTO app_operator_view (app_id, version, contract, created_at) VALUES (?, ?, ?, ?)').bind(appId, operatorView.contract.version, JSON.stringify(operatorView.contract), now)]
       : []),
+    // And visibility (#259): a manifest that no longer declares it makes the app public again.
+    db.prepare('DELETE FROM app_visibility WHERE app_id = ?').bind(appId),
+    ...(visibilityResult.visibility
+      ? [db.prepare('INSERT INTO app_visibility (app_id, mode, roles, created_at) VALUES (?, ?, ?, ?)').bind(appId, visibilityResult.visibility.mode, JSON.stringify(visibilityResult.visibility.roles), now)]
+      : []),
   ];
   await db.batch(stmts);
 
@@ -739,6 +773,7 @@ export async function replaceAppTools(
       operator_view: operatorView.contract
         ? { version: operatorView.contract.version, resources: operatorView.contract.resources.length, actions: operatorView.contract.actions.length }
         : null,
+      visibility: visibilityResult.visibility ?? PUBLIC_VISIBILITY,
       warnings },
   };
 }
@@ -813,9 +848,21 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
 
   // `source` tells the console which rows are code (mcp.json) and which are its
   // own endpoints (#155). The console `config` column is never listed here.
+  // The app's visibility (#259) rides on the same read: an app with no tools has
+  // nothing to list, so the join loses nothing.
   const result = await c.env.DB.prepare(
-    'SELECT name, manifest, updated_at, source FROM app_tools WHERE app_id = ? ORDER BY name',
-  ).bind(appId).all<{ name: string; manifest: string; updated_at: number; source: ToolSource | null }>();
+    `SELECT t.name, t.manifest, t.updated_at, t.source, v.mode AS visibility_mode, v.roles AS visibility_roles
+       FROM app_tools t LEFT JOIN app_visibility v ON v.app_id = t.app_id
+      WHERE t.app_id = ? ORDER BY t.name`,
+  ).bind(appId).all<{ name: string; manifest: string; updated_at: number; source: ToolSource | null; visibility_mode?: string | null; visibility_roles?: string | null }>();
+
+  // A private app's tool list is part of the app: its owner and allowed roles only.
+  const first = result.results?.[0];
+  const visibility = visibilityFromRow(first?.visibility_mode ?? null, first?.visibility_roles ?? null);
+  if (visibility.mode === 'private') {
+    const caller = c.req.header('Authorization') ? await requireUser(c) : null;
+    await requireVisible(c.env.DB, appId, visibility, caller);
+  }
 
   const tools: unknown[] = [];
   for (const r of result.results ?? []) {
@@ -831,8 +878,9 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
     );
   }
 
-  // The full variant is per-caller; no cache layer may hand it to anyone else.
-  if (teamMember) c.header('Cache-Control', 'private, no-store');
+  // The full variant is per-caller, and a private app's list is per-caller too;
+  // no cache layer may hand either to anyone else.
+  if (teamMember || visibility.mode === 'private') c.header('Cache-Control', 'private, no-store');
   return c.json({ tools });
 });
 
@@ -842,6 +890,8 @@ toolsRoutes.delete('/apps/:appId/tools', async (c) => {
   await requireAppOwner(c, appId);
   // Code rows only: console endpoints are removed through the audited endpoints route (#155).
   // Page meta, sitemap, the operator gate and the operator view go with the code manifest that declared them (#210, #229, #240).
+  // Visibility (#259) deliberately does not: removing an app's tools must never
+  // make a private app public. Only a registration that omits it does that.
   await c.env.DB.batch([
     c.env.DB.prepare("DELETE FROM app_tools WHERE app_id = ? AND source = 'code'").bind(appId),
     c.env.DB.prepare('DELETE FROM app_page_meta WHERE app_id = ?').bind(appId),

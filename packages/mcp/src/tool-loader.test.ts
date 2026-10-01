@@ -19,6 +19,48 @@ afterEach(() => {
 });
 
 describe('fetchTools', () => {
+  // #259: a private app refuses the signed-out list; it is asked for as the caller and never cached.
+  it('asks a private app\'s list as the caller, keeps only the public fields, and never caches it', async () => {
+    const full = [
+      { name: 'my_notes', description: 'Notes', operation: 'query', params: {}, requires_auth: true, sql: 'SELECT * FROM notes WHERE user_id = :__user_id LIMIT 50', auth: { app_roles: ['family'], caller_unscoped: { reason: 'x' } } },
+      { name: 'nightly', description: 'Nightly', operation: 'execute', params: {}, requires_auth: true, sql: 'DELETE FROM notes', schedule: { cron: '0 3 * * *', params: {} } },
+    ];
+    const calls: Array<string | null> = [];
+    globalThis.fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get('Authorization');
+      calls.push(auth);
+      return auth ? new Response(JSON.stringify({ tools: full }), { status: 200 }) : new Response('this app is private', { status: 403 });
+    }) as unknown as typeof fetch;
+
+    const result = await fetchTools(api, 'https://api.test', 'diary', 'owner-token');
+    expect(result.map((t) => t.name)).toEqual(['my_notes']);
+    expect(result[0]).not.toHaveProperty('sql');
+    expect(result[0]!.auth).toEqual({ required: undefined, platform_roles: undefined, app_roles: ['family'] });
+    expect(calls).toEqual([null, 'Bearer owner-token']);
+
+    // Not cached: the next caller (here, signed out) is asked about again and gets nothing.
+    expect(await fetchTools(api, 'https://api.test', 'diary')).toEqual([]);
+    expect(calls).toEqual([null, 'Bearer owner-token', null]);
+  });
+
+  it('drops a cached public list once the app refuses the signed-out read', async () => {
+    let refused = false;
+    globalThis.fetch = vi.fn(async () => refused
+      ? new Response('this app is private', { status: 403 })
+      : new Response(JSON.stringify({ tools: [{ name: 'x', description: '', operation: 'query', params: {} }] }), { status: 200 })) as unknown as typeof fetch;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      expect(await fetchTools(api, 'https://api.test', 'went-private')).toHaveLength(1);
+      // TTL lapsed: the entry is stale but still present. A plain failure would fall
+      // back to it; a refusal must not serve the old public list.
+      now.mockReturnValue(1_000_000 + 61_000);
+      refused = true;
+      expect(await fetchTools(api, 'https://api.test', 'went-private')).toEqual([]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it('fetches and stamps one app\'s tools from the per-app route — never the retired /v1/tools (#157, #193)', async () => {
     const tools = [
       { name: 'list_companies', description: 'List companies', operation: 'query', params: {} },
