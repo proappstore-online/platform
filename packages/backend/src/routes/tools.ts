@@ -18,6 +18,7 @@ import { VERIFY_PARAM_PREFIX, literalLimit, resolveToolParams, selectsColumn, ty
 import { ENDPOINT_NAME_PREFIX } from '../lib/endpoint-sql.js';
 import { getVerifier, VERIFIERS } from '../lib/verifiers/index.js';
 import { validateOperatorView } from '../lib/operator-contract.js';
+import { SCHEDULER_TICK_MINUTES } from '../lib/scheduler-tick.js';
 
 export const toolsRoutes = new Hono<{ Bindings: Env }>();
 
@@ -298,9 +299,10 @@ function validateManifest(tool: ToolManifest, opts: { source: ToolSource } = { s
     }
     const schedule = tool.schedule;
     if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule)) return 'schedule must be an object';
-    const cronError = typeof schedule.cron === 'string' ? scheduledCronError(schedule.cron) : 'not a string';
-    if (cronError === CRON_MINUTES_NOT_ON_TICK) return `schedule.cron ${CRON_MINUTES_NOT_ON_TICK}`;
-    if (cronError) return 'schedule.cron must be a valid five-field UTC cron with a minimum interval of five minutes';
+    if (typeof schedule.cron !== 'string') return 'schedule.cron must be a five-field numeric UTC cron string';
+    const cronError = scheduledCronError(schedule.cron);
+    if (cronError && isCronSyntaxError(cronError)) return 'schedule.cron must be a valid five-field numeric UTC cron';
+    if (cronError) return `schedule.cron ${cronError}`;
     if (!schedule.params || typeof schedule.params !== 'object' || Array.isArray(schedule.params)) {
       return 'schedule.params must be an object';
     }
@@ -330,15 +332,21 @@ function cronFieldValues(raw: string, min: number, max: number): number[] | null
   const values = new Set<number>();
   for (const part of raw.split(',')) {
     if (!part) return null;
-    const [base, stepText] = part.split('/');
-    if (part.split('/').length > 2 || !base) return null;
+    const pieces = part.split('/');
+    const [base, stepText] = pieces;
+    if (pieces.length > 2 || !base) return null;
+    // Digits only: Number() would otherwise read "1e1", "0x5" and "5.0" as steps.
+    if (stepText !== undefined && !/^\d+$/.test(stepText)) return null;
     const step = stepText === undefined ? 1 : Number(stepText);
-    if (!Number.isInteger(step) || step < 1 || step > max - min + 1) return null;
+    if (step < 1 || step > max - min + 1) return null;
     let start: number;
     let end: number;
     if (base === '*') { start = min; end = max; }
-    else if (/^\d+$/.test(base)) { start = end = Number(base); }
-    else {
+    else if (/^\d+$/.test(base)) {
+      // Standard cron: a bare start before a step ("5/15") means start..max.
+      start = Number(base);
+      end = stepText === undefined ? start : max;
+    } else {
       const match = /^(\d+)-(\d+)$/.exec(base);
       if (!match) return null;
       start = Number(match[1]); end = Number(match[2]);
@@ -349,30 +357,42 @@ function cronFieldValues(raw: string, min: number, max: number): number[] | null
   return [...values].sort((a, b) => a - b);
 }
 
-/** The platform's only cron trigger fires every 5 minutes (backend wrangler.toml `[triggers]`). */
-export const SCHEDULER_TICK_MINUTES = 5;
-export const CRON_MINUTES_NOT_ON_TICK = 'cron minutes must be multiples of 5 (the platform ticks every 5 minutes)';
+export const CRON_MINUTES_NOT_ON_TICK = `minutes must be multiples of ${SCHEDULER_TICK_MINUTES} (the platform ticks every ${SCHEDULER_TICK_MINUTES} minutes)`;
+export const CRON_DATE_NEVER_OCCURS = 'never fires: no listed day-of-month occurs in any listed month';
+
+/** Longest each month (1-12) can be; February counts its leap-year 29th. */
+const MONTH_MAX_DAYS = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31] as const;
+
+/** Errors that are a malformed cron rather than a well-formed one that would never fire. */
+const CRON_SYNTAX_ERRORS = new Set(['must have five fields', 'has an invalid field']);
 
 /**
  * Why a scheduled-action cron is invalid, or null when it is valid: five numeric
- * fields, a minute set that never fires less than five minutes apart, and (#281)
- * every minute a multiple of {@link SCHEDULER_TICK_MINUTES}. The scheduler only
- * ever runs at :00, :05 … :55 and matches the minute exactly
- * ({@link scheduledCronMatches}), so a minute like :07 would be accepted and then
- * never fire — reject it here, where the owner sees the error.
+ * fields, (#281) every minute a multiple of {@link SCHEDULER_TICK_MINUTES}, and a
+ * day-of-month/month combination that can occur. The scheduler only ever runs on
+ * the tick and matches the minute exactly ({@link scheduledCronMatches}), so a
+ * minute like :07 would be accepted and then never fire — reject it here, where
+ * the owner sees the error. On-tick minutes are at least one tick apart, so this
+ * also enforces the minimum interval. Likewise "0 0 31 2 *" (February 31st) is
+ * well-formed but never matches; when day-of-week is restricted too, the OR rule
+ * still lets it fire on that weekday, so only a `*` day-of-week is rejected.
  */
 export function scheduledCronError(cron: string): string | null {
   const fields = cron.trim().split(/\s+/);
   if (fields.length !== 5) return 'must have five fields';
   const values = fields.map((field, i) => cronFieldValues(field, CRON_FIELD_LIMITS[i]![0], CRON_FIELD_LIMITS[i]![1]));
   if (values.some((v) => v === null)) return 'has an invalid field';
-  const minutes = values[0]!;
-  for (let i = 0; i < minutes.length; i++) {
-    const next = i + 1 < minutes.length ? minutes[i + 1]! : minutes[0]! + 60;
-    if (next - minutes[i]! < 5) return 'fires less than five minutes apart';
+  if (values[0]!.some((m) => m % SCHEDULER_TICK_MINUTES !== 0)) return CRON_MINUTES_NOT_ON_TICK;
+  if (fields[2] !== '*' && fields[4] === '*') {
+    const longestMonth = Math.max(...values[3]!.map((month) => MONTH_MAX_DAYS[month - 1]!));
+    if (values[2]![0]! > longestMonth) return CRON_DATE_NEVER_OCCURS;
   }
-  if (minutes.some((m) => m % SCHEDULER_TICK_MINUTES !== 0)) return CRON_MINUTES_NOT_ON_TICK;
   return null;
+}
+
+/** Is this a malformed cron (as opposed to a well-formed one that would never fire)? */
+export function isCronSyntaxError(error: string): boolean {
+  return CRON_SYNTAX_ERRORS.has(error);
 }
 
 /** Five-field numeric cron the scheduler will actually fire (see {@link scheduledCronError}). */
