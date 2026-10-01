@@ -193,8 +193,9 @@ errors. Added the **`whoami`** MCP tool so the authenticated identity is explici
 - [x] CI-unblock: data-worker APP_ID authz tests + `template-seed` skip-when-absent
 - [x] **E2E fixture**: wait for `#root` mount, not `networkidle` (`e2e-harness.ts` + interns repo)
 - [x] `template-app` flagged `is_template=true`; `scaffold_app` 404 → actionable error
-- [x] **`reconcile-app-secrets` workflow** — fans org R2 "hub" secret out to private app
-      repos; admin `provisionApp` + `pas publish` dispatch it; hourly cron backstops
+- [x] ~~**R2 secret fan-out workflow**~~ — fanned the org R2 "hub" secret out to private app
+      repos. **Removed in #279**: deploys are keyless (OIDC `deploy-credentials`), and the
+      fan-out put an account-wide R2 key in every app repo
 - [x] **Honest deploy-stuck diagnostic** — dropped the false "workflow scope" guess
 - [x] **Self-healing deploy recovery** — bounded auto-retry (`MAX_DEPLOY_ATTEMPTS=3`) +
       backoff (2m, 5m), escalate when exhausted; `tickets.deploy_attempts` column; Play

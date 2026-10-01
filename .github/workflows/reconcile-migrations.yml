@@ -12,7 +12,7 @@ on:
         required: false
         default: "false"
   schedule:
-    - cron: "43 * * * *" # hourly, offset from reconcile-app-secrets
+    - cron: "43 * * * *" # hourly
 
 permissions:
   contents: read

@@ -71,8 +71,8 @@ jobs:
 
           for r in $repos; do
             full="proappstore-online/$r"
-            # Only app repos — identified by the injected deploy workflow (same
-            # rule as reconcile-app-secrets). The platform, storefront, template
+            # Only app repos — identified by the injected deploy workflow.
+            # The platform, storefront, template
             # and console repos are not apps and are left alone.
             if ! gh api "repos/$full/contents/.github/workflows/deploy.yml" --silent >/dev/null 2>&1; then
               skipped=$((skipped + 1)); continue
