@@ -104,7 +104,7 @@ pnpm test:runtime   # Cloudflare-runtime integration tests (workerd + real D1)
 
 ## Deployment
 
-- Push to main → auto-deploy backend + data-workers via GitHub Actions
+- Changes land through pull requests (see `CLAUDE.md` § Delivery mode); merging to `main` auto-deploys backend + data-workers via GitHub Actions
 - SDK/CLI auto-publish to npm via OIDC on version bump
 
 ## License

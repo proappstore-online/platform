@@ -120,10 +120,11 @@ are the definition of done; a bundle that does not pass them is not a skill.
    pnpm -r typecheck && pnpm test
    ```
 
-8. **Ship it.** Maintainers commit straight to `main` (this repository's
-   delivery mode; see `CLAUDE.md`) with the issue's closing keyword. External
-   contributors open a pull request against `main`; CI runs the same gates
-   (`check`, `skills-gate`) and a maintainer lands it. Bump
+8. **Ship it.** Every change — maintainers and external contributors alike —
+   is a pull request against `main` that says `Refs #<n>` (this repository's
+   delivery mode; see `CLAUDE.md`). CI runs the same gates (`check`,
+   `skills-gate`); a person reviews it and a human or gated merger lands it.
+   The issue is closed after the merged change is verified, not on merge. Bump
    `metadata.version` on any change to a skill's behaviour; the release gate
    pins the new content digest in `index.json`.
 9. **Security review.** Every change to a skill is reviewed against
