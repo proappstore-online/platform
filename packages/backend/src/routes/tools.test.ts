@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
 import { selectsColumn } from '../lib/action-sql.js';
-import { mainStatementVerb, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_SCHEDULED_ACTIONS_PER_APP, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from './tools.js';
+import { mainStatementVerb, scheduledCronError, scheduledCronMatches, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_SCHEDULED_ACTIONS_PER_APP, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from './tools.js';
 import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 import { PARENTS_CLUBS, STASH } from '../__fixtures__/operator-view.js';
 
@@ -1183,6 +1183,47 @@ describe('PUT /v1/apps/:appId/tools — unscoped statement rejection (#150)', ()
       expect((await put({ ...scheduled, schedule: { cron: '*/2 * * * *', params: { idle_minutes: 30 } } })).status).toBe(400);
     });
 
+    it('rejects a cron minute that is not a multiple of 5 — the platform ticks every 5 minutes, so it would never fire (#281)', async () => {
+      // `* * * * *`, `*/2`, `*/7` and `0,3` used to get the spacing message; the
+      // tick check now runs first and names the real problem.
+      for (const cron of ['7 * * * *', '3-59/10 * * * *', '0,32 * * * *', '58 2 * * 1', '* * * * *', '*/2 * * * *', '*/7 * * * *', '0,3 * * * *', '3/15 * * * *']) {
+        const res = await put({ ...scheduled, schedule: { cron, params: { idle_minutes: 30 } } });
+        expect(res.status, cron).toBe(400);
+        expect((await res.json() as { error: string }).error, cron).toBe('tool "reap_stale": schedule.cron minutes must be multiples of 5 (the platform ticks every 5 minutes)');
+      }
+    });
+
+    it('accepts cron minutes on the 5-minute tick (#281)', async () => {
+      for (const cron of ['10 * * * *', '*/15 * * * *', '0,30 * * * *', '*/5 * * * *', '55 23 * * 0', '5/15 * * * *', '0/5 * * * *']) {
+        const res = await put({ ...scheduled, schedule: { cron, params: { idle_minutes: 30 } } });
+        expect(res.status, cron).toBe(200);
+      }
+    });
+
+    it('rejects a day-of-month that never occurs in any listed month (#281)', async () => {
+      for (const cron of ['0 0 31 2 *', '0 0 30 2 *', '0 0 31 4,6,9,11 *', '0 0 30-31 2 *']) {
+        const res = await put({ ...scheduled, schedule: { cron, params: { idle_minutes: 30 } } });
+        expect(res.status, cron).toBe(400);
+        expect((await res.json() as { error: string }).error, cron).toBe('tool "reap_stale": schedule.cron never fires: no listed day-of-month occurs in any listed month');
+      }
+    });
+
+    it('accepts day-of-month/month combinations that can occur (#281)', async () => {
+      // Feb 29 fires in leap years; a restricted day-of-week fires under the OR rule.
+      for (const cron of ['0 0 29 2 *', '0 0 31 1 *', '0 0 30,31 2,4 *', '0 0 31 2 1', '0 0 31 * *']) {
+        const res = await put({ ...scheduled, schedule: { cron, params: { idle_minutes: 30 } } });
+        expect(res.status, cron).toBe(200);
+      }
+    });
+
+    it('rejects malformed crons with the syntax message, including non-decimal steps (#281)', async () => {
+      for (const cron of ['*/1e1 * * * *', '*/0x5 * * * *', '*/5.0 * * * *', '*/ * * * *', '*/0 * * * *', '0 0 * *', '60 * * * *', '5/15/2 * * * *']) {
+        const res = await put({ ...scheduled, schedule: { cron, params: { idle_minutes: 30 } } });
+        expect(res.status, cron).toBe(400);
+        expect((await res.json() as { error: string }).error, cron).toBe('tool "reap_stale": schedule.cron must be a valid five-field numeric UTC cron');
+      }
+    });
+
     it('enforces the per-app scheduled-action cap', async () => {
       const tools = Array.from({ length: MAX_SCHEDULED_ACTIONS_PER_APP + 1 }, (_, i) => ({ ...scheduled, name: `reap_stale_${i}` }));
       const res = await app.request('/v1/apps/test-app/tools', {
@@ -1763,5 +1804,40 @@ describe('large manifests (#109)', () => {
     for (const [n, ms] of Object.entries(timings)) expect(ms, `registering ${n} tools took ${ms.toFixed(0)} ms`).toBeLessThan(4_000);
     // eslint-disable-next-line no-console
     console.info(`[#109] registration timings ms: ${Object.entries(timings).map(([n, ms]) => `${n}=${ms.toFixed(0)}`).join(' ')}`);
+  });
+});
+
+describe('scheduled cron grammar (#281)', () => {
+  const firingMinutes = (cron: string) => Array.from({ length: 60 }, (_, m) => m)
+    .filter((m) => scheduledCronMatches(cron, Date.UTC(2026, 0, 5, 3, m)));
+
+  it('reads a bare start before a step as start..max, like standard cron', () => {
+    expect(firingMinutes('5/15 * * * *')).toEqual([5, 20, 35, 50]);
+    expect(firingMinutes('0/5 * * * *')).toEqual(firingMinutes('*/5 * * * *'));
+    expect(firingMinutes('0/5 * * * *')).toEqual([0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]);
+    // Hours follow the same rule: 1/6 is 1, 7, 13, 19.
+    const hours = Array.from({ length: 24 }, (_, h) => h).filter((h) => scheduledCronMatches('0 1/6 * * *', Date.UTC(2026, 0, 5, h, 0)));
+    expect(hours).toEqual([1, 7, 13, 19]);
+    // A bare number with no step is still that single value.
+    expect(firingMinutes('5 * * * *')).toEqual([5]);
+  });
+
+  it('accepts only decimal digits as a step', () => {
+    for (const cron of ['*/1e1 * * * *', '*/0x5 * * * *', '*/5.0 * * * *', '*/+5 * * * *', '*/ 5 * * *']) {
+      expect(scheduledCronError(cron), cron).not.toBeNull();
+      expect(scheduledCronMatches(cron, Date.UTC(2026, 0, 5, 3, 10)), cron).toBe(false);
+    }
+  });
+
+  it('checks the tick before anything else that could be wrong with the minutes', () => {
+    expect(scheduledCronError('*/7 * * * *')).toBe('minutes must be multiples of 5 (the platform ticks every 5 minutes)');
+    expect(scheduledCronError('0,3 * * * *')).toBe('minutes must be multiples of 5 (the platform ticks every 5 minutes)');
+  });
+
+  it('rejects a day-of-month no listed month has, but not when day-of-week can fire it', () => {
+    expect(scheduledCronError('0 0 31 2 *')).toMatch(/never fires/);
+    expect(scheduledCronError('0 0 30 2 *')).toMatch(/never fires/);
+    expect(scheduledCronError('0 0 29 2 *')).toBeNull();
+    expect(scheduledCronError('0 0 31 2 1')).toBeNull();
   });
 });

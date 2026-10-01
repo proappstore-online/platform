@@ -256,8 +256,23 @@ per-app compute.
 
 Registration validates all of the following:
 
-- Five numeric cron fields in UTC (`*`, lists, ranges and steps), with no
-  interval below five minutes.
+- Five numeric cron fields in UTC (`*`, lists, ranges and steps). A step is
+  decimal digits only, and a bare start before a step means start..max, as in
+  standard cron: `"5/15 * * * *"` fires at :05, :20, :35 and :50. Anything else
+  is rejected with `schedule.cron must be a valid five-field numeric UTC cron`.
+- **Every minute value is a multiple of 5** (`0`, `5`, … `55`). The platform
+  ticks every five minutes and matches the minute exactly, so `"7 * * * *"`,
+  `"3-59/10 * * * *"` or `"* * * * *"` would not fire as written; registration
+  rejects them with
+  `schedule.cron minutes must be multiples of 5 (the platform ticks every 5 minutes)`.
+  Write `"10 * * * *"`, `"*/15 * * * *"` or `"0,30 * * * *"` instead. This is
+  also what keeps every schedule at least five minutes apart.
+- **The date can occur.** With day-of-week `*`, at least one listed
+  day-of-month must exist in at least one listed month (February counts 29):
+  `"0 0 31 2 *"` and `"0 0 30 2 *"` are rejected with
+  `schedule.cron never fires: no listed day-of-month occurs in any listed month`.
+  When day-of-week is restricted too, cron's OR rule fires it on that weekday,
+  so the combination is accepted.
 - Only `execute` and `batch`; `requires_auth: true`; a non-empty
   `auth.caller_unscoped.reason`. The executor binds `:__user_id` to the
   synthetic `system:schedule`, which matches no app user. Never use a human

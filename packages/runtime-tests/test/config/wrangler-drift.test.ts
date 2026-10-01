@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { COMPATIBILITY_DATE } from '../../config/shared';
+import { SCHEDULER_TICK_MINUTES } from '../../../backend/src/lib/scheduler-tick';
 
 const root = (p: string) => fileURLToPath(new URL(`../../../../${p}`, import.meta.url));
 const toml = readFileSync(root('packages/backend/wrangler.toml'), 'utf8');
@@ -52,6 +53,15 @@ describe('backend wrangler.toml matches the code', () => {
   it('has a cron trigger for the scheduled handler and exports it', () => {
     expect(toml).toMatch(/\[triggers\][\s\S]*crons\s*=\s*\[/);
     expect(readFileSync(root('packages/backend/src/index.ts'), 'utf8')).toMatch(/scheduled/);
+  });
+
+  it('ticks at the interval scheduled-action validation assumes (#281)', () => {
+    // Registration rejects cron minutes off SCHEDULER_TICK_MINUTES and the executor
+    // sizes its window from it; a trigger on any other cadence would silently skip
+    // or double-claim schedules.
+    const crons = /\[triggers\][\s\S]*?crons\s*=\s*\[([^\]]*)\]/.exec(toml)![1]!;
+    const declared = [...crons.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+    expect(declared).toEqual([`*/${SCHEDULER_TICK_MINUTES} * * * *`]);
   });
 
   it('the runtime suite pins a compatibility date no newer than production', () => {

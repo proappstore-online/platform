@@ -9,9 +9,10 @@ import { prepareActionBatch, prepareActionQuery, type ToolManifest } from './act
 import { forwardToDataWorker } from '../routes/actions.js';
 import { scheduledCronMatches } from '../routes/tools.js';
 import { dispatchWebhook } from './webhook-dispatch.js';
+import { SCHEDULER_TICK_MINUTES } from './scheduler-tick.js';
 
 const SYSTEM_SCHEDULE_USER = 'system:schedule';
-export const SCHEDULE_TICK_MS = 5 * 60_000;
+export const SCHEDULE_TICK_MS = SCHEDULER_TICK_MINUTES * 60_000;
 export const STALE_SCHEDULE_CLAIM_MS = 10 * 60_000;
 export const SCHEDULE_FAILURE_BREAKER = 5;
 
