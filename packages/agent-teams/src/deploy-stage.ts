@@ -419,8 +419,36 @@ async function finishGreenDeploy(
   // actions if it succeeded — an action that references a column the migration
   // failed to create is exactly the drift that 500'd users (#32).
   const migrated = await applyMigrations(deps, proj, ticketId, files);
-  if (migrated) await registerMcpTools(deps, proj, ticketId, files);
-  else deps.logActivity('deploy', 'Skipped MCP tool registration — migrations.json did not apply cleanly', ticketId);
+  const registration = migrated
+    ? await registerMcpTools(deps, proj, ticketId, files)
+    : { ok: false, private: declaresPrivate(files), reason: 'migrations.json did not apply cleanly' };
+  if (!migrated) deps.logActivity('deploy', 'Skipped MCP tool registration — migrations.json did not apply cleanly', ticketId);
+
+  // #259: for every other app a missed registration is retried next deploy. For a
+  // manifest that declares `visibility: private` it means the app just went live
+  // PUBLIC — so it is not "done": park the ticket for a human and mark the deploy
+  // failed, rather than log a line nobody reads.
+  if (registration.private && !registration.ok) {
+    const reason = `mcp.json declares visibility: private, but registering it failed — the app is live and NOT private until it registers: ${registration.reason ?? 'unknown error'}`;
+    deps.storeMessage({ ticketId, author: 'system', body: reason.slice(0, 8000) }).catch(() => {});
+    sql.exec(
+      "UPDATE tickets SET status = 'needs-input', assignee_role = NULL, stuck_reason = ?, updated_at = ? WHERE id = ?",
+      reason.slice(0, 500), Date.now(), ticketId,
+    );
+    deps.broadcast({ type: 'transition', ticketId, from: 'done', to: 'needs-input', trigger: 'system', reason: 'visibility-unregistered' });
+    deps.logActivity('deploy', reason.slice(0, 300), ticketId);
+    setDeployStatus(deps, proj.slug, 'failed', { ticketId, sha, ciUrl: url, detail: 'private visibility not registered' });
+  }
+}
+
+/** Whether the working tree's mcp.json declares `visibility.mode: "private"` (#259). Unparseable → false. */
+export function declaresPrivate(files: Map<string, string>): boolean {
+  try {
+    const parsed = JSON.parse(files.get('mcp.json') ?? 'null') as { visibility?: { mode?: unknown } } | null;
+    return parsed?.visibility?.mode === 'private';
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -542,29 +570,37 @@ async function ensureDataInfra(
  * the registered tools stay in sync with the shipped manifest. No-op (and no
  * network call) when the app ships no `mcp.json`. Best-effort.
  */
-async function registerMcpTools(
+export async function registerMcpTools(
   deps: DeployDeps,
   proj: { slug: string },
   ticketId: string,
   files: Map<string, string>,
-): Promise<void> {
+): Promise<{ ok: boolean; private: boolean; reason?: string }> {
   const { env } = deps;
   const raw = files.get('mcp.json');
-  if (!raw) return; // app declares no tools — nothing to register
-  if (!env.PAS_BACKEND || !env.INTERNAL_TOKEN) return; // no backend binding (dev)
+  if (!raw) return { ok: true, private: false }; // app declares no tools — nothing to register
+  const isPrivate = declaresPrivate(files);
+  if (!env.PAS_BACKEND || !env.INTERNAL_TOKEN) {
+    // No backend binding (dev): nothing can be registered. Fine for a public app;
+    // for a private one it is a failure the caller must surface.
+    return { ok: !isPrivate, private: isPrivate, reason: 'no PAS_BACKEND / INTERNAL_TOKEN binding' };
+  }
 
   let tools: unknown;
-  let site: { page_meta?: unknown; sitemap?: unknown; operator?: unknown; operator_view?: unknown } = {};
+  let site: { page_meta?: unknown; sitemap?: unknown; operator?: unknown; operator_view?: unknown; visibility?: unknown } = {};
   try {
-    const parsed = JSON.parse(raw) as { tools?: unknown; page_meta?: unknown; sitemap?: unknown; operator?: unknown; operator_view?: unknown };
+    const parsed = JSON.parse(raw) as { tools?: unknown; page_meta?: unknown; sitemap?: unknown; operator?: unknown; operator_view?: unknown; visibility?: unknown };
     tools = Array.isArray(parsed?.tools) ? parsed.tools : [];
-    // page_meta / sitemap (#210), operator (#229) and operator_view (#240) register with the tools and are replaced with them.
-    site = { page_meta: parsed?.page_meta, sitemap: parsed?.sitemap, operator: parsed?.operator, operator_view: parsed?.operator_view };
+    // page_meta / sitemap (#210), operator (#229), operator_view (#240) and visibility (#259) register with the tools and are replaced with them.
+    site = { page_meta: parsed?.page_meta, sitemap: parsed?.sitemap, operator: parsed?.operator, operator_view: parsed?.operator_view, visibility: parsed?.visibility };
   } catch {
     deps.logActivity('deploy', 'mcp.json is not valid JSON — skipped tool registration', ticketId);
-    return;
+    return { ok: true, private: false };
   }
-  if (!Array.isArray(tools) || tools.length === 0) return;
+  // #259: an app with no tools still registers when it declares visibility —
+  // visibility rides on the tools registration, so skipping it would leave a
+  // tool-less private app public. Nothing declared and no tools: nothing to do.
+  if ((!Array.isArray(tools) || tools.length === 0) && site.visibility === undefined) return { ok: true, private: false };
 
   try {
     const res = await env.PAS_BACKEND.fetch(new Request(`https://api.proappstore.online/v1/apps/${proj.slug}/tools/internal`, {
@@ -578,11 +614,15 @@ async function registerMcpTools(
       for (const schedule of r.schedules ?? []) {
         deps.logActivity('deploy', `Scheduled action registered: ${schedule.name} (${schedule.cron} UTC)`, ticketId);
       }
-    } else {
-      deps.logActivity('deploy', `MCP tools not registered (will retry next deploy): ${r.error ?? `backend ${res.status}`}`, ticketId);
+      return { ok: true, private: isPrivate };
     }
+    const reason = r.error ?? `backend ${res.status}`;
+    deps.logActivity('deploy', `MCP tools not registered (will retry next deploy): ${reason}`, ticketId);
+    return { ok: false, private: isPrivate, reason };
   } catch (e) {
-    deps.logActivity('deploy', `MCP tool registration error (will retry next deploy): ${e instanceof Error ? e.message : 'unknown'}`, ticketId);
+    const reason = e instanceof Error ? e.message : 'unknown';
+    deps.logActivity('deploy', `MCP tool registration error (will retry next deploy): ${reason}`, ticketId);
+    return { ok: false, private: isPrivate, reason };
   }
 }
 

@@ -1,5 +1,7 @@
 interface AuthLike {
   token: string | null;
+  /** True in platform-cookie mode, where same-origin /.pas/api requests carry the session. */
+  usesPlatformCookie?: boolean;
   handleUnauthorized(): void;
   authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
@@ -26,6 +28,12 @@ export class Storage {
     private readonly appId: string,
     private readonly apiBase: string,
     private readonly auth: AuthLike,
+    /**
+     * The app is private (#259): its "public" files are readable only by users
+     * it admits, so a bare API URL — which an `<img>` loads without credentials
+     * — would be refused. See {@link publicUrl}.
+     */
+    private readonly privateApp = false,
   ) {}
 
   /** Upload a file. Returns the upload result with the file URL. */
@@ -123,9 +131,23 @@ export class Storage {
     return this.remove(`_review/u/${encodeURIComponent(userId)}/${path}`, false);
   }
 
-  /** Get a public URL for a file (no auth needed, usable in <img src>). File must have been uploaded with uploadPublic(). */
+  /**
+   * Get a URL for a file uploaded with uploadPublic()/uploadUserPublic(), usable in `<img src>`.
+   *
+   * On a public app it is the API URL, readable by anyone. On a PRIVATE app
+   * (#259) served by the PAS host it is the same-origin
+   * `/.pas/api/v1/apps/<id>/public/<path>`: the browser sends the session
+   * cookie with it and the host forwards the request with the session, so the
+   * image loads for users the app admits and for nobody else. Such a URL only
+   * works on the app's own origin — do not share it elsewhere.
+   */
   publicUrl(path: string): string {
-    return `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/public/${path}`;
+    const apiPath = `/v1/apps/${encodeURIComponent(this.appId)}/public/${path}`;
+    if (this.privateApp && this.auth.usesPlatformCookie) {
+      const origin = typeof window !== 'undefined' && window.location ? window.location.origin : '';
+      return `${origin}/.pas/api${apiPath}`;
+    }
+    return `${this.apiBase}${apiPath}`;
   }
 
   /** Get a private URL for a file (requires auth header). */

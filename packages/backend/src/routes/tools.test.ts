@@ -870,6 +870,88 @@ describe('PUT /v1/apps/:appId/tools — operator gate (#229)', () => {
   });
 });
 
+// #259: visibility registers with the tools — a private app is served (origin,
+// data, MCP) only to its team and up to five declared app roles.
+describe('PUT /v1/apps/:appId/tools — visibility (#259)', () => {
+  const publicTool = {
+    name: 'list_public',
+    description: 'Public catalogue',
+    operation: 'query',
+    sql: 'SELECT id, title FROM items LIMIT 50',
+    params: {},
+    requires_auth: false,
+  };
+  const put = (body: Record<string, unknown>, tools: unknown[] = [validTool]) => {
+    const db = mockD1();
+    db.prepare.mockReset();
+    db.prepare.mockReturnValueOnce(mockStmt({ first: { creator_id: 'gh:1' } })).mockImplementation(() => mockStmt());
+    return app.request(
+      '/v1/apps/test-app/tools',
+      { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools, ...body }) },
+      makeEnv({}, db),
+    ).then(async (res) => ({ res, db, body: (await res.json()) as { error?: string; visibility?: unknown } }));
+  };
+  const writes = (db: ReturnType<typeof mockD1>) =>
+    (db.prepare as ReturnType<typeof vi.fn>).mock.calls.map((call, i) => ({
+      sql: call[0] as string,
+      args: ((db.prepare as ReturnType<typeof vi.fn>).mock.results[i]!.value.bind as ReturnType<typeof vi.fn>).mock.calls[0] ?? [],
+    }));
+
+  it('stores a private declaration in the same batch as the tools, replacing any previous one', async () => {
+    const { res, db, body } = await put({ visibility: { mode: 'private', roles: ['viewer', 'family'] } });
+    expect(res.status, body.error).toBe(200);
+    expect(body.visibility).toEqual({ mode: 'private', roles: ['viewer', 'family'] });
+    expect(db.batch).toHaveBeenCalledOnce();
+    const all = writes(db);
+    const del = all.findIndex((w) => w.sql === 'DELETE FROM app_visibility WHERE app_id = ?');
+    const ins = all.findIndex((w) => w.sql.startsWith('INSERT INTO app_visibility'));
+    expect(del).toBeGreaterThan(-1);
+    expect(ins).toBeGreaterThan(del);
+    expect(all[ins]!.args.slice(0, 3)).toEqual(['test-app', 'private', '["viewer","family"]']);
+  });
+
+  it('a private app may declare no roles at all: the owner alone', async () => {
+    const { res, body } = await put({ visibility: { mode: 'private' } });
+    expect(res.status, body.error).toBe(200);
+    expect(body.visibility).toEqual({ mode: 'private', roles: [] });
+  });
+
+  it('a manifest without visibility clears it: the app is public again', async () => {
+    const { res, db, body } = await put({});
+    expect(res.status, body.error).toBe(200);
+    expect(body.visibility).toEqual({ mode: 'public', roles: [] });
+    const all = writes(db);
+    expect(all.some((w) => w.sql === 'DELETE FROM app_visibility WHERE app_id = ?')).toBe(true);
+    expect(all.some((w) => w.sql.startsWith('INSERT INTO app_visibility'))).toBe(false);
+  });
+
+  it('refuses a private app with a public action, and member as an allowed role, without writing anything', async () => {
+    const cases: Array<[unknown, unknown[], string]> = [
+      [{ mode: 'private', roles: ['viewer'] }, [validTool, publicTool], 'a private app cannot register public action "list_public"'],
+      [{ mode: 'private', roles: ['member'] }, [validTool], "visibility.roles cannot include 'member'"],
+      [{ mode: 'private', roles: ['viewer', 'member'] }, [validTool], "visibility.roles cannot include 'member'"],
+      [{ mode: 'secret' }, [validTool], "visibility.mode must be 'public' or 'private'"],
+      [{ roles: ['viewer'] }, [validTool], "visibility.mode must be 'public' or 'private'"],
+      [[], [validTool], 'visibility must be an object'],
+      [{ mode: 'private', roles: 'viewer' }, [validTool], 'visibility.roles must be an array of at most 5'],
+      [{ mode: 'private', roles: ['a', 'b', 'c', 'd', 'e', 'f'] }, [validTool], 'visibility.roles must be an array of at most 5'],
+      [{ mode: 'private', roles: ['Viewer'] }, [validTool], 'visibility.roles entries must be app role names'],
+      [{ mode: 'private', roles: ['viewer', 'viewer'] }, [validTool], 'must not repeat a role'],
+    ];
+    for (const [visibility, tools, error] of cases) {
+      const { res, db, body } = await put({ visibility }, tools);
+      expect(res.status, JSON.stringify(visibility)).toBe(400);
+      expect(body.error, JSON.stringify(visibility)).toContain(error);
+      expect(db.batch).not.toHaveBeenCalled();
+    }
+  });
+
+  it('a public app keeps its public actions', async () => {
+    const { res, body } = await put({ visibility: { mode: 'public' } }, [validTool, publicTool]);
+    expect(res.status, body.error).toBe(200);
+  });
+});
+
 // #240: the console operator-view contract registers with the tools — validated
 // against them, stored in the same batch, replaced and cleared with them.
 describe('PUT /v1/apps/:appId/tools — operator_view (#240)', () => {
@@ -1240,11 +1322,11 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
     expect(db.batch).toHaveBeenCalledTimes(1);
   });
 
-  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view reset)', async () => {
+  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view/visibility reset)', async () => {
     const { res, db } = await internalPost({ tools: [] }, { 'X-Internal-Token': 'secret' });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false, operator: null, operator_view: null });
-    expect(db.batch.mock.calls[0]![0]).toHaveLength(6);
+    expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false, operator: null, operator_view: null, visibility: { mode: 'public', roles: [] } });
+    expect(db.batch.mock.calls[0]![0]).toHaveLength(7);
     expect(db.batch.mock.calls[0]![0][1]!.bind).toHaveBeenCalledWith('test-app');
 
     const missing = await internalPost({}, { 'X-Internal-Token': 'secret' });

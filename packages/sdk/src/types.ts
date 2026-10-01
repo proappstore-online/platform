@@ -17,6 +17,14 @@ export interface ProInitOptions {
   authMode?: 'legacy-bearer' | 'platform-cookie';
   /** Defaults to https://api.proappstore.online. */
   proApiBase?: string;
+  /**
+   * The app's declared visibility (#259) — `visibility.mode` in its mcp.json.
+   * Default: `private` when the page carries the host's
+   * `<meta name="pas-visibility" content="private">` marker (every page of a
+   * private app the PAS host serves), else `public`. Decides what
+   * `storage.publicUrl()` returns.
+   */
+  visibility?: 'public' | 'private';
   /** Defaults to https://data-{appId}.proappstore.online, or same-origin /.pas/data in platform-cookie mode. */
   dataApiBase?: string;
   /** Usage telemetry options. Auto-heartbeat is on by default. */

@@ -120,6 +120,105 @@ metadata is a coarse gate, not the whole model** — the tool SQL must *also* sc
 rows to the caller (`:__user_id`, membership sub-queries). See
 [App Actions and Data Access Security](./app-actions-security.md).
 
+### Private apps (`visibility: private`) — who may use the app at all
+
+An app can declare itself private in `mcp.json` (#259):
+`"visibility": { "mode": "private", "roles": ["viewer"] }`. This is a gate on the
+**whole app**, in front of every check above. It mixes two of the three systems on
+purpose, so it is spelled out here:
+
+- **The app's team always passes**, in the sense of `requireAppAccess(c, appId,
+  'viewer')`: the creator, **any** `team_members` row of the app (whatever its team
+  role), or a platform admin — recognised by `ADMIN_GITHUB_IDS` as well as by the
+  session's `admin` role, because a session issued to an app origin carries only
+  `['user']` (#56). A team developer can deploy the app and run raw SQL
+  against its data worker, so refusing them the app and its console would protect
+  nothing and break the console.
+- **Anyone else needs one of the declared app roles** (`app_roles`, 0–5 names),
+  granted through the ordinary invite flow (`routes/invites.ts`). `member` can
+  never be declared: every signed-in user can self-grant it (`ensure-member`),
+  the same reason the operator gate refuses it.
+- **Role identity.** An `app_roles` row matches the caller's user id. It matches
+  the caller's `login` **only for a GitHub (`gh:`) session**, where the login is
+  the GitHub-verified login that older, login-keyed grants were written against.
+  A credential account's `login` is the display name typed at sign-up, and a
+  Google session's is the profile name, so matching them would let anyone
+  register an account named `gh:2` or `bob` and take over that holder's role.
+  The same rule applies to every app-role check (#272, `lib/role-subject.ts`).
+  Until #273 is on main, `lib/visibility.ts` carries its own copy of the rule
+  (marked `TODO(#273)`); merge #273 first, then fold it.
+
+`lib/visibility.ts` (`visibilityAllows`) is the single implementation; `GET
+/v1/apps/:id/visibility/me` exposes it to the host and the MCP. Where it is
+enforced:
+
+| Surface | Enforcement |
+|---|---|
+| App origin (`/`, assets, `/__qa`), on the platform subdomain or a custom domain | host `visibility-gate.ts`, after `/.pas/auth/*` and before mediation, the edge cache and R2; signed-out navigation → the platform sign-in page `/.pas/auth/signin`; a refused navigation to an invite link `/join/<code>` → the platform invite page `/.pas/auth/join`; anything else 403; never edge-cached |
+| Sign-in and invites | platform pages under `/.pas/auth/` (`auth-pages.ts`), which the gate lets through: `/signin` offers GitHub, Google, an emailed link (which also creates an account) and email + password — passkeys are a step-up after sign-in on this platform, not a first factor; `/join` redeems an invite as the session with a same-origin POST, scoped to this app (`POST /v1/invites/:code/redeem` with `{ appId }`), then returns to `/join/<code>` |
+| `/.pas/api/*`, `/.pas/data/*`, and the secrets proxy (origin-only, reached through `/.pas/api`) | the same host gate (they are on the app origin) |
+| `data-<app>.proappstore.online` | **not gated by the host.** Every SQL route on the data worker requires team `developer`+ (or the platform's internal token), a subset of who the app admits, and the worker also answers on its own custom domain, so a host check would cost every app a D1 read and protect nothing |
+| Registered actions | `routes/actions.ts`: a public (`requires_auth: false`) action is refused at registration and at execution, and a console endpoint with `scope: "public"` is refused at creation; every session or app-token caller must pass `visibilityAllows` |
+| Public storage `GET /v1/apps/:id/public/*` | `requireVisibleCaller`: no session 401, refused 403; served `private, no-store`, never `public, immutable`. The SDK's `storage.publicUrl()` returns the same-origin `/.pas/api/...` URL on a private app (host marker `<meta name="pas-visibility">`), so an `<img>` carries the session |
+| Counters `GET/POST /v1/apps/:id/counters*` | reads `requireVisibleCaller`, writes `requireVisible`; the SDK sends the session on reads when signed in |
+| Rooms `GET /v1/apps/:id/rooms/:room` | refused callers' sockets close `4401 app_private` before the room. Checked at the upgrade only — see the propagation table |
+| Tool list / per-app MCP | `GET /v1/apps/:id/tools` refuses non-allowed callers; `mcp.proappstore.online/mcp/apps/<id>` refuses the session with 403 |
+| Storefront | private apps are absent from `/v1/storefront/apps` and 404 on `/v1/storefront/apps/:id`; the admin publish step never writes a private app to the public `registry.json`, and removes its entry on a republish after it went private |
+
+System identities (`system:schedule`, and the `system:worker` / `system:hook`
+callers #251 adds) never pass through the gate: the scheduler forwards to the data
+worker directly. A lookup that fails is a 503, never an allow.
+
+**Cost.** On an app origin the visibility mode is read in the route lookup itself
+(`host.ts` LEFT JOINs `app_visibility`), so a public app pays no extra D1 read and
+no backend call; the `data-<app>` hostname is not gated, so it pays nothing either.
+A private app asks the backend (`visibility/me`), and the host remembers the answer
+per isolate, keyed by SHA-256(session) + app: an **allow** for 30 s, a **refusal**
+(refused, or a session the backend rejects) for 5 s, so a refused or bogus session
+costs one backend call per 5 s rather than one per request. A failed lookup is not
+cached.
+
+The backend routes that also serve anonymous callers of public apps — public
+storage, counter reads and writes, room upgrades — read the app's mode from a
+per-isolate cache (`getAppVisibilityCached`, 30 s; registering a manifest forgets
+the app in that isolate). **Failure mode:** on a D1 error the last known mode is
+used, so a D1 blip neither breaks a public app's images nor opens a private app's;
+with nothing known (a cold isolate) the request is a **503** — a private app's
+files are never served on a guess, so during an outage a cold isolate refuses
+public apps' files too. `visibility/me`, actions and the storefront read live.
+
+**Propagation bounds.**
+
+| Change | Takes effect |
+|---|---|
+| Public → private (new manifest registered) | App origin, `visibility/me`, actions and the tool list: the next request. Public storage, counters and room upgrades: up to 30 s per backend isolate (the mode cache). Nothing on a private app is edge-cached, and a public response cached before the flip is never served because the gate runs before the cache. The MCP may still open an app-scoped session and list the app's tool names and params for up to 10 s (`PUBLIC_APP_TTL_MS`, `TOOL_CACHE_TTL_MS`), but every call is re-checked by the backend. |
+| Role revoked, team member removed | Backend routes: the next request. App origin: up to 30 s per host isolate (the allow cache). **Open room sockets are not re-checked:** a socket admitted before the change stays connected until it closes or reconnects (the upgrade is the only check). |
+| Role granted, team member added | Backend routes: the next request. App origin: up to 5 s per host isolate (the refusal cache) — at once in the isolate that redeemed it, when it came through the platform invite page. |
+| Private → public | App origin and live routes: the next request. Public storage, counters and room upgrades: up to 30 s per backend isolate. |
+| Any flip, for an open room socket | Not applied to sockets already open (see above). |
+
+**Not covered:**
+
+- **The KB host** (`kb.proappstore.online/<app>/*`) serves an app's knowledge base
+  with no session. It is a separate origin without the app's session cookie, so it
+  cannot run this gate as it stands. Tracked in #277.
+- **The storefront static site** builds from `registry.json` in
+  `proappstore-online/proappstore`. A private app's first publish is kept out of it
+  (MCP `publish_app` sends the repo's declared visibility, and the admin registry
+  step reads the repo's `mcp.json` when nothing has registered yet), but an app
+  published *before* it declared itself private keeps its card until it is
+  republished or the storefront build filters private apps. Tracked in
+  proappstore-online/proappstore#3.
+- **Open room sockets** survive a revocation or a flip to private until they
+  close (see the propagation table). Re-checking open sockets periodically is not
+  implemented.
+- **The data worker** (`data-<app>.proappstore.online` and its `workers.dev` URL).
+  Its raw-SQL path requires team `developer` or above, and every team member passes
+  this gate anyway, so it admits no one the gate would refuse.
+- **Per-user KV and private storage** (`/v1/apps/:id/kv*`, `/v1/apps/:id/storage/*`)
+  are scoped to the caller's own rows and files. A signed-in user the app refuses
+  can write to their own namespace but can read nobody else's.
+
 ## Trust boundaries that are NOT roles
 
 - **`INTERNAL_TOKEN`** proves "a trusted *platform worker* is calling"

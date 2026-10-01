@@ -328,6 +328,7 @@ inviteRoutes.delete('/apps/:appId/group-admin-grants', async (c) => {
 /**
  * Redeem an invite code. Any authenticated user.
  * Validates the code, increments used_count, assigns the role in PAS D1.
+ * Optional body `{ appId }` scopes the code to that app (the host's invite page).
  */
 inviteRoutes.post('/invites/:code/redeem', async (c) => {
   try {
@@ -342,7 +343,12 @@ inviteRoutes.post('/invites/:code/redeem', async (c) => {
       max_uses: number; used_count: number; expires_at: number;
     }>();
 
-    if (!invite) return c.json({ error: 'invite not found' }, 404);
+    // #259: the platform invite page on an app origin names its app, so a code
+    // minted for another app cannot be redeemed there (answered as not found).
+    const scope = (await c.req.json<{ appId?: unknown }>().catch(() => ({}))) as { appId?: unknown };
+    if (!invite || (typeof scope.appId === 'string' && scope.appId !== invite.app_id)) {
+      return c.json({ error: 'invite not found' }, 404);
+    }
     if (invite.expires_at < Date.now()) return c.json({ error: 'invite expired' }, 410);
     if (invite.used_count >= invite.max_uses) return c.json({ error: 'invite fully used' }, 410);
 

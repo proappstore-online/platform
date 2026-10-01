@@ -40,6 +40,24 @@ export function resolveAuthMode(explicit?: AuthMode): AuthMode {
   }
 }
 
+/** `<meta name>` the PAS host stamps on a PRIVATE app's pages (#259, host meta-rewriter). */
+export const VISIBILITY_META_NAME = 'pas-visibility';
+
+/**
+ * Whether this app is private (#259). An explicit `visibility` option wins;
+ * otherwise the host's `<meta name="pas-visibility" content="private">` decides
+ * (the host strips any copy an app ships). No document → public.
+ */
+export function resolvePrivateApp(explicit?: 'public' | 'private'): boolean {
+  if (explicit) return explicit === 'private';
+  const doc = (globalThis as { document?: { querySelector?: (selector: string) => { getAttribute(name: string): string | null } | null } }).document;
+  try {
+    return doc?.querySelector?.(`meta[name="${VISIBILITY_META_NAME}"]`)?.getAttribute('content') === 'private';
+  } catch {
+    return false;
+  }
+}
+
 /** PAS-owned localStorage key for the legacy cached session (per-origin). */
 const STORAGE_KEY = 'pas:session';
 

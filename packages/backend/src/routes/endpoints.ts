@@ -11,6 +11,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { requireAppOwner } from '../lib/auth.js';
+import { getAppVisibility } from '../lib/visibility.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
 import {
   CONSOLE_ENDPOINT_CAP,
@@ -135,6 +136,11 @@ endpointsRoutes.put('/apps/:appId/endpoints/:name', async (c) => {
   }
   const built = await build(c.env, appId, raw);
   if (!built.ok) return c.json(built.payload, built.status);
+  // #259: a private app has no anonymous data path — the executor refuses a
+  // public action on one anyway, so refuse to create it rather than store a dead row.
+  if (built.config.scope === 'public' && (await getAppVisibility(c.env.DB, appId)).mode === 'private') {
+    return c.json({ error: 'a private app cannot have a public endpoint (scope "public"); use "own" or "all"' }, 400);
+  }
 
   const existing = await c.env.DB.prepare('SELECT source FROM app_tools WHERE app_id = ? AND name = ?')
     .bind(appId, name).first<{ source: string | null }>();

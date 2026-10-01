@@ -499,6 +499,60 @@ If the app is a PWA, keep the prefix out of the service worker: add it to
 would request gated files for every visitor, and the refusals would fail the
 service worker install.
 
+## Private apps (`visibility`)
+
+A personal or invite-only app declares itself private (#259):
+
+```json
+{
+  "tools": [],
+  "visibility": { "mode": "private", "roles": ["viewer"] }
+}
+```
+
+The whole app — `/`, every asset, `/.pas/api/*`, `/.pas/data/*`, its actions, its
+`mcp.proappstore.online/mcp/apps/<id>` endpoint and its storefront listing — is
+then available only to the app's **team** (its creator, any team member, platform
+admins) and to users holding one of `roles`. Grant those roles with the normal
+invite flow. `/.pas/auth/*` stays reachable, so a visitor can still sign in.
+
+- **No session:** a page navigation is redirected to the platform sign-in page
+  (`/.pas/auth/signin?return_to=<path>`), which offers GitHub, Google, an emailed
+  sign-in link and email + password — the app's own sign-in screen is behind the
+  gate. Any other request gets `403`.
+- **Invite links** (`https://<app>/join/<code>`): a signed-out invitee signs in on
+  that page and comes back; a signed-in invitee the app does not admit yet is sent
+  to the platform invite page (`/.pas/auth/join`), which redeems the code for this
+  app on a click and returns to the link — now admitted.
+- **Signed in, not on the team and without a listed role:** `403`.
+- **Lookup failed:** `503`. Nothing is served when the check cannot run.
+- **Caching:** every response is `Cache-Control: private, no-store` and never goes
+  into the edge cache.
+- **SDK:** pages of a private app carry `<meta name="pas-visibility"
+  content="private">`. With it (or `new ProAppStore({ visibility: 'private' })`),
+  `storage.publicUrl()` returns a same-origin `/.pas/api/...` URL that works in an
+  `<img>` for signed-in users the app admits (and only on the app's own origin),
+  and `counters.list/get` send the session.
+- **`data-<app>.proappstore.online`** is not gated by the host; the data worker
+  already requires a team `developer` role for raw SQL.
+
+`mode` is `public` (the default) or `private`. `roles` is 0–5 app role names, and
+cannot include `member`, because every signed-in user holds it. With no roles, only
+the team can use the app. A private app **cannot register a public action**
+(`requires_auth: false`) or a public console endpoint, so `page_meta` and
+`sitemap`, which need one, are not available to it either. Its public storage,
+counters and rooms are limited to the same callers.
+
+The declaration registers with the tools, so a manifest with `"tools": []` still
+registers when it declares `visibility`. `pas publish` exits non-zero, and an Agent
+Teams deploy is parked for a human, if a private declaration fails to register —
+until it registers, the app is served publicly.
+
+Like `operator`, it is replaced with the manifest on every registration: removing
+it from `mcp.json` makes the app public again. Deleting the app's tools does not.
+See [Authorization Model](./authorization-model.md#private-apps-visibility-private-who-may-use-the-app-at-all)
+for where each surface is enforced and what is not covered.
+
 ## Console operator view (`operator_view`)
 
 The app's owner oversees it from the Creator Console: **Operator** tab,

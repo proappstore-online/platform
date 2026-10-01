@@ -5,6 +5,7 @@ import type { Env } from '../types.js';
 import { requireUser, requireAppAccess, requireAppOwner, HttpError } from '../lib/auth.js';
 import { roleSubjects } from '../lib/role-subject.js';
 import { dispatchWebhook } from '../lib/webhook-dispatch.js';
+import { requireVisibleCaller, type AppVisibility } from '../lib/visibility.js';
 
 /**
  * File storage routes — shared R2 bucket, scoped by app + user.
@@ -218,6 +219,16 @@ storageRoutes.get('/apps/:appId/public/*', async (c) => {
   const filePath = c.req.path.replace(`/v1/apps/${appId}/public/`, '');
   if (!filePath) return c.text('file path required', 400);
 
+  // #259: "public" here means "any user of the app" — for a private app, only the
+  // callers its visibility gate allows, and never a shared-cacheable response.
+  let visibility: AppVisibility;
+  try {
+    visibility = await requireVisibleCaller(c, appId);
+  } catch (err) {
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode, { 'cache-control': 'private, no-store' });
+    throw err;
+  }
+
   const key = `${appId}/_public/${filePath}`;
   const object = await c.env.STORAGE.get(key);
   if (!object) return c.text('not found', 404);
@@ -225,7 +236,7 @@ storageRoutes.get('/apps/:appId/public/*', async (c) => {
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
-  headers.set('cache-control', 'public, max-age=31536000, immutable');
+  headers.set('cache-control', visibility.mode === 'private' ? 'private, no-store' : 'public, max-age=31536000, immutable');
   // Never let the browser sniff a user-uploaded blob into an executable type
   // (e.g. HTML/JS) on the API origin.
   headers.set('x-content-type-options', 'nosniff');

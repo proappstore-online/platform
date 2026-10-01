@@ -8,6 +8,8 @@ import type { ListingMeta } from "./host.js";
 
 export interface SocialMeta extends ListingMeta {
   title?: string | null;
+  /** The app is private (#259): stamp VISIBILITY_META_TAG so the SDK keeps file URLs same-origin. */
+  private?: boolean;
 }
 
 /**
@@ -21,6 +23,17 @@ export interface SocialMeta extends ListingMeta {
  */
 export const AUTH_MODE_META_NAME = "pas-auth-mode";
 export const AUTH_MODE_META_TAG = `<meta name="${AUTH_MODE_META_NAME}" content="platform-cookie">`;
+
+/**
+ * Marker the host stamps on a PRIVATE app's pages (#259). The SDK reads it so
+ * `storage.publicUrl()` returns a same-origin `/.pas/api/...` URL — which the
+ * host mediates with the session cookie — instead of a bare API URL an `<img>`
+ * would load without credentials (and so be refused). Unlike the auth-mode
+ * marker the host always sets this one: it describes the platform's state, not
+ * a choice the app makes.
+ */
+export const VISIBILITY_META_NAME = "pas-visibility";
+export const VISIBILITY_META_TAG = `<meta name="${VISIBILITY_META_NAME}" content="private">`;
 
 /** Track which meta tags were found so we can inject missing ones. */
 export class MetaTagTracker {
@@ -65,6 +78,7 @@ export class MetaTagTracker {
     if (!this.found.has("og:url"))
       parts.push(`<meta property="og:url" content="${esc(this.canonicalUrl)}">`);
     if (!this.found.has(AUTH_MODE_META_NAME)) parts.push(AUTH_MODE_META_TAG);
+    if (this.meta.private) parts.push(VISIBILITY_META_TAG);
     if (!this.found.has("twitter:card")) {
       const hasShareImage = Boolean(icon) || this.found.has("twitter:image") || this.found.has("og:image");
       parts.push(`<meta name="twitter:card" content="${hasShareImage ? "summary_large_image" : "summary"}">`);
@@ -186,10 +200,10 @@ class HeadEndInjector implements HTMLRewriterElementContentHandlers {
  */
 export function rewriteMetaTags(response: Response, meta: SocialMeta, canonicalUrl: string): Response {
   const tracker = new MetaTagTracker(meta, canonicalUrl);
-  let rewriter = new HTMLRewriter().on(
-    `meta[name="${AUTH_MODE_META_NAME}"]`,
-    new FoundTagMarker(AUTH_MODE_META_NAME, tracker),
-  );
+  let rewriter = new HTMLRewriter()
+    .on(`meta[name="${AUTH_MODE_META_NAME}"]`, new FoundTagMarker(AUTH_MODE_META_NAME, tracker))
+    // An app's own pas-visibility tag is dropped: only the host may say it.
+    .on(`meta[name="${VISIBILITY_META_NAME}"]`, { element: (el: Element) => { el.remove(); } });
 
   if (meta.title) {
     rewriter = rewriter

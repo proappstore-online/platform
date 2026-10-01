@@ -15,6 +15,7 @@ import { handleAuthRoute } from "./auth-handler.js";
 import { handlePlatformMediation } from "./platform-mediation.js";
 import { handleQaRunner } from "./qa-runner.js";
 import { getOperatorGate, isUnderPrefix, refuseUnlessOperator } from "./operator-gate.js";
+import { refuseUnlessVisible } from "./visibility-gate.js";
 import {
   contentType,
   etagsMatch,
@@ -87,6 +88,11 @@ export default {
       if (!env.DATA_WORKER_HOST) {
         return new Response("DATA_WORKER_HOST is not configured", { status: 503 });
       }
+      // Not gated by app visibility (#259): every SQL route on the data worker
+      // already requires a team role of developer or above (a subset of who a
+      // private app admits), and the worker is also reachable directly at its
+      // own custom domain, so a check here would cost every app a D1 read and
+      // add no protection.
       return fetch(
         new Request(
           `https://pas-${slug}.${env.DATA_WORKER_HOST}${url.pathname}${url.search}`,
@@ -108,6 +114,17 @@ export default {
 
     const authResponse = await handleAuthRoute(request, env, route);
     if (authResponse) return authResponse;
+
+    // Private apps (#259): the whole origin — pages, assets, /.pas/api, /.pas/data,
+    // the QA runner — is served only to the app team and the declared roles. After the
+    // auth routes, so sign-in stays reachable; before mediation, the edge cache and
+    // R2. Nothing on a private app is ever edge-cached (see skipEdgeCache).
+    // `visibility_mode` came with the route lookup (LEFT JOIN): no extra D1 read.
+    const privateApp = route.visibility_mode === "private";
+    if (privateApp) {
+      const refusal = await refuseUnlessVisible(request, env, route.slug);
+      if (refusal) return refusal;
+    }
 
     const mediationResponse = await handlePlatformMediation(request, env, route);
     if (mediationResponse) return mediationResponse;
@@ -141,7 +158,7 @@ export default {
 
     // Edge cache check — serve from cache if available (avoids R2 + D1 on every hit)
     const cache = (caches as unknown as { default: Cache }).default;
-    const skipEdgeCache = operatorPath || isUpdateSensitivePath(url.pathname);
+    const skipEdgeCache = privateApp || operatorPath || isUpdateSensitivePath(url.pathname);
     if (request.method === "GET" && !skipEdgeCache) {
       const cached = await cache.match(request);
       if (cached) return cached;
@@ -158,9 +175,9 @@ export default {
           return new Response("Sitemap temporarily unavailable", { status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "300" } });
         }
         const sitemap = new Response(request.method === "HEAD" ? null : renderSitemap(url.origin, urls), {
-          headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "public, max-age=3600", "X-Content-Type-Options": "nosniff" },
+          headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": skipEdgeCache ? "private, no-store" : "public, max-age=3600", "X-Content-Type-Options": "nosniff" },
         });
-        if (request.method === "GET") ctx.waitUntil(cache.put(request, sitemap.clone()));
+        if (request.method === "GET" && !skipEdgeCache) ctx.waitUntil(cache.put(request, sitemap.clone()));
         return sitemap;
       }
     }
@@ -192,7 +209,7 @@ export default {
     // 304 Not Modified
     const etag = object.httpEtag;
     if (etagsMatch(request.headers.get("If-None-Match"), etag)) {
-      return new Response(null, { status: 304, headers: { ETag: etag } });
+      return new Response(null, { status: 304, headers: privateApp ? { ETag: etag, "Cache-Control": "private, no-store" } : { ETag: etag } });
     }
 
     // Serve the object
@@ -201,7 +218,7 @@ export default {
     const headers = securityHeaders(isHtml, updateSensitive);
     headers.set("Content-Type", contentType(key));
     headers.set("ETag", etag);
-    if (operatorPath) headers.set("Cache-Control", "private, no-store");
+    if (operatorPath || privateApp) headers.set("Cache-Control", "private, no-store");
     if (!isHtml && object.size !== undefined) headers.set("Content-Length", String(object.size));
 
     // The console's Code Health panel fetches /.vcqa/report.json (+ badge.svg)
@@ -230,6 +247,7 @@ export default {
         title: page?.title ?? tenant?.title ?? null,
         tagline: page?.description ?? listing?.tagline ?? null,
         icon_url: page?.image_url ?? tenant?.icon_url ?? listing?.icon_url ?? null,
+        private: privateApp,
       }, `${url.origin}${url.pathname}`);
     }
 

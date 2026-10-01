@@ -4,6 +4,7 @@ import type { Env } from '../types.js';
 import { requireAppOwner, HttpError } from '../lib/auth.js';
 import { auditModeration, chunkText, moderateChunks, moderateText } from '../lib/moderation.js';
 import { withinModerationRate } from '../lib/ai-budget.js';
+import { getAppVisibility } from '../lib/visibility.js';
 import type { ListingRow, ListingPatch } from './listing-types.js';
 import { rowToDto, emptyDto } from './listing-types.js';
 import {
@@ -61,7 +62,8 @@ listingsRoutes.get('/storefront/apps/:id', async (c) => {
     const appRow = await c.env.DB.prepare('SELECT id FROM apps WHERE id = ?')
       .bind(appId)
       .first<{ id: string }>();
-    if (!appRow) return c.text('not found', 404);
+    // A private app (#259) has no public listing: answered exactly as a missing one.
+    if (!appRow || (await getAppVisibility(c.env.DB, appId)).mode === 'private') return c.text('not found', 404);
 
     const row = await c.env.DB.prepare('SELECT * FROM app_listings WHERE app_id = ?')
       .bind(appId)
@@ -102,6 +104,8 @@ listingsRoutes.get('/storefront/apps', async (c) => {
               l.updated_at
          FROM apps a
     LEFT JOIN app_listings l ON l.app_id = a.id
+    LEFT JOIN app_visibility v ON v.app_id = a.id
+        WHERE v.mode IS NULL OR v.mode <> 'private'  -- private apps (#259) are never listed
         ORDER BY a.created_at DESC`,
     ).all<{
       app_id: string;

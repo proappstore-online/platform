@@ -28,10 +28,14 @@ vi.mock('./api-helpers.js', () => ({
   verifyToken: verifyTokenMock,
 }));
 
-const { default: worker } = await import('./index.js');
+const { default: worker, clearVisibilityCache, PUBLIC_APP_TTL_MS } = await import('./index.js');
+
+// GET /v1/apps/:id/visibility/me (#259): public unless a test says otherwise.
+const visibilityMe = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ mode: 'public', allowed: true }));
 
 const env = {
   API_BASE: 'https://api.proappstore.online',
+  API: { fetch: (url: string, init?: RequestInit) => visibilityMe(url, init) } as unknown as Fetcher,
   OAUTH_KV: makeKv(),
   SESSION_SIGNING_KEY: 'test-key',
 } as Env;
@@ -50,6 +54,8 @@ function makeKv(seed: Record<string, string> = {}): KVNamespace {
 describe('MCP transport auth', () => {
   afterEach(() => {
     verifyTokenMock.mockReset();
+    visibilityMe.mockClear();
+    clearVisibilityCache();
     servedMock.calls.length = 0;
     delete (ctx as ExecutionContext & { props?: Record<string, unknown> }).props;
   });
@@ -260,5 +266,76 @@ describe('landing page refuses MCP protocol clients (#112)', () => {
     const res = await worker.fetch(new Request('https://mcp.proappstore.online/mcp', { headers: { Accept: 'text/event-stream' } }), env, ctx);
     expect(res.status).toBe(401);
     expect(res.headers.get('WWW-Authenticate')).toContain('resource_metadata');
+  });
+});
+
+// #259: an app-scoped session on a private app is for its team and declared roles only.
+describe('MCP app-scoped sessions on private apps (#259)', () => {
+  afterEach(() => {
+    verifyTokenMock.mockReset();
+    visibilityMe.mockReset();
+    visibilityMe.mockImplementation(async () => Response.json({ mode: 'public', allowed: true }));
+    servedMock.calls.length = 0;
+    clearVisibilityCache();
+    delete (ctx as ExecutionContext & { props?: Record<string, unknown> }).props;
+  });
+
+  const open = (app = 'diary') => {
+    verifyTokenMock.mockResolvedValueOnce({ id: 'gh:2', login: 'someone' });
+    return worker.fetch(new Request(`https://mcp.proappstore.online/mcp/apps/${app}`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer good-token' },
+    }), env, ctx);
+  };
+
+  it('remembers a public answer for at most 10 s, so a public → private flip is honoured within that bound', async () => {
+    expect(PUBLIC_APP_TTL_MS).toBeLessThanOrEqual(10_000);
+    vi.useFakeTimers();
+    try {
+      expect((await open('flip')).status).not.toBe(403);
+      visibilityMe.mockImplementation(async () => Response.json({ mode: 'private', allowed: false }));
+      vi.advanceTimersByTime(PUBLIC_APP_TTL_MS + 1);
+      expect((await open('flip')).status).toBe(403);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refuses a caller the backend does not allow with 403, before any session exists', async () => {
+    visibilityMe.mockImplementation(async () => Response.json({ mode: 'private', allowed: false }));
+    const res = await open();
+    expect(res.status).toBe(403);
+    expect(servedMock.calls).toEqual([]);
+    const [url, init] = visibilityMe.mock.calls[0]!;
+    expect(url).toBe('https://api.proappstore.online/v1/apps/diary/visibility/me');
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer good-token');
+  });
+
+  it('serves an allowed caller, and asks again on the next message (a private answer is never remembered)', async () => {
+    visibilityMe.mockImplementation(async () => Response.json({ mode: 'private', allowed: true }));
+    expect((await open()).status).toBe(200);
+    expect((await open()).status).toBe(200);
+    expect(visibilityMe).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails closed with 503 when the lookup fails, never an allow', async () => {
+    visibilityMe.mockImplementation(async () => new Response('boom', { status: 500 }));
+    expect((await open()).status).toBe(503);
+    visibilityMe.mockImplementation(async () => { throw new Error('binding down'); });
+    expect((await open()).status).toBe(503);
+    expect(servedMock.calls).toEqual([]);
+  });
+
+  it('a public app is asked once, then remembered — no backend call per message', async () => {
+    expect((await open('crm')).status).toBe(200);
+    expect((await open('crm')).status).toBe(200);
+    expect(visibilityMe).toHaveBeenCalledTimes(1);
+  });
+
+  it('the shared /mcp endpoint never asks', async () => {
+    verifyTokenMock.mockResolvedValueOnce({ id: 'gh:2', login: 'someone' });
+    const res = await worker.fetch(new Request('https://mcp.proappstore.online/mcp', { method: 'POST', headers: { Authorization: 'Bearer good-token' } }), env, ctx);
+    expect(res.status).toBe(200);
+    expect(visibilityMe).not.toHaveBeenCalled();
   });
 });

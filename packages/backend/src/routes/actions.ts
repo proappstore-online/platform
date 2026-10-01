@@ -12,6 +12,7 @@ import {
 } from '../lib/action-sql.js';
 import { looksLikeAppToken, rememberTokenUser, touchLastUsed, verifyAppToken } from '../lib/app-tokens.js';
 import { getVerifier, runVerifier } from '../lib/verifiers/index.js';
+import { PUBLIC_VISIBILITY, requireVisible, visibilityFromRow, type AppVisibility } from '../lib/visibility.js';
 
 export const actionRoutes = new Hono<{ Bindings: Env }>();
 
@@ -73,13 +74,19 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
     return rateLimited();
   }
 
-  const manifest = await loadManifest(c.env.DB, appId, name);
+  const { manifest, visibility } = await loadManifestWithVisibility(c.env.DB, appId, name);
   // #203: a scheduled action takes no caller input — its params are the schedule's
   // fixed values — and its caller_unscoped reason holds only for those. The
   // platform scheduler reaches the data worker directly (forwardToDataWorker),
   // never this route, so no session or app token may run one here.
   if (manifest.schedule !== undefined) throw new HttpError('scheduled actions run only on the platform scheduler', 403);
   const publicAction = manifest.requires_auth === false;
+  // #259: a private app has no anonymous data path, and every caller — session or
+  // app token — must be its owner or hold one of its declared roles. Registration
+  // already refuses a public code action on a private app; this also covers a
+  // public console endpoint (#155) and a manifest that predates the declaration.
+  // System identities never reach this route (the scheduler forwards directly).
+  if (publicAction && visibility.mode === 'private') throw new HttpError('this app is private', 403);
   let token: string | null = null;
   let userId = '';
 
@@ -101,6 +108,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
       // `users`), then the same role checks and :__user_id injection apply.
       const verified = await verifyAppToken(c.env.DB, appId, token);
       rememberTokenUser(c.req.raw, verified.user.id);
+      await requireVisible(c.env, appId, visibility, verified.user);
       if (verified.scopes.access === 'read' && actionWrites(manifest)) {
         throw new HttpError('token is read-only', 403);
       }
@@ -118,6 +126,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
       try { c.executionCtx.waitUntil(touched); } catch { void touched; }
     } else {
       const user = await requireUser(c);
+      await requireVisible(c.env, appId, visibility, user);
       userId = user.id;
       grantRole(c.req.raw, user, await enforceActionAuth(c.env.DB, appId, manifest, user));
       // #231: after the role check, so a caller without the role is told that,
@@ -345,6 +354,37 @@ export async function loadManifest(db: D1Database, appId: string, name: string):
   } catch {
     throw new HttpError('action manifest is invalid', 500);
   }
+}
+
+/**
+ * The action's manifest and the app's visibility (#259) in ONE read: the join
+ * keeps the executor's hot path at the single D1 query it had before. A missing
+ * app_visibility table (migration not applied yet) reads as public.
+ */
+async function loadManifestWithVisibility(
+  db: D1Database,
+  appId: string,
+  name: string,
+): Promise<{ manifest: ToolManifest; visibility: AppVisibility }> {
+  let row: { manifest: string; visibility_mode?: string | null; visibility_roles?: string | null } | null;
+  try {
+    row = await db.prepare(
+      `SELECT t.manifest, v.mode AS visibility_mode, v.roles AS visibility_roles
+         FROM app_tools t LEFT JOIN app_visibility v ON v.app_id = t.app_id
+        WHERE t.app_id = ? AND t.name = ?`,
+    ).bind(appId, name).first<{ manifest: string; visibility_mode: string | null; visibility_roles: string | null }>();
+  } catch (e) {
+    if (!/no such table: app_visibility/i.test(String((e as Error)?.message ?? e))) throw e;
+    return { manifest: await loadManifest(db, appId, name), visibility: PUBLIC_VISIBILITY };
+  }
+  if (!row) throw new HttpError('action not found', 404);
+  let manifest: ToolManifest;
+  try {
+    manifest = JSON.parse(row.manifest) as ToolManifest;
+  } catch {
+    throw new HttpError('action manifest is invalid', 500);
+  }
+  return { manifest, visibility: visibilityFromRow(row.visibility_mode ?? null, row.visibility_roles ?? null) };
 }
 
 /** Mark the request for the success audit when an app-role gate granted it. */

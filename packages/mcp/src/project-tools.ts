@@ -726,6 +726,22 @@ export function registerProjectTools(
         success?: boolean;
         error?: string;
       };
+      // #259: tell the admin publish step the app's declared visibility, read
+      // from the repo's mcp.json, so a private app's FIRST publish never lands in
+      // the public registry.json (nothing has registered app_visibility yet).
+      // The admin step also reads the repo itself when this is missing.
+      let visibility: "public" | "private" | undefined;
+      try {
+        const manifest = await gh.getFile(app_id, "mcp.json");
+        if (manifest.ok && manifest.content) {
+          const mode = (JSON.parse(manifest.content) as { visibility?: { mode?: unknown } } | null)?.visibility?.mode;
+          visibility = mode === "private" ? "private" : "public";
+        } else if (manifest.status === 404) {
+          visibility = "public";
+        }
+      } catch {
+        visibility = undefined; // unreadable or unparseable: leave it to the admin step
+      }
       try {
         const headers: Record<string, string> = { "Content-Type": "application/json" };
         if (env.INTERNAL_TOKEN && auth.login) {
@@ -745,6 +761,7 @@ export function registerProjectTools(
             icon: icon || "📦",
             iconBg: icon_bg || "#7c3aed",
             ...(pro_features?.length ? { proFeatures: pro_features } : {}),
+            ...(visibility ? { visibility } : {}),
           }),
         });
         if (!res.ok) {
@@ -765,7 +782,7 @@ export function registerProjectTools(
       return text([
         data.success ? `Published: **${name}** (${app_id})` : `Publish failed for ${app_id}`,
         `Live: https://${app_id}.proappstore.online`,
-        `Listing: https://proappstore.online/app/${app_id}`,
+        visibility === "private" ? "Listing: none (private app)" : `Listing: https://proappstore.online/app/${app_id}`,
         "",
         steps,
       ].join("\n"));

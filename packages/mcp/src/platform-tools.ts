@@ -168,7 +168,13 @@ export function registerPlatformTools(server: McpServer, env: Env) {
         // App hostnames are served by the route-mapped host worker — a plain
         // same-zone fetch would bypass it and report a false status.
         const check = await env.HOST.fetch(liveUrl, { method: "HEAD" });
-        status = check.ok ? "Live (200)" : `Down (${check.status})`;
+        // A private app (#259) refuses an anonymous HEAD by design: the host marks
+        // that refusal, so it reads as live-and-private, not down.
+        status = check.ok
+          ? "Live (200)"
+          : check.headers.get("X-PAS-Visibility") === "private"
+            ? `Live (private — sign-in required, ${check.status})`
+            : `Down (${check.status})`;
       } catch {
         status = "Down (unreachable)";
       }

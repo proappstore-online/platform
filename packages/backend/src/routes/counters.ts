@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { requireUser } from '../lib/auth.js';
+import { getAppVisibilityCached, requireVisible, requireVisibleCaller } from '../lib/visibility.js';
 import type { Env } from '../types.js';
 
 const MAX_COUNTERS_PER_APP = 1000;
@@ -8,8 +9,11 @@ const MAX_INCREMENT = 1000;
 
 export const counterRoutes = new Hono<{ Bindings: Env }>();
 
+// #259: counters are anonymous-readable for a public app; a private app's are
+// its users' only — reads and writes both go through the visibility gate.
 counterRoutes.get('/apps/:appId/counters', async (c) => {
   const { appId } = c.req.param();
+  if ((await requireVisibleCaller(c, appId)).mode === 'private') c.header('Cache-Control', 'private, no-store');
   const prefix = c.req.query('prefix');
   let query: string;
   let bindings: unknown[];
@@ -26,6 +30,7 @@ counterRoutes.get('/apps/:appId/counters', async (c) => {
 
 counterRoutes.get('/apps/:appId/counters/:key', async (c) => {
   const { appId, key } = c.req.param();
+  if ((await requireVisibleCaller(c, appId)).mode === 'private') c.header('Cache-Control', 'private, no-store');
   const row = await c.env.DB.prepare('SELECT value FROM counters WHERE app_id = ? AND key = ?')
     .bind(appId, key).first<{ value: number }>();
   if (!row) return c.json({ value: 0 });
@@ -33,8 +38,9 @@ counterRoutes.get('/apps/:appId/counters/:key', async (c) => {
 });
 
 counterRoutes.post('/apps/:appId/counters/:key', async (c) => {
-  await requireUser(c);
+  const user = await requireUser(c);
   const { appId, key } = c.req.param();
+  await requireVisible(c.env, appId, await getAppVisibilityCached(c.env.DB, appId), user);
   if (key.length > MAX_KEY_LENGTH) return c.text(`counter key exceeds ${MAX_KEY_LENGTH} chars`, 400);
 
   const body = await c.req.json<{ increment?: number }>().catch(() => ({ increment: 1 }));

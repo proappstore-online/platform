@@ -113,7 +113,7 @@ export class PasMcpAgent extends McpAgent<Env> {
     //    a resident core is registered, plus list_app_tools / call_app_tool fixed to
     //    this app — the rest is one discovery call away and callable by name.
     if (this.appScope) {
-      const appTools = await fetchTools(this.env.API, this.env.API_BASE, this.appScope);
+      const appTools = await fetchTools(this.env.API, this.env.API_BASE, this.appScope, this.userToken);
       const result = registerAppToolsProgressive(
         this.server,
         appTools,
@@ -286,6 +286,13 @@ export default {
       return new Response("Not found — the MCP endpoint is /mcp or /mcp/apps/:appId", { status: 404 });
     }
 
+    // Private apps (#259): an app-scoped session on a private app is for its owner
+    // and its declared roles only — refused before any session exists.
+    if (mcpRoute.appScope && request.method !== "OPTIONS") {
+      const refusal = await refuseUnlessAppVisible(env, mcpRoute.appScope, bearer && user ? bearer : null);
+      if (refusal) return refusal;
+    }
+
     (ctx as unknown as { props?: Record<string, unknown> }).props = {
       ...((ctx as unknown as { props?: Record<string, unknown> }).props ?? {}),
       ...(bearer && user ? { authToken: bearer } : {}),
@@ -295,6 +302,54 @@ export default {
     return PasMcpAgent.serve("/mcp").fetch(rewriteToSharedMcpPath(request), env, ctx);
   },
 };
+
+// Apps last seen public, by id → when that answer expires. Only a PUBLIC answer
+// is remembered (it is the same for every caller), so a public app's MCP traffic
+// does not ask the backend on every message. The tool list and every action call
+// re-check visibility in the backend, so this window never exposes app data.
+//
+// Flip bound (#259): after an app goes public → private, an isolate may still
+// open an app-scoped session on it for up to PUBLIC_APP_TTL_MS (10 s), and the
+// shared tool cache (tool-loader.ts TOOL_CACHE_TTL_MS, also 10 s) may still list
+// its tool NAMES and params. Neither ever returns app data: every action call is
+// re-checked by the backend's visibility gate on the request itself.
+const publicApps = new Map<string, number>();
+export const PUBLIC_APP_TTL_MS = 10_000;
+
+/**
+ * Null when the caller may open a session on the app; otherwise the refusal.
+ * Asks GET /v1/apps/:id/visibility/me; a failed lookup is a 503, never an allow.
+ */
+export async function refuseUnlessAppVisible(env: Pick<Env, "API" | "API_BASE">, appId: string, token: string | null): Promise<Response | null> {
+  const known = publicApps.get(appId);
+  if (known !== undefined && known > Date.now()) return null;
+  let res: Response;
+  try {
+    res = await env.API.fetch(`${env.API_BASE}/v1/apps/${encodeURIComponent(appId)}/visibility/me`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  } catch {
+    return visibilityRefusal(503, "Authorization unavailable");
+  }
+  if (res.status === 401) return visibilityRefusal(401, "Unauthorized");
+  if (!res.ok) return visibilityRefusal(503, "Authorization unavailable");
+  const body = (await res.json().catch(() => null)) as { mode?: unknown; allowed?: unknown } | null;
+  if (body?.mode === "public" && body.allowed === true) {
+    publicApps.set(appId, Date.now() + PUBLIC_APP_TTL_MS);
+    return null;
+  }
+  publicApps.delete(appId);
+  return body?.allowed === true ? null : visibilityRefusal(403, "Forbidden — this app is private");
+}
+
+/** Test seam: forget remembered public answers. */
+export function clearVisibilityCache(): void {
+  publicApps.clear();
+}
+
+function visibilityRefusal(status: number, message: string): Response {
+  return new Response(JSON.stringify({ error: message }), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+}
 
 /** The app scope a scoped session was routed with (#149); null on the shared endpoint or for a malformed id. */
 export function extractAppScope(props: Record<string, unknown>): string | null {
