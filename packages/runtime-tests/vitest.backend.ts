@@ -50,6 +50,8 @@ export default defineWorkersConfig(async () => ({
             VAPID_PRIVATE_KEY: 'vapid-private',
             // The key vault's KEK (base64 32 bytes) so the BYO key round-trip runs on real WebCrypto + D1 (#3).
             APP_SECRET_KEK: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+            // Lets /email/send and notify-user reach their role checks (#272); Resend itself is fetchMock'd.
+            RESEND_API_KEY: 're_runtime',
             TEST_MIGRATIONS: await readD1Migrations(here('../../migrations')),
           },
           workers: [
