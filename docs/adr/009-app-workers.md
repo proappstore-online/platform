@@ -53,8 +53,10 @@ credential**. Two facts bound it:
   a workflow with their own GitHub credentials. Repo-level copies widen it
   further: `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_ACCOUNT_ID` (the
   account's `pas-prd-r2` key, which can write every app's static site) sit in
-  29 app repos, re-copied hourly by `reconcile-app-secrets.yml` (removal:
-  #279), and `CLOUDFLARE_API_TOKEN` sits in 5. The MCP `write_file` route to a
+  29 app repos, where a platform fan-out workflow re-copied them hourly
+  (since deleted, #279); the MCP `setR2Variables` still writes them as plaintext
+  repo Actions variables on repos it provisions (#285); and
+  `CLOUDFLARE_API_TOKEN` sits in 5. The MCP `write_file` route to a
   workflow (#280) is a second, narrower path; guarding it is defence in depth,
   not the control.
 

@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { resolveToken } from './lib/config.js';
 import { readJsonIfExists } from './lib/json-file.js';
@@ -187,9 +186,6 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
   }
 
   if (data.success) {
-    // Set R2 deploy secrets on external-org repos
-    await ensureDeploySecrets(appId, token);
-
     process.stdout.write(`\n  Published. Push your code to deploy:\n`);
     process.stdout.write(`    git push origin main\n\n`);
     process.stdout.write(`  Live URL:        https://${appId}.proappstore.online\n`);
@@ -199,57 +195,4 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
     process.stderr.write(`\n  Some steps failed. Fix the failing step and retry — pas publish is idempotent.\n`);
     process.exit(1);
   }
-}
-
-/**
- * Ensure an app repo has its R2 deploy secrets.
- * proappstore-online app repos are PRIVATE on the free org plan and CANNOT inherit
- * org-level secrets, so they need R2_* as REPO-level secrets. Trigger the reconcile
- * workflow (runs in the public platform repo, reads the org R2 secrets, fans them
- * out repo-level) rather than assuming inheritance. External-org repos can't use our
- * org secrets at all, so we print manual instructions.
- */
-async function ensureDeploySecrets(appId: string, _token: string): Promise<void> {
-  let remoteUrl: string;
-  try {
-    remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], { encoding: 'utf8' }).trim();
-  } catch {
-    return;
-  }
-
-  const match = remoteUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)/);
-  if (!match) return;
-  const [, owner] = match;
-
-  if (owner === 'proappstore-online') {
-    // Private-repo-on-free ⇒ no org inheritance. Dispatch the reconcile workflow to
-    // set R2_* repo-level (idempotent; the hourly cron also catches it).
-    try {
-      execFileSync(
-        'gh',
-        ['workflow', 'run', 'reconcile-app-secrets.yml', '-R', 'proappstore-online/platform', '-f', `repo=${appId}`],
-        { stdio: 'pipe' },
-      );
-      process.stdout.write(`  [+] R2 deploy secrets: reconcile dispatched for ${appId}\n`);
-    } catch {
-      process.stdout.write(`  [!] Could not dispatch secret reconcile (hourly cron will catch it, or run it manually)\n`);
-    }
-    return;
-  }
-
-  // External repo — check if R2 secrets are set
-  const fullRepo = `${owner}/${match[2]}`;
-  try {
-    execFileSync('gh', ['--version'], { stdio: 'pipe' });
-    const secrets = execFileSync('gh', ['secret', 'list', '-R', fullRepo], { encoding: 'utf8', stdio: 'pipe' });
-    if (secrets.includes('R2_ACCESS_KEY_ID')) return;
-  } catch {
-    // gh not available or can't list secrets
-  }
-
-  process.stdout.write(`\n  Your repo is outside the proappstore-online org.\n`);
-  process.stdout.write(`  Set these GitHub Actions secrets on ${fullRepo}:\n`);
-  process.stdout.write(`    R2_ACCESS_KEY_ID      (from CF Dashboard → R2 → API Tokens)\n`);
-  process.stdout.write(`    R2_SECRET_ACCESS_KEY\n`);
-  process.stdout.write(`    R2_ACCOUNT_ID\n\n`);
 }

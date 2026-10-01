@@ -21,8 +21,12 @@ hosting — a single host Worker + R2, no per-app CF Pages project:
    Worker's `routes` table in D1
 4. Add entry to storefront `registry.json`
 5. Provision CF Web Analytics RUM site (non-fatal)
-6. Dispatch the `reconcile-app-secrets` workflow so the new repo gets R2 deploy
-   creds as repo-level secrets before its first deploy
+
+The publish paths place no deploy secrets in app repos: the canonical deploy
+workflow mints scoped R2 credentials through GitHub OIDC (`deploy-credentials`).
+App repos are not yet credential-free, though — the MCP `provision_pas_app` /
+`scaffold_app` tools still write `R2_*` repo Actions variables via
+`setR2Variables` (#285).
 
 Idempotent — re-running on a partially-provisioned app fills in only missing pieces.
 The same provisioning core also backs `/api/agent-deploy` (Agent Teams deploy)

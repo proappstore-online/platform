@@ -482,13 +482,11 @@ async function addCollaborator(env: Env, id: string, username: string): Promise<
   };
 }
 
-// NOTE: the workflow's CLOUDFLARE_API_TOKEN is an ORG-level Actions secret,
-// managed in SOPS (~/dev/secrets; pushed to the proappstore-online org secret by
-// hand — see ~/dev/secrets/README.md). Used by PUBLIC infra repos, which CAN read
-// org secrets. It is deliberately NOT set per-repo here (the admin Worker can't
-// seal repo secrets — libsodium unavailable in Workers). NOTE R2 deploy creds are
-// the opposite: app repos are PRIVATE on the free org and can't read org secrets,
-// so R2_* is set REPO-level, fanned out by the reconcile-app-secrets workflow.
+// NOTE: the publish paths place no deploy secrets in app repos. Deploys mint
+// scoped R2 credentials through OIDC (`POST /v1/apps/<id>/deploy-credentials`,
+// see deployWorkflowYaml), and the workflow's CLOUDFLARE_API_TOKEN is not an
+// app-repo secret (#279). The MCP `setR2Variables` still writes `R2_*` repo
+// variables on provision_pas_app / scaffold_app (#285).
 
 /** addToRegistry: attempts at the registry.json read-modify-write before giving up (#60). */
 const REGISTRY_WRITE_ATTEMPTS = 3;
@@ -813,27 +811,7 @@ async function provisionApp(
   const cf = cfFor(env);
   steps.push(await ensureAnalytics(cf, req.id));
 
-  // 5. R2 deploy secrets. App repos are PRIVATE on the free org and CANNOT inherit
-  //    org-level secrets, so each needs R2_* as REPO-level secrets or it dies at
-  //    "Upload to R2". The admin Worker can't seal repo secrets itself, so trigger
-  //    the reconcile workflow (runs in the PUBLIC platform repo, which CAN read the
-  //    org R2 secrets) to set them repo-level BEFORE the first deploy. Non-fatal —
-  //    the hourly cron + re-runs backstop it. See .github/workflows/reconcile-app-secrets.yml.
-  try {
-    const dispatch = await ghFor(env).api(
-      `/repos/${env.PUBLISHERS_ORG}/platform/actions/workflows/reconcile-app-secrets.yml/dispatches`,
-      { method: "POST", body: { ref: "main", inputs: { repo: req.id } } },
-    );
-    steps.push(
-      dispatch.ok
-        ? { name: "Deploy secrets", status: "ok", detail: "reconcile-app-secrets dispatched (R2 creds → repo-level)" }
-        : { name: "Deploy secrets", status: "skip", detail: `reconcile dispatch ${dispatch.status} — hourly cron will catch it` },
-    );
-  } catch (e) {
-    steps.push({ name: "Deploy secrets", status: "skip", detail: `reconcile dispatch failed (cron backstops): ${(e as Error).message}` });
-  }
-
-  // 6. Agent path: ensure a deploy workflow exists, then push the bundle as one
+  // 5. Agent path: ensure a deploy workflow exists, then push the bundle as one
   //    commit. Without an injected workflow a push triggers no CI and the deploy
   //    gate times out with "CI never started".
   let commitSha: string | undefined;

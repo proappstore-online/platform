@@ -149,7 +149,7 @@ describe("provisioning: shared core", () => {
       ENV,
     );
     expect(r.success).toBe(true);
-    expect(names(r)).toEqual(["GitHub repo", "R2 route", "Registry", "Analytics", "Deploy secrets"]);
+    expect(names(r)).toEqual(["GitHub repo", "R2 route", "Registry", "Analytics"]);
     expect(rec.blobs).toHaveLength(0); // CLI pushes app files itself
   });
 
@@ -192,7 +192,7 @@ describe("provisioning: shared core", () => {
     expect(r.success).toBe(true);
     expect(r.commitSha).toBe("commit-abc");
     expect(r.repoUrl).toBe("https://github.com/proappstore-online/widget");
-    expect(names(r)).toEqual(["GitHub repo", "R2 route", "Analytics", "Deploy secrets", "Push files"]);
+    expect(names(r)).toEqual(["GitHub repo", "R2 route", "Analytics", "Push files"]);
     expect(names(r)).not.toContain("Registry");
     expect(rec.blobs.length).toBeGreaterThan(0);
   });

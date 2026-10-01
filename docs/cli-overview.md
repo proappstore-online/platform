@@ -153,10 +153,9 @@ there is no per-app CF Pages project or per-app DNS record. Apps deploy via
 GitHub Actions → R2 upload.
 
 After a successful provision the CLI also registers MCP tools from `mcp.json`
-(if present) and ensures the app repo's R2 deploy secrets (`R2_ACCESS_KEY_ID`,
-`R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`) — for `proappstore-online` repos it
-dispatches the secret-reconcile workflow; external-org repos get printed
-instructions.
+(if present). The publish paths place no deploy secrets in app repos: the
+canonical deploy workflow mints scoped R2 credentials through GitHub OIDC
+(#279). The MCP `setR2Variables` still writes `R2_*` repo variables (#285).
 
 Idempotent — re-running fills in only missing pieces.
 
