@@ -588,7 +588,7 @@ export function registerProjectTools(
   // ── write_file ────────────────────────────────────────────
   server.tool(
     "write_file",
-    "Create or overwrite a file in a PAS app's GitHub repo. Commits directly to the main branch.",
+    "Create or overwrite a file in a PAS app's GitHub repo. Commits directly to the main branch. Paths under .github/ are refused (platform-managed).",
     {
       app_id: APP_ID,
       path: z.string().describe("File path relative to repo root (e.g. 'web/src/App.tsx')"),
@@ -642,7 +642,7 @@ export function registerProjectTools(
   // ── delete_file ───────────────────────────────────────────
   server.tool(
     "delete_file",
-    "Delete a file from a PAS app's GitHub repo. Requires confirm: true.",
+    "Delete a file from a PAS app's GitHub repo. Requires confirm: true. Paths under .github/ are refused (platform-managed).",
     { app_id: APP_ID, path: z.string().describe("File path to delete"), message: z.string().optional().describe("Commit message"), confirm: CONFIRM, dry_run: DRY_RUN },
     async ({ app_id, path, message, confirm, dry_run }) => {
       const auth = await requireOwner(app_id);
@@ -828,7 +828,7 @@ export function registerProjectTools(
   // ── batch_write_files ─────────────────────────────────────
   server.tool(
     "batch_write_files",
-    "Write multiple files in a single commit to a PAS app's GitHub repo. More efficient than individual write_file calls.",
+    "Write multiple files in a single commit to a PAS app's GitHub repo. More efficient than individual write_file calls. Paths under .github/ are refused (platform-managed).",
     {
       app_id: APP_ID,
       files: z.array(z.object({
