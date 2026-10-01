@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { requireUser, requireAppAccess, HttpError, TEAM_ROLES, type FasUser } from '../lib/auth.js';
+import { roleSubjects } from '../lib/role-subject.js';
 import { generateQrSvg } from '../lib/qr.js';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
@@ -78,7 +79,7 @@ async function inviteAccess(c: Parameters<typeof requireUser>[0], appId: string)
        JOIN app_roles r ON r.app_id = p.app_id AND r.role_name = p.delegate_role
       WHERE p.app_id = ? AND (r.user_id = ? OR r.user_id = ?)
       LIMIT 1`,
-  ).bind(appId, user.id, user.login).first();
+  ).bind(appId, ...roleSubjects(user)).first();
   if (!eligible) throw new HttpError('invite delegation not granted', 403);
   return { kind: 'delegated', user };
 }
@@ -107,7 +108,7 @@ async function canDelegateRoleToGroup(
       WHERE g.app_id = ? AND g.group_id = ? AND g.user_id = ?
         AND p.grantable_role = ? AND (r.user_id = ? OR r.user_id = ?)
       LIMIT 1`,
-  ).bind(appId, group, user.id, role, user.id, user.login).first();
+  ).bind(appId, group, user.id, role, ...roleSubjects(user)).first();
   return row !== null;
 }
 

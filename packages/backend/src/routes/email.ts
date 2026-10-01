@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
+import { roleSubjects } from '../lib/role-subject.js';
 import { sendEmail, isLikelyEmail } from '../lib/email.js';
 
 export const emailRoutes = new Hono<{ Bindings: Env }>();
@@ -51,14 +52,15 @@ emailRoutes.post('/email/send', async (c) => {
     //
     // The grant lives in `app_roles`, so read it there. Only when the cheaper
     // checks miss, and note the (user_id = ? OR user_id = ?) shape: rows may be
-    // keyed by user id OR login, so matching on id alone still misses grants.
+    // keyed by user id OR a GitHub login — roleSubjects (#272) binds the login
+    // for GitHub sessions only, never a credential/Google display name.
     let isEditor = false;
     if (!isOwner && !isAdmin) {
       const row = await c.env.DB.prepare(
         `SELECT 1 FROM app_roles
           WHERE app_id = ? AND (user_id = ? OR user_id = ?) AND role_name = 'editor'
           LIMIT 1`,
-      ).bind(appId, user.id, user.login).first();
+      ).bind(appId, ...roleSubjects(user)).first();
       isEditor = row !== null;
     }
 

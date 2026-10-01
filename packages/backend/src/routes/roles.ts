@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { requireUser, requireAppAccess, HttpError } from '../lib/auth.js';
+import { roleSubjects } from '../lib/role-subject.js';
 
 /**
  * App-level RBAC endpoints. Vendored from FAS, adapted for PAS auth.
@@ -142,7 +143,7 @@ rolesRoutes.get('/apps/:appId/roles/check/:role', async (c) => {
   const row = await c.env.DB.prepare(
     'SELECT 1 FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id = ?) AND role_name = ? LIMIT 1',
   )
-    .bind(appId, user.id, user.login, role)
+    .bind(appId, ...roleSubjects(user), role)
     .first();
 
   return c.json({ has: row !== null, source: 'db' });
@@ -156,7 +157,7 @@ rolesRoutes.get('/apps/:appId/roles/me', async (c) => {
   const { results } = await c.env.DB.prepare(
     'SELECT role_name FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id = ?)',
   )
-    .bind(appId, user.id, user.login)
+    .bind(appId, ...roleSubjects(user))
     .all<{ role_name: string }>();
 
   return c.json({ roles: (results ?? []).map((r) => r.role_name) });
@@ -170,7 +171,7 @@ rolesRoutes.post('/apps/:appId/roles/ensure-member', async (c) => {
   const existing = await c.env.DB.prepare(
     'SELECT 1 FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id = ?) LIMIT 1',
   )
-    .bind(appId, user.id, user.login)
+    .bind(appId, ...roleSubjects(user))
     .first();
 
   if (existing) return c.json({ ok: true, assigned: false });

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, optionalUser, requireRecentAuth, requireUser, type FasUser } from '../lib/auth.js';
+import { roleSubjects } from '../lib/role-subject.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
 import {
   prepareActionBatch,
@@ -372,7 +373,7 @@ export async function enforceActionAuth(
   // table, where a revoked role takes effect immediately rather than lingering
   // for the life of a 30-day token.
   const rows = await db.prepare('SELECT role_name FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id = ?)')
-    .bind(appId, user.id, user.login)
+    .bind(appId, ...roleSubjects(user))
     .all<{ role_name: string }>();
   const assigned = new Set((rows.results ?? []).map((row) => row.role_name));
   const granted = appRoles.find((role) => assigned.has(role));

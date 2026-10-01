@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, requireAppAccess, requireAppOwner, HttpError } from '../lib/auth.js';
+import { roleSubjects } from '../lib/role-subject.js';
 import { dispatchWebhook } from '../lib/webhook-dispatch.js';
 
 /**
@@ -63,7 +64,7 @@ export async function holdsReviewRole(db: D1Database, appId: string, user: { id:
   return Boolean(await db.prepare(
     `SELECT 1 FROM app_roles WHERE app_id = ?1 AND (user_id = ?2 OR user_id = ?3)
        AND role_name IN (${roles.map((_, i) => `?${i + 4}`).join(', ')}) LIMIT 1`,
-  ).bind(appId, user.id, user.login, ...roles).first());
+  ).bind(appId, ...roleSubjects(user), ...roles).first());
 }
 
 /** One row of the reviewer access trail (#208): who read or deleted whose review document. */
