@@ -111,7 +111,7 @@ describe('host: private apps (#259)', () => {
     // app admits), and the worker answers on its own custom domain anyway.
     await seedApp('vis-data', 'private');
     const url = 'https://data-vis-data.proappstore.online/v1/query';
-    for (const headers of [{}, { Authorization: 'Bearer member-token' }, { Authorization: 'Bearer broken-token' }]) {
+    for (const headers of [{}, { Authorization: 'Bearer member-token' }, { Authorization: 'Bearer broken-token' }] as Record<string, string>[]) {
       const r = await get(url, headers, 'POST');
       expect(r.res.status).toBe(200);
       expect(r.res.headers.get('X-Stub-Worker')).toBe('outbound-echo');
