@@ -43,15 +43,26 @@ credential**. Two facts bound it:
   or redeploy `proappstore-api` itself. Nothing in §2's authorisation rule, the
   shim or the envelope signature defends against that holder; the per-app token
   defends only against a holder of *another app's* code, not of the account.
-- **Today that boundary does not hold.** All `proappstore-online` organisation
-  Actions secrets have visibility `all` — including the account-wide
-  `CLOUDFLARE_API_TOKEN`, `SESSION_SIGNING_KEY` and `INTERNAL_TOKEN` — so every
-  public app repo's workflows can read them, and any app owner can commit a
-  workflow through MCP `write_file` (#274, critical).
+- **Today that boundary does not hold** (#274, critical). All `proappstore-online`
+  organisation Actions secrets have visibility `all` — including the
+  account-wide `CLOUDFLARE_API_TOKEN`, `SESSION_SIGNING_KEY` and
+  `INTERNAL_TOKEN` — so every public app repo's workflows can read them. And
+  **every publisher can run a workflow**: publishing invites the publisher as a
+  **push collaborator** on their app's org repo (`addCollaborator`,
+  `packages/admin/src/publish.ts:~443-478`), and a push collaborator can commit
+  a workflow with their own GitHub credentials. Repo-level copies widen it
+  further: `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_ACCOUNT_ID` (the
+  account's `pas-prd-r2` key, which can write every app's static site) sit in
+  29 app repos, re-copied hourly by `reconcile-app-secrets.yml` (removal:
+  #279), and `CLOUDFLARE_API_TOKEN` sits in 5. The MCP `write_file` route to a
+  workflow (#280) is a second, narrower path; guarding it is defence in depth,
+  not the control.
 
-Therefore **#274 must be closed before #253 starts.** No app worker is deployed,
-on any backend, while an org secret holding a Cloudflare credential is visible to
-an app repo. Exit criterion 3 (§6) is the measured form of this assumption.
+Therefore **#274 must be closed before `app_workers_enabled` is set for any app
+in production.** #253's spike and implementation may proceed before then; no app
+worker is enabled, on any backend, while a Cloudflare credential (R2 keys
+included) is reachable from an app repo, as an org secret or a repo secret. Exit
+criterion 3 (§6) is the measured form of this assumption.
 
 ## Decision
 
@@ -62,7 +73,8 @@ an app repo. Exit criterion 3 (§6) is the measured form of this assumption.
   `deploy-credentials`, `tools/oidc` and `migrate/oidc`. **No app repo may reach
   a Cloudflare credential — org secrets included**: not a repo secret, not an
   organisation secret whose visibility includes the repo, not a token placed by
-  hand (see Trust assumptions; measured by §6 criterion 3).
+  hand. R2 access keys (`R2_*`) count as Cloudflare credentials (see Trust
+  assumptions; measured by §6 criterion 3).
 - The platform constructs the script metadata (bindings, compatibility date,
   limits) and the **entry point**. App code cannot add, remove or alter a
   binding, and it is never the script's `main_module`.
@@ -109,12 +121,20 @@ worker; files through `PAS.storage.*`; logs through `PAS.log`.
   user's file list and quota (#254).
 
 **Per-app token lifecycle.** `PAS_WORKER_TOKEN` is **minted by the platform at
-the app worker's first deploy**, returned only into the worker's binding, and
-**stored hashed** (SHA-256) in D1 against the app; the plaintext is never stored
-or logged. **Rotation** mints a new token and keeps **two valid hashes** for an
-overlap window, so in-flight invocations holding the old binding still
-authorise; the old hash is dropped when the window closes and the new binding is
-live. **`AppWorkerHost.remove(appId)`** (§5) deletes both hashes, so a removed
+the app worker's first deploy** and stored in D1 against the app in two forms:
+`token_hash` (SHA-256), which is what every `PAS` call is verified against, and
+the token **sealed** under `APP_SECRET_KEK` (`token_ct`, `token_dek`,
+`token_iv`; the envelope encryption of `lib/encryption.ts`). The sealed copy is
+needed because the `loader` backend has no secret binding: its `env` is built in
+the `LOADER.get()` callback on every cold load, so the platform must recover the
+plaintext there; it is also used to re-upload `account`/`dispatch` scripts. The
+plaintext is never stored unsealed, logged or returned by any route.
+**Rotation** mints a new token, moves the old hash to `prev_token_hash` with
+`prev_token_until` set to the end of an overlap window, and writes the new hash
+and sealed token; until `prev_token_until`, either hash authorises, so
+in-flight invocations holding the old token are not dropped. The `prev_*`
+columns are cleared once the window has passed. **`AppWorkerHost.remove(appId)`**
+(§5) clears `token_hash`, `prev_token_hash` and the sealed columns, so a removed
 worker's token stops working at once, independent of whether its code is still
 cached anywhere.
 
@@ -162,7 +182,9 @@ signed **event envelope**, on every backend:
                  "body_encoding": "utf8" | "base64" }
 
 `caller` is part of the signed body, so it is covered by the envelope signature
-like every other field.
+like every other field. The signature also covers the top-level `app_id`, and
+the grant's own `sig` is computed over that `app_id` too (#260), so a `caller`
+grant minted for one app cannot be replayed into another app's envelope.
 
 - **Signature.** HMAC-SHA256 over `"<t>.<raw body>"` with `PAS_EVENT_KEY`,
   compared in constant time. The header may carry **several `v1=` values**; the
@@ -212,7 +234,9 @@ like every other field.
   amended.
 - `PAS.actions.batch`: ≤ 500 prepared statements per call (D1's 1,000
   queries-per-invocation on Workers Paid, halved for headroom), body ≤ 1 MB.
-- Schedules: minimum interval 5 minutes (the platform tick), ≤ 3 per app; the
+- Schedules: minimum interval 5 minutes (the platform tick), and every cron
+  minute must be a multiple of 5, because the tick only ever lands on minutes
+  0, 5, …, 55 and an off-tick minute would never fire (#281); ≤ 3 per app; the
   #123 five-failure breaker applies unchanged.
 - Hooks: ≤ 10 per app, body ≤ 5 MB, verified by the platform before any app code
   runs, de-duplicated by delivery id.
@@ -238,7 +262,9 @@ like every other field.
 off: it deletes the script (`account`, `dispatch`) or the stored bundle
 (`loader`), revokes the app's `PAS_WORKER_TOKEN` hashes (§2) and its event key,
 and stops its schedules and hooks. After `remove`, no route reaches the app's code
-and no `PAS` call from a still-cached isolate authorises.
+and no `PAS` call from a still-cached isolate authorises. Turning the flag back on
+does not restore anything: re-enabling requires a **fresh deploy** from the app's
+main-branch workflow, which mints a new token and event key.
 
 The backend is configuration (`APP_WORKER_BACKEND` = `account` | `loader` |
 `dispatch`), not a code fork. All three run the same shim, the same signed
@@ -246,13 +272,16 @@ envelope and the same `PAS` contract.
 
 - **`loader`** — Cloudflare [Dynamic Workers](https://developers.cloudflare.com/dynamic-workers/)
   (the Worker Loader binding). The platform stores the uploaded bundle and loads
-  it on demand with `env.LOADER.get("<appId>:<bundleHash>:<configVersion>", …)`,
-  with the shim as `mainModule`. The ID **must** include `configVersion`, not
-  only the bundle hash: the loader caches by ID, and the `WorkerCode` behind an
-  ID includes its `env` (`PAS_WORKER_TOKEN`, `PAS_EVENT_KEY`). Every token or key
-  rotation, and every platform change to the env or limits, bumps
-  `configVersion`; otherwise a cached isolate keeps running with the revoked
-  credential. Per the Cloudflare docs, as read on 2026-10-01:
+  it on demand with
+  `env.LOADER.get("<appId>:<bundleHash>:<configVersion>:<shimHash>", …)`, with
+  the shim as `mainModule`. The ID **must** include more than the bundle hash:
+  the loader caches by ID, and the `WorkerCode` behind an ID includes its `env`
+  (`PAS_WORKER_TOKEN`, `PAS_EVENT_KEY`), the shim and the limits.
+  `configVersion` is a per-app counter, bumped on every token or key rotation
+  and every per-app env or limits change; `shimHash` is a build-time constant,
+  the hash of the built shim plus the platform-set limits, so a platform deploy
+  that changes either yields a new ID for every app. Otherwise a cached isolate
+  keeps running with a revoked credential or an old shim. Per the Cloudflare docs, as read on 2026-10-01:
   - available on the **Workers Paid** plan, which PAS already uses — no new
     product purchase ([pricing](https://developers.cloudflare.com/dynamic-workers/pricing/));
   - billed per unique Dynamic Worker (Worker ID + code) per day — 1,000 included
@@ -320,10 +349,10 @@ with scheduled syncs inside the breaker; (2) GitHub webhooks reach its dashboard
 within ~1 minute; (3) **no Cloudflare token reaches any app repo** — measured
 as **both** (a) `gh api orgs/proappstore-online/actions/secrets -q
 '[.secrets[]|select(.visibility=="all")]|length'` → `0`, and no
-`CLOUDFLARE_*`/`CF_API_*` org secret whose `…/repositories` includes an app repo,
-**and** (b) `gh secret list -R proappstore-online/<r>` shows no
-`CLOUDFLARE_*`/`CF_API_*` for every app repo (#274; a per-repo `gh secret list`
-alone does not see org secrets); (4) the pre-PAS duperdash is retired.
+`CLOUDFLARE_*`/`CF_API_*`/`R2_*` org secret whose `…/repositories` includes an
+app repo, **and** (b) `gh secret list -R proappstore-online/<r>` shows no
+`CLOUDFLARE_*`/`CF_API_*`/`R2_*` for every app repo (#274, #279; a per-repo
+`gh secret list` alone does not see org secrets); (4) the pre-PAS duperdash is retired.
 
 **B. Open app workers to all apps** (lift the flag, the cap and the first-party
 rule), on whichever backend is then in use, when (1)–(4) hold **and**:
