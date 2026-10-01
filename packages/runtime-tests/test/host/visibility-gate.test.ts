@@ -289,4 +289,16 @@ describe('host: platform sign-in and invite pages for private apps (#259 review)
       expect(r.text, slug).not.toContain('forged');
     }
   });
+
+  it("the SDK's private publicUrl (/.pas/api/.../public/...) reaches the API with the session as a Bearer", async () => {
+    await seedApp('vis-img', 'private');
+    // An <img> sends the cookie and no Accept: text/html — it must be admitted and mediated, not redirected.
+    const r = await get('https://vis-img.proappstore.online/.pas/api/v1/apps/vis-img/public/u/gh:2/a.png', { ...session('owner-token'), Accept: 'image/*' });
+    expect(r.res.status).toBe(200);
+    const echo = JSON.parse(r.text) as { worker: string; path: string; headers: Record<string, string> };
+    expect(echo.worker).toBe('api-echo');
+    expect(echo.path).toBe('/v1/apps/vis-img/public/u/gh:2/a.png');
+    expect(echo.headers.authorization).toBe('Bearer owner-token');
+    expect((await get('https://vis-img.proappstore.online/.pas/api/v1/apps/vis-img/public/u/gh:2/a.png', { Accept: 'image/*' })).res.status).toBe(403);
+  });
 });
