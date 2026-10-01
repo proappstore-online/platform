@@ -22,6 +22,7 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireRecentAuth, type FasUser } from '../lib/auth.js';
+import { roleSubjects } from '../lib/role-subject.js';
 import { markAudited, operatorOwnerOf, requireOperatorOwner, wasAudited } from '../lib/operator-audit-marks.js';
 import { loadContract } from './operator.js';
 
@@ -167,7 +168,7 @@ async function trailRole(db: D1Database, appId: string, owner: FasUser, roles: s
   if (!roles?.length) return '';
   const row = await db.prepare(
     `SELECT role_name FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id = ?) AND role_name IN (${roles.map(() => '?').join(', ')}) LIMIT 1`,
-  ).bind(appId, owner.id, owner.login, ...roles).first<{ role_name: string }>();
+  ).bind(appId, ...roleSubjects(owner), ...roles).first<{ role_name: string }>();
   if (!row) throw new HttpError('requires app role', 403);
   return row.role_name;
 }

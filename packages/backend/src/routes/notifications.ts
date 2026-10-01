@@ -125,11 +125,15 @@ const EMAIL_MAX_BODY = 2000;
 type NotifyChannel = 'push' | 'email' | 'both';
 type EmailSkip = 'unsubscribed' | 'no_address' | 'not_member';
 
-/** Any app role (the `member` row ensure-member writes on first sign-in) — keyed by id or login. */
+/**
+ * Any app role (the `member` row ensure-member writes on first sign-in) — keyed
+ * by id, or by GitHub login for a `gh:` user only (#272: a credential or Google
+ * account's `login` is a free-text display name, see lib/role-subject.ts).
+ */
 async function isAppMember(db: D1Database, appId: string, userId: string): Promise<boolean> {
   const row = await db.prepare(
     `SELECT 1 FROM app_roles
-      WHERE app_id = ?1 AND (user_id = ?2 OR user_id = (SELECT login FROM users WHERE id = ?2))
+      WHERE app_id = ?1 AND (user_id = ?2 OR user_id = (SELECT login FROM users WHERE id = ?2 AND substr(?2, 1, 3) = 'gh:'))
       LIMIT 1`,
   ).bind(appId, userId).first();
   return row !== null;
