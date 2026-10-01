@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { requireUser } from '../lib/auth.js';
-import { getAppVisibility, requireVisible, requireVisibleCaller } from '../lib/visibility.js';
+import { getAppVisibilityCached, requireVisible, requireVisibleCaller } from '../lib/visibility.js';
 import type { Env } from '../types.js';
 
 const MAX_COUNTERS_PER_APP = 1000;
@@ -40,7 +40,7 @@ counterRoutes.get('/apps/:appId/counters/:key', async (c) => {
 counterRoutes.post('/apps/:appId/counters/:key', async (c) => {
   const user = await requireUser(c);
   const { appId, key } = c.req.param();
-  await requireVisible(c.env.DB, appId, await getAppVisibility(c.env.DB, appId), user);
+  await requireVisible(c.env, appId, await getAppVisibilityCached(c.env.DB, appId), user);
   if (key.length > MAX_KEY_LENGTH) return c.text(`counter key exceeds ${MAX_KEY_LENGTH} chars`, 400);
 
   const body = await c.req.json<{ increment?: number }>().catch(() => ({ increment: 1 }));

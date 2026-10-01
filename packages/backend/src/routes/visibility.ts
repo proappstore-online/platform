@@ -20,7 +20,7 @@ visibilityRoutes.get('/apps/:appId/visibility/me', async (c) => {
   const appId = c.req.param('appId');
   const user: FasUser | null = c.req.header('Authorization') ? await requireUser(c) : null;
   const visibility = await getAppVisibility(c.env.DB, appId);
-  const allowed = await visibilityAllows(c.env.DB, appId, visibility, user);
+  const allowed = await visibilityAllows(c.env, appId, visibility, user);
   // Per-caller: no cache layer may hand one caller's answer to another.
   c.header('Cache-Control', 'private, no-store');
   return c.json({ mode: visibility.mode, allowed });

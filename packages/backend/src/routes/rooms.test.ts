@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
+import { forgetAppVisibility } from '../lib/visibility.js';
 import { TEST_SK, testToken, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 import type { Env } from '../types.js';
 
@@ -14,6 +15,9 @@ vi.mock('../do/room.js', async (importOriginal) => {
 });
 
 const TOK = await testToken('gh:room-user');
+
+// The route caches each app's visibility per isolate (#259); tests swap the D1 under it.
+afterEach(() => forgetAppVisibility());
 
 /** A D1 whose every lookup answers `row` — enough for the visibility gate (#259). */
 function visibilityDb(row: Record<string, unknown> | null): D1Database {

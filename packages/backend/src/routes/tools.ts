@@ -12,7 +12,7 @@ import { Hono } from 'hono';
 import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { requireAppAccess, requireAppOwner, requireUser } from '../lib/auth.js';
-import { MAX_VISIBILITY_ROLES, PUBLIC_VISIBILITY, requireVisible, visibilityFromRow, type AppVisibility } from '../lib/visibility.js';
+import { forgetAppVisibility, MAX_VISIBILITY_ROLES, PUBLIC_VISIBILITY, requireVisible, visibilityFromRow, type AppVisibility } from '../lib/visibility.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
 import { VERIFY_PARAM_PREFIX, literalLimit, resolveToolParams, selectsColumn, type ToolManifest, type ToolParam } from '../lib/action-sql.js';
 import { ENDPOINT_NAME_PREFIX } from '../lib/endpoint-sql.js';
@@ -742,6 +742,8 @@ export async function replaceAppTools(
       : []),
   ];
   await db.batch(stmts);
+  // This isolate's remembered visibility (lib/visibility.ts) is now stale.
+  forgetAppVisibility(appId);
 
   // Report the model-facing cost beside the count (#117). A soft warning above the
   // threshold — never a rejection: the deploy workflow prints `warnings[]` as
@@ -861,7 +863,7 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
   const visibility = visibilityFromRow(first?.visibility_mode ?? null, first?.visibility_roles ?? null);
   if (visibility.mode === 'private') {
     const caller = c.req.header('Authorization') ? await requireUser(c) : null;
-    await requireVisible(c.env.DB, appId, visibility, caller);
+    await requireVisible(c.env, appId, visibility, caller);
   }
 
   const tools: unknown[] = [];

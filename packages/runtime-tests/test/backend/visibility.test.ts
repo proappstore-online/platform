@@ -105,6 +105,16 @@ describe('private apps: GET /v1/apps/:id/visibility/me (#259)', () => {
     expect((await me(await session('gh:2'))).body).toEqual({ mode: 'private', allowed: true });
   });
 
+  it('admits a platform admin whose session came from an app origin (roles [user], #56) — by ADMIN_GITHUB_IDS', async () => {
+    const appOrigin = await session('gh:admin', { roles: ['user'] });
+    expect((await me(appOrigin)).body).toEqual({ mode: 'private', allowed: true });
+    // …and on the paths that use requireVisible: an action runs for them too.
+    dataWorker().intercept({ path: '/query', method: 'POST' }).reply(200, { rows: [], meta: {} });
+    expect((await call('my_notes', appOrigin)).status).toBe(200);
+    // A non-admin with the same session shape is still refused.
+    expect((await me(await session('gh:3', { roles: ['user'] }))).body.allowed).toBe(false);
+  });
+
   it('refuses member-only and signed-out callers; an invalid session is a 401, not "signed out"', async () => {
     expect((await me(await session('gh:3'))).body).toEqual({ mode: 'private', allowed: false });
     expect((await me()).body).toEqual({ mode: 'private', allowed: false });

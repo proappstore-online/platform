@@ -107,7 +107,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
       // `users`), then the same role checks and :__user_id injection apply.
       const verified = await verifyAppToken(c.env.DB, appId, token);
       rememberTokenUser(c.req.raw, verified.user.id);
-      await requireVisible(c.env.DB, appId, visibility, verified.user);
+      await requireVisible(c.env, appId, visibility, verified.user);
       if (verified.scopes.access === 'read' && actionWrites(manifest)) {
         throw new HttpError('token is read-only', 403);
       }
@@ -125,7 +125,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
       try { c.executionCtx.waitUntil(touched); } catch { void touched; }
     } else {
       const user = await requireUser(c);
-      await requireVisible(c.env.DB, appId, visibility, user);
+      await requireVisible(c.env, appId, visibility, user);
       userId = user.id;
       grantRole(c.req.raw, user, await enforceActionAuth(c.env.DB, appId, manifest, user));
       // #231: after the role check, so a caller without the role is told that,
