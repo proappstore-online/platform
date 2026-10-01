@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "./env.js";
-import { buildAgentBundle, deployWorkflowYaml, handleAgentDeploy, handlePublish, kbWorkflowYaml } from "./publish.js";
+import { addToRegistry, buildAgentBundle, deployWorkflowYaml, handleAgentDeploy, handlePublish, isPrivateForRegistry, kbWorkflowYaml } from "./publish.js";
 
 /**
  * The two ways an app repo gets provisioned must yield the SAME hosting:
@@ -569,5 +569,64 @@ describe("deploy workflow build gate fails closed (#204)", { timeout: 30_000 }, 
     expect(runStep(stepScript(golden(), "Install"), { "pnpm-lock.yaml": "lockfileVersion: '9.0'\n" }).calls)
       .toEqual(["pnpm install --frozen-lockfile"]);
     expect(runStep(stepScript(golden(), "Install"), {}).calls).toEqual(["pnpm install --no-frozen-lockfile"]);
+  });
+});
+
+describe("storefront registry: private apps (#259)", () => {
+  /** A registry.json mock holding `apps`, recording every PUT body. */
+  function registryMock(apps: { id: string }[]) {
+    const puts: { apps: { id: string }[] }[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (!url.includes("/contents/registry.json")) throw new Error(`unexpected fetch ${url}`);
+      if (init?.method === "PUT") {
+        const body = JSON.parse(init.body as string) as { content: string };
+        puts.push(JSON.parse(Buffer.from(body.content, "base64").toString("utf8")));
+        return new Response(JSON.stringify({ commit: { sha: "c" } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ sha: "s", content: Buffer.from(JSON.stringify({ apps })).toString("base64") }), { status: 200 });
+    }) as typeof fetch;
+    return puts;
+  }
+  const dbWith = (mode: string | null, fail?: string) => ({
+    prepare: () => ({ bind: () => ({ first: async () => { if (fail) throw new Error(fail); return mode ? { mode } : null; } }) }),
+  }) as unknown as D1Database;
+  const REQ = { id: "diary", name: "Diary", category: "x", icon: "d", iconBg: "#000", description: "d" };
+
+  it("never adds an app the publish request declares private", async () => {
+    const puts = registryMock([]);
+    const step = await addToRegistry({ ...ENV, DB: dbWith(null) }, { ...REQ, visibility: "private" });
+    expect(step).toMatchObject({ status: "skip" });
+    expect(puts).toEqual([]);
+  });
+
+  it("never adds an app whose registered manifest is private, and removes a stale entry", async () => {
+    expect(registryMock([])).toEqual([]);
+    expect((await addToRegistry({ ...ENV, DB: dbWith("private") }, REQ)).status).toBe("skip");
+    const puts = registryMock([{ id: "other" }, { id: "diary" }]);
+    const step = await addToRegistry({ ...ENV, DB: dbWith("private") }, REQ);
+    expect(step).toMatchObject({ status: "ok" });
+    expect(puts).toHaveLength(1);
+    expect(puts[0]!.apps.map((a) => a.id)).toEqual(["other"]);
+  });
+
+  it("lists a public app as before, and reads a missing app_visibility table as public", async () => {
+    let puts = registryMock([]);
+    expect((await addToRegistry({ ...ENV, DB: dbWith("public") }, REQ)).status).toBe("ok");
+    expect(puts[0]!.apps.map((a) => a.id)).toEqual(["diary"]);
+    puts = registryMock([]);
+    expect((await addToRegistry({ ...ENV, DB: dbWith(null, "D1_ERROR: no such table: app_visibility") }, REQ)).status).toBe("ok");
+    expect(puts).toHaveLength(1);
+  });
+
+  it("fails the step — never lists — when the visibility lookup errors", async () => {
+    const puts = registryMock([]);
+    const step = await addToRegistry({ ...ENV, DB: dbWith(null, "D1_ERROR: database unavailable") }, REQ);
+    expect(step).toMatchObject({ status: "fail" });
+    expect(puts).toEqual([]);
+  });
+
+  it("isPrivateForRegistry trusts a private declaration without a lookup", async () => {
+    expect(await isPrivateForRegistry({ DB: dbWith(null, "should not be called") }, { id: "x", visibility: "private" })).toBe(true);
   });
 });

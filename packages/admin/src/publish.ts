@@ -23,6 +23,13 @@ export interface PublishRequest {
    *  /api/provision handler. Granted push access to the app repo (so creators
    *  can push/clone their own app, not just the platform). */
   creatorGithub?: string;
+  /**
+   * The app's declared visibility mode from its mcp.json (#259), when the caller
+   * knows it. A private app is never written to the public storefront
+   * registry.json. The registry step also checks the app_visibility table, which
+   * is authoritative once the app has registered its manifest.
+   */
+  visibility?: "public" | "private";
 }
 
 // Path of the deploy workflow we inject into agent-authored repos.
@@ -495,8 +502,35 @@ const REGISTRY_WRITE_BACKOFF_MS = 150;
 // by then the repo and R2 route already exist — so a lost race used to leave a
 // half-provisioned app with no storefront listing and a "retry" that only a
 // human could perform (#60). Now: re-read, re-apply, retry, bounded.
-async function addToRegistry(env: Env, req: PublishRequest): Promise<Step> {
+/**
+ * Whether the app is private (#259): the publish request says so, or its
+ * registered manifest does (app_visibility). A missing table means nothing has
+ * been declared yet; any other lookup error throws, so the publish step fails
+ * rather than listing an app that might be private.
+ */
+export async function isPrivateForRegistry(env: Pick<Env, "DB">, req: Pick<PublishRequest, "id" | "visibility">): Promise<boolean> {
+  if (req.visibility === "private") return true;
+  try {
+    const row = await env.DB.prepare("SELECT mode FROM app_visibility WHERE app_id = ?").bind(req.id).first<{ mode: string }>();
+    return row?.mode === "private";
+  } catch (e) {
+    if (/no such table/i.test(String((e as Error)?.message ?? e))) return false;
+    throw e;
+  }
+}
+
+export async function addToRegistry(env: Env, req: PublishRequest): Promise<Step> {
   const gh = ghFor(env);
+  // #259: a private app has no public listing. registry.json is public and the
+  // storefront build renders a card, a page and a sitemap entry for every app in
+  // it — so a private app is never added, and a republish after the app went
+  // private removes the entry it had.
+  let isPrivate: boolean;
+  try {
+    isPrivate = await isPrivateForRegistry(env, req);
+  } catch (e) {
+    return { name: "Registry", status: "fail", detail: `Could not read app visibility: ${(e as Error).message}` };
+  }
   for (let attempt = 1; ; attempt++) {
     // registry.json lives in the storefront repo (org/proappstore).
     const file = await gh.getFile("proappstore", "registry.json");
@@ -507,9 +541,22 @@ async function addToRegistry(env: Env, req: PublishRequest): Promise<Step> {
     const content = JSON.parse(file.content);
     const apps = content.apps || [];
 
+    const listed = apps.some((a: { id: string }) => a.id === req.id);
+    if (isPrivate) {
+      if (!listed) return { name: "Registry", status: "skip", detail: "Private app — not listed on the storefront" };
+      content.apps = apps.filter((a: { id: string }) => a.id !== req.id);
+      const removed = await gh.putFile("proappstore", "registry.json", JSON.stringify(content, null, 2), `Unlist ${req.name} (private app)`, file.sha);
+      if (removed.ok) return { name: "Registry", status: "ok", detail: `Removed private app ${req.name} from the storefront` };
+      if (removed.status === 409 && attempt < REGISTRY_WRITE_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, REGISTRY_WRITE_BACKOFF_MS * attempt));
+        continue;
+      }
+      return { name: "Registry", status: "fail", detail: (removed.data as { message?: string }).message || "Failed to unlist private app" };
+    }
+
     // Re-checked on every attempt: the writer that beat us may have been a
     // retry of this very app, in which case the entry now exists.
-    if (apps.some((a: { id: string }) => a.id === req.id)) {
+    if (listed) {
       return { name: "Registry", status: "skip", detail: "Already listed" };
     }
 
