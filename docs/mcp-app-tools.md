@@ -516,12 +516,25 @@ then available only to the app's **team** (its creator, any team member, platfor
 admins) and to users holding one of `roles`. Grant those roles with the normal
 invite flow. `/.pas/auth/*` stays reachable, so a visitor can still sign in.
 
-- **No session:** a page navigation is redirected to sign-in
-  (`/.pas/auth/start?return_to=<path>`). Any other request gets `403`.
+- **No session:** a page navigation is redirected to the platform sign-in page
+  (`/.pas/auth/signin?return_to=<path>`), which offers GitHub, Google, an emailed
+  sign-in link and email + password — the app's own sign-in screen is behind the
+  gate. Any other request gets `403`.
+- **Invite links** (`https://<app>/join/<code>`): a signed-out invitee signs in on
+  that page and comes back; a signed-in invitee the app does not admit yet is sent
+  to the platform invite page (`/.pas/auth/join`), which redeems the code for this
+  app on a click and returns to the link — now admitted.
 - **Signed in, not on the team and without a listed role:** `403`.
 - **Lookup failed:** `503`. Nothing is served when the check cannot run.
 - **Caching:** every response is `Cache-Control: private, no-store` and never goes
   into the edge cache.
+- **SDK:** pages of a private app carry `<meta name="pas-visibility"
+  content="private">`. With it (or `new ProAppStore({ visibility: 'private' })`),
+  `storage.publicUrl()` returns a same-origin `/.pas/api/...` URL that works in an
+  `<img>` for signed-in users the app admits (and only on the app's own origin),
+  and `counters.list/get` send the session.
+- **`data-<app>.proappstore.online`** is not gated by the host; the data worker
+  already requires a team `developer` role for raw SQL.
 
 `mode` is `public` (the default) or `private`. `roles` is 0–5 app role names, and
 cannot include `member`, because every signed-in user holds it. With no roles, only
