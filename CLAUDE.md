@@ -6,22 +6,21 @@ The PAS control plane: Cloudflare Workers, the SDK, the CLI, and the D1 registry
 
 ## Delivery mode
 
-**Straight to `main`. No branches, no pull requests.** Declared 2026-08-16.
+**Every change goes through a pull request against `main`. Never push to `main`.**
+Changed 2026-09-16 (previously straight-to-main, declared 2026-08-16). Applies to the
+whole `proappstore-online` org — `platform` and every per-app repo.
 
-This applies to the whole `proappstore-online` org, `platform` and the per-app repos alike. Push to
-`main` and the change deploys.
-
-Two consequences worth internalising before your first commit:
-
-- **Each worker has its own path-filtered deploy workflow** (`.github/workflows/deploy-*.yml`). If
-  your diff does not match a workflow's `paths:`, nothing deploys — a change can be merged, green,
-  and inert. Check which workflow your paths trigger.
+- Branch, push, open a PR, let the reviewer reach it. Approval is human.
+- **Never force-push a branch under review** — reviewers pin findings to a SHA.
+- **Merging to `main` deploys.** Each worker has its own path-filtered deploy workflow
+  (`.github/workflows/deploy-*.yml`); if your diff does not match a workflow's `paths:`,
+  nothing deploys — a change can be merged, green, and inert.
 - **`deploy-backend.yml` applies D1 migrations to the live database before deploying**
-  (`pnpm exec wrangler d1 migrations apply pas --remote`). There is no staging step in that path. A
-  migration you push has run in production by the time you read the log.
+  (`pnpm exec wrangler d1 migrations apply pas --remote`). There is no staging step. A
+  migration you merge has run in production by the time you read the log.
 
-Never release from local: no `wrangler deploy`, no `npm publish`. `publish.yml` publishes the npm
-packages and commits the version bumps back.
+Never release from local: no `wrangler deploy`, no `npm publish`. `publish.yml` publishes
+the npm packages and commits the version bumps back.
 
 ## This is not one repo
 
@@ -79,7 +78,7 @@ node scripts/sync-template-workflow.mjs --check    # template-app deploy workflo
 
 - **`pas-ba`** — turns an observation into a dev-ready GitHub issue grounded in `file:line` evidence
   and live production state. Writes issues; never code.
-- **`pas-dev`** — implements issues by number and commits them to `main`. Refuses untracked work.
+- **`pas-dev`** — implements issues by number and delivers them as pull requests against `main`. Refuses untracked work.
 
 The handoff between them is the `_Files:_` footer on an issue: `pas-dev` partitions parallel work
 from it.
