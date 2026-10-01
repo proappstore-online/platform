@@ -512,22 +512,28 @@ A personal or invite-only app declares itself private (#259):
 
 The whole app — `/`, every asset, `/.pas/api/*`, `/.pas/data/*`, its actions, its
 `mcp.proappstore.online/mcp/apps/<id>` endpoint and its storefront listing — is
-then available only to the app's **owner** and to users holding one of `roles`.
-Grant those roles with the normal invite flow. `/.pas/auth/*` stays reachable, so
-a visitor can still sign in.
+then available only to the app's **team** (its creator, any team member, platform
+admins) and to users holding one of `roles`. Grant those roles with the normal
+invite flow. `/.pas/auth/*` stays reachable, so a visitor can still sign in.
 
 - **No session:** a page navigation is redirected to sign-in
   (`/.pas/auth/start?return_to=<path>`). Any other request gets `403`.
-- **Signed in, not owner and without a listed role:** `403`.
+- **Signed in, not on the team and without a listed role:** `403`.
 - **Lookup failed:** `503`. Nothing is served when the check cannot run.
 - **Caching:** every response is `Cache-Control: private, no-store` and never goes
   into the edge cache.
 
 `mode` is `public` (the default) or `private`. `roles` is 0–5 app role names, and
 cannot include `member`, because every signed-in user holds it. With no roles, only
-the owner can use the app. A private app **cannot register a public action**
-(`requires_auth: false`), so `page_meta` and `sitemap`, which need one, are not
-available to it either.
+the team can use the app. A private app **cannot register a public action**
+(`requires_auth: false`) or a public console endpoint, so `page_meta` and
+`sitemap`, which need one, are not available to it either. Its public storage,
+counters and rooms are limited to the same callers.
+
+The declaration registers with the tools, so a manifest with `"tools": []` still
+registers when it declares `visibility`. `pas publish` exits non-zero, and an Agent
+Teams deploy is parked for a human, if a private declaration fails to register —
+until it registers, the app is served publicly.
 
 Like `operator`, it is replaced with the manifest on every registration: removing
 it from `mcp.json` makes the app public again. Deleting the app's tools does not.

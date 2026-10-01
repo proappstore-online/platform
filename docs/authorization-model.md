@@ -127,14 +127,22 @@ An app can declare itself private in `mcp.json` (#259):
 **whole app**, in front of every check above. It mixes two of the three systems on
 purpose, so it is spelled out here:
 
-- **The owner always passes** — exactly `requireAppAccess(c, appId, 'owner')`:
-  the creator, a `team_members` row with role `owner`, or a platform admin. A team
-  `developer`/`admin`/`po`/`viewer` is *not* the owner and needs one of the roles
-  below like anyone else.
+- **The app's team always passes**, in the sense of `requireAppAccess(c, appId,
+  'viewer')`: the creator, **any** `team_members` row of the app (whatever its team
+  role), or a platform admin. A team developer can deploy the app and run raw SQL
+  against its data worker, so refusing them the app and its console would protect
+  nothing and break the console.
 - **Anyone else needs one of the declared app roles** (`app_roles`, 0–5 names),
   granted through the ordinary invite flow (`routes/invites.ts`). `member` can
   never be declared: every signed-in user can self-grant it (`ensure-member`),
   the same reason the operator gate refuses it.
+- **Role identity.** An `app_roles` row matches the caller's user id. It matches
+  the caller's `login` **only for a GitHub (`gh:`) session**, where the login is
+  the GitHub-verified login that older, login-keyed grants were written against.
+  A credential account's `login` is the display name typed at sign-up, and a
+  Google session's is the profile name, so matching them would let anyone
+  register an account named `gh:2` or `bob` and take over that holder's role.
+  The same rule applies to every app-role check (#272, `lib/role-subject.ts`).
 
 `lib/visibility.ts` (`visibilityAllows`) is the single implementation; `GET
 /v1/apps/:id/visibility/me` exposes it to the host and the MCP. Where it is
@@ -142,23 +150,50 @@ enforced:
 
 | Surface | Enforcement |
 |---|---|
-| App origin (`/`, assets, `/__qa`) | host `visibility-gate.ts`, after `/.pas/auth/*` and before mediation, the edge cache and R2; navigation → sign-in, else 403; never edge-cached |
-| `/.pas/api/*`, `/.pas/data/*` | the same host gate (they are on the app origin) |
+| App origin (`/`, assets, `/__qa`), on the platform subdomain or a custom domain | host `visibility-gate.ts`, after `/.pas/auth/*` and before mediation, the edge cache and R2; navigation → sign-in, else 403; never edge-cached |
+| `/.pas/api/*`, `/.pas/data/*`, and the secrets proxy (origin-only, reached through `/.pas/api`) | the same host gate (they are on the app origin) |
 | `data-<app>.proappstore.online` | host gate, by Bearer; 401 / 403 |
-| Registered actions | `routes/actions.ts`: a public (`requires_auth: false`) action is refused at registration and at execution; every session or app-token caller must pass `visibilityAllows` |
+| Registered actions | `routes/actions.ts`: a public (`requires_auth: false`) action is refused at registration and at execution, and a console endpoint with `scope: "public"` is refused at creation; every session or app-token caller must pass `visibilityAllows` |
+| Public storage `GET /v1/apps/:id/public/*` | `requireVisibleCaller`: no session 401, refused 403; served `private, no-store`, never `public, immutable` |
+| Counters `GET/POST /v1/apps/:id/counters*` | reads `requireVisibleCaller`, writes `requireVisible` |
+| Rooms `GET /v1/apps/:id/rooms/:room` | refused callers' sockets close `4401 app_private` before the room |
 | Tool list / per-app MCP | `GET /v1/apps/:id/tools` refuses non-allowed callers; `mcp.proappstore.online/mcp/apps/<id>` refuses the session with 403 |
-| Storefront | private apps are absent from `/v1/storefront/apps` and 404 on `/v1/storefront/apps/:id` |
+| Storefront | private apps are absent from `/v1/storefront/apps` and 404 on `/v1/storefront/apps/:id`; the admin publish step never writes a private app to the public `registry.json`, and removes its entry on a republish after it went private |
 
 System identities (`system:schedule`, and the `system:worker` / `system:hook`
 callers #251 adds) never pass through the gate: the scheduler forwards to the data
-worker directly. A lookup that fails is a 503, never an allow. Public apps cost the
-host one indexed D1 read (the operator gate's) and no backend call.
+worker directly. A lookup that fails is a 503, never an allow.
 
-**Not covered** (each called directly at `api.proappstore.online` with a session,
-bypassing the host): app-scoped platform services such as KV, storage, rooms and
-the secrets proxy, and the data worker's own `workers.dev` URL. The data worker's
-raw-SQL path already requires team `developer` or above, so no app-role holder and
-no outsider reaches it; a non-owner team member without a declared role still can.
+**Cost.** On an app origin the visibility mode is read in the route lookup itself
+(`host.ts` LEFT JOINs `app_visibility`), so a public app pays no extra D1 read and
+no backend call. The `data-<app>` hostname has no route lookup and pays one indexed
+D1 read. A private app asks the backend (`visibility/me`) and the host remembers an
+**allow** per isolate for 30 s, keyed by SHA-256(session) + app; a refusal is never
+cached.
+
+**Propagation bounds.**
+
+| Change | Takes effect |
+|---|---|
+| Public → private (new manifest registered) | App origin and backend routes: the next request. Nothing on a private app is edge-cached, and a public response cached before the flip is never served because the gate runs before the cache. The MCP may still open an app-scoped session and list the app's tool names and params for up to 10 s (`PUBLIC_APP_TTL_MS`, `TOOL_CACHE_TTL_MS`), but every call is re-checked by the backend. |
+| Role revoked, team member removed | Backend routes: the next request. App origin: up to 30 s per host isolate (the allow cache). |
+| Private → public | The next request. |
+
+**Not covered:**
+
+- **The KB host** (`kb.proappstore.online/<app>/*`) serves an app's knowledge base
+  with no session. It is a separate origin without the app's session cookie, so it
+  cannot run this gate as it stands. Tracked in #277.
+- **The storefront static site** builds from `registry.json` in
+  `proappstore-online/proappstore`. An app published *before* it declared itself
+  private keeps its card until it is republished or the storefront build filters
+  private apps. Tracked in proappstore-online/proappstore#3.
+- **The data worker's own `workers.dev` URL.** Its raw-SQL path requires team
+  `developer` or above, and every team member passes this gate anyway, so it
+  admits no one the gate would refuse.
+- **Per-user KV and private storage** (`/v1/apps/:id/kv*`, `/v1/apps/:id/storage/*`)
+  are scoped to the caller's own rows and files. A signed-in user the app refuses
+  can write to their own namespace but can read nobody else's.
 
 ## Trust boundaries that are NOT roles
 
