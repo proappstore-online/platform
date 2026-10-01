@@ -11,6 +11,31 @@ export interface Route {
   zone: string;
   r2_prefix: string;
   store: string;
+  /**
+   * The app's declared visibility mode (#259), read in the same query as the
+   * route (LEFT JOIN app_visibility) so a public app pays no extra round trip.
+   * Null/undefined: nothing declared, i.e. public.
+   */
+  visibility_mode?: string | null;
+}
+
+/** Whether the D1 error is the app_visibility table not existing yet (migration not applied). */
+function missingVisibilityTable(e: unknown): boolean {
+  return /no such table: app_visibility/i.test(String((e as Error)?.message ?? e));
+}
+
+/**
+ * Run a route query that LEFT JOINs app_visibility; if the table does not
+ * exist yet (the host deployed before the backend's migration ran), run the
+ * same query without the join. Nothing can have been declared private then.
+ */
+async function withVisibility<T>(run: (join: boolean) => Promise<T>): Promise<T> {
+  try {
+    return await run(true);
+  } catch (e) {
+    if (!missingVisibilityTable(e)) throw e;
+    return run(false);
+  }
 }
 
 export interface ResolvedRoute extends Route {
@@ -63,10 +88,19 @@ export const RESERVED_SUBDOMAINS = new Set([
 
 /** Look up a route from D1. Returns null if no matching row. */
 export async function resolveRoute(db: D1Database, slug: string): Promise<Route | null> {
-  return db
-    .prepare("SELECT slug, zone, r2_prefix, store FROM routes WHERE slug = ?1 AND zone = ?2")
-    .bind(slug, PLATFORM_ZONE)
-    .first<Route>();
+  const row = await withVisibility((join) =>
+    db
+      .prepare(
+        join
+          ? "SELECT r.slug, r.zone, r.r2_prefix, r.store, v.mode AS visibility_mode FROM routes r LEFT JOIN app_visibility v ON v.app_id = r.slug WHERE r.slug = ?1 AND r.zone = ?2"
+          : "SELECT slug, zone, r2_prefix, store FROM routes WHERE slug = ?1 AND zone = ?2",
+      )
+      .bind(slug, PLATFORM_ZONE)
+      .first<Route>(),
+  );
+  if (!row) return null;
+  const { visibility_mode, ...base } = row;
+  return visibility_mode ? { ...base, visibility_mode } : base;
 }
 
 /**
@@ -87,11 +121,12 @@ export async function resolveRouteForHostname(db: D1Database, hostname: string):
   const parts = host.split(".");
   const tenant = parts.length > 2 ? parts[0] : null;
   const wildcardBase = parts.length > 2 ? parts.slice(1).join(".") : null;
-  const row = await db
+  const row = await withVisibility((join) => db
     .prepare(
-      `SELECT r.slug, r.zone, r.r2_prefix, r.store, d.kind, d.domain AS matched_domain
+      `SELECT r.slug, r.zone, r.r2_prefix, r.store, d.kind, d.domain AS matched_domain${join ? ", v.mode AS visibility_mode" : ""}
        FROM app_custom_domains d
        JOIN routes r ON r.slug = d.app_id AND r.zone = ?1
+       ${join ? "LEFT JOIN app_visibility v ON v.app_id = r.slug" : ""}
        WHERE d.status = 'active'
          AND ((COALESCE(d.kind, 'exact') = 'exact' AND d.domain = ?2)
            OR (COALESCE(d.kind, 'exact') = 'wildcard' AND d.domain = ?2)
@@ -109,13 +144,13 @@ export async function resolveRouteForHostname(db: D1Database, hostname: string):
        LIMIT 1`,
     )
     .bind(PLATFORM_ZONE, host, wildcardBase)
-    .first<Route & { kind?: string | null; matched_domain?: string | null }>();
+    .first<Route & { kind?: string | null; matched_domain?: string | null }>());
 
   if (!row) return null;
   if (row.kind === "wildcard") {
-    return { slug: row.slug, zone: row.zone, r2_prefix: row.r2_prefix, store: row.store, matched: "wildcard", tenant: row.matched_domain === host ? undefined : tenant ?? undefined, base: row.matched_domain ?? wildcardBase ?? undefined };
+    return { slug: row.slug, zone: row.zone, r2_prefix: row.r2_prefix, store: row.store, ...(row.visibility_mode ? { visibility_mode: row.visibility_mode } : {}), matched: "wildcard", tenant: row.matched_domain === host ? undefined : tenant ?? undefined, base: row.matched_domain ?? wildcardBase ?? undefined };
   }
-  return { slug: row.slug, zone: row.zone, r2_prefix: row.r2_prefix, store: row.store, matched: "exact" };
+  return { slug: row.slug, zone: row.zone, r2_prefix: row.r2_prefix, store: row.store, ...(row.visibility_mode ? { visibility_mode: row.visibility_mode } : {}), matched: "exact" };
 }
 
 /** Fetch listing metadata for meta tag injection. Returns null if no listing exists. */

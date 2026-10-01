@@ -2,8 +2,8 @@
  * Private apps (#259, part of #251) — an app declares
  * `visibility: { mode: "private", roles: [...] }` in its mcp.json, and the host
  * serves its WHOLE origin — `/`, every asset, /.pas/api/*, /.pas/data/* and the
- * data-<app> hostname — only to the app's owner and to holders of one of those
- * app roles. /.pas/auth/* (sign-in, passkeys) stays reachable: the gate runs
+ * data-<app> hostname — only to the app's team (creator, team members,
+ * platform admins) and to holders of one of those app roles. /.pas/auth/* (sign-in, passkeys) stays reachable: the gate runs
  * after it, or nobody could ever sign in to pass it.
  *
  * Same shape as the operator gate (operator-gate.ts, #229): checked before the
@@ -12,8 +12,18 @@
  * operator gate it asks `visibility/me`, not `roles/me`: the owner always
  * passes, and `roles/me` does not report ownership.
  *
- * Public apps pay one indexed D1 read (the same lookup the operator gate does)
- * and never a backend call.
+ * Cost. On an app origin the visibility mode rides on the route lookup
+ * (host.ts LEFT JOINs app_visibility), so a public app pays nothing extra — no
+ * D1 read, no backend call. The data-<app> hostname has no route lookup, so it
+ * pays one indexed D1 read (isPrivateApp). A private app asks the backend
+ * (visibility/me), and an ALLOW is remembered per isolate for
+ * ALLOW_CACHE_TTL_MS keyed by SHA-256(token) + app, so a page's assets do not
+ * each cost a backend round trip. Refusals are never cached.
+ *
+ * Propagation bound: a public→private flip takes effect on the next request
+ * (the route lookup is live D1, and nothing on a private app is edge-cached).
+ * Revoking a role, removing a team member or signing out of a private app can
+ * leave an isolate serving that session for up to ALLOW_CACHE_TTL_MS (30 s).
  */
 import { clearSessionCookie, readCookie, SESSION_COOKIE_NAME } from "./auth-handler.js";
 import type { Env } from "./env.js";
@@ -76,7 +86,39 @@ export async function refuseDataUnlessVisible(request: Request, env: Env, appId:
   return answer === "allowed" ? null : refusal(403, "Forbidden");
 }
 
+/** How long an isolate remembers that a session may use a private app. See the module comment. */
+export const ALLOW_CACHE_TTL_MS = 30_000;
+const ALLOW_CACHE_MAX = 1000;
+const allowCache = new Map<string, number>();
+
+async function allowCacheKey(appId: string, token: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${appId}\u0000${hex}`;
+}
+
+/** Test seam: forget every remembered allow. */
+export function clearVisibilityAllowCache(): void {
+  allowCache.clear();
+}
+
 async function askVisibility(env: Env, appId: string, token: string): Promise<"allowed" | "refused" | "invalid-session" | "unavailable"> {
+  const key = await allowCacheKey(appId, token);
+  const until = allowCache.get(key);
+  if (until !== undefined) {
+    if (until > Date.now()) return "allowed";
+    allowCache.delete(key);
+  }
+  const answer = await askBackend(env, appId, token);
+  if (answer === "allowed") {
+    // Bounded: drop the oldest entry (Map keeps insertion order) rather than grow without limit.
+    if (allowCache.size >= ALLOW_CACHE_MAX) allowCache.delete(allowCache.keys().next().value as string);
+    allowCache.set(key, Date.now() + ALLOW_CACHE_TTL_MS);
+  }
+  return answer;
+}
+
+async function askBackend(env: Env, appId: string, token: string): Promise<"allowed" | "refused" | "invalid-session" | "unavailable"> {
   let res: Response;
   try {
     res = await env.API.fetch(
@@ -101,9 +143,14 @@ function signInOrForbidden(request: Request): Response {
   if (!navigation) return refusal(403, "Forbidden");
   const start = new URL("/.pas/auth/start", url.origin);
   start.searchParams.set("return_to", `${url.pathname}${url.search}`);
-  return new Response(null, { status: 302, headers: { Location: start.toString(), "Cache-Control": "no-store" } });
+  return new Response(null, { status: 302, headers: { Location: start.toString(), "Cache-Control": "no-store", "X-PAS-Visibility": "private" } });
 }
 
+/**
+ * Every visibility refusal carries `X-PAS-Visibility: private`, so a health
+ * probe (MCP app_info) can tell "private, sign in" from "down". The app's
+ * privacy is already evident from the refusal itself; the header adds nothing.
+ */
 function refusal(status: number, text: string): Response {
-  return new Response(text, { status, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } });
+  return new Response(text, { status, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "X-PAS-Visibility": "private" } });
 }

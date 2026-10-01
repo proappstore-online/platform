@@ -195,6 +195,55 @@ function fakeRouteDb(): D1Database {
   } as unknown as D1Database;
 }
 
+describe("resolveRouteForHostname: visibility rides on the route lookup (#259 review)", () => {
+  /** One D1 query per lookup, recorded; `mode` is what the LEFT JOIN yields; `missingTable` simulates a pre-migration DB. */
+  function joinDb(mode: string | null, missingTable = false) {
+    const sqls: string[] = [];
+    const db = {
+      prepare(sql: string) {
+        sqls.push(sql);
+        return {
+          bind: () => ({
+            async first() {
+              if (sql.includes("app_visibility") && missingTable) throw new Error("D1_ERROR: no such table: app_visibility: SQLITE_ERROR");
+              const vis = sql.includes("app_visibility") ? { visibility_mode: mode } : {};
+              return sql.includes("app_custom_domains")
+                ? { ...route, kind: "exact", matched_domain: "app.example.com", ...vis }
+                : { ...route, ...vis };
+            },
+          }),
+        };
+      },
+    } as unknown as D1Database;
+    return { db, sqls };
+  }
+
+  it("a private app's mode comes back with the route, in the same single query", async () => {
+    for (const host of ["meetup.proappstore.online", "app.example.com"]) {
+      const { db, sqls } = joinDb("private");
+      const r = await resolveRouteForHostname(db, host);
+      expect(r?.visibility_mode, host).toBe("private");
+      expect(sqls, host).toHaveLength(1);
+      expect(sqls[0], host).toContain("LEFT JOIN app_visibility");
+    }
+  });
+
+  it("a public app costs the same one query and carries no mode", async () => {
+    const { db, sqls } = joinDb(null);
+    const r = await resolveRouteForHostname(db, "meetup.proappstore.online");
+    expect(r).toEqual({ ...route, matched: "platform" });
+    expect(sqls).toHaveLength(1);
+  });
+
+  it("before the migration (no app_visibility table) it falls back to the plain lookup, read as public", async () => {
+    const { db, sqls } = joinDb("private", true);
+    const r = await resolveRouteForHostname(db, "meetup.proappstore.online");
+    expect(r).toEqual({ ...route, matched: "platform" });
+    expect(sqls).toHaveLength(2);
+    expect(sqls[1]).not.toContain("app_visibility");
+  });
+});
+
 describe("etagsMatch", () => {
   it("returns false for null header", () => {
     expect(etagsMatch(null, '"abc"')).toBe(false);

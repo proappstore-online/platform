@@ -117,10 +117,11 @@ export default {
     if (authResponse) return authResponse;
 
     // Private apps (#259): the whole origin — pages, assets, /.pas/api, /.pas/data,
-    // the QA runner — is served only to the owner and the declared roles. After the
+    // the QA runner — is served only to the app team and the declared roles. After the
     // auth routes, so sign-in stays reachable; before mediation, the edge cache and
     // R2. Nothing on a private app is ever edge-cached (see skipEdgeCache).
-    const privateApp = await isPrivateApp(env.DB, route.slug);
+    // `visibility_mode` came with the route lookup (LEFT JOIN): no extra D1 read.
+    const privateApp = route.visibility_mode === "private";
     if (privateApp) {
       const refusal = await refuseUnlessVisible(request, env, route.slug);
       if (refusal) return refusal;

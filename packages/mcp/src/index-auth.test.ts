@@ -28,7 +28,7 @@ vi.mock('./api-helpers.js', () => ({
   verifyToken: verifyTokenMock,
 }));
 
-const { default: worker, clearVisibilityCache } = await import('./index.js');
+const { default: worker, clearVisibilityCache, PUBLIC_APP_TTL_MS } = await import('./index.js');
 
 // GET /v1/apps/:id/visibility/me (#259): public unless a test says otherwise.
 const visibilityMe = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ mode: 'public', allowed: true }));
@@ -269,7 +269,7 @@ describe('landing page refuses MCP protocol clients (#112)', () => {
   });
 });
 
-// #259: an app-scoped session on a private app is for its owner and declared roles only.
+// #259: an app-scoped session on a private app is for its team and declared roles only.
 describe('MCP app-scoped sessions on private apps (#259)', () => {
   afterEach(() => {
     verifyTokenMock.mockReset();
@@ -287,6 +287,19 @@ describe('MCP app-scoped sessions on private apps (#259)', () => {
       headers: { Authorization: 'Bearer good-token' },
     }), env, ctx);
   };
+
+  it('remembers a public answer for at most 10 s, so a public → private flip is honoured within that bound', async () => {
+    expect(PUBLIC_APP_TTL_MS).toBeLessThanOrEqual(10_000);
+    vi.useFakeTimers();
+    try {
+      expect((await open('flip')).status).not.toBe(403);
+      visibilityMe.mockImplementation(async () => Response.json({ mode: 'private', allowed: false }));
+      vi.advanceTimersByTime(PUBLIC_APP_TTL_MS + 1);
+      expect((await open('flip')).status).toBe(403);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('refuses a caller the backend does not allow with 403, before any session exists', async () => {
     visibilityMe.mockImplementation(async () => Response.json({ mode: 'private', allowed: false }));

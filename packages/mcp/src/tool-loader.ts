@@ -88,7 +88,13 @@ interface ToolsResponse {
 // widen another. There is no global cache and no global fetch any more (#157):
 // the cross-app `GET /v1/tools` is retired (#193).
 const cachedTools = new Map<string, { tools: AppTool[]; time: number }>();
-const CACHE_TTL = 60_000;
+/**
+ * How long one isolate reuses an app's signed-out tool list. Short because it is
+ * also the bound on how long a public → private flip (#259) can keep listing the
+ * app's tool metadata to callers the app no longer admits (never its data — every
+ * call is re-checked in the backend). See index.ts PUBLIC_APP_TTL_MS.
+ */
+export const TOOL_CACHE_TTL_MS = 10_000;
 
 /**
  * One app's registered tools, from `GET /v1/apps/:appId/tools` (public view — never SQL).
@@ -102,7 +108,7 @@ export async function fetchTools(api: Fetcher, apiBase: string, appId: string, t
   const now = Date.now();
   const cacheKey = `app:${appId}`;
   const cached = cachedTools.get(cacheKey);
-  if (cached && now - cached.time < CACHE_TTL) return cached.tools;
+  if (cached && now - cached.time < TOOL_CACHE_TTL_MS) return cached.tools;
 
   const url = `${apiBase}/v1/apps/${encodeURIComponent(appId)}/tools`;
   let res: Response;

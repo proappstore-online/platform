@@ -127,4 +127,33 @@ describe('host: private apps (#259)', () => {
       expect(data.res.status, slug).toBe(200);
     }
   });
+
+  it('a public app with a warm edge cache flips to private: the next request is gated, never served from cache', async () => {
+    await seedApp('vis-flip', 'public');
+    for (let i = 0; i < 2; i++) {
+      const warm = await get('https://vis-flip.proappstore.online/assets/x.js');
+      expect(warm.res.status).toBe(200);
+    }
+    expect(await caches.default.match('https://vis-flip.proappstore.online/assets/x.js')).toBeDefined();
+
+    await env.DB.prepare("INSERT OR REPLACE INTO app_visibility (app_id, mode, roles, created_at) VALUES ('vis-flip', 'private', '[\"viewer\"]', ?)").bind(Date.now()).run();
+    const after = await get('https://vis-flip.proappstore.online/assets/x.js');
+    expect(after.res.status).toBe(403);
+    expect(after.text).not.toContain('private app bundle');
+    expect(after.res.headers.get('X-PAS-Visibility')).toBe('private');
+    expect((await get('https://vis-flip.proappstore.online/assets/x.js', session('owner-token'))).res.status).toBe(200);
+    await caches.default.delete('https://vis-flip.proappstore.online/assets/x.js');
+  });
+
+  it('gates a private app reached through an active custom domain (visibility rides on the route lookup)', async () => {
+    await seedApp('vis-custom', 'private');
+    await env.DB.prepare("INSERT INTO app_custom_domains (app_id, domain, status, added_at) VALUES ('vis-custom', 'diary.example.com', 'active', ?)").bind(Date.now()).run().catch(async (e) => {
+      throw new Error(`seed custom domain: ${String(e)}`);
+    });
+    const r = await get('https://diary.example.com/assets/x.js');
+    expect(r.res.status).toBe(403);
+    expect(r.text).not.toContain('private app bundle');
+    await env.DB.prepare("DELETE FROM app_custom_domains WHERE app_id = 'vis-custom'").run();
+  });
 });
+

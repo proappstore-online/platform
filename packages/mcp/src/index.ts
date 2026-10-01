@@ -307,8 +307,14 @@ export default {
 // is remembered (it is the same for every caller), so a public app's MCP traffic
 // does not ask the backend on every message. The tool list and every action call
 // re-check visibility in the backend, so this window never exposes app data.
+//
+// Flip bound (#259): after an app goes public → private, an isolate may still
+// open an app-scoped session on it for up to PUBLIC_APP_TTL_MS (10 s), and the
+// shared tool cache (tool-loader.ts TOOL_CACHE_TTL_MS, also 10 s) may still list
+// its tool NAMES and params. Neither ever returns app data: every action call is
+// re-checked by the backend's visibility gate on the request itself.
 const publicApps = new Map<string, number>();
-const PUBLIC_APP_TTL_MS = 60_000;
+export const PUBLIC_APP_TTL_MS = 10_000;
 
 /**
  * Null when the caller may open a session on the app; otherwise the refusal.
