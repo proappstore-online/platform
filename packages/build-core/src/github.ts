@@ -105,6 +105,33 @@ function isDeployGateRun(run: Record<string, unknown>): boolean {
     || (typeof run.path === 'string' && run.path.endsWith(DEPLOY_GATE_WORKFLOW_PATH));
 }
 
+/**
+ * #280: encode a repo path for the Contents API, one segment at a time, so the
+ * URL addresses exactly the file named — never another one. Interpolated raw,
+ * the path is reinterpreted twice: fetch's URL parser resolves dot segments
+ * (including percent-encoded `%2e` / `%2e%2e`, and `..<TAB>` once it strips
+ * tab and newline), and GitHub percent-decodes `%2F` and `%2e`. So
+ * `src/%2e%2e/.github/workflows/x.yml` reached `.github/workflows/x.yml`.
+ * Encoded, `%` becomes `%25` and dots/controls are literal, so what passed a
+ * path check is what GitHub writes. `/` stays the separator; spaces and
+ * unicode round-trip (GitHub decodes them once).
+ */
+export function encodeRepoPath(path: string): string | null {
+  const segments = path.split('/');
+  // `.` and `..` cannot be escaped: the URL parser resolves them in every
+  // spelling (`%2e`, `.%2E`, …). A path containing one names no file, so it
+  // gets no request at all rather than one that lands somewhere else.
+  if (segments.some((seg) => seg === '.' || seg === '..')) return null;
+  return segments.map(encodeURIComponent).join('/');
+}
+
+/** The result of a Contents API call refused before it was sent. */
+const DOT_SEGMENT_REFUSAL: GhResult = {
+  ok: false,
+  status: 400,
+  data: { message: 'repo path may not contain "." or ".." segments' },
+};
+
 export function makeGitHub(token: string, org: string): GitHub {
   async function api(path: string, opts?: { method?: string; body?: unknown }): Promise<GhResult> {
     const res = await fetch(`https://api.github.com${path}`, {
@@ -128,6 +155,11 @@ export function makeGitHub(token: string, org: string): GitHub {
   }
 
   const repo = (id: string) => `${org}/${id}`;
+  /** Contents API URL for a repo path, or null when it has a dot segment — see {@link encodeRepoPath}. */
+  const contents = (id: string, path: string) => {
+    const encoded = encodeRepoPath(path);
+    return encoded === null ? null : `/repos/${repo(id)}/contents/${encoded}`;
+  };
   const d = (r: GhResult) => r.data as Record<string, unknown>;
 
   return {
@@ -161,7 +193,9 @@ export function makeGitHub(token: string, org: string): GitHub {
     },
 
     async getFile(id, path) {
-      const r = await api(`/repos/${repo(id)}/contents/${path}`);
+      const url = contents(id, path);
+      if (url === null) return { ok: false, status: DOT_SEGMENT_REFUSAL.status };
+      const r = await api(url);
       if (!r.ok) return { ok: false, status: r.status };
       const data = d(r);
       let content = data.content ? b64decode((data.content as string).replace(/\n/g, '')) : undefined;
@@ -177,18 +211,24 @@ export function makeGitHub(token: string, org: string): GitHub {
     },
 
     async putFile(id, path, content, message, sha) {
-      return api(`/repos/${repo(id)}/contents/${path}`, {
+      const url = contents(id, path);
+      if (url === null) return DOT_SEGMENT_REFUSAL;
+      return api(url, {
         method: 'PUT',
         body: { message, content: b64encode(content), ...(sha ? { sha } : {}) },
       });
     },
 
     async deleteFile(id, path, message, sha) {
-      return api(`/repos/${repo(id)}/contents/${path}`, { method: 'DELETE', body: { message, sha } });
+      const url = contents(id, path);
+      if (url === null) return DOT_SEGMENT_REFUSAL;
+      return api(url, { method: 'DELETE', body: { message, sha } });
     },
 
     async listFiles(id, path) {
-      return api(`/repos/${repo(id)}/contents/${path ?? ''}`);
+      const url = contents(id, path ?? '');
+      if (url === null) return DOT_SEGMENT_REFUSAL;
+      return api(url);
     },
 
     async searchCode(id, query) {

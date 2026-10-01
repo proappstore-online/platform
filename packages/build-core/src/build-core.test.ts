@@ -43,6 +43,57 @@ describe('makeGitHub', () => {
     expect(f.content).toBe('hello world');
   });
 
+  // #280 / review of #283: the Contents API path is encoded per segment, so a
+  // path that passed a `.github/` check cannot be rewritten into one by fetch's
+  // URL parser (dot segments, tab/newline stripping) or by GitHub (%2F, %2e).
+  describe('Contents API paths are encoded per segment', () => {
+    const urls: string[] = [];
+    const record = () => { urls.length = 0; mockFetch((url) => { urls.push(url); return { body: { sha: 's', content: b64encode('x') } }; }); };
+    const base = 'https://api.github.com/repos/org/app/contents/';
+
+    it.each([
+      ['src/%2e%2e/x', 'src/%252e%252e/x'],
+      ['src/%2E%2E/.github/workflows/x.yml', 'src/%252E%252E/.github/workflows/x.yml'],
+      ['src/.%2e/.github/workflows/x.yml', 'src/.%252e/.github/workflows/x.yml'],
+      ['%2e/.github/workflows/x.yml', '%252e/.github/workflows/x.yml'],
+      ['%2egithub/workflows/x.yml', '%252egithub/workflows/x.yml'],
+      ['.github%2Fworkflows%2Fx.yml', '.github%252Fworkflows%252Fx.yml'],
+      ['src/..\t/.github/workflows/x.yml', 'src/..%09/.github/workflows/x.yml'],
+      ['src/..\n/.github/workflows/x.yml', 'src/..%0A/.github/workflows/x.yml'],
+      ['docs/my notes/café #1?.md', 'docs/my%20notes/caf%C3%A9%20%231%3F.md'],
+      ['registry.json', 'registry.json'],
+    ])('%j → contents/%s on get, put, delete and list', async (path, encoded) => {
+      record();
+      const gh = makeGitHub('t', 'org');
+      await gh.getFile('app', path);
+      await gh.putFile('app', path, 'x', 'm', 'sha');
+      await gh.deleteFile('app', path, 'm', 'sha');
+      await gh.listFiles('app', path);
+      expect(urls).toEqual([base + encoded, base + encoded, base + encoded, base + encoded]);
+      // And the URL the runtime actually requests keeps the segments as written.
+      expect(new URL(urls[0]!).pathname).toBe(`/repos/org/app/contents/${encoded}`);
+    });
+
+    it('lists the repo root when no path is given', async () => {
+      record();
+      await makeGitHub('t', 'org').listFiles('app');
+      expect(urls).toEqual([base]);
+    });
+
+    it.each(['src/../.github/workflows/x.yml', './x', 'a/./b', '..'])(
+      'sends no request for a literal dot segment (%j) — the URL parser would resolve it',
+      async (path) => {
+        record();
+        const gh = makeGitHub('t', 'org');
+        expect(await gh.getFile('app', path)).toEqual({ ok: false, status: 400 });
+        expect((await gh.putFile('app', path, 'x', 'm')).ok).toBe(false);
+        expect((await gh.deleteFile('app', path, 'm', 's')).ok).toBe(false);
+        expect((await gh.listFiles('app', path)).ok).toBe(false);
+        expect(urls).toEqual([]);
+      },
+    );
+  });
+
   it('pushFiles runs tree(inline content)→commit→ref on an existing repo', async () => {
     const calls: string[] = [];
     let treeBody: unknown;
