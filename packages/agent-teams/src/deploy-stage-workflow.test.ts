@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { runDeployViaWorkflow, type WorkflowDeployArgs } from './deploy-stage.ts';
+import { declaresPrivate, registerMcpTools, runDeployViaWorkflow, type WorkflowDeployArgs } from './deploy-stage.ts';
 
 /**
  * Tests the canary deploy path's outcome mapping: start the provisioning
@@ -168,5 +168,74 @@ describe('runDeployViaWorkflow', () => {
     });
     await runDeployViaWorkflow(h.args);
     expect(h.infraFail).toHaveBeenCalledOnce();
+  });
+});
+
+describe('private apps: visibility registration on a green deploy (#259 review)', () => {
+  const PRIVATE_MCP = JSON.stringify({ tools: [], visibility: { mode: 'private', roles: ['viewer'] } });
+  const complete = () => resp(true, { status: { status: 'complete', output: { commitSha: 'deadbeef', repoUrl: 'https://gh/x' } } });
+
+  /** A PAS_BACKEND binding answering tools/internal with `status`, recording bodies. */
+  function backend(status: number) {
+    const bodies: unknown[] = [];
+    const fetch = vi.fn(async (req: Request) => {
+      bodies.push(await req.json());
+      return new Response(JSON.stringify(status === 200 ? { registered: 0 } : { error: 'backend said no' }), { status });
+    });
+    return { binding: { fetch }, bodies, fetch };
+  }
+  const deps = (env: Record<string, unknown>) => {
+    const activities: string[] = [];
+    return { deps: { env, logActivity: (_t: string, d: string) => { activities.push(d); return 'log'; } } as unknown as Parameters<typeof registerMcpTools>[0], activities };
+  };
+
+  it('declaresPrivate reads mcp.json; anything unparseable or undeclared is not private', () => {
+    expect(declaresPrivate(new Map([['mcp.json', PRIVATE_MCP]]))).toBe(true);
+    expect(declaresPrivate(new Map([['mcp.json', '{"tools":[]}']]))).toBe(false);
+    expect(declaresPrivate(new Map([['mcp.json', '{not json']]))).toBe(false);
+    expect(declaresPrivate(new Map())).toBe(false);
+  });
+
+  it('registers a tool-less manifest that declares visibility (it used to be skipped, leaving the app public)', async () => {
+    const b = backend(200);
+    const { deps: d } = deps({ PAS_BACKEND: b.binding, INTERNAL_TOKEN: 'it' });
+    expect(await registerMcpTools(d, { slug: 'diary' }, 't1', new Map([['mcp.json', PRIVATE_MCP]]))).toEqual({ ok: true, private: true });
+    expect(b.bodies).toEqual([expect.objectContaining({ tools: [], visibility: { mode: 'private', roles: ['viewer'] } })]);
+  });
+
+  it('still skips a tool-less manifest that declares nothing', async () => {
+    const b = backend(200);
+    const { deps: d } = deps({ PAS_BACKEND: b.binding, INTERNAL_TOKEN: 'it' });
+    expect(await registerMcpTools(d, { slug: 'diary' }, 't1', new Map([['mcp.json', '{"tools":[]}']]))).toEqual({ ok: true, private: false });
+    expect(b.fetch).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed private registration as a failure the caller must act on', async () => {
+    const b = backend(400);
+    const { deps: d } = deps({ PAS_BACKEND: b.binding, INTERNAL_TOKEN: 'it' });
+    expect(await registerMcpTools(d, { slug: 'diary' }, 't1', new Map([['mcp.json', PRIVATE_MCP]]))).toEqual({ ok: false, private: true, reason: 'backend said no' });
+  });
+
+  it('a green deploy whose private manifest did not register is parked for a human, not done', async () => {
+    globalThis.fetch = vi.fn(async () => resp(false, {}, 404)); // harvest summary no-op
+    const h = harness({ ticket: { deploy_pushed_at: Date.now(), deploy_pushed_sha: 'wf-abc' }, status: complete() });
+    const b = backend(500);
+    (h.args.deps as unknown as { env: Record<string, unknown> }).env = { PAS_BACKEND: b.binding, INTERNAL_TOKEN: 'it' };
+    h.args.files = new Map([['index.html', '<html></html>'], ['mcp.json', PRIVATE_MCP]]);
+    await runDeployViaWorkflow(h.args);
+
+    const parked = h.exec.find((e) => e.sql.startsWith("UPDATE tickets SET status = 'needs-input'"));
+    expect(parked?.args[0]).toMatch(/visibility: private.*NOT private/);
+    expect(h.events).toContainEqual(expect.objectContaining({ type: 'transition', to: 'needs-input', reason: 'visibility-unregistered' }));
+  });
+
+  it('a green deploy whose private manifest registered stays done', async () => {
+    globalThis.fetch = vi.fn(async () => resp(false, {}, 404));
+    const h = harness({ ticket: { deploy_pushed_at: Date.now(), deploy_pushed_sha: 'wf-abc' }, status: complete() });
+    (h.args.deps as unknown as { env: Record<string, unknown> }).env = { PAS_BACKEND: backend(200).binding, INTERNAL_TOKEN: 'it' };
+    h.args.files = new Map([['mcp.json', PRIVATE_MCP]]);
+    await runDeployViaWorkflow(h.args);
+    expect(h.exec.find((e) => e.sql.startsWith("UPDATE tickets SET status = 'needs-input'"))).toBeUndefined();
+    expect(h.events).toContainEqual(expect.objectContaining({ type: 'transition', to: 'done' }));
   });
 });

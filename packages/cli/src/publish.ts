@@ -146,14 +146,20 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
     // ── Register MCP tools from mcp.json (if present) ──────────
     const mcpManifestPath = resolve(cwd, 'mcp.json');
     const mcpManifest = readJsonIfExists<{ tools?: unknown[]; page_meta?: unknown; sitemap?: unknown; operator?: unknown; operator_view?: unknown; visibility?: unknown }>(mcpManifestPath);
-    if (mcpManifest?.tools && Array.isArray(mcpManifest.tools) && mcpManifest.tools.length > 0) {
-      process.stdout.write(`\n  Registering ${mcpManifest.tools.length} MCP tool(s)...\n`);
+    const manifestTools = Array.isArray(mcpManifest?.tools) ? mcpManifest.tools : [];
+    // #259: visibility registers with the tools, so a manifest that declares it
+    // registers even with no tools — or a tool-less private app would go live public.
+    const declaresVisibility = mcpManifest?.visibility !== undefined;
+    const isPrivate = (mcpManifest?.visibility as { mode?: unknown } | undefined)?.mode === 'private';
+    let privateRegistrationFailed = false;
+    if (mcpManifest && (manifestTools.length > 0 || declaresVisibility)) {
+      process.stdout.write(`\n  Registering ${manifestTools.length} MCP tool(s)${declaresVisibility ? ' and visibility' : ''}...\n`);
       try {
         const toolsRes = await fetch(`${PAS_API}/v1/apps/${appId}/tools`, {
           method: 'PUT',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
           // page_meta / sitemap (#210), operator (#229), operator_view (#240) and visibility (#259) register with the tools and are replaced with them.
-          body: JSON.stringify({ tools: mcpManifest.tools, page_meta: mcpManifest.page_meta, sitemap: mcpManifest.sitemap, operator: mcpManifest.operator, operator_view: mcpManifest.operator_view, visibility: mcpManifest.visibility }),
+          body: JSON.stringify({ tools: manifestTools, page_meta: mcpManifest.page_meta, sitemap: mcpManifest.sitemap, operator: mcpManifest.operator, operator_view: mcpManifest.operator_view, visibility: mcpManifest.visibility }),
         });
         if (toolsRes.ok) {
           const toolsData = (await toolsRes.json()) as { registered: number; schedules?: Array<{ name: string; cron: string }> };
@@ -164,10 +170,19 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
         } else {
           const errText = await toolsRes.text();
           process.stdout.write(`  [!] MCP tools: ${errText}\n`);
+          privateRegistrationFailed = isPrivate;
         }
       } catch (e) {
         process.stdout.write(`  [!] MCP tools: ${e}\n`);
+        privateRegistrationFailed = isPrivate;
       }
+    }
+    if (privateRegistrationFailed) {
+      process.stderr.write(
+        `\n  mcp.json declares visibility: private, but it did not register — the app would be served PUBLICLY.\n` +
+          `  Fix the error above and re-run pas publish (it is idempotent) before pushing any code.\n`,
+      );
+      process.exit(1);
     }
   }
 
