@@ -32,14 +32,37 @@ own Cloudflare token, KV namespace, cron and Access app.
 because unattended app code needs a sandbox, limits and abuse controls. This ADR
 supplies those, and so withdraws the rejection.
 
+### Trust assumptions
+
+This ADR's isolation argument holds only if **no app repo can reach a Cloudflare
+credential**. Two facts bound it:
+
+- **Anyone holding a Workers-edit API token on the PAS Cloudflare account *is* the
+  platform.** They can redeploy any `pas-app-<id>` script keeping its secret
+  bindings (`PAS_WORKER_TOKEN`, `PAS_EVENT_KEY`), rewrite any binding's `props`,
+  or redeploy `proappstore-api` itself. Nothing in §2's authorisation rule, the
+  shim or the envelope signature defends against that holder; the per-app token
+  defends only against a holder of *another app's* code, not of the account.
+- **Today that boundary does not hold.** All `proappstore-online` organisation
+  Actions secrets have visibility `all` — including the account-wide
+  `CLOUDFLARE_API_TOKEN`, `SESSION_SIGNING_KEY` and `INTERNAL_TOKEN` — so every
+  public app repo's workflows can read them, and any app owner can commit a
+  workflow through MCP `write_file` (#274, critical).
+
+Therefore **#274 must be closed before #253 starts.** No app worker is deployed,
+on any backend, while an org secret holding a Cloudflare credential is visible to
+an app repo. Exit criterion 3 (§6) is the measured form of this assumption.
+
 ## Decision
 
 ### 1. An app may own one *app worker*, deployed by the platform, whose code runs only behind a platform-owned entry point
 
 - The bundle is built in the app repo (`worker/`) and uploaded **through the
   platform**, authenticated by GitHub Actions OIDC exactly like
-  `deploy-credentials`, `tools/oidc` and `migrate/oidc`. **No Cloudflare
-  credential ever lives in an app repo.**
+  `deploy-credentials`, `tools/oidc` and `migrate/oidc`. **No app repo may reach
+  a Cloudflare credential — org secrets included**: not a repo secret, not an
+  organisation secret whose visibility includes the repo, not a token placed by
+  hand (see Trust assumptions; measured by §6 criterion 3).
 - The platform constructs the script metadata (bindings, compatibility date,
   limits) and the **entry point**. App code cannot add, remove or alter a
   binding, and it is never the script's `main_module`.
@@ -66,7 +89,7 @@ An app worker receives **exactly**:
 |---|---|
 | `PAS` | RPC binding to `proappstore-api`'s `AppWorkerApi` entrypoint, with platform-set `props: { appId }` |
 | `PAS_WORKER_TOKEN` | per-app secret; **required** second factor on every `PAS` call |
-| `PAS_EVENT_KEY` | per-app HMAC key; read by the platform shim to verify event envelopes on every backend. The app's handler does not need it |
+| `PAS_EVENT_KEY` | per-app HMAC key; read by the platform shim to verify event envelopes on every backend. The app's handler does not need it, but **it can read it**: env is not private to the shim (on `account`, any module can `import { env } from "cloudflare:workers"`; on `loader`, env is part of the `WorkerCode` the app's modules run with). Because the key is per-app, reading it lets an app forge events **only to itself** — nothing it could not already do by calling its own handler |
 | `APP_ID` | plain text |
 
 It receives **no** D1, KV, R2, Durable Object, Queue or AI binding, and **no** app
@@ -74,6 +97,26 @@ secret as an environment variable. Data goes through `PAS.actions.*` (registered
 linted SQL — the same actions every other caller uses); secrets through
 `PAS.secrets.get(name)`, which returns only secrets the manifest declares for the
 worker; files through `PAS.storage.*`; logs through `PAS.log`.
+
+- **System-only actions are unreachable over HTTP.** Each action declares who may
+  call it — `callers: ("user" | "worker" | "hook")[]`, default `["user"]` (#254).
+  An action whose `callers` lacks `"user"` is refused on the HTTP actions route,
+  as scheduled actions already are, so a write meant only for the worker or a hook
+  can never be called by a signed-in user.
+- **Worker storage is its own namespace.** `PAS.storage.*` reads and writes
+  `${appId}/_worker/<key>` — never a user's prefix `${appId}/${userId}/…` — so
+  worker files never appear in, count against, or can be overwritten from a
+  user's file list and quota (#254).
+
+**Per-app token lifecycle.** `PAS_WORKER_TOKEN` is **minted by the platform at
+the app worker's first deploy**, returned only into the worker's binding, and
+**stored hashed** (SHA-256) in D1 against the app; the plaintext is never stored
+or logged. **Rotation** mints a new token and keeps **two valid hashes** for an
+overlap window, so in-flight invocations holding the old binding still
+authorise; the old hash is dropped when the window closes and the new binding is
+live. **`AppWorkerHost.remove(appId)`** (§5) deletes both hashes, so a removed
+worker's token stops working at once, independent of whether its code is still
+cached anywhere.
 
 The platform authorises every `PAS` call by `ctx.props.appId` **and** the token;
 both must match, and a call missing either is rejected. The token is a
@@ -83,9 +126,13 @@ token on the shared Cloudflare account can rewrite that metadata — including t
 `props` of another app's binding. `props` proves "the platform account configured
 this", not "this is app X". The per-app token, which only the platform mints and
 which is never shared between apps, is what binds a call to one app. (On the
-`loader` backend the `PAS` stub is created in-process by `ctx.exports` and cannot
-be forged or re-pointed by account metadata; the token is still required, so one
-authorisation rule holds on every backend.)
+`loader` backend the `LOADER` (`worker_loaders`) binding lives in
+**`proappstore-api` itself**, so the `PAS` stub is created in-process from
+`proappstore-api`'s own `ctx.exports.AppWorkerApi` with `props` set by platform
+code at load time. The Dynamic Worker receives the stub, not the means to make
+one, and no account metadata describes it, so those `props` cannot be forged or
+re-pointed. The token is still required, so one authorisation rule holds on every
+backend.)
 
 ### 3. Events, not routes, by default
 
@@ -101,8 +148,21 @@ signed **event envelope**, on every backend:
       "name": "<schedule or hook name>",
       "attempt": 1,
       "issued_at": <unix ms>,
-      "payload": { ... }            // hook body, schedule params, or request
+      "caller": {                   // http only; absent on schedule and hook
+        "grant_id": "<uuid>", "user_id": "<id>", "roles": ["..."],
+        "exp": <unix s>, "sig": "<hex>"
+      },
+      "payload": { ... }            // schedule params, hook delivery, or request
     }
+
+    // http payload (request; the response comes back in the same shape):
+    "payload": { "method": "POST", "path": "/...", "query": "...",
+                 "headers": { ... },              // allow-listed
+                 "body": "<string>",
+                 "body_encoding": "utf8" | "base64" }
+
+`caller` is part of the signed body, so it is covered by the envelope signature
+like every other field.
 
 - **Signature.** HMAC-SHA256 over `"<t>.<raw body>"` with `PAS_EVENT_KEY`,
   compared in constant time. The header may carry **several `v1=` values**; the
@@ -112,7 +172,8 @@ signed **event envelope**, on every backend:
   `dispatch` — so the shim and the SDK have one code path, and an envelope that
   reaches an app worker by any route is verifiable.
 - **Freshness.** The shim rejects `|now − t| > 300 s` with `401`.
-- **Replay and duplicates.** Delivery is **at-least-once**: a retry, a queue
+- **Replay and duplicates.** Delivery of `schedule` and `hook` events is
+  **at-least-once**: a retry, a queue
   redelivery or a replay inside the 300 s window can deliver the same envelope
   twice. App handlers **must be idempotent on the envelope `id`**. The shim
   additionally de-duplicates ids it has already accepted within the window where
@@ -120,14 +181,29 @@ signed **event envelope**, on every backend:
   isolates are not shared; a platform-side record of delivered ids is
   authoritative), but handlers may not rely on it.
 - **`http` events** (browser routes under `/.pas/worker/*`, proxied by the
-  platform) carry a platform-minted, request-scoped caller grant so the worker
-  may run actions *as that user* for the life of the request — never otherwise.
-  The browser never reaches the app worker directly.
+  platform) carry a platform-minted, request-scoped caller grant in the top-level
+  `caller` field (#260) so the worker may run actions *as that user* for the life
+  of the request — never otherwise, and only actions whose `callers` includes
+  `"user"`. The browser never reaches the app worker directly. `http` events are
+  **not retried** — a browser request is not at-least-once — so they are the one
+  exception to the delivery rule above.
+- **Body encoding.** The envelope is JSON, which cannot carry arbitrary bytes. An
+  `http` request or response body travels as `body` (string) plus
+  `body_encoding`: `utf8` when the content type is textual (`text/*`,
+  `application/json`, `*+json`, `application/x-www-form-urlencoded`) and the bytes
+  are valid UTF-8, otherwise `base64`. The SDK rebuilds the exact bytes (#260).
 
 ### 4. Limits and abuse controls
 
 - Per invocation: CPU 30 s; wall-clock bounded by the invoker (scheduled 5 min,
   http 30 s, hook — see below); `PAS` calls per invocation ≤ 200.
+- **Two budgets, not one.** The 200 `PAS` calls are a **platform-side** budget,
+  counted atomically on the per-invocation D1 record (an in-memory counter does
+  not hold across isolates) (#254). The runtime `subRequests` limit (§5, §6 B.6)
+  counts **every** subrequest — each `PAS` RPC **plus** every outbound `fetch`.
+  So `subRequests` = `PAS` budget + an outbound budget, sized from duperdash's
+  measured reconcile (#267). Setting `subRequests` to 200 starves any worker that
+  calls out.
 - **Hook budget.** Until queue delivery (#257) lands, a hook is acknowledged to
   the sender and then invoked from the request's `waitUntil`, which Cloudflare
   caps at 30 s after the response. Hook handlers therefore get **≤ 25 s**
@@ -155,7 +231,14 @@ signed **event envelope**, on every backend:
     interface AppWorkerHost {
       deploy(appId, bundle): Promise<DeployResult>;
       invoke(appId, event): Promise<InvokeResult>;
+      remove(appId): Promise<void>;
     }
+
+`remove` runs when the app is deleted or its `app_workers_enabled` flag is turned
+off: it deletes the script (`account`, `dispatch`) or the stored bundle
+(`loader`), revokes the app's `PAS_WORKER_TOKEN` hashes (§2) and its event key,
+and stops its schedules and hooks. After `remove`, no route reaches the app's code
+and no `PAS` call from a still-cached isolate authorises.
 
 The backend is configuration (`APP_WORKER_BACKEND` = `account` | `loader` |
 `dispatch`), not a code fork. All three run the same shim, the same signed
@@ -163,14 +246,19 @@ envelope and the same `PAS` contract.
 
 - **`loader`** — Cloudflare [Dynamic Workers](https://developers.cloudflare.com/dynamic-workers/)
   (the Worker Loader binding). The platform stores the uploaded bundle and loads
-  it on demand with `env.LOADER.get("<appId>:<bundle hash>", …)`, with the shim
-  as `mainModule`. Per the Cloudflare docs, as read on 2026-10-01:
+  it on demand with `env.LOADER.get("<appId>:<bundleHash>:<configVersion>", …)`,
+  with the shim as `mainModule`. The ID **must** include `configVersion`, not
+  only the bundle hash: the loader caches by ID, and the `WorkerCode` behind an
+  ID includes its `env` (`PAS_WORKER_TOKEN`, `PAS_EVENT_KEY`). Every token or key
+  rotation, and every platform change to the env or limits, bumps
+  `configVersion`; otherwise a cached isolate keeps running with the revoked
+  credential. Per the Cloudflare docs, as read on 2026-10-01:
   - available on the **Workers Paid** plan, which PAS already uses — no new
     product purchase ([pricing](https://developers.cloudflare.com/dynamic-workers/pricing/));
   - billed per unique Dynamic Worker (Worker ID + code) per day — 1,000 included
     per month, then $0.002 per Dynamic Worker per day — plus requests and CPU at
     Workers Standard rates, where CPU includes isolate start-up. A stable ID per
-    bundle version keeps an app at one billable worker per day
+    bundle and config version keeps an app at one billable worker per day
     ([pricing](https://developers.cloudflare.com/dynamic-workers/pricing/));
   - **no public URL**: a Dynamic Worker is reachable only through the stub the
     loader Worker obtains ([API reference](https://developers.cloudflare.com/dynamic-workers/api-reference/));
@@ -188,8 +276,11 @@ envelope and the same `PAS` contract.
     request, 10 per Durable Object
     ([limits](https://developers.cloudflare.com/dynamic-workers/platform/limits/)).
     A scheduler tick cannot fan out to every app from one request; invocations
-    must be spread across requests (one per queue message under #257, or a
-    bounded pool).
+    must be spread across requests. A **queue consumer batch is one invocation**,
+    so the cap applies to a batch too: a consumer either sets
+    `max_batch_size` ≤ 4 or handles a batch's messages sequentially. #257 sets
+    `max_batch_size = 1` (one message per consumer invocation), which satisfies
+    both.
   - `get()` caches isolates by ID but guarantees nothing about reuse; the
     shim and app must not assume warm state.
   Not established by the docs and therefore **open for the spike**: whether
@@ -226,8 +317,13 @@ Two separate gates.
 **A. Purchase Workers for Platforms** (only if `loader` was found insufficient and
 `dispatch` is needed), when all hold: (1) duperdash has run on PAS for ≥ 2 weeks
 with scheduled syncs inside the breaker; (2) GitHub webhooks reach its dashboard
-within ~1 minute; (3) no app repo holds a hand-placed Cloudflare token; (4) the
-pre-PAS duperdash is retired.
+within ~1 minute; (3) **no Cloudflare token reaches any app repo** — measured
+as **both** (a) `gh api orgs/proappstore-online/actions/secrets -q
+'[.secrets[]|select(.visibility=="all")]|length'` → `0`, and no
+`CLOUDFLARE_*`/`CF_API_*` org secret whose `…/repositories` includes an app repo,
+**and** (b) `gh secret list -R proappstore-online/<r>` shows no
+`CLOUDFLARE_*`/`CF_API_*` for every app repo (#274; a per-repo `gh secret list`
+alone does not see org secrets); (4) the pre-PAS duperdash is retired.
 
 **B. Open app workers to all apps** (lift the flag, the cap and the first-party
 rule), on whichever backend is then in use, when (1)–(4) hold **and**:
@@ -243,7 +339,10 @@ rule), on whichever backend is then in use, when (1)–(4) hold **and**:
    secrets, storage or logs, and cannot reach B's worker;
 8. **a key-rotation drill has been done** — `PAS_EVENT_KEY` and
    `PAS_WORKER_TOKEN` rotated for a live app with dual-signing (§3) and no
-   dropped event.
+   dropped event;
+9. **per-app usage quotas are enforced** — metered invocations, CPU and hook
+   volume per app, with daily quotas, so one app cannot exhaust the shared
+   account's budget (#275).
 
 ## Alternatives Considered
 
@@ -263,7 +362,8 @@ rule), on whichever backend is then in use, when (1)–(4) hold **and**:
 **Positive:**
 - Apps gain scheduled jobs that can call out, inbound webhooks and connectors,
   while data still flows only through linted actions.
-- No Cloudflare credential in any app repo; the doordrop/duperdash hacks retire.
+- No Cloudflare credential reaches any app repo (once #274 closes — a
+  precondition, not a consequence); the doordrop/duperdash hacks retire.
 - Envelope verification is enforced by platform code on every backend, not left
   to each app.
 - If the `loader` spike succeeds, the prototype already has isolation, egress
