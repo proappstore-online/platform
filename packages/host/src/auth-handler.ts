@@ -1,5 +1,6 @@
 import type { Env } from "./env.js";
 import type { Route } from "./host.js";
+import { joinPage, signInPage } from "./auth-pages.js";
 
 export const AUTH_PREFIX = "/.pas/auth";
 export const SESSION_COOKIE_NAME = "__Host-pas_session";
@@ -18,6 +19,10 @@ export async function handleAuthRoute(
   if (!url.pathname.startsWith(`${AUTH_PREFIX}/`) && url.pathname !== AUTH_PREFIX) return null;
 
   if (url.pathname === `${AUTH_PREFIX}/start`) return authStart(request, route);
+  // Platform-owned sign-in and invite pages (#259): reachable on a private app,
+  // whose own pages the visibility gate holds back. See auth-pages.ts.
+  if (url.pathname === `${AUTH_PREFIX}/signin`) return signInPage(request, env, route);
+  if (url.pathname === `${AUTH_PREFIX}/join`) return joinPage(request, env, route);
   if (url.pathname === `${AUTH_PREFIX}/callback`) return authCallback(request, env);
   if (url.pathname === `${AUTH_PREFIX}/me`) return authMe(request, env);
   if (url.pathname === `${AUTH_PREFIX}/logout`) return authLogout(request);
@@ -323,7 +328,7 @@ export function isSameOriginMutation(request: Request): boolean {
   return false;
 }
 
-async function fetchMe(
+export async function fetchMe(
   env: Env,
   token: string,
 ): Promise<{ ok: boolean; status: number; body: string; contentType: string | null }> {
@@ -351,7 +356,7 @@ function redirectWithAuthError(
   return redirect(dest.toString(), 303, cookies);
 }
 
-function sameOriginPath(baseUrl: URL, raw: string | null): string {
+export function sameOriginPath(baseUrl: URL, raw: string | null): string {
   if (!raw) return "/";
   try {
     const parsed = new URL(raw, baseUrl.origin);

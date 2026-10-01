@@ -1,10 +1,16 @@
 /**
  * Private apps (#259, part of #251) — an app declares
  * `visibility: { mode: "private", roles: [...] }` in its mcp.json, and the host
- * serves its WHOLE origin — `/`, every asset, /.pas/api/*, /.pas/data/* and the
- * data-<app> hostname — only to the app's team (creator, team members,
- * platform admins) and to holders of one of those app roles. /.pas/auth/* (sign-in, passkeys) stays reachable: the gate runs
- * after it, or nobody could ever sign in to pass it.
+ * serves its WHOLE origin — `/`, every asset, /.pas/api/* and /.pas/data/* —
+ * only to the app's team (creator, team members, platform admins) and to
+ * holders of one of those app roles. /.pas/auth/* (sign-in, the platform
+ * sign-in and invite pages, passkeys) stays reachable: the gate runs after it,
+ * or nobody could ever sign in to pass it.
+ *
+ * The data-<app> hostname is NOT gated here: every SQL route on the data worker
+ * already requires a team role of developer or above, which is a subset of who
+ * a private app admits, and the worker is reachable at its own custom domain
+ * anyway — a host check would cost every app a D1 read for no protection.
  *
  * Same shape as the operator gate (operator-gate.ts, #229): checked before the
  * edge cache and R2, and nothing on a private app is ever edge-cached, so a
@@ -12,41 +18,35 @@
  * operator gate it asks `visibility/me`, not `roles/me`: the owner always
  * passes, and `roles/me` does not report ownership.
  *
+ * Signed out, a navigation goes to the PLATFORM sign-in page
+ * (/.pas/auth/signin, auth-pages.ts), which offers every sign-in method the
+ * platform has — never straight to GitHub, which would shut out everyone
+ * without a GitHub account. A signed-in caller who is refused on an invite link
+ * (`/join/<code>`, the link routes/invites.ts mints) goes to the platform
+ * invite page (/.pas/auth/join), which redeems the code and sends them back.
+ *
  * Cost. On an app origin the visibility mode rides on the route lookup
  * (host.ts LEFT JOINs app_visibility), so a public app pays nothing extra — no
- * D1 read, no backend call. The data-<app> hostname has no route lookup, so it
- * pays one indexed D1 read (isPrivateApp). A private app asks the backend
- * (visibility/me), and an ALLOW is remembered per isolate for
- * ALLOW_CACHE_TTL_MS keyed by SHA-256(token) + app, so a page's assets do not
- * each cost a backend round trip. Refusals are never cached.
+ * D1 read, no backend call. A private app asks the backend (visibility/me),
+ * and the answer is remembered per isolate, keyed by SHA-256(token) + app: an
+ * ALLOW for ALLOW_CACHE_TTL_MS, so a page's assets do not each cost a backend
+ * round trip, and a REFUSAL (refused, or a session the backend rejects) for
+ * REFUSAL_CACHE_TTL_MS, so a refused or bogus session hammering a private app
+ * costs one backend call per window rather than one per request. "Lookup
+ * failed" is never cached.
  *
  * Propagation bound: a public→private flip takes effect on the next request
  * (the route lookup is live D1, and nothing on a private app is edge-cached).
  * Revoking a role, removing a team member or signing out of a private app can
- * leave an isolate serving that session for up to ALLOW_CACHE_TTL_MS (30 s).
+ * leave an isolate serving that session for up to ALLOW_CACHE_TTL_MS (30 s); a
+ * newly granted role can take up to REFUSAL_CACHE_TTL_MS (5 s) to be seen —
+ * except an invite redeemed through /.pas/auth/join, which clears this
+ * isolate's entry at once.
  */
 import { clearSessionCookie, readCookie, SESSION_COOKIE_NAME } from "./auth-handler.js";
 import type { Env } from "./env.js";
 
 const API_BASE = "https://api.proappstore.online";
-
-/**
- * Whether the app is declared private. A missing table means the migration has
- * not reached this database, so nothing can have been declared; any other error
- * throws — failing the request closed rather than serving a private app.
- */
-export async function isPrivateApp(db: D1Database, appId: string): Promise<boolean> {
-  try {
-    const row = await db
-      .prepare("SELECT mode FROM app_visibility WHERE app_id = ?1")
-      .bind(appId)
-      .first<{ mode: string }>();
-    return row?.mode === "private";
-  } catch (e) {
-    if (/no such table/i.test(String((e as Error)?.message ?? e))) return false;
-    throw e;
-  }
-}
 
 /**
  * Null when the caller may use the private app; otherwise the refusal. No
@@ -66,59 +66,71 @@ export async function refuseUnlessVisible(request: Request, env: Env, appId: str
     return refusal;
   }
   if (answer === "unavailable") return refusal(503, "Authorization unavailable");
-  return answer === "allowed" ? null : refusal(403, "Forbidden");
+  if (answer === "allowed") return null;
+  // Signed in but not admitted. On an invite link, the platform invite page can
+  // redeem the code — the app's own /join page is behind this very gate.
+  const invite = isNavigation(request) ? inviteCodeFromPath(new URL(request.url).pathname) : null;
+  if (invite) return redirectTo(request, "/.pas/auth/join", { code: invite });
+  return refusal(403, "Forbidden");
 }
 
-/**
- * The same check for the data-<app> hostname, which browsers call with a Bearer
- * rather than the app-origin cookie. It is an API, so a refusal is never a
- * sign-in redirect. CORS preflights carry no credential and run nothing; they
- * pass through to the data worker unchanged.
- */
-export async function refuseDataUnlessVisible(request: Request, env: Env, appId: string): Promise<Response | null> {
-  if (request.method === "OPTIONS") return null;
-  const header = request.headers.get("Authorization") ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-  if (!token) return refusal(401, "Unauthorized");
-  const answer = await askVisibility(env, appId, token);
-  if (answer === "invalid-session") return refusal(401, "Unauthorized");
-  if (answer === "unavailable") return refusal(503, "Authorization unavailable");
-  return answer === "allowed" ? null : refusal(403, "Forbidden");
+/** The invite code in an app-origin invite link (`/join/<code>`, routes/invites.ts), or null. */
+export function inviteCodeFromPath(pathname: string): string | null {
+  const m = /^\/join\/([A-Za-z0-9]{4,32})\/?$/.exec(pathname);
+  return m ? m[1]!.toUpperCase() : null;
 }
 
 /** How long an isolate remembers that a session may use a private app. See the module comment. */
 export const ALLOW_CACHE_TTL_MS = 30_000;
-const ALLOW_CACHE_MAX = 1000;
-const allowCache = new Map<string, number>();
+/**
+ * How long an isolate remembers that a session may NOT (refused, or rejected
+ * as invalid). Short — it only has to blunt a flood — and never longer than
+ * the propagation bound docs/authorization-model.md documents for a grant.
+ */
+export const REFUSAL_CACHE_TTL_MS = 5_000;
+const VISIBILITY_CACHE_MAX = 1000;
+type Answer = "allowed" | "refused" | "invalid-session" | "unavailable";
+const visibilityCache = new Map<string, { answer: Exclude<Answer, "unavailable">; until: number }>();
 
-async function allowCacheKey(appId: string, token: string): Promise<string> {
+async function visibilityCacheKey(appId: string, token: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
   return `${appId}\u0000${hex}`;
 }
 
-/** Test seam: forget every remembered allow. */
+/** Test seam: forget every remembered answer. */
 export function clearVisibilityAllowCache(): void {
-  allowCache.clear();
+  visibilityCache.clear();
 }
 
-async function askVisibility(env: Env, appId: string, token: string): Promise<"allowed" | "refused" | "invalid-session" | "unavailable"> {
-  const key = await allowCacheKey(appId, token);
-  const until = allowCache.get(key);
-  if (until !== undefined) {
-    if (until > Date.now()) return "allowed";
-    allowCache.delete(key);
+/** Forget this isolate's answer for one session on one app — after an invite is redeemed, so the grant is seen at once. */
+export async function forgetVisibility(appId: string, token: string): Promise<void> {
+  visibilityCache.delete(await visibilityCacheKey(appId, token));
+}
+
+async function askVisibility(env: Env, appId: string, token: string): Promise<Answer> {
+  const key = await visibilityCacheKey(appId, token);
+  const cached = visibilityCache.get(key);
+  if (cached !== undefined) {
+    if (cached.until > Date.now()) return cached.answer;
+    visibilityCache.delete(key);
   }
   const answer = await askBackend(env, appId, token);
-  if (answer === "allowed") {
+  if (answer !== "unavailable") {
     // Bounded: drop the oldest entry (Map keeps insertion order) rather than grow without limit.
-    if (allowCache.size >= ALLOW_CACHE_MAX) allowCache.delete(allowCache.keys().next().value as string);
-    allowCache.set(key, Date.now() + ALLOW_CACHE_TTL_MS);
+    if (visibilityCache.size >= VISIBILITY_CACHE_MAX) visibilityCache.delete(visibilityCache.keys().next().value as string);
+    visibilityCache.set(key, { answer, until: Date.now() + (answer === "allowed" ? ALLOW_CACHE_TTL_MS : REFUSAL_CACHE_TTL_MS) });
   }
   return answer;
 }
 
-async function askBackend(env: Env, appId: string, token: string): Promise<"allowed" | "refused" | "invalid-session" | "unavailable"> {
+/** The backend's answer, uncached — for the invite page, right after a redemption. */
+export async function askVisibilityFresh(env: Env, appId: string, token: string): Promise<Answer> {
+  await forgetVisibility(appId, token);
+  return askVisibility(env, appId, token);
+}
+
+async function askBackend(env: Env, appId: string, token: string): Promise<Answer> {
   let res: Response;
   try {
     res = await env.API.fetch(
@@ -135,15 +147,27 @@ async function askBackend(env: Env, appId: string, token: string): Promise<"allo
   return body?.allowed === true ? "allowed" : "refused";
 }
 
-function signInOrForbidden(request: Request): Response {
-  const url = new URL(request.url);
-  const navigation =
+function isNavigation(request: Request): boolean {
+  return (
     request.method === "GET" &&
-    (request.headers.get("Sec-Fetch-Mode") === "navigate" || (request.headers.get("Accept") ?? "").includes("text/html"));
-  if (!navigation) return refusal(403, "Forbidden");
-  const start = new URL("/.pas/auth/start", url.origin);
-  start.searchParams.set("return_to", `${url.pathname}${url.search}`);
-  return new Response(null, { status: 302, headers: { Location: start.toString(), "Cache-Control": "no-store", "X-PAS-Visibility": "private" } });
+    (request.headers.get("Sec-Fetch-Mode") === "navigate" || (request.headers.get("Accept") ?? "").includes("text/html"))
+  );
+}
+
+/**
+ * Signed out: a navigation goes to the platform sign-in page, which offers
+ * every method the platform supports (not just GitHub); anything else is 403.
+ */
+function signInOrForbidden(request: Request): Response {
+  if (!isNavigation(request)) return refusal(403, "Forbidden");
+  const url = new URL(request.url);
+  return redirectTo(request, "/.pas/auth/signin", { return_to: `${url.pathname}${url.search}` });
+}
+
+function redirectTo(request: Request, path: string, params: Record<string, string>): Response {
+  const target = new URL(path, new URL(request.url).origin);
+  for (const [k, v] of Object.entries(params)) target.searchParams.set(k, v);
+  return new Response(null, { status: 302, headers: { Location: target.toString(), "Cache-Control": "no-store", "X-PAS-Visibility": "private" } });
 }
 
 /**

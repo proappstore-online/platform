@@ -15,7 +15,7 @@ import { handleAuthRoute } from "./auth-handler.js";
 import { handlePlatformMediation } from "./platform-mediation.js";
 import { handleQaRunner } from "./qa-runner.js";
 import { getOperatorGate, isUnderPrefix, refuseUnlessOperator } from "./operator-gate.js";
-import { isPrivateApp, refuseDataUnlessVisible, refuseUnlessVisible } from "./visibility-gate.js";
+import { refuseUnlessVisible } from "./visibility-gate.js";
 import {
   contentType,
   etagsMatch,
@@ -88,12 +88,11 @@ export default {
       if (!env.DATA_WORKER_HOST) {
         return new Response("DATA_WORKER_HOST is not configured", { status: 503 });
       }
-      // A private app's data hostname is gated like its origin (#259).
-      const dataAppId = slug.slice("data-".length);
-      if (await isPrivateApp(env.DB, dataAppId)) {
-        const refusal = await refuseDataUnlessVisible(request, env, dataAppId);
-        if (refusal) return refusal;
-      }
+      // Not gated by app visibility (#259): every SQL route on the data worker
+      // already requires a team role of developer or above (a subset of who a
+      // private app admits), and the worker is also reachable directly at its
+      // own custom domain, so a check here would cost every app a D1 read and
+      // add no protection.
       return fetch(
         new Request(
           `https://pas-${slug}.${env.DATA_WORKER_HOST}${url.pathname}${url.search}`,
@@ -248,6 +247,7 @@ export default {
         title: page?.title ?? tenant?.title ?? null,
         tagline: page?.description ?? listing?.tagline ?? null,
         icon_url: page?.image_url ?? tenant?.icon_url ?? listing?.icon_url ?? null,
+        private: privateApp,
       }, `${url.origin}${url.pathname}`);
     }
 

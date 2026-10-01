@@ -248,6 +248,29 @@ describe('private apps: non-owner team members (#259 review)', () => {
   });
 });
 
+describe('private apps: invites from the platform invite page (#259 review)', () => {
+  beforeEach(async () => {
+    expect((await register({ tools: [notes], visibility: PRIVATE })).status).toBe(200);
+    for (const t of ['invite_redemptions', 'invites']) await env.DB.prepare(`DELETE FROM ${t}`).run();
+  });
+
+  it('a non-GitHub invitee redeems a code scoped to this app and is then admitted; the same code is not found for another app', async () => {
+    const created = await SELF.fetch(`${BASE}/v1/apps/diary/invites`, json('POST', { role: 'viewer' }, await session('gh:1')));
+    expect(created.status).toBe(200);
+    const { code } = (await created.json()) as { code: string };
+    const invitee = await session('cred:invitee', { login: 'invitee', roles: ['user'] });
+    expect((await me(invitee)).body).toEqual({ mode: 'private', allowed: false });
+
+    const elsewhere = await SELF.fetch(`${BASE}/v1/invites/${code}/redeem`, json('POST', { appId: 'open' }, invitee));
+    expect(elsewhere.status).toBe(404);
+    expect((await me(invitee)).body.allowed).toBe(false);
+
+    const redeemed = await SELF.fetch(`${BASE}/v1/invites/${code}/redeem`, json('POST', { appId: 'diary' }, invitee));
+    expect(redeemed.status).toBe(200);
+    expect((await me(invitee)).body).toEqual({ mode: 'private', allowed: true });
+  });
+});
+
 describe('private apps: public storage, counters and rooms (#259 review)', () => {
   beforeEach(async () => {
     expect((await register({ tools: [notes], visibility: PRIVATE })).status).toBe(200);
