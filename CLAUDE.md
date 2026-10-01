@@ -2,7 +2,7 @@
 
 The PAS control plane: Cloudflare Workers, the SDK, the CLI, and the D1 registry behind
 `proappstore.online`. Product strategy is in `STRATEGY.md`; architecture and subsystem docs are in
-`docs/` (published with VitePress).
+`docs/` (published with Zensical by `publish-docs.yml`; VitePress is only the local preview).
 
 ## Delivery mode
 
@@ -11,9 +11,16 @@ Changed 2026-09-16 (previously straight-to-main, declared 2026-08-16). Applies t
 changes made by people and agents across the `proappstore-online` org — `platform` and every
 platform-maintained repo (storefront, console, dashboard, templates).
 
+**This is convention, not enforcement.** `main` on `platform` has no branch protection and no
+ruleset (checked 2026-10-01: `branches/main/protection` → 404, `rulesets` → `[]`), so a direct push
+still succeeds — and deploys. Nothing will stop you; follow it anyway. Enforcement (a ruleset plus a
+bypass for `publish.yml`'s bump push) is tracked in Refs #278.
+
 - Branch, push, open a PR that says `Refs #<n>`, and let review reach it. The issue is closed only
   after the merged change has been verified in production (see `pas-dev: verify #<n>`), never by a
-  closing keyword on merge.
+  closing keyword on merge. Until then the issue carries the `awaiting-verify` label, and whoever merges
+  dispatches `pas-dev: verify #<n>` — nothing triggers it automatically
+  (`gh issue list -l awaiting-verify` is the queue).
 - **Review is human until a PAS reviewer agent exists.** There is no reviewer agent in
   `.claude/agents/` and no `Ready To Merge` label on this repo yet; until both exist, a person reads
   the diff. Approval is always human.
@@ -59,8 +66,9 @@ issue belongs to before you start.
 
 ## Verification bar
 
-Run from this directory before committing. Keep this list equal to the gates in
-`.github/workflows/ci.yml`:
+Run from this directory before committing. Keep this list a **superset** of the gates in
+`.github/workflows/ci.yml` — every CI gate is here; `pnpm test` is the fast local loop that CI
+runs only as part of `pnpm test:coverage`:
 
 ```
 pnpm install --frozen-lockfile

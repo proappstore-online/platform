@@ -143,6 +143,7 @@ genuinely the owner's, state it as an open question — and say which way you wo
 Judge each issue against reality, not against its own text. Four verdicts:
 
 - **Delivered** — check `main` and the deployed workers, not the issue's comments.
+- **Awaiting verify is not stale and not delivered** — an open issue with a merged `Refs` PR or the `awaiting-verify` label is waiting on `pas-dev: verify #n`; say so, don't close it or re-file it.
 - **Premise expired** — the ticket describes a constraint that no longer exists. These are the
   dangerous ones: they read as live work. Say what changed.
 - **Would regress** — the stated fix collides with something shipped since. Rewrite the fix, keep
@@ -157,7 +158,7 @@ Same rule as code: the deliverable is an issue carrying the **full proposed text
 
 - **`platform/docs/adr/NNNN-*.md`** — for a constraint that is easy to violate accidentally.
   Sequential, never renumbered, superseded rather than edited.
-- **`platform/docs/*.md`** — the published VitePress documentation. When you find it stale, file the
+- **`platform/docs/*.md`** — the published documentation (Zensical, via `publish-docs.yml`; VitePress is only the local preview). When you find it stale, file the
   correction with the replacement text. A stale published doc sends the next reader down a dead end,
   so this is real work, not tidying.
 
