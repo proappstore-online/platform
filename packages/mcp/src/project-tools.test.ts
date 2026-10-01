@@ -754,6 +754,28 @@ describe('publish_app', () => {
     description: 'Online chess teaching platform.',
     confirm: true, // publish_app is destructive (public listing) — gated behind confirm
   };
+  /** The admin publish call (the GitHub read of mcp.json precedes it). */
+  const adminCall = () => mockFetch.mock.calls.find((c) => String(c[0]).endsWith('/api/publish-app'))!;
+
+  it("#259: sends the repo mcp.json's visibility, so a private app's first publish is never listed", async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: true, steps: [] }) });
+    mockGh.getFile.mockResolvedValueOnce({ ok: true, status: 200, content: JSON.stringify({ tools: [], visibility: { mode: 'private', roles: ['viewer'] } }) });
+    const out = getText(await tools.get('publish_app')!(publishArgs));
+    expect(mockGh.getFile).toHaveBeenCalledWith('chess-academy', 'mcp.json');
+    expect(JSON.parse(adminCall()[1].body).visibility).toBe('private');
+    expect(out).toContain('Listing: none (private app)');
+
+    mockFetch.mockClear();
+    mockGh.getFile.mockResolvedValueOnce({ ok: true, status: 200, content: JSON.stringify({ tools: [] }) });
+    await tools.get('publish_app')!(publishArgs);
+    expect(JSON.parse(adminCall()[1].body).visibility).toBe('public');
+
+    mockFetch.mockClear();
+    mockGh.getFile.mockResolvedValueOnce({ ok: false, status: 502 });
+    await tools.get('publish_app')!(publishArgs);
+    // Unreadable: omitted, so the admin step reads the repo itself (and fails closed).
+    expect(JSON.parse(adminCall()[1].body).visibility).toBeUndefined();
+  });
 
   it('refuses to publish an app the caller does not own (no listing takeover)', async () => {
     mockOwnership.mockResolvedValue(false);
@@ -812,7 +834,7 @@ describe('publish_app', () => {
       pro_features: ['Real-time games', 'Swiss tournaments'],
     });
 
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const body = JSON.parse(adminCall()[1].body);
     expect(body.id).toBe('chess-academy');
     expect(body.name).toBe('Chess Academy');
     expect(body.icon).toBe('&#9822;');
@@ -828,7 +850,7 @@ describe('publish_app', () => {
 
     await tools.get('publish_app')!(publishArgs);
 
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const body = JSON.parse(adminCall()[1].body);
     expect(body.icon).toBe('📦');
     expect(body.iconBg).toBe('#7c3aed');
     expect(body.proFeatures).toBeUndefined();

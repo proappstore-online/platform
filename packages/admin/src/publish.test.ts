@@ -573,11 +573,19 @@ describe("deploy workflow build gate fails closed (#204)", { timeout: 30_000 }, 
 });
 
 describe("storefront registry: private apps (#259)", () => {
-  /** A registry.json mock holding `apps`, recording every PUT body. */
-  function registryMock(apps: { id: string }[]) {
+  /**
+   * A registry.json mock holding `apps`, recording every PUT body. `manifest` is
+   * the app repo's mcp.json: undefined → 404, a number → that error status.
+   */
+  function registryMock(apps: { id: string }[], manifest?: unknown) {
     const puts: { apps: { id: string }[] }[] = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/diary/contents/mcp.json")) {
+        if (manifest === undefined) return new Response("{}", { status: 404 });
+        if (typeof manifest === "number") return new Response("{}", { status: manifest });
+        return new Response(JSON.stringify({ sha: "m", content: Buffer.from(JSON.stringify(manifest)).toString("base64") }), { status: 200 });
+      }
       if (!url.includes("/contents/registry.json")) throw new Error(`unexpected fetch ${url}`);
       if (init?.method === "PUT") {
         const body = JSON.parse(init.body as string) as { content: string };
@@ -624,6 +632,31 @@ describe("storefront registry: private apps (#259)", () => {
     const step = await addToRegistry({ ...ENV, DB: dbWith(null, "D1_ERROR: database unavailable") }, REQ);
     expect(step).toMatchObject({ status: "fail" });
     expect(puts).toEqual([]);
+  });
+
+  it("first publish: no request field, no registered row — the repo's mcp.json decides", async () => {
+    // Every real caller used to omit `visibility`, and nothing has registered yet.
+    let puts = registryMock([], { tools: [], visibility: { mode: "private", roles: ["viewer"] } });
+    expect(await addToRegistry({ ...ENV, DB: dbWith(null) }, REQ)).toMatchObject({ status: "skip", detail: expect.stringContaining("Private") });
+    expect(puts).toEqual([]);
+    puts = registryMock([], { tools: [] });
+    expect((await addToRegistry({ ...ENV, DB: dbWith(null) }, REQ)).status).toBe("ok");
+    expect(puts).toHaveLength(1);
+    puts = registryMock([]); // no mcp.json at all: public
+    expect((await addToRegistry({ ...ENV, DB: dbWith(null) }, REQ)).status).toBe("ok");
+    expect(puts).toHaveLength(1);
+  });
+
+  it("fails the step — never lists — when the repo's mcp.json cannot be read", async () => {
+    const puts = registryMock([], 502);
+    expect(await addToRegistry({ ...ENV, DB: dbWith(null) }, REQ)).toMatchObject({ status: "fail" });
+    expect(puts).toEqual([]);
+  });
+
+  it("an explicit 'public' from the caller skips the repo read; a registered row still wins over it", async () => {
+    registryMock([], 502); // would fail if read
+    expect(await isPrivateForRegistry({ DB: dbWith(null) }, { id: "diary", visibility: "public" }, { getFile: async () => { throw new Error("read"); } })).toBe(false);
+    expect(await isPrivateForRegistry({ DB: dbWith("private") }, { id: "diary", visibility: "public" })).toBe(true);
   });
 
   it("isPrivateForRegistry trusts a private declaration without a lookup", async () => {

@@ -503,19 +503,44 @@ const REGISTRY_WRITE_BACKOFF_MS = 150;
 // half-provisioned app with no storefront listing and a "retry" that only a
 // human could perform (#60). Now: re-read, re-apply, retry, bounded.
 /**
- * Whether the app is private (#259): the publish request says so, or its
- * registered manifest does (app_visibility). A missing table means nothing has
- * been declared yet; any other lookup error throws, so the publish step fails
- * rather than listing an app that might be private.
+ * Whether the app is private (#259), for the storefront registry. Any one of:
+ *
+ *   1. the publish request says so (`visibility`, read by the caller from mcp.json);
+ *   2. its registered manifest does (app_visibility) — authoritative once the app
+ *      has registered, and the only source for a republish after a flip;
+ *   3. on a FIRST publish, neither exists yet — the caller may not have sent
+ *      `visibility` and nothing has registered — so the app repo's own mcp.json
+ *      is read. Skipped when the caller explicitly said "public".
+ *
+ * A missing table means nothing has been declared yet. Any other lookup error —
+ * D1, or GitHub answering anything but the file or a 404 — throws, so the
+ * registry step fails rather than listing an app that might be private.
  */
-export async function isPrivateForRegistry(env: Pick<Env, "DB">, req: Pick<PublishRequest, "id" | "visibility">): Promise<boolean> {
+export async function isPrivateForRegistry(
+  env: Pick<Env, "DB">,
+  req: Pick<PublishRequest, "id" | "visibility">,
+  gh?: { getFile(id: string, path: string): Promise<{ ok: boolean; status: number; content?: string | undefined }> },
+): Promise<boolean> {
   if (req.visibility === "private") return true;
   try {
     const row = await env.DB.prepare("SELECT mode FROM app_visibility WHERE app_id = ?").bind(req.id).first<{ mode: string }>();
-    return row?.mode === "private";
+    if (row) return row.mode === "private";
   } catch (e) {
-    if (/no such table/i.test(String((e as Error)?.message ?? e))) return false;
-    throw e;
+    if (!/no such table/i.test(String((e as Error)?.message ?? e))) throw e;
+  }
+  if (req.visibility === "public" || !gh) return false;
+  const manifest = await gh.getFile(req.id, "mcp.json");
+  if (manifest.status === 404) return false;
+  if (!manifest.ok) throw new Error(`could not read ${req.id}/mcp.json (${manifest.status})`);
+  return manifestDeclaresPrivate(manifest.content);
+}
+
+/** Whether an mcp.json text declares `visibility.mode: "private"`. Unparseable reads as undeclared — it cannot register either. */
+export function manifestDeclaresPrivate(text: string | undefined): boolean {
+  try {
+    return (JSON.parse(text ?? "null") as { visibility?: { mode?: unknown } } | null)?.visibility?.mode === "private";
+  } catch {
+    return false;
   }
 }
 
@@ -527,7 +552,7 @@ export async function addToRegistry(env: Env, req: PublishRequest): Promise<Step
   // private removes the entry it had.
   let isPrivate: boolean;
   try {
-    isPrivate = await isPrivateForRegistry(env, req);
+    isPrivate = await isPrivateForRegistry(env, req, gh);
   } catch (e) {
     return { name: "Registry", status: "fail", detail: `Could not read app visibility: ${(e as Error).message}` };
   }
