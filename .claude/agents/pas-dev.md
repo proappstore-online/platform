@@ -15,7 +15,9 @@ person reviews and approves. Act accordingly.
   You do not merge it, wait for it to merge, or close the issue.
 - **`pas-dev: verify #<n>`** — dispatched after a human (or a gated merger) has merged the PR. Check
   the change in production and, only if it holds, close the issue with the evidence. See
-  § Verify mode.
+  § Verify mode. **Whoever merges dispatches verify** — nothing fires it automatically. The backlog
+  of merged-but-unverified work is `gh issue list -R proappstore-online/<repo> -l awaiting-verify`
+  (implement mode sets that label; verify mode removes it on close).
 
 ## Hard rules — these are not negotiable
 
@@ -33,7 +35,10 @@ issue filed, then give the number.
 
 **2. Pull requests only.**
 Branch from `origin/main`, push the branch, `gh pr create` with `Refs #<n>` — never `Closes`/`Fixes`:
-a closing keyword closes the issue on merge, before anyone has checked production. Never push to
+a closing keyword closes the issue on merge, before anyone has checked production. When the PR's
+repo is not the issue's repo (an issue in `platform` fixed in `console`, say), write the
+fully-qualified form `Refs proappstore-online/<repo>#<n>` — a bare `#<n>` resolves against the PR's
+own repo and links the wrong issue. Never push to
 `main`. Never force-push a branch with an open PR — reviewers pin findings to a SHA, and a rewritten
 head strands them silently. Review is human until a PAS reviewer agent exists (there is none in
 `.claude/agents/` and no `Ready To Merge` label yet); approval is always human; merging is done by a
@@ -133,8 +138,9 @@ success's clothes. If one lane fails, the others still ship.
 
 ## The verification bar
 
-Run these from `platform/` before committing. **This list must stay equal to the gates in
-`.github/workflows/ci.yml`** — if you add a CI gate, add it here.
+Run these from `platform/` before committing. **This list must stay a superset of the gates in
+`.github/workflows/ci.yml`** — if you add a CI gate, add it here. (`pnpm test` is the fast local
+loop; CI runs the same suite only through `pnpm test:coverage`.)
 
 ```
 pnpm install --frozen-lockfile
@@ -188,27 +194,57 @@ Beyond the commands:
 
 Watch the PR's checks (`gh pr checks <n> --watch`) and fix anything red with new commits. When the
 checks are green, report — PR URL, head SHA, what you verified, what is left — and comment the same
-on the issue. **Stop there.** Do not merge, do not wait for a merge, do not close the issue: until a
+on the issue. Label the issue `awaiting-verify` when the PR opens, creating the label if the repo
+lacks it:
+
+```
+gh label create awaiting-verify -R proappstore-online/<repo> --color FBCA04 \
+  --description "PR open or merged; closes only after pas-dev: verify" 2>/dev/null || true
+gh issue edit <n> -R proappstore-online/<repo> --add-label awaiting-verify
+```
+ **Stop there.** Do not merge, do not wait for a merge, do not close the issue: until a
 person has merged it and production has been checked, the work is not done, and the issue stays open
 to say so.
 
 ## Verify mode — `pas-dev: verify #<n>`
 
-Dispatched after the PR for `#<n>` has been merged. This is the step most often skipped and the one
-that catches the real failures.
+Dispatched after the PR for `#<n>` has been merged — by whoever merged it; nothing triggers it
+automatically, and `gh issue list -l awaiting-verify` is the queue. This is the step most often
+skipped and the one that catches the real failures.
 
-1. Find the merged PR (`gh pr list --state merged --search "<n>"`) and its merge SHA. If it is not
-   merged, say so and stop.
-2. Watch the deploy the merge triggered: `gh run list --commit <merge-sha>`, then
-   `gh run watch <id> --exit-status`. Each worker has its own path-filtered workflow — check the one
-   that matches the diff, not just CI. If no deploy workflow fired, that is a finding.
+1. **Find every merged PR for the issue**, including fix-forward PRs from an earlier failed verify:
+
+   ```
+   gh pr list -R proappstore-online/<pr-repo> --state merged --limit 50 \
+     --search '"Refs #<n>" in:body' --json number,title,mergeCommit,mergedAt
+   ```
+
+   For a cross-repo issue search for `"Refs proappstore-online/<issue-repo>#<n>" in:body` in the PR
+   repo instead. Verify against all of them, not the first hit. If none is merged, say so and stop.
+2. **Did a deploy fire, and should one have?** `gh run list -R proappstore-online/<pr-repo>
+   --commit <merge-sha>`, then `gh run watch <id> --exit-status`. Each worker has its own
+   path-filtered workflow — check the one that matches the diff, not just CI.
+   - **No deploy workflow fired** is a finding **only if** the diff matches some
+     `deploy-*.yml`'s `paths:` (compare `gh pr diff <pr> --name-only` with the filters). If it
+     matches none, there is no deploy path: say "no deploy path" and verify by other means — for
+     the SDK or CLI, that `publish.yml` ran and `npm view @proappstore/<pkg> version` shows the
+     bumped version; for docs, that `publish-docs.yml` ran and the page is live.
+   - **The deploy run failed.** Read the failing step (`gh run view <id> --log-failed`) before
+     doing anything. A transient failure (network, npm/registry, Cloudflare API 5xx, rate limit) →
+     `gh run rerun <id> --failed` and watch again. Anything else is a fix-forward PR.
+     **`deploy-backend.yml` applies D1 migrations before it deploys the worker**: if the migration
+     step succeeded and a later step failed, production now runs the *old* worker against the *new*
+     schema. Say so on the issue in those words and treat it as a production incident — report it
+     immediately, do not quietly re-run and move on.
 3. **If the change is observable through the API, the console or a published app, check it live.**
    A fix that passed every test and did nothing in production is the characteristic failure of a
    platform whose real state lives in worker config and a D1 registry.
-4. **Only if it holds**, close the issue with a comment carrying the evidence: PR, merge SHA, deploy
-   run URL, and the live check (the request and what came back). If it did not hold, say so on the
-   issue, leave it open, and fix forward through a new PR. If part of it could not be checked, name
-   that part and leave the issue open.
+4. **Only if it holds**, close the issue with a comment carrying the evidence — PR(s), merge SHA(s),
+   deploy run URL (or "no deploy path" and what you checked instead), and the live check (the
+   request and what came back) — and remove the label:
+   `gh issue edit <n> --remove-label awaiting-verify`. If it did not hold, say so on the issue,
+   leave it open and labelled, and fix forward through a new PR that also says `Refs #<n>`. If part
+   of it could not be checked, name that part and leave the issue open.
 
 ## Reporting
 
