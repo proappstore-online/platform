@@ -34,3 +34,13 @@ custom_domain = true
 [[r2_buckets]]
 binding = "KB_R2"
 bucket_name = "pas-kb"
+
+# Read the same visibility declarations as the backend, before serving R2.
+[[d1_databases]]
+binding = "DB"
+database_name = "pas"
+database_id = "585bbda3-0016-42ad-a53d-c089f1864fcb"
+migrations_dir = "../../migrations"
+
+# INTERNAL_TOKEN: platform-only read secret, configured by the credential holder.
+# This does not authorize ingest (GitHub OIDC only).

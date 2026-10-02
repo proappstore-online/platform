@@ -78,3 +78,19 @@ describe("_ingest authorization (#57)", () => {
     expect(put).not.toHaveBeenCalled();
   });
 });
+
+describe('private KB reads fail closed (#277)', () => {
+  it('does not read R2 when the platform read secret is absent, even with a supplied header', async () => {
+    const get = vi.fn();
+    const env = {
+      KB_R2: { get },
+      DB: { prepare: () => ({ bind: () => ({ first: async () => ({ mode: 'private' }) }) }) },
+    } as never;
+    const res = await worker.fetch(new Request('https://kb.proappstore.online/private-app/', {
+      headers: { 'x-internal-token': 'anything' },
+    }), env);
+    expect(res.status).toBe(404);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(get).not.toHaveBeenCalled();
+  });
+});
