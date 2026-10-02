@@ -25,9 +25,9 @@ const DOCS_REPO = `${ORG}/platform`;
 
 export interface Env {
   KB_R2: R2Bucket;
-  // No INTERNAL_TOKEN (#57): the shared CI secret was retired as an ingest
-  // credential. It could not prove which app was calling, so any holder could
-  // write any other tenant's KB prefix. Ingest is keyless OIDC only.
+  DB: D1Database;
+  /** Platform-only read credential; never accepted for ingest. */
+  INTERNAL_TOKEN?: string;
 }
 
 /**
@@ -107,6 +107,14 @@ export function keyForPath(pathname: string, hostname = "kb.proappstore.online")
   return key;
 }
 
+/** Compare without an early return on a differing byte. */
+function equalToken(actual: string | null, expected: string): boolean {
+  if (actual === null || actual.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) diff |= actual.charCodeAt(i) ^ expected.charCodeAt(i);
+  return diff === 0;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -145,6 +153,24 @@ export default {
       return new Response("ProAppStore Knowledge Base host - visit kb.proappstore.online/<app>/ or docs.proappstore.online", { status: 404 });
     }
 
+    // Check before R2, custom 404 pages and conditional responses. Never guess
+    // public on a lookup failure, and never cache private bytes in a browser.
+    const app = key.split("/")[0]!;
+    let privateApp = false;
+    if (app !== "platform") {
+      try {
+        const row = await env.DB.prepare("SELECT mode FROM app_visibility WHERE app_id = ?")
+          .bind(app).first<{ mode: string }>();
+        privateApp = row?.mode === "private";
+      } catch {
+        return new Response("Knowledge base unavailable", { status: 503, headers: { "cache-control": "no-store" } });
+      }
+    }
+    const privateHeaders: Record<string, string> = privateApp ? { "cache-control": "private, no-store" } : {};
+    if (privateApp && !(env.INTERNAL_TOKEN && equalToken(request.headers.get("x-internal-token"), env.INTERNAL_TOKEN))) {
+      return new Response("Not found", { status: 404, headers: privateHeaders });
+    }
+
     const obj = await env.KB_R2.get(key);
     if (!obj) {
       // Serve the app's own 404 page if it has one (Zensical/Material ships one),
@@ -152,14 +178,14 @@ export default {
       const app = key.split("/")[0];
       const custom404 = app ? await env.KB_R2.get(`${app}/404.html`) : null;
       if (custom404) {
-        return new Response(custom404.body, { status: 404, headers: { "content-type": "text/html; charset=utf-8" } });
+        return new Response(custom404.body, { status: 404, headers: { "content-type": "text/html; charset=utf-8", ...privateHeaders } });
       }
-      return new Response("Not found", { status: 404 });
+      return new Response("Not found", { status: 404, headers: privateHeaders });
     }
 
     const etag = obj.httpEtag;
     if (request.headers.get("if-none-match") === etag) {
-      return new Response(null, { status: 304, headers: { etag } });
+      return new Response(null, { status: 304, headers: { etag, ...privateHeaders } });
     }
 
     const headers = new Headers();
@@ -167,7 +193,7 @@ export default {
     headers.set("etag", etag);
     // HTML revalidates quickly (KB changes on each redeploy); fingerprinted
     // assets cache long.
-    headers.set("cache-control", key.endsWith(".html") ? "public, max-age=60, must-revalidate" : "public, max-age=86400");
+    headers.set("cache-control", privateApp ? "private, no-store" : key.endsWith(".html") ? "public, max-age=60, must-revalidate" : "public, max-age=86400");
     headers.set("x-content-type-options", "nosniff");
     return new Response(request.method === "HEAD" ? null : obj.body, { headers });
   },

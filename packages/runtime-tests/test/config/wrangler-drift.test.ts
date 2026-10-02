@@ -79,22 +79,23 @@ describe('backend wrangler.toml matches the code', () => {
  */
 describe.each([
   { pkg: 'agent-teams', envFile: 'src/bindings.ts', secrets: ['SESSION_SIGNING_KEY'] },
+  { pkg: 'kb-host', envFile: 'src/index.ts', secrets: [] as string[] },
   { pkg: 'host', envFile: 'src/env.ts', secrets: [] as string[] },
   { pkg: 'admin', envFile: 'src/env.ts', secrets: ['CF_API_TOKEN', 'GITHUB_TOKEN', 'SESSION_SIGNING_KEY'] },
 ])('$pkg wrangler.toml matches the code', ({ pkg, envFile, secrets }) => {
   const cfg = readFileSync(root(`packages/${pkg}/wrangler.toml`), 'utf8');
   const env = readFileSync(root(`packages/${pkg}/${envFile}`), 'utf8');
   const blocks = (section: string) => [...cfg.matchAll(new RegExp(`\\[\\[?${section.replace(/\./g, '\\.')}\\]\\]?[^[]*`, 'g'))].map((m) => m[0]);
-  const named = (section: string, key: string) => blocks(section).flatMap((b) => [...b.matchAll(new RegExp(`${key}\\s*=\\s*"([A-Z_]+)"`, 'g'))].map((m) => m[1]!));
+  const named = (section: string, key: string) => blocks(section).flatMap((b) => [...b.matchAll(new RegExp(`${key}\\s*=\\s*"([A-Z0-9_]+)"`, 'g'))].map((m) => m[1]!));
 
   it('declares every required binding of Env', () => {
-    const required = [...env.matchAll(/^\s{2}([A-Z_]+):\s/gm)].map((m) => m[1]!);
-    expect(required.length).toBeGreaterThan(2);
+    const required = [...env.matchAll(/^\s{2}([A-Z0-9_]+):\s/gm)].map((m) => m[1]!);
+    expect(required.length).toBeGreaterThanOrEqual(pkg === 'kb-host' ? 2 : 3);
     const declared = new Set([
       ...named('d1_databases', 'binding'), ...named('r2_buckets', 'binding'), ...named('services', 'binding'),
       ...named('workflows', 'binding'), ...named('ai', 'binding'), ...named('durable_objects.bindings', 'name'),
     ]);
-    const vars = new Set([...cfg.matchAll(/^([A-Z_]+)\s*=\s*"/gm)].map((m) => m[1]!));
+    const vars = new Set([...cfg.matchAll(/^([A-Z0-9_]+)\s*=\s*"/gm)].map((m) => m[1]!));
     for (const name of required) {
       expect(declared.has(name) || vars.has(name) || secrets.includes(name), `${pkg}: Env.${name} is required but wrangler.toml declares no binding, var or synced secret for it`).toBe(true);
     }
