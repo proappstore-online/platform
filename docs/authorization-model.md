@@ -197,11 +197,15 @@ public apps' files too. `visibility/me`, actions and the storefront read live.
 | Private → public | App origin and live routes: the next request. Public storage, counters and room upgrades: up to 30 s per backend isolate. |
 | Any flip, for an open room socket | Not applied to sockets already open (see above). |
 
+The KB host reads D1 visibility before serving any app page, asset, custom 404
+or conditional response. Private KBs return 404 to browser callers (this origin
+has no app session cookie). Platform test-result harvests present INTERNAL_TOKEN;
+private responses use `private, no-store`. Lookup failures return an uncacheable
+503. Official platform documentation remains public. Public KB responses may
+remain in browser caches for their existing TTL after a visibility flip.
+
 **Not covered:**
 
-- **The KB host** (`kb.proappstore.online/<app>/*`) serves an app's knowledge base
-  with no session. It is a separate origin without the app's session cookie, so it
-  cannot run this gate as it stands. Tracked in #277.
 - **The storefront static site** builds from `registry.json` in
   `proappstore-online/proappstore`. A private app's first publish is kept out of it
   (MCP `publish_app` sends the repo's declared visibility, and the admin registry

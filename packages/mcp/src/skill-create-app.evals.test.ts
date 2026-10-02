@@ -29,7 +29,7 @@ const svc = { fetch: (...a: Parameters<typeof fetch>) => globalThis.fetch(...a) 
 function register(readOnly: boolean, session: { userId: string | null; login: string | null; token: string | null; roles?: string[] }) {
   const tools = new Map<string, Handler>();
   const env = { GITHUB_ORG: 'test-org', GITHUB_TOKEN: 'gh-tok', API_BASE: 'https://api.test.com', API: svc, ADMIN: svc, HOST: svc,
-    INTERNAL_TOKEN: 'internal-secret', R2_ACCESS_KEY_ID: 'r2-ak', R2_SECRET_ACCESS_KEY: 'r2-sk', R2_ACCOUNT_ID: 'r2-acct',
+    INTERNAL_TOKEN: 'internal-secret',
     ...(readOnly ? { MCP_READ_ONLY: '1' } : {}) };
   registerProjectTools({ tool: (n: string, _d: string, _s: unknown, h: Handler) => { tools.set(n, h); } } as never, env as never, () => session);
   return tools.get('provision_pas_app')!;

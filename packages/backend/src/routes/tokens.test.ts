@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
 import { testToken, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 import { sha256Hex } from '../lib/app-tokens.js';
@@ -85,8 +85,12 @@ describe('POST /v1/apps/:appId/tokens', () => {
 });
 
 describe('GET /v1/apps/:appId/tokens and /v1/me/tokens', () => {
+  // The future fixture must stay future while both requests run on a busy host.
+  const now = Date.now();
+  beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(now); });
+  afterEach(() => { vi.restoreAllMocks(); });
   const rows = [
-    { token_id: 'a'.repeat(32), app_id: 'leads', label: 'zapier', scopes: '{"access":"read","actions":null}', created_origin: 'leads.proappstore.online', created_at: 1, last_used_at: 2, expires_at: Date.now() + 1000 },
+    { token_id: 'a'.repeat(32), app_id: 'leads', label: 'zapier', scopes: '{"access":"read","actions":null}', created_origin: 'leads.proappstore.online', created_at: 1, last_used_at: 2, expires_at: now + 1000 },
     { token_id: 'b'.repeat(32), app_id: 'crm', label: null, scopes: '{"access":"write","actions":["api_x"]}', created_origin: null, created_at: 1, last_used_at: null, expires_at: 1 },
   ];
   it('lists mine with access / actions / origin and never the token or hash', async () => {

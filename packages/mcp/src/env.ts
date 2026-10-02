@@ -23,8 +23,4 @@ export interface Env {
   AUTH_START?: string;
   /** Comma-separated OAuth providers exposed on the MCP login page. */
   AUTH_PROVIDERS?: string;
-  /** R2 deploy secrets — set on new repos so the deploy workflow can upload to R2. */
-  R2_ACCESS_KEY_ID?: string;
-  R2_SECRET_ACCESS_KEY?: string;
-  R2_ACCOUNT_ID?: string;
 }

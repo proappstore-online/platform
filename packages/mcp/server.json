@@ -69,7 +69,7 @@
     },
     {
       "name": "provision_pas_app",
-      "description": "Operator workflow: create or reuse a PAS app GitHub repo from template-app, configure deploy credentials/placeholders, provision platform infrastru…"
+      "description": "Operator workflow: create or reuse a PAS app GitHub repo from template-app, replace template placeholders, provision platform infrastru…"
     },
     {
       "name": "scaffold_app",
