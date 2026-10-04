@@ -23,9 +23,6 @@ interface ProjectToolsEnv {
   API: Fetcher;
   ADMIN: Fetcher;
   HOST: Fetcher;
-  R2_ACCESS_KEY_ID?: string;
-  R2_SECRET_ACCESS_KEY?: string;
-  R2_ACCOUNT_ID?: string;
   OAUTH_KV?: KVNamespace;
   MCP_READ_ONLY?: string;
   INTERNAL_TOKEN?: string;
@@ -184,24 +181,6 @@ export function registerProjectTools(
     return r.ok && Array.isArray(r.data) && r.data.length === 1;
   }
 
-  /** Set R2 deploy credentials as GitHub Actions variables on a repo. */
-  async function setR2Variables(appId: string): Promise<string[]> {
-    const vars: [string, string][] = [
-      ['R2_ACCESS_KEY_ID', env.R2_ACCESS_KEY_ID ?? ''],
-      ['R2_SECRET_ACCESS_KEY', env.R2_SECRET_ACCESS_KEY ?? ''],
-      ['R2_ACCOUNT_ID', env.R2_ACCOUNT_ID ?? ''],
-    ];
-    if (vars.every(([, v]) => !v)) return ['R2 credentials not configured on MCP server'];
-    if (vars.some(([, v]) => !v)) return ['R2 credentials partially configured (some missing)'];
-
-    const errors: string[] = [];
-    for (const [name, value] of vars) {
-      const res = await gh.setRepoVariable(appId, name, value).catch(() => ({ ok: false }));
-      if (!res.ok) errors.push(`Failed to set ${name}`);
-    }
-    return errors;
-  }
-
   /** Call /v1/provision and format the step results. */
   interface ProvisionOpts { skipCompliance?: boolean; template?: string; templateRev?: string; allowUnapprovedTemplate?: boolean }
 
@@ -347,7 +326,7 @@ export function registerProjectTools(
   // ── provision_pas_app ──────────────────────────────────────
   server.tool(
     "provision_pas_app",
-    "Operator workflow: create or reuse a PAS app GitHub repo from template-app, configure deploy credentials/placeholders, provision platform infrastructure, and verify the result. Use publish_app separately when the app should appear in the public storefront.",
+    "Operator workflow: create or reuse a PAS app GitHub repo from template-app, replace template placeholders, provision platform infrastructure, and verify the result. Use publish_app separately when the app should appear in the public storefront.",
     {
       app_id: APP_ID,
       name: z.string().describe("Display name for the app"),
@@ -383,7 +362,6 @@ export function registerProjectTools(
           ...templateWarnings,
           `- create GitHub repo ${org}/${app_id} from ${org}/${templateRepoName} if it does not exist`,
           reuse ? "- reuse an existing repo only when the caller already owns the PAS app or is a platform admin" : "- fail if the repo already exists",
-          "- configure R2 deploy variables on the repo",
           "- replace APPNAME placeholders in template files",
           "- call /v1/provision for R2 route + D1 database + data worker + app record",
           verify === false ? "- skip live verification" : "- verify repo, provision result, deploy status, and host response",
@@ -454,11 +432,6 @@ export function registerProjectTools(
         return text(`Error creating repo: ${JSON.stringify(createRes.data)}`);
       }
 
-      const r2Errors = await setR2Variables(app_id);
-      steps.push(r2Errors.length === 0
-        ? "+ R2 deploy variables: configured"
-        : `! R2 deploy variables: ${r2Errors.join(", ")}`);
-
       const placeholders = await patchTemplatePlaceholders(app_id);
       steps.push(...placeholders.lines);
 
@@ -498,7 +471,7 @@ export function registerProjectTools(
   // ── scaffold_app ──────────────────────────────────────────
   server.tool(
     "scaffold_app",
-    "Create a new PAS app. Creates a GitHub repo from the template, sets R2 deploy credentials, provisions the route + D1 database + data worker. The app is live after the first push.",
+    "Create a new PAS app. Creates a GitHub repo from the template, provisions the route + D1 database + data worker. The app is live after the first push.",
     {
       app_id: APP_ID,
       name: z.string().describe("Display name (e.g. 'Chess Academy')"),
@@ -511,11 +484,11 @@ export function registerProjectTools(
       if ('content' in auth) return auth;
       const preview = await dry("scaffold_app",
         dry_run,
-        `- create GitHub repo ${org}/${app_id} from template-app\n- set R2 deploy credentials on the repo\n- provision R2 route + D1 database + data worker (data-${app_id})`,
+        `- create GitHub repo ${org}/${app_id} from template-app\n- provision R2 route + D1 database + data worker (data-${app_id})`,
         { app_id, name });
       if (preview) return text(preview);
       if (confirm !== true)
-        return text(`Refused: scaffold_app creates a GitHub repo + deploy secrets + infra for "${app_id}". Re-call with confirm: true to proceed.`);
+        return text(`Refused: scaffold_app creates a GitHub repo + infra for "${app_id}". Re-call with confirm: true to proceed.`);
       await gate("scaffold_app", { app_id, name });
 
       // 1. Create repo from template
@@ -547,14 +520,6 @@ export function registerProjectTools(
         // 2. Replace APPNAME placeholders (wait for GitHub to finish template copy)
         await new Promise((r) => setTimeout(r, 4000));
         steps.push(...(await patchTemplatePlaceholders(app_id)).lines);
-
-        // 3. Set R2 deploy credentials
-        const r2Errors = await setR2Variables(app_id);
-        if (r2Errors.length === 0) {
-          steps.push("+ R2 deploy credentials set");
-        } else {
-          steps.push(`! R2 credentials: ${r2Errors.join(', ')}`);
-        }
       } else {
         steps.push("~ Repo already existed");
         // The repo already existed and wasn't created by this call — require the

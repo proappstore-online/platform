@@ -109,6 +109,21 @@ describe('runDeployViaWorkflow', () => {
     expect(h.infraFail).not.toHaveBeenCalled();
   });
 
+  it('authenticates private KB result harvests over the service binding (#277)', async () => {
+    const h = harness({
+      ticket: { deploy_pushed_at: Date.now(), deploy_pushed_sha: 'wf-abc' },
+      status: resp(true, { status: { status: 'complete', output: { commitSha: 'deadbeef' } } }),
+    });
+    const kbFetch = vi.fn(async () => resp(true, { passed: 3, failed: 0, ok: true }));
+    h.args.deps.env.KB = { fetch: kbFetch } as unknown as Fetcher;
+    h.args.deps.env.INTERNAL_TOKEN = 'platform-read-token';
+    await runDeployViaWorkflow(h.args);
+    expect(kbFetch).toHaveBeenCalledWith('https://kb.proappstore.online/myapp/.e2e/summary.json', {
+      headers: { 'x-internal-token': 'platform-read-token' },
+    });
+    expect(h.exec.some((e) => e.sql.includes('INSERT OR REPLACE INTO test_runs'))).toBe(true);
+  });
+
   it('green deploy marks sibling deploying tickets done from the shared tree', async () => {
     globalThis.fetch = vi.fn(async () => resp(false, {}, 404)); // harvest summary no-op
     const h = harness({

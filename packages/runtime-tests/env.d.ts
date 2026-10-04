@@ -3,6 +3,7 @@ declare module 'cloudflare:test' {
   interface ProvidedEnv {
     DB: D1Database;
     STORAGE: R2Bucket;
+    KB_R2: R2Bucket;
     APPS: R2Bucket;
     AGENT_STORAGE: R2Bucket;
     ROOM: DurableObjectNamespace;
