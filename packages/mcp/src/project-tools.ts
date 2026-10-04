@@ -23,9 +23,6 @@ interface ProjectToolsEnv {
   API: Fetcher;
   ADMIN: Fetcher;
   HOST: Fetcher;
-  R2_ACCESS_KEY_ID?: string;
-  R2_SECRET_ACCESS_KEY?: string;
-  R2_ACCOUNT_ID?: string;
   OAUTH_KV?: KVNamespace;
   MCP_READ_ONLY?: string;
   INTERNAL_TOKEN?: string;
@@ -182,24 +179,6 @@ export function registerProjectTools(
   async function isUntouchedTemplate(appId: string): Promise<boolean> {
     const r = await gh.api(`/repos/${org}/${appId}/commits?per_page=2`);
     return r.ok && Array.isArray(r.data) && r.data.length === 1;
-  }
-
-  /** Set R2 deploy credentials as GitHub Actions variables on a repo. */
-  async function setR2Variables(appId: string): Promise<string[]> {
-    const vars: [string, string][] = [
-      ['R2_ACCESS_KEY_ID', env.R2_ACCESS_KEY_ID ?? ''],
-      ['R2_SECRET_ACCESS_KEY', env.R2_SECRET_ACCESS_KEY ?? ''],
-      ['R2_ACCOUNT_ID', env.R2_ACCOUNT_ID ?? ''],
-    ];
-    if (vars.every(([, v]) => !v)) return ['R2 credentials not configured on MCP server'];
-    if (vars.some(([, v]) => !v)) return ['R2 credentials partially configured (some missing)'];
-
-    const errors: string[] = [];
-    for (const [name, value] of vars) {
-      const res = await gh.setRepoVariable(appId, name, value).catch(() => ({ ok: false }));
-      if (!res.ok) errors.push(`Failed to set ${name}`);
-    }
-    return errors;
   }
 
   /** Call /v1/provision and format the step results. */
@@ -383,7 +362,6 @@ export function registerProjectTools(
           ...templateWarnings,
           `- create GitHub repo ${org}/${app_id} from ${org}/${templateRepoName} if it does not exist`,
           reuse ? "- reuse an existing repo only when the caller already owns the PAS app or is a platform admin" : "- fail if the repo already exists",
-          "- configure R2 deploy variables on the repo",
           "- replace APPNAME placeholders in template files",
           "- call /v1/provision for R2 route + D1 database + data worker + app record",
           verify === false ? "- skip live verification" : "- verify repo, provision result, deploy status, and host response",
@@ -454,11 +432,6 @@ export function registerProjectTools(
         return text(`Error creating repo: ${JSON.stringify(createRes.data)}`);
       }
 
-      const r2Errors = await setR2Variables(app_id);
-      steps.push(r2Errors.length === 0
-        ? "+ R2 deploy variables: configured"
-        : `! R2 deploy variables: ${r2Errors.join(", ")}`);
-
       const placeholders = await patchTemplatePlaceholders(app_id);
       steps.push(...placeholders.lines);
 
@@ -511,7 +484,7 @@ export function registerProjectTools(
       if ('content' in auth) return auth;
       const preview = await dry("scaffold_app",
         dry_run,
-        `- create GitHub repo ${org}/${app_id} from template-app\n- set R2 deploy credentials on the repo\n- provision R2 route + D1 database + data worker (data-${app_id})`,
+        `- create GitHub repo ${org}/${app_id} from template-app\n- provision R2 route + D1 database + data worker (data-${app_id})`,
         { app_id, name });
       if (preview) return text(preview);
       if (confirm !== true)
@@ -547,14 +520,6 @@ export function registerProjectTools(
         // 2. Replace APPNAME placeholders (wait for GitHub to finish template copy)
         await new Promise((r) => setTimeout(r, 4000));
         steps.push(...(await patchTemplatePlaceholders(app_id)).lines);
-
-        // 3. Set R2 deploy credentials
-        const r2Errors = await setR2Variables(app_id);
-        if (r2Errors.length === 0) {
-          steps.push("+ R2 deploy credentials set");
-        } else {
-          steps.push(`! R2 credentials: ${r2Errors.join(', ')}`);
-        }
       } else {
         steps.push("~ Repo already existed");
         // The repo already existed and wasn't created by this call — require the

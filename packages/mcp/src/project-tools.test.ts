@@ -63,9 +63,6 @@ const env = {
   ADMIN: svc,
   HOST: svc,
   INTERNAL_TOKEN: 'internal-secret',
-  R2_ACCESS_KEY_ID: 'r2-ak',
-  R2_SECRET_ACCESS_KEY: 'r2-sk',
-  R2_ACCOUNT_ID: 'r2-acct',
 };
 
 let userCtx: { userId: string | null; login?: string | null; token: string | null; roles?: string[] } = {
@@ -149,7 +146,6 @@ describe('provision_pas_app — template selection contract (#178)', () => {
 
   it('records the copied template revision and forwards template + rev to /v1/provision', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
-    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
     mockGh.api.mockResolvedValue({ ok: true, status: 200, data: { sha: 'd8c2e08f32b8e30847b27c7092fd4b0e64341d2f' } });
     okProvision();
@@ -163,7 +159,6 @@ describe('provision_pas_app — template selection contract (#178)', () => {
 
   it('never invents a revision: an unresolved head is reported as unknown and omitted from the payload', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
-    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
     mockGh.api.mockResolvedValue({ ok: false, status: 500, data: {} });
     okProvision();
@@ -176,7 +171,6 @@ describe('provision_pas_app — template selection contract (#178)', () => {
 
   it('scaffold_app forwards the default template and its revision too', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
-    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
     mockGh.api.mockResolvedValue({ ok: true, status: 200, data: { sha: 'abc1234' } });
     okProvision();
@@ -223,7 +217,6 @@ describe('provision_pas_app', () => {
 
   it('creates a private template repo, patches placeholders, provisions infra, and reports links', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: { id: 1 } });
-    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
     const repo = fakeRepo({ 'package.json': '{"name":"APPNAME"}', 'web/src/App.tsx': "initPro({ appId: 'APPNAME' })" });
     mockFetch.mockResolvedValue({
       ok: true,
@@ -247,7 +240,7 @@ describe('provision_pas_app', () => {
       description: 'Coordinate school clubs.',
       private: true,
     });
-    expect(mockGh.setRepoVariable).toHaveBeenCalledTimes(3);
+    expect(mockGh.setRepoVariable).not.toHaveBeenCalled();
     expect(mockGh.pushFiles).toHaveBeenCalledWith(
       'school-clubs',
       [
@@ -349,7 +342,6 @@ describe('provision_pas_app', () => {
     mockGh.repoExists.mockResolvedValue(true);
     mockOwnership.mockResolvedValue(false);
     mockGh.api.mockResolvedValue({ ok: true, status: 200, data: [{ sha: '0572725' }] }); // one commit
-    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
     mockFetch.mockImplementation((url: string) => {
       if (String(url).includes('/listing')) return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve('app not found') });
@@ -366,7 +358,7 @@ describe('provision_pas_app', () => {
     expect(out).toContain('no PAS app record (untouched template scaffold) — adopting it');
     expect(out).toContain('PAS app provisioned');
     expect(mockGh.api).toHaveBeenCalledWith('/repos/test-org/school-clubs/commits?per_page=2');
-    expect(mockGh.setRepoVariable).toHaveBeenCalledTimes(3);
+    expect(mockGh.setRepoVariable).not.toHaveBeenCalled();
     expect(mockFetch.mock.calls.map((c) => String(c[0]))).toContainEqual(expect.stringContaining('/v1/provision'));
   });
 
@@ -391,7 +383,6 @@ describe('provision_pas_app', () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: false, status: 422, data: { message: 'exists' } });
     mockGh.repoExists.mockResolvedValue(true);
     mockOwnership.mockResolvedValue(false);
-    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
     mockFetch.mockResolvedValue({
       ok: true,
@@ -404,14 +395,13 @@ describe('provision_pas_app', () => {
 
     expect(out).toContain('GitHub repo: test-org/manual-repo already exists');
     expect(out).toContain('PAS app provisioned');
-    expect(mockGh.setRepoVariable).toHaveBeenCalledTimes(3);
+    expect(mockGh.setRepoVariable).not.toHaveBeenCalled();
     expect(mockFetch).toHaveBeenCalled();
   });
 
   it('reports best-effort verification when requested', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: { id: 1 } });
     mockGh.repoExists.mockResolvedValue(true);
-    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
     mockGh.getDeployStatus.mockResolvedValue({
       ok: true,
@@ -484,10 +474,9 @@ describe('scaffold_app', () => {
     return p;
   }
 
-  it('creates repo, sets R2 vars, provisions', async () => {
+  it('creates repo and provisions', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
-    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockFetch.mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ steps: [{ name: 'route', status: 'ok', detail: 'done' }] }),
@@ -498,14 +487,12 @@ describe('scaffold_app', () => {
 
     expect(out).toContain('my-app');
     expect(out).toContain('Repo created from template');
-    expect(out).toContain('R2 deploy credentials set');
     expect(out).toContain('+ route: done');
-    expect(mockGh.setRepoVariable).toHaveBeenCalledTimes(3);
+    expect(mockGh.setRepoVariable).not.toHaveBeenCalled();
   });
 
   it('replaces APPNAME in every template file, workflows included (#205)', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
-    mockGh.setRepoVariable.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ steps: [] }) });
     const repo = fakeRepo();
 
@@ -555,59 +542,10 @@ describe('scaffold_app', () => {
     expect(txt).toContain('is_template=true');
   });
 
-  it('reports R2 credential errors', async () => {
-    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
-    mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
-    mockGh.setRepoVariable.mockResolvedValue({ ok: false, status: 403, data: {} });
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ steps: [] }),
-    });
-
-    const result = await runScaffold({ app_id: 'r2fail', name: 'R2 Fail', description: 'test' });
-    expect(getText(result)).toContain('Failed to set R2_ACCESS_KEY_ID');
-  });
-
   it('requires auth', async () => {
     userCtx = { userId: null, token: null };
     const result = await runScaffold({ app_id: 'x', name: 'X', description: 'test' });
     expect(getText(result)).toContain('authentication required');
-  });
-});
-
-describe('setR2Variables (via scaffold_app)', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); });
-
-  it('skips when all R2 env vars are missing', async () => {
-    const noR2Tools = new Map<string, Handler>();
-    const noR2Server = { tool: (n: string, _d: string, _s: unknown, h: Handler) => { noR2Tools.set(n, h); } };
-    registerProjectTools(noR2Server as any, { ...env, R2_ACCESS_KEY_ID: undefined, R2_SECRET_ACCESS_KEY: undefined, R2_ACCOUNT_ID: undefined }, () => userCtx);
-
-    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
-    mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
-    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ steps: [] }) });
-
-    const p = noR2Tools.get('scaffold_app')!({ app_id: 'no-r2', name: 'No R2', description: 'test', confirm: true });
-    await vi.advanceTimersByTimeAsync(5000);
-    const result = await p;
-    expect(getText(result)).toContain('R2 credentials not configured');
-    expect(mockGh.setRepoVariable).not.toHaveBeenCalled();
-  });
-
-  it('reports partial config when only some R2 vars are set', async () => {
-    const partialTools = new Map<string, Handler>();
-    const partialServer = { tool: (n: string, _d: string, _s: unknown, h: Handler) => { partialTools.set(n, h); } };
-    registerProjectTools(partialServer as any, { ...env, R2_SECRET_ACCESS_KEY: undefined }, () => userCtx);
-
-    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
-    mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
-    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ steps: [] }) });
-
-    const p = partialTools.get('scaffold_app')!({ app_id: 'partial', name: 'P', description: 'test', confirm: true });
-    await vi.advanceTimersByTimeAsync(5000);
-    const result = await p;
-    expect(getText(result)).toContain('partially configured');
   });
 });
 
