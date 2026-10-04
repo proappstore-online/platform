@@ -63,7 +63,7 @@ export function registerStatsRoutes(analyticsRoutes: Hono<{ Bindings: Env }>) {
       // (set for offline-replayed events), fall back to server-write timestamp
       // for older rows that pre-date the second double.
       const effectiveTime =
-        `if(length(doubles) > 1, fromUnixTimestamp64Milli(toInt64(double2)), timestamp)`;
+        `if(length(doubles) > 1, fromUnixTimestamp64Milli(CAST(doubles[2] AS Int64)), timestamp)`;
       const sinceClause = `${effectiveTime} > NOW() - INTERVAL '${days}' DAY`;
       const where = `WHERE index1 = '${appId}' AND blob2 = '${kindParam}'${pathClause} AND ${sinceClause}`;
 
@@ -117,7 +117,7 @@ export function registerStatsRoutes(analyticsRoutes: Hono<{ Bindings: Env }>) {
         Math.max(1, Number(c.req.query('days') ?? STATS_DAYS_DEFAULT) | 0),
       );
       const effectiveTime =
-        `if(length(doubles) > 1, fromUnixTimestamp64Milli(toInt64(double2)), timestamp)`;
+        `if(length(doubles) > 1, fromUnixTimestamp64Milli(CAST(doubles[2] AS Int64)), timestamp)`;
       const sinceClause = `${effectiveTime} > NOW() - INTERVAL '${days}' DAY`;
       const where = `WHERE index1 = '${appId}' AND blob2 != 'pageview' AND ${sinceClause}`;
       const kindsQ = `SELECT blob2 AS kind, SUM(_sample_interval) AS count FROM ${STATS_DATASET} ${where} GROUP BY kind ORDER BY count DESC LIMIT 20`;
@@ -198,7 +198,7 @@ export function registerStatsRoutes(analyticsRoutes: Hono<{ Bindings: Env }>) {
             : 'day';
       const seriesGroup = bucket === 'hour' ? 'toStartOfHour' : 'toStartOfDay';
       const effectiveTime =
-        `if(length(doubles) > 1, fromUnixTimestamp64Milli(toInt64(double2)), timestamp)`;
+        `if(length(doubles) > 1, fromUnixTimestamp64Milli(CAST(doubles[2] AS Int64)), timestamp)`;
       const sinceClause = `${effectiveTime} > NOW() - INTERVAL '${days}' DAY`;
       const where = `WHERE blob2 = 'pageview' AND ${sinceClause}`;
 
