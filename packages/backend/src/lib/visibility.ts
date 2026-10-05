@@ -217,3 +217,16 @@ export async function requireVisibleCaller(
   await requireVisible(c.env, appId, visibility, await requireUser(c));
   return visibility;
 }
+
+/**
+ * For a route that always needs a session (counter writes, per-user KV and
+ * private storage, #276): the signed-in caller, refused 403 by a private app's
+ * gate. A refused user has no reason to touch even their own rows in an app they
+ * cannot open, and must not use it as free storage billed to the app. Reads the
+ * per-isolate cache above, so a public app pays no D1 read per request.
+ */
+export async function requireVisibleUser(c: Context<{ Bindings: Env }>, appId: string): Promise<FasUser> {
+  const user = await requireUser(c);
+  await requireVisible(c.env, appId, await getAppVisibilityCached(c.env.DB, appId), user);
+  return user;
+}

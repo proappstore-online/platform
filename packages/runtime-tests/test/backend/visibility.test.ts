@@ -1,4 +1,4 @@
-import { SELF, env as providedEnv, fetchMock } from 'cloudflare:test';
+import { SELF, env as providedEnv, fetchMock, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { runScheduledActions } from '../../../backend/src/lib/scheduled-actions';
@@ -344,5 +344,97 @@ describe('private apps: public storage, counters and rooms (#259 review)', () =>
     const outcome = await Promise.race([allowed.closed, new Promise((r) => setTimeout(() => r('open'), 50))]);
     expect(outcome).toBe('open');
     allowed.ws.close();
+  });
+});
+
+describe('private apps residuals: per-user KV/storage and open room sockets (#276)', () => {
+  beforeEach(async () => {
+    expect((await register({ tools: [notes], visibility: PRIVATE })).status).toBe(200);
+    await env.DB.prepare('DELETE FROM kv').run();
+  });
+  afterEach(async () => {
+    await env.DB.prepare('DELETE FROM kv').run();
+    const listed = await env.STORAGE.list({ prefix: 'diary/' });
+    const open = await env.STORAGE.list({ prefix: 'open/' });
+    const keys = [...listed.objects, ...open.objects].map((o) => o.key);
+    if (keys.length) await env.STORAGE.delete(keys);
+  });
+
+  const kv = async (method: string, appId: string, uid: string) =>
+    SELF.fetch(`${BASE}/v1/apps/${appId}/kv/x`, { method, headers: { Authorization: `Bearer ${await session(uid)}` }, ...(method === 'PUT' ? { body: '"v"' } : {}) });
+  const file = async (method: string, appId: string, uid: string) =>
+    SELF.fetch(`${BASE}/v1/apps/${appId}/storage/a.png`, {
+      method,
+      headers: { Authorization: `Bearer ${await session(uid)}`, 'Content-Type': 'image/png' },
+      ...(method === 'PUT' ? { body: new Uint8Array([1, 2, 3]) } : {}),
+    });
+
+  it('a refused user cannot write or read their own KV or private storage; nothing is stored', async () => {
+    expect((await kv('PUT', 'diary', 'gh:3')).status).toBe(403);
+    expect((await kv('GET', 'diary', 'gh:3')).status).toBe(403);
+    expect((await file('PUT', 'diary', 'gh:3')).status).toBe(403);
+    expect((await file('GET', 'diary', 'gh:3')).status).toBe(403);
+    const listing = await SELF.fetch(`${BASE}/v1/apps/diary/files`, json('GET', undefined, await session('gh:3')));
+    expect(listing.status).toBe(403);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM kv WHERE app_id = 'diary'").first('n')).toBe(0);
+    expect((await env.STORAGE.list({ prefix: 'diary/gh:3/' })).objects).toHaveLength(0);
+  });
+
+  it('a revoked user is refused on the next write', async () => {
+    expect((await kv('PUT', 'diary', 'gh:2')).status).toBe(204);
+    await env.DB.prepare("DELETE FROM app_roles WHERE app_id = 'diary' AND user_id = 'gh:2'").run();
+    expect((await kv('PUT', 'diary', 'gh:2')).status).toBe(403);
+    expect((await file('PUT', 'diary', 'gh:2')).status).toBe(403);
+  });
+
+  it('the owner and an allowed role are unchanged; a public app is unchanged for anyone', async () => {
+    for (const uid of ['gh:1', 'gh:2']) {
+      expect((await kv('PUT', 'diary', uid)).status).toBe(204);
+      expect((await kv('GET', 'diary', uid)).status).toBe(200);
+      expect((await file('PUT', 'diary', uid)).status).toBe(200);
+      const got = await file('GET', 'diary', uid);
+      expect(got.status).toBe(200);
+      await got.arrayBuffer();
+    }
+    expect((await kv('PUT', 'open', 'gh:3')).status).toBe(204);
+    expect((await file('PUT', 'open', 'gh:3')).status).toBe(200);
+  });
+
+  it('an open socket of a user whose role is revoked closes 4401 app_private on the next re-check (<= 60 s); others stay', async () => {
+    const join = async (uid: string) => {
+      const res = await SELF.fetch(`${BASE}/v1/apps/diary/rooms/revoke?token=${encodeURIComponent(await session(uid))}`, { headers: { Upgrade: 'websocket' } });
+      expect(res.status).toBe(101);
+      const ws = res.webSocket!;
+      const closed = new Promise<{ code: number; reason: string }>((resolve) => ws.addEventListener('close', (ev) => resolve({ code: (ev as CloseEvent).code, reason: (ev as CloseEvent).reason }), { once: true }));
+      ws.accept();
+      return { ws, closed };
+    };
+    const viewer = await join('gh:2');
+    const owner = await join('gh:1');
+    const stub = env.ROOM.get(env.ROOM.idFromName('diary:revoke'));
+    // Joining scheduled the re-check within the stated bound.
+    const alarm = await runInDurableObject(stub, (_i, state) => state.storage.getAlarm());
+    expect(alarm).not.toBeNull();
+    expect(alarm! - Date.now()).toBeLessThanOrEqual(60_000);
+
+    // Still allowed: the tick closes nothing.
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await Promise.race([viewer.closed, new Promise((r) => setTimeout(() => r('open'), 50))])).toBe('open');
+
+    await env.DB.prepare("DELETE FROM app_roles WHERE app_id = 'diary' AND user_id = 'gh:2'").run();
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await viewer.closed).toEqual({ code: 4401, reason: 'app_private' });
+    expect(await Promise.race([owner.closed, new Promise((r) => setTimeout(() => r('open'), 50))])).toBe('open');
+    owner.ws.close();
+  });
+
+  it('a public app flipped to private closes the sockets it now refuses', async () => {
+    const res = await SELF.fetch(`${BASE}/v1/apps/open/rooms/flip?token=${encodeURIComponent(await session('gh:3'))}`, { headers: { Upgrade: 'websocket' } });
+    const ws = res.webSocket!;
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => ws.addEventListener('close', (ev) => resolve({ code: (ev as CloseEvent).code, reason: (ev as CloseEvent).reason }), { once: true }));
+    ws.accept();
+    await env.DB.prepare("INSERT INTO app_visibility (app_id, mode, roles, created_at) VALUES ('open', 'private', '[]', 1)").run();
+    expect(await runDurableObjectAlarm(env.ROOM.get(env.ROOM.idFromName('open:flip')))).toBe(true);
+    expect(await closed).toEqual({ code: 4401, reason: 'app_private' });
   });
 });

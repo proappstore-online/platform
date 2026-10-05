@@ -1,10 +1,17 @@
 import { consume, newRateLimitState, type RateLimitState } from '../lib/rate-limit.js';
+import { getAppVisibility, visibilityAllows } from '../lib/visibility.js';
 import type { Env } from '../types.js';
 
 const MAX_PEERS = 32;
 const MAX_MESSAGE_BYTES = 4 * 1024;
 const MAX_MSGS_PER_SEC = 100;
 const IDLE_EVICT_MS = 24 * 60 * 60 * 1000;
+/**
+ * How often an occupied room re-runs the private-app gate on its open sockets
+ * (#276). The upgrade route checks only at join, so without this a socket
+ * outlived a role revocation or a flip to private. The propagation bound.
+ */
+export const VISIBILITY_RECHECK_MS = 60_000;
 
 /**
  * WebSocket close codes a client can read (#119). A refused join is delivered
@@ -40,6 +47,7 @@ interface Peer {
   socket: WebSocket;
   uid: string;
   login: string;
+  roles: string[];
   rateLimit: RateLimitState;
 }
 
@@ -51,10 +59,12 @@ interface PublicPeer {
 export class Room {
   private peers = new Map<WebSocket, Peer>();
   private lastActivity = Date.now();
+  /** The app this room belongs to, from the upgrade route; null when addressed directly. */
+  private appId: string | null = null;
 
   constructor(
     private readonly state: DurableObjectState,
-    _env: Env,
+    private readonly env: Env,
   ) {
     void this.state.blockConcurrencyWhile(async () => {
       const stored = (await this.state.storage.get<number>('lastActivity')) ?? Date.now();
@@ -78,15 +88,20 @@ export class Room {
     const url = new URL(request.url);
     const uid = url.searchParams.get('uid') ?? 'anon';
     const login = url.searchParams.get('login') ?? uid;
+    const roles = (url.searchParams.get('roles') ?? 'user').split(',').filter(Boolean);
+    this.appId = url.searchParams.get('app') ?? this.appId;
 
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
     server.accept();
 
-    const peer: Peer = { socket: server, uid, login, rateLimit: newRateLimitState(Date.now()) };
+    const peer: Peer = { socket: server, uid, login, roles, rateLimit: newRateLimitState(Date.now()) };
     this.peers.set(server, peer);
     this.broadcastPeers();
+    if (this.appId && (await this.state.storage.getAlarm()) === null) {
+      await this.state.storage.setAlarm(Date.now() + VISIBILITY_RECHECK_MS);
+    }
 
     server.addEventListener('message', (ev) => {
       this.lastActivity = Date.now();
@@ -121,6 +136,37 @@ export class Room {
     });
 
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /**
+   * Re-run the private-app gate on every open socket (#276); refused ones close
+   * 4401 app_private, as at the upgrade. Reads D1 live, not the 30 s isolate
+   * cache, so the bound stays VISIBILITY_RECHECK_MS. A public app costs one read
+   * per room per tick. A failed lookup closes nothing: an open socket is kept and
+   * re-checked on the next tick, never closed on a guess.
+   */
+  async alarm(): Promise<void> {
+    if (this.peers.size === 0 || !this.appId) return;
+    const appId = this.appId;
+    try {
+      const visibility = await getAppVisibility(this.env.DB, appId);
+      if (visibility.mode === 'private') {
+        const allowed = new Map<string, boolean>();
+        const before = this.peers.size;
+        for (const peer of [...this.peers.values()]) {
+          if (!allowed.has(peer.uid)) {
+            allowed.set(peer.uid, await visibilityAllows(this.env, appId, visibility, { id: peer.uid, login: peer.login, roles: peer.roles }));
+          }
+          if (allowed.get(peer.uid)) continue;
+          this.peers.delete(peer.socket);
+          try { peer.socket.close(ROOM_CLOSE_CODES.UNAUTHORIZED, 'app_private'); } catch { /* gone */ }
+        }
+        if (this.peers.size !== before) this.broadcastPeers();
+      }
+    } catch (e) {
+      console.warn(`room visibility re-check failed for ${appId}: ${(e as Error)?.message ?? e}`);
+    }
+    if (this.peers.size > 0) await this.state.storage.setAlarm(Date.now() + VISIBILITY_RECHECK_MS);
   }
 
   private broadcast(msg: string, except?: WebSocket): void {

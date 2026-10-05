@@ -160,8 +160,9 @@ enforced:
 | `data-<app>.proappstore.online` | **not gated by the host.** Every SQL route on the data worker requires team `developer`+ (or the platform's internal token), a subset of who the app admits, and the worker also answers on its own custom domain, so a host check would cost every app a D1 read and protect nothing |
 | Registered actions | `routes/actions.ts`: a public (`requires_auth: false`) action is refused at registration and at execution, and a console endpoint with `scope: "public"` is refused at creation; every session or app-token caller must pass `visibilityAllows` |
 | Public storage `GET /v1/apps/:id/public/*` | `requireVisibleCaller`: no session 401, refused 403; served `private, no-store`, never `public, immutable`. The SDK's `storage.publicUrl()` returns the same-origin `/.pas/api/...` URL on a private app (host marker `<meta name="pas-visibility">`), so an `<img>` carries the session |
-| Counters `GET/POST /v1/apps/:id/counters*` | reads `requireVisibleCaller`, writes `requireVisible`; the SDK sends the session on reads when signed in |
-| Rooms `GET /v1/apps/:id/rooms/:room` | refused callers' sockets close `4401 app_private` before the room. Checked at the upgrade only — see the propagation table |
+| Counters `GET/POST /v1/apps/:id/counters*` | reads `requireVisibleCaller`, writes `requireVisibleUser`; the SDK sends the session on reads when signed in |
+| Per-user KV `/v1/apps/:id/kv*`, private storage `/v1/apps/:id/storage/*` and `/v1/apps/:id/files` | `requireVisibleUser` on every route, reads and deletes included (#276): a refused user gets 403 even on their own rows and files, so a private app's storage is not free storage for users it refuses |
+| Rooms `GET /v1/apps/:id/rooms/:room` | refused callers' sockets close `4401 app_private` before the room. The room then re-runs the gate on its open sockets every 60 s (a Durable Object alarm, #276) and closes refused ones with the same `4401 app_private`; a failed lookup closes nothing and is retried on the next tick |
 | Tool list / per-app MCP | `GET /v1/apps/:id/tools` refuses non-allowed callers; `mcp.proappstore.online/mcp/apps/<id>` refuses the session with 403 |
 | Storefront | private apps are absent from `/v1/storefront/apps` and 404 on `/v1/storefront/apps/:id`; the admin publish step never writes a private app to the public `registry.json`, and removes its entry on a republish after it went private |
 
@@ -179,23 +180,26 @@ costs one backend call per 5 s rather than one per request. A failed lookup is n
 cached.
 
 The backend routes that also serve anonymous callers of public apps — public
-storage, counter reads and writes, room upgrades — read the app's mode from a
+storage, counter reads and writes, room upgrades — and per-user KV and private
+storage read the app's mode from a
 per-isolate cache (`getAppVisibilityCached`, 30 s; registering a manifest forgets
 the app in that isolate). **Failure mode:** on a D1 error the last known mode is
 used, so a D1 blip neither breaks a public app's images nor opens a private app's;
 with nothing known (a cold isolate) the request is a **503** — a private app's
 files are never served on a guess, so during an outage a cold isolate refuses
 public apps' files too. `visibility/me`, actions and the storefront read live.
+The room re-check reads live too, once per occupied room per 60 s (and once per
+distinct user on a private app).
 
 **Propagation bounds.**
 
 | Change | Takes effect |
 |---|---|
 | Public → private (new manifest registered) | App origin, `visibility/me`, actions and the tool list: the next request. Public storage, counters and room upgrades: up to 30 s per backend isolate (the mode cache). Nothing on a private app is edge-cached, and a public response cached before the flip is never served because the gate runs before the cache. The MCP may still open an app-scoped session and list the app's tool names and params for up to 10 s (`PUBLIC_APP_TTL_MS`, `TOOL_CACHE_TTL_MS`), but every call is re-checked by the backend. |
-| Role revoked, team member removed | Backend routes: the next request. App origin: up to 30 s per host isolate (the allow cache). **Open room sockets are not re-checked:** a socket admitted before the change stays connected until it closes or reconnects (the upgrade is the only check). |
+| Role revoked, team member removed | Backend routes: the next request. App origin: up to 30 s per host isolate (the allow cache). Open room sockets: closed `4401 app_private` within 60 s (the room's re-check). |
 | Role granted, team member added | Backend routes: the next request. App origin: up to 5 s per host isolate (the refusal cache) — at once in the isolate that redeemed it, when it came through the platform invite page. |
 | Private → public | App origin and live routes: the next request. Public storage, counters and room upgrades: up to 30 s per backend isolate. |
-| Any flip, for an open room socket | Not applied to sockets already open (see above). |
+| Any flip, for an open room socket | Within 60 s (the room's re-check, which reads D1 live). A flip to public closes nothing. |
 
 The KB host reads D1 visibility before serving any app page, asset, custom 404
 or conditional response. Private KBs return 404 to browser callers (this origin
@@ -213,15 +217,9 @@ remain in browser caches for their existing TTL after a visibility flip.
   published *before* it declared itself private keeps its card until it is
   republished or the storefront build filters private apps. Tracked in
   proappstore-online/proappstore#3.
-- **Open room sockets** survive a revocation or a flip to private until they
-  close (see the propagation table). Re-checking open sockets periodically is not
-  implemented.
 - **The data worker** (`data-<app>.proappstore.online` and its `workers.dev` URL).
   Its raw-SQL path requires team `developer` or above, and every team member passes
   this gate anyway, so it admits no one the gate would refuse.
-- **Per-user KV and private storage** (`/v1/apps/:id/kv*`, `/v1/apps/:id/storage/*`)
-  are scoped to the caller's own rows and files. A signed-in user the app refuses
-  can write to their own namespace but can read nobody else's.
 
 ## Trust boundaries that are NOT roles
 

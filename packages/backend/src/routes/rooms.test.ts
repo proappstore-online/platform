@@ -51,6 +51,9 @@ describe('GET /v1/apps/:appId/rooms/:roomId', () => {
       expect(url.pathname).toBe('/v1/apps/meetup/rooms/lobby');
       expect(url.searchParams.get('uid')).toBe('gh:room-user');
       expect(url.searchParams.get('login')).toBe('testuser');
+      // #276: the room re-runs the private-app gate on open sockets with these.
+      expect(url.searchParams.get('app')).toBe('meetup');
+      expect(url.searchParams.get('roles')).toBe('user');
       return new Response('upgraded');
     });
 

@@ -2,10 +2,10 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
-import { requireUser, requireAppAccess, requireAppOwner, HttpError } from '../lib/auth.js';
+import { requireAppAccess, requireAppOwner, HttpError, type FasUser } from '../lib/auth.js';
 import { roleSubjects } from '../lib/role-subject.js';
 import { dispatchWebhook } from '../lib/webhook-dispatch.js';
-import { requireVisibleCaller, type AppVisibility } from '../lib/visibility.js';
+import { requireVisibleCaller, requireVisibleUser, type AppVisibility } from '../lib/visibility.js';
 
 /**
  * File storage routes — shared R2 bucket, scoped by app + user.
@@ -85,8 +85,8 @@ async function authorizeReview(
   c: Context<{ Bindings: Env }>,
   appId: string,
   filePath: string,
+  user: FasUser,
 ): Promise<{ key: string; audit: (action: 'read' | 'delete') => Promise<void> }> {
-  const user = await requireUser(c);
   const m = /^_review\/u\/([^/]+)\/(.+)$/.exec(filePath);
   if (!m) throw new HttpError('review files are addressed as _review/u/<userId>/<path>', 400);
   const [, rawOwner, path] = m as unknown as [string, string, string];
@@ -130,7 +130,7 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
     let returnedKey: string;
     let quotaPrefix: string | null = null; // #219: the caller's namespace; null = not counted
     if (filePath.startsWith('_review/')) {
-      user = await requireUser(c);
+      user = await requireVisibleUser(c, appId);
       const rest = filePath.slice('_review/'.length);
       if (!rest) return c.text('file path required', 400);
       const type = (c.req.header('Content-Type') ?? '').split(';')[0]!.trim().toLowerCase();
@@ -139,7 +139,7 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
       returnedKey = `_review/u/${user.id}/${rest}`;
       quotaPrefix = `${appId}/_review/u/${user.id}/`;
     } else if (filePath.startsWith('_userpub/')) {
-      user = await requireUser(c);
+      user = await requireVisibleUser(c, appId);
       const rest = filePath.slice('_userpub/'.length);
       if (!rest) return c.text('file path required', 400);
       storageKey = `${appId}/_public/u/${user.id}/${rest}`;
@@ -150,7 +150,7 @@ storageRoutes.put('/apps/:appId/storage/*', async (c) => {
       storageKey = `${appId}/${filePath}`;
       returnedKey = filePath;
     } else {
-      user = await requireUser(c);
+      user = await requireVisibleUser(c, appId);
       storageKey = `${appId}/${user.id}/${filePath}`;
       returnedKey = filePath;
       quotaPrefix = `${appId}/${user.id}/`;
@@ -252,14 +252,14 @@ storageRoutes.get('/apps/:appId/public/*', async (c) => {
 /** Download a private file. Auth required (reads own files). */
 storageRoutes.get('/apps/:appId/storage/*', async (c) => {
   try {
-    const user = await requireUser(c);
     const appId = c.req.param('appId');
+    const user = await requireVisibleUser(c, appId);
     const filePath = c.req.path.replace(`/v1/apps/${appId}/storage/`, '');
 
     if (!filePath) return c.text('file path required', 400);
 
     if (filePath.startsWith('_review/')) {
-      const review = await authorizeReview(c, appId, filePath);
+      const review = await authorizeReview(c, appId, filePath, user);
       const object = await c.env.STORAGE.get(review.key);
       if (!object) return c.text('not found', 404);
       await review.audit('read');
@@ -299,8 +299,8 @@ storageRoutes.get('/apps/:appId/storage/*', async (c) => {
 /** List files. Auth required. */
 storageRoutes.get('/apps/:appId/files', async (c) => {
   try {
-    const user = await requireUser(c);
     const appId = c.req.param('appId');
+    const user = await requireVisibleUser(c, appId);
     const prefix = `${appId}/${user.id}/`;
 
     const listed = await c.env.STORAGE.list({ prefix, limit: 1000 });
@@ -336,13 +336,13 @@ storageRoutes.delete('/apps/:appId/storage/*', async (c) => {
 
     let key: string;
     if (filePath.startsWith('_review/')) {
-      const review = await authorizeReview(c, appId, filePath);
+      const review = await authorizeReview(c, appId, filePath, await requireVisibleUser(c, appId));
       if (!(await c.env.STORAGE.head(review.key))) return c.text('not found', 404);
       await review.audit('delete');
       await c.env.STORAGE.delete(review.key);
       return c.body(null, 204);
     } else if (filePath.startsWith('_userpub/')) {
-      const user = await requireUser(c);
+      const user = await requireVisibleUser(c, appId);
       const rest = filePath.slice('_userpub/'.length);
       if (!rest) return c.text('file path required', 400);
       key = `${appId}/_public/u/${user.id}/${rest}`;
@@ -353,7 +353,7 @@ storageRoutes.delete('/apps/:appId/storage/*', async (c) => {
       await requireAppOwner(c, appId);
       key = `${appId}/${filePath}`;
     } else {
-      const user = await requireUser(c);
+      const user = await requireVisibleUser(c, appId);
       key = `${appId}/${user.id}/${filePath}`;
     }
 

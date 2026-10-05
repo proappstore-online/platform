@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { requireUser } from '../lib/auth.js';
+import { requireVisibleUser } from '../lib/visibility.js';
 import { checkKvWrite, KV_LIMITS } from '../lib/quota.js';
 import type { Env } from '../types.js';
 
@@ -14,8 +14,8 @@ function toBytes(value: unknown): Uint8Array {
 }
 
 kvRoutes.get('/apps/:appId/kv', async (c) => {
-  const user = await requireUser(c);
   const { appId } = c.req.param();
+  const user = await requireVisibleUser(c, appId);
   const prefix = c.req.query('prefix');
   let query: string;
   let bindings: unknown[];
@@ -31,8 +31,8 @@ kvRoutes.get('/apps/:appId/kv', async (c) => {
 });
 
 kvRoutes.get('/apps/:appId/kv/:key', async (c) => {
-  const user = await requireUser(c);
   const { appId, key } = c.req.param();
+  const user = await requireVisibleUser(c, appId);
   const row = await c.env.DB.prepare(
     'SELECT value FROM kv WHERE app_id = ? AND user_id = ? AND key = ?',
   ).bind(appId, user.id, key).first<{ value: unknown }>();
@@ -41,8 +41,8 @@ kvRoutes.get('/apps/:appId/kv/:key', async (c) => {
 });
 
 kvRoutes.put('/apps/:appId/kv/:key', async (c) => {
-  const user = await requireUser(c);
   const { appId, key } = c.req.param();
+  const user = await requireVisibleUser(c, appId);
   const body = await c.req.arrayBuffer();
   if (body.byteLength === 0) return c.text('empty values are not allowed; use DELETE to remove a key', 400);
 
@@ -69,8 +69,8 @@ kvRoutes.put('/apps/:appId/kv/:key', async (c) => {
 });
 
 kvRoutes.delete('/apps/:appId/kv/:key', async (c) => {
-  const user = await requireUser(c);
   const { appId, key } = c.req.param();
+  const user = await requireVisibleUser(c, appId);
   const result = await c.env.DB.prepare(
     'DELETE FROM kv WHERE app_id = ? AND user_id = ? AND key = ?',
   ).bind(appId, user.id, key).run();

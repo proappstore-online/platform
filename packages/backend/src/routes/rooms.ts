@@ -31,6 +31,9 @@ roomRoutes.get('/apps/:appId/rooms/:roomId', async (c) => {
   const url = new URL(c.req.raw.url);
   url.searchParams.set('uid', session.uid);
   url.searchParams.set('login', session.login ?? session.uid);
+  // #276: what the room needs to re-run the gate on its open sockets.
+  url.searchParams.set('app', appId);
+  url.searchParams.set('roles', (session.roles ?? ['user']).join(','));
   return stub.fetch(url.toString(), c.req.raw);
 });
 
