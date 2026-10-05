@@ -11,6 +11,7 @@
  *     "actions":   [{ "id", "title", "resource", "action", "params": { <action param>: <resource column> }, "confirm",
  *                     "transition"?: { "from": [<state>], "to": <state> }, "destructive"?: true, "target"?: <column> }],
  *     "audit"?:    { "app_roles": [<role>] }     // the owner must also hold one to read the audit trail
+ *     "admin_access"?: { "roles": [<role>] }     // #302: who may use the admin console (inert until #293)
  *   }
  *
  * A resource is a table (or, for `metrics`, one row of KPIs) read by one of the
@@ -41,6 +42,7 @@ const OPERATOR_VIEW_VERSIONS = [1] as const;
 const MAX_OPERATOR_RESOURCES = 20;
 const MAX_OPERATOR_ACTIONS = 20;
 const MAX_AUDIT_ROLES = 5;
+const MAX_ADMIN_ROLES = 5;
 const ROLE = /^[a-z][a-z0-9_-]{0,49}$/;
 
 const RESOURCE_FIELDS = ['id', 'kind', 'title', 'description', 'action', 'columns', 'search', 'page', 'detail', 'status', 'related', 'series'];
@@ -204,13 +206,36 @@ function validateAudit(raw: unknown): { app_roles: string[] } | null | string {
 }
 
 /**
+ * `admin_access: { roles }` (#291, #302): the app roles that may use the admin
+ * console. Never `member` (every signed-in user holds it) or `public` (not a
+ * role). Who may read the audit trail stays `audit.app_roles`; the design's
+ * `audit_required_role` is refused rather than kept as a second field for it.
+ */
+function validateAdminAccess(raw: unknown): { roles: string[] } | null | string {
+  if (raw === undefined) return null;
+  if (!isObj(raw)) return 'operator_view.admin_access must be an object';
+  if ('audit_required_role' in raw) {
+    return 'operator_view.admin_access.audit_required_role is not supported: declare who may read the audit trail in operator_view.audit.app_roles';
+  }
+  const extra = unknownField(raw, ['roles'], 'operator_view.admin_access');
+  if (extra) return extra;
+  const roles = raw.roles;
+  if (!Array.isArray(roles) || roles.length === 0 || roles.length > MAX_ADMIN_ROLES || roles.some((r) => typeof r !== 'string' || !ROLE.test(r))) {
+    return `operator_view.admin_access.roles must be 1-${MAX_ADMIN_ROLES} app role names`;
+  }
+  if (roles.includes('member')) return "operator_view.admin_access.roles cannot include 'member' (every signed-in user holds it)";
+  if (roles.includes('public')) return "operator_view.admin_access.roles cannot include 'public' (it is not a role; the admin console is never public)";
+  return { roles: [...new Set(roles as string[])] };
+}
+
+/**
  * Validate `operator_view` against the app's (already validated) tools.
  * Absent or null is the baseline: `{ contract: null }`.
  */
 export function validateOperatorView(tools: ToolManifest[], raw: unknown): { error: string } | { contract: OperatorViewContract | null } {
   if (raw === undefined || raw === null) return { contract: null };
   if (!isObj(raw)) return { error: 'operator_view must be an object' };
-  const extra = unknownField(raw, ['version', 'resources', 'actions', 'audit'], 'operator_view');
+  const extra = unknownField(raw, ['version', 'resources', 'actions', 'audit', 'admin_access'], 'operator_view');
   if (extra) return { error: extra };
   if (!OPERATOR_VIEW_VERSIONS.includes(raw.version as 1)) {
     return { error: `operator_view.version must be one of ${OPERATOR_VIEW_VERSIONS.join(', ')}` };
@@ -247,5 +272,8 @@ export function validateOperatorView(tools: ToolManifest[], raw: unknown): { err
   if (verification) return { error: verification };
   const audit = validateAudit(raw.audit);
   if (typeof audit === 'string') return { error: audit };
-  return { contract: { version: 1, resources, actions, audit } };
+  const adminAccess = validateAdminAccess(raw.admin_access);
+  if (typeof adminAccess === 'string') return { error: adminAccess };
+  // Absent stays absent, so a contract without it stores exactly as before.
+  return { contract: { version: 1, resources, actions, audit, ...(adminAccess ? { admin_access: adminAccess } : {}) } };
 }

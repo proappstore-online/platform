@@ -75,6 +75,12 @@ export interface OperatorViewContract {
   actions: OperatorAction[];
   /** Who may read the operator audit trail besides being the owner: one of these app roles. Absent: the owner alone. */
   audit?: { app_roles: string[] } | null;
+  /**
+   * App roles whose holders may use the admin console (#291, #302). Present only
+   * when declared. Grants nothing until the admin role gate (#293) lands: the
+   * operator routes stay owner-only.
+   */
+  admin_access?: { roles: string[] };
 }
 
 export const ID = /^[a-z][a-z0-9_]{0,49}$/;

@@ -841,6 +841,22 @@ The trail is owner-only. An app can require more by declaring
 `"audit": { "app_roles": ["operator"] }` at the top level of `operator_view`:
 the owner must then also hold one of those roles (never `member`).
 
+### Admin access (`admin_access`)
+
+An app can declare which app roles may use its admin console (#291):
+
+```json
+"operator_view": { "version": 1, "admin_access": { "roles": ["admin", "moderator"] }, "resources": [], "actions": [] }
+```
+
+`roles` is 1–5 app role names, never `member` (every signed-in user holds it)
+or `public`. Who may read the audit trail stays `audit.app_roles` above, so
+`audit_required_role` is refused. Without `admin_access` the console is owner-only.
+
+**Not enforced yet.** `admin_access` is validated, stored and returned in the
+contract, but the operator routes stay owner-only until the admin role gate
+(#293) lands. Until then, a holder of a declared role is refused like anyone else.
+
 **Only declared columns and fields leave the platform.** A query may select
 more (an internal id, a hash): the operator read routes return only the
 declared keys, in declared order, and a declared key the row lacks comes back

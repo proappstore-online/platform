@@ -85,3 +85,39 @@ describe('operator routes refuse every non-owner (#240 regression matrix)', () =
     expect(entry.status).toBe(200);
   });
 });
+
+// #291 / #302: declaring admin_access registers and is returned to the owner,
+// but grants nothing until the admin role gate (#293). Every caller in this file
+// holds the declared admin role ('operator'), so the ownership check alone must
+// still refuse — and the projection still never returns undeclared or secret fields.
+describe('admin_access is declared but inert until #293 (#302)', () => {
+  beforeEach(async () => {
+    fetchMock.get(`https://pas-data-stash.${env.DATA_WORKER_HOST}`).intercept({ path: '/validate', method: 'POST' })
+      .reply(200, (req) => ({ results: (JSON.parse(String(req.body)) as { statements: { id: string }[] }).statements.map((st) => ({ id: st.id, ok: true })) }));
+    const withAccess = { ...STASH, operator_view: { ...STASH.operator_view, admin_access: { roles: ['operator', 'reviewer'] } } };
+    const put = await SELF.fetch(`${BASE}/v1/apps/stash/tools`, json('PUT', withAccess, await session('gh:1')));
+    expect(put.status, await put.clone().text()).toBe(200);
+  });
+
+  it('a holder of a declared admin role is refused everywhere, as is another app\'s owner and a signed-out caller', async () => {
+    await expectRefusedEverywhere(await session('gh:3'), 403);
+    await expectRefusedEverywhere(await session('gh:2'), 403);
+    await expectRefusedEverywhere(undefined, 401);
+  });
+
+  it('the owner is admitted and sees the stored admin_access', async () => {
+    const res = await SELF.fetch(`${BASE}/v1/apps/stash/operator`, json('GET', undefined, await session('gh:1')));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { contract: { admin_access?: unknown } }).contract.admin_access).toEqual({ roles: ['operator', 'reviewer'] });
+  });
+
+  it('secret and undeclared fields from the data worker never reach the owner', async () => {
+    fetchMock.get(`https://pas-data-stash.${env.DATA_WORKER_HOST}`).intercept({ path: '/query', method: 'POST' })
+      .reply(200, { rows: [{ user_id: 'u001', display_name: 'Ada', created_at: 1, suspended: 0, password_hash: 'h', api_token: 'tok_live', session_secret: 's' }], meta: {} });
+    const res = await SELF.fetch(`${BASE}/v1/apps/stash/operator/resources/members`, json('GET', undefined, await session('gh:1')));
+    const text = await res.text();
+    expect(res.status, text).toBe(200);
+    expect(text).toContain('Ada');
+    expect(text).not.toMatch(/password_hash|api_token|tok_live|session_secret/);
+  });
+});

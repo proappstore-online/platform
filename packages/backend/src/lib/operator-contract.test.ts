@@ -381,3 +381,44 @@ describe('validateOperatorView (#240)', () => {
   });
 });
 
+
+describe('operator_view.admin_access (#291, #302)', () => {
+  const withAccess = (admin_access: unknown) => ({ ...clone(STASH.operator_view), admin_access });
+
+  it('absent stays absent: both sample contracts normalize exactly as before', () => {
+    for (const [tools, view] of [[stashTools, STASH.operator_view], [PARENTS_CLUBS.tools as ToolManifest[], PARENTS_CLUBS.operator_view]] as const) {
+      const r = validateOperatorView(tools, view);
+      if (!('contract' in r) || !r.contract) throw new Error(JSON.stringify(r));
+      expect(r.contract).not.toHaveProperty('admin_access');
+      expect(Object.keys(r.contract)).toEqual(['version', 'resources', 'actions', 'audit']);
+    }
+  });
+
+  it('normalizes declared admin roles, deduplicated, without touching the rest of the contract', () => {
+    const base = validateOperatorView(stashTools, STASH.operator_view);
+    const r = validateOperatorView(stashTools, withAccess({ roles: ['admin', 'moderator', 'admin'] }));
+    if (!('contract' in r) || !r.contract || !('contract' in base) || !base.contract) throw new Error(JSON.stringify(r));
+    expect(r.contract.admin_access).toEqual({ roles: ['admin', 'moderator'] });
+    const { admin_access: _, ...rest } = r.contract;
+    expect(rest).toEqual(base.contract);
+  });
+
+  it('refuses everyone-holds-it, non-roles, malformed lists, unknown fields and a second audit gate', () => {
+    for (const [access, error] of [
+      [null, 'operator_view.admin_access must be an object'],
+      [['admin'], 'operator_view.admin_access must be an object'],
+      [{}, 'admin_access.roles must be 1-5 app role names'],
+      [{ roles: [] }, 'admin_access.roles must be 1-5 app role names'],
+      [{ roles: 'admin' }, 'admin_access.roles must be 1-5 app role names'],
+      [{ roles: ['a', 'b', 'c', 'd', 'e', 'f'] }, 'admin_access.roles must be 1-5 app role names'],
+      [{ roles: ['Admin'] }, 'admin_access.roles must be 1-5 app role names'],
+      [{ roles: [''] }, 'admin_access.roles must be 1-5 app role names'],
+      [{ roles: ['member'] }, "cannot include 'member'"],
+      [{ roles: ['admin', 'public'] }, "cannot include 'public'"],
+      [{ roles: ['admin'], owners: true }, 'admin_access: unknown field "owners"'],
+      [{ roles: ['admin'], audit_required_role: 'admin' }, 'declare who may read the audit trail in operator_view.audit.app_roles'],
+    ] as const) {
+      expect(errorOf(stashTools, withAccess(access)), JSON.stringify(access)).toContain(error);
+    }
+  });
+});
