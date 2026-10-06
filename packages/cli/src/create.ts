@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
-import { access, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, appendFile, cp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { writeFileSync, readFileSync } from 'node:fs';
-import { extname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { resolveToken } from './lib/config.js';
 import { writeOgImage } from './og-image.js';
 
@@ -9,6 +10,8 @@ const TEMPLATE_REPO = 'proappstore-online/template-app';
 /** #178: the public approved-template catalogue (published by the docs build). */
 const CATALOGUE_URL = 'https://docs.proappstore.online/templates/catalogue.json';
 const DEFAULT_TEMPLATE_ID = 'template-app';
+/** #261: the optional app-worker scaffold, shipped with the CLI so apps without a worker carry none. */
+const WORKER_TEMPLATE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'templates', 'worker');
 
 interface CatalogueTemplate {
   id: string;
@@ -62,6 +65,8 @@ interface CreateOptions {
   skipProvision?: boolean;
   token?: string;
   repo?: string;
+  /** #261: add `worker/` (an app worker, ADR-009) to the workspace. */
+  withWorker?: boolean;
 }
 
 function toTitleCase(id: string): string {
@@ -95,6 +100,13 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
   // #178: provenance is recorded locally regardless of provisioning, so a later
   // `pas publish` can forward the template id + revision to the platform.
   writePasConfig(targetDir, { appId, template: template.id, templateRev });
+
+  // #261: the deploy workflow builds and uploads worker/ only when worker/package.json exists.
+  if (opts.withWorker) {
+    await cp(WORKER_TEMPLATE_DIR, join(targetDir, 'worker'), { recursive: true });
+    await appendFile(join(targetDir, 'pnpm-workspace.yaml'), '  - worker\n');
+    process.stdout.write(`        added worker/ (app worker — runs once a platform admin enables it for ${appId})\n`);
+  }
 
   // Step 2: Replace APPNAME placeholders
   process.stdout.write(`  [2/4] Configuring for ${appId}...\n`);

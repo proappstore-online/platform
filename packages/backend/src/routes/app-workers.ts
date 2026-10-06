@@ -9,7 +9,7 @@
  *
  *   PUT    /v1/apps/:appId/worker/oidc            the app's main-branch workflow uploads its bundle
  *   PUT    /v1/admin/apps/:appId/worker-enabled   admin: { enabled } — off runs remove()
- *   GET    /v1/apps/:appId/worker                 owner: status, last deploy, last 20 invocations
+ *   GET    /v1/apps/:appId/worker                 owner: status, last deploy, last 20 invocations, schedules
  *   DELETE /v1/apps/:appId/worker                 owner: disable + remove()
  *   POST   /v1/apps/:appId/worker/rotate          owner: rotate token + event key
  *   POST   /v1/apps/:appId/worker/schedules/:name/run   owner: queue a schedule run now (#255)
@@ -106,7 +106,7 @@ appWorkerRoutes.get('/apps/:appId/worker', async (c) => {
   const appId = c.req.param('appId');
   await requireAppOwner(c, appId);
   // Explicit columns: the token, its hash and the sealed keys are never selected.
-  const [worker, lastDeploy, invocations] = await Promise.all([
+  const [worker, lastDeploy, invocations, schedules] = await Promise.all([
     c.env.DB.prepare(
       `SELECT enabled, backend, bundle_sha256, config_version, deployed_sha, deployed_ref, deployed_at, enabled_by, enabled_at,
               prev_key_until AS rotation_overlap_until
@@ -119,9 +119,16 @@ appWorkerRoutes.get('/apps/:appId/worker', async (c) => {
       `SELECT id, event_id, type, name, attempt, status, http_status, body_excerpt, pas_calls, started_at, finished_at, error
          FROM app_worker_invocations WHERE app_id = ? ORDER BY started_at DESC LIMIT 20`,
     ).bind(appId).all(),
+    // #261: the manifest's schedules, with the #123 breaker state the console and CLI show.
+    c.env.DB.prepare(
+      `SELECT s.name, s.cron, st.consecutive_failures, st.schedule_disabled_at
+         FROM app_worker_schedules s
+         LEFT JOIN scheduled_action_state st ON st.app_id = s.app_id AND st.action_name = ? || s.name
+        WHERE s.app_id = ? ORDER BY s.name`,
+    ).bind(WORKER_RUN_PREFIX, appId).all(),
   ]);
   c.header('Cache-Control', 'private, no-store');
-  return c.json({ app_id: appId, worker: worker ?? { enabled: 0 }, last_deploy: lastDeploy ?? null, invocations: invocations.results ?? [] });
+  return c.json({ app_id: appId, worker: worker ?? { enabled: 0 }, last_deploy: lastDeploy ?? null, invocations: invocations.results ?? [], schedules: schedules.results ?? [] });
 });
 
 appWorkerRoutes.delete('/apps/:appId/worker', async (c) => {

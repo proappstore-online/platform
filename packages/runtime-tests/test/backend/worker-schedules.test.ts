@@ -71,6 +71,9 @@ describe('worker schedules on the platform tick (#255)', () => {
     for (let i = 0; i < SCHEDULE_FAILURE_BREAKER; i++) await runScheduledActions({ env, now: TICK + i * 300_000 });
     expect((await runs()).every((r) => r.status === 'failed' && String(r.error).includes('worker answered 500'))).toBe(true);
     expect(await env.DB.prepare("SELECT schedule_disabled_at FROM scheduled_action_state WHERE app_id = 't' AND action_name = 'worker:tick'").first()).toEqual({ schedule_disabled_at: expect.any(Number) });
+    // #261: the owner's worker status carries each schedule with its breaker state.
+    const status = await (await SELF.fetch(`${BASE}/v1/apps/t/worker`, json('GET', undefined, await session('gh:admin')))).json() as { schedules: unknown[] };
+    expect(status.schedules).toEqual([{ name: 'tick', cron: '*/5 * * * *', consecutive_failures: SCHEDULE_FAILURE_BREAKER, schedule_disabled_at: expect.any(Number) }]);
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM app_alerts WHERE app_id = 't' AND kind = 'scheduled_action_failures'").first<{ n: number }>())?.n).toBe(1);
     expect((await runScheduledActions({ env, now: TICK + 5 * 300_000 })).workers).toMatchObject({ claimed: 0, skipped: 1 });
     await register([{ name: 'tick', cron: '*/5 * * * *', params: {} }]);

@@ -1,0 +1,16 @@
+{
+  "name": "@APPNAME/worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=esm --platform=browser --outfile=dist/app.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@proappstore/sdk": "^1.16.66"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}

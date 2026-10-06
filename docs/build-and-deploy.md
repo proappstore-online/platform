@@ -16,6 +16,18 @@ goes if we ever centralize. Decision record: [ADR-006](./adr/006-centralized-bui
    bare `vite build` (#204). The output (layout-adaptive: `dist/` or `web/dist/`)
    is `aws s3 sync`ed to the `pas-apps` R2 bucket under `apps/<app>/`, after
    `migrations.json` is applied and `mcp.json` is registered.
+   - **App worker step** ([App workers](./app-workers.md), ADR-009). This step
+     is for apps with a `worker/package.json`. It runs between the migrations
+     and the `mcp.json` registration, so a first deploy's hooks register
+     against a worker that already exists.
+     - It builds `worker/` to `worker/dist/app.js`.
+     - It uploads the modules with GitHub OIDC to
+       `PUT /v1/apps/<app>/worker/oidc`. No Cloudflare credential is involved.
+     - The platform refuses the upload with `403` unless an admin has enabled
+       app workers for the app.
+     - Apps without `worker/` skip the step.
+
+     The step is not yet in the canonical `deploy.yml` (#305).
 2. **`proappstore-host`** (one Worker, route `*.proappstore.online/*`) serves every
    app from R2 by subdomain, and dispatches reserved subdomains (`api`, `admin`,
    `agents`, `mcp`, `kb`, `docs`) to sibling Workers via service bindings.

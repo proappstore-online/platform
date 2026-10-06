@@ -1,0 +1,290 @@
+# App workers
+
+An app worker is the app's own server code: one Worker per app, deployed and
+invoked by the platform, for the work a browser cannot do — a scheduled sync with
+GitHub, a webhook from Stripe, a server-side route that holds an API key. The
+design and its constraints are [ADR-009](./adr/009-app-workers.md); this page is
+the developer reference.
+
+::: warning Prototype
+App workers run only for apps a platform admin has enabled (at most 5, first-party
+apps only), and no production app is enabled yet. Deploys for any other app are
+refused with `403 app workers are not enabled for this app`.
+:::
+
+## What the worker is
+
+- **Code in `worker/`, built to `worker/dist/app.js`.** `pas create <id> --with-worker`
+  adds the scaffold. On push to `main` the app's deploy workflow builds it and
+  uploads the modules to the platform with GitHub OIDC — no Cloudflare credential
+  is involved. An app without `worker/package.json` skips the step.
+- **The platform owns the entry point.** It uploads its own entry shim beside your
+  modules. The shim verifies the signature on every event (HMAC-SHA256, ±300 s) and
+  only then imports `app.js`; an unsigned request gets `401` and none of your code
+  runs, not even module top level.
+- **No URL of its own.** The worker is reached only through platform events:
+  `schedule`, `hook` and `http` (below).
+
+## Sandbox contract
+
+The worker receives exactly these bindings (ADR-009 §2):
+
+| Binding | What it is |
+|---|---|
+| `PAS` | RPC to the platform API: `actions`, `secrets`, `storage`, `log` |
+| `PAS_WORKER_TOKEN` | per-app token, required on every `PAS` call (the SDK passes it) |
+| `PAS_EVENT_KEY` | per-app HMAC key the shim verifies events with |
+| `APP_ID` | the app id |
+
+There is **no** D1, KV, R2, queue or AI binding, and no app secret in `env`:
+
+- **Data** goes through your registered actions — the same linted SQL every
+  other caller uses — and only actions whose `callers` include `"worker"`.
+- **Secrets** come from `pas.secrets.get(name)`, and only for names listed in
+  `worker.secrets`.
+- **Files** go to `pas.storage`, under `<app>/_worker/<key>`, never a user's files.
+- **Logs** go to `pas.log`, into the app's logs with category `worker`.
+
+Outbound `fetch` to the Internet works.
+
+## Manifest (`mcp.json`)
+
+```json
+{
+  "tools": [
+    {
+      "name": "upsert_repo", "description": "Worker: record a repo", "operation": "execute",
+      "sql": "INSERT INTO repos (id, name, synced_at) VALUES (:id, :name, :__now) ON CONFLICT(id) DO UPDATE SET name = excluded.name, synced_at = excluded.synced_at",
+      "params": { "id": { "type": "integer" }, "name": { "type": "string" } },
+      "requires_auth": true,
+      "auth": { "caller_unscoped": { "reason": "the sync writes every repo" } },
+      "callers": ["worker"]
+    }
+  ],
+  "worker": {
+    "secrets": ["GITHUB_TOKEN"],
+    "schedules": [{ "name": "reconcile", "cron": "*/15 * * * *", "params": { "full": false } }]
+  },
+  "hooks": [
+    { "name": "github", "verify": { "kind": "github-hmac-sha256", "secret": "GITHUB_WEBHOOK_SECRET" }, "to": "worker" }
+  ],
+  "visibility": { "mode": "private", "roles": ["viewer"] }
+}
+```
+
+### `callers` (per action)
+
+Who may run the action: any of `"user"`, `"worker"` and `"hook"`. The default is
+`["user"]`, so existing actions behave as before.
+
+- An action whose `callers` lacks `"user"` is refused on the HTTP actions route
+  and hidden from the app's MCP tools. A worker-only or hook-only write can never
+  be called by a signed-in user.
+- A worker or hook runs as `system:worker` or `system:hook`. Neither identity holds
+  any role, so a role-gated action never runs for them. An authenticated statement
+  without `:__user_id` needs `auth.caller_unscoped` with a reason.
+- Scheduled actions cannot declare `callers`: only the platform scheduler runs them.
+
+### `worker`
+
+| Field | Meaning |
+|---|---|
+| `secrets` | App secret names the worker may read with `pas.secrets.get`. Set values with `pas secret set NAME`. |
+| `schedules` | Up to **3** entries of `{ name, cron, params? }`. `name` matches `[a-z][a-z0-9_]{0,49}`. `cron` is five-field UTC, and every minute must be a multiple of 5 (the platform ticks every 5 minutes). `params` is at most 4 KB of JSON and arrives as `event.payload`. |
+
+### `hooks`
+
+Up to **10** entries of `{ name, verify, to }`. Each hook gets a public URL:
+
+    POST https://api.proappstore.online/v1/apps/<app>/hooks/<name>
+
+`verify.kind` is the scheme the platform checks **before** any of your code runs:
+
+| Kind | Checks |
+|---|---|
+| `github-hmac-sha256` | `X-Hub-Signature-256`; delivery id from `X-GitHub-Delivery` |
+| `stripe` | `Stripe-Signature` (timestamped, 5 min tolerance); delivery id is the event `id` in the body |
+| `hmac-sha256` | a hex or base64 HMAC of the body in a header you name (`header`, `prefix`, `encoding`); delivery id from `id_header`, else the body's SHA-256 |
+| `secret-token` | `X-PAS-Hook-Token` equals the secret; delivery id from `id_header`, else the body's SHA-256 |
+| `github-app` | fed by the platform's GitHub App, not a public URL (#258 — not yet available) |
+
+`verify.secret` names the app secret holding the shared secret. If the secret
+is not set, every delivery is refused with `401`. `pas hook list` shows
+`MISSING` for it.
+
+`to` is `"worker"`, which delivers the hook to the worker's `webhook` handler.
+It can instead be `{ "action": "<name>", "params": { … } }`, which runs one
+`execute` or `batch` action as `system:hook`. Each param is either a literal or
+a path into the JSON body (`$.repository.id`, `$.items[0]`). The action must list
+`"hook"` in `callers`, require auth, declare `caller_unscoped` with a reason, and
+have no role gate.
+
+A delivery is de-duplicated on its delivery id. Repeating one that was received
+or delivered answers `200 {"duplicate": true}`. Repeating one that failed runs it
+again as the next attempt. The sender gets `202` as soon as the delivery is
+verified and recorded.
+
+### `visibility`
+
+`{ "mode": "private", "roles": [...] }` gates the whole app, including
+`/.pas/worker/*`, to its team and the listed roles. See
+[MCP app tools](./mcp-app-tools.md#private-apps-visibility).
+
+### `connectors`
+
+Not available yet. GitHub App installations and a PAT mode for workers are
+tracked in #258. Until then, store a GitHub token as an app secret, list it in
+`worker.secrets`, and read it with `pas.secrets.get`.
+
+## The SDK: `@proappstore/sdk/worker`
+
+```ts
+import { defineAppWorker } from '@proappstore/sdk/worker';
+
+export default defineAppWorker({
+  async scheduled(event, pas) { /* event.name is the schedule, event.payload its params */ },
+  async webhook(event, pas) { /* event.hook.headers, event.hook.body (exact bytes) */ },
+  async fetch(request, pas) { return Response.json({ ok: true }); },
+});
+```
+
+Every handler receives the event, plus a `pas` client bound to this invocation:
+
+| Call | Does |
+|---|---|
+| `pas.actions.call(name, params?)` | Runs one registered action. |
+| `pas.actions.batch([{ name, params }])` | Runs many actions in one transaction, at most 500 statements and 1 MB. It counts as one `PAS` call. |
+| `pas.secrets.get(name)` | Returns a secret listed in `worker.secrets`, otherwise `null`. |
+| `pas.storage.put(key, body, { contentType? })` / `get(key)` | Reads and writes worker files, at most 10 MB each. |
+| `pas.log(level, message, fields?)` | Appends to the app's logs. Resolves `false` when the app's daily log quota is spent. |
+
+`event` is `{ id, type, name, attempt, issuedAt, payload }`. For a hook it also
+carries `hook: { headers, body }`. `hookBody(payload)` decodes an envelope body
+back to bytes.
+
+### `fetch`: browser routes
+
+A request from the app's own page to `/.pas/worker/<path>` reaches `fetch` as a
+standard `Request`:
+
+- **Who:** signed-in users only, with the same CSRF rules as `/.pas/api`.
+- **Request:** at most 1 MB. It is never retried.
+- **Actions:** inside the request, `pas.actions` run **as that user**, with their
+  rows and their role gates. The platform passes a 30-second caller grant for
+  this. Only actions whose `callers` include `"user"` can run this way.
+- **Response:** only `Content-Type` and `ETag` pass through, and
+  `Cache-Control` is always `private, no-store`.
+
+```ts
+// web: const res = await fetch('/.pas/worker/v1/report', { credentials: 'include' });
+// SDK: await pro.worker.fetch('/v1/report')
+```
+
+## Delivery is at least once
+
+`schedule` and `hook` events can arrive more than once: a retry, a redelivery, or
+a replay inside the signature window. **Make every handler idempotent on
+`event.id`.** The `id` stays the same across retries.
+
+- Write with `INSERT … ON CONFLICT DO UPDATE` or a uniqueness check.
+- Never write with a blind `INSERT` or an increment.
+
+`http` events are the exception: they are never retried.
+
+## Limits
+
+| Limit | Value |
+|---|---|
+| CPU per invocation | 30 s |
+| Wall clock | schedule 5 min · http 30 s · hook **25 s** (it runs after the `202`, until queue delivery lands in #257) |
+| `PAS` calls per invocation | 200, counted on the platform side. Outbound `fetch` counts toward the runtime subrequest limit, not this budget. |
+| `PAS.actions.batch` | 500 statements, 1 MB body |
+| Schedules | ≤ 3 per app, ≥ 5 min apart, minutes on the 5-minute tick |
+| Schedule failures | 5 in a row disable the schedule and raise one alert. Redeploying the manifest re-enables it. |
+| Run now | one manual run per schedule per minute; it starts on the next tick (≤ 5 min) |
+| Hooks | ≤ 10 per app, body ≤ 5 MB |
+| Worker files | 10 MB per object |
+| Invocation history | 30 days; hook deliveries 14 days |
+
+**Logs share the app's quota.** `pas.log` writes into the same per-app daily
+budget (50,000 entries per UTC day) as the app's browser clients. A chatty
+worker can therefore use up the budget that the app's error reporting relies on.
+Log a summary per run, not a line per item.
+
+Per-app usage quotas for app workers (invocations, CPU, hook volume) are not
+enforced yet; they are tracked in #275.
+
+## Operating it
+
+The owner commands use your `pas login` session:
+
+```bash
+pas worker status                       # enabled, last deploy, schedules (and breaker state), recent invocations
+pas worker logs --since 10m [--follow]  # PAS.log lines + invocation outcomes
+pas worker rotate                       # new token + event key; the old pair works for 10 more minutes
+pas schedule runs [--status failed]     # scheduled-action and worker-schedule runs
+pas schedule run reconcile              # queue a worker schedule now (202)
+pas hook list                           # each hook's URL, verifier, and whether its secret is set
+pas hook deliveries github --status failed
+pas secret set GITHUB_TOKEN             # hidden prompt; or: … | pas secret set NAME --stdin
+```
+
+The same data is available over HTTP (owner session):
+
+- `GET /v1/apps/:id/worker`
+- `GET /v1/apps/:id/scheduled-runs`
+- `GET /v1/apps/:id/hooks`
+- `GET /v1/apps/:id/hook-deliveries`
+- `GET /v1/apps/:id/logs?category=worker`
+
+No route ever returns a secret value, the worker token or the event key.
+
+## Recipe: keep a table in sync with GitHub
+
+1. Run `pas secret set GITHUB_TOKEN` and paste a fine-grained token with read
+   access.
+2. Run `pas secret set GITHUB_WEBHOOK_SECRET`. Use the same value in the GitHub
+   webhook settings, with Payload URL `https://api.proappstore.online/v1/apps/<app>/hooks/github`
+   and content type `application/json`.
+3. Write the manifest shown above: a worker-only `upsert_repo` action,
+   `worker.secrets`, a `reconcile` schedule, and a `github` hook to the worker.
+4. Add the worker with `pas create <app> --with-worker` for a new app. For an
+   existing one, copy `worker/` from a new scaffold and add `- worker` to
+   `pnpm-workspace.yaml`.
+
+```ts
+import { defineAppWorker, type PasClient } from '@proappstore/sdk/worker';
+
+async function upsert(pas: PasClient, repos: { id: number; full_name: string }[]) {
+  // Idempotent on the repo id: a redelivered event rewrites the same rows.
+  await pas.actions.batch(repos.map((r) => ({ name: 'upsert_repo', params: { id: r.id, name: r.full_name } })));
+}
+
+export default defineAppWorker({
+  async scheduled(event, pas) {
+    const token = await pas.secrets.get('GITHUB_TOKEN');
+    const res = await fetch('https://api.github.com/user/repos?per_page=100', {
+      headers: { authorization: `Bearer ${token}`, 'user-agent': 'my-app' },
+    });
+    if (!res.ok) throw new Error(`github ${res.status}`); // a failed run; 5 in a row disable the schedule
+    const repos = (await res.json()) as { id: number; full_name: string }[];
+    await upsert(pas, repos);
+    await pas.log('info', 'reconciled', { count: repos.length, run: event.id });
+  },
+  async webhook(event, pas) {
+    if (event.hook?.headers['x-github-event'] !== 'repository') return;
+    const body = JSON.parse(new TextDecoder().decode(event.hook.body)) as { repository: { id: number; full_name: string } };
+    await upsert(pas, [body.repository]);
+  },
+});
+```
+
+5. Push to `main`, then check the result:
+   - `pas worker status` shows the deploy.
+   - `pas schedule run reconcile` queues a first sync, and
+     `pas schedule runs` shows it.
+   - `pas hook deliveries github` shows GitHub's ping.
+
+For a simple mapping, skip the worker: a hook can go straight to an action with
+`"to": { "action": "upsert_repo", "params": { "id": "$.repository.id", "name": "$.repository.full_name" } }`.
+The action then needs `"callers": ["hook"]`.

@@ -27,6 +27,7 @@ flowchart TB
         KB["kb-host Worker — kb.proappstore.online<br/>project knowledge sharing"]
         AT["agent-teams Worker — agents.proappstore.online<br/>AI build team (Architect + PO/BA/Dev/QA)<br/>one Durable Object per project"]
         DATA["data-app Worker<br/>the app's own SQL"]
+        AW["app worker (per app, Worker Loader)<br/>schedules · hooks · /.pas/worker/*<br/>no bindings but PAS RPC"]
         DO[("ProjectDO<br/>backlog · working-tree<br/>memory · cost · WebSocket")]
         AT --- DO
     end
@@ -42,6 +43,8 @@ flowchart TB
     PAS --> Stripe["Stripe"]
     PAS -->|provision repo, DNS, D1| GH["GitHub — proappstore-online"]
     PAS -->|prepared SQL| DATA
+    PAS -->|signed events| AW
+    AW -->|PAS RPC: actions · secrets · storage · log| PAS
     HOST -->|serve app assets| R2
     HOST -->|reserved subdomains| PAS
     HOST --> ADMIN
@@ -81,6 +84,12 @@ Lives at `api.proappstore.online`. Source:
   services exposed through the SDK.
 - **Session validation:** verifies PAS session JWTs locally with
   `SESSION_SIGNING_KEY`.
+- **App workers** ([ADR-009](./adr/009-app-workers.md), [App workers](./app-workers.md)):
+  hosts each enabled app's own worker through the Worker Loader binding,
+  behind a platform entry shim. It sends the worker signed events (schedules
+  on the 5-minute platform tick, verified inbound webhooks, and `/.pas/worker/*`
+  browser requests mediated by the host). It serves the worker's only binding,
+  the `PAS` RPC entrypoint (`AppWorkerApi`).
 
 D1 binding: `DB`. Migrations live at the repo-root `migrations/`, wired via
 `migrations_dir = "../../migrations"` in `packages/backend/wrangler.toml`.

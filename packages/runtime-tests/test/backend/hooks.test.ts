@@ -162,6 +162,25 @@ describe('a hook mapped to an action (#256)', () => {
   });
 });
 
+describe('owner hook list (#261)', () => {
+  it('lists each hook with its public URL, verifier and whether its secret is set — never a value', async () => {
+    await env.DB.prepare("DELETE FROM app_secrets WHERE name = 'PING_TOKEN'").run();
+    const res = await SELF.fetch(`${BASE}/v1/apps/t/hooks`, json('GET', undefined, await session('gh:admin')));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    const text = await res.text();
+    for (const value of [GH_SECRET, BIN_SECRET, STRIPE_SECRET]) expect(text).not.toContain(value);
+    const { hooks: listed } = JSON.parse(text) as { hooks: Record<string, unknown>[] };
+    expect(listed.map((h) => h.name)).toEqual(['app', 'bin', 'github', 'ping', 'stripe']);
+    expect(listed.find((h) => h.name === 'github')).toEqual({
+      name: 'github', url: `${BASE}/v1/apps/t/hooks/github`, verify_kind: 'github-hmac-sha256', secret_name: 'GITHUB_WEBHOOK_SECRET', secret_set: true, to: 'worker',
+    });
+    expect(listed.find((h) => h.name === 'ping')).toMatchObject({ secret_set: false, to: { action: 'record_ping', params: { source: '$.source' } } });
+    expect(listed.find((h) => h.name === 'app')).toMatchObject({ url: null, secret_name: null, secret_set: null });
+    expect((await SELF.fetch(`${BASE}/v1/apps/t/hooks`, json('GET', undefined, await session('gh:7')))).status).toBe(403);
+  });
+});
+
 describe('owner delivery log (#256)', () => {
   it('lists deliveries to the owner without bodies; refuses anyone else', async () => {
     await github('ping', 'log-1');

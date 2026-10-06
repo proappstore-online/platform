@@ -173,6 +173,7 @@ against your app's own D1 tables.
 | `requires_auth` | explicit `true` or `false`. `true` requires a session token. `false` is allowed only for constrained public `query` tools. SQL using `:__user_id` must require auth. |
 | `cache_ttl` | optional integer, 1–300 seconds, **public `query` tools only**. The platform caches a `200` response at the edge for this long, keyed by the prepared statement and params, and serves it with `Cache-Control: public, max-age=<ttl>`. Registration rejects it on any tool that requires auth. See [Public actions: rate limit and cache](#public-actions-rate-limit-and-cache). |
 | `schedule` | optional platform schedule for an `execute` or `batch` action: `{ "cron": "*/15 * * * *", "params": { ... } }`. See [Scheduled actions](#scheduled-actions). |
+| `callers` | optional, who may invoke the action: any of `"user"`, `"worker"`, `"hook"`; default `["user"]`. An action without `"user"` is refused over HTTP and hidden from MCP — only the app worker or an inbound hook can run it. See [App workers](./app-workers.md#callers-per-action). |
 | `core` | optional boolean. On a large manifest (see below) `core: true` keeps this tool pre-loaded on the app's MCP session instead of deferring it to discovery. Ignored on a small manifest, where everything is pre-loaded anyway. |
 
 Use `requires_auth: true` for writes and user-scoped reads. Deliberately public
@@ -567,6 +568,24 @@ Like `operator`, it is replaced with the manifest on every registration: removin
 it from `mcp.json` makes the app public again. Deleting the app's tools does not.
 See [Authorization Model](./authorization-model.md#private-apps-visibility-private-who-may-use-the-app-at-all)
 for where each surface is enforced and what is not covered.
+
+## App workers and inbound hooks (`worker`, `hooks`)
+
+Two more manifest keys configure server-side code (prototype; see
+[App workers](./app-workers.md) for the full reference):
+
+- **`worker`**: `{ "secrets": ["NAME"], "schedules": [{ "name", "cron", "params?" }] }`.
+  It names the app secrets the app worker may read and up to 3 schedules on the
+  5-minute platform tick.
+- **`hooks`**: up to 10 entries of `{ "name", "verify": { "kind", "secret" }, "to" }`.
+  - Each hook gets a public URL, `https://api.proappstore.online/v1/apps/<app>/hooks/<name>`.
+  - The platform verifies every delivery before any app code runs, and
+    de-duplicates on the delivery id.
+  - `to` is `"worker"`, or `{ "action", "params" }` to run one hook action as
+    `system:hook`.
+
+Both are replaced with the manifest on every registration, like `operator`.
+Removing one from `mcp.json` removes its schedules or hooks.
 
 ## Console operator view (`operator_view`)
 
@@ -1141,9 +1160,12 @@ tools, and are validated by `test/skills.test.ts`.
 
 ## Limits & roadmap
 
-- Tools are **SQL against the app's D1** — they can't (yet) call an external API
-  or run business logic in a Worker route. That's a deliberate, safe surface.
-  Use `operation: "batch"` for atomic multi-statement writes.
+- Tools are **SQL against the app's D1** and cannot call an external API.
+  That's a deliberate, safe surface. Use `operation: "batch"` for atomic
+  multi-statement writes. Business logic that needs to call out (a sync, a
+  webhook handler, a server route) goes in an [app worker](./app-workers.md),
+  which runs these same actions. App workers are a prototype, enabled per app
+  by a platform admin.
 - Existing agent-built apps register on their **next** deploy (or a `pas publish`).
 - Coming next: richer (non-SQL) tool handlers and raw-SQL migration gates,
   alongside [agent customization](./agent-customization).

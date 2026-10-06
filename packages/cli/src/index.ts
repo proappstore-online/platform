@@ -13,6 +13,9 @@ import { publishApp } from './publish.js';
 import { secretCommand } from './secret.js';
 import { proxyCommand } from './proxy.js';
 import { integrateCommand } from './integrate.js';
+import { workerCommand } from './worker.js';
+import { hookCommand } from './hook.js';
+import { scheduleCommand } from './schedule.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as { version: string };
@@ -33,7 +36,8 @@ program
   .option('--token <token>', 'Session token (or set PAS_SESSION_TOKEN env var)')
   .option('--repo <owner/name>', 'Create a GitHub repo and push (e.g. my-org/my-app)')
   .option('--template <id>', 'Approved template id from https://docs.proappstore.online/templates/ (default: template-app)')
-  .action(async (appId: string, opts: { skipInstall?: boolean; skipGit?: boolean; skipProvision?: boolean; token?: string; repo?: string; template?: string }) => {
+  .option('--with-worker', 'Add worker/ — an app worker for schedules, webhooks and server routes (enabled per app by a platform admin)')
+  .action(async (appId: string, opts: { skipInstall?: boolean; skipGit?: boolean; skipProvision?: boolean; token?: string; repo?: string; template?: string; withWorker?: boolean }) => {
     await createApp(appId, opts);
   });
 
@@ -60,6 +64,9 @@ program.addCommand(domainCommand);
 program.addCommand(secretCommand);
 program.addCommand(proxyCommand);
 program.addCommand(integrateCommand);
+program.addCommand(workerCommand);
+program.addCommand(hookCommand);
+program.addCommand(scheduleCommand);
 
 program.parseAsync().catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err);

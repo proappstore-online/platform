@@ -22,6 +22,7 @@ pas logout                          # clear session
 # Create
 pas create <app-id>                 # scaffold a new Pro app from the template
 pas create <app-id> --repo org/name # scaffold + create GitHub repo + push
+pas create <app-id> --with-worker   # also add worker/ — an app worker (see App workers)
 
 # Develop
 pas check                           # run platform compliance checks locally
@@ -37,12 +38,22 @@ pas integrate amadeus               # connect Amadeus — prompts for credential
 pas integrate list                  # show all available integrations
 
 # Secrets & proxy (manual configuration)
-pas secret set API_KEY <value>      # store an encrypted API key
+pas secret set API_KEY             # store an encrypted API key (hidden prompt, prints only the length)
+echo "$V" | pas secret set API_KEY --stdin   # non-interactive
 pas secret list                     # list secret names (values never shown)
 pas secret rm API_KEY               # delete a secret
 pas proxy allow <pattern> --inject bearer --secret API_KEY
 pas proxy list                      # show proxy allowlist
 pas proxy deny <pattern>            # remove a proxy rule
+
+# App workers (owner; see docs/app-workers.md)
+pas worker status                   # enabled flag, last deploy, schedules, recent invocations
+pas worker logs --since 10m -f      # PAS.log lines + invocation outcomes, following
+pas worker rotate                   # rotate the worker token + event key
+pas schedule runs --status failed   # scheduled-action and worker-schedule runs
+pas schedule run <name>             # run a worker schedule on the next tick
+pas hook list                       # hook URLs, verifiers, secret set/missing
+pas hook deliveries <name> --status failed
 
 # Custom domains
 pas domain add my-custom.com        # add a custom domain

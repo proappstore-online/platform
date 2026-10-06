@@ -221,6 +221,44 @@ remain in browser caches for their existing TTL after a visibility flip.
   Its raw-SQL path requires team `developer` or above, and every team member passes
   this gate anyway, so it admits no one the gate would refuse.
 
+### App workers: `system:worker`, `system:hook` and caller grants
+
+An app worker ([App workers](./app-workers.md), ADR-009) and an inbound hook act
+on an app with no user behind them. They run with platform identities that are
+**not roles**:
+
+- **`system:worker`** is the identity of a schedule or hook event in the app
+  worker. **`system:hook`** is the identity of a hook delivered straight to an
+  action.
+  - Neither holds any platform or app role, so a role-gated action never runs
+    for them (`lib/role-invariants.test.ts`).
+  - An authenticated statement without `:__user_id` must declare
+    `auth.caller_unscoped` with a reason. For these identities `:__user_id`
+    binds to the literal system id, never a person.
+- **`callers`** on each action is who may invoke it at all: `"user"`,
+  `"worker"`, `"hook"`. The default is `["user"]`. An action that lacks
+  `"user"` is refused on the HTTP actions route and hidden from MCP, so a
+  system-only write is unreachable for a signed-in user.
+- **Every `PAS` call is authorized by the app and the per-app worker token,**
+  with no exceptions.
+  - The app comes from the binding's platform-set `props`. The token is a
+    required factor, verified against its hash.
+  - Then a per-invocation budget of 200 calls applies, counted in D1.
+  - Rotation (`pas worker rotate`) keeps the old token valid for 10 minutes.
+- **Caller grants (`http` events, #260).** For a signed-in user's request to
+  `/.pas/worker/*`, the platform mints a 30-second grant.
+  - **What it is:** an HMAC under a key derived from `SESSION_SIGNING_KEY`,
+    over app, grant id, user, roles and expiry. It travels inside the signed
+    event envelope.
+  - **What it lets the worker do:** run actions **as that user**, with the
+    user's `:__user_id`, the user's role gates and the role-gated audit
+    entry. Only actions whose `callers` include `"user"` can run this way, and
+    step-up actions are refused.
+  - **What fails:** a grant for another app, or an expired one, is
+    `Unauthorized`.
+- **Private apps** gate `/.pas/worker/*` like every other app path. The worker
+  itself is never reachable from the Internet.
+
 ## Trust boundaries that are NOT roles
 
 - **`INTERNAL_TOKEN`** proves "a trusted *platform worker* is calling"
@@ -230,7 +268,11 @@ remain in browser caches for their existing TTL after a visibility flip.
   app slug), as the data-worker/QA/R2 deploy paths do.
 - **GitHub OIDC** (`repository == proappstore-online/<appId>`, `ref == main`) is
   the keyless, app-scoped identity for CI-initiated writes (tool registration,
-  KB ingest, R2 creds).
+  KB ingest, R2 creds, app-worker bundle upload).
+- **The app-worker token and event key** (`PAS_WORKER_TOKEN`, `PAS_EVENT_KEY`)
+  prove "this is app X's worker" and "this event came from the platform". They
+  are per app, minted by the platform, sealed at rest, and never returned by
+  any route.
 - **Keyless e2e sessions** (#146): a workflow can also exchange its OIDC token
   for a *user* session — `POST /v1/auth/exchange/oidc` — but only through an
   explicit grant a platform admin creates (`POST /v1/admin/oidc-session-grants`:

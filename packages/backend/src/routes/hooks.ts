@@ -2,6 +2,7 @@
  * Inbound webhooks (#256, ADR-009 §3–§4).
  *
  *   POST /v1/apps/:appId/hooks/:name       public — a third party (GitHub, Stripe, …) tells the app something happened
+ *   GET  /v1/apps/:appId/hooks             owner  — registered hooks: URL, verifier, whether the secret is set (#261)
  *   GET  /v1/apps/:appId/hook-deliveries   owner  — recent deliveries; never the body
  *
  * The POST fails closed at every step, in this order: body ≤ 5 MB (413); the
@@ -157,6 +158,30 @@ hookRoutes.post('/apps/:appId/hooks/:name', async (c) => {
     .then((error) => finish(c.env, row.id, error))
     .catch((e) => console.error(`[hooks] recording delivery ${row.id} failed: ${(e as Error)?.message ?? e}`)));
   return c.json({ accepted: true, delivery: row.id }, 202);
+});
+
+/** Never a secret value: only whether the named app secret exists. */
+hookRoutes.get('/apps/:appId/hooks', async (c) => {
+  const appId = c.req.param('appId');
+  await requireAppOwner(c, appId);
+  const rows = await c.env.DB.prepare(
+    `SELECT h.name, h.verify_kind, h.secret_name, h.target, s.name IS NOT NULL AS secret_set
+       FROM app_hooks h LEFT JOIN app_secrets s ON s.app_id = h.app_id AND s.name = h.secret_name
+      WHERE h.app_id = ? ORDER BY h.name`,
+  ).bind(appId).all<{ name: string; verify_kind: string; secret_name: string | null; target: string; secret_set: number }>();
+  const origin = new URL(c.req.url).origin;
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({
+    hooks: (rows.results ?? []).map((h) => ({
+      name: h.name,
+      // github-app hooks are fed by the platform's GitHub App (#258), not a public URL.
+      url: h.verify_kind === 'github-app' ? null : `${origin}/v1/apps/${appId}/hooks/${h.name}`,
+      verify_kind: h.verify_kind,
+      secret_name: h.secret_name,
+      secret_set: h.secret_name ? h.secret_set === 1 : null,
+      to: JSON.parse(h.target) as HookTarget,
+    })),
+  });
 });
 
 hookRoutes.get('/apps/:appId/hook-deliveries', async (c) => {

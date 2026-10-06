@@ -137,6 +137,7 @@ jobs:
             - Publishing: publishing-flow.md
             - Approved templates: templates/index.md
             - MCP App Tools: mcp-app-tools.md
+            - App Workers: app-workers.md
             - Agent Customization: agent-customization.md
             - Architecture: architecture.md
             - Agent Teams Runtime: agent-teams-runtime-and-billing.md
