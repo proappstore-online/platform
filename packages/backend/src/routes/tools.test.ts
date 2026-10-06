@@ -1367,7 +1367,7 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
     const { res, db } = await internalPost({ tools: [] }, { 'X-Internal-Token': 'secret' });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false, operator: null, operator_view: null, visibility: { mode: 'public', roles: [] }, worker: null });
-    expect(db.batch.mock.calls[0]![0]).toHaveLength(8);
+    expect(db.batch.mock.calls[0]![0]).toHaveLength(9);
     expect(db.batch.mock.calls[0]![0][1]!.bind).toHaveBeenCalledWith('test-app');
 
     const missing = await internalPost({}, { 'X-Internal-Token': 'secret' });
@@ -1881,10 +1881,10 @@ describe('callers and the worker section (#254)', () => {
   it('registers worker.secrets with the tools; refuses unknown fields and bad names', async () => {
     const ok = await put({ tools: [write({ callers: ['worker'] })], worker: { secrets: ['GITHUB_TOKEN'] } });
     expect(ok.res.status).toBe(200);
-    expect(ok.body.worker).toEqual({ secrets: ['GITHUB_TOKEN'] });
+    expect(ok.body.worker).toEqual({ secrets: ['GITHUB_TOKEN'], schedules: [] });
     const sqls = ok.db.prepare.mock.calls.map((c) => String(c[0]));
     expect(sqls).toEqual(expect.arrayContaining(['DELETE FROM app_worker_manifest WHERE app_id = ?', 'INSERT INTO app_worker_manifest (app_id, secrets, created_at) VALUES (?, ?, ?)']));
-    for (const worker of [{ secrets: ['lower'] }, { secrets: 'X' }, { secrets: ['A', 'A'] }, { schedules: [] }, ['X']]) {
+    for (const worker of [{ secrets: ['lower'] }, { secrets: 'X' }, { secrets: ['A', 'A'] }, { crons: [] }, ['X']]) {
       expect((await put({ tools: [write()], worker })).res.status, JSON.stringify(worker)).toBe(400);
     }
     // No worker section: the stored one is cleared and nothing is inserted.
@@ -1892,5 +1892,47 @@ describe('callers and the worker section (#254)', () => {
     const noneSqls = none.db.prepare.mock.calls.map((c) => String(c[0]));
     expect(noneSqls).toContain('DELETE FROM app_worker_manifest WHERE app_id = ?');
     expect(noneSqls.some((q) => q.startsWith('INSERT INTO app_worker_manifest'))).toBe(false);
+  });
+});
+
+describe('worker.schedules (#255)', () => {
+  const put = async (worker: unknown) => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    const res = await app.request('/v1/apps/test-app/tools', {
+      method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools: [validTool], worker }),
+    }, makeEnv({}, db));
+    return { res, db, body: await res.json() as { error?: string; worker?: unknown } };
+  };
+  const sched = (over: Record<string, unknown> = {}) => ({ name: 'reconcile', cron: '10 * * * *', params: { full: true }, ...over });
+
+  it('accepts on-tick crons and registers each schedule with the manifest', async () => {
+    const ok = await put({ schedules: [sched(), sched({ name: 'tick', cron: '*/5 * * * *', params: undefined })] });
+    expect(ok.res.status).toBe(200);
+    expect(ok.body.worker).toEqual({ secrets: [], schedules: [{ name: 'reconcile', cron: '10 * * * *', params: { full: true } }, { name: 'tick', cron: '*/5 * * * *', params: {} }] });
+    const sqls = ok.db.prepare.mock.calls.map((c) => String(c[0]));
+    expect(sqls).toContain('DELETE FROM app_worker_schedules WHERE app_id = ?');
+    expect(sqls.filter((q) => q.startsWith('INSERT INTO app_worker_schedules'))).toHaveLength(2);
+  });
+
+  it('refuses a fourth schedule, sub-tick and off-tick crons (#281), bad names, duplicates and oversized params', async () => {
+    const cases: [unknown, RegExp][] = [
+      [{ schedules: [sched({ name: 'a' }), sched({ name: 'b' }), sched({ name: 'c' }), sched({ name: 'd' })] }, /at most 3/],
+      [{ schedules: [sched({ cron: '* * * * *' })] }, /cron/],
+      [{ schedules: [sched({ cron: '7 * * * *' })] }, /cron/],
+      [{ schedules: [sched({ cron: 'every hour' })] }, /cron/],
+      [{ schedules: [sched({ name: 'Bad-Name' })] }, /name must match/],
+      [{ schedules: [sched(), sched()] }, /duplicate name/],
+      [{ schedules: [sched({ params: [] })] }, /params must be an object/],
+      [{ schedules: [sched({ params: { blob: 'x'.repeat(5000) } })] }, /at most 4096 bytes/],
+      [{ schedules: [sched({ when: 'now' })] }, /unknown field "when"/],
+      [{ schedules: 'daily' }, /at most 3/],
+      [{ schedules: [null] }, /must be an object/],
+      [{ schedules: [sched({ cron: 5 })] }, /cron must be/],
+    ];
+    for (const [worker, error] of cases) {
+      const { res, body } = await put(worker);
+      expect(res.status, JSON.stringify(worker)).toBe(400);
+      expect(body.error, JSON.stringify(worker)).toMatch(error);
+    }
   });
 });

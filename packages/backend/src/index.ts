@@ -41,6 +41,7 @@ import { scheduledRunsRoutes } from './routes/scheduled-runs.js';
 import { operatorView } from './routes/operator-view.js';
 import { evaluateErrorSpikes } from './lib/error-alerts.js';
 import { runScheduledActions } from './lib/scheduled-actions.js';
+import type { AppWorkerExports } from './lib/app-worker-host.js';
 import { tokenUserFor } from './lib/app-tokens.js';
 import { actionRoutes } from './routes/actions.js';
 import { secretsRoutes } from './routes/secrets.js';
@@ -297,7 +298,8 @@ export default {
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     // #123 runs on the five-minute platform tick. It is durable and has no
     // backfill behaviour; a delayed/missed tick never turns into a burst.
-    ctx.waitUntil(runScheduledActions({ env, now: event.scheduledTime ?? Date.now() }).catch((e) => console.error(`[schedule] executor failed: ${(e as Error).message}`)));
+    // ctx carries exports.AppWorkerApi, the PAS binding of invoked app workers (#254, #255).
+    ctx.waitUntil(runScheduledActions({ env, now: event.scheduledTime ?? Date.now(), ctx: ctx as AppWorkerExports }).catch((e) => console.error(`[schedule] executor failed: ${(e as Error).message}`)));
     // The pre-existing checks remain every fifteen minutes even though the
     // Worker now receives a five-minute tick for scheduled app actions.
     const tickAt = event.scheduledTime ?? Date.now();

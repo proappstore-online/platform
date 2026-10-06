@@ -12,6 +12,7 @@
  *   GET    /v1/apps/:appId/worker                 owner: status, last deploy, last 20 invocations
  *   DELETE /v1/apps/:appId/worker                 owner: disable + remove()
  *   POST   /v1/apps/:appId/worker/rotate          owner: rotate token + event key
+ *   POST   /v1/apps/:appId/worker/schedules/:name/run   owner: queue a schedule run now (#255)
  *
  * No route returns or logs the worker's token or event key.
  */
@@ -19,7 +20,11 @@ import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, isAdminId, requireAdmin, requireAppOwner } from '../lib/auth.js';
 import { requireAppDeployOidc } from '../lib/app-deploy-oidc.js';
-import { appWorkerHost, disableAppWorker, parseBundle, rotateAppWorkerCredentials } from '../lib/app-worker-host.js';
+import { activeAppWorker, appWorkerHost, disableAppWorker, parseBundle, rotateAppWorkerCredentials } from '../lib/app-worker-host.js';
+import { runNowDueAt, WORKER_RUN_PREFIX } from '../lib/scheduled-actions.js';
+
+/** One manual run per schedule per minute (#255). */
+export const RUN_NOW_INTERVAL_MS = 60_000;
 
 export const APP_WORKER_CAP = 5;
 
@@ -126,4 +131,44 @@ appWorkerRoutes.post('/apps/:appId/worker/rotate', async (c) => {
   await requireAppOwner(c, appId);
   const { configVersion } = await rotateAppWorkerCredentials(c.env, appId);
   return c.json({ ok: true, config_version: configVersion });
+});
+
+/**
+ * Run a worker schedule now (#255). Never invokes the worker from this request —
+ * a run may take 5 minutes and a fetch handler gets 30 s of waitUntil. It inserts
+ * a `due` run row (due_at in ms, never minute-aligned) that the next platform
+ * tick claims through the same race-proof claim as cron runs: started within one
+ * tick (≤ 5 min), with the full run budget. Callers poll GET …/scheduled-runs.
+ * #257 swaps this for an enqueue.
+ */
+appWorkerRoutes.post('/apps/:appId/worker/schedules/:name/run', async (c) => {
+  const appId = c.req.param('appId');
+  const name = c.req.param('name');
+  await requireAppOwner(c, appId);
+  const action = `${WORKER_RUN_PREFIX}${name}`;
+
+  const schedule = await c.env.DB.prepare('SELECT 1 AS found FROM app_worker_schedules WHERE app_id = ? AND name = ?').bind(appId, name).first();
+  if (!schedule) throw new HttpError('worker schedule not found', 404);
+  if (!(await activeAppWorker(c.env, appId))) throw new HttpError('the app worker is not enabled and deployed', 409);
+  const disabled = await c.env.DB.prepare(
+    'SELECT 1 AS off FROM scheduled_action_state WHERE app_id = ? AND action_name = ? AND schedule_disabled_at IS NOT NULL',
+  ).bind(appId, action).first();
+  if (disabled) throw new HttpError('this schedule is disabled after repeated failures; redeploy the manifest to re-enable it', 409);
+  const inFlight = await c.env.DB.prepare(
+    "SELECT 1 AS busy FROM scheduled_action_runs WHERE app_id = ? AND action_name = ? AND status IN ('due', 'claimed', 'queued') LIMIT 1",
+  ).bind(appId, action).first();
+  if (inFlight) throw new HttpError('a run is already in progress', 409);
+
+  const now = Date.now();
+  // Atomic: two concurrent requests cannot both pass the limit.
+  const allowed = await c.env.DB.prepare(
+    'UPDATE app_worker_schedules SET last_manual_run_at = ? WHERE app_id = ? AND name = ? AND (last_manual_run_at IS NULL OR last_manual_run_at <= ?)',
+  ).bind(now, appId, name, now - RUN_NOW_INTERVAL_MS).run();
+  if (!allowed.meta.changes) throw new HttpError('one manual run per schedule per minute', 429);
+
+  const runId = crypto.randomUUID();
+  await c.env.DB.prepare(
+    "INSERT INTO scheduled_action_runs (run_id, app_id, action_name, source, due_at, status) VALUES (?, ?, ?, 'code', ?, 'due')",
+  ).bind(runId, appId, action, runNowDueAt(now)).run();
+  return c.json({ run_id: runId, status: 'due' }, 202);
 });

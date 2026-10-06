@@ -733,17 +733,53 @@ function validateVisibility(visibility: unknown, tools: ToolManifest[]): { error
 }
 
 /** The `worker` section (#254): `{ secrets?: string[] }` naming app secrets (app_secrets.name). */
-export function validateWorkerManifest(worker: unknown): { error: string } | { secrets: string[] | null } {
-  if (worker === undefined || worker === null) return { secrets: null };
+/** ADR-009 §4: worker schedules per app, separate from (and fewer than) action schedules — worker runs are heavier. */
+export const MAX_WORKER_SCHEDULES_PER_APP = 3;
+export const MAX_WORKER_SCHEDULE_PARAMS_BYTES = 4096;
+const WORKER_SCHEDULE_NAME = /^[a-z][a-z0-9_]{0,49}$/;
+
+export interface WorkerSchedule { name: string; cron: string; params: Record<string, unknown> }
+export interface WorkerManifest { secrets: string[]; schedules: WorkerSchedule[] }
+
+/**
+ * The `worker` section: `{ secrets?: string[], schedules?: [{ name, cron, params? }] }`.
+ * Secrets name app secrets (#254); schedules run the app worker on the platform
+ * tick (#255) — same cron rules as scheduled actions, minutes on the 5-minute tick.
+ */
+export function validateWorkerManifest(worker: unknown): { error: string } | { worker: WorkerManifest | null } {
+  if (worker === undefined || worker === null) return { worker: null };
   if (typeof worker !== 'object' || Array.isArray(worker)) return { error: 'worker must be an object' };
-  const extra = Object.keys(worker).find((k) => k !== 'secrets');
+  const extra = Object.keys(worker).find((k) => k !== 'secrets' && k !== 'schedules');
   if (extra) return { error: `worker: unknown field "${extra}"` };
   const secrets = (worker as { secrets?: unknown }).secrets ?? [];
   if (!Array.isArray(secrets) || secrets.length > MAX_SECRETS_PER_APP || secrets.some((n) => typeof n !== 'string' || !SECRET_NAME_RE.test(n))) {
     return { error: `worker.secrets must be an array of at most ${MAX_SECRETS_PER_APP} app secret names (${SECRET_NAME_RE.source})` };
   }
   if (new Set(secrets).size !== secrets.length) return { error: 'worker.secrets must not repeat a name' };
-  return { secrets: secrets as string[] };
+
+  const rawSchedules = (worker as { schedules?: unknown }).schedules ?? [];
+  if (!Array.isArray(rawSchedules) || rawSchedules.length > MAX_WORKER_SCHEDULES_PER_APP) {
+    return { error: `worker.schedules must be an array of at most ${MAX_WORKER_SCHEDULES_PER_APP} schedules` };
+  }
+  const schedules: WorkerSchedule[] = [];
+  for (const [i, raw] of rawSchedules.entries()) {
+    const at = `worker.schedules[${i}]`;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: `${at} must be an object` };
+    const unknown = Object.keys(raw).find((k) => !['name', 'cron', 'params'].includes(k));
+    if (unknown) return { error: `${at}: unknown field "${unknown}"` };
+    const { name, cron, params = {} } = raw as { name?: unknown; cron?: unknown; params?: unknown };
+    if (typeof name !== 'string' || !WORKER_SCHEDULE_NAME.test(name)) return { error: `${at}.name must match ${WORKER_SCHEDULE_NAME.source}` };
+    if (schedules.some((s) => s.name === name)) return { error: `${at}: duplicate name "${name}"` };
+    if (typeof cron !== 'string') return { error: `${at}.cron must be a five-field numeric UTC cron string` };
+    const cronError = scheduledCronError(cron);
+    if (cronError) return { error: isCronSyntaxError(cronError) ? `${at}.cron must be a valid five-field numeric UTC cron` : `${at}.cron ${cronError}` };
+    if (!params || typeof params !== 'object' || Array.isArray(params)) return { error: `${at}.params must be an object` };
+    if (new TextEncoder().encode(JSON.stringify(params)).byteLength > MAX_WORKER_SCHEDULE_PARAMS_BYTES) {
+      return { error: `${at}.params must be at most ${MAX_WORKER_SCHEDULE_PARAMS_BYTES} bytes of JSON` };
+    }
+    schedules.push({ name, cron, params: params as Record<string, unknown> });
+  }
+  return { worker: { secrets: secrets as string[], schedules } };
 }
 
 export async function replaceAppTools(
@@ -823,9 +859,16 @@ export async function replaceAppTools(
       : []),
     // And the worker section (#254): a manifest without it leaves the worker no secrets.
     db.prepare('DELETE FROM app_worker_manifest WHERE app_id = ?').bind(appId),
-    ...(workerResult.secrets
-      ? [db.prepare('INSERT INTO app_worker_manifest (app_id, secrets, created_at) VALUES (?, ?, ?)').bind(appId, JSON.stringify(workerResult.secrets), now)]
+    ...(workerResult.worker
+      ? [db.prepare('INSERT INTO app_worker_manifest (app_id, secrets, created_at) VALUES (?, ?, ?)').bind(appId, JSON.stringify(workerResult.worker.secrets), now)]
       : []),
+    // Worker schedules (#255) are replaced with the manifest too. Their run
+    // history and breaker state live in scheduled_action_runs/_state under
+    // 'worker:<name>' (source 'code'), reset by the DELETE above like actions'.
+    db.prepare('DELETE FROM app_worker_schedules WHERE app_id = ?').bind(appId),
+    ...(workerResult.worker?.schedules ?? []).map((sch) =>
+      db.prepare('INSERT INTO app_worker_schedules (app_id, name, cron, params, created_at) VALUES (?, ?, ?, ?, ?)')
+        .bind(appId, sch.name, sch.cron, JSON.stringify(sch.params), now)),
   ];
   await db.batch(stmts);
   // This isolate's remembered visibility (lib/visibility.ts) is now stale.
@@ -865,7 +908,7 @@ export async function replaceAppTools(
         ? { version: operatorView.contract.version, resources: operatorView.contract.resources.length, actions: operatorView.contract.actions.length }
         : null,
       visibility: visibilityResult.visibility ?? PUBLIC_VISIBILITY,
-      worker: workerResult.secrets ? { secrets: workerResult.secrets } : null,
+      worker: workerResult.worker,
       warnings },
   };
 }
@@ -993,6 +1036,7 @@ toolsRoutes.delete('/apps/:appId/tools', async (c) => {
     c.env.DB.prepare('DELETE FROM app_operator_gate WHERE app_id = ?').bind(appId),
     c.env.DB.prepare('DELETE FROM app_operator_view WHERE app_id = ?').bind(appId),
     c.env.DB.prepare('DELETE FROM app_worker_manifest WHERE app_id = ?').bind(appId),
+    c.env.DB.prepare('DELETE FROM app_worker_schedules WHERE app_id = ?').bind(appId),
   ]);
   return c.json({ ok: true });
 });

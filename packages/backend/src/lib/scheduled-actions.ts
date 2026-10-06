@@ -10,6 +10,7 @@ import { forwardToDataWorker } from '../routes/actions.js';
 import { scheduledCronMatches } from '../routes/tools.js';
 import { dispatchWebhook } from './webhook-dispatch.js';
 import { SCHEDULER_TICK_MINUTES } from './scheduler-tick.js';
+import { appWorkerHost, LOADER_MAX_CONCURRENT, type AppWorkerExports } from './app-worker-host.js';
 
 const SYSTEM_SCHEDULE_USER = 'system:schedule';
 export const SCHEDULE_TICK_MS = SCHEDULER_TICK_MINUTES * 60_000;
@@ -26,7 +27,11 @@ export interface ScheduledActionReport {
   failed: number;
   recovered: number;
   skipped: number;
+  /** App-worker schedules (#255), counted apart from actions. */
+  workers?: WorkerScheduleReport;
 }
+
+export interface WorkerScheduleReport { due: number; claimed: number; succeeded: number; failed: number; skipped: number }
 
 function minute(timestamp: number): number {
   return Math.floor(timestamp / 60_000) * 60_000;
@@ -171,17 +176,132 @@ async function executeClaimed(env: Env, row: ScheduledToolRow, manifest: ToolMan
     console.log(`[schedule] succeeded app=${row.app_id} action=${row.name} run=${runId}`);
     return 'succeeded';
   } catch (error) {
-    const message = errorText(error);
-    const failedRun = await env.DB.prepare(
-      "UPDATE scheduled_action_runs SET status = 'failed', finished_at = ?, error = ? WHERE run_id = ? AND status = 'claimed'",
-    ).bind(now, message, runId).run();
-    const failures = failedRun.meta?.changes ? await recordFailure(env, row.app_id, row.name, source, now) : null;
-    console.error(`[schedule] failed app=${row.app_id} action=${row.name} run=${runId} failures=${failures}: ${message}`);
+    await failRun(env, row.app_id, row.name, source, runId, errorText(error), now);
     return 'failed';
   }
 }
 
-export async function runScheduledActions(opts: { env: Env; now?: number }): Promise<ScheduledActionReport> {
+/** Finish a claimed run as failed and advance the breaker — once, even if recovery got there first. */
+async function failRun(env: Env, appId: string, action: string, source: string, runId: string, message: string, now: number): Promise<void> {
+  const failedRun = await env.DB.prepare(
+    "UPDATE scheduled_action_runs SET status = 'failed', finished_at = ?, error = ? WHERE run_id = ? AND status = 'claimed'",
+  ).bind(now, message, runId).run();
+  const failures = failedRun.meta?.changes ? await recordFailure(env, appId, action, source, now) : null;
+  console.error(`[schedule] failed app=${appId} action=${action} run=${runId} failures=${failures}: ${message}`);
+}
+
+// ── App-worker schedules (#255, ADR-009 §3–§4) ───────────────────────────────
+
+/** Run rows of a worker schedule are named `worker:<name>`; `:` is not legal in an action name, so they never collide. */
+export const WORKER_RUN_PREFIX = 'worker:';
+/** A worker schedule gets 5 minutes, under the 10-minute stale-claim window, so a hung run fails before recovery sees it. */
+export const WORKER_SCHEDULE_TIMEOUT_MS = 5 * 60_000;
+
+export interface ClaimedWorkerRun { appId: string; schedule: string; params: Record<string, unknown>; runId: string }
+
+/**
+ * Deliver one claimed worker run and say whether it succeeded. The one place a
+ * run reaches the worker: #257 swaps this for "enqueue" (status `queued`).
+ */
+export type WorkerRunDispatch = (env: Env, run: ClaimedWorkerRun, ctx?: AppWorkerExports) => Promise<{ ok: true } | { ok: false; error: string }>;
+
+export const invokeWorkerRun: WorkerRunDispatch = async (env, run, ctx) => {
+  try {
+    const result = await appWorkerHost(env, ctx).invoke(
+      run.appId,
+      // The envelope id is the run id: stable for this run, so handlers can be idempotent on it (ADR-009 §3).
+      { id: run.runId, type: 'schedule', name: run.schedule, attempt: 1, payload: run.params },
+      { timeoutMs: WORKER_SCHEDULE_TIMEOUT_MS },
+    );
+    if (result.status === 'succeeded') return { ok: true };
+    return { ok: false, error: result.status === 'timeout' ? `worker timed out after ${WORKER_SCHEDULE_TIMEOUT_MS} ms` : `worker answered ${result.httpStatus ?? 'no response'}: ${(result.body ?? '').slice(0, 300)}` };
+  } catch (e) {
+    return { ok: false, error: errorText(e) };
+  }
+};
+
+interface WorkerScheduleRow { app_id: string; name: string; cron: string; params: string }
+
+/** A run-now due_at: `now` in ms, never on a minute, so it is told apart from (and never collides with) a tick's row. */
+export function runNowDueAt(now: number): number {
+  return now % 60_000 === 0 ? now + 1 : now;
+}
+
+/** Active worker schedules: enabled, deployed worker of an app that still exists (#253's activeAppWorker rule). */
+const ACTIVE_WORKER_SCHEDULES = `
+  FROM app_worker_schedules s
+  INNER JOIN app_workers w ON w.app_id = s.app_id
+  INNER JOIN apps a ON a.id = s.app_id
+  WHERE w.enabled = 1 AND w.deployed_at IS NOT NULL`;
+
+function paramsOf(raw: string): Record<string, unknown> {
+  try {
+    const v = JSON.parse(raw) as unknown;
+    return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
+  } catch { return {}; }
+}
+
+/** Run `tasks` with at most `limit` in flight. */
+async function inPool<T>(items: T[], limit: number, task: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  await Promise.allSettled(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) await task(items[next++]!);
+  }));
+}
+
+/**
+ * Claim this tick's worker runs, then deliver them concurrently (≤ 4 at once,
+ * the loader's per-request cap) instead of inline, so one slow worker cannot
+ * hold up the rest. Run-now rows (`due`, inserted by the owner's route with a
+ * millisecond due_at) are claimed first, through the same race-proof claim.
+ */
+export async function runWorkerSchedules(
+  env: Env, now: number, dueAt: number, ctx?: AppWorkerExports, dispatch: WorkerRunDispatch = invokeWorkerRun,
+): Promise<WorkerScheduleReport> {
+  const report: WorkerScheduleReport = { due: 0, claimed: 0, succeeded: 0, failed: 0, skipped: 0 };
+  const schedules = (await env.DB.prepare(`SELECT s.app_id, s.name, s.cron, s.params ${ACTIVE_WORKER_SCHEDULES}`).all<WorkerScheduleRow>()).results ?? [];
+  const byRun = new Map(schedules.map((s) => [`${s.app_id}\u0000${WORKER_RUN_PREFIX}${s.name}`, s]));
+  const runs: ClaimedWorkerRun[] = [];
+  const claim = async (s: WorkerScheduleRow, at: number) => {
+    report.due += 1;
+    const runId = await claimDue(env, { app_id: s.app_id, name: `${WORKER_RUN_PREFIX}${s.name}`, manifest: '', source: 'code' }, at, now);
+    if (!runId) { report.skipped += 1; return; }
+    report.claimed += 1;
+    runs.push({ appId: s.app_id, schedule: s.name, params: paramsOf(s.params), runId });
+  };
+
+  const pending = (await env.DB.prepare(
+    // Only run-now rows: their due_at is never minute-aligned (runNowDueAt). A minute-aligned
+    // 'due' row is a tick's orphan, and the scheduler never backfills missed minutes.
+    `SELECT app_id, action_name, due_at FROM scheduled_action_runs
+      WHERE status = 'due' AND action_name LIKE '${WORKER_RUN_PREFIX}%' AND due_at % 60000 <> 0 ORDER BY due_at`,
+  ).all<{ app_id: string; action_name: string; due_at: number }>()).results ?? [];
+  for (const p of pending) {
+    const s = byRun.get(`${p.app_id}\u0000${p.action_name}`);
+    if (s) await claim(s, p.due_at);
+  }
+  for (const s of schedules) if (scheduledCronMatches(s.cron, dueAt)) await claim(s, dueAt);
+
+  await inPool(runs, LOADER_MAX_CONCURRENT, async (run) => {
+    const action = `${WORKER_RUN_PREFIX}${run.schedule}`;
+    const outcome = await dispatch(env, run, ctx).catch((e) => ({ ok: false as const, error: errorText(e) }));
+    const finishedAt = Date.now();
+    try {
+      if (outcome.ok) {
+        await recordSuccess(env, run.runId, run.appId, action, 'code', null, finishedAt);
+        report.succeeded += 1;
+      } else {
+        await failRun(env, run.appId, action, 'code', run.runId, outcome.error, finishedAt);
+        report.failed += 1;
+      }
+    } catch (e) {
+      console.error(`[schedule] recording worker run ${run.runId} failed: ${errorText(e)}`);
+    }
+  });
+  return report;
+}
+
+export async function runScheduledActions(opts: { env: Env; now?: number; ctx?: AppWorkerExports; dispatch?: WorkerRunDispatch }): Promise<ScheduledActionReport> {
   const now = opts.now ?? Date.now();
   const dueAt = minute(now);
   const report: ScheduledActionReport = { due: 0, claimed: 0, succeeded: 0, failed: 0, recovered: 0, skipped: 0 };
@@ -197,6 +317,12 @@ export async function runScheduledActions(opts: { env: Env; now?: number }): Pro
     report.claimed += 1;
     const outcome = await executeClaimed(opts.env, row, manifest, runId, now);
     report[outcome] += 1;
+  }
+  // After, and isolated from, the action loop: a worker failure never fails an action run (#255).
+  try {
+    report.workers = await runWorkerSchedules(opts.env, now, dueAt, opts.ctx, opts.dispatch);
+  } catch (e) {
+    console.error(`[schedule] worker schedules failed: ${errorText(e)}`);
   }
   return report;
 }
