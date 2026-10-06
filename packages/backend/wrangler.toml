@@ -20,11 +20,11 @@ upload_source_maps = true
 [observability]
 enabled = true
 
-# Embed the data-worker bundle before bundling this worker, so deployDataWorker
-# uploads a script that ships with the backend (no runtime GitHub fetch). Runs
-# on `wrangler deploy` and `wrangler dev`. See scripts/embed-data-worker.mjs.
+# Embed the data-worker bundle and the app-worker entry shim (#253) before
+# bundling this worker, so both ship with the backend (no runtime GitHub fetch).
+# Runs on `wrangler deploy` and `wrangler dev`. See scripts/embed-*.mjs.
 [build]
-command = "node scripts/embed-data-worker.mjs"
+command = "node scripts/embed-data-worker.mjs && node scripts/embed-app-worker-shim.mjs"
 
 [vars]
 # Public base URL of this API — used to build OAuth callback URLs (routes/auth.ts).
@@ -67,6 +67,13 @@ CF_ACCOUNT_ID = "c1089bfcc43c1c6c2aa89e584e86f0bc"
 VAPID_PUBLIC_KEY = "BPg6E92QAOhdcif_HckOEGY6mL03VKWNQ3CS1xQX5q59fXURI1xCGwwBr4Vsv7gn3TXIGSJquJwvHGYRbMcAQc0"
 # Comma-separated `gh:<id>` strings allowed to approve/reject submissions.
 ADMIN_GITHUB_IDS = "gh:2824906"
+
+# App workers (#253, ADR-009) are OFF here: APP_WORKER_BACKEND is deliberately
+# unset and there is no [[worker_loaders]] binding, so deploys and invocations
+# answer 503 whatever any app's flag says. Turning them on means adding
+#   APP_WORKER_BACKEND = "loader"   and   [[worker_loaders]] binding = "LOADER"
+# — only after #274 is closed (ADR-009, "Trust assumptions") and the loader is
+# verified on this account (the runtime suite runs it on miniflare only).
 
 # Session-key drift check (#70): every 15 minutes, mint a probe session with the
 # CURRENT SESSION_SIGNING_KEY and present it to a sample of data workers; a 401

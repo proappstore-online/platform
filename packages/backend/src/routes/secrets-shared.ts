@@ -57,9 +57,4 @@ export function requireKek(c: Ctx): string {
   return kek;
 }
 
-export function toUint8(v: unknown): Uint8Array {
-  if (v instanceof Uint8Array) return v;
-  if (v instanceof ArrayBuffer) return new Uint8Array(v);
-  if (Array.isArray(v)) return Uint8Array.from(v as number[]);
-  return new Uint8Array(0);
-}
+export { toUint8 } from '../lib/bytes.js';

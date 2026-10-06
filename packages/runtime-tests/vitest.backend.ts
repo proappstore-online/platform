@@ -27,6 +27,9 @@ export default defineWorkersConfig(async () => ({
           d1Databases: ['DB'],
           r2Buckets: ['STORAGE'],
           durableObjects: { ROOM: 'Room' },
+          // #253: the app-worker `loader` backend, on the real Worker Loader. Production
+          // has neither the binding nor APP_WORKER_BACKEND yet (app workers stay off).
+          workerLoaders: { LOADER: {} },
           ratelimits: {
             PUBLIC_ACTION_RATE_LIMIT: { simple: { limit: 120, period: 60 } },
             AI_RATE_LIMIT: { simple: { limit: 20, period: 60 } },
@@ -39,6 +42,9 @@ export default defineWorkersConfig(async () => ({
           bindings: {
             APP_BASE: 'https://api.test',
             DATA_WORKER_HOST: 'test.workers.dev',
+            APP_WORKER_BACKEND: 'loader',
+            // This workerd predates the platform's app-worker date (2026-01-01).
+            APP_WORKER_COMPATIBILITY_DATE: COMPATIBILITY_DATE,
             ADMIN_GITHUB_IDS: 'gh:admin',
             SESSION_SIGNING_KEY,
             INTERNAL_TOKEN,

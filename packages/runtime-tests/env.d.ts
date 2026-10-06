@@ -24,5 +24,7 @@ declare module 'cloudflare:test' {
     APP_SECRET_KEK: string;
     APP_ID: string;
     DATA_WORKER_HOST: string;
+    LOADER: WorkerLoader;
+    APP_WORKER_BACKEND: 'loader';
   }
 }

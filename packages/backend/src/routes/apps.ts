@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
-import { requireUser, HttpError } from '../lib/auth.js';
+import { requireUser, HttpError, isAdminId } from '../lib/auth.js';
+import { disableAppWorker } from '../lib/app-worker-host.js';
 
 /**
  * Apps owned by the signed-in dev. The `apps` table is the source of truth
@@ -77,19 +78,12 @@ function toTitleCase(id: string): string {
     .join(' ');
 }
 
-function isAdmin(userId: string, env: Env): boolean {
-  if (!env.ADMIN_GITHUB_IDS) return false;
-  return env.ADMIN_GITHUB_IDS.split(',')
-    .map((s) => s.trim())
-    .includes(userId);
-}
-
 export const appsRoutes = new Hono<{ Bindings: Env }>();
 
 appsRoutes.get('/apps', async (c) => {
   try {
     const user = await requireUser(c);
-    const wantAll = c.req.query('all') === 'true' && isAdmin(user.id, c.env);
+    const wantAll = c.req.query('all') === 'true' && isAdminId(user.id, c.env);
     const creatorFilter = wantAll ? null : user.id;
 
     // Pull apps: owned by this user OR where they're a team member (or all if admin).
@@ -165,7 +159,7 @@ appsRoutes.get('/apps', async (c) => {
 /**
  * Remove an app from the owner's dashboard listing. This does NOT
  * deprovision Cloudflare Pages, D1, the GitHub repo, DNS, or the storefront
- * registry — those keep working. It only deletes the row in the `apps`
+ * registry — those keep working. Its app worker, if any, is removed (#253). It only deletes the row in the `apps`
  * table that Console reads for "my apps." If the dev later wants the app
  * back on their dashboard, re-running provision (idempotent) re-inserts it.
  *
@@ -183,8 +177,12 @@ appsRoutes.delete('/apps/:id', async (c) => {
     if (!existing) return c.text('Not found', 404);
 
     const owns = existing.creator_id === user.id;
-    if (!owns && !isAdmin(user.id, c.env)) return c.text('Forbidden', 403);
+    if (!owns && !isAdminId(user.id, c.env)) return c.text('Forbidden', 403);
 
+    // An app worker must not outlive its app (#253): turn it off and remove its
+    // code and credentials first. Best-effort — a failure is logged, never a
+    // reason to keep the app.
+    await disableAppWorker(c.env, id).catch((e) => console.error(`[apps] app worker removal failed for ${id}: ${(e as Error).message}`));
     await c.env.DB.prepare('DELETE FROM apps WHERE id = ?').bind(id).run();
     return c.json({ ok: true });
   } catch (err) {

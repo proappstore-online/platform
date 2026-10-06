@@ -8,8 +8,9 @@
   "main": "./src/index.ts",
   "scripts": {
     "embed-data-worker": "node scripts/embed-data-worker.mjs",
-    "prebuild": "node scripts/embed-data-worker.mjs",
-    "pretypecheck": "node scripts/embed-data-worker.mjs",
+    "embed-app-worker-shim": "node scripts/embed-app-worker-shim.mjs",
+    "prebuild": "node scripts/embed-data-worker.mjs && node scripts/embed-app-worker-shim.mjs",
+    "pretypecheck": "node scripts/embed-data-worker.mjs && node scripts/embed-app-worker-shim.mjs",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "dev": "wrangler dev",
@@ -26,6 +27,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",
     "@types/web-push": "^3.6.0",
+    "esbuild": "^0.28.0",
     "typescript": "^5.7.0",
     "wrangler": "^4.0.0"
   }

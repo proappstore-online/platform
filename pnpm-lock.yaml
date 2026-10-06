@@ -102,6 +102,9 @@ importers:
       '@types/web-push':
         specifier: ^3.6.0
         version: 3.6.4
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.0
       typescript:
         specifier: ^5.7.0
         version: 5.9.3

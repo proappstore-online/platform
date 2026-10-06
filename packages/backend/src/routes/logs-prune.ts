@@ -91,6 +91,13 @@ const RETENTION_PRUNES = [
     where: "due_at < ? AND status <> 'claimed'",
     binds: (nowMs: number) => [cutoffMs(nowMs, SCHEDULED_RUN_RETENTION_DAYS)],
   },
+  {
+    // #253: one row per app-worker invocation, kept as long as scheduled runs.
+    key: 'app_worker_invocations',
+    table: 'app_worker_invocations',
+    where: 'started_at < ?',
+    binds: (nowMs: number) => [cutoffMs(nowMs, SCHEDULED_RUN_RETENTION_DAYS)],
+  },
 ] as const;
 
 export function cutoffMs(nowMs: number, days: number): number {

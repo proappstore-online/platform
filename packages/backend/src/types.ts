@@ -155,6 +155,15 @@ export interface Env {
   APP_SECRET_KEK?: string;
   /** Sender address for outbound emails. Defaults to "ProAppStore <noreply@proappstore.online>". */
   EMAIL_FROM?: string;
+  /**
+   * App-worker hosting backend (#253, ADR-009 §5). Unset: app workers are off —
+   * deploys and invocations answer 503, removal still works.
+   */
+  APP_WORKER_BACKEND?: 'account' | 'loader' | 'dispatch';
+  /** Worker Loader (Dynamic Workers) binding; required by the `loader` backend. */
+  LOADER?: WorkerLoader;
+  /** Compatibility date of loaded app workers. Defaults to the platform pin (lib/app-worker-host.ts). */
+  APP_WORKER_COMPATIBILITY_DATE?: string;
 }
 
 export interface PushSubscriptionRow {

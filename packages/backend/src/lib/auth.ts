@@ -205,6 +205,18 @@ export async function requireAppOwner(
 }
 
 /**
+ * Whether a stored user id (`gh:<id>`) is a platform admin — in `ADMIN_GITHUB_IDS`.
+ * For ids with no session behind them, such as `apps.creator_id`; a session's
+ * own admin role is `requireAdmin`.
+ */
+export function isAdminId(userId: string, env: Pick<Env, 'ADMIN_GITHUB_IDS'>): boolean {
+  if (!env.ADMIN_GITHUB_IDS) return false;
+  return env.ADMIN_GITHUB_IDS.split(',')
+    .map((s) => s.trim())
+    .includes(userId);
+}
+
+/**
  * Require a platform admin. Checks 'admin' role in session token claims.
  */
 export async function requireAdmin(c: Context<{ Bindings: Env }>): Promise<FasUser> {

@@ -49,9 +49,25 @@ describe('rate-limit ledger retention against real D1', () => {
     expect(body.ledgerRowsDeleted).toEqual({
       maps_usage: 0, sms_usage: 0, notification_log: 0, webhook_deliveries: 0, webhook_deliveries_orphaned: 0,
       app_proxy_usage: 0, app_proxy_usage_user: 0, ai_daily_budget: 0, license_validate_attempts: 0, provision_attempts: 0,
-      scheduled_action_runs: 0,
+      scheduled_action_runs: 0, app_worker_invocations: 0,
     });
     expect(await count('maps_usage')).toBe(1);
+  });
+});
+
+// #253: app-worker invocation records keep 30 days, like scheduled-action runs.
+describe('app-worker invocation retention against real D1', () => {
+  it('deletes invocation rows older than 30 days and keeps recent ones', async () => {
+    await env.DB.prepare('DELETE FROM app_worker_invocations').run();
+    const add = (id: string, startedAt: number) => env.DB.prepare(
+      "INSERT INTO app_worker_invocations (id, app_id, event_id, type, attempt, status, started_at) VALUES (?, 'demo', ?, 'schedule', 1, 'succeeded', ?)",
+    ).bind(id, id, startedAt).run();
+    await add('old:1', Date.now() - 31 * 24 * 60 * 60 * 1000);
+    await add('new:1', Date.now() - 60_000);
+    const body = await (await prune()).json() as { ledgerRowsDeleted: Record<string, number> };
+    expect(body.ledgerRowsDeleted).toMatchObject({ app_worker_invocations: 1 });
+    expect((await env.DB.prepare('SELECT id FROM app_worker_invocations').all()).results).toEqual([{ id: 'new:1' }]);
+    await env.DB.prepare('DELETE FROM app_worker_invocations').run();
   });
 });
 
