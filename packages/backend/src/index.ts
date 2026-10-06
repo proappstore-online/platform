@@ -284,6 +284,8 @@ app.route('/v1', v1);
 app.route('/', webhookRoutes);
 
 export { Room } from './do/room.js';
+// #254: the RPC entrypoint behind an app worker's `PAS` binding (ctx.exports.AppWorkerApi).
+export { AppWorkerApi } from './rpc/app-worker-api.js';
 
 /**
  * Cron entry (#70): the session-key drift check. `[triggers] crons` in wrangler.toml

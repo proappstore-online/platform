@@ -164,6 +164,8 @@ export interface Env {
   LOADER?: WorkerLoader;
   /** Compatibility date of loaded app workers. Defaults to the platform pin (lib/app-worker-host.ts). */
   APP_WORKER_COMPATIBILITY_DATE?: string;
+  /** One data point per app-worker `PAS` call (#254, ADR-009 §4): index app id; blobs method, action, outcome. */
+  APP_WORKER_CALLS?: AnalyticsEngineDataset;
 }
 
 export interface PushSubscriptionRow {

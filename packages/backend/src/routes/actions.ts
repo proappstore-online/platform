@@ -4,6 +4,7 @@ import { HttpError, optionalUser, requireRecentAuth, requireUser, type FasUser }
 import { roleSubjects } from '../lib/role-subject.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
 import {
+  actionCallers,
   prepareActionBatch,
   prepareActionQuery,
   prepareVerifyInput,
@@ -80,6 +81,9 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   // platform scheduler reaches the data worker directly (forwardToDataWorker),
   // never this route, so no session or app token may run one here.
   if (manifest.schedule !== undefined) throw new HttpError('scheduled actions run only on the platform scheduler', 403);
+  // #254: an action whose callers lack "user" runs only through the app's worker
+  // (PAS.actions) or hooks — never from a session or app token here.
+  if (!actionCallers(manifest).includes('user')) throw new HttpError("this action runs only from the app's worker/hooks", 403);
   const publicAction = manifest.requires_auth === false;
   // #259: a private app has no anonymous data path, and every caller — session or
   // app token — must be its owner or hold one of its declared roles. Registration

@@ -14,11 +14,12 @@ import type { Env } from '../types.js';
 import { requireAppAccess, requireAppOwner, requireUser } from '../lib/auth.js';
 import { forgetAppVisibility, MAX_VISIBILITY_ROLES, PUBLIC_VISIBILITY, requireVisible, visibilityFromRow, type AppVisibility } from '../lib/visibility.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
-import { VERIFY_PARAM_PREFIX, literalLimit, resolveToolParams, selectsColumn, type ToolManifest, type ToolParam } from '../lib/action-sql.js';
+import { ACTION_CALLERS, VERIFY_PARAM_PREFIX, actionCallers, literalLimit, resolveToolParams, selectsColumn, type ToolManifest, type ToolParam } from '../lib/action-sql.js';
 import { ENDPOINT_NAME_PREFIX } from '../lib/endpoint-sql.js';
 import { getVerifier, VERIFIERS } from '../lib/verifiers/index.js';
 import { validateOperatorView } from '../lib/operator-contract.js';
 import { SCHEDULER_TICK_MINUTES } from '../lib/scheduler-tick.js';
+import { MAX_SECRETS_PER_APP, SECRET_NAME_RE } from './secrets-shared.js';
 
 export const toolsRoutes = new Hono<{ Bindings: Env }>();
 
@@ -318,7 +319,32 @@ function validateManifest(tool: ToolManifest, opts: { source: ToolSource } = { s
     }
   }
 
+  // #254 (ADR-009 §2): who may run the action. Absent = ["user"].
+  if (tool.callers !== undefined) {
+    const callers: unknown = tool.callers;
+    if (!Array.isArray(callers) || callers.length === 0 || callers.some((c) => !(ACTION_CALLERS as readonly unknown[]).includes(c))) {
+      return `callers must be a non-empty array of ${ACTION_CALLERS.map((c) => `"${c}"`).join(', ')}`;
+    }
+    if (new Set(callers).size !== callers.length) return 'callers must not repeat a caller';
+    if (tool.requires_auth === false && !callers.includes('user')) return 'a public action (requires_auth false) must include "user" in callers';
+    if (tool.schedule !== undefined) return 'scheduled tools cannot declare callers (only the platform scheduler runs them)';
+  }
+
   return null;
+}
+
+/**
+ * #254: an unscoped write that any signed-in user can run. Not refused — some
+ * apps mean it — but said out loud at registration, because a write meant for
+ * the app's worker usually wants `callers: ["worker"]` instead.
+ */
+function openUnscopedWrite(tool: ToolManifest): boolean {
+  return (tool.operation === 'execute' || tool.operation === 'batch')
+    && tool.requires_auth !== false
+    && tool.schedule === undefined
+    && tool.auth?.caller_unscoped !== undefined
+    && !tool.auth.app_roles?.length && !tool.auth.platform_roles?.length
+    && actionCallers(tool).includes('user');
 }
 
 /**
@@ -591,11 +617,13 @@ export interface SiteManifest {
   operator_view?: unknown;
   /** Private apps (#259): `{ mode: 'public' | 'private', roles?: string[] }` — lib/visibility.ts. */
   visibility?: unknown;
+  /** The app worker's manifest (#254): `{ secrets?: string[] }` — the app secrets it may read. */
+  worker?: unknown;
 }
 
 /** The site-manifest fields of a submitted mcp.json body, for every registration path. */
 export function siteManifestFrom(body: SiteManifest | null | undefined): SiteManifest {
-  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility };
+  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker };
 }
 
 interface PageMetaRoute { path: string; action: string; param: string }
@@ -704,6 +732,20 @@ function validateVisibility(visibility: unknown, tools: ToolManifest[]): { error
   return { visibility: { mode, roles: roles as string[] } };
 }
 
+/** The `worker` section (#254): `{ secrets?: string[] }` naming app secrets (app_secrets.name). */
+export function validateWorkerManifest(worker: unknown): { error: string } | { secrets: string[] | null } {
+  if (worker === undefined || worker === null) return { secrets: null };
+  if (typeof worker !== 'object' || Array.isArray(worker)) return { error: 'worker must be an object' };
+  const extra = Object.keys(worker).find((k) => k !== 'secrets');
+  if (extra) return { error: `worker: unknown field "${extra}"` };
+  const secrets = (worker as { secrets?: unknown }).secrets ?? [];
+  if (!Array.isArray(secrets) || secrets.length > MAX_SECRETS_PER_APP || secrets.some((n) => typeof n !== 'string' || !SECRET_NAME_RE.test(n))) {
+    return { error: `worker.secrets must be an array of at most ${MAX_SECRETS_PER_APP} app secret names (${SECRET_NAME_RE.source})` };
+  }
+  if (new Set(secrets).size !== secrets.length) return { error: 'worker.secrets must not repeat a name' };
+  return { secrets: secrets as string[] };
+}
+
 export async function replaceAppTools(
   db: D1Database,
   appId: string,
@@ -735,6 +777,8 @@ export async function replaceAppTools(
   if ('error' in operatorView) return { status: 400, payload: { error: operatorView.error } };
   const visibilityResult = validateVisibility(site.visibility, tools as ToolManifest[]);
   if ('error' in visibilityResult) return { status: 400, payload: { error: visibilityResult.error } };
+  const workerResult = validateWorkerManifest(site.worker);
+  if ('error' in workerResult) return { status: 400, payload: { error: workerResult.error } };
 
   // A deploy replaces the CODE tools only (#155): console-defined endpoints live
   // in the same table under source = 'console' and are never touched here — a
@@ -777,6 +821,11 @@ export async function replaceAppTools(
     ...(visibilityResult.visibility
       ? [db.prepare('INSERT INTO app_visibility (app_id, mode, roles, created_at) VALUES (?, ?, ?, ?)').bind(appId, visibilityResult.visibility.mode, JSON.stringify(visibilityResult.visibility.roles), now)]
       : []),
+    // And the worker section (#254): a manifest without it leaves the worker no secrets.
+    db.prepare('DELETE FROM app_worker_manifest WHERE app_id = ?').bind(appId),
+    ...(workerResult.secrets
+      ? [db.prepare('INSERT INTO app_worker_manifest (app_id, secrets, created_at) VALUES (?, ?, ?)').bind(appId, JSON.stringify(workerResult.secrets), now)]
+      : []),
   ];
   await db.batch(stmts);
   // This isolate's remembered visibility (lib/visibility.ts) is now stale.
@@ -799,6 +848,9 @@ export async function replaceAppTools(
       : [];
   // Count headroom (#109): a second, independent warning as the manifest nears
   // the hard cap, so the limit is announced while there is still room to plan.
+  for (const tool of (tools as ToolManifest[]).filter(openUnscopedWrite)) {
+    warnings.push(`action "${tool.name}" is an unscoped write any signed-in user can run; if only the app's worker should, declare "callers": ["worker"]`);
+  }
   if (tools.length >= TOOLS_WARN_THRESHOLD) {
     warnings.push(
       `Manifest registers ${tools.length} of ${MAX_TOOLS_PER_APP} tools (${Math.round((tools.length / MAX_TOOLS_PER_APP) * 100)}% of the per-app cap, ${MAX_TOOLS_PER_APP - tools.length} left); ` +
@@ -813,6 +865,7 @@ export async function replaceAppTools(
         ? { version: operatorView.contract.version, resources: operatorView.contract.resources.length, actions: operatorView.contract.actions.length }
         : null,
       visibility: visibilityResult.visibility ?? PUBLIC_VISIBILITY,
+      worker: workerResult.secrets ? { secrets: workerResult.secrets } : null,
       warnings },
   };
 }
@@ -867,6 +920,8 @@ function publicToolView(m: ToolManifest) {
     ...(m.core !== undefined ? { core: m.core } : {}),
     // Only that one is scheduled, so MCP can hide it (#203) — never its cron or fixed params.
     ...(m.schedule !== undefined ? { scheduled: true } : {}),
+    // Who may run it (#254), so MCP can hide what a user session cannot call.
+    ...(m.callers !== undefined ? { callers: m.callers } : {}),
     // Lets a client or MCP host step up before calling, rather than after a refusal (#231).
     ...(m.step_up ? { step_up: true } : {}),
     ...(m.auth
@@ -928,7 +983,7 @@ toolsRoutes.delete('/apps/:appId/tools', async (c) => {
   const appId = c.req.param('appId')!;
   await requireAppOwner(c, appId);
   // Code rows only: console endpoints are removed through the audited endpoints route (#155).
-  // Page meta, sitemap, the operator gate and the operator view go with the code manifest that declared them (#210, #229, #240).
+  // Page meta, sitemap, the operator gate, the operator view and the worker section go with the code manifest that declared them (#210, #229, #240, #254).
   // Visibility (#259) deliberately does not: removing an app's tools must never
   // make a private app public. Only a registration that omits it does that.
   await c.env.DB.batch([
@@ -937,6 +992,7 @@ toolsRoutes.delete('/apps/:appId/tools', async (c) => {
     c.env.DB.prepare('DELETE FROM app_sitemap WHERE app_id = ?').bind(appId),
     c.env.DB.prepare('DELETE FROM app_operator_gate WHERE app_id = ?').bind(appId),
     c.env.DB.prepare('DELETE FROM app_operator_view WHERE app_id = ?').bind(appId),
+    c.env.DB.prepare('DELETE FROM app_worker_manifest WHERE app_id = ?').bind(appId),
   ]);
   return c.json({ ok: true });
 });

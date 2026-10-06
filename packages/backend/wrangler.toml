@@ -128,6 +128,12 @@ dataset = "pas_app_errors"
 binding = "PAYOUT_METER"
 dataset = "pas_payout_meter"
 
+# App-worker PAS calls (#254, ADR-009 §4): one data point per call, indexed by
+# app; blobs method, action, outcome. Individual calls are never written to D1.
+[[analytics_engine_datasets]]
+binding = "APP_WORKER_CALLS"
+dataset = "pas_app_worker_calls"
+
 # Realtime rooms — Durable Object for WebSocket fan-out.
 [durable_objects]
 bindings = [

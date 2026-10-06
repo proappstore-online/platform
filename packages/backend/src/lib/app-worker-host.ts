@@ -95,11 +95,24 @@ export interface AppWorkerHost {
   remove(appId: string): Promise<void>;
 }
 
-/** The host for this deployment's backend. Never throws; an unusable backend answers on use. */
-export function appWorkerHost(env: Env): AppWorkerHost {
+/**
+ * Where the `PAS` stub comes from (#254): the calling Worker's own
+ * `ctx.exports.AppWorkerApi`, so its `props` are set by platform code and cannot
+ * be forged by the app (ADR-009 §2).
+ */
+export interface AppWorkerExports {
+  exports?: { AppWorkerApi?: (opts: { props: { appId: string } }) => unknown };
+}
+
+/**
+ * The host for this deployment's backend. Never throws; an unusable backend
+ * answers on use. Pass the request's ExecutionContext so invoked workers get
+ * their `PAS` binding; without it they run with no `PAS`.
+ */
+export function appWorkerHost(env: Env, ctx?: AppWorkerExports): AppWorkerHost {
   switch (env.APP_WORKER_BACKEND) {
     case 'loader':
-      return env.LOADER ? loaderHost(env, env.LOADER) : unavailableHost(env, 'loader', 'the LOADER binding is missing', 503);
+      return env.LOADER ? loaderHost(env, env.LOADER, ctx) : unavailableHost(env, 'loader', 'the LOADER binding is missing', 503);
     case 'account':
     case 'dispatch':
       return unavailableHost(env, env.APP_WORKER_BACKEND, `the ${env.APP_WORKER_BACKEND} app-worker backend is not implemented`, 501);
@@ -336,7 +349,7 @@ export function loaderId(appId: string, bundleSha: string, configVersion: number
   return `${appId}:${bundleSha}:${configVersion}:${shim}`;
 }
 
-function loaderHost(env: Env, loader: WorkerLoader): AppWorkerHost {
+function loaderHost(env: Env, loader: WorkerLoader, ctx?: AppWorkerExports): AppWorkerHost {
   return {
     backend: 'loader',
 
@@ -411,13 +424,16 @@ function loaderHost(env: Env, loader: WorkerLoader): AppWorkerHost {
       const compatDate = compatibilityDate(env);
       const id = loaderId(appId, w.bundle_sha256, w.config_version, await appWorkerShimSha(compatDate));
       const bundleSha = w.bundle_sha256;
+      const pas = ctx?.exports?.AppWorkerApi?.({ props: { appId } });
+      if (!pas) console.warn(`[app-worker] invoking ${appId} without a PAS binding (no ctx.exports.AppWorkerApi)`);
       const worker = loader.get(id, async () => ({
         compatibilityDate: compatDate,
         compatibilityFlags: COMPATIBILITY_FLAGS,
         mainModule: SHIM_MODULE,
         modules: { ...(await loadBundle(env.STORAGE, appId, bundleSha)), [SHIM_MODULE]: APP_WORKER_SHIM },
-        // ADR-009 §2. `PAS` (the AppWorkerApi stub) is added with the entrypoint in #254.
+        // ADR-009 §2: exactly these bindings. `PAS` is the AppWorkerApi stub (#254).
         env: {
+          ...(pas ? { PAS: pas } : {}),
           PAS_WORKER_TOKEN: await openSecret(sealed(w.token_ct, w.token_dek, w.token_iv), kek),
           PAS_EVENT_KEY: keys[0],
           APP_ID: appId,

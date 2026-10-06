@@ -218,6 +218,18 @@ describe('private apps: visibility registration on a green deploy (#259 review)'
     expect(b.bodies).toEqual([expect.objectContaining({ tools: [], visibility: { mode: 'private', roles: ['viewer'] } })]);
   });
 
+  it('forwards every site-manifest key, worker included, so no deploy wipes one (#254)', async () => {
+    const manifest = {
+      tools: [{ name: 'upsert_repo' }], page_meta: [{ path: '/r/:id' }], sitemap: { action: 'list' }, operator: { prefix: '/admin' },
+      operator_view: { version: 1 }, visibility: { mode: 'public' }, worker: { secrets: ['GITHUB_TOKEN'] },
+    };
+    const b = backend(200);
+    const { deps: d } = deps({ PAS_BACKEND: b.binding, INTERNAL_TOKEN: 'it' });
+    await registerMcpTools(d, { slug: 'repos' }, 't1', new Map([['mcp.json', JSON.stringify(manifest)]]));
+    await registerMcpTools(d, { slug: 'repos' }, 't2', new Map([['mcp.json', JSON.stringify(manifest)]]));
+    expect(b.bodies).toEqual([manifest, manifest]);
+  });
+
   it('still skips a tool-less manifest that declares nothing', async () => {
     const b = backend(200);
     const { deps: d } = deps({ PAS_BACKEND: b.binding, INTERNAL_TOKEN: 'it' });

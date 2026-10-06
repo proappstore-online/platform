@@ -589,12 +589,15 @@ export async function registerMcpTools(
   }
 
   let tools: unknown;
-  let site: { page_meta?: unknown; sitemap?: unknown; operator?: unknown; operator_view?: unknown; visibility?: unknown } = {};
+  let site: { visibility?: unknown } & Record<string, unknown> = {};
   try {
-    const parsed = JSON.parse(raw) as { tools?: unknown; page_meta?: unknown; sitemap?: unknown; operator?: unknown; operator_view?: unknown; visibility?: unknown };
+    const parsed = JSON.parse(raw) as ({ tools?: unknown } & Record<string, unknown>) | null;
     tools = Array.isArray(parsed?.tools) ? parsed.tools : [];
-    // page_meta / sitemap (#210), operator (#229), operator_view (#240) and visibility (#259) register with the tools and are replaced with them.
-    site = { page_meta: parsed?.page_meta, sitemap: parsed?.sitemap, operator: parsed?.operator, operator_view: parsed?.operator_view, visibility: parsed?.visibility };
+    // Every site-manifest key (page_meta, sitemap, operator, operator_view, visibility, worker, …)
+    // registers with the tools and is replaced with them. Forward them all so a key added later
+    // cannot be dropped here and silently wiped on the next deploy (#254); the API picks the keys it knows.
+    const { tools: _tools, ...rest } = parsed && typeof parsed === 'object' ? parsed : {};
+    site = rest;
   } catch {
     deps.logActivity('deploy', 'mcp.json is not valid JSON — skipped tool registration', ticketId);
     return { ok: true, private: false };

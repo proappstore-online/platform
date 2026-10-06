@@ -144,7 +144,7 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
   if (data.success) {
     // ── Register MCP tools from mcp.json (if present) ──────────
     const mcpManifestPath = resolve(cwd, 'mcp.json');
-    const mcpManifest = readJsonIfExists<{ tools?: unknown[]; page_meta?: unknown; sitemap?: unknown; operator?: unknown; operator_view?: unknown; visibility?: unknown }>(mcpManifestPath);
+    const mcpManifest = readJsonIfExists<{ tools?: unknown[]; visibility?: unknown } & Record<string, unknown>>(mcpManifestPath);
     const manifestTools = Array.isArray(mcpManifest?.tools) ? mcpManifest.tools : [];
     // #259: visibility registers with the tools, so a manifest that declares it
     // registers even with no tools — or a tool-less private app would go live public.
@@ -157,8 +157,10 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
         const toolsRes = await fetch(`${PAS_API}/v1/apps/${appId}/tools`, {
           method: 'PUT',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          // page_meta / sitemap (#210), operator (#229), operator_view (#240) and visibility (#259) register with the tools and are replaced with them.
-          body: JSON.stringify({ tools: manifestTools, page_meta: mcpManifest.page_meta, sitemap: mcpManifest.sitemap, operator: mcpManifest.operator, operator_view: mcpManifest.operator_view, visibility: mcpManifest.visibility }),
+          // Every site-manifest key (page_meta, sitemap, operator, operator_view, visibility, worker, …)
+          // registers with the tools and is replaced with them. Forward the whole manifest so a key added
+          // later cannot be dropped here and silently wiped on the next publish (#254); the API picks the keys it knows.
+          body: JSON.stringify({ ...mcpManifest, tools: manifestTools }),
         });
         if (toolsRes.ok) {
           const toolsData = (await toolsRes.json()) as { registered: number; schedules?: Array<{ name: string; cron: string }> };

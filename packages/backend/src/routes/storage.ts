@@ -28,7 +28,7 @@ export const MAX_FILES_PER_NAMESPACE = 1000;
  * list on the prefix — authoritative, no counter to backfill or drift. Returns
  * the refusal message, or null to proceed.
  */
-async function fileQuotaRefusal(bucket: R2Bucket, key: string, prefix: string): Promise<string | null> {
+export async function fileQuotaRefusal(bucket: R2Bucket, key: string, prefix: string): Promise<string | null> {
   if (await bucket.head(key)) return null;
   const listed = await bucket.list({ prefix, limit: MAX_FILES_PER_NAMESPACE });
   if (listed.objects.length < MAX_FILES_PER_NAMESPACE) return null;

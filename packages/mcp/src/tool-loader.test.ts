@@ -458,6 +458,16 @@ describe('registerAppDiscoveryTools — list_app_tools / call_app_tool on the sh
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('fetchTools drops worker/hook-only actions a session cannot call, keeps mixed ones (#254)', async () => {
+    const workerOnly = { name: 'upsert_repo', description: 'x', operation: 'execute', params: {}, requires_auth: true, callers: ['worker'] };
+    const mixed = { name: 'touch_repo', description: 'x', operation: 'execute', params: {}, requires_auth: true, callers: ['user', 'worker'] };
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ tools: [...crmTools, workerOnly, mixed] }), { status: 200 }));
+    const names = (await fetchTools(api, 'https://api.test', 'crm')).map((t) => t.name);
+    expect(names).not.toContain('upsert_repo');
+    expect(names).toContain('touch_repo');
+    expect(names).toContain('update_company');
+  });
+
   describe('scheduled actions are platform-only (#203)', () => {
     const scheduled = { name: 'reap_stale_games_all', description: 'Reap stale games', operation: 'execute', params: { idle_ms: { type: 'integer' } }, requires_auth: true, scheduled: true };
     const withScheduled = () => new Response(JSON.stringify({ tools: [...crmTools, scheduled] }), { status: 200 });

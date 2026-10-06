@@ -49,6 +49,8 @@ export interface ToolManifest {
   core?: boolean;
   /** Runs only on the platform scheduler; the executor refuses it over HTTP/MCP (#203). */
   scheduled?: boolean;
+  /** #254: who may run it; absent means users. */
+  callers?: string[];
 }
 
 export interface AppTool extends ToolManifest {
@@ -145,7 +147,8 @@ function toolsFrom(data: ToolsResponse, appId: string): AppTool[] {
   // session registers, lists or resolves it by name. (`scheduled` on the public
   // view; `schedule` on the full manifest a team member receives.)
   return (data.tools ?? [])
-    .filter((tool) => !tool.scheduled && !(tool as { schedule?: unknown }).schedule)
+    // #254: a worker/hook-only action refuses user sessions, so it is hidden too.
+    .filter((tool) => !tool.scheduled && !(tool as { schedule?: unknown }).schedule && (tool.callers ?? ['user']).includes('user'))
     .map((tool) => ({ ...tool, app_id: appId }));
 }
 

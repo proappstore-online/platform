@@ -7,7 +7,7 @@
  */
 import type { Env } from '../types.js';
 import { HttpError, requireRecentAuth, type FasUser } from '../lib/auth.js';
-import { prepareActionBatch, prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
+import { actionCallers, prepareActionBatch, prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
 import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from './actions.js';
 import { markAudited } from '../lib/operator-audit-marks.js';
 
@@ -79,7 +79,8 @@ async function runOperatorCall(
   operations: ToolManifest['operation'][],
 ): Promise<{ body: unknown; role: string | null }> {
   const manifest = await loadManifest(env.DB, appId, name);
-  if (!operations.includes(manifest.operation) || manifest.requires_auth === false || manifest.schedule !== undefined) {
+  // The console runs actions as the owner: a worker/hook-only action (#254) is out of reach, like a scheduled one.
+  if (!operations.includes(manifest.operation) || manifest.requires_auth === false || manifest.schedule !== undefined || !actionCallers(manifest).includes('user')) {
     throw new HttpError(`action ${name} cannot run from the operator view`, 409);
   }
   const role = await enforceActionAuth(env.DB, appId, manifest, user);

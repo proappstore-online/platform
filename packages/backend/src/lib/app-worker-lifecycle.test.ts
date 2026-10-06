@@ -169,6 +169,16 @@ describe('loader backend lifecycle (#253)', () => {
     expect(invocations.get(result.invocationId)).toMatchObject({ status: 'succeeded', http_status: 200, body_excerpt: null });
   });
 
+  it('hands the worker a PAS stub made from ctx.exports with platform-set props (#254)', async () => {
+    const made: unknown[] = [];
+    const ctx = { exports: { AppWorkerApi: (opts: { props: { appId: string } }) => { made.push(opts); return { stub: 'pas' }; } } };
+    const host = appWorkerHost(env, ctx);
+    await host.deploy('demo', bundle());
+    await host.invoke('demo', event(), { timeoutMs: 5_000 });
+    expect(made).toEqual([{ props: { appId: 'demo' } }]);
+    expect(Object.keys(loads[0]!.code.env).sort()).toEqual(['APP_ID', 'PAS', 'PAS_EVENT_KEY', 'PAS_WORKER_TOKEN']);
+  });
+
   it('records a non-2xx with the first 1 KB, a timeout, and refuses a duplicate id', async () => {
     const host = appWorkerHost(env);
     await host.deploy('demo', bundle());

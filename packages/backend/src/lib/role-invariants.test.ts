@@ -49,3 +49,14 @@ describe('role-system invariants', () => {
     }
   });
 });
+
+// #254: an app worker acts as `system:worker`, which must never satisfy a role
+// gate — not even if someone granted that id an app role. The worker path refuses
+// a role-gated action outright and never consults role grants.
+describe('system:worker holds no role (#254)', () => {
+  it('the worker call path refuses role-gated actions and never runs the role check', () => {
+    const src = read('./app-worker-calls.ts');
+    expect(src).toMatch(/if \(manifest\.auth\?\.app_roles\?\.length \|\| manifest\.auth\?\.platform_roles\?\.length\) \{\s*throw new WorkerCallError\('Forbidden'/);
+    expect(src).not.toMatch(/enforceActionAuth|roleSubjects|app_roles WHERE/);
+  });
+});

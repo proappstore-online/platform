@@ -14,6 +14,16 @@ export class WorkflowEntrypoint<_Env = unknown, _Params = unknown> {
   ) {}
 }
 
+/** RPC entrypoints (#254): methods are called directly in Node tests; `ctx.props` is whatever the test passes. */
+export class WorkerEntrypoint<Env = unknown, _Props = unknown> {
+  constructor(
+    protected ctx: unknown,
+    protected env: Env,
+  ) {}
+}
+
+export class RpcTarget {}
+
 export class NonRetryableError extends Error {
   constructor(message: string) {
     super(message);

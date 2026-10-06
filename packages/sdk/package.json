@@ -23,6 +23,10 @@
       "types": "./dist/ui.d.ts",
       "import": "./dist/ui.js"
     },
+    "./worker": {
+      "types": "./dist/worker.d.ts",
+      "import": "./dist/worker.js"
+    },
     "./shell.css": "./dist/shell.css"
   },
   "repository": {

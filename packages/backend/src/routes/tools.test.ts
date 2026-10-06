@@ -1363,11 +1363,11 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
     expect(db.batch).toHaveBeenCalledTimes(1);
   });
 
-  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view/visibility reset)', async () => {
+  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view/visibility/worker reset)', async () => {
     const { res, db } = await internalPost({ tools: [] }, { 'X-Internal-Token': 'secret' });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false, operator: null, operator_view: null, visibility: { mode: 'public', roles: [] } });
-    expect(db.batch.mock.calls[0]![0]).toHaveLength(7);
+    expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false, operator: null, operator_view: null, visibility: { mode: 'public', roles: [] }, worker: null });
+    expect(db.batch.mock.calls[0]![0]).toHaveLength(8);
     expect(db.batch.mock.calls[0]![0][1]!.bind).toHaveBeenCalledWith('test-app');
 
     const missing = await internalPost({}, { 'X-Internal-Token': 'secret' });
@@ -1839,5 +1839,58 @@ describe('scheduled cron grammar (#281)', () => {
     expect(scheduledCronError('0 0 30 2 *')).toMatch(/never fires/);
     expect(scheduledCronError('0 0 29 2 *')).toBeNull();
     expect(scheduledCronError('0 0 31 2 1')).toBeNull();
+  });
+});
+
+describe('callers and the worker section (#254)', () => {
+  const put = async (body: Record<string, unknown>) => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    const res = await app.request('/v1/apps/test-app/tools', {
+      method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }, makeEnv({}, db));
+    return { res, db, body: await res.json() as { error?: string; warnings?: string[]; worker?: unknown } };
+  };
+  const write = (extra: Record<string, unknown> = {}) => ({
+    name: 'upsert_repo', description: 'Upsert a repo', operation: 'execute', requires_auth: true,
+    sql: 'INSERT INTO repos (id) VALUES (:id)', params: { id: { type: 'string' } },
+    auth: { caller_unscoped: { reason: 'the reconcile writes every repo' } }, ...extra,
+  });
+
+  it('accepts worker-only and mixed callers; refuses malformed ones', async () => {
+    expect((await put({ tools: [write({ callers: ['worker'] })] })).res.status).toBe(200);
+    expect((await put({ tools: [write({ callers: ['user', 'worker', 'hook'] })] })).res.status).toBe(200);
+    for (const callers of [[], ['admin'], 'worker', ['worker', 'worker']]) {
+      const { res, body } = await put({ tools: [write({ callers })] });
+      expect(res.status, JSON.stringify(callers)).toBe(400);
+      expect(body.error).toMatch(/callers/);
+    }
+  });
+
+  it('a public action must include user; a scheduled one cannot declare callers', async () => {
+    const pub = { ...validTool, requires_auth: false, sql: 'SELECT id FROM items LIMIT 5', params: {}, callers: ['worker'] };
+    expect((await put({ tools: [pub] })).body.error).toMatch(/public action/);
+    const sched = write({ callers: ['worker'], schedule: { cron: '*/5 * * * *', params: { id: 'x' } } });
+    expect((await put({ tools: [sched] })).body.error).toMatch(/scheduled tools cannot declare callers/);
+  });
+
+  it('warns about an unscoped write any signed-in user can run, not about a worker-only one', async () => {
+    expect((await put({ tools: [write()] })).body.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/"upsert_repo" is an unscoped write/)]));
+    expect((await put({ tools: [write({ callers: ['worker'] })] })).body.warnings ?? []).not.toEqual(expect.arrayContaining([expect.stringMatching(/unscoped write/)]));
+  });
+
+  it('registers worker.secrets with the tools; refuses unknown fields and bad names', async () => {
+    const ok = await put({ tools: [write({ callers: ['worker'] })], worker: { secrets: ['GITHUB_TOKEN'] } });
+    expect(ok.res.status).toBe(200);
+    expect(ok.body.worker).toEqual({ secrets: ['GITHUB_TOKEN'] });
+    const sqls = ok.db.prepare.mock.calls.map((c) => String(c[0]));
+    expect(sqls).toEqual(expect.arrayContaining(['DELETE FROM app_worker_manifest WHERE app_id = ?', 'INSERT INTO app_worker_manifest (app_id, secrets, created_at) VALUES (?, ?, ?)']));
+    for (const worker of [{ secrets: ['lower'] }, { secrets: 'X' }, { secrets: ['A', 'A'] }, { schedules: [] }, ['X']]) {
+      expect((await put({ tools: [write()], worker })).res.status, JSON.stringify(worker)).toBe(400);
+    }
+    // No worker section: the stored one is cleared and nothing is inserted.
+    const none = await put({ tools: [write()] });
+    const noneSqls = none.db.prepare.mock.calls.map((c) => String(c[0]));
+    expect(noneSqls).toContain('DELETE FROM app_worker_manifest WHERE app_id = ?');
+    expect(noneSqls.some((q) => q.startsWith('INSERT INTO app_worker_manifest'))).toBe(false);
   });
 });
