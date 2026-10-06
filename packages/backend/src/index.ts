@@ -41,6 +41,7 @@ import { scheduledRunsRoutes } from './routes/scheduled-runs.js';
 import { operatorView } from './routes/operator-view.js';
 import { evaluateErrorSpikes } from './lib/error-alerts.js';
 import { runScheduledActions } from './lib/scheduled-actions.js';
+import { checkAccountCeiling } from './lib/app-worker-usage.js';
 import type { AppWorkerExports } from './lib/app-worker-host.js';
 import { tokenUserFor } from './lib/app-tokens.js';
 import { actionRoutes } from './routes/actions.js';
@@ -313,6 +314,8 @@ export default {
     // #107: aggregate app_logs + QA runs per app for the last window and record
     // spikes (lib/error-alerts.ts). Failures here must not take the drift check down.
     ctx.waitUntil(evaluateErrorSpikes({ env }).catch((e) => console.error(`[alert] evaluation failed: ${(e as Error).message}`)));
+    // #275: close new app-worker enables when today's account-wide usage passes the ceiling.
+    ctx.waitUntil(checkAccountCeiling(env, tickAt).catch((e) => console.error(`[app-worker-usage] account check failed: ${(e as Error).message}`)));
     // Reconcile provider-authoritative token/cost rows once hourly. This is
     // independent of payout execution; operators can run the same endpoint on
     // demand before closing a month.

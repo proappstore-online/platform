@@ -211,15 +211,51 @@ budget (50,000 entries per UTC day) as the app's browser clients. A chatty
 worker can therefore use up the budget that the app's error reporting relies on.
 Log a summary per run, not a line per item.
 
-Per-app usage quotas for app workers (invocations, CPU, hook volume) are not
-enforced yet; they are tracked in #275.
+## Daily quotas
+
+Each app has a usage quota per UTC day (#275). The quota is checked before any
+work starts, and usage resets at 00:00 UTC.
+
+| Quota | Default | Counts |
+|---|---|---|
+| `invocations` | 5,000 | every invocation: schedule runs, hook deliveries to the worker, and `/.pas/worker/*` requests |
+| `cpu_ms` | 3,600,000 (1 h) | wall-clock time of invocations. The loader reports no CPU time, so this is a proxy, labelled `cpu_ms_source: "wall"` |
+| `hook_deliveries` | 2,000 | verified, non-duplicate deliveries to any hook (worker or action) |
+
+The defaults are provisional: they will be revisited with measured usage before
+app workers open to all apps. A platform admin can raise one app's quotas with
+`PUT /v1/admin/apps/:id/worker-quotas`.
+
+What happens over quota:
+
+- **Schedule:** the run fails with `quota exceeded`. It counts toward the
+  five-failure breaker.
+- **Hook:** the sender still gets `202`. The delivery is recorded with
+  `status: "quota_exceeded"`, and no app code runs.
+  **Events over quota are recorded but not processed. Redeliver them from the
+  sender after 00:00 UTC**: GitHub's *Redeliver*, or Stripe's *Resend*. A
+  redelivery of a `quota_exceeded` delivery is accepted like a failed one. The
+  hook answers `202` and not `429` because GitHub never redelivers on its own,
+  so a `429` would lose the event just the same.
+- **Browser request:** `429` with `Retry-After` set to the seconds until 00:00
+  UTC.
+- **Quota check fails:** if the check itself cannot run, nothing runs. The
+  delivery or run is recorded as `failed` with `quota check unavailable`, and a
+  browser request gets `503`.
+
+At 80 % of any quota, the app gets one `app_worker_quota` alert and one
+`app.alert` webhook per day. `pas worker status` shows today's usage against the
+quotas, and `GET /v1/apps/:id/worker/usage?days=30` returns the history.
+
+Above a platform-wide daily ceiling, the platform stops enabling app workers for
+new apps until an admin reopens it. Apps already running are not affected.
 
 ## Operating it
 
 The owner commands use your `pas login` session:
 
 ```bash
-pas worker status                       # enabled, last deploy, schedules (and breaker state), recent invocations
+pas worker status                       # enabled, today's usage vs quota, last deploy, schedules (and breaker state), recent invocations
 pas worker logs --since 10m [--follow]  # PAS.log lines + invocation outcomes
 pas worker rotate                       # new token + event key; the old pair works for 10 more minutes
 pas schedule runs [--status failed]     # scheduled-action and worker-schedule runs
@@ -232,6 +268,7 @@ pas secret set GITHUB_TOKEN             # hidden prompt; or: … | pas secret se
 The same data is available over HTTP (owner session):
 
 - `GET /v1/apps/:id/worker`
+- `GET /v1/apps/:id/worker/usage?days=30`
 - `GET /v1/apps/:id/scheduled-runs`
 - `GET /v1/apps/:id/hooks`
 - `GET /v1/apps/:id/hook-deliveries`

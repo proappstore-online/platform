@@ -61,6 +61,8 @@ function fakeDb(): D1Database {
     if (s.startsWith('UPDATE app_workers SET enabled = 0')) { if (worker) worker.enabled = 0; return { changes: 1 }; }
     if (s.startsWith('SELECT count FROM app_log_usage')) return { first: null };
     if (s.startsWith('INSERT INTO app_log_usage')) return { changes: 1 };
+    // #275: the invocation reservation and the finished invocation's metering (lib/app-worker-usage.test.ts covers them).
+    if (s.startsWith('INSERT INTO app_worker_usage') || s.startsWith('UPDATE app_worker_usage')) return { first: { invocations: 1, cpu_ms: 0, hook_deliveries: 0, pas_calls: 0 } };
     if (s.startsWith('INSERT INTO app_worker_invocations')) {
       if (invocations.has(String(args[0]))) throw new Error('D1_ERROR: UNIQUE constraint failed: app_worker_invocations.id');
       invocations.set(String(args[0]), { status: 'running', started_at: args[6] });

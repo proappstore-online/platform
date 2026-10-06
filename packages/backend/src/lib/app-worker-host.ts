@@ -26,6 +26,7 @@ import { openSecret, sealSecret, type SealedSecret } from './encryption.js';
 import { sha256Hex } from './app-tokens.js';
 import { toUint8 } from './bytes.js';
 import { checkLogQuota, d1LogUsageStore } from './log-quota.js';
+import { quotasFrom, recordInvocationUsage, reserveInvocation } from './app-worker-usage.js';
 import { SIGNATURE_HEADER, signatureHeader } from '../app-worker-shim/signature.js';
 import { APP_WORKER_SHIM } from '../generated/app-worker-shim.js';
 
@@ -135,6 +136,8 @@ export interface AppWorkerRow {
   prev_event_key_ct: unknown; prev_event_key_dek: unknown; prev_event_key_iv: unknown; prev_key_until: number | null;
   bundle_sha256: string | null;
   deployed_at: number | null;
+  /** Admin per-app quota overrides (#275), JSON. */
+  quota_overrides?: string | null;
 }
 
 /**
@@ -404,6 +407,9 @@ function loaderHost(env: Env, loader: WorkerLoader, ctx?: AppWorkerExports): App
 
       const quota = await checkLogQuota(d1LogUsageStore(env.DB), { appId, clientKey: 'app-worker', entries: 1, nowMs: now });
       if (!quota.persist) throw new HttpError(`app worker invocation refused: log quota (${quota.reason})`, 429);
+      // #275: today's quota, reserved before any work. Throws AppWorkerQuotaError, or 503 if the check cannot run.
+      const quotas = quotasFrom(w.quota_overrides);
+      await reserveInvocation(env, appId, quotas, now);
 
       const invocationId = `${event.id}:${event.attempt}`;
       try {
@@ -460,9 +466,11 @@ function loaderHost(env: Env, loader: WorkerLoader, ctx?: AppWorkerExports): App
         status = e instanceof InvokeTimeout ? 'timeout' : 'failed';
         error = String((e as Error)?.message ?? e).slice(0, 500);
       }
+      const finishedAt = Date.now();
       await env.DB.prepare(
         `UPDATE app_worker_invocations SET status = ?, http_status = ?, body_excerpt = ?, finished_at = ?, error = ? WHERE id = ?`,
-      ).bind(status, httpStatus, status === 'failed' && text !== null ? excerpt(text) : null, Date.now(), error, invocationId).run();
+      ).bind(status, httpStatus, status === 'failed' && text !== null ? excerpt(text) : null, finishedAt, error, invocationId).run();
+      await recordInvocationUsage(env, appId, invocationId, quotas, now, finishedAt);
       return { invocationId, status, httpStatus, body: text };
     },
 

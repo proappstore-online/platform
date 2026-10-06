@@ -14,6 +14,9 @@
  *   POST   /v1/apps/:appId/worker/rotate          owner: rotate token + event key
  *   POST   /v1/apps/:appId/worker/schedules/:name/run   owner: queue a schedule run now (#255)
  *   POST   /v1/apps/:appId/worker/http        a signed-in user's /.pas/worker/* request, mediated by the host (#260)
+ *   GET    /v1/apps/:appId/worker/usage?days=30   owner: quotas, today, daily usage (#275)
+ *   PUT    /v1/admin/apps/:appId/worker-quotas    admin: per-app quota overrides, or null (#275)
+ *   PUT    /v1/admin/app-workers/open             admin: { open } — reopen (or close) new enables (#275)
  *
  * No route returns or logs the worker's token or event key.
  */
@@ -27,6 +30,7 @@ import { requireVisibleUser } from '../lib/visibility.js';
 import { mintCallerGrant } from '../lib/caller-grant.js';
 import { decodeEnvelopeBody, encodeEnvelopeBody } from '../app-worker-shim/body.js';
 import type { AppWorkerExports } from '../lib/app-worker-host.js';
+import { AppWorkerQuotaError, appWorkersOpen, appWorkerUsage, setAppWorkersOpen, validateQuotaOverrides } from '../lib/app-worker-usage.js';
 
 /** One manual run per schedule per minute (#255). */
 export const RUN_NOW_INTERVAL_MS = 60_000;
@@ -90,6 +94,9 @@ appWorkerRoutes.put('/admin/apps/:appId/worker-enabled', async (c) => {
   if (!isAdminId(app.creator_id, c.env)) {
     throw new HttpError('app workers are limited to first-party apps during the prototype', 403);
   }
+  // #275: the account guard closes new enables; an app already enabled stays as it is.
+  const already = await c.env.DB.prepare('SELECT 1 AS on_ FROM app_workers WHERE app_id = ? AND enabled = 1').bind(appId).first();
+  if (!already && !(await appWorkersOpen(c.env))) throw new HttpError('app workers are closed to new apps (account ceiling)', 409);
   // One statement, so two concurrent enables cannot both take the last slot.
   const now = Date.now();
   const res = await c.env.DB.prepare(
@@ -129,6 +136,34 @@ appWorkerRoutes.get('/apps/:appId/worker', async (c) => {
   ]);
   c.header('Cache-Control', 'private, no-store');
   return c.json({ app_id: appId, worker: worker ?? { enabled: 0 }, last_deploy: lastDeploy ?? null, invocations: invocations.results ?? [], schedules: schedules.results ?? [] });
+});
+
+appWorkerRoutes.get('/apps/:appId/worker/usage', async (c) => {
+  const appId = c.req.param('appId');
+  await requireAppOwner(c, appId);
+  const requested = Number(c.req.query('days') ?? 30);
+  const days = Number.isInteger(requested) && requested > 0 ? Math.min(requested, 90) : 30;
+  c.header('Cache-Control', 'private, no-store');
+  return c.json(await appWorkerUsage(c.env, appId, days, Date.now()));
+});
+
+appWorkerRoutes.put('/admin/apps/:appId/worker-quotas', async (c) => {
+  await requireAdmin(c);
+  const appId = c.req.param('appId');
+  const parsed = validateQuotaOverrides(await c.req.json<unknown>().catch(() => undefined));
+  if ('error' in parsed) throw new HttpError(parsed.error, 400);
+  const res = await c.env.DB.prepare('UPDATE app_workers SET quota_overrides = ? WHERE app_id = ?')
+    .bind(parsed.overrides ? JSON.stringify(parsed.overrides) : null, appId).run();
+  if (!res.meta.changes) throw new HttpError('this app has no app worker', 404);
+  return c.json({ ok: true, quota_overrides: parsed.overrides });
+});
+
+appWorkerRoutes.put('/admin/app-workers/open', async (c) => {
+  const admin = await requireAdmin(c);
+  const body = await c.req.json<{ open?: unknown }>().catch(() => null);
+  if (typeof body?.open !== 'boolean') throw new HttpError('body must be { "open": true | false }', 400);
+  await setAppWorkersOpen(c.env, body.open, `closed by ${admin.id}`, Date.now());
+  return c.json({ ok: true, open: body.open });
 });
 
 appWorkerRoutes.delete('/apps/:appId/worker', async (c) => {
@@ -238,7 +273,14 @@ appWorkerRoutes.post('/apps/:appId/worker/http', async (c) => {
       ...encodeEnvelopeBody(bytes, headers['content-type'] ?? null),
     },
     caller: await mintCallerGrant(c.env, appId, user),
-  }, { timeoutMs: WORKER_HTTP_TIMEOUT_MS });
+  }, { timeoutMs: WORKER_HTTP_TIMEOUT_MS }).catch((e: unknown) => {
+    // #275: an interactive request is refused honestly, with when to come back.
+    if (e instanceof AppWorkerQuotaError) return e;
+    throw e;
+  });
+  if (result instanceof AppWorkerQuotaError) {
+    return c.json({ error: result.message, quota: result.quota }, 429, { 'Retry-After': String(result.retryAfter), 'Cache-Control': 'private, no-store' });
+  }
 
   if (result.status === 'timeout') throw new HttpError('the app worker did not answer in time', 504);
   let wrapped: { v?: unknown; status?: unknown; headers?: Record<string, string>; body?: unknown; body_encoding?: unknown };

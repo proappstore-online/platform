@@ -102,6 +102,13 @@ const RETENTION_PRUNES = [
     binds: (nowMs: number) => [cutoffMs(nowMs, HOOK_DELIVERY_RETENTION_DAYS)],
   },
   {
+    // #275: per-app per-day app-worker usage, kept like the other usage counters.
+    key: 'app_worker_usage',
+    table: 'app_worker_usage',
+    where: 'day < ?',
+    binds: (nowMs: number) => [new Date(cutoffMs(nowMs, USAGE_RETENTION_DAYS)).toISOString().slice(0, 10)],
+  },
+  {
     // #253: one row per app-worker invocation, kept as long as scheduled runs.
     key: 'app_worker_invocations',
     table: 'app_worker_invocations',

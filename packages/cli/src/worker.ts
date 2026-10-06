@@ -31,6 +31,12 @@ interface WorkerStatus {
   schedules: { name: string; cron: string; consecutive_failures: number | null; schedule_disabled_at: number | null }[];
 }
 
+interface Usage {
+  quotas: { invocations: number; cpu_ms: number; hook_deliveries: number };
+  cpu_ms_source: string;
+  today: { day: string; invocations: number; cpu_ms: number; hook_deliveries: number; pas_calls: number };
+}
+
 interface LogEntry { ts: number; level: string; message: string; data?: unknown }
 
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -78,9 +84,12 @@ export const workerCommand = new Command('worker')
       .action(async (opts: { app?: string; json?: boolean }) => {
         const cfg = await requireSession();
         const appId = await resolveAppIdOrExit(opts.app);
-        const s = await ownerApi<WorkerStatus>(cfg, 'GET', `/v1/apps/${appId}/worker`, 'read worker status');
+        const [s, usage] = await Promise.all([
+          ownerApi<WorkerStatus>(cfg, 'GET', `/v1/apps/${appId}/worker`, 'read worker status'),
+          ownerApi<Usage>(cfg, 'GET', `/v1/apps/${appId}/worker/usage?days=1`, 'read worker usage'),
+        ]);
         if (opts.json) {
-          process.stdout.write(`${JSON.stringify(s, null, 2)}\n`);
+          process.stdout.write(`${JSON.stringify({ ...s, usage }, null, 2)}\n`);
           return;
         }
         const w = s.worker;
@@ -89,6 +98,9 @@ export const workerCommand = new Command('worker')
         if (w.deployed_at) out.push(`  deployed  ${w.deployed_sha?.slice(0, 12) ?? '?'} (${w.deployed_ref ?? '?'}) at ${iso(w.deployed_at)}`);
         if (s.last_deploy) out.push(`  last deploy ${s.last_deploy.status} at ${iso(s.last_deploy.created_at)}${s.last_deploy.detail ? ` — ${s.last_deploy.detail}` : ''}`);
         if (w.rotation_overlap_until && w.rotation_overlap_until > Date.now()) out.push(`  key rotation overlap until ${iso(w.rotation_overlap_until)}`);
+        const t = usage.today;
+        const q = usage.quotas;
+        out.push(`  today (${t.day} UTC)  invocations ${t.invocations}/${q.invocations} · ${usage.cpu_ms_source === 'wall' ? 'wall-clock' : 'cpu'} ms ${t.cpu_ms}/${q.cpu_ms} · hook deliveries ${t.hook_deliveries}/${q.hook_deliveries} · PAS calls ${t.pas_calls}`);
         if (s.schedules.length) {
           out.push('  schedules');
           for (const sch of s.schedules) {

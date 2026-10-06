@@ -9,9 +9,14 @@
  * hook exists (404, with no hint whether the app does); the raw bytes, read once,
  * verify against the hook's verifier (401 — no row is written, no app code runs);
  * the delivery id is de-duplicated (a repeat of a received/delivered delivery is
- * 200 {duplicate:true}; a repeat of a failed one is a redelivery). Then 202, and
- * delivery continues in waitUntil with a 25 s budget (Cloudflare cancels
- * waitUntil 30 s after the response; #257 moves delivery to a queue).
+ * 200 {duplicate:true}; a repeat of a failed one is a redelivery). Then the
+ * app's daily hook quota (#275): over it, the row is `quota_exceeded` and nothing
+ * is delivered — still a 202, because GitHub never redelivers on its own and a
+ * 429 would lose the event just the same; the owner redelivers it from the sender
+ * after the reset. Then 202, and delivery continues in waitUntil with a 25 s
+ * budget (Cloudflare cancels waitUntil 30 s after the response; #257 moves
+ * delivery to a queue). A worker over its invocation quota ends `quota_exceeded`
+ * the same way.
  */
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -21,6 +26,7 @@ import { openAppSecret } from '../lib/app-secrets.js';
 import { activeAppWorker, appWorkerHost, type AppWorkerExports } from '../lib/app-worker-host.js';
 import { actionCallers, prepareActionBatch, prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
 import { encodeEnvelopeBody, hookHeaders, verifyHookDelivery, type HookVerify } from '../lib/hook-verifiers.js';
+import { AppWorkerQuotaError, quotasFrom, reserveHookDelivery } from '../lib/app-worker-usage.js';
 import { forwardToDataWorker, loadManifest } from './actions.js';
 import type { HookTarget } from './tools.js';
 
@@ -100,9 +106,16 @@ export async function deliverHook(env: Env, d: HookDelivery, ctx?: AppWorkerExpo
   return `action ${d.target.action} failed (${res.status}): ${(await res.text()).slice(0, 300)}`;
 }
 
-async function finish(env: Env, rowId: string, error: string | null): Promise<void> {
+async function finish(env: Env, rowId: string, error: string | null, status: 'failed' | 'quota_exceeded' = 'failed'): Promise<void> {
   await env.DB.prepare('UPDATE app_hook_deliveries SET status = ?, finished_at = ?, error = ? WHERE id = ?')
-    .bind(error === null ? 'delivered' : 'failed', Date.now(), error === null ? null : error.slice(0, 500), rowId).run();
+    .bind(error === null ? 'delivered' : status, Date.now(), error === null ? null : error.slice(0, 500), rowId).run();
+}
+
+/** A delivery that will not be processed: over quota, or the quota check could not run (#275). */
+function notProcessed(e: unknown): { error: string; status: 'failed' | 'quota_exceeded' } {
+  return e instanceof AppWorkerQuotaError
+    ? { error: `quota exceeded (${e.quota}); redeliver it from the sender after 00:00 UTC`, status: 'quota_exceeded' }
+    : { error: String((e as Error)?.message ?? e), status: 'failed' };
 }
 
 function runAfterResponse(c: Context<{ Bindings: Env }>, work: Promise<void>): void {
@@ -149,13 +162,21 @@ hookRoutes.post('/apps/:appId/hooks/:name', async (c) => {
     row = { id: existing.id, status: 'received', attempts: retried.attempts };
   }
 
+  try {
+    const overrides = await c.env.DB.prepare('SELECT quota_overrides FROM app_workers WHERE app_id = ?').bind(appId).first<{ quota_overrides: string | null }>();
+    await reserveHookDelivery(c.env, appId, quotasFrom(overrides?.quota_overrides), now);
+  } catch (e) {
+    const { error, status } = notProcessed(e instanceof AppWorkerQuotaError ? e : new Error('quota check unavailable'));
+    await finish(c.env, row.id, error, status);
+    return c.json({ accepted: true, delivery: row.id, processed: false }, 202);
+  }
+
   const target = JSON.parse(hook.target) as HookTarget;
   const delivery: HookDelivery = { appId, hook: name, target, rowId: row.id, attempt: row.attempts, body, headers: c.req.raw.headers };
   let ctx: AppWorkerExports | undefined;
   try { ctx = c.executionCtx as unknown as AppWorkerExports; } catch { ctx = undefined; }
   runAfterResponse(c, deliverHook(c.env, delivery, ctx)
-    .catch((e) => String((e as Error)?.message ?? e))
-    .then((error) => finish(c.env, row.id, error))
+    .then((error) => finish(c.env, row.id, error), (e) => { const r = notProcessed(e); return finish(c.env, row.id, r.error, r.status); })
     .catch((e) => console.error(`[hooks] recording delivery ${row.id} failed: ${(e as Error)?.message ?? e}`)));
   return c.json({ accepted: true, delivery: row.id }, 202);
 });

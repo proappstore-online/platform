@@ -144,8 +144,13 @@ describe('owner commands (#261)', () => {
       invocations: [],
       schedules: [{ name: 'reconcile', cron: '*/15 * * * *', consecutive_failures: 5, schedule_disabled_at: 1 }],
     };
+    routes['GET /v1/apps/demo/worker/usage'] = {
+      quotas: { invocations: 5000, cpu_ms: 3600000, hook_deliveries: 2000 }, cpu_ms_source: 'wall',
+      today: { day: '2026-10-06', invocations: 12, cpu_ms: 3400, hook_deliveries: 2, pas_calls: 40 },
+    };
     await run(workerCommand, ['status']);
     expect(out.join('')).toMatch(/reconcile\s+\*\/15 \* \* \* \*\s+DISABLED after 5 failures/);
+    expect(out.join('')).toContain('invocations 12/5000 · wall-clock ms 3400/3600000 · hook deliveries 2/2000 · PAS calls 40');
     routes['POST /v1/apps/demo/worker/rotate'] = { ok: true, config_version: 3 };
     await run(workerCommand, ['rotate']);
     expect(out.join('')).toContain('config version 3');

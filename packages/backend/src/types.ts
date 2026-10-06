@@ -166,6 +166,12 @@ export interface Env {
   APP_WORKER_COMPATIBILITY_DATE?: string;
   /** One data point per app-worker `PAS` call (#254, ADR-009 §4): index app id; blobs method, action, outcome. */
   APP_WORKER_CALLS?: AnalyticsEngineDataset;
+  /**
+   * #275 account guard: JSON `{ "cpu_ms": n, "invocations": n }`, today's sum over
+   * all apps. Above it, new app-worker enables close (app_worker_platform.open).
+   * Unset or malformed: the guard is off.
+   */
+  APP_WORKER_ACCOUNT_CEILING?: string;
 }
 
 export interface PushSubscriptionRow {
