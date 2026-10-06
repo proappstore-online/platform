@@ -1363,11 +1363,11 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
     expect(db.batch).toHaveBeenCalledTimes(1);
   });
 
-  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view/visibility/worker reset)', async () => {
+  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view/visibility/worker/hooks reset)', async () => {
     const { res, db } = await internalPost({ tools: [] }, { 'X-Internal-Token': 'secret' });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false, operator: null, operator_view: null, visibility: { mode: 'public', roles: [] }, worker: null });
-    expect(db.batch.mock.calls[0]![0]).toHaveLength(9);
+    expect(db.batch.mock.calls[0]![0]).toHaveLength(10);
     expect(db.batch.mock.calls[0]![0][1]!.bind).toHaveBeenCalledWith('test-app');
 
     const missing = await internalPost({}, { 'X-Internal-Token': 'secret' });
@@ -1934,5 +1934,68 @@ describe('worker.schedules (#255)', () => {
       expect(res.status, JSON.stringify(worker)).toBe(400);
       expect(body.error, JSON.stringify(worker)).toMatch(error);
     }
+  });
+});
+
+describe('hooks (#256)', () => {
+  const hookWrite = (extra: Record<string, unknown> = {}) => ({
+    name: 'record_ping', description: 'Record a ping', operation: 'execute', requires_auth: true,
+    sql: 'INSERT INTO pings (source) VALUES (:source)', params: { source: { type: 'string' } },
+    auth: { caller_unscoped: { reason: 'any sender' } }, callers: ['hook'], ...extra,
+  });
+  const put = async (hooks: unknown, tools: unknown[] = [hookWrite()], workerFlag: unknown = null) => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), ...(workerFlag !== undefined ? [mockStmt({ first: workerFlag })] : []));
+    const res = await app.request('/v1/apps/test-app/tools', {
+      method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools, hooks }),
+    }, makeEnv({}, db));
+    return { res, db, body: await res.json() as { error?: string; hooks?: unknown; warnings?: string[] } };
+  };
+  const ping = { name: 'ping', verify: { kind: 'secret-token', secret: 'PING_TOKEN' }, to: { action: 'record_ping', params: { source: '$.source' } } };
+
+  it('registers an action hook and a worker hook (with app workers enabled)', async () => {
+    const ok = await put([ping, { name: 'github', verify: { kind: 'github-hmac-sha256', secret: 'GITHUB_WEBHOOK_SECRET' }, to: 'worker' }], [hookWrite()], { enabled: 1 });
+    expect(ok.res.status, ok.body.error).toBe(200);
+    expect(ok.body.hooks).toEqual([{ name: 'ping', kind: 'secret-token', to: { action: 'record_ping' } }, { name: 'github', kind: 'github-hmac-sha256', to: 'worker' }]);
+    const sqls = ok.db.prepare.mock.calls.map((c) => String(c[0]));
+    expect(sqls).toContain('DELETE FROM app_hooks WHERE app_id = ?');
+    expect(sqls.filter((q) => q.startsWith('INSERT INTO app_hooks'))).toHaveLength(2);
+  });
+
+  it('to "worker" without app workers enabled → 400', async () => {
+    const { res, body } = await put([{ name: 'gh', verify: { kind: 'github-hmac-sha256', secret: 'S' }, to: 'worker' }], [hookWrite()], null);
+    expect(res.status).toBe(400);
+    expect(body.error).toMatch(/needs app workers enabled/);
+  });
+
+  it('refuses an action without "hook" in callers, a role-gated or scheduled one, unknown params and bad paths', async () => {
+    const cases: [unknown[], unknown, RegExp][] = [
+      [[hookWrite({ callers: ['worker'] })], ping, /must list "hook" in its callers/],
+      [[hookWrite({ auth: { caller_unscoped: { reason: 'x' }, app_roles: ['admin'] } })], ping, /role-gated/],
+      [[hookWrite({ operation: 'query', sql: 'SELECT 1 FROM pings WHERE source = :source LIMIT 1' })], ping, /execute or batch/],
+      [[hookWrite()], { ...ping, to: { action: 'record_ping', params: { nope: 1 } } }, /not a param/],
+      [[hookWrite()], { ...ping, to: { action: 'record_ping', params: { source: '$..x' } } }, /not a path/],
+      [[hookWrite()], { ...ping, to: { action: 'record_ping', params: { source: { a: 1 } } } }, /path or a literal/],
+      [[hookWrite()], { ...ping, to: { action: 'missing' } }, /must name an action/],
+      [[hookWrite()], { ...ping, to: 'elsewhere' }, /to must be/],
+      [[hookWrite()], { ...ping, name: 'Bad Name' }, /name must match/],
+      [[hookWrite()], { ...ping, verify: { kind: 'basic' } }, /kind must be one of/],
+    ];
+    for (const [tools, hook, error] of cases) {
+      const { res, body } = await put([hook], tools);
+      expect(res.status, JSON.stringify(hook)).toBe(400);
+      expect(body.error, JSON.stringify(hook)).toMatch(error);
+    }
+    expect((await put(Array.from({ length: 11 }, (_, i) => ({ ...ping, name: `h${i}` })))).body.error).toMatch(/at most 10/);
+    expect((await put([ping, ping])).body.error).toMatch(/duplicate name/);
+  });
+
+  it('warns, but registers, when a hook secret is not set yet', async () => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ all: { results: [] } }));
+    db.prepare.mockImplementation((sql: string) => (sql.startsWith('SELECT name FROM app_secrets') ? mockStmt({ all: { results: [] } }) : mockStmt({ first: { creator_id: 'gh:1' } })));
+    const res = await app.request('/v1/apps/test-app/tools', {
+      method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools: [hookWrite()], hooks: [ping] }),
+    }, makeEnv({}, db));
+    expect(res.status).toBe(200);
+    expect((await res.json() as { warnings: string[] }).warnings).toEqual(expect.arrayContaining([expect.stringMatching(/secret PING_TOKEN is not set yet/)]));
   });
 });

@@ -49,9 +49,25 @@ describe('rate-limit ledger retention against real D1', () => {
     expect(body.ledgerRowsDeleted).toEqual({
       maps_usage: 0, sms_usage: 0, notification_log: 0, webhook_deliveries: 0, webhook_deliveries_orphaned: 0,
       app_proxy_usage: 0, app_proxy_usage_user: 0, ai_daily_budget: 0, license_validate_attempts: 0, provision_attempts: 0,
-      scheduled_action_runs: 0, app_worker_invocations: 0,
+      scheduled_action_runs: 0, app_hook_deliveries: 0, app_worker_invocations: 0,
     });
     expect(await count('maps_usage')).toBe(1);
+  });
+});
+
+// #256: inbound-hook delivery rows (the de-dupe record) keep 14 days.
+describe('hook delivery retention against real D1', () => {
+  it('deletes deliveries older than 14 days and keeps recent ones', async () => {
+    await env.DB.prepare('DELETE FROM app_hook_deliveries').run();
+    const add = (id: string, receivedAt: number) => env.DB.prepare(
+      "INSERT INTO app_hook_deliveries (id, app_id, hook, delivery_id, received_at, status) VALUES (?, 'demo', 'github', ?, ?, 'delivered')",
+    ).bind(id, id, receivedAt).run();
+    await add('old', Date.now() - 15 * 24 * 60 * 60 * 1000);
+    await add('new', Date.now() - 13 * 24 * 60 * 60 * 1000);
+    const body = await (await prune()).json() as { ledgerRowsDeleted: Record<string, number> };
+    expect(body.ledgerRowsDeleted).toMatchObject({ app_hook_deliveries: 1 });
+    expect((await env.DB.prepare('SELECT id FROM app_hook_deliveries').all()).results).toEqual([{ id: 'new' }]);
+    await env.DB.prepare('DELETE FROM app_hook_deliveries').run();
   });
 });
 

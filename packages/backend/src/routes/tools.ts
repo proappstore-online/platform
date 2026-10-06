@@ -20,6 +20,7 @@ import { getVerifier, VERIFIERS } from '../lib/verifiers/index.js';
 import { validateOperatorView } from '../lib/operator-contract.js';
 import { SCHEDULER_TICK_MINUTES } from '../lib/scheduler-tick.js';
 import { MAX_SECRETS_PER_APP, SECRET_NAME_RE } from './secrets-shared.js';
+import { validateHookVerify, type HookVerify } from '../lib/hook-verifiers.js';
 
 export const toolsRoutes = new Hono<{ Bindings: Env }>();
 
@@ -617,13 +618,15 @@ export interface SiteManifest {
   operator_view?: unknown;
   /** Private apps (#259): `{ mode: 'public' | 'private', roles?: string[] }` — lib/visibility.ts. */
   visibility?: unknown;
-  /** The app worker's manifest (#254): `{ secrets?: string[] }` — the app secrets it may read. */
+  /** The app worker's manifest (#254, #255): `{ secrets?: string[], schedules?: [...] }`. */
   worker?: unknown;
+  /** Inbound webhooks (#256): `[{ name, verify, to }]` — lib/hook-verifiers.ts, routes/hooks.ts. */
+  hooks?: unknown;
 }
 
 /** The site-manifest fields of a submitted mcp.json body, for every registration path. */
 export function siteManifestFrom(body: SiteManifest | null | undefined): SiteManifest {
-  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker };
+  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker, hooks: body?.hooks };
 }
 
 interface PageMetaRoute { path: string; action: string; param: string }
@@ -782,6 +785,67 @@ export function validateWorkerManifest(worker: unknown): { error: string } | { w
   return { worker: { secrets: secrets as string[], schedules } };
 }
 
+// ── Inbound webhooks (#256) ──────────────────────────────────────────────────
+
+export const MAX_HOOKS_PER_APP = 10;
+const HOOK_NAME = /^[a-z][a-z0-9_-]{0,49}$/;
+/** `$`, `$.a.b`, `$.a[0]` — a path into the verified JSON body. No expressions. */
+export const HOOK_PARAM_PATH = /^\$(\.[A-Za-z_][A-Za-z0-9_]*|\[\d{1,4}\])*$/;
+
+export type HookTarget = 'worker' | { action: string; params: Record<string, unknown> };
+export interface HookDef { name: string; verify: HookVerify; to: HookTarget }
+
+/**
+ * The `hooks` section. `to: "worker"` delivers to the app worker; `to: { action,
+ * params }` runs one registered write as `system:hook`, with params mapped from
+ * the body by path or given as literals. The action must be a hook action:
+ * `callers` including "hook", unscoped with a reason, no role gate — the same
+ * rules as a scheduled action, which a signed-in user cannot run unless it also
+ * lists "user".
+ */
+export function validateHooks(raw: unknown, tools: ToolManifest[]): { error: string } | { hooks: HookDef[] } {
+  if (raw === undefined || raw === null) return { hooks: [] };
+  if (!Array.isArray(raw) || raw.length > MAX_HOOKS_PER_APP) return { error: `hooks must be an array of at most ${MAX_HOOKS_PER_APP} hooks` };
+  const hooks: HookDef[] = [];
+  for (const [i, item] of raw.entries()) {
+    const at = `hooks[${i}]`;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return { error: `${at} must be an object` };
+    const unknown = Object.keys(item).find((k) => !['name', 'verify', 'to'].includes(k));
+    if (unknown) return { error: `${at}: unknown field "${unknown}"` };
+    const { name, verify, to } = item as { name?: unknown; verify?: unknown; to?: unknown };
+    if (typeof name !== 'string' || !HOOK_NAME.test(name)) return { error: `${at}.name must match ${HOOK_NAME.source}` };
+    if (hooks.some((h) => h.name === name)) return { error: `${at}: duplicate name "${name}"` };
+    const v = validateHookVerify(verify, at);
+    if ('error' in v) return v;
+    let target: HookTarget;
+    if (to === 'worker') {
+      target = 'worker';
+    } else if (to && typeof to === 'object' && !Array.isArray(to)) {
+      const extra = Object.keys(to).find((k) => k !== 'action' && k !== 'params');
+      if (extra) return { error: `${at}.to: unknown field "${extra}"` };
+      const { action, params = {} } = to as { action?: unknown; params?: unknown };
+      const tool = tools.find((t) => t.name === action);
+      if (typeof action !== 'string' || !tool) return { error: `${at}.to.action must name an action in this manifest` };
+      if (tool.operation !== 'execute' && tool.operation !== 'batch') return { error: `${at}.to.action "${action}" must be an execute or batch action` };
+      if (!actionCallers(tool).includes('hook')) return { error: `${at}.to.action "${action}" must list "hook" in its callers` };
+      if (tool.requires_auth !== true || !tool.auth?.caller_unscoped?.reason) return { error: `${at}.to.action "${action}" must require auth and declare auth.caller_unscoped with a reason (it runs as system:hook)` };
+      if (tool.auth.app_roles?.length || tool.auth.platform_roles?.length) return { error: `${at}.to.action "${action}" cannot be role-gated (system:hook holds no role)` };
+      if (tool.schedule !== undefined) return { error: `${at}.to.action "${action}" is a scheduled action` };
+      if (!params || typeof params !== 'object' || Array.isArray(params)) return { error: `${at}.to.params must be an object` };
+      for (const [key, value] of Object.entries(params as Record<string, unknown>)) {
+        if (!(key in (tool.params ?? {}))) return { error: `${at}.to.params: "${key}" is not a param of "${action}"` };
+        if (typeof value === 'string' && value.startsWith('$') && !HOOK_PARAM_PATH.test(value)) return { error: `${at}.to.params.${key}: "${value}" is not a path like $.a.b or $.a[0]` };
+        if (value !== null && typeof value === 'object') return { error: `${at}.to.params.${key} must be a path or a literal` };
+      }
+      target = { action, params: params as Record<string, unknown> };
+    } else {
+      return { error: `${at}.to must be "worker" or { action, params }` };
+    }
+    hooks.push({ name, verify: v.verify, to: target });
+  }
+  return { hooks };
+}
+
 export async function replaceAppTools(
   db: D1Database,
   appId: string,
@@ -815,6 +879,15 @@ export async function replaceAppTools(
   if ('error' in visibilityResult) return { status: 400, payload: { error: visibilityResult.error } };
   const workerResult = validateWorkerManifest(site.worker);
   if ('error' in workerResult) return { status: 400, payload: { error: workerResult.error } };
+  const hooksResult = validateHooks(site.hooks, tools as ToolManifest[]);
+  if ('error' in hooksResult) return { status: 400, payload: { error: hooksResult.error } };
+  // `to: "worker"` needs app workers turned on for this app — the flag, not a
+  // finished deploy, so registration never depends on the worker step's order.
+  if (hooksResult.hooks.some((h) => h.to === 'worker')) {
+    const flag = await db.prepare('SELECT enabled FROM app_workers WHERE app_id = ?').bind(appId).first<{ enabled: number }>()
+      .catch(() => null);
+    if (flag?.enabled !== 1) return { status: 400, payload: { error: 'hooks: to "worker" needs app workers enabled for this app' } };
+  }
 
   // A deploy replaces the CODE tools only (#155): console-defined endpoints live
   // in the same table under source = 'console' and are never touched here — a
@@ -866,6 +939,13 @@ export async function replaceAppTools(
     // history and breaker state live in scheduled_action_runs/_state under
     // 'worker:<name>' (source 'code'), reset by the DELETE above like actions'.
     db.prepare('DELETE FROM app_worker_schedules WHERE app_id = ?').bind(appId),
+    // Inbound hooks (#256), replaced with the manifest. Deliveries keep their history.
+    db.prepare('DELETE FROM app_hooks WHERE app_id = ?').bind(appId),
+    ...hooksResult.hooks.map((h) => {
+      const { kind, secret, ...opts } = h.verify;
+      return db.prepare('INSERT INTO app_hooks (app_id, name, verify_kind, secret_name, verify_opts, target, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(appId, h.name, kind, secret ?? null, Object.keys(opts).length ? JSON.stringify(opts) : null, JSON.stringify(h.to), now);
+    }),
     ...(workerResult.worker?.schedules ?? []).map((sch) =>
       db.prepare('INSERT INTO app_worker_schedules (app_id, name, cron, params, created_at) VALUES (?, ?, ?, ?, ?)')
         .bind(appId, sch.name, sch.cron, JSON.stringify(sch.params), now)),
@@ -891,6 +971,15 @@ export async function replaceAppTools(
       : [];
   // Count headroom (#109): a second, independent warning as the manifest nears
   // the hard cap, so the limit is announced while there is still room to plan.
+  // A hook whose secret the owner has not set yet registers, but cannot verify a delivery until they do.
+  const hookSecrets = [...new Set(hooksResult.hooks.map((h) => h.verify.secret).filter((n): n is string => !!n))];
+  if (hookSecrets.length) {
+    const present = await db.prepare('SELECT name FROM app_secrets WHERE app_id = ?').bind(appId).all<{ name: string }>()
+      .then((r) => new Set((r.results ?? []).map((x) => x.name)), () => null);
+    for (const name of hookSecrets) {
+      if (present && !present.has(name)) warnings.push(`hooks: secret ${name} is not set yet; deliveries to the hooks that use it are refused (401) until it is`);
+    }
+  }
   for (const tool of (tools as ToolManifest[]).filter(openUnscopedWrite)) {
     warnings.push(`action "${tool.name}" is an unscoped write any signed-in user can run; if only the app's worker should, declare "callers": ["worker"]`);
   }
@@ -909,6 +998,7 @@ export async function replaceAppTools(
         : null,
       visibility: visibilityResult.visibility ?? PUBLIC_VISIBILITY,
       worker: workerResult.worker,
+      hooks: hooksResult.hooks.map((h) => ({ name: h.name, kind: h.verify.kind, to: h.to === 'worker' ? 'worker' : { action: h.to.action } })),
       warnings },
   };
 }
@@ -1037,6 +1127,7 @@ toolsRoutes.delete('/apps/:appId/tools', async (c) => {
     c.env.DB.prepare('DELETE FROM app_operator_view WHERE app_id = ?').bind(appId),
     c.env.DB.prepare('DELETE FROM app_worker_manifest WHERE app_id = ?').bind(appId),
     c.env.DB.prepare('DELETE FROM app_worker_schedules WHERE app_id = ?').bind(appId),
+    c.env.DB.prepare('DELETE FROM app_hooks WHERE app_id = ?').bind(appId),
   ]);
   return c.json({ ok: true });
 });

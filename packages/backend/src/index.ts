@@ -60,6 +60,7 @@ import { kvRoutes } from './routes/kv.js';
 import { counterRoutes } from './routes/counters.js';
 import { roomRoutes } from './routes/rooms.js';
 import { appWorkerRoutes } from './routes/app-workers.js';
+import { hookRoutes } from './routes/hooks.js';
 
 export const app = new Hono<{ Bindings: Env }>();
 
@@ -279,6 +280,7 @@ v1.route('/', kvRoutes);
 v1.route('/', counterRoutes);
 v1.route('/', roomRoutes);
 v1.route('/', appWorkerRoutes);
+v1.route('/', hookRoutes);
 app.route('/v1', v1);
 
 // Stripe webhook is outside /v1 — it's not user-facing API

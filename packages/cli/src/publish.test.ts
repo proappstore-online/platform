@@ -17,6 +17,7 @@ const MANIFEST = {
   operator_view: { version: 1, resources: [], actions: [] },
   visibility: { mode: 'private', roles: ['viewer'] },
   worker: { secrets: ['GITHUB_TOKEN'] },
+  hooks: [{ name: 'github', verify: { kind: 'github-hmac-sha256', secret: 'GITHUB_WEBHOOK_SECRET' }, to: 'worker' }],
 };
 
 let dir: string;

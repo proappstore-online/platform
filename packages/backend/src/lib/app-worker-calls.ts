@@ -14,8 +14,8 @@ import type { Env } from '../types.js';
 import { actionCallers, prepareActionBatch, prepareActionQuery, type ToolManifest } from './action-sql.js';
 import { activeAppWorker } from './app-worker-host.js';
 import { sha256Hex } from './app-tokens.js';
-import { timingSafeEqual, toUint8 } from './bytes.js';
-import { openSecret } from './encryption.js';
+import { timingSafeEqual } from './bytes.js';
+import { openAppSecret } from './app-secrets.js';
 import { checkLogQuota, d1LogUsageStore } from './log-quota.js';
 import { LEVELS, normalizeEntry } from './log-ingest.js';
 import { HttpError } from './auth.js';
@@ -197,15 +197,7 @@ export async function workerSecretGet(env: Env, appId: string, name: unknown): P
     return null;
   }
   if (!env.APP_SECRET_KEK) throw new WorkerCallError('Unavailable', 'app secrets are not configured on this deployment');
-  const secret = await env.DB.prepare('SELECT key_ciphertext, dek_wrapped, iv FROM app_secrets WHERE app_id = ? AND name = ?')
-    .bind(appId, name).first<{ key_ciphertext: unknown; dek_wrapped: unknown; iv: unknown }>();
-  if (!secret) return null;
-  const plaintext = await openSecret({ keyCiphertext: toUint8(secret.key_ciphertext), dekWrapped: toUint8(secret.dek_wrapped), iv: toUint8(secret.iv) }, env.APP_SECRET_KEK);
-  // As the secrets proxy does (routes/secrets-proxy.ts): 1 in 10, to save writes.
-  if (Math.random() < 0.1) {
-    await env.DB.prepare('UPDATE app_secrets SET last_used_at = ? WHERE app_id = ? AND name = ?').bind(Date.now(), appId, name).run().catch(() => {});
-  }
-  return plaintext;
+  return openAppSecret(env, env.APP_SECRET_KEK, appId, name);
 }
 
 // ── storage ─────────────────────────────────────────────────────────────────

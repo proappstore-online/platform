@@ -27,6 +27,18 @@ export interface AppWorkerEvent {
   attempt: number;
   issuedAt: number;
   payload: unknown;
+  /** Hook events (#256): the sender's allowlisted headers and the exact body bytes. */
+  hook?: { headers: Record<string, string>; body: Uint8Array };
+}
+
+/** A hook envelope's body back to its exact bytes (`utf8` or `base64`, ADR-009 §3). */
+export function hookBody(payload: { body?: unknown; body_encoding?: unknown }): Uint8Array {
+  const body = typeof payload.body === 'string' ? payload.body : '';
+  if (payload.body_encoding !== 'base64') return new TextEncoder().encode(body);
+  const bin = atob(body);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
 }
 
 export interface PasClient {
@@ -116,6 +128,10 @@ export function defineAppWorker(handlers: AppWorkerHandlers): AppWorkerModule {
         issuedAt: Number(envelope.issued_at ?? 0),
         payload: envelope.payload,
       };
+      if (event.type === 'hook' && envelope.payload && typeof envelope.payload === 'object') {
+        const p = envelope.payload as { headers?: Record<string, string>; body?: unknown; body_encoding?: unknown };
+        event.hook = { headers: p.headers ?? {}, body: hookBody(p) };
+      }
       const handler = event.type === 'schedule' ? handlers.scheduled : event.type === 'hook' ? handlers.webhook : undefined;
       if (!handler) return new Response(`no handler for ${String(event.type)} events`, { status: 501 });
       try {

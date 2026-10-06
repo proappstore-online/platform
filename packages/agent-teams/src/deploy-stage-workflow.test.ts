@@ -222,6 +222,7 @@ describe('private apps: visibility registration on a green deploy (#259 review)'
     const manifest = {
       tools: [{ name: 'upsert_repo' }], page_meta: [{ path: '/r/:id' }], sitemap: { action: 'list' }, operator: { prefix: '/admin' },
       operator_view: { version: 1 }, visibility: { mode: 'public' }, worker: { secrets: ['GITHUB_TOKEN'] },
+      hooks: [{ name: 'github', verify: { kind: 'github-hmac-sha256', secret: 'S' }, to: 'worker' }],
     };
     const b = backend(200);
     const { deps: d } = deps({ PAS_BACKEND: b.binding, INTERNAL_TOKEN: 'it' });

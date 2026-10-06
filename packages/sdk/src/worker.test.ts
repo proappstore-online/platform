@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { defineAppWorker, pasClient, type AppWorkerEnv } from './worker.js';
+import { defineAppWorker, hookBody, pasClient, type AppWorkerEnv } from './worker.js';
 
 // #254: defineAppWorker dispatches the platform's envelope and binds every PAS
 // call to the worker token and the invocation id `<event id>:<attempt>`.
@@ -63,5 +63,26 @@ describe('pasClient', () => {
 
   it('refuses to run without a PAS binding', () => {
     expect(() => pasClient({}, { id: 'e', attempt: 1 })).toThrow(/no PAS binding/);
+  });
+});
+
+describe('hook events (#256)', () => {
+  it('hand the handler the exact body bytes and the allowlisted headers', async () => {
+    const { env } = envWithPas();
+    const webhook = vi.fn();
+    const req = new Request('https://w/', { method: 'POST', body: JSON.stringify({
+      v: 1, id: 'h1', type: 'hook', name: 'github', attempt: 1, issued_at: 1,
+      payload: { headers: { 'x-github-event': 'push' }, body: '/wAQ', body_encoding: 'base64' },
+    }) });
+    expect((await defineAppWorker({ webhook }).fetch(req, env, {})).status).toBe(200);
+    const event = webhook.mock.calls[0]![0];
+    expect(event.hook.headers).toEqual({ 'x-github-event': 'push' });
+    expect([...event.hook.body]).toEqual([0xff, 0x00, 0x10]);
+  });
+
+  it('hookBody decodes utf8 and base64', () => {
+    expect(new TextDecoder().decode(hookBody({ body: '{"a":1}', body_encoding: 'utf8' }))).toBe('{"a":1}');
+    expect([...hookBody({ body: '/wAQ', body_encoding: 'base64' })]).toEqual([0xff, 0x00, 0x10]);
+    expect(hookBody({})).toEqual(new Uint8Array());
   });
 });

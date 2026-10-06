@@ -72,6 +72,8 @@ export const WEBHOOK_DELIVERY_RETENTION_DAYS = 7;
  * stale-claim recovery finishes it within minutes. `due_at` is in ms.
  */
 export const SCHEDULED_RUN_RETENTION_DAYS = 30;
+/** #256: inbound-hook delivery rows (the de-dupe record). */
+export const HOOK_DELIVERY_RETENTION_DAYS = 14;
 const RETENTION_PRUNES = [
   {
     key: 'webhook_deliveries',
@@ -90,6 +92,14 @@ const RETENTION_PRUNES = [
     table: 'scheduled_action_runs',
     where: "due_at < ? AND status <> 'claimed'",
     binds: (nowMs: number) => [cutoffMs(nowMs, SCHEDULED_RUN_RETENTION_DAYS)],
+  },
+  {
+    // #256: inbound-hook deliveries keep 14 days — longer than GitHub's
+    // redelivery window, so de-dupe holds — and never hold a body.
+    key: 'app_hook_deliveries',
+    table: 'app_hook_deliveries',
+    where: 'received_at < ?',
+    binds: (nowMs: number) => [cutoffMs(nowMs, HOOK_DELIVERY_RETENTION_DAYS)],
   },
   {
     // #253: one row per app-worker invocation, kept as long as scheduled runs.
