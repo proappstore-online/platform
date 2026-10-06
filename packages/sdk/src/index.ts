@@ -21,6 +21,7 @@ import { Invites } from './invites.js';
 import { Actions } from './actions.js';
 import { Tokens } from './tokens.js';
 import { Logs } from './logs.js';
+import { WorkerHttp } from './worker-http.js';
 import type { ProInitOptions } from './types.js';
 
 // Vendored base primitive types — one import for app authors.
@@ -114,6 +115,8 @@ export class ProAppStore {
   readonly tokens: Tokens;
   /** Runtime error capture — auto-captures errors + records failed ops to app_logs. */
   readonly logs: Logs;
+  /** The app's own worker (#260): `pro.worker.fetch('/v1/ping')` → `/.pas/worker/v1/ping`. */
+  readonly worker: WorkerHttp;
 
   constructor(opts: ProInitOptions) {
     const apiBase = opts.proApiBase ?? 'https://api.proappstore.online';
@@ -137,6 +140,7 @@ export class ProAppStore {
     this.email = new Email(opts.appId, apiBase, this.auth);
     this.webhooks = new Webhooks(opts.appId, apiBase, this.auth);
     this.invites = new Invites(opts.appId, apiBase, this.auth);
+    this.worker = new WorkerHttp();
     // Constructed before Actions: Actions reports failed calls to the logger (#106).
     this.logs = new Logs(opts.appId, apiBase, this.auth, opts.monitoring ?? {});
     this.actions = new Actions(opts.appId, apiBase, this.auth, this.logs);

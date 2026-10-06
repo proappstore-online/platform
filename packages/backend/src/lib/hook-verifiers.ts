@@ -139,18 +139,5 @@ export function hookHeaders(headers: Headers): Record<string, string> {
   return out;
 }
 
-const TEXTUAL = /^(text\/[^;]+|application\/json|application\/[^;]+\+json|application\/x-www-form-urlencoded)\s*(;|$)/i;
-
-/**
- * A body for a JSON envelope (ADR-009 §3, shared with #260's http events):
- * `utf8` when the content type is textual and the bytes are valid UTF-8,
- * otherwise `base64`, so the worker can rebuild the exact bytes.
- */
-export function encodeEnvelopeBody(body: Uint8Array, contentType: string | null): { body: string; body_encoding: 'utf8' | 'base64' } {
-  if (contentType && TEXTUAL.test(contentType.trim())) {
-    try {
-      return { body: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(body), body_encoding: 'utf8' };
-    } catch { /* not UTF-8 after all */ }
-  }
-  return { body: toBase64(body), body_encoding: 'base64' };
-}
+// The envelope body encoding lives with the shim, which needs it too (#260).
+export { encodeEnvelopeBody } from '../app-worker-shim/body.js';

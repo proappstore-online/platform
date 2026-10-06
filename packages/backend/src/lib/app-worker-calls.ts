@@ -19,7 +19,8 @@ import { openAppSecret } from './app-secrets.js';
 import { checkLogQuota, d1LogUsageStore } from './log-quota.js';
 import { LEVELS, normalizeEntry } from './log-ingest.js';
 import { HttpError } from './auth.js';
-import { forwardToDataWorker, loadManifest } from '../routes/actions.js';
+import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from '../routes/actions.js';
+import { verifyCallerGrant } from './caller-grant.js';
 import { fileQuotaRefusal } from '../routes/storage.js';
 
 export const SYSTEM_WORKER_USER = 'system:worker';
@@ -45,8 +46,12 @@ export interface CallCtx {
   token: string;
   /** `<envelope id>:<attempt>` — the app_worker_invocations row of the running invocation. */
   invocation: string;
+  /** A caller grant from an http event (#260): run actions as that user. */
   as?: unknown;
 }
+
+/** The signed-in user a verified caller grant names (#260). */
+export interface CallerIdentity { id: string; roles: string[] }
 
 // ── Authorisation and budget ────────────────────────────────────────────────
 
@@ -59,19 +64,27 @@ const hexEqual = (a: string, b: string) => timingSafeEqual(new TextEncoder().enc
  * deployed and its app must exist; and the call is counted against the running
  * invocation's budget in one atomic UPDATE, so the cap holds across isolates.
  */
-export async function authorizeWorkerCall(env: Pick<Env, 'DB'>, appId: string | undefined, ctx: unknown, now = Date.now()): Promise<CallCtx> {
+export async function authorizeWorkerCall(
+  env: Pick<Env, 'DB' | 'SESSION_SIGNING_KEY'>, appId: string | undefined, ctx: unknown, now = Date.now(),
+): Promise<{ caller: CallerIdentity | null }> {
   if (!appId) throw new WorkerCallError('Unauthorized', 'the binding carries no app');
   const call = ctx as Partial<CallCtx> | null;
   if (!call || typeof call.token !== 'string' || !call.token || typeof call.invocation !== 'string' || !call.invocation) {
     throw new WorkerCallError('Unauthorized', 'every PAS call needs { token, invocation }');
   }
-  if (call.as !== undefined) throw new WorkerCallError('Forbidden', 'calling as a user needs a caller grant (#260), which is not available yet');
 
   const w = await activeAppWorker(env, appId);
   const hash = await sha256Hex(call.token);
   const current = !!w?.token_hash && hexEqual(hash, w.token_hash);
   const previous = !!w?.prev_token_hash && !!w.prev_token_until && w.prev_token_until > now && hexEqual(hash, w.prev_token_hash);
   if (!w || !(current || previous)) throw new WorkerCallError('Unauthorized', 'invalid worker token for this app');
+  // A caller grant (#260) must be one the platform signed for THIS app, unexpired.
+  // Checked before the budget, so a forged or stale grant spends nothing.
+  let caller: CallerIdentity | null = null;
+  if (call.as !== undefined) {
+    caller = await verifyCallerGrant(env, appId, call.as, Math.floor(now / 1000));
+    if (!caller) throw new WorkerCallError('Unauthorized', 'invalid or expired caller grant');
+  }
 
   const counted = await env.DB.prepare(
     `UPDATE app_worker_invocations SET pas_calls = pas_calls + 1
@@ -83,7 +96,7 @@ export async function authorizeWorkerCall(env: Pick<Env, 'DB'>, appId: string | 
     if (row?.status === 'running') throw new WorkerCallError('TooManyCalls', `at most ${MAX_PAS_CALLS_PER_INVOCATION} PAS calls per invocation`);
     throw new WorkerCallError('Unauthorized', 'PAS calls are accepted only during a running invocation');
   }
-  return { token: call.token, invocation: call.invocation };
+  return { caller };
 }
 
 /** One Analytics Engine point per call (ADR-009 §4); never fails the call. */
@@ -95,9 +108,20 @@ export function recordWorkerCall(env: Pick<Env, 'APP_WORKER_CALLS'>, appId: stri
 
 // ── actions ─────────────────────────────────────────────────────────────────
 
-interface PreparedCall { name: string; endpoint: 'query' | 'execute' | 'batch'; statements: { sql: string; params: unknown[] }[] }
+interface PreparedCall {
+  name: string;
+  endpoint: 'query' | 'execute' | 'batch';
+  statements: { sql: string; params: unknown[] }[];
+  /** The app role a caller-grant call ran under, for the success audit (#232). */
+  role: string | null;
+}
 
-async function prepareWorkerCall(env: Pick<Env, 'DB'>, appId: string, name: unknown, params: unknown): Promise<PreparedCall> {
+/**
+ * The gate for one action. As `system:worker`: callers must include "worker",
+ * no role gate. As a grant's user (#260): callers must include "user" and the
+ * action's own role gates apply, exactly as on the HTTP actions route.
+ */
+async function prepareWorkerCall(env: Pick<Env, 'DB'>, appId: string, name: unknown, params: unknown, caller: CallerIdentity | null = null): Promise<PreparedCall> {
   if (typeof name !== 'string' || !name) throw new WorkerCallError('BadRequest', 'action name is required');
   if (params !== undefined && (params === null || typeof params !== 'object' || Array.isArray(params))) {
     throw new WorkerCallError('BadRequest', `params of "${name}" must be an object`);
@@ -110,18 +134,32 @@ async function prepareWorkerCall(env: Pick<Env, 'DB'>, appId: string, name: unkn
     throw e;
   }
   if (manifest.schedule !== undefined) throw new WorkerCallError('Forbidden', `"${name}" is a scheduled action; only the platform scheduler runs it`);
-  if (!actionCallers(manifest).includes('worker')) throw new WorkerCallError('Forbidden', `"${name}" does not list "worker" in its callers`);
-  if (manifest.auth?.app_roles?.length || manifest.auth?.platform_roles?.length) {
-    throw new WorkerCallError('Forbidden', `"${name}" is role-gated; system:worker holds no role`);
+  let role: string | null = null;
+  if (caller) {
+    if (!actionCallers(manifest).includes('user')) throw new WorkerCallError('Forbidden', `"${name}" does not list "user" in its callers`);
+    // A grant carries no sign-in time, so it can never satisfy a step-up.
+    if (manifest.step_up) throw new WorkerCallError('Forbidden', `"${name}" needs a recent sign-in, which a worker request cannot carry`);
+    try {
+      role = await enforceActionAuth(env.DB, appId, manifest, { id: caller.id, login: caller.id, avatarUrl: null, roles: caller.roles });
+    } catch (e) {
+      if (e instanceof HttpError) throw new WorkerCallError('Forbidden', `"${name}": ${e.message}`);
+      throw e;
+    }
+  } else {
+    if (!actionCallers(manifest).includes('worker')) throw new WorkerCallError('Forbidden', `"${name}" does not list "worker" in its callers`);
+    if (manifest.auth?.app_roles?.length || manifest.auth?.platform_roles?.length) {
+      throw new WorkerCallError('Forbidden', `"${name}" is role-gated; system:worker holds no role`);
+    }
   }
   const input = (params ?? {}) as Record<string, unknown>;
+  const userId = caller?.id ?? SYSTEM_WORKER_USER;
   try {
     switch (manifest.operation) {
       case 'query':
       case 'execute':
-        return { name, endpoint: manifest.operation, statements: [prepareActionQuery(manifest, input, SYSTEM_WORKER_USER)] };
+        return { name, endpoint: manifest.operation, statements: [prepareActionQuery(manifest, input, userId)], role };
       case 'batch':
-        return { name, endpoint: 'batch', statements: prepareActionBatch(manifest, input, SYSTEM_WORKER_USER) };
+        return { name, endpoint: 'batch', statements: prepareActionBatch(manifest, input, userId), role };
       default:
         throw new WorkerCallError('Forbidden', `"${name}" is a ${manifest.operation} action, which workers cannot run`);
     }
@@ -143,10 +181,18 @@ async function dataWorker(env: Env, appId: string, endpoint: string, payload: un
 }
 
 /** Run one registered action as `system:worker`. Returns the data worker's answer (`rows`/`meta`, or `results` for a batch tool). */
-export async function workerActionCall(env: Env, appId: string, name: unknown, params: unknown): Promise<unknown> {
-  const call = await prepareWorkerCall(env, appId, name, params);
+export async function workerActionCall(env: Env, appId: string, name: unknown, params: unknown, caller: CallerIdentity | null = null): Promise<unknown> {
+  const call = await prepareWorkerCall(env, appId, name, params, caller);
   const payload = call.endpoint === 'batch' ? { statements: call.statements } : call.statements[0];
-  return dataWorker(env, appId, call.endpoint, payload);
+  const answer = await dataWorker(env, appId, call.endpoint, payload);
+  await auditAsUser(env, appId, [call], caller);
+  return answer;
+}
+
+/** The role-gated success audit (#232) for actions a grant's user ran — as the HTTP route records it. */
+async function auditAsUser(env: Env, appId: string, calls: PreparedCall[], caller: CallerIdentity | null): Promise<void> {
+  if (!caller) return;
+  for (const c of calls) if (c.role) await recordActionSuccess(env.DB, appId, c.name, { actorId: caller.id, role: c.role }, 200);
 }
 
 /**
@@ -155,12 +201,12 @@ export async function workerActionCall(env: Env, appId: string, name: unknown, p
  * `MAX_BATCH_BODY_BYTES`, checked before any SQL runs. Returns, per call, the
  * results of its statements.
  */
-export async function workerActionBatch(env: Env, appId: string, calls: unknown): Promise<{ name: string; results: unknown[] }[]> {
+export async function workerActionBatch(env: Env, appId: string, calls: unknown, caller: CallerIdentity | null = null): Promise<{ name: string; results: unknown[] }[]> {
   if (!Array.isArray(calls) || calls.length === 0) throw new WorkerCallError('BadRequest', 'batch takes a non-empty array of { name, params }');
   const prepared: PreparedCall[] = [];
   let count = 0;
   for (const c of calls as { name?: unknown; params?: unknown }[]) {
-    const p = await prepareWorkerCall(env, appId, c?.name, c?.params);
+    const p = await prepareWorkerCall(env, appId, c?.name, c?.params, caller);
     count += p.statements.length;
     if (count > MAX_BATCH_STATEMENTS) throw new WorkerCallError('BadRequest', `a batch runs at most ${MAX_BATCH_STATEMENTS} prepared statements`);
     prepared.push(p);
@@ -171,6 +217,7 @@ export async function workerActionBatch(env: Env, appId: string, calls: unknown)
     throw new WorkerCallError('BadRequest', `a batch body is at most ${MAX_BATCH_BODY_BYTES} bytes`);
   }
   const answer = await dataWorker(env, appId, 'batch', payload) as { results?: unknown[] };
+  await auditAsUser(env, appId, prepared, caller);
   const results = answer.results ?? [];
   let at = 0;
   return prepared.map((p) => {

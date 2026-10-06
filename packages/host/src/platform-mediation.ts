@@ -4,6 +4,7 @@ import type { Route } from "./host.js";
 
 const API_PREFIX = "/.pas/api";
 const DATA_PREFIX = "/.pas/data";
+const WORKER_PREFIX = "/.pas/worker";
 const API_BASE = "https://api.proappstore.online";
 
 export async function handlePlatformMediation(request: Request, env: Env, route: Route): Promise<Response | null> {
@@ -19,6 +20,17 @@ export async function handlePlatformMediation(request: Request, env: Env, route:
     // valid session. Never let that sign the user out — surface it as a data
     // error and keep the cookie. See #65/#66.
     return forwardWithSession(request, null, upstreamDataUrl(url, route), false, route);
+  }
+  if (url.pathname === WORKER_PREFIX || url.pathname.startsWith(`${WORKER_PREFIX}/`)) {
+    // App worker plane (#260): the backend resolves the user, mints a caller
+    // grant and invokes the app's worker. Always a POST upstream; the browser's
+    // method and path travel as headers. A 401 here may be the worker's own
+    // answer, so it never clears the session cookie.
+    const path = `${url.pathname.slice(WORKER_PREFIX.length) || "/"}${url.search}`;
+    return forwardWithSession(request, env.API, `${API_BASE}/v1/apps/${route.slug}/worker/http`, false, route, {
+      method: "POST",
+      headers: { "X-PAS-Worker-Method": request.method, "X-PAS-Worker-Path": path },
+    });
   }
   return null;
 }
@@ -37,7 +49,10 @@ function upstreamDataUrl(url: URL, route: Route): string {
   return upstream.toString();
 }
 
-async function forwardWithSession(request: Request, binding: Fetcher | null, upstreamUrl: string, clearCookieOn401: boolean, route: Route): Promise<Response> {
+/** Rewrite of the upstream request — the worker plane sends every method as a POST with the original in headers. */
+interface Upstream { method: string; headers: Record<string, string> }
+
+async function forwardWithSession(request: Request, binding: Fetcher | null, upstreamUrl: string, clearCookieOn401: boolean, route: Route, as?: Upstream): Promise<Response> {
   const token = readCookie(request.headers.get("Cookie"), SESSION_COOKIE_NAME);
   if (!token) return noStore(Response.json({ error: "not signed in" }, { status: 401 }));
 
@@ -46,8 +61,9 @@ async function forwardWithSession(request: Request, binding: Fetcher | null, ups
   }
 
   const headers = forwardedHeaders(request.headers, token, route);
+  for (const [name, value] of Object.entries(as?.headers ?? {})) headers.set(name, value);
   const init: RequestInit = {
-    method: request.method,
+    method: as?.method ?? request.method,
     headers,
     redirect: "manual",
   };

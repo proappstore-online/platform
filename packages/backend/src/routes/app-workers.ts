@@ -13,6 +13,7 @@
  *   DELETE /v1/apps/:appId/worker                 owner: disable + remove()
  *   POST   /v1/apps/:appId/worker/rotate          owner: rotate token + event key
  *   POST   /v1/apps/:appId/worker/schedules/:name/run   owner: queue a schedule run now (#255)
+ *   POST   /v1/apps/:appId/worker/http        a signed-in user's /.pas/worker/* request, mediated by the host (#260)
  *
  * No route returns or logs the worker's token or event key.
  */
@@ -22,6 +23,10 @@ import { HttpError, isAdminId, requireAdmin, requireAppOwner } from '../lib/auth
 import { requireAppDeployOidc } from '../lib/app-deploy-oidc.js';
 import { activeAppWorker, appWorkerHost, disableAppWorker, parseBundle, rotateAppWorkerCredentials } from '../lib/app-worker-host.js';
 import { runNowDueAt, WORKER_RUN_PREFIX } from '../lib/scheduled-actions.js';
+import { requireVisibleUser } from '../lib/visibility.js';
+import { mintCallerGrant } from '../lib/caller-grant.js';
+import { decodeEnvelopeBody, encodeEnvelopeBody } from '../app-worker-shim/body.js';
+import type { AppWorkerExports } from '../lib/app-worker-host.js';
 
 /** One manual run per schedule per minute (#255). */
 export const RUN_NOW_INTERVAL_MS = 60_000;
@@ -171,4 +176,78 @@ appWorkerRoutes.post('/apps/:appId/worker/schedules/:name/run', async (c) => {
     "INSERT INTO scheduled_action_runs (run_id, app_id, action_name, source, due_at, status) VALUES (?, ?, ?, 'code', ?, 'due')",
   ).bind(runId, appId, action, runNowDueAt(now)).run();
   return c.json({ run_id: runId, status: 'due' }, 202);
+});
+
+// ── Browser requests to the app worker (#260) ───────────────────────────────
+
+export const WORKER_HTTP_MAX_REQUEST_BYTES = 1024 * 1024;
+export const WORKER_HTTP_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+/** ADR-009 §4: http events get 30 s. They are never retried. */
+export const WORKER_HTTP_TIMEOUT_MS = 30_000;
+const WORKER_HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
+const REQUEST_HEADERS = ['content-type', 'accept', 'accept-language', 'if-none-match', 'if-modified-since'];
+/** All a worker response may carry back; Cache-Control is forced, Set-Cookie and the rest never pass. */
+const RESPONSE_HEADERS = ['content-type', 'etag'];
+
+/**
+ * A signed-in user's request to `/.pas/worker/<path>` on the app origin. The host
+ * (platform-mediation.ts) forwards it here with the session as bearer, the app it
+ * resolved as X-PAS-App, and the original method and path in X-PAS-Worker-*.
+ * The platform mints a 30-second caller grant for that user and invokes the
+ * worker with an `http` event; inside the request the worker may run actions as
+ * the user (`PAS.actions.call(…, { as: grant })`).
+ */
+appWorkerRoutes.post('/apps/:appId/worker/http', async (c) => {
+  const appId = c.req.param('appId');
+  const user = await requireVisibleUser(c, appId);
+  // Only the host sets this (the API entry strips it), so it proves the request came through the app's own origin.
+  if (c.req.header('X-PAS-App') !== appId) throw new HttpError('worker routes are reached through the app origin (/.pas/worker)', 403);
+  const method = (c.req.header('X-PAS-Worker-Method') ?? '').toUpperCase();
+  const target = c.req.header('X-PAS-Worker-Path') ?? '';
+  if (!WORKER_HTTP_METHODS.has(method)) throw new HttpError('unsupported method', 405);
+  if (!target.startsWith('/') || target.length > 2048 || /[\r\n]/.test(target)) throw new HttpError('invalid worker path', 400);
+  if (!(await activeAppWorker(c.env, appId))) throw new HttpError('not found', 404);
+
+  const bytes = new Uint8Array(await c.req.arrayBuffer());
+  if (bytes.byteLength > WORKER_HTTP_MAX_REQUEST_BYTES) throw new HttpError(`request body exceeds ${WORKER_HTTP_MAX_REQUEST_BYTES} bytes`, 413);
+  const q = target.indexOf('?');
+  const headers: Record<string, string> = {};
+  for (const name of REQUEST_HEADERS) {
+    const value = c.req.header(name);
+    if (value !== undefined) headers[name] = value.slice(0, 1024);
+  }
+
+  let ctx: AppWorkerExports | undefined;
+  try { ctx = c.executionCtx as unknown as AppWorkerExports; } catch { ctx = undefined; }
+  const result = await appWorkerHost(c.env, ctx).invoke(appId, {
+    id: crypto.randomUUID(),
+    type: 'http',
+    attempt: 1,
+    payload: {
+      method,
+      path: q === -1 ? target : target.slice(0, q),
+      query: q === -1 ? '' : target.slice(q + 1),
+      headers,
+      ...encodeEnvelopeBody(bytes, headers['content-type'] ?? null),
+    },
+    caller: await mintCallerGrant(c.env, appId, user),
+  }, { timeoutMs: WORKER_HTTP_TIMEOUT_MS });
+
+  if (result.status === 'timeout') throw new HttpError('the app worker did not answer in time', 504);
+  let wrapped: { v?: unknown; status?: unknown; headers?: Record<string, string>; body?: unknown; body_encoding?: unknown };
+  try {
+    wrapped = JSON.parse(result.body ?? '');
+  } catch {
+    throw new HttpError('the app worker failed', 502);
+  }
+  if (wrapped.v !== 1 || typeof wrapped.status !== 'number' || wrapped.status < 200 || wrapped.status > 599) throw new HttpError('the app worker failed', 502);
+  const body = decodeEnvelopeBody(wrapped.body, wrapped.body_encoding);
+  if (body.byteLength > WORKER_HTTP_MAX_RESPONSE_BYTES) throw new HttpError('the app worker response is too large', 502);
+  const out = new Headers({ 'Cache-Control': 'private, no-store' });
+  for (const name of RESPONSE_HEADERS) {
+    const value = wrapped.headers?.[name];
+    if (typeof value === 'string') out.set(name, value);
+  }
+  const nullBody = [204, 205, 304].includes(wrapped.status) || method === 'HEAD';
+  return new Response(nullBody ? null : body, { status: wrapped.status, headers: out });
 });

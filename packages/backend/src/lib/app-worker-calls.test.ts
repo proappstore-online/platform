@@ -7,6 +7,7 @@ import {
 import { AppWorkerApi } from '../rpc/app-worker-api.js';
 import { sha256Hex } from './app-tokens.js';
 import { sealSecret } from './encryption.js';
+import { mintCallerGrant } from './caller-grant.js';
 import { resetBurstState } from './log-quota.js';
 import type { Env } from '../types.js';
 
@@ -28,6 +29,8 @@ let logs: unknown[][];
 let r2: Map<string, { bytes: Uint8Array; contentType?: string }>;
 let sent: { url: string; body: unknown }[];
 let points: unknown[];
+let appRoles: Map<string, string[]>;
+let audits: unknown[][];
 
 const tool = (m: Row) => tools.set(String(m.name), m);
 const workerTool = (name: string, extra: Row = {}) => tool({
@@ -36,7 +39,7 @@ const workerTool = (name: string, extra: Row = {}) => tool({
 });
 
 function fakeDb(): D1Database {
-  const handle = (sql: string, args: unknown[]): { first?: unknown; changes?: number } => {
+  const handle = (sql: string, args: unknown[]): { first?: unknown; changes?: number; all?: unknown[] } => {
     const s = sql.replace(/\s+/g, ' ').trim();
     if (s.startsWith('SELECT w.* FROM app_workers')) return { first: worker && worker.app_id === args[0] && worker.enabled === 1 && worker.deployed_at ? { ...worker } : null };
     if (s.startsWith('UPDATE app_worker_invocations SET pas_calls')) {
@@ -56,6 +59,8 @@ function fakeDb(): D1Database {
     if (s.startsWith('SELECT secrets FROM app_worker_manifest')) return { first: workerSecrets ? { secrets: JSON.stringify(workerSecrets) } : null };
     if (s.startsWith('SELECT key_ciphertext')) return { first: appSecrets.get(String(args[1])) ?? null };
     if (s.startsWith('UPDATE app_secrets SET last_used_at')) return { changes: 1 };
+    if (s.startsWith('SELECT role_name FROM app_roles')) return { all: (appRoles.get(String(args[1])) ?? []).map((role_name) => ({ role_name })) };
+    if (s.startsWith('INSERT INTO app_action_audit')) { audits.push(args); return { changes: 1 }; }
     if (s.startsWith('SELECT count FROM app_log_usage')) return { first: null };
     if (s.startsWith('INSERT INTO app_log_usage')) return { changes: 1 };
     if (s.startsWith('INSERT INTO app_logs')) { logs.push(args); return { changes: 1 }; }
@@ -66,6 +71,7 @@ function fakeDb(): D1Database {
       const exec = (args: unknown[]) => ({
         first: async () => handle(sql, args).first ?? null,
         run: async () => ({ meta: { changes: handle(sql, args).changes ?? 0 } }),
+        all: async () => ({ results: handle(sql, args).all ?? [] }),
       });
       return { ...exec([]), bind: (...args: unknown[]) => exec(args) };
     },
@@ -103,8 +109,10 @@ beforeEach(async () => {
   r2 = new Map();
   sent = [];
   points = [];
+  appRoles = new Map();
+  audits = [];
   env = {
-    DB: fakeDb(), STORAGE: fakeR2(), APP_SECRET_KEK: KEK, DATA_WORKER_HOST: 'test.workers.dev', INTERNAL_TOKEN: 'internal',
+    DB: fakeDb(), STORAGE: fakeR2(), APP_SECRET_KEK: KEK, DATA_WORKER_HOST: 'test.workers.dev', INTERNAL_TOKEN: 'internal', SESSION_SIGNING_KEY: 'sk',
     APP_WORKER_CALLS: { writeDataPoint: (p: unknown) => points.push(p) },
   } as unknown as Env;
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
@@ -122,13 +130,13 @@ describe('authorizeWorkerCall: token is authoritative, every call (#254)', () =>
     expect(invocations.get('e1:1')!.pas_calls).toBe(1);
   });
 
-  it('refuses no app, no ctx, a wrong token, another app, a disabled worker and a caller grant', async () => {
+  it('refuses no app, no ctx, a wrong token, another app, a disabled worker and a forged caller grant', async () => {
     expect(await code(authorizeWorkerCall(env, undefined, ctx()))).toBe('Unauthorized');
     expect(await code(authorizeWorkerCall(env, 't', null))).toBe('Unauthorized');
     expect(await code(authorizeWorkerCall(env, 't', { token: TOKEN }))).toBe('Unauthorized');
     expect(await code(authorizeWorkerCall(env, 't', ctx({ token: 'x'.repeat(64) })))).toBe('Unauthorized');
     expect(await code(authorizeWorkerCall(env, 'u', ctx()))).toBe('Unauthorized');
-    expect(await code(authorizeWorkerCall(env, 't', ctx({ as: { grant: 'g' } })))).toBe('Forbidden');
+    expect(await code(authorizeWorkerCall(env, 't', ctx({ as: { grant: 'g' } })))).toBe('Unauthorized');
     worker!.enabled = 0;
     expect(await code(authorizeWorkerCall(env, 't', ctx()))).toBe('Unauthorized');
     // None of the refusals spent budget.
@@ -268,5 +276,43 @@ describe('AppWorkerApi RPC surface (#254)', () => {
   it('an unexpected failure is reported as Failed, never leaking the cause', async () => {
     env.DB = { prepare: () => { throw new Error('D1 exploded with secrets'); } } as unknown as D1Database;
     await expect(api({ appId: 't' }).log('info', 'x', undefined, ctx())).rejects.toThrow(/^Failed: log failed$/);
+  });
+});
+
+describe('actions as the caller of an http request (#260)', () => {
+  const userTool = (name: string, extra: Row = {}) => tool({
+    name, description: name, operation: 'query', requires_auth: true, params: {},
+    sql: 'SELECT id FROM notes WHERE owner = :__user_id LIMIT 10', ...extra,
+  });
+  const grant = (over: Row = {}) => mintCallerGrant(env, 't', { id: 'gh:42', roles: ['user'] }).then((g) => ({ ...g, ...over }));
+
+  it('runs a user action with :__user_id = the grant\'s user', async () => {
+    userTool('my_notes');
+    const pas = new AppWorkerApi({ props: { appId: 't' } } as never, env);
+    await pas.actions.call('my_notes', {}, ctx({ as: await grant() }));
+    expect(sent[0]!.body).toEqual({ sql: 'SELECT id FROM notes WHERE owner = ? LIMIT 10', params: ['gh:42'] });
+  });
+
+  it('applies the action\'s role gate as the user, and records the role-gated success audit', async () => {
+    userTool('mod_queue', { auth: { app_roles: ['moderator'] } });
+    const g = await grant();
+    expect(await code(workerActionCall(env, 't', 'mod_queue', {}, { id: 'gh:42', roles: ['user'] }))).toBe('Forbidden');
+    appRoles.set('gh:42', ['moderator']);
+    const pas = new AppWorkerApi({ props: { appId: 't' } } as never, env);
+    await pas.actions.batch([{ name: 'mod_queue' }], ctx({ as: g }));
+    expect(audits).toEqual([expect.arrayContaining(['t', 'mod_queue', 'gh:42', 'moderator', 200])]);
+  });
+
+  it('refuses worker-only and step-up actions as a user; a grant for another app or an expired one spends no budget', async () => {
+    workerTool('add_row');
+    userTool('id_docs', { step_up: true });
+    const caller = { id: 'gh:42', roles: ['user'] };
+    expect(await code(workerActionCall(env, 't', 'add_row', { id: 'x' }, caller))).toBe('Forbidden');
+    expect(await code(workerActionCall(env, 't', 'id_docs', {}, caller))).toBe('Forbidden');
+    const other = await mintCallerGrant(env, 'u', caller);
+    expect(await code(authorizeWorkerCall(env, 't', ctx({ as: other })))).toBe('Unauthorized');
+    expect(await code(authorizeWorkerCall(env, 't', ctx({ as: await grant() }), Date.now() + 31_000))).toBe('Unauthorized');
+    expect(invocations.get('e1:1')!.pas_calls).toBe(0);
+    expect(sent).toHaveLength(0);
   });
 });

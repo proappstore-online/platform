@@ -32,7 +32,8 @@ describe('defineAppWorker (#254)', () => {
     expect((await defineAppWorker({ webhook }).fetch(envelope('hook'), env, {})).status).toBe(200);
     expect(webhook).toHaveBeenCalledTimes(1);
     expect((await defineAppWorker({ webhook }).fetch(envelope('schedule'), env, {})).status).toBe(501);
-    expect((await defineAppWorker({}).fetch(envelope('http'), env, {})).status).toBe(501);
+    // http events (#260) without a fetch handler are a missing route.
+    expect((await defineAppWorker({}).fetch(envelope('http'), env, {})).status).toBe(404);
     expect((await defineAppWorker({ webhook }).fetch(new Request('https://w/', { method: 'POST', body: '{' }), env, {})).status).toBe(400);
   });
 
@@ -84,5 +85,36 @@ describe('hook events (#256)', () => {
     expect(new TextDecoder().decode(hookBody({ body: '{"a":1}', body_encoding: 'utf8' }))).toBe('{"a":1}');
     expect([...hookBody({ body: '/wAQ', body_encoding: 'base64' })]).toEqual([0xff, 0x00, 0x10]);
     expect(hookBody({})).toEqual(new Uint8Array());
+  });
+});
+
+describe('http events (#260)', () => {
+  const httpEnvelope = (payload: Record<string, unknown>, caller: unknown = { grant_id: 'g', user_id: 'gh:42', roles: ['user'], exp: 9, sig: 's' }) =>
+    new Request('https://w/', { method: 'POST', body: JSON.stringify({ v: 1, id: 'r1', type: 'http', attempt: 1, issued_at: 1, caller, payload }) });
+
+  it('rebuild a standard Request (method, path, query, headers, exact body) and run actions as the caller', async () => {
+    const { env, pas } = envWithPas();
+    let seen: { method: string; url: string; type: string | null; bytes: number[] } | null = null;
+    const res = await defineAppWorker({
+      async fetch(request, p) {
+        seen = { method: request.method, url: request.url, type: request.headers.get('content-type'), bytes: [...new Uint8Array(await request.arrayBuffer())] };
+        await p.actions.call('my_rows');
+        await p.log('info', 'hi');
+        return Response.json({ ok: true }, { status: 201 });
+      },
+    }).fetch(httpEnvelope({ method: 'POST', path: '/v1/rows', query: 'a=1', headers: { 'content-type': 'application/octet-stream' }, body: '/wAQ', body_encoding: 'base64' }), env, {});
+    expect(res.status).toBe(201);
+    expect(seen).toEqual({ method: 'POST', url: 'https://demo.proappstore.online/v1/rows?a=1', type: 'application/octet-stream', bytes: [0xff, 0x00, 0x10] });
+    const caller = { grant_id: 'g', user_id: 'gh:42', roles: ['user'], exp: 9, sig: 's' };
+    expect(pas.actions.call).toHaveBeenCalledWith('my_rows', {}, { token: 'tok', invocation: 'r1:1', as: caller });
+    // Only actions carry the grant.
+    expect(pas.log).toHaveBeenCalledWith('info', 'hi', undefined, { token: 'tok', invocation: 'r1:1' });
+  });
+
+  it('answers 404 when the worker has no fetch handler; a GET carries no body', async () => {
+    const { env } = envWithPas();
+    expect((await defineAppWorker({}).fetch(httpEnvelope({ method: 'GET', path: '/' }), env, {})).status).toBe(404);
+    const res = await defineAppWorker({ fetch: (r) => new Response(r.method) }).fetch(httpEnvelope({ method: 'GET', path: '/x', body: 'ignored', body_encoding: 'utf8' }), env, {});
+    expect(await res.text()).toBe('GET');
   });
 });

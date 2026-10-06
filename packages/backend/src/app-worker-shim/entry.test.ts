@@ -85,3 +85,34 @@ describe('signature header parsing', () => {
     expect(await verifySignature(h, body, '', NOW_MS / 1000)).toBe(false);
   });
 });
+
+describe('http events: the shim wraps the response for the JSON hop back (#260)', () => {
+  const httpBody = JSON.stringify({ v: 1, id: 'h1', app_id: 'demo', type: 'http', attempt: 1, payload: { method: 'GET', path: '/x' } });
+  const run = async (respond: () => Response) => {
+    const shim = createShim(async () => ({ default: { fetch: async () => respond() } }), () => NOW_MS);
+    return shim.fetch(post(await signatureHeader(httpBody, [KEY], NOW_MS / 1000), httpBody), { PAS_EVENT_KEY: KEY }, {});
+  };
+
+  it('carries the app status, headers and exact bytes (base64 for binary)', async () => {
+    const res = await run(() => new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { status: 201, headers: { 'content-type': 'image/png', 'set-cookie': 'a=b' } }));
+    expect(res.status).toBe(201);
+    const wrapped = await res.json() as { v: number; status: number; headers: Record<string, string>; body: string; body_encoding: string };
+    expect(wrapped).toMatchObject({ v: 1, status: 201, body_encoding: 'base64', body: btoa('\x89PNG') });
+    expect(wrapped.headers['content-type']).toBe('image/png');
+  });
+
+  it('a 204 travels inside a 200 wrapper; a JSON body as utf8', async () => {
+    const empty = await run(() => new Response(null, { status: 204 }));
+    expect(empty.status).toBe(200);
+    expect(await empty.json()).toMatchObject({ status: 204, body: '', body_encoding: 'base64' });
+    const json = await run(() => Response.json({ ok: true }, { status: 500 }));
+    expect(json.status).toBe(500);
+    expect(await json.json()).toMatchObject({ status: 500, body: '{"ok":true}', body_encoding: 'utf8' });
+  });
+
+  it('leaves schedule and hook responses unwrapped', async () => {
+    const shim = createShim(async () => ({ default: { fetch: async () => new Response('plain') } }), () => NOW_MS);
+    const res = await shim.fetch(post(await signatureHeader(body, [KEY], NOW_MS / 1000)), { PAS_EVENT_KEY: KEY }, {});
+    expect(await res.text()).toBe('plain');
+  });
+});

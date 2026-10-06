@@ -51,12 +51,22 @@ describe('role-system invariants', () => {
 });
 
 // #254: an app worker acts as `system:worker`, which must never satisfy a role
-// gate — not even if someone granted that id an app role. The worker path refuses
-// a role-gated action outright and never consults role grants.
-describe('system:worker holds no role (#254)', () => {
-  it('the worker call path refuses role-gated actions and never runs the role check', () => {
+// gate — not even if someone granted that id an app role. Its path refuses a
+// role-gated action outright. #260: the only path that runs a role check is a
+// verified caller grant, and it checks the grant's user, never system:worker.
+describe('system:worker holds no role (#254, #260)', () => {
+  it('without a grant, a role-gated action is refused before any role check', () => {
     const src = read('./app-worker-calls.ts');
-    expect(src).toMatch(/if \(manifest\.auth\?\.app_roles\?\.length \|\| manifest\.auth\?\.platform_roles\?\.length\) \{\s*throw new WorkerCallError\('Forbidden'/);
-    expect(src).not.toMatch(/enforceActionAuth|roleSubjects|app_roles WHERE/);
+    const workerBranch = /\} else \{\s*if \(!actionCallers\(manifest\)\.includes\('worker'\)\)[\s\S]*?\n  \}/.exec(src)?.[0] ?? '';
+    expect(workerBranch).toMatch(/app_roles\?\.length \|\| manifest\.auth\?\.platform_roles\?\.length\) \{\s*throw new WorkerCallError\('Forbidden'/);
+    expect(workerBranch).not.toMatch(/enforceActionAuth/);
+  });
+
+  it('the role check runs only inside the caller-grant branch, as the grant\'s user', () => {
+    const src = read('./app-worker-calls.ts');
+    const calls = [...src.matchAll(/enforceActionAuth\(([^)]*)\)/g)].map((m) => m[1]!);
+    expect(calls).toEqual([expect.stringContaining('id: caller.id')]);
+    expect(src.indexOf('if (caller) {')).toBeLessThan(src.indexOf('enforceActionAuth(env.DB'));
+    expect(src).not.toMatch(/app_roles WHERE|roleSubjects/);
   });
 });

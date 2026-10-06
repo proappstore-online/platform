@@ -64,6 +64,12 @@ export interface PasClient {
 export interface AppWorkerHandlers {
   scheduled?(event: AppWorkerEvent, pas: PasClient): Promise<void> | void;
   webhook?(event: AppWorkerEvent, pas: PasClient): Promise<void> | void;
+  /**
+   * A signed-in user's request to `/.pas/worker/<path>` (#260), as a standard
+   * Request. `pas.actions` run AS that user — their rows, their role gates —
+   * for the life of the request. Not retried.
+   */
+  fetch?(request: Request, pas: PasClient): Promise<Response> | Response;
 }
 
 /** The module shape the platform shim imports as `app.js`. */
@@ -78,7 +84,7 @@ export interface AppWorkerEnv {
   APP_ID?: string;
 }
 
-interface CallCtx { token: string; invocation: string }
+interface CallCtx { token: string; invocation: string; as?: unknown }
 interface PasBinding {
   actions: { call(name: string, params: unknown, ctx: CallCtx): Promise<unknown>; batch(calls: unknown, ctx: CallCtx): Promise<unknown> };
   secrets: { get(name: string, ctx: CallCtx): Promise<string | null> };
@@ -86,15 +92,19 @@ interface PasBinding {
   log(level: string, message: string, fields: unknown, ctx: CallCtx): Promise<boolean>;
 }
 
-/** A `PasClient` bound to one invocation: every call carries the worker token and the invocation id. */
-export function pasClient(env: AppWorkerEnv, event: Pick<AppWorkerEvent, 'id' | 'attempt'>): PasClient {
+/**
+ * A `PasClient` bound to one invocation: every call carries the worker token and
+ * the invocation id. With a caller grant (http events, #260), actions run as that user.
+ */
+export function pasClient(env: AppWorkerEnv, event: Pick<AppWorkerEvent, 'id' | 'attempt'>, caller?: unknown): PasClient {
   const pas = env.PAS;
   if (!pas) throw new Error('this worker has no PAS binding');
   const ctx: CallCtx = { token: env.PAS_WORKER_TOKEN ?? '', invocation: `${event.id}:${event.attempt}` };
+  const actionCtx: CallCtx = caller === undefined ? ctx : { ...ctx, as: caller };
   return {
     actions: {
-      call: (name, params) => pas.actions.call(name, params ?? {}, ctx),
-      batch: (calls) => pas.actions.batch(calls, ctx) as Promise<{ name: string; results: unknown[] }[]>,
+      call: (name, params) => pas.actions.call(name, params ?? {}, actionCtx),
+      batch: (calls) => pas.actions.batch(calls, actionCtx) as Promise<{ name: string; results: unknown[] }[]>,
     },
     secrets: { get: (name) => pas.secrets.get(name, ctx) },
     storage: {
@@ -131,6 +141,15 @@ export function defineAppWorker(handlers: AppWorkerHandlers): AppWorkerModule {
       if (event.type === 'hook' && envelope.payload && typeof envelope.payload === 'object') {
         const p = envelope.payload as { headers?: Record<string, string>; body?: unknown; body_encoding?: unknown };
         event.hook = { headers: p.headers ?? {}, body: hookBody(p) };
+      }
+      if (event.type === 'http') {
+        if (!handlers.fetch) return new Response('no handler for http events', { status: 404 });
+        const p = (envelope.payload ?? {}) as { method?: string; path?: string; query?: string; headers?: Record<string, string>; body?: unknown; body_encoding?: unknown };
+        const method = (p.method ?? 'GET').toUpperCase();
+        const url = `https://${env.APP_ID ?? 'app'}.proappstore.online${p.path ?? '/'}${p.query ? `?${p.query}` : ''}`;
+        const init: RequestInit = { method, headers: p.headers ?? {} };
+        if (method !== 'GET' && method !== 'HEAD') init.body = hookBody(p) as BodyInit;
+        return handlers.fetch(new Request(url, init), pasClient(env, event, (envelope as { caller?: unknown }).caller));
       }
       const handler = event.type === 'schedule' ? handlers.scheduled : event.type === 'hook' ? handlers.webhook : undefined;
       if (!handler) return new Response(`no handler for ${String(event.type)} events`, { status: 501 });

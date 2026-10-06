@@ -5,7 +5,7 @@
  * `props` is set by platform code; the worker's token is still required on every
  * call, and is the authoritative factor.
  *
- *   env.PAS.actions.call(name, params, ctx)      env.PAS.actions.batch(calls, ctx)
+ *   env.PAS.actions.call(name, params, ctx)      env.PAS.actions.batch(calls, ctx)   (ctx.as: a caller grant, #260)
  *   env.PAS.secrets.get(name, ctx)               env.PAS.log(level, message, fields, ctx)
  *   env.PAS.storage.put(key, body, opts, ctx)    env.PAS.storage.get(key, ctx)
  *
@@ -20,17 +20,17 @@ import { RpcTarget, WorkerEntrypoint } from 'cloudflare:workers';
 import type { Env } from '../types.js';
 import {
   authorizeWorkerCall, recordWorkerCall, workerActionBatch, workerActionCall, workerLog,
-  workerSecretGet, workerStorageGet, workerStoragePut, WorkerCallError,
+  workerSecretGet, workerStorageGet, workerStoragePut, WorkerCallError, type CallerIdentity,
 } from '../lib/app-worker-calls.js';
 
-type Run = <T>(method: string, action: string, ctx: unknown, fn: (appId: string) => Promise<T>) => Promise<T>;
+type Run = <T>(method: string, action: string, ctx: unknown, fn: (appId: string, caller: CallerIdentity | null) => Promise<T>) => Promise<T>;
 
 function runner(env: Env, appId: string | undefined): Run {
   return async (method, action, ctx, fn) => {
     let outcome = 'ok';
     try {
-      await authorizeWorkerCall(env, appId, ctx);
-      return await fn(appId!);
+      const { caller } = await authorizeWorkerCall(env, appId, ctx);
+      return await fn(appId!, caller);
     } catch (e) {
       outcome = e instanceof WorkerCallError ? e.code : 'Failed';
       if (e instanceof WorkerCallError) throw e;
@@ -47,11 +47,12 @@ class ActionsApi extends RpcTarget {
   readonly #env: Env;
   constructor(run: Run, env: Env) { super(); this.#run = run; this.#env = env; }
   call(name: string, params: Record<string, unknown> | undefined, ctx: unknown): Promise<unknown> {
-    return this.#run('actions.call', String(name ?? ''), ctx, (appId) => workerActionCall(this.#env, appId, name, params));
+    // With ctx.as (a caller grant, #260) the action runs as that user; otherwise as system:worker.
+    return this.#run('actions.call', String(name ?? ''), ctx, (appId, caller) => workerActionCall(this.#env, appId, name, params, caller));
   }
   /** Many invocations, one D1 transaction; counts as ONE PAS call. */
   batch(calls: { name: string; params?: Record<string, unknown> }[], ctx: unknown): Promise<{ name: string; results: unknown[] }[]> {
-    return this.#run('actions.batch', '', ctx, (appId) => workerActionBatch(this.#env, appId, calls));
+    return this.#run('actions.batch', '', ctx, (appId, caller) => workerActionBatch(this.#env, appId, calls, caller));
   }
 }
 
