@@ -7,12 +7,13 @@
  *   console keeps in sessionStorage. A repeated POST (rerender, remount, tab
  *   switch, poll) for the same visit writes nothing: the insert is guarded in
  *   the same statement.
- * - Refusals: operatorRefusalAudit records every refused operator request by a
- *   verified owner (role missing, step-up, conflict, validation…) once, unless
- *   the request already wrote its row. Callers who never passed the ownership
- *   check are not recorded, so a stranger cannot fill an app's trail.
+ * - Refusals: operatorRefusalAudit records every refused operator request by an
+ *   admitted caller — the owner or an admin (#293) — (role missing, step-up,
+ *   conflict, validation…) once, unless the request already wrote its row.
+ *   Callers who never passed the gate are not recorded, so a stranger cannot
+ *   fill an app's trail.
  * - Trail: GET /v1/apps/:appId/operator/audit — owner-only (plus the
- *   contract's `audit.app_roles` when declared), 50 rows a page, newest first,
+ *   contract's `audit.app_roles` when declared); the admin gate (#293) does not open it, 50 rows a page, newest first,
  *   keyset-paged and filterable. Rows carry who, what, which record, the
  *   outcome and when — never tokens, params, document paths or results.
  *   Targets of identity-verification reads and document views are hidden
@@ -23,7 +24,7 @@ import { Hono, type MiddlewareHandler } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireRecentAuth, type FasUser } from '../lib/auth.js';
 import { roleSubjects } from '../lib/role-subject.js';
-import { markAudited, operatorOwnerOf, requireOperatorOwner, wasAudited } from '../lib/operator-audit-marks.js';
+import { markAudited, operatorCallerOf, requireOperatorAccess, requireOperatorOwner, wasAudited } from '../lib/operator-audit-marks.js';
 import { loadContract } from './operator.js';
 
 export const operatorAuditRoutes = new Hono<{ Bindings: Env }>();
@@ -77,20 +78,20 @@ function attempted(path: string): { operatorAction: string; target: string | nul
   return null;
 }
 
-/** Records a refused operator request by a verified owner — once, and only if nothing was recorded for it yet. */
+/** Records a refused operator request by an admitted caller (owner or admin, #293) — once, and only if nothing was recorded for it yet. */
 export const operatorRefusalAudit: MiddlewareHandler<{ Bindings: Env }> = async (c, next) => {
   await next();
-  const owner = operatorOwnerOf(c.req.raw);
-  if (!owner || c.res.status < 400 || wasAudited(c.req.raw)) return;
+  const caller = operatorCallerOf(c.req.raw);
+  if (!caller || c.res.status < 400 || wasAudited(c.req.raw)) return;
   const what = attempted(c.req.path);
   if (!what) return;
-  await writeRow(c.env.DB, { appId: c.req.param('appId') ?? '', actorId: owner.id, role: '', status: c.res.status, ...what });
+  await writeRow(c.env.DB, { appId: c.req.param('appId') ?? '', actorId: caller.id, role: '', status: c.res.status, ...what });
 };
 
 // ── Entry into the operator view, once per visit ──────────────────────
 operatorAuditRoutes.post('/apps/:appId/operator/entries', async (c) => {
   const appId = c.req.param('appId');
-  const owner = await requireOperatorOwner(c, appId);
+  const caller = await requireOperatorAccess(c, appId);
   const body = await c.req.json<{ visit?: unknown }>().catch(() => null);
   const visit = body?.visit;
   if (typeof visit !== 'string' || !VISIT.test(visit)) throw new HttpError('visit must be 8-64 characters of [A-Za-z0-9_-]', 400);
@@ -98,7 +99,7 @@ operatorAuditRoutes.post('/apps/:appId/operator/entries', async (c) => {
     `INSERT INTO app_action_audit (app_id, action_name, actor_id, role_name, status, created_at, operator_action, target)
      SELECT ?1, '', ?2, '', 200, ?3, 'enter', ?4
       WHERE NOT EXISTS (SELECT 1 FROM app_action_audit WHERE app_id = ?1 AND actor_id = ?2 AND operator_action = 'enter' AND target = ?4)`,
-  ).bind(appId, owner.id, Date.now(), visit).run();
+  ).bind(appId, caller.id, Date.now(), visit).run();
   markAudited(c.req.raw);
   return c.json({ recorded: (result.meta?.changes ?? 0) > 0 });
 });

@@ -832,8 +832,8 @@ read through the plain resource route.
 
 ### Operator audit trail
 
-The console's **Audit trail** panel lists what the app's owner did in the
-operator view:
+The console's **Audit trail** panel lists what the app's owner, and any admitted
+admin (`admin_access`, below), did in the operator view, each under their own id:
 
 - entering the view, once per visit (a console tab session per app);
 - list, record, document and metric reads;
@@ -856,7 +856,7 @@ Targets of identity-verification reads and document views are hidden (with
 `target_hidden: true`) until the owner has signed in recently. Reading the
 trail is itself recorded.
 
-The trail is owner-only. An app can require more by declaring
+The trail is owner-only; `admin_access` does not open it. An app can require more by declaring
 `"audit": { "app_roles": ["operator"] }` at the top level of `operator_view`:
 the owner must then also hold one of those roles (never `member`).
 
@@ -872,16 +872,27 @@ An app can declare which app roles may use its admin console (#291):
 or `public`. Who may read the audit trail stays `audit.app_roles` above, so
 `audit_required_role` is refused. Without `admin_access` the console is owner-only.
 
-**Not enforced yet.** `admin_access` is validated, stored and returned in the
-contract, but the operator routes stay owner-only until the admin role gate
-(#293) lands. Until then, a holder of a declared role is refused like anyone else.
+**Who it admits (#293).** A holder of one of these roles is admitted to the
+operator view beside the owner: the context, resource rows, records, evidence,
+metric series, row actions and the visit record. The audit trail and the
+platform users list stay owner-only. The role is read from `app_roles` on every
+request, so revoking it, or dropping `admin_access`, refuses the next request.
+It is matched on the holder's user id (and, for a GitHub session, its login),
+never on a credential or Google account's display name (#272). Anyone else —
+an undeclared role, `member`, a lesser team role, another app's owner, a
+signed-out caller — gets a `403` (`401` when signed out) before anything is read.
+
+Admission grants no action by itself: every read and write still runs the
+referenced action under its own `auth.app_roles` and `step_up`, as below, and
+is audited under the admin's own id. Refused attempts by an admitted admin join
+the audit trail exactly as the owner's do.
 
 **Only declared columns and fields leave the platform.** A query may select
 more (an internal id, a hash): the operator read routes return only the
 declared keys, in declared order, and a declared key the row lacks comes back
 as `null`.
 
-**The contract grants nothing.** The console uses three owner-only routes:
+**The contract grants nothing.** The console uses three routes (owner, or an admitted admin):
 
 - `GET /v1/apps/:appId/operator/resources/:id` reads rows, with `?q=`,
   `?cursor=`, `?status=` and `?related=`.
@@ -891,13 +902,13 @@ as `null`.
   be a scalar.
 
 Each runs the app's registered action with the same checks as
-`POST /v1/apps/:appId/actions/:name`: the owner's own session, the action's
+`POST /v1/apps/:appId/actions/:name`: the caller's own session, the action's
 `auth.app_roles`, `step_up`, and the success audit of role-gated actions (#232).
 For these calls the audit row also records `operator_action` (the contract
 action id, or `read:<resource>` / `detail:<resource>`) and `target` (the
-record's key). It still records no other params and no results. The owner
-must hold the role themselves (grant it in the console under **Settings →
-Access**). Only the app's owner can read the contract, through
+record's key). It still records no other params and no results. The owner or
+admin must hold the role themselves (grant it in the console under **Settings →
+Access**). Only the app's owner and its admitted admins can read the contract, through
 `GET /v1/apps/:appId/operator`. It is not part of the public tool listing or MCP
 discovery. The actions it names stay ordinary MCP tools.
 

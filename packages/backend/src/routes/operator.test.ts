@@ -15,8 +15,10 @@ const auth = (token: string) => ({ headers: { Authorization: `Bearer ${token}` }
 const get = (appId: string, init: RequestInit, db: ReturnType<typeof mockD1>) =>
   app.request(`/v1/apps/${appId}/operator`, init, makeEnv({}, db));
 
+/** The admin gate's own lookup (#293) — the declared roles joined to the caller's — is part of the gate, not app data. */
+const ADMIN_GATE_SQL = /json_each\(v\.contract, '\$\.admin_access\.roles'\)/;
 const readsAppData = (db: ReturnType<typeof mockD1>) =>
-  db.prepare.mock.calls.some(([sql]) => /app_roles|usage_daily|app_operator_view|SELECT id, created_at/.test(String(sql)));
+  db.prepare.mock.calls.some(([sql]) => !ADMIN_GATE_SQL.test(String(sql)) && /app_roles|usage_daily|app_operator_view|SELECT id, created_at/.test(String(sql)));
 
 describe('GET /v1/apps/:appId/operator (#240)', () => {
   it('returns the baseline context to the app owner, private and uncached', async () => {

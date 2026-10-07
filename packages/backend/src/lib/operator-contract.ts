@@ -11,7 +11,7 @@
  *     "actions":   [{ "id", "title", "resource", "action", "params": { <action param>: <resource column> }, "confirm",
  *                     "transition"?: { "from": [<state>], "to": <state> }, "destructive"?: true, "target"?: <column> }],
  *     "audit"?:    { "app_roles": [<role>] }     // the owner must also hold one to read the audit trail
- *     "admin_access"?: { "roles": [<role>] }     // #302: who may use the admin console (inert until #293)
+ *     "admin_access"?: { "roles": [<role>] }     // #302: who may use the admin console, beside the owner (enforced since #293)
  *   }
  *
  * A resource is a table (or, for `metrics`, one row of KPIs) read by one of the

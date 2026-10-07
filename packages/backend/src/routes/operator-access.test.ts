@@ -7,10 +7,12 @@ import type { ToolManifest } from '../lib/action-sql.js';
 import { STASH } from '../__fixtures__/operator-view.js';
 import { operatorView } from './operator-view.js';
 
-// #240 regression: every console operator route is owner-only. One table, every
-// route × every non-owner caller: the refusal happens at the ownership check —
-// before the contract, app data, the data worker or R2 is touched — and writes
-// no audit row, so a stranger can neither read an app nor fill its trail.
+// #240 / #293 regression: every console operator route refuses every caller who
+// is neither the owner nor a holder of a declared admin role. One table, every
+// route × every such caller: the refusal happens at the gate — the ownership
+// check, then the admin-role lookup — before the contract's resources, app data,
+// the data worker or R2 is touched, and writes no audit row, so a stranger can
+// neither read an app nor fill its trail.
 
 type Route = { method: 'GET' | 'POST'; pattern: string; path: string; body?: unknown };
 
@@ -37,6 +39,11 @@ const ownerGate = (team: { role: string } | null) =>
   mockD1(mockStmt({ first: { creator_id: 'gh:9' } }), mockStmt({ first: team }));
 
 const OWNER_GATE_SQL = /SELECT creator_id FROM apps WHERE id = \?|SELECT role FROM team_members WHERE app_id = \? AND user_id = \?/;
+/** #293: the admin gate's one extra read — the declared admin_access roles joined to the caller's app roles. */
+const ADMIN_GATE_SQL = /FROM app_operator_view v, json_each\(v\.contract, '\$\.admin_access\.roles'\)/;
+const GATE_SQL = new RegExp(`${OWNER_GATE_SQL.source}|${ADMIN_GATE_SQL.source}`);
+/** The routes the admin gate opens (#293); the audit trail and the platform users list stay owner-only. */
+const OWNER_ONLY = new Set(['/apps/:appId/operator/audit', '/apps/:appId/operator/users']);
 
 type Caller = { name: string; token: () => Promise<string | null>; db: () => ReturnType<typeof mockD1>; status: 401 | 403; readsDb: boolean };
 
@@ -78,7 +85,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('operator routes are owner-only (#240 regression matrix)', () => {
+describe('operator routes refuse every caller who is not the owner or a declared admin (#240/#293 regression matrix)', () => {
   it('the matrix covers every route the operator view mounts', () => {
     const mounted = new Set(
       operatorView.routes.filter((r) => r.method !== 'ALL').map((r) => `${r.method} ${r.path}`),
@@ -96,9 +103,9 @@ describe('operator routes are owner-only (#240 regression matrix)', () => {
         expect(res.status).toBe(caller.status);
         const sql = db.prepare.mock.calls.map(([s]) => String(s));
         if (caller.readsDb) {
-          // Only the ownership check ran: no contract, app data, role or audit query.
+          // Only the gate ran: no contract resources, app data or audit query.
           expect(sql.length).toBeGreaterThan(0);
-          for (const s of sql) expect(s).toMatch(OWNER_GATE_SQL);
+          for (const s of sql) expect(s).toMatch(GATE_SQL);
         } else {
           expect(db.prepare).not.toHaveBeenCalled();
         }
@@ -137,5 +144,56 @@ describe('operator routes are owner-only (#240 regression matrix)', () => {
     expect(res.status).toBe(403);
     expect(await res.text()).toContain('requires app role');
     expect(fetches).toEqual([]);
+  });
+});
+
+// #293: the admin role gate. A non-owner who holds one of the contract's
+// admin_access roles is admitted to every route but the audit trail and the
+// platform users list; the role is read per request with #272's role subject.
+describe('admin role gate (#293)', () => {
+  /** Not the creator, no team row, and the admin-role lookup answers `holds`. */
+  const adminGate = (holds: boolean) =>
+    mockD1(mockStmt({ first: { creator_id: 'gh:9' } }), mockStmt({ first: null }), mockStmt({ first: holds ? { 1: 1 } : null }));
+
+  for (const route of ROUTES.filter((r) => !OWNER_ONLY.has(r.pattern))) {
+    it(`${route.method} ${route.pattern}: a holder of a declared admin role passes the gate`, async () => {
+      const db = adminGate(true);
+      const res = await request(route, await testToken('gh:1'), db, { get: vi.fn() });
+      expect([401, 403]).not.toContain(res.status);
+      const sql = db.prepare.mock.calls.map(([s]) => String(s));
+      expect(sql.some((s) => ADMIN_GATE_SQL.test(s))).toBe(true);
+    });
+  }
+
+  for (const route of ROUTES.filter((r) => OWNER_ONLY.has(r.pattern))) {
+    it(`${route.method} ${route.pattern}: stays owner-only for an admin, without consulting admin_access`, async () => {
+      const db = adminGate(true);
+      const res = await request(route, await testToken('gh:1'), db, { get: vi.fn() });
+      expect(res.status).toBe(403);
+      const sql = db.prepare.mock.calls.map(([s]) => String(s));
+      expect(sql.some((s) => ADMIN_GATE_SQL.test(s))).toBe(false);
+      expect(sql.some((s) => /app_action_audit/.test(s))).toBe(false);
+    });
+  }
+
+  it('refuses a caller whose roles are not declared, with a clear error and no audit row', async () => {
+    const db = adminGate(false);
+    const res = await request(ROUTES[0]!, await testToken('gh:1'), db, { get: vi.fn() });
+    expect(res.status).toBe(403);
+    expect(await res.text()).toContain("the operator view needs the app owner or one of the app's admin roles");
+    expect(db.prepare.mock.calls.some(([s]) => /app_action_audit/.test(String(s)))).toBe(false);
+  });
+
+  it('binds the canonical role subject: a GitHub login alias, never a credential or Google login (#272)', async () => {
+    const bindsFor = async (uid: string, login: string) => {
+      const db = adminGate(false);
+      await request(ROUTES[0]!, await testToken(uid, { login }), db, { get: vi.fn() });
+      const i = db.prepare.mock.calls.findIndex(([s]) => ADMIN_GATE_SQL.test(String(s)));
+      return db.prepare.mock.results[i]!.value.bind.mock.calls[0];
+    };
+    expect(await bindsFor('gh:1', 'ada')).toEqual(['stash', 'gh:1', 'ada']);
+    // A credential or Google account named like an admin's GitHub login or id matches on its own id only.
+    expect(await bindsFor('cred:x', 'ada')).toEqual(['stash', 'cred:x', 'cred:x']);
+    expect(await bindsFor('google:y', 'gh:1')).toEqual(['stash', 'google:y', 'google:y']);
   });
 });

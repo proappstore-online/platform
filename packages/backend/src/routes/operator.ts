@@ -8,14 +8,16 @@
  * audit) and return ONLY the declared columns/fields. Writes stay on the
  * ordinary actions route.
  *
- * Owner-only via requireOperatorOwner (creator, a team `owner`, or a platform
- * admin). Another app's owner, a lesser team role, and a signed-out caller are
- * refused before any app data is read.
+ * Admitted via requireOperatorAccess (#293): the owner (creator, a team `owner`,
+ * or a platform admin), or a holder of one of the contract's `admin_access.roles`.
+ * Anyone else — another app's owner, a lesser team role or an undeclared role,
+ * a signed-out caller — is refused before any app data is read. Admission grants
+ * no action: each read and write runs under its action's own role, step_up and audit.
  */
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireRecentAuth } from '../lib/auth.js';
-import { requireOperatorOwner } from '../lib/operator-audit-marks.js';
+import { requireOperatorAccess } from '../lib/operator-audit-marks.js';
 import type { OperatorResource, OperatorViewContract } from '../lib/operator-contract.js';
 import { runOperatorQuery, runOperatorWrite } from './operator-exec.js';
 import { REVIEW_CONTENT_TYPES, holdsReviewRole, recordReviewAccess } from './storage.js';
@@ -28,7 +30,7 @@ const MAX_KEY = 200;
 
 operatorRoutes.get('/apps/:appId/operator', async (c) => {
   const appId = c.req.param('appId');
-  const operator = await requireOperatorOwner(c, appId);
+  const operator = await requireOperatorAccess(c, appId);
 
   const since = new Date(Date.now() - (ACTIVITY_DAYS - 1) * 86_400_000).toISOString().slice(0, 10);
   const [app, roles, activity, contract] = await Promise.all([
@@ -102,7 +104,7 @@ function textParam(value: string | undefined, max: number, name: string): string
   return v;
 }
 
-/** requireOperatorOwner has already verified the `Bearer` session; the data worker gets the same token the actions route forwards. */
+/** requireOperatorAccess has already verified the `Bearer` session; the data worker gets the same token the actions route forwards. */
 export const sessionToken = (header: string | undefined) => (header ?? '').slice(7).trim();
 
 // ── Rows of one declared resource (#240) ─────────────────────────
@@ -113,7 +115,7 @@ export const sessionToken = (header: string | undefined) => (header ?? '').slice
 // `next_cursor` is the last row's cursor column when the page came back full.
 operatorRoutes.get('/apps/:appId/operator/resources/:resourceId', async (c) => {
   const appId = c.req.param('appId');
-  const owner = await requireOperatorOwner(c, appId);
+  const caller = await requireOperatorAccess(c, appId);
   const resource = await declaredResource(c.env.DB, appId, c.req.param('resourceId'));
   if (resource.series) throw new HttpError('this metric is a time series: read it from /operator/metrics/:id', 400);
 
@@ -141,7 +143,7 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId', async (c) => {
   }
 
   const rows = await runOperatorQuery(
-    c.env, appId, resource.action, input, owner, sessionToken(c.req.header('Authorization')),
+    c.env, appId, resource.action, input, caller, sessionToken(c.req.header('Authorization')),
     { operatorAction: `read:${resource.id}`, target: related, request: c.req.raw },
   );
   c.header('Cache-Control', 'private, no-store');
@@ -164,14 +166,14 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId', async (c) => {
 // what it may return. Only the declared fields come back.
 operatorRoutes.get('/apps/:appId/operator/resources/:resourceId/records/:key', async (c) => {
   const appId = c.req.param('appId');
-  const owner = await requireOperatorOwner(c, appId);
+  const caller = await requireOperatorAccess(c, appId);
   const resource = await declaredResource(c.env.DB, appId, c.req.param('resourceId'));
   if (!resource.detail) throw new HttpError('resource has no detail', 404);
   const key = textParam(c.req.param('key'), MAX_KEY, 'key');
   if (key === null) throw new HttpError('key is required', 400);
 
   const rows = await runOperatorQuery(
-    c.env, appId, resource.detail.action, { [resource.detail.param]: key }, owner, sessionToken(c.req.header('Authorization')),
+    c.env, appId, resource.detail.action, { [resource.detail.param]: key }, caller, sessionToken(c.req.header('Authorization')),
     { operatorAction: `detail:${resource.id}`, target: key, request: c.req.raw },
   );
   if (rows.length === 0) throw new HttpError('record not found', 404);
@@ -203,7 +205,7 @@ function reviewPath(value: unknown): { ownerId: string; path: string } | null {
 // cached, and the read joins the #208 access trail.
 operatorRoutes.get('/apps/:appId/operator/resources/:resourceId/records/:key/evidence/:field', async (c) => {
   const appId = c.req.param('appId');
-  const owner = await requireOperatorOwner(c, appId);
+  const caller = await requireOperatorAccess(c, appId);
   const resource = await declaredResource(c.env.DB, appId, c.req.param('resourceId'));
   const field = c.req.param('field');
   const detail = resource.detail;
@@ -212,11 +214,11 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId/records/:key/evi
   if (key === null) throw new HttpError('key is required', 400);
   // An identity document needs a recent passkey step-up (#244), not just a recent
   // sign-in — before the review role is read, the record re-run or R2 touched.
-  requireRecentAuth(owner, c.env, { method: 'passkey' });
-  if (!(await holdsReviewRole(c.env.DB, appId, owner))) throw new HttpError('not a reviewer for this app', 403);
+  requireRecentAuth(caller, c.env, { method: 'passkey' });
+  if (!(await holdsReviewRole(c.env.DB, appId, caller))) throw new HttpError('not a reviewer for this app', 403);
 
   const rows = await runOperatorQuery(
-    c.env, appId, detail.action, { [detail.param]: key }, owner, sessionToken(c.req.header('Authorization')),
+    c.env, appId, detail.action, { [detail.param]: key }, caller, sessionToken(c.req.header('Authorization')),
     { operatorAction: `evidence:${resource.id}.${field}`, target: key, request: c.req.raw },
   );
   const doc = rows.length ? reviewPath(rows[0]![field]) : null;
@@ -225,7 +227,7 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId/records/:key/evi
   if (!object) throw new HttpError('no document for this record', 404);
   const type = object.httpMetadata?.contentType ?? '';
   if (!REVIEW_CONTENT_TYPES.has(type)) throw new HttpError('document type is not viewable', 415);
-  await recordReviewAccess(c.env.DB, appId, doc.ownerId, doc.path, owner.id, 'read');
+  await recordReviewAccess(c.env.DB, appId, doc.ownerId, doc.path, caller.id, 'read');
   return new Response(object.body, {
     headers: {
       'content-type': type,
@@ -254,7 +256,7 @@ function scalar(value: unknown, column: string): string | number | boolean | nul
 // row names the contract action and its target.
 operatorRoutes.post('/apps/:appId/operator/actions/:actionId', async (c) => {
   const appId = c.req.param('appId');
-  const owner = await requireOperatorOwner(c, appId);
+  const caller = await requireOperatorAccess(c, appId);
   const contract = await loadContract(c.env.DB, appId);
   const action = contract?.actions.find((a) => a.id === c.req.param('actionId'));
   const resource = contract?.resources.find((r) => r.id === action?.resource);
@@ -278,7 +280,7 @@ operatorRoutes.post('/apps/:appId/operator/actions/:actionId', async (c) => {
   const target = action.target ? scalar(cells[action.target] ?? null, action.target) : null;
 
   const changes = await runOperatorWrite(
-    c.env, appId, action.action, input, owner, sessionToken(c.req.header('Authorization')),
+    c.env, appId, action.action, input, caller, sessionToken(c.req.header('Authorization')),
     { operatorAction: action.id, target: target === null ? null : String(target), request: c.req.raw }, Boolean(action.transition),
   );
   c.header('Cache-Control', 'no-store');
