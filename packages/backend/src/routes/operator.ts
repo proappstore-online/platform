@@ -21,6 +21,7 @@ import { requireOperatorAccess } from '../lib/operator-audit-marks.js';
 import type { OperatorResource, OperatorViewContract } from '../lib/operator-contract.js';
 import { runOperatorQuery, runOperatorWrite } from './operator-exec.js';
 import { REVIEW_CONTENT_TYPES, holdsReviewRole, recordReviewAccess } from './storage.js';
+import { isSensitiveField } from '../lib/sensitive-fields.js';
 
 export const operatorRoutes = new Hono<{ Bindings: Env }>();
 
@@ -80,6 +81,19 @@ export async function declaredResource(db: D1Database, appId: string, id: string
   const resource = (await loadContract(db, appId))?.resources.find((r) => r.id === id);
   if (!resource) throw new HttpError('resource not declared', 404);
   return resource;
+}
+
+/**
+ * The declared keys the operator view may return (#294): the categorical
+ * sensitive-field list (lib/sensitive-fields.ts) blocks the rest, whoever asks.
+ * Registration already refuses such a key; this is the second layer, for a
+ * contract stored before a term joined the list. Blocked names are logged,
+ * never their values, and the field is simply absent from the response.
+ */
+export function returnableKeys<K extends { key: string }>(keys: K[], log: { appId: string; where: string }): K[] {
+  const blocked = keys.filter((k) => isSensitiveField(k.key)).map((k) => k.key);
+  if (blocked.length) console.warn('[operator] blocked sensitive fields', { ...log, fields: blocked });
+  return blocked.length ? keys.filter((k) => !isSensitiveField(k.key)) : keys;
 }
 
 /** Only the declared keys, in declared order: undeclared columns never leave the platform. */
@@ -149,13 +163,14 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId', async (c) => {
   c.header('Cache-Control', 'private, no-store');
   // A KPI panel (#245) is one row of aggregate numbers, whatever the app's query
   // returns: never a second row, never a string (an email, a name) in a tile.
-  if (resource.kind === 'metrics') return c.json({ rows: rows.slice(0, 1).map((row) => kpiRow(row, resource.columns)), next_cursor: null });
+  const columns = returnableKeys(resource.columns, { appId, where: `resource:${resource.id}` });
+  if (resource.kind === 'metrics') return c.json({ rows: rows.slice(0, 1).map((row) => kpiRow(row, columns)), next_cursor: null });
   const page = resource.page;
   const bounded = rows.slice(0, page?.size ?? rows.length);
   const last = bounded[bounded.length - 1];
   const next = page && last && bounded.length >= page.size ? last[page.column] : null;
   return c.json({
-    rows: bounded.map((row) => project(row, resource.columns)),
+    rows: bounded.map((row) => project(row, columns)),
     next_cursor: next === null || next === undefined ? null : String(next),
   });
 });
@@ -177,9 +192,9 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId/records/:key', a
     { operatorAction: `detail:${resource.id}`, target: key, request: c.req.raw },
   );
   if (rows.length === 0) throw new HttpError('record not found', 404);
-  const record = project(rows[0]!, resource.detail.fields);
+  const record = project(rows[0]!, returnableKeys(resource.detail.fields, { appId, where: `detail:${resource.id}` }));
   // Evidence fields hold storage paths: the console gets only whether a document is there.
-  for (const { field } of resource.detail.evidence ?? []) record[field] = reviewPath(record[field]) !== null;
+  for (const { field } of resource.detail.evidence ?? []) if (field in record) record[field] = reviewPath(record[field]) !== null;
   c.header('Cache-Control', 'private, no-store');
   return c.json({ record });
 });

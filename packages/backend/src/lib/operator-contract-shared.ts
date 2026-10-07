@@ -4,6 +4,7 @@
  * operator-contract-lists.ts (search, paging, detail, status, related).
  */
 import { selectsColumn, type ToolManifest } from './action-sql.js';
+import { sensitiveMatch } from './sensitive-fields.js';
 import type { OperatorSeries } from './operator-contract-series.js';
 
 export const OPERATOR_RESOURCE_KINDS = ['users', 'reports', 'suspensions', 'verification', 'metrics'] as const;
@@ -133,6 +134,11 @@ export function validateColumns(tool: ToolManifest, value: unknown, where: strin
     const colExtra = unknownField(col, ['key', 'label', 'format'], at);
     if (colExtra) return colExtra;
     if (typeof col.key !== 'string' || !COLUMN_KEY.test(col.key)) return `${at}: key must match [a-z_][a-z0-9_] (max 50 chars)`;
+    // #294: a secret-like column is never returned by the operator view, so declaring one is a mistake to catch at deploy time.
+    const sensitive = sensitiveMatch(col.key);
+    if (sensitive) {
+      return `${at}: "${col.key}" matches the sensitive-field list ("${sensitive}") and is never returned by the operator view; leave it out (if it is not a secret, select it under a name that does not look like one)`;
+    }
     if (columns.some((c) => c.key === col.key)) return `${at}: duplicate column "${col.key}"`;
     if (!selectsColumn(tool.sql ?? '', col.key)) return `${at}: action "${tool.name}" does not select column "${col.key}"`;
     const label = text(col.label, 40);

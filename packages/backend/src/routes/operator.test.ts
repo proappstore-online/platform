@@ -156,6 +156,37 @@ describe('GET /v1/apps/:appId/operator/resources/* (#240 slice 3)', () => {
     expect(audit.bind).toHaveBeenCalledWith('stash', 'op_list_users', 'gh:1', 'operator', 200, expect.any(Number), 'read:members', null);
   });
 
+  it('blocks a declared secret-like column categorically: absent from rows and detail, logged by name only (#294)', async () => {
+    // A contract stored before these names joined the list (registration refuses them now): the second layer still blocks them.
+    const legacy = contractOf(STASH);
+    const members = legacy.resources.find((r) => r.id === 'members')!;
+    members.columns.push({ key: 'api_key', label: 'Key', format: 'text' }, { key: '_internal_score', label: 'Score', format: 'text' });
+    members.detail!.fields.push({ key: 'password_hash', label: 'Hash', format: 'text' }, { key: 'refresh_token', label: 'Token', format: 'text' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      dataWorker([{ ...member(1), api_key: 'sk_live_1', _internal_score: 9 }]);
+      const res = await list('stash', 'members', db({ action: 'op_list_users', contract: legacy }).d);
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      expect(JSON.parse(body).rows[0]).toEqual({ display_name: 'Member 1', user_id: 'u001', created_at: 1, suspended: 0 });
+      expect(body).not.toMatch(/api_key|sk_live|_internal_score/);
+      expect(warn).toHaveBeenCalledWith('[operator] blocked sensitive fields', { appId: 'stash', where: 'resource:members', fields: ['api_key', '_internal_score'] });
+
+      dataWorker([{ ...member(1), password_hash: 'pbkdf2$abc', refresh_token: 'rt_live' }]);
+      const detail = await app.request('/v1/apps/stash/operator/resources/members/records/u001', auth(OWNER), makeEnv({}, db({ action: 'op_member_detail', contract: legacy }).d));
+      expect(detail.status).toBe(200);
+      const record = ((await detail.json()) as { record: Record<string, unknown> }).record;
+      expect(record).not.toHaveProperty('password_hash');
+      expect(record).not.toHaveProperty('refresh_token');
+      expect(JSON.stringify(record)).not.toMatch(/pbkdf2|rt_live/);
+      expect(warn).toHaveBeenCalledWith('[operator] blocked sensitive fields', { appId: 'stash', where: 'detail:members', fields: ['password_hash', 'refresh_token'] });
+      // Names only: no value ever reaches the log.
+      expect(JSON.stringify(warn.mock.calls)).not.toMatch(/sk_live|pbkdf2|rt_live/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('passes search text and cursor to the declared params; a short page ends paging', async () => {
     dataWorker([member(51)]);
     const res = await list('stash', 'members?q=%20Ada%20&cursor=u050', db({ action: 'op_list_users' }).d);

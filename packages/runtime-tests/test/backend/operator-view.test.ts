@@ -588,3 +588,60 @@ describe('operator audit trail (#240)', () => {
   });
 });
 
+
+// #294: categorical secret-field blocking, on real D1. One name per pattern
+// family plus the `_internal` prefix: registration refuses each as a declared
+// column, and a contract stored before the rule still never returns them — to
+// the owner or anyone — nor writes them to the audit trail.
+describe('operator sensitive-field blocking (#294)', () => {
+  const FAMILIES: Record<string, string> = {
+    password: 'password_hash', secret: 'client_secret', token: 'auth_token', key: 'api_key',
+    hash: 'pin_hash', salt: 'password_salt', credential: 'aws_credentials', bearer: 'bearer_value', _internal: '_internal_notes',
+  };
+  const worker = () => fetchMock.get(`https://pas-data-stash.${env.DATA_WORKER_HOST}`);
+  const validates = () => worker().intercept({ path: '/validate', method: 'POST' })
+    .reply(200, (req) => ({ results: (JSON.parse(String(req.body)) as { statements: { id: string }[] }).statements.map((st) => ({ id: st.id, ok: true })) }));
+
+  it('refuses to register a declared column from every family, with a clear error', async () => {
+    for (const [family, key] of Object.entries(FAMILIES)) {
+      const view = JSON.parse(JSON.stringify(STASH.operator_view)) as typeof STASH.operator_view;
+      view.resources[0]!.columns[0]!.key = key;
+      validates();
+      const res = await SELF.fetch(`${BASE}/v1/apps/stash/tools`, json('PUT', { ...STASH, operator_view: view }, await session('gh:1')));
+      const text = await res.text();
+      expect(res.status, family).toBe(400);
+      expect((JSON.parse(text) as { error: string }).error, family).toContain(`"${key}" matches the sensitive-field list`);
+    }
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM app_operator_view WHERE app_id = 'stash'").first<{ n: number }>()).toEqual({ n: 0 });
+  });
+
+  it('never returns a declared secret-like column from a stored contract, to the owner, and never audits it', async () => {
+    validates();
+    const reg = await SELF.fetch(`${BASE}/v1/apps/stash/tools`, json('PUT', STASH, await session('gh:1')));
+    expect(reg.status, await reg.clone().text()).toBe(200);
+    await env.DB.prepare("INSERT INTO app_roles (app_id, user_id, role_name) VALUES ('stash', 'gh:1', 'operator')").run();
+    // As if stored before the rule: append one column per family straight into the stored contract.
+    const row = await env.DB.prepare("SELECT contract FROM app_operator_view WHERE app_id = 'stash'").first<{ contract: string }>();
+    const contract = JSON.parse(row!.contract) as { resources: { id: string; columns: { key: string; label: string; format: string }[] }[] };
+    const members = contract.resources.find((r) => r.id === 'members')!;
+    for (const key of Object.values(FAMILIES)) members.columns.push({ key, label: key, format: 'text' });
+    await env.DB.prepare("UPDATE app_operator_view SET contract = ? WHERE app_id = 'stash'").bind(JSON.stringify(contract)).run();
+
+    const values = Object.fromEntries(Object.values(FAMILIES).map((key) => [key, `VALUE-OF-${key}`]));
+    worker().intercept({ path: '/query', method: 'POST' })
+      .reply(200, { rows: [{ user_id: 'u001', display_name: 'Ada', created_at: 1, suspended: 0, ...values }], meta: {} });
+    const res = await SELF.fetch(`${BASE}/v1/apps/stash/operator/resources/members`, json('GET', undefined, await session('gh:1')));
+    const text = await res.text();
+    expect(res.status, text).toBe(200);
+    expect(JSON.parse(text).rows).toEqual([{ display_name: 'Ada', user_id: 'u001', created_at: 1, suspended: 0 }]);
+    for (const key of Object.values(FAMILIES)) {
+      expect(text, key).not.toContain(key);
+      expect(text, key).not.toContain(`VALUE-OF-${key}`);
+    }
+
+    const audit = await env.DB.prepare("SELECT * FROM app_action_audit WHERE app_id = 'stash'").all();
+    expect(audit.results).toHaveLength(1);
+    const trail = JSON.stringify(audit.results);
+    for (const key of Object.values(FAMILIES)) expect(trail, key).not.toContain(`VALUE-OF-${key}`);
+  });
+});

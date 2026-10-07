@@ -82,8 +82,8 @@ describe('validateOperatorView (#240)', () => {
 
   it('only renders columns the action selects', () => {
     const v = clone(STASH.operator_view);
-    v.resources[0]!.columns.push({ key: 'password_hash', label: 'Hash' });
-    expect(errorOf(stashTools, v)).toContain('does not select column "password_hash"');
+    v.resources[0]!.columns.push({ key: 'nickname', label: 'Nickname' });
+    expect(errorOf(stashTools, v)).toContain('does not select column "nickname"');
     const dup = clone(STASH.operator_view);
     dup.resources[0]!.columns.push({ key: 'user_id', label: 'Again' });
     expect(errorOf(stashTools, dup)).toContain('duplicate column "user_id"');
@@ -421,4 +421,16 @@ describe('operator_view.admin_access (#291, #302)', () => {
       expect(errorOf(stashTools, withAccess(access)), JSON.stringify(access)).toContain(error);
     }
   });
+
+  it('refuses a declared column or detail field named like a secret, for every family (#294)', () => {
+    for (const key of ['api_key', 'password_hash', 'client_secret', 'auth_token', 'password_salt', 'credentials', 'bearer', '_internal_notes']) {
+      const asColumn = clone(STASH.operator_view);
+      asColumn.resources[0]!.columns[0]!.key = key;
+      expect(errorOf(stashTools, asColumn), key).toMatch(new RegExp(`"${key}" matches the sensitive-field list .*never returned by the operator view`));
+      const asField = clone(STASH.operator_view);
+      asField.resources[0]!.detail!.fields[0]!.key = key;
+      expect(errorOf(stashTools, asField), key).toMatch(/sensitive-field list/);
+    }
+  });
 });
+

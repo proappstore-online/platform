@@ -892,6 +892,33 @@ more (an internal id, a hash): the operator read routes return only the
 declared keys, in declared order, and a declared key the row lacks comes back
 as `null`.
 
+**Sensitive fields are never returned, even when declared (#294).** On top of
+the declared-only rule, the platform blocks field names on its
+PAS-SENSITIVE-FIELDS list (`packages/backend/src/lib/sensitive-fields.ts`), for
+every caller, owners and admins included. It applies to resource rows, KPI
+panels, related lists and record detail, after the data worker answers and
+before anything leaves. A blocked field is simply absent, never an error, and
+only its name is logged.
+
+A name is sensitive when one of its words (split on `_`, `-` and camelCase) is
+one of:
+
+`password` `passwd` `passphrase` `pwd` `secret` `secrets` `token` `tokens`
+`jwt` `bearer` `cookie` `cookies` `key` `keys` `apikey` `hash` `hashed` `salt`
+`credential` `credentials`
+
+It is also sensitive when it contains `password`, `passwd`, `passphrase`,
+`apikey`, `authtoken`, `accesstoken`, `refreshtoken`, `privatekey` or
+`credential` written as one word, or when it starts with `_internal`, the
+convention for platform-internal fields. Whole words keep `monkey`, `hashtag`
+and `secretary` out.
+
+Registration refuses a declared column or detail field on the list, with an
+error naming the field and the term it matched, so you find out at deploy time.
+If the column is not a secret, select it under a name that does not look like
+one (`SELECT password_resets AS resets`). The audit trail never records field
+values, so it cannot hold a blocked field.
+
 **The contract grants nothing.** The console uses three routes (owner, or an admitted admin):
 
 - `GET /v1/apps/:appId/operator/resources/:id` reads rows, with `?q=`,
