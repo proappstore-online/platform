@@ -12,8 +12,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Env } from "./env.js";
 import { gateMutation } from "./safety.js";
+import { text, type Text } from "./text-result.js";
 
-type Text = { content: { type: "text"; text: string }[] };
 // Validated: appId is interpolated into internal API subrequest paths
 // (/v1/apps/${appId}/qa/…) over a service binding, so reject anything that
 // isn't a plain slug to prevent path/endpoint injection.
@@ -26,7 +26,6 @@ const APP_ID = z.string().regex(/^[a-z][a-z0-9-]*$/);
 const FLOW_ID = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/, "flowId must be a slug: lowercase letters, digits and hyphens, max 64 chars");
 const RUN_ID = z.string().uuid("runId must be the UUID returned by qa_run / qa_list_runs");
 
-const text = (s: string): Text => ({ content: [{ type: "text" as const, text: s }] });
 const json = (v: unknown): Text => text(typeof v === "string" ? v : JSON.stringify(v, null, 2));
 
 async function qaCall(

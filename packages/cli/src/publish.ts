@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { resolveToken } from './lib/config.js';
 import { readJsonIfExists } from './lib/json-file.js';
+import { toTitleCase } from './lib/title-case.js';
 
 interface PublishOptions {
   name?: string;
@@ -13,13 +14,6 @@ interface PublishOptions {
 }
 
 const PAS_API = 'https://api.proappstore.online';
-
-function toTitleCase(id: string): string {
-  return id
-    .split('-')
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(' ');
-}
 
 /**
  * Map a failing step's detail to an actionable next-step hint. Returns

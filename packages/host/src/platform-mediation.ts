@@ -1,4 +1,4 @@
-import { clearSessionCookie, isSameOriginMutation, readCookie, SESSION_COOKIE_NAME } from "./auth-handler.js";
+import { clearSessionCookie, isSameOriginMutation, noStore, readCookie, SESSION_COOKIE_NAME } from "./auth-handler.js";
 import type { Env } from "./env.js";
 import type { Route } from "./host.js";
 
@@ -110,14 +110,4 @@ function forwardedHeaders(source: Headers, token: string, route: Route): Headers
 
 function isMutation(method: string): boolean {
   return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
-}
-
-function noStore(response: Response): Response {
-  const headers = new Headers(response.headers);
-  headers.set("Cache-Control", "no-store");
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
 }

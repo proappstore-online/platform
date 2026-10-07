@@ -1,7 +1,7 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
-import { verifyGithubOidc } from '../lib/github-oidc.js';
+import { verifyGithubOidc, type OidcClaims } from '../lib/github-oidc.js';
 import { HttpError, requireAdmin, requireAppOwner } from '../lib/auth.js';
 import { replaceAppTools, siteManifestFrom, type SiteManifest } from './tools.js';
 
@@ -31,35 +31,50 @@ const TTL_SECONDS = 900; // 15 min — long enough for a build+sync, short-lived
 
 export const deployRoutes = new Hono<{ Bindings: Env }>();
 
+/**
+ * The OIDC preamble shared by the keyless deploy routes: a GitHub Actions token
+ * for our audience, from this org's repo named exactly the app id, on main.
+ * Returns the verified claims, or the refusal to send.
+ */
+async function authorizeDeployOidc(
+  c: Context<{ Bindings: Env }>,
+  appId: string,
+): Promise<{ claims: OidcClaims } | { refusal: Response }> {
+  // 1. GitHub OIDC token from Authorization: Bearer <jwt>
+  const auth = c.req.header('Authorization') || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  if (!token) return { refusal: c.json({ error: 'missing OIDC token' }, 401) };
+
+  // 2. Verify it's a genuine GitHub Actions token for our audience
+  let claims: OidcClaims;
+  try {
+    claims = await verifyGithubOidc(token, { audience: AUDIENCE });
+  } catch (e) {
+    return { refusal: c.json({ error: `OIDC verification failed: ${(e as Error).message}` }, 401) };
+  }
+
+  // 3. Authorize: the deploying repo must be this org's repo named exactly the
+  //    app id. Since the R2 prefix is derived from appId and appId must equal
+  //    the verified repo name, a repo can only ever mint creds for its own prefix.
+  if (claims.repository !== `${ORG}/${appId}`) {
+    return { refusal: c.json({ error: `repository ${claims.repository} is not authorized for app ${appId}` }, 403) };
+  }
+  if (claims.ref !== DEPLOY_REF) {
+    return { refusal: c.json({ error: `ref ${claims.ref ?? '(none)'} not authorized — deploys must run from ${DEPLOY_REF}` }, 403) };
+  }
+  return { claims };
+}
+
 deployRoutes.post('/apps/:appId/deploy-credentials', async (c) => {
   const appId = c.req.param('appId');
   if (!/^[a-z][a-z0-9-]*$/.test(appId) || appId.length > 58) {
     return c.json({ error: 'invalid app id' }, 400);
   }
 
-  // 1. GitHub OIDC token from Authorization: Bearer <jwt>
-  const auth = c.req.header('Authorization') || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-  if (!token) return c.json({ error: 'missing OIDC token' }, 401);
-
-  // 2. Verify it's a genuine GitHub Actions token for our audience
-  let claims;
-  try {
-    claims = await verifyGithubOidc(token, { audience: AUDIENCE });
-  } catch (e) {
-    return c.json({ error: `OIDC verification failed: ${(e as Error).message}` }, 401);
-  }
-
-  // 3. Authorize: the deploying repo must be this org's repo named exactly the
-  //    app id. Since the prefix below is derived from appId and appId must equal
-  //    the verified repo name, a repo can only ever mint creds for its own prefix.
-  const expected = `${ORG}/${appId}`;
-  if (claims.repository !== expected) {
-    return c.json({ error: `repository ${claims.repository} is not authorized for app ${appId}` }, 403);
-  }
-  if (claims.ref !== DEPLOY_REF) {
-    return c.json({ error: `ref ${claims.ref ?? '(none)'} not authorized — deploys must run from ${DEPLOY_REF}` }, 403);
-  }
+  // 1–3. GitHub OIDC token, verified and authorized for this app.
+  const oidc = await authorizeDeployOidc(c, appId);
+  if ('refusal' in oidc) return oidc.refusal;
+  const { claims } = oidc;
 
   // 4. Mint short-lived, prefix-scoped R2 credentials via the R2 API.
   const parentKey = c.env.R2_PARENT_ACCESS_KEY_ID;
@@ -137,23 +152,8 @@ deployRoutes.put('/apps/:appId/tools/oidc', async (c) => {
     return c.json({ error: 'invalid app id' }, 400);
   }
 
-  const auth = c.req.header('Authorization') || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-  if (!token) return c.json({ error: 'missing OIDC token' }, 401);
-
-  let claims;
-  try {
-    claims = await verifyGithubOidc(token, { audience: AUDIENCE });
-  } catch (e) {
-    return c.json({ error: `OIDC verification failed: ${(e as Error).message}` }, 401);
-  }
-
-  if (claims.repository !== `${ORG}/${appId}`) {
-    return c.json({ error: `repository ${claims.repository} is not authorized for app ${appId}` }, 403);
-  }
-  if (claims.ref !== DEPLOY_REF) {
-    return c.json({ error: `ref ${claims.ref ?? '(none)'} not authorized — deploys must run from ${DEPLOY_REF}` }, 403);
-  }
+  const oidc = await authorizeDeployOidc(c, appId);
+  if ('refusal' in oidc) return oidc.refusal;
 
   // The deploy workflow sends the whole mcp.json: tools plus page_meta / sitemap (#210), operator (#229), operator_view (#240) and visibility (#259).
   const body = await c.req.json<{ tools?: unknown } & SiteManifest>().catch(() => null);
@@ -430,22 +430,8 @@ deployRoutes.post('/apps/:appId/migrate/oidc', async (c) => {
     return c.json({ error: 'invalid app id' }, 400);
   }
 
-  const auth = c.req.header('Authorization') || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-  if (!token) return c.json({ error: 'missing OIDC token' }, 401);
-
-  let claims;
-  try {
-    claims = await verifyGithubOidc(token, { audience: AUDIENCE });
-  } catch (e) {
-    return c.json({ error: `OIDC verification failed: ${(e as Error).message}` }, 401);
-  }
-  if (claims.repository !== `${ORG}/${appId}`) {
-    return c.json({ error: `repository ${claims.repository} is not authorized for app ${appId}` }, 403);
-  }
-  if (claims.ref !== DEPLOY_REF) {
-    return c.json({ error: `ref ${claims.ref ?? '(none)'} not authorized — deploys must run from ${DEPLOY_REF}` }, 403);
-  }
+  const oidc = await authorizeDeployOidc(c, appId);
+  if ('refusal' in oidc) return oidc.refusal;
 
   const body = await c.req.json<{ migrations?: unknown }>().catch(() => null);
   const { status, body: payload } = await applyMigrations(c.env, appId, body?.migrations, 'oidc');

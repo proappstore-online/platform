@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireAppOwner, HttpError } from '../lib/auth.js';
-import { MAX_WEBHOOKS_PER_APP, WEBHOOK_TIMEOUT_MS } from '../lib/webhook-dispatch.js';
+import { MAX_WEBHOOKS_PER_APP, signWebhookBody, WEBHOOK_TIMEOUT_MS } from '../lib/webhook-dispatch.js';
 
 export const webhookConfigRoutes = new Hono<{ Bindings: Env }>();
 
@@ -119,19 +119,7 @@ webhookConfigRoutes.post('/apps/:appId/webhooks/:id/test', async (c) => {
 
     const payload = { test: true, event: hook.event, appId, timestamp: Date.now() };
     const body = JSON.stringify(payload);
-    const encoder = new TextEncoder();
-
-    const key = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(hook.secret),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['sign'],
-    );
-    const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
-    const signature = Array.from(new Uint8Array(sig))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
+    const signature = await signWebhookBody(hook.secret, body);
 
     // Same bounds as delivery (#224, #226): never follow a redirect — the SSRF
     // guard only checked the registered URL, and this route echoes the body

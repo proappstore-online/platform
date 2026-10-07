@@ -23,10 +23,8 @@
  */
 
 import { consume, newRateLimitState, type RateLimitState } from './rate-limit.js';
-import { dayKey } from './proxy-rate-limit.js';
+import { utcDayKey } from './day-key.js';
 import { BURST_ENTRIES_PER_SECOND, DAILY_ENTRY_LIMIT } from './log-ingest.js';
-
-export { dayKey };
 
 export interface LogUsageStore {
   read(appId: string, day: string): Promise<number>;
@@ -102,7 +100,7 @@ export async function checkLogQuota(
   opts: { appId: string; clientKey: string; entries: number; nowMs: number; dailyLimit?: number },
 ): Promise<QuotaVerdict> {
   const dailyLimit = opts.dailyLimit ?? DAILY_ENTRY_LIMIT;
-  const day = dayKey(opts.nowMs);
+  const day = utcDayKey(opts.nowMs);
   const dayCount = await store.read(opts.appId, day);
 
   if (!checkBurst(opts.appId, opts.clientKey, opts.nowMs, opts.entries)) {

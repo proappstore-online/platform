@@ -1,7 +1,7 @@
 import type { FileSource } from '../lib/file-source.js';
 import { stripCommentsForExt } from '../lib/strip.js';
 import type { CheckResult } from '../types.js';
-import { extOf } from '../lib/source-text.js';
+import { escapeRegExp, extOf } from '../lib/source-text.js';
 
 // Each tracker carries one or more patterns that should ONLY match real SDK
 // usage — never bare English words used as geometry / math / physics terms.
@@ -18,7 +18,7 @@ type TrackerSpec = {
 function wb(name: string): RegExp {
   // word-boundary, case-insensitive: only matches the literal token surrounded
   // by non-word chars (or string start/end). Avoids `segmentation`, `collideSegment`.
-  return new RegExp(`(?:^|[^a-zA-Z0-9_])${escapeForRegExp(name)}(?:$|[^a-zA-Z0-9_])`, 'i');
+  return new RegExp(`(?:^|[^a-zA-Z0-9_])${escapeRegExp(name)}(?:$|[^a-zA-Z0-9_])`, 'i');
 }
 
 export const TRACKERS: TrackerSpec[] = [
@@ -82,10 +82,6 @@ const SCAN_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.html', '.json']);
  */
 export function matchedTrackers(text: string): string[] {
   return TRACKERS.filter((t) => t.patterns.some((re) => re.test(text))).map((t) => t.name);
-}
-
-function escapeForRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // Per-game compliance tests legitimately mention these tracker names as

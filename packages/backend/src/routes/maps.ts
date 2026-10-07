@@ -1,5 +1,6 @@
 import { Hono, type Context } from 'hono';
 import { requireUser } from '../lib/auth.js';
+import { sha256Hex } from '../lib/app-tokens.js';
 import type { Env } from '../types.js';
 
 /**
@@ -36,8 +37,7 @@ async function edgeCached(
   let key: Request | undefined;
   if (cache) {
     try {
-      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(upstreamUrl));
-      const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+      const hash = await sha256Hex(upstreamUrl);
       key = new Request(`${new URL(c.req.url).origin}/__maps-cache/${kind}/${hash}`);
       const hit = await cache.match(key);
       // Re-wrapped: a cache match has immutable headers, and CORS middleware appends to them.

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { checkAndBump, dayKey, type ProxyUsageStore } from './proxy-rate-limit.js';
+import { checkAndBump, type ProxyUsageStore } from './proxy-rate-limit.js';
+import { utcDayKey } from './day-key.js';
 
 function fakeStore(): ProxyUsageStore & { counts: Map<string, number>; userCounts: Map<string, number> } {
   const counts = new Map<string, number>();
@@ -32,15 +33,15 @@ function legacyStore(): ProxyUsageStore {
   };
 }
 
-describe('dayKey', () => {
+describe('utcDayKey', () => {
   it('returns YYYY-MM-DD in UTC', () => {
     // 2026-01-16T13:10:00Z
-    expect(dayKey(1768569000000)).toBe('2026-01-16');
+    expect(utcDayKey(1768569000000)).toBe('2026-01-16');
   });
 
   it('handles midnight boundary', () => {
     // Use a known epoch: 2025-01-01T00:00:00.000Z
-    expect(dayKey(1735689600000)).toBe('2025-01-01');
+    expect(utcDayKey(1735689600000)).toBe('2025-01-01');
   });
 });
 
@@ -58,7 +59,7 @@ describe('checkAndBump', () => {
 
   it('blocks requests at the limit', async () => {
     const store = fakeStore();
-    const day = dayKey(Date.now());
+    const day = utcDayKey(Date.now());
     store.counts.set(`app1:${day}`, 100);
     const result = await checkAndBump(store, {
       appId: 'app1', dailyLimit: 100, nowMs: Date.now(),
@@ -92,7 +93,7 @@ describe('checkAndBump', () => {
 
   it('isolates apps by appId', async () => {
     const store = fakeStore();
-    const day = dayKey(Date.now());
+    const day = utcDayKey(Date.now());
     store.counts.set(`app1:${day}`, 99);
     const r1 = await checkAndBump(store, {
       appId: 'app1', dailyLimit: 100, nowMs: Date.now(),
@@ -109,7 +110,7 @@ describe('checkAndBump', () => {
   it('resets count on a new day', async () => {
     const store = fakeStore();
     const yesterday = Date.now() - 86400000;
-    store.counts.set(`app1:${dayKey(yesterday)}`, 500);
+    store.counts.set(`app1:${utcDayKey(yesterday)}`, 500);
     const result = await checkAndBump(store, {
       appId: 'app1', dailyLimit: 100, nowMs: Date.now(),
       denominator: 1, rng: () => 0,
@@ -129,19 +130,19 @@ describe('checkAndBump — per-user sub-cap (#80)', () => {
 
   it('blocks a caller at their own cap while the app still has budget', async () => {
     const store = fakeStore();
-    store.userCounts.set(`app1:attacker:${dayKey(now)}`, 10);
+    store.userCounts.set(`app1:attacker:${utcDayKey(now)}`, 10);
 
     const result = await checkAndBump(store, { ...opts, userId: 'attacker', perUserLimit: 10 });
 
     expect(result.allowed).toBe(false);
     expect(result.deniedBy).toBe('user');
     // The app budget is untouched — that is the whole point.
-    expect(store.counts.get(`app1:${dayKey(now)}`) ?? 0).toBe(0);
+    expect(store.counts.get(`app1:${utcDayKey(now)}`) ?? 0).toBe(0);
   });
 
   it('still serves a different caller once one is capped', async () => {
     const store = fakeStore();
-    store.userCounts.set(`app1:attacker:${dayKey(now)}`, 10);
+    store.userCounts.set(`app1:attacker:${utcDayKey(now)}`, 10);
 
     const blocked = await checkAndBump(store, { ...opts, userId: 'attacker', perUserLimit: 10 });
     const served = await checkAndBump(store, { ...opts, userId: 'legit', perUserLimit: 10 });
@@ -155,7 +156,7 @@ describe('checkAndBump — per-user sub-cap (#80)', () => {
     // Ordering matters for the error the caller sees: an exhausted app budget is
     // the creator's ceiling and applies no matter who is asking.
     const store = fakeStore();
-    store.counts.set(`app1:${dayKey(now)}`, 100);
+    store.counts.set(`app1:${utcDayKey(now)}`, 100);
 
     const result = await checkAndBump(store, { ...opts, userId: 'legit', perUserLimit: 10 });
 
@@ -169,21 +170,21 @@ describe('checkAndBump — per-user sub-cap (#80)', () => {
     const store = fakeStore();
     await checkAndBump(store, { ...opts, denominator: 10, rng: () => 0, userId: 'u1', perUserLimit: 50 });
 
-    expect(store.counts.get(`app1:${dayKey(now)}`)).toBe(10);
-    expect(store.userCounts.get(`app1:u1:${dayKey(now)}`)).toBe(10);
+    expect(store.counts.get(`app1:${utcDayKey(now)}`)).toBe(10);
+    expect(store.userCounts.get(`app1:u1:${utcDayKey(now)}`)).toBe(10);
   });
 
   it('leaves both counters alone when the die misses', async () => {
     const store = fakeStore();
     await checkAndBump(store, { ...opts, denominator: 10, rng: () => 0.99, userId: 'u1', perUserLimit: 50 });
 
-    expect(store.counts.get(`app1:${dayKey(now)}`)).toBeUndefined();
-    expect(store.userCounts.get(`app1:u1:${dayKey(now)}`)).toBeUndefined();
+    expect(store.counts.get(`app1:${utcDayKey(now)}`)).toBeUndefined();
+    expect(store.userCounts.get(`app1:u1:${utcDayKey(now)}`)).toBeUndefined();
   });
 
   it('checks only the app cap when no userId is supplied', async () => {
     const store = fakeStore();
-    store.userCounts.set(`app1:u1:${dayKey(now)}`, 999);
+    store.userCounts.set(`app1:u1:${utcDayKey(now)}`, 999);
 
     const result = await checkAndBump(store, opts);
 

@@ -1,4 +1,5 @@
 import { PAYOUT_METER_DATASET } from './telemetry-datasets.js';
+import { sha256Hex } from './app-tokens.js';
 
 /** Analytics Engine dataset that is the source of truth for usage-share payouts. */
 export { PAYOUT_METER_DATASET };
@@ -59,9 +60,7 @@ export function writePayoutUsagePoint(dataset: AnalyticsEngineDataset | undefine
 /** SHA-256 is sufficient here: the immutable operator-held salt prevents AE readers reversing account ids. */
 export async function payoutActorId(userId: string, salt: string | undefined): Promise<string> {
   if (!salt) throw new Error('payout metering is not configured (missing PAYOUT_METER_SALT)');
-  const bytes = new TextEncoder().encode(`${salt}:${userId}`);
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+  return sha256Hex(`${salt}:${userId}`);
 }
 
 export interface LegacyUsageRow {

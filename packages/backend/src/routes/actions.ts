@@ -11,7 +11,7 @@ import {
   prepareVerifyWrites,
   type ToolManifest,
 } from '../lib/action-sql.js';
-import { looksLikeAppToken, rememberTokenUser, touchLastUsed, verifyAppToken } from '../lib/app-tokens.js';
+import { looksLikeAppToken, rememberTokenUser, sha256Hex, touchLastUsed, verifyAppToken } from '../lib/app-tokens.js';
 import { getVerifier, runVerifier } from '../lib/verifiers/index.js';
 import { PUBLIC_VISIBILITY, requireVisible, visibilityFromRow, type AppVisibility } from '../lib/visibility.js';
 
@@ -206,8 +206,7 @@ async function cachedPublicQuery(
   ttl: number,
   waitUntil: (p: Promise<unknown>) => void,
 ): Promise<Response> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(payload)));
-  const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const hash = await sha256Hex(JSON.stringify(payload));
   const key = new Request(`${new URL(requestUrl).origin}/__action-cache/${appId}/${name}/${hash}`);
   const hit = await caches.default.match(key);
   // Re-wrapped: a cache match has immutable headers, and CORS middleware appends to them.

@@ -17,6 +17,8 @@
  * the lag-induced overage.
  */
 
+import { utcDayKey } from './day-key.js';
+
 export const PROBABILISTIC_WRITE_DENOMINATOR = 10;
 
 export interface ProxyUsageStore {
@@ -72,14 +74,6 @@ export function d1UsageStore(db: D1Database): ProxyUsageStore {
   };
 }
 
-/**
- * UTC day key in YYYY-MM-DD form. Matches the column convention in
- * migrations/0006_app_secrets.sql.
- */
-export function dayKey(nowMs: number): string {
-  return new Date(nowMs).toISOString().slice(0, 10);
-}
-
 export interface CheckOptions {
   appId: string;
   /** Hard cap for the day. */
@@ -127,7 +121,7 @@ export async function checkAndBump(
 ): Promise<CheckResult> {
   const denom = opts.denominator ?? PROBABILISTIC_WRITE_DENOMINATOR;
   const rng = opts.rng ?? Math.random;
-  const day = dayKey(opts.nowMs);
+  const day = utcDayKey(opts.nowMs);
   const current = await store.read(opts.appId, day);
 
   // Per-caller sub-cap (#80). Only meaningful when the store can track it and

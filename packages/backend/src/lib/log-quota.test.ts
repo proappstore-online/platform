@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   checkBurst,
   checkLogQuota,
-  dayKey,
   resetBurstState,
   type LogUsageStore,
 } from './log-quota.js';
+import { utcDayKey } from './day-key.js';
 import { BURST_ENTRIES_PER_SECOND } from './log-ingest.js';
 
 const NOW = 1_800_000_000_000;
@@ -55,11 +55,11 @@ describe('checkLogQuota', () => {
     const store = fakeStore();
     const v = await checkLogQuota(store, { appId: 'a', clientKey: 'c', entries: 5, nowMs: NOW });
     expect(v).toMatchObject({ persist: true, reason: 'ok', dayCount: 0 });
-    expect(store.counts.get(`a:${dayKey(NOW)}`)).toBe(5);
+    expect(store.counts.get(`a:${utcDayKey(NOW)}`)).toBe(5);
   });
 
   it('refuses detail once the daily budget is spent', async () => {
-    const store = fakeStore({ [`a:${dayKey(NOW)}`]: 100 });
+    const store = fakeStore({ [`a:${utcDayKey(NOW)}`]: 100 });
     const v = await checkLogQuota(store, {
       appId: 'a', clientKey: 'c', entries: 1, nowMs: NOW, dailyLimit: 100,
     });
@@ -71,14 +71,14 @@ describe('checkLogQuota', () => {
     await checkLogQuota(store, {
       appId: 'a', clientKey: 'c', entries: BURST_ENTRIES_PER_SECOND, nowMs: NOW,
     });
-    const spentAfterFirst = store.counts.get(`a:${dayKey(NOW)}`);
+    const spentAfterFirst = store.counts.get(`a:${utcDayKey(NOW)}`);
     const v = await checkLogQuota(store, { appId: 'a', clientKey: 'c', entries: 1, nowMs: NOW });
     expect(v.reason).toBe('burst');
-    expect(store.counts.get(`a:${dayKey(NOW)}`)).toBe(spentAfterFirst);
+    expect(store.counts.get(`a:${utcDayKey(NOW)}`)).toBe(spentAfterFirst);
   });
 
   it('rolls over to a fresh budget on the next UTC day', async () => {
-    const store = fakeStore({ [`a:${dayKey(NOW)}`]: 100 });
+    const store = fakeStore({ [`a:${utcDayKey(NOW)}`]: 100 });
     const nextDay = NOW + 24 * 60 * 60 * 1000;
     const v = await checkLogQuota(store, {
       appId: 'a', clientKey: 'c', entries: 1, nowMs: nextDay, dailyLimit: 100,
@@ -87,7 +87,7 @@ describe('checkLogQuota', () => {
   });
 
   it('keeps app budgets independent', async () => {
-    const store = fakeStore({ [`a:${dayKey(NOW)}`]: 100 });
+    const store = fakeStore({ [`a:${utcDayKey(NOW)}`]: 100 });
     const v = await checkLogQuota(store, {
       appId: 'b', clientKey: 'c', entries: 1, nowMs: NOW, dailyLimit: 100,
     });

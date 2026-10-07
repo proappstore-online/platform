@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AI_DAILY_UNITS, chargeAiBudget, embedUnits, generateUnits, secondsUntilUtcMidnight, utcDay, withinAiRate, withinModerationRate } from './ai-budget.js';
+import { AI_DAILY_UNITS, chargeAiBudget, embedUnits, generateUnits, secondsUntilUtcMidnight, withinAiRate, withinModerationRate } from './ai-budget.js';
+import { utcDayKey } from './day-key.js';
 import type { Env } from '../types.js';
 
 // #218: the weights, day boundaries and fail-open/fail-closed rules.
@@ -11,7 +12,7 @@ describe('ai-budget', () => {
   });
 
   it('UTC day and time to the reset', () => {
-    expect(utcDay(Date.UTC(2026, 8, 26, 23, 59))).toBe('2026-09-26');
+    expect(utcDayKey(Date.UTC(2026, 8, 26, 23, 59))).toBe('2026-09-26');
     expect(secondsUntilUtcMidnight(Date.UTC(2026, 8, 26, 23, 0))).toBe(3600);
   });
 

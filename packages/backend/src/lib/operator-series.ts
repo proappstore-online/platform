@@ -9,6 +9,7 @@
  * distinguishable for every aggregation.
  */
 import { HttpError } from './auth.js';
+import { utcDayKey } from './day-key.js';
 import { SERIES_GRAINS, type OperatorSeries, type SeriesGrain } from './operator-contract-series.js';
 
 const DAY = 86_400_000;
@@ -21,10 +22,8 @@ interface Acc { sum: number; count: number; min: number; max: number; abs: numbe
 function parseDay(value: string): number | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const ms = Date.parse(`${value}T00:00:00Z`);
-  return Number.isFinite(ms) && dayKey(ms) === value ? ms : null;
+  return Number.isFinite(ms) && utcDayKey(ms) === value ? ms : null;
 }
-
-const dayKey = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 function bucketStart(ms: number, grain: SeriesGrain): number {
   const d = new Date(ms);
@@ -65,7 +64,7 @@ export function resolveSeriesRequest(
   if (SERIES_GRAINS.indexOf(grain) < SERIES_GRAINS.indexOf(series.time.grain)) {
     throw new HttpError(`grain must be ${series.time.grain} or coarser`, 400);
   }
-  return { from: dayKey(fromMs), to: dayKey(toMs), grain };
+  return { from: utcDayKey(fromMs), to: utcDayKey(toMs), grain };
 }
 
 /** A row's time as UTC ms: an ISO date/time string, or epoch seconds/milliseconds. */
@@ -100,7 +99,7 @@ export function rollupSeries(series: OperatorSeries, rows: Record<string, unknow
   const index = new Map<number, number>();
   for (let b = bucketStart(fromMs, req.grain); b < endMs; b = nextBucket(b, req.grain)) {
     index.set(b, buckets.length);
-    buckets.push(dayKey(b));
+    buckets.push(utcDayKey(b));
   }
 
   // per dimension value (null without a breakdown) → per measure → per bucket, plus a whole-range total.

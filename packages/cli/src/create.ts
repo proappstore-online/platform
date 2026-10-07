@@ -4,6 +4,7 @@ import { writeFileSync, readFileSync } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveToken } from './lib/config.js';
+import { toTitleCase } from './lib/title-case.js';
 import { writeOgImage } from './og-image.js';
 
 const TEMPLATE_REPO = 'proappstore-online/template-app';
@@ -67,10 +68,6 @@ interface CreateOptions {
   repo?: string;
   /** #261: add `worker/` (an app worker, ADR-009) to the workspace. */
   withWorker?: boolean;
-}
-
-function toTitleCase(id: string): string {
-  return id.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
 export async function createApp(appId: string, opts: CreateOptions = {}): Promise<void> {

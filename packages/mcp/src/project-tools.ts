@@ -14,6 +14,7 @@ import { selectTemplate, getTemplate, DEFAULT_TEMPLATE_ID } from "@proappstore/b
 import { gateMutation, dryRun } from "./safety.js";
 import { BUILD_WITH_PROSHELL } from "./sdk-reference.js";
 import { errText } from "./errors.js";
+import { text, type Text } from "./text-result.js";
 
 interface ProjectToolsEnv {
   GITHUB_ORG: string;
@@ -37,9 +38,6 @@ const DRY_RUN = z
   .boolean()
   .optional()
   .describe("Preview what this tool would do without making any changes (no confirm needed). Omit or set false to execute.");
-
-type Text = { content: { type: "text"; text: string }[] };
-const text = (s: string): Text => ({ content: [{ type: "text" as const, text: s }] });
 
 const APP_ID = z.string().max(58).regex(/^[a-z][a-z0-9-]*$/).describe("App ID (lowercase, max 58 chars, e.g. 'chess-academy')");
 const OWNERSHIP_CACHE_TTL_MS = 60_000;

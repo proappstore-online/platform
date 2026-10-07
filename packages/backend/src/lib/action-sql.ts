@@ -136,10 +136,7 @@ export function prepareVerifyInput(
   input: Record<string, unknown>,
   userId: string,
 ): PreparedQuery {
-  if (typeof manifest.sql !== 'string') {
-    throw new Error(`tool ${manifest.name} has no sql`);
-  }
-  return bindStatement(manifest.sql, resolveToolParams(manifest, input), userId);
+  return prepareActionQuery(manifest, input, userId);
 }
 
 /**

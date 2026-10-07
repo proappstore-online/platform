@@ -11,3 +11,8 @@ export function lineNumberAt(content: string, index: number): number {
   for (let i = 0; i < index; i++) if (content.charCodeAt(i) === 10) n++;
   return n;
 }
+
+/** `value` with every RegExp metacharacter escaped, for embedding in a pattern. */
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

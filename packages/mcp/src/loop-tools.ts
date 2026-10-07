@@ -14,9 +14,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { verifyToken } from "./api-helpers.js";
 import { audit, isReadOnly } from "./safety.js";
-
-type Text = { content: { type: "text"; text: string }[] };
-const text = (s: string): Text => ({ content: [{ type: "text" as const, text: s }] });
+import { text } from "./text-result.js";
 
 interface LoopEnv {
   AGENTS_BASE: string;

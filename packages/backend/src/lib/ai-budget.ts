@@ -6,6 +6,7 @@
  * daily budget bound both.
  */
 import type { Env } from '../types.js';
+import { utcDayKey } from './day-key.js';
 
 /** Weighted units a user may spend per UTC day on /v1/ai/*. */
 export const AI_DAILY_UNITS = 200;
@@ -44,10 +45,6 @@ export function withinModerationRate(env: Env, userId: string, calls = 1): Promi
   return take(env.MODERATION_RATE_LIMIT, `mod:${userId}`, calls);
 }
 
-export function utcDay(now: number): string {
-  return new Date(now).toISOString().slice(0, 10);
-}
-
 /** Seconds until the next UTC midnight, when the daily budget resets. */
 export function secondsUntilUtcMidnight(now: number): number {
   const next = new Date(now);
@@ -68,6 +65,6 @@ export async function chargeAiBudget(db: D1Database, userId: string, units: numb
      ON CONFLICT(user_id, date) DO UPDATE SET units_used = units_used + ?3
        WHERE ai_daily_budget.units_used + ?3 <= ?4
      RETURNING units_used`,
-  ).bind(userId, utcDay(now), units, AI_DAILY_UNITS).first<{ units_used: number }>();
+  ).bind(userId, utcDayKey(now), units, AI_DAILY_UNITS).first<{ units_used: number }>();
   return row !== null;
 }

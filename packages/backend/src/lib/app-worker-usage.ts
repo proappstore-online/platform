@@ -23,7 +23,8 @@
  */
 import type { Env } from '../types.js';
 import { HttpError } from './auth.js';
-import { secondsUntilUtcMidnight, utcDay } from './ai-budget.js';
+import { secondsUntilUtcMidnight } from './ai-budget.js';
+import { utcDayKey } from './day-key.js';
 import { dispatchWebhook } from './webhook-dispatch.js';
 
 export interface AppWorkerQuotas { invocations: number; cpu_ms: number; hook_deliveries: number }
@@ -97,7 +98,7 @@ export async function reserveInvocation(env: Env, appId: string, quotas: AppWork
        ON CONFLICT(app_id, day) DO UPDATE SET invocations = invocations + 1
         WHERE invocations < ?3 AND cpu_ms < ?4
        RETURNING invocations, cpu_ms, hook_deliveries, pas_calls`,
-    ).bind(appId, utcDay(now), quotas.invocations, quotas.cpu_ms).first<UsageRow>();
+    ).bind(appId, utcDayKey(now), quotas.invocations, quotas.cpu_ms).first<UsageRow>();
   } catch (e) {
     console.error(`[app-worker-usage] reserve failed for ${appId}: ${(e as Error)?.message ?? e}`);
     throw quotaCheckUnavailable();
@@ -117,7 +118,7 @@ export async function reserveHookDelivery(env: Env, appId: string, quotas: AppWo
       `INSERT INTO app_worker_usage (app_id, day, hook_deliveries) VALUES (?1, ?2, 1)
        ON CONFLICT(app_id, day) DO UPDATE SET hook_deliveries = hook_deliveries + 1 WHERE hook_deliveries < ?3
        RETURNING invocations, cpu_ms, hook_deliveries, pas_calls`,
-    ).bind(appId, utcDay(now), quotas.hook_deliveries).first<UsageRow>();
+    ).bind(appId, utcDayKey(now), quotas.hook_deliveries).first<UsageRow>();
   } catch (e) {
     console.error(`[app-worker-usage] hook reserve failed for ${appId}: ${(e as Error)?.message ?? e}`);
     throw quotaCheckUnavailable();
@@ -140,7 +141,7 @@ export async function recordInvocationUsage(
               pas_calls = pas_calls + COALESCE((SELECT pas_calls FROM app_worker_invocations WHERE id = ?2), 0)
         WHERE app_id = ?3 AND day = ?4
        RETURNING invocations, cpu_ms, hook_deliveries, pas_calls`,
-    ).bind(Math.max(0, finishedAt - startedAt), invocationId, appId, utcDay(startedAt)).first<UsageRow>();
+    ).bind(Math.max(0, finishedAt - startedAt), invocationId, appId, utcDayKey(startedAt)).first<UsageRow>();
     if (row) await alertNearQuota(env, appId, row, quotas, finishedAt);
   } catch (e) {
     console.error(`[app-worker-usage] recording ${invocationId} failed: ${(e as Error)?.message ?? e}`);
@@ -149,7 +150,7 @@ export async function recordInvocationUsage(
 
 async function todayUsage(env: Pick<Env, 'DB'>, appId: string, now: number): Promise<UsageRow | null> {
   return env.DB.prepare('SELECT invocations, cpu_ms, hook_deliveries, pas_calls FROM app_worker_usage WHERE app_id = ? AND day = ?')
-    .bind(appId, utcDay(now)).first<UsageRow>();
+    .bind(appId, utcDayKey(now)).first<UsageRow>();
 }
 
 /** The first quota at or past 80 % today, if any. */
@@ -187,8 +188,8 @@ export async function appWorkerUsage(env: Pick<Env, 'DB'>, appId: string, days: 
   const overrides = await env.DB.prepare('SELECT quota_overrides FROM app_workers WHERE app_id = ?').bind(appId).first<{ quota_overrides: string | null }>();
   const rows = await env.DB.prepare(
     'SELECT day, invocations, cpu_ms, hook_deliveries, pas_calls FROM app_worker_usage WHERE app_id = ? AND day >= ? ORDER BY day DESC',
-  ).bind(appId, utcDay(now - (days - 1) * DAY_MS)).all<UsageRow & { day: string }>();
-  const today = utcDay(now);
+  ).bind(appId, utcDayKey(now - (days - 1) * DAY_MS)).all<UsageRow & { day: string }>();
+  const today = utcDayKey(now);
   const usage = rows.results ?? [];
   return {
     app_id: appId,
@@ -235,7 +236,7 @@ export async function checkAccountCeiling(env: Env, now: number): Promise<{ clos
   const ceiling = parseAccountCeiling(env.APP_WORKER_ACCOUNT_CEILING);
   if (!ceiling) return { closed: false };
   const sum = await env.DB.prepare('SELECT COALESCE(SUM(cpu_ms), 0) AS cpu_ms, COALESCE(SUM(invocations), 0) AS invocations FROM app_worker_usage WHERE day = ?')
-    .bind(utcDay(now)).first<{ cpu_ms: number; invocations: number }>();
+    .bind(utcDayKey(now)).first<{ cpu_ms: number; invocations: number }>();
   const over = sum && (sum.cpu_ms > ceiling.cpu_ms || sum.invocations > ceiling.invocations);
   if (!over) return { closed: false };
   const reason = `account ceiling: today ${sum.invocations} invocations / ${sum.cpu_ms} cpu_ms over ${ceiling.invocations} / ${ceiling.cpu_ms}`;

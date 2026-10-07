@@ -13,7 +13,7 @@ import type {
   ToolCall,
   ToolResult,
 } from '../types.ts';
-import { dispatchTool, isAllowedTool } from '../tool-dispatch.ts';
+import { invokeSpineTool } from '../tool-dispatch.ts';
 import { PLATFORM_CAPABILITIES } from '../platform-skill.ts';
 import type { AnthropicContent, AnthropicMessage } from './cf-native-types.ts';
 import { estimateCostCached } from './cf-native-pricing.ts';
@@ -250,20 +250,7 @@ export class CFNativeRuntime implements AgentRuntime {
   }
 
   async invokeTool(handle: RuntimeHandle, toolCall: ToolCall): Promise<ToolResult> {
-    const s = handle.state as {
-      spineTools: string[];
-      dispatch?: (call: ToolCall) => Promise<ToolResult>;
-    };
-    if (!isAllowedTool(toolCall.name, s.spineTools)) {
-      return {
-        callId: toolCall.id,
-        ok: false,
-        errorMessage: `Tool "${toolCall.name}" not in allowed spine tools for this role`,
-        durationMs: 0,
-      };
-    }
-    if (s.dispatch) return s.dispatch(toolCall);
-    return dispatchTool(toolCall);
+    return invokeSpineTool(handle, toolCall);
   }
 
   async terminate(_handle: RuntimeHandle): Promise<{ costUsd: number; tokensIn: number; tokensOut: number }> {

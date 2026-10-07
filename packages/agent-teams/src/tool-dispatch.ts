@@ -14,7 +14,7 @@
  * so the run surfaces it instead of hanging.
  */
 
-import type { ToolCall, ToolResult } from './types.ts';
+import type { RuntimeHandle, ToolCall, ToolResult } from './types.ts';
 
 export function dispatchTool(toolCall: ToolCall): Promise<ToolResult> {
   return Promise.resolve({
@@ -30,4 +30,25 @@ export function dispatchTool(toolCall: ToolCall): Promise<ToolResult> {
  */
 export function isAllowedTool(name: string, spineTools: string[]): boolean {
   return spineTools.includes(name);
+}
+
+/**
+ * A runtime's invokeTool: refuse a tool outside the role's spine tools, then run
+ * it through the executor injected at prepare() time (or the dispatchTool fallback).
+ */
+export function invokeSpineTool(handle: RuntimeHandle, toolCall: ToolCall): Promise<ToolResult> {
+  const s = handle.state as {
+    spineTools: string[];
+    dispatch?: (call: ToolCall) => Promise<ToolResult>;
+  };
+  if (!isAllowedTool(toolCall.name, s.spineTools)) {
+    return Promise.resolve({
+      callId: toolCall.id,
+      ok: false,
+      errorMessage: `Tool "${toolCall.name}" not in allowed spine tools for this role`,
+      durationMs: 0,
+    });
+  }
+  if (s.dispatch) return s.dispatch(toolCall);
+  return dispatchTool(toolCall);
 }

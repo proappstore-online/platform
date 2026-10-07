@@ -13,6 +13,22 @@
 
 export const WEBHOOK_TIMEOUT_MS = 10_000;
 
+/** The X-Webhook-Signature value: hex HMAC-SHA256 of the body under the hook's secret. */
+export async function signWebhookBody(secret: string, body: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 /**
  * Webhooks per app (#27). Every event fans out to all of an app's matching
  * hooks, so an uncapped list turns one end-user upload into that many signed
@@ -36,8 +52,6 @@ export async function dispatchWebhook(
     if (!hooks.length) return;
 
     const body = JSON.stringify(payload);
-    const encoder = new TextEncoder();
-    const bodyBytes = encoder.encode(body);
 
     await Promise.allSettled(
       hooks.map(async (hook) => {
@@ -46,18 +60,7 @@ export async function dispatchWebhook(
         let reason: string | undefined;
 
         try {
-          // HMAC-SHA256 signature
-          const key = await crypto.subtle.importKey(
-            'raw',
-            encoder.encode(hook.secret),
-            { name: 'HMAC', hash: 'SHA-256' },
-            false,
-            ['sign'],
-          );
-          const sig = await crypto.subtle.sign('HMAC', key, bodyBytes);
-          const signature = Array.from(new Uint8Array(sig))
-            .map((b) => b.toString(16).padStart(2, '0'))
-            .join('');
+          const signature = await signWebhookBody(hook.secret, body);
 
           const res = await fetch(hook.url, {
             method: 'POST',

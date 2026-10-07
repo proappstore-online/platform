@@ -1,6 +1,7 @@
 import { extname } from 'node:path';
 import type { FileSource } from '../lib/file-source.js';
 import { stripCommentsForExt } from '../lib/strip.js';
+import { escapeRegExp } from '../lib/source-text.js';
 import type { CheckResult } from '../types.js';
 
 const SOURCE_EXTENSIONS = new Set(['.html', '.htm', '.jsx', '.tsx']);
@@ -147,8 +148,4 @@ function isInsideLabel(content: string, index: number): boolean {
 
 function lineFor(content: string, index: number): number {
   return content.slice(0, index).split('\n').length;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

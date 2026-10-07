@@ -434,7 +434,7 @@ function redirect(location: string, status: 302 | 303, cookies: string[] = []): 
   return new Response(null, { status, headers });
 }
 
-function noStore(response: Response): Response {
+export function noStore(response: Response): Response {
   const headers = new Headers(response.headers);
   headers.set("Cache-Control", "no-store");
   return new Response(response.body, {
