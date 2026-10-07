@@ -51,8 +51,10 @@ export default {
     if (slug === "api") {
       // X-PAS-App is this worker's assertion of which app a *mediated* request
       // came from (platform-mediation.ts), and the backend's secret proxy binds
-      // calls to it (#80). A caller hitting the API directly must not be able to
-      // say it for us.
+      // calls to it (#80). env.API is the backend's HostApi entrypoint, which
+      // trusts these headers (#315), so a client's copy must not ride along.
+      // (api.proappstore.online normally routes straight to the backend, whose
+      // default export strips them itself; this covers the host route too.)
       const direct = new Request(request);
       direct.headers.delete("X-PAS-App");
       // Same for the hostname passkeys use as their relying-party id (#230).

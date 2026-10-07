@@ -45,9 +45,13 @@ migrations_dir = "migrations"
 
 # Service bindings — zero-hop dispatch to sibling Workers on this zone.
 # Every Worker with a custom_domain on proappstore.online MUST be listed here.
+# API names the backend's HostApi entrypoint (#315): the only way in on which the
+# backend honours X-PAS-App / X-PAS-Host. Direct traffic reaches its default export,
+# which strips them. Nothing else may bind HostApi.
 [[services]]
 binding = "API"
 service = "proappstore-api"
+entrypoint = "HostApi"
 
 [[services]]
 binding = "ADMIN"
