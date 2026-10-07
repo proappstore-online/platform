@@ -13,8 +13,29 @@
  *     child's). Run it under `wrangler tail` to read the request's CPU time.
  */
 import { Hono } from 'hono';
+import { WorkerEntrypoint } from 'cloudflare:workers';
 import { requireAdmin } from '../lib/auth.js';
 import type { Env } from '../types.js';
+
+/** Tail Worker for the harness's dynamic workers: files each run's CPU, wall time and logs in R2 under `_spike/<label>`. */
+export class SpikeTail extends WorkerEntrypoint<Env, { label: string }> {
+  async tail(events: TraceItem[]): Promise<void> {
+    const rows = events.map((e) => ({
+      cpuTime: e.cpuTime, wallTime: e.wallTime, outcome: e.outcome, entrypoint: e.entrypoint ?? null,
+      logs: e.logs.map((l) => l.message), exceptions: e.exceptions.map((x) => x.message),
+    }));
+    await this.env.STORAGE.put(`_spike/${(this.ctx as unknown as { props: { label: string } }).props.label}`, JSON.stringify(rows));
+  }
+}
+
+async function readTail(env: Env, label: string): Promise<unknown> {
+  for (let i = 0; i < 20; i++) {
+    const obj = await env.STORAGE.get(`_spike/${label}`);
+    if (obj) { const rows = await obj.json(); await env.STORAGE.delete(`_spike/${label}`); return rows; }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return null;
+}
 
 export const appWorkerSpikeRoutes = new Hono<{ Bindings: Env }>();
 
@@ -25,7 +46,7 @@ const waiter = `export default { async fetch(req) {
   return Response.json({ startedAt, finishedAt: Date.now() });
 } };`;
 
-function sizedModule(kb: number, spinMs: number): string {
+function sizedModule(kb: number, spinMs: number, spinIn: string): string {
   const parts = ['const registry = {};'];
   let size = parts[0]!.length;
   for (let i = 0; size < kb * 1024; i++) {
@@ -33,8 +54,9 @@ function sizedModule(kb: number, spinMs: number): string {
     parts.push(fn);
     size += fn.length + 1;
   }
-  parts.push(`const spinUntil = Date.now(); let acc = 0; for (let i = 0; i < ${spinMs} * 40000; i++) acc += Math.sqrt(i);`);
-  parts.push(`export default { fetch() { return Response.json({ fns: Object.keys(registry).length, acc: acc > 0 }); } };`);
+  const spin = `let acc = 0; for (let i = 0; i < ${spinMs} * 40000; i++) acc += Math.sqrt(i);`;
+  parts.push(spinIn === 'fetch' ? 'let acc = 0;' : spin);
+  parts.push(`export default { fetch() { ${spinIn === 'fetch' ? spin.replace('let acc = 0; ', '') : ''} console.log('spike-child-log ' + Object.keys(registry).length); return Response.json({ fns: Object.keys(registry).length, acc: acc > 0 }); } };`);
   return parts.join('\n');
 }
 
@@ -42,7 +64,7 @@ appWorkerSpikeRoutes.post('/internal/app-worker-spike', async (c) => {
   await requireAdmin(c);
   const loader = c.env.LOADER;
   if (!loader) return c.json({ error: 'no LOADER binding' }, 503);
-  const body = await c.req.json<{ mode?: string; n?: number; sleepMs?: number; kb?: number; spinMs?: number; cpuMs?: number }>();
+  const body = await c.req.json<{ mode?: string; n?: number; sleepMs?: number; kb?: number; spinMs?: number; cpuMs?: number; spinIn?: string; tail?: boolean }>();
   const run = crypto.randomUUID();
   const t0 = Date.now();
 
@@ -67,16 +89,17 @@ appWorkerSpikeRoutes.post('/internal/app-worker-spike', async (c) => {
 
   if (body.mode === 'startup') {
     const kb = Math.min(Math.max(body.kb ?? 200, 0), 3000);
-    const source = sizedModule(kb, Math.min(Math.max(body.spinMs ?? 0, 0), 2000));
+    const source = sizedModule(kb, Math.min(Math.max(body.spinMs ?? 0, 0), 2000), body.spinIn ?? 'startup');
     const worker = loader.get(`spike:${run}:startup`, async () => ({
       compatibilityDate: '2026-01-01', mainModule: 'w.js', modules: { 'w.js': source }, env: {}, globalOutbound: null,
       ...(body.cpuMs ? { limits: { cpuMs: body.cpuMs } } : {}),
+      ...(body.tail ? { tails: [(c.executionCtx as unknown as { exports: { SpikeTail(o: { props: { label: string } }): Fetcher } }).exports.SpikeTail({ props: { label: run } })] } : {}),
     }));
     try {
       const res = await worker.getEntrypoint().fetch(new Request('https://w.invalid/'));
-      return c.json({ run, bytes: source.length, kb, spinMs: body.spinMs ?? 0, cpuMs: body.cpuMs ?? null, wallMs: Date.now() - t0, status: res.status, child: await res.text() });
+      return c.json({ run, bytes: source.length, kb, spinMs: body.spinMs ?? 0, cpuMs: body.cpuMs ?? null, wallMs: Date.now() - t0, status: res.status, child: await res.text(), ...(body.tail ? { tail: await readTail(c.env, run) } : {}) });
     } catch (e) {
-      return c.json({ run, bytes: source.length, kb, spinMs: body.spinMs ?? 0, cpuMs: body.cpuMs ?? null, wallMs: Date.now() - t0, error: String((e as Error).message ?? e) });
+      return c.json({ run, bytes: source.length, kb, spinMs: body.spinMs ?? 0, cpuMs: body.cpuMs ?? null, wallMs: Date.now() - t0, error: String((e as Error).message ?? e), ...(body.tail ? { tail: await readTail(c.env, run) } : {}) });
     }
   }
 
