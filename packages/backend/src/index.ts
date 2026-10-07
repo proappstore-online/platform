@@ -64,7 +64,6 @@ import { kvRoutes } from './routes/kv.js';
 import { counterRoutes } from './routes/counters.js';
 import { roomRoutes } from './routes/rooms.js';
 import { appWorkerRoutes } from './routes/app-workers.js';
-import { appWorkerSpikeRoutes } from './routes/app-worker-spike.js'; // TEMPORARY (#305)
 import { hookRoutes } from './routes/hooks.js';
 import { connectorRoutes } from './routes/connectors.js';
 
@@ -277,7 +276,6 @@ v1.route('/', keysRoutes);
 v1.route('/', servicesRoutes);
 v1.route('/', engagementRoutes);
 v1.route('/', payoutCronRoutes);
-v1.route('/', appWorkerSpikeRoutes); // TEMPORARY (#305)
 v1.route('/', payoutMeteringRoutes);
 v1.route('/', teamRoutes);
 v1.route('/', inviteRoutes);
@@ -297,7 +295,6 @@ app.route('/', webhookRoutes);
 export { Room } from './do/room.js';
 // #254: the RPC entrypoint behind an app worker's `PAS` binding (ctx.exports.AppWorkerApi).
 export { AppWorkerApi } from './rpc/app-worker-api.js';
-export { SpikeTail } from './routes/app-worker-spike.js'; // TEMPORARY (#305)
 
 /**
  * Cron entry (#70): the session-key drift check. `[triggers] crons` in wrangler.toml
