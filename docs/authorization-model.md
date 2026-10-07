@@ -120,6 +120,29 @@ metadata is a coarse gate, not the whole model** — the tool SQL must *also* sc
 rows to the caller (`:__user_id`, membership sub-queries). See
 [App Actions and Data Access Security](./app-actions-security.md).
 
+### The admin console (`operator_view.admin_access`)
+
+The console's operator view ([Admin console](./admin-console.md)) is the one place where a
+**team** role and an **app** role open the same door. That's deliberate, so here is exactly
+how it works:
+
+- **`requireOperatorAccess(c, appId)`** (`backend/src/lib/operator-audit-marks.ts`) first
+  tries `requireAppOwner`: the creator, a team `owner`, or a platform admin. Only when that
+  answers 403 ("not the owner") does it check the app's declared admin roles: an `app_roles`
+  row whose role is in the stored contract's `admin_access.roles`. A 401 (signed out) or a
+  404 (no such app) is passed straight through. Lesser team roles (`viewer` … `admin`) are
+  **not** admitted on their team role. They need a declared app role, like anyone else.
+- **`requireOperatorOwner(c, appId)`** is the owner-only version, for the audit trail and the
+  platform-held users list. `admin_access` never opens those.
+- **Admission is not authorization.** Each read and write runs a registered action through
+  `enforceActionAuth`, so the admitted caller must also hold that action's `auth.app_roles`.
+  This applies to the owner too.
+- `admin_access.roles` can never be `member` or `public`. Both the contract validator and
+  the security review refuse them. Role identity is the #272 rule below (user id, plus the
+  login only for a GitHub session).
+- Both gates are read per request: there is no cached grant. `GET /v1/me/administered-apps`
+  uses the same rule to list the apps a user administers without owning or joining them.
+
 ### Private apps (`visibility: private`) — who may use the app at all
 
 An app can declare itself private in `mcp.json` (#259):
@@ -288,6 +311,8 @@ on an app with no user behind them. They run with platform identities that are
 2. Something about an app's build/data/config? → `requireAppAccess(minRole)` (or
    `team_role` rank in a separate worker). **Membership is never enough.**
 3. Something the running app enforces on its own users? → app roles + row-scoping SQL.
+   The admin console is this case too: `admin_access` admits app roles, and the actions do
+   the enforcing.
 4. Worker-to-worker? → `INTERNAL_TOKEN`. CI-to-platform? → GitHub OIDC. Neither is a role.
 
 When unsure, pick the **higher** bar and fail closed. Names collide — comment

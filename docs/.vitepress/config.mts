@@ -77,6 +77,9 @@ const mainSidebar = [
     text: "AI & Agents",
     items: [
       { text: "MCP: App Tools", link: "/mcp-app-tools" },
+      { text: "Admin Console", link: "/admin-console" },
+      { text: "Admin Console Migration", link: "/admin-console-migration" },
+      { text: "Agent Onboarding: Admin Console", link: "/agent-onboarding" },
       { text: "App Workers", link: "/app-workers" },
       { text: "Agent Customization", link: "/agent-customization" },
       { text: "AI Gateway (Agent Teams)", link: "/ai-gateway" },

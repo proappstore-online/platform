@@ -589,6 +589,11 @@ Removing one from `mcp.json` removes its schedules or hooks.
 
 ## Console operator view (`operator_view`)
 
+> This section is the contract reference. For the overview, the agent workflow, a worked
+> example, the API and error-code reference and custom admin panels, see
+> [Admin console](./admin-console.md). Existing #240 apps adding admins should read the
+> [migration guide](./admin-console-migration.md).
+
 The app's owner oversees it from the Creator Console: **Operator** tab,
 `console.proappstore.online/#/apps/<app-id>/operator` (#240). Every owned app
 gets a baseline there: users holding app roles and 30-day activity, plus the
@@ -863,8 +868,8 @@ the owner must then also hold one of those roles (never `member`).
 ### Authoring tools (MCP)
 
 Six MCP tools on `mcp.proappstore.online/mcp` help write an `operator_view` and
-apply it (#295, #296). They are owner-only, and only `apply_admin_update`
-writes. None of them reads app data, so their output never holds a field value.
+apply it (#295, #296). All but `list_admin_capabilities` are owner-only (it
+needs only a signed-in caller), and only `apply_admin_update` writes. None of them reads app data, so their output never holds a field value.
 
 - `list_admin_capabilities` returns the resource kinds, column formats, action
   operations, limits (20 resources, 20 actions, …), features, the
@@ -883,14 +888,14 @@ writes. None of them reads app data, so their output never holds a field value.
   array. When valid, it renders the tabs, columns, actions, the role access
   matrix and the blocked fields. It stores nothing
   (`POST /v1/apps/:appId/operator-view/preview`).
-- `propose_admin_update(appId, proposal, validateAgainstActions = true)`
+- `propose_admin_update(appId, proposal, validateAgainstActions = true, tools?)`
   validates without applying. `valid` is the platform validator's own verdict:
   a proposal it refuses is one a deploy would refuse. It returns the
   normalized contract and `errors`, `warnings`, `missing_requirements` and
   `security_issues`, each with a path. Structural errors all come back
   together. With `validateAgainstActions: false` it checks the structure
   only (`POST /v1/apps/:appId/operator-view/propose`).
-- `validate_admin_security(appId, proposal)` runs the security and
+- `validate_admin_security(appId, proposal, tools?)` runs the security and
   compatibility checks and returns `passesSecurityGates`. Each issue has a
   path, a code and a severity (`POST /v1/apps/:appId/operator-view/security`).
   - **Errors:** a declared column on the sensitive-field list, an action that
@@ -941,7 +946,15 @@ signed-out caller — gets a `403` (`401` when signed out) before anything is re
 Admission grants no action by itself: every read and write still runs the
 referenced action under its own `auth.app_roles` and `step_up`, as below, and
 is audited under the admin's own id. Refused attempts by an admitted admin join
-the audit trail exactly as the owner's do.
+the audit trail exactly as the owner's do. So list each admin role in the
+`auth.app_roles` of every action its holders should use. Otherwise
+`validate_admin_security` warns `admin_role_grants_nothing`.
+
+**Custom admin panels (#299).** For workflows the contract can't express, an
+app builds its own panel on its own origin with the SDK's `AdminConsole`,
+`useAdminContext`, `useAction` and `ActionError`. The panel calls the same
+registered actions, so the same role gates apply. See
+[Admin console → Custom admin panels](./admin-console.md#custom-admin-panels).
 
 **Only declared columns and fields leave the platform.** A query may select
 more (an internal id, a hash): the operator read routes return only the
