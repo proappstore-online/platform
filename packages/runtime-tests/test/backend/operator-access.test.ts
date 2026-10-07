@@ -206,3 +206,55 @@ describe('admin role gate (#293)', () => {
     await expectRefusedEverywhere(token, 403);
   });
 });
+
+// #297: the console reaches an app the caller only administers through
+// GET /v1/me/administered-apps — never by widening /v1/apps (owner + team).
+describe('apps the caller administers (#297)', () => {
+  const administered = async (token?: string) => SELF.fetch(`${BASE}/v1/me/administered-apps`, json('GET', undefined, token));
+  const ids = async (token: string) => ((await (await administered(token)).json()) as { apps: { id: string }[] }).apps.map((a) => a.id);
+
+  beforeEach(async () => {
+    await seedUser('gh:4', 'admina');
+    fetchMock.get(`https://pas-data-stash.${env.DATA_WORKER_HOST}`).intercept({ path: '/validate', method: 'POST' })
+      .reply(200, (req) => ({ results: (JSON.parse(String(req.body)) as { statements: { id: string }[] }).statements.map((st) => ({ id: st.id, ok: true })) }));
+    const withAccess = { ...STASH, operator_view: { ...STASH.operator_view, admin_access: { roles: ['support'] } } };
+    const put = await SELF.fetch(`${BASE}/v1/apps/stash/tools`, json('PUT', withAccess, await session('gh:1')));
+    expect(put.status, await put.clone().text()).toBe(200);
+  });
+
+  it('lists an app where the caller holds a declared admin role, and keeps it out of /v1/apps', async () => {
+    await env.DB.prepare("INSERT INTO app_roles (app_id, user_id, role_name) VALUES ('stash', 'gh:4', 'support')").run();
+    const token = await session('gh:4', { login: 'admina' });
+    const res = await administered(token);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(await res.json()).toEqual({ apps: [{ id: 'stash', name: expect.any(String), created_at: expect.any(Number) }] });
+    const own = (await (await SELF.fetch(`${BASE}/v1/apps`, json('GET', undefined, token))).json()) as { apps: { id: string }[] };
+    expect(own.apps.map((a) => a.id)).not.toContain('stash');
+  });
+
+  it('lists nothing for an undeclared role, the owner, a team member, or a squatter of the admin login; 401 signed out', async () => {
+    // gh:3 holds operator/reviewer (the actions' roles), not the declared 'support'.
+    expect(await ids(await session('gh:3'))).toEqual([]);
+    // The owner reaches the app through /v1/apps.
+    await env.DB.prepare("INSERT INTO app_roles (app_id, user_id, role_name) VALUES ('stash', 'gh:1', 'support'), ('stash', 'admina', 'support')").run();
+    expect(await ids(await session('gh:1'))).toEqual([]);
+    // A legacy login-keyed grant admits the GitHub session with that login, never a credential account named the same (#272).
+    expect(await ids(await session('gh:4', { login: 'admina' }))).toEqual(['stash']);
+    expect(await ids(await session('cred:squat', { login: 'admina' }))).toEqual([]);
+    // A team member already gets the app from /v1/apps.
+    await env.DB.prepare("INSERT INTO team_members (app_id, user_id, role, created_at) VALUES ('stash', 'gh:4', 'viewer', 0)").run();
+    expect(await ids(await session('gh:4', { login: 'admina' }))).toEqual([]);
+    expect((await administered()).status).toBe(401);
+  });
+
+  it('drops the app when admin_access no longer declares the role', async () => {
+    await env.DB.prepare("INSERT INTO app_roles (app_id, user_id, role_name) VALUES ('stash', 'gh:4', 'support')").run();
+    const token = await session('gh:4', { login: 'admina' });
+    expect(await ids(token)).toEqual(['stash']);
+    fetchMock.get(`https://pas-data-stash.${env.DATA_WORKER_HOST}`).intercept({ path: '/validate', method: 'POST' })
+      .reply(200, (req) => ({ results: (JSON.parse(String(req.body)) as { statements: { id: string }[] }).statements.map((st) => ({ id: st.id, ok: true })) }));
+    await SELF.fetch(`${BASE}/v1/apps/stash/tools`, json('PUT', STASH, await session('gh:1')));
+    expect(await ids(token)).toEqual([]);
+  });
+});

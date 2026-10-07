@@ -929,7 +929,12 @@ metric series, row actions and the visit record. The audit trail and the
 platform users list stay owner-only. The role is read from `app_roles` on every
 request, so revoking it, or dropping `admin_access`, refuses the next request.
 It is matched on the holder's user id (and, for a GitHub session, its login),
-never on a credential or Google account's display name (#272). Anyone else —
+never on a credential or Google account's display name (#272). In the Creator
+Console the **Operator** tab shows only when the platform admits the caller: the
+console reads `GET /v1/apps/:appId/operator` and never infers access. An app
+the caller administers without owning or joining the team is listed by
+`GET /v1/me/administered-apps` and offers only that tab (#297); `/v1/apps`
+stays the owner and team list. Anyone else —
 an undeclared role, `member`, a lesser team role, another app's owner, a
 signed-out caller — gets a `403` (`401` when signed out) before anything is read.
 

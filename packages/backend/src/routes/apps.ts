@@ -3,6 +3,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, HttpError, isAdminId } from '../lib/auth.js';
 import { disableAppWorker } from '../lib/app-worker-host.js';
+import { roleSubjects } from '../lib/role-subject.js';
 
 /**
  * Apps owned by the signed-in dev. The `apps` table is the source of truth
@@ -150,6 +151,39 @@ appsRoutes.get('/apps', async (c) => {
     });
 
     return c.json({ apps: dtos });
+  } catch (err) {
+    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
+    throw err;
+  }
+});
+
+/**
+ * Apps the caller administers but neither owns nor is on the team of (#297): the
+ * caller holds one of the app roles its operator-view contract declares in
+ * `admin_access.roles` — the same rule the operator gate applies (#293), with
+ * #272's role subject (a GitHub session's login alias, never another
+ * provider's display name). `/v1/apps` stays the owner and team list (#276);
+ * the console lists these beside it with only the operator view. Read per
+ * request, so a revoked role or a dropped declaration drops the app.
+ */
+appsRoutes.get('/me/administered-apps', async (c) => {
+  try {
+    const user = await requireUser(c);
+    const { results } = await c.env.DB.prepare(
+      `SELECT a.id, a.created_at,
+              (SELECT s.name FROM submissions s WHERE s.app_id = a.id ORDER BY s.created_at DESC LIMIT 1) AS name
+         FROM apps a JOIN app_operator_view v ON v.app_id = a.id
+        WHERE a.creator_id <> ?1
+          AND NOT EXISTS (SELECT 1 FROM team_members tm WHERE tm.app_id = a.id AND tm.user_id = ?1)
+          AND EXISTS (
+            SELECT 1 FROM json_each(v.contract, '$.admin_access.roles') declared
+              JOIN app_roles r ON r.app_id = a.id AND r.role_name = declared.value
+             WHERE r.user_id = ?1 OR r.user_id = ?2)
+        ORDER BY a.created_at DESC
+        LIMIT 200`,
+    ).bind(...roleSubjects(user)).all<{ id: string; created_at: number; name: string | null }>();
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ apps: (results ?? []).map((a) => ({ id: a.id, name: a.name ?? toTitleCase(a.id), created_at: a.created_at })) });
   } catch (err) {
     if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
     throw err;
