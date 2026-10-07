@@ -23,7 +23,7 @@ export default defineWorkersConfig(async () => ({
         isolatedStorage: false,
         miniflare: {
           compatibilityDate: COMPATIBILITY_DATE,
-          compatibilityFlags: ['nodejs_compat'],
+          compatibilityFlags: ['nodejs_compat', 'global_fetch_strictly_public'], // parity with backend/wrangler.toml (#310)
           d1Databases: ['DB'],
           r2Buckets: ['STORAGE'],
           durableObjects: { ROOM: 'Room' },

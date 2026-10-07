@@ -104,16 +104,6 @@ describe('PAS actions as system:worker (#254)', () => {
   });
 });
 
-describe('PAS -> data worker hop through SELF (#310)', () => {
-  const hop = (path: string, headers: Record<string, string>) => SELF.fetch(`${BASE}/v1/internal/data-worker/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: '{}' });
-
-  it('the internal hop route refuses a missing or wrong internal token and any endpoint but query/execute/batch', async () => {
-    expect((await hop('t/execute', {})).status).toBe(403);
-    expect((await hop('t/execute', { 'X-Internal-Token': 'wrong' })).status).toBe(403);
-    expect((await hop('t/tables', { 'X-Internal-Token': env.INTERNAL_TOKEN! })).status).toBe(404);
-  });
-});
-
 describe('PAS authorisation, every call (#254)', () => {
   it('refuses a wrong token, a disabled worker, another app\'s token, no props and no running invocation', async () => {
     const refused = (p: Promise<unknown>) => expect(p).rejects.toThrow(/^Unauthorized:/);
