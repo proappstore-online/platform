@@ -20,7 +20,11 @@ on:
     branches: [main]
     paths:
       - 'packages/backend/**'
+      # Every workspace package the backend bundles (#322; scripts/check-deploy-paths.mjs keeps this exact):
       - 'packages/build-core/**' # backend bundles build-core — redeploy when it changes
+      - 'packages/compliance/**' # routes/provision.ts imports @proappstore/compliance
+      - 'packages/qa-spec/**' # routes/qa.ts imports @proappstore/qa-spec
+      - 'packages/data-worker/**' # scripts/embed-data-worker.mjs embeds its bundle at build time
       - 'migrations/**'
       - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:

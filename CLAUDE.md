@@ -16,6 +16,12 @@ Two consequences worth internalising before your first commit:
 - **Each worker has its own path-filtered deploy workflow** (`.github/workflows/deploy-*.yml`). If
   your diff does not match a workflow's `paths:`, nothing deploys — a change can be merged, green,
   and inert. Check which workflow your paths trigger.
+  - A workflow's `paths:` must list exactly the deployed package plus every workspace package its
+    worker bundles: by `@proappstore/*` import, by a relative import into another package, or by a
+    build-time embed. `scripts/check-deploy-paths.mjs` derives that set from the real imports and
+    fails CI on any missing or extra `packages/*/**` glob (#322).
+  - A new import of a workspace package means adding its glob. A new deploy workflow means adding it
+    to `DEPLOYS` in the script. A new codegen embed means adding it to `EMBEDS`.
 - **`deploy-backend.yml` applies D1 migrations to the live database before deploying**
   (`pnpm exec wrangler d1 migrations apply pas --remote`). There is no staging step in that path. A
   migration you push has run in production by the time you read the log.
@@ -46,6 +52,7 @@ Run from this directory before committing. Keep this list equal to the gates in
 pnpm install --frozen-lockfile
 pnpm -r --filter './packages/*' build
 bash scripts/check-design-system.sh .              # banned CSS aliases, html.dark, theme storage key
+node scripts/check-deploy-paths.mjs                # deploy paths: list every workspace package the worker bundles
 pnpm -r typecheck
 pnpm test                                          # vitest, from the workspace root
 pnpm test:coverage                                 # same suite + V8 coverage floors (what CI's check job runs) + gaps report

@@ -27,6 +27,9 @@ jobs:
       - run: pnpm -r --filter './packages/*' build
       - name: Design system lint
         run: bash scripts/check-design-system.sh .
+      # #322: every deploy workflow's paths: lists exactly the workspace packages its worker bundles.
+      - name: Deploy path filters track workspace imports
+        run: node scripts/check-deploy-paths.mjs
       - run: pnpm -r typecheck
       # #128: the unit suite with V8 coverage. Vitest enforces the floors in
       # vitest.config.ts (global + per high-risk area) and fails the job under

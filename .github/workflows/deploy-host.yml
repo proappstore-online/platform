@@ -11,6 +11,8 @@ on:
     branches: [main]
     paths:
       - 'packages/host/**'
+      # Every workspace package the host bundles (#322; scripts/check-deploy-paths.mjs keeps this exact):
+      - 'packages/qa-spec/**' # src/qa-runner.ts serves @proappstore/qa-spec/browser-bundle — keep /__qa/ in step with qa-worker
       - '.github/workflows/deploy-host.yml'
   workflow_dispatch:
 
