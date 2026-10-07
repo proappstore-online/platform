@@ -214,13 +214,9 @@ describe('POST /webhooks/stripe', () => {
     const sql = db.prepare.mock.calls[0][0] as string;
     expect(sql).toContain('INSERT INTO subscriptions');
     expect(sql).toContain('ON CONFLICT');
-    expect(upsertStmt.bind).toHaveBeenCalledWith(
-      'gh:42',
-      'cus_test123',
-      'sub_test456',
-      expect.any(Number),
-      expect.any(Number),
-    );
+    // #321: never for a terminated subscription, and conditional on the row it would replace.
+    expect(sql).toContain('NOT EXISTS (SELECT 1 FROM stripe_terminated_subscriptions');
+    expect(upsertStmt.bind).toHaveBeenCalledWith('gh:42', 'cus_test123', 'sub_test456', expect.any(Number), 0);
   });
 
   it('handles customer.subscription.deleted and marks canceled', async () => {
@@ -231,8 +227,9 @@ describe('POST /webhooks/stripe', () => {
       },
     });
     const signature = await buildStripeSignature(payload, 'whsec_test');
+    const terminatedStmt = mockStmt({ run: { meta: { changes: 1 } } });
     const updateStmt = mockStmt({ run: { meta: { changes: 1 } } });
-    const db = mockD1(updateStmt);
+    const db = mockD1(terminatedStmt, updateStmt);
 
     const res = await app.request(
       '/webhooks/stripe',
@@ -247,7 +244,10 @@ describe('POST /webhooks/stripe', () => {
       makeEnv({}, db),
     );
     expect(res.status).toBe(200);
-    const sql = db.prepare.mock.calls[0][0] as string;
+    // #321: the end is recorded first, then the row is cancelled.
+    expect(db.prepare.mock.calls[0][0] as string).toContain('INSERT OR IGNORE INTO stripe_terminated_subscriptions');
+    expect(terminatedStmt.bind).toHaveBeenCalledWith('sub_cancel999', expect.any(Number), 'customer.subscription.deleted');
+    const sql = db.prepare.mock.calls[1][0] as string;
     expect(sql).toContain("status = 'canceled'");
     expect(sql).toContain("tier = 'free'");
     expect(updateStmt.bind).toHaveBeenCalledWith(expect.any(Number), 'sub_cancel999');

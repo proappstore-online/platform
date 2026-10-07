@@ -120,9 +120,9 @@ via `migrations_dir = "../../migrations"` in `packages/backend/wrangler.toml`).
 
 | Event | Action |
 |---|---|
-| `checkout.session.completed` | upsert subscription, set `status='active'`, `tier='pro'` |
-| `customer.subscription.updated` | update status / price_id / period / cancel flag (reads `current_period_end` from `items.data[0]` first, falls back to the legacy top-level field) |
-| `customer.subscription.deleted` | mark `status='canceled'`, `tier='free'` (terminal) |
+| `checkout.session.completed` | upsert subscription, set `status='active'`, `tier='pro'`, never for a terminated subscription id (below) |
+| `customer.subscription.updated` | update status / price_id / period / cancel flag (reads `current_period_end` from `items.data[0]` first, falls back to the legacy top-level field); a terminal status (`canceled`, `incomplete_expired`) also records the id as terminated |
+| `customer.subscription.deleted` | record the id as terminated, then mark `status='canceled'`, `tier='free'` (terminal) |
 | `invoice.payment_failed` | mark `status='past_due'` |
 
 `invoice.paid` and `customer.subscription.trial_will_end` are **not** handled
@@ -132,6 +132,31 @@ Webhook signature verification uses `STRIPE_WEBHOOK_SECRET`. Every handler SETs
 absolute state (never increments), so retries are idempotent; `updated` /
 `payment_failed` guard on `status != 'canceled'` so an out-of-order event can't
 resurrect a canceled subscription.
+
+### Ordering invariant (#321)
+
+Stripe neither orders nor de-duplicates webhook deliveries. So a cancellation
+is terminal, whatever order events arrive in and however often:
+
+- **An ended subscription is remembered.** A deletion, or an update to a
+  terminal status, records the Stripe subscription id in
+  `stripe_terminated_subscriptions` before it cancels the row. It does this even
+  when no row matched yet. Stripe never reuses an id, so the record is permanent.
+- **A checkout never activates a terminated id.** A deletion that arrives before
+  its own checkout still wins, and a redelivered checkout of a cancelled
+  subscription changes nothing.
+- **A checkout updates the user's row only when:**
+  - it is the **same** subscription and the row is not cancelled (a duplicate or
+    a retry, which is idempotent);
+  - or it is a **different** subscription, and either the row is cancelled (a
+    genuine re-subscribe) or its event is newer. "Newer" compares the signed
+    event `created` time with `checkout_event_at`, so an old checkout delivered
+    late cannot swap a user back to a superseded subscription.
+- **Writes are single conditional statements.** A deletion is recorded before
+  the row changes, so concurrent deliveries end in the same state in any order.
+
+Restoring access after a cancellation therefore takes a **new** subscription,
+that is, a new Checkout session.
 
 ## Differences between Tailored and Ready
 
