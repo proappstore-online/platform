@@ -22,9 +22,9 @@
  */
 
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env, LicenseRow } from '../types.js';
-import { requireUser, HttpError } from '../lib/auth.js';
+import { requireUser } from '../lib/auth.js';
+import { wrap } from '../lib/route-wrap.js';
 import {
   consumeValidateAttempt,
   d1ValidateAttemptStore,
@@ -49,42 +49,37 @@ function licenseJson(row: Pick<LicenseRow, 'key' | 'app_id' | 'issued_at' | 'exp
 }
 
 /** Get the current user's license for an app. */
-licenseRoutes.get('/apps/:appId/license', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const { appId } = c.req.param();
+licenseRoutes.get('/apps/:appId/license', wrap(async (c) => {
+  const user = await requireUser(c);
+  const { appId } = c.req.param();
 
-    // LEFT JOIN rather than an inner join so the three failure modes stay
-    // distinguishable. This route is authenticated and returns the caller's own
-    // license, so a precise reason leaks nothing and "your subscription lapsed"
-    // is actionable in a way that a bare 404 is not.
-    const row = await c.env.DB.prepare(
-      `SELECT l.*, s.status AS sub_status
-         FROM licenses l
-         LEFT JOIN subscriptions s ON s.user_id = l.user_id
-        WHERE l.app_id = ? AND l.user_id = ? AND l.revoked = 0`,
-    )
-      .bind(appId, user.id)
-      .first<LicenseRow & { sub_status: string | null }>();
+  // LEFT JOIN rather than an inner join so the three failure modes stay
+  // distinguishable. This route is authenticated and returns the caller's own
+  // license, so a precise reason leaks nothing and "your subscription lapsed"
+  // is actionable in a way that a bare 404 is not.
+  const row = await c.env.DB.prepare(
+    `SELECT l.*, s.status AS sub_status
+       FROM licenses l
+       LEFT JOIN subscriptions s ON s.user_id = l.user_id
+      WHERE l.app_id = ? AND l.user_id = ? AND l.revoked = 0`,
+  )
+    .bind(appId, user.id)
+    .first<LicenseRow & { sub_status: string | null }>();
 
-    if (!row) return c.text('not found', 404);
+  if (!row) return c.text('not found', 404);
 
-    // Check expiry
-    if (row.expires_at && row.expires_at < Date.now()) {
-      return c.text('license expired', 404);
-    }
-
-    // Entitlement follows the subscription (#86), not the key.
-    if (row.sub_status !== 'active') {
-      return c.text('subscription inactive', 403);
-    }
-
-    return c.json(licenseJson(row));
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
+  // Check expiry
+  if (row.expires_at && row.expires_at < Date.now()) {
+    return c.text('license expired', 404);
   }
-});
+
+  // Entitlement follows the subscription (#86), not the key.
+  if (row.sub_status !== 'active') {
+    return c.text('subscription inactive', 403);
+  }
+
+  return c.json(licenseJson(row));
+}));
 
 /**
  * Issue the current user's license for an app (#86).
@@ -94,59 +89,49 @@ licenseRoutes.get('/apps/:appId/license', async (c) => {
  * FIRST so that a lapsed user cannot mint a key that the validate join would
  * refuse anyway — no orphaned rows, nothing to clean up on cancel.
  */
-licenseRoutes.post('/apps/:appId/license', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const { appId } = c.req.param();
+licenseRoutes.post('/apps/:appId/license', wrap(async (c) => {
+  const user = await requireUser(c);
+  const appId = c.req.param('appId')!;
 
-    const sub = await c.env.DB.prepare(
-      'SELECT status FROM subscriptions WHERE user_id = ?',
-    ).bind(user.id).first<{ status: string }>();
-    if (sub?.status !== 'active') return c.text('subscription inactive', 403);
+  const sub = await c.env.DB.prepare(
+    'SELECT status FROM subscriptions WHERE user_id = ?',
+  ).bind(user.id).first<{ status: string }>();
+  if (sub?.status !== 'active') return c.text('subscription inactive', 403);
 
-    const now = Date.now();
-    // Idempotent: a live key is returned, not replaced. Revoke first to rotate.
-    const existing = await c.env.DB.prepare(
-      `SELECT key, app_id, issued_at, expires_at
-         FROM licenses
-        WHERE app_id = ? AND user_id = ? AND revoked = 0
-          AND (expires_at IS NULL OR expires_at > ?)
-        ORDER BY issued_at DESC
-        LIMIT 1`,
-    ).bind(appId, user.id, now).first<Pick<LicenseRow, 'key' | 'app_id' | 'issued_at' | 'expires_at'>>();
-    if (existing) return c.json(licenseJson(existing));
+  const now = Date.now();
+  // Idempotent: a live key is returned, not replaced. Revoke first to rotate.
+  const existing = await c.env.DB.prepare(
+    `SELECT key, app_id, issued_at, expires_at
+       FROM licenses
+      WHERE app_id = ? AND user_id = ? AND revoked = 0
+        AND (expires_at IS NULL OR expires_at > ?)
+      ORDER BY issued_at DESC
+      LIMIT 1`,
+  ).bind(appId, user.id, now).first<Pick<LicenseRow, 'key' | 'app_id' | 'issued_at' | 'expires_at'>>();
+  if (existing) return c.json(licenseJson(existing));
 
-    const key = mintLicenseKey();
-    await c.env.DB.prepare(
-      `INSERT INTO licenses (key, app_id, user_id, issued_at, expires_at, revoked)
-       VALUES (?, ?, ?, ?, NULL, 0)`,
-    ).bind(key, appId, user.id, now).run();
+  const key = mintLicenseKey();
+  await c.env.DB.prepare(
+    `INSERT INTO licenses (key, app_id, user_id, issued_at, expires_at, revoked)
+     VALUES (?, ?, ?, ?, NULL, 0)`,
+  ).bind(key, appId, user.id, now).run();
 
-    return c.json(licenseJson({ key, app_id: appId, issued_at: now, expires_at: null }), 201);
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
+  return c.json(licenseJson({ key, app_id: appId, issued_at: now, expires_at: null }), 201);
+}));
 
 /**
  * Revoke the current user's license(s) for an app (#86). Covers the case the
  * subscription join cannot: a key that leaked while the subscription is still
  * active. Revocation is permanent; `POST` mints a replacement.
  */
-licenseRoutes.delete('/apps/:appId/license', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const { appId } = c.req.param();
-    const result = await c.env.DB.prepare(
-      'UPDATE licenses SET revoked = 1 WHERE app_id = ? AND user_id = ? AND revoked = 0',
-    ).bind(appId, user.id).run();
-    return c.json({ revoked: result.meta?.changes ?? 0 });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
+licenseRoutes.delete('/apps/:appId/license', wrap(async (c) => {
+  const user = await requireUser(c);
+  const { appId } = c.req.param();
+  const result = await c.env.DB.prepare(
+    'UPDATE licenses SET revoked = 1 WHERE app_id = ? AND user_id = ? AND revoked = 0',
+  ).bind(appId, user.id).run();
+  return c.json({ revoked: result.meta?.changes ?? 0 });
+}));
 
 /** Validate a license key (no auth required — for offline validation). */
 licenseRoutes.post('/license/validate', async (c) => {

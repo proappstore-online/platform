@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
-import { requireUser, HttpError, isAdminId } from '../lib/auth.js';
+import { requireUser, isAdminId } from '../lib/auth.js';
+import { wrap } from '../lib/route-wrap.js';
 import { disableAppWorker } from '../lib/app-worker-host.js';
 import { roleSubjects } from '../lib/role-subject.js';
 
@@ -81,81 +81,76 @@ function toTitleCase(id: string): string {
 
 export const appsRoutes = new Hono<{ Bindings: Env }>();
 
-appsRoutes.get('/apps', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const wantAll = c.req.query('all') === 'true' && isAdminId(user.id, c.env);
-    const creatorFilter = wantAll ? null : user.id;
+appsRoutes.get('/apps', wrap(async (c) => {
+  const user = await requireUser(c);
+  const wantAll = c.req.query('all') === 'true' && isAdminId(user.id, c.env);
+  const creatorFilter = wantAll ? null : user.id;
 
-    // Pull apps: owned by this user OR where they're a team member (or all if admin).
-    const appsQuery = creatorFilter
-      ? c.env.DB.prepare(
-          `SELECT DISTINCT a.*, CASE WHEN a.creator_id = ?1 THEN 'owner' ELSE tm.role END AS team_role
-           FROM apps a
-           LEFT JOIN team_members tm ON tm.app_id = a.id AND tm.user_id = ?1
-           WHERE a.creator_id = ?1 OR tm.user_id IS NOT NULL
-           ORDER BY a.created_at DESC`,
-        ).bind(creatorFilter)
-      : c.env.DB.prepare("SELECT *, 'owner' AS team_role FROM apps ORDER BY created_at DESC");
-    const appsResult = await appsQuery.all<AppRow>();
-    const apps = appsResult.results ?? [];
+  // Pull apps: owned by this user OR where they're a team member (or all if admin).
+  const appsQuery = creatorFilter
+    ? c.env.DB.prepare(
+        `SELECT DISTINCT a.*, CASE WHEN a.creator_id = ?1 THEN 'owner' ELSE tm.role END AS team_role
+         FROM apps a
+         LEFT JOIN team_members tm ON tm.app_id = a.id AND tm.user_id = ?1
+         WHERE a.creator_id = ?1 OR tm.user_id IS NOT NULL
+         ORDER BY a.created_at DESC`,
+      ).bind(creatorFilter)
+    : c.env.DB.prepare("SELECT *, 'owner' AS team_role FROM apps ORDER BY created_at DESC");
+  const appsResult = await appsQuery.all<AppRow>();
+  const apps = appsResult.results ?? [];
 
-    if (apps.length === 0) {
-      return c.json({ apps: [] satisfies AppDto[] });
-    }
-
-    // Pull all submissions for the same creator(s) and bucket by app_id, latest-first.
-    // (For admins listing all apps, we pull all submissions; for devs, only theirs.)
-    const subsQuery = creatorFilter
-      ? c.env.DB.prepare(
-          'SELECT app_id, name, category, description, icon, icon_bg, pro_features, status, suggested_monthly_price_cents, created_at FROM submissions WHERE creator_id = ? ORDER BY created_at DESC',
-        ).bind(creatorFilter)
-      : c.env.DB.prepare(
-          'SELECT app_id, name, category, description, icon, icon_bg, pro_features, status, suggested_monthly_price_cents, created_at FROM submissions ORDER BY created_at DESC',
-        );
-    const subsResult = await subsQuery.all<SubmissionMetaRow>();
-    const latestByAppId = new Map<string, SubmissionMetaRow>();
-    for (const s of subsResult.results ?? []) {
-      // Iterating DESC order; first occurrence is most-recent.
-      if (!latestByAppId.has(s.app_id)) latestByAppId.set(s.app_id, s);
-    }
-
-    const dtos: AppDto[] = apps.map((a) => {
-      const sub = latestByAppId.get(a.id);
-      let proFeatures: string[] | null = null;
-      if (sub?.pro_features) {
-        try {
-          const parsed = JSON.parse(sub.pro_features);
-          if (Array.isArray(parsed)) proFeatures = parsed;
-        } catch {
-          // bad JSON in column — skip rather than 500ing the whole list
-        }
-      }
-      return {
-        id: a.id,
-        creator_id: a.creator_id,
-        created_at: a.created_at,
-        d1_database_id: a.d1_database_id,
-        template_id: a.template_id ?? null,
-        template_rev: a.template_rev ?? null,
-        name: sub?.name ?? toTitleCase(a.id),
-        category: sub?.category ?? null,
-        description: sub?.description ?? null,
-        icon: sub?.icon ?? null,
-        icon_bg: sub?.icon_bg ?? null,
-        pro_features: proFeatures,
-        has_submission: !!sub,
-        submission_status: sub?.status ?? null,
-        team_role: a.team_role ?? 'viewer',
-      };
-    });
-
-    return c.json({ apps: dtos });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
+  if (apps.length === 0) {
+    return c.json({ apps: [] satisfies AppDto[] });
   }
-});
+
+  // Pull all submissions for the same creator(s) and bucket by app_id, latest-first.
+  // (For admins listing all apps, we pull all submissions; for devs, only theirs.)
+  const subsQuery = creatorFilter
+    ? c.env.DB.prepare(
+        'SELECT app_id, name, category, description, icon, icon_bg, pro_features, status, suggested_monthly_price_cents, created_at FROM submissions WHERE creator_id = ? ORDER BY created_at DESC',
+      ).bind(creatorFilter)
+    : c.env.DB.prepare(
+        'SELECT app_id, name, category, description, icon, icon_bg, pro_features, status, suggested_monthly_price_cents, created_at FROM submissions ORDER BY created_at DESC',
+      );
+  const subsResult = await subsQuery.all<SubmissionMetaRow>();
+  const latestByAppId = new Map<string, SubmissionMetaRow>();
+  for (const s of subsResult.results ?? []) {
+    // Iterating DESC order; first occurrence is most-recent.
+    if (!latestByAppId.has(s.app_id)) latestByAppId.set(s.app_id, s);
+  }
+
+  const dtos: AppDto[] = apps.map((a) => {
+    const sub = latestByAppId.get(a.id);
+    let proFeatures: string[] | null = null;
+    if (sub?.pro_features) {
+      try {
+        const parsed = JSON.parse(sub.pro_features);
+        if (Array.isArray(parsed)) proFeatures = parsed;
+      } catch {
+        // bad JSON in column — skip rather than 500ing the whole list
+      }
+    }
+    return {
+      id: a.id,
+      creator_id: a.creator_id,
+      created_at: a.created_at,
+      d1_database_id: a.d1_database_id,
+      template_id: a.template_id ?? null,
+      template_rev: a.template_rev ?? null,
+      name: sub?.name ?? toTitleCase(a.id),
+      category: sub?.category ?? null,
+      description: sub?.description ?? null,
+      icon: sub?.icon ?? null,
+      icon_bg: sub?.icon_bg ?? null,
+      pro_features: proFeatures,
+      has_submission: !!sub,
+      submission_status: sub?.status ?? null,
+      team_role: a.team_role ?? 'viewer',
+    };
+  });
+
+  return c.json({ apps: dtos });
+}));
 
 /**
  * Apps the caller administers but neither owns nor is on the team of (#297): the
@@ -166,29 +161,24 @@ appsRoutes.get('/apps', async (c) => {
  * the console lists these beside it with only the operator view. Read per
  * request, so a revoked role or a dropped declaration drops the app.
  */
-appsRoutes.get('/me/administered-apps', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const { results } = await c.env.DB.prepare(
-      `SELECT a.id, a.created_at,
-              (SELECT s.name FROM submissions s WHERE s.app_id = a.id ORDER BY s.created_at DESC LIMIT 1) AS name
-         FROM apps a JOIN app_operator_view v ON v.app_id = a.id
-        WHERE a.creator_id <> ?1
-          AND NOT EXISTS (SELECT 1 FROM team_members tm WHERE tm.app_id = a.id AND tm.user_id = ?1)
-          AND EXISTS (
-            SELECT 1 FROM json_each(v.contract, '$.admin_access.roles') declared
-              JOIN app_roles r ON r.app_id = a.id AND r.role_name = declared.value
-             WHERE r.user_id = ?1 OR r.user_id = ?2)
-        ORDER BY a.created_at DESC
-        LIMIT 200`,
-    ).bind(...roleSubjects(user)).all<{ id: string; created_at: number; name: string | null }>();
-    c.header('Cache-Control', 'private, no-store');
-    return c.json({ apps: (results ?? []).map((a) => ({ id: a.id, name: a.name ?? toTitleCase(a.id), created_at: a.created_at })) });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
+appsRoutes.get('/me/administered-apps', wrap(async (c) => {
+  const user = await requireUser(c);
+  const { results } = await c.env.DB.prepare(
+    `SELECT a.id, a.created_at,
+            (SELECT s.name FROM submissions s WHERE s.app_id = a.id ORDER BY s.created_at DESC LIMIT 1) AS name
+       FROM apps a JOIN app_operator_view v ON v.app_id = a.id
+      WHERE a.creator_id <> ?1
+        AND NOT EXISTS (SELECT 1 FROM team_members tm WHERE tm.app_id = a.id AND tm.user_id = ?1)
+        AND EXISTS (
+          SELECT 1 FROM json_each(v.contract, '$.admin_access.roles') declared
+            JOIN app_roles r ON r.app_id = a.id AND r.role_name = declared.value
+           WHERE r.user_id = ?1 OR r.user_id = ?2)
+      ORDER BY a.created_at DESC
+      LIMIT 200`,
+  ).bind(...roleSubjects(user)).all<{ id: string; created_at: number; name: string | null }>();
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({ apps: (results ?? []).map((a) => ({ id: a.id, name: a.name ?? toTitleCase(a.id), created_at: a.created_at })) });
+}));
 
 /**
  * Remove an app from the owner's dashboard listing. This does NOT
@@ -199,28 +189,23 @@ appsRoutes.get('/me/administered-apps', async (c) => {
  *
  * Owner-only. Admin can delete any.
  */
-appsRoutes.delete('/apps/:id', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const id = c.req.param('id');
-    if (!id) return c.text('id required', 400);
+appsRoutes.delete('/apps/:id', wrap(async (c) => {
+  const user = await requireUser(c);
+  const id = c.req.param('id');
+  if (!id) return c.text('id required', 400);
 
-    const existing = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?')
-      .bind(id)
-      .first<{ creator_id: string }>();
-    if (!existing) return c.text('Not found', 404);
+  const existing = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?')
+    .bind(id)
+    .first<{ creator_id: string }>();
+  if (!existing) return c.text('Not found', 404);
 
-    const owns = existing.creator_id === user.id;
-    if (!owns && !isAdminId(user.id, c.env)) return c.text('Forbidden', 403);
+  const owns = existing.creator_id === user.id;
+  if (!owns && !isAdminId(user.id, c.env)) return c.text('Forbidden', 403);
 
-    // An app worker must not outlive its app (#253): turn it off and remove its
-    // code and credentials first. Best-effort — a failure is logged, never a
-    // reason to keep the app.
-    await disableAppWorker(c.env, id).catch((e) => console.error(`[apps] app worker removal failed for ${id}: ${(e as Error).message}`));
-    await c.env.DB.prepare('DELETE FROM apps WHERE id = ?').bind(id).run();
-    return c.json({ ok: true });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
+  // An app worker must not outlive its app (#253): turn it off and remove its
+  // code and credentials first. Best-effort — a failure is logged, never a
+  // reason to keep the app.
+  await disableAppWorker(c.env, id).catch((e) => console.error(`[apps] app worker removal failed for ${id}: ${(e as Error).message}`));
+  await c.env.DB.prepare('DELETE FROM apps WHERE id = ?').bind(id).run();
+  return c.json({ ok: true });
+}));

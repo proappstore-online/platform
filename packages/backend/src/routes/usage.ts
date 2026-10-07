@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
-import { requireUser, requireAppOwner, HttpError } from '../lib/auth.js';
+import { requireUser, requireAppOwner } from '../lib/auth.js';
+import { wrap } from '../lib/route-wrap.js';
 import { APP_ID_RE } from './validation.js';
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { utcDayKey } from '../lib/day-key.js';
@@ -99,126 +99,121 @@ function clampDelta(v: unknown, max: number): number {
   return floored > max ? max : floored;
 }
 
-usageRoutes.post('/usage/ping', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const body = await c.req.json<PingBody>().catch(() => ({} as PingBody));
+usageRoutes.post('/usage/ping', wrap(async (c) => {
+  const user = await requireUser(c);
+  const body = await c.req.json<PingBody>().catch(() => ({} as PingBody));
 
-    const appId = typeof body.appId === 'string' ? body.appId.trim() : '';
-    if (!appId || !APP_ID_RE.test(appId) || appId.length > APP_ID_MAX_LEN) {
-      return c.text('invalid appId', 400);
-    }
-
-    // SECURITY (#58): the body's `appId` is the page's word. The only claim
-    // about WHICH app a caller is actually using comes from the host's
-    // platform mediation, which strips any client copy of X-PAS-App and sets it
-    // from the resolved route (lib/app-context.ts). A mediated ping that names a
-    // different app is hostile — a subscriber redirecting their pool share onto
-    // an arbitrary app — and is refused outright.
-    const mediatedApp = c.req.header(APP_CONTEXT_HEADER);
-    if (mediatedApp && mediatedApp !== appId) {
-      return c.text('app context mismatch', 403);
-    }
-
-    // Make sure the app actually exists — otherwise a typo'd appId would
-    // silently accumulate rows that no creator owns.
-    const appRow = await c.env.DB.prepare('SELECT id FROM apps WHERE id = ?')
-      .bind(appId)
-      .first<{ id: string }>();
-    if (!appRow) return c.text('unknown app', 400);
-
-    const now = Date.now();
-    const day = utcDayKey(now);
-
-    // SECURITY (#58): no mediated origin means the request did not come from
-    // the app's own origin — a direct API call, or the SDK in legacy-bearer
-    // mode, which posts straight to api.proappstore.online. Such a caller can
-    // name any app it likes, so its usage is acknowledged but NOT recorded:
-    // usage that drives creator payouts must be attributable to an app the
-    // caller is verifiably inside. Benign 200 so the SDK heartbeat never
-    // error-spams; hosted apps are on the mediated path per PAS-AUTH-001.
-    if (!mediatedApp) {
-      return c.json({ ok: true, recorded: false, reason: 'unverified-origin', day, sessionSeconds: 0, apiCalls: 0 });
-    }
-
-    // SECURITY (#58): usage drives creator payouts from the subscription pool,
-    // so only an ACTIVE PAID subscriber's usage may be recorded — otherwise
-    // anyone (incl. cheaply-created throwaway accounts) could Sybil-inflate an
-    // app's pool share or dilute a rival's. Non-subscribers get a benign ok
-    // without a write, so the SDK heartbeat doesn't error-spam.
-    const sub = await c.env.DB.prepare(
-      "SELECT 1 FROM subscriptions WHERE user_id = ? AND status = 'active'",
-    )
-      .bind(user.id)
-      .first<{ 1: number }>();
-    if (!sub) {
-      return c.json({ ok: true, recorded: false, reason: 'no-subscription', day, sessionSeconds: 0, apiCalls: 0 });
-    }
-
-    // Read the prior row up front so we can bind recorded session time to REAL
-    // elapsed wall-clock: a caller can't accrue more seconds than have actually
-    // passed since their last ping (defeats "send MAX_DELTA every request").
-    // First ping of the day (no prior row) allows up to the per-ping clamp.
-    const prior = await c.env.DB.prepare(
-      'SELECT session_seconds, api_calls, last_seen FROM usage_daily WHERE app_id = ? AND user_id = ? AND day = ?',
-    )
-      .bind(appId, user.id, day)
-      .first<{ session_seconds: number; api_calls: number; last_seen: number }>();
-
-    const requestedSeconds = clampDelta(body.deltaSeconds, MAX_DELTA_SECONDS);
-    const elapsedSeconds = prior ? Math.max(0, Math.ceil((now - Number(prior.last_seen)) / 1000)) : MAX_DELTA_SECONDS;
-    const deltaSeconds = Math.min(requestedSeconds, elapsedSeconds);
-
-    // api_calls gets the same wall-clock treatment as session time (#58): bound
-    // the reported count by what the elapsed interval could plausibly carry, so
-    // ping volume can't inflate the total. First ping of the day (no prior row)
-    // allows the per-ping clamp, mirroring deltaSeconds above.
-    const requestedApiCalls = clampDelta(body.deltaApiCalls, MAX_DELTA_API_CALLS);
-    const allowedApiCalls = prior ? elapsedSeconds * MAX_API_CALLS_PER_SECOND : MAX_DELTA_API_CALLS;
-    const deltaApiCalls = Math.min(requestedApiCalls, allowedApiCalls);
-
-    // Fail closed before updating the legacy projection: a successful heartbeat
-    // that is absent from the financial ledger would make payouts unauditable.
-    const actor = await payoutActorId(user.id, c.env.PAYOUT_METER_SALT);
-
-    // Upsert: insert a fresh row if this is the first ping for this
-    // (app, user, day), otherwise add to the existing totals.
-    await c.env.DB.prepare(
-      `INSERT INTO usage_daily (app_id, user_id, day, session_seconds, api_calls, last_seen)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-       ON CONFLICT(app_id, user_id, day) DO UPDATE SET
-         session_seconds = session_seconds + ?4,
-         api_calls = api_calls + ?5,
-         last_seen = ?6`,
-    )
-      .bind(appId, user.id, day, deltaSeconds, deltaApiCalls, now)
-      .run();
-
-    // AE is append-only. A unique event key makes every accepted heartbeat an
-    // independently auditable delta; backfilled legacy rows use deterministic
-    // keys and the payout SQL deduplicates key replays.
-    writePayoutUsagePoint(c.env.PAYOUT_METER, {
-      appId,
-      actor,
-      eventKey: `sdk:${crypto.randomUUID()}`,
-      source: 'sdk',
-      occurredAt: now,
-      sessionSeconds: deltaSeconds,
-      apiCalls: deltaApiCalls,
-    });
-
-    return c.json({
-      ok: true,
-      recorded: true,
-      day,
-      sessionSeconds: prior ? Number(prior.session_seconds) + deltaSeconds : deltaSeconds,
-      apiCalls: prior ? Number(prior.api_calls) + deltaApiCalls : deltaApiCalls,
-    });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
+  const appId = typeof body.appId === 'string' ? body.appId.trim() : '';
+  if (!appId || !APP_ID_RE.test(appId) || appId.length > APP_ID_MAX_LEN) {
+    return c.text('invalid appId', 400);
   }
-});
+
+  // SECURITY (#58): the body's `appId` is the page's word. The only claim
+  // about WHICH app a caller is actually using comes from the host's
+  // platform mediation, which strips any client copy of X-PAS-App and sets it
+  // from the resolved route (lib/app-context.ts). A mediated ping that names a
+  // different app is hostile — a subscriber redirecting their pool share onto
+  // an arbitrary app — and is refused outright.
+  const mediatedApp = c.req.header(APP_CONTEXT_HEADER);
+  if (mediatedApp && mediatedApp !== appId) {
+    return c.text('app context mismatch', 403);
+  }
+
+  // Make sure the app actually exists — otherwise a typo'd appId would
+  // silently accumulate rows that no creator owns.
+  const appRow = await c.env.DB.prepare('SELECT id FROM apps WHERE id = ?')
+    .bind(appId)
+    .first<{ id: string }>();
+  if (!appRow) return c.text('unknown app', 400);
+
+  const now = Date.now();
+  const day = utcDayKey(now);
+
+  // SECURITY (#58): no mediated origin means the request did not come from
+  // the app's own origin — a direct API call, or the SDK in legacy-bearer
+  // mode, which posts straight to api.proappstore.online. Such a caller can
+  // name any app it likes, so its usage is acknowledged but NOT recorded:
+  // usage that drives creator payouts must be attributable to an app the
+  // caller is verifiably inside. Benign 200 so the SDK heartbeat never
+  // error-spams; hosted apps are on the mediated path per PAS-AUTH-001.
+  if (!mediatedApp) {
+    return c.json({ ok: true, recorded: false, reason: 'unverified-origin', day, sessionSeconds: 0, apiCalls: 0 });
+  }
+
+  // SECURITY (#58): usage drives creator payouts from the subscription pool,
+  // so only an ACTIVE PAID subscriber's usage may be recorded — otherwise
+  // anyone (incl. cheaply-created throwaway accounts) could Sybil-inflate an
+  // app's pool share or dilute a rival's. Non-subscribers get a benign ok
+  // without a write, so the SDK heartbeat doesn't error-spam.
+  const sub = await c.env.DB.prepare(
+    "SELECT 1 FROM subscriptions WHERE user_id = ? AND status = 'active'",
+  )
+    .bind(user.id)
+    .first<{ 1: number }>();
+  if (!sub) {
+    return c.json({ ok: true, recorded: false, reason: 'no-subscription', day, sessionSeconds: 0, apiCalls: 0 });
+  }
+
+  // Read the prior row up front so we can bind recorded session time to REAL
+  // elapsed wall-clock: a caller can't accrue more seconds than have actually
+  // passed since their last ping (defeats "send MAX_DELTA every request").
+  // First ping of the day (no prior row) allows up to the per-ping clamp.
+  const prior = await c.env.DB.prepare(
+    'SELECT session_seconds, api_calls, last_seen FROM usage_daily WHERE app_id = ? AND user_id = ? AND day = ?',
+  )
+    .bind(appId, user.id, day)
+    .first<{ session_seconds: number; api_calls: number; last_seen: number }>();
+
+  const requestedSeconds = clampDelta(body.deltaSeconds, MAX_DELTA_SECONDS);
+  const elapsedSeconds = prior ? Math.max(0, Math.ceil((now - Number(prior.last_seen)) / 1000)) : MAX_DELTA_SECONDS;
+  const deltaSeconds = Math.min(requestedSeconds, elapsedSeconds);
+
+  // api_calls gets the same wall-clock treatment as session time (#58): bound
+  // the reported count by what the elapsed interval could plausibly carry, so
+  // ping volume can't inflate the total. First ping of the day (no prior row)
+  // allows the per-ping clamp, mirroring deltaSeconds above.
+  const requestedApiCalls = clampDelta(body.deltaApiCalls, MAX_DELTA_API_CALLS);
+  const allowedApiCalls = prior ? elapsedSeconds * MAX_API_CALLS_PER_SECOND : MAX_DELTA_API_CALLS;
+  const deltaApiCalls = Math.min(requestedApiCalls, allowedApiCalls);
+
+  // Fail closed before updating the legacy projection: a successful heartbeat
+  // that is absent from the financial ledger would make payouts unauditable.
+  const actor = await payoutActorId(user.id, c.env.PAYOUT_METER_SALT);
+
+  // Upsert: insert a fresh row if this is the first ping for this
+  // (app, user, day), otherwise add to the existing totals.
+  await c.env.DB.prepare(
+    `INSERT INTO usage_daily (app_id, user_id, day, session_seconds, api_calls, last_seen)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+     ON CONFLICT(app_id, user_id, day) DO UPDATE SET
+       session_seconds = session_seconds + ?4,
+       api_calls = api_calls + ?5,
+       last_seen = ?6`,
+  )
+    .bind(appId, user.id, day, deltaSeconds, deltaApiCalls, now)
+    .run();
+
+  // AE is append-only. A unique event key makes every accepted heartbeat an
+  // independently auditable delta; backfilled legacy rows use deterministic
+  // keys and the payout SQL deduplicates key replays.
+  writePayoutUsagePoint(c.env.PAYOUT_METER, {
+    appId,
+    actor,
+    eventKey: `sdk:${crypto.randomUUID()}`,
+    source: 'sdk',
+    occurredAt: now,
+    sessionSeconds: deltaSeconds,
+    apiCalls: deltaApiCalls,
+  });
+
+  return c.json({
+    ok: true,
+    recorded: true,
+    day,
+    sessionSeconds: prior ? Number(prior.session_seconds) + deltaSeconds : deltaSeconds,
+    apiCalls: prior ? Number(prior.api_calls) + deltaApiCalls : deltaApiCalls,
+  });
+}));
 
 interface AppDailyRow {
   day: string;
@@ -227,81 +222,76 @@ interface AppDailyRow {
   users: number;
 }
 
-usageRoutes.get('/apps/:id/usage', async (c) => {
-  try {
-    const appId = c.req.param('id');
-    await requireAppOwner(c, appId);
+usageRoutes.get('/apps/:id/usage', wrap(async (c) => {
+  const appId = c.req.param('id')!;
+  await requireAppOwner(c, appId);
 
-    const days = parseDaysParam(c.req.query('days'));
-    const today = utcDayKey();
-    const startDay = addDays(today, -(days - 1));
-    const window = buildDayWindow(today, days);
+  const days = parseDaysParam(c.req.query('days'));
+  const today = utcDayKey();
+  const startDay = addDays(today, -(days - 1));
+  const window = buildDayWindow(today, days);
 
-    // Per-day aggregation across all users for this app.
-    const { results } = await c.env.DB.prepare(
-      `SELECT day,
-              SUM(session_seconds) AS session_seconds,
-              SUM(api_calls) AS api_calls,
-              COUNT(DISTINCT user_id) AS users
-         FROM usage_daily
-        WHERE app_id = ?
-          AND day >= ?
-          AND day <= ?
-        GROUP BY day`,
-    )
-      .bind(appId, startDay, today)
-      .all<AppDailyRow>();
+  // Per-day aggregation across all users for this app.
+  const { results } = await c.env.DB.prepare(
+    `SELECT day,
+            SUM(session_seconds) AS session_seconds,
+            SUM(api_calls) AS api_calls,
+            COUNT(DISTINCT user_id) AS users
+       FROM usage_daily
+      WHERE app_id = ?
+        AND day >= ?
+        AND day <= ?
+      GROUP BY day`,
+  )
+    .bind(appId, startDay, today)
+    .all<AppDailyRow>();
 
-    const byDay = new Map<string, AppDailyRow>();
-    for (const r of results ?? []) {
-      byDay.set(r.day, {
-        day: r.day,
-        session_seconds: Number(r.session_seconds ?? 0),
-        api_calls: Number(r.api_calls ?? 0),
-        users: Number(r.users ?? 0),
-      });
-    }
-
-    const series = window.map((day) => {
-      const r = byDay.get(day);
-      return {
-        day,
-        sessionSeconds: r ? r.session_seconds : 0,
-        apiCalls: r ? r.api_calls : 0,
-        users: r ? r.users : 0,
-      };
+  const byDay = new Map<string, AppDailyRow>();
+  for (const r of results ?? []) {
+    byDay.set(r.day, {
+      day: r.day,
+      session_seconds: Number(r.session_seconds ?? 0),
+      api_calls: Number(r.api_calls ?? 0),
+      users: Number(r.users ?? 0),
     });
-
-    // Window-wide totals. Distinct-user count has to come from the raw rows,
-    // not summed from the per-day counts (a user active two days counts twice
-    // if we sum naively).
-    const totalsRow = await c.env.DB.prepare(
-      `SELECT COALESCE(SUM(session_seconds), 0) AS session_seconds,
-              COALESCE(SUM(api_calls), 0) AS api_calls,
-              COUNT(DISTINCT user_id) AS users
-         FROM usage_daily
-        WHERE app_id = ?
-          AND day >= ?
-          AND day <= ?`,
-    )
-      .bind(appId, startDay, today)
-      .first<{ session_seconds: number; api_calls: number; users: number }>();
-
-    return c.json({
-      appId,
-      days,
-      series,
-      totals: {
-        sessionSeconds: Number(totalsRow?.session_seconds ?? 0),
-        apiCalls: Number(totalsRow?.api_calls ?? 0),
-        users: Number(totalsRow?.users ?? 0),
-      },
-    });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
   }
-});
+
+  const series = window.map((day) => {
+    const r = byDay.get(day);
+    return {
+      day,
+      sessionSeconds: r ? r.session_seconds : 0,
+      apiCalls: r ? r.api_calls : 0,
+      users: r ? r.users : 0,
+    };
+  });
+
+  // Window-wide totals. Distinct-user count has to come from the raw rows,
+  // not summed from the per-day counts (a user active two days counts twice
+  // if we sum naively).
+  const totalsRow = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(session_seconds), 0) AS session_seconds,
+            COALESCE(SUM(api_calls), 0) AS api_calls,
+            COUNT(DISTINCT user_id) AS users
+       FROM usage_daily
+      WHERE app_id = ?
+        AND day >= ?
+        AND day <= ?`,
+  )
+    .bind(appId, startDay, today)
+    .first<{ session_seconds: number; api_calls: number; users: number }>();
+
+  return c.json({
+    appId,
+    days,
+    series,
+    totals: {
+      sessionSeconds: Number(totalsRow?.session_seconds ?? 0),
+      apiCalls: Number(totalsRow?.api_calls ?? 0),
+      users: Number(totalsRow?.users ?? 0),
+    },
+  });
+}));
 
 interface MeAppRow {
   app_id: string;
@@ -309,53 +299,48 @@ interface MeAppRow {
   api_calls: number;
 }
 
-usageRoutes.get('/usage/me', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const days = parseDaysParam(c.req.query('days'));
-    const today = utcDayKey();
-    const startDay = addDays(today, -(days - 1));
+usageRoutes.get('/usage/me', wrap(async (c) => {
+  const user = await requireUser(c);
+  const days = parseDaysParam(c.req.query('days'));
+  const today = utcDayKey();
+  const startDay = addDays(today, -(days - 1));
 
-    const { results } = await c.env.DB.prepare(
-      `SELECT app_id,
-              SUM(session_seconds) AS session_seconds,
-              SUM(api_calls) AS api_calls
-         FROM usage_daily
-        WHERE user_id = ?
-          AND day >= ?
-          AND day <= ?
-        GROUP BY app_id
-        ORDER BY app_id`,
-    )
-      .bind(user.id, startDay, today)
-      .all<MeAppRow>();
+  const { results } = await c.env.DB.prepare(
+    `SELECT app_id,
+            SUM(session_seconds) AS session_seconds,
+            SUM(api_calls) AS api_calls
+       FROM usage_daily
+      WHERE user_id = ?
+        AND day >= ?
+        AND day <= ?
+      GROUP BY app_id
+      ORDER BY app_id`,
+  )
+    .bind(user.id, startDay, today)
+    .all<MeAppRow>();
 
-    const perApp = (results ?? []).map((r) => ({
-      appId: r.app_id,
-      sessionSeconds: Number(r.session_seconds ?? 0),
-      apiCalls: Number(r.api_calls ?? 0),
-    }));
+  const perApp = (results ?? []).map((r) => ({
+    appId: r.app_id,
+    sessionSeconds: Number(r.session_seconds ?? 0),
+    apiCalls: Number(r.api_calls ?? 0),
+  }));
 
-    const totals = perApp.reduce(
-      (acc, r) => {
-        acc.sessionSeconds += r.sessionSeconds;
-        acc.apiCalls += r.apiCalls;
-        return acc;
-      },
-      { sessionSeconds: 0, apiCalls: 0 },
-    );
+  const totals = perApp.reduce(
+    (acc, r) => {
+      acc.sessionSeconds += r.sessionSeconds;
+      acc.apiCalls += r.apiCalls;
+      return acc;
+    },
+    { sessionSeconds: 0, apiCalls: 0 },
+  );
 
-    return c.json({
-      userId: user.id,
-      days,
-      perApp,
-      totals,
-    });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
+  return c.json({
+    userId: user.id,
+    days,
+    perApp,
+    totals,
+  });
+}));
 
 interface OwnerSummaryRow {
   active_users: number | null;
@@ -369,44 +354,39 @@ interface OwnerSummaryRow {
  * aggregate over their ids) — short-circuits to zeros when the caller owns
  * no apps so the empty-state load is cheap.
  */
-usageRoutes.get('/usage/owner-summary', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const days = parseDaysParam(c.req.query('days'));
-    const today = utcDayKey();
-    const startDay = addDays(today, -(days - 1));
+usageRoutes.get('/usage/owner-summary', wrap(async (c) => {
+  const user = await requireUser(c);
+  const days = parseDaysParam(c.req.query('days'));
+  const today = utcDayKey();
+  const startDay = addDays(today, -(days - 1));
 
-    const ownedApps = await c.env.DB.prepare('SELECT id FROM apps WHERE creator_id = ?')
-      .bind(user.id)
-      .all<{ id: string }>();
-    const appIds = (ownedApps.results ?? []).map((r) => r.id);
+  const ownedApps = await c.env.DB.prepare('SELECT id FROM apps WHERE creator_id = ?')
+    .bind(user.id)
+    .all<{ id: string }>();
+  const appIds = (ownedApps.results ?? []).map((r) => r.id);
 
-    if (appIds.length === 0) {
-      return c.json({ days, appCount: 0, activeUsers: 0, sessionSeconds: 0, apiCalls: 0 });
-    }
-
-    const placeholders = appIds.map(() => '?').join(', ');
-    const summary = await c.env.DB.prepare(
-      `SELECT COUNT(DISTINCT user_id) AS active_users,
-              COALESCE(SUM(session_seconds), 0) AS session_seconds,
-              COALESCE(SUM(api_calls), 0) AS api_calls
-         FROM usage_daily
-        WHERE app_id IN (${placeholders})
-          AND day >= ?
-          AND day <= ?`,
-    )
-      .bind(...appIds, startDay, today)
-      .first<OwnerSummaryRow>();
-
-    return c.json({
-      days,
-      appCount: appIds.length,
-      activeUsers: Number(summary?.active_users ?? 0),
-      sessionSeconds: Number(summary?.session_seconds ?? 0),
-      apiCalls: Number(summary?.api_calls ?? 0),
-    });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
+  if (appIds.length === 0) {
+    return c.json({ days, appCount: 0, activeUsers: 0, sessionSeconds: 0, apiCalls: 0 });
   }
-});
+
+  const placeholders = appIds.map(() => '?').join(', ');
+  const summary = await c.env.DB.prepare(
+    `SELECT COUNT(DISTINCT user_id) AS active_users,
+            COALESCE(SUM(session_seconds), 0) AS session_seconds,
+            COALESCE(SUM(api_calls), 0) AS api_calls
+       FROM usage_daily
+      WHERE app_id IN (${placeholders})
+        AND day >= ?
+        AND day <= ?`,
+  )
+    .bind(...appIds, startDay, today)
+    .first<OwnerSummaryRow>();
+
+  return c.json({
+    days,
+    appCount: appIds.length,
+    activeUsers: Number(summary?.active_users ?? 0),
+    sessionSeconds: Number(summary?.session_seconds ?? 0),
+    apiCalls: Number(summary?.api_calls ?? 0),
+  });
+}));

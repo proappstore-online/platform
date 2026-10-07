@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
-import { requireUser, HttpError } from '../lib/auth.js';
+import { requireUser } from '../lib/auth.js';
+import { wrap } from '../lib/route-wrap.js';
 
 export const smsRoutes = new Hono<{ Bindings: Env }>();
 
@@ -26,70 +26,65 @@ interface SmsSendResult {
  * Numbers must be in E.164 format. The Worker proxies to Twilio's REST API.
  * Twilio credentials live in env and are never exposed to the client.
  */
-smsRoutes.post('/sms/send', async (c) => {
-  try {
-    const user = await requireUser(c);
+smsRoutes.post('/sms/send', wrap(async (c) => {
+  const user = await requireUser(c);
 
-    if (!c.env.TWILIO_ACCOUNT_SID || !c.env.TWILIO_AUTH_TOKEN || !c.env.TWILIO_FROM_NUMBER) {
-      return c.text('SMS not configured', 503);
-    }
-
-    const { appId, to, message } = await c.req.json<{
-      appId: string;
-      to: string | string[];
-      message: string;
-    }>();
-
-    if (!appId || !to || !message) {
-      return c.text('missing required fields: appId, to, message', 400);
-    }
-
-    const numbers = Array.isArray(to) ? to : [to];
-    if (numbers.length === 0) return c.text('to must include at least one number', 400);
-    if (numbers.length > 20) return c.text('max 20 recipients per request', 400);
-    for (const n of numbers) {
-      if (!isE164(n)) return c.text(`invalid E.164 number: ${n}`, 400);
-    }
-
-    // Daily rate limit: 100 SMS per app per day
-    const dayStart = new Date();
-    dayStart.setUTCHours(0, 0, 0, 0);
-    const countRow = await c.env.DB.prepare(
-      'SELECT COUNT(*) AS cnt FROM sms_usage WHERE app_id = ? AND sent_at >= ?',
-    ).bind(appId, dayStart.getTime()).first<{ cnt: number }>();
-    if ((countRow?.cnt ?? 0) + numbers.length > 100) {
-      return c.text('daily SMS limit reached (100/day per app)', 429);
-    }
-
-    const app = await c.env.DB
-      .prepare('SELECT creator_id FROM apps WHERE id = ?1')
-      .bind(appId)
-      .first<{ creator_id: string }>();
-    if (!app || app.creator_id !== user.id) {
-      return c.text('only the app creator can send SMS', 403);
-    }
-
-    const cfg: TwilioConfig = {
-      accountSid: c.env.TWILIO_ACCOUNT_SID,
-      authToken: c.env.TWILIO_AUTH_TOKEN,
-      from: c.env.TWILIO_FROM_NUMBER,
-    };
-
-    const result = await sendViaTwilio(cfg, numbers, message);
-
-    // Log SMS usage for rate limiting
-    if (result.sent > 0) {
-      const now = Date.now();
-      const stmt = c.env.DB.prepare('INSERT INTO sms_usage (app_id, sent_at) VALUES (?, ?)');
-      await c.env.DB.batch(Array.from({ length: result.sent }, () => stmt.bind(appId, now)));
-    }
-
-    return c.json(result satisfies SmsSendResult);
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
+  if (!c.env.TWILIO_ACCOUNT_SID || !c.env.TWILIO_AUTH_TOKEN || !c.env.TWILIO_FROM_NUMBER) {
+    return c.text('SMS not configured', 503);
   }
-});
+
+  const { appId, to, message } = await c.req.json<{
+    appId: string;
+    to: string | string[];
+    message: string;
+  }>();
+
+  if (!appId || !to || !message) {
+    return c.text('missing required fields: appId, to, message', 400);
+  }
+
+  const numbers = Array.isArray(to) ? to : [to];
+  if (numbers.length === 0) return c.text('to must include at least one number', 400);
+  if (numbers.length > 20) return c.text('max 20 recipients per request', 400);
+  for (const n of numbers) {
+    if (!isE164(n)) return c.text(`invalid E.164 number: ${n}`, 400);
+  }
+
+  // Daily rate limit: 100 SMS per app per day
+  const dayStart = new Date();
+  dayStart.setUTCHours(0, 0, 0, 0);
+  const countRow = await c.env.DB.prepare(
+    'SELECT COUNT(*) AS cnt FROM sms_usage WHERE app_id = ? AND sent_at >= ?',
+  ).bind(appId, dayStart.getTime()).first<{ cnt: number }>();
+  if ((countRow?.cnt ?? 0) + numbers.length > 100) {
+    return c.text('daily SMS limit reached (100/day per app)', 429);
+  }
+
+  const app = await c.env.DB
+    .prepare('SELECT creator_id FROM apps WHERE id = ?1')
+    .bind(appId)
+    .first<{ creator_id: string }>();
+  if (!app || app.creator_id !== user.id) {
+    return c.text('only the app creator can send SMS', 403);
+  }
+
+  const cfg: TwilioConfig = {
+    accountSid: c.env.TWILIO_ACCOUNT_SID,
+    authToken: c.env.TWILIO_AUTH_TOKEN,
+    from: c.env.TWILIO_FROM_NUMBER,
+  };
+
+  const result = await sendViaTwilio(cfg, numbers, message);
+
+  // Log SMS usage for rate limiting
+  if (result.sent > 0) {
+    const now = Date.now();
+    const stmt = c.env.DB.prepare('INSERT INTO sms_usage (app_id, sent_at) VALUES (?, ?)');
+    await c.env.DB.batch(Array.from({ length: result.sent }, () => stmt.bind(appId, now)));
+  }
+
+  return c.json(result satisfies SmsSendResult);
+}));
 
 async function sendViaTwilio(
   cfg: TwilioConfig,
