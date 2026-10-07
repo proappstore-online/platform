@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
+import { wrap } from '../lib/route-wrap.js';
 import { Stripe } from '../lib/stripe.js';
 
 /**
@@ -122,54 +123,49 @@ connectRoutes.post('/connect/onboard', async (c) => {
   }
 });
 
-connectRoutes.get('/connect/status', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const row = await c.env.DB.prepare('SELECT * FROM creator_payouts WHERE creator_id = ?')
-      .bind(user.id)
-      .first<CreatorPayoutsRow>();
+connectRoutes.get('/connect/status', wrap(async (c) => {
+  const user = await requireUser(c);
+  const row = await c.env.DB.prepare('SELECT * FROM creator_payouts WHERE creator_id = ?')
+    .bind(user.id)
+    .first<CreatorPayoutsRow>();
 
-    if (!row) {
-      return c.json({ connected: false });
-    }
-
-    // Refresh from Stripe so the Console doesn't show stale flags after the
-    // creator returns from hosted onboarding.
-    if (c.env.STRIPE_SECRET_KEY) {
-      try {
-        const stripe = new Stripe(c.env.STRIPE_SECRET_KEY);
-        const account = await stripe.getAccount(row.stripe_connect_account_id);
-        const next: CreatorPayoutsRow = {
-          ...row,
-          charges_enabled: account.charges_enabled ? 1 : 0,
-          payouts_enabled: account.payouts_enabled ? 1 : 0,
-          details_submitted: account.details_submitted ? 1 : 0,
-          country: account.country ?? row.country,
-          updated_at: Date.now(),
-        };
-        await c.env.DB.prepare(
-          `UPDATE creator_payouts
-              SET charges_enabled = ?, payouts_enabled = ?, details_submitted = ?, country = ?, updated_at = ?
-            WHERE creator_id = ?`,
-        )
-          .bind(
-            next.charges_enabled,
-            next.payouts_enabled,
-            next.details_submitted,
-            next.country,
-            next.updated_at,
-            user.id,
-          )
-          .run();
-        return c.json(statusDto(next));
-      } catch {
-        // Stripe API hiccup — fall through to the cached row.
-      }
-    }
-
-    return c.json(statusDto(row));
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
+  if (!row) {
+    return c.json({ connected: false });
   }
-});
+
+  // Refresh from Stripe so the Console doesn't show stale flags after the
+  // creator returns from hosted onboarding.
+  if (c.env.STRIPE_SECRET_KEY) {
+    try {
+      const stripe = new Stripe(c.env.STRIPE_SECRET_KEY);
+      const account = await stripe.getAccount(row.stripe_connect_account_id);
+      const next: CreatorPayoutsRow = {
+        ...row,
+        charges_enabled: account.charges_enabled ? 1 : 0,
+        payouts_enabled: account.payouts_enabled ? 1 : 0,
+        details_submitted: account.details_submitted ? 1 : 0,
+        country: account.country ?? row.country,
+        updated_at: Date.now(),
+      };
+      await c.env.DB.prepare(
+        `UPDATE creator_payouts
+            SET charges_enabled = ?, payouts_enabled = ?, details_submitted = ?, country = ?, updated_at = ?
+          WHERE creator_id = ?`,
+      )
+        .bind(
+          next.charges_enabled,
+          next.payouts_enabled,
+          next.details_submitted,
+          next.country,
+          next.updated_at,
+          user.id,
+        )
+        .run();
+      return c.json(statusDto(next));
+    } catch {
+      // Stripe API hiccup — fall through to the cached row.
+    }
+  }
+
+  return c.json(statusDto(row));
+}));

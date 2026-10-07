@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { requireUser, requireAppAccess, HttpError, TEAM_ROLES, type FasUser } from '../lib/auth.js';
+import { wrap } from '../lib/route-wrap.js';
 import { roleSubjects } from '../lib/role-subject.js';
 import { generateQrSvg } from '../lib/qr.js';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 export const inviteRoutes = new Hono<{ Bindings: Env }>();
 
@@ -116,129 +116,114 @@ async function canDelegateRoleToGroup(
  * Create an invite. Team developers have app-wide access; configured delegates
  * require both their app role policy and a grant for the requested group.
  */
-inviteRoutes.post('/apps/:appId/invites', async (c) => {
-  try {
-    const appId = c.req.param('appId');
-    const access = await inviteAccess(c, appId);
-    const user = access.user;
+inviteRoutes.post('/apps/:appId/invites', wrap(async (c) => {
+  const appId = c.req.param('appId')!;
+  const access = await inviteAccess(c, appId);
+  const user = access.user;
 
-    const body = await c.req.json<CreateBody>().catch(() => ({} as CreateBody));
-    const role = body.role ?? 'member';
-    const group = body.group ?? null;
-    const metadata = body.metadata ? JSON.stringify(body.metadata) : null;
-    const maxUses = body.uses ?? 1;
-    const expiresIn = body.expiresIn ?? '7d';
+  const body = await c.req.json<CreateBody>().catch(() => ({} as CreateBody));
+  const role = body.role ?? 'member';
+  const group = body.group ?? null;
+  const metadata = body.metadata ? JSON.stringify(body.metadata) : null;
+  const maxUses = body.uses ?? 1;
+  const expiresIn = body.expiresIn ?? '7d';
 
-    if (maxUses < 1 || maxUses > 10000) {
-      return c.json({ error: 'uses must be between 1 and 10000' }, 400);
-    }
-    // Same role-name shape the direct-assignment endpoint enforces.
-    if (!ROLE_NAME.test(role)) {
-      return c.json(
-        { error: 'role must be lowercase alphanumeric with hyphens/underscores, 1-50 chars' },
-        400,
-      );
-    }
-    if (role === 'owner') {
-      return c.json({ error: "cannot invite with 'owner' role" }, 400);
-    }
-    if (access.kind === 'team') {
-      // Existing team-role escalation guard remains unchanged for the build
-      // authority. Data-role delegates use explicit policy mappings below.
-      const invitedRank = TEAM_ROLES.indexOf(role as (typeof TEAM_ROLES)[number]);
-      if (invitedRank > TEAM_ROLES.indexOf(access.user.teamRole)) {
-        return c.json({ error: `cannot invite with a role above your own (${access.user.teamRole})` }, 403);
-      }
-    } else {
-      if (!validGroup(group)) {
-        return c.json({ error: 'delegated invites require a non-empty group' }, 400);
-      }
-      if (!await canDelegateRoleToGroup(c.env, appId, user, group, role)) {
-        return c.json({ error: 'not allowed to invite this role for this group' }, 403);
-      }
-    }
-
-    const id = crypto.randomUUID();
-    const code = generateCode();
-    const expiresAt = Date.now() + parseDuration(expiresIn);
-
-    await c.env.DB.prepare(
-      `INSERT INTO invites (id, app_id, code, role, group_id, metadata, max_uses, used_count, expires_at, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
-    ).bind(id, appId, code, role, group, metadata, maxUses, expiresAt, user.id, Date.now()).run();
-
-    const link = `https://${appId}.proappstore.online/join/${code}`;
-    const qr = generateQrSvg(link);
-
-    return c.json({ id, code, link, qr, role, group, maxUses, usedCount: 0, expiresAt });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
+  if (maxUses < 1 || maxUses > 10000) {
+    return c.json({ error: 'uses must be between 1 and 10000' }, 400);
   }
-});
+  // Same role-name shape the direct-assignment endpoint enforces.
+  if (!ROLE_NAME.test(role)) {
+    return c.json(
+      { error: 'role must be lowercase alphanumeric with hyphens/underscores, 1-50 chars' },
+      400,
+    );
+  }
+  if (role === 'owner') {
+    return c.json({ error: "cannot invite with 'owner' role" }, 400);
+  }
+  if (access.kind === 'team') {
+    // Existing team-role escalation guard remains unchanged for the build
+    // authority. Data-role delegates use explicit policy mappings below.
+    const invitedRank = TEAM_ROLES.indexOf(role as (typeof TEAM_ROLES)[number]);
+    if (invitedRank > TEAM_ROLES.indexOf(access.user.teamRole)) {
+      return c.json({ error: `cannot invite with a role above your own (${access.user.teamRole})` }, 403);
+    }
+  } else {
+    if (!validGroup(group)) {
+      return c.json({ error: 'delegated invites require a non-empty group' }, 400);
+    }
+    if (!await canDelegateRoleToGroup(c.env, appId, user, group, role)) {
+      return c.json({ error: 'not allowed to invite this role for this group' }, 403);
+    }
+  }
+
+  const id = crypto.randomUUID();
+  const code = generateCode();
+  const expiresAt = Date.now() + parseDuration(expiresIn);
+
+  await c.env.DB.prepare(
+    `INSERT INTO invites (id, app_id, code, role, group_id, metadata, max_uses, used_count, expires_at, created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+  ).bind(id, appId, code, role, group, metadata, maxUses, expiresAt, user.id, Date.now()).run();
+
+  const link = `https://${appId}.proappstore.online/join/${code}`;
+  const qr = generateQrSvg(link);
+
+  return c.json({ id, code, link, qr, role, group, maxUses, usedCount: 0, expiresAt });
+}));
 
 /**
  * List invites. Delegates see only their explicitly administered groups.
  */
-inviteRoutes.get('/apps/:appId/invites', async (c) => {
-  try {
-    const appId = c.req.param('appId');
-    const access = await inviteAccess(c, appId);
+inviteRoutes.get('/apps/:appId/invites', wrap(async (c) => {
+  const appId = c.req.param('appId')!;
+  const access = await inviteAccess(c, appId);
 
-    if (access.kind === 'delegated') {
-      const groups = await delegatedGroups(c.env, appId, access.user);
-      if (!groups.length) return c.json({ invites: [] });
-      const placeholders = groups.map(() => '?').join(', ');
-      const { results } = await c.env.DB.prepare(
-        `SELECT id, code, role, group_id, metadata, max_uses, used_count, expires_at, created_by, created_at
-           FROM invites WHERE app_id = ? AND group_id IN (${placeholders}) ORDER BY created_at DESC`,
-      ).bind(appId, ...groups).all<InviteRow>();
-      return c.json({ invites: inviteList(appId, results ?? []) });
-    }
-
+  if (access.kind === 'delegated') {
+    const groups = await delegatedGroups(c.env, appId, access.user);
+    if (!groups.length) return c.json({ invites: [] });
+    const placeholders = groups.map(() => '?').join(', ');
     const { results } = await c.env.DB.prepare(
       `SELECT id, code, role, group_id, metadata, max_uses, used_count, expires_at, created_by, created_at
-       FROM invites WHERE app_id = ? ORDER BY created_at DESC`,
-    ).bind(appId).all<InviteRow>();
-
+         FROM invites WHERE app_id = ? AND group_id IN (${placeholders}) ORDER BY created_at DESC`,
+    ).bind(appId, ...groups).all<InviteRow>();
     return c.json({ invites: inviteList(appId, results ?? []) });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
   }
-});
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, code, role, group_id, metadata, max_uses, used_count, expires_at, created_by, created_at
+     FROM invites WHERE app_id = ? ORDER BY created_at DESC`,
+  ).bind(appId).all<InviteRow>();
+
+  return c.json({ invites: inviteList(appId, results ?? []) });
+}));
 
 /**
  * Revoke an invite. Delegates may revoke only within an administered group.
  */
-inviteRoutes.delete('/apps/:appId/invites/:inviteId', async (c) => {
-  try {
-    const appId = c.req.param('appId');
-    const inviteId = c.req.param('inviteId');
-    const access = await inviteAccess(c, appId);
+inviteRoutes.delete('/apps/:appId/invites/:inviteId', wrap(async (c) => {
+  const appId = c.req.param('appId')!;
+  const inviteId = c.req.param('inviteId')!;
+  const access = await inviteAccess(c, appId);
 
-    if (access.kind === 'delegated') {
-      const groups = await delegatedGroups(c.env, appId, access.user);
-      if (!groups.length) return c.json({ error: 'invite not found' }, 404);
-      const placeholders = groups.map(() => '?').join(', ');
-      const result = await c.env.DB.prepare(
-        `DELETE FROM invites WHERE id = ? AND app_id = ? AND group_id IN (${placeholders})`,
-      ).bind(inviteId, appId, ...groups).run();
-      if (!result.meta.changes) return c.json({ error: 'invite not found' }, 404);
-      return c.json({ ok: true });
-    }
-
+  if (access.kind === 'delegated') {
+    const groups = await delegatedGroups(c.env, appId, access.user);
+    if (!groups.length) return c.json({ error: 'invite not found' }, 404);
+    const placeholders = groups.map(() => '?').join(', ');
     const result = await c.env.DB.prepare(
-      'DELETE FROM invites WHERE id = ? AND app_id = ?',
-    ).bind(inviteId, appId).run();
-
+      `DELETE FROM invites WHERE id = ? AND app_id = ? AND group_id IN (${placeholders})`,
+    ).bind(inviteId, appId, ...groups).run();
     if (!result.meta.changes) return c.json({ error: 'invite not found' }, 404);
     return c.json({ ok: true });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
   }
-});
+
+  const result = await c.env.DB.prepare(
+    'DELETE FROM invites WHERE id = ? AND app_id = ?',
+  ).bind(inviteId, appId).run();
+
+  if (!result.meta.changes) return c.json({ error: 'invite not found' }, 404);
+  return c.json({ ok: true });
+}));
 
 /** Team-admin APIs for the platform-owned delegated-invite policy. */
 inviteRoutes.get('/apps/:appId/invite-policies', async (c) => {
@@ -330,61 +315,56 @@ inviteRoutes.delete('/apps/:appId/group-admin-grants', async (c) => {
  * Validates the code, increments used_count, assigns the role in PAS D1.
  * Optional body `{ appId }` scopes the code to that app (the host's invite page).
  */
-inviteRoutes.post('/invites/:code/redeem', async (c) => {
-  try {
-    const code = c.req.param('code').toUpperCase();
-    const user = await requireUser(c);
+inviteRoutes.post('/invites/:code/redeem', wrap(async (c) => {
+  const code = c.req.param('code')!.toUpperCase();
+  const user = await requireUser(c);
 
-    const invite = await c.env.DB.prepare(
-      'SELECT id, app_id, code, role, group_id, metadata, max_uses, used_count, expires_at FROM invites WHERE code = ?',
-    ).bind(code).first<{
-      id: string; app_id: string; code: string; role: string;
-      group_id: string | null; metadata: string | null;
-      max_uses: number; used_count: number; expires_at: number;
-    }>();
+  const invite = await c.env.DB.prepare(
+    'SELECT id, app_id, code, role, group_id, metadata, max_uses, used_count, expires_at FROM invites WHERE code = ?',
+  ).bind(code).first<{
+    id: string; app_id: string; code: string; role: string;
+    group_id: string | null; metadata: string | null;
+    max_uses: number; used_count: number; expires_at: number;
+  }>();
 
-    // #259: the platform invite page on an app origin names its app, so a code
-    // minted for another app cannot be redeemed there (answered as not found).
-    const scope = (await c.req.json<{ appId?: unknown }>().catch(() => ({}))) as { appId?: unknown };
-    if (!invite || (typeof scope.appId === 'string' && scope.appId !== invite.app_id)) {
-      return c.json({ error: 'invite not found' }, 404);
-    }
-    if (invite.expires_at < Date.now()) return c.json({ error: 'invite expired' }, 410);
-    if (invite.used_count >= invite.max_uses) return c.json({ error: 'invite fully used' }, 410);
-
-    // Backward-compatible idempotency for redemptions made before migration
-    // 0054, followed by the durable per-invite redemption key introduced there.
-    const alreadyRedeemed = await c.env.DB.prepare(
-      `SELECT 1 FROM invite_redemptions WHERE invite_id = ? AND user_id = ?
-       UNION ALL
-       SELECT 1 FROM app_roles WHERE app_id = ? AND user_id = ? AND role_name = ? AND granted_by = ?
-       LIMIT 1`,
-    ).bind(invite.id, user.id, invite.app_id, user.id, invite.role, `invite:${invite.id}`).first();
-    if (alreadyRedeemed) {
-      return c.json({ ok: true, role: invite.role, group: invite.group_id, alreadyRedeemed: true });
-    }
-
-    // One conditional INSERT starts the transaction. Migration 0054's triggers
-    // increment the use count and grant the role atomically with this row.
-    const redeemed = await c.env.DB.prepare(
-      `INSERT OR IGNORE INTO invite_redemptions (invite_id, user_id, redeemed_at)
-       SELECT id, ?, ? FROM invites
-        WHERE id = ? AND expires_at >= ? AND used_count < max_uses`,
-    ).bind(user.id, Date.now(), invite.id, Date.now()).run();
-    if (!redeemed.meta.changes) return c.json({ error: 'invite no longer available' }, 410);
-
-    return c.json({
-      ok: true,
-      role: invite.role,
-      group: invite.group_id,
-      metadata: invite.metadata ? JSON.parse(invite.metadata) : null,
-      appId: invite.app_id,
-    });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
+  // #259: the platform invite page on an app origin names its app, so a code
+  // minted for another app cannot be redeemed there (answered as not found).
+  const scope = (await c.req.json<{ appId?: unknown }>().catch(() => ({}))) as { appId?: unknown };
+  if (!invite || (typeof scope.appId === 'string' && scope.appId !== invite.app_id)) {
+    return c.json({ error: 'invite not found' }, 404);
   }
-});
+  if (invite.expires_at < Date.now()) return c.json({ error: 'invite expired' }, 410);
+  if (invite.used_count >= invite.max_uses) return c.json({ error: 'invite fully used' }, 410);
+
+  // Backward-compatible idempotency for redemptions made before migration
+  // 0054, followed by the durable per-invite redemption key introduced there.
+  const alreadyRedeemed = await c.env.DB.prepare(
+    `SELECT 1 FROM invite_redemptions WHERE invite_id = ? AND user_id = ?
+     UNION ALL
+     SELECT 1 FROM app_roles WHERE app_id = ? AND user_id = ? AND role_name = ? AND granted_by = ?
+     LIMIT 1`,
+  ).bind(invite.id, user.id, invite.app_id, user.id, invite.role, `invite:${invite.id}`).first();
+  if (alreadyRedeemed) {
+    return c.json({ ok: true, role: invite.role, group: invite.group_id, alreadyRedeemed: true });
+  }
+
+  // One conditional INSERT starts the transaction. Migration 0054's triggers
+  // increment the use count and grant the role atomically with this row.
+  const redeemed = await c.env.DB.prepare(
+    `INSERT OR IGNORE INTO invite_redemptions (invite_id, user_id, redeemed_at)
+     SELECT id, ?, ? FROM invites
+      WHERE id = ? AND expires_at >= ? AND used_count < max_uses`,
+  ).bind(user.id, Date.now(), invite.id, Date.now()).run();
+  if (!redeemed.meta.changes) return c.json({ error: 'invite no longer available' }, 410);
+
+  return c.json({
+    ok: true,
+    role: invite.role,
+    group: invite.group_id,
+    metadata: invite.metadata ? JSON.parse(invite.metadata) : null,
+    appId: invite.app_id,
+  });
+}));
 
 interface InviteRow {
   id: string; app_id: string; code: string; role: string; group_id: string | null;

@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
+import { wrap } from '../lib/route-wrap.js';
 import { internalTokenOk } from '@proappstore/build-core';
 import { Stripe } from '../lib/stripe.js';
 import { auditModeration, moderateText } from '../lib/moderation.js';
@@ -130,196 +131,171 @@ servicesRoutes.get('/services/developers/:id', async (c) => {
 });
 
 // Auth: get own dev profile (returns null fields if not yet created)
-servicesRoutes.get('/services/profile', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const row = await c.env.DB.prepare('SELECT * FROM dev_profiles WHERE creator_id = ?')
-      .bind(user.id).first<DevProfileRow>();
-    if (!row) return c.json({ exists: false });
-    return c.json({ exists: true, ...profileDto(row) });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
+servicesRoutes.get('/services/profile', wrap(async (c) => {
+  const user = await requireUser(c);
+  const row = await c.env.DB.prepare('SELECT * FROM dev_profiles WHERE creator_id = ?')
+    .bind(user.id).first<DevProfileRow>();
+  if (!row) return c.json({ exists: false });
+  return c.json({ exists: true, ...profileDto(row) });
+}));
 
 // Auth: create or update own dev profile
-servicesRoutes.put('/services/profile', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const body = await c.req.json<{
-      promptRateCents?: number;
-      bioServices?: string;
-      available?: boolean;
-    }>();
+servicesRoutes.put('/services/profile', wrap(async (c) => {
+  const user = await requireUser(c);
+  const body = await c.req.json<{
+    promptRateCents?: number;
+    bioServices?: string;
+    available?: boolean;
+  }>();
 
-    const rate = Math.round(body.promptRateCents ?? 100);
-    if (!Number.isFinite(rate) || rate < 10 || rate > 5000) return c.json({ error: 'promptRateCents must be an integer 10-5000' }, 400);
-    if (body.bioServices && body.bioServices.length > 2000) return c.json({ error: 'bioServices too long (max 2000)' }, 400);
+  const rate = Math.round(body.promptRateCents ?? 100);
+  if (!Number.isFinite(rate) || rate < 10 || rate > 5000) return c.json({ error: 'promptRateCents must be an integer 10-5000' }, 400);
+  if (body.bioServices && body.bioServices.length > 2000) return c.json({ error: 'bioServices too long (max 2000)' }, 400);
 
-    // #217: the bio is public (GET /services/developers, searchable). Moderate it
-    // only when it changes to a new non-empty value; rate/availability updates
-    // never call the model. Fail closed; nothing is written on refusal.
-    if (body.bioServices?.trim()) {
-      const current = await c.env.DB.prepare('SELECT bio_services FROM dev_profiles WHERE creator_id = ?')
-        .bind(user.id).first<{ bio_services: string | null }>();
-      if (body.bioServices !== (current?.bio_services ?? null)) {
-        // #218: bound moderation model calls per user.
-        if (!(await withinModerationRate(c.env, user.id))) {
-          return c.json({ error: 'moderation_rate_limited', message: 'too many moderated submissions: try again in a minute' }, 429, { 'Retry-After': '60' });
-        }
-        const moderation = await moderateText(c.env.AI, body.bioServices);
-        auditModeration('dev_profile_moderation', { actor: user.id }, moderation);
-        if (moderation.verdict === 'unsafe') {
-          return c.json({ error: 'bio rejected by content moderation', categories: moderation.categories }, 422);
-        }
-        if (moderation.verdict === 'error') {
-          return c.text('content moderation is unavailable; try again shortly', 503, { 'Retry-After': '5' });
-        }
+  // #217: the bio is public (GET /services/developers, searchable). Moderate it
+  // only when it changes to a new non-empty value; rate/availability updates
+  // never call the model. Fail closed; nothing is written on refusal.
+  if (body.bioServices?.trim()) {
+    const current = await c.env.DB.prepare('SELECT bio_services FROM dev_profiles WHERE creator_id = ?')
+      .bind(user.id).first<{ bio_services: string | null }>();
+    if (body.bioServices !== (current?.bio_services ?? null)) {
+      // #218: bound moderation model calls per user.
+      if (!(await withinModerationRate(c.env, user.id))) {
+        return c.json({ error: 'moderation_rate_limited', message: 'too many moderated submissions: try again in a minute' }, 429, { 'Retry-After': '60' });
+      }
+      const moderation = await moderateText(c.env.AI, body.bioServices);
+      auditModeration('dev_profile_moderation', { actor: user.id }, moderation);
+      if (moderation.verdict === 'unsafe') {
+        return c.json({ error: 'bio rejected by content moderation', categories: moderation.categories }, 422);
+      }
+      if (moderation.verdict === 'error') {
+        return c.text('content moderation is unavailable; try again shortly', 503, { 'Retry-After': '5' });
       }
     }
-
-    const now = Date.now();
-    await c.env.DB.prepare(
-      `INSERT INTO dev_profiles (creator_id, prompt_rate_cents, bio_services, available, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(creator_id) DO UPDATE SET
-         prompt_rate_cents = excluded.prompt_rate_cents,
-         bio_services = excluded.bio_services,
-         available = excluded.available,
-         updated_at = excluded.updated_at`,
-    ).bind(
-      user.id,
-      rate,
-      body.bioServices ?? null,
-      body.available !== false ? 1 : 0,
-      now,
-      now,
-    ).run();
-
-    const row = await c.env.DB.prepare('SELECT * FROM dev_profiles WHERE creator_id = ?')
-      .bind(user.id).first<DevProfileRow>();
-    return c.json(profileDto(row!));
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
   }
-});
+
+  const now = Date.now();
+  await c.env.DB.prepare(
+    `INSERT INTO dev_profiles (creator_id, prompt_rate_cents, bio_services, available, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(creator_id) DO UPDATE SET
+       prompt_rate_cents = excluded.prompt_rate_cents,
+       bio_services = excluded.bio_services,
+       available = excluded.available,
+       updated_at = excluded.updated_at`,
+  ).bind(
+    user.id,
+    rate,
+    body.bioServices ?? null,
+    body.available !== false ? 1 : 0,
+    now,
+    now,
+  ).run();
+
+  const row = await c.env.DB.prepare('SELECT * FROM dev_profiles WHERE creator_id = ?')
+    .bind(user.id).first<DevProfileRow>();
+  return c.json(profileDto(row!));
+}));
 
 // Auth: toggle availability
-servicesRoutes.patch('/services/profile/availability', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const body = await c.req.json<{ available: boolean }>();
+servicesRoutes.patch('/services/profile/availability', wrap(async (c) => {
+  const user = await requireUser(c);
+  const body = await c.req.json<{ available: boolean }>();
 
-    const result = await c.env.DB.prepare(
-      'UPDATE dev_profiles SET available = ?, updated_at = ? WHERE creator_id = ?',
-    ).bind(body.available ? 1 : 0, Date.now(), user.id).run();
+  const result = await c.env.DB.prepare(
+    'UPDATE dev_profiles SET available = ?, updated_at = ? WHERE creator_id = ?',
+  ).bind(body.available ? 1 : 0, Date.now(), user.id).run();
 
-    if (!result.meta.changes) return c.json({ error: 'profile not found — create one first' }, 404);
-    return c.json({ available: body.available });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
+  if (!result.meta.changes) return c.json({ error: 'profile not found — create one first' }, 404);
+  return c.json({ available: body.available });
+}));
 
 // ── Developer earnings ──────────────────────────────────────
 
 // Auth: earnings breakdown for the developer
-servicesRoutes.get('/services/earnings', async (c) => {
-  try {
-    const user = await requireUser(c);
+servicesRoutes.get('/services/earnings', wrap(async (c) => {
+  const user = await requireUser(c);
 
-    // Total earnings across all engagements
-    const totals = await c.env.DB.prepare(
-      `SELECT
-         COUNT(*) AS total_engagements,
-         SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS delivered,
-         SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
-         SUM(total_dev_earned_cents) AS total_earned_cents,
-         SUM(prompts_count) AS total_prompts
-       FROM engagements WHERE developer_id = ?`,
-    ).bind(user.id).first<{
-      total_engagements: number; delivered: number; active: number;
-      total_earned_cents: number; total_prompts: number;
-    }>();
+  // Total earnings across all engagements
+  const totals = await c.env.DB.prepare(
+    `SELECT
+       COUNT(*) AS total_engagements,
+       SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS delivered,
+       SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
+       SUM(total_dev_earned_cents) AS total_earned_cents,
+       SUM(prompts_count) AS total_prompts
+     FROM engagements WHERE developer_id = ?`,
+  ).bind(user.id).first<{
+    total_engagements: number; delivered: number; active: number;
+    total_earned_cents: number; total_prompts: number;
+  }>();
 
-    // Per-engagement breakdown (recent 20)
-    const engagements = await c.env.DB.prepare(
-      `SELECT e.id, e.status, e.prompt_rate_cents, e.prompts_count,
-              e.total_dev_earned_cents, e.total_charged_cents, e.created_at, e.updated_at,
-              u.login AS client_login
-       FROM engagements e
-       LEFT JOIN users u ON u.id = e.client_id
-       WHERE e.developer_id = ?
-       ORDER BY e.updated_at DESC LIMIT 20`,
-    ).bind(user.id).all<Record<string, unknown>>();
+  // Per-engagement breakdown (recent 20)
+  const engagements = await c.env.DB.prepare(
+    `SELECT e.id, e.status, e.prompt_rate_cents, e.prompts_count,
+            e.total_dev_earned_cents, e.total_charged_cents, e.created_at, e.updated_at,
+            u.login AS client_login
+     FROM engagements e
+     LEFT JOIN users u ON u.id = e.client_id
+     WHERE e.developer_id = ?
+     ORDER BY e.updated_at DESC LIMIT 20`,
+  ).bind(user.id).all<Record<string, unknown>>();
 
-    // Connect status (can they actually receive payouts?)
-    const connect = await c.env.DB.prepare(
-      'SELECT charges_enabled, payouts_enabled, details_submitted FROM creator_payouts WHERE creator_id = ?',
-    ).bind(user.id).first<{ charges_enabled: number; payouts_enabled: number; details_submitted: number }>();
+  // Connect status (can they actually receive payouts?)
+  const connect = await c.env.DB.prepare(
+    'SELECT charges_enabled, payouts_enabled, details_submitted FROM creator_payouts WHERE creator_id = ?',
+  ).bind(user.id).first<{ charges_enabled: number; payouts_enabled: number; details_submitted: number }>();
 
-    return c.json({
-      totalEarnedCents: totals?.total_earned_cents ?? 0,
-      totalPrompts: totals?.total_prompts ?? 0,
-      totalEngagements: totals?.total_engagements ?? 0,
-      deliveredEngagements: totals?.delivered ?? 0,
-      activeEngagements: totals?.active ?? 0,
-      payoutsEnabled: (connect?.payouts_enabled ?? 0) === 1,
-      connectOnboarded: (connect?.details_submitted ?? 0) === 1,
-      engagements: (engagements.results ?? []).map((r) => ({
-        id: r.id,
-        clientLogin: r.client_login ?? null,
-        status: r.status,
-        promptRateCents: r.prompt_rate_cents,
-        promptsCount: r.prompts_count,
-        earnedCents: r.total_dev_earned_cents,
-        chargedCents: r.total_charged_cents,
-        createdAt: r.created_at,
-        updatedAt: r.updated_at,
-      })),
-    });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
+  return c.json({
+    totalEarnedCents: totals?.total_earned_cents ?? 0,
+    totalPrompts: totals?.total_prompts ?? 0,
+    totalEngagements: totals?.total_engagements ?? 0,
+    deliveredEngagements: totals?.delivered ?? 0,
+    activeEngagements: totals?.active ?? 0,
+    payoutsEnabled: (connect?.payouts_enabled ?? 0) === 1,
+    connectOnboarded: (connect?.details_submitted ?? 0) === 1,
+    engagements: (engagements.results ?? []).map((r) => ({
+      id: r.id,
+      clientLogin: r.client_login ?? null,
+      status: r.status,
+      promptRateCents: r.prompt_rate_cents,
+      promptsCount: r.prompts_count,
+      earnedCents: r.total_dev_earned_cents,
+      chargedCents: r.total_charged_cents,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    })),
+  });
+}));
 
 // ── Client: my requests ─────────────────────────────────────
 
 // Auth: list the client's own build requests (all statuses, not just open)
-servicesRoutes.get('/services/my-requests', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const rows = await c.env.DB.prepare(
-      `SELECT r.*, u.login AS dev_login
-       FROM build_requests r
-       LEFT JOIN users u ON u.id = r.accepted_by
-       WHERE r.client_id = ?
-       ORDER BY r.created_at DESC LIMIT 50`,
-    ).bind(user.id).all<Record<string, unknown>>();
+servicesRoutes.get('/services/my-requests', wrap(async (c) => {
+  const user = await requireUser(c);
+  const rows = await c.env.DB.prepare(
+    `SELECT r.*, u.login AS dev_login
+     FROM build_requests r
+     LEFT JOIN users u ON u.id = r.accepted_by
+     WHERE r.client_id = ?
+     ORDER BY r.created_at DESC LIMIT 50`,
+  ).bind(user.id).all<Record<string, unknown>>();
 
-    return c.json({
-      requests: (rows.results ?? []).map((r) => ({
-        id: r.id,
-        title: r.title,
-        description: r.description,
-        budgetCents: r.budget_cents,
-        status: r.status,
-        acceptedBy: r.accepted_by ?? null,
-        devLogin: r.dev_login ?? null,
-        engagementId: r.engagement_id ?? null,
-        createdAt: r.created_at,
-        updatedAt: r.updated_at,
-      })),
-    });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
+  return c.json({
+    requests: (rows.results ?? []).map((r) => ({
+      id: r.id,
+      title: r.title,
+      description: r.description,
+      budgetCents: r.budget_cents,
+      status: r.status,
+      acceptedBy: r.accepted_by ?? null,
+      devLogin: r.dev_login ?? null,
+      engagementId: r.engagement_id ?? null,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    })),
+  });
+}));
 
 // ── Stats recomputation ─────────────────────────────────────
 
@@ -365,22 +341,17 @@ interface BalanceRow {
 }
 
 // Auth: get current balance
-servicesRoutes.get('/services/balance', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const row = await c.env.DB.prepare('SELECT * FROM client_balances WHERE user_id = ?')
-      .bind(user.id).first<BalanceRow>();
+servicesRoutes.get('/services/balance', wrap(async (c) => {
+  const user = await requireUser(c);
+  const row = await c.env.DB.prepare('SELECT * FROM client_balances WHERE user_id = ?')
+    .bind(user.id).first<BalanceRow>();
 
-    return c.json({
-      balanceCents: row?.balance_cents ?? 0,
-      totalDepositedCents: row?.total_deposited_cents ?? 0,
-      totalSpentCents: row?.total_spent_cents ?? 0,
-    });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
+  return c.json({
+    balanceCents: row?.balance_cents ?? 0,
+    totalDepositedCents: row?.total_deposited_cents ?? 0,
+    totalSpentCents: row?.total_spent_cents ?? 0,
+  });
+}));
 
 // Auth: create Stripe checkout session for balance top-up (min $10)
 servicesRoutes.post('/services/balance/deposit', async (c) => {
@@ -537,29 +508,24 @@ servicesRoutes.post('/services/balance/confirm', async (c) => {
 });
 
 // Auth: transaction history
-servicesRoutes.get('/services/balance/transactions', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const rows = await c.env.DB.prepare(
-      'SELECT * FROM balance_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 100',
-    ).bind(user.id).all<{
-      id: string; user_id: string; type: string; amount_cents: number;
-      engagement_id: string | null; stripe_payment_intent_id: string | null;
-      description: string | null; created_at: number;
-    }>();
+servicesRoutes.get('/services/balance/transactions', wrap(async (c) => {
+  const user = await requireUser(c);
+  const rows = await c.env.DB.prepare(
+    'SELECT * FROM balance_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 100',
+  ).bind(user.id).all<{
+    id: string; user_id: string; type: string; amount_cents: number;
+    engagement_id: string | null; stripe_payment_intent_id: string | null;
+    description: string | null; created_at: number;
+  }>();
 
-    return c.json({
-      transactions: (rows.results ?? []).map((r) => ({
-        id: r.id,
-        type: r.type,
-        amountCents: r.amount_cents,
-        engagementId: r.engagement_id,
-        description: r.description,
-        createdAt: r.created_at,
-      })),
-    });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
+  return c.json({
+    transactions: (rows.results ?? []).map((r) => ({
+      id: r.id,
+      type: r.type,
+      amountCents: r.amount_cents,
+      engagementId: r.engagement_id,
+      description: r.description,
+      createdAt: r.created_at,
+    })),
+  });
+}));
