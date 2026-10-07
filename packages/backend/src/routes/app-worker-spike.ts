@@ -27,8 +27,11 @@ const waiter = `export default { async fetch(req) {
 
 function sizedModule(kb: number, spinMs: number): string {
   const parts = ['const registry = {};'];
-  for (let i = 0; parts.join('\n').length < kb * 1024; i++) {
-    parts.push(`registry.f${i} = function f${i}(a, b) { const t = { id: ${i}, tags: ['x${i}', 'y${i}'], next: (v) => v * ${i + 1} + (a ?? 0) }; return t.next(b ?? ${i}) + t.tags.length; };`);
+  let size = parts[0]!.length;
+  for (let i = 0; size < kb * 1024; i++) {
+    const fn = `registry.f${i} = function f${i}(a, b) { const t = { id: ${i}, tags: ['x${i}', 'y${i}'], next: (v) => v * ${i + 1} + (a ?? 0) }; return t.next(b ?? ${i}) + t.tags.length; };`;
+    parts.push(fn);
+    size += fn.length + 1;
   }
   parts.push(`const spinUntil = Date.now(); let acc = 0; for (let i = 0; i < ${spinMs} * 40000; i++) acc += Math.sqrt(i);`);
   parts.push(`export default { fetch() { return Response.json({ fns: Object.keys(registry).length, acc: acc > 0 }); } };`);
