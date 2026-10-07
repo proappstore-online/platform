@@ -22,7 +22,9 @@ describe('Room Durable Object', () => {
     ws.accept();
     const first = await nextMessage(ws);
     expect(first).toMatchObject({ kind: 'peers', peers: [expect.objectContaining({ uid: 'gh:1' })] });
+    const closed = nextClose(ws);
     ws.close();
+    expect(await closed).toEqual({ code: 1000, reason: 'done' });
     // The same room, addressed directly: a second peer joins the same object.
     const stub = env.ROOM.get(env.ROOM.idFromName('demo:lobby'));
     const direct = await stub.fetch('https://room/?uid=gh:2&login=bob', { headers: { Upgrade: 'websocket' } });

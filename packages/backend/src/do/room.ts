@@ -133,7 +133,7 @@ export class Room {
     server.addEventListener('close', () => {
       this.peers.delete(server);
       this.broadcastPeers();
-      try { server.close(); } catch { /* already closed */ }
+      try { server.close(1000, 'done'); } catch { /* already closed */ }
     });
 
     return new Response(null, { status: 101, webSocket: client });
