@@ -12,8 +12,14 @@
  * off the status code. The probe subject is not a member of any app, so a worker
  * holding the current key answers **403** (signature verified, membership refused);
  * one holding a stale key answers **401** (`invalid session`). 401 is drift, full stop.
- * Anything else (5xx, timeout, network) is "unreachable" — a different problem, not
- * evidence either way.
+ * Only 403 (or 200) is "ok". Anything else (404, 5xx, timeout, network) is
+ * "unreachable" — a different problem, not evidence either way — except
+ * Cloudflare's `404 error code: 1042`, which is "refused": the backend's own
+ * fetch of a same-account workers.dev host was refused from a non-request
+ * context (#310). The cron runs this probe, so a 1042 here is the live sign that
+ * scheduled actions, queue deliveries and app workers' PAS calls cannot reach data
+ * workers either; it fails the report and logs an error. (Before #310 a 404 counted
+ * as "ok", which hid exactly that outage.)
  *
  * On drift, when a GitHub token with `actions: write` is configured, the check
  * dispatches `redeploy-data-workers.yml` for each drifted app, which re-runs
@@ -34,7 +40,7 @@ export const DRIFT_PROBE_TIMEOUT_MS = 8_000;
 
 export const REDEPLOY_WORKFLOW = { owner: 'proappstore-online', repo: 'platform', file: 'redeploy-data-workers.yml', ref: 'main' } as const;
 
-export type DriftVerdict = 'ok' | 'drift' | 'unreachable';
+export type DriftVerdict = 'ok' | 'drift' | 'unreachable' | 'refused';
 
 export interface DriftProbe {
   appId: string;
@@ -50,6 +56,8 @@ export interface DriftReport {
   probes: DriftProbe[];
   drifted: string[];
   unreachable: string[];
+  /** Data workers the backend's fetch could not reach: Cloudflare 1042 (#310). */
+  refused: string[];
   /** Apps for which the fleet fan-out was dispatched (needs GITHUB_TOKEN with actions:write). */
   dispatched: string[];
   /** Why nothing was dispatched, when drift was found and nothing was. */
@@ -73,7 +81,10 @@ async function probeOne(fetchImpl: typeof fetch, env: Env, appId: string, token:
       headers: { Authorization: `Bearer ${token}` },
       signal: ctl.signal,
     });
-    const verdict: DriftVerdict = res.status === 401 ? 'drift' : res.status >= 500 ? 'unreachable' : 'ok';
+    const verdict: DriftVerdict = res.status === 401 ? 'drift'
+      : res.status === 403 || res.status === 200 ? 'ok'
+      : res.status === 404 && /error code: 1042/.test(await res.text().catch(() => '')) ? 'refused'
+      : 'unreachable';
     return { appId, verdict, status: res.status, ms: now() - started };
   } catch {
     return { appId, verdict: 'unreachable', status: null, ms: now() - started };
@@ -119,6 +130,7 @@ export async function checkSessionKeyDrift(opts: DriftOptions): Promise<DriftRep
   const probes = await Promise.all(ids.map((id) => probeOne(fetchImpl, env, id, token, now)));
   const drifted = probes.filter((p) => p.verdict === 'drift').map((p) => p.appId);
   const unreachable = probes.filter((p) => p.verdict === 'unreachable').map((p) => p.appId);
+  const refused = probes.filter((p) => p.verdict === 'refused').map((p) => p.appId);
 
   const dispatched: string[] = [];
   let dispatchSkipped: string | undefined;
@@ -132,15 +144,19 @@ export async function checkSessionKeyDrift(opts: DriftOptions): Promise<DriftRep
   }
 
   const report: DriftReport = {
-    ok: drifted.length === 0,
+    ok: drifted.length === 0 && refused.length === 0,
     checkedAt: new Date(now()).toISOString(),
     sampled: ids.length,
     probes,
     drifted,
     unreachable,
+    refused,
     dispatched,
     ...(dispatchSkipped ? { dispatchSkipped } : {}),
   };
   console.log(JSON.stringify({ kind: 'session-key-drift', ...report, probes: undefined }));
+  if (refused.length) {
+    console.error(`[session-key-drift] Cloudflare 1042: the backend cannot fetch data workers from this context (${refused.join(', ')}) — scheduled actions, queue deliveries and app-worker PAS calls are failing too (#310: compatibility flag global_fetch_strictly_public)`);
+  }
   return report;
 }

@@ -56,6 +56,27 @@ describe('checkSessionKeyDrift', () => {
     expect(report.unreachable).toEqual(['gamma']);
   });
 
+  it('reads a 404 as unreachable, and Cloudflare 1042 as refused — never as "ok" (#310)', async () => {
+    const { impl, calls } = fetchStub((url) => {
+      if (url.includes('alpha')) return new Response('error code: 1042', { status: 404 });
+      if (url.includes('beta')) return new Response('Not Found', { status: 404 });
+      return status(403);
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const report = await checkSessionKeyDrift({ env: env({ GITHUB_TOKEN: 'gh' }), fetchImpl: impl });
+      expect(report.probes.map((p) => [p.appId, p.verdict])).toEqual([['alpha', 'refused'], ['beta', 'unreachable'], ['gamma', 'ok']]);
+      expect(report.refused).toEqual(['alpha']);
+      expect(report.ok).toBe(false);
+      expect(report.drifted).toEqual([]);
+      // A refusal is not key drift: nothing is redeployed.
+      expect(calls.some((c) => c.url.includes('api.github.com'))).toBe(false);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('Cloudflare 1042'));
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('dispatches redeploy-data-workers.yml for each drifted app when a GitHub token is configured', async () => {
     const { impl, calls } = fetchStub((url) => {
       if (url.includes('api.github.com')) return new Response(null, { status: 204 });

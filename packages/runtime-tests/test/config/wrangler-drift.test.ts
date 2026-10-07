@@ -50,6 +50,18 @@ describe('backend wrangler.toml matches the code', () => {
     expect(numbers[0]).toBe(1);
   });
 
+  it('keeps global_fetch_strictly_public, and the runtime tests run with the same flags (#310)', () => {
+    // Without it, the backend's fetch of pas-data-<app>.<DATA_WORKER_HOST> from a
+    // non-request context (cron, queue consumer, the PAS RPC behind app workers) is
+    // answered 404 error code 1042 in production. Miniflare cannot reproduce that, so
+    // the flag itself is what this guards; the live probe is the cron's drift check.
+    const flags = JSON.parse(/^compatibility_flags\s*=\s*(\[[^\]]*\])/m.exec(toml)![1]!) as string[];
+    expect(flags).toContain('global_fetch_strictly_public');
+    const vitest = readFileSync(root('packages/runtime-tests/vitest.backend.ts'), 'utf8');
+    const testFlags = JSON.parse(/compatibilityFlags:\s*(\[[^\]]*\])/.exec(vitest)![1]!.replace(/'/g, '"')) as string[];
+    expect([...testFlags].sort()).toEqual([...flags].sort());
+  });
+
   it('has a cron trigger for the scheduled handler and exports it', () => {
     expect(toml).toMatch(/\[triggers\][\s\S]*crons\s*=\s*\[/);
     expect(readFileSync(root('packages/backend/src/index.ts'), 'utf8')).toMatch(/scheduled/);
