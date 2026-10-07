@@ -1,6 +1,6 @@
 /**
  * TEMPORARY (#305): measurement harness for the Dynamic Workers spike. Removed
- * in the commit that records the results. Internal-token only; touches no D1,
+ * in the commit that records the results. Platform-admin session only; touches no D1,
  * R2 or app data, and the workers it loads have no env and no egress.
  *
  *   POST /internal/app-worker-spike  { mode: 'fanout', n, sleepMs }
@@ -13,7 +13,7 @@
  *     child's). Run it under `wrangler tail` to read the request's CPU time.
  */
 import { Hono } from 'hono';
-import { internalTokenOk } from '@proappstore/build-core';
+import { requireAdmin } from '../lib/auth.js';
 import type { Env } from '../types.js';
 
 export const appWorkerSpikeRoutes = new Hono<{ Bindings: Env }>();
@@ -36,7 +36,7 @@ function sizedModule(kb: number, spinMs: number): string {
 }
 
 appWorkerSpikeRoutes.post('/internal/app-worker-spike', async (c) => {
-  if (!internalTokenOk(c.req.header('X-Internal-Token'), c.env.INTERNAL_TOKEN)) return c.json({ error: 'forbidden' }, 403);
+  await requireAdmin(c);
   const loader = c.env.LOADER;
   if (!loader) return c.json({ error: 'no LOADER binding' }, 503);
   const body = await c.req.json<{ mode?: string; n?: number; sleepMs?: number; kb?: number; spinMs?: number }>();
