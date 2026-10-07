@@ -42,7 +42,13 @@ export default defineWorkersConfig(async () => ({
           // kCurrentWorker binds SELF to this worker. The cast is type-only: the
           // `miniflare` package here and the one the pool bundles are the same
           // runtime instance but declare distinct `unique symbol` types.
-          serviceBindings: { SELF: kCurrentWorker as unknown as string, QA_WORKER: 'proappstore-qa-worker' },
+          // HOST_API is the host worker's binding to the HostApi entrypoint (#315): the only path on which
+          // X-PAS-App / X-PAS-Host are honoured. SELF is the default export, which strips them.
+          serviceBindings: {
+            SELF: kCurrentWorker as unknown as string,
+            HOST_API: { name: kCurrentWorker, entrypoint: 'HostApi' } as unknown as string,
+            QA_WORKER: 'proappstore-qa-worker',
+          },
           bindings: {
             APP_BASE: 'https://api.test',
             DATA_WORKER_HOST: 'test.workers.dev',

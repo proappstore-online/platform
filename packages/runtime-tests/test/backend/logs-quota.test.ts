@@ -1,6 +1,6 @@
 import { SELF, env } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { BASE, json, seedApp, seedUser, mockNetwork, resetTables } from './helpers';
+import { BASE, json, seedApp, seedUser, mockNetwork, resetTables, viaHostApi } from './helpers';
 
 const entries = (n: number) => Array.from({ length: n }, (_, i) => ({ ts: Date.now(), level: 'error', category: 'client', message: `boom ${i}` }));
 const dayKey = () => new Date().toISOString().slice(0, 10);
@@ -33,7 +33,7 @@ describe('log ingestion and quota against real D1 tables', () => {
 
   it('a mediated request for a different app is refused', async () => {
     await seedUser('gh:1'); await seedApp('demo', 'gh:1');
-    const res = await SELF.fetch(`${BASE}/v1/apps/demo/logs`, { ...json('POST', { entries: entries(1) }), headers: { 'Content-Type': 'application/json', 'X-PAS-App': 'other' } });
+    const res = await viaHostApi(`${BASE}/v1/apps/demo/logs`, { ...json('POST', { entries: entries(1) }), headers: { 'Content-Type': 'application/json', 'X-PAS-App': 'other' } });
     expect(res.status).toBe(403);
   });
 });

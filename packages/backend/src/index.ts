@@ -1,3 +1,4 @@
+import { WorkerEntrypoint } from 'cloudflare:workers';
 import { APP_CONTEXT_HEADER } from './lib/app-context.js';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -299,6 +300,19 @@ export { AppWorkerApi } from './rpc/app-worker-api.js';
 export { AppWorkerEgress } from './rpc/app-worker-egress.js';
 // #308: the Tail Worker of loaded app workers (ctx.exports.AppWorkerTail).
 export { AppWorkerTail } from './rpc/app-worker-tail.js';
+
+/**
+ * #315: the host worker's way in. The host's `API` service binding names this
+ * entrypoint (packages/host/wrangler.toml), and the Internet cannot reach a
+ * named entrypoint — only the default export below. So this is the one path on
+ * which X-PAS-App / X-PAS-Host arrive intact: the host sets them from the route
+ * it resolved and strips any client copy (host platform-mediation.ts, index.ts).
+ */
+export class HostApi extends WorkerEntrypoint<Env> {
+  override fetch(request: Request): Response | Promise<Response> {
+    return app.fetch(request, this.env, this.ctx);
+  }
+}
 
 /**
  * Cron entry (#70): the session-key drift check. `[triggers] crons` in wrangler.toml

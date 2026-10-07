@@ -1,7 +1,7 @@
 import { SELF, env } from 'cloudflare:test';
 import { mintSession, verifySession } from '@proappstore/build-core';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { BASE } from './helpers';
+import { BASE, viaHostApi } from './helpers';
 import { Authenticator } from './webauthn';
 
 // #230 (part of #228): passkey registration and step-up on real D1 and real
@@ -20,9 +20,9 @@ function signIn(opts: { authTime?: number; method?: string } = {}): Promise<stri
   );
 }
 
-/** A request as the host mediates it: session + asserted app + hostname. */
+/** A request as the host mediates it: session + asserted app + hostname, through its HostApi binding (#315). */
 function call(path: string, token: string, body: unknown = {}, host: string | null = RP) {
-  return SELF.fetch(`${BASE}/v1/auth/passkey/${path}`, {
+  return viaHostApi(`${BASE}/v1/auth/passkey/${path}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-PAS-App': 'demo', ...(host ? { 'X-PAS-Host': host } : {}) },
     body: JSON.stringify(body),
@@ -173,7 +173,12 @@ describe('console relying party (#244)', () => {
     expect((await direct('register/options', token, {}, { Origin: 'https://stash.proappstore.online' })).status).toBe(400);
     expect((await direct('register/options', token, {}, { Origin: 'https://proappstore.online' })).status).toBe(400);
     // The cookie data plane sets X-PAS-App and strips X-PAS-Host: still no relying party, so page JS never gets a token.
-    expect((await direct('register/options', token, {}, { Origin: `https://${CONSOLE}`, 'X-PAS-App': 'stash' })).status).toBe(400);
+    const mediated = await viaHostApi(`${BASE}/v1/auth/passkey/register/options`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Origin: `https://${CONSOLE}`, 'X-PAS-App': 'stash' },
+      body: '{}',
+    });
+    expect(mediated.status).toBe(400);
   });
 
   it("an app page's key or ceremony cannot enroll or step up on the console", async () => {

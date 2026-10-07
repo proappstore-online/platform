@@ -41,6 +41,15 @@ export async function resetTables(): Promise<void> {
   }
 }
 
+/**
+ * A request as the host worker sends it (#315): through its service binding to the
+ * backend's HostApi entrypoint, the only path that keeps X-PAS-App / X-PAS-Host.
+ * SELF.fetch is a direct caller; its copies of those headers are stripped.
+ */
+export function viaHostApi(url: string, init?: RequestInit): Promise<Response> {
+  return (env as unknown as { HOST_API: Fetcher }).HOST_API.fetch(url, init);
+}
+
 /** Outbound fetch from this worker is mocked; nothing reaches the network. */
 export function mockNetwork(): void {
   fetchMock.activate();

@@ -1,7 +1,7 @@
 import { SELF, env, fetchMock } from 'cloudflare:test';
 import { mintSession } from '@proappstore/build-core';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { BASE, mockNetwork, seedApp, seedUser, session, resetTables } from './helpers';
+import { BASE, mockNetwork, seedApp, seedUser, session, resetTables, viaHostApi } from './helpers';
 import { PARENTS_CLUBS, STASH } from '../../../backend/src/__fixtures__/operator-view';
 import { operatorView } from '../../../backend/src/routes/operator-view';
 import { toolsRoutes } from '../../../backend/src/routes/tools';
@@ -89,7 +89,9 @@ const fresh = (uid: string, login: string) => mintSession(
   { uid, login, avatarUrl: null, roles: ['user', 'creator'], auth_time: Math.floor(Date.now() / 1000) - 5, auth_method: 'passkey' } as never, env.SESSION_SIGNING_KEY);
 
 function call(route: Route, headers: Record<string, string>): Promise<Response> {
-  return SELF.fetch(`${BASE}${route.path}`, {
+  // A request an app page made carries X-PAS-App, which only the host can send: it comes through HostApi (#315).
+  const send = 'X-PAS-App' in headers ? viaHostApi : (url: string, init: RequestInit) => SELF.fetch(url, init);
+  return send(`${BASE}${route.path}`, {
     method: route.method,
     headers: { 'Content-Type': 'application/json', ...headers },
     ...(route.body !== undefined ? { body: JSON.stringify(route.body) } : {}),

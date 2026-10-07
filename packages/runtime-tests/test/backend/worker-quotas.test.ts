@@ -4,7 +4,7 @@ import type { Env } from '../../../backend/src/types';
 import { runScheduledActions } from '../../../backend/src/lib/scheduled-actions';
 import { appWorkerHost, disableAppWorker } from '../../../backend/src/lib/app-worker-host';
 import { sealSecret } from '../../../backend/src/lib/encryption';
-import { BASE, captureAppEvents, drainAppEvents, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
+import { BASE, captureAppEvents, drainAppEvents, json, mockNetwork, resetTables, seedApp, seedUser, session, viaHostApi } from './helpers';
 
 const env = providedEnv as unknown as Env;
 
@@ -49,7 +49,7 @@ async function settled(id: string) {
   return row;
 }
 async function viaHost(path = '/v1/ping') {
-  return SELF.fetch(`${BASE}/v1/apps/t/worker/http`, {
+  return viaHostApi(`${BASE}/v1/apps/t/worker/http`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${await session('gh:42')}`, 'X-PAS-App': 't', 'X-PAS-Worker-Method': 'GET', 'X-PAS-Worker-Path': path },
   });

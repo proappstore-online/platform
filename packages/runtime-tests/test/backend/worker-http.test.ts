@@ -5,7 +5,7 @@ import { appWorkerHost, disableAppWorker } from '../../../backend/src/lib/app-wo
 import { mintCallerGrant } from '../../../backend/src/lib/caller-grant';
 import { sha256Hex } from '../../../backend/src/lib/app-tokens';
 import { AppWorkerApi } from '../../../backend/src/rpc/app-worker-api';
-import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
+import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session, viaHostApi } from './helpers';
 
 const env = providedEnv as unknown as Env;
 
@@ -41,7 +41,7 @@ async function viaHost(path: string, init: { method?: string; body?: BodyInit; c
   const headers: Record<string, string> = { 'X-PAS-App': init.app ?? 't', 'X-PAS-Worker-Method': init.method ?? 'GET', 'X-PAS-Worker-Path': path };
   if (init.uid !== null) headers.Authorization = `Bearer ${await session(init.uid ?? 'gh:42')}`;
   if (init.contentType) headers['content-type'] = init.contentType;
-  return SELF.fetch(`${BASE}/v1/apps/t/worker/http`, { method: 'POST', headers, ...(init.body !== undefined ? { body: init.body } : {}) });
+  return viaHostApi(`${BASE}/v1/apps/t/worker/http`, { method: 'POST', headers, ...(init.body !== undefined ? { body: init.body } : {}) });
 }
 
 beforeEach(async () => {
