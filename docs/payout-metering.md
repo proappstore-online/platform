@@ -24,6 +24,39 @@ account IDs do not enter Analytics Engine. Do not rotate that salt: it would
 break a subscriber's cross-app weighting. Treat a needed rotation as a new
 ledger epoch and document the cutover before any monthly close.
 
+### Heartbeats claim each interval once (#320)
+
+`POST /v1/usage/ping` records a heartbeat only for an active subscriber, from
+the app's own mediated origin (#58). Its session time is bounded so that it can
+never exceed wall-clock time, however many requests run at once:
+
+- **Each heartbeat claims the interval since the last one.** It claims the time
+  between the `(app, subscriber, day)` row's `last_seen` and its own arrival,
+  capped at 90 s, in whole seconds. API calls are capped at 1,000, and at 20 per
+  claimed second. The first heartbeat of a UTC day may claim up to 90 s.
+- **The claim is a compare-and-swap.** The write applies only if `last_seen`
+  still has the value the heartbeat read: `UPDATE … WHERE last_seen = <read>`,
+  or `INSERT … ON CONFLICT DO NOTHING` for the day's first heartbeat. Of several
+  concurrent heartbeats, one wins the interval. The others re-read, see the
+  winner's `last_seen`, and claim only what remains, normally nothing.
+- **The invariant:** every recorded second lies in exactly one interval
+  `(previous last_seen, now]`, claimed by exactly one heartbeat. A meter event is
+  written only for a heartbeat that won its interval. So 50 parallel heartbeats
+  after 90 s record 90 s, not 4,500 s.
+- **Whole seconds, remainder carried.** When elapsed time is what limits a
+  claim, `last_seen` advances by exactly the seconds claimed, and the sub-second
+  rest counts towards the next heartbeat. Rounding a fraction up would let
+  heartbeats a few milliseconds apart each claim a second. When the requested
+  delta is what limits it, the unclaimed time is dropped and `last_seen` moves
+  to the heartbeat's arrival.
+- **Retries and late arrivals claim nothing.** An immediate retry, or a
+  heartbeat arriving after a later one (a delayed request, a skewed clock), finds
+  no elapsed time. It answers `recorded: false, reason: 'no-elapsed-time'`,
+  writes nothing, and never moves `last_seen` back.
+
+`usage_daily` holds only the claim's state (`last_seen`) and a dashboard
+projection. The meter events are the ledger.
+
 ## Required configuration
 
 Backend Worker secrets:

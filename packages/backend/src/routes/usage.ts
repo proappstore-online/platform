@@ -17,7 +17,9 @@ import { payoutActorId, writePayoutUsagePoint } from '../lib/payout-meter.js';
  *                            event, while the legacy daily rollup remains for
  *                            rate limiting and non-financial dashboard views.
  *                            session_seconds + api_calls. Clamps the per-ping
- *                            deltas so a misbehaving SDK can't inflate usage.
+ *                            deltas so a misbehaving SDK can't inflate usage, and
+ *                            claims each elapsed interval atomically, so parallel
+ *                            pings can't multiply it (#320, claimPingInterval).
  *                            SECURITY (#58): attribution is bound to the app
  *                            origin the host asserts (`X-PAS-App`), never to
  *                            the client-declared `appId` alone — see the route.
@@ -99,6 +101,84 @@ function clampDelta(v: unknown, max: number): number {
   return floored > max ? max : floored;
 }
 
+/** How many times a ping re-reads after losing its interval to a concurrent ping. */
+const PING_CLAIM_ATTEMPTS = 3;
+
+interface PingClaim { deltaSeconds: number; deltaApiCalls: number; sessionSeconds: number; apiCalls: number }
+
+/**
+ * Claim the wall-clock interval since this (app, user, day)'s last recorded ping,
+ * atomically (#320). The concurrency invariant payout metering relies on:
+ *
+ *   every recorded second lies in exactly one interval (prior last_seen, now],
+ *   claimed by exactly one ping.
+ *
+ * The write is a compare-and-swap on the `last_seen` this ping read. A first
+ * ping of the day is `INSERT … ON CONFLICT DO NOTHING`. A later one is
+ * `UPDATE … WHERE last_seen = <read value>`. A ping that loses (changes = 0)
+ * re-reads and recomputes against the winner's last_seen, so it can claim only
+ * time after it, normally none. Recorded session time therefore never exceeds
+ * wall-clock time, however many pings run in parallel, and only a winner writes
+ * a meter event.
+ *
+ * Unchanged from #58: the per-ping caps (MAX_DELTA_SECONDS, MAX_DELTA_API_CALLS),
+ * the bound by real elapsed time (api_calls at MAX_API_CALLS_PER_SECOND of it),
+ * and the per-ping cap for a day's first ping. Elapsed time is counted in whole
+ * seconds, with the sub-second rest carried in last_seen. Rounding up would let
+ * pings a few milliseconds apart each claim a second. A ping whose `now` is at
+ * or before last_seen (a retry, an out-of-order or skewed request) claims
+ * nothing and never moves last_seen back. Null: nothing was claimed.
+ */
+export async function claimPingInterval(
+  db: D1Database, key: { appId: string; userId: string; day: string; now: number }, body: PingBody,
+): Promise<PingClaim | null> {
+  const { appId, userId, day, now } = key;
+  const requestedSeconds = clampDelta(body.deltaSeconds, MAX_DELTA_SECONDS);
+  const requestedApiCalls = clampDelta(body.deltaApiCalls, MAX_DELTA_API_CALLS);
+  for (let attempt = 0; attempt < PING_CLAIM_ATTEMPTS; attempt++) {
+    const prior = await db.prepare(
+      'SELECT session_seconds, api_calls, last_seen FROM usage_daily WHERE app_id = ? AND user_id = ? AND day = ?',
+    ).bind(appId, userId, day).first<{ session_seconds: number; api_calls: number; last_seen: number }>();
+
+    if (!prior) {
+      // First ping of the day: up to the per-ping caps. Only one concurrent first ping can insert.
+      if (requestedSeconds === 0 && requestedApiCalls === 0) return null;
+      const inserted = await db.prepare(
+        `INSERT INTO usage_daily (app_id, user_id, day, session_seconds, api_calls, last_seen)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(app_id, user_id, day) DO NOTHING`,
+      ).bind(appId, userId, day, requestedSeconds, requestedApiCalls, now).run();
+      if (inserted.meta.changes) {
+        return { deltaSeconds: requestedSeconds, deltaApiCalls: requestedApiCalls, sessionSeconds: requestedSeconds, apiCalls: requestedApiCalls };
+      }
+      continue; // a concurrent first ping inserted the row: re-read and claim only what is left
+    }
+
+    const lastSeen = Number(prior.last_seen);
+    // Whole seconds only. Rounding a sub-second gap up let pings a few ms apart each claim a second (#320).
+    const elapsedSeconds = Math.max(0, Math.floor((now - lastSeen) / 1000));
+    const deltaSeconds = Math.min(requestedSeconds, elapsedSeconds);
+    const deltaApiCalls = Math.min(requestedApiCalls, elapsedSeconds * MAX_API_CALLS_PER_SECOND);
+    if (now <= lastSeen || (deltaSeconds === 0 && deltaApiCalls === 0)) return null;
+    // Bounded by elapsed time: advance by exactly what was claimed, so the sub-second rest carries to the next ping.
+    // Bounded by the request: time past it was not claimed and is dropped, as before. Never past `now`.
+    const nextSeen = deltaSeconds === elapsedSeconds ? lastSeen + elapsedSeconds * 1000 : now;
+    const swapped = await db.prepare(
+      `UPDATE usage_daily SET session_seconds = session_seconds + ?4, api_calls = api_calls + ?5, last_seen = ?6
+        WHERE app_id = ?1 AND user_id = ?2 AND day = ?3 AND last_seen = ?7`,
+    ).bind(appId, userId, day, deltaSeconds, deltaApiCalls, nextSeen, lastSeen).run();
+    if (swapped.meta.changes) {
+      return {
+        deltaSeconds, deltaApiCalls,
+        sessionSeconds: Number(prior.session_seconds) + deltaSeconds,
+        apiCalls: Number(prior.api_calls) + deltaApiCalls,
+      };
+    }
+    // Lost the race for this interval: another ping moved last_seen. Re-read.
+  }
+  return null;
+}
+
 usageRoutes.post('/usage/ping', wrap(async (c) => {
   const user = await requireUser(c);
   const body = await c.req.json<PingBody>().catch(() => ({} as PingBody));
@@ -154,64 +234,37 @@ usageRoutes.post('/usage/ping', wrap(async (c) => {
     return c.json({ ok: true, recorded: false, reason: 'no-subscription', day, sessionSeconds: 0, apiCalls: 0 });
   }
 
-  // Read the prior row up front so we can bind recorded session time to REAL
-  // elapsed wall-clock: a caller can't accrue more seconds than have actually
-  // passed since their last ping (defeats "send MAX_DELTA every request").
-  // First ping of the day (no prior row) allows up to the per-ping clamp.
-  const prior = await c.env.DB.prepare(
-    'SELECT session_seconds, api_calls, last_seen FROM usage_daily WHERE app_id = ? AND user_id = ? AND day = ?',
-  )
-    .bind(appId, user.id, day)
-    .first<{ session_seconds: number; api_calls: number; last_seen: number }>();
-
-  const requestedSeconds = clampDelta(body.deltaSeconds, MAX_DELTA_SECONDS);
-  const elapsedSeconds = prior ? Math.max(0, Math.ceil((now - Number(prior.last_seen)) / 1000)) : MAX_DELTA_SECONDS;
-  const deltaSeconds = Math.min(requestedSeconds, elapsedSeconds);
-
-  // api_calls gets the same wall-clock treatment as session time (#58): bound
-  // the reported count by what the elapsed interval could plausibly carry, so
-  // ping volume can't inflate the total. First ping of the day (no prior row)
-  // allows the per-ping clamp, mirroring deltaSeconds above.
-  const requestedApiCalls = clampDelta(body.deltaApiCalls, MAX_DELTA_API_CALLS);
-  const allowedApiCalls = prior ? elapsedSeconds * MAX_API_CALLS_PER_SECOND : MAX_DELTA_API_CALLS;
-  const deltaApiCalls = Math.min(requestedApiCalls, allowedApiCalls);
-
   // Fail closed before updating the legacy projection: a successful heartbeat
   // that is absent from the financial ledger would make payouts unauditable.
   const actor = await payoutActorId(user.id, c.env.PAYOUT_METER_SALT);
 
-  // Upsert: insert a fresh row if this is the first ping for this
-  // (app, user, day), otherwise add to the existing totals.
-  await c.env.DB.prepare(
-    `INSERT INTO usage_daily (app_id, user_id, day, session_seconds, api_calls, last_seen)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-     ON CONFLICT(app_id, user_id, day) DO UPDATE SET
-       session_seconds = session_seconds + ?4,
-       api_calls = api_calls + ?5,
-       last_seen = ?6`,
-  )
-    .bind(appId, user.id, day, deltaSeconds, deltaApiCalls, now)
-    .run();
+  const claim = await claimPingInterval(c.env.DB, { appId, userId: user.id, day, now }, body);
+  if (!claim) {
+    // Nothing left to claim: no wall-clock time has passed since the last recorded ping,
+    // a concurrent ping claimed it, or this ping's clock is behind the row (#320).
+    return c.json({ ok: true, recorded: false, reason: 'no-elapsed-time', day, sessionSeconds: 0, apiCalls: 0 });
+  }
 
   // AE is append-only. A unique event key makes every accepted heartbeat an
   // independently auditable delta; backfilled legacy rows use deterministic
-  // keys and the payout SQL deduplicates key replays.
+  // keys and the payout SQL deduplicates key replays. Written only for the ping
+  // that won its interval (#320), so one stretch of time is metered once.
   writePayoutUsagePoint(c.env.PAYOUT_METER, {
     appId,
     actor,
     eventKey: `sdk:${crypto.randomUUID()}`,
     source: 'sdk',
     occurredAt: now,
-    sessionSeconds: deltaSeconds,
-    apiCalls: deltaApiCalls,
+    sessionSeconds: claim.deltaSeconds,
+    apiCalls: claim.deltaApiCalls,
   });
 
   return c.json({
     ok: true,
     recorded: true,
     day,
-    sessionSeconds: prior ? Number(prior.session_seconds) + deltaSeconds : deltaSeconds,
-    apiCalls: prior ? Number(prior.api_calls) + deltaApiCalls : deltaApiCalls,
+    sessionSeconds: claim.sessionSeconds,
+    apiCalls: claim.apiCalls,
   });
 }));
 

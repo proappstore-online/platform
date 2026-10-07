@@ -21,7 +21,7 @@ describe('POST /v1/usage/ping', () => {
     // app exists -> active subscription -> prior row (none) -> upsert
     const appLookup = mockStmt({ first: { id: 'meetup' } });
     const prior = mockStmt({ first: null });
-    const upsert = mockStmt();
+    const upsert = mockStmt({ run: { meta: { changes: 1 } } }); // the claim wins (#320)
     const db = mockD1(appLookup, active(), prior, upsert);
 
     const res = await app.request(
@@ -74,7 +74,7 @@ describe('POST /v1/usage/ping', () => {
     // Prior ping was ~2s ago — even though the client claims 90s, only ~2s of
     // real time elapsed, so at most ~2s may be recorded.
     const prior = mockStmt({ first: { session_seconds: 100, api_calls: 0, last_seen: Date.now() - 2000 } });
-    const upsert = mockStmt();
+    const upsert = mockStmt({ run: { meta: { changes: 1 } } }); // the claim wins (#320)
     const db = mockD1(appLookup, active(), prior, upsert);
 
     const res = await app.request(
@@ -127,7 +127,7 @@ describe('POST /v1/usage/ping', () => {
   it('clamps deltaApiCalls to 1000', async () => {
     const appLookup = mockStmt({ first: { id: 'meetup' } });
     const prior = mockStmt({ first: null });
-    const upsert = mockStmt();
+    const upsert = mockStmt({ run: { meta: { changes: 1 } } }); // the claim wins (#320)
     const db = mockD1(appLookup, active(), prior, upsert);
 
     const res = await app.request(
@@ -149,7 +149,7 @@ describe('POST /v1/usage/ping', () => {
     // send 1000 on every ping and inflate the total purely by ping volume.
     const appLookup = mockStmt({ first: { id: 'meetup' } });
     const prior = mockStmt({ first: { session_seconds: 0, api_calls: 0, last_seen: Date.now() - 2000 } });
-    const upsert = mockStmt();
+    const upsert = mockStmt({ run: { meta: { changes: 1 } } }); // the claim wins (#320)
     const db = mockD1(appLookup, active(), prior, upsert);
 
     const res = await app.request(
@@ -173,7 +173,7 @@ describe('POST /v1/usage/ping', () => {
     // reporting the full 1000 is recorded intact.
     const appLookup = mockStmt({ first: { id: 'meetup' } });
     const prior = mockStmt({ first: { session_seconds: 0, api_calls: 0, last_seen: Date.now() - 60_000 } });
-    const upsert = mockStmt();
+    const upsert = mockStmt({ run: { meta: { changes: 1 } } }); // the claim wins (#320)
     const db = mockD1(appLookup, active(), prior, upsert);
 
     const res = await app.request(
@@ -238,7 +238,7 @@ describe('POST /v1/usage/ping', () => {
   it('a mediated ping for the asserted app records normally (the SDK cookie-mode path)', async () => {
     const appLookup = mockStmt({ first: { id: 'meetup' } });
     const prior = mockStmt({ first: null });
-    const upsert = mockStmt();
+    const upsert = mockStmt({ run: { meta: { changes: 1 } } }); // the claim wins (#320)
     const db = mockD1(appLookup, active(), prior, upsert);
     const res = await app.request(
       '/v1/usage/ping',

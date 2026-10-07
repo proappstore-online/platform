@@ -49,7 +49,10 @@ export default defineWorkersConfig(async () => ({
             HOST_API: { name: kCurrentWorker, entrypoint: 'HostApi' } as unknown as string,
             QA_WORKER: 'proappstore-qa-worker',
           },
+          // #320: usage pings meter into Analytics Engine and fail closed without both.
+          analyticsEngineDatasets: { PAYOUT_METER: { dataset: 'pas_payout_meter_test' } },
           bindings: {
+            PAYOUT_METER_SALT: 'runtime-test-payout-salt',
             APP_BASE: 'https://api.test',
             DATA_WORKER_HOST: 'test.workers.dev',
             APP_WORKER_BACKEND: 'loader',
