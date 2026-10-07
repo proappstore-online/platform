@@ -230,6 +230,17 @@ describe("canonical deploy workflow — single source of truth", () => {
     expect(golden).toContain("--no-frozen-lockfile");
   });
 
+  it("deploys the app worker between migrations and tools registration, only when worker/ exists (#253)", () => {
+    const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
+    const at = (path: string) => golden.indexOf(`/v1/apps/\${{ github.event.repository.name }}/${path}"`);
+    expect(at("migrate/oidc")).toBeGreaterThan(0);
+    expect(at("worker/oidc")).toBeGreaterThan(at("migrate/oidc"));
+    expect(at("tools/oidc")).toBeGreaterThan(at("worker/oidc"));
+    expect(at("deploy-credentials")).toBeGreaterThan(at("tools/oidc"));
+    // An app without worker/ (template-app included) skips the step entirely.
+    expect(golden).toContain("hashFiles('worker/package.json') != '' && github.event.repository.name != 'template-app'");
+  });
+
   it("skips schema/action registration only in the canonical template source repo", () => {
     const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
     expect(golden).toContain("hashFiles('migrations.json') != '' && github.event.repository.name != 'template-app'");

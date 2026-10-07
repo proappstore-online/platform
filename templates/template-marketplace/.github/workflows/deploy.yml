@@ -93,6 +93,32 @@ jobs:
             echo "::error::migration failed: $(echo "$RESP" | jq -c '.error // .')"; exit 1
           fi
 
+      - name: Deploy app worker (worker/ -> platform, keyless)
+        if: hashFiles('worker/package.json') != '' && github.event.repository.name != 'template-app'
+        run: |
+          # App worker (#253, ADR-009): build worker/ and upload its modules to the
+          # platform, which hosts and invokes them behind its own entry shim. No
+          # Cloudflare credential is involved: the same verified GitHub OIDC claims
+          # as the deploy-credentials mint. Runs BEFORE tools registration, so a
+          # first deploy's hooks register against a worker that already exists.
+          # Fails the deploy when refused (e.g. app workers not enabled for the app).
+          pnpm --dir worker build
+          [ -f worker/dist/app.js ] || { echo "::error::worker build must produce worker/dist/app.js"; exit 1; }
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.proappstore.online" | jq -r '.value')
+          if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then echo "::error::could not obtain OIDC token"; exit 1; fi
+          PARTS=()
+          while IFS= read -r f; do PARTS+=(-F "${f#./}=@worker/dist/${f#./};type=application/javascript"); done \
+            < <(cd worker/dist && find . -type f \( -name '*.js' -o -name '*.mjs' \) | sort)
+          RESP=$(curl -sS -X PUT \
+            "https://api.proappstore.online/v1/apps/${{ github.event.repository.name }}/worker/oidc" \
+            -H "Authorization: Bearer $OIDC" "${PARTS[@]}")
+          if echo "$RESP" | jq -e '.ok == true' >/dev/null; then
+            echo "Deployed app worker $(echo "$RESP" | jq -r '.bundle_sha256') ($(echo "$RESP" | jq -r '.backend'))"
+          else
+            echo "::error::app worker deploy refused: $(echo "$RESP" | jq -c '.error // .')"; exit 1
+          fi
+
       - name: Register app tools (mcp.json -> platform, keyless)
         if: hashFiles('mcp.json') != '' && github.event.repository.name != 'template-app'
         run: |
