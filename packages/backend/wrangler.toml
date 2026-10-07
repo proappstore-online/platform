@@ -76,12 +76,10 @@ VAPID_PUBLIC_KEY = "BPg6E92QAOhdcif_HckOEGY6mL03VKWNQ3CS1xQX5q59fXURI1xCGwwBr4Vs
 # Comma-separated `gh:<id>` strings allowed to approve/reject submissions.
 ADMIN_GITHUB_IDS = "gh:2824906"
 
-# App workers (#253, ADR-009) are OFF here: APP_WORKER_BACKEND is deliberately
-# unset and there is no [[worker_loaders]] binding, so deploys and invocations
-# answer 503 whatever any app's flag says. Turning them on means adding
-#   APP_WORKER_BACKEND = "loader"   and   [[worker_loaders]] binding = "LOADER"
-# — only after #274 is closed (ADR-009, "Trust assumptions") and the loader is
-# verified on this account (the runtime suite runs it on miniflare only).
+# App workers (#253, ADR-009) run on the `loader` backend (Dynamic Workers).
+# Enabled 2026-10-07 for the #305 spike measurements, after #274 closed and with
+# Serge's go-ahead. No app is enabled until a platform admin sets
+# app_workers_enabled (first-party only, cap of 5).
 #
 # #275 account guard: today's app-worker usage summed over every app. Above it,
 # the 15-minute cron closes new enables (app_worker_platform.open = 0) and records
@@ -89,6 +87,7 @@ ADMIN_GITHUB_IDS = "gh:2824906"
 # reopens with PUT /v1/admin/app-workers/open. cpu_ms is wall-clock (the loader
 # reports no CPU time). Revisit with duperdash's measured usage before #267.
 APP_WORKER_ACCOUNT_CEILING = '{ "cpu_ms": 36000000, "invocations": 100000 }'
+APP_WORKER_BACKEND = "loader"
 
 # Session-key drift check (#70): every 15 minutes, mint a probe session with the
 # CURRENT SESSION_SIGNING_KEY and present it to a sample of data workers; a 401
@@ -115,6 +114,10 @@ bucket_name = "pas-storage"
 # Free quota included with Workers Paid; pay-as-you-go beyond.
 [ai]
 binding = "AI"
+
+# Dynamic Workers (Worker Loader) — runs app workers (#253, ADR-009 loader backend).
+[[worker_loaders]]
+binding = "LOADER"
 
 # Workers Analytics Engine — first-party cookieless analytics for Pro apps.
 # Events written by analytics-ingest.ts, queried by analytics-stats-routes.ts
