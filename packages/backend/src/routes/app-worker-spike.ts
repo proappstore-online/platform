@@ -19,7 +19,7 @@ import type { Env } from '../types.js';
 
 /** Tail Worker for the harness's dynamic workers: files each run's CPU, wall time and logs in R2 under `_spike/<label>`. */
 export class SpikeTail extends WorkerEntrypoint<Env, { label: string }> {
-  async tail(events: TraceItem[]): Promise<void> {
+  override async tail(events: TraceItem[]): Promise<void> {
     const rows = events.map((e) => ({
       cpuTime: e.cpuTime, wallTime: e.wallTime, outcome: e.outcome, entrypoint: e.entrypoint ?? null,
       logs: e.logs.map((l) => l.message), exceptions: e.exceptions.map((x) => x.message),
