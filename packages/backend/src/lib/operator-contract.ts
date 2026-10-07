@@ -38,12 +38,12 @@ import {
 
 export type { OperatorResource, OperatorViewContract } from './operator-contract-shared.js';
 
-const OPERATOR_VIEW_VERSIONS = [1] as const;
-const MAX_OPERATOR_RESOURCES = 20;
-const MAX_OPERATOR_ACTIONS = 20;
-const MAX_AUDIT_ROLES = 5;
-const MAX_ADMIN_ROLES = 5;
-const ROLE = /^[a-z][a-z0-9_-]{0,49}$/;
+export const OPERATOR_VIEW_VERSIONS = [1] as const;
+export const MAX_OPERATOR_RESOURCES = 20;
+export const MAX_OPERATOR_ACTIONS = 20;
+export const MAX_AUDIT_ROLES = 5;
+export const MAX_ADMIN_ROLES = 5;
+export const ROLE = /^[a-z][a-z0-9_-]{0,49}$/;
 
 const RESOURCE_FIELDS = ['id', 'kind', 'title', 'description', 'action', 'columns', 'search', 'page', 'detail', 'status', 'related', 'series'];
 const ACTION_FIELDS = ['id', 'title', 'resource', 'action', 'params', 'confirm', 'transition', 'destructive', 'target'];

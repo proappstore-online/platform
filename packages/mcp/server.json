@@ -230,6 +230,18 @@
     {
       "name": "qa_mint_key",
       "description": "Mint a scoped QA API key for an app (owner only)."
+    },
+    {
+      "name": "inspect_admin_console",
+      "description": "An app's admin console contract (operator_view) against its current tools: referenced actions, gaps (action_missing, wrong_operation, …), what renders. Owner only, read-only."
+    },
+    {
+      "name": "list_admin_capabilities",
+      "description": "What an operator_view may contain: resource kinds, column formats, action operations, limits, features, sensitive fields and its JSON Schema (incl. admin_access)."
+    },
+    {
+      "name": "preview_admin_console",
+      "description": "Dry-run an operator_view proposal through the platform validator: tabs, columns, actions, role access matrix, blocked fields. Owner only, stores nothing."
     }
   ],
   "_meta": {
@@ -339,6 +351,11 @@
           "qa_run_artifacts",
           "qa_flow_playwright",
           "qa_mint_key"
+        ],
+        "admin console": [
+          "inspect_admin_console",
+          "list_admin_capabilities",
+          "preview_admin_console"
         ]
       },
       "docs": {

@@ -8,8 +8,8 @@ import { sensitiveMatch } from './sensitive-fields.js';
 import type { OperatorSeries } from './operator-contract-series.js';
 
 export const OPERATOR_RESOURCE_KINDS = ['users', 'reports', 'suspensions', 'verification', 'metrics'] as const;
-const OPERATOR_COLUMN_FORMATS = ['text', 'number', 'datetime', 'boolean', 'badge'] as const;
-const MAX_OPERATOR_COLUMNS = 12;
+export const OPERATOR_COLUMN_FORMATS = ['text', 'number', 'datetime', 'boolean', 'badge'] as const;
+export const MAX_OPERATOR_COLUMNS = 12;
 
 export type OperatorResourceKind = (typeof OPERATOR_RESOURCE_KINDS)[number];
 type OperatorColumnFormat = (typeof OPERATOR_COLUMN_FORMATS)[number];
@@ -77,15 +77,14 @@ export interface OperatorViewContract {
   /** Who may read the operator audit trail besides being the owner: one of these app roles. Absent: the owner alone. */
   audit?: { app_roles: string[] } | null;
   /**
-   * App roles whose holders may use the admin console (#291, #302). Present only
-   * when declared. Grants nothing until the admin role gate (#293) lands: the
-   * operator routes stay owner-only.
+   * App roles whose holders may use the admin console beside the owner (#291,
+   * #302), enforced by the admin role gate (#293). Present only when declared.
    */
   admin_access?: { roles: string[] };
 }
 
 export const ID = /^[a-z][a-z0-9_]{0,49}$/;
-const COLUMN_KEY = /^[a-z_][a-z0-9_]{0,49}$/;
+export const COLUMN_KEY = /^[a-z_][a-z0-9_]{0,49}$/;
 
 export type Obj = Record<string, unknown>;
 export const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);

@@ -148,6 +148,14 @@ found with `discover_tools` / `describe_tool` on the app endpoint).
 | `qa_flow_playwright` | Get a flow transpiled to a Playwright .spec.ts (for CI parity — run the same flow under Playwright). |
 | `qa_mint_key` | Mint a scoped QA API key for an app (owner only). |
 
+### Admin console authoring (read-only, owner only)
+
+| Tool | Description |
+|---|---|
+| `inspect_admin_console` | An app's stored `operator_view`, the actions it references, gaps against the current tools (`action_missing`, `wrong_operation`, …) and what renders per resource. |
+| `list_admin_capabilities` | Resource kinds, column formats, action operations, limits (20 resources, 20 actions), features, the sensitive-field list and the JSON Schema of `operator_view`, including `admin_access`. |
+| `preview_admin_console` | Dry-run a proposed `operator_view` (optionally with a proposed `tools` array) through the platform's own validator: tabs, columns, actions, the role access matrix, blocked fields. Stores nothing, reads no app data. |
+
 ## Safety
 
 - **Read-only mode** — `MCP_READ_ONLY=1` on the worker blocks every mutating tool (they throw, so a caller cannot misreport success); reads and dry-runs still work.

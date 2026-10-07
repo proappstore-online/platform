@@ -18,6 +18,8 @@ import { ACTION_CALLERS, VERIFY_PARAM_PREFIX, actionCallers, literalLimit, resol
 import { ENDPOINT_NAME_PREFIX } from '../lib/endpoint-sql.js';
 import { getVerifier, VERIFIERS } from '../lib/verifiers/index.js';
 import { validateOperatorView } from '../lib/operator-contract.js';
+import { inspectAdminConsole, operatorCapabilities, previewAdminConsole } from '../lib/operator-authoring.js';
+import { loadContract } from './operator.js';
 import { SCHEDULER_TICK_MINUTES } from '../lib/scheduler-tick.js';
 import { MAX_SECRETS_PER_APP, SECRET_NAME_RE } from './secrets-shared.js';
 import { validateHookVerify, type HookVerify } from '../lib/hook-verifiers.js';
@@ -1193,4 +1195,57 @@ toolsRoutes.delete('/apps/:appId/tools/:name', async (c) => {
   await requireAppOwner(c, appId);
   await c.env.DB.prepare("DELETE FROM app_tools WHERE app_id = ? AND name = ? AND source = 'code'").bind(appId, name).run();
   return c.json({ ok: true });
+});
+
+// ── Admin-console authoring, read-only (#295) ───────────────────────────────
+// The MCP admin-authoring tools call these: capabilities (the validator's
+// kinds, limits and JSON Schema), a validate-only preview of a proposed
+// operator_view (the real validateOperatorView, never a second validator), and
+// an inspection of the stored contract against today's tools. None reads app
+// data, so no field value can appear in a response. Owner-only, except the
+// capabilities, which are the same for every app.
+
+/** The app's registered tools (code and console), as the operator executor would load them. */
+async function registeredTools(db: D1Database, appId: string): Promise<ToolManifest[]> {
+  const { results } = await db.prepare('SELECT manifest FROM app_tools WHERE app_id = ? ORDER BY name').bind(appId).all<{ manifest: string }>();
+  return (results ?? []).flatMap((r) => {
+    try { return [JSON.parse(r.manifest) as ToolManifest]; } catch { return []; }
+  });
+}
+
+toolsRoutes.get('/operator-view/capabilities', async (c) => {
+  await requireUser(c);
+  return c.json(operatorCapabilities());
+});
+
+toolsRoutes.get('/apps/:appId/operator-view/inspect', async (c) => {
+  const appId = c.req.param('appId')!;
+  await requireAppOwner(c, appId);
+  const [contract, tools] = await Promise.all([loadContract(c.env.DB, appId), registeredTools(c.env.DB, appId)]);
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({ app_id: appId, ...inspectAdminConsole(contract, tools) });
+});
+
+/**
+ * Body: `{ operator_view, tools? }`. Validates `operator_view` against `tools`
+ * when given — a proposed mcp.json `tools` array, checked by the same tool-set
+ * validation a deploy runs — else against the app's registered tools. Nothing
+ * is stored: `valid: false` with the validator's error, or the render.
+ */
+toolsRoutes.post('/apps/:appId/operator-view/preview', async (c) => {
+  const appId = c.req.param('appId')!;
+  await requireAppOwner(c, appId);
+  const body = await c.req.json<{ operator_view?: unknown; tools?: unknown }>().catch(() => null);
+  if (!body || typeof body !== 'object' || !('operator_view' in body)) return c.json({ error: 'body must be { operator_view, tools? }' }, 400);
+  let tools: ToolManifest[];
+  if (body.tools !== undefined) {
+    if (!Array.isArray(body.tools)) return c.json({ error: 'tools must be an array of tool manifests' }, 400);
+    const invalid = await validateToolSet(body.tools as ToolManifest[], undefined, appId);
+    if (invalid) return c.json({ valid: false, error: `tools: ${String(invalid.payload.error)}`, details: invalid.payload.details ?? null });
+    tools = body.tools as ToolManifest[];
+  } else {
+    tools = await registeredTools(c.env.DB, appId);
+  }
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({ app_id: appId, ...previewAdminConsole(tools, body.operator_view) });
 });

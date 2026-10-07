@@ -10,7 +10,7 @@ Remote MCP server for AI agents to interact with the ProAppStore platform.
   agents), `README.md` (connect + tool tables), `llms.txt`. Explicit failure
   returns go through `errText()` (`src/errors.ts`) so they carry `isError: true`.
 
-## Tools (53 shared + dynamic per-app)
+## Tools (57 shared + dynamic per-app)
 
 ### Platform tools (no auth required unless noted)
 
@@ -84,6 +84,18 @@ Use connection-level auth or internal token.
 | `agent_activity` | Recent activity log entries |
 | `agent_ticket_detail` | Detailed ticket info with messages |
 | `agent_cost` | Cost breakdown by role and model |
+
+### Admin console authoring (#295)
+
+Read-only (`readOnlyHint`), owner only (the backend enforces it), and audited as `invoked`.
+They call `/v1/operator-view/capabilities` and `/v1/apps/:appId/operator-view/{inspect,preview}`,
+which run the backend's own `validateOperatorView`; none reads app data.
+
+| Tool | Description |
+|------|-------------|
+| `inspect_admin_console` | Stored `operator_view`, referenced actions, gaps against the current tools, what renders |
+| `list_admin_capabilities` | Kinds, formats, operations, limits, features, sensitive fields, JSON Schema of `operator_view` |
+| `preview_admin_console` | Dry-run a proposal: tabs, columns, actions, role access matrix, blocked fields |
 
 ### Per-app tools
 

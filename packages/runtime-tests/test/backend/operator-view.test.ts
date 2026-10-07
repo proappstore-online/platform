@@ -645,3 +645,53 @@ describe('operator sensitive-field blocking (#294)', () => {
     for (const key of Object.values(FAMILIES)) expect(trail, key).not.toContain(`VALUE-OF-${key}`);
   });
 });
+
+// #295: the admin-authoring routes behind the MCP tools, on real D1. Owner-only,
+// read-only, and they never call the data worker (no interceptor is set, and
+// disableNetConnect fails any call), so no field value can appear.
+describe('admin-console authoring routes (#295)', () => {
+  const validates = () => fetchMock.get(`https://pas-data-stash.${env.DATA_WORKER_HOST}`).intercept({ path: '/validate', method: 'POST' })
+    .reply(200, (req) => ({ results: (JSON.parse(String(req.body)) as { statements: { id: string }[] }).statements.map((st) => ({ id: st.id, ok: true })) }));
+
+  beforeEach(async () => {
+    validates();
+    const put = await SELF.fetch(`${BASE}/v1/apps/stash/tools`, json('PUT', STASH, await session('gh:1')));
+    expect(put.status, await put.clone().text()).toBe(200);
+  });
+
+  it('inspect: no gaps for a fresh contract; deleting a referenced action is flagged as action_missing', async () => {
+    const inspect = async () => SELF.fetch(`${BASE}/v1/apps/stash/operator-view/inspect`, json('GET', undefined, await session('gh:1')));
+    const fresh = await inspect();
+    expect(fresh.status, await fresh.clone().text()).toBe(200);
+    expect(await fresh.json()).toMatchObject({ app_id: 'stash', gaps: [], contract: { version: 1 } });
+
+    const del = await SELF.fetch(`${BASE}/v1/apps/stash/tools/op_list_users`, json('DELETE', undefined, await session('gh:1')));
+    expect(del.status).toBe(200);
+    const body = (await (await inspect()).json()) as { gaps: { code: string; where: string }[]; resources: { id: string; renders: boolean }[] };
+    expect(body.gaps).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'action_missing', where: 'resources[0]' })]));
+    expect(body.resources.find((r) => r.id === 'members')).toMatchObject({ renders: false });
+  });
+
+  it('preview: validates a proposal with the real validator and renders it; nothing is stored', async () => {
+    const before = await env.DB.prepare("SELECT contract FROM app_operator_view WHERE app_id = 'stash'").first<{ contract: string }>();
+    const proposal = { ...STASH.operator_view, admin_access: { roles: ['support'] } };
+    const res = await SELF.fetch(`${BASE}/v1/apps/stash/operator-view/preview`, json('POST', { operator_view: proposal }, await session('gh:1')));
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(await res.json()).toMatchObject({ valid: true, render: { access: { console: { owner: true, admin_roles: ['support'] } } } });
+    const bad = await SELF.fetch(`${BASE}/v1/apps/stash/operator-view/preview`, json('POST', {
+      operator_view: { ...STASH.operator_view, resources: [{ ...STASH.operator_view.resources[0], columns: [{ key: 'api_key', label: 'Key' }] }] },
+    }, await session('gh:1')));
+    expect(await bad.json()).toMatchObject({ valid: false, blocked_fields: [{ key: 'api_key', matched: 'key' }] });
+    expect(await env.DB.prepare("SELECT contract FROM app_operator_view WHERE app_id = 'stash'").first<{ contract: string }>()).toEqual(before);
+  });
+
+  it("refuses another app's owner and a signed-out caller; capabilities need a session", async () => {
+    for (const [method, path, body] of [['GET', '/v1/apps/stash/operator-view/inspect', undefined], ['POST', '/v1/apps/stash/operator-view/preview', { operator_view: STASH.operator_view }]] as const) {
+      expect((await SELF.fetch(`${BASE}${path}`, json(method, body, await session('gh:2')))).status, path).toBe(403);
+      expect((await SELF.fetch(`${BASE}${path}`, json(method, body))).status, path).toBe(401);
+    }
+    expect((await SELF.fetch(`${BASE}/v1/operator-view/capabilities`, json('GET'))).status).toBe(401);
+    const caps = await SELF.fetch(`${BASE}/v1/operator-view/capabilities`, json('GET', undefined, await session('gh:2')));
+    expect(await caps.json()).toMatchObject({ limits: { resources: 20, actions: 20 } });
+  });
+});

@@ -12,14 +12,14 @@ import {
   type Obj, type OperatorColumn, type OperatorResource, type OperatorStatus,
 } from './operator-contract-shared.js';
 
-const LIST_KINDS = ['users', 'reports', 'suspensions', 'verification'];
-const MAX_EVIDENCE = 6;
-const CAPABILITIES = ['search', 'page', 'detail', 'status', 'related'] as const;
-const MAX_DETAIL_FIELDS = 24;
-const MAX_PAGE_SIZE = 200; // a paged resource's page size is its query's literal LIMIT
-const MAX_STATES = 12;
+export const LIST_KINDS = ['users', 'reports', 'suspensions', 'verification'];
+export const MAX_EVIDENCE = 6;
+export const LIST_CAPABILITIES = ['search', 'page', 'detail', 'status', 'related'] as const;
+export const MAX_DETAIL_FIELDS = 24;
+export const MAX_PAGE_SIZE = 200; // a paged resource's page size is its query's literal LIMIT
+export const MAX_STATES = 12;
 
-type Capabilities = Pick<OperatorResource, (typeof CAPABILITIES)[number]>;
+type Capabilities = Pick<OperatorResource, (typeof LIST_CAPABILITIES)[number]>;
 
 export function validateListCapabilities(
   tools: ToolManifest[],
@@ -29,7 +29,7 @@ export function validateListCapabilities(
   where: string,
 ): Capabilities | string {
   const none: Capabilities = { search: null, page: null, detail: null, status: null, related: null };
-  const declared = CAPABILITIES.filter((k) => raw[k] !== undefined);
+  const declared = LIST_CAPABILITIES.filter((k) => raw[k] !== undefined);
   if (declared.length === 0) return none;
   if (!LIST_KINDS.includes(raw.kind as string)) return `${where}: ${declared.join(', ')} are only supported on ${LIST_KINDS.join(', ')} resources`;
 

@@ -11,6 +11,7 @@ import { registerProjectTools } from "./project-tools.js";
 import { registerLoopTools } from "./loop-tools.js";
 import { registerAgentsTools } from "./agents-tools.js";
 import { registerQaTools } from "./qa-tools.js";
+import { registerAdminConsoleTools } from "./admin-console-tools.js";
 import { createAuthChallenge, handleOAuthRoute, resolveOAuthToken } from "./oauth-provider.js";
 
 const AUTH_PROVIDERS = ["github", "google"] as const;
@@ -99,6 +100,12 @@ export class PasMcpAgent extends McpAgent<Env> {
 
       // ── QA automation tools (connect + write/run browser e2e tests) ─
       registerQaTools(this.server, this.env, () => ({
+        userId: this.userId,
+        token: this.userToken,
+      }));
+
+      // ── Admin-console authoring, read-only (#295): inspect, capabilities, preview ─
+      registerAdminConsoleTools(this.server, this.env, () => ({
         userId: this.userId,
         token: this.userToken,
       }));

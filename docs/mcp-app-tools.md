@@ -860,6 +860,30 @@ The trail is owner-only; `admin_access` does not open it. An app can require mor
 `"audit": { "app_roles": ["operator"] }` at the top level of `operator_view`:
 the owner must then also hold one of those roles (never `member`).
 
+### Authoring tools (MCP, read-only)
+
+Three MCP tools on `mcp.proappstore.online/mcp` help write an `operator_view`
+before it goes into `mcp.json` (#295). They are owner-only and read-only. They
+never read app data, so their output never holds a field value.
+
+- `list_admin_capabilities` returns the resource kinds, column formats, action
+  operations, limits (20 resources, 20 actions, …), features, the
+  sensitive-field list, the rules that depend on the app's tools, and a JSON
+  Schema of `operator_view` including `admin_access`. The backend builds the
+  schema from the validator's own constants
+  (`GET /v1/operator-view/capabilities`).
+- `inspect_admin_console(appId)` returns the stored contract, the actions it
+  references and the gaps against the app's current tools. A gap is
+  `action_missing`, `wrong_operation`, `not_role_gated`, `public_action`,
+  `scheduled_action`, `not_user_callable`, `step_up_missing`,
+  `column_not_selected` or `sensitive_field`. The response also says what
+  renders per resource (`GET /v1/apps/:appId/operator-view/inspect`).
+- `preview_admin_console(appId, proposal, tools?)` runs the platform's own
+  validator on a proposal, against the registered tools or a proposed `tools`
+  array. When valid, it renders the tabs, columns, actions, the role access
+  matrix and the blocked fields. It stores nothing
+  (`POST /v1/apps/:appId/operator-view/preview`).
+
 ### Admin access (`admin_access`)
 
 An app can declare which app roles may use its admin console (#291):

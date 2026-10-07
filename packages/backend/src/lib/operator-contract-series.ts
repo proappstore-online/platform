@@ -19,12 +19,12 @@ import { literalLimit, type ToolManifest } from './action-sql.js';
 import { isObj, optionalParam, text, unknownField, type OperatorColumn } from './operator-contract-shared.js';
 
 export const SERIES_GRAINS = ['day', 'week', 'month'] as const;
-const SERIES_AGGREGATIONS = ['sum', 'avg', 'min', 'max'] as const;
-const SERIES_UNITS = ['count', 'percent', 'seconds', 'bytes', 'currency'] as const;
-const MAX_MEASURES = 4;
-const MAX_DIMENSION_VALUES = 8;
-const MAX_SERIES_DAYS = 731;
-const MAX_SERIES_ROWS = 5000;
+export const SERIES_AGGREGATIONS = ['sum', 'avg', 'min', 'max'] as const;
+export const SERIES_UNITS = ['count', 'percent', 'seconds', 'bytes', 'currency'] as const;
+export const MAX_MEASURES = 4;
+export const MAX_DIMENSION_VALUES = 8;
+export const MAX_SERIES_DAYS = 731;
+export const MAX_SERIES_ROWS = 5000;
 
 export type SeriesGrain = (typeof SERIES_GRAINS)[number];
 type SeriesAggregation = (typeof SERIES_AGGREGATIONS)[number];
