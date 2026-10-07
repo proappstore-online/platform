@@ -41,6 +41,7 @@ import { scheduledRunsRoutes } from './routes/scheduled-runs.js';
 import { operatorView } from './routes/operator-view.js';
 import { evaluateErrorSpikes } from './lib/error-alerts.js';
 import { runScheduledActions } from './lib/scheduled-actions.js';
+import { reapReviewUploads } from './lib/review-storage-reaper.js';
 import { checkAccountCeiling } from './lib/app-worker-usage.js';
 import type { AppWorkerExports } from './lib/app-worker-host.js';
 import { tokenUserFor } from './lib/app-tokens.js';
@@ -61,8 +62,8 @@ import { kvRoutes } from './routes/kv.js';
 import { counterRoutes } from './routes/counters.js';
 import { roomRoutes } from './routes/rooms.js';
 import { appWorkerRoutes } from './routes/app-workers.js';
-import { hookRoutes } from './routes/hooks.js';
 import { appWorkerSpikeRoutes } from './routes/app-worker-spike.js'; // TEMPORARY (#305)
+import { hookRoutes } from './routes/hooks.js';
 import { connectorRoutes } from './routes/connectors.js';
 
 export const app = new Hono<{ Bindings: Env }>();
@@ -274,8 +275,8 @@ v1.route('/', keysRoutes);
 v1.route('/', servicesRoutes);
 v1.route('/', engagementRoutes);
 v1.route('/', payoutCronRoutes);
-v1.route('/', payoutMeteringRoutes);
 v1.route('/', appWorkerSpikeRoutes); // TEMPORARY (#305)
+v1.route('/', payoutMeteringRoutes);
 v1.route('/', teamRoutes);
 v1.route('/', inviteRoutes);
 v1.route('/', rolesRoutes);
@@ -320,6 +321,10 @@ export default {
     ctx.waitUntil(evaluateErrorSpikes({ env }).catch((e) => console.error(`[alert] evaluation failed: ${(e as Error).message}`)));
     // #275: close new app-worker enables when today's account-wide usage passes the ceiling.
     ctx.waitUntil(checkAccountCeiling(env, tickAt).catch((e) => console.error(`[app-worker-usage] account check failed: ${(e as Error).message}`)));
+    // #307: once a day, delete review uploads older than the app's retention (default 30 days).
+    if (new Date(tickAt).getUTCHours() === 3 && new Date(tickAt).getUTCMinutes() === 45) {
+      ctx.waitUntil(reapReviewUploads(env, tickAt).catch((e) => console.error(`[review-retention] run failed: ${(e as Error).message}`)));
+    }
     // Reconcile provider-authoritative token/cost rows once hourly. This is
     // independent of payout execution; operators can run the same endpoint on
     // demand before closing a month.

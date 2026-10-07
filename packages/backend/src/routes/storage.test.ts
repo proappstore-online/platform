@@ -386,13 +386,13 @@ describe('review uploads — _review namespace, reviewer roles, audit (#208)', (
   const CERT = 'myapp/_review/u/gh:1/cert.pdf';
   type State = {
     objects: Map<string, Uint8Array>; config: string[] | null; roles: Map<string, string[]>;
-    team: Map<string, string>; creator: string; audit: unknown[][]; auditFails: boolean;
+    team: Map<string, string>; creator: string; audit: unknown[][]; auditFails: boolean; retention: number | null;
   };
   let state: State;
   beforeEach(() => {
     state = {
       objects: new Map(), config: ['moderator'], roles: new Map([['gh:2', ['moderator']]]),
-      team: new Map([['gh:9', 'admin']]), creator: 'gh:8', audit: [], auditFails: false,
+      team: new Map([['gh:9', 'admin']]), creator: 'gh:8', audit: [], auditFails: false, retention: null,
     };
   });
 
@@ -411,7 +411,13 @@ describe('review uploads — _review namespace, reviewer roles, audit (#208)', (
     const answer = (sql: string, args: unknown[]): { first?: unknown; all?: unknown; run?: unknown } => {
       if (sql.includes('SELECT creator_id FROM apps')) return { first: { creator_id: state.creator } };
       if (sql.includes('FROM team_members')) return { first: state.team.has(args[1] as string) ? { role: state.team.get(args[1] as string) } : null };
-      if (sql.includes('INSERT INTO app_storage_config')) { state.config = JSON.parse(args[1] as string); return { run: {} }; }
+      if (sql.includes('INSERT INTO app_storage_config')) {
+        // (app, roles, days, actor, at, setRoles, setDays): an absent field keeps its value.
+        if (args[5]) state.config = JSON.parse(args[1] as string);
+        if (args[6]) state.retention = args[2] as number | null;
+        return { run: {} };
+      }
+      if (sql.includes('SELECT review_retention_days FROM app_storage_config')) return { first: { review_retention_days: state.retention } };
       if (sql.includes('FROM app_storage_config')) return { first: state.config ? { review_roles: JSON.stringify(state.config) } : null };
       if (sql.includes('FROM app_roles')) {
         const [, id, , ...wanted] = args as string[];
@@ -550,14 +556,32 @@ describe('review uploads — _review namespace, reviewer roles, audit (#208)', (
     const ADMIN = await testToken('gh:9');
     const ok = await put(ADMIN, ['verifier', 'verifier', 'moderator']);
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toEqual({ review_roles: ['verifier', 'moderator'] });
+    expect(await ok.json()).toEqual({ review_roles: ['verifier', 'moderator'], review_retention_days: null, effective_review_retention_days: 30 });
     expect(state.config).toEqual(['verifier', 'moderator']);
     expect((await put(ADMIN, ['member'])).status).toBe(400);
     expect((await put(ADMIN, ['Bad Role'])).status).toBe(400);
     expect((await put(ADMIN, 'moderator')).status).toBe(400);
     expect((await put(TOK_B, ['moderator'])).status).toBe(403); // a reviewer is not the team
     const got = await req('GET', '/v1/apps/myapp/storage-config', ADMIN);
-    expect(await got.json()).toEqual({ review_roles: ['verifier', 'moderator'] });
+    expect(await got.json()).toEqual({ review_roles: ['verifier', 'moderator'], review_retention_days: null, effective_review_retention_days: 30 });
+  });
+
+  it('storage-config: review_retention_days is 1–365 or null, set alone without touching the roles (#307)', async () => {
+    const ADMIN = await testToken('gh:9');
+    const put = (token: string, body: unknown) =>
+      req('PUT', '/v1/apps/myapp/storage-config', token, { body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } });
+    const ok = await put(ADMIN, { review_retention_days: 7 });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ review_roles: ['moderator'], review_retention_days: 7, effective_review_retention_days: 7 });
+    expect(state.config).toEqual(['moderator']); // roles kept
+    for (const bad of [0, 366, 1.5, '30', true]) expect((await put(ADMIN, { review_retention_days: bad })).status).toBe(400);
+    expect(state.retention).toBe(7);
+    expect((await put(ADMIN, { review_roles: ['verifier'] })).status).toBe(200);
+    expect(state.retention).toBe(7); // retention kept
+    const reset = await put(ADMIN, { review_retention_days: null });
+    expect(await reset.json()).toEqual({ review_roles: ['verifier'], review_retention_days: null, effective_review_retention_days: 30 });
+    expect((await put(ADMIN, {})).status).toBe(400);
+    expect((await put(TOK_B, { review_retention_days: 7 })).status).toBe(403);
   });
 
   it('storage-review-access: the team admin reads the audit trail; a reviewer cannot', async () => {

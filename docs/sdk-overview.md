@@ -267,9 +267,23 @@ the role does, and `/public/...` never serves these files.
 request. The team admin reads the trail at
 `GET /v1/apps/<appId>/storage-review-access?owner=<userId>&limit=50`.
 
-**Expiry.** A file stays until its uploader or a reviewer deletes it
-(`deleteForReview`). Delete the document once the review is decided, so the
-evidence is kept no longer than the review needs (PAS-OPS-016).
+**Expiry.** Delete the document with `deleteForReview` once the review is
+decided, so the evidence is kept no longer than the review needs (PAS-OPS-016).
+A review nobody decides does not keep its file forever: once a day the platform
+deletes every review upload older than the app's retention, **30 days** by
+default (#307). Age counts from the upload; replacing a file restarts it. A
+team admin sets the retention, 1–365 days, or `null` for the default:
+
+```
+PUT /v1/apps/<appId>/storage-config   { "review_retention_days": 14 }
+```
+
+Either field of `storage-config` may be sent alone; the other keeps its value.
+`GET /v1/apps/<appId>/storage-config` returns `review_retention_days` (null when
+unset) and `effective_review_retention_days`. Each expiry is recorded in the
+audit trail above with actor `system:retention` and action `platform_expired`.
+If your app keeps the review key on a row, expect a `404` for a document past
+its retention.
 
 ## Workers AI limits
 
