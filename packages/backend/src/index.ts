@@ -62,6 +62,7 @@ import { counterRoutes } from './routes/counters.js';
 import { roomRoutes } from './routes/rooms.js';
 import { appWorkerRoutes } from './routes/app-workers.js';
 import { hookRoutes } from './routes/hooks.js';
+import { appWorkerSpikeRoutes } from './routes/app-worker-spike.js'; // TEMPORARY (#305)
 import { connectorRoutes } from './routes/connectors.js';
 
 export const app = new Hono<{ Bindings: Env }>();
@@ -274,6 +275,7 @@ v1.route('/', servicesRoutes);
 v1.route('/', engagementRoutes);
 v1.route('/', payoutCronRoutes);
 v1.route('/', payoutMeteringRoutes);
+v1.route('/', appWorkerSpikeRoutes); // TEMPORARY (#305)
 v1.route('/', teamRoutes);
 v1.route('/', inviteRoutes);
 v1.route('/', rolesRoutes);
