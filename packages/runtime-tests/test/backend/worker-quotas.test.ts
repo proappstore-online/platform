@@ -39,7 +39,7 @@ async function github(delivery: string, body = '{"zen":"ok"}') {
     headers: { 'content-type': 'application/json', 'x-github-event': 'push', 'x-github-delivery': delivery, 'x-hub-signature-256': `sha256=${await hmacHex(GH_SECRET, body)}` },
   });
 }
-const deliveryRow = (id: string) => env.DB.prepare('SELECT id, status, attempts, error FROM app_hook_deliveries WHERE delivery_id = ?').bind(id).first<{ id: string; status: string; attempts: number; error: string | null }>();
+const deliveryRow = (id: string) => env.DB.prepare('SELECT id, status, attempts, error FROM app_hook_deliveries WHERE COALESCE(sender_delivery_id, delivery_id) = ?').bind(id).first<{ id: string; status: string; attempts: number; error: string | null }>();
 // Deliveries and schedule runs go through the app-events queue (#257): recorded, then drained through the real consumer.
 let sent: ReturnType<typeof captureAppEvents>;
 async function settled(id: string) {
@@ -144,7 +144,8 @@ describe('the daily invocation quota (#275)', () => {
     expect((await setQuotas({ hook_deliveries: 1 })).status).toBe(200);
     await github('h-1');
     expect(await settled('h-1')).toMatchObject({ status: 'delivered' });
-    const res = await github('h-2');
+    // A distinct event (another body): the same body would be the same delivery (#317).
+    const res = await github('h-2', '{"zen":"second"}');
     expect(res.status).toBe(202);
     expect(await res.json()).toMatchObject({ processed: false });
     expect(await deliveryRow('h-2')).toMatchObject({ status: 'quota_exceeded', error: expect.stringContaining('hook_deliveries') });

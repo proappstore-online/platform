@@ -3,12 +3,20 @@
  * any app code runs"). Not to be confused with lib/verifiers/, which holds the
  * verify-*tool* verifiers of #148.
  *
- *   kind                 signature                                           delivery id
- *   github-hmac-sha256   X-Hub-Signature-256: sha256=<hex>, HMAC of raw body  X-GitHub-Delivery
- *   stripe               Stripe-Signature t=…,v1=… (lib/stripe.ts, 5 min)     event `id` in the body
- *   hmac-sha256          configurable header/prefix, hex or base64            id_header, else SHA-256 of body
- *   secret-token         X-PAS-Hook-Token equals the secret                   id_header, else SHA-256 of body
+ *   kind                 signature                                           replay key (#317)        sender id (display)
+ *   github-hmac-sha256   X-Hub-Signature-256: sha256=<hex>, HMAC of raw body  SHA-256 of the body      X-GitHub-Delivery
+ *   stripe               Stripe-Signature t=…,v1=… (lib/stripe.ts, 5 min)     event `id` in the body   event `id`
+ *   hmac-sha256          configurable header/prefix, hex or base64            SHA-256 of the body      id_header
+ *   secret-token         X-PAS-Hook-Token equals the secret                   SHA-256 of the body      id_header
  *   github-app           fed only by the platform's GitHub App demux (#258) — its per-app URL answers 404
+ *
+ * The replay key is what de-duplicates a delivery, so it must come from bytes the
+ * signature covers (#317). A delivery-id header is not signed: replaying a
+ * captured body and signature under a fresh X-GitHub-Delivery or id_header used
+ * to pass as a new delivery and run again. Stripe's event id is inside the signed
+ * body, and its signature carries a timestamp, so it stays the key. Everywhere
+ * else the key is the hash of the verified body; the header id is kept only to
+ * show the owner which sender delivery a row is.
  *
  * Every comparison is constant-time (lib/bytes.ts). No query-string tokens: a
  * secret in a URL leaks into logs, proxies and Referer.
@@ -27,7 +35,7 @@ export interface HookVerify {
   header?: string;
   prefix?: string;
   encoding?: 'hex' | 'base64';
-  /** hmac-sha256 / secret-token: a header carrying the sender's delivery id. */
+  /** hmac-sha256 / secret-token: a header carrying the sender's delivery id — shown to the owner, never a de-dupe key (#317). */
   id_header?: string;
 }
 
@@ -80,7 +88,10 @@ export async function sha256OfBytes(body: Uint8Array): Promise<string> {
 }
 
 export interface VerifiedDelivery {
-  deliveryId: string;
+  /** De-duplication key, from authenticated bytes only (#317): the signed body's hash, or Stripe's signed event id. */
+  replayKey: string;
+  /** The sender's own delivery id, for display. Unsigned except for Stripe: never a security key. */
+  deliveryId: string | null;
   /** The sender's event name, where it says one (GitHub's X-GitHub-Event, Stripe's `type`). */
   event: string | null;
 }
@@ -92,12 +103,12 @@ export interface VerifiedDelivery {
  */
 export async function verifyHookDelivery(verify: HookVerify, secret: string, body: Uint8Array, headers: Headers): Promise<VerifiedDelivery | null> {
   if (!secret) return null;
-  const idFrom = async (header?: string) => (header ? headers.get(header)?.trim().slice(0, 200) : '') || sha256OfBytes(body);
+  const senderId = (header?: string) => (header ? headers.get(header)?.trim().slice(0, 200) || null : null);
   switch (verify.kind) {
     case 'github-hmac-sha256': {
       const sig = headers.get('x-hub-signature-256') ?? '';
       if (!sig.startsWith('sha256=') || !same(sig.slice(7).toLowerCase(), toHex(await hmac(secret, body)))) return null;
-      return { deliveryId: headers.get('x-github-delivery')?.trim().slice(0, 200) || await sha256OfBytes(body), event: headers.get('x-github-event')?.slice(0, 100) ?? null };
+      return { replayKey: await sha256OfBytes(body), deliveryId: senderId('x-github-delivery'), event: headers.get('x-github-event')?.slice(0, 100) ?? null };
     }
     case 'stripe': {
       let text: string;
@@ -105,10 +116,8 @@ export async function verifyHookDelivery(verify: HookVerify, secret: string, bod
       if (!(await verifyWebhookSignature(text, headers.get('stripe-signature') ?? '', secret))) return null;
       let event: { id?: unknown; type?: unknown } = {};
       try { event = JSON.parse(text) as typeof event; } catch { /* signed but not JSON: id from the bytes */ }
-      return {
-        deliveryId: typeof event.id === 'string' && event.id ? event.id.slice(0, 200) : await sha256OfBytes(body),
-        event: typeof event.type === 'string' ? event.type.slice(0, 100) : null,
-      };
+      const id = typeof event.id === 'string' && event.id ? event.id.slice(0, 200) : null;
+      return { replayKey: id ?? await sha256OfBytes(body), deliveryId: id, event: typeof event.type === 'string' ? event.type.slice(0, 100) : null };
     }
     case 'hmac-sha256': {
       let sig = headers.get(verify.header ?? 'x-signature') ?? '';
@@ -118,11 +127,13 @@ export async function verifyHookDelivery(verify: HookVerify, secret: string, bod
       const mac = await hmac(secret, body);
       const expected = verify.encoding === 'base64' ? toBase64(new Uint8Array(mac)) : toHex(mac);
       if (!same(verify.encoding === 'base64' ? sig : sig.toLowerCase(), expected)) return null;
-      return { deliveryId: await idFrom(verify.id_header), event: null };
+      return { replayKey: await sha256OfBytes(body), deliveryId: senderId(verify.id_header), event: null };
     }
     case 'secret-token': {
       if (!same(headers.get('x-pas-hook-token') ?? '', secret)) return null;
-      return { deliveryId: await idFrom(verify.id_header), event: null };
+      // The token proves the sender knows the secret, not that the body is theirs: anyone holding it can send
+      // any body. The body hash still makes each body run once.
+      return { replayKey: await sha256OfBytes(body), deliveryId: senderId(verify.id_header), event: null };
     }
     default:
       return null; // github-app: never verified on the per-app URL (#258)

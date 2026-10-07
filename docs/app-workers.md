@@ -104,13 +104,13 @@ Up to **10** entries of `{ name, verify, to }`. Each hook gets a public URL:
 
 `verify.kind` is the scheme the platform checks **before** any of your code runs:
 
-| Kind | Checks |
-|---|---|
-| `github-hmac-sha256` | `X-Hub-Signature-256`; delivery id from `X-GitHub-Delivery` |
-| `stripe` | `Stripe-Signature` (timestamped, 5 min tolerance); delivery id is the event `id` in the body |
-| `hmac-sha256` | a hex or base64 HMAC of the body in a header you name (`header`, `prefix`, `encoding`); delivery id from `id_header`, else the body's SHA-256 |
-| `secret-token` | `X-PAS-Hook-Token` equals the secret; delivery id from `id_header`, else the body's SHA-256 |
-| `github-app` | fed by the platform's GitHub App (see `connectors`), not a public URL; it has no `secret` |
+| Kind | Checks | De-duplicated on | Shown as the delivery id |
+|---|---|---|---|
+| `github-hmac-sha256` | `X-Hub-Signature-256` | the body's SHA-256 | `X-GitHub-Delivery` |
+| `stripe` | `Stripe-Signature` (timestamped, 5 min tolerance) | the event `id` in the signed body | the event `id` |
+| `hmac-sha256` | a hex or base64 HMAC of the body in a header you name (`header`, `prefix`, `encoding`) | the body's SHA-256 | `id_header`, if set |
+| `secret-token` | `X-PAS-Hook-Token` equals the secret | the body's SHA-256 | `id_header`, if set |
+| `github-app` | fed by the platform's GitHub App (see `connectors`), not a public URL; it has no `secret` | the body's SHA-256 | `X-GitHub-Delivery` |
 
 `verify.secret` names the app secret holding the shared secret. If the secret
 is not set, every delivery is refused with `401`. `pas hook list` shows
@@ -123,10 +123,33 @@ a path into the JSON body (`$.repository.id`, `$.items[0]`). The action must lis
 `"hook"` in `callers`, require auth, declare `caller_unscoped` with a reason, and
 have no role gate.
 
-A delivery is de-duplicated on its delivery id. Repeating one that was received
-or delivered answers `200 {"duplicate": true}`. Repeating one that failed runs it
-again as the next attempt. The sender gets `202` as soon as the delivery is
-verified and recorded.
+**Replay protection (#317).** A delivery is de-duplicated on a key taken only
+from bytes the signature covers: the SHA-256 of the verified body, or, for
+Stripe, the event id inside the signed body. A delivery-id header such as
+`X-GitHub-Delivery` or your `id_header` is not signed. It is shown in
+`pas hook deliveries` and `GET …/hook-deliveries` (`delivery_id`, next to
+`replay_key`), and nothing else depends on it. So someone who has seen a signed
+delivery cannot get it run again by changing its headers.
+
+- Repeating a delivery that was received or delivered answers
+  `200 {"duplicate": true}`, whatever its headers say. That includes the
+  sender's own retries.
+- Repeating one that failed runs it again as the next attempt. This is how
+  GitHub "Redeliver" and Stripe "Resend" work.
+- Two deliveries with different bodies are two deliveries, even under the same
+  delivery id.
+- Two deliveries with byte-identical bodies are one delivery. Real events
+  differ, but if your sender can emit the same body twice for two events, put
+  something unique (an id or a timestamp) in the body.
+- **The window is 14 days**, the retention of the delivery log. After that, a
+  captured delivery from a sender without a signed timestamp (every kind but
+  `stripe`) could be accepted once more. Stripe's 5-minute signature tolerance
+  closes that window.
+- `secret-token` proves only that the sender knows the token, not that the body
+  is theirs: anyone holding the token can send any body. Prefer an HMAC kind
+  where the sender supports one.
+
+The sender gets `202` as soon as the delivery is verified and recorded.
 
 A hook for the worker is delivered from a queue, with retries: if the worker does
 not answer 2xx, the platform tries again after 20, 40, 80, 160 and 320 seconds,

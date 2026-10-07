@@ -205,7 +205,7 @@ describe('webhook demux', () => {
     expect(res.status).toBe(202);
     expect(await res.json()).toEqual({ accepted: true, delivered: 1 });
     expect(ingest).toHaveBeenCalledTimes(1);
-    expect(ingest.mock.calls[0]!.slice(1, 5)).toEqual(['a', 'github', '"worker"', { deliveryId: 'd-1', event: 'issues' }]);
+    expect(ingest.mock.calls[0]!.slice(1, 5)).toEqual(['a', 'github', '"worker"', { replayKey: expect.stringMatching(/^[0-9a-f]{64}$/), deliveryId: 'd-1', event: 'issues' }]);
   });
 
   it('removes bindings and cached tokens when the installation is deleted', async () => {

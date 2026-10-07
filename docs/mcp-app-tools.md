@@ -579,8 +579,10 @@ Two more manifest keys configure server-side code (prototype; see
   5-minute platform tick.
 - **`hooks`**: up to 10 entries of `{ "name", "verify": { "kind", "secret" }, "to" }`.
   - Each hook gets a public URL, `https://api.proappstore.online/v1/apps/<app>/hooks/<name>`.
-  - The platform verifies every delivery before any app code runs, and
-    de-duplicates on the delivery id.
+  - The platform verifies every delivery before any app code runs. It
+    de-duplicates on a key from the signed bytes: the body's SHA-256, or
+    Stripe's event id. The unsigned delivery-id header is shown, not trusted
+    (#317, [app workers](./app-workers.md)).
   - `to` is `"worker"`, or `{ "action", "params" }` to run one hook action as
     `system:hook`.
 

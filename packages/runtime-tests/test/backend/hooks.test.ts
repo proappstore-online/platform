@@ -63,7 +63,8 @@ async function github(event: string, delivery: string, body = '{"zen":"ok"}', se
     headers: { 'content-type': 'application/json', 'x-github-event': event, 'x-github-delivery': delivery, 'x-hub-signature-256': `sha256=${await hmacHex(secret, body)}`, 'user-agent': 'GitHub-Hookshot/1' },
   });
 }
-const delivery = (deliveryId: string) => env.DB.prepare('SELECT id, status, attempts, error, event FROM app_hook_deliveries WHERE delivery_id = ?').bind(deliveryId).first<{ id: string; status: string; attempts: number; error: string | null; event: string | null }>();
+// By the sender's delivery id (#317: the row's delivery_id is now its replay key, the sender's id sits beside it).
+const delivery = (deliveryId: string) => env.DB.prepare('SELECT id, status, attempts, error, event FROM app_hook_deliveries WHERE COALESCE(sender_delivery_id, delivery_id) = ?').bind(deliveryId).first<{ id: string; status: string; attempts: number; error: string | null; event: string | null }>();
 let sent: ReturnType<typeof captureAppEvents>;
 /** Run what the 202 queued through the consumer, then read the row. */
 async function settled(deliveryId: string) {
@@ -250,5 +251,70 @@ describe('owner delivery log (#256)', () => {
     expect(deliveries).toEqual([expect.objectContaining({ hook: 'github', delivery_id: 'log-1', status: 'delivered' })]);
     expect(Object.keys(deliveries[0]!)).not.toContain('body');
     expect((await SELF.fetch(`${BASE}/v1/apps/t/hook-deliveries`, json('GET', undefined, await session('gh:7')))).status).toBe(403);
+  });
+});
+
+describe('replay protection keys on signed bytes, not delivery-id headers (#317)', () => {
+  const rows = () => env.DB.prepare("SELECT delivery_id, sender_delivery_id, status FROM app_hook_deliveries WHERE app_id = 't' ORDER BY received_at, id").all<{ delivery_id: string; sender_delivery_id: string | null; status: string }>().then((r) => r.results ?? []);
+  const workerRuns = () => env.DB.prepare("SELECT COUNT(*) AS n FROM app_worker_invocations WHERE app_id = 't'").first<{ n: number }>().then((r) => r!.n);
+
+  it('a captured GitHub delivery replayed under a new X-GitHub-Delivery is a duplicate and runs once', async () => {
+    const body = '{"action":"opened","issue":{"number":7}}';
+    expect((await github('issues', 'gh-1', body)).status).toBe(202);
+    expect(await settled('gh-1')).toMatchObject({ status: 'delivered', attempts: 1 });
+    for (const forged of ['gh-2', 'gh-3', crypto.randomUUID()]) {
+      const replay = await github('issues', forged, body);
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toEqual({ duplicate: true });
+    }
+    await drainAppEvents(sent);
+    expect(await workerRuns()).toBe(1);
+    expect(await rows()).toEqual([{ delivery_id: expect.stringMatching(/^[0-9a-f]{64}$/), sender_delivery_id: 'gh-1', status: 'delivered' }]);
+    // A changed X-GitHub-Event is no way round it either: same signed body, same row.
+    expect(await (await github('push', 'gh-4', body)).json()).toEqual({ duplicate: true });
+  });
+
+  it('distinct signed bodies run separately, even under the same delivery id', async () => {
+    expect((await github('issues', 'same-id', '{"n":1}')).status).toBe(202);
+    expect((await github('issues', 'same-id', '{"n":2}')).status).toBe(202);
+    await drainAppEvents(sent);
+    expect(await workerRuns()).toBe(2);
+    expect((await rows()).map((r) => [r.sender_delivery_id, r.status])).toEqual([['same-id', 'delivered'], ['same-id', 'delivered']]);
+  });
+
+  it('hmac-sha256 with id_header: a replay under a fresh X-Delivery is a duplicate', async () => {
+    const bytes = enc.encode('{"order":42}');
+    const send = (id: string) => SELF.fetch(`${BASE}/v1/apps/t/hooks/bin`, {
+      method: 'POST', body: bytes, headers: { 'content-type': 'application/json', 'x-signature': '', 'x-delivery': id },
+    });
+    const sig = await hmacHex(BIN_SECRET, bytes);
+    const signed = (id: string) => SELF.fetch(`${BASE}/v1/apps/t/hooks/bin`, {
+      method: 'POST', body: bytes, headers: { 'content-type': 'application/json', 'x-signature': sig, 'x-delivery': id },
+    });
+    expect((await send('unsigned')).status).toBe(401);
+    expect((await signed('b-1')).status).toBe(202);
+    expect(await (await signed('b-2')).json()).toEqual({ duplicate: true });
+    await drainAppEvents(sent);
+    expect(await workerRuns()).toBe(1);
+  });
+
+  it("Stripe is unchanged: its retry (same event, a new signature timestamp) is a duplicate; another event id is new", async () => {
+    const stripe = async (id: string, t = Math.floor(Date.now() / 1000)) => {
+      const body = JSON.stringify({ id, type: 'invoice.paid' });
+      return SELF.fetch(`${BASE}/v1/apps/t/hooks/stripe`, { method: 'POST', body, headers: { 'stripe-signature': `t=${t},v1=${await hmacHex(STRIPE_SECRET, `${t}.${body}`)}` } });
+    };
+    expect((await stripe('evt_A')).status).toBe(202);
+    expect(await (await stripe('evt_A', Math.floor(Date.now() / 1000) - 30)).json()).toEqual({ duplicate: true });
+    expect((await stripe('evt_B')).status).toBe(202);
+    await drainAppEvents(sent);
+    expect(await workerRuns()).toBe(2);
+    expect((await rows()).map((r) => [r.delivery_id, r.sender_delivery_id])).toEqual([['evt_A', 'evt_A'], ['evt_B', 'evt_B']]);
+  });
+
+  it("the owner's log shows the sender's delivery id, with the replay key beside it", async () => {
+    await github('ping', 'shown-1', '{"zen":"shown"}');
+    await settled('shown-1');
+    const { deliveries } = await (await SELF.fetch(`${BASE}/v1/apps/t/hook-deliveries?hook=github`, json('GET', undefined, await session('gh:admin')))).json() as { deliveries: Record<string, unknown>[] };
+    expect(deliveries).toEqual([expect.objectContaining({ delivery_id: 'shown-1', replay_key: expect.stringMatching(/^[0-9a-f]{64}$/), status: 'delivered' })]);
   });
 });

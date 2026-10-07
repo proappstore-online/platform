@@ -253,7 +253,9 @@ grant minted for one app cannot be replayed into another app's envelope.
   0, 5, …, 55 and an off-tick minute would never fire (#281); ≤ 3 per app; the
   #123 five-failure breaker applies unchanged.
 - Hooks: ≤ 10 per app, body ≤ 5 MB, verified by the platform before any app code
-  runs, de-duplicated by delivery id.
+  runs, de-duplicated on a key from signed bytes only. That key is the verified
+  body's SHA-256, or Stripe's signed event id. A sender's delivery-id header is
+  unsigned and kept for display (#317).
 - **Recording**, consistent with [ADR-008](./008-error-observability.md)'s
   two-tier split:
   - one **per-invocation record in D1** (app, event id, type, name, attempt,

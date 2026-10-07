@@ -165,7 +165,7 @@ connectorRoutes.post('/connectors/github/webhook', async (c) => {
   let delivered = 0;
   for (const row of bound.results ?? []) {
     if (!(JSON.parse(row.events) as string[]).includes(event)) continue;
-    // De-dupe by X-GitHub-Delivery per app is the #256 pipeline's own (app, hook, delivery id) key.
+    // De-dupe per app is the #256 pipeline's own (app, hook, replay key): the signed body's hash, never X-GitHub-Delivery (#317).
     await ingestVerifiedDelivery(c, row.app_id, row.hook, row.target, verified, body);
     delivered++;
   }

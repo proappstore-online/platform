@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { encodeEnvelopeBody, hookHeaders, sha256OfBytes, validateHookVerify, verifyHookDelivery } from './hook-verifiers.js';
 
 // #256: the platform verifies an inbound delivery before any app code runs, on
-// the exact bytes, in constant time; and derives the id it de-duplicates on.
+// the exact bytes, in constant time; and derives the key it de-duplicates on —
+// from signed bytes only (#317), with the sender's unsigned id kept for display.
 
 const SECRET = 'whsec_test_secret';
 const enc = new TextEncoder();
@@ -17,9 +18,19 @@ const b64 = (hex: string) => btoa(String.fromCharCode(...hex.match(/../g)!.map((
 
 describe('github-hmac-sha256', () => {
   const verify = { kind: 'github-hmac-sha256' as const, secret: 'GH' };
-  it('accepts sha256=<hmac of the raw body>; the delivery id is X-GitHub-Delivery', async () => {
+  it('accepts sha256=<hmac of the raw body>; the replay key is the body hash, X-GitHub-Delivery only the sender id', async () => {
     const headers = new Headers({ 'x-hub-signature-256': `sha256=${await hmacHex(SECRET, body)}`, 'x-github-delivery': 'd1', 'x-github-event': 'issues' });
-    expect(await verifyHookDelivery(verify, SECRET, body, headers)).toEqual({ deliveryId: 'd1', event: 'issues' });
+    expect(await verifyHookDelivery(verify, SECRET, body, headers)).toEqual({ replayKey: await sha256OfBytes(body), deliveryId: 'd1', event: 'issues' });
+  });
+  it('#317: the same signed body under another X-GitHub-Delivery has the same replay key; another body does not', async () => {
+    const sig = `sha256=${await hmacHex(SECRET, body)}`;
+    const a = await verifyHookDelivery(verify, SECRET, body, new Headers({ 'x-hub-signature-256': sig, 'x-github-delivery': 'd1' }));
+    const replay = await verifyHookDelivery(verify, SECRET, body, new Headers({ 'x-hub-signature-256': sig, 'x-github-delivery': 'forged-d2' }));
+    expect(replay!.replayKey).toBe(a!.replayKey);
+    expect(replay!.deliveryId).toBe('forged-d2');
+    const other = enc.encode('{"action":"closed"}');
+    const b = await verifyHookDelivery(verify, SECRET, other, new Headers({ 'x-hub-signature-256': `sha256=${await hmacHex(SECRET, other)}`, 'x-github-delivery': 'd1' }));
+    expect(b!.replayKey).not.toBe(a!.replayKey);
   });
   it('refuses a wrong secret, a tampered body, a missing prefix and no header', async () => {
     const good = await hmacHex(SECRET, body);
@@ -29,18 +40,20 @@ describe('github-hmac-sha256', () => {
     expect(await verifyHookDelivery(verify, SECRET, body, new Headers())).toBeNull();
     expect(await verifyHookDelivery(verify, '', body, new Headers({ 'x-hub-signature-256': `sha256=${good}` }))).toBeNull();
   });
-  it('without X-GitHub-Delivery, the id is the SHA-256 of the body', async () => {
+  it('without X-GitHub-Delivery, there is no sender id; the replay key is still the body hash', async () => {
     const headers = new Headers({ 'x-hub-signature-256': `sha256=${await hmacHex(SECRET, body)}` });
-    expect((await verifyHookDelivery(verify, SECRET, body, headers))?.deliveryId).toBe(await sha256OfBytes(body));
+    expect(await verifyHookDelivery(verify, SECRET, body, headers)).toMatchObject({ replayKey: await sha256OfBytes(body), deliveryId: null });
   });
 });
 
 describe('stripe (lib/stripe.ts, 5-minute window)', () => {
   const verify = { kind: 'stripe' as const, secret: 'STRIPE' };
   const sign = async (t: number, payload = body) => `t=${t},v1=${await hmacHex(SECRET, `${t}.${new TextDecoder().decode(payload)}`)}`;
-  it('accepts a fresh signature; the delivery id is the event id', async () => {
+  it('accepts a fresh signature; the replay key is the signed event id (unchanged by #317)', async () => {
     const t = Math.floor(Date.now() / 1000);
-    expect(await verifyHookDelivery(verify, SECRET, body, new Headers({ 'stripe-signature': await sign(t) }))).toEqual({ deliveryId: 'evt_1', event: 'issues.opened' });
+    expect(await verifyHookDelivery(verify, SECRET, body, new Headers({ 'stripe-signature': await sign(t) }))).toEqual({ replayKey: 'evt_1', deliveryId: 'evt_1', event: 'issues.opened' });
+    // Stripe's own retry re-signs with a new timestamp: still the same event id, so still one delivery.
+    expect((await verifyHookDelivery(verify, SECRET, body, new Headers({ 'stripe-signature': await sign(t - 60) })))!.replayKey).toBe('evt_1');
   });
   it('refuses a signature older than 5 minutes and a body that is not UTF-8', async () => {
     const old = Math.floor(Date.now() / 1000) - 301;
@@ -51,23 +64,26 @@ describe('stripe (lib/stripe.ts, 5-minute window)', () => {
   it('a signed body that is not JSON gets the body hash as its id', async () => {
     const t = Math.floor(Date.now() / 1000);
     const text = enc.encode('plain');
-    expect(await verifyHookDelivery(verify, SECRET, text, new Headers({ 'stripe-signature': await sign(t, text) }))).toEqual({ deliveryId: await sha256OfBytes(text), event: null });
+    expect(await verifyHookDelivery(verify, SECRET, text, new Headers({ 'stripe-signature': await sign(t, text) }))).toEqual({ replayKey: await sha256OfBytes(text), deliveryId: null, event: null });
   });
 });
 
 describe('hmac-sha256 and secret-token', () => {
-  it('hmac-sha256: default X-Signature hex, or a configured header, prefix and base64; id from id_header', async () => {
+  it('hmac-sha256: default X-Signature hex, or a configured header, prefix and base64; id_header is the sender id only', async () => {
     const hex = await hmacHex(SECRET, body);
+    const hash = await sha256OfBytes(body);
     expect(await verifyHookDelivery({ kind: 'hmac-sha256', secret: 'S' }, SECRET, body, new Headers({ 'x-signature': hex.toUpperCase() })))
-      .toEqual({ deliveryId: await sha256OfBytes(body), event: null });
+      .toEqual({ replayKey: hash, deliveryId: null, event: null });
     const custom = { kind: 'hmac-sha256' as const, secret: 'S', header: 'X-Sig', prefix: 'v1,', encoding: 'base64' as const, id_header: 'X-Id' };
-    expect(await verifyHookDelivery(custom, SECRET, body, new Headers({ 'x-sig': `v1,${b64(hex)}`, 'x-id': 'abc' }))).toEqual({ deliveryId: 'abc', event: null });
+    expect(await verifyHookDelivery(custom, SECRET, body, new Headers({ 'x-sig': `v1,${b64(hex)}`, 'x-id': 'abc' }))).toEqual({ replayKey: hash, deliveryId: 'abc', event: null });
+    // #317: a fresh id_header does not make a replay new.
+    expect((await verifyHookDelivery(custom, SECRET, body, new Headers({ 'x-sig': `v1,${b64(hex)}`, 'x-id': 'forged' })))!.replayKey).toBe(hash);
     expect(await verifyHookDelivery(custom, SECRET, body, new Headers({ 'x-sig': b64(hex) }))).toBeNull();
     expect(await verifyHookDelivery(custom, SECRET, body, new Headers({ 'x-sig': `v1,${hex}` }))).toBeNull();
   });
   it('secret-token: X-PAS-Hook-Token must equal the secret', async () => {
     const verify = { kind: 'secret-token' as const, secret: 'T' };
-    expect(await verifyHookDelivery(verify, SECRET, body, new Headers({ 'x-pas-hook-token': SECRET })))?.toMatchObject({ event: null });
+    expect(await verifyHookDelivery(verify, SECRET, body, new Headers({ 'x-pas-hook-token': SECRET }))).toEqual({ replayKey: await sha256OfBytes(body), deliveryId: null, event: null });
     expect(await verifyHookDelivery(verify, SECRET, body, new Headers({ 'x-pas-hook-token': `${SECRET}x` }))).toBeNull();
     expect(await verifyHookDelivery(verify, SECRET, body, new Headers())).toBeNull();
   });

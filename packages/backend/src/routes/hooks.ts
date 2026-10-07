@@ -148,8 +148,12 @@ hookRoutes.post('/apps/:appId/hooks/:name', async (c) => {
 
 /**
  * Everything after verification, shared with the GitHub App demux (#258): de-dupe
- * per (app, hook, delivery id), the daily hook quota, then 202 and delivery in
+ * per (app, hook, replay key), the daily hook quota, then 202 and delivery in
  * waitUntil. The caller has already verified the body against the right secret.
+ *
+ * The replay key comes from signed bytes only (#317, lib/hook-verifiers.ts), so a
+ * captured delivery replayed under a fresh delivery-id header is the same row: a
+ * duplicate, never a second run. The sender's id is stored beside it for display.
  */
 export async function ingestVerifiedDelivery(
   c: Context<{ Bindings: Env }>, appId: string, name: string, targetJson: string, verified: VerifiedDelivery, body: Uint8Array,
@@ -157,13 +161,13 @@ export async function ingestVerifiedDelivery(
   const now = Date.now();
   const rowId = crypto.randomUUID();
   const inserted = await c.env.DB.prepare(
-    `INSERT OR IGNORE INTO app_hook_deliveries (id, app_id, hook, delivery_id, event, received_at, status, attempts)
-     VALUES (?, ?, ?, ?, ?, ?, 'received', 1)`,
-  ).bind(rowId, appId, name, verified.deliveryId, verified.event, now).run();
+    `INSERT OR IGNORE INTO app_hook_deliveries (id, app_id, hook, delivery_id, sender_delivery_id, event, received_at, status, attempts)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'received', 1)`,
+  ).bind(rowId, appId, name, verified.replayKey, verified.deliveryId, verified.event, now).run();
   let row: DeliveryRow = { id: rowId, status: 'received', attempts: 1 };
   if (!inserted.meta.changes) {
     const existing = await c.env.DB.prepare('SELECT id, status, attempts FROM app_hook_deliveries WHERE app_id = ? AND hook = ? AND delivery_id = ?')
-      .bind(appId, name, verified.deliveryId).first<DeliveryRow>();
+      .bind(appId, name, verified.replayKey).first<DeliveryRow>();
     if (!existing || existing.status === 'received' || existing.status === 'delivered') return c.json({ duplicate: true }, 200);
     // A sender redelivering a failed delivery: only the request that wins this update proceeds.
     const retried = await c.env.DB.prepare(
@@ -235,7 +239,8 @@ hookRoutes.get('/apps/:appId/hook-deliveries', async (c) => {
   const status = c.req.query('status');
   if (status && !['received', 'delivered', 'failed', 'quota_exceeded'].includes(status)) throw new HttpError('invalid status', 400);
   const rows = await c.env.DB.prepare(
-    `SELECT id, hook, delivery_id, event, received_at, status, attempts, finished_at, error
+    `SELECT id, hook, COALESCE(sender_delivery_id, delivery_id) AS delivery_id, delivery_id AS replay_key,
+            event, received_at, status, attempts, finished_at, error
        FROM app_hook_deliveries WHERE app_id = ?${hook ? ' AND hook = ?' : ''}${status ? ' AND status = ?' : ''}
       ORDER BY received_at DESC LIMIT ?`,
   ).bind(appId, ...(hook ? [hook] : []), ...(status ? [status] : []), limit).all();
