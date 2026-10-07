@@ -42,7 +42,7 @@ appWorkerSpikeRoutes.post('/internal/app-worker-spike', async (c) => {
   await requireAdmin(c);
   const loader = c.env.LOADER;
   if (!loader) return c.json({ error: 'no LOADER binding' }, 503);
-  const body = await c.req.json<{ mode?: string; n?: number; sleepMs?: number; kb?: number; spinMs?: number }>();
+  const body = await c.req.json<{ mode?: string; n?: number; sleepMs?: number; kb?: number; spinMs?: number; cpuMs?: number }>();
   const run = crypto.randomUUID();
   const t0 = Date.now();
 
@@ -70,9 +70,38 @@ appWorkerSpikeRoutes.post('/internal/app-worker-spike', async (c) => {
     const source = sizedModule(kb, Math.min(Math.max(body.spinMs ?? 0, 0), 2000));
     const worker = loader.get(`spike:${run}:startup`, async () => ({
       compatibilityDate: '2026-01-01', mainModule: 'w.js', modules: { 'w.js': source }, env: {}, globalOutbound: null,
+      ...(body.cpuMs ? { limits: { cpuMs: body.cpuMs } } : {}),
     }));
-    const res = await worker.getEntrypoint().fetch(new Request('https://w.invalid/'));
-    return c.json({ run, bytes: source.length, kb, spinMs: body.spinMs ?? 0, wallMs: Date.now() - t0, child: await res.json() });
+    try {
+      const res = await worker.getEntrypoint().fetch(new Request('https://w.invalid/'));
+      return c.json({ run, bytes: source.length, kb, spinMs: body.spinMs ?? 0, cpuMs: body.cpuMs ?? null, wallMs: Date.now() - t0, status: res.status, child: await res.text() });
+    } catch (e) {
+      return c.json({ run, bytes: source.length, kb, spinMs: body.spinMs ?? 0, cpuMs: body.cpuMs ?? null, wallMs: Date.now() - t0, error: String((e as Error).message ?? e) });
+    }
   }
-  return c.json({ error: 'mode must be fanout or startup' }, 400);
+
+  if (body.mode === 'waves') {
+    // n workers, at most 4 in flight: each starts as one finishes. Shows a freed slot is reusable in the same request.
+    const n = Math.min(Math.max(body.n ?? 8, 1), 12);
+    const sleepMs = Math.min(Math.max(body.sleepMs ?? 1000, 0), 10_000);
+    const results: unknown[] = [];
+    let next = 0;
+    await Promise.all(Array.from({ length: 4 }, async () => {
+      while (next < n) {
+        const i = next++;
+        const worker = loader.get(`spike:${run}:${i}`, async () => ({
+          compatibilityDate: '2026-01-01', mainModule: 'w.js', modules: { 'w.js': waiter }, env: {}, globalOutbound: null,
+        }));
+        const startedAt = Date.now() - t0;
+        try {
+          await (await worker.getEntrypoint().fetch(new Request('https://w.invalid/', { method: 'POST', body: JSON.stringify({ sleepMs }) }))).text();
+          results.push({ i, startedAt, doneAt: Date.now() - t0 });
+        } catch (e) {
+          results.push({ i, startedAt, error: String((e as Error).message ?? e) });
+        }
+      }
+    }));
+    return c.json({ run, n, sleepMs, totalMs: Date.now() - t0, results });
+  }
+  return c.json({ error: 'mode must be fanout, waves or startup' }, 400);
 });
