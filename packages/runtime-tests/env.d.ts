@@ -7,6 +7,7 @@ declare module 'cloudflare:test' {
     APPS: R2Bucket;
     AGENT_STORAGE: R2Bucket;
     ROOM: DurableObjectNamespace;
+    APP_EVENTS: Queue;
     PROJECT: DurableObjectNamespace;
     PROVISION_WORKFLOW: Workflow;
     SELF: Fetcher;

@@ -1,3 +1,5 @@
+import type { AppEventMessage } from './lib/app-event-queue.js';
+
 export interface Env {
   DB: D1Database;
   /** Self service binding — internal re-entry into this worker's own routes
@@ -174,6 +176,8 @@ export interface Env {
   APP_WORKER_BACKEND?: 'account' | 'loader' | 'dispatch';
   /** Worker Loader (Dynamic Workers) binding; required by the `loader` backend. */
   LOADER?: WorkerLoader;
+  /** Producer of the app-events queue (#257): schedule and worker-hook deliveries, with retries. Consumed by this Worker's `queue()`. */
+  APP_EVENTS?: Queue<AppEventMessage>;
   /** Compatibility date of loaded app workers. Defaults to the platform pin (lib/app-worker-host.ts). */
   APP_WORKER_COMPATIBILITY_DATE?: string;
   /** One data point per app-worker `PAS` call (#254, ADR-009 §4): index app id; blobs method, action, outcome. */

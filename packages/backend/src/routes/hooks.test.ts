@@ -63,7 +63,7 @@ describe('deliverHook → worker (#256)', () => {
     return invoke;
   };
 
-  it('invokes a hook envelope: row id, the delivery attempt, allowlisted headers, base64 body, 25 s', async () => {
+  it('invokes a hook envelope: row id, the delivery attempt, allowlisted headers, base64 body, 60 s', async () => {
     const invoke = stubHost(true, {});
     expect(await deliverHook({} as Env, workerTarget)).toBeNull();
     expect(invoke).toHaveBeenCalledWith('t', {

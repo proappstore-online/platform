@@ -119,6 +119,32 @@ binding = "AI"
 [[worker_loaders]]
 binding = "LOADER"
 
+# App-event queue (#257, ADR-009): schedule and worker-hook deliveries run in this Worker's
+# queue() consumer, with retries (delay 2 ** attempt * 10 s) and a dead-letter queue. Both
+# queues and the R2 lifecycle rule for `_hook-bodies/` are created idempotently by
+# deploy-backend.yml BEFORE `wrangler deploy`: a missing queue fails the deploy.
+# max_batch_size = 1: one invocation may take 5 minutes, a batch is retried as a unit, and it
+# keeps the loader under its 4-concurrent-Dynamic-Workers cap. max_concurrency = 5 matches the
+# prototype's cap of 5 app workers (raise it with #267). max_retries must equal
+# APP_EVENT_MAX_RETRIES in lib/app-event-queue.ts.
+[[queues.producers]]
+binding = "APP_EVENTS"
+queue = "pas-app-events"
+
+[[queues.consumers]]
+queue = "pas-app-events"
+max_batch_size = 1
+max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "pas-app-events-dlq"
+max_concurrency = 5
+
+# The dead-letter consumer fails the delivery's row and deletes any spilled hook body.
+[[queues.consumers]]
+queue = "pas-app-events-dlq"
+max_batch_size = 10
+max_retries = 3
+
 # Workers Analytics Engine — first-party cookieless analytics for Pro apps.
 # Events written by analytics-ingest.ts, queried by analytics-stats-routes.ts
 # via the CF SQL API (CF_ANALYTICS_API_TOKEN secret).

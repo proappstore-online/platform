@@ -124,6 +124,14 @@ or delivered answers `200 {"duplicate": true}`. Repeating one that failed runs i
 again as the next attempt. The sender gets `202` as soon as the delivery is
 verified and recorded.
 
+A hook for the worker is delivered from a queue, with retries: if the worker does
+not answer 2xx, the platform tries again after 20, 40, 80, 160 and 320 seconds,
+each time with `attempt` one higher and the same `id`. After the last retry the
+delivery is `failed` (`dead-lettered after 6 attempts`) and is not replayed
+automatically; redeliver it from the sender. A schedule run is retried the same
+way, stays `queued` while it is, and counts one failure toward the breaker only if
+every attempt fails.
+
 ### `visibility`
 
 `{ "mode": "private", "roles": [...] }` gates the whole app, including
@@ -218,12 +226,12 @@ a replay inside the signature window. **Make every handler idempotent on
 | Limit | Value |
 |---|---|
 | CPU per invocation | 30 s |
-| Wall clock | schedule 5 min · http 30 s · hook **25 s** (it runs after the `202`, until queue delivery lands in #257) |
+| Wall clock | schedule 5 min · http 30 s · hook 60 s (delivered by a queue after the `202`) |
 | `PAS` calls per invocation | 200, counted on the platform side. Outbound `fetch` counts toward the runtime subrequest limit, not this budget. |
 | `PAS.actions.batch` | 500 statements, 1 MB body |
 | Schedules | ≤ 3 per app, ≥ 5 min apart, minutes on the 5-minute tick |
 | Schedule failures | 5 in a row disable the schedule and raise one alert. Redeploying the manifest re-enables it. |
-| Run now | one manual run per schedule per minute; it starts on the next tick (≤ 5 min) |
+| Run now | one manual run per schedule per minute; it is queued at once (status `queued`) |
 | Hooks | ≤ 10 per app, body ≤ 5 MB |
 | Worker files | 10 MB per object |
 | Invocation history | 30 days; hook deliveries 14 days |

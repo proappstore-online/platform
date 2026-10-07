@@ -75,6 +75,7 @@ describe('runScheduledActions (#123)', () => {
     vi.stubGlobal('fetch', fetch);
     const report = await runScheduledActions({ env: env(db(
       statement({ all: { results: [] } }), // stale claims
+      statement({ all: { results: [] } }), // stale queued runs (#257)
       statement({ all: { results: [{ app_id: 'chess', name: 'reap_stale', manifest: scheduledManifest, source: 'code' }] } }),
       statement({ first: null }), // disabled
       statement({ first: null }), // active claim
@@ -95,12 +96,14 @@ describe('runScheduledActions (#123)', () => {
     const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
     const missed = await runScheduledActions({ env: env(db(
       statement({ all: { results: [] } }),
+      statement({ all: { results: [] } }), // stale queued runs (#257)
       statement({ all: { results: [{ app_id: 'chess', name: 'reap_stale', manifest: JSON.stringify({ ...JSON.parse(scheduledManifest), schedule: { cron: '*/15 * * * *', params: {} } }), source: 'code' }] } }),
     )), now: Date.UTC(2026, 8, 25, 10, 5) });
     expect(missed).toMatchObject({ due: 0, claimed: 0 });
 
     const active = await runScheduledActions({ env: env(db(
       statement({ all: { results: [] } }),
+      statement({ all: { results: [] } }), // stale queued runs (#257)
       statement({ all: { results: [{ app_id: 'chess', name: 'reap_stale', manifest: scheduledManifest, source: 'code' }] } }),
       statement({ first: null }),
       statement({ first: { active: 1 } }),
@@ -112,6 +115,7 @@ describe('runScheduledActions (#123)', () => {
   it('uses an atomic no-live-claim predicate when it claims a due minute', async () => {
     const database = db(
       statement({ all: { results: [] } }),
+      statement({ all: { results: [] } }), // stale queued runs (#257)
       statement({ all: { results: [{ app_id: 'chess', name: 'reap_stale', manifest: scheduledManifest, source: 'code' }] } }),
       statement({ first: null }),
       statement({ first: null }),
@@ -128,6 +132,7 @@ describe('runScheduledActions (#123)', () => {
       statement({ run: { meta: { changes: 1 } } }), // mark stale run failed
       statement(), // increment failure state
       statement({ first: { consecutive_failures: 1, schedule_disabled_at: null } }),
+      statement({ all: { results: [] } }), // stale queued runs (#257)
       statement({ all: { results: [] } }), // tools
     )), now: Date.UTC(2026, 8, 25, 10, 5) });
     expect(report).toMatchObject({ recovered: 1, due: 0 });

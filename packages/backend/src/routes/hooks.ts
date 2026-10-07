@@ -13,10 +13,11 @@
  * app's daily hook quota (#275): over it, the row is `quota_exceeded` and nothing
  * is delivered — still a 202, because GitHub never redelivers on its own and a
  * 429 would lose the event just the same; the owner redelivers it from the sender
- * after the reset. Then 202, and delivery continues in waitUntil with a 25 s
- * budget (Cloudflare cancels waitUntil 30 s after the response; #257 moves
- * delivery to a queue). A worker over its invocation quota ends `quota_exceeded`
- * the same way.
+ * after the reset. Then 202. A worker hook is put on the app-events queue (#257),
+ * whose consumer delivers it with a 60 s budget and retries; if it cannot be
+ * enqueued the row fails and the answer is 503, so the sender can redeliver. An
+ * action hook still runs in waitUntil. A worker over its invocation quota ends
+ * `quota_exceeded` the same way.
  */
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -27,12 +28,13 @@ import { activeAppWorker, appWorkerHost, type AppWorkerExports } from '../lib/ap
 import { actionCallers, prepareActionBatch, prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
 import { encodeEnvelopeBody, hookHeaders, verifyHookDelivery, type HookVerify, type VerifiedDelivery } from '../lib/hook-verifiers.js';
 import { AppWorkerQuotaError, quotasFrom, reserveHookDelivery } from '../lib/app-worker-usage.js';
+import { enqueueHookDelivery } from '../lib/app-event-queue.js';
 import { forwardToDataWorker, loadManifest } from './actions.js';
 import type { HookTarget } from './tools.js';
 
 export const MAX_HOOK_BODY_BYTES = 5 * 1024 * 1024;
-/** ADR-009 §4 hook budget: 25 s of the 30 s waitUntil, until #257's queue. */
-export const HOOK_TIMEOUT_MS = 25_000;
+/** ADR-009 §4 hook budget: 60 s, in the queue consumer (#257), which waitUntil's 30 s cap does not bind. */
+export const HOOK_TIMEOUT_MS = 60_000;
 export const SYSTEM_HOOK_USER = 'system:hook';
 
 export const hookRoutes = new Hono<{ Bindings: Env }>();
@@ -183,6 +185,15 @@ export async function ingestVerifiedDelivery(
 
   const target = JSON.parse(targetJson) as HookTarget;
   const delivery: HookDelivery = { appId, hook: name, target, rowId: row.id, attempt: row.attempts, body, headers: c.req.raw.headers };
+  if (target === 'worker') {
+    try {
+      await enqueueHookDelivery(c.env, delivery);
+    } catch (e) {
+      await finish(c.env, row.id, `could not enqueue: ${String((e as Error)?.message ?? e)}`);
+      return c.json({ error: 'could not queue the delivery; redeliver it from the sender', delivery: row.id }, 503);
+    }
+    return c.json({ accepted: true, delivery: row.id }, 202);
+  }
   let ctx: AppWorkerExports | undefined;
   try { ctx = c.executionCtx as unknown as AppWorkerExports; } catch { ctx = undefined; }
   runAfterResponse(c, deliverHook(c.env, delivery, ctx)

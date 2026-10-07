@@ -228,12 +228,24 @@ grant minted for one app cannot be replayed into another app's envelope.
   So `subRequests` = `PAS` budget + an outbound budget, sized from duperdash's
   measured reconcile (#267). Setting `subRequests` to 200 starves any worker that
   calls out.
-- **Hook budget.** Until queue delivery (#257) lands, a hook is acknowledged to
-  the sender and then invoked from the request's `waitUntil`, which Cloudflare
-  caps at 30 s after the response. Hook handlers therefore get **≤ 25 s**
-  wall-clock (5 s headroom for the platform's own bookkeeping). When #257 moves
-  hook delivery to a queue consumer, the budget may be raised and this ADR
-  amended.
+- **Hook budget.** *Amended by #257.* A worker hook is acknowledged to the
+  sender (202) and then delivered by the `pas-app-events` queue consumer, which
+  is not bound by the 30 s `waitUntil` cap the first implementation lived under
+  (that gave handlers ≤ 25 s). Hook handlers now get **≤ 60 s** wall-clock per
+  attempt; schedules keep 5 min.
+- **Queue delivery (#257).** Schedule and worker-hook deliveries are one message
+  each on `pas-app-events` (`max_batch_size = 1`, `max_concurrency = 5`,
+  `max_retries = 5`, retry delay `2 ** attempt * 10` s, dead-letter queue
+  `pas-app-events-dlq`). The message is the §3 envelope minus the signature — the
+  consumer signs at send time, so a retry carries a fresh `t`. A hook body over
+  the 128 KB message limit is held in R2 at `_hook-bodies/<app>/<delivery id>`
+  for delivery only: deleted on ack and on dead-letter, with a 14-day lifecycle
+  rule as a backstop. A schedule run is `queued` from enqueue until the consumer
+  finishes it; only a run that is finally dead-lettered (or swept after 60 min)
+  counts one failure toward the breaker, never one per attempt. A hook the
+  consumer cannot deliver ends `failed`; the owner redelivers it from the sender.
+  Action-target hooks (`to: { action }`) do not touch an app worker and still run
+  in `waitUntil`.
 - `PAS.actions.batch`: ≤ 500 prepared statements per call (D1's 1,000
   queries-per-invocation on Workers Paid, halved for headroom), body ≤ 1 MB.
 - Schedules: minimum interval 5 minutes (the platform tick), and every cron

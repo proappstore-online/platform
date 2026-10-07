@@ -69,6 +69,30 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      # #257: the Worker binds these queues and consumes them, so a deploy without them
+      # fails. Idempotent: create only what is missing (a real failure, e.g. a token
+      # without Queues:Edit, still fails here instead of being swallowed). The lifecycle
+      # rule expires `_hook-bodies/` objects after 14 days — a backstop only; the consumer
+      # deletes a spilled hook body on ack or dead-letter.
+      - name: Ensure app-event queues and hook-body lifecycle
+        working-directory: packages/backend
+        run: |
+          for queue in pas-app-events pas-app-events-dlq; do
+            if pnpm exec wrangler queues info "$queue" >/dev/null 2>&1; then
+              echo "queue $queue exists"
+            else
+              pnpm exec wrangler queues create "$queue"
+            fi
+          done
+          if pnpm exec wrangler r2 bucket lifecycle list pas-storage | grep -q hook-bodies-14d; then
+            echo "lifecycle rule hook-bodies-14d exists"
+          else
+            pnpm exec wrangler r2 bucket lifecycle add pas-storage hook-bodies-14d _hook-bodies/ --expire-days 14 --force
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       - name: Deploy Worker
         working-directory: packages/backend
         run: pnpm exec wrangler deploy

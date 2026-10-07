@@ -1,10 +1,10 @@
 import { SELF, env as providedEnv, fetchMock } from 'cloudflare:test';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { runScheduledActions } from '../../../backend/src/lib/scheduled-actions';
 import { appWorkerHost, disableAppWorker } from '../../../backend/src/lib/app-worker-host';
 import { sealSecret } from '../../../backend/src/lib/encryption';
-import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
+import { BASE, captureAppEvents, drainAppEvents, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
 const env = providedEnv as unknown as Env;
 
@@ -40,13 +40,13 @@ async function github(delivery: string, body = '{"zen":"ok"}') {
   });
 }
 const deliveryRow = (id: string) => env.DB.prepare('SELECT id, status, attempts, error FROM app_hook_deliveries WHERE delivery_id = ?').bind(id).first<{ id: string; status: string; attempts: number; error: string | null }>();
+// Deliveries and schedule runs go through the app-events queue (#257): recorded, then drained through the real consumer.
+let sent: ReturnType<typeof captureAppEvents>;
 async function settled(id: string) {
-  for (let i = 0; i < 100; i++) {
-    const row = await deliveryRow(id);
-    if (row && row.status !== 'received') return row;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  throw new Error(`delivery ${id} never finished`);
+  await drainAppEvents(sent);
+  const row = await deliveryRow(id);
+  if (!row || row.status === 'received') throw new Error(`delivery ${id} never finished`);
+  return row;
 }
 async function viaHost(path = '/v1/ping') {
   return SELF.fetch(`${BASE}/v1/apps/t/worker/http`, {
@@ -63,6 +63,7 @@ const setQuotas = async (body: unknown) => SELF.fetch(`${BASE}/v1/admin/apps/t/w
 const invocationCount = async () => (await env.DB.prepare("SELECT COUNT(*) AS n FROM app_worker_invocations WHERE app_id = 't'").first<{ n: number }>())!.n;
 
 beforeEach(async () => {
+  sent = captureAppEvents();
   mockNetwork();
   for (const r of (await env.DB.prepare('SELECT app_id FROM app_workers').all<{ app_id: string }>()).results ?? []) await disableAppWorker(env, r.app_id);
   await resetTables();
@@ -87,6 +88,7 @@ beforeEach(async () => {
   expect(put.status, await put.clone().text()).toBe(200);
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   fetchMock.assertNoPendingInterceptors();
   await env.DB.prepare('DELETE FROM app_worker_schedules').run();
 });
@@ -96,7 +98,8 @@ describe('metering (#275)', () => {
     for (let i = 0; i < 2; i++) expect((await viaHost()).status).toBe(200);
     await github('m-1');
     await settled('m-1');
-    expect((await runScheduledActions({ env, now: TICK })).workers).toMatchObject({ succeeded: 1 });
+    expect((await runScheduledActions({ env, now: TICK })).workers).toMatchObject({ queued: 1 });
+    await drainAppEvents(sent);
     const u = await usage();
     expect(u.today).toMatchObject({ invocations: 4, hook_deliveries: 1 });
     expect(u.today.cpu_ms).toBeGreaterThanOrEqual(0);
@@ -117,7 +120,9 @@ describe('the daily invocation quota (#275)', () => {
     expect(await refused.json()).toEqual({ error: 'quota exceeded', quota: 'invocations' });
 
     const report = await runScheduledActions({ env, now: TICK });
-    expect(report.workers).toMatchObject({ claimed: 1, failed: 1 });
+    expect(report.workers).toMatchObject({ claimed: 1, queued: 1 });
+    // Retrying cannot help once the quota is spent: the consumer ends the run on the first try, counting one failure.
+    expect(await drainAppEvents(sent)).toEqual([expect.objectContaining({ tries: 1, deadLettered: false })]);
     expect(await env.DB.prepare("SELECT status, error FROM scheduled_action_runs WHERE action_name = 'worker:tick'").first()).toEqual({ status: 'failed', error: 'quota exceeded' });
 
     const before = await invocationCount();
@@ -167,7 +172,7 @@ describe('APP_WORKER_OPEN (#275)', () => {
     expect(await refused.json()).toMatchObject({ error: 'app workers are closed to new apps (account ceiling)' });
     // Re-enabling an app that is already enabled is not a new enable.
     expect((await SELF.fetch(`${BASE}/v1/admin/apps/t/worker-enabled`, json('PUT', { enabled: true }, await admin()))).status).toBe(200);
-    expect((await runScheduledActions({ env, now: TICK })).workers).toMatchObject({ succeeded: 1 });
+    expect((await runScheduledActions({ env, now: TICK })).workers).toMatchObject({ queued: 1 });
 
     expect((await SELF.fetch(`${BASE}/v1/admin/app-workers/open`, json('PUT', { open: true }, await session('gh:42')))).status).toBe(403);
     expect((await SELF.fetch(`${BASE}/v1/admin/app-workers/open`, json('PUT', { open: true }, await admin()))).status).toBe(200);

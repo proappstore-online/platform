@@ -1,28 +1,39 @@
 import { SELF, env as providedEnv, fetchMock } from 'cloudflare:test';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { appWorkerHost, disableAppWorker } from '../../../backend/src/lib/app-worker-host';
 import { sealSecret } from '../../../backend/src/lib/encryption';
-import { SYSTEM_HOOK_USER } from '../../../backend/src/routes/hooks';
-import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
+import { HOOK_TIMEOUT_MS, SYSTEM_HOOK_USER } from '../../../backend/src/routes/hooks';
+import { BASE, captureAppEvents, drainAppEvents, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
 const env = providedEnv as unknown as Env;
 
 // #256 on real D1, R2 and the Worker Loader: inbound webhooks verified on the raw
-// bytes, de-duplicated by delivery id, redelivered after a failure with the next
-// attempt, delivered to the app worker through the shim (or to a hook action as
-// system:hook), and never carrying a signature header or a stored body.
+// bytes, de-duplicated by delivery id, put on the app-events queue (#257) and delivered
+// to the app worker through the shim by the real consumer — retried with backoff,
+// dead-lettered, spilled to R2 when too big for a message — or run as a hook action as
+// system:hook, and never carrying a signature header or a retained body. The queue is
+// recorded and drained by hand (helpers.captureAppEvents / drainAppEvents).
 
 const GH_SECRET = 'gh-hook-secret';
 const BIN_SECRET = 'bin-hook-secret';
 const STRIPE_SECRET = 'whsec_stripe';
 const enc = new TextEncoder();
 
-// attempt 1 of "flaky" fails; "echo" reports what arrived (via a 500, whose first 1 KB is recorded).
+// "flaky" fails its first two attempts; "dead" its first six (all of one delivery's tries); "echo" reports what
+// arrived (via a 500, whose first 1 KB is recorded); "big:<length>:<sum>" fails unless the body arrived intact.
 const APP = `export default { async fetch(req) {
   const e = await req.json();
   const p = e.payload;
-  if (p.headers['x-github-event'] === 'flaky' && e.attempt === 1) return new Response('first attempt fails', { status: 500 });
+  const event = p.headers['x-github-event'] || '';
+  if (event === 'flaky' && e.attempt < 3) return new Response('flaky', { status: 500 });
+  if (event === 'dead' && e.attempt < 7) return new Response('dead', { status: 500 });
+  if (event.startsWith('big:')) {
+    const bytes = Uint8Array.from(atob(p.body), (c) => c.charCodeAt(0));
+    const [, len, sum] = event.split(':');
+    const actual = bytes.reduce((a, b) => (a + b) % 65521, 0);
+    return bytes.length === Number(len) && actual === Number(sum) ? Response.json({ ok: true }) : new Response('mangled', { status: 500 });
+  }
   if (p.headers['x-github-event'] === 'echo' || p.headers['content-type'] === 'application/octet-stream') {
     return new Response(JSON.stringify({ headers: Object.keys(p.headers).sort(), body: p.body, enc: p.body_encoding }), { status: 500 });
   }
@@ -53,18 +64,18 @@ async function github(event: string, delivery: string, body = '{"zen":"ok"}', se
   });
 }
 const delivery = (deliveryId: string) => env.DB.prepare('SELECT id, status, attempts, error, event FROM app_hook_deliveries WHERE delivery_id = ?').bind(deliveryId).first<{ id: string; status: string; attempts: number; error: string | null; event: string | null }>();
-/** Delivery runs in waitUntil after the 202: wait for it to finish. */
+let sent: ReturnType<typeof captureAppEvents>;
+/** Run what the 202 queued through the consumer, then read the row. */
 async function settled(deliveryId: string) {
-  for (let i = 0; i < 100; i++) {
-    const row = await delivery(deliveryId);
-    if (row && row.status !== 'received') return row;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  throw new Error(`delivery ${deliveryId} never finished`);
+  await drainAppEvents(sent);
+  const row = await delivery(deliveryId);
+  if (!row || row.status === 'received') throw new Error(`delivery ${deliveryId} never finished`);
+  return row;
 }
 const invocations = (rowId: string) => env.DB.prepare('SELECT id, status, body_excerpt FROM app_worker_invocations WHERE event_id = ? ORDER BY id').bind(rowId).all<{ id: string; status: string; body_excerpt: string | null }>().then((r) => r.results ?? []);
 
 beforeEach(async () => {
+  sent = captureAppEvents();
   mockNetwork();
   for (const r of (await env.DB.prepare('SELECT app_id FROM app_workers').all<{ app_id: string }>()).results ?? []) await disableAppWorker(env, r.app_id);
   await resetTables();
@@ -84,7 +95,10 @@ beforeEach(async () => {
   const put = await SELF.fetch(`${BASE}/v1/apps/t/tools`, json('PUT', { tools: [tool], hooks }, await session('gh:admin')));
   expect(put.status, await put.clone().text()).toBe(200);
 });
-afterEach(() => fetchMock.assertNoPendingInterceptors());
+afterEach(() => {
+  vi.restoreAllMocks();
+  fetchMock.assertNoPendingInterceptors();
+});
 
 describe('inbound webhooks to the app worker (#256)', () => {
   it('a signed GitHub delivery is 202 and delivered; the same delivery again is 200 duplicate and runs once', async () => {
@@ -98,14 +112,58 @@ describe('inbound webhooks to the app worker (#256)', () => {
     expect(await invocations(row.id)).toEqual([expect.objectContaining({ id: `${row.id}:1`, status: 'succeeded' })]);
   });
 
-  it('a redelivery of a failed delivery runs again as attempt 2, with its own invocation record', async () => {
+  it('a worker that fails twice then answers: one 202, delivered on the third try, attempts 3, one invocation record per try', async () => {
     expect((await github('flaky', 'd2')).status).toBe(202);
-    const failed = await settled('d2');
-    expect(failed).toMatchObject({ status: 'failed', attempts: 1, error: 'worker answered 500' });
-    expect((await github('flaky', 'd2')).status).toBe(202);
-    const retried = await settled('d2');
-    expect(retried).toMatchObject({ id: failed.id, status: 'delivered', attempts: 2 });
-    expect((await invocations(failed.id)).map((i) => [i.id, i.status])).toEqual([[`${failed.id}:1`, 'failed'], [`${failed.id}:2`, 'succeeded']]);
+    expect(await delivery('d2')).toMatchObject({ status: 'received', attempts: 1 });
+    const [done] = await drainAppEvents(sent);
+    expect(done).toMatchObject({ tries: 3, deadLettered: false });
+    const row = (await delivery('d2'))!;
+    expect(row).toMatchObject({ status: 'delivered', attempts: 3, error: null });
+    expect((await invocations(row.id)).map((i) => [i.id, i.status])).toEqual([[`${row.id}:1`, 'failed'], [`${row.id}:2`, 'failed'], [`${row.id}:3`, 'succeeded']]);
+  });
+
+  it('a worker that always fails is dead-lettered after 5 retries; the sender\'s redelivery runs again as attempt 7', async () => {
+    expect((await github('dead', 'd4')).status).toBe(202);
+    const [done] = await drainAppEvents(sent);
+    expect(done).toMatchObject({ tries: 6, deadLettered: true });
+    const failed = (await delivery('d4'))!;
+    expect(failed).toMatchObject({ status: 'failed', attempts: 6 });
+    expect(failed.error).toBe('dead-lettered after 6 attempts: worker answered 500');
+    expect((await github('dead', 'd4')).status).toBe(202);
+    const retried = await settled('d4');
+    expect(retried).toMatchObject({ id: failed.id, status: 'delivered', attempts: 7 });
+    expect((await invocations(failed.id)).map((i) => i.id)).toEqual([1, 2, 3, 4, 5, 6, 7].map((n) => `${failed.id}:${n}`));
+  });
+
+  it('a 300 KB body is spilled to R2 for delivery only: it arrives intact and the object is gone after the ack', async () => {
+    const bytes = new Uint8Array(300 * 1024).map((_, i) => (i * 7) % 256);
+    const sum = bytes.reduce((a, b) => (a + b) % 65521, 0);
+    const res = await SELF.fetch(`${BASE}/v1/apps/t/hooks/bin`, {
+      method: 'POST', body: bytes,
+      headers: { 'content-type': 'application/octet-stream', 'x-signature': await hmacHex(BIN_SECRET, bytes), 'x-delivery': 'big-1', 'x-github-event': `big:${bytes.length}:${sum}` },
+    });
+    expect(res.status).toBe(202);
+    const key = `_hook-bodies/t/${(await delivery('big-1'))!.id}`;
+    expect(sent[0]!.body_key).toBe(key);
+    expect(await env.STORAGE.head(key)).not.toBeNull();
+    expect(await settled('big-1')).toMatchObject({ status: 'delivered' });
+    expect(await env.STORAGE.head(key)).toBeNull();
+  });
+
+  it('a spilled body is also deleted when its delivery is dead-lettered', async () => {
+    const bytes = new Uint8Array(300 * 1024);
+    const res = await SELF.fetch(`${BASE}/v1/apps/t/hooks/bin`, {
+      method: 'POST', body: bytes,
+      headers: { 'content-type': 'application/octet-stream', 'x-signature': await hmacHex(BIN_SECRET, bytes), 'x-delivery': 'big-2', 'x-github-event': 'big:1:1' },
+    });
+    expect(res.status).toBe(202);
+    const key = sent[0]!.body_key!;
+    expect(await settled('big-2')).toMatchObject({ status: 'failed' });
+    expect(await env.STORAGE.head(key)).toBeNull();
+  });
+
+  it('a hook handler that takes 40 s is no longer cut at the old 25 s waitUntil budget', () => {
+    expect(HOOK_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
   });
 
   it('the worker never sees a signature header; a binary body arrives byte-identical as base64', async () => {

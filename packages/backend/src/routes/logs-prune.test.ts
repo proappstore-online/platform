@@ -303,13 +303,13 @@ describe('POST /v1/internal/logs/prune — scheduled-action runs (#27)', () => {
   beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(NOW); });
   afterEach(() => { vi.restoreAllMocks(); });
 
-  it('deletes runs due more than 30 days ago (ms), never a claimed run, batch-bounded by rowid', async () => {
+  it('deletes runs due more than 30 days ago (ms), never a claimed or queued run, batch-bounded by rowid', async () => {
     const db = runsDb();
     expect((await prune('internal-tok', db)).status).toBe(200);
     const i = db.prepare.mock.calls.findIndex((c) => isRuns(String(c[0])));
     expect(i).toBeGreaterThanOrEqual(0);
     expect(String(db.prepare.mock.calls[i]![0])).toBe(
-      "DELETE FROM scheduled_action_runs WHERE rowid IN (SELECT rowid FROM scheduled_action_runs WHERE due_at < ? AND status <> 'claimed' LIMIT ?)",
+      "DELETE FROM scheduled_action_runs WHERE rowid IN (SELECT rowid FROM scheduled_action_runs WHERE due_at < ? AND status NOT IN ('claimed', 'queued') LIMIT ?)",
     );
     expect(SCHEDULED_RUN_RETENTION_DAYS).toBe(30);
     expect(db.prepare.mock.results[i]!.value.bind.mock.calls[0]).toEqual([NOW - 30 * 86_400_000, PRUNE_BATCH_LIMIT]);

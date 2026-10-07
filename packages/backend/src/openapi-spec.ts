@@ -3078,7 +3078,7 @@ export const openapiSpec: Record<string, unknown> = {
           "Tools"
         ],
         "summary": "List scheduled registered-action runs (#123)",
-        "description": "Owner only. Returns recent platform-scheduled action history. Optional status is due, claimed, succeeded or failed; limit defaults to 50 and is capped at 200.",
+        "description": "Owner only. Returns recent platform-scheduled action history. Optional status is due, claimed, queued, succeeded or failed; limit defaults to 50 and is capped at 200.",
         "operationId": "get_v1_apps_appId_scheduled_runs",
         "responses": {
           "200": {
@@ -3103,7 +3103,7 @@ export const openapiSpec: Record<string, unknown> = {
                           "due_at": { "type": "integer" },
                           "claimed_at": { "type": "integer", "nullable": true },
                           "finished_at": { "type": "integer", "nullable": true },
-                          "status": { "type": "string", "enum": ["due", "claimed", "succeeded", "failed"] },
+                          "status": { "type": "string", "enum": ["due", "claimed", "queued", "succeeded", "failed"] },
                           "changes": { "type": "integer", "nullable": true },
                           "error": { "type": "string", "nullable": true }
                         }
@@ -3131,7 +3131,7 @@ export const openapiSpec: Record<string, unknown> = {
           {
             "name": "status",
             "in": "query",
-            "schema": { "type": "string", "enum": ["due", "claimed", "succeeded", "failed"] }
+            "schema": { "type": "string", "enum": ["due", "claimed", "queued", "succeeded", "failed"] }
           },
           {
             "name": "limit",

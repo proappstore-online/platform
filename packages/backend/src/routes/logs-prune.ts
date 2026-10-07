@@ -68,8 +68,8 @@ export const WEBHOOK_DELIVERY_RETENTION_DAYS = 7;
  * see at most the latest 200 per app. Keep 30 days, like app logs. Safe for the
  * executor: due minutes come only from the current tick (no backfill), and the
  * failure breaker lives in `scheduled_action_state`, not in these rows. A
- * `claimed` row is never deleted — it is the live-claim overlap guard, and
- * stale-claim recovery finishes it within minutes. `due_at` is in ms.
+ * `claimed` or `queued` row is never deleted — it is the live-run overlap guard, and
+ * stale-claim recovery (10 min) and the queued sweep (60 min, #257) finish it. `due_at` is in ms.
  */
 export const SCHEDULED_RUN_RETENTION_DAYS = 30;
 /** #256: inbound-hook delivery rows (the de-dupe record). */
@@ -90,7 +90,7 @@ const RETENTION_PRUNES = [
   {
     key: 'scheduled_action_runs',
     table: 'scheduled_action_runs',
-    where: "due_at < ? AND status <> 'claimed'",
+    where: "due_at < ? AND status NOT IN ('claimed', 'queued')",
     binds: (nowMs: number) => [cutoffMs(nowMs, SCHEDULED_RUN_RETENTION_DAYS)],
   },
   {

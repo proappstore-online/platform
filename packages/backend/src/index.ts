@@ -42,6 +42,8 @@ import { operatorView } from './routes/operator-view.js';
 import { evaluateErrorSpikes } from './lib/error-alerts.js';
 import { runScheduledActions } from './lib/scheduled-actions.js';
 import { reapReviewUploads } from './lib/review-storage-reaper.js';
+import { handleAppEventBatch } from './lib/app-event-consumer.js';
+import type { AppEventMessage } from './lib/app-event-queue.js';
 import { checkAccountCeiling } from './lib/app-worker-usage.js';
 import type { AppWorkerExports } from './lib/app-worker-host.js';
 import { tokenUserFor } from './lib/app-tokens.js';
@@ -304,11 +306,13 @@ export { SpikeTail } from './routes/app-worker-spike.js'; // TEMPORARY (#305)
  */
 export default {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => app.fetch(request, env, ctx),
+  // #257: pas-app-events (deliver to the app worker, retry) and pas-app-events-dlq (fail the row). ctx carries exports.AppWorkerApi, the PAS binding of invoked app workers (#254).
+  queue: (batch: MessageBatch<AppEventMessage>, env: Env, ctx: ExecutionContext) => handleAppEventBatch(batch, env, ctx as AppWorkerExports),
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     // #123 runs on the five-minute platform tick. It is durable and has no
     // backfill behaviour; a delayed/missed tick never turns into a burst.
-    // ctx carries exports.AppWorkerApi, the PAS binding of invoked app workers (#254, #255).
-    ctx.waitUntil(runScheduledActions({ env, now: event.scheduledTime ?? Date.now(), ctx: ctx as AppWorkerExports }).catch((e) => console.error(`[schedule] executor failed: ${(e as Error).message}`)));
+    // Worker schedules are only claimed and queued here; the queue() consumer below runs them (#257).
+    ctx.waitUntil(runScheduledActions({ env, now: event.scheduledTime ?? Date.now() }).catch((e) => console.error(`[schedule] executor failed: ${(e as Error).message}`)));
     // The pre-existing checks remain every fifteen minutes even though the
     // Worker now receives a five-minute tick for scheduled app actions.
     const tickAt = event.scheduledTime ?? Date.now();

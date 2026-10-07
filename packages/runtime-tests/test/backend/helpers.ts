@@ -1,5 +1,9 @@
 import { env, fetchMock } from 'cloudflare:test';
 import { mintSession } from '@proappstore/build-core';
+import { vi } from 'vitest';
+import type { Env } from '../../../backend/src/types';
+import { APP_EVENT_MAX_RETRIES, APP_EVENTS_DLQ, APP_EVENTS_QUEUE, type AppEventMessage } from '../../../backend/src/lib/app-event-queue';
+import { handleAppEventBatch } from '../../../backend/src/lib/app-event-consumer';
 
 export const BASE = 'https://api.test';
 
@@ -41,4 +45,38 @@ export async function resetTables(): Promise<void> {
 export function mockNetwork(): void {
   fetchMock.activate();
   fetchMock.disableNetConnect();
+}
+
+/** Record what the backend puts on the app-events queue (#257) instead of sending it; undo with vi.restoreAllMocks(). */
+export function captureAppEvents(): AppEventMessage[] {
+  const sent: AppEventMessage[] = [];
+  vi.spyOn(env.APP_EVENTS!, 'send').mockImplementation((async (m: AppEventMessage) => { sent.push(m); }) as never);
+  return sent;
+}
+
+/** One consumer invocation for one message, as Queues would make it: `attempts` counts from 1. */
+export async function consumeAppEvent(m: AppEventMessage, attempts: number, queue = APP_EVENTS_QUEUE): Promise<{ acked: boolean; retryDelay: number | null }> {
+  const out = { acked: false, retryDelay: null as number | null };
+  const message = { id: m.id, timestamp: new Date(), body: m, attempts, ack: () => { out.acked = true; }, retry: (o?: { delaySeconds?: number }) => { out.retryDelay = o?.delaySeconds ?? 0; } };
+  await handleAppEventBatch({ queue, messages: [message], ackAll() {}, retryAll() {} } as unknown as MessageBatch<AppEventMessage>, env as unknown as Env);
+  return out;
+}
+
+/** Run recorded messages to completion like Queues: retry until acked, then dead-letter after max_retries. Returns each message's tries. */
+export async function drainAppEvents(sent: AppEventMessage[]): Promise<{ id: string; tries: number; deadLettered: boolean }[]> {
+  const done: { id: string; tries: number; deadLettered: boolean }[] = [];
+  while (sent.length) {
+    const m = sent.shift()!;
+    let tries = 0;
+    for (;;) {
+      tries += 1;
+      if ((await consumeAppEvent(m, tries)).acked) { done.push({ id: m.id, tries, deadLettered: false }); break; }
+      if (tries > APP_EVENT_MAX_RETRIES) {
+        await consumeAppEvent(m, 1, APP_EVENTS_DLQ);
+        done.push({ id: m.id, tries, deadLettered: true });
+        break;
+      }
+    }
+  }
+  return done;
 }

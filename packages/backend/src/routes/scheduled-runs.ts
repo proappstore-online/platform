@@ -24,7 +24,7 @@ scheduledRunsRoutes.get('/apps/:appId/scheduled-runs', async (c) => {
   const requested = Number(c.req.query('limit') ?? 50);
   const limit = Number.isInteger(requested) && requested > 0 ? Math.min(requested, 200) : 50;
   const status = c.req.query('status');
-  if (status && !['due', 'claimed', 'succeeded', 'failed'].includes(status)) return c.json({ error: 'invalid status' }, 400);
+  if (status && !['due', 'claimed', 'queued', 'succeeded', 'failed'].includes(status)) return c.json({ error: 'invalid status' }, 400);
   const rows = await c.env.DB.prepare(
     `SELECT run_id, app_id, action_name, source, due_at, claimed_at, finished_at, status, changes, error
      FROM scheduled_action_runs WHERE app_id = ?${status ? ' AND status = ?' : ''}

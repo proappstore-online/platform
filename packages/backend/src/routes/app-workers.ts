@@ -25,7 +25,7 @@ import type { Env } from '../types.js';
 import { HttpError, isAdminId, requireAdmin, requireAppOwner } from '../lib/auth.js';
 import { requireAppDeployOidc } from '../lib/app-deploy-oidc.js';
 import { activeAppWorker, appWorkerHost, disableAppWorker, parseBundle, rotateAppWorkerCredentials } from '../lib/app-worker-host.js';
-import { runNowDueAt, WORKER_RUN_PREFIX } from '../lib/scheduled-actions.js';
+import { paramsOf, queueWorkerRun, runNowDueAt, WORKER_RUN_PREFIX } from '../lib/scheduled-actions.js';
 import { requireVisibleUser } from '../lib/visibility.js';
 import { mintCallerGrant } from '../lib/caller-grant.js';
 import { decodeEnvelopeBody, encodeEnvelopeBody } from '../app-worker-shim/body.js';
@@ -183,10 +183,9 @@ appWorkerRoutes.post('/apps/:appId/worker/rotate', async (c) => {
 /**
  * Run a worker schedule now (#255). Never invokes the worker from this request —
  * a run may take 5 minutes and a fetch handler gets 30 s of waitUntil. It inserts
- * a `due` run row (due_at in ms, never minute-aligned) that the next platform
- * tick claims through the same race-proof claim as cron runs: started within one
- * tick (≤ 5 min), with the full run budget. Callers poll GET …/scheduled-runs.
- * #257 swaps this for an enqueue.
+ * a `queued` run row (due_at in ms, never minute-aligned) and puts it on the
+ * app-events queue (#257), so it starts at once rather than at the next tick; the
+ * consumer runs it with the full run budget and retries. Callers poll GET …/scheduled-runs.
  */
 appWorkerRoutes.post('/apps/:appId/worker/schedules/:name/run', async (c) => {
   const appId = c.req.param('appId');
@@ -194,7 +193,7 @@ appWorkerRoutes.post('/apps/:appId/worker/schedules/:name/run', async (c) => {
   await requireAppOwner(c, appId);
   const action = `${WORKER_RUN_PREFIX}${name}`;
 
-  const schedule = await c.env.DB.prepare('SELECT 1 AS found FROM app_worker_schedules WHERE app_id = ? AND name = ?').bind(appId, name).first();
+  const schedule = await c.env.DB.prepare('SELECT params FROM app_worker_schedules WHERE app_id = ? AND name = ?').bind(appId, name).first<{ params: string }>();
   if (!schedule) throw new HttpError('worker schedule not found', 404);
   if (!(await activeAppWorker(c.env, appId))) throw new HttpError('the app worker is not enabled and deployed', 409);
   const disabled = await c.env.DB.prepare(
@@ -214,10 +213,18 @@ appWorkerRoutes.post('/apps/:appId/worker/schedules/:name/run', async (c) => {
   if (!allowed.meta.changes) throw new HttpError('one manual run per schedule per minute', 429);
 
   const runId = crypto.randomUUID();
-  await c.env.DB.prepare(
-    "INSERT INTO scheduled_action_runs (run_id, app_id, action_name, source, due_at, status) VALUES (?, ?, ?, 'code', ?, 'due')",
-  ).bind(runId, appId, action, runNowDueAt(now)).run();
-  return c.json({ run_id: runId, status: 'due' }, 202);
+  // `claimed_at` is when it was queued: the queued sweep ages it from there. The NOT EXISTS is the
+  // same overlap guard the tick's claim uses, so a tick cannot slip a run in between the check above and here.
+  const inserted = await c.env.DB.prepare(
+    `INSERT INTO scheduled_action_runs (run_id, app_id, action_name, source, due_at, claimed_at, status)
+     SELECT ?, ?, ?, 'code', ?, ?, 'queued'
+      WHERE NOT EXISTS (SELECT 1 FROM scheduled_action_runs WHERE app_id = ? AND action_name = ? AND status IN ('claimed', 'queued'))`,
+  ).bind(runId, appId, action, runNowDueAt(now), now, appId, action).run();
+  if (!inserted.meta.changes) throw new HttpError('a run is already in progress', 409);
+  if (!(await queueWorkerRun(c.env, { appId, schedule: name, params: paramsOf(schedule.params), runId }, now))) {
+    throw new HttpError('could not queue the run', 503);
+  }
+  return c.json({ run_id: runId, status: 'queued' }, 202);
 });
 
 // ── Browser requests to the app worker (#260) ───────────────────────────────

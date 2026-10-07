@@ -2011,7 +2011,7 @@ paths:
       tags:
       - Tools
       summary: List scheduled registered-action runs (#123)
-      description: Owner only. Returns recent platform-scheduled action history. Optional status is due, claimed, succeeded or failed; limit defaults to 50 and is capped at 200.
+      description: Owner only. Returns recent platform-scheduled action history. Optional status is due, claimed, queued, succeeded or failed; limit defaults to 50 and is capped at 200.
       operationId: get_v1_apps_appId_scheduled_runs
       responses:
         '200':
@@ -2045,7 +2045,7 @@ paths:
                           nullable: true
                         status:
                           type: string
-                          enum: [due, claimed, succeeded, failed]
+                          enum: [due, claimed, queued, succeeded, failed]
                         changes:
                           type: integer
                           nullable: true
@@ -2070,7 +2070,7 @@ paths:
         in: query
         schema:
           type: string
-          enum: [due, claimed, succeeded, failed]
+          enum: [due, claimed, queued, succeeded, failed]
       - name: limit
         in: query
         schema:

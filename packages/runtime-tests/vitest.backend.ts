@@ -30,6 +30,10 @@ export default defineWorkersConfig(async () => ({
           // #253: the app-worker `loader` backend, on the real Worker Loader. Production
           // has neither the binding nor APP_WORKER_BACKEND yet (app workers stay off).
           workerLoaders: { LOADER: {} },
+          // #257: the app-events producer. No consumer is wired: tests record `env.APP_EVENTS.send` and
+          // feed the messages to the real consumer by hand, so retry delays and the DLQ are instant
+          // (helpers.captureAppEvents / drainAppEvents).
+          queueProducers: { APP_EVENTS: { queueName: 'pas-app-events' } },
           ratelimits: {
             PUBLIC_ACTION_RATE_LIMIT: { simple: { limit: 120, period: 60 } },
             AI_RATE_LIMIT: { simple: { limit: 20, period: 60 } },
