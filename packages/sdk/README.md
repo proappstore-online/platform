@@ -123,6 +123,10 @@ statement to the app data worker. Apps should migrate user-specific and
 role-specific reads/writes to actions instead of sending raw SQL from browser
 code.
 
+A refused call rejects with an `ActionError` (`status`, `code` — the server's
+`error`, e.g. `requires app role` or `step_up_required` — and `body`). Its
+message is the same `actions.<name> failed: <status> <body>` as before.
+
 ### KV (Per-user key-value storage)
 
 ```ts
@@ -569,6 +573,36 @@ function ReportsScreen() {
 Gate states: `'loading'` | `'signed-out'` | `'no-subscription'` | `'ready'`
 
 `allowFree` defaults to `true` (free users pass); pass `{ allowFree: false }` to require an active subscription.
+
+### Custom admin panels: `AdminConsole`, `useAdminContext`, `useAction`
+
+A custom admin panel is app code on the app's own origin; nothing runs inside the
+PAS console. It reaches data only through the app's declared actions, and the
+platform enforces auth, roles, step-up and audit on every call (#299).
+
+```tsx
+import { AdminConsole, useAdminContext, useAction, ActionError } from '@proappstore/sdk/hooks'
+
+function Moderation() {
+  const { app, user, roles, session } = useAdminContext()
+  const deleteGroup = useAction('admin_delete_group', {
+    // The action declares step_up: show your re-auth UI (a passkey check when
+    // e.needsPasskey), then resolve true to retry once or false to give up.
+    onStepUp: (e: ActionError) => showReauth(e),
+  })
+  if (!session.rolesLoaded) return <p>Loading…</p>
+  if (!roles.includes('admin')) return <p>You don't hold the admin role.</p>
+  return <button disabled={deleteGroup.pending} onClick={() => deleteGroup({ group_id: 'g1' })}>Delete</button>
+}
+
+<AdminConsole app={app}><Moderation /></AdminConsole>
+```
+
+- `useAdminContext()` → `{ app: { id }, user, roles, session: { status, rolesLoaded, refreshRoles } }`. `roles` come from the server and are for rendering only; never a session token.
+- `useAction(name, { onStepUp })` returns a function that calls the action, plus `pending`, `error` and `reset()`. A refusal rejects with an `ActionError`: `forbidden` when the caller's roles do not allow it, `stepUpRequired` (and `needsPasskey`) when it needs a recent sign-in. Every outcome is recorded in `app.logs` under `admin.action` (action, outcome, status — never params).
+- `AdminConsole` catches a render error in the panel and records it; `AdminErrorBoundary` does the same for one part of a panel.
+
+A full sample is `templates/template-membership/web/src/pages/Moderation.tsx`.
 
 ## ProShell Component
 

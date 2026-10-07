@@ -6,6 +6,10 @@ import { resolveApp } from './provider.js';
 // Re-export User type for convenience
 export type { User } from './base-types.js';
 export type { NotificationPayload, SendResult } from './notifications.js';
+// Custom admin panels (#299)
+export { AdminConsole, AdminErrorBoundary, useAdminContext, useAction } from './admin.js';
+export type { AdminConsoleProps, AdminContextValue, UseActionOptions, ActionInvoker } from './admin.js';
+export { ActionError } from './actions.js';
 
 // ---------------------------------------------------------------------------
 // useTheme — vendored from @freeappstore/sdk/hooks

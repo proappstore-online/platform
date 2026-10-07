@@ -22,6 +22,42 @@ export interface ActionVerifyResult<TOutput = Record<string, string | number | b
   writes?: { changes?: number; last_row_id?: number | null }[];
 }
 
+/**
+ * A refused or failed action call (#299). The message is unchanged from before
+ * (`actions.<name> failed: <status> <body>`); `code` is the server's `error`
+ * field — e.g. `step_up_required` or `requires app role` — and `body` the rest
+ * of its JSON body (a step-up refusal carries `max_age`, and `method: 'passkey'`
+ * when only a passkey will do).
+ */
+export class ActionError extends Error {
+  readonly code: string | null;
+  readonly body: Record<string, unknown> | null;
+
+  constructor(readonly action: string, readonly status: number, text: string) {
+    super(`actions.${action} failed: ${status} ${text}`);
+    this.name = 'ActionError';
+    let body: unknown = null;
+    try { body = JSON.parse(text); } catch { /* not JSON */ }
+    this.body = body !== null && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null;
+    this.code = typeof this.body?.error === 'string' ? this.body.error : null;
+  }
+
+  /** The server wants a recent sign-in (or a passkey check, see {@link needsPasskey}) before it runs this action. */
+  get stepUpRequired(): boolean {
+    return this.code === 'step_up_required';
+  }
+
+  /** Only a passkey step-up will do; a fresh sign-in would be refused again. */
+  get needsPasskey(): boolean {
+    return this.stepUpRequired && this.body?.method === 'passkey';
+  }
+
+  /** The caller lacks a role the action declares (`auth.app_roles` / `auth.platform_roles`). */
+  get forbidden(): boolean {
+    return this.status === 403 && !this.stepUpRequired;
+  }
+}
+
 export class Actions {
   constructor(
     private readonly appId: string,
@@ -48,7 +84,7 @@ export class Actions {
     if (!response.ok) {
       const text = await response.text().catch(() => '');
       this.logger?.capture('error', 'action', `action ${name} failed`, { action: name, status: response.status });
-      throw new Error(`actions.${name} failed: ${response.status} ${text}`);
+      throw new ActionError(name, response.status, text);
     }
     return (await response.json()) as T;
   }
@@ -64,7 +100,7 @@ export class Actions {
     );
     if (!response.ok) {
       const text = await response.text().catch(() => '');
-      throw new Error(`actions.${name} failed: ${response.status} ${text}`);
+      throw new ActionError(name, response.status, text);
     }
     return (await response.json()) as T;
   }

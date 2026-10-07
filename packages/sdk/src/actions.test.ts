@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Actions } from './actions.js';
+import { Actions, ActionError } from './actions.js';
 
 function auth(response: Response) {
   return {
@@ -86,5 +86,16 @@ describe('Actions', () => {
         body: JSON.stringify({ params: { slug: 'chessideas' } }),
       }),
     );
+  });
+
+  // #299: a refusal is a typed ActionError; the message is unchanged.
+  it('a refusal rejects with an ActionError carrying the server code and body', async () => {
+    const a = auth(Response.json({ error: 'requires app role' }, { status: 403 }));
+    const err = await new Actions('interns', 'https://api.proappstore.online', a).call('admin_x').catch((e) => e);
+    expect(err).toBeInstanceOf(ActionError);
+    expect(err.message).toBe('actions.admin_x failed: 403 {"error":"requires app role"}');
+    expect(err).toMatchObject({ action: 'admin_x', status: 403, code: 'requires app role', forbidden: true });
+    const plain = await new Actions('interns', 'https://api.proappstore.online', auth(new Response('boom', { status: 500 }))).call('x').catch((e) => e);
+    expect(plain).toMatchObject({ status: 500, code: null, body: null, forbidden: false });
   });
 });

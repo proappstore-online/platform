@@ -35,7 +35,7 @@ export type {
   Invite, InviteListItem, CreateInviteOptions, RedeemResult,
   DelegatedInvitePolicy, GroupAdminGrant,
 } from './invites.js';
-export { Actions } from './actions.js';
+export { Actions, ActionError } from './actions.js';
 export type { ActionVerifyResult } from './actions.js';
 export { Tokens } from './tokens.js';
 export type { AppToken, MintedAppToken, CreateTokenOptions, TokenAccess } from './tokens.js';
@@ -73,6 +73,8 @@ export { useAuth, useSubscription, useGate, useNotifications, useTheme } from '.
 // Backward-compat aliases
 export { useProAuth, useProSubscription, useProGate, useProNotifications } from './hooks.js';
 export { ProProvider, useApp } from './provider.js';
+export { AdminConsole, AdminErrorBoundary, useAdminContext, useAction } from './admin.js';
+export type { AdminConsoleProps, AdminContextValue, UseActionOptions, ActionInvoker } from './admin.js';
 export type { ProProviderProps } from './provider.js';
 export { ProShell } from './shell.js';
 export type { ProShellProps, ProShellRenderContext, ProShellNavContext, MenuItem, ShellErrorContext } from './shell.js';
@@ -117,8 +119,11 @@ export class ProAppStore {
   readonly logs: Logs;
   /** The app's own worker (#260): `pro.worker.fetch('/v1/ping')` → `/.pas/worker/v1/ping`. */
   readonly worker: WorkerHttp;
+  /** The app id this instance was initialised with. */
+  readonly appId: string;
 
   constructor(opts: ProInitOptions) {
+    this.appId = opts.appId;
     const apiBase = opts.proApiBase ?? 'https://api.proappstore.online';
     const authMode = resolveAuthMode(opts.authMode);
     this.auth = new Auth(opts.appId, apiBase, authMode);
