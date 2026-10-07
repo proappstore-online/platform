@@ -78,6 +78,23 @@ jobs:
             echo "⚠ PAS_ADMIN_GH_TOKEN not set in Doppler/org yet — leaving the existing Worker GITHUB_TOKEN unchanged"
           fi
 
+      # The admin worker verifies PAS Bearer sessions (/api/publish-app), so its
+      # SESSION_SIGNING_KEY must match proappstore-api's. Same source as
+      # deploy-backend.yml (platform repo secret); skipped when unset so a missing
+      # secret never blanks the live key (#309).
+      - name: Sync SESSION_SIGNING_KEY
+        working-directory: packages/admin
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SESSION_SIGNING_KEY: ${{ secrets.SESSION_SIGNING_KEY }}
+        run: |
+          if [ -n "$SESSION_SIGNING_KEY" ]; then
+            printf '%s' "$SESSION_SIGNING_KEY" | pnpm exec wrangler secret put SESSION_SIGNING_KEY
+          else
+            echo "⚠ SESSION_SIGNING_KEY not set — leaving the Worker's key unchanged"
+          fi
+
       - name: Smoke test
         run: |
           for i in 1 2 3 4 5; do
