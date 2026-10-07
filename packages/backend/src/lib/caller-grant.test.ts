@@ -22,7 +22,7 @@ describe('caller grants (#260)', () => {
     expect(await verifyCallerGrant(env, 't', g, NOW + CALLER_GRANT_TTL_SECONDS)).toBeNull();
     expect(await verifyCallerGrant(env, 'u', g, NOW)).toBeNull();
     expect(await verifyCallerGrant({ SESSION_SIGNING_KEY: 'other' }, 't', g, NOW)).toBeNull();
-    for (const tampered of [{ ...g, user_id: 'gh:1' }, { ...g, roles: ['user', 'admin'] }, { ...g, exp: g.exp + 600 }, { ...g, grant_id: 'x' }, { ...g, sig: g.sig.replace(/.$/, '0') }]) {
+    for (const tampered of [{ ...g, user_id: 'gh:1' }, { ...g, roles: ['user', 'admin'] }, { ...g, exp: g.exp + 600 }, { ...g, grant_id: 'x' }, { ...g, sig: g.sig.replace(/.$/, (c) => (c === '0' ? '1' : '0')) }]) {
       expect(await verifyCallerGrant(env, 't', tampered, NOW), JSON.stringify(tampered)).toBeNull();
     }
   });
