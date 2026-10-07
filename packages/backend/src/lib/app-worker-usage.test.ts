@@ -16,7 +16,8 @@ const {
 } = usage;
 
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
-const MIGRATION = readFileSync(new URL('../../../../migrations/0071_app_worker_usage.sql', import.meta.url), 'utf8');
+const MIGRATION = readFileSync(new URL('../../../../migrations/0071_app_worker_usage.sql', import.meta.url), 'utf8')
+  + readFileSync(new URL('../../../../migrations/0075_app_worker_log_usage.sql', import.meta.url), 'utf8');
 const NOW = Date.UTC(2026, 9, 6, 12, 0);
 const TOMORROW = NOW + 86_400_000;
 

@@ -79,6 +79,17 @@ export function checkBurst(appId: string, clientKey: string, nowMs: number, entr
   return true;
 }
 
+/**
+ * The burst key of a public log batch (#316). Namespaced, because `clientId` is
+ * chosen by the caller: unprefixed, an anonymous batch could name a signed-in
+ * user's bucket (`gh:42`) or a platform one (`worker`, `server`) and spend it.
+ */
+export function publicLogBurstKey(userId: string | null | undefined, clientId: string | null, ip: string | null | undefined): string {
+  if (userId) return `user:${userId}`;
+  if (clientId) return `client:${clientId}`;
+  return `ip:${ip ?? 'unknown'}`;
+}
+
 export interface QuotaVerdict {
   /** Write detail rows to D1. False → count in AE only. */
   persist: boolean;

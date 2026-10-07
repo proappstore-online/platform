@@ -12,6 +12,10 @@
  *                    its Tail Worker and is recorded per invocation
  *                    (app_worker_invocations.child_cpu_ms, #308), not metered.
  *   pas_calls        each invocation's own D1 counter (#254), added when it ends.
+ *   log_entries      the app worker's own log lines — PAS.log and its console (#308) —
+ *                    against their own daily budget (#316), never the app's log
+ *                    quota that anonymous ingestion spends. Over it, lines are
+ *                    dropped; logging never refuses an invocation.
  *   hook_deliveries  accepted (verified, non-duplicate) deliveries (#256),
  *                    reserved by the hooks route before anything is delivered.
  *
@@ -29,6 +33,7 @@ import { HttpError } from './auth.js';
 import { secondsUntilUtcMidnight } from './ai-budget.js';
 import { utcDayKey } from './day-key.js';
 import { dispatchWebhook } from './webhook-dispatch.js';
+import { checkLogQuota, type LogUsageStore, type QuotaVerdict } from './log-quota.js';
 
 export interface AppWorkerQuotas { invocations: number; cpu_ms: number; hook_deliveries: number }
 export type QuotaName = keyof AppWorkerQuotas;
@@ -48,6 +53,35 @@ export const ACCOUNT_CEILING_ALERT_KIND = 'app_worker_account_ceiling';
 /** app_alerts.app_id of platform-wide alerts; `_` is never a legal app id. */
 export const PLATFORM_ALERT_APP = '_platform';
 const DAY_MS = 86_400_000;
+
+/** #316: worker log lines kept per app per UTC day. Separate from the app's log quota (DAILY_ENTRY_LIMIT). */
+export const WORKER_LOG_DAILY_LIMIT = 50_000;
+/**
+ * The burst key of worker log lines. The public logs route namespaces its keys
+ * (`user:`, `client:`, `ip:`), so no caller-chosen clientId can name this bucket.
+ */
+export const WORKER_LOG_BURST_KEY = 'worker';
+
+/** The worker-log counter: `app_worker_usage.log_entries`, which only invocations write. */
+export function workerLogUsageStore(db: D1Database): LogUsageStore {
+  return {
+    async read(appId, day) {
+      const row = await db.prepare('SELECT log_entries FROM app_worker_usage WHERE app_id = ?1 AND day = ?2').bind(appId, day).first<{ log_entries: number }>();
+      return row?.log_entries ?? 0;
+    },
+    async bump(appId, day, by) {
+      await db.prepare(
+        `INSERT INTO app_worker_usage (app_id, day, log_entries) VALUES (?1, ?2, ?3)
+         ON CONFLICT(app_id, day) DO UPDATE SET log_entries = log_entries + ?3`,
+      ).bind(appId, day, by).run();
+    },
+  };
+}
+
+/** May `entries` worker log lines be stored? Drop them when not; never a reason to fail the invocation. */
+export function checkWorkerLogQuota(env: Pick<Env, 'DB'>, appId: string, entries: number, now: number): Promise<QuotaVerdict> {
+  return checkLogQuota(workerLogUsageStore(env.DB), { appId, clientKey: WORKER_LOG_BURST_KEY, entries, nowMs: now, dailyLimit: WORKER_LOG_DAILY_LIMIT });
+}
 
 export class AppWorkerQuotaError extends HttpError {
   readonly retryAfter: number;
@@ -190,15 +224,17 @@ async function alertNearQuota(env: Env, appId: string, usage: UsageRow, quotas: 
 export async function appWorkerUsage(env: Pick<Env, 'DB'>, appId: string, days: number, now: number) {
   const overrides = await env.DB.prepare('SELECT quota_overrides FROM app_workers WHERE app_id = ?').bind(appId).first<{ quota_overrides: string | null }>();
   const rows = await env.DB.prepare(
-    'SELECT day, invocations, cpu_ms, hook_deliveries, pas_calls FROM app_worker_usage WHERE app_id = ? AND day >= ? ORDER BY day DESC',
-  ).bind(appId, utcDayKey(now - (days - 1) * DAY_MS)).all<UsageRow & { day: string }>();
+    'SELECT day, invocations, cpu_ms, hook_deliveries, pas_calls, log_entries FROM app_worker_usage WHERE app_id = ? AND day >= ? ORDER BY day DESC',
+  ).bind(appId, utcDayKey(now - (days - 1) * DAY_MS)).all<UsageRow & { day: string; log_entries: number }>();
   const today = utcDayKey(now);
   const usage = rows.results ?? [];
   return {
     app_id: appId,
     quotas: quotasFrom(overrides?.quota_overrides),
     cpu_ms_source: CPU_MS_SOURCE,
-    today: usage.find((r) => r.day === today) ?? { day: today, invocations: 0, cpu_ms: 0, hook_deliveries: 0, pas_calls: 0 },
+    // #316: worker log lines are metered on their own; over this they are dropped, not refused.
+    worker_log_limit: WORKER_LOG_DAILY_LIMIT,
+    today: usage.find((r) => r.day === today) ?? { day: today, invocations: 0, cpu_ms: 0, hook_deliveries: 0, pas_calls: 0, log_entries: 0 },
     days: usage,
   };
 }

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { AppWorkerApi } from '../../../backend/src/rpc/app-worker-api';
 import { MAX_PAS_CALLS_PER_INVOCATION, SYSTEM_WORKER_USER } from '../../../backend/src/lib/app-worker-calls';
+import { WORKER_LOG_DAILY_LIMIT } from '../../../backend/src/lib/app-worker-usage';
 import { disableAppWorker } from '../../../backend/src/lib/app-worker-host';
 import { sha256Hex } from '../../../backend/src/lib/app-tokens';
 import { sealSecret } from '../../../backend/src/lib/encryption';
@@ -59,7 +60,7 @@ beforeEach(async () => {
   queried = [];
   for (const r of (await env.DB.prepare('SELECT app_id FROM app_workers').all<{ app_id: string }>()).results ?? []) await disableAppWorker(env, r.app_id);
   await resetTables();
-  for (const t of ['app_worker_invocations', 'app_worker_manifest', 'app_secrets', 'app_log_usage']) await env.DB.prepare(`DELETE FROM ${t}`).run();
+  for (const t of ['app_worker_invocations', 'app_worker_manifest', 'app_secrets', 'app_log_usage', 'app_worker_usage']) await env.DB.prepare(`DELETE FROM ${t}`).run();
   await seedUser('gh:admin', 'admin');
   await seedApp('t', 'gh:admin');
   await seedApp('u', 'gh:admin');
@@ -150,6 +151,27 @@ describe('PAS secrets, storage and log (#254)', () => {
     expect((await listing.json() as { files: unknown[] }).files).toEqual([]);
     const got = await pas({ appId: 't' }).storage.get('a.json', ctx());
     expect(new TextDecoder().decode(got!.body)).toBe('{"n":1}');
+  });
+
+  it("log draws on the worker's own budget (#316): a spent app log quota and a flooded 'worker' client id do not stop it", async () => {
+    const day = new Date().toISOString().slice(0, 10);
+    await env.DB.prepare("INSERT INTO app_log_usage (app_id, day, count) VALUES ('t', ?, 50000)").bind(day).run();
+    // An anonymous caller naming the workers' burst key: the public route namespaces it (client:worker), so it spends its own bucket.
+    const batch = { entries: Array.from({ length: 100 }, (_, i) => ({ level: 'info', message: `x${i}` })), clientId: 'worker' };
+    for (let i = 0; i < 3; i++) await SELF.fetch(`${BASE}/v1/apps/t/logs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(batch) });
+    expect(await pas({ appId: 't' }).log('info', 'still logging', undefined, ctx())).toBe(true);
+    expect(await env.DB.prepare("SELECT log_entries FROM app_worker_usage WHERE app_id = 't' AND day = ?").bind(day).first()).toEqual({ log_entries: 1 });
+    expect(await env.DB.prepare("SELECT count FROM app_log_usage WHERE app_id = 't' AND day = ?").bind(day).first()).toEqual({ count: 50000 });
+  });
+
+  it('over its own budget a worker log line is dropped (false), and the invocation is untouched', async () => {
+    const day = new Date().toISOString().slice(0, 10);
+    await env.DB.prepare(
+      "INSERT INTO app_worker_usage (app_id, day, log_entries) VALUES ('t', ?, ?) ON CONFLICT(app_id, day) DO UPDATE SET log_entries = excluded.log_entries",
+    ).bind(day, WORKER_LOG_DAILY_LIMIT).run();
+    expect(await pas({ appId: 't' }).log('info', 'dropped', undefined, ctx())).toBe(false);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM app_logs WHERE app_id = 't' AND message = 'dropped'").first()).toEqual({ n: 0 });
+    expect(await env.DB.prepare('SELECT status FROM app_worker_invocations WHERE id = ?').bind(INVOCATION).first()).toEqual({ status: 'running' });
   });
 
   it('log appends to app_logs as system:worker, category worker, traced to its invocation (#308)', async () => {

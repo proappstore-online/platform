@@ -17,7 +17,7 @@ import { sha256Hex } from './app-tokens.js';
 import { timingSafeEqual } from './bytes.js';
 import { openAppSecret } from './app-secrets.js';
 import { connectorConfigured, installationToken } from './github-app.js';
-import { checkLogQuota, d1LogUsageStore } from './log-quota.js';
+import { checkWorkerLogQuota } from './app-worker-usage.js';
 import { LEVELS, normalizeEntry, type NormalizedEntry } from './log-ingest.js';
 import { HttpError } from './auth.js';
 import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from '../routes/actions.js';
@@ -340,7 +340,8 @@ export async function workerLog(env: Env, appId: string, level: unknown, message
   const now = Date.now();
   const entry = await normalizeEntry({ level, category: 'worker', message, ...(fields !== undefined ? { data: fields } : {}) }, now);
   if (!entry) throw new WorkerCallError('BadRequest', 'message must be a non-empty string');
-  const verdict = await checkLogQuota(d1LogUsageStore(env.DB), { appId, clientKey: 'app-worker', entries: 1, nowMs: now });
+  // #316: the worker's own log budget, which anonymous ingestion cannot spend. Over it the line is dropped.
+  const verdict = await checkWorkerLogQuota(env, appId, 1, now);
   if (!verdict.persist) return false;
   await insertWorkerLog(env, appId, entry, invocation, 'worker', now).run();
   return true;

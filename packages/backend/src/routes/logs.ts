@@ -31,7 +31,7 @@ import {
   traceIdFromTraceparent,
   type RawLogEntry,
 } from '../lib/log-ingest.js';
-import { checkLogQuota, d1LogUsageStore } from '../lib/log-quota.js';
+import { checkLogQuota, d1LogUsageStore, publicLogBurstKey } from '../lib/log-quota.js';
 import type { Env } from '../types.js';
 
 export const logsRoutes = new Hono<{ Bindings: Env }>();
@@ -74,8 +74,8 @@ logsRoutes.post('/apps/:appId/logs', async (c) => {
 
   // Quota key: the session if there is one, else the client id, else the edge IP.
   // Never *only* the app, or one noisy client would spend every other user's
-  // burst budget for that app.
-  const clientKey = user?.id ?? clientId ?? c.req.header('cf-connecting-ip') ?? 'unknown';
+  // burst budget for that app. Namespaced (#316): see publicLogBurstKey.
+  const clientKey = publicLogBurstKey(user?.id, clientId, c.req.header('cf-connecting-ip'));
   const verdict = await checkLogQuota(d1LogUsageStore(c.env.DB), {
     appId,
     clientKey,

@@ -25,7 +25,6 @@ import { HttpError } from './auth.js';
 import { openSecret, sealSecret, type SealedSecret } from './encryption.js';
 import { sha256Hex } from './app-tokens.js';
 import { toUint8 } from './bytes.js';
-import { checkLogQuota, d1LogUsageStore } from './log-quota.js';
 import { quotasFrom, recordInvocationUsage, reserveInvocation } from './app-worker-usage.js';
 import { SIGNATURE_HEADER, signatureHeader } from '../app-worker-shim/signature.js';
 import { APP_WORKER_SHIM } from '../generated/app-worker-shim.js';
@@ -419,8 +418,8 @@ function loaderHost(env: Env, loader: WorkerLoader, ctx?: AppWorkerExports): App
         ).bind(appId, now, now).run();
       }
 
-      const quota = await checkLogQuota(d1LogUsageStore(env.DB), { appId, clientKey: 'app-worker', entries: 1, nowMs: now });
-      if (!quota.persist) throw new HttpError(`app worker invocation refused: log quota (${quota.reason})`, 429);
+      // Logging never gates an invocation (#316): the app's log quota is spendable by anonymous ingestion,
+      // and worker log lines have their own budget (checkWorkerLogQuota), which only drops lines.
       // #275: today's quota, reserved before any work. Throws AppWorkerQuotaError, or 503 if the check cannot run.
       const quotas = quotasFrom(w.quota_overrides);
       await reserveInvocation(env, appId, quotas, now);

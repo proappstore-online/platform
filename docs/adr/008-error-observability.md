@@ -142,6 +142,20 @@ One invariant, learned the hard way: **the burst ceiling must stay at or above
 `MAX_BATCH_SIZE`.** Set below it, a single legal full batch is throttled on
 arrival and no app can ever flush one. There is a test asserting the ordering.
 
+Two more invariants (#316). Ingestion is anonymous, so anything it can spend,
+an attacker can spend:
+
+- **Burst keys are namespaced.** The public route keys its burst buckets as
+  `user:<id>`, `client:<clientId>` or `ip:<ip>` (`publicLogBurstKey`). A
+  caller-chosen `clientId` therefore can never name a signed-in user's bucket,
+  or a platform one (`worker`, `server`).
+- **Nothing that controls execution draws on the app's log quota.** App-worker
+  invocations are not gated on it. Worker log lines (`PAS.log` and the Tail
+  Worker's console lines) count against their own budget,
+  `app_worker_usage.log_entries`, which only invocations write. Before this, about
+  500 anonymous 100-entry batches stopped every app worker of an app for the day
+  and tripped its schedule breakers.
+
 **App-context binding is real work, not a URL change.** #108 proposes preferring
 the mediated `/.pas/api/.../logs` route "so the host can bind the log to the app
 context." Today it cannot: `platform-mediation.ts:11-14` is a blanket

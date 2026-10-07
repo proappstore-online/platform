@@ -1,6 +1,6 @@
 import { SELF, env } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { BASE, json, seedApp, seedUser, mockNetwork, resetTables, viaHostApi } from './helpers';
+import { BASE, json, seedApp, seedUser, mockNetwork, resetTables, session, viaHostApi } from './helpers';
 
 const entries = (n: number) => Array.from({ length: n }, (_, i) => ({ ts: Date.now(), level: 'error', category: 'client', message: `boom ${i}` }));
 const dayKey = () => new Date().toISOString().slice(0, 10);
@@ -35,5 +35,15 @@ describe('log ingestion and quota against real D1 tables', () => {
     await seedUser('gh:1'); await seedApp('demo', 'gh:1');
     const res = await viaHostApi(`${BASE}/v1/apps/demo/logs`, { ...json('POST', { entries: entries(1) }), headers: { 'Content-Type': 'application/json', 'X-PAS-App': 'other' } });
     expect(res.status).toBe(403);
+  });
+
+  it("a caller-chosen clientId cannot spend a signed-in user's burst budget (#316)", async () => {
+    await seedUser('gh:1'); await seedApp('demo', 'gh:1');
+    // An anonymous flood under clientId 'gh:1' spends client:gh:1's burst (the key mapping is unit-tested in
+    // log-quota.test.ts; the per-second window makes the anonymous throttle itself timing-dependent here)…
+    for (let i = 0; i < 3; i++) await SELF.fetch(`${BASE}/v1/apps/demo/logs`, json('POST', { entries: entries(100), clientId: 'gh:1' }));
+    // …and the signed-in gh:1 still has its own bucket (user:gh:1).
+    const signedIn = await SELF.fetch(`${BASE}/v1/apps/demo/logs`, json('POST', { entries: entries(1) }, await session('gh:1')));
+    expect(await signedIn.json()).toMatchObject({ ok: true, ingested: 1 });
   });
 });

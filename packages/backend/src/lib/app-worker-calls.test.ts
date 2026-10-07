@@ -61,8 +61,10 @@ function fakeDb(): D1Database {
     if (s.startsWith('UPDATE app_secrets SET last_used_at')) return { changes: 1 };
     if (s.startsWith('SELECT role_name FROM app_roles')) return { all: (appRoles.get(String(args[1])) ?? []).map((role_name) => ({ role_name })) };
     if (s.startsWith('INSERT INTO app_action_audit')) { audits.push(args); return { changes: 1 }; }
-    if (s.startsWith('SELECT count FROM app_log_usage')) return { first: null };
-    if (s.startsWith('INSERT INTO app_log_usage')) return { changes: 1 };
+    // #316: worker log lines are metered on app_worker_usage.log_entries. app_log_usage — the counter anonymous
+    // ingestion spends — is deliberately unhandled here, so any worker path that touches it fails the test.
+    if (s.startsWith('SELECT log_entries FROM app_worker_usage')) return { first: null };
+    if (s.startsWith('INSERT INTO app_worker_usage')) return { changes: 1 };
     if (s.startsWith('INSERT INTO app_logs')) { logs.push(args); return { changes: 1 }; }
     throw new Error(`fake D1: unexpected SQL ${s.slice(0, 90)}`);
   };

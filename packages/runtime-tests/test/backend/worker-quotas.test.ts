@@ -68,7 +68,7 @@ beforeEach(async () => {
   for (const r of (await env.DB.prepare('SELECT app_id FROM app_workers').all<{ app_id: string }>()).results ?? []) await disableAppWorker(env, r.app_id);
   await resetTables();
   for (const t of ['app_hooks', 'app_hook_deliveries', 'app_secrets', 'app_worker_invocations', 'app_worker_usage', 'app_worker_schedules', 'app_alerts',
-    'scheduled_action_runs', 'scheduled_action_state']) await env.DB.prepare(`DELETE FROM ${t}`).run();
+    'scheduled_action_runs', 'scheduled_action_state', 'app_log_usage']) await env.DB.prepare(`DELETE FROM ${t}`).run();
   await env.DB.prepare('UPDATE app_worker_platform SET open = 1, closed_reason = NULL, closed_at = NULL').run();
   await env.DB.prepare('UPDATE app_workers SET quota_overrides = NULL').run();
   await seedUser('gh:admin', 'admin');
@@ -91,6 +91,9 @@ afterEach(async () => {
   vi.restoreAllMocks();
   fetchMock.assertNoPendingInterceptors();
   await env.DB.prepare('DELETE FROM app_worker_schedules').run();
+  // Quota overrides and today's usage must not reach the next file (singleWorker shares this D1).
+  await env.DB.prepare('UPDATE app_workers SET quota_overrides = NULL').run();
+  for (const t of ['app_worker_usage', 'app_log_usage']) await env.DB.prepare(`DELETE FROM ${t}`).run();
 });
 
 describe('metering (#275)', () => {
@@ -177,5 +180,47 @@ describe('APP_WORKER_OPEN (#275)', () => {
     expect((await SELF.fetch(`${BASE}/v1/admin/app-workers/open`, json('PUT', { open: true }, await session('gh:42')))).status).toBe(403);
     expect((await SELF.fetch(`${BASE}/v1/admin/app-workers/open`, json('PUT', { open: true }, await admin()))).status).toBe(200);
     expect((await SELF.fetch(`${BASE}/v1/admin/apps/second/worker-enabled`, json('PUT', { enabled: true }, await admin()))).status).toBe(200);
+  });
+});
+
+describe('an anonymous log flood cannot stop app workers (#316)', () => {
+  // ~500 anonymous 100-entry batches used to fill the app's daily log quota, which every invoke() checked first.
+  async function flood() {
+    const day = new Date().toISOString().slice(0, 10);
+    await env.DB.prepare("INSERT INTO app_log_usage (app_id, day, count) VALUES ('t', ?, 49950)").bind(day).run();
+    const batch = { entries: Array.from({ length: 100 }, (_, i) => ({ level: 'error', message: `flood ${i}` })) };
+    // The last stretch through the real anonymous route, under platform-looking client ids: the quota is now spent.
+    for (const clientId of ['worker', 'app-worker', 'server']) {
+      const res = await SELF.fetch(`${BASE}/v1/apps/t/logs`, json('POST', { ...batch, clientId }));
+      expect([200, 202]).toContain(res.status);
+    }
+    // The app's daily log quota is spent: from here the public route stores nothing more today.
+    const used = await env.DB.prepare("SELECT count FROM app_log_usage WHERE app_id = 't' AND day = ?").bind(day).first<{ count: number }>();
+    expect(used!.count).toBeGreaterThanOrEqual(50_000);
+  }
+
+  it('browser requests, hook deliveries and schedule runs still run, and the breaker counts nothing', async () => {
+    await flood();
+    expect((await viaHost()).status).toBe(200);
+
+    expect((await github('f-1')).status).toBe(202);
+    expect(await settled('f-1')).toMatchObject({ status: 'delivered', error: null });
+
+    for (const now of [TICK, TICK + 5 * 60_000]) {
+      expect((await runScheduledActions({ env, now })).workers).toMatchObject({ queued: 1 });
+      await drainAppEvents(sent);
+    }
+    const runs = await env.DB.prepare("SELECT status, error FROM scheduled_action_runs WHERE action_name = 'worker:tick' ORDER BY due_at").all();
+    expect(runs.results).toEqual([{ status: 'succeeded', error: null }, { status: 'succeeded', error: null }]);
+    const state = await env.DB.prepare("SELECT consecutive_failures, schedule_disabled_at FROM scheduled_action_state WHERE app_id = 't' AND action_name = 'worker:tick'").first();
+    expect(state).toMatchObject({ consecutive_failures: 0, schedule_disabled_at: null });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM app_worker_invocations WHERE app_id = 't' AND status = 'succeeded'").first()).toEqual({ n: 4 });
+  });
+
+  it('a true execution quota is still classified as one: quota exceeded, not a log failure', async () => {
+    await flood();
+    expect((await setQuotas({ invocations: 1 })).status).toBe(200);
+    expect((await viaHost()).status).toBe(200);
+    expect(await (await viaHost()).json()).toEqual({ error: 'quota exceeded', quota: 'invocations' });
   });
 });

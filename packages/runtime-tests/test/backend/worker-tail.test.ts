@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { AppWorkerTail } from '../../../backend/src/rpc/app-worker-tail';
 import { MAX_TAIL_LINES } from '../../../backend/src/lib/app-worker-tail';
+import { WORKER_LOG_DAILY_LIMIT } from '../../../backend/src/lib/app-worker-usage';
 import { BASE, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
 const env = providedEnv as unknown as Env;
@@ -29,7 +30,7 @@ const lines = (appId: string) => env.DB.prepare('SELECT level, category, message
 beforeEach(async () => {
   mockNetwork();
   await resetTables();
-  for (const t of ['app_worker_invocations', 'app_log_usage']) await env.DB.prepare(`DELETE FROM ${t}`).run();
+  for (const t of ['app_worker_invocations', 'app_log_usage', 'app_worker_usage']) await env.DB.prepare(`DELETE FROM ${t}`).run();
   await seedUser('gh:1', 'owner');
   await seedApp('t', 'gh:1');
   await seedApp('u', 'gh:1');
@@ -86,11 +87,16 @@ describe('AppWorkerTail (#308)', () => {
     expect(stored.at(-1)).toMatchObject({ level: 'warn', message: `21 more console lines dropped (max ${MAX_TAIL_LINES} per invocation)` });
   });
 
-  it("console lines count against the app's daily log quota", async () => {
+  it("console lines count against the worker's own log budget, not the app's log quota (#316)", async () => {
     const day = new Date().toISOString().slice(0, 10);
+    // A spent app log quota (anonymous ingestion) does not drop them…
     await env.DB.prepare('INSERT INTO app_log_usage (app_id, day, count) VALUES (?, ?, 50000)').bind('t', day).run();
-    await tail('t').tail([trace('evt-1:1', { logs: [{ timestamp: Date.now(), level: 'log', message: ['over quota'] }] })]);
-    expect(await lines('t')).toEqual([]);
-    expect(await record('evt-1:1')).toMatchObject({ child_cpu_ms: 12 }); // the CPU is still recorded
+    await tail('t').tail([trace('evt-1:1', { logs: [{ timestamp: Date.now(), level: 'log', message: ['still kept'] }] })]);
+    expect((await lines('t')).map((l) => l.message)).toEqual(['still kept']);
+    // …a spent worker budget does, and the CPU is still recorded.
+    await env.DB.prepare('UPDATE app_worker_usage SET log_entries = ? WHERE app_id = ? AND day = ?').bind(WORKER_LOG_DAILY_LIMIT, 't', day).run();
+    await tail('t').tail([trace('evt-1:1', { cpuTime: 7, logs: [{ timestamp: Date.now(), level: 'log', message: ['over budget'] }] })]);
+    expect((await lines('t')).map((l) => l.message)).toEqual(['still kept']);
+    expect(await record('evt-1:1')).toMatchObject({ child_cpu_ms: 7 });
   });
 });

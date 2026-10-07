@@ -47,7 +47,7 @@ There is **no** D1, KV, R2, queue or AI binding, and no app secret in `env`:
   Plain `console.log` / `console.error` output and uncaught exceptions land
   there too (source `worker-console`), delivered by the platform's Tail Worker
   (`AppWorkerTail`, #308) after each invocation: at most 100 lines per
-  invocation, within the same log quota.
+  invocation, within the worker's own log budget (below).
 
 Outbound `fetch` to the Internet works: it leaves through the platform's egress gateway (`AppWorkerEgress`, #311), which logs the app, method and host.
 
@@ -190,7 +190,7 @@ Every handler receives the event, plus a `pas` client bound to this invocation:
 | `pas.actions.batch([{ name, params }])` | Runs many actions in one transaction, at most 500 statements and 1 MB. It counts as one `PAS` call. |
 | `pas.secrets.get(name)` | Returns a secret listed in `worker.secrets`, otherwise `null`. |
 | `pas.storage.put(key, body, { contentType? })` / `get(key)` | Reads and writes worker files, at most 10 MB each. |
-| `pas.log(level, message, fields?)` | Appends to the app's logs. Resolves `false` when the app's daily log quota is spent. |
+| `pas.log(level, message, fields?)` | Appends to the app's logs. Resolves `false` when the worker's daily log budget is spent (the line is dropped; the invocation carries on). |
 
 `event` is `{ id, type, name, attempt, issuedAt, payload }`. For a hook it also
 carries `hook: { headers, body }`. `hookBody(payload)` decodes an envelope body
@@ -240,10 +240,19 @@ a replay inside the signature window. **Make every handler idempotent on
 | Worker files | 10 MB per object |
 | Invocation history | 30 days; hook deliveries 14 days |
 
-**Logs share the app's quota.** `pas.log` writes into the same per-app daily
-budget (50,000 entries per UTC day) as the app's browser clients. A chatty
-worker can therefore use up the budget that the app's error reporting relies on.
-Log a summary per run, not a line per item.
+**Worker logs have their own budget (#316).** `pas.log` lines and console
+output count against a worker log budget of 50,000 lines per app per UTC day.
+That counter is `log_entries` on `GET /v1/apps/:id/worker/usage`, and the
+limit is `worker_log_limit`. It is separate from the app's log quota, which the
+app's browser clients and anonymous log ingestion spend. Over the budget, lines
+are dropped and `pas.log` resolves `false`. Nothing else changes: the
+invocation runs, a schedule run still succeeds, and no breaker counts it.
+
+Logging never decides whether your worker runs. A flood of anonymous log
+batches against your app, or a chatty worker of your own, can use up a log
+budget, but only `invocations`, `cpu_ms` and `hook_deliveries` (below) can stop
+an invocation. Log a summary per run, not a line per item, to keep your lines
+inside the budget.
 
 ## Daily quotas
 

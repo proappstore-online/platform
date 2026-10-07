@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   checkBurst,
   checkLogQuota,
+  publicLogBurstKey,
   resetBurstState,
   type LogUsageStore,
 } from './log-quota.js';
 import { utcDayKey } from './day-key.js';
+import { WORKER_LOG_BURST_KEY } from './app-worker-usage.js';
 import { BURST_ENTRIES_PER_SECOND } from './log-ingest.js';
 
 const NOW = 1_800_000_000_000;
@@ -25,6 +27,25 @@ function fakeStore(seed: Record<string, number> = {}): LogUsageStore & { counts:
 }
 
 beforeEach(() => resetBurstState());
+
+describe('publicLogBurstKey (#316)', () => {
+  it('namespaces every caller key, so a chosen clientId never names a user or a platform bucket', () => {
+    expect(publicLogBurstKey('gh:42', 'gh:7', '1.2.3.4')).toBe('user:gh:42');
+    expect(publicLogBurstKey(null, 'gh:42', '1.2.3.4')).toBe('client:gh:42');
+    expect(publicLogBurstKey(undefined, null, '1.2.3.4')).toBe('ip:1.2.3.4');
+    expect(publicLogBurstKey(null, null, undefined)).toBe('ip:unknown');
+    // A clientId equal to a user id, or to a platform key, lands in a different bucket.
+    expect(publicLogBurstKey(null, 'gh:42', null)).not.toBe(publicLogBurstKey('gh:42', null, null));
+    for (const platform of [WORKER_LOG_BURST_KEY, 'server', 'app-worker']) expect(publicLogBurstKey(null, platform, null)).not.toBe(platform);
+  });
+
+  it("an anonymous flood under clientId 'worker' leaves the workers' burst bucket untouched", () => {
+    const now = 1_000_000;
+    expect(checkBurst('a', publicLogBurstKey(null, WORKER_LOG_BURST_KEY, null), now, BURST_ENTRIES_PER_SECOND)).toBe(true);
+    expect(checkBurst('a', publicLogBurstKey(null, WORKER_LOG_BURST_KEY, null), now, 1)).toBe(false);
+    expect(checkBurst('a', WORKER_LOG_BURST_KEY, now, 1)).toBe(true);
+  });
+});
 
 describe('checkBurst', () => {
   it('spends budget per entry, not per request', () => {

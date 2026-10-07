@@ -16,12 +16,13 @@
  *
  * Writes: child_cpu_ms / child_wall_ms / child_outcome on the invocation row,
  * and the console lines and exceptions into app_logs (category `worker`, source
- * `worker-console`, trace_id = the invocation id), within the app's log quota.
+ * `worker-console`, trace_id = the invocation id), within the worker's own log
+ * budget (#316), not the app's log quota.
  */
 import type { Env } from '../types.js';
 import { INVOCATION_HEADER } from './app-worker-host.js';
 import { insertWorkerLog } from './app-worker-calls.js';
-import { checkLogQuota, d1LogUsageStore } from './log-quota.js';
+import { checkWorkerLogQuota } from './app-worker-usage.js';
 import { normalizeEntry, type Level, type NormalizedEntry } from './log-ingest.js';
 
 /** Console lines and exceptions kept per invocation; the rest are dropped, and one line says how many. */
@@ -69,7 +70,7 @@ export async function recordTail(env: Env, appId: string, items: TraceItem[], no
       const entries = (await Promise.all(linesOf(item).map((l) =>
         normalizeEntry({ level: l.level, category: 'worker', message: l.message, ts: l.ts }, now)))).filter((e): e is NormalizedEntry => e !== null);
       if (!entries.length) continue;
-      const verdict = await checkLogQuota(d1LogUsageStore(env.DB), { appId, clientKey: 'app-worker', entries: entries.length, nowMs: now });
+      const verdict = await checkWorkerLogQuota(env, appId, entries.length, now);
       if (!verdict.persist) continue;
       await env.DB.batch(entries.map((e) => insertWorkerLog(env, appId, e, invocation, 'worker-console', now)));
     } catch (e) {
