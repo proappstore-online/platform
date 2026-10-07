@@ -20,6 +20,7 @@ import { getVerifier, VERIFIERS } from '../lib/verifiers/index.js';
 import { validateOperatorView } from '../lib/operator-contract.js';
 import { inspectAdminConsole, operatorCapabilities, previewAdminConsole, proposeAdminUpdate, securityReview, type RoleContext } from '../lib/operator-authoring.js';
 import { loadContract } from './operator.js';
+import { refuseAppMediated } from '../lib/operator-audit-marks.js';
 import { SCHEDULER_TICK_MINUTES } from '../lib/scheduler-tick.js';
 import { MAX_SECRETS_PER_APP, SECRET_NAME_RE } from './secrets-shared.js';
 import { validateHookVerify, type HookVerify } from '../lib/hook-verifiers.js';
@@ -1220,6 +1221,7 @@ toolsRoutes.get('/operator-view/capabilities', async (c) => {
 
 toolsRoutes.get('/apps/:appId/operator-view/inspect', async (c) => {
   const appId = c.req.param('appId')!;
+  refuseAppMediated(c);
   await requireAppOwner(c, appId);
   const [contract, tools, stored] = await Promise.all([
     loadContract(c.env.DB, appId),
@@ -1254,6 +1256,7 @@ async function proposalBody(c: { req: { json: <T>() => Promise<T> } }): Promise<
 
 toolsRoutes.post('/apps/:appId/operator-view/preview', async (c) => {
   const appId = c.req.param('appId')!;
+  refuseAppMediated(c);
   await requireAppOwner(c, appId);
   const body = await proposalBody(c);
   if (!body) return c.json({ error: 'body must be { operator_view, tools? }' }, 400);
@@ -1282,6 +1285,7 @@ async function roleContext(db: D1Database, appId: string): Promise<RoleContext> 
  */
 toolsRoutes.post('/apps/:appId/operator-view/propose', async (c) => {
   const appId = c.req.param('appId')!;
+  refuseAppMediated(c);
   await requireAppOwner(c, appId);
   const body = await proposalBody(c);
   if (!body) return c.json({ error: 'body must be { operator_view, tools?, validate_against_actions? }' }, 400);
@@ -1298,6 +1302,7 @@ toolsRoutes.post('/apps/:appId/operator-view/propose', async (c) => {
 /** #296: the security and compatibility checks alone. Body `{ operator_view, tools? }`. */
 toolsRoutes.post('/apps/:appId/operator-view/security', async (c) => {
   const appId = c.req.param('appId')!;
+  refuseAppMediated(c);
   await requireAppOwner(c, appId);
   const body = await proposalBody(c);
   if (!body) return c.json({ error: 'body must be { operator_view, tools? }' }, 400);

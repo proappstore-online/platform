@@ -124,6 +124,11 @@ to `app_action_audit`. Nothing needs to be added to the action.
   are not the owner are never recorded, so they cannot fill an app's trail.
   Owners read the trail in the console; see
   [MCP app tools → Operator audit trail](./mcp-app-tools.md).
+- **Console only (#300):** the operator view and its authoring routes answer a
+  direct `Authorization: Bearer` call (the console, MCP) and refuse, with 403,
+  any request the host mediated from an app origin (`X-PAS-App`). A page on any
+  PAS app holds its visitor's platform session in a cookie, so without this a
+  page could read or act on another app's operator view as the visitor.
 - **Not audited:** actions without `auth.app_roles`, calls refused at the gate,
   and calls that fail downstream. Refusals are still logged to `app_logs` as
   operation failures (`source = 'server'`), as before.

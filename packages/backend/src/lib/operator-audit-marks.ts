@@ -20,12 +20,25 @@ import type { Context } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireAppOwner, requireUser, type FasUser } from './auth.js';
 import { roleSubjects } from './role-subject.js';
+import { APP_CONTEXT_HEADER } from './app-context.js';
 
 const admitted = new WeakMap<Request, FasUser>();
 const audited = new WeakSet<Request>();
 
+/**
+ * The operator view and its authoring routes answer the console's direct Bearer
+ * calls only (#300). A request the host mediated from an app origin carries
+ * X-PAS-App: it is page JS on some app holding the visitor's cookie session —
+ * any app's page, not the console — so it never reaches an owner's or admin's
+ * operator data or actions.
+ */
+export function refuseAppMediated(c: Context<{ Bindings: Env }>): void {
+  if (c.req.header(APP_CONTEXT_HEADER) !== undefined) throw new HttpError('the operator view is not reachable from an app page', 403);
+}
+
 /** requireAppOwner, remembering the owner for the refusal audit. */
 export async function requireOperatorOwner(c: Context<{ Bindings: Env }>, appId: string): Promise<FasUser> {
+  refuseAppMediated(c);
   const owner = await requireAppOwner(c, appId);
   admitted.set(c.req.raw, owner);
   return owner;
@@ -49,6 +62,7 @@ export async function holdsOperatorAdminRole(db: D1Database, appId: string, user
 
 /** The owner, or a holder of a declared admin role (#293); remembered for the refusal audit. */
 export async function requireOperatorAccess(c: Context<{ Bindings: Env }>, appId: string): Promise<FasUser> {
+  refuseAppMediated(c);
   let caller: FasUser;
   try {
     caller = await requireAppOwner(c, appId);

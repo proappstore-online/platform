@@ -44,5 +44,11 @@ The compatibility date is the newest the bundled workerd supports
 checks is not older than the suite's. Bump both together with
 `@cloudflare/vitest-pool-workers`.
 
+The admin console's security matrix (#300, `test/backend/operator-matrix.test.ts`)
+runs every operator route, derived from both sample contracts and checked against
+the backend's registered routes, against every caller kind. `scripts/gate-mutations.mjs`
+weakens each security gate in turn and requires the guarding suite to fail
+(`node scripts/gate-mutations.mjs [name-filter]`; several minutes, not in CI).
+
 CI runs this in its own `runtime-integration` job, and `deploy-backend.yml` runs
 it before applying migrations to production.
