@@ -153,6 +153,18 @@ export interface Env {
    * Without this, proxy/secrets/allowlist endpoints return 503.
    */
   APP_SECRET_KEK?: string;
+  /**
+   * The platform's GitHub App (#258) — NOT the GitHub OAuth sign-in app above
+   * (GITHUB_CLIENT_ID/SECRET). GH_APP_ID, GH_APP_CLIENT_ID and GH_APP_SLUG are public
+   * [vars]; the private key (PKCS#8 PEM), webhook secret and client secret are Worker
+   * secrets. Any one missing and every /v1/connectors/github route answers 503.
+   */
+  GH_APP_ID?: string;
+  GH_APP_CLIENT_ID?: string;
+  GH_APP_SLUG?: string;
+  GH_APP_PRIVATE_KEY?: string;
+  GH_APP_WEBHOOK_SECRET?: string;
+  GH_APP_CLIENT_SECRET?: string;
   /** Sender address for outbound emails. Defaults to "ProAppStore <noreply@proappstore.online>". */
   EMAIL_FROM?: string;
   /**

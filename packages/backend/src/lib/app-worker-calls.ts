@@ -16,6 +16,7 @@ import { activeAppWorker } from './app-worker-host.js';
 import { sha256Hex } from './app-tokens.js';
 import { timingSafeEqual } from './bytes.js';
 import { openAppSecret } from './app-secrets.js';
+import { connectorConfigured, installationToken } from './github-app.js';
 import { checkLogQuota, d1LogUsageStore } from './log-quota.js';
 import { LEVELS, normalizeEntry } from './log-ingest.js';
 import { HttpError } from './auth.js';
@@ -245,6 +246,50 @@ export async function workerSecretGet(env: Env, appId: string, name: unknown): P
   }
   if (!env.APP_SECRET_KEK) throw new WorkerCallError('Unavailable', 'app secrets are not configured on this deployment');
   return openAppSecret(env, env.APP_SECRET_KEK, appId, name);
+}
+
+// ── connectors ──────────────────────────────────────────────────────────────
+
+const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
+
+/**
+ * A GitHub credential for the worker (#258 §4): an installation token covering `repo`'s
+ * owner (repo-scoped when `repo` is given — GitHub enforces it), else the owner's PAT
+ * secret, else null. `mode: 'pat'` forces the PAT (an installation token cannot answer
+ * `viewer` / `@me`); `mode: 'app'` never falls back to it. Only for a connector the app's
+ * manifest declares. Never logged.
+ */
+export async function workerConnectorToken(env: Env, appId: string, name: unknown, opts: unknown): Promise<string | null> {
+  if (typeof name !== 'string' || !name) throw new WorkerCallError('BadRequest', 'connector name is required');
+  const o = (opts ?? {}) as { repo?: unknown; mode?: unknown };
+  if (typeof o !== 'object' || Array.isArray(o)) throw new WorkerCallError('BadRequest', 'options must be an object');
+  if (o.repo !== undefined && (typeof o.repo !== 'string' || !REPO_RE.test(o.repo))) throw new WorkerCallError('BadRequest', 'repo must be "owner/name"');
+  if (o.mode !== undefined && o.mode !== 'app' && o.mode !== 'pat') throw new WorkerCallError('BadRequest', 'mode must be "app" or "pat"');
+  const repo = o.repo as string | undefined;
+  const mode = o.mode as 'app' | 'pat' | undefined;
+
+  const connector = await env.DB.prepare("SELECT modes, pat_secret FROM app_connectors WHERE app_id = ? AND name = ? AND kind = 'github'")
+    .bind(appId, name).first<{ modes: string; pat_secret: string | null }>();
+  if (!connector) {
+    console.warn(`[app-worker] ${appId} asked for connector "${name}", which its manifest does not declare`);
+    return null;
+  }
+  const modes = JSON.parse(connector.modes) as string[];
+
+  if (mode !== 'pat' && modes.includes('app') && connectorConfigured(env)) {
+    // An installation covers the owner; without a repo there is no owner, so the app's earliest binding.
+    const owner = repo?.split('/')[0]!.toLowerCase();
+    const installation = await env.DB.prepare(
+      `SELECT installation_id FROM app_connector_installations WHERE app_id = ? AND connector = 'github'${owner ? ' AND lower(account_login) = ?' : ''} ORDER BY created_at LIMIT 1`,
+    ).bind(appId, ...(owner ? [owner] : [])).first<{ installation_id: number }>();
+    if (installation) {
+      const token = await installationToken(env, installation.installation_id, repo).catch(() => null);
+      if (token) return token;
+    }
+  }
+  if (mode === 'app' || !modes.includes('pat') || !connector.pat_secret) return null;
+  if (!env.APP_SECRET_KEK) throw new WorkerCallError('Unavailable', 'app secrets are not configured on this deployment');
+  return openAppSecret(env, env.APP_SECRET_KEK, appId, connector.pat_secret);
 }
 
 // ── storage ─────────────────────────────────────────────────────────────────

@@ -52,6 +52,14 @@ export interface PasClient {
     /** An app secret listed in mcp.json `worker.secrets`; null otherwise. */
     get(name: string): Promise<string | null>;
   };
+  connectors: {
+    /**
+     * A GitHub credential for a connector declared in mcp.json `connectors` (#258): an installation
+     * token (repo-scoped when `repo` is given), else the connector's PAT, else null. `mode: 'pat'`
+     * forces the PAT — installation tokens cannot answer `viewer` / `@me`; `mode: 'app'` never falls back to it.
+     */
+    token(name: string, opts?: { repo?: string; mode?: 'app' | 'pat' }): Promise<string | null>;
+  };
   storage: {
     /** Stored under the app's worker namespace, never a user's files. ≤ 10 MB. */
     put(key: string, body: string | ArrayBuffer | Uint8Array, opts?: { contentType?: string }): Promise<{ key: string; size: number }>;
@@ -88,6 +96,7 @@ interface CallCtx { token: string; invocation: string; as?: unknown }
 interface PasBinding {
   actions: { call(name: string, params: unknown, ctx: CallCtx): Promise<unknown>; batch(calls: unknown, ctx: CallCtx): Promise<unknown> };
   secrets: { get(name: string, ctx: CallCtx): Promise<string | null> };
+  connectors: { token(name: string, opts: unknown, ctx: CallCtx): Promise<string | null> };
   storage: { put(key: string, body: unknown, opts: unknown, ctx: CallCtx): Promise<unknown>; get(key: string, ctx: CallCtx): Promise<unknown> };
   log(level: string, message: string, fields: unknown, ctx: CallCtx): Promise<boolean>;
 }
@@ -107,6 +116,7 @@ export function pasClient(env: AppWorkerEnv, event: Pick<AppWorkerEvent, 'id' | 
       batch: (calls) => pas.actions.batch(calls, actionCtx) as Promise<{ name: string; results: unknown[] }[]>,
     },
     secrets: { get: (name) => pas.secrets.get(name, ctx) },
+    connectors: { token: (name, opts) => pas.connectors.token(name, opts ?? {}, ctx) },
     storage: {
       put: (key, body, opts) => pas.storage.put(key, body, opts ?? {}, ctx) as Promise<{ key: string; size: number }>,
       get: (key) => pas.storage.get(key, ctx) as Promise<{ body: ArrayBuffer; contentType: string } | null>,

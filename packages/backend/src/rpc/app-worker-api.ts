@@ -8,6 +8,7 @@
  *   env.PAS.actions.call(name, params, ctx)      env.PAS.actions.batch(calls, ctx)   (ctx.as: a caller grant, #260)
  *   env.PAS.secrets.get(name, ctx)               env.PAS.log(level, message, fields, ctx)
  *   env.PAS.storage.put(key, body, opts, ctx)    env.PAS.storage.get(key, ctx)
+ *   env.PAS.connectors.token(name, { repo?, mode? }, ctx)   (#258)
  *
  * with ctx = { token: env.PAS_WORKER_TOKEN, invocation: '<envelope id>:<attempt>' }.
  * The SDK's `defineAppWorker` (@proappstore/sdk/worker) fills ctx in.
@@ -20,7 +21,7 @@ import { RpcTarget, WorkerEntrypoint } from 'cloudflare:workers';
 import type { Env } from '../types.js';
 import {
   authorizeWorkerCall, recordWorkerCall, workerActionBatch, workerActionCall, workerLog,
-  workerSecretGet, workerStorageGet, workerStoragePut, WorkerCallError, type CallerIdentity,
+  workerConnectorToken, workerSecretGet, workerStorageGet, workerStoragePut, WorkerCallError, type CallerIdentity,
 } from '../lib/app-worker-calls.js';
 
 type Run = <T>(method: string, action: string, ctx: unknown, fn: (appId: string, caller: CallerIdentity | null) => Promise<T>) => Promise<T>;
@@ -65,6 +66,16 @@ class SecretsApi extends RpcTarget {
   }
 }
 
+class ConnectorsApi extends RpcTarget {
+  readonly #run: Run;
+  readonly #env: Env;
+  constructor(run: Run, env: Env) { super(); this.#run = run; this.#env = env; }
+  /** A GitHub token for a connector the manifest declares (#258); null when none applies. */
+  token(name: string, opts: { repo?: string; mode?: 'app' | 'pat' } | undefined, ctx: unknown): Promise<string | null> {
+    return this.#run('connectors.token', String(name ?? ''), ctx, (appId) => workerConnectorToken(this.#env, appId, name, opts));
+  }
+}
+
 class StorageApi extends RpcTarget {
   readonly #run: Run;
   readonly #env: Env;
@@ -83,6 +94,7 @@ export class AppWorkerApi extends WorkerEntrypoint<Env, { appId: string }> {
   }
   get actions(): ActionsApi { return new ActionsApi(this.#runner(), this.env); }
   get secrets(): SecretsApi { return new SecretsApi(this.#runner(), this.env); }
+  get connectors(): ConnectorsApi { return new ConnectorsApi(this.#runner(), this.env); }
   get storage(): StorageApi { return new StorageApi(this.#runner(), this.env); }
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, fields: Record<string, unknown> | undefined, ctx: unknown): Promise<boolean> {
     return this.#runner()('log', '', ctx, (appId) => workerLog(this.env, appId, level, message, fields));

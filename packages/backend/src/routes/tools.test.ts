@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
 import { selectsColumn } from '../lib/action-sql.js';
-import { mainStatementVerb, scheduledCronError, scheduledCronMatches, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_SCHEDULED_ACTIONS_PER_APP, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from './tools.js';
+import { siteManifestFrom, mainStatementVerb, scheduledCronError, scheduledCronMatches, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_SCHEDULED_ACTIONS_PER_APP, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from './tools.js';
 import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 import { PARENTS_CLUBS, STASH } from '../__fixtures__/operator-view.js';
 
@@ -1363,11 +1363,11 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
     expect(db.batch).toHaveBeenCalledTimes(1);
   });
 
-  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view/visibility/worker/hooks reset)', async () => {
+  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view/visibility/worker/hooks/connectors reset)', async () => {
     const { res, db } = await internalPost({ tools: [] }, { 'X-Internal-Token': 'secret' });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false, operator: null, operator_view: null, visibility: { mode: 'public', roles: [] }, worker: null });
-    expect(db.batch.mock.calls[0]![0]).toHaveLength(10);
+    expect(db.batch.mock.calls[0]![0]).toHaveLength(11);
     expect(db.batch.mock.calls[0]![0][1]!.bind).toHaveBeenCalledWith('test-app');
 
     const missing = await internalPost({}, { 'X-Internal-Token': 'secret' });
@@ -1997,5 +1997,70 @@ describe('hooks (#256)', () => {
     }, makeEnv({}, db));
     expect(res.status).toBe(200);
     expect((await res.json() as { warnings: string[] }).warnings).toEqual(expect.arrayContaining([expect.stringMatching(/secret PING_TOKEN is not set yet/)]));
+  });
+});
+
+describe('connectors (#258)', () => {
+  const hookWrite = {
+    name: 'record_ping', description: 'Record a ping', operation: 'execute', requires_auth: true,
+    sql: 'INSERT INTO pings (source) VALUES (:source)', params: { source: { type: 'string' } },
+    auth: { caller_unscoped: { reason: 'any sender' } }, callers: ['hook'],
+  };
+  const ghHook = { name: 'github', verify: { kind: 'github-app' }, to: 'worker' };
+  const github = { name: 'github', kind: 'github', modes: ['app', 'pat'], pat_secret: 'GITHUB_TOKEN', events: ['issues', 'workflow_run'], hook: 'github' };
+  const put = async (connectors: unknown, hooks: unknown = [ghHook]) => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ first: { enabled: 1 } }));
+    const res = await app.request('/v1/apps/test-app/tools', {
+      method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools: [hookWrite], hooks, connectors }),
+    }, makeEnv({}, db));
+    return { res, db, body: await res.json() as { error?: string; connectors?: unknown } };
+  };
+
+  it('survives the publish round trip: siteManifestFrom keeps the section', () => {
+    expect(siteManifestFrom({ connectors: [github] }).connectors).toEqual([github]);
+  });
+
+  it('registers a github connector bound to a github-app hook', async () => {
+    const { res, body, db } = await put([github]);
+    expect(res.status, body.error).toBe(200);
+    expect(body.connectors).toEqual([{ name: 'github', kind: 'github', modes: ['app', 'pat'] }]);
+    const sqls = db.prepare.mock.calls.map((c) => String(c[0]));
+    expect(sqls).toContain('DELETE FROM app_connectors WHERE app_id = ?');
+    expect(sqls.filter((q) => q.startsWith('INSERT INTO app_connectors'))).toHaveLength(1);
+  });
+
+  it('a manifest with no connectors section clears the declaration but never the installations', async () => {
+    const { db } = await put(undefined);
+    const sqls = db.prepare.mock.calls.map((c) => String(c[0]));
+    expect(sqls).toContain('DELETE FROM app_connectors WHERE app_id = ?');
+    expect(sqls.some((q) => q.includes('app_connector_installations'))).toBe(false);
+  });
+
+  it('refuses malformed declarations', async () => {
+    const cases: [unknown, RegExp][] = [
+      [[{ ...github, kind: 'gitlab' }], /kind must be "github"/],
+      [[{ ...github, modes: [] }], /modes must be a non-empty list/],
+      [[{ ...github, modes: ['oauth'] }], /modes must be a non-empty list/],
+      [[{ ...github, pat_secret: undefined }], /pat_secret must name an app secret/],
+      [[{ ...github, modes: ['app'] }], /pat_secret applies only with mode "pat"/],
+      [[{ ...github, modes: ['pat'] }], /events are delivered by the GitHub App/],
+      [[{ ...github, hook: undefined }], /hook is required with events/],
+      [[{ ...github, hook: 'nope' }], /verify.kind "github-app"/],
+      [[{ ...github, extra: 1 }], /unknown field "extra"/],
+      [[{ ...github, events: ['Issues'] }], /GitHub event names/],
+      [[github, github], /duplicate name/],
+      ['github', /must be an array/],
+    ];
+    for (const [connectors, message] of cases) {
+      const { res, body } = await put(connectors);
+      expect(res.status, JSON.stringify(connectors)).toBe(400);
+      expect(body.error).toMatch(message);
+    }
+  });
+
+  it('refuses a hook that is not a github-app hook', async () => {
+    const { res, body } = await put([github], [{ ...ghHook, verify: { kind: 'github-hmac-sha256', secret: 'S' } }]);
+    expect(res.status).toBe(400);
+    expect(body.error).toMatch(/verify.kind "github-app"/);
   });
 });

@@ -25,7 +25,7 @@ import { HttpError, requireAppOwner } from '../lib/auth.js';
 import { openAppSecret } from '../lib/app-secrets.js';
 import { activeAppWorker, appWorkerHost, type AppWorkerExports } from '../lib/app-worker-host.js';
 import { actionCallers, prepareActionBatch, prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
-import { encodeEnvelopeBody, hookHeaders, verifyHookDelivery, type HookVerify } from '../lib/hook-verifiers.js';
+import { encodeEnvelopeBody, hookHeaders, verifyHookDelivery, type HookVerify, type VerifiedDelivery } from '../lib/hook-verifiers.js';
 import { AppWorkerQuotaError, quotasFrom, reserveHookDelivery } from '../lib/app-worker-usage.js';
 import { forwardToDataWorker, loadManifest } from './actions.js';
 import type { HookTarget } from './tools.js';
@@ -141,7 +141,17 @@ hookRoutes.post('/apps/:appId/hooks/:name', async (c) => {
   const secret = c.env.APP_SECRET_KEK && hook.secret_name ? await openAppSecret(c.env, c.env.APP_SECRET_KEK, appId, hook.secret_name) : null;
   const verified = secret ? await verifyHookDelivery(verify, secret, body, c.req.raw.headers) : null;
   if (!verified) return c.json({ error: 'signature verification failed' }, 401);
+  return ingestVerifiedDelivery(c, appId, name, hook.target, verified, body);
+});
 
+/**
+ * Everything after verification, shared with the GitHub App demux (#258): de-dupe
+ * per (app, hook, delivery id), the daily hook quota, then 202 and delivery in
+ * waitUntil. The caller has already verified the body against the right secret.
+ */
+export async function ingestVerifiedDelivery(
+  c: Context<{ Bindings: Env }>, appId: string, name: string, targetJson: string, verified: VerifiedDelivery, body: Uint8Array,
+): Promise<Response> {
   const now = Date.now();
   const rowId = crypto.randomUUID();
   const inserted = await c.env.DB.prepare(
@@ -171,7 +181,7 @@ hookRoutes.post('/apps/:appId/hooks/:name', async (c) => {
     return c.json({ accepted: true, delivery: row.id, processed: false }, 202);
   }
 
-  const target = JSON.parse(hook.target) as HookTarget;
+  const target = JSON.parse(targetJson) as HookTarget;
   const delivery: HookDelivery = { appId, hook: name, target, rowId: row.id, attempt: row.attempts, body, headers: c.req.raw.headers };
   let ctx: AppWorkerExports | undefined;
   try { ctx = c.executionCtx as unknown as AppWorkerExports; } catch { ctx = undefined; }
@@ -179,7 +189,7 @@ hookRoutes.post('/apps/:appId/hooks/:name', async (c) => {
     .then((error) => finish(c.env, row.id, error), (e) => { const r = notProcessed(e); return finish(c.env, row.id, r.error, r.status); })
     .catch((e) => console.error(`[hooks] recording delivery ${row.id} failed: ${(e as Error)?.message ?? e}`)));
   return c.json({ accepted: true, delivery: row.id }, 202);
-});
+}
 
 /** Never a secret value: only whether the named app secret exists. */
 hookRoutes.get('/apps/:appId/hooks', async (c) => {

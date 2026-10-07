@@ -106,7 +106,7 @@ Up to **10** entries of `{ name, verify, to }`. Each hook gets a public URL:
 | `stripe` | `Stripe-Signature` (timestamped, 5 min tolerance); delivery id is the event `id` in the body |
 | `hmac-sha256` | a hex or base64 HMAC of the body in a header you name (`header`, `prefix`, `encoding`); delivery id from `id_header`, else the body's SHA-256 |
 | `secret-token` | `X-PAS-Hook-Token` equals the secret; delivery id from `id_header`, else the body's SHA-256 |
-| `github-app` | fed by the platform's GitHub App, not a public URL (#258 — not yet available) |
+| `github-app` | fed by the platform's GitHub App (see `connectors`), not a public URL; it has no `secret` |
 
 `verify.secret` names the app secret holding the shared secret. If the secret
 is not set, every delivery is refused with `401`. `pas hook list` shows
@@ -132,9 +132,31 @@ verified and recorded.
 
 ### `connectors`
 
-Not available yet. GitHub App installations and a PAT mode for workers are
-tracked in #258. Until then, store a GitHub token as an app secret, list it in
-`worker.secrets`, and read it with `pas.secrets.get`.
+```json
+"connectors": [ { "name": "github", "kind": "github", "modes": ["app", "pat"], "pat_secret": "GITHUB_TOKEN",
+                  "events": ["issues", "workflow_run", "deployment_status", "check_suite"], "hook": "github" } ],
+"hooks": [ { "name": "github", "verify": { "kind": "github-app" }, "to": "worker" } ]
+```
+
+`modes` is `app` (the platform's GitHub App, installed on an account whose owner
+or admin approves it), `pat` (an app secret you set, named by `pat_secret`), or
+both. `events` are the GitHub events delivered to the `hook`, which must use
+`verify.kind: "github-app"`; the platform receives every App webhook on one
+endpoint and routes it by installation, so you configure nothing per repo.
+
+Connect an installation from the console (owner only). The platform proves you
+control the installation through GitHub before binding it; a non-admin org member
+cannot. Then, in the worker:
+
+```ts
+await pas.connectors.token('github', { repo: 'org/name' });   // installation token scoped to that repo, else the PAT, else null
+await pas.connectors.token('github', { mode: 'pat' });        // always the PAT
+```
+
+Installation tokens are short-lived and repo-scoped. They are not user tokens:
+`viewer` and `@me` queries need `mode: 'pat'`. `mode: 'app'` never falls back to
+the PAT. Until the platform's GitHub App is configured, the connect routes answer
+`503 connector not configured`; `pat` mode needs only the app secret.
 
 ## The SDK: `@proappstore/sdk/worker`
 

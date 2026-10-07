@@ -63,6 +63,15 @@ DATA_WORKER_HOST = "serge-the-dev.workers.dev"
 # sign-in survived that deploy untouched. That inconsistency is deliberate-by-
 # accident and is being left as-is; it is not a licence to move this one.
 GITHUB_CLIENT_ID = "Ov23ctEs8trbfizdBGfQ"
+# GitHub connector App (#258) — public identifiers of the "ProAppStore Connector" GitHub App,
+# registered by the owner (issue #258, human step 1). PLACEHOLDERS: deliberately unset until the
+# App exists. While any of these or the three secrets below is missing, every
+# /v1/connectors/github/* route and PAS.connectors.token('github') answers 503
+# "connector not configured" — deploys are unaffected. Distinct from GITHUB_CLIENT_ID above
+# (the sign-in OAuth app); do not reuse or merge the names.
+# GH_APP_ID = "<numeric App ID>"
+# GH_APP_CLIENT_ID = "<Iv23... client id>"
+# GH_APP_SLUG = "<slug in https://github.com/apps/<slug>>"
 CF_ACCOUNT_ID = "c1089bfcc43c1c6c2aa89e584e86f0bc"
 VAPID_PUBLIC_KEY = "BPg6E92QAOhdcif_HckOEGY6mL03VKWNQ3CS1xQX5q59fXURI1xCGwwBr4Vsv7gn3TXIGSJquJwvHGYRbMcAQc0"
 # Comma-separated `gh:<id>` strings allowed to approve/reject submissions.
@@ -210,6 +219,10 @@ service = "proappstore-api"
 #   APP_SECRET_KEK                  (32-byte base64 key for envelope encryption
 #                                    of app proxy secrets; without this, proxy/
 #                                    secrets/allowlist endpoints return 503)
+
+#   GH_APP_PRIVATE_KEY              (#258 — GitHub App private key, PKCS#8 PEM; see issue #258 step 2)
+#   GH_APP_WEBHOOK_SECRET           (#258 — verifies POST /v1/connectors/github/webhook)
+#   GH_APP_CLIENT_SECRET            (#258 — App client secret for the install-time code exchange)
 
 # Headless QA executor (#38) — nudged after POST /v1/apps/:appId/qa/runs.
 [[services]]
