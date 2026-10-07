@@ -51,6 +51,8 @@ describe('admin-authoring routes (#295)', () => {
   for (const [method, path, body] of [
     ['GET', '/v1/apps/stash/operator-view/inspect', undefined],
     ['POST', '/v1/apps/stash/operator-view/preview', { operator_view: STASH.operator_view }],
+    ['POST', '/v1/apps/stash/operator-view/propose', { operator_view: STASH.operator_view }],
+    ['POST', '/v1/apps/stash/operator-view/security', { operator_view: STASH.operator_view }],
   ] as const) {
     it(`${method} ${path}: refuses a non-owner (403) and a signed-out caller (401), reading nothing else`, async () => {
       const db = strangerDb();
@@ -98,4 +100,29 @@ describe('admin-authoring routes (#295)', () => {
     const res = await req('POST', '/v1/apps/stash/operator-view/preview', OWNER, mockD1(mockStmt({ first: { creator_id: 'gh:1' } })), { tools: 'nope' });
     expect(res.status).toBe(400);
   });
+
+  it('propose (#296): the validator verdict plus errors, missing requirements and security issues, using the role context', async () => {
+    const db = mockD1(
+      mockStmt({ first: { creator_id: 'gh:1' } }),
+      mockStmt({ all: { results: toolRows } }),
+      mockStmt({ all: { results: [{ role_name: 'operator', owner_holds: 1 }] } }),
+    );
+    const view = { ...STASH.operator_view, admin_access: { roles: ['helpdesk'] } };
+    const res = await req('POST', '/v1/apps/stash/operator-view/propose', OWNER, db, { operator_view: view });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { valid: boolean; passes_security_gates: boolean; security_issues: { code: string }[] };
+    expect(body).toMatchObject({ app_id: 'stash', valid: true, passes_security_gates: true, errors: [], missing_requirements: [] });
+    expect(body.security_issues.map((i) => i.code)).toEqual(expect.arrayContaining(['undefined_role', 'admin_role_grants_nothing']));
+    expect(db.prepare.mock.calls.some(([s]) => /FROM app_roles r JOIN apps a/.test(String(s)))).toBe(true);
+    expect(fetches).toEqual([]);
+  });
+
+  it('security (#296): flags a declared secret column against a proposed tools array', async () => {
+    const view = JSON.parse(JSON.stringify(STASH.operator_view));
+    view.resources[0].columns.push({ key: 'password_hash', label: 'Hash' });
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ all: { results: [] } }));
+    const res = await req('POST', '/v1/apps/stash/operator-view/security', OWNER, db, { operator_view: view, tools: STASH.tools });
+    expect(await res.json()).toMatchObject({ passes_security_gates: false, issues: expect.arrayContaining([expect.objectContaining({ code: 'secret_exposure' })]) });
+  });
 });
+

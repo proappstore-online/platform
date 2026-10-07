@@ -10,7 +10,7 @@ Remote MCP server for AI agents to interact with the ProAppStore platform.
   agents), `README.md` (connect + tool tables), `llms.txt`. Explicit failure
   returns go through `errText()` (`src/errors.ts`) so they carry `isError: true`.
 
-## Tools (57 shared + dynamic per-app)
+## Tools (60 shared + dynamic per-app)
 
 ### Platform tools (no auth required unless noted)
 
@@ -85,17 +85,24 @@ Use connection-level auth or internal token.
 | `agent_ticket_detail` | Detailed ticket info with messages |
 | `agent_cost` | Cost breakdown by role and model |
 
-### Admin console authoring (#295)
+### Admin console authoring (#295, #296)
 
-Read-only (`readOnlyHint`), owner only (the backend enforces it), and audited as `invoked`.
-They call `/v1/operator-view/capabilities` and `/v1/apps/:appId/operator-view/{inspect,preview}`,
-which run the backend's own `validateOperatorView`; none reads app data.
+Owner only (the backend enforces it) and audited. All but `apply_admin_update` are read-only
+(`readOnlyHint`). They call `/v1/operator-view/capabilities` and
+`/v1/apps/:appId/operator-view/{inspect,preview,propose,security}`, which run the backend's own
+`validateOperatorView`; none reads app data. `apply_admin_update` (**confirm**, **dry_run**)
+validates against the repo's own `mcp.json` tools, refuses an invalid proposal or a failed security
+gate, writes only `mcp.json` (the #280 `.github/` guard applies), and waits for the deploy to
+report the registration.
 
 | Tool | Description |
 |------|-------------|
 | `inspect_admin_console` | Stored `operator_view`, referenced actions, gaps against the current tools, what renders |
 | `list_admin_capabilities` | Kinds, formats, operations, limits, features, sensitive fields, JSON Schema of `operator_view` |
 | `preview_admin_console` | Dry-run a proposal: tabs, columns, actions, role access matrix, blocked fields |
+| `propose_admin_update` | Validate without applying: verdict, contract, errors, warnings, missing requirements, security issues (with paths) |
+| `validate_admin_security` | Security/compatibility checks; `passesSecurityGates` |
+| `apply_admin_update` | Commit to `mcp.json`, then report the registration after deploy — **confirm**, **dry_run** |
 
 ### Per-app tools
 
@@ -140,12 +147,12 @@ from the reference is present:
 - **Read-only mode** — set `MCP_READ_ONLY=1` (server-wide) to block every mutating
   tool (they throw, so a caller can't misreport success). Reads + dry-runs still work.
 - **confirm** — irreversible/public/infrastructure tools (`provision_pas_app`, `scaffold_app`,
-  `provision_app`, `delete_file`, `publish_app`) refuse unless called with `confirm: true`.
+  `provision_app`, `delete_file`, `publish_app`, `apply_admin_update`) refuse unless called with `confirm: true`.
 - **dry_run** — expensive/irreversible tools accept `dry_run: true` to audit +
   return the plan they *would* execute and make no changes. A preview needs no
   `confirm` and is allowed even in read-only mode. Tools: `scaffold_app`,
   `provision_pas_app`, `provision_app`, `publish_app`, `delete_file`, `deploy_project`,
-  `delete_project_files`.
+  `delete_project_files`, `apply_admin_update`.
 - **Ownership** — project tools (`write_file`, `read_file`, `provision_app`,
   `publish_app`, …) call `requireOwner` (`verifyAppOwnership`, 60s-cached) so a
   session can only touch apps it owns. Loop/agents/QA tools forward the token and

@@ -242,6 +242,18 @@
     {
       "name": "preview_admin_console",
       "description": "Dry-run an operator_view proposal through the platform validator: tabs, columns, actions, role access matrix, blocked fields. Owner only, stores nothing."
+    },
+    {
+      "name": "propose_admin_update",
+      "description": "Validate an operator_view proposal without applying it: the platform validator's verdict plus errors, warnings, missing requirements and security issues, each with a path. Owner only."
+    },
+    {
+      "name": "validate_admin_security",
+      "description": "Security checks on an operator_view proposal: secret exposure, missing actions, destructive without step_up, role errors, row-scoping smells. Returns passesSecurityGates. Owner only."
+    },
+    {
+      "name": "apply_admin_update",
+      "description": "Commit a validated operator_view to the app repo's mcp.json (one file, never .github/), then report the registration after deploy. Owner only; confirm: true; dry_run."
     }
   ],
   "_meta": {
@@ -269,7 +281,8 @@
           "provision_app",
           "provision_pas_app",
           "publish_app",
-          "scaffold_app"
+          "scaffold_app",
+          "apply_admin_update"
         ],
         "dry_run_supported": [
           "delete_file",
@@ -278,7 +291,8 @@
           "provision_app",
           "provision_pas_app",
           "publish_app",
-          "scaffold_app"
+          "scaffold_app",
+          "apply_admin_update"
         ],
         "audit": "every mutating call, dry-run and read-only denial is recorded per user (90 days, secrets redacted); read it with mcp_audit_log",
         "errors": "failures return isError: true"
@@ -355,7 +369,10 @@
         "admin console": [
           "inspect_admin_console",
           "list_admin_capabilities",
-          "preview_admin_console"
+          "preview_admin_console",
+          "propose_admin_update",
+          "validate_admin_security",
+          "apply_admin_update"
         ]
       },
       "docs": {

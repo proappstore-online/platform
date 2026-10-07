@@ -860,11 +860,11 @@ The trail is owner-only; `admin_access` does not open it. An app can require mor
 `"audit": { "app_roles": ["operator"] }` at the top level of `operator_view`:
 the owner must then also hold one of those roles (never `member`).
 
-### Authoring tools (MCP, read-only)
+### Authoring tools (MCP)
 
-Three MCP tools on `mcp.proappstore.online/mcp` help write an `operator_view`
-before it goes into `mcp.json` (#295). They are owner-only and read-only. They
-never read app data, so their output never holds a field value.
+Six MCP tools on `mcp.proappstore.online/mcp` help write an `operator_view` and
+apply it (#295, #296). They are owner-only, and only `apply_admin_update`
+writes. None of them reads app data, so their output never holds a field value.
 
 - `list_admin_capabilities` returns the resource kinds, column formats, action
   operations, limits (20 resources, 20 actions, …), features, the
@@ -883,6 +883,33 @@ never read app data, so their output never holds a field value.
   array. When valid, it renders the tabs, columns, actions, the role access
   matrix and the blocked fields. It stores nothing
   (`POST /v1/apps/:appId/operator-view/preview`).
+- `propose_admin_update(appId, proposal, validateAgainstActions = true)`
+  validates without applying. `valid` is the platform validator's own verdict:
+  a proposal it refuses is one a deploy would refuse. It returns the
+  normalized contract and `errors`, `warnings`, `missing_requirements` and
+  `security_issues`, each with a path. Structural errors all come back
+  together. With `validateAgainstActions: false` it checks the structure
+  only (`POST /v1/apps/:appId/operator-view/propose`).
+- `validate_admin_security(appId, proposal)` runs the security and
+  compatibility checks and returns `passesSecurityGates`. Each issue has a
+  path, a code and a severity (`POST /v1/apps/:appId/operator-view/security`).
+  - **Errors:** a declared column on the sensitive-field list, an action that
+    is not registered, a destructive action without `step_up`, `member` or
+    `public` as an audit or admin role, or a write whose `UPDATE`/`DELETE` uses
+    no param mapped from the row.
+  - **Warnings:** a role nobody holds and no action uses, audit roles the owner
+    holds none of, an admin role no referenced action allows, a `DELETE` that
+    is not declared destructive, `SELECT *`, a read scoped to the caller
+    (`:__user_id`), and a list read with no literal `LIMIT`.
+- `apply_admin_update(appId, proposal, { confirm: true, message?, dry_run?,
+  wait_seconds? })` validates the proposal against the tools in the app
+  repo's own `mcp.json`. It refuses anything invalid or failing a security
+  gate. Otherwise it commits one change, `operator_view` in `mcp.json`
+  replaced in place, on `main`. It never writes anything else, and never
+  under `.github/`. It then waits up to `wait_seconds` (default 120) for the
+  deploy that registers it, and reports `registered`, `pending`, `failed` or
+  `deployed_contract_differs`. Without `confirm: true` it refuses; with
+  `dry_run: true` it shows the change and writes nothing.
 
 ### Admin access (`admin_access`)
 

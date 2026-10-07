@@ -54,7 +54,7 @@ Project-local `.mcp.json`:
 | Agent Teams | `create_app`, `list_projects`, `get_project`, `build_knowledge_base`, `chat_agent`, `list_tickets`, `add_ticket`, `update_ticket`, `list_agents`, `get_project_files`, `write_project_files`, `delete_project_files`, `deploy_project`, `set_project_budget`, `set_project_running`, `set_model`, `run_tests` | an AI team (PO / BA / Dev / QA) builds the app; you steer it or write the tree yourself |
 | Agent introspection | `agent_project_status`, `agent_board`, `agent_activity`, `agent_ticket_detail`, `agent_cost` | read-only views of a team's work and spend |
 | QA | `qa_list_flows`, `qa_save_flow`, `qa_delete_flow`, `qa_run`, `qa_list_runs`, `qa_run_artifacts`, `qa_flow_playwright`, `qa_mint_key` | browser e2e flows stored on the platform and run headlessly after every deploy |
-| Admin console | `inspect_admin_console`, `list_admin_capabilities`, `preview_admin_console` | read-only: inspect an app's `operator_view`, learn what it may contain, preview a proposal before writing it to `mcp.json` |
+| Admin console | `inspect_admin_console`, `list_admin_capabilities`, `preview_admin_console`, `propose_admin_update`, `validate_admin_security`, `apply_admin_update` | inspect an app's `operator_view`, learn what it may contain, preview / propose / security-check a proposal; `apply_admin_update` (confirm, dry_run) commits it to `mcp.json` and reports the registration |
 
 ## Workflow recipes
 

@@ -18,7 +18,7 @@ import { ACTION_CALLERS, VERIFY_PARAM_PREFIX, actionCallers, literalLimit, resol
 import { ENDPOINT_NAME_PREFIX } from '../lib/endpoint-sql.js';
 import { getVerifier, VERIFIERS } from '../lib/verifiers/index.js';
 import { validateOperatorView } from '../lib/operator-contract.js';
-import { inspectAdminConsole, operatorCapabilities, previewAdminConsole } from '../lib/operator-authoring.js';
+import { inspectAdminConsole, operatorCapabilities, previewAdminConsole, proposeAdminUpdate, securityReview, type RoleContext } from '../lib/operator-authoring.js';
 import { loadContract } from './operator.js';
 import { SCHEDULER_TICK_MINUTES } from '../lib/scheduler-tick.js';
 import { MAX_SECRETS_PER_APP, SECRET_NAME_RE } from './secrets-shared.js';
@@ -1221,9 +1221,14 @@ toolsRoutes.get('/operator-view/capabilities', async (c) => {
 toolsRoutes.get('/apps/:appId/operator-view/inspect', async (c) => {
   const appId = c.req.param('appId')!;
   await requireAppOwner(c, appId);
-  const [contract, tools] = await Promise.all([loadContract(c.env.DB, appId), registeredTools(c.env.DB, appId)]);
+  const [contract, tools, stored] = await Promise.all([
+    loadContract(c.env.DB, appId),
+    registeredTools(c.env.DB, appId),
+    c.env.DB.prepare('SELECT created_at FROM app_operator_view WHERE app_id = ?').bind(appId).first<{ created_at: number }>(),
+  ]);
   c.header('Cache-Control', 'private, no-store');
-  return c.json({ app_id: appId, ...inspectAdminConsole(contract, tools) });
+  // registered_at: when the stored contract was last registered (each deploy re-registers it), so a caller can tell a fresh deploy's.
+  return c.json({ app_id: appId, registered_at: stored?.created_at ?? null, ...inspectAdminConsole(contract, tools) });
 });
 
 /**
@@ -1232,20 +1237,72 @@ toolsRoutes.get('/apps/:appId/operator-view/inspect', async (c) => {
  * validation a deploy runs — else against the app's registered tools. Nothing
  * is stored: `valid: false` with the validator's error, or the render.
  */
+/** The tools a proposal is checked against: a proposed `tools` array (validated as a deploy would), else the registered ones. */
+async function proposalTools(db: D1Database, appId: string, raw: unknown): Promise<{ tools: ToolManifest[] } | { error: string; details: unknown }> {
+  if (raw === undefined) return { tools: await registeredTools(db, appId) };
+  if (!Array.isArray(raw)) return { error: 'tools must be an array of tool manifests', details: null };
+  const invalid = await validateToolSet(raw as ToolManifest[], undefined, appId);
+  if (invalid) return { error: `tools: ${String(invalid.payload.error)}`, details: invalid.payload.details ?? null };
+  return { tools: raw as ToolManifest[] };
+}
+
+/** The proposal body, or a 400 answer. */
+async function proposalBody(c: { req: { json: <T>() => Promise<T> } }): Promise<{ operator_view: unknown; tools?: unknown; validate_against_actions?: unknown } | null> {
+  const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+  return body && typeof body === 'object' && 'operator_view' in body ? body as { operator_view: unknown } : null;
+}
+
 toolsRoutes.post('/apps/:appId/operator-view/preview', async (c) => {
   const appId = c.req.param('appId')!;
   await requireAppOwner(c, appId);
-  const body = await c.req.json<{ operator_view?: unknown; tools?: unknown }>().catch(() => null);
-  if (!body || typeof body !== 'object' || !('operator_view' in body)) return c.json({ error: 'body must be { operator_view, tools? }' }, 400);
-  let tools: ToolManifest[];
-  if (body.tools !== undefined) {
-    if (!Array.isArray(body.tools)) return c.json({ error: 'tools must be an array of tool manifests' }, 400);
-    const invalid = await validateToolSet(body.tools as ToolManifest[], undefined, appId);
-    if (invalid) return c.json({ valid: false, error: `tools: ${String(invalid.payload.error)}`, details: invalid.payload.details ?? null });
-    tools = body.tools as ToolManifest[];
-  } else {
-    tools = await registeredTools(c.env.DB, appId);
-  }
+  const body = await proposalBody(c);
+  if (!body) return c.json({ error: 'body must be { operator_view, tools? }' }, 400);
+  const resolved = await proposalTools(c.env.DB, appId, body.tools);
+  if ('error' in resolved) return c.json({ valid: false, error: resolved.error, details: resolved.details });
   c.header('Cache-Control', 'private, no-store');
-  return c.json({ app_id: appId, ...previewAdminConsole(tools, body.operator_view) });
+  return c.json({ app_id: appId, ...previewAdminConsole(resolved.tools, body.operator_view) });
+});
+
+/** Who holds which app roles today — anyone, and the app's creator (by id, or a GitHub creator's login alias, #272). */
+async function roleContext(db: D1Database, appId: string): Promise<RoleContext> {
+  const { results } = await db.prepare(
+    `SELECT r.role_name, MAX(CASE WHEN r.user_id = a.creator_id OR (a.creator_id LIKE 'gh:%' AND r.user_id = u.login) THEN 1 ELSE 0 END) AS owner_holds
+       FROM app_roles r JOIN apps a ON a.id = r.app_id LEFT JOIN users u ON u.id = a.creator_id
+      WHERE r.app_id = ? GROUP BY r.role_name`,
+  ).bind(appId).all<{ role_name: string; owner_holds: number }>();
+  const rows = results ?? [];
+  return { granted: new Set(rows.map((r) => r.role_name)), ownerHolds: new Set(rows.filter((r) => r.owner_holds).map((r) => r.role_name)) };
+}
+
+/**
+ * #296: validate a proposal without applying it. Body `{ operator_view, tools?,
+ * validate_against_actions? }`. `valid` is the backend validator's verdict, so a
+ * proposal this refuses is one a deploy would refuse; errors, warnings, missing
+ * requirements and security issues each carry a path.
+ */
+toolsRoutes.post('/apps/:appId/operator-view/propose', async (c) => {
+  const appId = c.req.param('appId')!;
+  await requireAppOwner(c, appId);
+  const body = await proposalBody(c);
+  if (!body) return c.json({ error: 'body must be { operator_view, tools?, validate_against_actions? }' }, 400);
+  const resolved = await proposalTools(c.env.DB, appId, body.tools);
+  if ('error' in resolved) return c.json({ valid: false, errors: [{ path: 'tools', message: resolved.error }], details: resolved.details });
+  const report = proposeAdminUpdate(resolved.tools, body.operator_view, {
+    validateAgainstActions: body.validate_against_actions !== false,
+    roles: await roleContext(c.env.DB, appId),
+  });
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({ app_id: appId, ...report });
+});
+
+/** #296: the security and compatibility checks alone. Body `{ operator_view, tools? }`. */
+toolsRoutes.post('/apps/:appId/operator-view/security', async (c) => {
+  const appId = c.req.param('appId')!;
+  await requireAppOwner(c, appId);
+  const body = await proposalBody(c);
+  if (!body) return c.json({ error: 'body must be { operator_view, tools? }' }, 400);
+  const resolved = await proposalTools(c.env.DB, appId, body.tools);
+  if ('error' in resolved) return c.json({ passes_security_gates: false, issues: [{ path: 'tools', code: 'invalid_tools', severity: 'error', message: resolved.error }] });
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({ app_id: appId, ...securityReview(resolved.tools, body.operator_view, await roleContext(c.env.DB, appId)) });
 });

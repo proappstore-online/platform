@@ -15,7 +15,8 @@
  * None of these reads app data: no data worker call, so no field value — secret
  * or not — can appear in their output.
  */
-import { selectsColumn, actionCallers, type ToolManifest } from './action-sql.js';
+import { selectsColumn, actionCallers, literalLimit, type ToolManifest } from './action-sql.js';
+import { schemaViolations } from './json-schema-check.js';
 import { validateOperatorView, MAX_ADMIN_ROLES, MAX_AUDIT_ROLES, MAX_OPERATOR_ACTIONS, MAX_OPERATOR_RESOURCES, OPERATOR_VIEW_VERSIONS, ROLE } from './operator-contract.js';
 import { COLUMN_KEY, ID, MAX_OPERATOR_COLUMNS, OPERATOR_COLUMN_FORMATS, OPERATOR_RESOURCE_KINDS, isObj, type OperatorViewContract } from './operator-contract-shared.js';
 import { LIST_CAPABILITIES, LIST_KINDS, MAX_DETAIL_FIELDS, MAX_EVIDENCE, MAX_PAGE_SIZE, MAX_STATES } from './operator-contract-lists.js';
@@ -269,4 +270,144 @@ export function inspectAdminConsole(contract: OperatorViewContract | null, tools
     resources: renders,
     render: renderAdminConsole(contract, tools),
   };
+}
+
+// ── Security review and propose (#296) ──────────────────────────────────────
+
+export interface SecurityIssue { path: string; code: string; severity: 'error' | 'warning'; message: string }
+/** Who holds which app roles today: any user (`granted`), and the app's creator (`ownerHolds`). */
+export interface RoleContext { granted: Set<string>; ownerHolds: Set<string> }
+const NO_ROLES: RoleContext = { granted: new Set(), ownerHolds: new Set() };
+
+const statementsOf = (t: ToolManifest) => [t.sql ?? '', ...(t.statements ?? [])].filter(Boolean);
+const objects = (v: unknown): [number, Record<string, unknown>][] =>
+  (Array.isArray(v) ? v : []).flatMap((x, i) => (isObj(x) ? [[i, x] as [number, Record<string, unknown>]] : []));
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+
+/**
+ * Security and compatibility checks on a proposal (#296): secret exposure,
+ * missing actions, destructive actions without step_up, audit and admin role
+ * errors, undefined roles, and row-scoping smells in the referenced SQL.
+ * `withActions: false` skips every check that needs the app's tools.
+ */
+export function securityReview(tools: ToolManifest[], proposal: unknown, roles: RoleContext = NO_ROLES, opts: { withActions?: boolean } = {}) {
+  const withActions = opts.withActions !== false;
+  const issues: SecurityIssue[] = [];
+  const add = (path: string, code: string, severity: SecurityIssue['severity'], message: string) => issues.push({ path, code, severity, message });
+  const view = isObj(proposal) ? proposal : {};
+
+  for (const b of blockedFieldsOf(proposal)) {
+    add(`operator_view.${b.at}`, 'secret_exposure', 'error', `"${b.key}" matches the sensitive-field list ("${b.matched}"): it would never be shown, and declaring it is refused`);
+  }
+
+  const used = new Set<string>();
+  const lookup = (name: unknown, path: string): ToolManifest | null => {
+    if (!withActions || typeof name !== 'string') return null;
+    const tool = toolNamed(tools, name);
+    if (!tool) { add(path, 'missing_action', 'error', `action "${name}" is not a registered tool`); return null; }
+    for (const r of tool.auth?.app_roles ?? []) used.add(r);
+    return tool;
+  };
+  const readSmells = (tool: ToolManifest, path: string, list: boolean) => {
+    const sql = tool.sql ?? '';
+    if (/\bSELECT\s+(?:DISTINCT\s+)?(?:\w+\.)?\*/i.test(sql)) add(path, 'select_star', 'warning', `"${tool.name}" selects *: every column leaves the data worker (only declared ones reach the console) — select the columns you declare`);
+    if (sql.includes(':__user_id')) add(path, 'caller_scoped_read', 'warning', `"${tool.name}" is scoped to the caller (:__user_id): an operator sees only their own rows`);
+    if (list && literalLimit(sql) === null) add(path, 'unbounded_read', 'warning', `"${tool.name}" has no literal LIMIT: a list read is unbounded`);
+  };
+
+  const resources = objects(view.resources);
+  for (const [i, r] of resources) {
+    const at = `operator_view.resources[${i}]`;
+    const tool = lookup(r.action, `${at}.action`);
+    if (tool) readSmells(tool, `${at}.action`, r.kind !== 'metrics');
+    if (isObj(r.detail)) {
+      const detail = lookup(r.detail.action, `${at}.detail.action`);
+      if (detail) readSmells(detail, `${at}.detail.action`, false);
+    }
+  }
+
+  for (const [j, a] of objects(view.actions)) {
+    const at = `operator_view.actions[${j}]`;
+    const tool = lookup(a.action, `${at}.action`);
+    if (!tool) continue;
+    const destructive = a.destructive === true;
+    if (destructive && tool.step_up !== true) add(`${at}.destructive`, 'destructive_without_step_up', 'error', `destructive action "${tool.name}" must declare step_up, so it needs a recent sign-in`);
+    const stmts = statementsOf(tool);
+    if (stmts.some((s) => /\bDELETE\b/i.test(s)) && !(destructive && tool.step_up === true)) {
+      add(`${at}.destructive`, 'delete_not_destructive', 'warning', `"${tool.name}" deletes rows: declare the action destructive with a step_up action`);
+    }
+    const mapped = Object.keys(isObj(a.params) ? a.params : {});
+    stmts.forEach((s, n) => {
+      if (!/^\s*(?:WITH\b[\s\S]*?\)\s*)?(UPDATE|DELETE)\b/i.test(s)) return;
+      if (!mapped.some((p) => new RegExp(`:${p}\\b`).test(s))) {
+        add(`${at}.params`, 'unscoped_write', 'error', `statement ${n + 1} of "${tool.name}" updates or deletes without any param mapped from the row — it could change every row`);
+      }
+    });
+  }
+
+  const audit = isObj(view.audit) ? strings(view.audit.app_roles) : [];
+  const admins = isObj(view.admin_access) ? strings(view.admin_access.roles) : [];
+  for (const [role, path, code] of [
+    ...audit.map((r) => [r, 'operator_view.audit.app_roles', 'audit_role_error'] as const),
+    ...admins.map((r) => [r, 'operator_view.admin_access.roles', 'admin_role_error'] as const),
+  ]) {
+    if (role === 'member' || role === 'public') { add(path, code, 'error', `"${role}" is not allowed: ${role === 'member' ? 'every signed-in user holds it' : 'it is not a role'}`); continue; }
+    if (!roles.granted.has(role) && !used.has(role)) add(path, 'undefined_role', 'warning', `nobody holds "${role}" and no referenced action uses it — a typo?`);
+  }
+  if (audit.length && !audit.some((r) => roles.ownerHolds.has(r))) {
+    add('operator_view.audit.app_roles', 'audit_role_unheld', 'warning', 'the owner holds none of these roles, so the audit trail stays unreadable until one is granted');
+  }
+  if (withActions) {
+    for (const role of admins) {
+      if (role !== 'member' && role !== 'public' && !used.has(role)) add('operator_view.admin_access.roles', 'admin_role_grants_nothing', 'warning', `"${role}" is admitted to the console but no referenced action allows it: its holders can open the console and do nothing`);
+    }
+  }
+  return { passes_security_gates: !issues.some((x) => x.severity === 'error'), issues };
+}
+
+/** "operator_view.resources[0]: action …" → { path, message }. */
+function located(error: string): { path: string; message: string } {
+  const m = /^(operator_view(?:\.[A-Za-z_]+|\[\d+\])*)(?::\s*|\s+)([\s\S]*)$/.exec(error);
+  return m ? { path: m[1]!, message: m[2]! } : { path: 'operator_view', message: error };
+}
+
+/**
+ * Validate without applying (#296). `valid` is the backend validator's verdict
+ * (validateOperatorView) — or, with validateAgainstActions false, the schema's —
+ * so a proposal this calls invalid is one a deploy would refuse.
+ */
+export function proposeAdminUpdate(tools: ToolManifest[], proposal: unknown, opts: { validateAgainstActions?: boolean; roles?: RoleContext } = {}) {
+  const withActions = opts.validateAgainstActions !== false;
+  const security = securityReview(tools, proposal, opts.roles ?? NO_ROLES, { withActions });
+  if (proposal === undefined || proposal === null) {
+    return { valid: true, contract: null, errors: [], warnings: [{ path: 'operator_view', message: 'no operator_view: the console shows the platform baseline only' }], missing_requirements: [], security_issues: security.issues, passes_security_gates: security.passes_security_gates };
+  }
+  const errors = schemaViolations(OPERATOR_VIEW_SCHEMA, proposal);
+  const warnings: { path: string; message: string }[] = [];
+  const missing: { path: string; message: string }[] = [];
+  let valid: boolean;
+  let contract: OperatorViewContract | null = null;
+  if (withActions) {
+    const r = validateOperatorView(tools, proposal);
+    if ('error' in r) {
+      valid = false;
+      const e = located(r.error);
+      if (!errors.some((x) => x.path === e.path)) errors.push(e);
+    } else {
+      valid = true;
+      contract = r.contract;
+    }
+    for (const i of security.issues) if (i.code === 'missing_action') missing.push({ path: i.path, message: i.message });
+    for (const [i, r2] of objects(isObj(proposal) ? proposal.resources : undefined)) {
+      const tool = typeof r2.action === 'string' ? toolNamed(tools, r2.action) : undefined;
+      if (tool?.operation !== 'query') continue;
+      for (const [k, c] of objects(r2.columns)) {
+        if (typeof c.key === 'string' && !selectsColumn(tool.sql ?? '', c.key)) missing.push({ path: `operator_view.resources[${i}].columns[${k}]`, message: `"${tool.name}" does not select "${c.key}"` });
+      }
+    }
+  } else {
+    valid = errors.length === 0;
+    warnings.push({ path: 'operator_view', message: 'action checks skipped (validateAgainstActions false): referenced actions, their roles and selected columns were not checked; a deploy checks them' });
+  }
+  return { valid, contract, errors, warnings, missing_requirements: missing, security_issues: security.issues, passes_security_gates: security.passes_security_gates };
 }

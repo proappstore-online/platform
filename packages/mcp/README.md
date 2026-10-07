@@ -148,13 +148,16 @@ found with `discover_tools` / `describe_tool` on the app endpoint).
 | `qa_flow_playwright` | Get a flow transpiled to a Playwright .spec.ts (for CI parity — run the same flow under Playwright). |
 | `qa_mint_key` | Mint a scoped QA API key for an app (owner only). |
 
-### Admin console authoring (read-only, owner only)
+### Admin console authoring (owner only)
 
 | Tool | Description |
 |---|---|
 | `inspect_admin_console` | An app's stored `operator_view`, the actions it references, gaps against the current tools (`action_missing`, `wrong_operation`, …) and what renders per resource. |
 | `list_admin_capabilities` | Resource kinds, column formats, action operations, limits (20 resources, 20 actions), features, the sensitive-field list and the JSON Schema of `operator_view`, including `admin_access`. |
 | `preview_admin_console` | Dry-run a proposed `operator_view` (optionally with a proposed `tools` array) through the platform's own validator: tabs, columns, actions, the role access matrix, blocked fields. Stores nothing, reads no app data. |
+| `propose_admin_update` | Validate a proposal without applying it: the platform validator's verdict, the normalized contract, and errors, warnings, missing requirements and security issues, each with a path. `validateAgainstActions: false` checks the structure only. |
+| `validate_admin_security` | Security and compatibility checks: secret exposure, missing actions, destructive actions without `step_up`, audit/admin role errors, undefined roles, row-scoping smells in the referenced SQL. Returns `passesSecurityGates`. |
+| `apply_admin_update` | **confirm**, **dry_run**. Validates against the repo's own `mcp.json` tools, refuses anything invalid or failing a security gate, commits one change to `mcp.json` (never `.github/`), then waits for the deploy and reports the registration status. The only writing tool in this group. |
 
 ## Safety
 

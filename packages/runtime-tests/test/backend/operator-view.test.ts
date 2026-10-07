@@ -695,3 +695,42 @@ describe('admin-console authoring routes (#295)', () => {
     expect(await caps.json()).toMatchObject({ limits: { resources: 20, actions: 20 } });
   });
 });
+
+// #296: propose and security on real D1 — the role context comes from the real
+// app_roles/apps/users join (including a GitHub creator's legacy login grant).
+describe('admin-console propose / security routes (#296)', () => {
+  beforeEach(async () => {
+    fetchMock.get(`https://pas-data-stash.${env.DATA_WORKER_HOST}`).intercept({ path: '/validate', method: 'POST' })
+      .reply(200, (req) => ({ results: (JSON.parse(String(req.body)) as { statements: { id: string }[] }).statements.map((st) => ({ id: st.id, ok: true })) }));
+    const put = await SELF.fetch(`${BASE}/v1/apps/stash/tools`, json('PUT', STASH, await session('gh:1')));
+    expect(put.status, await put.clone().text()).toBe(200);
+  });
+
+  it('propose: the validator verdict, and role warnings from who actually holds the roles', async () => {
+    // The creator holds `auditor` through a legacy login-keyed grant; `helpdesk` is held by someone else.
+    await env.DB.prepare("INSERT INTO app_roles (app_id, user_id, role_name) VALUES ('stash', 'owner', 'auditor'), ('stash', 'gh:3', 'helpdesk')").run();
+    const view = { ...STASH.operator_view, audit: { app_roles: ['auditor'] }, admin_access: { roles: ['helpdesk', 'typo_role'] } };
+    const res = await SELF.fetch(`${BASE}/v1/apps/stash/operator-view/propose`, json('POST', { operator_view: view }, await session('gh:1')));
+    expect(res.status, await res.clone().text()).toBe(200);
+    const body = (await res.json()) as { valid: boolean; passes_security_gates: boolean; security_issues: { code: string; message: string }[] };
+    expect(body.valid).toBe(true);
+    expect(body.passes_security_gates).toBe(true);
+    const codes = body.security_issues.map((i) => `${i.code}:${i.message.match(/"([^"]+)"/)?.[1] ?? ''}`);
+    expect(codes).toContain('undefined_role:typo_role');
+    expect(codes.some((c) => c.startsWith('audit_role_unheld'))).toBe(false); // the creator holds auditor via the login alias
+    expect(codes.some((c) => c === 'undefined_role:helpdesk')).toBe(false);
+  });
+
+  it('security: a declared secret column and a destructive action without step_up fail the gate; non-owners are refused', async () => {
+    const view = JSON.parse(JSON.stringify(STASH.operator_view));
+    view.resources[0].columns.push({ key: 'api_key', label: 'Key' });
+    const tools = STASH.tools.map((t) => (t.name === 'op_suspend_user' ? { ...t, step_up: false } : t));
+    const res = await SELF.fetch(`${BASE}/v1/apps/stash/operator-view/security`, json('POST', { operator_view: view, tools }, await session('gh:1')));
+    const body = (await res.json()) as { passes_security_gates: boolean; issues: { code: string }[] };
+    expect(body.passes_security_gates).toBe(false);
+    expect(body.issues.map((i) => i.code)).toEqual(expect.arrayContaining(['secret_exposure', 'destructive_without_step_up']));
+    for (const path of ['/v1/apps/stash/operator-view/security', '/v1/apps/stash/operator-view/propose']) {
+      expect((await SELF.fetch(`${BASE}${path}`, json('POST', { operator_view: view }, await session('gh:2')))).status, path).toBe(403);
+    }
+  });
+});

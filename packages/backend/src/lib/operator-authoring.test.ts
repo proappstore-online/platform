@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { inspectAdminConsole, operatorCapabilities, OPERATOR_VIEW_SCHEMA, previewAdminConsole } from './operator-authoring.js';
+import { inspectAdminConsole, operatorCapabilities, OPERATOR_VIEW_SCHEMA, previewAdminConsole, proposeAdminUpdate, securityReview } from './operator-authoring.js';
 import { validateOperatorView } from './operator-contract.js';
+import { schemaViolations } from './json-schema-check.js';
 import type { ToolManifest } from './action-sql.js';
 import { PARENTS_CLUBS, STASH } from '../__fixtures__/operator-view.js';
 
@@ -12,38 +13,6 @@ const contractOf = (tools: ToolManifest[], view: unknown) => {
   return r.contract;
 };
 
-/** A minimal JSON Schema checker for the keywords OPERATOR_VIEW_SCHEMA uses. Returns the first violation, or null. */
-type S = Record<string, unknown>;
-function violation(schema: S, value: unknown, at = '$'): string | null {
-  if (schema.enum && !(schema.enum as unknown[]).includes(value)) return `${at}: not in enum`;
-  if (schema.not && (schema.not as S).enum && ((schema.not as S).enum as unknown[]).includes(value)) return `${at}: forbidden value`;
-  const type = schema.type as string | undefined;
-  if (type === 'object') {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return `${at}: not an object`;
-    const props = (schema.properties ?? {}) as Record<string, S>;
-    for (const r of (schema.required ?? []) as string[]) if (!(r in value)) return `${at}: missing ${r}`;
-    for (const [k, v] of Object.entries(value)) {
-      if (props[k]) { const e = violation(props[k]!, v, `${at}.${k}`); if (e) return e; }
-      else if (schema.additionalProperties === false) return `${at}: unknown ${k}`;
-      else if (typeof schema.additionalProperties === 'object') { const e = violation(schema.additionalProperties as S, v, `${at}.${k}`); if (e) return e; }
-    }
-  } else if (type === 'array') {
-    if (!Array.isArray(value)) return `${at}: not an array`;
-    if (schema.minItems !== undefined && value.length < (schema.minItems as number)) return `${at}: too few`;
-    if (schema.maxItems !== undefined && value.length > (schema.maxItems as number)) return `${at}: too many`;
-    for (const [i, v] of value.entries()) { const e = violation(schema.items as S, v, `${at}[${i}]`); if (e) return e; }
-  } else if (type === 'string') {
-    if (typeof value !== 'string') return `${at}: not a string`;
-    if (schema.minLength !== undefined && value.length < (schema.minLength as number)) return `${at}: too short`;
-    if (schema.maxLength !== undefined && value.length > (schema.maxLength as number)) return `${at}: too long`;
-    if (schema.pattern && !new RegExp(schema.pattern as string).test(value)) return `${at}: pattern`;
-  } else if (type === 'integer') {
-    if (!Number.isInteger(value)) return `${at}: not an integer`;
-    if ((value as number) < (schema.minimum as number) || (value as number) > (schema.maximum as number)) return `${at}: out of range`;
-  } else if (type === 'boolean' && typeof value !== 'boolean') return `${at}: not a boolean`;
-  return null;
-}
-
 describe('list_admin_capabilities schema matches the validator (#295)', () => {
   const accepted: [string, ToolManifest[], unknown][] = [
     ['stash', stashTools, STASH.operator_view],
@@ -53,7 +22,7 @@ describe('list_admin_capabilities schema matches the validator (#295)', () => {
   for (const [label, tools, view] of accepted) {
     it(`accepts what the validator accepts: ${label}`, () => {
       expect(validateOperatorView(tools, view)).toHaveProperty('contract');
-      expect(violation(OPERATOR_VIEW_SCHEMA, view)).toBeNull();
+      expect(schemaViolations(OPERATOR_VIEW_SCHEMA, view)).toEqual([]);
     });
   }
 
@@ -84,7 +53,7 @@ describe('list_admin_capabilities schema matches the validator (#295)', () => {
       const view = v();
       mutate(view);
       expect(validateOperatorView(stashTools, view)).toHaveProperty('error');
-      expect(violation(OPERATOR_VIEW_SCHEMA, view)).not.toBeNull();
+      expect(schemaViolations(OPERATOR_VIEW_SCHEMA, view)).not.toEqual([]);
     });
   }
 
@@ -177,5 +146,133 @@ describe('preview_admin_console (#295)', () => {
 
   it('no operator_view: valid, the baseline', () => {
     expect(previewAdminConsole(stashTools, null)).toMatchObject({ valid: true, contract: null, render: null });
+  });
+});
+
+// ── #296: security review and propose ───────────────────────────────────────
+
+const roles = (granted: string[], ownerHolds: string[] = []) => ({ granted: new Set(granted), ownerHolds: new Set(ownerHolds) });
+const codes = (issues: { code: string; severity: string }[], severity?: string) => issues.filter((i) => !severity || i.severity === severity).map((i) => i.code);
+
+describe('validate_admin_security (#296)', () => {
+  it('passes both sample apps', () => {
+    expect(securityReview(stashTools, STASH.operator_view, roles(['operator', 'reviewer'], ['operator']))).toEqual({ passes_security_gates: true, issues: [] });
+    expect(securityReview(PARENTS_CLUBS.tools as ToolManifest[], PARENTS_CLUBS.operator_view).passes_security_gates).toBe(true);
+  });
+
+  it('flags a declared secret column and a destructive action without step_up, and fails the gate', () => {
+    const view = clone(STASH.operator_view) as Record<string, any>;
+    view.resources[0].columns.push({ key: 'api_key', label: 'Key' });
+    const tools = clone(stashTools).map((t) => (t.name === 'op_suspend_user' ? { ...t, step_up: false } : t)) as ToolManifest[];
+    const r = securityReview(tools, view);
+    expect(r.passes_security_gates).toBe(false);
+    expect(r.issues).toEqual(expect.arrayContaining([
+      { path: 'operator_view.resources[0].columns[4]', code: 'secret_exposure', severity: 'error', message: expect.stringContaining('"api_key"') },
+      { path: 'operator_view.actions[0].destructive', code: 'destructive_without_step_up', severity: 'error', message: expect.stringContaining('op_suspend_user') },
+    ]));
+  });
+
+  it('flags missing actions and a write no row param scopes', () => {
+    const view = clone(STASH.operator_view) as Record<string, any>;
+    view.resources[0].action = 'op_gone';
+    const tools = clone(stashTools).map((t) => (t.name === 'op_lift_suspension' ? { ...t, statements: ["UPDATE members SET suspended = 0 WHERE suspended = 1", ...t.statements!.slice(1)] } : t)) as ToolManifest[];
+    const lift = view.actions.findIndex((a: any) => a.action === 'op_lift_suspension');
+    const r = securityReview(tools, view);
+    expect(r.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'operator_view.resources[0].action', code: 'missing_action', severity: 'error' }),
+      expect.objectContaining({ path: `operator_view.actions[${lift}].params`, code: 'unscoped_write', severity: 'error' }),
+    ]));
+  });
+
+  it('warns on row-scoping smells in the referenced SQL', () => {
+    const tools = clone(stashTools).map((t) => {
+      if (t.name === 'op_list_users') return { ...t, sql: 'SELECT * FROM members m WHERE m.owner = :__user_id ORDER BY m.id' };
+      return t;
+    }) as ToolManifest[];
+    expect(codes(securityReview(tools, STASH.operator_view).issues, 'warning')).toEqual(expect.arrayContaining(['select_star', 'caller_scoped_read', 'unbounded_read']));
+  });
+
+  it('checks audit and admin roles: member is an error; undefined, unheld and powerless roles are warnings', () => {
+    const view = { ...clone(STASH.operator_view), audit: { app_roles: ['auditor'] }, admin_access: { roles: ['member', 'helpdesk', 'operator'] } };
+    const r = securityReview(stashTools, view, roles(['operator', 'helpdesk']));
+    expect(r.passes_security_gates).toBe(false);
+    expect(r.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'operator_view.admin_access.roles', code: 'admin_role_error', severity: 'error' }),
+      expect.objectContaining({ path: 'operator_view.audit.app_roles', code: 'undefined_role', severity: 'warning', message: expect.stringContaining('"auditor"') }),
+      expect.objectContaining({ code: 'audit_role_unheld', severity: 'warning' }),
+      expect.objectContaining({ code: 'admin_role_grants_nothing', severity: 'warning', message: expect.stringContaining('"helpdesk"') }),
+    ]));
+    // operator is held and used: no warning names it.
+    expect(r.issues.some((i) => i.message.includes('"operator"'))).toBe(false);
+  });
+
+  it('withActions false skips the checks that need the tools', () => {
+    const view = clone(STASH.operator_view) as Record<string, any>;
+    view.resources[0].action = 'op_gone';
+    expect(codes(securityReview([], view, undefined, { withActions: false }).issues)).not.toContain('missing_action');
+  });
+});
+
+describe('propose_admin_update agrees with the backend validator (#296)', () => {
+  for (const [label, tools, view] of [
+    ['stash', stashTools, STASH.operator_view],
+    ['parents-clubs', PARENTS_CLUBS.tools as ToolManifest[], PARENTS_CLUBS.operator_view],
+  ] as const) {
+    it(`valid where the validator accepts, with the same contract: ${label}`, () => {
+      const p = proposeAdminUpdate(tools as ToolManifest[], view);
+      expect(p.valid).toBe(true);
+      expect(p.errors).toEqual([]);
+      expect(p.contract).toEqual(contractOf(tools as ToolManifest[], view));
+    });
+  }
+
+  const v = () => clone(STASH.operator_view) as Record<string, any>;
+  for (const [label, mutate] of [
+    ['an unknown action', (x: Record<string, any>) => { x.resources[0].action = 'op_nope'; }],
+    ['a write as a resource', (x: Record<string, any>) => { x.resources[0].action = 'op_suspend_user'; }],
+    ['an undeclared column', (x: Record<string, any>) => { x.resources[0].columns.push({ key: 'nickname', label: 'Nick' }); }],
+    ['a secret column', (x: Record<string, any>) => { x.resources[0].columns.push({ key: 'api_key', label: 'Key' }); }],
+    ['an unknown field', (x: Record<string, any>) => { x.colour = 'red'; }],
+    ['admin_access with member', (x: Record<string, any>) => { x.admin_access = { roles: ['member'] }; }],
+  ] as const) {
+    it(`invalid where the validator refuses, with its error at its path: ${label}`, () => {
+      const view = v();
+      mutate(view);
+      const r = validateOperatorView(stashTools, view);
+      if (!('error' in r)) throw new Error('the validator accepted it');
+      const p = proposeAdminUpdate(stashTools, view);
+      expect(p.valid).toBe(false);
+      expect(p.contract).toBeNull();
+      const path = /^(operator_view(?:\.[A-Za-z_]+|\[\d+\])*)/.exec(r.error)![1];
+      expect(p.errors.some((e) => e.path === path)).toBe(true);
+    });
+  }
+
+  it('returns every structural error at once, each with a path', () => {
+    const view = v();
+    view.resources[0].kind = 'orders';
+    view.resources[1].columns[0].format = 'money';
+    view.version = 2;
+    const paths = proposeAdminUpdate(stashTools, view).errors.map((e) => e.path);
+    expect(paths).toEqual(expect.arrayContaining(['operator_view.version', 'operator_view.resources[0].kind', 'operator_view.resources[1].columns[0].format']));
+  });
+
+  it('lists every missing action and unselected column as missing requirements', () => {
+    const view = v();
+    view.resources[0].action = 'op_gone';
+    view.actions[0].action = 'op_also_gone';
+    view.resources[1].columns.push({ key: 'nickname', label: 'Nick' });
+    const missing = proposeAdminUpdate(stashTools, view).missing_requirements.map((m) => m.path);
+    expect(missing).toEqual(expect.arrayContaining(['operator_view.resources[0].action', 'operator_view.actions[0].action', `operator_view.resources[1].columns[${view.resources[1].columns.length - 1}]`]));
+  });
+
+  it('validateAgainstActions false checks the structure only, and says so', () => {
+    const view = v();
+    view.resources[0].action = 'op_gone';
+    const p = proposeAdminUpdate([], view, { validateAgainstActions: false });
+    expect(p.valid).toBe(true);
+    expect(p.warnings[0]!.message).toContain('action checks skipped');
+    view.colour = 'red';
+    expect(proposeAdminUpdate([], view, { validateAgainstActions: false }).valid).toBe(false);
   });
 });
