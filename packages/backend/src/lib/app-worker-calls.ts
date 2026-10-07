@@ -122,14 +122,20 @@ interface PreparedCall {
  * no role gate. As a grant's user (#260): callers must include "user" and the
  * action's own role gates apply, exactly as on the HTTP actions route.
  */
-async function prepareWorkerCall(env: Pick<Env, 'DB'>, appId: string, name: unknown, params: unknown, caller: CallerIdentity | null = null): Promise<PreparedCall> {
+async function prepareWorkerCall(
+  env: Pick<Env, 'DB'>, appId: string, name: unknown, params: unknown, caller: CallerIdentity | null = null,
+  manifests?: Map<string, Promise<ToolManifest>>,
+): Promise<PreparedCall> {
   if (typeof name !== 'string' || !name) throw new WorkerCallError('BadRequest', 'action name is required');
   if (params !== undefined && (params === null || typeof params !== 'object' || Array.isArray(params))) {
     throw new WorkerCallError('BadRequest', `params of "${name}" must be an object`);
   }
   let manifest: ToolManifest;
   try {
-    manifest = await loadManifest(env.DB, appId, name);
+    // A batch repeats one action hundreds of times: read each manifest once per batch (#312).
+    let pending = manifests?.get(name);
+    if (!pending) { pending = loadManifest(env.DB, appId, name); manifests?.set(name, pending); }
+    manifest = await pending;
   } catch (e) {
     if (e instanceof HttpError && e.status === 404) throw new WorkerCallError('NotFound', `action "${name}" is not registered`);
     throw e;
@@ -205,9 +211,10 @@ async function auditAsUser(env: Env, appId: string, calls: PreparedCall[], calle
 export async function workerActionBatch(env: Env, appId: string, calls: unknown, caller: CallerIdentity | null = null): Promise<{ name: string; results: unknown[] }[]> {
   if (!Array.isArray(calls) || calls.length === 0) throw new WorkerCallError('BadRequest', 'batch takes a non-empty array of { name, params }');
   const prepared: PreparedCall[] = [];
+  const manifests = new Map<string, Promise<ToolManifest>>();
   let count = 0;
   for (const c of calls as { name?: unknown; params?: unknown }[]) {
-    const p = await prepareWorkerCall(env, appId, c?.name, c?.params, caller);
+    const p = await prepareWorkerCall(env, appId, c?.name, c?.params, caller, manifests);
     count += p.statements.length;
     if (count > MAX_BATCH_STATEMENTS) throw new WorkerCallError('BadRequest', `a batch runs at most ${MAX_BATCH_STATEMENTS} prepared statements`);
     prepared.push(p);
