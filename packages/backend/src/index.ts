@@ -295,6 +295,8 @@ app.route('/', webhookRoutes);
 export { Room } from './do/room.js';
 // #254: the RPC entrypoint behind an app worker's `PAS` binding (ctx.exports.AppWorkerApi).
 export { AppWorkerApi } from './rpc/app-worker-api.js';
+// #311: the globalOutbound gateway of loaded app workers (ctx.exports.AppWorkerEgress).
+export { AppWorkerEgress } from './rpc/app-worker-egress.js';
 
 /**
  * Cron entry (#70): the session-key drift check. `[triggers] crons` in wrangler.toml

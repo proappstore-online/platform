@@ -45,7 +45,7 @@ There is **no** D1, KV, R2, queue or AI binding, and no app secret in `env`:
 - **Files** go to `pas.storage`, under `<app>/_worker/<key>`, never a user's files.
 - **Logs** go to `pas.log`, into the app's logs with category `worker`.
 
-Outbound `fetch` to the Internet works.
+Outbound `fetch` to the Internet works: it leaves through the platform's egress gateway (`AppWorkerEgress`, #311), which logs the app, method and host.
 
 ## Manifest (`mcp.json`)
 

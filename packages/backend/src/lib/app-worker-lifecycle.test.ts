@@ -167,7 +167,7 @@ describe('loader backend lifecycle (#253)', () => {
     expect(Object.keys(code.modules).sort()).toEqual(['__pas_entry.js', 'app.js', 'lib/x.js']);
     expect(Object.keys(code.env).sort()).toEqual(['APP_ID', 'PAS_EVENT_KEY', 'PAS_WORKER_TOKEN']);
     expect(code.globalOutbound).toBeNull();
-    expect(code.limits).toEqual({ cpuMs: 30_000, subRequests: 200 });
+    expect(code.limits).toEqual({ cpuMs: 30_000, subRequests: 500 });
     expect(invocations.get(result.invocationId)).toMatchObject({ status: 'succeeded', http_status: 200, body_excerpt: null });
   });
 
@@ -179,6 +179,16 @@ describe('loader backend lifecycle (#253)', () => {
     await host.invoke('demo', event(), { timeoutMs: 5_000 });
     expect(made).toEqual([{ props: { appId: 'demo' } }]);
     expect(Object.keys(loads[0]!.code.env).sort()).toEqual(['APP_ID', 'PAS', 'PAS_EVENT_KEY', 'PAS_WORKER_TOKEN']);
+  });
+
+  it('routes outbound fetch through the AppWorkerEgress gateway with platform-set props, else none (#311)', async () => {
+    const made: unknown[] = [];
+    const ctx = { exports: { AppWorkerEgress: (opts: { props: { appId: string } }) => { made.push(opts); return { stub: 'egress' }; } } };
+    const host = appWorkerHost(env, ctx);
+    await host.deploy('demo', bundle());
+    await host.invoke('demo', event(), { timeoutMs: 5_000 });
+    expect(made).toEqual([{ props: { appId: 'demo' } }]);
+    expect(loads[0]!.code.globalOutbound).toEqual({ stub: 'egress' });
   });
 
   it('records a non-2xx with the first 1 KB, a timeout, and refuses a duplicate id', async () => {

@@ -5,7 +5,7 @@
  *
  *   loader   — Dynamic Workers (`env.LOADER`). Implemented. The bundle lives in R2
  *              and is loaded on demand with the platform shim as main module, no
- *              Internet egress (`globalOutbound: null`) and explicit CPU and
+ *              Internet egress through the AppWorkerEgress gateway (#311) and explicit CPU and
  *              subrequest limits. No account script, no public URL.
  *   account  — plain `pas-app-<id>` scripts. Not implemented: kept as the
  *              fallback if the loader cannot carry the prototype.
@@ -49,11 +49,13 @@ export const APP_WORKER_COMPATIBILITY_DATE = '2026-01-01';
 const compatibilityDate = (env: Pick<Env, 'APP_WORKER_COMPATIBILITY_DATE'>) => env.APP_WORKER_COMPATIBILITY_DATE ?? APP_WORKER_COMPATIBILITY_DATE;
 const COMPATIBILITY_FLAGS = ['nodejs_compat'];
 /**
- * ADR-009 §4: 30 s CPU per invocation. `subRequests` is the 200-call `PAS`
- * budget only: the worker has no egress yet (`globalOutbound: null`), so there
- * is no outbound budget to add. #267 sizes it when the egress gateway lands.
+ * ADR-009 §4: 30 s CPU per invocation. `subRequests` counts every subrequest:
+ * the 200-call `PAS` budget plus 300 outbound fetches through the egress
+ * gateway (#311). #267 re-sizes the outbound part from measured usage.
  */
-export const APP_WORKER_LIMITS = { cpuMs: 30_000, subRequests: 200 } as const;
+export const APP_WORKER_LIMITS = { cpuMs: 30_000, subRequests: 500 } as const;
+/** How outbound traffic leaves a loaded worker; part of the loader ID (#311). */
+const EGRESS_MODE = 'gateway:AppWorkerEgress';
 
 const R2_PREFIX = '_app-workers';
 const MODULE_NAME = /^[A-Za-z0-9_-][A-Za-z0-9_.\/-]{0,199}\.m?js$/;
@@ -102,7 +104,10 @@ export interface AppWorkerHost {
  * be forged by the app (ADR-009 §2).
  */
 export interface AppWorkerExports {
-  exports?: { AppWorkerApi?: (opts: { props: { appId: string } }) => unknown };
+  exports?: {
+    AppWorkerApi?: (opts: { props: { appId: string } }) => unknown;
+    AppWorkerEgress?: (opts: { props: { appId: string } }) => unknown;
+  };
 }
 
 /**
@@ -335,7 +340,7 @@ const shimShas = new Map<string, Promise<string>>();
 export function appWorkerShimSha(compatDate: string = APP_WORKER_COMPATIBILITY_DATE): Promise<string> {
   let sha = shimShas.get(compatDate);
   if (!sha) {
-    sha = sha256Hex(JSON.stringify([APP_WORKER_SHIM, APP_WORKER_LIMITS, compatDate, COMPATIBILITY_FLAGS]));
+    sha = sha256Hex(JSON.stringify([APP_WORKER_SHIM, APP_WORKER_LIMITS, compatDate, COMPATIBILITY_FLAGS, EGRESS_MODE]));
     shimShas.set(compatDate, sha);
   }
   return sha;
@@ -432,6 +437,8 @@ function loaderHost(env: Env, loader: WorkerLoader, ctx?: AppWorkerExports): App
       const bundleSha = w.bundle_sha256;
       const pas = ctx?.exports?.AppWorkerApi?.({ props: { appId } });
       if (!pas) console.warn(`[app-worker] invoking ${appId} without a PAS binding (no ctx.exports.AppWorkerApi)`);
+      // #311: every outbound fetch goes through the platform's gateway; without it, no egress at all.
+      const egress = ctx?.exports?.AppWorkerEgress?.({ props: { appId } }) ?? null;
       const worker = loader.get(id, async () => ({
         compatibilityDate: compatDate,
         compatibilityFlags: COMPATIBILITY_FLAGS,
@@ -444,7 +451,7 @@ function loaderHost(env: Env, loader: WorkerLoader, ctx?: AppWorkerExports): App
           PAS_EVENT_KEY: keys[0],
           APP_ID: appId,
         },
-        globalOutbound: null,
+        globalOutbound: egress as Fetcher | null,
         limits: { ...APP_WORKER_LIMITS },
       }));
 
