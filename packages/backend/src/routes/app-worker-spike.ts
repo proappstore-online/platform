@@ -96,7 +96,7 @@ appWorkerSpikeRoutes.post('/internal/app-worker-spike', async (c) => {
       ...(body.tail ? { tails: [(c.executionCtx as unknown as { exports: { SpikeTail(o: { props: { label: string } }): Fetcher } }).exports.SpikeTail({ props: { label: run } })] } : {}),
     }));
     try {
-      const res = await (body.entrypointLimit ? worker.getEntrypoint(undefined, { limits: { cpuMs: body.cpuMs } }) : worker.getEntrypoint()).fetch(new Request('https://w.invalid/'));
+      const res = await (body.entrypointLimit ? worker.getEntrypoint(undefined, { limits: { cpuMs: body.cpuMs ?? 0 } }) : worker.getEntrypoint()).fetch(new Request('https://w.invalid/'));
       return c.json({ run, bytes: source.length, kb, spinMs: body.spinMs ?? 0, cpuMs: body.cpuMs ?? null, wallMs: Date.now() - t0, status: res.status, child: await res.text(), ...(body.tail ? { tail: await readTail(c.env, run) } : {}) });
     } catch (e) {
       return c.json({ run, bytes: source.length, kb, spinMs: body.spinMs ?? 0, cpuMs: body.cpuMs ?? null, wallMs: Date.now() - t0, error: String((e as Error).message ?? e), ...(body.tail ? { tail: await readTail(c.env, run) } : {}) });
