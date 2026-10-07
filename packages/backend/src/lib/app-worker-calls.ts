@@ -20,7 +20,7 @@ import { connectorConfigured, installationToken } from './github-app.js';
 import { checkLogQuota, d1LogUsageStore } from './log-quota.js';
 import { LEVELS, normalizeEntry } from './log-ingest.js';
 import { HttpError } from './auth.js';
-import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from '../routes/actions.js';
+import { enforceActionAuth, loadManifest, recordActionSuccess } from '../routes/actions.js';
 import { verifyCallerGrant } from './caller-grant.js';
 import { fileQuotaRefusal } from '../routes/storage.js';
 
@@ -170,8 +170,21 @@ async function prepareWorkerCall(env: Pick<Env, 'DB'>, appId: string, name: unkn
   }
 }
 
+/**
+ * The RPC entrypoint must NOT fetch the data worker's workers.dev host itself: from
+ * this context (a `WorkerEntrypoint` called by a loader-hosted worker, itself run
+ * from the queue consumer) Cloudflare answers `404 error code: 1042` (#310). The
+ * hop goes through the SELF service binding to `/v1/internal/data-worker/...`
+ * (routes/app-workers.ts), which runs `forwardToDataWorker` in a plain request
+ * handler — the context the HTTP action route and the scheduler already use.
+ */
 async function dataWorker(env: Env, appId: string, endpoint: string, payload: unknown): Promise<unknown> {
-  const res = await forwardToDataWorker(env, appId, endpoint, payload, null);
+  if (!env.INTERNAL_TOKEN) throw new WorkerCallError('Unavailable', 'INTERNAL_TOKEN is not configured on this deployment');
+  const res = await env.SELF.fetch(`https://api.proappstore.online/v1/internal/data-worker/${encodeURIComponent(appId)}/${endpoint}`, {
+    method: 'POST',
+    headers: { 'X-Internal-Token': env.INTERNAL_TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
   const text = await res.text();
   if (!res.ok) throw new WorkerCallError(res.status >= 500 ? 'Failed' : 'BadRequest', `data worker ${res.status}: ${text.slice(0, 300)}`);
   try {

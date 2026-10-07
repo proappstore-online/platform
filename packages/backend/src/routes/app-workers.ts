@@ -16,12 +16,15 @@
  *   POST   /v1/apps/:appId/worker/http        a signed-in user's /.pas/worker/* request, mediated by the host (#260)
  *   GET    /v1/apps/:appId/worker/usage?days=30   owner: quotas, today, daily usage (#275)
  *   PUT    /v1/admin/apps/:appId/worker-quotas    admin: per-app quota overrides, or null (#275)
+ *   POST   /v1/internal/data-worker/:appId/:endpoint   PAS RPC -> data worker hop, via SELF (#310); X-Internal-Token
  *   PUT    /v1/admin/app-workers/open             admin: { open } — reopen (or close) new enables (#275)
  *
  * No route returns or logs the worker's token or event key.
  */
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
+import { internalTokenOk } from '@proappstore/build-core';
+import { forwardToDataWorker } from './actions.js';
 import { HttpError, isAdminId, requireAdmin, requireAppOwner } from '../lib/auth.js';
 import { requireAppDeployOidc } from '../lib/app-deploy-oidc.js';
 import { activeAppWorker, appWorkerHost, disableAppWorker, parseBundle, rotateAppWorkerCredentials } from '../lib/app-worker-host.js';
@@ -75,6 +78,22 @@ appWorkerRoutes.put('/apps/:appId/worker/oidc', async (c) => {
     await recordDeploy(c.env, appId, claims, status < 500 ? 'refused' : 'failed', String((e as Error)?.message ?? e), bundleSha);
     throw e;
   }
+});
+
+/**
+ * #310: the PAS RPC entrypoint's way to the data worker. Called only through the SELF
+ * service binding, with the platform's INTERNAL_TOKEN (the same trust the data worker
+ * itself checks). The caller has already prepared the SQL; this only forwards it.
+ */
+appWorkerRoutes.post('/internal/data-worker/:appId/:endpoint', async (c) => {
+  if (!internalTokenOk(c.req.header('X-Internal-Token'), c.env.INTERNAL_TOKEN)) return c.text('forbidden', 403);
+  const endpoint = c.req.param('endpoint');
+  if (endpoint !== 'query' && endpoint !== 'execute' && endpoint !== 'batch') throw new HttpError('unknown data endpoint', 404);
+  const upstream = await forwardToDataWorker(c.env, c.req.param('appId'), endpoint, await c.req.json(), null);
+  return new Response(await upstream.text(), {
+    status: upstream.status,
+    headers: { 'Cache-Control': 'no-store', 'Content-Type': upstream.headers.get('Content-Type') ?? 'application/json; charset=utf-8' },
+  });
 });
 
 appWorkerRoutes.put('/admin/apps/:appId/worker-enabled', async (c) => {

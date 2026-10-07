@@ -115,12 +115,17 @@ beforeEach(async () => {
     DB: fakeDb(), STORAGE: fakeR2(), APP_SECRET_KEK: KEK, DATA_WORKER_HOST: 'test.workers.dev', INTERNAL_TOKEN: 'internal', SESSION_SIGNING_KEY: 'sk',
     APP_WORKER_CALLS: { writeDataPoint: (p: unknown) => points.push(p) },
   } as unknown as Env;
-  vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
-    const body = JSON.parse(String(init.body));
-    sent.push({ url: String(url), body });
-    if (String(url).endsWith('/batch')) return Response.json({ results: (body.statements as unknown[]).map(() => ({ rows: [], meta: { changes: 1 } })) });
-    return Response.json({ rows: [{ ok: 1 }], meta: { changes: 1 } });
-  }));
+  // #310: the data worker is reached through SELF, never a direct workers.dev fetch.
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('the RPC path must not fetch the data worker directly (#310)'); }));
+  (env as unknown as { SELF: unknown }).SELF = {
+    fetch: vi.fn(async (url: string, init: RequestInit) => {
+      expect((init.headers as Record<string, string>)['X-Internal-Token']).toBe('internal');
+      const body = JSON.parse(String(init.body));
+      sent.push({ url: String(url), body });
+      if (String(url).endsWith('/batch')) return Response.json({ results: (body.statements as unknown[]).map(() => ({ rows: [], meta: { changes: 1 } })) });
+      return Response.json({ rows: [{ ok: 1 }], meta: { changes: 1 } });
+    }),
+  };
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -169,7 +174,7 @@ describe('actions as system:worker (#254)', () => {
     const out = await workerActionCall(env, 't', 'add_row', { id: 'r1' });
     expect(out).toMatchObject({ meta: { changes: 1 } });
     expect(sent).toHaveLength(1);
-    expect(sent[0]!.url).toBe('https://pas-data-t.test.workers.dev/execute');
+    expect(sent[0]!.url).toBe('https://api.proappstore.online/v1/internal/data-worker/t/execute');
     expect(sent[0]!.body).toEqual({ sql: 'INSERT INTO t (id, by) VALUES (?, ?)', params: ['r1', SYSTEM_WORKER_USER] });
   });
 
@@ -212,7 +217,7 @@ describe('actions as system:worker (#254)', () => {
   it('refuses a batch over 1 MB and surfaces a data-worker failure', async () => {
     workerTool('add_row');
     expect(await code(workerActionBatch(env, 't', Array.from({ length: 300 }, () => ({ name: 'add_row', params: { id: 'x'.repeat(4000) } }))))).toBe('BadRequest');
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('boom', { status: 500 })));
+    (env as unknown as { SELF: unknown }).SELF = { fetch: vi.fn(async () => new Response('boom', { status: 500 })) };
     expect(await code(workerActionCall(env, 't', 'add_row', { id: 'a' }))).toBe('Failed');
   });
 });
