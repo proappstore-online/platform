@@ -16,6 +16,9 @@
     "overrides": {
       "ws@>=8.0.0 <8.21.0": ">=8.21.0",
       "undici@>=7.23.0 <7.28.0": ">=7.28.0 <8"
+    },
+    "patchedDependencies": {
+      "@cloudflare/vitest-pool-workers@0.8.71": "patches/@cloudflare__vitest-pool-workers@0.8.71.patch"
     }
   },
   "scripts": {

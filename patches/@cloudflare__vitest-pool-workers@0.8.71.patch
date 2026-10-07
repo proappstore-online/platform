@@ -1,0 +1,42 @@
+diff --git a/dist/worker/lib/cloudflare/test-internal.mjs b/dist/worker/lib/cloudflare/test-internal.mjs
+index 2d25bcbed8d79e80c0c979e32083365c773cf13f..92b9f28e076cc3a7b7fa8e5706ac473f0611cfe4 100644
+--- a/dist/worker/lib/cloudflare/test-internal.mjs
++++ b/dist/worker/lib/cloudflare/test-internal.mjs
+@@ -307,22 +307,25 @@ function importModule(env2, specifier) {
+ var IGNORED_KEYS = ["self", "tailStream"];
+ function createProxyPrototypeClass(superClass, getUnknownPrototypeKey) {
+   function Class(...args) {
+-    Class.prototype = new Proxy(Class.prototype, {
+-      get(target, key, receiver) {
+-        const value = Reflect.get(target, key, receiver);
+-        if (value !== void 0) {
+-          return value;
+-        }
+-        if (typeof key === "symbol" || IGNORED_KEYS.includes(key)) {
+-          return;
+-        }
+-        return getUnknownPrototypeKey.call(receiver, key);
+-      }
+-    });
+     return Reflect.construct(superClass, args, Class);
+   }
+   Reflect.setPrototypeOf(Class.prototype, superClass.prototype);
+   Reflect.setPrototypeOf(Class, superClass);
++  // Patched: wrap the prototype once. Upstream re-wraps it on every construction,
++  // nesting one Proxy per instance until property lookups overflow the stack in a
++  // long-lived (singleWorker) isolate (proappstore-online/platform#313).
++  Class.prototype = new Proxy(Class.prototype, {
++    get(target, key, receiver) {
++      const value = Reflect.get(target, key, receiver);
++      if (value !== void 0) {
++        return value;
++      }
++      if (typeof key === "symbol" || IGNORED_KEYS.includes(key)) {
++        return;
++      }
++      return getUnknownPrototypeKey.call(receiver, key);
++    }
++  });
+   return Class;
+ }
+ function getRPCProperty(ctor, instance, key) {
