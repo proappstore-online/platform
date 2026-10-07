@@ -1,8 +1,8 @@
 import { PLATFORM_FEE_BPS } from '../lib/platform-fee.js';
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
-import { requireUser, HttpError } from '../lib/auth.js';
+import { requireUser } from '../lib/auth.js';
+import { wrap } from '../lib/route-wrap.js';
 import { cfAnalyticsSql } from './analytics-shared.js';
 import { payoutAiCostSql, payoutUsageSql } from '../lib/payout-meter.js';
 import { utcDayKey } from '../lib/day-key.js';
@@ -152,66 +152,61 @@ export function computeMonthPreview(
   };
 }
 
-payoutsRoutes.get('/payouts/me/preview', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const monthsParam = c.req.query('months');
-    const monthsCount = Math.min(Math.max(Number(monthsParam) || 2, 1), 12);
+payoutsRoutes.get('/payouts/me/preview', wrap(async (c) => {
+  const user = await requireUser(c);
+  const monthsParam = c.req.query('months');
+  const monthsCount = Math.min(Math.max(Number(monthsParam) || 2, 1), 12);
 
-    // Owned apps — needed so we only sum slices for the caller's own apps.
-    const ownedApps = await c.env.DB.prepare('SELECT id FROM apps WHERE creator_id = ?')
-      .bind(user.id)
-      .all<{ id: string }>();
-    const ownedAppIds = new Set((ownedApps.results ?? []).map((r) => r.id));
+  // Owned apps — needed so we only sum slices for the caller's own apps.
+  const ownedApps = await c.env.DB.prepare('SELECT id FROM apps WHERE creator_id = ?')
+    .bind(user.id)
+    .all<{ id: string }>();
+  const ownedAppIds = new Set((ownedApps.results ?? []).map((r) => r.id));
 
-    const buckets = computeMonthBuckets(utcDayKey(), monthsCount);
+  const buckets = computeMonthBuckets(utcDayKey(), monthsCount);
 
-    const months: MonthPreview[] = [];
-    if (ownedAppIds.size === 0) {
-      // No apps → zeros for every requested month, but still return the shape.
-      for (const b of buckets) {
-        months.push({
-          month: b.month,
-          isCurrent: b.isCurrent,
-          daysCovered: b.daysCovered,
-          totalDays: b.totalDays,
-          activeUsers: 0,
-          estimatedCents: 0,
-          perApp: [],
-          aiCosts: [],
-        });
-      }
-    } else {
-      for (const bucket of buckets) {
-        const startMs = Date.parse(`${bucket.startDay}T00:00:00.000Z`);
-        const endMs = Date.parse(`${bucket.endDay}T00:00:00.000Z`) + 86_400_000;
-        const env = c.env as Env & { CF_ACCOUNT_ID?: string; CF_ANALYTICS_API_TOKEN?: string };
-        const [usageRows, aiRows] = await Promise.all([
-          cfAnalyticsSql<{ app_id: string; actor: string; session_seconds: number }>(env, payoutUsageSql(startMs, endMs)),
-          cfAnalyticsSql<{ app_id: string; provider: string; model: string; cost_usd: number; tokens_in: number; tokens_out: number }>(env, payoutAiCostSql(startMs, endMs)),
-        ]);
-        const preview = computeMonthPreview(
-          bucket,
-          ownedAppIds,
-          usageRows.map((r) => ({ user_id: r.actor, app_id: r.app_id, sec: Number(r.session_seconds) })),
-        );
-        preview.aiCosts = aiRows
-          .filter((r) => ownedAppIds.has(r.app_id))
-          .map((r) => ({ provider: r.provider || 'unknown', model: r.model || 'unknown', costUsd: Number(r.cost_usd), tokensIn: Number(r.tokens_in), tokensOut: Number(r.tokens_out) }))
-          .sort((a, b) => b.costUsd - a.costUsd || a.provider.localeCompare(b.provider));
-        months.push(preview);
-      }
+  const months: MonthPreview[] = [];
+  if (ownedAppIds.size === 0) {
+    // No apps → zeros for every requested month, but still return the shape.
+    for (const b of buckets) {
+      months.push({
+        month: b.month,
+        isCurrent: b.isCurrent,
+        daysCovered: b.daysCovered,
+        totalDays: b.totalDays,
+        activeUsers: 0,
+        estimatedCents: 0,
+        perApp: [],
+        aiCosts: [],
+      });
     }
-
-    const resp: PreviewResponse = {
-      subscriberPriceCents: SUBSCRIBER_PRICE_CENTS,
-      platformFeeBps: PLATFORM_FEE_BPS,
-      perSubscriberPoolCents: PER_SUBSCRIBER_POOL_CENTS,
-      months,
-    };
-    return c.json(resp);
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
+  } else {
+    for (const bucket of buckets) {
+      const startMs = Date.parse(`${bucket.startDay}T00:00:00.000Z`);
+      const endMs = Date.parse(`${bucket.endDay}T00:00:00.000Z`) + 86_400_000;
+      const env = c.env as Env & { CF_ACCOUNT_ID?: string; CF_ANALYTICS_API_TOKEN?: string };
+      const [usageRows, aiRows] = await Promise.all([
+        cfAnalyticsSql<{ app_id: string; actor: string; session_seconds: number }>(env, payoutUsageSql(startMs, endMs)),
+        cfAnalyticsSql<{ app_id: string; provider: string; model: string; cost_usd: number; tokens_in: number; tokens_out: number }>(env, payoutAiCostSql(startMs, endMs)),
+      ]);
+      const preview = computeMonthPreview(
+        bucket,
+        ownedAppIds,
+        usageRows.map((r) => ({ user_id: r.actor, app_id: r.app_id, sec: Number(r.session_seconds) })),
+      );
+      preview.aiCosts = aiRows
+        .filter((r) => ownedAppIds.has(r.app_id))
+        .map((r) => ({ provider: r.provider || 'unknown', model: r.model || 'unknown', costUsd: Number(r.cost_usd), tokensIn: Number(r.tokens_in), tokensOut: Number(r.tokens_out) }))
+        .sort((a, b) => b.costUsd - a.costUsd || a.provider.localeCompare(b.provider));
+      months.push(preview);
+    }
   }
-});
+
+  const resp: PreviewResponse = {
+    subscriberPriceCents: SUBSCRIBER_PRICE_CENTS,
+    platformFeeBps: PLATFORM_FEE_BPS,
+    perSubscriberPoolCents: PER_SUBSCRIBER_POOL_CENTS,
+    months,
+  };
+  return c.json(resp);
+}));

@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { runChecksFromFiles } from '@proappstore/compliance';
 import {
   internalTokenOk,
@@ -8,7 +7,8 @@ import {
   d1ProvisionAttemptStore,
 } from '@proappstore/build-core';
 import type { Env } from '../types.js';
-import { requireUser, HttpError, TEAM_ROLES, type TeamRole } from '../lib/auth.js';
+import { requireUser, TEAM_ROLES, type TeamRole } from '../lib/auth.js';
+import { wrap } from '../lib/route-wrap.js';
 import { provisionData } from '../lib/provision-data.js';
 import { selectTemplate, TEMPLATE_REV_RE } from '@proappstore/build-core';
 import { fetchRepoFiles, type RepoLocation } from '../lib/github-fetch.js';
@@ -54,182 +54,177 @@ interface ProvisionBody {
 
 export const provisionRoutes = new Hono<{ Bindings: Env }>();
 
-provisionRoutes.post('/provision', async (c) => {
-  try {
-    const user = await requireUser(c);
-    const body = await c.req.json<ProvisionBody>();
+provisionRoutes.post('/provision', wrap(async (c) => {
+  const user = await requireUser(c);
+  const body = await c.req.json<ProvisionBody>();
 
-    if (!body.appId || !/^[a-z][a-z0-9-]*$/.test(body.appId) || body.appId.length > 58) {
-      return c.text('Invalid app ID', 400);
-    }
-
-    const appId = body.appId;
-
-    // SECURITY (#82): appId arrives in the body and used to be format-checked
-    // only — nothing tied it to the caller. Any signed-in user could name a live
-    // app and drive its whole data-plane provision: D1 lookup, worker redeploy,
-    // and (before the fix in lib/deploy-worker.ts) seizure of the app's
-    // `data-<appId>` custom domain.
-    //
-    // The compliance gate did not stop this. For a non-admin it pins the repo to
-    // `<ORG>/<appId>` — the VICTIM's own repo — which, being a published app, is
-    // exactly the repo that passes. The guard that stops a caller pointing
-    // compliance at an arbitrary repo is what made the victim's repo the one
-    // checked.
-    //
-    // An unclaimed appId still provisions normally: this is a "not yours" check,
-    // not a "must exist" one. Platform admins pass for support/re-provision,
-    // matching requireAppAccess.
-    const claimed = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?')
-      .bind(appId)
-      .first<{ creator_id: string }>();
-    if (claimed && claimed.creator_id !== user.id && !user.roles.includes('admin')) {
-      return c.text('appId already claimed by another user', 403);
-    }
-
-    // SECURITY (#83): publishing is self-service, so a session is not a scarcity
-    // signal. Bound how fast one caller can drive a loop that creates org repos,
-    // D1 databases, Workers and DNS. Keyed on the platform user id so the budget
-    // is shared with the admin worker's /api/publish-app rather than doubled.
-    //
-    // Checked after ownership so a squatting attempt does not spend the
-    // squatter's budget, and a legitimate owner gets "not yours" over a 429.
-    try {
-      const quota = await checkProvisionQuota(d1ProvisionAttemptStore(c.env.DB), {
-        userKey: user.id,
-        ip: c.req.header('CF-Connecting-IP'),
-        nowMs: Date.now(),
-      });
-      if (!quota.allowed) {
-        return c.text(
-          `provisioning rate limit reached (${quota.scope}) — retry later`,
-          429,
-          quota.retryAfterSeconds ? { 'Retry-After': String(quota.retryAfterSeconds) } : undefined,
-        );
-      }
-    } catch (e) {
-      // Fail OPEN: the ownership check above is the security boundary; this is
-      // an abuse ceiling, and a limiter that cannot read its own table must not
-      // take publishing down.
-      console.warn(`provision rate limit unavailable, allowing: ${(e as Error).message}`);
-    }
-
-    // #178: the template selection contract. Unknown or withdrawn templates are
-    // refused before any Cloudflare call; deprecated ones proceed with a recorded
-    // warning; omitting the template means the default. Admins may override an
-    // unknown template explicitly, and the override is recorded on the app row.
-    if (body.templateRev !== undefined && !TEMPLATE_REV_RE.test(String(body.templateRev))) {
-      return c.text('templateRev must be a git object id (7–40 hex chars)', 400);
-    }
-    const selection = selectTemplate(body.template, { allowUnapproved: body.allowUnapprovedTemplate === true && user.roles.includes('admin') });
-    if (!selection.ok) return c.text(`template: ${selection.reason}`, 400);
-    const templateId = selection.template?.id ?? body.template;
-    const templateRev = body.templateRev;
-
-    const cfToken = c.env.CF_API_TOKEN;
-    const cfAccount = c.env.CF_ACCOUNT_ID;
-    const steps: Step[] = [];
-    if (selection.warnings.length > 0) {
-      steps.push({ name: 'template', status: 'ok', detail: `warning: ${selection.warnings.join('; ')}` });
-    }
-
-    if (!cfToken || !cfAccount) {
-      return c.text('Platform provisioning not configured (missing CF credentials)', 503);
-    }
-
-    // 0. Compliance check — skipCompliance is admin-only (used by `pas create` bootstrap)
-    const canSkipCompliance = body.skipCompliance && user.roles.includes('admin');
-    if (!canSkipCompliance) {
-      // SECURITY: repoOwner/repoName/ref are read with the platform GITHUB_TOKEN,
-      // which can read private org repos. A non-admin must not point compliance
-      // at an arbitrary repo (confused-deputy private-repo read) or inject path
-      // segments via `ref`. Non-admins are pinned to the org + their own appId;
-      // only admins may override owner/repo (used by tooling). `ref` is always
-      // format-validated and must not contain path traversal.
-      const isAdmin = user.roles.includes('admin');
-      const refCandidate = body.ref || 'main';
-      if (!/^[a-zA-Z0-9._/-]+$/.test(refCandidate) || refCandidate.includes('..')) {
-        return c.text('Invalid ref', 400);
-      }
-      const loc: RepoLocation = {
-        owner: isAdmin && body.repoOwner ? body.repoOwner : ORG,
-        repo: isAdmin && body.repoName ? body.repoName : appId,
-        ref: refCandidate,
-      };
-      try {
-        const fetched = await fetchRepoFiles(loc, c.env.GITHUB_TOKEN);
-        const results = await runChecksFromFiles(fetched.files);
-        const hardFails = results.filter((r) => r.status === 'fail');
-        const warnings = results.filter((r) => r.status === 'warn');
-        if (hardFails.length > 0) {
-          // #166: cite the public standard clause each failure breaches, and hand
-          // the structured results back so CI can act on ids rather than prose.
-          const detail = hardFails
-            .map((r) => `${r.name}: ${r.detail}${r.citations?.length ? ` (see ${r.citations.map((x) => x.url).join(', ')})` : ''}`)
-            .join('; ');
-          steps.push({ name: 'compliance', status: 'fail', detail: `${hardFails.length} rule(s) failed — ${detail}` });
-          return c.json({ appId, steps, dataWorkerUrl: '', appUrl: '', success: false, compliance: hardFails }, 412);
-        }
-        steps.push({
-          name: 'compliance',
-          status: 'ok',
-          detail: `${results.length - warnings.length} rules passed${warnings.length ? ` (${warnings.length} warnings)` : ''}`,
-        });
-      } catch (e) {
-        const msg = (e as Error).message;
-        if (/\(404\)/.test(msg)) {
-          steps.push({ name: 'compliance', status: 'skip', detail: 'Repo not found — first publish; compliance runs via CI on push' });
-        } else {
-          steps.push({ name: 'compliance', status: 'fail', detail: `Compliance check error: ${msg}` });
-          return c.json({ appId, steps, dataWorkerUrl: '', appUrl: '', success: false }, 412);
-        }
-      }
-    } else {
-      steps.push({ name: 'compliance', status: 'skip', detail: 'skipCompliance=true (admin bootstrap)' });
-    }
-
-    // 1. R2 route — register the app in the host Worker's routes table so
-    //    <appId>.proappstore.online resolves to R2. Idempotent (INSERT OR IGNORE).
-    if (!body.skipPublish) {
-      try {
-        await c.env.DB
-          .prepare(
-            `INSERT OR IGNORE INTO routes (slug, zone, r2_prefix, store, hosted_on, created_at, updated_at)
-             VALUES (?, ?, ?, 'pas', 'r2', ?, ?)`,
-          )
-          .bind(appId, DOMAIN, `apps/${appId}`, Date.now(), Date.now())
-          .run();
-        steps.push({ name: 'route', status: 'ok', detail: `${appId}.${DOMAIN} → apps/${appId}/` });
-      } catch (e) {
-        steps.push({ name: 'route', status: 'fail', detail: `Route insert failed: ${(e as Error).message}` });
-      }
-    }
-
-    // 2–4. Data plane (D1 + data worker + app record) — shared with the agent
-    //      deploy stage via /v1/provision-data so both paths get the same layer.
-    const data = await provisionData({
-      appId,
-      creatorId: user.id,
-      creatorLabel: user.login,
-      cfToken,
-      cfAccount,
-      db: c.env.DB,
-      sessionSigningKey: c.env.SESSION_SIGNING_KEY,
-      internalToken: c.env.INTERNAL_TOKEN ?? '',
-      dataWorkerHost: c.env.DATA_WORKER_HOST,
-      ...(templateId ? { templateId } : {}),
-      ...(templateRev ? { templateRev } : {}),
-    });
-    steps.push(...data.steps);
-    const dataWorkerUrl = data.dataWorkerUrl;
-
-    const success = !steps.some((s) => s.status === 'fail');
-    return c.json({ appId, steps, dataWorkerUrl, appUrl: `https://${appId}.${DOMAIN}`, success }, success ? 200 : 207);
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
+  if (!body.appId || !/^[a-z][a-z0-9-]*$/.test(body.appId) || body.appId.length > 58) {
+    return c.text('Invalid app ID', 400);
   }
-});
+
+  const appId = body.appId;
+
+  // SECURITY (#82): appId arrives in the body and used to be format-checked
+  // only — nothing tied it to the caller. Any signed-in user could name a live
+  // app and drive its whole data-plane provision: D1 lookup, worker redeploy,
+  // and (before the fix in lib/deploy-worker.ts) seizure of the app's
+  // `data-<appId>` custom domain.
+  //
+  // The compliance gate did not stop this. For a non-admin it pins the repo to
+  // `<ORG>/<appId>` — the VICTIM's own repo — which, being a published app, is
+  // exactly the repo that passes. The guard that stops a caller pointing
+  // compliance at an arbitrary repo is what made the victim's repo the one
+  // checked.
+  //
+  // An unclaimed appId still provisions normally: this is a "not yours" check,
+  // not a "must exist" one. Platform admins pass for support/re-provision,
+  // matching requireAppAccess.
+  const claimed = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?')
+    .bind(appId)
+    .first<{ creator_id: string }>();
+  if (claimed && claimed.creator_id !== user.id && !user.roles.includes('admin')) {
+    return c.text('appId already claimed by another user', 403);
+  }
+
+  // SECURITY (#83): publishing is self-service, so a session is not a scarcity
+  // signal. Bound how fast one caller can drive a loop that creates org repos,
+  // D1 databases, Workers and DNS. Keyed on the platform user id so the budget
+  // is shared with the admin worker's /api/publish-app rather than doubled.
+  //
+  // Checked after ownership so a squatting attempt does not spend the
+  // squatter's budget, and a legitimate owner gets "not yours" over a 429.
+  try {
+    const quota = await checkProvisionQuota(d1ProvisionAttemptStore(c.env.DB), {
+      userKey: user.id,
+      ip: c.req.header('CF-Connecting-IP'),
+      nowMs: Date.now(),
+    });
+    if (!quota.allowed) {
+      return c.text(
+        `provisioning rate limit reached (${quota.scope}) — retry later`,
+        429,
+        quota.retryAfterSeconds ? { 'Retry-After': String(quota.retryAfterSeconds) } : undefined,
+      );
+    }
+  } catch (e) {
+    // Fail OPEN: the ownership check above is the security boundary; this is
+    // an abuse ceiling, and a limiter that cannot read its own table must not
+    // take publishing down.
+    console.warn(`provision rate limit unavailable, allowing: ${(e as Error).message}`);
+  }
+
+  // #178: the template selection contract. Unknown or withdrawn templates are
+  // refused before any Cloudflare call; deprecated ones proceed with a recorded
+  // warning; omitting the template means the default. Admins may override an
+  // unknown template explicitly, and the override is recorded on the app row.
+  if (body.templateRev !== undefined && !TEMPLATE_REV_RE.test(String(body.templateRev))) {
+    return c.text('templateRev must be a git object id (7–40 hex chars)', 400);
+  }
+  const selection = selectTemplate(body.template, { allowUnapproved: body.allowUnapprovedTemplate === true && user.roles.includes('admin') });
+  if (!selection.ok) return c.text(`template: ${selection.reason}`, 400);
+  const templateId = selection.template?.id ?? body.template;
+  const templateRev = body.templateRev;
+
+  const cfToken = c.env.CF_API_TOKEN;
+  const cfAccount = c.env.CF_ACCOUNT_ID;
+  const steps: Step[] = [];
+  if (selection.warnings.length > 0) {
+    steps.push({ name: 'template', status: 'ok', detail: `warning: ${selection.warnings.join('; ')}` });
+  }
+
+  if (!cfToken || !cfAccount) {
+    return c.text('Platform provisioning not configured (missing CF credentials)', 503);
+  }
+
+  // 0. Compliance check — skipCompliance is admin-only (used by `pas create` bootstrap)
+  const canSkipCompliance = body.skipCompliance && user.roles.includes('admin');
+  if (!canSkipCompliance) {
+    // SECURITY: repoOwner/repoName/ref are read with the platform GITHUB_TOKEN,
+    // which can read private org repos. A non-admin must not point compliance
+    // at an arbitrary repo (confused-deputy private-repo read) or inject path
+    // segments via `ref`. Non-admins are pinned to the org + their own appId;
+    // only admins may override owner/repo (used by tooling). `ref` is always
+    // format-validated and must not contain path traversal.
+    const isAdmin = user.roles.includes('admin');
+    const refCandidate = body.ref || 'main';
+    if (!/^[a-zA-Z0-9._/-]+$/.test(refCandidate) || refCandidate.includes('..')) {
+      return c.text('Invalid ref', 400);
+    }
+    const loc: RepoLocation = {
+      owner: isAdmin && body.repoOwner ? body.repoOwner : ORG,
+      repo: isAdmin && body.repoName ? body.repoName : appId,
+      ref: refCandidate,
+    };
+    try {
+      const fetched = await fetchRepoFiles(loc, c.env.GITHUB_TOKEN);
+      const results = await runChecksFromFiles(fetched.files);
+      const hardFails = results.filter((r) => r.status === 'fail');
+      const warnings = results.filter((r) => r.status === 'warn');
+      if (hardFails.length > 0) {
+        // #166: cite the public standard clause each failure breaches, and hand
+        // the structured results back so CI can act on ids rather than prose.
+        const detail = hardFails
+          .map((r) => `${r.name}: ${r.detail}${r.citations?.length ? ` (see ${r.citations.map((x) => x.url).join(', ')})` : ''}`)
+          .join('; ');
+        steps.push({ name: 'compliance', status: 'fail', detail: `${hardFails.length} rule(s) failed — ${detail}` });
+        return c.json({ appId, steps, dataWorkerUrl: '', appUrl: '', success: false, compliance: hardFails }, 412);
+      }
+      steps.push({
+        name: 'compliance',
+        status: 'ok',
+        detail: `${results.length - warnings.length} rules passed${warnings.length ? ` (${warnings.length} warnings)` : ''}`,
+      });
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (/\(404\)/.test(msg)) {
+        steps.push({ name: 'compliance', status: 'skip', detail: 'Repo not found — first publish; compliance runs via CI on push' });
+      } else {
+        steps.push({ name: 'compliance', status: 'fail', detail: `Compliance check error: ${msg}` });
+        return c.json({ appId, steps, dataWorkerUrl: '', appUrl: '', success: false }, 412);
+      }
+    }
+  } else {
+    steps.push({ name: 'compliance', status: 'skip', detail: 'skipCompliance=true (admin bootstrap)' });
+  }
+
+  // 1. R2 route — register the app in the host Worker's routes table so
+  //    <appId>.proappstore.online resolves to R2. Idempotent (INSERT OR IGNORE).
+  if (!body.skipPublish) {
+    try {
+      await c.env.DB
+        .prepare(
+          `INSERT OR IGNORE INTO routes (slug, zone, r2_prefix, store, hosted_on, created_at, updated_at)
+           VALUES (?, ?, ?, 'pas', 'r2', ?, ?)`,
+        )
+        .bind(appId, DOMAIN, `apps/${appId}`, Date.now(), Date.now())
+        .run();
+      steps.push({ name: 'route', status: 'ok', detail: `${appId}.${DOMAIN} → apps/${appId}/` });
+    } catch (e) {
+      steps.push({ name: 'route', status: 'fail', detail: `Route insert failed: ${(e as Error).message}` });
+    }
+  }
+
+  // 2–4. Data plane (D1 + data worker + app record) — shared with the agent
+  //      deploy stage via /v1/provision-data so both paths get the same layer.
+  const data = await provisionData({
+    appId,
+    creatorId: user.id,
+    creatorLabel: user.login,
+    cfToken,
+    cfAccount,
+    db: c.env.DB,
+    sessionSigningKey: c.env.SESSION_SIGNING_KEY,
+    internalToken: c.env.INTERNAL_TOKEN ?? '',
+    dataWorkerHost: c.env.DATA_WORKER_HOST,
+    ...(templateId ? { templateId } : {}),
+    ...(templateRev ? { templateRev } : {}),
+  });
+  steps.push(...data.steps);
+  const dataWorkerUrl = data.dataWorkerUrl;
+
+  const success = !steps.some((s) => s.status === 'fail');
+  return c.json({ appId, steps, dataWorkerUrl, appUrl: `https://${appId}.${DOMAIN}`, success }, success ? 200 : 207);
+}));
 
 /**
  * Internal (service-to-service): provision ONLY an app's data plane (D1 + data

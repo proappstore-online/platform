@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireAppOwner, HttpError } from '../lib/auth.js';
+import { wrap } from '../lib/route-wrap.js';
 import { auditModeration, chunkText, moderateChunks, moderateText } from '../lib/moderation.js';
 import { withinModerationRate } from '../lib/ai-budget.js';
 import { getAppVisibility } from '../lib/visibility.js';
@@ -56,32 +56,27 @@ export const listingsRoutes = new Hono<{ Bindings: Env }>();
  * can render a "this app hasn't filled in its listing yet" tile rather
  * than 404ing the page.
  */
-listingsRoutes.get('/storefront/apps/:id', async (c) => {
-  try {
-    const appId = c.req.param('id');
-    const appRow = await c.env.DB.prepare('SELECT id FROM apps WHERE id = ?')
-      .bind(appId)
-      .first<{ id: string }>();
-    // A private app (#259) has no public listing: answered exactly as a missing one.
-    if (!appRow || (await getAppVisibility(c.env.DB, appId)).mode === 'private') return c.text('not found', 404);
+listingsRoutes.get('/storefront/apps/:id', wrap(async (c) => {
+  const appId = c.req.param('id')!;
+  const appRow = await c.env.DB.prepare('SELECT id FROM apps WHERE id = ?')
+    .bind(appId)
+    .first<{ id: string }>();
+  // A private app (#259) has no public listing: answered exactly as a missing one.
+  if (!appRow || (await getAppVisibility(c.env.DB, appId)).mode === 'private') return c.text('not found', 404);
 
-    const row = await c.env.DB.prepare('SELECT * FROM app_listings WHERE app_id = ?')
-      .bind(appId)
-      .first<ListingRow>();
-    const dto = row ? rowToDto(row) : emptyDto(appId);
-    // Strip support_email from the public payload — it's owner-private,
-    // exposed through supportUrl instead.
-    const { supportEmail, ...publicDto } = dto;
-    void supportEmail;
-    // Short cache: lets edits propagate quickly while still absorbing
-    // bursts from popular apps.
-    c.header('Cache-Control', 'public, max-age=60');
-    return c.json(publicDto);
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
+  const row = await c.env.DB.prepare('SELECT * FROM app_listings WHERE app_id = ?')
+    .bind(appId)
+    .first<ListingRow>();
+  const dto = row ? rowToDto(row) : emptyDto(appId);
+  // Strip support_email from the public payload — it's owner-private,
+  // exposed through supportUrl instead.
+  const { supportEmail, ...publicDto } = dto;
+  void supportEmail;
+  // Short cache: lets edits propagate quickly while still absorbing
+  // bursts from popular apps.
+  c.header('Cache-Control', 'public, max-age=60');
+  return c.json(publicDto);
+}));
 
 /**
  * Public list of every app + its (partial) listing. Powers the storefront
@@ -93,163 +88,148 @@ listingsRoutes.get('/storefront/apps/:id', async (c) => {
  * `category`, `themeColor` — enough for a card. Detail-page payloads still
  * come from /storefront/apps/:id when the user clicks through.
  */
-listingsRoutes.get('/storefront/apps', async (c) => {
-  try {
-    const { results } = await c.env.DB.prepare(
-      `SELECT a.id              AS app_id,
-              l.icon_url,
-              l.tagline,
-              l.category,
-              l.theme_color,
-              l.updated_at
-         FROM apps a
-    LEFT JOIN app_listings l ON l.app_id = a.id
-    LEFT JOIN app_visibility v ON v.app_id = a.id
-        WHERE v.mode IS NULL OR v.mode <> 'private'  -- private apps (#259) are never listed
-        ORDER BY a.created_at DESC`,
-    ).all<{
-      app_id: string;
-      icon_url: string | null;
-      tagline: string | null;
-      category: string | null;
-      theme_color: string | null;
-      updated_at: number | null;
-    }>();
-    const apps = (results ?? []).map((r) => ({
-      appId: r.app_id,
-      iconUrl: r.icon_url,
-      tagline: r.tagline,
-      category: r.category,
-      themeColor: r.theme_color,
-      updatedAt: r.updated_at ?? 0,
-    }));
-    c.header('Cache-Control', 'public, max-age=60');
-    return c.json({ apps });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
+listingsRoutes.get('/storefront/apps', wrap(async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT a.id              AS app_id,
+            l.icon_url,
+            l.tagline,
+            l.category,
+            l.theme_color,
+            l.updated_at
+       FROM apps a
+  LEFT JOIN app_listings l ON l.app_id = a.id
+  LEFT JOIN app_visibility v ON v.app_id = a.id
+      WHERE v.mode IS NULL OR v.mode <> 'private'  -- private apps (#259) are never listed
+      ORDER BY a.created_at DESC`,
+  ).all<{
+    app_id: string;
+    icon_url: string | null;
+    tagline: string | null;
+    category: string | null;
+    theme_color: string | null;
+    updated_at: number | null;
+  }>();
+  const apps = (results ?? []).map((r) => ({
+    appId: r.app_id,
+    iconUrl: r.icon_url,
+    tagline: r.tagline,
+    category: r.category,
+    themeColor: r.theme_color,
+    updatedAt: r.updated_at ?? 0,
+  }));
+  c.header('Cache-Control', 'public, max-age=60');
+  return c.json({ apps });
+}));
 
 /** Owner read. */
-listingsRoutes.get('/apps/:id/listing', async (c) => {
-  try {
-    const appId = c.req.param('id');
-    await requireAppOwner(c, appId);
-    const row = await c.env.DB.prepare('SELECT * FROM app_listings WHERE app_id = ?')
-      .bind(appId)
-      .first<ListingRow>();
-    return c.json(row ? rowToDto(row) : emptyDto(appId));
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
-  }
-});
+listingsRoutes.get('/apps/:id/listing', wrap(async (c) => {
+  const appId = c.req.param('id')!;
+  await requireAppOwner(c, appId);
+  const row = await c.env.DB.prepare('SELECT * FROM app_listings WHERE app_id = ?')
+    .bind(appId)
+    .first<ListingRow>();
+  return c.json(row ? rowToDto(row) : emptyDto(appId));
+}));
 
 /** Owner write. Merges in the provided fields; absent fields are unchanged. */
-listingsRoutes.put('/apps/:id/listing', async (c) => {
+listingsRoutes.put('/apps/:id/listing', wrap(async (c) => {
+  const appId = c.req.param('id')!;
+  const actor = await requireAppOwner(c, appId);
+  let body: ListingPatch;
   try {
-    const appId = c.req.param('id');
-    const actor = await requireAppOwner(c, appId);
-    let body: ListingPatch;
-    try {
-      body = await c.req.json<ListingPatch>();
-    } catch {
-      return c.text('invalid JSON body', 400);
-    }
-    if (!body || typeof body !== 'object') return c.text('body must be a JSON object', 400);
-
-    const patch: Partial<ListingRow> = {};
-    if ('iconUrl' in body) patch.icon_url = urlOrNull(body.iconUrl);
-    if ('themeColor' in body) patch.theme_color = hexOrNull(body.themeColor);
-    if ('splashColor' in body) patch.splash_color = hexOrNull(body.splashColor);
-    if ('tagline' in body) patch.tagline = clean(body.tagline, MAX_TAGLINE, 'tagline');
-    if ('longDescription' in body) patch.long_description = clean(body.longDescription, MAX_LONG_DESC, 'longDescription');
-    if ('category' in body) patch.category = clean(body.category, 40, 'category');
-    if ('websiteUrl' in body) patch.website_url = urlOrNull(body.websiteUrl);
-    if ('supportEmail' in body) patch.support_email = emailOrNull(body.supportEmail);
-    if ('supportUrl' in body) patch.support_url = urlOrNull(body.supportUrl);
-    if ('socialTwitter' in body) patch.social_twitter = handleOrNull(body.socialTwitter);
-    if ('socialGithub' in body) patch.social_github = handleOrNull(body.socialGithub);
-    if ('socialMastodon' in body) patch.social_mastodon = urlOrNull(body.socialMastodon);
-    if ('socialBluesky' in body) {
-      const raw = clean(body.socialBluesky, 128, 'socialBluesky');
-      if (raw && !BLUESKY_HANDLE.test(raw.startsWith('@') ? raw.slice(1) : raw)) {
-        throw new HttpError('invalid Bluesky handle (use the dot-form, e.g. alice.bsky.social)', 400);
-      }
-      patch.social_bluesky = raw ? (raw.startsWith('@') ? raw.slice(1) : raw) : null;
-    }
-    if ('privacyPolicyUrl' in body) patch.privacy_policy_url = urlOrNull(body.privacyPolicyUrl);
-    if ('termsUrl' in body) patch.terms_url = urlOrNull(body.termsUrl);
-    if ('screenshots' in body) {
-      const arr = Array.isArray(body.screenshots) ? body.screenshots : [];
-      const cleaned = arr
-        .filter((s): s is string => typeof s === 'string' && URL_LIKE.test(s))
-        .slice(0, MAX_SCREENSHOTS);
-      patch.screenshots_json = JSON.stringify(cleaned);
-    }
-
-    // #214: the tagline and long description are published under the platform's
-    // name (storefront pages, every app page's og:description) and owner edits
-    // skip the submission review. Moderate a text field only when it changes to
-    // a new non-empty value — one model call for both — before anything is
-    // written; fail closed.
-    const textFields = (['tagline', 'long_description'] as const).filter((k) => patch[k]);
-    if (textFields.length > 0) {
-      const current = await c.env.DB.prepare('SELECT tagline, long_description FROM app_listings WHERE app_id = ?')
-        .bind(appId)
-        .first<Pick<ListingRow, 'tagline' | 'long_description'>>();
-      const changed = textFields.filter((k) => patch[k] !== (current?.[k] ?? null));
-      if (changed.length > 0) {
-        // #218: bound moderation model calls per user.
-        if (!(await withinModerationRate(c.env, actor.id))) {
-          return c.json({ error: 'moderation_rate_limited', message: 'too many moderated submissions: try again in a minute' }, 429, { 'Retry-After': '60' });
-        }
-        const moderation = await moderateText(c.env.AI, changed.map((k) => patch[k]).join('\n\n'));
-        auditModeration('listing_moderation', { app_id: appId, actor: actor.id, changed_fields: changed }, moderation);
-        if (moderation.verdict === 'unsafe') {
-          return c.json({ error: 'listing text rejected by content moderation', categories: moderation.categories }, 422);
-        }
-        if (moderation.verdict === 'error') {
-          return c.text('listing content moderation is unavailable; try again shortly', 503, { 'Retry-After': '5' });
-        }
-      }
-    }
-
-    const now = Date.now();
-    // Upsert: insert the row if it doesn't exist, otherwise update only the
-    // columns the patch touched. SQLite's INSERT ... ON CONFLICT lets us
-    // express both in one statement, but the dynamic field set means we
-    // build it programmatically.
-    const cols = Object.keys(patch);
-    if (cols.length === 0) {
-      // No-op write — still bump updated_at so the dev gets feedback that
-      // the call landed
-      await c.env.DB.prepare(
-        `INSERT INTO app_listings (app_id, updated_at) VALUES (?, ?)
-         ON CONFLICT(app_id) DO UPDATE SET updated_at = excluded.updated_at`,
-      )
-        .bind(appId, now)
-        .run();
-    } else {
-      const placeholders = cols.map(() => '?').join(', ');
-      const updates = cols.map((c) => `${c} = excluded.${c}`).join(', ');
-      const sql = `INSERT INTO app_listings (app_id, updated_at, ${cols.join(', ')})
-                   VALUES (?, ?, ${placeholders})
-                   ON CONFLICT(app_id) DO UPDATE SET ${updates}, updated_at = excluded.updated_at`;
-      const values = [appId, now, ...cols.map((k) => (patch as Record<string, unknown>)[k])];
-      await c.env.DB.prepare(sql).bind(...values).run();
-    }
-
-    const row = await c.env.DB.prepare('SELECT * FROM app_listings WHERE app_id = ?')
-      .bind(appId)
-      .first<ListingRow>();
-    return c.json(row ? rowToDto(row) : emptyDto(appId));
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
+    body = await c.req.json<ListingPatch>();
+  } catch {
+    return c.text('invalid JSON body', 400);
   }
-});
+  if (!body || typeof body !== 'object') return c.text('body must be a JSON object', 400);
+
+  const patch: Partial<ListingRow> = {};
+  if ('iconUrl' in body) patch.icon_url = urlOrNull(body.iconUrl);
+  if ('themeColor' in body) patch.theme_color = hexOrNull(body.themeColor);
+  if ('splashColor' in body) patch.splash_color = hexOrNull(body.splashColor);
+  if ('tagline' in body) patch.tagline = clean(body.tagline, MAX_TAGLINE, 'tagline');
+  if ('longDescription' in body) patch.long_description = clean(body.longDescription, MAX_LONG_DESC, 'longDescription');
+  if ('category' in body) patch.category = clean(body.category, 40, 'category');
+  if ('websiteUrl' in body) patch.website_url = urlOrNull(body.websiteUrl);
+  if ('supportEmail' in body) patch.support_email = emailOrNull(body.supportEmail);
+  if ('supportUrl' in body) patch.support_url = urlOrNull(body.supportUrl);
+  if ('socialTwitter' in body) patch.social_twitter = handleOrNull(body.socialTwitter);
+  if ('socialGithub' in body) patch.social_github = handleOrNull(body.socialGithub);
+  if ('socialMastodon' in body) patch.social_mastodon = urlOrNull(body.socialMastodon);
+  if ('socialBluesky' in body) {
+    const raw = clean(body.socialBluesky, 128, 'socialBluesky');
+    if (raw && !BLUESKY_HANDLE.test(raw.startsWith('@') ? raw.slice(1) : raw)) {
+      throw new HttpError('invalid Bluesky handle (use the dot-form, e.g. alice.bsky.social)', 400);
+    }
+    patch.social_bluesky = raw ? (raw.startsWith('@') ? raw.slice(1) : raw) : null;
+  }
+  if ('privacyPolicyUrl' in body) patch.privacy_policy_url = urlOrNull(body.privacyPolicyUrl);
+  if ('termsUrl' in body) patch.terms_url = urlOrNull(body.termsUrl);
+  if ('screenshots' in body) {
+    const arr = Array.isArray(body.screenshots) ? body.screenshots : [];
+    const cleaned = arr
+      .filter((s): s is string => typeof s === 'string' && URL_LIKE.test(s))
+      .slice(0, MAX_SCREENSHOTS);
+    patch.screenshots_json = JSON.stringify(cleaned);
+  }
+
+  // #214: the tagline and long description are published under the platform's
+  // name (storefront pages, every app page's og:description) and owner edits
+  // skip the submission review. Moderate a text field only when it changes to
+  // a new non-empty value — one model call for both — before anything is
+  // written; fail closed.
+  const textFields = (['tagline', 'long_description'] as const).filter((k) => patch[k]);
+  if (textFields.length > 0) {
+    const current = await c.env.DB.prepare('SELECT tagline, long_description FROM app_listings WHERE app_id = ?')
+      .bind(appId)
+      .first<Pick<ListingRow, 'tagline' | 'long_description'>>();
+    const changed = textFields.filter((k) => patch[k] !== (current?.[k] ?? null));
+    if (changed.length > 0) {
+      // #218: bound moderation model calls per user.
+      if (!(await withinModerationRate(c.env, actor.id))) {
+        return c.json({ error: 'moderation_rate_limited', message: 'too many moderated submissions: try again in a minute' }, 429, { 'Retry-After': '60' });
+      }
+      const moderation = await moderateText(c.env.AI, changed.map((k) => patch[k]).join('\n\n'));
+      auditModeration('listing_moderation', { app_id: appId, actor: actor.id, changed_fields: changed }, moderation);
+      if (moderation.verdict === 'unsafe') {
+        return c.json({ error: 'listing text rejected by content moderation', categories: moderation.categories }, 422);
+      }
+      if (moderation.verdict === 'error') {
+        return c.text('listing content moderation is unavailable; try again shortly', 503, { 'Retry-After': '5' });
+      }
+    }
+  }
+
+  const now = Date.now();
+  // Upsert: insert the row if it doesn't exist, otherwise update only the
+  // columns the patch touched. SQLite's INSERT ... ON CONFLICT lets us
+  // express both in one statement, but the dynamic field set means we
+  // build it programmatically.
+  const cols = Object.keys(patch);
+  if (cols.length === 0) {
+    // No-op write — still bump updated_at so the dev gets feedback that
+    // the call landed
+    await c.env.DB.prepare(
+      `INSERT INTO app_listings (app_id, updated_at) VALUES (?, ?)
+       ON CONFLICT(app_id) DO UPDATE SET updated_at = excluded.updated_at`,
+    )
+      .bind(appId, now)
+      .run();
+  } else {
+    const placeholders = cols.map(() => '?').join(', ');
+    const updates = cols.map((c) => `${c} = excluded.${c}`).join(', ');
+    const sql = `INSERT INTO app_listings (app_id, updated_at, ${cols.join(', ')})
+                 VALUES (?, ?, ${placeholders})
+                 ON CONFLICT(app_id) DO UPDATE SET ${updates}, updated_at = excluded.updated_at`;
+    const values = [appId, now, ...cols.map((k) => (patch as Record<string, unknown>)[k])];
+    await c.env.DB.prepare(sql).bind(...values).run();
+  }
+
+  const row = await c.env.DB.prepare('SELECT * FROM app_listings WHERE app_id = ?')
+    .bind(appId)
+    .first<ListingRow>();
+  return c.json(row ? rowToDto(row) : emptyDto(appId));
+}));
 
 /** Versions of one listing-asset kind kept on every upload, besides referenced ones (#221). */
 export const LISTING_ASSET_VERSIONS_KEPT = 3;
@@ -292,78 +272,73 @@ async function pruneListingAssetVersions(env: Env, appId: string, kind: string):
 }
 
 /** Owner-only listing-asset upload. Returns the public URL. */
-listingsRoutes.put('/apps/:id/listing-assets/:kind', async (c) => {
-  try {
-    const appId = c.req.param('id');
-    const kind = c.req.param('kind');
-    if (!ALLOWED_KINDS.has(kind) && !SCREENSHOT_KIND.test(kind)) {
-      return c.text('invalid asset kind', 400);
-    }
-    const actor = await requireAppOwner(c, appId);
-
-    const contentType = (c.req.header('Content-Type') ?? '').split(';')[0]!.trim().toLowerCase();
-    const isMd = kind === 'privacy-policy' || kind === 'terms';
-    const isScreenshot = SCREENSHOT_KIND.test(kind);
-
-    if (isMd) {
-      if (contentType !== 'text/markdown' && contentType !== 'text/plain') {
-        return c.text('content-type must be text/markdown', 400);
-      }
-    } else {
-      if (contentType === 'image/svg+xml') {
-        // #216: refused explicitly so the owner learns why, not just "wrong type".
-        return c.text('SVG is not accepted for listing images: it can run script when opened. Upload PNG, JPEG or WebP.', 422);
-      }
-      if (!IMAGE_TYPES.has(contentType)) {
-        return c.text('content-type must be an image (png/jpeg/webp)', 400);
-      }
-    }
-
-    const body = await c.req.arrayBuffer();
-    if (body.byteLength === 0) return c.text('empty body', 400);
-    const max = isMd ? MAX_MD : isScreenshot ? MAX_SCREENSHOT : MAX_ICON;
-    if (body.byteLength > max) {
-      return c.text(`too large (max ${Math.floor(max / 1024)}KB)`, 413);
-    }
-
-    const ext = extFor(contentType);
-    if (!ext) return c.text('unsupported content-type', 400);
-
-    // #215: the privacy policy and terms are public, storefront-linked documents
-    // that owner edits publish without review. Moderate the markdown (chunked:
-    // up to 200 KB) before it is stored; fail closed. Images are not moderated
-    // (Llama Guard is text-only).
-    if (isMd) {
-      const text = new TextDecoder().decode(body);
-      // #218: one moderation token per model call (per chunk).
-      if (!(await withinModerationRate(c.env, actor.id, Math.max(1, chunkText(text).length)))) {
-        return c.json({ error: 'moderation_rate_limited', message: 'too many moderated submissions: try again in a minute' }, 429, { 'Retry-After': '60' });
-      }
-      const moderation = await moderateChunks(c.env.AI, text);
-      auditModeration('listing_asset_moderation', { app_id: appId, actor: actor.id, kind, chunks: moderation.chunks }, moderation);
-      if (moderation.verdict === 'unsafe') {
-        return c.json({ error: 'document rejected by content moderation', categories: moderation.categories }, 422);
-      }
-      if (moderation.verdict === 'error') {
-        return c.text('document content moderation is unavailable; try again shortly', 503, { 'Retry-After': '5' });
-      }
-    }
-
-    // Cache-bust by timestamping the path. The listing row stores the
-    // returned URL so older versions are still reachable for any cached
-    // storefront pages.
-    const key = `${appId}/_public/listing/${kind}-${Date.now()}.${ext}`;
-    await c.env.STORAGE.put(key, body, {
-      httpMetadata: { contentType, cacheControl: 'public, max-age=31536000, immutable' },
-    });
-
-    const publicUrl = `${new URL(c.req.url).origin}/v1/apps/${appId}/public/listing/${key.slice(
-      key.indexOf('_public/') + '_public/'.length,
-    )}`;
-    await pruneListingAssetVersions(c.env, appId, kind);
-    return c.json({ url: publicUrl, key, size: body.byteLength });
-  } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    throw err;
+listingsRoutes.put('/apps/:id/listing-assets/:kind', wrap(async (c) => {
+  const appId = c.req.param('id')!;
+  const kind = c.req.param('kind')!;
+  if (!ALLOWED_KINDS.has(kind) && !SCREENSHOT_KIND.test(kind)) {
+    return c.text('invalid asset kind', 400);
   }
-});
+  const actor = await requireAppOwner(c, appId);
+
+  const contentType = (c.req.header('Content-Type') ?? '').split(';')[0]!.trim().toLowerCase();
+  const isMd = kind === 'privacy-policy' || kind === 'terms';
+  const isScreenshot = SCREENSHOT_KIND.test(kind);
+
+  if (isMd) {
+    if (contentType !== 'text/markdown' && contentType !== 'text/plain') {
+      return c.text('content-type must be text/markdown', 400);
+    }
+  } else {
+    if (contentType === 'image/svg+xml') {
+      // #216: refused explicitly so the owner learns why, not just "wrong type".
+      return c.text('SVG is not accepted for listing images: it can run script when opened. Upload PNG, JPEG or WebP.', 422);
+    }
+    if (!IMAGE_TYPES.has(contentType)) {
+      return c.text('content-type must be an image (png/jpeg/webp)', 400);
+    }
+  }
+
+  const body = await c.req.arrayBuffer();
+  if (body.byteLength === 0) return c.text('empty body', 400);
+  const max = isMd ? MAX_MD : isScreenshot ? MAX_SCREENSHOT : MAX_ICON;
+  if (body.byteLength > max) {
+    return c.text(`too large (max ${Math.floor(max / 1024)}KB)`, 413);
+  }
+
+  const ext = extFor(contentType);
+  if (!ext) return c.text('unsupported content-type', 400);
+
+  // #215: the privacy policy and terms are public, storefront-linked documents
+  // that owner edits publish without review. Moderate the markdown (chunked:
+  // up to 200 KB) before it is stored; fail closed. Images are not moderated
+  // (Llama Guard is text-only).
+  if (isMd) {
+    const text = new TextDecoder().decode(body);
+    // #218: one moderation token per model call (per chunk).
+    if (!(await withinModerationRate(c.env, actor.id, Math.max(1, chunkText(text).length)))) {
+      return c.json({ error: 'moderation_rate_limited', message: 'too many moderated submissions: try again in a minute' }, 429, { 'Retry-After': '60' });
+    }
+    const moderation = await moderateChunks(c.env.AI, text);
+    auditModeration('listing_asset_moderation', { app_id: appId, actor: actor.id, kind, chunks: moderation.chunks }, moderation);
+    if (moderation.verdict === 'unsafe') {
+      return c.json({ error: 'document rejected by content moderation', categories: moderation.categories }, 422);
+    }
+    if (moderation.verdict === 'error') {
+      return c.text('document content moderation is unavailable; try again shortly', 503, { 'Retry-After': '5' });
+    }
+  }
+
+  // Cache-bust by timestamping the path. The listing row stores the
+  // returned URL so older versions are still reachable for any cached
+  // storefront pages.
+  const key = `${appId}/_public/listing/${kind}-${Date.now()}.${ext}`;
+  await c.env.STORAGE.put(key, body, {
+    httpMetadata: { contentType, cacheControl: 'public, max-age=31536000, immutable' },
+  });
+
+  const publicUrl = `${new URL(c.req.url).origin}/v1/apps/${appId}/public/listing/${key.slice(
+    key.indexOf('_public/') + '_public/'.length,
+  )}`;
+  await pruneListingAssetVersions(c.env, appId, kind);
+  return c.json({ url: publicUrl, key, size: body.byteLength });
+}));
