@@ -97,7 +97,7 @@ export interface UseActionOptions {
   onStepUp?: (error: ActionError) => boolean | Promise<boolean>;
 }
 
-/** Calls the action; also carries the state of the latest call. */
+/** Calls the action; also carries the state of the latest call. Its identity changes with that state, so an effect that runs it should depend on what triggers the call, not on the invoker. */
 export type ActionInvoker<P, T> = ((params?: P) => Promise<T>) & {
   pending: boolean;
   /** The latest call's failure: an {@link ActionError} for a server refusal (`forbidden`, `stepUpRequired`). */

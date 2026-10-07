@@ -285,4 +285,19 @@ describe('template-membership: scoped actions fail closed for the wrong user or 
     expect(call('admin_delete_group', 'gh:app-admin', { group_id: G }).at(-1)).toBe(1);
     expect(call('list_my_groups', ADMIN)).toEqual([]);
   });
+
+  // #299: the sample custom admin panel calls only declared admin actions through the SDK hooks,
+  // and the template locks an SDK release that has them (1.16.69), so the sample builds.
+  it('the moderation sample uses AdminConsole/useAction on declared admin_* actions, against an SDK that has them', () => {
+    const sample = readFileSync(new URL('web/src/pages/Moderation.tsx', ROOT), 'utf8');
+    expect(sample).toMatch(/<AdminConsole app=\{app\}>/);
+    const called = [...sample.matchAll(/useAction(?:<.*?>)?\('(\w+)'\)/g)].map((m) => m[1]);
+    expect(called).toEqual(['admin_list_groups', 'admin_delete_group']);
+    for (const name of called) expect(TOOLS[name!]!.auth?.app_roles).toEqual(['admin']);
+    expect(sample).not.toMatch(/app\.db|fetch\(/);
+    const range = (read('web/package.json') as { dependencies: Record<string, string> }).dependencies['@proappstore/sdk']!;
+    const locked = /'@proappstore\/sdk':\s*\n\s*specifier: [^\n]+\n\s*version: (\d+)\.(\d+)\.(\d+)/.exec(readFileSync(new URL('pnpm-lock.yaml', ROOT), 'utf8'))!.slice(1).map(Number);
+    expect(range).toBe('^1.16.69');
+    expect(locked[0]! > 1 || (locked[0] === 1 && (locked[1]! > 16 || (locked[1] === 16 && locked[2]! >= 69)))).toBe(true);
+  });
 });

@@ -10,6 +10,7 @@ import { Messages } from './pages/Messages'
 import { Activity } from './pages/Activity'
 import { Profile } from './pages/Profile'
 import { Admin } from './pages/Admin'
+import { Moderation } from './pages/Moderation'
 import { Empty, Section } from './components'
 
 type GroupPage = 'home' | 'members' | 'events' | 'messages' | 'activity' | 'admin'
@@ -18,6 +19,7 @@ export type Route =
   | { name: 'landing' }
   | { name: 'onboarding' }
   | { name: 'profile' }
+  | { name: 'moderation' }
   | { name: 'group'; id: string; page: GroupPage }
   | { name: 'event'; id: string; eventId: string }
 
@@ -29,6 +31,7 @@ function parseHash(): Route {
   if (m) return { name: 'group', id: m[1]!, page: (m[2] as GroupPage | undefined) ?? 'home' }
   if (h === '#/onboarding') return { name: 'onboarding' }
   if (h === '#/profile') return { name: 'profile' }
+  if (h === '#/moderation') return { name: 'moderation' }
   return { name: 'landing' }
 }
 
@@ -71,6 +74,7 @@ function Routed() {
     case 'landing': return <Landing />
     case 'onboarding': return <Onboarding />
     case 'profile': return <Profile />
+    case 'moderation': return <Moderation />
     case 'event': return <WithGroup id={route.id}>{(g) => <EventDetail group={g} eventId={route.eventId} />}</WithGroup>
     case 'group': return (
       <WithGroup id={route.id}>

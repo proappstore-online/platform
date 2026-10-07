@@ -37,6 +37,11 @@ Nobody changes their own role; the last admin can neither leave nor be removed. 
 moderation (`admin_*`) uses the platform's app roles (`app.roles`), granted by the app owner,
 not a group role.
 
+`#/moderation` (`web/src/pages/Moderation.tsx`) is the sample custom admin panel: it uses the
+SDK's `AdminConsole`, `useAdminContext` and `useAction` to list and delete groups through the two
+`admin_*` actions. The platform refuses those calls for anyone without the `admin` app role; the
+panel's own role check only decides what to render.
+
 ## Extending
 
 | You want | Change |
