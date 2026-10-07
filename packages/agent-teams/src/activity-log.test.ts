@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { insertActivity, updateActivityMeta, readActivity, costSummary, costDetail, activityFromBroadcast } from './activity-log.ts';
+import { insertActivity, readActivity, costSummary, costDetail, activityFromBroadcast } from './activity-log.ts';
 
 // Minimal SqlStorage mock for testing the pure SQL functions.
 function mockSql() {
