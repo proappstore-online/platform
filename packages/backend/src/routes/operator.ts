@@ -22,6 +22,7 @@ import type { OperatorResource, OperatorViewContract } from '../lib/operator-con
 import { runOperatorQuery, runOperatorWrite } from './operator-exec.js';
 import { REVIEW_CONTENT_TYPES, holdsReviewRole, recordReviewAccess } from './storage.js';
 import { isSensitiveField } from '../lib/sensitive-fields.js';
+import { textParam } from '../lib/text-param.js';
 
 export const operatorRoutes = new Hono<{ Bindings: Env }>();
 
@@ -108,14 +109,6 @@ export function kpiRow(row: Record<string, unknown>, keys: { key: string }[]): R
     const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
     return [key, Number.isFinite(n) ? n : null];
   }));
-}
-
-/** An optional bounded text query parameter; empty means absent. */
-function textParam(value: string | undefined, max: number, name: string): string | null {
-  const v = value?.trim() ?? '';
-  if (!v) return null;
-  if (v.length > max) throw new HttpError(`${name} is too long (max ${max} chars)`, 400);
-  return v;
 }
 
 /** requireOperatorAccess has already verified the `Bearer` session; the data worker gets the same token the actions route forwards. */

@@ -16,9 +16,9 @@
  */
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
-import { HttpError } from '../lib/auth.js';
 import { markAudited, requireOperatorOwner } from '../lib/operator-audit-marks.js';
 import { PLATFORM_USERS_READ, writeRow } from './operator-audit.js';
+import { textParam } from '../lib/text-param.js';
 
 export const operatorUsersRoutes = new Hono<{ Bindings: Env }>();
 
@@ -40,14 +40,6 @@ interface Row {
   last_seen: number | null;
 }
 
-/** An optional bounded query parameter; empty means absent. */
-function param(value: string | undefined, max: number, name: string): string | null {
-  const v = value?.trim() ?? '';
-  if (!v) return null;
-  if (v.length > max) throw new HttpError(`${name} is too long (max ${max} chars)`, 400);
-  return v;
-}
-
 /** `%`, `_` and `\` in a search are literal, not LIKE wildcards. */
 const likePrefix = (q: string) => `${q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
 
@@ -66,8 +58,8 @@ export function joinDateOf(firstGranted: number | null, firstDay: string | null)
 operatorUsersRoutes.get('/apps/:appId/operator/users', async (c) => {
   const appId = c.req.param('appId');
   const owner = await requireOperatorOwner(c, appId);
-  const q = param(c.req.query('q'), MAX_SEARCH, 'q');
-  const cursor = param(c.req.query('cursor'), MAX_CURSOR, 'cursor');
+  const q = textParam(c.req.query('q'), MAX_SEARCH, 'q');
+  const cursor = textParam(c.req.query('cursor'), MAX_CURSOR, 'cursor');
 
   const { results } = await c.env.DB.prepare(
     `WITH granted AS (
