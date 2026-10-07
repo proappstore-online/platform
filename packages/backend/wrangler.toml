@@ -64,14 +64,13 @@ DATA_WORKER_HOST = "serge-the-dev.workers.dev"
 # accident and is being left as-is; it is not a licence to move this one.
 GITHUB_CLIENT_ID = "Ov23ctEs8trbfizdBGfQ"
 # GitHub connector App (#258) — public identifiers of the "ProAppStore Connector" GitHub App,
-# registered by the owner (issue #258, human step 1). PLACEHOLDERS: deliberately unset until the
-# App exists. While any of these or the three secrets below is missing, every
-# /v1/connectors/github/* route and PAS.connectors.token('github') answers 503
-# "connector not configured" — deploys are unaffected. Distinct from GITHUB_CLIENT_ID above
-# (the sign-in OAuth app); do not reuse or merge the names.
-# GH_APP_ID = "<numeric App ID>"
-# GH_APP_CLIENT_ID = "<Iv23... client id>"
-# GH_APP_SLUG = "<slug in https://github.com/apps/<slug>>"
+# registered by the owner 2026-10-07 (issue #258, human step 1; https://github.com/apps/proappstore-connector).
+# While any of the three secrets below is missing, every /v1/connectors/github/* route and
+# PAS.connectors.token('github') answers 503 "connector not configured" — deploys are unaffected.
+# Distinct from GITHUB_CLIENT_ID above (the sign-in OAuth app); do not reuse or merge the names.
+GH_APP_ID = "5218621"
+GH_APP_CLIENT_ID = "Iv23liw9Cq9jPb4mByH9"
+GH_APP_SLUG = "proappstore-connector"
 CF_ACCOUNT_ID = "c1089bfcc43c1c6c2aa89e584e86f0bc"
 VAPID_PUBLIC_KEY = "BPg6E92QAOhdcif_HckOEGY6mL03VKWNQ3CS1xQX5q59fXURI1xCGwwBr4Vsv7gn3TXIGSJquJwvHGYRbMcAQc0"
 # Comma-separated `gh:<id>` strings allowed to approve/reject submissions.
