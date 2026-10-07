@@ -242,11 +242,11 @@ describe('secrets, storage and log (#254)', () => {
     expect(await code(workerStoragePut(env, 't', 'x.bin', 42))).toBe('BadRequest');
   });
 
-  it('log writes app_logs as system:worker, category worker', async () => {
-    expect(await workerLog(env, 't', 'info', 'synced', { count: 3 })).toBe(true);
-    expect(logs[0]).toEqual(expect.arrayContaining(['t', SYSTEM_WORKER_USER, 'info', 'worker', 'synced']));
-    expect(await code(workerLog(env, 't', 'loud', 'x', undefined))).toBe('BadRequest');
-    expect(await code(workerLog(env, 't', 'info', '', undefined))).toBe('BadRequest');
+  it('log writes app_logs as system:worker, category worker, traced to its invocation (#308)', async () => {
+    expect(await workerLog(env, 't', 'info', 'synced', { count: 3 }, 'evt-1:1')).toBe(true);
+    expect(logs[0]).toEqual(expect.arrayContaining(['t', SYSTEM_WORKER_USER, 'info', 'worker', 'synced', 'evt-1:1', 'worker']));
+    expect(await code(workerLog(env, 't', 'loud', 'x', undefined, 'evt-1:1'))).toBe('BadRequest');
+    expect(await code(workerLog(env, 't', 'info', '', undefined, 'evt-1:1'))).toBe('BadRequest');
   });
 });
 

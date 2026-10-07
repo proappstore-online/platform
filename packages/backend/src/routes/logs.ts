@@ -160,6 +160,8 @@ logsRoutes.get('/apps/:appId/logs', async (c) => {
   const userId = c.req.query('user_id');
   const fingerprint = c.req.query('fingerprint');
   const sourceFilter = c.req.query('source');
+  // #308: an app worker invocation's lines (PAS.log and its console) carry trace_id = the invocation id.
+  const traceId = c.req.query('trace_id');
 
   let sql = `SELECT ts, level, category, message, data, user_id, client_id, build_meta,
                     fingerprint, trace_id, source
@@ -172,6 +174,7 @@ logsRoutes.get('/apps/:appId/logs', async (c) => {
   if (userId) { sql += ' AND user_id = ?'; params.push(userId); }
   if (fingerprint) { sql += ' AND fingerprint = ?'; params.push(fingerprint); }
   if (sourceFilter) { sql += ' AND source = ?'; params.push(sourceFilter); }
+  if (traceId) { sql += ' AND trace_id = ?'; params.push(traceId); }
 
   sql += ' ORDER BY ts DESC LIMIT ?';
   params.push(limit);

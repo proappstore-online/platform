@@ -1,5 +1,5 @@
 import { SELF, env as providedEnv, fetchMock } from 'cloudflare:test';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { _resetJwksCache } from '../../../backend/src/lib/github-oidc';
 import { appWorkerHost, appWorkerShimSha, disableAppWorker, loaderId, rotateAppWorkerCredentials, ROTATION_OVERLAP_MS } from '../../../backend/src/lib/app-worker-host';
@@ -39,7 +39,7 @@ const APP_OK = `globalThis.__ran = (globalThis.__ran ?? 0) + 1;
 export default { async fetch(req, env) {
   const e = await req.json();
   if (e.payload?.fail) return new Response('E'.repeat(3 * 1024), { status: 500 });
-  return Response.json({ got: e.name, app: env.APP_ID, hasToken: typeof env.PAS_WORKER_TOKEN === 'string' && env.PAS_WORKER_TOKEN.length === 64 });
+  return Response.json({ got: e.name, app: env.APP_ID, hasToken: typeof env.PAS_WORKER_TOKEN === 'string' && env.PAS_WORKER_TOKEN.length === 64, invocation: req.headers.get('x-pas-invocation') });
 } };`;
 
 async function deploy(appId: string, modules: Record<string, string> = { 'app.js': APP_OK }, repo = `proappstore-online/${appId}`, ref?: string) {
@@ -151,9 +151,26 @@ describe('invocation through the platform shim on the Worker Loader (#253)', () 
   it('runs a signed envelope end to end and records the invocation', async () => {
     const result = await appWorkerHost(env).invoke('first', event({}), { timeoutMs: 10_000 });
     expect(result).toMatchObject({ status: 'succeeded', httpStatus: 200 });
-    expect(JSON.parse(result.body!)).toEqual({ got: 'sync', app: 'first', hasToken: true });
+    // #308: the invoke request names its invocation, which AppWorkerTail reads back from the trace.
+    expect(JSON.parse(result.body!)).toEqual({ got: 'sync', app: 'first', hasToken: true, invocation: result.invocationId });
     const rec = await env.DB.prepare('SELECT status, http_status, body_excerpt, finished_at FROM app_worker_invocations WHERE id = ?').bind(result.invocationId).first();
     expect(rec).toMatchObject({ status: 'succeeded', http_status: 200, body_excerpt: null });
+  });
+
+  it('a schedule, a hook and an http invocation each log their start and end with <event_id>:<attempt> (#308)', async () => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+    try {
+      for (const type of ['schedule', 'hook', 'http'] as const) {
+        const id = crypto.randomUUID();
+        const result = await appWorkerHost(env).invoke('first', { id, type, name: 'sync', attempt: 2, payload: {} }, { timeoutMs: 10_000 });
+        expect(result.invocationId).toBe(`${id}:2`);
+        expect(lines, type).toContain(`[app-worker] invoke first ${type} sync ${id}:2`);
+        expect(lines.some((l) => new RegExp(`^\\[app-worker\\] ${id}:2 succeeded 200 \\d+ms$`).test(l)), type).toBe(true);
+      }
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('a worker returning 500 with a 3 KB body is recorded failed with the first 1 KB', async () => {

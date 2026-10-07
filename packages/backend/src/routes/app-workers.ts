@@ -123,7 +123,8 @@ appWorkerRoutes.get('/apps/:appId/worker', async (c) => {
       'SELECT repository, ref, sha, bundle_sha256, status, detail, created_at FROM app_worker_deploys WHERE app_id = ? ORDER BY created_at DESC LIMIT 1',
     ).bind(appId).first(),
     c.env.DB.prepare(
-      `SELECT id, event_id, type, name, attempt, status, http_status, body_excerpt, pas_calls, started_at, finished_at, error
+      `SELECT id, event_id, type, name, attempt, status, http_status, body_excerpt, pas_calls, started_at, finished_at, error,
+              child_cpu_ms, child_wall_ms, child_outcome
          FROM app_worker_invocations WHERE app_id = ? ORDER BY started_at DESC LIMIT 20`,
     ).bind(appId).all(),
     // #261: the manifest's schedules, with the #123 breaker state the console and CLI show.

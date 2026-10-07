@@ -18,7 +18,7 @@ import { timingSafeEqual } from './bytes.js';
 import { openAppSecret } from './app-secrets.js';
 import { connectorConfigured, installationToken } from './github-app.js';
 import { checkLogQuota, d1LogUsageStore } from './log-quota.js';
-import { LEVELS, normalizeEntry } from './log-ingest.js';
+import { LEVELS, normalizeEntry, type NormalizedEntry } from './log-ingest.js';
 import { HttpError } from './auth.js';
 import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from '../routes/actions.js';
 import { verifyCallerGrant } from './caller-grant.js';
@@ -331,17 +331,25 @@ export async function workerStorageGet(env: Env, appId: string, key: unknown): P
 
 // ── log ─────────────────────────────────────────────────────────────────────
 
-/** Append to the app's logs as `system:worker`, category `worker`, within the app's log quota. Returns whether it was stored. */
-export async function workerLog(env: Env, appId: string, level: unknown, message: unknown, fields: unknown): Promise<boolean> {
+/**
+ * Append to the app's logs as `system:worker`, category `worker`, within the app's log quota. Returns whether it was stored.
+ * `invocation` (`<envelope id>:<attempt>`, already authorised by the caller) is the line's trace_id (#308).
+ */
+export async function workerLog(env: Env, appId: string, level: unknown, message: unknown, fields: unknown, invocation: string): Promise<boolean> {
   if (typeof level !== 'string' || !(LEVELS as readonly string[]).includes(level)) throw new WorkerCallError('BadRequest', `level must be one of ${LEVELS.join(', ')}`);
   const now = Date.now();
   const entry = await normalizeEntry({ level, category: 'worker', message, ...(fields !== undefined ? { data: fields } : {}) }, now);
   if (!entry) throw new WorkerCallError('BadRequest', 'message must be a non-empty string');
   const verdict = await checkLogQuota(d1LogUsageStore(env.DB), { appId, clientKey: 'app-worker', entries: 1, nowMs: now });
   if (!verdict.persist) return false;
-  await env.DB.prepare(
-    `INSERT INTO app_logs (app_id, user_id, client_id, ts, level, category, message, data, build_meta, fingerprint, trace_id, source, ingested_at)
-     VALUES (?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, NULL, 'worker', ?)`,
-  ).bind(appId, SYSTEM_WORKER_USER, entry.ts, entry.level, entry.category, entry.message, entry.data, entry.fingerprint, now).run();
+  await insertWorkerLog(env, appId, entry, invocation, 'worker', now).run();
   return true;
+}
+
+/** The app_logs row of one app-worker line: `PAS.log` (source `worker`) or console output from its tail (source `worker-console`, #308). */
+export function insertWorkerLog(env: Env, appId: string, entry: NormalizedEntry, invocation: string, source: 'worker' | 'worker-console', now: number): D1PreparedStatement {
+  return env.DB.prepare(
+    `INSERT INTO app_logs (app_id, user_id, client_id, ts, level, category, message, data, build_meta, fingerprint, trace_id, source, ingested_at)
+     VALUES (?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+  ).bind(appId, SYSTEM_WORKER_USER, entry.ts, entry.level, entry.category, entry.message, entry.data, entry.fingerprint, invocation, source, now);
 }

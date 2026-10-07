@@ -6,8 +6,11 @@
  *   invocations      reserved atomically before every invoke — schedule, hook and
  *                    http alike (lib/app-worker-host.ts `invoke`, the one function
  *                    every type goes through). The reservation IS the quota gate.
- *   cpu_ms           wall-clock duration of each invocation. The loader returns no
- *                    CPU time, so this is a proxy and the usage route labels it.
+ *   cpu_ms           wall-clock duration of each invocation, known when invoke
+ *                    returns, so the quota can be enforced at once; the usage
+ *                    route labels it. The child's real cpuTime arrives later from
+ *                    its Tail Worker and is recorded per invocation
+ *                    (app_worker_invocations.child_cpu_ms, #308), not metered.
  *   pas_calls        each invocation's own D1 counter (#254), added when it ends.
  *   hook_deliveries  accepted (verified, non-duplicate) deliveries (#256),
  *                    reserved by the hooks route before anything is delivered.
@@ -38,7 +41,7 @@ const QUOTA_NAMES: QuotaName[] = ['invocations', 'cpu_ms', 'hook_deliveries'];
  */
 export const DEFAULT_APP_WORKER_QUOTAS: AppWorkerQuotas = { invocations: 5_000, cpu_ms: 3_600_000, hook_deliveries: 2_000 };
 export const QUOTA_ALERT_RATIO = 0.8;
-/** How `cpu_ms` is measured. The loader reports no CPU time (ADR-009 §5). */
+/** How `cpu_ms` is measured: wall-clock, a proxy. Real CPU per invocation is `child_cpu_ms` (#308), arriving after the invocation. */
 export const CPU_MS_SOURCE = 'wall';
 export const QUOTA_ALERT_KIND = 'app_worker_quota';
 export const ACCOUNT_CEILING_ALERT_KIND = 'app_worker_account_ceiling';

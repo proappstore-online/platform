@@ -88,8 +88,10 @@ ADMIN_GITHUB_IDS = "gh:2824906"
 # #275 account guard: today's app-worker usage summed over every app. Above it,
 # the 15-minute cron closes new enables (app_worker_platform.open = 0) and records
 # an `app_worker_account_ceiling` alert; running apps keep running, and an admin
-# reopens with PUT /v1/admin/app-workers/open. cpu_ms is wall-clock (the loader
-# reports no CPU time). Revisit with duperdash's measured usage before #267.
+# reopens with PUT /v1/admin/app-workers/open. cpu_ms is wall-clock: a proxy known
+# when the invocation returns. The worker's real cpuTime reaches AppWorkerTail
+# afterwards and is recorded per invocation (child_cpu_ms, #308), not metered.
+# Revisit with duperdash's measured usage before #267.
 APP_WORKER_ACCOUNT_CEILING = '{ "cpu_ms": 36000000, "invocations": 100000 }'
 APP_WORKER_BACKEND = "loader"
 

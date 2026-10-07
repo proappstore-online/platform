@@ -44,6 +44,10 @@ There is **no** D1, KV, R2, queue or AI binding, and no app secret in `env`:
   `worker.secrets`.
 - **Files** go to `pas.storage`, under `<app>/_worker/<key>`, never a user's files.
 - **Logs** go to `pas.log`, into the app's logs with category `worker`.
+  Plain `console.log` / `console.error` output and uncaught exceptions land
+  there too (source `worker-console`), delivered by the platform's Tail Worker
+  (`AppWorkerTail`, #308) after each invocation: at most 100 lines per
+  invocation, within the same log quota.
 
 Outbound `fetch` to the Internet works: it leaves through the platform's egress gateway (`AppWorkerEgress`, #311), which logs the app, method and host.
 
@@ -249,7 +253,7 @@ work starts, and usage resets at 00:00 UTC.
 | Quota | Default | Counts |
 |---|---|---|
 | `invocations` | 5,000 | every invocation: schedule runs, hook deliveries to the worker, and `/.pas/worker/*` requests |
-| `cpu_ms` | 3,600,000 (1 h) | wall-clock time of invocations. The loader reports no CPU time, so this is a proxy, labelled `cpu_ms_source: "wall"` |
+| `cpu_ms` | 3,600,000 (1 h) | wall-clock time of invocations, labelled `cpu_ms_source: "wall"`. A proxy known when the invocation returns; the worker's real CPU time is recorded per invocation (below) but not metered |
 | `hook_deliveries` | 2,000 | verified, non-duplicate deliveries to any hook (worker or action) |
 
 The defaults are provisional: they will be revisited with measured usage before
@@ -303,6 +307,23 @@ The same data is available over HTTP (owner session):
 - `GET /v1/apps/:id/hooks`
 - `GET /v1/apps/:id/hook-deliveries`
 - `GET /v1/apps/:id/logs?category=worker`
+- `GET /v1/apps/:id/logs?trace_id=<invocation id>`
+
+### One invocation, end to end (#308)
+
+Every invocation has an id, `<event id>:<attempt>`: the `id` of its
+`app_worker_invocations` record. That id ties together:
+
+- **Platform logs.** Workers Logs has two `[app-worker]` lines for it, one
+  `invoke <app> <type> [<name>] <id>` and one `<id> <status> [<http status>] <ms>`.
+- **Your worker's logs.** Every `pas.log` line and every `console` line or
+  exception from that invocation has `traceId` = the id. Fetch them with
+  `GET /v1/apps/:id/logs?trace_id=<id>`.
+- **CPU.** After the invocation ends, the Tail Worker fills `child_cpu_ms`,
+  `child_wall_ms` and `child_outcome` on the record (`ok`, `exception`,
+  `exceededCpu`, …). `child_cpu_ms` is your worker's own `cpuTime`. It excludes
+  module start-up, which the runtime does not report. Until the trace arrives,
+  the three fields are `null`.
 
 No route ever returns a secret value, the worker token or the event key.
 

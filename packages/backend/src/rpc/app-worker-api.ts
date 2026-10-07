@@ -97,6 +97,7 @@ export class AppWorkerApi extends WorkerEntrypoint<Env, { appId: string }> {
   get connectors(): ConnectorsApi { return new ConnectorsApi(this.#runner(), this.env); }
   get storage(): StorageApi { return new StorageApi(this.#runner(), this.env); }
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, fields: Record<string, unknown> | undefined, ctx: unknown): Promise<boolean> {
-    return this.#runner()('log', '', ctx, (appId) => workerLog(this.env, appId, level, message, fields));
+    // The runner has authorised ctx, so its invocation is a string naming this app's running invocation.
+    return this.#runner()('log', '', ctx, (appId) => workerLog(this.env, appId, level, message, fields, (ctx as { invocation: string }).invocation));
   }
 }

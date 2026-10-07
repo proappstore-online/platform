@@ -56,6 +56,14 @@ const COMPATIBILITY_FLAGS = ['nodejs_compat'];
 export const APP_WORKER_LIMITS = { cpuMs: 30_000, subRequests: 500 } as const;
 /** How outbound traffic leaves a loaded worker; part of the loader ID (#311). */
 const EGRESS_MODE = 'gateway:AppWorkerEgress';
+/** #308: every loaded worker is tailed by AppWorkerTail. Part of the shim hash, so isolates cached without a tail are not reused. */
+const TAIL_MODE = 'tail:AppWorkerTail';
+/**
+ * #308: the invoke request names its invocation (`<envelope id>:<attempt>`). The
+ * WorkerCode — tails included — is cached per loader ID, so AppWorkerTail reads
+ * the invocation from the traced request, not from its props.
+ */
+export const INVOCATION_HEADER = 'x-pas-invocation';
 
 const R2_PREFIX = '_app-workers';
 const MODULE_NAME = /^[A-Za-z0-9_-][A-Za-z0-9_.\/-]{0,199}\.m?js$/;
@@ -107,6 +115,7 @@ export interface AppWorkerExports {
   exports?: {
     AppWorkerApi?: (opts: { props: { appId: string } }) => unknown;
     AppWorkerEgress?: (opts: { props: { appId: string } }) => unknown;
+    AppWorkerTail?: (opts: { props: { appId: string } }) => unknown;
   };
 }
 
@@ -340,7 +349,7 @@ const shimShas = new Map<string, Promise<string>>();
 export function appWorkerShimSha(compatDate: string = APP_WORKER_COMPATIBILITY_DATE): Promise<string> {
   let sha = shimShas.get(compatDate);
   if (!sha) {
-    sha = sha256Hex(JSON.stringify([APP_WORKER_SHIM, APP_WORKER_LIMITS, compatDate, COMPATIBILITY_FLAGS, EGRESS_MODE]));
+    sha = sha256Hex(JSON.stringify([APP_WORKER_SHIM, APP_WORKER_LIMITS, compatDate, COMPATIBILITY_FLAGS, EGRESS_MODE, TAIL_MODE]));
     shimShas.set(compatDate, sha);
   }
   return sha;
@@ -439,6 +448,8 @@ function loaderHost(env: Env, loader: WorkerLoader, ctx?: AppWorkerExports): App
       if (!pas) console.warn(`[app-worker] invoking ${appId} without a PAS binding (no ctx.exports.AppWorkerApi)`);
       // #311: every outbound fetch goes through the platform's gateway; without it, no egress at all.
       const egress = ctx?.exports?.AppWorkerEgress?.({ props: { appId } }) ?? null;
+      // #308: the worker's console, exceptions and CPU, delivered after each invocation. Props carry the app only.
+      const tail = ctx?.exports?.AppWorkerTail?.({ props: { appId } });
       const worker = loader.get(id, async () => ({
         compatibilityDate: compatDate,
         compatibilityFlags: COMPATIBILITY_FLAGS,
@@ -453,16 +464,19 @@ function loaderHost(env: Env, loader: WorkerLoader, ctx?: AppWorkerExports): App
         },
         globalOutbound: egress as Fetcher | null,
         limits: { ...APP_WORKER_LIMITS },
+        ...(tail ? { tails: [tail as Fetcher] } : {}),
       }));
 
       let status: InvokeResult['status'] = 'failed';
       let httpStatus: number | null = null;
       let text: string | null = null;
       let error: string | null = null;
+      // #308: one Workers Logs line per invocation start and end, each carrying its id.
+      console.log(`[app-worker] invoke ${appId} ${event.type}${event.name ? ` ${event.name}` : ''} ${invocationId}`);
       try {
         const res = await withTimeout(
           worker.getEntrypoint().fetch(new Request('https://app-worker.invalid/', {
-            method: 'POST', headers: { 'content-type': 'application/json', [SIGNATURE_HEADER]: signature }, body,
+            method: 'POST', headers: { 'content-type': 'application/json', [SIGNATURE_HEADER]: signature, [INVOCATION_HEADER]: invocationId }, body,
           })),
           timeoutMs,
         );
@@ -474,6 +488,7 @@ function loaderHost(env: Env, loader: WorkerLoader, ctx?: AppWorkerExports): App
         error = String((e as Error)?.message ?? e).slice(0, 500);
       }
       const finishedAt = Date.now();
+      console.log(`[app-worker] ${invocationId} ${status}${httpStatus === null ? '' : ` ${httpStatus}`} ${finishedAt - now}ms`);
       await env.DB.prepare(
         `UPDATE app_worker_invocations SET status = ?, http_status = ?, body_excerpt = ?, finished_at = ?, error = ? WHERE id = ?`,
       ).bind(status, httpStatus, status === 'failed' && text !== null ? excerpt(text) : null, finishedAt, error, invocationId).run();

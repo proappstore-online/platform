@@ -152,9 +152,9 @@ describe('PAS secrets, storage and log (#254)', () => {
     expect(new TextDecoder().decode(got!.body)).toBe('{"n":1}');
   });
 
-  it('log appends to app_logs as system:worker, category worker', async () => {
+  it('log appends to app_logs as system:worker, category worker, traced to its invocation (#308)', async () => {
     expect(await pas({ appId: 't' }).log('warn', 'reconcile slow', { ms: 900 }, ctx())).toBe(true);
-    const row = await env.DB.prepare("SELECT user_id, level, category, message, source FROM app_logs WHERE app_id = 't' ORDER BY id DESC LIMIT 1").first();
-    expect(row).toEqual({ user_id: SYSTEM_WORKER_USER, level: 'warn', category: 'worker', message: 'reconcile slow', source: 'worker' });
+    const row = await env.DB.prepare("SELECT user_id, level, category, message, source, trace_id FROM app_logs WHERE app_id = 't' ORDER BY id DESC LIMIT 1").first();
+    expect(row).toEqual({ user_id: SYSTEM_WORKER_USER, level: 'warn', category: 'worker', message: 'reconcile slow', source: 'worker', trace_id: INVOCATION });
   });
 });

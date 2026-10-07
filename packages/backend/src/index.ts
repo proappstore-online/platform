@@ -297,6 +297,8 @@ export { Room } from './do/room.js';
 export { AppWorkerApi } from './rpc/app-worker-api.js';
 // #311: the globalOutbound gateway of loaded app workers (ctx.exports.AppWorkerEgress).
 export { AppWorkerEgress } from './rpc/app-worker-egress.js';
+// #308: the Tail Worker of loaded app workers (ctx.exports.AppWorkerTail).
+export { AppWorkerTail } from './rpc/app-worker-tail.js';
 
 /**
  * Cron entry (#70): the session-key drift check. `[triggers] crons` in wrangler.toml
