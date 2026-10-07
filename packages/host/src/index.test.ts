@@ -477,6 +477,35 @@ describe("host same-origin platform mediation routes", () => {
     expect(apiFetch).toHaveBeenCalledOnce();
   });
 
+  it("passes through a WebSocket 101 response and its socket without reconstructing it", async () => {
+    const socket = {} as WebSocket;
+    const upgraded = {
+      status: 101,
+      statusText: "Switching Protocols",
+      headers: new Headers(),
+      body: null,
+      webSocket: socket,
+    } as Response & { webSocket: WebSocket };
+    const apiFetch = vi.fn(async () => upgraded);
+    const env = makeEnv({ apiFetch });
+
+    const res = await worker.fetch(
+      new Request("https://meetup.proappstore.online/.pas/api/v1/apps/meetup/rooms/lobby", {
+        headers: {
+          Cookie: "__Host-pas_session=cookie-token",
+          Upgrade: "WebSocket",
+        },
+      }),
+      env,
+      ctx(),
+    );
+
+    expect(res).toBe(upgraded);
+    expect(res.status).toBe(101);
+    expect((res as Response & { webSocket?: WebSocket }).webSocket).toBe(socket);
+    expect(apiFetch).toHaveBeenCalledOnce();
+  });
+
   it("rejects cross-site mediated mutations before reaching the API", async () => {
     const apiFetch = vi.fn(async () => Response.json({ ok: true }));
     const env = makeEnv({ apiFetch });

@@ -74,6 +74,8 @@ async function forwardWithSession(request: Request, binding: Fetcher | null, ups
 
   const upstreamRequest = new Request(upstreamUrl, init);
   const upstream = binding ? await binding.fetch(upstreamRequest) : await fetch(upstreamRequest);
+  if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") return upstream;
+
   const response = noStore(upstream);
   if (clearCookieOn401 && upstream.status === 401) response.headers.append("Set-Cookie", clearSessionCookie());
   return response;
