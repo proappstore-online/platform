@@ -29,6 +29,7 @@ export default { async fetch(req) {
   if (p.path === '/v1/ping') return new Response(JSON.stringify({ pong: true, user: e.caller && e.caller.user_id, method: p.method, query: p.query }), {
     headers: { 'content-type': 'application/json', 'set-cookie': 'evil=1', 'cache-control': 'public, max-age=600', 'x-internal': 'leak', etag: '"v1"' },
   });
+  if (p.path === '/v1/grant') return Response.json({ id: e.id, attempt: e.attempt, caller: e.caller });
   if (p.path === '/v1/echo') {
     const digest = await crypto.subtle.digest('SHA-256', bytesOf(p));
     return Response.json({ sha: [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, '0')).join(''), enc: p.body_encoding });
@@ -120,7 +121,7 @@ describe('actions run as the grant\'s user (#260)', () => {
   it(':__user_id is the user; a role the user lacks is Forbidden; with the role it runs and is audited', async () => {
     const tok = await token();
     const pas = new AppWorkerApi({ props: { appId: 't' } } as never, env);
-    const grant = await mintCallerGrant(env, 't', { id: 'gh:42', roles: ['user'] });
+    const grant = await mintCallerGrant(env, 't', { id: 'gh:42', roles: ['user'] }, { id: 'req-1', attempt: 1 });
     fetchMock.get(`https://pas-data-t.${env.DATA_WORKER_HOST}`).intercept({ path: '/query', method: 'POST' })
       .reply(200, (req) => { queried.push(JSON.parse(String(req.body))); return { rows: [], meta: {} }; }).times(2);
     await pas.actions.call('my_rows', {}, { token: tok, invocation: INVOCATION, as: grant });
@@ -134,9 +135,56 @@ describe('actions run as the grant\'s user (#260)', () => {
   it('a grant for another app, or one replayed after it expired, is Unauthorized', async () => {
     const tok = await token();
     const pas = new AppWorkerApi({ props: { appId: 't' } } as never, env);
-    const other = await mintCallerGrant(env, 'u', { id: 'gh:42', roles: ['user'] });
+    const other = await mintCallerGrant(env, 'u', { id: 'gh:42', roles: ['user'] }, { id: 'req-1', attempt: 1 });
     await expect(pas.actions.call('my_rows', {}, { token: tok, invocation: INVOCATION, as: other })).rejects.toThrow(/^Unauthorized:/);
-    const stale = await mintCallerGrant(env, 't', { id: 'gh:42', roles: ['user'] }, Math.floor(Date.now() / 1000) - 31);
+    const stale = await mintCallerGrant(env, 't', { id: 'gh:42', roles: ['user'] }, { id: 'req-1', attempt: 1 }, Math.floor(Date.now() / 1000) - 31);
     await expect(pas.actions.call('my_rows', {}, { token: tok, invocation: INVOCATION, as: stale })).rejects.toThrow(/^Unauthorized:/);
+  });
+
+  describe('a grant works only from the invocation it was minted for (#318)', () => {
+    const running = (id: string, type: string, eventId = id.split(':')[0]!, attempt = Number(id.split(':')[1])) => env.DB.prepare(
+      "INSERT INTO app_worker_invocations (id, app_id, event_id, type, attempt, status, pas_calls, started_at) VALUES (?, 't', ?, ?, ?, 'running', 0, ?)",
+    ).bind(id, eventId, type, attempt, Date.now()).run();
+    const budget = (id: string) => env.DB.prepare('SELECT pas_calls FROM app_worker_invocations WHERE id = ?').bind(id).first<{ pas_calls: number }>().then((r) => r!.pas_calls);
+    const rows = () => fetchMock.get(`https://pas-data-t.${env.DATA_WORKER_HOST}`).intercept({ path: '/query', method: 'POST' }).reply(200, { rows: [], meta: {} });
+
+    it('the platform binds a real request\'s grant to that request\'s envelope', async () => {
+      const res = await viaHost('/v1/grant');
+      expect(res.status).toBe(200);
+      const { id, attempt, caller } = await res.json<{ id: string; attempt: number; caller: { event_id: string; attempt: number; user_id: string } }>();
+      expect(caller).toMatchObject({ event_id: id, attempt, user_id: 'gh:42' });
+      // Kept after its request finished, it acts as nobody — the request's invocation is no longer running.
+      const tok = await token();
+      const pas = new AppWorkerApi({ props: { appId: 't' } } as never, env);
+      await expect(pas.actions.call('my_rows', {}, { token: tok, invocation: `${id}:${attempt}`, as: caller })).rejects.toThrow(/^Unauthorized:/);
+    });
+
+    it("kept in module state, it is refused from a schedule, a hook, another user's request or another attempt — and spends none of their budget", async () => {
+      const tok = await token();
+      const pas = new AppWorkerApi({ props: { appId: 't' } } as never, env);
+      const kept = await mintCallerGrant(env, 't', { id: 'gh:42', roles: ['user'] }, { id: 'req-1', attempt: 1 });
+      await running('sched-9:1', 'schedule');
+      await running('hook-3:1', 'hook');
+      await running('req-2:1', 'http');
+      await running('req-1:2', 'http');
+      for (const inv of ['sched-9:1', 'hook-3:1', 'req-2:1', 'req-1:2']) {
+        await expect(pas.actions.call('my_rows', {}, { token: tok, invocation: inv, as: kept }), inv).rejects.toThrow(/^Unauthorized:.*not for this invocation/);
+        expect(await budget(inv), inv).toBe(0);
+      }
+      // From its own running invocation it works, and counts there.
+      rows();
+      await pas.actions.call('my_rows', {}, { token: tok, invocation: INVOCATION, as: kept });
+      expect(await budget(INVOCATION)).toBe(1);
+    });
+
+    it('is refused once its own invocation has finished or timed out, though the grant is unexpired', async () => {
+      const tok = await token();
+      const pas = new AppWorkerApi({ props: { appId: 't' } } as never, env);
+      const grant = await mintCallerGrant(env, 't', { id: 'gh:42', roles: ['user'] }, { id: 'req-1', attempt: 1 });
+      for (const status of ['succeeded', 'timeout']) {
+        await env.DB.prepare('UPDATE app_worker_invocations SET status = ? WHERE id = ?').bind(status, INVOCATION).run();
+        await expect(pas.actions.call('my_rows', {}, { token: tok, invocation: INVOCATION, as: grant }), status).rejects.toThrow(/^Unauthorized:/);
+      }
+    });
   });
 });

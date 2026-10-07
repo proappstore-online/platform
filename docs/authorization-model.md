@@ -270,15 +270,25 @@ on an app with no user behind them. They run with platform identities that are
   - Rotation (`pas worker rotate`) keeps the old token valid for 10 minutes.
 - **Caller grants (`http` events, #260).** For a signed-in user's request to
   `/.pas/worker/*`, the platform mints a 30-second grant.
-  - **What it is:** an HMAC under a key derived from `SESSION_SIGNING_KEY`,
-    over app, grant id, user, roles and expiry. It travels inside the signed
-    event envelope.
+  - **What it is:** an HMAC under a key derived from `SESSION_SIGNING_KEY`. It
+    covers the app, the grant id, **the envelope it was minted for (`event_id`,
+    `attempt`)**, the user, the roles and the expiry. It travels inside the
+    signed event envelope.
+  - **Bound to its request (#318).** A call may use the grant only with
+    `ctx.invocation` equal to the grant's own `<event_id>:<attempt>`. That
+    invocation must still be `running`, and the call is counted against its
+    200-call budget. A grant the worker keeps (in module state, say) therefore
+    cannot act as its user from a schedule, a hook, another user's request,
+    another attempt of the same event, or after its own request has finished or
+    timed out. Re-pointing it at another invocation would need a new
+    signature, which the worker has no key to make.
   - **What it lets the worker do:** run actions **as that user**, with the
     user's `:__user_id`, the user's role gates and the role-gated audit
     entry. Only actions whose `callers` include `"user"` can run this way, and
     step-up actions are refused.
-  - **What fails:** a grant for another app, or an expired one, is
-    `Unauthorized`.
+  - **What fails:** a grant for another app, for another invocation, for an
+    invocation that is no longer running, or an expired one, is `Unauthorized`
+    and spends no budget.
 - **Private apps** gate `/.pas/worker/*` like every other app path. The worker
   itself is never reachable from the Internet.
 

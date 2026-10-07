@@ -271,10 +271,12 @@ appWorkerRoutes.post('/apps/:appId/worker/http', async (c) => {
 
   let ctx: AppWorkerExports | undefined;
   try { ctx = c.executionCtx as unknown as AppWorkerExports; } catch { ctx = undefined; }
+  // #318: the grant is minted for this envelope (id, attempt) and works only from its invocation.
+  const event = { id: crypto.randomUUID(), attempt: 1 };
   const result = await appWorkerHost(c.env, ctx).invoke(appId, {
-    id: crypto.randomUUID(),
+    id: event.id,
     type: 'http',
-    attempt: 1,
+    attempt: event.attempt,
     payload: {
       method,
       path: q === -1 ? target : target.slice(0, q),
@@ -282,7 +284,7 @@ appWorkerRoutes.post('/apps/:appId/worker/http', async (c) => {
       headers,
       ...encodeEnvelopeBody(bytes, headers['content-type'] ?? null),
     },
-    caller: await mintCallerGrant(c.env, appId, user),
+    caller: await mintCallerGrant(c.env, appId, user, event),
   }, { timeoutMs: WORKER_HTTP_TIMEOUT_MS }).catch((e: unknown) => {
     // #275: an interactive request is refused honestly, with when to come back.
     if (e instanceof AppWorkerQuotaError) return e;

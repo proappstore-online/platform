@@ -79,12 +79,14 @@ export async function authorizeWorkerCall(
   const current = !!w?.token_hash && hexEqual(hash, w.token_hash);
   const previous = !!w?.prev_token_hash && !!w.prev_token_until && w.prev_token_until > now && hexEqual(hash, w.prev_token_hash);
   if (!w || !(current || previous)) throw new WorkerCallError('Unauthorized', 'invalid worker token for this app');
-  // A caller grant (#260) must be one the platform signed for THIS app, unexpired.
-  // Checked before the budget, so a forged or stale grant spends nothing.
+  // A caller grant (#260) must be one the platform signed for THIS app, unexpired, and for THIS invocation
+  // (#318): ctx.invocation must be the grant's own `<event_id>:<attempt>`. Its budget is the one counted below,
+  // and only while it runs, so a kept grant is dead outside its request. Checked before the budget, so a
+  // forged, stale or borrowed grant spends nothing.
   let caller: CallerIdentity | null = null;
   if (call.as !== undefined) {
-    caller = await verifyCallerGrant(env, appId, call.as, Math.floor(now / 1000));
-    if (!caller) throw new WorkerCallError('Unauthorized', 'invalid or expired caller grant');
+    caller = await verifyCallerGrant(env, appId, call.as, call.invocation, Math.floor(now / 1000));
+    if (!caller) throw new WorkerCallError('Unauthorized', 'invalid or expired caller grant, or not for this invocation');
   }
 
   const counted = await env.DB.prepare(

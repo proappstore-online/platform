@@ -171,8 +171,8 @@ signed **event envelope**, on every backend:
       "attempt": 1,
       "issued_at": <unix ms>,
       "caller": {                   // http only; absent on schedule and hook
-        "grant_id": "<uuid>", "user_id": "<id>", "roles": ["..."],
-        "exp": <unix s>, "sig": "<hex>"
+        "grant_id": "<uuid>", "event_id": "<this envelope's id>", "attempt": 1,
+        "user_id": "<id>", "roles": ["..."], "exp": <unix s>, "sig": "<hex>"
       },
       "payload": { ... }            // schedule params, hook delivery, or request
     }
@@ -186,7 +186,12 @@ signed **event envelope**, on every backend:
 `caller` is part of the signed body, so it is covered by the envelope signature
 like every other field. The signature also covers the top-level `app_id`, and
 the grant's own `sig` is computed over that `app_id` too (#260), so a `caller`
-grant minted for one app cannot be replayed into another app's envelope.
+grant minted for one app cannot be replayed into another app's envelope. The
+grant's `sig` also covers the envelope it was minted for, `event_id` and
+`attempt` (#318). A `PAS` call may use it only with `ctx.invocation` equal to
+`<event_id>:<attempt>`, while that invocation is running, and on that
+invocation's budget. So a grant cannot be replayed into another invocation of the
+same app either.
 
 - **Signature.** HMAC-SHA256 over `"<t>.<raw body>"` with `PAS_EVENT_KEY`,
   compared in constant time. The header may carry **several `v1=` values**; the

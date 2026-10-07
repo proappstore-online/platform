@@ -286,7 +286,8 @@ describe('actions as the caller of an http request (#260)', () => {
     name, description: name, operation: 'query', requires_auth: true, params: {},
     sql: 'SELECT id FROM notes WHERE owner = :__user_id LIMIT 10', ...extra,
   });
-  const grant = (over: Row = {}) => mintCallerGrant(env, 't', { id: 'gh:42', roles: ['user'] }).then((g) => ({ ...g, ...over }));
+  // Minted for envelope e1, attempt 1: the invocation ctx() names (#318).
+  const grant = (over: Row = {}) => mintCallerGrant(env, 't', { id: 'gh:42', roles: ['user'] }, { id: 'e1', attempt: 1 }).then((g) => ({ ...g, ...over }));
 
   it('runs a user action with :__user_id = the grant\'s user', async () => {
     userTool('my_notes');
@@ -311,10 +312,46 @@ describe('actions as the caller of an http request (#260)', () => {
     const caller = { id: 'gh:42', roles: ['user'] };
     expect(await code(workerActionCall(env, 't', 'add_row', { id: 'x' }, caller))).toBe('Forbidden');
     expect(await code(workerActionCall(env, 't', 'id_docs', {}, caller))).toBe('Forbidden');
-    const other = await mintCallerGrant(env, 'u', caller);
+    const other = await mintCallerGrant(env, 'u', caller, { id: 'e1', attempt: 1 });
     expect(await code(authorizeWorkerCall(env, 't', ctx({ as: other })))).toBe('Unauthorized');
     expect(await code(authorizeWorkerCall(env, 't', ctx({ as: await grant() }), Date.now() + 31_000))).toBe('Unauthorized');
     expect(invocations.get('e1:1')!.pas_calls).toBe(0);
     expect(sent).toHaveLength(0);
+  });
+
+  describe('bound to the invocation it was minted for (#318)', () => {
+    const running = (id: string) => invocations.set(id, { app_id: 't', status: 'running', pas_calls: 0 });
+
+    it('works from its own invocation and spends that invocation\'s budget', async () => {
+      expect(await authorizeWorkerCall(env, 't', ctx({ as: await grant() }))).toEqual({ caller: { id: 'gh:42', roles: ['user'] } });
+      expect(invocations.get('e1:1')!.pas_calls).toBe(1);
+    });
+
+    it('is refused from any other running invocation (a schedule, a hook, another user\'s request), which spends nothing', async () => {
+      const g = await grant();
+      for (const other of ['sched-1:1', 'hook-1:1', 'req-of-gh7:1']) {
+        running(other);
+        expect(await code(authorizeWorkerCall(env, 't', ctx({ invocation: other, as: g }))), other).toBe('Unauthorized');
+        expect(invocations.get(other)!.pas_calls, other).toBe(0);
+      }
+      // That other user's request keeps its own grant working: grants are not interchangeable.
+      const theirs = await mintCallerGrant(env, 't', { id: 'gh:7', roles: ['user'] }, { id: 'req-of-gh7', attempt: 1 });
+      expect(await authorizeWorkerCall(env, 't', ctx({ invocation: 'req-of-gh7:1', as: theirs }))).toEqual({ caller: { id: 'gh:7', roles: ['user'] } });
+      expect(await code(authorizeWorkerCall(env, 't', ctx({ as: theirs })))).toBe('Unauthorized');
+    });
+
+    it('is refused for another attempt of its own event', async () => {
+      running('e1:2');
+      expect(await code(authorizeWorkerCall(env, 't', ctx({ invocation: 'e1:2', as: await grant() })))).toBe('Unauthorized');
+      expect(invocations.get('e1:2')!.pas_calls).toBe(0);
+    });
+
+    it('is dead once its own invocation has finished or timed out, though unexpired', async () => {
+      const g = await grant();
+      for (const status of ['succeeded', 'failed', 'timeout']) {
+        invocations.get('e1:1')!.status = status;
+        expect(await code(authorizeWorkerCall(env, 't', ctx({ as: g }))), status).toBe('Unauthorized');
+      }
+    });
   });
 });

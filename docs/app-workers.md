@@ -228,7 +228,11 @@ standard `Request`:
 - **Request:** at most 1 MB. It is never retried.
 - **Actions:** inside the request, `pas.actions` run **as that user**, with their
   rows and their role gates. The platform passes a 30-second caller grant for
-  this. Only actions whose `callers` include `"user"` can run this way.
+  this. Only actions whose `callers` include `"user"` can run this way. The
+  grant works only inside the request it came with (#318). It must be used with
+  that request's own invocation, which the SDK passes for you, while the request
+  is running. Keeping it for a later request, a schedule or a hook gets
+  `Unauthorized`.
 - **Response:** only `Content-Type` and `ETag` pass through, and
   `Cache-Control` is always `private, no-store`.
 
