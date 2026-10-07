@@ -64,7 +64,7 @@ appWorkerSpikeRoutes.post('/internal/app-worker-spike', async (c) => {
   await requireAdmin(c);
   const loader = c.env.LOADER;
   if (!loader) return c.json({ error: 'no LOADER binding' }, 503);
-  const body = await c.req.json<{ mode?: string; n?: number; sleepMs?: number; kb?: number; spinMs?: number; cpuMs?: number; spinIn?: string; tail?: boolean }>();
+  const body = await c.req.json<{ mode?: string; n?: number; sleepMs?: number; kb?: number; spinMs?: number; cpuMs?: number; spinIn?: string; tail?: boolean; entrypointLimit?: boolean }>();
   const run = crypto.randomUUID();
   const t0 = Date.now();
 
@@ -92,11 +92,11 @@ appWorkerSpikeRoutes.post('/internal/app-worker-spike', async (c) => {
     const source = sizedModule(kb, Math.min(Math.max(body.spinMs ?? 0, 0), 2000), body.spinIn ?? 'startup');
     const worker = loader.get(`spike:${run}:startup`, async () => ({
       compatibilityDate: '2026-01-01', mainModule: 'w.js', modules: { 'w.js': source }, env: {}, globalOutbound: null,
-      ...(body.cpuMs ? { limits: { cpuMs: body.cpuMs } } : {}),
+      ...(body.cpuMs && !body.entrypointLimit ? { limits: { cpuMs: body.cpuMs } } : {}),
       ...(body.tail ? { tails: [(c.executionCtx as unknown as { exports: { SpikeTail(o: { props: { label: string } }): Fetcher } }).exports.SpikeTail({ props: { label: run } })] } : {}),
     }));
     try {
-      const res = await worker.getEntrypoint().fetch(new Request('https://w.invalid/'));
+      const res = await (body.entrypointLimit ? worker.getEntrypoint(undefined, { limits: { cpuMs: body.cpuMs } }) : worker.getEntrypoint()).fetch(new Request('https://w.invalid/'));
       return c.json({ run, bytes: source.length, kb, spinMs: body.spinMs ?? 0, cpuMs: body.cpuMs ?? null, wallMs: Date.now() - t0, status: res.status, child: await res.text(), ...(body.tail ? { tail: await readTail(c.env, run) } : {}) });
     } catch (e) {
       return c.json({ run, bytes: source.length, kb, spinMs: body.spinMs ?? 0, cpuMs: body.cpuMs ?? null, wallMs: Date.now() - t0, error: String((e as Error).message ?? e), ...(body.tail ? { tail: await readTail(c.env, run) } : {}) });
