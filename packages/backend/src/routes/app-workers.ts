@@ -30,6 +30,7 @@ import { requireVisibleUser } from '../lib/visibility.js';
 import { mintCallerGrant } from '../lib/caller-grant.js';
 import { decodeEnvelopeBody, encodeEnvelopeBody } from '../app-worker-shim/body.js';
 import type { AppWorkerExports } from '../lib/app-worker-host.js';
+import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { AppWorkerQuotaError, appWorkersOpen, appWorkerUsage, setAppWorkersOpen, validateQuotaOverrides } from '../lib/app-worker-usage.js';
 
 /** One manual run per schedule per minute (#255). */
@@ -250,8 +251,9 @@ const RESPONSE_HEADERS = ['content-type', 'etag'];
 appWorkerRoutes.post('/apps/:appId/worker/http', async (c) => {
   const appId = c.req.param('appId');
   const user = await requireVisibleUser(c, appId);
-  // Only the host sets this (the API entry strips it), so it proves the request came through the app's own origin.
-  if (c.req.header('X-PAS-App') !== appId) throw new HttpError('worker routes are reached through the app origin (/.pas/worker)', 403);
+  // Only the host sets this: direct calls have it stripped by the default export, and only HostApi keeps it (#315).
+  // So it proves the request came through the app's own origin.
+  if (c.req.header(APP_CONTEXT_HEADER) !== appId) throw new HttpError('worker routes are reached through the app origin (/.pas/worker)', 403);
   const method = (c.req.header('X-PAS-Worker-Method') ?? '').toUpperCase();
   const target = c.req.header('X-PAS-Worker-Path') ?? '';
   if (!WORKER_HTTP_METHODS.has(method)) throw new HttpError('unsupported method', 405);

@@ -234,9 +234,13 @@ forwards them with the cookie session:
 | `/.pas/auth/passkey/step-up` | `/v1/auth/passkey/step-up` | verifies and swaps the session |
 
 - **Relying party.** The relying-party id is the app hostname. The host asserts it
-  in `X-PAS-Host` and strips any client-supplied copy, on `/.pas/api` and on direct
-  `api.*` dispatch alike. The API refuses a passkey request that lacks it, so the
-  routes work only through `/.pas/auth/passkey/*`.
+  in `X-PAS-Host`, and only on `/.pas/auth/passkey/*`. On `/.pas/api` it strips
+  any client-supplied copy. A direct call to `api.proappstore.online` never
+  passes the host, so the backend's default `fetch` export strips both
+  `X-PAS-Host` and `X-PAS-App` itself. Only the host's binding to the `HostApi`
+  entrypoint keeps them (#315, [authorization model](./authorization-model.md)).
+  The API refuses a passkey request without an app hostname, so app passkeys
+  work only through `/.pas/auth/passkey/*`.
 - **Registration.** The browser sends `getPublicKey()` (SPKI) and
   `getPublicKeyAlgorithm()`; ES256 and RS256 are accepted. It needs a sign-in
   within the last 10 minutes. Once the user has a passkey on that host, adding

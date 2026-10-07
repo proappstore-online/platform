@@ -1,5 +1,5 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { APP_CONTEXT_HEADER } from './lib/app-context.js';
+import { APP_CONTEXT_HEADER, withoutHostContext } from './lib/app-context.js';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
@@ -320,7 +320,9 @@ export class HostApi extends WorkerEntrypoint<Env> {
  * `fetch` stays the Hono app — tests and service-binding callers keep calling `app.fetch`.
  */
 export default {
-  fetch: (request: Request, env: Env, ctx: ExecutionContext) => app.fetch(request, env, ctx),
+  // #315: everything that is not the host — api.proappstore.online's own route, other service bindings, SELF —
+  // arrives here, so a caller's X-PAS-App / X-PAS-Host never reach a route. Only HostApi above keeps them.
+  fetch: (request: Request, env: Env, ctx: ExecutionContext) => app.fetch(withoutHostContext(request), env, ctx),
   // #257: pas-app-events (deliver to the app worker, retry) and pas-app-events-dlq (fail the row). ctx carries exports.AppWorkerApi, the PAS binding of invoked app workers (#254).
   queue: (batch: MessageBatch<AppEventMessage>, env: Env, ctx: ExecutionContext) => handleAppEventBatch(batch, env, ctx as AppWorkerExports),
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {

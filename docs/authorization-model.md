@@ -304,6 +304,34 @@ on an app with no user behind them. They run with platform identities that are
   `admin`. The grant, not the workflow, is the authority; revoke it and the
   next run gets 403. This is the last stored credential removed from CI: no
   PAT, no device-flow token in a repo secret.
+- **Host context (`X-PAS-App`, `X-PAS-Host`)** (#315) is the host worker's word
+  about which app origin (and which app hostname) a request came from. It is not
+  an identity, and it authorizes nothing on its own: it is an *input* to checks
+  that must not take the page's word. Those checks are:
+  - the secret proxy's app binding (#80);
+  - passkey relying parties (#230);
+  - the app-worker browser route (#260);
+  - usage attribution (#58);
+  - `source = 'mediated'` on logs;
+  - the operator view's refusal of app pages (#300).
+
+  It is true only because of where it can arrive:
+  - **Direct callers cannot send it.** `api.proappstore.online` has its own route
+    to `proappstore-api`, so direct traffic never passes the host. The backend's
+    default `fetch` export removes both headers before any route runs. That
+    covers the public route, every other service binding, and `SELF`.
+  - **Only the host can.** The host reaches the backend through its `API` service
+    binding to the **`HostApi`** entrypoint (`packages/host/wrangler.toml`).
+    Nothing on the Internet can address a named entrypoint, so this is the one
+    path on which the headers survive. The host itself deletes any client copy
+    before it sets them (`platform-mediation.ts`, `index.ts`).
+  - **No `workers.dev` URL.** The backend has none (`workers_dev = false`).
+
+  Never give another worker a binding to `HostApi`, and never read these headers
+  through a path that bypasses the default export. Absence means "not from an app
+  origin": logs accept it as unverified, the secret proxy refuses it. The
+  regression suite is `packages/runtime-tests/test/backend/host-context.test.ts`.
+  Each consumer is tested twice: forged on a direct call, and sent by the host.
 
 ## Rule of thumb
 

@@ -78,10 +78,10 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
 
       // SECURITY (#80): every proxy call is bound to the calling app. A request
       // arriving through same-origin mediation carries X-PAS-App, set by the host
-      // from the resolved route; the host strips any client-supplied copy on both
-      // the mediated path (platform-mediation.ts) and the direct api.* dispatch
-      // (host index.ts), and this worker has no workers.dev URL to go around it —
-      // so the header is the host's word, never the caller's. Anything else would
+      // from the resolved route (platform-mediation.ts strips any client copy). It
+      // arrives only through the host's HostApi binding: a direct call to
+      // api.proappstore.online reaches the default export, which strips it (#315,
+      // lib/app-context.ts) — so the header is the host's word, never the caller's. Anything else would
       // let a session obtained on app A spend app B's secrets and quota.
       //
       // Absent → the call did not come from an app origin at all (legacy-bearer,
