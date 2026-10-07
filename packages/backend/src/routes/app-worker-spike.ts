@@ -89,7 +89,7 @@ appWorkerSpikeRoutes.post('/internal/app-worker-spike', async (c) => {
 
   if (body.mode === 'startup') {
     const kb = Math.min(Math.max(body.kb ?? 200, 0), 3000);
-    const source = sizedModule(kb, Math.min(Math.max(body.spinMs ?? 0, 0), 2000), body.spinIn ?? 'startup');
+    const source = sizedModule(kb, Math.min(Math.max(body.spinMs ?? 0, 0), 80_000), body.spinIn ?? 'startup');
     const worker = loader.get(`spike:${run}:startup`, async () => ({
       compatibilityDate: '2026-01-01', mainModule: 'w.js', modules: { 'w.js': source }, env: {}, globalOutbound: null,
       ...(body.cpuMs && !body.entrypointLimit ? { limits: { cpuMs: body.cpuMs } } : {}),
