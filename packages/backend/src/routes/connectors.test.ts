@@ -151,7 +151,7 @@ describe('setup', () => {
       method: 'POST', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ installation_id: '5', state: await signConnectorState({ SESSION_SIGNING_KEY: TEST_SK }, 'a', 'gh:1') }),
     }, e);
-    expect(await res.json()).toEqual({ ok: true, installation_id: 5, account: 'acme' });
+    expect(await res.json()).toEqual({ ok: true, app_id: 'a', installation_id: 5, account: 'acme' });
   });
 });
 

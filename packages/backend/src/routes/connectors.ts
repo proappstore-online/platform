@@ -99,7 +99,7 @@ connectorRoutes.get('/connectors/github/setup', async (c) => {
     return c.redirect(`${CONSOLE}/#/connectors/github/setup?${new URLSearchParams({ installation_id: q.installation_id ?? '', setup_action: q.setup_action ?? '', state: q.state ?? '', ...(q.code ? { code: q.code } : {}) })}`, 302);
   }
   const done = await completeSetup(c, q);
-  return c.redirect(`${CONSOLE}/#/apps/${encodeURIComponent(done.appId)}?connector=github&installed=${encodeURIComponent(done.account)}`, 302);
+  return c.redirect(`${CONSOLE}/#/apps/${encodeURIComponent(done.appId)}/settings/integrations`, 302);
 });
 
 connectorRoutes.post('/connectors/github/setup', async (c) => {
@@ -108,7 +108,7 @@ connectorRoutes.post('/connectors/github/setup', async (c) => {
   const body = await c.req.json<SetupParams>().catch(() => null);
   if (!body || typeof body !== 'object') throw new HttpError('JSON body required', 400);
   const done = await completeSetup(c, body);
-  return c.json({ ok: true, installation_id: done.installationId, account: done.account });
+  return c.json({ ok: true, app_id: done.appId, installation_id: done.installationId, account: done.account });
 });
 
 connectorRoutes.delete('/apps/:appId/connectors/github/installations/:id', async (c) => {
