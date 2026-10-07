@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { appWorkerHost, disableAppWorker } from '../../../backend/src/lib/app-worker-host';
 import { sealSecret } from '../../../backend/src/lib/encryption';
-import { HOOK_TIMEOUT_MS, SYSTEM_HOOK_USER } from '../../../backend/src/routes/hooks';
+import { HOOK_TIMEOUT_MS, STALE_HOOK_WORKER_LEASE_MS, SYSTEM_HOOK_USER } from '../../../backend/src/routes/hooks';
+import { runScheduledActions } from '../../../backend/src/lib/scheduled-actions';
 import { BASE, captureAppEvents, drainAppEvents, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
 const env = providedEnv as unknown as Env;
@@ -80,7 +81,7 @@ beforeEach(async () => {
   mockNetwork();
   for (const r of (await env.DB.prepare('SELECT app_id FROM app_workers').all<{ app_id: string }>()).results ?? []) await disableAppWorker(env, r.app_id);
   await resetTables();
-  for (const t of ['app_hooks', 'app_hook_deliveries', 'app_secrets', 'app_worker_invocations', 'app_log_usage']) await env.DB.prepare(`DELETE FROM ${t}`).run();
+  for (const t of ['app_hooks', 'app_hook_deliveries', 'app_secrets', 'app_worker_invocations', 'app_log_usage', 'app_worker_usage']) await env.DB.prepare(`DELETE FROM ${t}`).run();
   await seedUser('gh:admin', 'admin');
   await seedUser('gh:7', 'other');
   await seedApp('t', 'gh:admin');
@@ -316,5 +317,80 @@ describe('replay protection keys on signed bytes, not delivery-id headers (#317)
     await settled('shown-1');
     const { deliveries } = await (await SELF.fetch(`${BASE}/v1/apps/t/hook-deliveries?hook=github`, json('GET', undefined, await session('gh:admin')))).json() as { deliveries: Record<string, unknown>[] };
     expect(deliveries).toEqual([expect.objectContaining({ delivery_id: 'shown-1', replay_key: expect.stringMatching(/^[0-9a-f]{64}$/), status: 'delivered' })]);
+  });
+});
+
+describe('a delivery cut off mid-processing is recovered, never doubled (#319)', () => {
+  const BODY = '{"action":"opened","issue":{"number":319}}';
+  const replayKey = async (body: string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(body)))].map((b) => b.toString(16).padStart(2, '0')).join('');
+  /** A `received` row as a cut-off attempt leaves it: no queue message, no finish. */
+  async function cutOff(leaseUntil: number, status = 'received') {
+    await env.DB.prepare(
+      `INSERT INTO app_hook_deliveries (id, app_id, hook, delivery_id, sender_delivery_id, event, received_at, status, attempts, lease_until)
+       VALUES ('row-319', 't', 'github', ?, 'gh-319', 'issues', ?, ?, 1, ?)`,
+    ).bind(await replayKey(BODY), Date.now() - 2 * STALE_HOOK_WORKER_LEASE_MS, status, leaseUntil).run();
+  }
+  const row = () => env.DB.prepare("SELECT status, attempts, lease_until, error FROM app_hook_deliveries WHERE id = 'row-319'").first<{ status: string; attempts: number; lease_until: number; error: string | null }>();
+  const hookQuota = () => env.DB.prepare("SELECT hook_deliveries FROM app_worker_usage WHERE app_id = 't'").first<{ hook_deliveries: number }>().then((r) => r?.hook_deliveries ?? 0);
+  const workerRuns = () => env.DB.prepare("SELECT COUNT(*) AS n FROM app_worker_invocations WHERE app_id = 't'").first<{ n: number }>().then((r) => r!.n);
+
+  it('a redelivery takes over a stale received row once, under a fresh lease, and it is delivered', async () => {
+    await cutOff(Date.now() - 1);
+    const res = await github('issues', 'gh-319', BODY);
+    expect(res.status).toBe(202);
+    const taken = await row();
+    expect(taken).toMatchObject({ status: 'received', attempts: 2 });
+    expect(taken!.lease_until).toBeGreaterThan(Date.now() + STALE_HOOK_WORKER_LEASE_MS - 60_000);
+    await drainAppEvents(sent);
+    expect(await row()).toMatchObject({ status: 'delivered', attempts: 2 });
+    expect(await workerRuns()).toBe(1);
+    expect(await hookQuota()).toBe(1); // the takeover is a try, counted once
+  });
+
+  it('inside its lease a received row is still a duplicate, and so is a delivered one however old', async () => {
+    await cutOff(Date.now() + 60_000);
+    expect(await (await github('issues', 'gh-319', BODY)).json()).toEqual({ duplicate: true });
+    expect(await row()).toMatchObject({ status: 'received', attempts: 1 });
+    await env.DB.prepare("UPDATE app_hook_deliveries SET status = 'delivered', lease_until = 1 WHERE id = 'row-319'").run();
+    expect(await (await github('issues', 'gh-319', BODY)).json()).toEqual({ duplicate: true });
+    expect(sent).toHaveLength(0);
+    expect(await hookQuota()).toBe(0);
+  });
+
+  it('concurrent redeliveries of a stale row (fresh delivery-id headers included): exactly one takes it over and it runs once', async () => {
+    await cutOff(Date.now() - 1);
+    const answers = await Promise.all(['gh-319', 'gh-319', 'forged-a', 'forged-b'].map((id) => github('issues', id, BODY).then(async (r) => ({ status: r.status, body: await r.json() }))));
+    expect(answers.filter((a) => a.status === 202)).toHaveLength(1);
+    expect(answers.filter((a) => a.status === 200 && (a.body as { duplicate?: boolean }).duplicate)).toHaveLength(3);
+    expect(sent).toHaveLength(1);
+    await drainAppEvents(sent);
+    expect(await row()).toMatchObject({ status: 'delivered', attempts: 2 });
+    expect(await workerRuns()).toBe(1);
+    expect(await hookQuota()).toBe(1);
+  });
+
+  it('the platform tick fails a stale received row, leaves a live one alone, and a later redelivery runs it', async () => {
+    await cutOff(Date.now() - 1);
+    await env.DB.prepare(
+      `INSERT INTO app_hook_deliveries (id, app_id, hook, delivery_id, event, received_at, status, attempts, lease_until)
+       VALUES ('row-live', 't', 'github', 'live-key', 'issues', ?, 'received', 1, ?)`,
+    ).bind(Date.now(), Date.now() + 60_000).run();
+    const report = await runScheduledActions({ env, now: Date.now() });
+    expect(report.recovery).toMatchObject({ hook_deliveries: 1 });
+    expect(await row()).toMatchObject({ status: 'failed', error: expect.stringContaining('lease expired') });
+    expect(await env.DB.prepare("SELECT status FROM app_hook_deliveries WHERE id = 'row-live'").first()).toEqual({ status: 'received' });
+    // A second tick finds nothing more: the sweep is idempotent.
+    expect((await runScheduledActions({ env, now: Date.now() })).recovery).toMatchObject({ hook_deliveries: 0 });
+    expect((await github('issues', 'gh-319', BODY)).status).toBe(202);
+    await drainAppEvents(sent);
+    expect(await row()).toMatchObject({ status: 'delivered', attempts: 2 });
+  });
+
+  it('a legacy row without a lease counts as received_at + the worker lease', async () => {
+    await cutOff(0);
+    await env.DB.prepare("UPDATE app_hook_deliveries SET lease_until = NULL WHERE id = 'row-319'").run();
+    expect((await github('issues', 'gh-319', BODY)).status).toBe(202); // received two leases ago: stale
+    await drainAppEvents(sent);
+    expect(await row()).toMatchObject({ status: 'delivered', attempts: 2 });
   });
 });

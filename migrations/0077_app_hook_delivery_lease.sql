@@ -1,0 +1,15 @@
+-- #319: a bounded processing lease on every inbound hook delivery attempt.
+--
+-- Additive only. A delivery is recorded `received` before it is processed: on the
+-- app-events queue for a worker hook, or in waitUntil for an action hook. If that
+-- processing was cut off (waitUntil's 30 s, an evicted isolate, a lost queue
+-- message), the row stayed `received` forever, and every redelivery was answered
+-- {duplicate:true}.
+--
+-- lease_until is when the current attempt's processing is over, set when it is
+-- accepted and again each time a retry takes the row over: received + 5 min for an
+-- action hook, + 60 min for a worker hook (past the queue's whole retry span).
+-- Past it, a `received` row is stale: one redelivery may take it over atomically,
+-- and the 5-minute platform tick fails it so it can be redelivered. NULL on rows
+-- from before this migration: they count as received_at + 60 min.
+ALTER TABLE app_hook_deliveries ADD COLUMN lease_until INTEGER;

@@ -11,7 +11,8 @@ import { scheduledCronMatches } from '../routes/tools.js';
 import { dispatchWebhook } from './webhook-dispatch.js';
 import { SCHEDULER_TICK_MINUTES } from './scheduler-tick.js';
 import { appWorkerHost, type AppWorkerExports } from './app-worker-host.js';
-import { scheduleMessage, sendAppEvent } from './app-event-queue.js';
+import { HOOK_BODY_PREFIX, scheduleMessage, sendAppEvent } from './app-event-queue.js';
+import { STALE_RECEIVED_SQL } from '../routes/hooks.js';
 import { AppWorkerQuotaError } from './app-worker-usage.js';
 
 const SYSTEM_SCHEDULE_USER = 'system:schedule';
@@ -22,6 +23,12 @@ export const STALE_QUEUED_RUN_MS = 60 * 60_000;
 /** Run states in which a run is live: no later run of the same action is claimed over it. */
 type LiveRunStatus = 'claimed' | 'queued';
 export const SCHEDULE_FAILURE_BREAKER = 5;
+/**
+ * #319: a `running` app-worker invocation older than this was cut off (an evicted
+ * isolate, a killed consumer) and will never record its outcome. Above the
+ * longest invocation budget, a 5-minute schedule, and equal to the stale-claim window.
+ */
+export const STALE_INVOCATION_MS = 10 * 60_000;
 
 interface ScheduledToolRow { app_id: string; name: string; manifest: string; source: 'code' | 'console' | null }
 interface ScheduledRunRow { run_id: string; app_id: string; action_name: string; source: 'code' | 'console'; claimed_at: number | null }
@@ -35,6 +42,36 @@ export interface ScheduledActionReport {
   skipped: number;
   /** App-worker schedules (#255), counted apart from actions. */
   workers?: WorkerScheduleReport;
+  /** #319: stale hook deliveries failed and stale invocations timed out on this tick. */
+  recovery?: { hook_deliveries: number; invocations: number };
+}
+
+/**
+ * #319: end what was cut off and will never finish on its own. Each UPDATE matches
+ * only rows that are still stale, so a concurrent tick or a late finish cannot
+ * double-count or overwrite a newer state.
+ *
+ * - A hook delivery still `received` past its lease (routes/hooks.ts) becomes
+ *   `failed`. The sender's redelivery then retries it through the normal path, and
+ *   any body spilled to R2 for the queue is deleted.
+ * - An invocation still `running` after STALE_INVOCATION_MS becomes `timeout`. Its
+ *   PAS calls and caller grant stop working, because both need it `running`.
+ */
+export async function recoverStaleAppWorkerState(env: Env, now: number): Promise<{ hook_deliveries: number; invocations: number }> {
+  const hooks = await env.DB.prepare(
+    `UPDATE app_hook_deliveries SET status = 'failed', finished_at = ?,
+            error = 'processing was cut off and never finished (lease expired); redeliver it from the sender'
+      WHERE ${STALE_RECEIVED_SQL} RETURNING id, app_id`,
+  ).bind(now, now).all<{ id: string; app_id: string }>();
+  for (const r of hooks.results ?? []) {
+    await env.STORAGE.delete(`${HOOK_BODY_PREFIX}${r.app_id}/${r.id}`).catch(() => {});
+  }
+  const invocations = await env.DB.prepare(
+    `UPDATE app_worker_invocations SET status = 'timeout', finished_at = ?,
+            error = 'abandoned: the invocation never finished (stale running invocation recovered)'
+      WHERE status = 'running' AND started_at < ? RETURNING id`,
+  ).bind(now, now - STALE_INVOCATION_MS).all<{ id: string }>();
+  return { hook_deliveries: hooks.results?.length ?? 0, invocations: invocations.results?.length ?? 0 };
 }
 
 /** `queued`: runs handed to the app-events queue; `failed`: runs that could not be enqueued. The outcome of a queued run is the consumer's. */
@@ -330,6 +367,12 @@ export async function runScheduledActions(opts: { env: Env; now?: number }): Pro
     report.workers = await runWorkerSchedules(opts.env, now, dueAt);
   } catch (e) {
     console.error(`[schedule] worker schedules failed: ${errorText(e)}`);
+  }
+  // #319: after the tick's own work, end what was cut off. Never let the sweep stop the tick.
+  try {
+    report.recovery = await recoverStaleAppWorkerState(opts.env, now);
+  } catch (e) {
+    console.error(`[schedule] stale app-worker recovery failed: ${(e as Error)?.message ?? e}`);
   }
   return report;
 }

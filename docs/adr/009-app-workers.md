@@ -260,7 +260,11 @@ same app either.
 - Hooks: ≤ 10 per app, body ≤ 5 MB, verified by the platform before any app code
   runs, de-duplicated on a key from signed bytes only. That key is the verified
   body's SHA-256, or Stripe's signed event id. A sender's delivery-id header is
-  unsigned and kept for display (#317).
+  unsigned and kept for display (#317). Each attempt holds a processing lease
+  (#319): 5 min for an action hook, 60 min for a worker hook, past the queue's
+  retry span. A `received` delivery past its lease is stale: one redelivery
+  takes it over by a conditional update, and the 5-minute tick fails it
+  otherwise. The same tick times out invocations still `running` after 10 min.
 - **Recording**, consistent with [ADR-008](./008-error-observability.md)'s
   two-tier split:
   - one **per-invocation record in D1** (app, event id, type, name, attempt,

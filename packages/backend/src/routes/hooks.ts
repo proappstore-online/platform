@@ -9,7 +9,10 @@
  * hook exists (404, with no hint whether the app does); the raw bytes, read once,
  * verify against the hook's verifier (401 — no row is written, no app code runs);
  * the delivery id is de-duplicated (a repeat of a received/delivered delivery is
- * 200 {duplicate:true}; a repeat of a failed one is a redelivery). Then the
+ * 200 {duplicate:true}; a repeat of a failed one is a redelivery). A received
+ * delivery whose processing lease has run out (#319: cut off in waitUntil, an
+ * evicted isolate, a lost queue message) counts as failed: one redelivery takes
+ * it over, and the platform tick fails it if none comes. Then the
  * app's daily hook quota (#275): over it, the row is `quota_exceeded` and nothing
  * is delivered — still a 202, because GitHub never redelivers on its own and a
  * 429 would lose the event just the same; the owner redelivers it from the sender
@@ -36,6 +39,18 @@ export const MAX_HOOK_BODY_BYTES = 5 * 1024 * 1024;
 /** ADR-009 §4 hook budget: 60 s, in the queue consumer (#257), which waitUntil's 30 s cap does not bind. */
 export const HOOK_TIMEOUT_MS = 60_000;
 export const SYSTEM_HOOK_USER = 'system:hook';
+/**
+ * #319: how long one attempt may stay `received` before it is presumed cut off.
+ * An action hook runs in waitUntil, which Cloudflare ends 30 s after the response.
+ * A worker hook is on the queue for up to ~16 min (5 retries over 620 s of
+ * backoff, 6 tries of 60 s) before dead-lettering fails it. Each lease is well
+ * past its path's end, so a takeover never races a live attempt.
+ */
+export const STALE_HOOK_ACTION_LEASE_MS = 5 * 60_000;
+export const STALE_HOOK_WORKER_LEASE_MS = 60 * 60_000;
+export const hookLeaseMs = (target: HookTarget) => (target === 'worker' ? STALE_HOOK_WORKER_LEASE_MS : STALE_HOOK_ACTION_LEASE_MS);
+/** A `received` row is stale once its lease has passed; pre-#319 rows carry none and get the longer one. */
+export const STALE_RECEIVED_SQL = `status = 'received' AND COALESCE(lease_until, received_at + ${STALE_HOOK_WORKER_LEASE_MS}) < ?`;
 
 export const hookRoutes = new Hono<{ Bindings: Env }>();
 
@@ -108,9 +123,14 @@ export async function deliverHook(env: Env, d: HookDelivery, ctx?: AppWorkerExpo
   return `action ${d.target.action} failed (${res.status}): ${(await res.text()).slice(0, 300)}`;
 }
 
-async function finish(env: Env, rowId: string, error: string | null, status: 'failed' | 'quota_exceeded' = 'failed'): Promise<void> {
-  await env.DB.prepare('UPDATE app_hook_deliveries SET status = ?, finished_at = ?, error = ? WHERE id = ?')
-    .bind(error === null ? 'delivered' : status, Date.now(), error === null ? null : error.slice(0, 500), rowId).run();
+/**
+ * End one attempt. Only that attempt, and only while it is still `received`: a
+ * late finish of a cut-off attempt must not overwrite the retry that took the
+ * row over (#319), nor a row the tick has already failed.
+ */
+async function finish(env: Env, rowId: string, attempt: number, error: string | null, status: 'failed' | 'quota_exceeded' = 'failed'): Promise<void> {
+  await env.DB.prepare("UPDATE app_hook_deliveries SET status = ?, finished_at = ?, error = ? WHERE id = ? AND attempts = ? AND status = 'received'")
+    .bind(error === null ? 'delivered' : status, Date.now(), error === null ? null : error.slice(0, 500), rowId, attempt).run();
 }
 
 /** A delivery that will not be processed: over quota, or the quota check could not run (#275). */
@@ -160,20 +180,24 @@ export async function ingestVerifiedDelivery(
 ): Promise<Response> {
   const now = Date.now();
   const rowId = crypto.randomUUID();
+  const target = JSON.parse(targetJson) as HookTarget;
+  const leaseUntil = now + hookLeaseMs(target);
   const inserted = await c.env.DB.prepare(
-    `INSERT OR IGNORE INTO app_hook_deliveries (id, app_id, hook, delivery_id, sender_delivery_id, event, received_at, status, attempts)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'received', 1)`,
-  ).bind(rowId, appId, name, verified.replayKey, verified.deliveryId, verified.event, now).run();
+    `INSERT OR IGNORE INTO app_hook_deliveries (id, app_id, hook, delivery_id, sender_delivery_id, event, received_at, status, attempts, lease_until)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'received', 1, ?)`,
+  ).bind(rowId, appId, name, verified.replayKey, verified.deliveryId, verified.event, now, leaseUntil).run();
   let row: DeliveryRow = { id: rowId, status: 'received', attempts: 1 };
   if (!inserted.meta.changes) {
     const existing = await c.env.DB.prepare('SELECT id, status, attempts FROM app_hook_deliveries WHERE app_id = ? AND hook = ? AND delivery_id = ?')
       .bind(appId, name, verified.replayKey).first<DeliveryRow>();
-    if (!existing || existing.status === 'received' || existing.status === 'delivered') return c.json({ duplicate: true }, 200);
-    // A sender redelivering a failed delivery: only the request that wins this update proceeds.
+    if (!existing || existing.status === 'delivered') return c.json({ duplicate: true }, 200);
+    // A sender redelivering a failed delivery, or one whose attempt is still `received` past its lease (#319: its
+    // processing was cut off). Only the request that wins this update proceeds, under a fresh lease; a `received`
+    // row inside its lease does not match, so a live attempt is never doubled.
     const retried = await c.env.DB.prepare(
-      `UPDATE app_hook_deliveries SET status = 'received', attempts = attempts + 1, error = NULL, finished_at = NULL
-        WHERE id = ? AND status IN ('failed', 'quota_exceeded') RETURNING attempts`,
-    ).bind(existing.id).first<{ attempts: number }>();
+      `UPDATE app_hook_deliveries SET status = 'received', attempts = attempts + 1, error = NULL, finished_at = NULL, lease_until = ?
+        WHERE id = ? AND (status IN ('failed', 'quota_exceeded') OR (${STALE_RECEIVED_SQL})) RETURNING attempts`,
+    ).bind(leaseUntil, existing.id, now).first<{ attempts: number }>();
     if (!retried) return c.json({ duplicate: true }, 200);
     row = { id: existing.id, status: 'received', attempts: retried.attempts };
   }
@@ -183,17 +207,16 @@ export async function ingestVerifiedDelivery(
     await reserveHookDelivery(c.env, appId, quotasFrom(overrides?.quota_overrides), now);
   } catch (e) {
     const { error, status } = notProcessed(e instanceof AppWorkerQuotaError ? e : new Error('quota check unavailable'));
-    await finish(c.env, row.id, error, status);
+    await finish(c.env, row.id, row.attempts, error, status);
     return c.json({ accepted: true, delivery: row.id, processed: false }, 202);
   }
 
-  const target = JSON.parse(targetJson) as HookTarget;
   const delivery: HookDelivery = { appId, hook: name, target, rowId: row.id, attempt: row.attempts, body, headers: c.req.raw.headers };
   if (target === 'worker') {
     try {
       await enqueueHookDelivery(c.env, delivery);
     } catch (e) {
-      await finish(c.env, row.id, `could not enqueue: ${String((e as Error)?.message ?? e)}`);
+      await finish(c.env, row.id, row.attempts, `could not enqueue: ${String((e as Error)?.message ?? e)}`);
       return c.json({ error: 'could not queue the delivery; redeliver it from the sender', delivery: row.id }, 503);
     }
     return c.json({ accepted: true, delivery: row.id }, 202);
@@ -201,7 +224,7 @@ export async function ingestVerifiedDelivery(
   let ctx: AppWorkerExports | undefined;
   try { ctx = c.executionCtx as unknown as AppWorkerExports; } catch { ctx = undefined; }
   runAfterResponse(c, deliverHook(c.env, delivery, ctx)
-    .then((error) => finish(c.env, row.id, error), (e) => { const r = notProcessed(e); return finish(c.env, row.id, r.error, r.status); })
+    .then((error) => finish(c.env, row.id, row.attempts, error), (e) => { const r = notProcessed(e); return finish(c.env, row.id, row.attempts, r.error, r.status); })
     .catch((e) => console.error(`[hooks] recording delivery ${row.id} failed: ${(e as Error)?.message ?? e}`)));
   return c.json({ accepted: true, delivery: row.id }, 202);
 }

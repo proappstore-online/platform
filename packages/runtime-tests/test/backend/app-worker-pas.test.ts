@@ -4,6 +4,8 @@ import type { Env } from '../../../backend/src/types';
 import { AppWorkerApi } from '../../../backend/src/rpc/app-worker-api';
 import { MAX_PAS_CALLS_PER_INVOCATION, SYSTEM_WORKER_USER } from '../../../backend/src/lib/app-worker-calls';
 import { WORKER_LOG_DAILY_LIMIT } from '../../../backend/src/lib/app-worker-usage';
+import { runScheduledActions, STALE_INVOCATION_MS } from '../../../backend/src/lib/scheduled-actions';
+import { mintCallerGrant } from '../../../backend/src/lib/caller-grant';
 import { disableAppWorker } from '../../../backend/src/lib/app-worker-host';
 import { sha256Hex } from '../../../backend/src/lib/app-tokens';
 import { sealSecret } from '../../../backend/src/lib/encryption';
@@ -178,5 +180,29 @@ describe('PAS secrets, storage and log (#254)', () => {
     expect(await pas({ appId: 't' }).log('warn', 'reconcile slow', { ms: 900 }, ctx())).toBe(true);
     const row = await env.DB.prepare("SELECT user_id, level, category, message, source, trace_id FROM app_logs WHERE app_id = 't' ORDER BY id DESC LIMIT 1").first();
     expect(row).toEqual({ user_id: SYSTEM_WORKER_USER, level: 'warn', category: 'worker', message: 'reconcile slow', source: 'worker', trace_id: INVOCATION });
+  });
+});
+
+describe('a cut-off invocation is timed out by the platform tick (#319)', () => {
+  it('a running invocation past the stale window becomes timeout and its PAS calls and grant stop; a fresh one is untouched', async () => {
+    const started = Date.now() - STALE_INVOCATION_MS - 60_000;
+    await env.DB.prepare(
+      "INSERT INTO app_worker_invocations (id, app_id, event_id, type, attempt, status, pas_calls, started_at) VALUES ('old:1', 't', 'old', 'http', 1, 'running', 0, ?)",
+    ).bind(started).run();
+    const grant = await mintCallerGrant(env, 't', { id: 'gh:admin', roles: ['user'] }, { id: 'old', attempt: 1 }, Math.floor(Date.now() / 1000));
+    expect(await pas({ appId: 't' }).log('info', 'before', undefined, ctx({ invocation: 'old:1' }))).toBe(true);
+
+    const report = await runScheduledActions({ env, now: Date.now() });
+    expect(report.recovery).toMatchObject({ invocations: 1 });
+    expect(await env.DB.prepare("SELECT status, error, finished_at FROM app_worker_invocations WHERE id = 'old:1'").first())
+      .toEqual({ status: 'timeout', error: expect.stringContaining('abandoned'), finished_at: expect.any(Number) });
+    await expect(pas({ appId: 't' }).log('info', 'after', undefined, ctx({ invocation: 'old:1' }))).rejects.toThrow(/^Unauthorized:/);
+    await expect(pas({ appId: 't' }).actions.call('my_rows', {}, ctx({ invocation: 'old:1', as: grant }))).rejects.toThrow(/^Unauthorized:/);
+
+    // The beforeEach invocation (just started) is still running and still usable.
+    expect(await env.DB.prepare('SELECT status FROM app_worker_invocations WHERE id = ?').bind(INVOCATION).first()).toEqual({ status: 'running' });
+    expect(await pas({ appId: 't' }).log('info', 'fresh', undefined, ctx())).toBe(true);
+    // Idempotent: the next tick finds nothing.
+    expect((await runScheduledActions({ env, now: Date.now() })).recovery).toMatchObject({ invocations: 0 });
   });
 });

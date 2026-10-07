@@ -159,6 +159,40 @@ automatically; redeliver it from the sender. A schedule run is retried the same
 way, stays `queued` while it is, and counts one failure toward the breaker only if
 every attempt fails.
 
+**Recovery from cut-off processing (#319).** A delivery is recorded `received`
+before it is processed. Processing can be cut off: an action hook runs after the
+response, which Cloudflare ends 30 s later, and an isolate can be evicted at any
+time. Each attempt therefore holds a processing lease:
+
+| Target | Lease | Why |
+|---|---|---|
+| `{ "action": … }` | 5 minutes | the action runs within the 30 s after the response |
+| `"worker"` | 60 minutes | the queue's retries and dead-lettering end within about 16 minutes |
+
+While its lease runs, a `received` delivery is in progress: a repeat answers
+`{"duplicate": true}`. Once the lease has passed it is stale:
+
+- **A redelivery takes it over.** Exactly one, even when several arrive at once:
+  the takeover is one conditional update, which only the first matches, under a
+  fresh lease. The delivery runs again as the next attempt and counts toward
+  `hook_deliveries` like any retry. A late finish of the cut-off attempt cannot
+  overwrite the new one.
+- **The platform's 5-minute tick fails it** when no redelivery comes. Its error
+  is `processing was cut off and never finished (lease expired)`, so it shows
+  in `pas hook deliveries --status failed`. Redeliver it from the sender.
+- A `delivered` delivery is always a duplicate, however old.
+
+Hooks are at-least-once. An attempt cut off after its action or worker had
+already acted, but before the platform recorded it, runs again on takeover.
+Handlers must be idempotent on the delivery, as they already must be for
+retries.
+
+The same tick also ends **invocations** left `running` for more than 10
+minutes (the longest budget is a schedule's 5): they become `timeout`, with an
+`abandoned` error. From then on their `PAS` calls and caller grant are refused.
+
+Delivery rows are kept 14 days and invocation rows 30 days.
+
 ### `visibility`
 
 `{ "mode": "private", "roles": [...] }` gates the whole app, including
