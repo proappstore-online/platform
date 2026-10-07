@@ -57,7 +57,7 @@ describe('template catalogue', () => {
     expect(bad.ok).toBe(false);
     expect(bad.reason).toContain('unknown template "evil-template"');
     expect(bad.reason).toContain('template-app');
-    expect(bad.approved).toEqual(['template-app']);
+    expect(bad.approved).toEqual(['template-app', 'template-marketplace']);
   });
 
   it('selection contract: an explicit override admits an unknown template with a recorded warning', () => {

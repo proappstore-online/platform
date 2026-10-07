@@ -25,7 +25,9 @@ const templates = readdirSync(TEMPLATES, { withFileTypes: true })
 
 describe('staged templates inherit the pending auth status (#241)', () => {
   it('finds the staged templates', () => {
-    expect(templates.length).toBeGreaterThanOrEqual(4);
+    // template-marketplace was published as its own GitHub template repository
+    // and is no longer staged here (#199); three staged templates remain.
+    expect(templates.length).toBeGreaterThanOrEqual(3);
   });
 
   for (const name of templates) {

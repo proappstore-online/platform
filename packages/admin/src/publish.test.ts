@@ -254,7 +254,9 @@ describe("canonical deploy workflow — single source of truth", () => {
   const staged = readdirSync(templatesDir).filter((name) => existsSync(new URL(`${name}/.github/workflows/deploy.yml`, templatesDir)));
 
   it("finds the staged templates", () => {
-    expect(staged).toEqual(expect.arrayContaining(["template-map", "template-marketplace", "template-membership", "template-workspace"]));
+    // template-marketplace is no longer staged here: it was published as its own
+    // GitHub template repository, proappstore-online/template-marketplace (#199).
+    expect(staged).toEqual(expect.arrayContaining(["template-map", "template-membership", "template-workspace"]));
   });
 
   it.each(staged)("staged %s ships the golden workflow", (name) => {

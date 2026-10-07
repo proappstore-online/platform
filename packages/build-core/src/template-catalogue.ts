@@ -87,6 +87,46 @@ export const TEMPLATE_CATALOGUE: readonly TemplateEntry[] = [
     deprecation: null,
     default: true,
   },
+  {
+    id: 'template-marketplace',
+    repo: 'proappstore-online/template-marketplace',
+    ref: 'main',
+    title: 'Two-sided listings marketplace template',
+    purpose:
+      'Two-sided markets: owners publish listings, seekers browse a public catalogue, save favourites, send a ' +
+      'request (booking / application / enquiry — the noun is configurable), message the owner and review after ' +
+      'a completed request, with blocks and reports built in. Listing photos through app.storage; an optional ' +
+      'map mode (MAPS_ENABLED) geocodes listings through app.maps. Not for apps where the map is the primary ' +
+      'workspace (template-map), back-office records (template-workspace) or community groups (template-membership); ' +
+      'no payments or escrow.',
+    supported_categories: ['marketplace', 'real-estate', 'lifestyle', 'business', 'social'],
+    requires: { sdk: '>=1.16.61', cli: '>=2.6.0', node: '>=22', pnpm: '10.x' },
+    capabilities: [
+      'platform-auth', 'registered-actions', 'public-catalogue', 'd1-migrations', 'owner-scoping',
+      'requests-lifecycle', 'favorites', 'messaging', 'reviews', 'storage-uploads', 'maps-optional',
+      'pwa', 'keyless-oidc-deploy',
+    ],
+    security_compliance: {
+      status: 'reviewed',
+      reviewed_at: '2026-09-25',
+      known_deviations: [],
+      notes:
+        'Static audit at staging (a268bee, #191): pas check passes every hard check once APPNAME is replaced ' +
+        '(re-run 2026-09-28; in the template itself only the placeholder check fails, by design); the manifest ' +
+        "registers through the platform's own validation (manifest rules, PAS-DATA-011 public-tool rules, " +
+        ':__user_id scoping, schema coherence) and the migrations pass the additive-only lint ' +
+        '(test/template-marketplace.test.ts). Five public reads name their columns and never expose a ' +
+        "reviewer's id; every other statement is scoped to the owner, requester or message pair, transitions " +
+        "are guarded in SQL, and blocks are enforced in SQL. Fixes the base template's three known deviations " +
+        '(PAS-AUTH-001, PAS-UI-002, PAS-UI-007).',
+    },
+    maintainer: { org: 'proappstore-online', contact: 'https://github.com/proappstore-online/platform/issues' },
+    release: { version: '2026.09.25', source_commit: '4b000c9967dbd7981e4d45cbfdfffba680beb8e7', released_at: '2026-09-25' },
+    preview: { docs: 'https://docs.proappstore.online/templates/', screenshot: null },
+    status: 'approved',
+    deprecation: null,
+    default: false,
+  },
 ];
 
 export function getTemplate(idOrRepo: string | undefined | null): TemplateEntry | undefined {

@@ -6,7 +6,7 @@ selection contract every provisioning path applies. Machine-readable copy:
 [`catalogue.schema.json`](./catalogue.schema.json)); the MCP tool
 `list_templates` returns the same data.
 
-There is one approved template today. The catalogue exists so that template
+There are two approved templates today. The catalogue exists so that template
 selection is governed — identity, purpose, compatibility, security status,
 maintainer, reviewed revision, deprecation — not so that it is long. Entries are
 added only for reviewed, maintained templates (see
@@ -51,6 +51,7 @@ exactly what an audit wants to see.
 | id | repo@ref | status | reviewed commit | categories | requires | known deviations |
 |---|---|---|---|---|---|---|
 | `template-app` (default) | `proappstore-online/template-app@main` | approved | `d8c2e08f32b8` (2026.09.23) | any | sdk >=1.16.0, cli >=2.6.0, node >=22, pnpm 10.x | [PAS-AUTH-001](../standard/auth.md#pas-auth-001), [PAS-UI-002](../standard/ui.md#pas-ui-002), [PAS-UI-007](../standard/ui.md#pas-ui-007) |
+| `template-marketplace` | `proappstore-online/template-marketplace@main` | approved | `4b000c9967db` (2026.09.25) | marketplace, real-estate, lifestyle, business, social | sdk >=1.16.61, cli >=2.6.0, node >=22, pnpm 10.x | none |
 
 ### `template-app` — ProAppStore app template
 
@@ -60,6 +61,16 @@ The canonical Pro app scaffold: React 19 + Vite 8 + Tailwind 4 web/ workspace, @
 - **Security / compliance:** reviewed on 2026-09-23. Template actions list_items/get_item are scoped to the calling user (d8c2e08). Known deviations an app must fix on day one: initPro() is called without authMode (PAS-AUTH-001), the theme boot script reads fas:theme instead of stores-theme (PAS-UI-002), and the viewport meta ships user-scalable=no (PAS-UI-007). Tracked for the template repository.
 - **Maintainer:** proappstore-online — https://github.com/proappstore-online/platform/issues
 - **Preview:** https://docs.proappstore.online/getting-started/
+- **Deprecation:** none
+
+### `template-marketplace` — Two-sided listings marketplace template
+
+Two-sided markets: owners publish listings, seekers browse a public catalogue, save favourites, send a request (booking / application / enquiry — the noun is configurable), message the owner and review after a completed request, with blocks and reports built in. Listing photos through app.storage; an optional map mode (MAPS_ENABLED) geocodes listings through app.maps. Not for apps where the map is the primary workspace (`template-map`), back-office records (`template-workspace`) or community groups (`template-membership`); no payments or escrow.
+
+- **Capabilities:** platform-auth, registered-actions, public-catalogue, d1-migrations, owner-scoping, requests-lifecycle, favorites, messaging, reviews, storage-uploads, maps-optional, pwa, keyless-oidc-deploy
+- **Security / compliance:** reviewed on 2026-09-25. Static audit at staging (a268bee, #191): pas check passes every hard check once APPNAME is replaced; the manifest registers through the platform's own validation (manifest rules, PAS-DATA-011 public-tool rules, :__user_id scoping, schema coherence) and the migrations pass the additive-only lint. Five public reads name their columns and never expose a reviewer's id; every other statement is scoped to the owner, requester or message pair, transitions are guarded in SQL, and blocks are enforced in SQL. Fixes the base template's three known deviations (PAS-AUTH-001, PAS-UI-002, PAS-UI-007).
+- **Maintainer:** proappstore-online — https://github.com/proappstore-online/platform/issues
+- **Preview:** https://docs.proappstore.online/templates/
 - **Deprecation:** none
 
 ## Candidate archetypes
@@ -72,12 +83,8 @@ scores, what to extract and what must not be copied:
 [Template archetypes](./archetypes.md). None is in the catalogue until it
 exists as a reviewed template repository.
 
-The marketplace template (#191) is built and staged in this repository at
-`templates/template-marketplace/` — manifest, migrations, UI and negative tests — and
-validated by `test/template-marketplace.test.ts` against the platform's own registration
-and migration rules. It enters the catalogue once it is published as the GitHub template
-repository `proappstore-online/template-marketplace` (an org-owner action, since
-repository creation is disabled for members) and its reviewed commit is recorded.
+The marketplace template (#191) is published as `proappstore-online/template-marketplace`
+and listed in the catalogue above (#199).
 
 The back-office workspace template (#190) is staged the same way at
 `templates/template-workspace/` — workspaces, members, a `permissions` table, single-use

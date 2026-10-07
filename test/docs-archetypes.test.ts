@@ -21,6 +21,9 @@ const narrative = readFileSync(join(DOCS, 'templates/archetypes.md'), 'utf8');
 const standard = JSON.parse(readFileSync(join(DOCS, 'standard/standard.json'), 'utf8')) as { standard: { version: string }; clauses: Array<{ id: string; status: string }> };
 const CLAUSES = new Map(standard.clauses.map((c) => [c.id, c.status]));
 const catalogue = JSON.parse(readFileSync(join(DOCS, 'templates/catalogue.json'), 'utf8')) as { templates: Array<{ id: string }> };
+// Archetypes that graduated into the catalogue by following their own recommendation
+// (not a naming conflict): template-marketplace, published per #191/#199.
+const GRADUATED = new Set(['template-marketplace']);
 const SDK_MODULES = new Set([...readFileSync(resolve(__dirname, '../packages/sdk/src/index.ts'), 'utf8').matchAll(/^\s+readonly ([a-z]+):/gm)].map((m) => m[1]!));
 
 describe('template archetype evidence (#179)', () => {
@@ -56,7 +59,9 @@ describe('template archetype evidence (#179)', () => {
         expect(x.core_actions.length).toBeGreaterThan(2);
         expect(x.required_services).toContain('auth');
         expect(x.id).toMatch(/^template-[a-z]+$/);
-        expect(catalogue.templates.some((t) => t.id === x.id), `${x.id} collides with a catalogue template`).toBe(false);
+        if (!GRADUATED.has(x.id)) {
+          expect(catalogue.templates.some((t) => t.id === x.id), `${x.id} collides with a catalogue template`).toBe(false);
+        }
         // every recommended archetype has at least two evidence apps that are reusable (yes or with-fixes)
         expect(x.evidence_apps.filter((a) => matrix.apps.find((m) => m.id === a)!.reuse !== 'no').length, `${x.id} reusable sources`).toBeGreaterThanOrEqual(2);
       } else {
