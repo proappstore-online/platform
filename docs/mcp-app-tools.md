@@ -977,18 +977,23 @@ panels, related lists and record detail, after the data worker answers and
 before anything leaves. A blocked field is simply absent, never an error, and
 only its name is logged.
 
-A name is sensitive when one of its words (split on `_`, `-` and camelCase) is
-one of:
+A name is sensitive when one of its words (split on `_`, `-`, camelCase and
+between letters and digits, so `token2` is `token`) is one of:
 
 `password` `passwd` `passphrase` `pwd` `secret` `secrets` `token` `tokens`
 `jwt` `bearer` `cookie` `cookies` `key` `keys` `apikey` `hash` `hashed` `salt`
 `credential` `credentials`
 
-It is also sensitive when it contains `password`, `passwd`, `passphrase`,
-`apikey`, `authtoken`, `accesstoken`, `refreshtoken`, `privatekey` or
-`credential` written as one word, or when it starts with `_internal`, the
-convention for platform-internal fields. Whole words keep `monkey`, `hashtag`
-and `secretary` out.
+It is also sensitive when one of its words ends in `secret`, `secrets`, `token`
+or `tokens` (`clientsecret`, `webhooksecret`, `sessiontoken`, `csrftoken`), when
+it contains `password`, `passwd`, `passphrase`, `apikey`, `authtoken`,
+`accesstoken`, `refreshtoken`, `privatekey`, `credential`, `secretkey`,
+`signingkey`, `privkey`, `hmackey`, `encryptionkey`, `masterkey` or
+`sessionkey` written as one word, or when it starts with `_internal`, the
+convention for platform-internal fields (#335). Whole words keep `monkey`,
+`hashtag`, `secretary` and `tokenizer` out. `key` has no suffix rule, because
+`monkey` and `turkey` end in it: a one-word `…key` secret is caught only if it is
+listed above.
 
 Registration refuses a declared column or detail field on the list, with an
 error naming the field and the term it matched, so you find out at deploy time.

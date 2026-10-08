@@ -655,6 +655,8 @@ describe('operator sensitive-field blocking (#294)', () => {
   const FAMILIES: Record<string, string> = {
     password: 'password_hash', secret: 'client_secret', token: 'auth_token', key: 'api_key',
     hash: 'pin_hash', salt: 'password_salt', credential: 'aws_credentials', bearer: 'bearer_value', _internal: '_internal_notes',
+    // #335: a digit glued to the term, and one-word compounds.
+    digit: 'token2', 'secret compound': 'webhooksecret', 'token compound': 'sessiontoken', 'key compound': 'signingkey',
   };
   const worker = () => fetchMock.get(`https://pas-data-stash.${env.DATA_WORKER_HOST}`);
   const validates = () => worker().intercept({ path: '/validate', method: 'POST' })
