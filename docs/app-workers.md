@@ -369,6 +369,16 @@ pas hook deliveries github --status failed
 pas secret set GITHUB_TOKEN             # hidden prompt; or: … | pas secret set NAME --stdin
 ```
 
+Platform administrators can enable or disable the prototype worker for a named
+app. These commands call the admin endpoint, so they require `pas login` with
+an admin account; an ordinary app owner receives the server's authorization
+error.
+
+```bash
+pas worker enable <appId>               # allow this first-party app's worker to deploy and run
+pas worker disable <appId>              # stop the app worker
+```
+
 The same data is available over HTTP (owner session):
 
 - `GET /v1/apps/:id/worker`

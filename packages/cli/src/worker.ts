@@ -75,7 +75,41 @@ export async function workerLogLines(cfg: CliConfig, appId: string, since: numbe
 const FOLLOW_INTERVAL_MS = 5_000;
 
 export const workerCommand = new Command('worker')
-  .description('Inspect and manage the app worker (status, logs, key rotation).')
+  .description('Inspect and manage the app worker (status, logs, keys, and admin enablement).')
+  .addCommand(
+    new Command('enable')
+      .description('Enable an app worker (platform admin only).')
+      .argument('<appId>', 'app id')
+      .action(async (requestedAppId: string) => {
+        const cfg = await requireSession();
+        const appId = await resolveAppIdOrExit(requestedAppId);
+        await ownerApi<{ ok: true; enabled: true }>(
+          cfg,
+          'PUT',
+          `/v1/admin/apps/${appId}/worker-enabled`,
+          'enable worker',
+          { enabled: true },
+        );
+        process.stdout.write(`✓ Worker enabled for ${appId}\n`);
+      }),
+  )
+  .addCommand(
+    new Command('disable')
+      .description('Disable an app worker (platform admin only).')
+      .argument('<appId>', 'app id')
+      .action(async (requestedAppId: string) => {
+        const cfg = await requireSession();
+        const appId = await resolveAppIdOrExit(requestedAppId);
+        await ownerApi<{ ok: true; enabled: false }>(
+          cfg,
+          'PUT',
+          `/v1/admin/apps/${appId}/worker-enabled`,
+          'disable worker',
+          { enabled: false },
+        );
+        process.stdout.write(`✓ Worker disabled for ${appId}\n`);
+      }),
+  )
   .addCommand(
     new Command('status')
       .description('Enabled flag, last deploy, schedules and recent invocations.')

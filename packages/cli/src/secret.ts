@@ -176,8 +176,18 @@ export async function resolveAppIdOrExit(explicit: string | undefined): Promise<
 }
 
 /** An owner-authenticated API call; exits with the server's error on a non-2xx. */
-export async function ownerApi<T>(cfg: CliConfig, method: string, path: string, action: string): Promise<T> {
-  const res = await fetch(`${cfg.apiBase}${path}`, { method, headers: bearer(cfg) });
+export async function ownerApi<T>(
+  cfg: CliConfig,
+  method: string,
+  path: string,
+  action: string,
+  body?: unknown,
+): Promise<T> {
+  const res = await fetch(`${cfg.apiBase}${path}`, {
+    method,
+    headers: bearer(cfg),
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
   if (!res.ok) await dieFromHttp(res, action);
   return (await res.json()) as T;
 }

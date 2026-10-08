@@ -15,7 +15,7 @@ const { scheduleCommand } = await import('./schedule.js');
 
 let out: string[];
 let err: string[];
-let calls: { method: string; url: string }[];
+let calls: { method: string; url: string; headers: Headers; body: string | undefined }[];
 let routes: Record<string, unknown>;
 
 beforeEach(() => {
@@ -28,10 +28,12 @@ beforeEach(() => {
   vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`); }) as never);
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
     const method = init.method ?? 'GET';
-    calls.push({ method, url });
-    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer tok');
+    const headers = new Headers(init.headers);
+    calls.push({ method, url, headers, body: init.body === undefined ? undefined : String(init.body) });
+    expect(headers.get('Authorization')).toBe('Bearer tok');
     const path = new URL(url).pathname;
     const body = routes[`${method} ${path}`];
+    if (body instanceof Response) return body;
     return body === undefined ? Response.json({ error: 'not found' }, { status: 404 }) : Response.json(body, { status: method === 'POST' ? 202 : 200 });
   }));
 });
@@ -107,6 +109,39 @@ describe('pas worker logs (#261)', () => {
 
 describe('owner commands (#261)', () => {
   const run = (cmd: typeof workerCommand, args: string[]) => cmd.parseAsync(['node', cmd.name(), ...args, '--app', 'demo']);
+
+  it('enables and disables a worker through the admin endpoint', async () => {
+    routes['PUT /v1/admin/apps/demo/worker-enabled'] = { ok: true, enabled: true };
+    await workerCommand.parseAsync(['node', 'worker', 'enable', 'demo']);
+    expect(calls.at(-1)).toMatchObject({
+      method: 'PUT',
+      url: 'https://api.test/v1/admin/apps/demo/worker-enabled',
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(calls.at(-1)!.headers.get('Authorization')).toBe('Bearer tok');
+    expect(out.join('')).toContain('✓ Worker enabled for demo');
+
+    routes['PUT /v1/admin/apps/demo/worker-enabled'] = { ok: true, enabled: false };
+    await workerCommand.parseAsync(['node', 'worker', 'disable', 'demo']);
+    expect(calls.at(-1)).toMatchObject({
+      method: 'PUT',
+      url: 'https://api.test/v1/admin/apps/demo/worker-enabled',
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(calls.at(-1)!.headers.get('Authorization')).toBe('Bearer tok');
+    expect(out.join('')).toContain('✓ Worker disabled for demo');
+  });
+
+  it.each([
+    [403, 'app workers are limited to first-party apps during the prototype'],
+    [409, 'app worker cap reached (5)'],
+    [409, 'app workers are closed to new apps (account ceiling)'],
+    [404, 'app not found'],
+  ])('prints the server error and exits for an enable failure (%i)', async (status, error) => {
+    routes['PUT /v1/admin/apps/demo/worker-enabled'] = Response.json({ error }, { status });
+    await expect(workerCommand.parseAsync(['node', 'worker', 'enable', 'demo'])).rejects.toThrow('exit 1');
+    expect(err.join('')).toContain(`enable worker failed (${status}): ${error}`);
+  });
 
   it('pas schedule run <name> queues a run; pas schedule runs labels worker runs and in-progress ones', async () => {
     routes['POST /v1/apps/demo/worker/schedules/reconcile/run'] = { run_id: 'r1', status: 'due' };
