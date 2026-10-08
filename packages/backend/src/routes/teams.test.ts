@@ -138,6 +138,18 @@ describe('PUT /v1/apps/:appId/team/:userId', () => {
     );
     expect(res.status).toBe(403);
   });
+
+  it('updates an invited non-GitHub canonical id without GitHub lookup (#330)', async () => {
+    const env = makeEnv({ creatorId: 'gh:1', teamMembers: [{ user_id: 'inv:member-1', role: 'viewer' }] });
+    const res = await app.fetch(req('PUT', `/v1/apps/myapp/team/${encodeURIComponent('inv:member-1')}`, { role: 'developer' }), env);
+    expect(res.status).toBe(200);
+    expect((await res.json() as { userId: string }).userId).toBe('inv:member-1');
+  });
+
+  it('refuses an unknown canonical id instead of treating it as a GitHub username', async () => {
+    const res = await app.fetch(req('PUT', `/v1/apps/myapp/team/${encodeURIComponent('inv:unknown')}`, { role: 'viewer' }), makeEnv({ creatorId: 'gh:1' }));
+    expect(res.status).toBe(404);
+  });
 });
 
 describe('DELETE /v1/apps/:appId/team/:userId', () => {
@@ -166,6 +178,13 @@ describe('DELETE /v1/apps/:appId/team/:userId', () => {
     });
     const res = await app.fetch(req('DELETE', '/v1/apps/myapp/team/gh:3', undefined, TOK2), env);
     expect(res.status).toBe(403);
+  });
+
+  it('removes an invited non-GitHub canonical id and retains last-owner protection', async () => {
+    const memberEnv = makeEnv({ creatorId: 'gh:1', teamMembers: [{ user_id: 'inv:member-1', role: 'developer' }] });
+    expect((await app.fetch(req('DELETE', `/v1/apps/myapp/team/${encodeURIComponent('inv:member-1')}`), memberEnv)).status).toBe(200);
+    const ownerEnv = makeEnv({ creatorId: 'gh:1', teamMembers: [{ user_id: 'inv:owner-1', role: 'owner' }] });
+    expect((await app.fetch(req('DELETE', `/v1/apps/myapp/team/${encodeURIComponent('inv:owner-1')}`), ownerEnv)).status).toBe(400);
   });
 });
 

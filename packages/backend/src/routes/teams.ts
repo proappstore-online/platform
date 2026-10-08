@@ -24,6 +24,22 @@ async function resolveGitHubUser(username: string, ghToken?: string): Promise<st
 }
 
 /**
+ * Resolve a member reference without confusing a canonical provider id with a
+ * GitHub login. Existing exact team ids always win; only colon-free references
+ * may be GitHub usernames. Unknown non-GitHub canonical ids are never added or
+ * reinterpreted as usernames (#330).
+ */
+async function resolveTeamUserRef(db: D1Database, appId: string, userRef: string, ghToken?: string): Promise<string | null> {
+  const existing = await db.prepare(
+    'SELECT 1 FROM team_members WHERE app_id = ? AND user_id = ?',
+  ).bind(appId, userRef).first();
+  if (existing) return userRef;
+  if (userRef.startsWith('gh:')) return userRef;
+  if (userRef.includes(':')) return null;
+  return resolveGitHubUser(userRef, ghToken);
+}
+
+/**
  * List team members for an app. Any team member can see the list.
  */
 teamRoutes.get('/apps/:appId/team', wrap(async (c) => {
@@ -45,15 +61,11 @@ teamRoutes.get('/apps/:appId/team', wrap(async (c) => {
  */
 teamRoutes.put('/apps/:appId/team/:userRef', wrap(async (c) => {
   const appId = c.req.param('appId')!;
-  let userId = c.req.param('userRef')!;
+  const userRef = c.req.param('userRef')!;
   const user = await requireAppAccess(c, appId, 'admin');
 
-  // Resolve GitHub username to user ID
-  if (!userId.startsWith('gh:')) {
-    const resolved = await resolveGitHubUser(userId, c.env.GITHUB_TOKEN);
-    if (!resolved) return c.text(`GitHub user "${userId}" not found`, 404);
-    userId = resolved;
-  }
+  const userId = await resolveTeamUserRef(c.env.DB, appId, userRef, c.env.GITHUB_TOKEN);
+  if (!userId) return c.text(`Member "${userRef}" not found`, 404);
 
   const body = await c.req.json<{ role?: string }>();
   const role = (body.role ?? 'viewer') as TeamRole;
@@ -101,14 +113,11 @@ teamRoutes.put('/apps/:appId/team/:userRef', wrap(async (c) => {
  */
 teamRoutes.delete('/apps/:appId/team/:userRef', wrap(async (c) => {
   const appId = c.req.param('appId')!;
-  let userId = c.req.param('userRef')!;
+  const userRef = c.req.param('userRef')!;
   const user = await requireAppAccess(c, appId, 'admin');
 
-  if (!userId.startsWith('gh:')) {
-    const resolved = await resolveGitHubUser(userId, c.env.GITHUB_TOKEN);
-    if (!resolved) return c.text(`GitHub user "${userId}" not found`, 404);
-    userId = resolved;
-  }
+  const userId = await resolveTeamUserRef(c.env.DB, appId, userRef, c.env.GITHUB_TOKEN);
+  if (!userId) return c.text('Member not found', 404);
 
   const member = await c.env.DB.prepare(
     'SELECT role FROM team_members WHERE app_id = ? AND user_id = ?',
