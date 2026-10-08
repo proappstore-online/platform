@@ -862,12 +862,20 @@ with `?cursor=` and these filters:
 - `?kind=` is one of `enter`, `audit`, `read`, `detail`, `evidence`,
   `series`, `action`.
 - `?outcome=` is `success` or `refused`.
-- `?actor=` and `?target=` match exactly.
+- `?actor=` and `?target=` match exactly. `?target=` needs a recent sign-in, like the
+  targets it would reveal (#345): without one it is refused with `step_up_required`.
 - `?from=` and `?to=` are dates spanning at most 366 days.
 
 Targets of identity-verification reads and document views are hidden (with
 `target_hidden: true`) until the owner has signed in recently. Reading the
 trail is itself recorded.
+
+A document view is recorded with its final status (#345): 200 when the document
+is served, 404 when the record has none or it is missing, and 415 when its type
+can't be viewed. Refusals are recorded under the kind of the route that refused
+them, read after `apps/<id>/operator`, so an app named `operator` is no special
+case. An action, resource or evidence field the contract doesn't declare is
+recorded as `(undeclared)`, never as the caller wrote it (#343).
 
 The trail is owner-only; `admin_access` does not open it. An app can require more by declaring
 `"audit": { "app_roles": ["operator"] }` at the top level of `operator_view`:

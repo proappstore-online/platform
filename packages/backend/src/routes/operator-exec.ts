@@ -38,10 +38,34 @@ export async function runOperatorQuery(
   token: string,
   audit: OperatorAudit,
 ): Promise<Record<string, unknown>[]> {
+  const read = await startOperatorQuery(env, appId, name, input, user, token, audit);
+  await read.finish(200);
+  return read.rows;
+}
+
+/**
+ * runOperatorQuery for a read whose outcome is only known after the query
+ * (#345): the evidence route still has to find the document and check its type.
+ * `finish(status)` writes the role-granted audit row with that final status, so
+ * a failed download is never recorded as a 200.
+ */
+export async function startOperatorQuery(
+  env: Env,
+  appId: string,
+  name: string,
+  input: Record<string, unknown>,
+  user: FasUser,
+  token: string,
+  audit: OperatorAudit,
+): Promise<{ rows: Record<string, unknown>[]; finish: (status: number) => Promise<void> }> {
   const { body, role } = await runOperatorCall(env, appId, name, input, user, token, ['query']);
-  if (role) { await recordActionSuccess(env.DB, appId, name, { actorId: user.id, role }, 200, audit); markAudited(audit.request); }
   const rows = (body as { rows?: unknown }).rows;
-  return Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
+  return {
+    rows: Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [],
+    finish: async (status) => {
+      if (role) { await recordActionSuccess(env.DB, appId, name, { actorId: user.id, role }, status, audit); markAudited(audit.request); }
+    },
+  };
 }
 
 /**

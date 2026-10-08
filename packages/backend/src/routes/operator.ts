@@ -19,7 +19,7 @@ import type { Env } from '../types.js';
 import { HttpError, requireRecentAuth } from '../lib/auth.js';
 import { markUndeclared, requireOperatorAccess } from '../lib/operator-audit-marks.js';
 import { transitionGuard, type OperatorResource, type OperatorViewContract } from '../lib/operator-contract.js';
-import { runOperatorQuery, runOperatorWrite } from './operator-exec.js';
+import { runOperatorQuery, runOperatorWrite, startOperatorQuery } from './operator-exec.js';
 import { REVIEW_CONTENT_TYPES, holdsReviewRole, recordReviewAccess } from '../lib/review-access.js';
 import { isSensitiveField } from '../lib/sensitive-fields.js';
 import { textParam } from '../lib/text-param.js';
@@ -235,17 +235,28 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId/records/:key/evi
   requireRecentAuth(caller, c.env, { method: 'passkey', rpId: CONSOLE_RP_ID });
   if (!(await holdsReviewRole(c.env.DB, appId, caller))) throw new HttpError('not a reviewer for this app', 403);
 
-  const rows = await runOperatorQuery(
+  // The audit row is written once the outcome is known (#345): a missing
+  // document or an unviewable type is recorded with its 404 or 415, not a 200.
+  const read = await startOperatorQuery(
     c.env, appId, detail.action, { [detail.param]: key }, caller, sessionToken(c.req.header('Authorization')),
     { operatorAction: `evidence:${resource.id}.${field}`, target: key, request: c.req.raw },
   );
-  const doc = rows.length ? reviewPath(rows[0]![field]) : null;
-  if (!doc) throw new HttpError('no document for this record', 404);
-  const object = await c.env.STORAGE.get(`${appId}/_review/u/${doc.ownerId}/${doc.path}`);
-  if (!object) throw new HttpError('no document for this record', 404);
-  const type = object.httpMetadata?.contentType ?? '';
-  if (!REVIEW_CONTENT_TYPES.has(type)) throw new HttpError('document type is not viewable', 415);
-  await recordReviewAccess(c.env.DB, appId, doc.ownerId, doc.path, caller.id, 'read');
+  let object: R2ObjectBody;
+  let type: string;
+  try {
+    const doc = read.rows.length ? reviewPath(read.rows[0]![field]) : null;
+    if (!doc) throw new HttpError('no document for this record', 404);
+    const found = await c.env.STORAGE.get(`${appId}/_review/u/${doc.ownerId}/${doc.path}`);
+    if (!found) throw new HttpError('no document for this record', 404);
+    object = found;
+    type = object.httpMetadata?.contentType ?? '';
+    if (!REVIEW_CONTENT_TYPES.has(type)) throw new HttpError('document type is not viewable', 415);
+    await recordReviewAccess(c.env.DB, appId, doc.ownerId, doc.path, caller.id, 'read');
+  } catch (e) {
+    await read.finish(e instanceof HttpError ? e.status : 500);
+    throw e;
+  }
+  await read.finish(200);
   return new Response(object.body, {
     headers: {
       'content-type': type,

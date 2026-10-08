@@ -71,7 +71,12 @@ export function parseOperatorAction(op: string): { kind: Kind; resource: string 
 
 /** What a refused operator request was attempting, from its path (the handler never got to say). */
 function attempted(path: string): { operatorAction: string; target: string | null } | null {
-  const seg = path.split('/').slice(path.split('/').indexOf('operator') + 1).map((s) => {
+  // The segments after `apps/<id>/operator` (#345): matching the first 'operator'
+  // segment would land on the app id itself for an app named `operator`.
+  const parts = path.split('/');
+  const at = parts.indexOf('apps');
+  if (at < 0 || parts[at + 2] !== 'operator') return null;
+  const seg = parts.slice(at + 3).map((s) => {
     try { return decodeURIComponent(s).slice(0, 100); } catch { return s.slice(0, 100); }
   });
   const [a, id, b, key, c, field] = seg;
@@ -218,6 +223,12 @@ operatorAuditRoutes.get('/apps/:appId/operator/audit', async (c) => {
   const contract = await loadContract(c.env.DB, appId);
   const role = await trailRole(c.env.DB, appId, owner, contract?.audit?.app_roles);
   const where = filters((name) => c.req.query(name));
+  let recent = true;
+  try { requireRecentAuth(owner, c.env); } catch { recent = false; }
+  // Targets of identity reads are hidden without a recent sign-in, so filtering
+  // by one must be too (#345): which rows a guessed id returns would reveal who
+  // opened that verification record.
+  if (!recent && c.req.query('target')?.trim()) requireRecentAuth(owner, c.env);
 
   const { results } = await c.env.DB.prepare(
     `SELECT a.id, a.created_at, a.actor_id, u.login AS actor_login, a.role_name, a.action_name, a.operator_action, a.target, a.status
@@ -228,8 +239,6 @@ operatorAuditRoutes.get('/apps/:appId/operator/audit', async (c) => {
 
   // Identity data: who opened which verification record or document is shown only after a recent sign-in.
   const sensitive = new Set((contract?.resources ?? []).filter((r) => r.kind === 'verification').map((r) => r.id));
-  let recent = true;
-  try { requireRecentAuth(owner, c.env); } catch { recent = false; }
   const page = (results ?? []).slice(0, PAGE);
   let hidden = false;
   const rows = page.map((r) => {

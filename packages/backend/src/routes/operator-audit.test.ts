@@ -6,7 +6,7 @@ import { validateOperatorView } from '../lib/operator-contract.js';
 import type { ToolManifest } from '../lib/action-sql.js';
 import { PARENTS_CLUBS, STASH } from '../__fixtures__/operator-view.js';
 import { parseOperatorAction } from './operator-audit.js';
-import { REFUSAL_CAP } from './operator-audit.js';
+import { REFUSAL_CAP, UNDECLARED } from './operator-audit.js';
 
 // #240 operator audit trail: entry once per visit, refusals recorded once for
 // owners only, and an owner-only, paged, filtered, redacted trail.
@@ -67,6 +67,27 @@ describe('POST /v1/apps/:appId/operator/entries', () => {
       expect((await entry(visit, d)).status, String(visit)).toBe(400);
       expect(refusal.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 400, expect.any(Number), 'enter', null, expect.any(Number), REFUSAL_CAP);
     }
+  });
+
+  // #345 L4 (done in #343): an undeclared action id is recorded as a fixed label, never as the caller wrote it,
+  // so an admitted caller cannot plant rows that read as another kind (e.g. `evidence:` or `enter`).
+  it('records a refusal for an undeclared action id as (undeclared), with no target', async () => {
+    for (const forged of ['enter', 'evidence:kyc.document_path', 'kind_audit_forged']) {
+      const refusal = mockStmt();
+      const d = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ first: { contract: stored(STASH) } }), refusal);
+      const res = await req(`stash/operator/actions/${encodeURIComponent(forged)}`, d, { method: 'POST', body: JSON.stringify({ row: {} }) });
+      expect(res.status, forged).toBe(404);
+      expect(refusal.bind, forged).toHaveBeenCalledWith('stash', '', 'gh:1', '', 404, expect.any(Number), UNDECLARED, null, expect.any(Number), REFUSAL_CAP);
+    }
+  });
+
+  // #345 L3: the path is read after `apps/<id>/operator`, so an app named `operator` is no special case.
+  it("records the refusals of an app named 'operator' under the right kind", async () => {
+    const refusal = mockStmt();
+    const d = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), refusal);
+    const res = await req('operator/operator/entries', d, { method: 'POST', body: JSON.stringify({ visit: 'short' }) });
+    expect(res.status).toBe(400);
+    expect(refusal.bind).toHaveBeenCalledWith('operator', '', 'gh:1', '', 400, expect.any(Number), 'enter', null, expect.any(Number), REFUSAL_CAP);
   });
 });
 
@@ -141,11 +162,27 @@ describe('GET /v1/apps/:appId/operator/audit', () => {
       ['from=2026-09-01&to=2026-09-02', 'a.created_at >= ? AND a.created_at < ?', [Date.parse('2026-09-01T00:00:00Z'), Date.parse('2026-09-03T00:00:00Z')]],
     ] as const) {
       const { d, query } = db([]);
-      expect((await req(`stash/operator/audit?${qs}`, d)).status, qs).toBe(200);
+      // #345: a target filter needs a recent sign-in, like the targets it would reveal.
+      const token = qs.startsWith('target=') ? await fresh() : undefined;
+      expect((await req(`stash/operator/audit?${qs}`, d, { token })).status, qs).toBe(200);
       expect(sqls(d)[2], qs).toContain(clause);
       expect(sqls(d)[2], qs).not.toContain('OR 1=1');
       expect(query.bind, qs).toHaveBeenCalledWith('stash', ...binds, 51);
     }
+  });
+
+  // #345 L1: filtering by target is as sensitive as the targets it would reveal.
+  it('refuses a target filter without a recent sign-in, before querying; a recent one may filter', async () => {
+    const stale = db(trail);
+    const refused = await req('stash/operator/audit?target=k1', stale.d);
+    expect(refused.status).toBe(403);
+    expect(await refused.text()).toContain('step_up_required');
+    expect(stale.query.all).not.toHaveBeenCalled();
+    const recent = db([]);
+    expect((await req('stash/operator/audit?target=k1', recent.d, { token: await fresh() })).status).toBe(200);
+    expect(recent.query.bind).toHaveBeenCalledWith('stash', 'k1', 51);
+    // Without a target, a stale session still reads the trail (targets hidden).
+    expect((await req('stash/operator/audit', db(trail).d)).status).toBe(200);
   });
 
   it('refuses malformed filters before querying', async () => {

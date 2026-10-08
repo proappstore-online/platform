@@ -480,7 +480,7 @@ describe('operator ID verification (#240)', () => {
     document_path: '_review/u/gh:10/id.png', selfie_path: '_review/u/gh:10/../../other', internal_score: 97,
   };
   /** owner → contract → [review roles → review-role holder] → manifest → app role → audit → [review access]. */
-  function db(sample: typeof STASH | typeof PARENTS_CLUBS, action: string, opts: { reviewer?: boolean; evidence?: boolean } = {}) {
+  function db(sample: typeof STASH | typeof PARENTS_CLUBS, action: string, opts: { reviewer?: boolean; evidence?: boolean; accessFirst?: boolean } = {}) {
     const audit = mockStmt();
     const access = mockStmt();
     const tool = sample.tools.find((t) => t.name === action)!;
@@ -493,8 +493,8 @@ describe('operator ID verification (#240)', () => {
       ...review,
       mockStmt({ first: { manifest: JSON.stringify(tool) } }),
       mockStmt({ all: { results: [{ role_name: 'operator' }] } }),
-      audit,
-      access,
+      // #345: a served document records its review access before the read's audit row (written once the outcome is known).
+      ...(opts.accessFirst ? [access, audit] : [audit, access]),
     );
     return { d, audit, access };
   }
@@ -521,7 +521,7 @@ describe('operator ID verification (#240)', () => {
   it("serves the record's own document to a reviewer, uncached and locked down, on both audit trails", async () => {
     dataWorker([kycRow]);
     const bucket = storage('image/png');
-    const { d, audit, access } = db(STASH, 'op_kyc_detail', { evidence: true });
+    const { d, audit, access } = db(STASH, 'op_kyc_detail', { evidence: true, accessFirst: true });
     const res = await get('stash/operator/resources/kyc/records/k1/evidence/document_path', d, await fresh(), bucket);
     expect(res.status, await res.clone().text()).toBe(200);
     expect(await res.text()).toBe('PNGDATA');
@@ -590,6 +590,26 @@ describe('operator ID verification (#240)', () => {
     expect(access.bind).not.toHaveBeenCalled();
   });
 
+  // #345 L2: the read's audit row carries the final status, so a failed download is never recorded as a 200.
+  it('audits an evidence read with its final status: 404 without a document, 415 for an unviewable type', async () => {
+    dataWorker([{ ...kycRow, document_path: null }]);
+    const none = db(STASH, 'op_kyc_detail', { evidence: true });
+    expect((await get('stash/operator/resources/kyc/records/k1/evidence/document_path', none.d, await fresh())).status).toBe(404);
+    expect(none.audit.bind).toHaveBeenCalledWith('stash', 'op_kyc_detail', 'gh:1', 'operator', 404, expect.any(Number), 'evidence:kyc.document_path', 'k1');
+
+    dataWorker([kycRow]);
+    const missing = db(STASH, 'op_kyc_detail', { evidence: true });
+    const empty = { get: vi.fn(async () => null) };
+    expect((await get('stash/operator/resources/kyc/records/k1/evidence/document_path', missing.d, await fresh(), empty as never)).status).toBe(404);
+    expect(missing.audit.bind).toHaveBeenCalledWith('stash', 'op_kyc_detail', 'gh:1', 'operator', 404, expect.any(Number), 'evidence:kyc.document_path', 'k1');
+
+    dataWorker([kycRow]);
+    const html = db(STASH, 'op_kyc_detail', { evidence: true });
+    expect((await get('stash/operator/resources/kyc/records/k1/evidence/document_path', html.d, await fresh(), storage('text/html'))).status).toBe(415);
+    expect(html.audit.bind).toHaveBeenCalledWith('stash', 'op_kyc_detail', 'gh:1', 'operator', 415, expect.any(Number), 'evidence:kyc.document_path', 'k1');
+    expect(html.audit.bind).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses signed-out callers and other owners', async () => {
     const anon = mockD1();
     expect((await app.request('/v1/apps/stash/operator/resources/kyc/records/k1/evidence/document_path', {}, makeEnv({ STORAGE: storage() }, anon))).status).toBe(401);
@@ -622,7 +642,7 @@ describe('operator ID verification (#240)', () => {
   it("a second app (Parents Clubs) serves its licence through the same route", async () => {
     dataWorker([{ request_id: 'v1', parent_name: 'Grace', state: 'pending', submitted_at: 1, licence_path: '_review/u/p7/licence.pdf' }]);
     const bucket = storage('application/pdf');
-    const { d, audit } = db(PARENTS_CLUBS, 'op_verification_detail', { evidence: true });
+    const { d, audit } = db(PARENTS_CLUBS, 'op_verification_detail', { evidence: true, accessFirst: true });
     const res = await get('parents-clubs/operator/resources/id_checks/records/v1/evidence/licence_path', d, await fresh(), bucket);
     expect(res.status, await res.clone().text()).toBe(200);
     expect(res.headers.get('content-type')).toBe('application/pdf');
