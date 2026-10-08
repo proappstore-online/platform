@@ -2,6 +2,7 @@ import { SELF, env as providedEnv, fetchMock, runDurableObjectAlarm, runInDurabl
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { runScheduledActions } from '../../../backend/src/lib/scheduled-actions';
+import { roomObjectName } from '../../../backend/src/routes/rooms';
 import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
 const env = providedEnv as unknown as Env;
@@ -411,7 +412,9 @@ describe('private apps residuals: per-user KV/storage and open room sockets (#27
     };
     const viewer = await join('gh:2');
     const owner = await join('gh:1');
-    const stub = env.ROOM.get(env.ROOM.idFromName('diary:revoke'));
+    // Look up the same collision-safe Durable Object name used by the route.
+    // A delimiter name would inspect a fresh DO and falsely report no alarm.
+    const stub = env.ROOM.get(env.ROOM.idFromName(roomObjectName('diary', 'revoke')));
     // Joining scheduled the re-check within the stated bound.
     const alarm = await runInDurableObject(stub, (_i, state) => state.storage.getAlarm());
     expect(alarm).not.toBeNull();
@@ -434,7 +437,8 @@ describe('private apps residuals: per-user KV/storage and open room sockets (#27
     const closed = new Promise<{ code: number; reason: string }>((resolve) => ws.addEventListener('close', (ev) => resolve({ code: (ev as CloseEvent).code, reason: (ev as CloseEvent).reason }), { once: true }));
     ws.accept();
     await env.DB.prepare("INSERT INTO app_visibility (app_id, mode, roles, created_at) VALUES ('open', 'private', '[]', 1)").run();
-    expect(await runDurableObjectAlarm(env.ROOM.get(env.ROOM.idFromName('open:flip')))).toBe(true);
+    const stub = env.ROOM.get(env.ROOM.idFromName(roomObjectName('open', 'flip')));
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect(await closed).toEqual({ code: 4401, reason: 'app_private' });
   });
 });
