@@ -161,3 +161,56 @@ describe('host: per-route page meta and sitemap (#210)', () => {
     expect(await stat.text()).toBe('<urlset>static</urlset>');
   });
 });
+
+// #350: the console's Code Health panel reads /.vcqa/ cross-origin. Every answer there must
+// carry CORS, or the browser hides a 404 / a private app's refusal and the fetch fails with
+// "Failed to fetch" instead of showing the status. Other paths keep their own (no) CORS.
+describe('host: /.vcqa/ answers are readable cross-origin (#350)', () => {
+  const CONSOLE = { Origin: 'https://console.proappstore.online' };
+  const read = async (url: string, headers: Record<string, string> = CONSOLE) => {
+    const res = await SELF.fetch(url, { headers, redirect: 'manual' });
+    await res.text(); // the host tees served bodies into the edge cache
+    return res;
+  };
+
+  it('a found report, a 304, a missing report and an unknown app all allow any origin', async () => {
+    await seedRoute('scanned');
+    await seedRoute('unscanned');
+    await env.APPS.put('apps/scanned/.vcqa/report.json', '{"score":80}', { httpMetadata: { contentType: 'application/json' } });
+    await env.APPS.put('apps/unscanned/index.html', '<html>app</html>');
+
+    const found = await read('https://scanned.proappstore.online/.vcqa/report.json?t=1');
+    expect(found.status).toBe(200);
+    expect(found.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    const notModified = await read('https://scanned.proappstore.online/.vcqa/report.json?t=2', { ...CONSOLE, 'If-None-Match': found.headers.get('ETag')! });
+    expect(notModified.status).toBe(304);
+    expect(notModified.headers.get('Access-Control-Allow-Origin')).toBe('*');
+
+    for (const url of ['https://unscanned.proappstore.online/.vcqa/report.json?t=1', 'https://nobody.proappstore.online/.vcqa/report.json']) {
+      const missing = await read(url);
+      expect(missing.status, url).toBe(404);
+      expect(missing.headers.get('Access-Control-Allow-Origin'), url).toBe('*');
+    }
+  });
+
+  it("a private app's refusal on /.vcqa/ is readable as a status; nothing else gains CORS", async () => {
+    await seedRoute('secret');
+    await env.DB.prepare("INSERT OR REPLACE INTO app_visibility (app_id, mode, roles, created_at) VALUES ('secret', 'private', '[\"viewer\"]', ?)").bind(Date.now()).run();
+    await env.APPS.put('apps/secret/.vcqa/report.json', '{"score":80}');
+    try {
+      const refused = await read('https://secret.proappstore.online/.vcqa/report.json');
+      expect(refused.status).toBeGreaterThanOrEqual(400);
+      expect(refused.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      // The report itself is still not served to a signed-out caller.
+      const body = await (await SELF.fetch('https://secret.proappstore.online/.vcqa/report.json', { headers: CONSOLE, redirect: 'manual' })).text();
+      expect(body).not.toContain('score');
+    } finally {
+      await env.DB.prepare("DELETE FROM app_visibility WHERE app_id = 'secret'").run();
+    }
+
+    await seedRoute('plain');
+    await env.APPS.put('apps/plain/assets/app.js', 'console.log(1)');
+    expect((await read('https://plain.proappstore.online/assets/app.js')).headers.get('Access-Control-Allow-Origin')).toBeNull();
+    expect((await read('https://plain.proappstore.online/assets/missing.js')).headers.get('Access-Control-Allow-Origin')).toBeNull();
+  });
+});

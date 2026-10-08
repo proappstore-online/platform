@@ -455,3 +455,19 @@ export function securityHeaders(isHtml: boolean, updateSensitive = false): Heade
   );
   return h;
 }
+
+/**
+ * The console's Code Health panel fetches /.vcqa/report.json (+ badge.svg)
+ * cross-origin (console.proappstore.online ≠ <app>.proappstore.online). Every
+ * answer on /.vcqa/ carries `Access-Control-Allow-Origin: *`, not only a found
+ * report (#350): without it the browser hides a 404 (no report yet), a private
+ * app's refusal or a 304 from the console, whose fetch then rejects with
+ * "Failed to fetch" instead of showing the status. The report is served
+ * without auth, and a refusal says nothing a direct request would not.
+ */
+export function withCodeHealthCors(request: Request, response: Response): Response {
+  if (!new URL(request.url).pathname.startsWith("/.vcqa/") || response.headers.has("Access-Control-Allow-Origin")) return response;
+  const out = new Response(response.body, response);
+  out.headers.set("Access-Control-Allow-Origin", "*");
+  return out;
+}
