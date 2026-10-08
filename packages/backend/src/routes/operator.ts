@@ -126,6 +126,12 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId', async (c) => {
   const caller = await requireOperatorAccess(c, appId);
   const resource = await declaredResource(c.env.DB, appId, c.req.param('resourceId'));
   if (resource.series) throw new HttpError('this metric is a time series: read it from /operator/metrics/:id', 400);
+  // The cursor is the last row's page column, returned as is (#336): a contract
+  // stored before that column's name joined the sensitive-field list is refused
+  // before the app's query runs, rather than handing out its values as cursors.
+  if (resource.page && !returnableKeys([{ key: resource.page.column }], { appId, where: `cursor:${resource.id}` }).length) {
+    throw new HttpError('this resource pages on a column on the sensitive-field list; redeploy its operator_view', 409);
+  }
 
   const input: Record<string, unknown> = {};
   const q = textParam(c.req.query('q'), MAX_SEARCH, 'q');

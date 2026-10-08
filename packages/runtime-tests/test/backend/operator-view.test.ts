@@ -704,6 +704,68 @@ describe('operator sensitive-field blocking (#294)', () => {
     const trail = JSON.stringify(audit.results);
     for (const key of Object.values(FAMILIES)) expect(trail, key).not.toContain(`VALUE-OF-${key}`);
   });
+
+  // #336: the same second layer for the series columns and the page cursor of a contract stored before the rule.
+  describe('series and cursor of a contract stored before the rule (#336)', () => {
+    type Stored = { resources: { id: string; page?: { column: string }; series?: { time: { column: string }; measures: { column: string; label: string; unit: string; aggregation: string }[]; dimension: { column: string; label: string; max_values: number } | null } }[] };
+    const store = async (edit: (c: Stored) => void) => {
+      validates();
+      const reg = await SELF.fetch(`${BASE}/v1/apps/stash/tools`, json('PUT', STASH, await session('gh:1')));
+      expect(reg.status, await reg.clone().text()).toBe(200);
+      await env.DB.prepare("INSERT INTO app_roles (app_id, user_id, role_name) VALUES ('stash', 'gh:1', 'operator')").run();
+      const row = await env.DB.prepare("SELECT contract FROM app_operator_view WHERE app_id = 'stash'").first<{ contract: string }>();
+      const contract = JSON.parse(row!.contract) as Stored;
+      edit(contract);
+      await env.DB.prepare("UPDATE app_operator_view SET contract = ? WHERE app_id = 'stash'").bind(JSON.stringify(contract)).run();
+    };
+    const growth = (c: Stored) => c.resources.find((r) => r.id === 'growth')!.series!;
+    const today = new Date().toISOString().slice(0, 10);
+    const metrics = async () => SELF.fetch(`${BASE}/v1/apps/stash/operator/metrics/growth`, json('GET', undefined, await session('gh:1')));
+
+    it('a sensitive dimension loses its breakdown: no value becomes a label', async () => {
+      await store((c) => { growth(c).dimension = { column: 'api_key', label: 'Key', max_values: 3 }; });
+      worker().intercept({ path: '/query', method: 'POST' }).reply(200, {
+        rows: [{ day: today, api_key: 'VALUE-OF-api_key-1', signups: 2 }, { day: today, api_key: 'VALUE-OF-api_key-2', signups: 3 }], meta: {},
+      });
+      const res = await metrics();
+      const text = await res.text();
+      expect(res.status, text).toBe(200);
+      expect(text).not.toContain('VALUE-OF');
+      expect(text).not.toContain('api_key');
+      const body = JSON.parse(text) as { dimension: unknown; measures: { column: string; summary: number; series: { dimension: unknown }[] }[] };
+      expect(body.dimension).toBeNull();
+      expect(body.measures).toEqual([expect.objectContaining({ column: 'signups', summary: 5, series: [expect.objectContaining({ dimension: null })] })]);
+    });
+
+    it('a sensitive measure is dropped', async () => {
+      await store((c) => {
+        growth(c).dimension = null;
+        growth(c).measures.push({ column: 'token_count', label: 'Tokens', unit: 'count', aggregation: 'sum' });
+      });
+      worker().intercept({ path: '/query', method: 'POST' }).reply(200, { rows: [{ day: today, signups: 2, token_count: 777 }], meta: {} });
+      const res = await metrics();
+      const text = await res.text();
+      expect(res.status, text).toBe(200);
+      expect(text).not.toContain('token_count');
+      expect(text).not.toContain('777');
+      expect((JSON.parse(text) as { measures: { column: string }[] }).measures.map((m) => m.column)).toEqual(['signups']);
+    });
+
+    it('a sensitive time column, or a sensitive page column, refuses the request before the query runs', async () => {
+      await store((c) => {
+        growth(c).time.column = 'session_token';
+        c.resources.find((r) => r.id === 'members')!.page!.column = 'session_token';
+      });
+      // No /query interceptor: had either route reached the data worker, the call would fail and answer 502, not 409.
+      const series = await metrics();
+      expect(series.status).toBe(409);
+      expect(await series.text()).toContain('sensitive-field list');
+      const members = await SELF.fetch(`${BASE}/v1/apps/stash/operator/resources/members`, json('GET', undefined, await session('gh:1')));
+      expect(members.status).toBe(409);
+      expect(await members.text()).toContain('sensitive-field list');
+      expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM app_action_audit WHERE app_id = 'stash' AND status = 200").first()).toEqual({ n: 0 });
+    });
+  });
 });
 
 // #295: the admin-authoring routes behind the MCP tools, on real D1. Owner-only,

@@ -329,6 +329,7 @@ Errors are JSON `{ "error": "<message>", ...extra }`.
 | 409 | `the record changed since it was loaded; reload and try again` | A guarded write that changed nothing |
 | 409 | `action <name> cannot run from the operator view` | The action is public, scheduled, or can't be called by a user |
 | 409 | `action <name> does not guard every statement with :<param>; redeploy it…` | A transition whose stored action has a statement that ignores the status (#340) |
+| 409 | `this resource pages on a column on the sensitive-field list…` / `this metric's time column is on the sensitive-field list…` | A contract stored before that name joined the sensitive-field list (#336). Redeploy the `operator_view` |
 | 415 | `document type is not viewable` | Evidence that isn't a PDF or an image |
 | 502 | `action <name> failed (…)` / `data worker returned an invalid response` | The data worker failed |
 

@@ -975,7 +975,11 @@ PAS-SENSITIVE-FIELDS list (`packages/backend/src/lib/sensitive-fields.ts`), for
 every caller, owners and admins included. It applies to resource rows, KPI
 panels, related lists and record detail, after the data worker answers and
 before anything leaves. A blocked field is simply absent, never an error, and
-only its name is logged.
+only its name is logged. A metric series applies it to its columns too (#336):
+a blocked measure is dropped, and a blocked dimension loses its breakdown. A
+series whose time column is blocked, or a paged resource whose cursor column is
+blocked, is refused with a 409 before its query runs, because the cursor is
+returned as is.
 
 A name is sensitive when one of its words (split on `_`, `-`, camelCase and
 between letters and digits, so `token2` is `token`) is one of:
