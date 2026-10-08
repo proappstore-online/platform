@@ -72,6 +72,65 @@ describe('Rooms', () => {
   });
 });
 
+// #351: events an app worker publishes, and the reconnect signal that tells a client to refetch.
+describe('Room events and reconnects (#351)', () => {
+  const auth = { token: 'tok', isSignedIn: true, usesPlatformCookie: false };
+  function fire(sock: MockWebSocket, type: string, ev: unknown) {
+    for (const call of sock.addEventListener.mock.calls) if (call[0] === type) (call[1] as (e: unknown) => void)(ev);
+  }
+  const frame = (data: unknown) => ({ data: JSON.stringify(data) });
+
+  it('a server event reaches onEvent only, with its seq; a peer message reaches onMessage only', () => {
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    const room = makeRooms(auth).join('doors:c1');
+    const events: unknown[] = [];
+    const messages: unknown[] = [];
+    room.onEvent((e) => events.push(e));
+    room.onMessage((m) => messages.push(m));
+    fire(sockets[0]!, 'message', frame({ kind: 'event', from: { uid: 'system:worker', login: 'system:worker' }, data: { door: 'd1' }, at: 5, seq: 3 }));
+    fire(sockets[0]!, 'message', frame({ kind: 'msg', from: { uid: 'gh:2', login: 'bob' }, data: 'hi', at: 6 }));
+    expect(events).toEqual([{ from: { uid: 'system:worker', login: 'system:worker' }, data: { door: 'd1' }, at: 5, seq: 3 }]);
+    expect(messages).toEqual([{ from: { uid: 'gh:2', login: 'bob' }, data: 'hi', at: 6 }]);
+    room.close();
+  });
+
+  it('onReconnect fires when a dropped socket opens again, never for the first connection', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    try {
+      const room = makeRooms(auth).join('doors:c1');
+      let reconnects = 0;
+      room.onReconnect(() => { reconnects += 1; });
+      fire(sockets[0]!, 'open', {});
+      expect(reconnects).toBe(0);
+      fire(sockets[0]!, 'close', { code: 1006, reason: '' });
+      vi.advanceTimersByTime(3_000);
+      expect(sockets).toHaveLength(2);
+      fire(sockets[1]!, 'open', {});
+      expect(reconnects).toBe(1); // refetch now: anything published while closed was missed
+      room.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('room_forbidden is an auth close and is not retried', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    try {
+      const room = makeRooms(auth).join('user:gh:9');
+      const closes: { kind: string; willReconnect: boolean; reason: string }[] = [];
+      room.onClose((info) => closes.push(info));
+      fire(sockets[0]!, 'close', { code: ROOM_CLOSE_CODES.UNAUTHORIZED, reason: 'room_forbidden' });
+      expect(closes[0]).toMatchObject({ kind: 'auth', willReconnect: false, reason: 'room_forbidden' });
+      vi.advanceTimersByTime(60_000);
+      expect(sockets).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('Room close reasons (#119)', () => {
   const auth = { token: 'tok', isSignedIn: true, usesPlatformCookie: false };
   function fire(sock: MockWebSocket, type: string, ev: unknown) {

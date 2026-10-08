@@ -1,9 +1,12 @@
 import { consume, newRateLimitState, type RateLimitState } from '../lib/rate-limit.js';
 import { getAppVisibility, visibilityAllows } from '../lib/visibility.js';
+import { ROOM_PUBLISH_PATH, roomAccess, roomRules, ruleFor, USER_ROOM_PREFIX, type RoomAccess } from '../lib/room-access.js';
 import type { Env } from '../types.js';
 
 const MAX_PEERS = 32;
 const MAX_MESSAGE_BYTES = 4 * 1024;
+/** The `from` of an event an app worker published (#351); no peer can send one. */
+export const SERVER_PEER = { uid: 'system:worker', login: 'system:worker' } as const;
 const MAX_MSGS_PER_SEC = 100;
 const IDLE_EVICT_MS = 24 * 60 * 60 * 1000;
 /**
@@ -61,6 +64,10 @@ export class Room {
   private lastActivity = Date.now();
   /** The app this room belongs to, from the upgrade route; null when addressed directly. */
   private appId: string | null = null;
+  /** The room's id within its app (#351), for re-running its access rule on open sockets. */
+  private roomId: string | null = null;
+  /** Server events published here (#351), numbered so a client can see it missed some and refetch. */
+  private seq = 0;
 
   constructor(
     private readonly state: DurableObjectState,
@@ -69,10 +76,17 @@ export class Room {
     void this.state.blockConcurrencyWhile(async () => {
       const stored = (await this.state.storage.get<number>('lastActivity')) ?? Date.now();
       this.lastActivity = stored;
+      this.seq = (await this.state.storage.get<number>('seq')) ?? 0;
     });
   }
 
   async fetch(request: Request): Promise<Response> {
+    // #351: an app worker's publish, reachable only through this Durable
+    // Object's binding (lib/room-access.ts workerRoomPublish): the WebSocket
+    // route forwards upgrade GETs only, so no client can send a server event.
+    const target = new URL(request.url);
+    if (request.method === 'POST' && target.pathname === ROOM_PUBLISH_PATH) return this.publish(request);
+
     // Idle eviction clears the room's storage only — and only when the room is
     // empty. Connected peers are never evicted (#119).
     if (this.peers.size === 0 && Date.now() - this.lastActivity > IDLE_EVICT_MS) {
@@ -90,6 +104,7 @@ export class Room {
     const login = url.searchParams.get('login') ?? uid;
     const roles = (url.searchParams.get('roles') ?? 'user').split(',').filter(Boolean);
     this.appId = url.searchParams.get('app') ?? this.appId;
+    this.roomId = url.searchParams.get('room') ?? this.roomId;
 
     const pair = new WebSocketPair();
     const client = pair[0];
@@ -140,33 +155,74 @@ export class Room {
   }
 
   /**
-   * Re-run the private-app gate on every open socket (#276); refused ones close
-   * 4401 app_private, as at the upgrade. Reads D1 live, not the 30 s isolate
-   * cache, so the bound stays VISIBILITY_RECHECK_MS. A public app costs one read
-   * per room per tick. A failed lookup closes nothing: an open socket is kept and
-   * re-checked on the next tick, never closed on a guess.
+   * An app worker's event (#351): `{ kind: 'event', from: SERVER_PEER, data,
+   * at, seq }` to every open socket. Answers how many got it; 0 when nobody is
+   * connected, which is not an error. `seq` grows by one per event in this room
+   * and survives the room going idle, so a client that sees a gap refetches.
+   */
+  private async publish(request: Request): Promise<Response> {
+    const body = await request.json<{ app?: string; room?: string; data?: unknown }>().catch(() => null);
+    if (!body || typeof body.app !== 'string' || typeof body.room !== 'string') return new Response('bad publish', { status: 400 });
+    this.appId ??= body.app;
+    this.roomId ??= body.room;
+    this.seq += 1;
+    await this.state.storage.put('seq', this.seq);
+    const frame = JSON.stringify({ kind: 'event', from: SERVER_PEER, data: body.data ?? null, at: Date.now(), seq: this.seq });
+    let delivered = 0;
+    for (const peer of this.peers.values()) {
+      try { peer.socket.send(frame); delivered += 1; } catch { /* gone */ }
+    }
+    return Response.json({ delivered, seq: this.seq });
+  }
+
+  /**
+   * Re-run the private-app gate on every open socket (#276), and the room's own
+   * access rule (#351: a declared room's authorize action, or `user:<uid>`);
+   * refused sockets close 4401 with `app_private` or `room_forbidden`, as at the
+   * upgrade. Reads D1 live, not the 30 s isolate cache, so the bound stays
+   * VISIBILITY_RECHECK_MS. A failed lookup closes nothing: an open socket is kept
+   * and re-checked on the next tick, never closed on a guess.
    */
   async alarm(): Promise<void> {
     if (this.peers.size === 0 || !this.appId) return;
     const appId = this.appId;
+    const before = this.peers.size;
+    const refuse = (peer: Peer, reason: string) => {
+      this.peers.delete(peer.socket);
+      try { peer.socket.close(ROOM_CLOSE_CODES.UNAUTHORIZED, reason); } catch { /* gone */ }
+    };
     try {
       const visibility = await getAppVisibility(this.env.DB, appId);
       if (visibility.mode === 'private') {
         const allowed = new Map<string, boolean>();
-        const before = this.peers.size;
         for (const peer of [...this.peers.values()]) {
           if (!allowed.has(peer.uid)) {
             allowed.set(peer.uid, await visibilityAllows(this.env, appId, visibility, { id: peer.uid, login: peer.login, roles: peer.roles }));
           }
-          if (allowed.get(peer.uid)) continue;
-          this.peers.delete(peer.socket);
-          try { peer.socket.close(ROOM_CLOSE_CODES.UNAUTHORIZED, 'app_private'); } catch { /* gone */ }
+          if (!allowed.get(peer.uid)) refuse(peer, 'app_private');
         }
-        if (this.peers.size !== before) this.broadcastPeers();
       }
     } catch (e) {
       console.warn(`room visibility re-check failed for ${appId}: ${(e as Error)?.message ?? e}`);
     }
+    const roomId = this.roomId;
+    if (roomId && this.peers.size > 0) {
+      try {
+        const rules = roomId.startsWith(USER_ROOM_PREFIX) ? [] : await roomRules(this.env.DB, appId);
+        if (roomId.startsWith(USER_ROOM_PREFIX) || ruleFor(rules, roomId)) {
+          const verdicts = new Map<string, RoomAccess>();
+          for (const peer of [...this.peers.values()]) {
+            if (!verdicts.has(peer.uid)) {
+              try { verdicts.set(peer.uid, await roomAccess(this.env, appId, roomId, { id: peer.uid, roles: peer.roles }, rules)); } catch { /* unknown: keep */ }
+            }
+            if (verdicts.get(peer.uid) === 'denied') refuse(peer, 'room_forbidden');
+          }
+        }
+      } catch (e) {
+        console.warn(`room access re-check failed for ${appId}/${roomId}: ${(e as Error)?.message ?? e}`);
+      }
+    }
+    if (this.peers.size !== before) this.broadcastPeers();
     if (this.peers.size > 0) await this.state.storage.setAlarm(Date.now() + VISIBILITY_RECHECK_MS);
   }
 

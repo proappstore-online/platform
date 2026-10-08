@@ -33,7 +33,9 @@ export const MAX_BATCH_BODY_BYTES = 1024 * 1024;
 export const MAX_WORKER_OBJECT_BYTES = 10 * 1024 * 1024;
 const STORAGE_KEY = /^[A-Za-z0-9_][A-Za-z0-9_.\/-]{0,511}$/;
 
-export type WorkerCallCode = 'Unauthorized' | 'TooManyCalls' | 'Forbidden' | 'NotFound' | 'BadRequest' | 'Unavailable' | 'Failed';
+export type WorkerCallCode = 'Unauthorized' | 'TooManyCalls' | 'Forbidden' | 'NotFound' | 'BadRequest' | 'Unavailable' | 'Failed'
+  // #351: PAS.rooms.publish
+  | 'InvalidRoom' | 'PayloadTooLarge' | 'RateLimited';
 
 export class WorkerCallError extends Error {
   constructor(readonly code: WorkerCallCode, detail: string) {
@@ -187,6 +189,19 @@ async function dataWorker(env: Env, appId: string, endpoint: string, payload: un
   } catch {
     throw new WorkerCallError('Failed', 'the data worker returned an invalid response');
   }
+}
+
+/**
+ * Run one registered query action as `user`, with its role gates and
+ * `:__user_id` bound to them, and return its rows (#351: a room's authorize
+ * action). Platform-initiated, so no success audit row: the room re-checks its
+ * peers every minute and would otherwise fill the trail.
+ */
+export async function queryAsUser(env: Env, appId: string, name: string, params: Record<string, unknown>, user: CallerIdentity): Promise<unknown[]> {
+  const call = await prepareWorkerCall(env, appId, name, params, user);
+  if (call.endpoint !== 'query') throw new WorkerCallError('Forbidden', `"${name}" must be a query action`);
+  const answer = await dataWorker(env, appId, 'query', call.statements[0]) as { rows?: unknown };
+  return Array.isArray(answer.rows) ? answer.rows : [];
 }
 
 /** Run one registered action as `system:worker`. Returns the data worker's answer (`rows`/`meta`, or `results` for a batch tool). */

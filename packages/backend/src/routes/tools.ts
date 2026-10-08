@@ -24,6 +24,7 @@ import { refuseAppMediated } from '../lib/operator-audit-marks.js';
 import { SCHEDULER_TICK_MINUTES } from '../lib/scheduler-tick.js';
 import { MAX_SECRETS_PER_APP, SECRET_NAME_RE } from './secrets-shared.js';
 import { validateHookVerify, type HookVerify } from '../lib/hook-verifiers.js';
+import { MAX_ROOM_RULES_PER_APP, ROOM_PATTERN, USER_ROOM_PREFIX, type RoomRule } from '../lib/room-access.js';
 
 export const toolsRoutes = new Hono<{ Bindings: Env }>();
 
@@ -627,11 +628,13 @@ export interface SiteManifest {
   hooks?: unknown;
   /** The GitHub connector (#258): `[{ name, kind, modes, pat_secret?, events, hook? }]` — routes/connectors.ts. */
   connectors?: unknown;
+  /** Room authorization (#351): `[{ pattern: "chat:*", authorize }]` — lib/room-access.ts. */
+  rooms?: unknown;
 }
 
 /** The site-manifest fields of a submitted mcp.json body, for every registration path. */
 export function siteManifestFrom(body: SiteManifest | null | undefined): SiteManifest {
-  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker, hooks: body?.hooks, connectors: body?.connectors };
+  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker, hooks: body?.hooks, connectors: body?.connectors, rooms: body?.rooms };
 }
 
 interface PageMetaRoute { path: string; action: string; param: string }
@@ -894,6 +897,45 @@ export function validateConnectors(raw: unknown, hooks: HookDef[]): { error: str
   return { connectors: out };
 }
 
+// ── Rooms (#351) ─────────────────────────────────────────────────────────────
+
+/**
+ * The `rooms` section: `[{ pattern: "<prefix>:*", authorize: "<action>" }]`. A
+ * room whose id starts with the prefix admits a signed-in user only when the
+ * authorize action returns a row for them (lib/room-access.ts). The action runs
+ * as the joining user, with params `room` and `key`: a registered query that
+ * requires sign-in, lists "user" in its callers, takes no other required param,
+ * and is neither scheduled nor step-up (a room join carries no recent sign-in).
+ * `user:` is the platform's own and cannot be declared.
+ */
+export function validateRooms(raw: unknown, tools: ToolManifest[]): { error: string } | { rules: RoomRule[] } {
+  if (raw === undefined || raw === null) return { rules: [] };
+  if (!Array.isArray(raw) || raw.length > MAX_ROOM_RULES_PER_APP) return { error: `rooms must be an array of at most ${MAX_ROOM_RULES_PER_APP} rules` };
+  const rules: RoomRule[] = [];
+  for (const [i, item] of raw.entries()) {
+    const at = `rooms[${i}]`;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return { error: `${at} must be an object` };
+    const unknown = Object.keys(item).find((k) => k !== 'pattern' && k !== 'authorize');
+    if (unknown) return { error: `${at}: unknown field "${unknown}"` };
+    const { pattern, authorize } = item as { pattern?: unknown; authorize?: unknown };
+    const m = typeof pattern === 'string' ? ROOM_PATTERN.exec(pattern) : null;
+    if (!m) return { error: `${at}.pattern must be a lowercase prefix ending in ":" followed by "*", e.g. "chat:*"` };
+    const prefix = m[1]!;
+    if (prefix === USER_ROOM_PREFIX) return { error: `${at}.pattern: "user:*" is the platform's own (only user <uid> may join user:<uid>)` };
+    if (rules.some((r) => r.prefix === prefix)) return { error: `${at}: duplicate pattern "${pattern}"` };
+    const tool = tools.find((t) => t.name === authorize);
+    if (typeof authorize !== 'string' || !tool) return { error: `${at}.authorize must name an action in this manifest` };
+    if (tool.operation !== 'query') return { error: `${at}.authorize "${authorize}" must be a query action (it returns a row when the user may join)` };
+    if (tool.requires_auth !== true) return { error: `${at}.authorize "${authorize}" must require sign-in (it runs as the joining user)` };
+    if (!actionCallers(tool).includes('user')) return { error: `${at}.authorize "${authorize}" must list "user" in its callers` };
+    if (tool.schedule !== undefined || tool.step_up) return { error: `${at}.authorize "${authorize}" cannot be scheduled or require step_up` };
+    const other = Object.entries(tool.params ?? {}).find(([name, p]) => name !== 'room' && name !== 'key' && !p.optional && p.default === undefined);
+    if (other) return { error: `${at}.authorize "${authorize}": param "${other[0]}" is required, but a join passes only "room" and "key"` };
+    rules.push({ prefix, authorize });
+  }
+  return { rules };
+}
+
 export async function replaceAppTools(
   db: D1Database,
   appId: string,
@@ -931,6 +973,8 @@ export async function replaceAppTools(
   if ('error' in hooksResult) return { status: 400, payload: { error: hooksResult.error } };
   const connectorsResult = validateConnectors(site.connectors, hooksResult.hooks);
   if ('error' in connectorsResult) return { status: 400, payload: { error: connectorsResult.error } };
+  const roomsResult = validateRooms(site.rooms, tools as ToolManifest[]);
+  if ('error' in roomsResult) return { status: 400, payload: { error: roomsResult.error } };
   // `to: "worker"` needs app workers turned on for this app — the flag, not a
   // finished deploy, so registration never depends on the worker step's order.
   if (hooksResult.hooks.some((h) => h.to === 'worker')) {
@@ -1001,6 +1045,10 @@ export async function replaceAppTools(
     ...connectorsResult.connectors.map((k) =>
       db.prepare('INSERT INTO app_connectors (app_id, name, kind, modes, pat_secret, events, hook, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
         .bind(appId, k.name, k.kind, JSON.stringify(k.modes), k.pat_secret, JSON.stringify(k.events), k.hook, now)),
+    // Room rules (#351), replaced with the manifest: a manifest without `rooms` leaves every room open again.
+    db.prepare('DELETE FROM app_room_rules WHERE app_id = ?').bind(appId),
+    ...roomsResult.rules.map((r) =>
+      db.prepare('INSERT INTO app_room_rules (app_id, prefix, authorize, created_at) VALUES (?, ?, ?, ?)').bind(appId, r.prefix, r.authorize, now)),
     ...(workerResult.worker?.schedules ?? []).map((sch) =>
       db.prepare('INSERT INTO app_worker_schedules (app_id, name, cron, params, created_at) VALUES (?, ?, ?, ?, ?)')
         .bind(appId, sch.name, sch.cron, JSON.stringify(sch.params), now)),
@@ -1055,6 +1103,7 @@ export async function replaceAppTools(
       worker: workerResult.worker,
       hooks: hooksResult.hooks.map((h) => ({ name: h.name, kind: h.verify.kind, to: h.to === 'worker' ? 'worker' : { action: h.to.action } })),
       connectors: connectorsResult.connectors.map((k) => ({ name: k.name, kind: k.kind, modes: k.modes })),
+      rooms: roomsResult.rules.map((r) => ({ pattern: `${r.prefix}*`, authorize: r.authorize })),
       warnings },
   };
 }
@@ -1185,21 +1234,24 @@ toolsRoutes.delete('/apps/:appId/tools', async (c) => {
     c.env.DB.prepare('DELETE FROM app_worker_schedules WHERE app_id = ?').bind(appId),
     c.env.DB.prepare('DELETE FROM app_hooks WHERE app_id = ?').bind(appId),
     c.env.DB.prepare('DELETE FROM app_connectors WHERE app_id = ?').bind(appId),
+    c.env.DB.prepare('DELETE FROM app_room_rules WHERE app_id = ?').bind(appId),
   ]);
   return c.json({ ok: true });
 });
 
 /**
  * What still runs action `name` (#348): the stored operator_view (a resource's
- * read or detail, a row action) and the app's hooks (`to.action`). Deleting it
+ * read or detail, a row action), the app's hooks (`to.action`) and its room
+ * rules (#351, `rooms[].authorize`). Deleting it
  * would leave those pointing at nothing: the console 404s, a re-registered
  * action of the same name could slip in without a role, and every verified
  * hook delivery fails while still spending the hook quota.
  */
 async function toolReferences(db: D1Database, appId: string, name: string): Promise<string[]> {
-  const [contract, hooks] = await Promise.all([
+  const [contract, hooks, rooms] = await Promise.all([
     loadContract(db, appId),
     db.prepare('SELECT name, target FROM app_hooks WHERE app_id = ? ORDER BY name').bind(appId).all<{ name: string; target: string }>(),
+    db.prepare('SELECT prefix FROM app_room_rules WHERE app_id = ? AND authorize = ? ORDER BY prefix').bind(appId, name).all<{ prefix: string }>(),
   ]);
   const refs: string[] = [];
   for (const r of contract?.resources ?? []) {
@@ -1212,6 +1264,8 @@ async function toolReferences(db: D1Database, appId: string, name: string): Prom
     try { target = JSON.parse(h.target); } catch { continue; }
     if (target && typeof target === 'object' && (target as { action?: unknown }).action === name) refs.push(`hook "${h.name}"`);
   }
+  // #351: a room's authorize action; without it the room would refuse everyone.
+  for (const r of rooms.results ?? []) refs.push(`room pattern "${r.prefix}*"`);
   return refs;
 }
 

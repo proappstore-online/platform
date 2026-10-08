@@ -156,6 +156,20 @@ room.onPeers((peers) => console.log(peers))
 room.close()
 ```
 
+Your app worker can publish to a room (#351): `pas.rooms.publish('doors:c1', { id })`.
+Browsers receive it with `onEvent`, and refetch on `onReconnect`, because events are
+not replayed after a disconnect:
+
+```ts
+const room = app.rooms.join(`doors:${campaignId}`)
+room.onEvent((e) => refetch())       // e = { from: { uid: 'system:worker' }, data, at, seq }
+room.onReconnect(() => refetch())
+```
+
+`user:<uid>` rooms admit only that user. Other rooms are open unless the app's
+`mcp.json` declares a `rooms` pattern and an authorize action for them; a refused
+join closes `4401 room_forbidden` and is not retried.
+
 ### Proxy (Secret-injecting API proxy)
 
 Call third-party APIs without exposing keys to the client.

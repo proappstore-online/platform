@@ -3,21 +3,11 @@ import { ROOM_CLOSE_CODES, refuseWebSocket } from '../do/room.js';
 import { verifySession } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { getAppVisibilityCached, visibilityAllows } from '../lib/visibility.js';
+import { roomAccess, roomObjectName } from '../lib/room-access.js';
 
 export const roomRoutes = new Hono<{ Bindings: Env }>();
 
-/**
- * A stable, collision-free Durable Object name for one app room. The old
- * `${appId}:${roomId}` delimiter was ambiguous when either component contained
- * `:`. Rooms are ephemeral, so deliberately do not route to that legacy name:
- * retaining it would retain the cross-app collision (#329).
- */
-export function roomObjectName(appId: string, roomId: string): string {
-  const bytes = new TextEncoder().encode(`${appId}\0${roomId}`);
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return `v1:${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
-}
+export { roomObjectName } from '../lib/room-access.js';
 
 roomRoutes.get('/apps/:appId/rooms/:roomId', async (c) => {
   if (c.req.header('upgrade') !== 'websocket') return c.text('expected websocket', 400);
@@ -39,6 +29,14 @@ roomRoutes.get('/apps/:appId/rooms/:roomId', async (c) => {
   if (!(await visibilityAllows(c.env, appId, visibility, { id: session.uid, login: session.login ?? session.uid, roles: session.roles ?? ['user'] }))) {
     return refuseWebSocket(ROOM_CLOSE_CODES.UNAUTHORIZED, 'app_private');
   }
+  // #351: `user:<uid>` rooms admit only that user; a room the app declares in
+  // mcp.json `rooms` admits whom its authorize action returns a row for. A
+  // refusal is closed 4401 like a bad session (the SDK stops reconnecting), with
+  // its own reason. A data-worker outage while authorizing is a 503 the SDK retries.
+  const roles = session.roles ?? ['user'];
+  if ((await roomAccess(c.env, appId, roomId, { id: session.uid, roles })) === 'denied') {
+    return refuseWebSocket(ROOM_CLOSE_CODES.UNAUTHORIZED, 'room_forbidden');
+  }
   const id = c.env.ROOM.idFromName(roomObjectName(appId, roomId));
   const stub = c.env.ROOM.get(id);
   const url = new URL(c.req.raw.url);
@@ -46,7 +44,8 @@ roomRoutes.get('/apps/:appId/rooms/:roomId', async (c) => {
   url.searchParams.set('login', session.login ?? session.uid);
   // #276: what the room needs to re-run the gate on its open sockets.
   url.searchParams.set('app', appId);
-  url.searchParams.set('roles', (session.roles ?? ['user']).join(','));
+  url.searchParams.set('room', roomId);
+  url.searchParams.set('roles', roles.join(','));
   return stub.fetch(url.toString(), c.req.raw);
 });
 

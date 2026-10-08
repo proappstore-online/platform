@@ -65,6 +65,19 @@ export interface PasClient {
     put(key: string, body: string | ArrayBuffer | Uint8Array, opts?: { contentType?: string }): Promise<{ key: string; size: number }>;
     get(key: string): Promise<{ body: ArrayBuffer; contentType: string } | null>;
   };
+  rooms: {
+    /**
+     * Send `data` (JSON, ≤ 4 KB serialized) as a server event to every client
+     * connected to `roomId` of this app (#351); browsers receive it through
+     * `room.onEvent`. Resolves `{ delivered }`, the number of sockets it reached:
+     * 0 when nobody is connected, which is not an error — clients refetch when they
+     * reconnect. Rejects with InvalidRoom, PayloadTooLarge, BadRequest (not JSON)
+     * or RateLimited (more than 60 publishes a minute for the app). Publishes as
+     * `system:worker`. Use `user:<uid>` for one user's events; only that user can
+     * join it.
+     */
+    publish(roomId: string, data: unknown): Promise<{ delivered: number }>;
+  };
   /** Append to the app's logs (category `worker`). Resolves false when the app's log quota is spent. */
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, fields?: Record<string, unknown>): Promise<boolean>;
 }
@@ -98,6 +111,7 @@ interface PasBinding {
   secrets: { get(name: string, ctx: CallCtx): Promise<string | null> };
   connectors: { token(name: string, opts: unknown, ctx: CallCtx): Promise<string | null> };
   storage: { put(key: string, body: unknown, opts: unknown, ctx: CallCtx): Promise<unknown>; get(key: string, ctx: CallCtx): Promise<unknown> };
+  rooms: { publish(roomId: string, data: unknown, ctx: CallCtx): Promise<unknown> };
   log(level: string, message: string, fields: unknown, ctx: CallCtx): Promise<boolean>;
 }
 
@@ -121,6 +135,7 @@ export function pasClient(env: AppWorkerEnv, event: Pick<AppWorkerEvent, 'id' | 
       put: (key, body, opts) => pas.storage.put(key, body, opts ?? {}, ctx) as Promise<{ key: string; size: number }>,
       get: (key) => pas.storage.get(key, ctx) as Promise<{ body: ArrayBuffer; contentType: string } | null>,
     },
+    rooms: { publish: (roomId, data) => pas.rooms.publish(roomId, data, ctx) as Promise<{ delivered: number }> },
     log: (level, message, fields) => pas.log(level, message, fields, ctx),
   };
 }

@@ -32,6 +32,17 @@ export interface RoomMessage<T = unknown> {
   at: number;
 }
 
+/**
+ * An event an app worker published to this room (#351: `pas.rooms.publish`).
+ * `from.uid` is always `system:worker`: no peer can send one. `seq` grows by one
+ * per event in the room, so a gap means events were missed — refetch.
+ */
+export interface RoomEvent<T = unknown> {
+  from: RoomPeer;
+  data: T;
+  at: number;
+  seq: number;
+}
 export type ConnectionState = 'connecting' | 'open' | 'closed' | 'error';
 
 /**
@@ -41,7 +52,12 @@ export type ConnectionState = 'connecting' | 'open' | 'closed' | 'error';
 export const ROOM_CLOSE_CODES = {
   /** The room already holds 32 peers. Retrying will not help until someone leaves. */
   ROOM_FULL: 4429,
-  /** The session was missing or invalid. Sign in again. */
+  /**
+   * The session was missing or invalid (`missing_token`, `invalid_session`), the
+   * app is private (`app_private`), or the room refuses this user
+   * (`room_forbidden`, #351: a `user:<uid>` room of someone else, or a room the
+   * app's authorize action does not admit them to). Not retried.
+   */
   UNAUTHORIZED: 4401,
 } as const;
 
@@ -85,6 +101,9 @@ const RECONNECT_MAX_MS = 30_000;
 export class Room {
   private socket: WebSocket | null = null;
   private listeners = new Set<(msg: RoomMessage) => void>();
+  private eventListeners = new Set<(event: RoomEvent) => void>();
+  private reconnectListeners = new Set<() => void>();
+  private everOpened = false;
   private peerListeners = new Set<(peers: RoomPeer[]) => void>();
   private stateListeners = new Set<(state: ConnectionState) => void>();
   private closeListeners = new Set<(info: RoomCloseInfo) => void>();
@@ -142,6 +161,26 @@ export class Room {
     return () => this.listeners.delete(listener as (msg: RoomMessage) => void);
   }
 
+  /**
+   * Events the app's worker publishes to this room (#351, `pas.rooms.publish`).
+   * Not persisted: one published while this client was disconnected is never
+   * replayed. Pair it with {@link onReconnect} to refetch what you show.
+   */
+  onEvent<T = unknown>(listener: (event: RoomEvent<T>) => void): Unsubscribe {
+    this.eventListeners.add(listener as (event: RoomEvent) => void);
+    return () => this.eventListeners.delete(listener as (event: RoomEvent) => void);
+  }
+
+  /**
+   * Fires each time the socket opens again after it had been open (#351), i.e.
+   * after a dropped connection is restored: anything published meanwhile was
+   * missed, so refetch now. Not called for the first connection.
+   */
+  onReconnect(listener: () => void): Unsubscribe {
+    this.reconnectListeners.add(listener);
+    return () => this.reconnectListeners.delete(listener);
+  }
+
   onPeers(listener: (peers: RoomPeer[]) => void): Unsubscribe {
     this.peerListeners.add(listener);
     listener(this._peers);
@@ -182,6 +221,8 @@ export class Room {
     this.socket = null;
     this.setState('closed');
     this.listeners.clear();
+    this.eventListeners.clear();
+    this.reconnectListeners.clear();
     this.peerListeners.clear();
     this.stateListeners.clear();
     this.closeListeners.clear();
@@ -202,6 +243,8 @@ export class Room {
     socket.addEventListener('open', () => {
       this.reconnectAttempt = 0;
       this.setState('open');
+      if (this.everOpened) for (const l of this.reconnectListeners) l();
+      this.everOpened = true;
       if (this.debug) console.log(`[rooms] connected to ${this.roomId}`);
     });
 
@@ -210,6 +253,7 @@ export class Room {
       try {
         const parsed = JSON.parse(ev.data as string) as
           | { kind: 'msg'; from: RoomPeer; data: unknown; at: number }
+          | { kind: 'event'; from: RoomPeer; data: unknown; at: number; seq: number }
           | { kind: 'peers'; peers: RoomPeer[] };
         if (parsed.kind === 'msg' && parsed.from) {
           if (this.debug)
@@ -217,6 +261,8 @@ export class Room {
           for (const l of this.listeners) {
             l({ from: parsed.from, data: parsed.data, at: parsed.at });
           }
+        } else if (parsed.kind === 'event' && parsed.from) {
+          for (const l of this.eventListeners) l({ from: parsed.from, data: parsed.data, at: parsed.at, seq: parsed.seq });
         } else if (parsed.kind === 'peers' && Array.isArray(parsed.peers)) {
           // Guard the shape — a malformed frame ({"kind":"peers"} with no array)
           // must not set _peers to undefined and hand undefined to every

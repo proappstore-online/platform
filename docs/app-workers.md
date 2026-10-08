@@ -31,7 +31,7 @@ The worker receives exactly these bindings (ADR-009 §2):
 
 | Binding | What it is |
 |---|---|
-| `PAS` | RPC to the platform API: `actions`, `secrets`, `storage`, `log` |
+| `PAS` | RPC to the platform API: `actions`, `secrets`, `storage`, `rooms`, `log` |
 | `PAS_WORKER_TOKEN` | per-app token, required on every `PAS` call (the SDK passes it) |
 | `PAS_EVENT_KEY` | per-app HMAC key the shim verifies events with |
 | `APP_ID` | the app id |
@@ -247,11 +247,53 @@ Every handler receives the event, plus a `pas` client bound to this invocation:
 | `pas.actions.batch([{ name, params }])` | Runs many actions in one transaction, at most 500 statements and 1 MB. It counts as one `PAS` call. |
 | `pas.secrets.get(name)` | Returns a secret listed in `worker.secrets`, otherwise `null`. |
 | `pas.storage.put(key, body, { contentType? })` / `get(key)` | Reads and writes worker files, at most 10 MB each. |
+| `pas.rooms.publish(roomId, data)` | Sends `data` as an event to every client connected to that room of your app, as `system:worker` (#351). Resolves `{ delivered }`. See [Rooms](#rooms-notify-connected-clients). |
 | `pas.log(level, message, fields?)` | Appends to the app's logs. Resolves `false` when the worker's daily log budget is spent (the line is dropped; the invocation carries on). |
 
 `event` is `{ id, type, name, attempt, issuedAt, payload }`. For a hook it also
 carries `hook: { headers, body }`. `hookBody(payload)` decodes an envelope body
 back to bytes.
+
+### Rooms: notify connected clients
+
+`pas.rooms.publish(roomId, data)` (#351, ADR-010) turns a write into a push: after
+the worker changes state, it tells the clients watching that state to update.
+
+```ts
+export default defineAppWorker({
+  async webhook(event, pas) {
+    const { campaignId, doorId, userId } = JSON.parse(new TextDecoder().decode(hookBody(event.payload)));
+    await pas.actions.call('mark_door', { id: doorId });                                  // 1. write the state
+    await pas.rooms.publish(`doors:${campaignId}`, { type: 'door_updated', id: doorId });  // 2. tell the campaign
+    await pas.rooms.publish(`user:${userId}`, { type: 'notification' });                   // 3. and that one user
+  },
+});
+```
+
+And in the browser:
+
+```ts
+const room = app.rooms.join(`doors:${campaignId}`);
+const refetch = () => loadDoors(campaignId);   // your action call: the data stays in actions
+room.onEvent(() => refetch());                  // an event says "this changed"
+room.onReconnect(() => refetch());              // anything published while disconnected was missed
+```
+
+- **Rooms are your app's only.** The app comes from the worker's binding, so a
+  worker can never reach another app's rooms.
+- **Who receives it** is whoever the room admits: `user:<uid>` admits only that
+  user, and a room under a pattern you declare in `mcp.json` `rooms` admits only
+  the users your authorize action allows (see
+  [MCP app tools → Rooms](./mcp-app-tools.md#rooms-rooms-who-may-join-and-app-worker-events)).
+  Publish into such rooms anything user- or tenant-specific.
+- **Not persisted.** `{ delivered: 0 }` means nobody was connected; that is not an
+  error. Events carry `seq`, one more per event in the room, and the SDK's
+  `onReconnect` fires after every restored connection: refetch then. Keep polling
+  only as the disconnected fallback.
+- **Errors** (the call rejects): `InvalidRoom` (ids are `[A-Za-z0-9][A-Za-z0-9:_.@-]{0,127}`),
+  `BadRequest` (not JSON), `PayloadTooLarge` (over 4 KB serialized), `RateLimited`
+  (over 60 a minute for the app). It always publishes as `system:worker`, also
+  inside a browser request's caller grant.
 
 ### `fetch`: browser routes
 
@@ -298,6 +340,7 @@ a replay inside the signature window. **Make every handler idempotent on
 | Schedule failures | 5 in a row disable the schedule and raise one alert. Redeploying the manifest re-enables it. |
 | Run now | one manual run per schedule per minute; it is queued at once (status `queued`) |
 | Hooks | ≤ 10 per app, body ≤ 5 MB |
+| `pas.rooms.publish` | `data` is JSON, ≤ 4 KB serialized; 60 publishes a minute per app; each publish is one `PAS` call |
 | Worker files | 10 MB per object |
 | Invocation history | 30 days; hook deliveries 14 days |
 

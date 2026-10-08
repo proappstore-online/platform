@@ -10,6 +10,7 @@ function envWithPas() {
     secrets: { get: vi.fn(async () => 'v') },
     storage: { put: vi.fn(async () => ({ key: 'k', size: 1 })), get: vi.fn(async () => null) },
     log: vi.fn(async () => true),
+    rooms: { publish: vi.fn(async () => ({ delivered: 2 })) },
   };
   return { pas, env: { PAS: pas, PAS_WORKER_TOKEN: 'tok', APP_ID: 'demo' } as unknown as AppWorkerEnv };
 }
@@ -60,6 +61,14 @@ describe('pasClient', () => {
     expect(pas.storage.put).toHaveBeenCalledWith('k', 'v', {}, ctx);
     expect(pas.storage.get).toHaveBeenCalledWith('k', ctx);
     expect(pas.log).toHaveBeenCalledWith('info', 'hi', { n: 1 }, ctx);
+  });
+
+  // #351: a publish carries the worker token and invocation, never a caller grant (it is always system:worker).
+  it('rooms.publish passes the room, the data and the bare ctx, even with a caller grant', async () => {
+    const { env, pas } = envWithPas();
+    const p = pasClient(env, { id: 'e1', attempt: 1 }, 'grant');
+    expect(await p.rooms.publish('user:gh:1', { kind: 'door_updated', id: 'd1' })).toEqual({ delivered: 2 });
+    expect(pas.rooms.publish).toHaveBeenCalledWith('user:gh:1', { kind: 'door_updated', id: 'd1' }, { token: 'tok', invocation: 'e1:1' });
   });
 
   it('refuses to run without a PAS binding', () => {

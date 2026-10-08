@@ -9,6 +9,7 @@
  *   env.PAS.secrets.get(name, ctx)               env.PAS.log(level, message, fields, ctx)
  *   env.PAS.storage.put(key, body, opts, ctx)    env.PAS.storage.get(key, ctx)
  *   env.PAS.connectors.token(name, { repo?, mode? }, ctx)   (#258)
+ *   env.PAS.rooms.publish(roomId, data, ctx)     → { delivered }   (#351)
  *
  * with ctx = { token: env.PAS_WORKER_TOKEN, invocation: '<envelope id>:<attempt>' }.
  * The SDK's `defineAppWorker` (@proappstore/sdk/worker) fills ctx in.
@@ -23,6 +24,7 @@ import {
   authorizeWorkerCall, recordWorkerCall, workerActionBatch, workerActionCall, workerLog,
   workerConnectorToken, workerSecretGet, workerStorageGet, workerStoragePut, WorkerCallError, type CallerIdentity,
 } from '../lib/app-worker-calls.js';
+import { workerRoomPublish } from '../lib/room-access.js';
 
 type Run = <T>(method: string, action: string, ctx: unknown, fn: (appId: string, caller: CallerIdentity | null) => Promise<T>) => Promise<T>;
 
@@ -88,6 +90,20 @@ class StorageApi extends RpcTarget {
   }
 }
 
+class RoomsApi extends RpcTarget {
+  readonly #run: Run;
+  readonly #env: Env;
+  constructor(run: Run, env: Env) { super(); this.#run = run; this.#env = env; }
+  /**
+   * Send `data` as a server event to every socket open in `roomId` of this app
+   * (#351), as `system:worker`. One PAS call, and one of the app's
+   * ROOM_PUBLISH_PER_MINUTE publishes. `{ delivered: 0 }` when nobody is connected.
+   */
+  publish(roomId: string, data: unknown, ctx: unknown): Promise<{ delivered: number }> {
+    return this.#run('rooms.publish', String(roomId ?? '').slice(0, 128), ctx, (appId) => workerRoomPublish(this.#env, appId, roomId, data));
+  }
+}
+
 export class AppWorkerApi extends WorkerEntrypoint<Env, { appId: string }> {
   #runner(): Run {
     return runner(this.env, (this.ctx as { props?: { appId?: string } }).props?.appId);
@@ -96,6 +112,7 @@ export class AppWorkerApi extends WorkerEntrypoint<Env, { appId: string }> {
   get secrets(): SecretsApi { return new SecretsApi(this.#runner(), this.env); }
   get connectors(): ConnectorsApi { return new ConnectorsApi(this.#runner(), this.env); }
   get storage(): StorageApi { return new StorageApi(this.#runner(), this.env); }
+  get rooms(): RoomsApi { return new RoomsApi(this.#runner(), this.env); }
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, fields: Record<string, unknown> | undefined, ctx: unknown): Promise<boolean> {
     // The runner has authorised ctx, so its invocation is a string naming this app's running invocation.
     return this.#runner()('log', '', ctx, (appId) => workerLog(this.env, appId, level, message, fields, (ctx as { invocation: string }).invocation));

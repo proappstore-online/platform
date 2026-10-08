@@ -589,6 +589,46 @@ Two more manifest keys configure server-side code (prototype; see
 Both are replaced with the manifest on every registration, like `operator`.
 Removing one from `mcp.json` removes its schedules or hooks.
 
+## Rooms (`rooms`): who may join, and app-worker events
+
+Rooms are WebSocket fan-out for an app's signed-in users (`app.rooms.join(id)`).
+Since #351 the platform also enforces **who may be in a room**, and an app worker
+can **publish** events into its own app's rooms (ADR-010).
+
+**Who may join**, decided from the room id:
+
+- `user:<uid>` is reserved: only the signed-in user `<uid>` may join it. Use it
+  for one user's events (notifications, inbox).
+- A room whose id starts with a prefix you declare admits only the users your
+  authorize action returns a row for:
+
+  ```json
+  {
+    "rooms": [{ "pattern": "chat:*", "authorize": "can_join_campaign" }],
+    "tools": [{
+      "name": "can_join_campaign", "operation": "query", "requires_auth": true,
+      "sql": "SELECT 1 AS ok FROM campaign_members WHERE campaign_id = :key AND user_id = :__user_id LIMIT 1",
+      "params": { "key": { "type": "string" } }
+    }]
+  }
+  ```
+
+  The action runs as the joining user, with `room` (the full id) and `key` (the
+  part after the prefix) as params. It must be a `query` that requires sign-in,
+  lists `"user"` in its `callers`, takes no other required param, and is neither
+  scheduled nor `step_up`. Its own `auth.app_roles` apply. At most 20 patterns;
+  the longest matching prefix wins; `user:*` cannot be declared.
+- Every other room is open to every caller the app's visibility admits, as before.
+
+A refused join closes `4401 room_forbidden`, and the SDK does not retry it. The
+room re-runs the rule on its open sockets every 60 s, so a membership you revoke
+closes within a minute. Deleting an action a room pattern names is refused (409)
+until the pattern is removed.
+
+**Publishing** is for the app worker only: `pas.rooms.publish(roomId, data)`
+(see [App workers](./app-workers.md#rooms-notify-connected-clients)). Browsers
+receive it with `room.onEvent()`; a peer can never send one.
+
 ## Console operator view (`operator_view`)
 
 > This section is the contract reference. For the overview, the agent workflow, a worked

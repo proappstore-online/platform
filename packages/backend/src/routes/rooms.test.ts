@@ -43,9 +43,9 @@ describe('roomObjectName (#329)', () => {
 // The route caches each app's visibility per isolate (#259); tests swap the D1 under it.
 afterEach(() => forgetAppVisibility());
 
-/** A D1 whose every lookup answers `row` — enough for the visibility gate (#259). */
+/** A D1 whose every lookup answers `row` — enough for the visibility gate (#259); no room rules (#351). */
 function visibilityDb(row: Record<string, unknown> | null): D1Database {
-  return { prepare: () => ({ bind: () => ({ first: async () => row }) }) } as unknown as D1Database;
+  return { prepare: () => ({ bind: () => ({ first: async () => row, all: async () => ({ results: [] }) }) }) } as unknown as D1Database;
 }
 
 function makeEnv(fetchRoom: (request: Request) => Response | Promise<Response>, db: D1Database = visibilityDb(null)): Env {

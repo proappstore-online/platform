@@ -66,6 +66,9 @@ app.counters.increment(name) / .get(name) / .list()
 
 // Real-time WebSocket rooms
 app.rooms.join(roomId) → room.send() / .onMessage() / .onPeers() / .close()
+//   + .onEvent()      events the app's worker publishes (#351)
+//   + .onReconnect()  the socket came back: refetch what you show
+//   `user:<uid>` rooms admit only that user; `mcp.json` `rooms` declares who may join others
 
 // Secret-injecting API proxy — requires authMode: 'platform-cookie' (calls are
 // bound to the app's own origin; a legacy-bearer call gets 403)
