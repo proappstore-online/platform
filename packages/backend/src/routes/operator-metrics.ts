@@ -31,7 +31,7 @@ export const operatorMetricsRoutes = new Hono<{ Bindings: Env }>();
 operatorMetricsRoutes.get('/apps/:appId/operator/metrics/:resourceId', async (c) => {
   const appId = c.req.param('appId');
   const caller = await requireOperatorAccess(c, appId);
-  const resource = await declaredResource(c.env.DB, appId, c.req.param('resourceId'));
+  const resource = await declaredResource(c.env.DB, appId, c.req.param('resourceId'), c.req.raw);
   const declared = resource.series;
   if (!declared) throw new HttpError('resource is not a time series', 404);
   const kept = new Set(returnableKeys(

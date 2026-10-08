@@ -6,6 +6,7 @@ import { TEST_SK, makeEnv, mockD1, mockStmt, testToken } from '../test-helpers.j
 import { validateOperatorView } from '../lib/operator-contract.js';
 import type { ToolManifest } from '../lib/action-sql.js';
 import { PARENTS_CLUBS, STASH } from '../__fixtures__/operator-view.js';
+import { REFUSAL_CAP } from './operator-audit.js';
 
 // #240: the console operator view is owner-only. Every refusal must happen
 // before any of the app's data is read.
@@ -231,7 +232,7 @@ describe('GET /v1/apps/:appId/operator/resources/* (#240 slice 3)', () => {
     expect(await res.text()).toContain('requires app role');
     expect(dataCalls).toHaveLength(0);
     // The refused attempt joins the operator trail — no role, status 403, never a success row.
-    expect(audit.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 403, expect.any(Number), 'read:members', null);
+    expect(audit.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 403, expect.any(Number), 'read:members', null, expect.any(Number), REFUSAL_CAP);
   });
 
   it('keeps the baseline and isolates apps: no contract, undeclared or other-app resources are 404', async () => {
@@ -406,7 +407,7 @@ describe('operator reports & suspensions (#240)', () => {
     const refused = await act('stash', 'resolve', report, noRole.d);
     expect(refused.status).toBe(403);
     expect(await refused.text()).toContain('requires app role');
-    expect(noRole.audit.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 403, expect.any(Number), 'resolve', null);
+    expect(noRole.audit.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 403, expect.any(Number), 'resolve', null, expect.any(Number), REFUSAL_CAP);
     expect((await act('stash', 'drop_tables', report, db(STASH, 'op_resolve_report').d)).status).toBe(404);
     const baseline = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt({ first: null }));
     expect((await act('stash', 'resolve', report, baseline)).status).toBe(404);

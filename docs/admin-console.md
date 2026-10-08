@@ -67,7 +67,8 @@ above).
   action asks for confirmation.
 - **Metrics:** a `metrics` resource shows KPI tiles or a time series.
 - **Audit:** every visit, read and action, and every refused attempt, is recorded under the
-  caller's own id.
+  caller's own id. Refused attempts are bounded: at most 20 rows per caller and app in any
+  10 minutes (#343).
 - **Not provided:** there is no generic "new record" or "edit any field" form, and no raw
   table browser. Creating or editing records is something you declare as a row action
   with its own SQL (for example "Restore listing" or "Change plan"). Anything that needs a
@@ -309,7 +310,13 @@ All routes live on `https://api.proappstore.online/v1` and take the caller's
 
 Both operator checks remember the admitted caller for that request. If an admitted caller is
 then refused, the refusal is audited once. Callers who never got past the gate leave nothing
-in the trail.
+in the trail. An admitted caller cannot flood it either (#343):
+- **Bounded:** at most `REFUSAL_CAP` (20) refusal rows per caller and app within
+  `REFUSAL_WINDOW_MS` (10 minutes), decided inside the insert, so parallel requests can't slip
+  past it. Further refusals in the window are logged to Workers Logs by name and status only.
+  The rows that are kept still show the owner who was refused, at what, and when.
+- **Declared ids only:** a refusal for an action, resource or evidence field the contract
+  doesn't declare is recorded as `(undeclared)` with no target, never as the caller wrote it.
 
 ### Error codes
 

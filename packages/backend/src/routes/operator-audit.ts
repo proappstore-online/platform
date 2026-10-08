@@ -11,7 +11,10 @@
  *   admitted caller — the owner or an admin (#293) — (role missing, step-up,
  *   conflict, validation…) once, unless the request already wrote its row.
  *   Callers who never passed the gate are not recorded, so a stranger cannot
- *   fill an app's trail.
+ *   fill an app's trail; and an admitted one cannot either (#343): at most
+ *   REFUSAL_CAP refusal rows per actor and app per REFUSAL_WINDOW_MS (the rest
+ *   are logged by name only), and an id the contract does not declare is
+ *   recorded as UNDECLARED, never as the caller wrote it.
  * - Trail: GET /v1/apps/:appId/operator/audit — owner-only (plus the
  *   contract's `audit.app_roles` when declared); the admin gate (#293) does not open it, 50 rows a page, newest first,
  *   keyset-paged and filterable. Rows carry who, what, which record, the
@@ -24,7 +27,7 @@ import { Hono, type MiddlewareHandler } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireRecentAuth, type FasUser } from '../lib/auth.js';
 import { roleSubjects } from '../lib/role-subject.js';
-import { markAudited, operatorCallerOf, requireOperatorAccess, requireOperatorOwner, wasAudited } from '../lib/operator-audit-marks.js';
+import { markAudited, operatorCallerOf, requireOperatorAccess, requireOperatorOwner, wasAudited, wasUndeclared } from '../lib/operator-audit-marks.js';
 import { loadContract } from './operator.js';
 
 export const operatorAuditRoutes = new Hono<{ Bindings: Env }>();
@@ -39,6 +42,11 @@ const PREFIXED: Kind[] = ['read', 'detail', 'evidence', 'series'];
 const VISIT = /^[A-Za-z0-9_-]{8,64}$/;
 /** The platform-held users list (#246). Contract resource ids cannot contain '-', so this never collides with one. */
 export const PLATFORM_USERS_READ = 'read:platform-users';
+/** A refused attempt at an action or resource the contract does not declare (#343). Ids match [a-z][a-z0-9_], so it collides with none. */
+export const UNDECLARED = '(undeclared)';
+/** Refusal rows one actor may add to one app's trail per window (#343). */
+export const REFUSAL_CAP = 20;
+export const REFUSAL_WINDOW_MS = 10 * 60_000;
 
 export async function writeRow(
   db: D1Database,
@@ -78,14 +86,38 @@ function attempted(path: string): { operatorAction: string; target: string | nul
   return null;
 }
 
-/** Records a refused operator request by an admitted caller (owner or admin, #293) — once, and only if nothing was recorded for it yet. */
+/**
+ * Records a refused operator request by an admitted caller (owner or admin,
+ * #293) — once, and only if nothing was recorded for it yet. Bounded per actor
+ * and app (#343): the row is inserted only while that actor has fewer than
+ * REFUSAL_CAP refusal rows in the app's trail within REFUSAL_WINDOW_MS, decided
+ * in the INSERT itself so parallel requests cannot all slip in. The rows kept
+ * still show the owner who was refused, at what and when; the rest are logged.
+ */
 export const operatorRefusalAudit: MiddlewareHandler<{ Bindings: Env }> = async (c, next) => {
   await next();
   const caller = operatorCallerOf(c.req.raw);
   if (!caller || c.res.status < 400 || wasAudited(c.req.raw)) return;
-  const what = attempted(c.req.path);
-  if (!what) return;
-  await writeRow(c.env.DB, { appId: c.req.param('appId') ?? '', actorId: caller.id, role: '', status: c.res.status, ...what });
+  const attempt = attempted(c.req.path);
+  if (!attempt) return;
+  const appId = c.req.param('appId') ?? '';
+  // The route answered "not declared" for this id: record the label, not what the caller wrote.
+  const what = wasUndeclared(c.req.raw) ? { operatorAction: UNDECLARED, target: null } : attempt;
+  const now = Date.now();
+  try {
+    // Bound in the order of writeRow's INSERT, then the window start and the cap.
+    const result = await c.env.DB.prepare(
+      `INSERT INTO app_action_audit (app_id, action_name, actor_id, role_name, status, created_at, operator_action, target)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
+        WHERE (SELECT COUNT(*) FROM app_action_audit
+                WHERE app_id = ?1 AND actor_id = ?3 AND action_name = '' AND status >= 400 AND created_at > ?9) < ?10`,
+    ).bind(appId, '', caller.id, '', c.res.status, now, what.operatorAction, what.target, now - REFUSAL_WINDOW_MS, REFUSAL_CAP).run();
+    if ((result.meta?.changes ?? 0) === 0) {
+      console.warn('[operator-audit] refusal not recorded: actor at the refusal cap', { appId, actorId: caller.id, operatorAction: what.operatorAction, status: c.res.status });
+    }
+  } catch (e) {
+    console.error('[operator-audit] write failed', { appId, operatorAction: what.operatorAction, err: String(e) });
+  }
 };
 
 // ── Entry into the operator view, once per visit ──────────────────────

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { app } from '../index.js';
 import { makeEnv, mockD1, mockStmt, testToken } from '../test-helpers.js';
 import { activityOf, joinDateOf } from './operator-users.js';
+import { REFUSAL_CAP } from './operator-audit.js';
 
 // #246: the platform-held users of an app, for its owner in the console
 // operator view — present whether or not the app declares a contract.
@@ -72,7 +73,7 @@ describe('GET /v1/apps/:appId/operator/users (#246)', () => {
       const res = await list(qs, d);
       expect(res.status, qs).toBe(400);
       expect(sqlOf(d).some((s) => /usage_daily|FROM app_roles/.test(s)), qs).toBe(false);
-      expect(refusal.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 400, expect.any(Number), 'read:platform-users', null);
+      expect(refusal.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 400, expect.any(Number), 'read:platform-users', null, expect.any(Number), REFUSAL_CAP);
     }
   });
 

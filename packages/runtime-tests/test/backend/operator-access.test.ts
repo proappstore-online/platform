@@ -3,6 +3,7 @@ import { mintSession } from '@proappstore/build-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BASE, json, mockNetwork, seedApp, seedUser, session, resetTables } from './helpers';
 import { STASH } from '../../../backend/src/__fixtures__/operator-view';
+import { REFUSAL_CAP, REFUSAL_WINDOW_MS, UNDECLARED } from '../../../backend/src/routes/operator-audit';
 
 // #240 / #293 regression, on real D1: every console operator route refuses every
 // caller who is neither the app's owner nor a holder of a declared admin role,
@@ -186,6 +187,38 @@ describe('admin role gate (#293)', () => {
     expect((await get('', await session('gh:4', { login: 'admina' }))).status).toBe(200);
     await expectRefusedEverywhere(await session('cred:squat', { login: 'admina' }), 403);
     await expectRefusedEverywhere(await session('google:squat', { login: 'gh:4' }), 403);
+  });
+
+  // #343: an admitted admin is less trusted than the owner, and must not be able to flood the owner's trail.
+  it('bounds an admin\'s refusal rows per app and window, records undeclared ids as a label, and keeps the owner\'s evidence', async () => {
+    await grant('gh:4', 'support'); // admitted, but without the actions' own 'operator' role
+    const admin = await session('gh:4', { login: 'admina' });
+    const N = REFUSAL_CAP + 15;
+    // In parallel: the cap is decided inside the INSERT, so concurrent refusals cannot all slip in.
+    const statuses = await Promise.all(Array.from({ length: N }, async () => (await get('/resources/members', admin)).status));
+    expect(statuses).toEqual(Array(N).fill(403)); // every request is still refused
+    const rows = async (uid: string) => (await env.DB.prepare(
+      "SELECT operator_action, status, target FROM app_action_audit WHERE app_id = 'stash' AND actor_id = ? ORDER BY id",
+    ).bind(uid).all<{ operator_action: string; status: number; target: string | null }>()).results ?? [];
+    const kept = await rows('gh:4');
+    expect(kept).toHaveLength(REFUSAL_CAP);
+    // What is kept is the owner's evidence: who was refused, at what, with which status.
+    expect(new Set(kept.map((r) => `${r.operator_action} ${r.status}`))).toEqual(new Set(['read:members 403']));
+
+    // Undeclared ids are recorded as one label, never as the caller wrote them; the owner's own refusal still lands (per actor).
+    const owner = await session('gh:1');
+    for (const path of ['actions/kind_enter_forged', 'resources/evidence_forged', 'metrics/nope']) {
+      const res = await SELF.fetch(`${BASE}/v1/apps/stash/operator/${path}`, json(path.startsWith('actions') ? 'POST' : 'GET', path.startsWith('actions') ? { row: {} } : undefined, owner));
+      expect(res.status, path).toBe(404);
+    }
+    expect(await rows('gh:1')).toEqual(Array(3).fill({ operator_action: UNDECLARED, status: 404, target: null }));
+    const trail = JSON.stringify((await env.DB.prepare("SELECT * FROM app_action_audit WHERE app_id = 'stash'").all()).results);
+    expect(trail).not.toMatch(/forged|nope/);
+
+    // The bound is a window: once the admin's rows age out of it, a new refusal is recorded again.
+    await env.DB.prepare("UPDATE app_action_audit SET created_at = created_at - ? WHERE app_id = 'stash' AND actor_id = 'gh:4'").bind(REFUSAL_WINDOW_MS + 1000).run();
+    expect((await get('/resources/members', admin)).status).toBe(403);
+    expect(await rows('gh:4')).toHaveLength(REFUSAL_CAP + 1);
   });
 
   it('reads the role per request: revoking it, or dropping admin_access, refuses the next request', async () => {

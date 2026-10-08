@@ -6,6 +6,7 @@ import { validateOperatorView } from '../lib/operator-contract.js';
 import type { ToolManifest } from '../lib/action-sql.js';
 import { PARENTS_CLUBS, STASH } from '../__fixtures__/operator-view.js';
 import { parseOperatorAction } from './operator-audit.js';
+import { REFUSAL_CAP } from './operator-audit.js';
 
 // #240 operator audit trail: entry once per visit, refusals recorded once for
 // owners only, and an owner-only, paged, filtered, redacted trail.
@@ -64,7 +65,7 @@ describe('POST /v1/apps/:appId/operator/entries', () => {
       const refusal = mockStmt();
       const d = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), refusal);
       expect((await entry(visit, d)).status, String(visit)).toBe(400);
-      expect(refusal.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 400, expect.any(Number), 'enter', null);
+      expect(refusal.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 400, expect.any(Number), 'enter', null, expect.any(Number), REFUSAL_CAP);
     }
   });
 });
@@ -226,7 +227,7 @@ describe('refused operator requests join the trail exactly once', () => {
     const res = await app.request('/v1/apps/stash/operator/resources/kyc/records/k1/evidence/document_path', { headers: { Authorization: `Bearer ${OWNER}` } }, makeEnv({ STORAGE: { get: vi.fn() } }, d));
     expect(res.status).toBe(403);
     expect(calls).toBe(0);
-    expect(auditBinds(d)).toEqual([['stash', '', 'gh:1', '', 403, expect.any(Number), 'evidence:kyc.document_path', 'k1']]);
+    expect(auditBinds(d)).toEqual([['stash', '', 'gh:1', '', 403, expect.any(Number), 'evidence:kyc.document_path', 'k1', expect.any(Number), REFUSAL_CAP]]);
   });
 
   it('a success is written once (no refusal row), and a signed-out caller is never written', async () => {

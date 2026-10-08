@@ -82,3 +82,7 @@ export async function requireOperatorAccess(c: Context<{ Bindings: Env }>, appId
 export const operatorCallerOf = (req: Request): FasUser | undefined => admitted.get(req);
 export const markAudited = (req: Request): void => { audited.add(req); };
 export const wasAudited = (req: Request): boolean => audited.has(req);
+const undeclared = new WeakSet<Request>();
+/** The request named an action, resource or evidence field the contract does not declare (#343): its refusal row records a fixed label, not the caller's id. */
+export const markUndeclared = (req: Request): void => { undeclared.add(req); };
+export const wasUndeclared = (req: Request): boolean => undeclared.has(req);

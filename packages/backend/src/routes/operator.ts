@@ -17,7 +17,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireRecentAuth } from '../lib/auth.js';
-import { requireOperatorAccess } from '../lib/operator-audit-marks.js';
+import { markUndeclared, requireOperatorAccess } from '../lib/operator-audit-marks.js';
 import { transitionGuard, type OperatorResource, type OperatorViewContract } from '../lib/operator-contract.js';
 import { runOperatorQuery, runOperatorWrite } from './operator-exec.js';
 import { REVIEW_CONTENT_TYPES, holdsReviewRole, recordReviewAccess } from '../lib/review-access.js';
@@ -79,9 +79,12 @@ export async function loadContract(db: D1Database, appId: string): Promise<Opera
 }
 
 /** The declared resource, or 404: an app without a contract keeps the baseline and has no resources. */
-export async function declaredResource(db: D1Database, appId: string, id: string): Promise<OperatorResource> {
+export async function declaredResource(db: D1Database, appId: string, id: string, req?: Request): Promise<OperatorResource> {
   const resource = (await loadContract(db, appId))?.resources.find((r) => r.id === id);
-  if (!resource) throw new HttpError('resource not declared', 404);
+  if (!resource) {
+    if (req) markUndeclared(req);
+    throw new HttpError('resource not declared', 404);
+  }
   return resource;
 }
 
@@ -124,7 +127,7 @@ export const sessionToken = (header: string | undefined) => (header ?? '').slice
 operatorRoutes.get('/apps/:appId/operator/resources/:resourceId', async (c) => {
   const appId = c.req.param('appId');
   const caller = await requireOperatorAccess(c, appId);
-  const resource = await declaredResource(c.env.DB, appId, c.req.param('resourceId'));
+  const resource = await declaredResource(c.env.DB, appId, c.req.param('resourceId'), c.req.raw);
   if (resource.series) throw new HttpError('this metric is a time series: read it from /operator/metrics/:id', 400);
   // The cursor is the last row's page column, returned as is (#336): a contract
   // stored before that column's name joined the sensitive-field list is refused
@@ -182,7 +185,7 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId', async (c) => {
 operatorRoutes.get('/apps/:appId/operator/resources/:resourceId/records/:key', async (c) => {
   const appId = c.req.param('appId');
   const caller = await requireOperatorAccess(c, appId);
-  const resource = await declaredResource(c.env.DB, appId, c.req.param('resourceId'));
+  const resource = await declaredResource(c.env.DB, appId, c.req.param('resourceId'), c.req.raw);
   if (!resource.detail) throw new HttpError('resource has no detail', 404);
   const key = textParam(c.req.param('key'), MAX_KEY, 'key');
   if (key === null) throw new HttpError('key is required', 400);
@@ -221,10 +224,10 @@ function reviewPath(value: unknown): { ownerId: string; path: string } | null {
 operatorRoutes.get('/apps/:appId/operator/resources/:resourceId/records/:key/evidence/:field', async (c) => {
   const appId = c.req.param('appId');
   const caller = await requireOperatorAccess(c, appId);
-  const resource = await declaredResource(c.env.DB, appId, c.req.param('resourceId'));
+  const resource = await declaredResource(c.env.DB, appId, c.req.param('resourceId'), c.req.raw);
   const field = c.req.param('field');
   const detail = resource.detail;
-  if (!detail?.evidence?.some((e) => e.field === field)) throw new HttpError('evidence not declared', 404);
+  if (!detail?.evidence?.some((e) => e.field === field)) { markUndeclared(c.req.raw); throw new HttpError('evidence not declared', 404); }
   const key = textParam(c.req.param('key'), MAX_KEY, 'key');
   if (key === null) throw new HttpError('key is required', 400);
   // An identity document needs a recent passkey step-up (#244), not just a recent
@@ -275,7 +278,7 @@ operatorRoutes.post('/apps/:appId/operator/actions/:actionId', async (c) => {
   const contract = await loadContract(c.env.DB, appId);
   const action = contract?.actions.find((a) => a.id === c.req.param('actionId'));
   const resource = contract?.resources.find((r) => r.id === action?.resource);
-  if (!action || !resource) throw new HttpError('action not declared', 404);
+  if (!action || !resource) { markUndeclared(c.req.raw); throw new HttpError('action not declared', 404); }
 
   const body = await c.req.json<{ row?: unknown }>().catch(() => null);
   const row = body?.row;
