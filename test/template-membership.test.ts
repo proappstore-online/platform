@@ -295,6 +295,10 @@ describe('template-membership: scoped actions fail closed for the wrong user or 
     expect(called).toEqual(['admin_list_groups', 'admin_delete_group']);
     for (const name of called) expect(TOOLS[name!]!.auth?.app_roles).toEqual(['admin']);
     expect(sample).not.toMatch(/app\.db|fetch\(/);
+    // #344: a failed list is an error state (never "No groups yet"), and a successful reload clears a stale delete error.
+    expect(sample).not.toMatch(/catch\(\(\) => setGroups\(\[\]\)\)/);
+    expect(sample).toMatch(/\.catch\(\(\) => setLoadFailed\(true\)\)/);
+    expect(sample).toMatch(/setGroups\(r\.rows\); setLoadFailed\(false\); deleteGroup\.reset\(\)/);
     const range = (read('web/package.json') as { dependencies: Record<string, string> }).dependencies['@proappstore/sdk']!;
     const locked = /'@proappstore\/sdk':\s*\n\s*specifier: [^\n]+\n\s*version: (\d+)\.(\d+)\.(\d+)/.exec(readFileSync(new URL('pnpm-lock.yaml', ROOT), 'utf8'))!.slice(1).map(Number);
     expect(range).toBe('^1.16.69');

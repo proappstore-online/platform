@@ -98,4 +98,15 @@ describe('Actions', () => {
     const plain = await new Actions('interns', 'https://api.proappstore.online', auth(new Response('boom', { status: 500 }))).call('x').catch((e) => e);
     expect(plain).toMatchObject({ status: 500, code: null, body: null, forbidden: false });
   });
+
+  // #344: `forbidden` means a missing role, not every 403.
+  it('forbidden is true only for role refusals, not for other 403s', () => {
+    const err = (status: number, body: unknown) => new ActionError('x', status, JSON.stringify(body));
+    expect(err(403, { error: 'requires app role' }).forbidden).toBe(true);
+    expect(err(403, { error: 'requires platform role' }).forbidden).toBe(true);
+    for (const code of ['this app is private', 'action x runs only from the app worker', 'token is read-only', 'step_up_required']) {
+      expect(err(403, { error: code }).forbidden, code).toBe(false);
+    }
+    expect(err(401, { error: 'requires app role' }).forbidden).toBe(false);
+  });
 });

@@ -21,9 +21,13 @@ function Dashboard() {
   const listGroups = useAction<Record<string, never>, { rows: ModeratedGroup[] }>('admin_list_groups')
   const deleteGroup = useAction<{ group_id: string }, { results: unknown[] }>('admin_delete_group')
   const [groups, setGroups] = useState<ModeratedGroup[] | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
   const isAdmin = roles.includes('admin')
 
-  const load = () => listGroups().then((r) => setGroups(r.rows)).catch(() => setGroups([]))
+  // A failed list is an error, not "no groups" (#344); a successful reload clears a stale delete error.
+  const load = () => listGroups()
+    .then((r) => { setGroups(r.rows); setLoadFailed(false); deleteGroup.reset() })
+    .catch(() => setLoadFailed(true))
   // Load once the role is known. An invoker changes identity with its own state, so it is not a dependency.
   useEffect(() => { if (isAdmin) void load() }, [isAdmin])
 
@@ -42,7 +46,8 @@ function Dashboard() {
   return (
     <Section title="Moderation">
       {error ? <p role="alert" className="mb-3 text-sm text-[var(--danger)]">{explain(error)}</p> : null}
-      {groups === null ? <p className="text-sm text-[var(--muted)]">Loading groups…</p> : groups.length === 0 ? <Empty title="No groups yet" /> : (
+      {loadFailed ? <Button size="sm" variant="ghost" disabled={listGroups.pending} onClick={() => void load()}>Retry</Button> : null}
+      {groups === null ? (loadFailed ? null : <p className="text-sm text-[var(--muted)]">Loading groups…</p>) : groups.length === 0 ? <Empty title="No groups yet" /> : (
         <ul className="space-y-2">
           {groups.map((g) => (
             <Row key={g.id}>

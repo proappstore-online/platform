@@ -20,8 +20,10 @@ export interface AdminContextValue {
   roles: string[];
   session: {
     status: AuthStatus;
-    /** False while the caller's roles are still being fetched. */
+    /** False while the caller's roles are still being fetched, and when fetching them failed. */
     rolesLoaded: boolean;
+    /** Why the latest roles fetch failed (#344), or null. An empty `roles` with no error means the caller holds none. */
+    rolesError: Error | null;
     /** Re-read the caller's roles, e.g. after the owner granted one. */
     refreshRoles: () => Promise<void>;
   };
@@ -46,7 +48,7 @@ export interface AdminConsoleProps {
 export function AdminConsole({ app: explicit, children, renderError }: AdminConsoleProps) {
   const app = resolveApp(explicit);
   const [auth, setAuth] = useState(() => ({ status: app.auth.status, user: app.auth.user }));
-  const [roles, setRoles] = useState<{ for: string | null; list: string[] }>({ for: null, list: [] });
+  const [roles, setRoles] = useState<{ for: string | null; list: string[]; error: Error | null }>({ for: null, list: [], error: null });
 
   useEffect(() => {
     const unsubscribe = app.auth.onStatus((status, user) => setAuth({ status, user }));
@@ -61,9 +63,11 @@ export function AdminConsole({ app: explicit, children, renderError }: AdminCons
   const latest = useRef(0);
   const refreshRoles = useCallback(async () => {
     const request = ++latest.current;
-    if (!userId) return setRoles({ for: null, list: [] });
-    const list = await app.roles.myRoles();
-    if (request === latest.current) setRoles({ for: userId, list });
+    if (!userId) return setRoles({ for: null, list: [], error: null });
+    // A failed fetch is an error, not "no roles" (#344): the panel can say so and retry.
+    let next: { list: string[]; error: Error | null };
+    try { next = { list: await app.roles.myRoles({ throwOnError: true }), error: null }; } catch (e) { next = { list: [], error: e instanceof Error ? e : new Error(String(e)) }; }
+    if (request === latest.current) setRoles({ for: userId, ...next });
   }, [app, userId]);
   useEffect(() => {
     void refreshRoles();
@@ -72,12 +76,13 @@ export function AdminConsole({ app: explicit, children, renderError }: AdminCons
 
   // Roles fetched for a previous user are never shown for the current one.
   const current = roles.for === userId ? roles.list : NO_ROLES;
+  const rolesError = roles.for === userId ? roles.error : null;
   const value = useMemo<AdminContextValue>(() => ({
     app: { id: app.appId },
     user: auth.user,
     roles: current,
-    session: { status: auth.status, rolesLoaded: userId !== null && roles.for === userId, refreshRoles },
-  }), [app.appId, auth, current, userId, roles.for, refreshRoles]);
+    session: { status: auth.status, rolesLoaded: userId !== null && roles.for === userId && rolesError === null, rolesError, refreshRoles },
+  }), [app.appId, auth, current, userId, roles.for, rolesError, refreshRoles]);
 
   return (
     <ProProvider app={app}>
@@ -112,7 +117,7 @@ export interface UseActionOptions {
 /** Calls the action; also carries the state of the latest call. Its identity changes with that state, so an effect that runs it should depend on what triggers the call, not on the invoker. */
 export type ActionInvoker<P, T> = ((params?: P) => Promise<T>) & {
   pending: boolean;
-  /** The latest call's failure: an {@link ActionError} for a server refusal (`forbidden`, `stepUpRequired`). */
+  /** The latest call's failure (#344: an older call settling later never overwrites it): an {@link ActionError} for a server refusal (`forbidden`, `stepUpRequired`). */
   error: Error | null;
   reset: () => void;
 };
@@ -136,8 +141,11 @@ export function useAction<P extends Record<string, unknown> = Record<string, unk
   const app = resolveApp(opts.app);
   const [state, setState] = useState<{ pending: number; error: Error | null }>({ pending: 0, error: null });
   const { onStepUp } = opts;
+  // Only the latest call decides `error` (#344); every call still settles `pending`.
+  const latest = useRef(0);
 
   const call = useCallback(async (params?: P): Promise<T> => {
+    const id = ++latest.current;
     setState((s) => ({ pending: s.pending + 1, error: null }));
     const record = (outcome: string, status?: number) =>
       app.logs.capture(outcome === 'ok' ? 'info' : 'warn', 'admin.action', `admin action ${name} ${outcome}`, { action: name, outcome, status });
@@ -151,12 +159,12 @@ export function useAction<P extends Record<string, unknown> = Record<string, unk
         result = await app.actions.call<T>(name, params ?? {});
       }
       record('ok');
-      setState((s) => ({ pending: s.pending - 1, error: null }));
+      setState((s) => ({ pending: s.pending - 1, error: id === latest.current ? null : s.error }));
       return result;
     } catch (e) {
       const error = e instanceof Error ? e : new Error(String(e));
       record(error instanceof ActionError ? (error.forbidden ? 'refused' : error.code ?? 'failed') : 'failed', error instanceof ActionError ? error.status : undefined);
-      setState((s) => ({ pending: s.pending - 1, error }));
+      setState((s) => ({ pending: s.pending - 1, error: id === latest.current ? error : s.error }));
       throw error;
     }
   }, [app, name, onStepUp]);

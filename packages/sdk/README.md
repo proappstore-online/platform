@@ -591,6 +591,10 @@ function Moderation() {
     // once or false to give up. Signing in again alone is refused again.
     onStepUp: (e: ActionError) => showReauth(e),
   })
+  // Signed-out visitors have no roles to load: check the session first (#344).
+  if (session.status === 'pending') return <p>Loading…</p>
+  if (session.status === 'signed-out') return <p>Sign in to moderate.</p>
+  if (session.rolesError) return <p>Couldn't load your roles. <button onClick={() => session.refreshRoles()}>Retry</button></p>
   if (!session.rolesLoaded) return <p>Loading…</p>
   if (!roles.includes('admin')) return <p>You don't hold the admin role.</p>
   return <button disabled={deleteGroup.pending} onClick={() => deleteGroup({ group_id: 'g1' })}>Delete</button>
@@ -599,8 +603,8 @@ function Moderation() {
 <AdminConsole app={app}><Moderation /></AdminConsole>
 ```
 
-- `useAdminContext()` → `{ app: { id }, user, roles, session: { status, rolesLoaded, refreshRoles } }`. `roles` come from the server and are for rendering only; never a session token.
-- `useAction(name, { onStepUp })` returns a function that calls the action, plus `pending`, `error` and `reset()`. A refusal rejects with an `ActionError`: `forbidden` when the caller's roles do not allow it, `stepUpRequired` and `needsPasskey` when it needs a passkey check. An app's `step_up` action is bound to the app's own relying party (#331), so only a passkey step-up there passes: run `/.pas/auth/passkey/step-up/options` then `/.pas/auth/passkey/step-up` (on 404 `no_passkey`, register one first through `/.pas/auth/passkey/register/options` and `/register` within 10 minutes of signing in), then retry (#337). Every outcome is recorded in `app.logs` under `admin.action` (action, outcome, status — never params).
+- `useAdminContext()` → `{ app: { id }, user, roles, session: { status, rolesLoaded, rolesError, refreshRoles } }`. `roles` come from the server and are for rendering only; never a session token. `rolesLoaded` is false while signed out and while loading; a failed fetch sets `rolesError` (an empty `roles` without it means the caller holds none) and `refreshRoles()` retries.
+- `useAction(name, { onStepUp })` returns a function that calls the action, plus `pending`, `error` (the latest call's failure; an older call settling later never overwrites it) and `reset()`. A refusal rejects with an `ActionError`: `forbidden` only when the caller's roles do not allow it (`requires app role` / `requires platform role`; other 403s such as a private app or a worker-only action keep their own `code`), `stepUpRequired` and `needsPasskey` when it needs a passkey check. An app's `step_up` action is bound to the app's own relying party (#331), so only a passkey step-up there passes: run `/.pas/auth/passkey/step-up/options` then `/.pas/auth/passkey/step-up` (on 404 `no_passkey`, register one first through `/.pas/auth/passkey/register/options` and `/register` within 10 minutes of signing in), then retry (#337). Every outcome is recorded in `app.logs` under `admin.action` (action, outcome, status — never params).
 - `AdminConsole` catches a render error in the panel and records it; `AdminErrorBoundary` does the same for one part of a panel.
 
 A full sample is `templates/template-membership/web/src/pages/Moderation.tsx`.

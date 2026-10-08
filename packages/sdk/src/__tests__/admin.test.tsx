@@ -72,12 +72,12 @@ describe('useAdminContext (#299)', () => {
 
   // #338: role answers that arrive out of order. Each myRoles() call is a promise the test resolves by hand.
   function racingApp() {
-    const pending: { resolve: (roles: string[]) => void }[] = [];
+    const pending: { resolve: (roles: string[]) => void; reject: (e: Error) => void }[] = [];
     let listener: ((status: string, user: unknown) => void) | null = null;
     const app = {
       appId: 'moder',
       auth: { status: 'signed-in', user: USER, onStatus: (fn: typeof listener) => { listener = fn; return () => {}; }, init: async () => {} },
-      roles: { myRoles: () => new Promise<string[]>((resolve) => { pending.push({ resolve }); }) },
+      roles: { myRoles: () => new Promise<string[]>((resolve, reject) => { pending.push({ resolve, reject }); }) },
       logs: { capture: vi.fn() },
     } as unknown as ProAppStore;
     return { app, pending, signIn: (user: typeof USER) => listener?.('signed-in', user) };
@@ -125,6 +125,31 @@ describe('useAdminContext (#299)', () => {
     expect(seen.ctx).toMatchObject({ user: { id: 'gh:4' }, roles: ['moderator'], session: { rolesLoaded: true } });
   });
 
+  // #344: a failed roles fetch is an error the panel can show and retry, not "no roles".
+  it('surfaces a failed roles fetch as rolesError, and refreshRoles retries it', async () => {
+    const { app, pending } = racingApp();
+    const seen = await probe(app);
+    await act(async () => { pending[0]!.reject(new Error('roles/me failed: 503')); });
+    expect(seen.ctx).toMatchObject({ roles: [], session: { rolesLoaded: false, rolesError: { message: 'roles/me failed: 503' } } });
+    let retry!: Promise<void>;
+    act(() => { retry = seen.ctx!.session.refreshRoles(); });
+    await act(async () => { pending[1]!.resolve(['admin']); await retry; });
+    expect(seen.ctx).toMatchObject({ roles: ['admin'], session: { rolesLoaded: true, rolesError: null } });
+  });
+
+  it('asks myRoles to throw, and a signed-out visitor has neither roles nor an error', async () => {
+    const myRoles = vi.fn(async () => ['admin']);
+    const app = { appId: 'moder', auth: { status: 'signed-out', user: null, onStatus: () => () => {}, init: async () => {} }, roles: { myRoles }, logs: { capture: vi.fn() } } as unknown as ProAppStore;
+    const seen = await probe(app);
+    expect(myRoles).not.toHaveBeenCalled();
+    expect(seen.ctx).toMatchObject({ user: null, roles: [], session: { status: 'signed-out', rolesLoaded: false, rolesError: null } });
+    const signedIn = { ...app, auth: { ...app.auth, status: 'signed-in', user: USER } } as unknown as ProAppStore;
+    act(() => root.unmount());
+    root = createRoot(host);
+    await probe(signedIn);
+    expect(myRoles).toHaveBeenCalledWith({ throwOnError: true });
+  });
+
   it('throws outside <AdminConsole>', async () => {
     let caught: unknown;
     function Bare() { try { useAdminContext(); } catch (e) { caught = e; } return null; }
@@ -134,6 +159,35 @@ describe('useAdminContext (#299)', () => {
 });
 
 describe('useAction (#299)', () => {
+  // #344: `error` reflects the latest call; an older call settling later never overwrites it.
+  it('only the latest call decides error, whichever settles last', async () => {
+    const calls: { resolve: (v: unknown) => void; reject: (e: Error) => void }[] = [];
+    const app = {
+      appId: 'moder',
+      auth: { status: 'signed-in', user: USER, onStatus: () => () => {}, init: async () => {} },
+      roles: { myRoles: async () => ['admin'] },
+      actions: { call: () => new Promise((resolve, reject) => { calls.push({ resolve, reject }); }) },
+      logs: { capture: vi.fn() },
+    } as unknown as ProAppStore;
+    const seen = await mount(app, 'admin_x');
+    // A slow failure lands after a newer success: error stays null.
+    let first!: Promise<unknown>;
+    let second!: Promise<unknown>;
+    act(() => { first = seen.run!().catch(() => {}); second = seen.run!(); });
+    await act(async () => { calls[1]!.resolve({ ok: 1 }); await second; });
+    await act(async () => { calls[0]!.reject(new Error('old failure')); await first; });
+    expect(seen.run!.error).toBeNull();
+    expect(seen.run!.pending).toBe(false);
+    // And the other way: the latest call fails, an older success lands after it — the failure stands.
+    let third!: Promise<unknown>;
+    let fourth!: Promise<unknown>;
+    act(() => { third = seen.run!(); fourth = seen.run!().catch(() => {}); });
+    await act(async () => { calls[3]!.reject(new Error('latest failure')); await fourth; });
+    await act(async () => { calls[2]!.resolve({ ok: 1 }); await third; });
+    expect(seen.run!.error?.message).toBe('latest failure');
+    expect(seen.run!.pending).toBe(false);
+  });
+
   it('calls the declared action, returns its result and records the outcome without params', async () => {
     const { app, authenticatedFetch, capture } = fakeApp([Response.json({ meta: { changes: 1 } })]);
     const seen = await mount(app, 'admin_delete_group');

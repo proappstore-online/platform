@@ -52,9 +52,14 @@ export class ActionError extends Error {
     return this.stepUpRequired && this.body?.method === 'passkey';
   }
 
-  /** The caller lacks a role the action declares (`auth.app_roles` / `auth.platform_roles`). */
+  /**
+   * The caller lacks a role the action declares (`auth.app_roles` /
+   * `auth.platform_roles`). Only those refusals (#344): a private app, a
+   * worker- or hook-only action, a read-only token or a scheduled action is a
+   * 403 too, with its own `code`, and is not a missing role.
+   */
   get forbidden(): boolean {
-    return this.status === 403 && !this.stepUpRequired;
+    return this.status === 403 && (this.code === 'requires app role' || this.code === 'requires platform role');
   }
 }
 

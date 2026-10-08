@@ -87,17 +87,22 @@ export class Roles {
     return all.filter((r) => r.roleName === role);
   }
 
-  /** Get the current user's roles in this app. */
-  async myRoles(): Promise<string[]> {
-    let res: Response;
+  /**
+   * Get the current user's roles in this app. A failed request resolves `[]`
+   * by default; with `throwOnError` it rejects instead, so a caller can tell
+   * "no roles" from "couldn't ask" (#344: AdminConsole shows the error).
+   */
+  async myRoles(opts: { throwOnError?: boolean } = {}): Promise<string[]> {
     try {
-      res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/roles/me`);
-    } catch {
+      const res = await this.auth.authenticatedFetch(`${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/roles/me`);
+      if (!res.ok) throw new Error(`roles/me failed: ${res.status}`);
+      const data = (await res.json()) as { roles?: unknown };
+      if (!Array.isArray(data.roles)) throw new Error('roles/me returned no roles');
+      return data.roles as string[];
+    } catch (e) {
+      if (opts.throwOnError) throw e instanceof Error ? e : new Error(String(e));
       return [];
     }
-    if (!res.ok) return [];
-    const data = (await res.json()) as { roles: string[] };
-    return data.roles;
   }
 
   private async post(path: string, body: unknown): Promise<void> {
