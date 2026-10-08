@@ -25,6 +25,11 @@ describe('root migrations against a real D1', () => {
     expect(row?.source).toBe('code');
   });
 
+  it('persists an optional provisioning-app boundary on credential accounts (#326)', async () => {
+    const cols = await env.DB.prepare('PRAGMA table_info(users)').all<{ name: string }>();
+    expect((cols.results ?? []).some((c) => c.name === 'credential_app_id')).toBe(true);
+  });
+
   it('D1 enforces the primary keys and unique constraints the routes rely on', async () => {
     await env.DB.prepare("INSERT INTO user_app_tokens (token_hash, token_id, user_id, app_id, scopes, created_at, expires_at) VALUES ('h1', 'id1', 'gh:1', 'a', '{}', 1, 2)").run();
     await expect(env.DB.prepare("INSERT INTO user_app_tokens (token_hash, token_id, user_id, app_id, scopes, created_at, expires_at) VALUES ('h2', 'id1', 'gh:1', 'a', '{}', 1, 2)").run()).rejects.toThrow(/UNIQUE/);

@@ -281,7 +281,7 @@ describe('CORS for app custom domains', () => {
 
 // Minimal in-memory D1 fake covering just the statements the credential
 // endpoints + rate limiter issue. Enforces the unique credential_login.
-function fakeDb(opts: { tools?: Record<string, unknown> } = {}) {
+function fakeDb(opts: { tools?: Record<string, unknown>; toolsByApp?: Record<string, Record<string, unknown>> } = {}) {
   const users: Array<Record<string, unknown>> = [];
   const attempts = new Map<string, { window_start: number; count: number }>();
   const tools = opts.tools ?? {};
@@ -294,7 +294,13 @@ function fakeDb(opts: { tools?: Record<string, unknown> } = {}) {
         bind(...a: unknown[]) { stmt._args = a; return stmt; },
         async run() {
           if (/INSERT INTO users/i.test(sql)) {
-            const [uid, display, isChild, login, hash, createdBy, now, credentialEmail] = stmt._args as [string, string, number, string, string, string, number, string | null];
+            const [uid, display, isChild, login, hash, createdBy, seventh, eighth, ninth] = stmt._args as [string, string, number, string, string, string | null, string | number | null, number | string | null, string | null];
+            // Provisioning stores an app binding (#326); self-registration is
+            // intentionally unbound and retains its original bind positions.
+            const boundToApp = sql.includes('credential_app_id');
+            const credentialAppId = boundToApp ? seventh as string | null : null;
+            const now = (boundToApp ? eighth : seventh) as number;
+            const credentialEmail = (boundToApp ? ninth : eighth) as string | null;
             if (users.some((u) => u.credential_login === login)) {
               throw new Error('D1_ERROR: UNIQUE constraint failed: users.credential_login');
             }
@@ -302,7 +308,7 @@ function fakeDb(opts: { tools?: Record<string, unknown> } = {}) {
             if (credentialEmail !== null && users.some((u) => u.credential_email === credentialEmail)) {
               throw new Error('D1_ERROR: UNIQUE constraint failed: users.credential_email');
             }
-            users.push({ id: uid, login: display, is_child: isChild, credential_login: login, credential_email: credentialEmail, password_hash: hash, created_by: createdBy, last_login_at: now });
+            users.push({ id: uid, login: display, is_child: isChild, credential_login: login, credential_email: credentialEmail, password_hash: hash, created_by: createdBy, credential_app_id: credentialAppId, last_login_at: now });
             return { meta: { changes: 1 } };
           }
           if (/UPDATE users SET password_hash/i.test(sql)) {
@@ -325,8 +331,9 @@ function fakeDb(opts: { tools?: Record<string, unknown> } = {}) {
         },
         async first<T>() {
           if (/SELECT manifest FROM app_tools/i.test(sql)) {
-            const [, name] = stmt._args as [string, string];
-            return (tools[name] ? { manifest: JSON.stringify(tools[name]) } : null) as T | null;
+            const [appId, name] = stmt._args as [string, string];
+            const tool = opts.toolsByApp?.[appId]?.[name] ?? tools[name];
+            return (tool ? { manifest: JSON.stringify(tool) } : null) as T | null;
           }
           if (/FROM users WHERE credential_login/i.test(sql)) {
             const u = users.find((x) => x.credential_login === (stmt._args[0] as string));
@@ -338,7 +345,7 @@ function fakeDb(opts: { tools?: Record<string, unknown> } = {}) {
           }
           if (/FROM users WHERE id = .* AND provider/i.test(sql)) {
             const u = users.find((x) => x.id === (stmt._args[0] as string));
-            return (u ? { id: u.id, credential_login: u.credential_login, created_by: u.created_by } : null) as T | null;
+            return (u ? { id: u.id, credential_login: u.credential_login, created_by: u.created_by, credential_app_id: u.credential_app_id } : null) as T | null;
           }
           if (/INSERT INTO credential_login_attempts/i.test(sql)) {
             // Mirrors claimAttempt's upsert: open or roll the window, then count.
@@ -361,6 +368,7 @@ function fakeDb(opts: { tools?: Record<string, unknown> } = {}) {
 
 const creatorToken = () => mintSession({ uid: 'gh:adult', login: 'teacher', roles: ['user', 'creator'] }, KEY);
 const userToken = () => mintSession({ uid: 'gh:kid', login: 'plainuser', roles: ['user'] }, KEY);
+const adminToken = () => mintSession({ uid: 'gh:admin', login: 'admin', roles: ['user', 'admin'] }, KEY);
 const allowTool = (name: string, params: Record<string, { type: string; optional?: boolean }> = {}) => ({
   name,
   description: 'test permission probe',
@@ -408,6 +416,7 @@ describe('POST /v1/auth/credentials/provision', () => {
 
     expect(res.status).toBe(200);
     expect(db._users[0]!.created_by).toBe('gh:kid');
+    expect(db._users[0]!.credential_app_id).toBe('chess-academy');
   });
 
   it('provisions a child: returns login+password once, records created_by', async () => {
@@ -702,7 +711,7 @@ describe('POST /v1/auth/credentials/reset-password', () => {
     expect(res.status).toBe(401);
   });
 
-  it('allows an app-authorized non-creator to reset another creator-created credential account', async () => {
+  it('allows an app-authorized non-creator to reset a credential account provisioned for that app', async () => {
     const db = fakeDb({
       tools: {
         can_reset_student_credential_password: allowTool('can_reset_student_credential_password', {
@@ -714,7 +723,7 @@ describe('POST /v1/auth/credentials/reset-password', () => {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })));
-    const prov = await (await provision({ login: 'reset-by-staff' }, db)).json() as { uid: string; password: string };
+    const prov = await (await provision({ login: 'reset-by-staff', appId: 'chess-academy' }, db)).json() as { uid: string; password: string };
 
     const resetRes = await resetPw({ targetUserId: prov.uid, appId: 'chess-academy' }, db, userToken());
 
@@ -722,6 +731,43 @@ describe('POST /v1/auth/credentials/reset-password', () => {
     const { password: newPw } = await resetRes.json() as { password: string };
     expect(newPw).toBeTruthy();
     expect(newPw).not.toBe(prov.password);
+  });
+
+  it('refuses a malicious always-allow action from another app before it can reset the password (#326)', async () => {
+    const db = fakeDb({
+      toolsByApp: {
+        'malicious-app': {
+          can_reset_student_credential_password: allowTool('can_reset_student_credential_password', {
+            target_user_id: { type: 'string' },
+          }),
+        },
+      },
+    });
+    // Before #326, this action was evaluated for malicious-app and its row
+    // skipped created_by for a chess-academy target, returning a replacement
+    // password to this plain user.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ rows: [{ ok: 1 }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+    const target = await (await provision({ login: 'other-app-student', appId: 'chess-academy' }, db)).json() as { uid: string };
+    const before = db._users.find((u) => u.id === target.uid)!.password_hash;
+
+    const res = await resetPw({ targetUserId: target.uid, appId: 'malicious-app' }, db, userToken());
+
+    expect(res.status).toBe(403);
+    expect(db._users.find((u) => u.id === target.uid)!.password_hash).toBe(before);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('lets a platform admin recover a credential account created by another adult', async () => {
+    const db = fakeDb();
+    const target = await (await provision({ login: 'admin-recovery' }, db)).json() as { uid: string; password: string };
+
+    const res = await resetPw({ targetUserId: target.uid }, db, adminToken());
+
+    expect(res.status).toBe(200);
+    expect((await res.json() as { password: string }).password).not.toBe(target.password);
   });
 
   it('400s for non-credential accounts', async () => {

@@ -596,9 +596,11 @@ authRoutes.post('/auth/credentials/provision', async (c) => {
     .json<{ login?: string; email?: string; displayName?: string; isChild?: boolean; password?: string; appId?: string; orgId?: string; schoolId?: string | null }>()
     .catch(() => ({} as { login?: string; email?: string; displayName?: string; isChild?: boolean; password?: string; appId?: string; orgId?: string; schoolId?: string | null }));
 
+  // Persist this scope on the credential row. It is later compared before an
+  // app-defined reset policy can operate on the account (#326).
+  const appId = appIdFromBody(body.appId);
   const platformAllowed = claims.roles.includes('creator') || claims.roles.includes('admin');
   if (!platformAllowed) {
-    const appId = appIdFromBody(body.appId);
     const appAllowed = appId
       ? await appActionAllows(c, appId, 'can_provision_student_credentials', {
         org_id: body.orgId,
@@ -679,9 +681,9 @@ authRoutes.post('/auth/credentials/provision', async (c) => {
       // A provisioned address goes in credential_email and nowhere else.
       await c.env.DB.prepare(
         `INSERT INTO users (id, provider, provider_id, login, email, avatar_url, is_child,
-           credential_login, credential_email, password_hash, created_by, created_at, last_login_at)
-         VALUES (?1, 'credential', ?1, ?2, NULL, NULL, ?3, ?4, ?8, ?5, ?6, ?7, ?7)`,
-      ).bind(uid, display, isChild ? 1 : 0, login, passwordHash, claims.uid, now, credentialEmail).run();
+           credential_login, credential_email, password_hash, created_by, credential_app_id, created_at, last_login_at)
+         VALUES (?1, 'credential', ?1, ?2, NULL, NULL, ?3, ?4, ?9, ?5, ?6, ?7, ?8, ?8)`,
+      ).bind(uid, display, isChild ? 1 : 0, login, passwordHash, claims.uid, appId, now, credentialEmail).run();
 
       // Returned ONCE — the password is not stored in plaintext and can't be
       // fetched again. If lost, the adult re-provisions / resets.
@@ -919,8 +921,18 @@ authRoutes.post('/auth/credentials/reset-password', async (c) => {
   if (!targetId || typeof targetId !== 'string') throw new HttpError('targetUserId is required', 400);
   if (!targetId.startsWith('cred:')) throw new HttpError('can only reset credential accounts', 400);
 
+  // Verify the target exists and is a credential account
+  const target = await c.env.DB.prepare(
+    'SELECT id, credential_login, created_by, credential_app_id FROM users WHERE id = ? AND provider = ?',
+  ).bind(targetId, 'credential').first<{ id: string; credential_login: string; created_by: string | null; credential_app_id: string | null }>();
+  if (!target) throw new HttpError('account not found', 404);
+
   const appId = appIdFromBody(body.appId);
-  const appAllowed = appId
+  // An app's policy can delegate resets to its staff, but ONLY for accounts
+  // provisioned into that exact app. Checking the durable binding before the
+  // action also means an arbitrary app cannot even probe its policy against a
+  // different app's account (#326).
+  const appAllowed = appId !== null && target.credential_app_id === appId
     ? await appActionAllows(c, appId, 'can_reset_student_credential_password', {
       target_user_id: targetId,
     }, claims.uid)
@@ -929,16 +941,11 @@ authRoutes.post('/auth/credentials/reset-password', async (c) => {
     throw new HttpError('not allowed to reset credential passwords', 403);
   }
 
-  // Verify the target exists and is a credential account
-  const target = await c.env.DB.prepare(
-    'SELECT id, credential_login, created_by FROM users WHERE id = ? AND provider = ?',
-  ).bind(targetId, 'credential').first<{ id: string; credential_login: string; created_by: string | null }>();
-  if (!target) throw new HttpError('account not found', 404);
-
   // SECURITY: only the adult who created this credential account (or an admin)
-  // may reset its password. Without this, every 'creator' (which is every
-  // signed-in user) could reset ANY credential account and read the new
-  // password from the response — full cross-tenant account takeover.
+  // may reset its password. An app-policy result is equally sufficient only
+  // after the exact credential_app_id match above. Without either condition,
+  // every 'creator' (which is every signed-in user) could reset ANY credential
+  // account and read the new password from the response — full takeover.
   if (!appAllowed && target.created_by !== claims.uid && !claims.roles.includes('admin')) {
     throw new HttpError('not your account', 403);
   }
