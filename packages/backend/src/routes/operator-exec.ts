@@ -12,6 +12,7 @@ import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSucce
 import { markAudited } from '../lib/operator-audit-marks.js';
 import { CONSOLE_RP_ID } from './passkeys.js';
 import { unguardedStatements } from '../lib/operator-contract.js';
+import { gatedTool } from '../lib/operator-contract-shared.js';
 
 /** What an operator-view call adds to its audit row (#240): the contract action or read, and its target record. */
 export interface OperatorAudit {
@@ -88,6 +89,11 @@ async function runOperatorCall(
   if (!operations.includes(manifest.operation) || manifest.requires_auth === false || manifest.schedule !== undefined || !actionCallers(manifest).includes('user')) {
     throw new HttpError(`action ${name} cannot run from the operator view`, 409);
   }
+  // The operator view runs only role-gated actions (#348), re-checked against the
+  // action as registered now: a same-named action re-registered without a role
+  // would otherwise run for any admitted caller and write no audit row.
+  const ungated = gatedTool([manifest], manifest.name, 'operator view');
+  if (typeof ungated === 'string') throw new HttpError(`${ungated}; the operator view refuses it until it is redeployed with a role`, 409);
   // A contract stored before #340, or an action re-registered since, may have a
   // statement that ignores the status: it would commit even when the guard fails.
   if (guard !== null && unguardedStatements(manifest, guard).length) {

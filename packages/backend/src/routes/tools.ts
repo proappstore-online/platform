@@ -1189,11 +1189,43 @@ toolsRoutes.delete('/apps/:appId/tools', async (c) => {
   return c.json({ ok: true });
 });
 
+/**
+ * What still runs action `name` (#348): the stored operator_view (a resource's
+ * read or detail, a row action) and the app's hooks (`to.action`). Deleting it
+ * would leave those pointing at nothing: the console 404s, a re-registered
+ * action of the same name could slip in without a role, and every verified
+ * hook delivery fails while still spending the hook quota.
+ */
+async function toolReferences(db: D1Database, appId: string, name: string): Promise<string[]> {
+  const [contract, hooks] = await Promise.all([
+    loadContract(db, appId),
+    db.prepare('SELECT name, target FROM app_hooks WHERE app_id = ? ORDER BY name').bind(appId).all<{ name: string; target: string }>(),
+  ]);
+  const refs: string[] = [];
+  for (const r of contract?.resources ?? []) {
+    if (r.action === name) refs.push(`operator_view resource "${r.id}"`);
+    if (r.detail?.action === name) refs.push(`operator_view resource "${r.id}" detail`);
+  }
+  for (const a of contract?.actions ?? []) if (a.action === name) refs.push(`operator_view action "${a.id}"`);
+  for (const h of hooks.results ?? []) {
+    let target: unknown;
+    try { target = JSON.parse(h.target); } catch { continue; }
+    if (target && typeof target === 'object' && (target as { action?: unknown }).action === name) refs.push(`hook "${h.name}"`);
+  }
+  return refs;
+}
+
 // ── DELETE /v1/apps/:appId/tools/:name — remove one tool ─────────
+// Refused with 409 while the operator view or a hook still uses it (#348):
+// remove the reference in mcp.json and redeploy, which replaces both.
 toolsRoutes.delete('/apps/:appId/tools/:name', async (c) => {
   const appId = c.req.param('appId')!;
   const name = c.req.param('name')!;
   await requireAppOwner(c, appId);
+  const references = await toolReferences(c.env.DB, appId, name);
+  if (references.length) {
+    return c.json({ error: `tool "${name}" is still used by ${references.join(', ')}; remove those references from mcp.json and redeploy first`, references }, 409);
+  }
   await c.env.DB.prepare("DELETE FROM app_tools WHERE app_id = ? AND name = ? AND source = 'code'").bind(appId, name).run();
   return c.json({ ok: true });
 });

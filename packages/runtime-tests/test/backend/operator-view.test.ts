@@ -781,17 +781,66 @@ describe('admin-console authoring routes (#295)', () => {
     expect(put.status, await put.clone().text()).toBe(200);
   });
 
-  it('inspect: no gaps for a fresh contract; deleting a referenced action is flagged as action_missing', async () => {
+  it('inspect: no gaps for a fresh contract; a referenced action that went missing is flagged as action_missing', async () => {
     const inspect = async () => SELF.fetch(`${BASE}/v1/apps/stash/operator-view/inspect`, json('GET', undefined, await session('gh:1')));
     const fresh = await inspect();
     expect(fresh.status, await fresh.clone().text()).toBe(200);
     expect(await fresh.json()).toMatchObject({ app_id: 'stash', gaps: [], contract: { version: 1 } });
 
-    const del = await SELF.fetch(`${BASE}/v1/apps/stash/tools/op_list_users`, json('DELETE', undefined, await session('gh:1')));
-    expect(del.status).toBe(200);
+    // The delete route refuses a referenced tool (#348); drift from before that rule is simulated in D1.
+    await env.DB.prepare("DELETE FROM app_tools WHERE app_id = 'stash' AND name = 'op_list_users'").run();
     const body = (await (await inspect()).json()) as { gaps: { code: string; where: string }[]; resources: { id: string; renders: boolean }[] };
     expect(body.gaps).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'action_missing', where: 'resources[0]' })]));
     expect(body.resources.find((r) => r.id === 'members')).toMatchObject({ renders: false });
+  });
+
+  // #348: a tool the operator view or a hook still runs cannot be deleted on its own.
+  describe('deleting a referenced tool (#348)', () => {
+    const del = async (name: string) => SELF.fetch(`${BASE}/v1/apps/stash/tools/${name}`, json('DELETE', undefined, await session('gh:1')));
+    const registered = async (name: string) => (await env.DB.prepare("SELECT COUNT(*) AS n FROM app_tools WHERE app_id = 'stash' AND name = ?").bind(name).first<{ n: number }>())!.n;
+
+    it('refuses a tool the operator contract references (a resource read, a detail, a row action), naming each use', async () => {
+      for (const [name, ref] of [
+        ['op_list_users', 'operator_view resource "members"'],
+        ['op_member_detail', 'operator_view resource "members" detail'],
+        ['op_lift_suspension', 'operator_view action "lift"'],
+      ] as const) {
+        const res = await del(name);
+        expect(res.status, name).toBe(409);
+        const body = (await res.json()) as { error: string; references: string[] };
+        expect(body.references, name).toContain(ref);
+        expect(body.error, name).toContain('remove those references from mcp.json and redeploy');
+        expect(await registered(name), name).toBe(1);
+      }
+    });
+
+    it('refuses a tool a hook delivers to, and deletes an unreferenced one', async () => {
+      await env.DB.prepare("INSERT INTO app_tools (app_id, name, manifest, created_at, updated_at, source) VALUES ('stash', 'on_payment', ?, 0, 0, 'code'), ('stash', 'spare', ?, 0, 0, 'code')")
+        .bind(JSON.stringify({ name: 'on_payment', operation: 'execute' }), JSON.stringify({ name: 'spare', operation: 'execute' })).run();
+      await env.DB.prepare("INSERT INTO app_hooks (app_id, name, verify_kind, secret_name, verify_opts, target, created_at) VALUES ('stash', 'stripe', 'stripe', 'STRIPE_WHSEC', NULL, ?, 0), ('stash', 'raw', 'secret-token', 'TOK', NULL, ?, 0)")
+        .bind(JSON.stringify({ action: 'on_payment', params: {} }), JSON.stringify('worker')).run();
+      const refused = await del('on_payment');
+      expect(refused.status).toBe(409);
+      expect(((await refused.json()) as { references: string[] }).references).toEqual(['hook "stripe"']);
+      expect(await registered('on_payment')).toBe(1);
+
+      const ok = await del('spare');
+      expect(ok.status, await ok.clone().text()).toBe(200);
+      expect(await registered('spare')).toBe(0);
+    });
+
+    it('the operator view refuses to run a referenced action re-registered without an app role', async () => {
+      await env.DB.prepare("INSERT INTO app_roles (app_id, user_id, role_name) VALUES ('stash', 'gh:1', 'operator')").run();
+      const row = await env.DB.prepare("SELECT manifest FROM app_tools WHERE app_id = 'stash' AND name = 'op_list_users'").first<{ manifest: string }>();
+      const manifest = JSON.parse(row!.manifest) as { auth?: unknown };
+      delete manifest.auth;
+      await env.DB.prepare("UPDATE app_tools SET manifest = ? WHERE app_id = 'stash' AND name = 'op_list_users'").bind(JSON.stringify(manifest)).run();
+      // No /query interceptor: had it reached the data worker, the call would fail with 502, not 409.
+      const res = await SELF.fetch(`${BASE}/v1/apps/stash/operator/resources/members`, json('GET', undefined, await session('gh:1')));
+      expect(res.status).toBe(409);
+      expect(await res.text()).toContain('must be gated by auth.app_roles');
+      expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM app_action_audit WHERE app_id = 'stash' AND status = 200").first()).toEqual({ n: 0 });
+    });
   });
 
   it('preview: validates a proposal with the real validator and renders it; nothing is stored', async () => {

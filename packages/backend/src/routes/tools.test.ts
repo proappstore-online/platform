@@ -1317,7 +1317,8 @@ describe('console endpoints coexist with code tools (#155)', () => {
     expect(String(all.prepare.mock.calls[1]![0])).toBe("DELETE FROM app_tools WHERE app_id = ? AND source = 'code'");
     const one = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt());
     await app.request('/v1/apps/test-app/tools/api_my_tasks', { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({}, one));
-    expect(String(one.prepare.mock.calls[1]![0])).toContain("AND source = 'code'");
+    // #348: the reference lookups run first; the delete itself still touches code rows only.
+    expect(one.prepare.mock.calls.map((c) => String(c[0])).find((sql) => sql.startsWith('DELETE'))).toContain("AND source = 'code'");
   });
 });
 
