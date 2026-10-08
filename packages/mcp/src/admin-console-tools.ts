@@ -142,8 +142,14 @@ export function registerAdminConsoleTools(
       const guard = refusedRepoPath(MANIFEST_PATH);
       if (guard) return json({ error: `Refused: ${guard}` }, true);
       const ctx = { env, subject: userId };
-      const gh = makeGitHub(env.GITHUB_TOKEN, env.GITHUB_ORG);
 
+      // Owner first (#342): the backend's own owner check (the read-only inspect
+      // route, the same requireAppOwner as propose) before the app repo is read,
+      // so a non-owner gets the same 403 whether its mcp.json is there, parses or not.
+      const owner = await api(token, `/v1/apps/${appId}/operator-view/inspect`);
+      if (!owner.ok) return json({ error: owner.error }, true);
+
+      const gh = makeGitHub(env.GITHUB_TOKEN, env.GITHUB_ORG);
       // The manifest the deploy will register: validate against ITS tools, not the registered ones.
       const file = await gh.getFile(appId, MANIFEST_PATH);
       if (!file.ok || file.content === undefined) return json({ error: `could not read ${MANIFEST_PATH} from the app repo (${file.status}); create it first` }, true);
@@ -156,7 +162,7 @@ export function registerAdminConsoleTools(
         return json({ error: `${MANIFEST_PATH} in the app repo is not a JSON object; fix it before applying` }, true);
       }
 
-      // Owner-only and the validator's verdict, both from the backend: a non-owner gets its 403, an invalid proposal is never written.
+      // The validator's verdict from the backend (owner-only too): an invalid proposal is never written.
       const checked = await api(token, `/v1/apps/${appId}/operator-view/propose`, {
         operator_view: proposal, tools: Array.isArray(manifest.tools) ? manifest.tools : [],
       });

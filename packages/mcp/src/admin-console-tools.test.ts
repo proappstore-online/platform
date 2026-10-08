@@ -130,6 +130,8 @@ describe('admin-console MCP tools (#295)', () => {
     const repoManifest = { tools: [{ name: 'op_list' }], page_meta: [], operator_view: { version: 1, resources: [{ id: 'old' }], actions: [] }, visibility: { mode: 'public' } };
     const report = { valid: true, passes_security_gates: true, contract: { version: 1, resources: [], actions: [], audit: null }, warnings: [], security_issues: [] };
     const repo = () => gh.getFile.mockResolvedValue({ ok: true, status: 200, sha: 'file-sha', content: `${JSON.stringify(repoManifest, null, 2)}\n` });
+    /** The owner check (#342): the backend's inspect route answers for the owner. */
+    const owner = () => ok({ app_id: 'stash', gaps: [] });
 
     it('refuses without confirm, before reading the repo or calling the backend', async () => {
       const res = await call('apply_admin_update', { appId: 'stash', proposal });
@@ -140,22 +142,71 @@ describe('admin-console MCP tools (#295)', () => {
       expect(gh.putFile).not.toHaveBeenCalled();
     });
 
-    it("refuses a non-owner: the backend's 403, and nothing is written", async () => {
+    it("refuses a non-owner: the backend's 403, before the repo is read, and nothing is written", async () => {
       repo();
       apiFetch.mockResolvedValueOnce(new Response('not the app owner', { status: 403 }));
       const res = await call('apply_admin_update', { appId: 'stash', proposal, confirm: true });
       expect(res.isError).toBe(true);
       expect(body(res).error).toBe('API 403: not the app owner');
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      expect(apiFetch.mock.calls[0]![0]).toBe('https://api.test.com/v1/apps/stash/operator-view/inspect');
+      expect(gh.getFile).not.toHaveBeenCalled();
       expect(gh.putFile).not.toHaveBeenCalled();
+    });
+
+    // #342: a non-owner must not learn whether an app's repo has an mcp.json, or whether it parses.
+    it('a non-owner gets the same 403 whether mcp.json is missing, invalid or present, and the repo is never read', async () => {
+      const answers: unknown[] = [];
+      for (const file of [
+        { ok: false, status: 404 },
+        { ok: true, status: 200, sha: 's', content: '{ not json' },
+        { ok: true, status: 200, sha: 's', content: '[1, 2]' },
+        { ok: true, status: 200, sha: 's', content: JSON.stringify(repoManifest) },
+      ]) {
+        gh.getFile.mockResolvedValue(file);
+        apiFetch.mockResolvedValueOnce(new Response('not the app owner', { status: 403 }));
+        const res = await call('apply_admin_update', { appId: 'stash', proposal, confirm: true });
+        expect(res.isError).toBe(true);
+        answers.push(body(res));
+      }
+      expect(answers).toEqual(Array(4).fill({ error: 'API 403: not the app owner' }));
+      expect(gh.getFile).not.toHaveBeenCalled();
+      expect(gh.putFile).not.toHaveBeenCalled();
+    });
+
+    it('the owner proceeds: the owner check, then the repo read, then the validation against its tools', async () => {
+      repo();
+      owner();
+      ok(report);
+      const res = body(await call('apply_admin_update', { appId: 'stash', proposal, dry_run: true }));
+      expect(res.dry_run).toBe(true);
+      expect(apiFetch.mock.calls.map((c) => c[0])).toEqual([
+        'https://api.test.com/v1/apps/stash/operator-view/inspect',
+        'https://api.test.com/v1/apps/stash/operator-view/propose',
+      ]);
+      expect(gh.getFile).toHaveBeenCalledWith('stash', 'mcp.json');
+      expect(apiFetch.mock.invocationCallOrder[0]!).toBeLessThan(gh.getFile.mock.invocationCallOrder[0]!);
+      expect(gh.getFile.mock.invocationCallOrder[0]!).toBeLessThan(apiFetch.mock.invocationCallOrder[1]!);
+    });
+
+    it("the owner still gets mcp.json's own errors: missing, or not a JSON object", async () => {
+      owner();
+      gh.getFile.mockResolvedValue({ ok: false, status: 404 });
+      expect(body(await call('apply_admin_update', { appId: 'stash', proposal, confirm: true })).error).toContain('could not read mcp.json');
+      owner();
+      gh.getFile.mockResolvedValue({ ok: true, status: 200, sha: 's', content: '{ not json' });
+      expect(body(await call('apply_admin_update', { appId: 'stash', proposal, confirm: true })).error).toContain('is not a JSON object');
     });
 
     it("validates against the repo's own mcp.json tools, and never applies an invalid proposal or a failed security gate", async () => {
       repo();
+      owner();
       ok({ ...report, valid: false, errors: [{ path: 'operator_view.resources[0].action', message: 'x' }] });
       const invalid = await call('apply_admin_update', { appId: 'stash', proposal, confirm: true });
-      expect(JSON.parse((apiFetch.mock.calls[0]![1] as { body: string }).body)).toEqual({ operator_view: proposal, tools: repoManifest.tools });
+      expect(JSON.parse((apiFetch.mock.calls[1]![1] as { body: string }).body)).toEqual({ operator_view: proposal, tools: repoManifest.tools });
       expect(invalid.isError).toBe(true);
       expect(body(invalid).error).toContain('not applied');
+      owner();
       ok({ ...report, passes_security_gates: false });
       expect((await call('apply_admin_update', { appId: 'stash', proposal, confirm: true })).isError).toBe(true);
       expect(gh.putFile).not.toHaveBeenCalled();
@@ -163,6 +214,7 @@ describe('admin-console MCP tools (#295)', () => {
 
     it('dry_run shows the change without committing (no confirm needed)', async () => {
       repo();
+      owner();
       ok(report);
       const res = body(await call('apply_admin_update', { appId: 'stash', proposal, dry_run: true }));
       expect(res.dry_run).toBe(true);
@@ -172,6 +224,7 @@ describe('admin-console MCP tools (#295)', () => {
 
     it('commits ONE change to mcp.json only — operator_view replaced in place, the rest untouched — and reports the registration', async () => {
       repo();
+      owner();
       ok(report);
       gh.putFile.mockResolvedValue({ ok: true, status: 200, data: { commit: { sha: 'c0ffee' } } });
       gh.deployResult.mockResolvedValue({ ok: true, status: 'completed', conclusion: 'success', url: 'https://gh/run/1' });
@@ -186,18 +239,20 @@ describe('admin-console MCP tools (#295)', () => {
       expect(Object.keys(written)).toEqual(['tools', 'page_meta', 'operator_view', 'visibility']);
       expect(written).toEqual({ ...repoManifest, operator_view: proposal });
       expect(gh.deployResult).toHaveBeenCalledWith('stash', { sha: 'c0ffee', waitMs: 30_000 });
-      expect(apiFetch.mock.calls[1]![0]).toBe('https://api.test.com/v1/apps/stash/operator-view/inspect');
+      expect(apiFetch.mock.calls[2]![0]).toBe('https://api.test.com/v1/apps/stash/operator-view/inspect');
       expect(res).toMatchObject({ applied: true, commit: { sha: 'c0ffee', path: 'mcp.json' }, registration: { status: 'registered' } });
       expect(JSON.parse(kvPut.mock.calls.at(-1)![1] as string)).toMatchObject({ tool: 'apply_admin_update', action: 'invoked' });
     });
 
     it('reports a pending or failed deploy instead of claiming the registration', async () => {
       repo();
+      owner();
       ok(report);
       gh.putFile.mockResolvedValue({ ok: true, status: 200, data: { commit: { sha: 'c0ffee' } } });
       gh.deployResult.mockResolvedValueOnce({ ok: false, status: 'pending', errorTail: 'no deploy workflow run registered yet' });
       expect(body(await call('apply_admin_update', { appId: 'stash', proposal, confirm: true, wait_seconds: 0 })).registration).toMatchObject({ status: 'pending' });
       repo();
+      owner();
       ok(report);
       gh.deployResult.mockResolvedValueOnce({ ok: false, status: 'completed', conclusion: 'failure', errorTail: '::error::tools registration failed' });
       expect(body(await call('apply_admin_update', { appId: 'stash', proposal, confirm: true, wait_seconds: 0 })).registration).toMatchObject({ status: 'failed' });
@@ -206,6 +261,7 @@ describe('admin-console MCP tools (#295)', () => {
     it('is blocked in read-only mode, writing nothing', async () => {
       env.MCP_READ_ONLY = '1';
       repo();
+      owner();
       ok(report);
       await expect(call('apply_admin_update', { appId: 'stash', proposal, confirm: true })).rejects.toThrow(/read-only/);
       expect(gh.putFile).not.toHaveBeenCalled();
@@ -213,6 +269,7 @@ describe('admin-console MCP tools (#295)', () => {
 
     it('does not commit when mcp.json already holds the proposal', async () => {
       gh.getFile.mockResolvedValue({ ok: true, status: 200, sha: 's', content: `${JSON.stringify({ ...repoManifest, operator_view: proposal }, null, 2)}\n` });
+      owner();
       ok(report);
       expect(body(await call('apply_admin_update', { appId: 'stash', proposal, confirm: true }))).toMatchObject({ applied: false });
       expect(gh.putFile).not.toHaveBeenCalled();
