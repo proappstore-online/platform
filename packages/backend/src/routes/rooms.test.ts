@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
+import { roomObjectName } from './rooms.js';
 import { forgetAppVisibility } from '../lib/visibility.js';
 import { TEST_SK, testToken, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 import type { Env } from '../types.js';
@@ -15,6 +16,29 @@ vi.mock('../do/room.js', async (importOriginal) => {
 });
 
 const TOK = await testToken('gh:room-user');
+
+describe('roomObjectName (#329)', () => {
+  it('is deterministic for ordinary room pairs', () => {
+    expect(roomObjectName('meetup', 'lobby')).toBe(roomObjectName('meetup', 'lobby'));
+    expect(roomObjectName('meetup', 'lobby')).toMatch(/^v1:[A-Za-z0-9_-]+$/);
+  });
+
+  it('separates pairs that collided under delimiter concatenation', () => {
+    expect(roomObjectName('a:b', 'c')).not.toBe(roomObjectName('a', 'b:c'));
+  });
+
+  it.each([
+    ['', ''],
+    [':', ':'],
+    ['a:b:c', 'room:one'],
+    ['café', '東京/%3A'],
+    ['a'.repeat(1024), 'b'.repeat(1024)],
+  ])('is unambiguous for edge-case pair %j / %j', (appId, roomId) => {
+    const name = roomObjectName(appId, roomId);
+    expect(name).toBe(roomObjectName(appId, roomId));
+    expect(name).not.toBe(roomObjectName(`${appId}\0`, roomId));
+  });
+});
 
 // The route caches each app's visibility per isolate (#259); tests swap the D1 under it.
 afterEach(() => forgetAppVisibility());

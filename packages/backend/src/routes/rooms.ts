@@ -6,6 +6,19 @@ import { getAppVisibilityCached, visibilityAllows } from '../lib/visibility.js';
 
 export const roomRoutes = new Hono<{ Bindings: Env }>();
 
+/**
+ * A stable, collision-free Durable Object name for one app room. The old
+ * `${appId}:${roomId}` delimiter was ambiguous when either component contained
+ * `:`. Rooms are ephemeral, so deliberately do not route to that legacy name:
+ * retaining it would retain the cross-app collision (#329).
+ */
+export function roomObjectName(appId: string, roomId: string): string {
+  const bytes = new TextEncoder().encode(`${appId}\0${roomId}`);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return `v1:${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+}
+
 roomRoutes.get('/apps/:appId/rooms/:roomId', async (c) => {
   if (c.req.header('upgrade') !== 'websocket') return c.text('expected websocket', 400);
 
@@ -26,7 +39,7 @@ roomRoutes.get('/apps/:appId/rooms/:roomId', async (c) => {
   if (!(await visibilityAllows(c.env, appId, visibility, { id: session.uid, login: session.login ?? session.uid, roles: session.roles ?? ['user'] }))) {
     return refuseWebSocket(ROOM_CLOSE_CODES.UNAUTHORIZED, 'app_private');
   }
-  const id = c.env.ROOM.idFromName(`${appId}:${roomId}`);
+  const id = c.env.ROOM.idFromName(roomObjectName(appId, roomId));
   const stub = c.env.ROOM.get(id);
   const url = new URL(c.req.raw.url);
   url.searchParams.set('uid', session.uid);
