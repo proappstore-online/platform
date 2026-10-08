@@ -71,6 +71,19 @@ export const STATS_DAYS_MAX = 90;
  *  query read an empty table. See lib/telemetry-datasets.ts. */
 export const STATS_DATASET = ANALYTICS_DATASET;
 
+/**
+ * An event's effective time (#349): the client-recorded `t` (epoch ms, the
+ * second double written by analytics-ingest.ts) for offline-replayed events,
+ * else the server-write `timestamp`. Analytics Engine SQL exposes each double as
+ * its own column (`double1`…`double20`; there is no `doubles` array) and
+ * supports neither `length()`, `CAST`, `toInt64` nor `fromUnixTimestamp64Milli`,
+ * so every earlier form of this expression was refused and the dashboard
+ * answered 502. Rows written before the second double read `double2` as 0 and
+ * fall back to `timestamp`. Only documented functions: if, toDateTime (epoch
+ * seconds), toUInt32, and `/`.
+ */
+export const EFFECTIVE_TIME = 'if(double2 > 0, toDateTime(toUInt32(double2 / 1000)), timestamp)';
+
 export interface StatsRow {
   total_views: number;
   unique_paths: number;
