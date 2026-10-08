@@ -115,7 +115,9 @@ export async function optionalUser(c: Context<{ Bindings: Env }>): Promise<FasUs
 // them. Full guide: docs/authorization-model.md.
 //
 //   1. PlatformRole — the identity's relationship to ProAppStore itself
-//      (publish, platform admin). From the session JWT. Check: requireRole().
+//      (publish, platform admin). From the session JWT. Platform-admin routes
+//      check requireAdmin(); other platform capabilities define their own
+//      explicit policy instead of a generic role gate.
 //   2. TeamRole     — who may BUILD/operate an app (repo, data, deploy). From
 //      team_members. Check: requireAppAccess()/requireAppOwner().
 //   3. AppRole      — roles within an app's OWN user base (the app author's
@@ -222,17 +224,5 @@ export function isAdminId(userId: string, env: Pick<Env, 'ADMIN_GITHUB_IDS'>): b
 export async function requireAdmin(c: Context<{ Bindings: Env }>): Promise<FasUser> {
   const user = await requireUser(c);
   if (!user.roles.includes('admin')) throw new HttpError('admin only', 403);
-  return user;
-}
-
-/**
- * Require a specific PLATFORM role (not a team or app role). Reads from session
- * token claims. Typed to `PlatformRole` so a team/app role literal (e.g.
- * 'developer', 'moderator', 'owner') won't compile here — that was the class of
- * scope-confusion behind #78/#79/#95.
- */
-export async function requireRole(c: Context<{ Bindings: Env }>, role: PlatformRole): Promise<FasUser> {
-  const user = await requireUser(c);
-  if (!user.roles.includes(role)) throw new HttpError(`requires role: ${role}`, 403);
   return user;
 }

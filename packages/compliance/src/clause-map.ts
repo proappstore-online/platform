@@ -32,7 +32,7 @@ export function clauseUrl(clauseId: string): string {
 }
 
 export interface CheckMeta {
-  /** Stable id. Never renamed; a retired check keeps its id in `RETIRED_CHECK_IDS`. */
+  /** Stable id. Never renamed; a retired check id is never reused. */
   id: string;
   /** The `name` the check emits on its results (the historical, human-facing label). */
   name: string;
@@ -103,9 +103,6 @@ export const CHECKS: readonly CheckMeta[] = [
   { id: 'unsafe-vh-live', name: 'No unsafe 100vh (live)', clauses: ['PAS-UI-010'], automation: 'partial', evidenceClass: 'runtime', scope: 'all', live: true,
     limits: 'Served CSS text only.' },
 ];
-
-/** Ids that once existed; kept so a consumer storing results by id never sees a reused meaning. */
-export const RETIRED_CHECK_IDS: readonly string[] = [];
 
 const BY_NAME = new Map(CHECKS.map((m) => [m.name, m]));
 const BY_ID = new Map(CHECKS.map((m) => [m.id, m]));

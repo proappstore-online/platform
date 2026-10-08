@@ -87,8 +87,10 @@ ladder. Always name which system you mean.
 ## Which check to use
 
 ### Platform-level actions (publish, admin-only endpoints)
-Use `requireRole(c, 'admin' | 'creator')` (`backend/src/lib/auth.ts`). Platform
-roles come from the signed session; they cannot be forged.
+Use the route's explicit platform policy. Admin-only routes use
+`requireAdmin(c)` (`backend/src/lib/auth.ts`); platform roles come from the
+signed session and cannot be forged. Do not use app/team role checks for
+platform authority.
 
 ### App build/data/config actions (the common case)
 Use **`requireAppAccess(c, appId, minRole)`** (`backend/src/lib/auth.ts`) — the
@@ -348,7 +350,8 @@ on an app with no user behind them. They run with platform identities that are
 
 ## Rule of thumb
 
-1. Platform capability? → `requireRole`.
+1. Platform capability? → its explicit platform policy (`requireAdmin` for
+   admin-only routes).
 2. Something about an app's build/data/config? → `requireAppAccess(minRole)` (or
    `team_role` rank in a separate worker). **Membership is never enough.**
 3. Something the running app enforces on its own users? → app roles + row-scoping SQL.

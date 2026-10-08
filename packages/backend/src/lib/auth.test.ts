@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mintSession } from '@proappstore/build-core';
-import { requireUser, requireAdmin, requireRole, requireAppOwner, requireRecentAuth, stepUpMaxAgeSeconds, HttpError } from './auth.js';
+import { requireUser, requireAdmin, requireAppOwner, requireRecentAuth, stepUpMaxAgeSeconds, HttpError } from './auth.js';
 
 const SK = 'test-signing-key';
 
@@ -74,19 +74,6 @@ describe('requireAdmin — role-based', () => {
   it('rejects creator-only users (creator is not admin)', async () => {
     const t = await tok('gh:42', { roles: ['user', 'creator'] });
     await expect(requireAdmin(makeContext(t))).rejects.toThrow('admin only');
-  });
-});
-
-describe('requireRole — arbitrary roles', () => {
-  it('passes when user has the requested role', async () => {
-    const t = await tok('gh:42', { roles: ['user', 'creator'] });
-    const user = await requireRole(makeContext(t), 'creator');
-    expect(user.roles).toContain('creator');
-  });
-
-  it('rejects when user lacks the requested role', async () => {
-    const t = await tok('gh:42', { roles: ['user'] });
-    await expect(requireRole(makeContext(t), 'creator')).rejects.toThrow('requires role: creator');
   });
 });
 
