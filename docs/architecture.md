@@ -125,7 +125,10 @@ the CLI publish path.
 Auth: the admin Worker does not mint sessions. It verifies backend-minted
 PAS sessions with the same `SESSION_SIGNING_KEY` the backend signs with, and
 accepts `INTERNAL_TOKEN` + `X-PAS-Login` from sibling Workers that have already
-authenticated the caller. (Its own GitHub-token exchange was removed in #142:
+authenticated the caller. Browser and CLI publishing sessions separately bind
+ownership to an immutable GitHub `gh:<numeric id>` and compare it exactly with
+`apps.creator_id`; a login/display name is collaborator metadata only, never
+publish authority (#327). (Its own GitHub-token exchange was removed in #142:
 it never checked which OAuth app a token was issued to.) No CF Access on
 `api.proappstore.online`.
 

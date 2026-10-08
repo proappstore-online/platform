@@ -31,7 +31,7 @@ describe('admin: sessions and the publish guards on real D1', () => {
     expect((await SELF.fetch(`${BASE}/v1/auth/me`, { headers: { Authorization: 'Bearer nope' } })).status).toBe(401);
   });
 
-  it('publish-app: 401 without a session, 400 without an id, 403 for an app id another creator owns (#83)', async () => {
+  it('publish-app: 401 without a session, 400 without an id, and exact immutable creator ownership (#83, #327)', async () => {
     expect((await publish({ id: 'x' })).status).toBe(401);
     const alice = await session('gh:1', 'alice');
     expect((await publish({}, alice)).status).toBe(400);
@@ -41,9 +41,18 @@ describe('admin: sessions and the publish guards on real D1', () => {
     const squat = await publish({ id: 'bobs-app' }, alice);
     expect(squat.status).toBe(403);
     expect(await squat.json()).toEqual({ error: 'appId already claimed by another user' });
-    // A claimed app whose creator has no users row fails closed with a distinct message.
-    await seedApp('orphan-app', 'gh:999');
-    expect(((await (await publish({ id: 'orphan-app' }, alice)).json()) as { error: string }).error).toContain('could not be resolved');
+
+    // The attacker chooses the owner's display spelling. It must still be
+    // refused: the guard compares gh:1 to apps.creator_id (gh:2), not either
+    // users.login value or its case-folded form.
+    const squatterToken = await session('gh:1', 'BoB');
+    expect((await publish({ id: 'bobs-app' }, squatterToken)).status).toBe(403);
+
+    // An owner may rename their GitHub login and still re-publish, because the
+    // immutable user id is what the apps row stores. Network is disabled, so
+    // the publish work later answers 422 rather than its guard rejecting 403.
+    const ownerToken = await session('gh:2', 'bob-renamed');
+    expect((await publish({ id: 'bobs-app' }, ownerToken)).status).toBe(422);
   });
 
   it('publish-app: the per-caller rate limit counts attempts in provision_attempts and answers 429 with Retry-After', async () => {

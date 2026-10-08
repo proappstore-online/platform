@@ -2,13 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { guardProvisionRequest } from "./provision-guard.js";
 
 /**
- * SQL-shape-routed D1 stub. The guard issues three distinct queries (owner
- * lookup, login→id resolution, rate-limit bucket) and a positional mock would
- * make each test depend on their order rather than on what it is asserting.
+ * SQL-shape-routed D1 stub. The guard issues distinct owner and rate-limit
+ * queries, so a positional mock would make each test depend on their order
+ * rather than on what it is asserting.
  */
 function db(opts: {
-  owner?: { creator_id: string; creator_login: string | null } | null;
-  userId?: string | null;
+  owner?: { creator_id: string } | null;
   buckets?: Record<string, { window_start: number; count: number }>;
   failLimiter?: boolean;
 } = {}) {
@@ -21,10 +20,7 @@ function db(opts: {
     return {
       bind: (...args: unknown[]) => ({
         async first<T>(): Promise<T | null> {
-          if (/FROM apps a/i.test(sql)) return (opts.owner ?? null) as T | null;
-          if (/FROM users/i.test(sql)) {
-            return (opts.userId ? { id: opts.userId } : null) as T | null;
-          }
+          if (/FROM apps/i.test(sql)) return (opts.owner ?? null) as T | null;
           if (/provision_attempts/i.test(sql)) {
             if (opts.failLimiter) throw new Error("no such table: provision_attempts");
             return (buckets[String(args[0])] ?? null) as T | null;
@@ -48,50 +44,47 @@ function db(opts: {
 describe("guardProvisionRequest — appId ownership (#83)", () => {
   it("allows an unclaimed appId (first publish)", async () => {
     const r = await guardProvisionRequest({
-      db: db({ owner: null }), appId: "brand-new", login: "alice",
+      db: db({ owner: null }), appId: "brand-new", userId: "gh:1",
     });
     expect(r.ok).toBe(true);
   });
 
-  it("allows the owner to re-publish, matching login case-insensitively", async () => {
-    // apps.creator_id is `gh:<numeric id>` while the admin session subject is a
-    // GitHub login — the comparison has to go through `users`, not string
-    // concatenation, or the real owner is 403'd on every re-publish.
+  it("allows the owner to re-publish by exact immutable user id", async () => {
     const r = await guardProvisionRequest({
-      db: db({ owner: { creator_id: "gh:2824906", creator_login: "Alice" } }),
+      db: db({ owner: { creator_id: "gh:2824906" } }),
       appId: "myapp",
-      login: "alice",
+      userId: "gh:2824906",
     });
     expect(r.ok).toBe(true);
   });
 
   it("403s when the appId belongs to someone else", async () => {
     const r = await guardProvisionRequest({
-      db: db({ owner: { creator_id: "gh:99", creator_login: "victim" } }),
+      db: db({ owner: { creator_id: "gh:99" } }),
       appId: "victimapp",
-      login: "attacker",
+      userId: "gh:100",
     });
     expect(r.ok).toBe(false);
     expect(r.status).toBe(403);
     expect(r.error).toMatch(/already claimed/i);
   });
 
-  it("fails closed when a claimed app has an unresolvable creator", async () => {
+  it("refuses a different immutable user id", async () => {
     const r = await guardProvisionRequest({
-      db: db({ owner: { creator_id: "gh:ghost", creator_login: null } }),
-      appId: "orphaned",
-      login: "someone",
+      db: db({ owner: { creator_id: "gh:99" } }),
+      appId: "victimapp",
+      userId: "gh:100",
     });
     expect(r.ok).toBe(false);
     expect(r.status).toBe(403);
-    expect(r.error).toMatch(/could not be resolved/i);
+    expect(r.error).toMatch(/already claimed/i);
   });
 
   it("checks ownership before spending rate budget", async () => {
     // A squatting attempt must not consume the squatter's quota, and the owner
     // should see "not yours" rather than an opaque 429.
-    const d = db({ owner: { creator_id: "gh:99", creator_login: "victim" } });
-    await guardProvisionRequest({ db: d, appId: "victimapp", login: "attacker" });
+    const d = db({ owner: { creator_id: "gh:99" } });
+    await guardProvisionRequest({ db: d, appId: "victimapp", userId: "gh:100" });
     expect(d.sqlSeen.some((s) => /provision_attempts/i.test(s))).toBe(false);
   });
 });
@@ -103,28 +96,19 @@ describe("guardProvisionRequest — rate limit (#83)", () => {
     const r = await guardProvisionRequest({
       db: db({
         owner: null,
-        userId: "gh:1",
         buckets: { "user:gh:1:h": { window_start: NOW, count: 10 } },
       }),
-      appId: "another", login: "alice", nowMs: NOW + 1000,
+      appId: "another", userId: "gh:1", nowMs: NOW + 1000,
     });
     expect(r.ok).toBe(false);
     expect(r.status).toBe(429);
     expect(r.retryAfterSeconds).toBeGreaterThan(0);
   });
 
-  it("keys on the platform user id so the budget is shared with /v1/provision", async () => {
-    const d = db({ owner: null, userId: "gh:2824906" });
-    await guardProvisionRequest({ db: d, appId: "x", login: "alice", nowMs: NOW });
+  it("keys on the immutable session user id so the budget is shared with /v1/provision", async () => {
+    const d = db({ owner: null });
+    await guardProvisionRequest({ db: d, appId: "x", userId: "gh:2824906", nowMs: NOW });
     expect(d.writes.some(([key]) => key === "user:gh:2824906:h")).toBe(true);
-  });
-
-  it("falls back to a login-scoped budget for an unknown login", async () => {
-    const d = db({ owner: null, userId: null });
-    await guardProvisionRequest({ db: d, appId: "x", login: "Ghost", nowMs: NOW });
-    // The limiter namespaces every identity under `user:`, so the fallback
-    // reads as `user:login:<login>` — distinct from a resolved `user:gh:<id>`.
-    expect(d.writes.some(([key]) => key === "user:login:ghost:h")).toBe(true);
   });
 
   it("fails OPEN when the limiter cannot read its table", async () => {
@@ -132,8 +116,8 @@ describe("guardProvisionRequest — rate limit (#83)", () => {
     // ceiling, and it must not take publishing down on its own.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const r = await guardProvisionRequest({
-      db: db({ owner: null, userId: "gh:1", failLimiter: true }),
-      appId: "x", login: "alice", nowMs: NOW,
+      db: db({ owner: null, failLimiter: true }),
+      appId: "x", userId: "gh:1", nowMs: NOW,
     });
     expect(r.ok).toBe(true);
     expect(warn).toHaveBeenCalled();
@@ -142,8 +126,8 @@ describe("guardProvisionRequest — rate limit (#83)", () => {
 
   it("still enforces ownership when the limiter is broken", async () => {
     const r = await guardProvisionRequest({
-      db: db({ owner: { creator_id: "gh:99", creator_login: "victim" }, failLimiter: true }),
-      appId: "victimapp", login: "attacker",
+      db: db({ owner: { creator_id: "gh:99" }, failLimiter: true }),
+      appId: "victimapp", userId: "gh:100",
     });
     expect(r.ok).toBe(false);
     expect(r.status).toBe(403);

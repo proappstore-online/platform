@@ -12,6 +12,29 @@
 // redundant. `pas login` goes through the backend, not this Worker.
 import { verifySession as verifyPasSession } from "@proappstore/build-core";
 
+/** A publish-capable session: the stable GitHub user id plus its verified login. */
+export interface GitHubPublishIdentity {
+  uid: string;
+  login: string;
+}
+
+/**
+ * Accept only a backend-minted GitHub session for user-driven publishing.
+ *
+ * `login` is useful later to grant a GitHub collaborator, but it is not an
+ * authorization subject. Google and credential identities (and the old admin
+ * token format, which only carries a mutable login) have no immutable GitHub
+ * owner mapping here, so they must not enter the GitHub-backed publish path.
+ */
+export async function verifyGitHubPublishSession(
+  token: string,
+  signingKey: string,
+): Promise<GitHubPublishIdentity | null> {
+  const claims = await verifyPasSession(token, signingKey);
+  if (!claims || !/^gh:\d+$/.test(claims.uid) || typeof claims.login !== "string") return null;
+  return { uid: claims.uid, login: claims.login };
+}
+
 /** Accepts a backend-minted PAS session, or a legacy 3-part admin session
  *  minted before #142 removed the exchange (valid for up to 30 days after). */
 export async function verifySession(token: string, signingKey: string): Promise<string | null> {

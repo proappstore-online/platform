@@ -1,6 +1,6 @@
 import { mintSession } from "@proappstore/build-core";
 import { describe, expect, it } from "vitest";
-import { verifySession } from "./auth.js";
+import { verifyGitHubPublishSession, verifySession } from "./auth.js";
 
 const KEY = "test-signing-key";
 
@@ -40,5 +40,15 @@ describe("verifySession", () => {
     const token = await mintLegacySession("serge-ivo", KEY);
 
     await expect(verifySession(token, KEY)).resolves.toBe("serge-ivo");
+  });
+
+  it("admits only immutable GitHub identities to the publish contract (#327)", async () => {
+    const github = await mintSession({ uid: "gh:2824906", login: "serge-ivo", roles: ["user"] }, KEY);
+    const google = await mintSession({ uid: "google:subject", login: "serge-ivo", roles: ["user"] }, KEY);
+    const credential = await mintSession({ uid: "cred:abc", login: "serge-ivo", roles: ["user"] }, KEY);
+
+    await expect(verifyGitHubPublishSession(github, KEY)).resolves.toEqual({ uid: "gh:2824906", login: "serge-ivo" });
+    await expect(verifyGitHubPublishSession(google, KEY)).resolves.toBeNull();
+    await expect(verifyGitHubPublishSession(credential, KEY)).resolves.toBeNull();
   });
 });

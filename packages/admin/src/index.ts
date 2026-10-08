@@ -1,6 +1,6 @@
 import { internalTokenOk, turnstileEnabled, turnstileFailure, turnstileTokenFrom, verifyTurnstile } from "@proappstore/build-core";
 import { AccessKeysUnavailable, isValidTeamDomain, verifyAccessJwt } from "./access-jwt.js";
-import { handleAuthMe, verifySession } from "./auth.js";
+import { handleAuthMe, verifyGitHubPublishSession } from "./auth.js";
 import type { Env } from "./env.js";
 import { guardProvisionRequest } from "./provision-guard.js";
 import {
@@ -99,14 +99,28 @@ async function publishBotCheck(request: Request, env: Env, body: unknown, intern
   return Response.json({ error: failure.error }, { status: failure.status });
 }
 
-async function verifyPublishLogin(request: Request, env: Env): Promise<string | null> {
+type PublishPrincipal =
+  | { kind: "internal"; creatorGithub: string }
+  | { kind: "session"; userId: string; creatorGithub: string };
+
+/**
+ * Internal callers are already authenticated and owner-gated by their sibling
+ * service. Browser/CLI callers must carry a GitHub UID that the publish guard
+ * can compare directly to apps.creator_id; names never authorize them (#327).
+ */
+async function verifyPublishPrincipal(request: Request, env: Env): Promise<PublishPrincipal | null> {
   if (internalTokenOk(request.headers.get("X-Internal-Token"), env.INTERNAL_TOKEN)) {
-    return safeGitHubLogin(request.headers.get("X-PAS-Login"));
+    const creatorGithub = safeGitHubLogin(request.headers.get("X-PAS-Login"));
+    return creatorGithub ? { kind: "internal", creatorGithub } : null;
   }
 
   const authHeader = request.headers.get("Authorization");
   if (!authHeader?.startsWith("Bearer ")) return null;
-  return verifySession(authHeader.slice(7), env.SESSION_SIGNING_KEY);
+  const identity = await verifyGitHubPublishSession(authHeader.slice(7), env.SESSION_SIGNING_KEY);
+  const creatorGithub = safeGitHubLogin(identity?.login ?? null);
+  return identity && creatorGithub
+    ? { kind: "session", userId: identity.uid, creatorGithub }
+    : null;
 }
 
 export default {
@@ -121,7 +135,7 @@ export default {
 
     // No GitHub-token → session exchange here (#142): sessions are minted by
     // the backend, whose exchange checks the token's OAuth audience. This
-    // Worker only verifies them (verifyPublishLogin) and answers whoami.
+    // Worker only verifies them (verifyPublishPrincipal) and answers whoami.
     if (url.pathname === "/v1/auth/me" && request.method === "GET") {
       return handleAuthMe(request, env);
     }
@@ -138,9 +152,11 @@ export default {
     if (url.pathname === "/api/publish-app" && request.method === "POST") {
       // Authenticated publish. Public callers use an Admin/PAS Bearer session;
       // sibling workers that have already authenticated and owner-gated the
-      // caller may use INTERNAL_TOKEN + X-PAS-Login.
-      const login = await verifyPublishLogin(request, env);
-      if (!login) {
+      // caller may use INTERNAL_TOKEN + X-PAS-Login. A user session must name
+      // an immutable GitHub uid; Google/credential and legacy login-only
+      // sessions cannot satisfy this GitHub-backed publishing contract (#327).
+      const principal = await verifyPublishPrincipal(request, env);
+      if (!principal) {
         return Response.json({ error: "invalid or expired session" }, { status: 401 });
       }
       let body: PublishRequest;
@@ -157,23 +173,25 @@ export default {
       // account may publish — so a session alone is not enough. Refuse an appId
       // someone else already claimed, and bound how fast one caller can drive a
       // loop that creates org repos, D1 databases, Workers and DNS.
-      const guard = await guardProvisionRequest({
-        db: env.DB,
-        appId: body.id,
-        login,
-        ip: request.headers.get("CF-Connecting-IP") ?? undefined,
-      });
-      if (!guard.ok) {
-        const headers: Record<string, string> = {};
-        if (guard.retryAfterSeconds) headers["Retry-After"] = String(guard.retryAfterSeconds);
-        return Response.json({ error: guard.error }, { status: guard.status ?? 403, headers });
+      if (principal.kind === "session") {
+        const guard = await guardProvisionRequest({
+          db: env.DB,
+          appId: body.id,
+          userId: principal.userId,
+          ip: request.headers.get("CF-Connecting-IP") ?? undefined,
+        });
+        if (!guard.ok) {
+          const headers: Record<string, string> = {};
+          if (guard.retryAfterSeconds) headers["Retry-After"] = String(guard.retryAfterSeconds);
+          return Response.json({ error: guard.error }, { status: guard.status ?? 403, headers });
+        }
       }
 
-      // Force the creator to the verified session login — NEVER trust a
+      // Force the collaborator to the authenticated principal's GitHub login — NEVER trust a
       // client-supplied creatorGithub. Otherwise any authenticated user could
       // POST {creatorGithub:"victim"} to forge app ownership in the registry AND
       // invite an arbitrary GitHub account as a push collaborator on the repo.
-      const result = await handlePublish({ ...body, creatorGithub: login }, env);
+      const result = await handlePublish({ ...body, creatorGithub: principal.creatorGithub }, env);
       return Response.json(result, { status: result.success ? 200 : 422 });
     }
 
@@ -227,15 +245,29 @@ export default {
     // Cloudflare Workflow (per-step retry + persistence). Returns the instance
     // id immediately; poll status at /api/provision-workflow/status?id=.
     if (url.pathname === "/api/provision-workflow" && request.method === "POST") {
-      const login = await verifyPublishLogin(request, env);
-      if (!login) {
+      const principal = await verifyPublishPrincipal(request, env);
+      if (!principal) {
         return Response.json({ error: "invalid or expired session" }, { status: 401 });
       }
       const body = await request.json<PublishRequest>();
+      if (!body?.id) return Response.json({ error: "id required" }, { status: 400 });
+      if (principal.kind === "session") {
+        const guard = await guardProvisionRequest({
+          db: env.DB,
+          appId: body.id,
+          userId: principal.userId,
+          ip: request.headers.get("CF-Connecting-IP") ?? undefined,
+        });
+        if (!guard.ok) {
+          const headers: Record<string, string> = {};
+          if (guard.retryAfterSeconds) headers["Retry-After"] = String(guard.retryAfterSeconds);
+          return Response.json({ error: guard.error }, { status: guard.status ?? 403, headers });
+        }
+      }
       const instance = await env.PROVISION_WORKFLOW.create({
-        // Force the verified session login — see /api/publish-app above. A
+        // Force the authenticated principal's collaborator login — see /api/publish-app above. A
         // client-supplied creatorGithub would forge ownership + collaborator invites.
-        params: { req: { ...body, creatorGithub: login }, addRegistry: true },
+        params: { req: { ...body, creatorGithub: principal.creatorGithub }, addRegistry: true },
       });
       return Response.json({ id: instance.id, status: await instance.status() }, { status: 202 });
     }
