@@ -144,6 +144,46 @@ async function isAppTeam(db: D1Database, appId: string, user: Pick<FasUser, 'id'
   return row !== null;
 }
 
+/**
+ * visibilityAllows as a SQL condition over a stored user id, for rows that
+ * have no session behind them: push subscriptions and notify-user recipients
+ * (#325). Evaluated when a notification is sent, so a revoked role or a
+ * public→private flip stops delivery from then on, not only at subscribe time.
+ * One statement for a whole broadcast — a per-subscriber visibilityAllows
+ * would cost two D1 queries a recipient and hit D1's per-invocation limit.
+ *
+ * `userCol` is a trusted column expression (e.g. `s.user_id`); the binds are
+ * positional `?`, in order. Admins match by id only (ADMIN_GITHUB_IDS): a
+ * stored row has no session roles. The login alias is the user's stored
+ * GitHub login, for a `gh:` id only, as in roleLoginAlias.
+ */
+export function visibleUserCondition(
+  env: Pick<Env, 'ADMIN_GITHUB_IDS'>,
+  appId: string,
+  visibility: AppVisibility,
+  userCol: string,
+): { sql: string; binds: unknown[] } {
+  if (visibility.mode === 'public') return { sql: '1', binds: [] };
+  const admins = (env.ADMIN_GITHUB_IDS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const parts = [
+    `EXISTS (SELECT 1 FROM apps WHERE id = ? AND creator_id = ${userCol})`,
+    `EXISTS (SELECT 1 FROM team_members WHERE app_id = ? AND user_id = ${userCol})`,
+  ];
+  const binds: unknown[] = [appId, appId];
+  if (admins.length > 0) {
+    parts.push(`${userCol} IN (${admins.map(() => '?').join(', ')})`);
+    binds.push(...admins);
+  }
+  if (visibility.roles.length > 0) {
+    parts.push(
+      `EXISTS (SELECT 1 FROM app_roles WHERE app_id = ? AND role_name IN (${visibility.roles.map(() => '?').join(', ')})
+         AND (user_id = ${userCol} OR (substr(${userCol}, 1, 3) = 'gh:' AND user_id = (SELECT login FROM users WHERE id = ${userCol}))))`,
+    );
+    binds.push(appId, ...visibility.roles);
+  }
+  return { sql: `(${parts.join(' OR ')})`, binds };
+}
+
 /** Throws 403 unless `user` may use the app. */
 export async function requireVisible(
   env: VisibilityEnv,

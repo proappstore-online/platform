@@ -8,6 +8,7 @@ import { dispatchWebhook } from '../lib/webhook-dispatch.js';
 import { isLikelyEmail, sendEmail } from '../lib/email.js';
 import { isAppOriginUrl, renderNotifyEmail, signUnsubscribeToken, verifyUnsubscribeToken } from '../lib/notify-email.js';
 import { auditModeration, moderateText } from '../lib/moderation.js';
+import { getAppVisibility, getAppVisibilityCached, requireVisible, visibleUserCondition } from '../lib/visibility.js';
 
 export const notificationRoutes = new Hono<{ Bindings: Env }>();
 
@@ -38,6 +39,31 @@ async function sendPushToSubs(env: Env, subs: PushSubscriptionRow[], payload: st
 }
 
 /**
+ * Visibility (#325): a private app's notifications reach only users its gate
+ * (lib/visibility.ts) still allows. Subscribing and notify-user require the
+ * caller to pass the gate; every send re-checks each recipient at send time,
+ * so a revoked role or a public→private flip stops delivery from then on.
+ * Public apps are unchanged.
+ */
+
+/** The app's push subscriptions (one user's, if given) whose owner may still use the app. */
+export async function deliverableSubs(env: Env, appId: string, userId?: string): Promise<PushSubscriptionRow[]> {
+  const allowed = visibleUserCondition(env, appId, await getAppVisibility(env.DB, appId), 's.user_id');
+  const { results } = await env.DB.prepare(
+    `SELECT s.* FROM push_subscriptions s WHERE s.app_id = ?${userId ? ' AND s.user_id = ?' : ''} AND ${allowed.sql}`,
+  ).bind(appId, ...(userId ? [userId] : []), ...allowed.binds).all<PushSubscriptionRow>();
+  return results;
+}
+
+/** Whether a user, by id alone (no session), may still use the app. */
+async function userMayUse(env: Env, appId: string, userId: string): Promise<boolean> {
+  const allowed = visibleUserCondition(env, appId, await getAppVisibility(env.DB, appId), 't.uid');
+  if (allowed.sql === '1') return true;
+  const row = await env.DB.prepare(`WITH t(uid) AS (SELECT ?) SELECT 1 FROM t WHERE ${allowed.sql}`).bind(userId, ...allowed.binds).first();
+  return row !== null;
+}
+
+/**
  * Internal push send (X-Internal-Token) — for platform services like agent-teams
  * to notify a specific user (e.g. "your task needs input"). Bypasses the public
  * creator/peer checks; targets one user's subscriptions for an app.
@@ -52,10 +78,8 @@ notificationRoutes.post('/notifications/send-internal', async (c) => {
   if (!userId || !appId || !title || !body) {
     return c.text('missing required fields: userId, appId, title, body', 400);
   }
-  const { results } = await c.env.DB.prepare(
-    'SELECT * FROM push_subscriptions WHERE app_id = ?1 AND user_id = ?2',
-  ).bind(appId, userId).all<PushSubscriptionRow>();
-  const out = await sendPushToSubs(c.env, results, JSON.stringify({ title, body, url, icon, tag }));
+  const subs = await deliverableSubs(c.env, appId, userId);
+  const out = await sendPushToSubs(c.env, subs, JSON.stringify({ title, body, url, icon, tag }));
   return c.json(out);
 });
 
@@ -77,6 +101,9 @@ notificationRoutes.post('/notifications/subscribe', wrap(async (c) => {
   if (!appId || !endpoint || !p256dh || !auth) {
     return c.text('missing required fields: appId, endpoint, p256dh, auth', 400);
   }
+  const app = await c.env.DB.prepare('SELECT 1 AS ok FROM apps WHERE id = ?1').bind(appId).first();
+  if (!app) return c.text('app not found', 404);
+  await requireVisible(c.env, appId, await getAppVisibilityCached(c.env.DB, appId), user);
 
   const id = crypto.randomUUID();
   await c.env.DB.prepare(
@@ -153,6 +180,8 @@ notificationRoutes.post('/notifications/notify-user', wrap(async (c) => {
   if (!appId || !targetUserId || !title || !body) {
     return c.text('missing required fields: appId, targetUserId, title, body', 400);
   }
+  // A user the app refuses may not reach its members, whatever rows they hold (#325).
+  await requireVisible(c.env, appId, await getAppVisibilityCached(c.env.DB, appId), user);
   const channel = rawChannel ?? 'push';
   if (!['push', 'email', 'both'].includes(channel)) return c.text('channel must be "push", "email" or "both"', 400);
   const wantsPush = channel !== 'email';
@@ -205,7 +234,7 @@ notificationRoutes.post('/notifications/notify-user', wrap(async (c) => {
     const optedOut = await c.env.DB.prepare(
       'SELECT 1 FROM notification_email_optout WHERE app_id = ?1 AND user_id = ?2',
     ).bind(appId, targetUserId).first();
-    if (!(await isAppMember(c.env.DB, appId, targetUserId))) skipped = 'not_member';
+    if (!(await isAppMember(c.env.DB, appId, targetUserId)) || !(await userMayUse(c.env, appId, targetUserId))) skipped = 'not_member';
     else if (optedOut) skipped = 'unsubscribed';
     else {
       // users.email is the address an OAuth provider verified; credential_email
@@ -252,10 +281,7 @@ notificationRoutes.post('/notifications/notify-user', wrap(async (c) => {
 
   let result = { sent: 0, failed: 0 };
   if (wantsPush) {
-    const subs = (await c.env.DB.prepare(
-      'SELECT * FROM push_subscriptions WHERE app_id = ?1 AND user_id = ?2',
-    ).bind(appId, targetUserId).all<PushSubscriptionRow>()).results;
-    result = await sendPushToSubs(c.env, subs, JSON.stringify({ title, body, url, icon, tag }));
+    result = await sendPushToSubs(c.env, await deliverableSubs(c.env, appId, targetUserId), JSON.stringify({ title, body, url, icon, tag }));
   }
   if (!wantsEmail) return c.json(result);
   if (!emailTo) return c.json({ ...result, email: 'skipped', skipped });
@@ -337,61 +363,10 @@ notificationRoutes.post('/notifications/send', wrap(async (c) => {
     return c.text('only the app creator can send notifications', 403);
   }
 
-  // Fetch target subscriptions
-  let subs: PushSubscriptionRow[];
-  if (userId) {
-    const result = await c.env.DB.prepare(
-      'SELECT * FROM push_subscriptions WHERE app_id = ?1 AND user_id = ?2',
-    ).bind(appId, userId).all<PushSubscriptionRow>();
-    subs = result.results;
-  } else {
-    const result = await c.env.DB.prepare(
-      'SELECT * FROM push_subscriptions WHERE app_id = ?1',
-    ).bind(appId).all<PushSubscriptionRow>();
-    subs = result.results;
-  }
+  // Target subscriptions — only of users the app still allows (#325).
+  const subs = await deliverableSubs(c.env, appId, userId);
 
-  webpush.setVapidDetails(
-    'mailto:push@proappstore.online',
-    c.env.VAPID_PUBLIC_KEY,
-    c.env.VAPID_PRIVATE_KEY,
-  );
-
-  const payload = JSON.stringify({ title, body, url, icon, tag });
-  let sent = 0;
-  let failed = 0;
-  const deadEndpoints: string[] = [];
-
-  await Promise.allSettled(
-    subs.map(async (sub) => {
-      try {
-        await webpush.sendNotification(
-          {
-            endpoint: sub.endpoint,
-            keys: { p256dh: sub.p256dh, auth: sub.auth_secret },
-          },
-          payload,
-        );
-        sent++;
-      } catch (err: any) {
-        failed++;
-        // Clean up dead subscriptions (browser unsubscribed or endpoint expired)
-        if (err?.statusCode === 410 || err?.statusCode === 404) {
-          deadEndpoints.push(sub.endpoint);
-        }
-      }
-    }),
-  );
-
-  // Batch-delete dead endpoints
-  if (deadEndpoints.length > 0) {
-    const placeholders = deadEndpoints.map((_, i) => `?${i + 1}`).join(',');
-    await c.env.DB.prepare(
-      `DELETE FROM push_subscriptions WHERE endpoint IN (${placeholders})`,
-    )
-      .bind(...deadEndpoints)
-      .run();
-  }
+  const { sent, failed } = await sendPushToSubs(c.env, subs, JSON.stringify({ title, body, url, icon, tag }));
 
   // Fire webhook (non-blocking)
   if (sent > 0) {

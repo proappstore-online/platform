@@ -10,6 +10,7 @@ vi.mock('web-push', () => ({
 import { app } from '../index.js';
 import webpush from 'web-push';
 import { testToken, TEST_SK, mockStmt, mockD1, makeEnv as sharedMakeEnv } from '../test-helpers.js';
+import { forgetAppVisibility } from '../lib/visibility.js';
 
 const TOK = await testToken('gh:1');
 
@@ -20,7 +21,10 @@ function makeEnv(db?: ReturnType<typeof mockD1>) {
 beforeEach(() => {
   vi.mocked(webpush.sendNotification).mockClear();
   vi.mocked(webpush.setVapidDetails).mockClear();
+  forgetAppVisibility(); // the visibility read is positional in these mocks
 });
+/** `SELECT … FROM app_visibility` with no row: the app is public. */
+const publicApp = () => mockStmt({ first: null });
 
 describe('GET /v1/notifications/vapid-key', () => {
   it('returns the VAPID public key without auth', async () => {
@@ -33,7 +37,7 @@ describe('GET /v1/notifications/vapid-key', () => {
 describe('POST /v1/notifications/subscribe', () => {
   it('inserts subscription and returns ok', async () => {
     const stmt = mockStmt();
-    const db = mockD1(stmt);
+    const db = mockD1(mockStmt({ first: { ok: 1 } }), publicApp(), stmt); // app exists, is public, then the upsert
     const res = await app.request('/v1/notifications/subscribe', {
       method: 'POST',
       headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
@@ -48,7 +52,7 @@ describe('POST /v1/notifications/subscribe', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
     expect(db.prepare).toHaveBeenCalled();
-    const sql = db.prepare.mock.calls[0][0];
+    const sql = db.prepare.mock.calls[2][0];
     expect(sql).toContain('INSERT INTO push_subscriptions');
     expect(sql).toContain('ON CONFLICT(endpoint)');
     expect(stmt.bind).toHaveBeenCalledWith(
@@ -136,7 +140,7 @@ describe('POST /v1/notifications/send', () => {
         ],
       },
     });
-    const db = mockD1(appsStmt, subsStmt);
+    const db = mockD1(appsStmt, publicApp(), subsStmt);
 
     const res = await app.request('/v1/notifications/send', {
       method: 'POST',
@@ -178,7 +182,7 @@ describe('POST /v1/notifications/send', () => {
         ],
       },
     });
-    const db = mockD1(appsStmt, subsStmt);
+    const db = mockD1(appsStmt, publicApp(), subsStmt);
 
     const res = await app.request('/v1/notifications/send', {
       method: 'POST',
@@ -191,9 +195,9 @@ describe('POST /v1/notifications/send', () => {
     expect(webpush.sendNotification).toHaveBeenCalledTimes(2);
 
     // Verify the subscription query is for all app subscribers (no user_id filter)
-    const subsSql = db.prepare.mock.calls[1][0];
-    expect(subsSql).toContain('WHERE app_id = ?1');
-    expect(subsSql).not.toContain('user_id');
+    const subsSql = db.prepare.mock.calls[2][0];
+    expect(subsSql).toContain('WHERE s.app_id = ?');
+    expect(subsSql).not.toContain('user_id'); // a public app: no per-user filter of any kind
   });
 
   it('cleans up dead endpoints on 410', async () => {
@@ -207,7 +211,7 @@ describe('POST /v1/notifications/send', () => {
       },
     });
     const cleanupStmt = mockStmt();
-    const db = mockD1(appsStmt, subsStmt, cleanupStmt);
+    const db = mockD1(appsStmt, publicApp(), subsStmt, cleanupStmt);
 
     vi.mocked(webpush.sendNotification)
       .mockResolvedValueOnce({} as any)
@@ -223,7 +227,7 @@ describe('POST /v1/notifications/send', () => {
     expect(await res.json()).toEqual({ sent: 1, failed: 1 });
 
     // Verify dead endpoint cleanup query
-    const cleanupSql = db.prepare.mock.calls[2][0];
+    const cleanupSql = db.prepare.mock.calls[3][0];
     expect(cleanupSql).toContain('DELETE FROM push_subscriptions WHERE endpoint IN');
     expect(cleanupStmt.bind).toHaveBeenCalledWith('https://push.example.com/dead');
   });
@@ -238,7 +242,7 @@ describe('POST /v1/notifications/send', () => {
       },
     });
     const cleanupStmt = mockStmt();
-    const db = mockD1(appsStmt, subsStmt, cleanupStmt);
+    const db = mockD1(appsStmt, publicApp(), subsStmt, cleanupStmt);
 
     vi.mocked(webpush.sendNotification).mockRejectedValueOnce({ statusCode: 404 });
 
@@ -250,7 +254,7 @@ describe('POST /v1/notifications/send', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ sent: 0, failed: 1 });
-    expect(db.prepare).toHaveBeenCalledTimes(3); // apps + subs + cleanup
+    expect(db.prepare).toHaveBeenCalledTimes(4); // apps + visibility + subs + cleanup
   });
 
   it('does not run cleanup when no dead endpoints', async () => {
@@ -262,7 +266,7 @@ describe('POST /v1/notifications/send', () => {
         ],
       },
     });
-    const db = mockD1(appsStmt, subsStmt);
+    const db = mockD1(appsStmt, publicApp(), subsStmt);
 
     const res = await app.request('/v1/notifications/send', {
       method: 'POST',
@@ -271,7 +275,7 @@ describe('POST /v1/notifications/send', () => {
     }, makeEnv(db));
 
     expect(res.status).toBe(200);
-    expect(db.prepare).toHaveBeenCalledTimes(3); // apps + subs + webhook dispatch query (no cleanup)
+    expect(db.prepare).toHaveBeenCalledTimes(4); // apps + visibility + subs + webhook dispatch query (no cleanup)
   });
 
   it('returns 403 when user is not app creator', async () => {
@@ -323,7 +327,7 @@ describe('POST /v1/notifications/send', () => {
   it('returns {sent:0, failed:0} when no subscribers', async () => {
     const appsStmt = mockStmt({ first: { creator_id: 'gh:1' } });
     const subsStmt = mockStmt({ all: { results: [] } });
-    const db = mockD1(appsStmt, subsStmt);
+    const db = mockD1(appsStmt, publicApp(), subsStmt);
 
     const res = await app.request('/v1/notifications/send', {
       method: 'POST',
@@ -345,7 +349,7 @@ describe('POST /v1/notifications/send', () => {
         ],
       },
     });
-    const db = mockD1(appsStmt, subsStmt);
+    const db = mockD1(appsStmt, publicApp(), subsStmt);
 
     await app.request('/v1/notifications/send', {
       method: 'POST',
@@ -381,7 +385,7 @@ describe('POST /v1/notifications/send-internal', () => {
   });
 
   it('sends to the target user’s subscriptions with a valid internal token', async () => {
-    const db = mockD1(mockStmt({ all: { results: [SUB] } })); // the SELECT subscriptions
+    const db = mockD1(publicApp(), mockStmt({ all: { results: [SUB] } })); // visibility, then the SELECT subscriptions
     const res = await app.request('/v1/notifications/send-internal', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Internal-Token': 'secret' },
@@ -427,7 +431,7 @@ describe('POST /v1/notifications/notify-user — push unchanged, email channel (
   function db() {
     const answer = (sql: string, args: unknown[]) => {
       if (sql.includes('FROM push_subscriptions WHERE app_id = ?1 AND user_id = ?2 LIMIT 1')) return { first: state.subs.has(args[1] as string) ? { 1: 1 } : null };
-      if (sql.includes('SELECT * FROM push_subscriptions')) {
+      if (sql.includes('SELECT s.* FROM push_subscriptions s')) {
         const results = state.subs.has(args[1] as string) ? [{ id: '1', user_id: args[1], app_id: 'myapp', endpoint: `https://push.example/${args[1]}`, p256dh: 'k', auth_secret: 's', created_at: 1 }] : [];
         return { all: { results } };
       }
