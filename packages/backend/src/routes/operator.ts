@@ -18,7 +18,7 @@ import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireRecentAuth } from '../lib/auth.js';
 import { requireOperatorAccess } from '../lib/operator-audit-marks.js';
-import type { OperatorResource, OperatorViewContract } from '../lib/operator-contract.js';
+import { transitionGuard, type OperatorResource, type OperatorViewContract } from '../lib/operator-contract.js';
 import { runOperatorQuery, runOperatorWrite } from './operator-exec.js';
 import { REVIEW_CONTENT_TYPES, holdsReviewRole, recordReviewAccess } from '../lib/review-access.js';
 import { isSensitiveField } from '../lib/sensitive-fields.js';
@@ -290,7 +290,8 @@ operatorRoutes.post('/apps/:appId/operator/actions/:actionId', async (c) => {
 
   const changes = await runOperatorWrite(
     c.env, appId, action.action, input, caller, sessionToken(c.req.header('Authorization')),
-    { operatorAction: action.id, target: target === null ? null : String(target), request: c.req.raw }, Boolean(action.transition),
+    { operatorAction: action.id, target: target === null ? null : String(target), request: c.req.raw },
+    action.transition ? transitionGuard(action.params, resource) ?? null : null,
   );
   c.header('Cache-Control', 'no-store');
   return c.json({ ok: true, changes });

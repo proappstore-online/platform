@@ -56,9 +56,12 @@ export const STASH = {
     {
       name: 'op_lift_suspension', description: 'Lift a suspension', operation: 'batch', requires_auth: true,
       params: { suspension_id: { type: 'string' }, from_status: { type: 'string' }, user_id: { type: 'string' } },
+      // #340: every statement carries the status guard, so a stale lift changes
+      // nothing. The member is unsuspended first, while the suspension is still in
+      // :from_status — and only if it belongs to that member.
       statements: [
+        'UPDATE members SET suspended = 0 WHERE id = :user_id AND EXISTS (SELECT 1 FROM suspensions WHERE id = :suspension_id AND user_id = :user_id AND status = :from_status)',
         "UPDATE suspensions SET status = 'lifted', lifted_at = :__now, lifted_by = :__user_id WHERE id = :suspension_id AND status = :from_status",
-        'UPDATE members SET suspended = 0 WHERE id = :user_id',
       ],
       auth: operator('Operators lift any suspension.'),
     },

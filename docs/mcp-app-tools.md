@@ -730,9 +730,15 @@ actions:
   whose status is in `from`, and `to` must be a declared state. The app's SQL
   must enforce it: one param must be mapped to the status column and used by
   the write, for example `UPDATE reports SET status = 'resolved' WHERE id =
-  :report_id AND status = :from_status`. The platform refuses a row whose status
-  is not in `from` with a 409. A write that changes nothing (someone else moved
-  the record first) is also a 409, and is audited with status 409.
+  :report_id AND status = :from_status`. In a `batch`, **every** statement must
+  use that param (#340): the batch commits each statement it runs, so one that
+  ignores the status would still write on a stale status. Guard a statement on
+  another table with `EXISTS (SELECT 1 FROM … WHERE id = :id AND status =
+  :from_status)`, ahead of the statement that changes the status. Registration
+  refuses an unguarded statement, and the console refuses to run one stored
+  before this rule. The platform refuses a row whose status is not in `from`
+  with a 409. A write that changes nothing (someone else moved the record
+  first) is also a 409, and is audited with status 409.
 - **`destructive: true`** marks an irreversible or account-affecting action,
   such as a suspension. Its registered action must declare `step_up`, so it
   needs a recent sign-in. The console styles it as dangerous and offers a

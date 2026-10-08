@@ -284,6 +284,64 @@ describe('operator reports & suspensions (#240)', () => {
     ]);
   });
 
+  // #340: a stale lift (s1 was lifted by someone else; u9 was suspended again as s2)
+  // must change no row. The statements the backend sends are replayed on real D1
+  // exactly as the data worker runs them: prepare(sql).bind(...params), one batch.
+  it('a stale op_lift_suspension is a 409 and leaves every row unchanged (#340)', async () => {
+    const batches: { sql: string; params?: unknown[] }[][] = [];
+    const capture = (changes: number[]) => worker('stash').intercept({ path: '/batch', method: 'POST' }).reply(200, (req) => {
+      batches.push((JSON.parse(String(req.body)) as { statements: { sql: string; params?: unknown[] }[] }).statements);
+      return { results: changes.map((n) => ({ meta: { changes: n } })) };
+    });
+    const replay = async (statements: { sql: string; params?: unknown[] }[]) =>
+      (await env.DB.batch(statements.map((s) => env.DB.prepare(s.sql).bind(...(s.params ?? []))))).map((r) => r.meta.changes);
+    const rows = async () => [
+      (await env.DB.prepare('SELECT * FROM members ORDER BY id').all()).results,
+      (await env.DB.prepare('SELECT * FROM suspensions ORDER BY id').all()).results,
+    ];
+    await env.DB.batch([
+      env.DB.prepare('CREATE TABLE members (id TEXT PRIMARY KEY, suspended INTEGER NOT NULL)'),
+      env.DB.prepare('CREATE TABLE suspensions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, status TEXT NOT NULL, lifted_at INTEGER, lifted_by TEXT)'),
+      env.DB.prepare("INSERT INTO members VALUES ('u9', 1)"),
+      env.DB.prepare("INSERT INTO suspensions VALUES ('s1', 'u9', 'lifted', 5, 'gh:7'), ('s2', 'u9', 'active', NULL, NULL)"),
+    ]);
+    try {
+      const before = await rows();
+      // The operator's page still shows s1 as active.
+      capture([0, 0]);
+      const stale = await act('stash', 'lift', { suspension_id: 's1', user_id: 'u9', reason: 'spam', status: 'active', created_at: 1, lifted_at: null });
+      expect(stale.status, await stale.clone().text()).toBe(409);
+      expect(await replay(batches[0]!)).toEqual([0, 0]);
+      expect(await rows()).toEqual(before);
+
+      // The current suspension still lifts: both statements apply.
+      capture([1, 1]);
+      const ok = await act('stash', 'lift', { suspension_id: 's2', user_id: 'u9', reason: 'spam', status: 'active', created_at: 2, lifted_at: null });
+      expect(ok.status, await ok.clone().text()).toBe(200);
+      expect(await replay(batches[1]!)).toEqual([1, 1]);
+      expect(await env.DB.prepare("SELECT suspended FROM members WHERE id = 'u9'").first()).toEqual({ suspended: 0 });
+      expect(await env.DB.prepare("SELECT status, lifted_by FROM suspensions WHERE id = 's2'").first()).toEqual({ status: 'lifted', lifted_by: 'gh:1' });
+
+      expect((await audit('stash')).results).toEqual([
+        { action_name: 'op_lift_suspension', actor_id: 'gh:1', role_name: 'operator', status: 409, operator_action: 'lift', target: 'u9' },
+        { action_name: 'op_lift_suspension', actor_id: 'gh:1', role_name: 'operator', status: 200, operator_action: 'lift', target: 'u9' },
+      ]);
+    } finally {
+      await env.DB.batch([env.DB.prepare('DROP TABLE members'), env.DB.prepare('DROP TABLE suspensions')]);
+    }
+  });
+
+  it('refuses to run a transition whose stored action has an unguarded statement (#340)', async () => {
+    // A contract stored before #340: the action was re-registered without the guard on statement 2.
+    const manifest = JSON.parse((await env.DB.prepare("SELECT manifest FROM app_tools WHERE app_id = 'stash' AND name = 'op_lift_suspension'").first<{ manifest: string }>())!.manifest) as { statements: string[] };
+    manifest.statements = [manifest.statements[1]!, 'UPDATE members SET suspended = 0 WHERE id = :user_id'];
+    await env.DB.prepare("UPDATE app_tools SET manifest = ? WHERE app_id = 'stash' AND name = 'op_lift_suspension'").bind(JSON.stringify(manifest)).run();
+    const res = await act('stash', 'lift', { suspension_id: 's1', user_id: 'u9', reason: 'spam', status: 'active', created_at: 1, lifted_at: null });
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain('does not guard every statement with :from_status');
+    expect(sent).toHaveLength(0); // nothing reached the data worker
+  });
+
   it("lists a member's suspension history and filters reports by status", async () => {
     answer('stash', '/query', { rows: [{ suspension_id: 's1', user_id: 'u9', reason: 'spam', status: 'active', created_at: 1, lifted_at: null, internal: 'x' }] });
     const history = await SELF.fetch(`${BASE}/v1/apps/stash/operator/resources/suspension_history?related=u9`, json('GET', undefined, await session('gh:1')));

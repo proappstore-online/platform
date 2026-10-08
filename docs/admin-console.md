@@ -62,8 +62,9 @@ above).
 - **Inspect:** a `detail` opens a record page with the fields you declare. A
   `verification` resource can also show ID-document evidence, which needs a passkey step-up.
 - **Change:** each `actions[]` entry is a row button that runs one registered write action.
-  It can be a status `transition` (409 if the row has moved on) or `destructive`
-  (needs `step_up`). Every action asks for confirmation.
+  It can be a status `transition` (409 if the row has moved on; in a `batch`, every
+  statement must check the status, #340) or `destructive` (needs `step_up`). Every
+  action asks for confirmation.
 - **Metrics:** a `metrics` resource shows KPI tiles or a time series.
 - **Audit:** every visit, read and action, and every refused attempt, is recorded under the
   caller's own id.
@@ -327,6 +328,7 @@ Errors are JSON `{ "error": "<message>", ...extra }`.
 | 409 | `"<title>" is not available from status …` | A transition from a status that isn't in `from` |
 | 409 | `the record changed since it was loaded; reload and try again` | A guarded write that changed nothing |
 | 409 | `action <name> cannot run from the operator view` | The action is public, scheduled, or can't be called by a user |
+| 409 | `action <name> does not guard every statement with :<param>; redeploy it…` | A transition whose stored action has a statement that ignores the status (#340) |
 | 415 | `document type is not viewable` | Evidence that isn't a PDF or an image |
 | 502 | `action <name> failed (…)` / `data worker returned an invalid response` | The data worker failed |
 

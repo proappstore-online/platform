@@ -104,10 +104,29 @@ function mapParams(tool: ToolManifest, resource: OperatorResource, params: unkno
 }
 
 /**
+ * The statements of a transition's write that do not use its status guard
+ * param, as 1-based positions (#340). A batch commits every statement it runs,
+ * so a statement without the guard would still write when the guard matched
+ * nothing; each one must carry it (`AND status = :from_status`, or `EXISTS (...
+ * status = :from_status)` on another table), so a stale status changes nothing.
+ */
+export function unguardedStatements(tool: Pick<ToolManifest, 'sql' | 'statements'>, guard: string): number[] {
+  const uses = new RegExp(`:${guard}\\b`);
+  const statements = tool.statements ?? [tool.sql ?? ''];
+  return statements.flatMap((s, i) => (uses.test(s) ? [] : [i + 1]));
+}
+
+/** The param a transition action maps to its resource's status column. */
+export function transitionGuard(params: Record<string, string>, resource: Pick<OperatorResource, 'status'>): string | undefined {
+  return Object.entries(params).find(([, column]) => column === resource.status?.column)?.[0];
+}
+
+/**
  * A status transition is offered on rows whose status is in `from` — and the
  * app's own SQL must enforce it: one mapped param carries the row's current
- * status, and the write uses it (`... AND status = :from_status`). A stale or
- * forged status then changes nothing, which the platform answers with 409.
+ * status, and every statement of the write uses it (`... AND status =
+ * :from_status`). A stale or forged status then changes nothing, which the
+ * platform answers with 409.
  */
 function validateTransition(tool: ToolManifest, resource: OperatorResource, mapped: Record<string, string>, raw: unknown, where: string): NonNullable<OperatorAction['transition']> | string {
   const at = `${where}.transition`;
@@ -122,10 +141,13 @@ function validateTransition(tool: ToolManifest, resource: OperatorResource, mapp
     return `${at}: from must be a non-empty list of declared states`;
   }
   if (typeof raw.to !== 'string' || !states.includes(raw.to)) return `${at}: to must be a declared state`;
-  const guard = Object.entries(mapped).find(([, column]) => column === status.column)?.[0];
-  const sql = [tool.sql ?? '', ...(tool.statements ?? [])].join('\n');
-  if (!guard || !new RegExp(`:${guard}\\b`).test(sql)) {
+  const guard = transitionGuard(mapped, resource);
+  const unguarded = guard ? unguardedStatements(tool, guard) : [];
+  if (!guard || unguarded.length === (tool.statements?.length ?? 1)) {
     return `${at}: map a param of "${tool.name}" to the status column "${status.column}" and guard the write with it (e.g. AND status = :from_status)`;
+  }
+  if (unguarded.length) {
+    return `${at}: statement ${unguarded.join(', ')} of "${tool.name}" does not use :${guard}; every statement of a transition must be guarded by the status, or a stale status still writes it`;
   }
   return { from: from as string[], to: raw.to };
 }

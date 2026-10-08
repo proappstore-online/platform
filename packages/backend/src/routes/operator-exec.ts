@@ -11,6 +11,7 @@ import { actionCallers, prepareActionBatch, prepareActionQuery, type ToolManifes
 import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from './actions.js';
 import { markAudited } from '../lib/operator-audit-marks.js';
 import { CONSOLE_RP_ID } from './passkeys.js';
+import { unguardedStatements } from '../lib/operator-contract.js';
 
 /** What an operator-view call adds to its audit row (#240): the contract action or read, and its target record. */
 export interface OperatorAudit {
@@ -45,9 +46,11 @@ export async function runOperatorQuery(
 /**
  * Run a registered write (execute or batch) for an operator-view action (#240)
  * under the same gates as the actions route, and return how many rows it
- * changed. With `mustChange` (a status transition), a write the app's SQL guard
- * matched to nothing is recorded with status 409 and refused: the record moved
- * on since the operator loaded it.
+ * changed. With `guard` (a status transition: the param carrying the row's
+ * status), every statement must use that param, re-checked here against the
+ * action as registered now (#340), so a stale status changes nothing anywhere
+ * in the batch. A write the guard matched to nothing is recorded with status
+ * 409 and refused: the record moved on since the operator loaded it.
  */
 export async function runOperatorWrite(
   env: Env,
@@ -57,14 +60,14 @@ export async function runOperatorWrite(
   user: FasUser,
   token: string,
   audit: OperatorAudit,
-  mustChange: boolean,
+  guard: string | null,
 ): Promise<number> {
-  const { body, role } = await runOperatorCall(env, appId, name, input, user, token, ['execute', 'batch']);
+  const { body, role } = await runOperatorCall(env, appId, name, input, user, token, ['execute', 'batch'], guard);
   const result = body as { meta?: { changes?: unknown }; results?: { meta?: { changes?: unknown } }[] };
   const changes = Array.isArray(result.results)
     ? result.results.reduce((n, r) => n + Number(r.meta?.changes ?? 0), 0)
     : Number(result.meta?.changes ?? 0);
-  const refused = mustChange && changes === 0;
+  const refused = guard !== null && changes === 0;
   if (role) { await recordActionSuccess(env.DB, appId, name, { actorId: user.id, role }, refused ? 409 : 200, audit); markAudited(audit.request); }
   if (refused) throw new HttpError('the record changed since it was loaded; reload and try again', 409);
   return changes;
@@ -78,11 +81,17 @@ async function runOperatorCall(
   user: FasUser,
   token: string,
   operations: ToolManifest['operation'][],
+  guard: string | null = null,
 ): Promise<{ body: unknown; role: string | null }> {
   const manifest = await loadManifest(env.DB, appId, name);
   // The console runs actions as the owner: a worker/hook-only action (#254) is out of reach, like a scheduled one.
   if (!operations.includes(manifest.operation) || manifest.requires_auth === false || manifest.schedule !== undefined || !actionCallers(manifest).includes('user')) {
     throw new HttpError(`action ${name} cannot run from the operator view`, 409);
+  }
+  // A contract stored before #340, or an action re-registered since, may have a
+  // statement that ignores the status: it would commit even when the guard fails.
+  if (guard !== null && unguardedStatements(manifest, guard).length) {
+    throw new HttpError(`action ${name} does not guard every statement with :${guard}; redeploy it so each statement checks the status`, 409);
   }
   const role = await enforceActionAuth(env.DB, appId, manifest, user);
   if (manifest.step_up) requireRecentAuth(user, env, { rpId: CONSOLE_RP_ID });

@@ -120,7 +120,7 @@ export function operatorCapabilities() {
       "Columns and detail fields must be selected by their action's SQL, and none may match the sensitive-field list.",
       'A paged resource needs a literal LIMIT (the page size) and an ORDER BY; a series needs a literal LIMIT.',
       'Action params map action params to columns of their resource and cover every required param; a destructive action needs step_up.',
-      'A transition maps a param to the status column and the write guards on it; verification decisions are step-up transitions taken on the record page.',
+      'A transition maps a param to the status column and every statement of the write guards on it (#340); verification decisions are step-up transitions taken on the record page.',
     ],
     schema: OPERATOR_VIEW_SCHEMA,
   };

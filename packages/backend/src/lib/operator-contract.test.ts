@@ -232,6 +232,13 @@ describe('validateOperatorView (#240)', () => {
         stashTools.map((t) => (t.name === 'op_resolve_report' ? { ...t, params: { report_id: { type: 'string' }, from_status: { type: 'string', optional: true } } } : t)) as ToolManifest[]],
       ['resolve', (a) => void a, 'guard the write with it',
         stashTools.map((t) => (t.name === 'op_resolve_report' ? { ...t, sql: "UPDATE reports SET status = 'resolved' WHERE id = :report_id" } : t)) as ToolManifest[]],
+      // #340: a batch transition where one statement ignores the status would still write it on a stale status.
+      ['lift', (a) => void a, 'statement 2 of "op_lift_suspension" does not use :from_status',
+        stashTools.map((t) => (t.name === 'op_lift_suspension' ? { ...t, statements: [t.statements![1]!, 'UPDATE members SET suspended = 0 WHERE id = :user_id'] } : t)) as ToolManifest[]],
+      ['lift', (a) => void a, 'statement 1 of "op_lift_suspension" does not use :from_status',
+        stashTools.map((t) => (t.name === 'op_lift_suspension' ? { ...t, statements: ['UPDATE members SET suspended = 0 WHERE id = :user_id', t.statements![1]!] } : t)) as ToolManifest[]],
+      ['lift', (a) => void a, 'guard the write with it',
+        stashTools.map((t) => (t.name === 'op_lift_suspension' ? { ...t, statements: ['UPDATE members SET suspended = 0 WHERE id = :user_id', "UPDATE suspensions SET status = 'lifted' WHERE id = :suspension_id"] } : t)) as ToolManifest[]],
       ['suspend_member', (a) => { a.transition = { from: ['open'], to: 'resolved' }; }, 'resource "members" declares no status'],
       ['suspend_member', (a) => void a, 'destructive action "op_suspend_user" must declare step_up',
         stashTools.map((t) => (t.name === 'op_suspend_user' ? { ...t, step_up: undefined } : t)) as ToolManifest[]],
