@@ -120,6 +120,54 @@ describe('POST /v1/services/balance/deposit', () => {
   });
 });
 
+describe('POST /v1/services/balance/confirm — checkout purpose (#328)', () => {
+  const checkout = (overrides: Record<string, unknown> = {}) => ({
+    id: 'cs_deposit', mode: 'payment', payment_status: 'paid', payment_intent: 'pi_deposit', amount_total: 2500,
+    metadata: { user_id: 'gh:1', type: 'balance_deposit' }, ...overrides,
+  });
+  const confirm = async (session: Record<string, unknown>, db = mockD1()) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(session)));
+    const response = await app.request('/v1/services/balance/confirm', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'cs_deposit' }),
+    }, env({ STRIPE_SECRET_KEY: 'sk_test' }, db));
+    return { response, db };
+  };
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('credits a paid one-time session created for a balance deposit', async () => {
+    const { response, db } = await confirm(checkout());
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ balanceCents: 0, credited: 2500 });
+    expect(db.batch).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['subscription', checkout({ mode: 'subscription' })],
+    ['setup', checkout({ mode: 'setup' })],
+    ['missing purpose', checkout({ metadata: { user_id: 'gh:1' } })],
+    ['wrong purpose', checkout({ metadata: { user_id: 'gh:1', type: 'subscription' } })],
+  ])('rejects a paid %s checkout without crediting balance', async (_name, session) => {
+    const { response, db } = await confirm(session);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'checkout session is not a balance deposit' });
+    expect(db.batch).not.toHaveBeenCalled();
+  });
+
+  it('keeps duplicate confirmation idempotent for a valid deposit session', async () => {
+    const db = {
+      prepare: vi.fn((sql: string) => mockStmt({ first: sql.includes('SELECT balance_cents') ? { balance_cents: 2500 } : null })),
+      batch: vi.fn(),
+    } as unknown as ReturnType<typeof mockD1>;
+    db.batch.mockRejectedValueOnce(new Error('UNIQUE constraint failed: balance_transactions.stripe_payment_intent_id'));
+    const { response } = await confirm(checkout(), db);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ balanceCents: 2500, alreadyCredited: true });
+  });
+});
+
 describe('POST /v1/services/recompute-stats', () => {
   it('rejects without internal token', async () => {
     const res = await app.request('/v1/services/recompute-stats', {

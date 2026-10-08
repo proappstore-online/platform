@@ -206,6 +206,8 @@ export class Stripe {
 /** Subset of the Stripe Checkout Session for verifying payment. */
 export interface StripeCheckoutSessionDetail {
   id: string;
+  /** Checkout's purpose: only one-time `payment` sessions can fund service balance. */
+  mode: 'payment' | 'subscription' | 'setup';
   payment_status: 'paid' | 'unpaid' | 'no_payment_required';
   payment_intent: string | null;
   amount_total: number | null;

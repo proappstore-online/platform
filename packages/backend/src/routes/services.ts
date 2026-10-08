@@ -458,6 +458,12 @@ servicesRoutes.post('/services/balance/confirm', async (c) => {
     if (session.metadata?.user_id !== user.id) {
       return c.json({ error: 'session does not belong to you' }, 403);
     }
+    // A paid Checkout Session is not automatically service credit. In
+    // particular, subscription sessions also carry user_id metadata. Credit
+    // only the one-time sessions minted by /services/balance/deposit (#328).
+    if (session.mode !== 'payment' || session.metadata?.type !== 'balance_deposit') {
+      return c.json({ error: 'checkout session is not a balance deposit' }, 400);
+    }
 
     const amountCents = session.amount_total ?? 0;
     if (amountCents <= 0) return c.json({ error: 'invalid amount' }, 400);

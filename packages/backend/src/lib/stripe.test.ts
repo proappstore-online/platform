@@ -117,7 +117,7 @@ describe('Stripe client', () => {
   });
 
   it('getCheckoutSession retrieves payment verification data', async () => {
-    mockOk({ id: 'cs_1', payment_status: 'paid', payment_intent: 'pi_1', amount_total: 900 });
+    mockOk({ id: 'cs_1', mode: 'payment', payment_status: 'paid', payment_intent: 'pi_1', amount_total: 900, metadata: { type: 'balance_deposit' } });
     const session = await stripe.getCheckoutSession('cs_1');
     expect(session.payment_status).toBe('paid');
     expect(session.amount_total).toBe(900);

@@ -248,8 +248,14 @@ PATCH  /services/profile/availability    -- toggle available/unavailable
 ```
 GET    /services/balance                 -- current balance (auth)
 POST   /services/balance/deposit         -- create Stripe checkout for top-up (min $10)
+POST   /services/balance/confirm         -- redeem the returned one-time deposit checkout (auth)
 GET    /services/balance/transactions    -- ledger (auth)
 ```
+
+Only a paid Stripe Checkout session created by the deposit route is redeemable:
+it must be `mode=payment`, carry `metadata.type=balance_deposit`, and belong to
+the signed-in user. Subscription and setup checkouts never become service
+balance (#328).
 
 ### Build requests
 ```
