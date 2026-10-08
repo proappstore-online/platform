@@ -138,7 +138,7 @@ describe('passkey step-up (#230)', () => {
 // hostname, and only a ceremony from that origin can complete.
 describe('console relying party (#244)', () => {
   const CONSOLE = 'console.proappstore.online';
-  const direct = (path: string, token: string, body: unknown = {}, headers: Record<string, string> = { Origin: `https://${CONSOLE}`, 'Cf-Access-Jwt-Assertion': 'access-assertion' }) =>
+  const direct = (path: string, token: string, body: unknown = {}, headers: Record<string, string> = { Origin: `https://${CONSOLE}` }) =>
     SELF.fetch(`${BASE}/v1/auth/passkey/${path}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...headers },
@@ -182,13 +182,31 @@ describe('console relying party (#244)', () => {
     expect(mediated.status).toBe(400);
   });
 
-  it('does not let a forged Origin select the console relying party (#331)', async () => {
+  // #334: the Console calls api.proappstore.online straight from the browser. That
+  // host is not behind Cloudflare Access and CORS allows only Authorization and
+  // Content-Type, so a real ceremony carries exactly those headers and Origin.
+  it('accepts the request a browser on the console actually sends (#334)', async () => {
+    const preflight = await SELF.fetch(`${BASE}/v1/auth/passkey/register/options`, {
+      method: 'OPTIONS',
+      headers: { Origin: `https://${CONSOLE}`, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type' },
+    });
+    expect(preflight.headers.get('Access-Control-Allow-Origin')).toBe(`https://${CONSOLE}`);
+    expect(preflight.headers.get('Access-Control-Allow-Headers')?.toLowerCase()).not.toContain('cf-access-jwt-assertion');
+
     const token = await signIn({ authTime: now() });
-    const forged = await direct('register/options', token, {}, { Origin: `https://${CONSOLE}` });
-    expect(forged.status).toBe(400);
-    // A request that reached the Console through Cloudflare Access retains the
-    // assertion and remains a legitimate Console ceremony.
-    expect((await direct('register/options', token)).status).toBe(200);
+    const res = await SELF.fetch(`${BASE}/v1/auth/passkey/register/options`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Origin: `https://${CONSOLE}` },
+      body: '{}',
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(((await res.json()) as { rp: { id: string } }).rp.id).toBe(CONSOLE);
+  });
+
+  it('an unverified Cf-Access-Jwt-Assertion selects nothing (#334)', async () => {
+    const token = await signIn({ authTime: now() });
+    expect((await direct('register/options', token, {}, { 'Cf-Access-Jwt-Assertion': 'forged' })).status).toBe(400);
+    expect((await direct('register/options', token, {}, { Origin: 'https://stash.proappstore.online', 'Cf-Access-Jwt-Assertion': 'forged' })).status).toBe(400);
   });
 
   it("an app page's key or ceremony cannot enroll or step up on the console", async () => {

@@ -253,11 +253,16 @@ forwards them with the cookie session:
   entrypoint keeps them (#315, [authorization model](./authorization-model.md)).
   The API refuses a passkey request without an app hostname, so app passkeys
   work only through `/.pas/auth/passkey/*`.
-- **Creator Console.** The direct Console ceremony is admitted only when
-  Cloudflare Access has stamped `Cf-Access-Jwt-Assertion` on the request; its
-  `Origin` is validated by WebAuthn but is never used to select the Console
-  relying party. The API route must remain behind that Access boundary, which
-  strips caller-provided assertions before adding its own.
+- **Creator Console.** The Console calls `api.proappstore.online` directly from
+  the browser, with no host mediation. A passkey request with neither host header
+  and `Origin: https://console.proappstore.online` uses the Console relying party
+  (#244, #334). A browser sets `Origin` itself, so an app page can't choose the
+  Console relying party. A non-browser caller can send any `Origin`, but it also
+  writes `clientDataJSON` and, with `attestation: 'none'`, the key, so the
+  boundary against it is the fresh sign-in that registration requires (below).
+  `Cf-Access-Jwt-Assertion` is not used: `api.proappstore.online` is not behind
+  Cloudflare Access, and CORS lets a browser send only `Authorization` and
+  `Content-Type`.
 - **Registration.** The browser sends `getPublicKey()` (SPKI) and
   `getPublicKeyAlgorithm()`; ES256 and RS256 are accepted. It needs a sign-in
   within the last 10 minutes. Once the user has a passkey on that host, adding

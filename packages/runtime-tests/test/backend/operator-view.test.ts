@@ -373,7 +373,7 @@ describe('operator ID verification (#240)', () => {
 
     // The console's own ceremony: register a passkey (fresh sign-in), then step up with it.
     const passkey = (path: string, token: string, body: unknown = {}) => SELF.fetch(`${BASE}/v1/auth/passkey/${path}`, {
-      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Origin: 'https://console.proappstore.online', 'Cf-Access-Jwt-Assertion': 'access-assertion' }, body: JSON.stringify(body),
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Origin: 'https://console.proappstore.online' }, body: JSON.stringify(body),
     });
     const auth = await Authenticator.create('console.proappstore.online');
     const reg = (await (await passkey('register/options', githubFresh)).json()) as { challenge: string };

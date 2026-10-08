@@ -331,13 +331,6 @@ on an app with no user behind them. They run with platform identities that are
   - `source = 'mediated'` on logs;
   - the operator view's refusal of app pages (#300).
 
-- **Console Access assertion** (`Cf-Access-Jwt-Assertion`, #331) is the edge's
-  assertion that a direct passkey ceremony originated on the Creator Console.
-  It selects the Console relying party only after Cloudflare Access has removed
-  caller-supplied copies and stamped its own; `Origin` is not an authorization
-  signal. Console-gated step-ups require `step_up_rp_id` to equal
-  `console.proappstore.online`.
-
   It is true only because of where it can arrive:
   - **Direct callers cannot send it.** `api.proappstore.online` has its own route
     to `proappstore-api`, so direct traffic never passes the host. The backend's
@@ -355,6 +348,13 @@ on an app with no user behind them. They run with platform identities that are
   origin": logs accept it as unverified, the secret proxy refuses it. The
   regression suite is `packages/runtime-tests/test/backend/host-context.test.ts`.
   Each consumer is tested twice: forged on a direct call, and sent by the host.
+
+- **Console passkey relying party** (#244, #334). A direct passkey call (no host
+  context) with `Origin: https://console.proappstore.online` uses the Console
+  relying party. That `Origin` check is only as strong as WebAuthn's own origin
+  and rpIdHash checks (see the [session model](./auth-session-model.md)), so it
+  selects the ceremony and authorizes nothing by itself. Console-gated step-ups
+  require `step_up_rp_id` to equal `console.proappstore.online`.
 
 ## Rule of thumb
 

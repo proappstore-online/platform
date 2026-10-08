@@ -81,22 +81,28 @@ function nowSeconds(): number {
  */
 export const CONSOLE_RP_ID = 'console.proappstore.online';
 const CONSOLE_ORIGIN = `https://${CONSOLE_RP_ID}`;
-/** Set by Cloudflare Access after it authenticates the Console surface (#331). */
-const CONSOLE_ACCESS_HEADER = 'Cf-Access-Jwt-Assertion';
 
 /**
  * The relying party: the app hostname the host mediated this request from, or
- * — for a direct call from the Console surface, which carries neither host
- * header — the console. Cloudflare Access, not Origin, identifies that surface:
- * Origin remains a WebAuthn ceremony check but is caller-controlled on an API
- * request. A mediated request always carries X-PAS-App, so the
+ * — for a direct call from the console page, which carries neither host
+ * header — the console. A mediated request always carries X-PAS-App, so the
  * cookie data plane (which strips X-PAS-Host so page JS never receives a
  * step-up token) still gets no relying party.
+ *
+ * The console path requires the browser's Origin to be the console (#334): a
+ * browser sets Origin itself, so an app page holding a fresh session cannot
+ * enroll a key of its own for the console. A non-browser caller can send any
+ * Origin, but it also writes clientDataJSON and, with `attestation: 'none'`, the
+ * key, so Origin is exactly as strong as WebAuthn's own origin and rpIdHash
+ * checks and no stronger signal exists here: api.proappstore.online is not
+ * behind Cloudflare Access, and CORS lets a browser send only Authorization and
+ * Content-Type. Against such a caller the boundary is the fresh sign-in
+ * registration requires (reauthRequired).
  */
 function relyingParty(c: Context<{ Bindings: Env }>): { appId: string; rpId: string } {
   const appId = c.req.header(APP_CONTEXT_HEADER);
   const rpId = c.req.header(APP_HOST_HEADER)?.toLowerCase();
-  if (!appId && !rpId && c.req.header(CONSOLE_ACCESS_HEADER)) return { appId: 'console', rpId: CONSOLE_RP_ID };
+  if (!appId && !rpId && c.req.header('Origin') === CONSOLE_ORIGIN) return { appId: 'console', rpId: CONSOLE_RP_ID };
   if (!appId || !rpId || !HOSTNAME.test(rpId)) throw new HttpError('passkeys are only available on an app origin or the console', 400);
   return { appId, rpId };
 }
