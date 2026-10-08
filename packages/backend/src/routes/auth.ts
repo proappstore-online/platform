@@ -27,7 +27,7 @@ import {
   generateLogin, generatePassword, normalizeLogin, isValidLogin,
   normalizeEmail, isValidEmail, looksLikeEmail,
 } from '../lib/credential-gen.js';
-import { d1AttemptStore, isBlocked, recordFailure, recordSuccess } from '../lib/credential-rate-limit.js';
+import { claimAttempt, recordSuccess } from '../lib/credential-rate-limit.js';
 import { recordAuthFailure, recordOperationFailure } from '../lib/operation-log.js';
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
@@ -773,14 +773,12 @@ authRoutes.post('/auth/credentials/register', async (c) => {
 
   // Per-IP limit: every attempt counts, successful or not, so a flood of
   // registrations from one address stops at MAX_ATTEMPTS per window.
-  const store = d1AttemptStore(c.env.DB);
   const now = Date.now();
   const ipKey = `${REGISTER_RATE_LIMIT_PREFIX}${c.req.header('cf-connecting-ip') ?? 'unknown'}`;
-  if (await isBlocked(store, ipKey, now)) {
+  if (!(await claimAttempt(c.env.DB, ipKey, now))) {
     await recordAuthFailure(c.env, { reason: 'register_rate_limited', status: 429, cfRay: c.req.header('cf-ray') ?? null });
     throw new HttpError('too many registrations from this address — please try again later', 429);
   }
-  await recordFailure(store, ipKey, now);
 
   const passwordHash = await hashPassword(password);
   const uid = `cred:${crypto.randomUUID()}`;
@@ -846,8 +844,9 @@ authRoutes.post('/auth/credentials/login', async (c) => {
     throw new HttpError('invalid login or password', 401);
   }
 
-  const store = d1AttemptStore(c.env.DB);
   const now = Date.now();
+  // Claimed before the password is checked, so parallel guesses are counted
+  // too (#323); a failure below leaves its claim counted.
   // Keyed on the identifier as typed, so an account with both a username and
   // an email has two independent counters and tolerates 2 × MAX_ATTEMPTS
   // guesses overall. Accepted: only adults (isChild: false) can hold an email,
@@ -855,7 +854,7 @@ authRoutes.post('/auth/credentials/login', async (c) => {
   // realistic, so the doubled budget applies to the accounts least likely to
   // carry a low-entropy animal password. Key on the resolved user id instead
   // if that stops being true.
-  if (await isBlocked(store, login, now)) {
+  if (!(await claimAttempt(c.env.DB, login, now))) {
     // Counted, never stored: a credential sign-in is not app-scoped and
     // `app_logs.app_id` is NOT NULL, so this lands in Analytics Engine under the
     // `platform` index. It is the only visibility we have into platform#89 —
@@ -885,7 +884,6 @@ authRoutes.post('/auth/credentials/login', async (c) => {
   const passwordMatches = await verifyPassword(password, row?.password_hash ?? (await dummyPasswordHash()));
   const ok = !!row?.password_hash && passwordMatches;
   if (!ok || !row) {
-    await recordFailure(store, login, now);
     // One reason for both branches, matching the response: distinguishing
     // "no such login" from "wrong password" in telemetry would reintroduce the
     // account enumeration the constant-time path above exists to prevent, for
@@ -899,7 +897,7 @@ authRoutes.post('/auth/credentials/login', async (c) => {
     throw new HttpError('invalid login or password', 401);
   }
 
-  await recordSuccess(store, login);
+  await recordSuccess(c.env.DB, login);
   await c.env.DB.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').bind(now, row.id).run();
 
   // Credential accounts are plain users (never 'creator'/'admin').
@@ -957,7 +955,11 @@ authRoutes.post('/auth/credentials/reset-password', async (c) => {
 
 // ── POST /v1/auth/credentials/change-password ──────────────
 // A signed-in credential (student) account changes their own password.
-// Requires the current password for verification.
+// Requires the current password for verification. Guesses at it are limited
+// like credentials/login (#323): page JavaScript on a cookie-mediated app acts
+// as the signed-in user, so without a limit it could brute-force the current
+// password and take the account over. Keyed on the session's user id — never
+// on an app id the caller controls.
 authRoutes.post('/auth/credentials/change-password', async (c) => {
   const claims = await requireClaims(c);
   if (!claims.uid.startsWith('cred:')) throw new HttpError('only credential accounts can change passwords', 403);
@@ -975,8 +977,16 @@ authRoutes.post('/auth/credentials/change-password', async (c) => {
   ).bind(claims.uid).first<{ id: string; password_hash: string | null }>();
   if (!row?.password_hash) throw new HttpError('account not found', 404);
 
+  // Claimed before verifying, so parallel guesses each take one of the
+  // MAX_ATTEMPTS; once locked, even the right password is refused until the
+  // window rolls over.
+  if (!(await claimAttempt(c.env.DB, claims.uid, Date.now()))) {
+    await recordAuthFailure(c.env, { reason: 'change_password_lockout', status: 429, cfRay: c.req.header('cf-ray') ?? null });
+    throw new HttpError('too many attempts — please try again later', 429);
+  }
   const ok = await verifyPassword(currentPassword, row.password_hash);
   if (!ok) throw new HttpError('current password is incorrect', 403);
+  await recordSuccess(c.env.DB, claims.uid);
 
   const passwordHash = await hashPassword(newPassword);
   await c.env.DB.prepare(

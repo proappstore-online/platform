@@ -317,11 +317,6 @@ function fakeDb(opts: { tools?: Record<string, unknown> } = {}) {
             if (u) u.last_login_at = now;
             return { meta: { changes: u ? 1 : 0 } };
           }
-          if (/INSERT INTO credential_login_attempts/i.test(sql)) {
-            const [login, ws, count] = stmt._args as [string, number, number];
-            attempts.set(login, { window_start: ws, count });
-            return { meta: { changes: 1 } };
-          }
           if (/DELETE FROM credential_login_attempts/i.test(sql)) {
             attempts.delete(stmt._args[0] as string);
             return { meta: { changes: 1 } };
@@ -345,8 +340,15 @@ function fakeDb(opts: { tools?: Record<string, unknown> } = {}) {
             const u = users.find((x) => x.id === (stmt._args[0] as string));
             return (u ? { id: u.id, credential_login: u.credential_login, created_by: u.created_by } : null) as T | null;
           }
-          if (/FROM credential_login_attempts WHERE login/i.test(sql)) {
-            return (attempts.get(stmt._args[0] as string) ?? null) as T | null;
+          if (/INSERT INTO credential_login_attempts/i.test(sql)) {
+            // Mirrors claimAttempt's upsert: open or roll the window, then count.
+            const [login, now, windowMs] = stmt._args as [string, number, number];
+            const prev = attempts.get(login);
+            const next = !prev || now - prev.window_start >= windowMs
+              ? { window_start: now, count: 1 }
+              : { window_start: prev.window_start, count: prev.count + 1 };
+            attempts.set(login, next);
+            return { count: next.count } as T;
           }
           return null;
         },

@@ -194,6 +194,14 @@ path", with these controls:
 - **Abuse controls**: 10 attempts per client address per 15 minutes
   (`credential_login_attempts` under a `register-ip:` key, independent of the
   per-login lockout); `CREDENTIAL_SELF_REGISTRATION=0` turns the route off (403).
+- **Password guessing** (`lib/credential-rate-limit.ts`): `credentials/login`
+  (keyed on the identifier as typed) and `credentials/change-password` (keyed on
+  the session's `cred:` user id, so page JavaScript acting as the signed-in user
+  cannot brute-force the current password, #323) each allow 10 attempts per 15
+  minutes. Every attempt is claimed in one atomic upsert *before* the password is
+  checked, so parallel guesses cannot exceed the limit; a success clears the
+  counter; a locked key gets 429 even with the right password until the window
+  rolls over.
 - **Bot check** (#26): when `TURNSTILE_SITE_KEY` + `TURNSTILE_SECRET_KEY` are
   set on the API, the request must carry a Turnstile token (`turnstileToken`
   body field or `CF-Turnstile-Response` header) minted with action `register`;
