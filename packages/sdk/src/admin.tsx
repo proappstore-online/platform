@@ -90,9 +90,13 @@ export function useAdminContext(): AdminContextValue {
 export interface UseActionOptions {
   /**
    * Called when the server answers `step_up_required` (the action declares
-   * `step_up`). Re-authenticate the user — a passkey check when
-   * `error.needsPasskey` — and resolve `true` to retry the call once; resolve
-   * `false` to give up, and the call rejects with the error.
+   * `step_up`). Re-authenticate the user and resolve `true` to retry the call
+   * once; resolve `false` to give up, and the call rejects with the error. For
+   * an app action this is a passkey check on the app's own origin
+   * (`error.needsPasskey`, #337): run `/.pas/auth/passkey/step-up/options` then `/.pas/auth/passkey/step-up` (if
+   * step-up/options answers 404 `no_passkey`, register one first through
+   * `/.pas/auth/passkey/register/options` and `/register`, which need a sign-in
+   * in the last 10 minutes). Signing in again alone is refused again.
    */
   onStepUp?: (error: ActionError) => boolean | Promise<boolean>;
 }

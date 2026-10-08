@@ -174,4 +174,19 @@ describe('requireRecentAuth / stepUpMaxAgeSeconds', () => {
       expect(() => requireRecentAuth(candidate, {}, { method: 'passkey', rpId: 'a.proappstore.online' })).toThrow('step_up_required');
     }
   });
+
+  it('an audience implies a passkey: a fresh OAuth sign-in is refused with method passkey, so the client runs the ceremony (#337)', () => {
+    const now = Math.floor(Date.now() / 1000);
+    for (const rpId of ['a.proappstore.online', '']) {
+      try {
+        requireRecentAuth({ ...user(now - 1), authMethod: 'github' }, {}, { rpId });
+        expect.unreachable('should have thrown');
+      } catch (e) {
+        expect((e as HttpError).status).toBe(403);
+        expect((e as HttpError).body).toEqual({ message: 'Recent passkey verification required', max_age: 300, method: 'passkey' });
+      }
+    }
+    // The passkey step-up on that relying party passes without the caller naming the method.
+    expect(() => requireRecentAuth({ ...user(now - 1, 'a.proappstore.online'), authMethod: 'passkey' }, {}, { rpId: 'a.proappstore.online' })).not.toThrow();
+  });
 });

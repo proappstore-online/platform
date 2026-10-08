@@ -586,8 +586,9 @@ import { AdminConsole, useAdminContext, useAction, ActionError } from '@proappst
 function Moderation() {
   const { app, user, roles, session } = useAdminContext()
   const deleteGroup = useAction('admin_delete_group', {
-    // The action declares step_up: show your re-auth UI (a passkey check when
-    // e.needsPasskey), then resolve true to retry once or false to give up.
+    // The action declares step_up: run a passkey check on this origin
+    // (e.needsPasskey is true for app actions), then resolve true to retry
+    // once or false to give up. Signing in again alone is refused again.
     onStepUp: (e: ActionError) => showReauth(e),
   })
   if (!session.rolesLoaded) return <p>Loading…</p>
@@ -599,7 +600,7 @@ function Moderation() {
 ```
 
 - `useAdminContext()` → `{ app: { id }, user, roles, session: { status, rolesLoaded, refreshRoles } }`. `roles` come from the server and are for rendering only; never a session token.
-- `useAction(name, { onStepUp })` returns a function that calls the action, plus `pending`, `error` and `reset()`. A refusal rejects with an `ActionError`: `forbidden` when the caller's roles do not allow it, `stepUpRequired` (and `needsPasskey`) when it needs a recent sign-in. Every outcome is recorded in `app.logs` under `admin.action` (action, outcome, status — never params).
+- `useAction(name, { onStepUp })` returns a function that calls the action, plus `pending`, `error` and `reset()`. A refusal rejects with an `ActionError`: `forbidden` when the caller's roles do not allow it, `stepUpRequired` and `needsPasskey` when it needs a passkey check. An app's `step_up` action is bound to the app's own relying party (#331), so only a passkey step-up there passes: run `/.pas/auth/passkey/step-up/options` then `/.pas/auth/passkey/step-up` (on 404 `no_passkey`, register one first through `/.pas/auth/passkey/register/options` and `/register` within 10 minutes of signing in), then retry (#337). Every outcome is recorded in `app.logs` under `admin.action` (action, outcome, status — never params).
 - `AdminConsole` catches a render error in the panel and records it; `AdminErrorBoundary` does the same for one part of a panel.
 
 A full sample is `templates/template-membership/web/src/pages/Moderation.tsx`.

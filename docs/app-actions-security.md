@@ -74,7 +74,7 @@ Use manifest metadata for coarse permission gates:
 | `auth.required` | Optional explicit marker. `false` is allowed only when `requires_auth` is also `false`. |
 | `auth.platform_roles` | Any listed PAS platform role may call the action, such as `creator` or `admin`. |
 | `auth.app_roles` | Any listed app role may call the action, such as `member`, `manager`, `editor`, or a custom role. |
-| `step_up` | `true` requires a recent authentication. The session's `auth_time` must be within `STEP_UP_MAX_AGE_SECONDS` (default 300). A stale session gets `403 { error: 'step_up_required', message, max_age }`: step up via `/.pas/auth/passkey/step-up`, then retry. Personal app tokens are always refused. Allowed only on `requires_auth: true`, non-scheduled tools (#231). |
+| `step_up` | `true` requires a recent authentication. The session's `auth_time` must be within `STEP_UP_MAX_AGE_SECONDS` (default 300). Since #331 it must also be a passkey step-up on the app's own relying party (`step_up_rp_id`), so a fresh OAuth or password sign-in does not pass. A refused session gets `403 { error: 'step_up_required', message, max_age, method: 'passkey' }` (#337): step up via `/.pas/auth/passkey/step-up` (registering a passkey first if `step-up/options` answers `no_passkey`), then retry. A direct call to `api.proappstore.online` has no app relying party and is always refused. Personal app tokens are always refused. Allowed only on `requires_auth: true`, non-scheduled tools (#231). |
 
 Role metadata is an early gate, not the whole data permission model. SQL must
 still scope rows to the signed-in user or to app-domain membership tables.

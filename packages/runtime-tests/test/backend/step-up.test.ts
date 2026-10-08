@@ -2,6 +2,8 @@ import { SELF, env, fetchMock } from 'cloudflare:test';
 import { mintSession } from '@proappstore/build-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BASE, json, seedApp, seedUser, mockNetwork, resetTables, viaHostApi } from './helpers';
+import { Authenticator } from './webauthn';
+import { ActionError } from '../../../sdk/src/actions';
 
 // #231 (part of #228): an action declaring `step_up: true` runs only for a
 // session whose auth_time is within STEP_UP_MAX_AGE_SECONDS (default 300). A
@@ -59,7 +61,46 @@ describe('step_up actions (#231)', () => {
     await registerTools(tool('view_id_document', { step_up: true }));
     const res = await call('view_id_document', await sessionAged(301));
     expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: 'step_up_required', message: 'Recent authentication required', max_age: 300 });
+    expect(await res.json()).toEqual({ error: 'step_up_required', message: 'Recent passkey verification required', max_age: 300, method: 'passkey' });
+  });
+
+  // #337: since #331 a step_up action is bound to the app's relying party, which
+  // only a passkey step-up there satisfies. The refusal must say so, or the SDK
+  // sends the user to sign in again and the retry is refused again.
+  it('a fresh OAuth sign-in is refused with method passkey (needsPasskey), and a passkey step-up on the same relying party then passes (#337)', async () => {
+    await registerTools(tool('view_id_document', { step_up: true }));
+    for (const t of ['passkey_credentials', 'passkey_challenges']) await env.DB.prepare(`DELETE FROM ${t}`).run();
+    const RP = 'ops.proappstore.online';
+    const oauth = await mintSession({ uid: 'gh:2', login: 'op', avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 5, auth_method: 'github' }, env.SESSION_SIGNING_KEY);
+
+    const refused = await call('view_id_document', oauth);
+    expect(refused.status).toBe(403);
+    const text = await refused.text();
+    expect(JSON.parse(text)).toEqual({ error: 'step_up_required', message: 'Recent passkey verification required', max_age: 300, method: 'passkey' });
+    const err = new ActionError('view_id_document', 403, text);
+    expect([err.stepUpRequired, err.needsPasskey, err.forbidden]).toEqual([true, true, false]);
+
+    // The flow the SDK points to: register a passkey on this origin (fresh sign-in), step up with it, retry.
+    const passkey = (path: string, token: string, body: unknown = {}) => viaHostApi(`${BASE}/v1/auth/passkey/${path}`, {
+      method: 'POST', body: JSON.stringify(body),
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-PAS-App': 'ops', 'X-PAS-Host': RP },
+    });
+    const challenge = async (path: string, token: string) => {
+      const res = await passkey(path, token);
+      expect(res.status, await res.clone().text()).toBe(200);
+      return ((await res.json()) as { challenge: string }).challenge;
+    };
+    const auth = await Authenticator.create(RP);
+    const reg = await passkey('register', oauth, await auth.attest(await challenge('register/options', oauth)));
+    expect(reg.status, await reg.clone().text()).toBe(200);
+    const stepped = await passkey('step-up', oauth, await auth.assert(await challenge('step-up/options', oauth)));
+    expect(stepped.status, await stepped.clone().text()).toBe(200);
+    const { token } = (await stepped.json()) as { token: string };
+
+    dataWorkerAnswers();
+    const ok = await call('view_id_document', token);
+    expect(ok.status, await ok.clone().text()).toBe(200);
+    expect(await ok.json()).toMatchObject({ rows: [{ id: 'd1' }] });
   });
 
   it('refuses a passkey step-up replayed from another app or a direct bearer request (#331)', async () => {

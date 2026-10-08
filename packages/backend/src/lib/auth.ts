@@ -79,15 +79,20 @@ export function requireRecentAuth(
   // `method: 'passkey'` (#244): only a passkey step-up counts — a fresh OAuth or
   // password sign-in does not. The body says so, so the client runs the passkey
   // ceremony rather than a sign-in that would be refused again.
-  const wrongMethod = opts.method !== undefined && user.authMethod !== opts.method;
+  // A relying-party audience (#331) is met only by `step_up_rp_id`, which only a
+  // passkey step-up on that relying party mints: requiring one requires a
+  // passkey, and the refusal says so (#337), or the client would send the user
+  // to sign in again and be refused again.
+  const method = opts.rpId !== undefined ? 'passkey' : opts.method;
+  const wrongMethod = method !== undefined && user.authMethod !== method;
   // An omitted claim is a refusal when an audience is required: tokens minted
   // before #331 cannot become a wildcard step-up for every relying party.
   const wrongRp = opts.rpId !== undefined && user.stepUpRpId !== opts.rpId;
   if (!(age <= maxAge) || wrongMethod || wrongRp) {
     throw new HttpError('step_up_required', 403, {
-      message: opts.method ? 'Recent passkey verification required' : 'Recent authentication required',
+      message: method ? 'Recent passkey verification required' : 'Recent authentication required',
       max_age: maxAge,
-      ...(opts.method ? { method: opts.method } : {}),
+      ...(method ? { method } : {}),
     });
   }
 }

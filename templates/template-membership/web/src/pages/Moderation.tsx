@@ -60,6 +60,8 @@ function Dashboard() {
 function explain(e: Error): string {
   const err = e as ActionError
   if (err.forbidden) return "The platform refused: you don't hold the app role admin any more."
+  // A step_up action needs a passkey check on this site (#337): signing in again would be refused again.
+  if (err.needsPasskey) return 'This needs a passkey check on this site. Confirm with your passkey, then retry.'
   if (err.stepUpRequired) return 'This needs a recent sign-in. Sign in again, then retry.'
   return 'Something went wrong. Try again.'
 }

@@ -47,7 +47,7 @@ export class ActionError extends Error {
     return this.code === 'step_up_required';
   }
 
-  /** Only a passkey step-up will do; a fresh sign-in would be refused again. */
+  /** Only a passkey step-up will do; a fresh sign-in would be refused again. Every app `step_up` action answers this way (#337). */
   get needsPasskey(): boolean {
     return this.stepUpRequired && this.body?.method === 'passkey';
   }
