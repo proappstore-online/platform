@@ -48,7 +48,7 @@ const MUTATIONS = [
   {
     name: 'step-up: a stale session passes',
     file: 'backend/src/lib/auth.ts',
-    find: 'if (!(age <= maxAge) || wrongMethod) {',
+    find: 'if (!(age <= maxAge) || wrongMethod || wrongRp) {',
     replace: 'if (false) {',
     suite: MATRIX,
   },
@@ -100,7 +100,8 @@ const MUTATIONS = [
 ];
 
 const run = (args) => spawnSync('npx', ['vitest', 'run', '--config', ...args], { cwd: pkg('runtime-tests'), stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
-const summary = (r) => (`${r.stdout}${r.stderr}`.match(/Tests\s+[^\n]+/g) ?? ['(no summary)']).at(-1);
+// The totals line (`Tests  2 failed | 18 passed (20)`), not the `Failed Tests 2 ⎯⎯⎯` banner.
+const summary = (r) => (`${r.stdout}${r.stderr}`.match(/^\s*Tests\s+\d+ (?:failed|passed)[^\n]*/gm) ?? ['(no summary)']).at(-1).trim();
 /**
  * A mutation is caught only by a failed assertion. A run that fails any other
  * way — a timeout on a loaded machine, a crash, a compile error — proves
@@ -117,6 +118,18 @@ const selected = MUTATIONS.filter((m) => !filter || m.name.includes(filter));
 let restore = null;
 process.on('SIGINT', () => { restore?.(); process.exit(130); });
 
+if (!selected.length) { console.error(`No mutation matches "${filter}".`); process.exit(1); }
+
+// Every target must match its file exactly once before anything runs (#341): a
+// gate refactor that moves a target fails here, naming each mutation and file,
+// instead of stopping the run halfway with the later mutations never tried.
+const drifted = selected.filter((m) => readFileSync(pkg(m.file), 'utf8').split(m.find).length !== 2);
+for (const m of drifted) console.error(`DRIFTED       ${m.name} — its target text is not in packages/${m.file} exactly once`);
+if (drifted.length) {
+  console.error(`\n${drifted.length} mutation target(s) no longer match the code: update their \`find\` in scripts/gate-mutations.mjs.`);
+  process.exit(1);
+}
+
 const suites = [...new Map(selected.map((m) => [m.suite.join(' '), m.suite])).values()];
 for (const suite of suites) {
   const r = run(suite);
@@ -129,7 +142,6 @@ let inconclusive = 0;
 for (const m of selected) {
   const path = pkg(m.file);
   const original = readFileSync(path, 'utf8');
-  if (original.split(m.find).length !== 2) { console.error(`${m.name}: the target text is not in ${m.file} exactly once — update this script.`); process.exit(1); }
   restore = () => writeFileSync(path, original);
   writeFileSync(path, original.replace(m.find, m.replace));
   let r;
