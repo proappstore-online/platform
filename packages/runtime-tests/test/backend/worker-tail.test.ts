@@ -70,6 +70,23 @@ describe('AppWorkerTail (#308)', () => {
     expect((await res.json<{ logs: { message: string; traceId: string }[] }>()).logs.map((l) => l.message)).toEqual(['TypeError: x is undefined', 'slow upstream', 'synced {"count":2}']);
   });
 
+  // The trace names its invocation by id, whatever triggered it: a schedule and an http
+  // request are recorded exactly like the hook above (the per-type log lines are
+  // app-workers.test.ts "a schedule, a hook and an http invocation each log …").
+  for (const type of ['schedule', 'http'] as const) {
+    it(`records CPU and console lines for a ${type} invocation, findable by its id`, async () => {
+      const id = `evt-${type}:2`;
+      await env.DB.prepare(
+        "INSERT INTO app_worker_invocations (id, app_id, event_id, type, attempt, status, started_at, finished_at) VALUES (?, 't', ?, ?, 2, 'succeeded', ?, ?)",
+      ).bind(id, `evt-${type}`, type, Date.now() - 500, Date.now()).run();
+      await tail('t').tail([trace(id, { cpuTime: 4.6, wallTime: 90, logs: [{ timestamp: Date.now(), level: 'log', message: [`${type} ran`] }] })]);
+      expect(await record(id)).toEqual({ child_cpu_ms: 5, child_wall_ms: 90, child_outcome: 'ok' });
+      const auth = { Authorization: `Bearer ${await session('gh:1')}` };
+      const res = await SELF.fetch(`${BASE}/v1/apps/t/logs?trace_id=${encodeURIComponent(id)}`, { headers: auth });
+      expect((await res.json<{ logs: { message: string }[] }>()).logs.map((l) => l.message)).toEqual([`${type} ran`]);
+    });
+  }
+
   it("never touches another app's invocation, and ignores traces without the invocation header", async () => {
     // The tail attached for `u` names t's invocation: no row matches (app_id from props), nothing is written.
     await tail('u').tail([trace('evt-1:1', { logs: [{ timestamp: Date.now(), level: 'log', message: ['forged'] }] })]);
