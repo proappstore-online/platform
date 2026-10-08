@@ -70,6 +70,61 @@ describe('useAdminContext (#299)', () => {
     expect(JSON.stringify(seen.ctx)).not.toMatch(/token/i);
   });
 
+  // #338: role answers that arrive out of order. Each myRoles() call is a promise the test resolves by hand.
+  function racingApp() {
+    const pending: { resolve: (roles: string[]) => void }[] = [];
+    let listener: ((status: string, user: unknown) => void) | null = null;
+    const app = {
+      appId: 'moder',
+      auth: { status: 'signed-in', user: USER, onStatus: (fn: typeof listener) => { listener = fn; return () => {}; }, init: async () => {} },
+      roles: { myRoles: () => new Promise<string[]>((resolve) => { pending.push({ resolve }); }) },
+      logs: { capture: vi.fn() },
+    } as unknown as ProAppStore;
+    return { app, pending, signIn: (user: typeof USER) => listener?.('signed-in', user) };
+  }
+  async function probe(app: ProAppStore) {
+    const seen: { ctx?: AdminContextValue } = {};
+    function Probe() { seen.ctx = useAdminContext(); return null; }
+    await act(async () => root.render(<AdminConsole app={app}><Probe /></AdminConsole>));
+    return seen;
+  }
+
+  it('same user: only the latest roles request writes, whichever answers last (#338)', async () => {
+    const { app, pending } = racingApp();
+    const seen = await probe(app);
+    expect(pending).toHaveLength(1); // the initial load, still in flight
+    let refresh!: Promise<void>;
+    act(() => { refresh = seen.ctx!.session.refreshRoles(); }); // e.g. after the owner granted a role
+    expect(pending).toHaveLength(2);
+    await act(async () => { pending[1]!.resolve(['admin', 'moderator']); await refresh; });
+    expect(seen.ctx).toMatchObject({ roles: ['admin', 'moderator'], session: { rolesLoaded: true } });
+    await act(async () => { pending[0]!.resolve(['viewer']); }); // the slower initial load lands last
+    expect(seen.ctx!.roles).toEqual(['admin', 'moderator']);
+  });
+
+  it("user switch: the previous user's late roles answer is dropped, the new user's stands (#338)", async () => {
+    const { app, pending, signIn } = racingApp();
+    const seen = await probe(app);
+    const BOB = { ...USER, id: 'gh:2', name: 'Bob', login: 'bob' };
+    await act(async () => { signIn(BOB); });
+    expect(pending).toHaveLength(2);
+    // Ada's answer lands first, while Bob's is still loading: nothing is shown for Bob yet.
+    await act(async () => { pending[0]!.resolve(['admin']); });
+    expect(seen.ctx).toMatchObject({ user: { id: 'gh:2' }, roles: [], session: { rolesLoaded: false } });
+    await act(async () => { pending[1]!.resolve(['viewer']); });
+    expect(seen.ctx).toMatchObject({ user: { id: 'gh:2' }, roles: ['viewer'], session: { rolesLoaded: true } });
+
+    // And the other order: the new user's answer first, then the previous user's stale one.
+    const CAROL = { ...USER, id: 'gh:3', name: 'Carol', login: 'carol' };
+    const DAVE = { ...USER, id: 'gh:4', name: 'Dave', login: 'dave' };
+    await act(async () => { signIn(CAROL); });
+    await act(async () => { signIn(DAVE); });
+    expect(pending).toHaveLength(4);
+    await act(async () => { pending[3]!.resolve(['moderator']); });
+    await act(async () => { pending[2]!.resolve(['admin']); });
+    expect(seen.ctx).toMatchObject({ user: { id: 'gh:4' }, roles: ['moderator'], session: { rolesLoaded: true } });
+  });
+
   it('throws outside <AdminConsole>', async () => {
     let caught: unknown;
     function Bare() { try { useAdminContext(); } catch (e) { caught = e; } return null; }

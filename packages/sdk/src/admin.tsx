@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ProAppStore } from './index.js';
 import type { User } from './base-types.js';
 import type { AuthStatus } from './auth.js';
@@ -55,12 +55,20 @@ export function AdminConsole({ app: explicit, children, renderError }: AdminCons
   }, [app]);
 
   const userId = auth.user?.id ?? null;
+  // Only the latest roles request may write (#338): each call takes the next
+  // number, and a user switch or unmount (the effect's cleanup) moves it on, so
+  // a slower earlier answer, or one for the previous user, is dropped.
+  const latest = useRef(0);
   const refreshRoles = useCallback(async () => {
+    const request = ++latest.current;
     if (!userId) return setRoles({ for: null, list: [] });
     const list = await app.roles.myRoles();
-    setRoles({ for: userId, list });
+    if (request === latest.current) setRoles({ for: userId, list });
   }, [app, userId]);
-  useEffect(() => { void refreshRoles(); }, [refreshRoles]);
+  useEffect(() => {
+    void refreshRoles();
+    return () => { latest.current++; };
+  }, [refreshRoles]);
 
   // Roles fetched for a previous user are never shown for the current one.
   const current = roles.for === userId ? roles.list : NO_ROLES;
