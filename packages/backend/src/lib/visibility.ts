@@ -19,10 +19,7 @@
  * Role identity (#272): an `app_roles` row matches the session's id, and its
  * login only for a GitHub (`gh:`) session — a credential or Google account's
  * `login` is a free-text display name anyone can set to `gh:2` or `bob`. This
- * is the same rule as lib/role-subject.ts in the #272 fix (PR #273), duplicated
- * here so this PR does not depend on that one landing first.
- * TODO(#273): once #273 is on main, replace roleLoginAlias below with
- * lib/role-subject.ts `roleLoginAlias` and delete this copy.
+ * is the shared rule in lib/role-subject.ts (#272).
  *
  * `member` is never an allowed role: every signed-in user can self-grant it
  * (routes/roles.ts `ensure-member`), which is why the operator gate (#229)
@@ -37,6 +34,7 @@ import type { Context } from 'hono';
 import type { Env } from '../types.js';
 import type { FasUser } from './auth.js';
 import { HttpError, requireUser } from './auth.js';
+import { roleLoginAlias } from './role-subject.js';
 
 /** What the visibility predicate reads: the database, and who the platform admins are. */
 export type VisibilityEnv = Pick<Env, 'DB' | 'ADMIN_GITHUB_IDS'>;
@@ -106,15 +104,6 @@ export async function visibilityAllows(
     .bind(appId, user.id, roleLoginAlias(user), ...visibility.roles)
     .first();
   return row !== null;
-}
-
-/**
- * The `app_roles.user_id` a session may match besides its id: the GitHub login
- * for a `gh:` session, else the id again. Same semantics as
- * lib/role-subject.ts `roleLoginAlias` (#272); see the module comment.
- */
-export function roleLoginAlias(user: Pick<FasUser, 'id' | 'login'>): string {
-  return user.id.startsWith('gh:') && user.login ? user.login : user.id;
 }
 
 /**

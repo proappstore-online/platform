@@ -20,7 +20,7 @@ import { HttpError, requireRecentAuth } from '../lib/auth.js';
 import { requireOperatorAccess } from '../lib/operator-audit-marks.js';
 import type { OperatorResource, OperatorViewContract } from '../lib/operator-contract.js';
 import { runOperatorQuery, runOperatorWrite } from './operator-exec.js';
-import { REVIEW_CONTENT_TYPES, holdsReviewRole, recordReviewAccess } from './storage.js';
+import { REVIEW_CONTENT_TYPES, holdsReviewRole, recordReviewAccess } from '../lib/review-access.js';
 import { isSensitiveField } from '../lib/sensitive-fields.js';
 import { textParam } from '../lib/text-param.js';
 

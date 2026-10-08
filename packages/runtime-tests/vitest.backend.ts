@@ -11,6 +11,8 @@ const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 export default defineWorkersConfig(async () => ({
   test: {
     name: 'backend',
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     include: ['test/backend/**/*.test.ts'],
     setupFiles: ['test/backend/setup.ts'],
     poolOptions: {

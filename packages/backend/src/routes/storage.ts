@@ -4,7 +4,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireAppAccess, requireAppOwner, HttpError, type FasUser } from '../lib/auth.js';
 import { wrap } from '../lib/route-wrap.js';
-import { roleSubjects } from '../lib/role-subject.js';
+import { holdsReviewRole, recordReviewAccess, REVIEW_CONTENT_TYPES, REVIEW_ROLE_NAME, reviewRoles } from '../lib/review-access.js';
 import { dispatchWebhook } from '../lib/webhook-dispatch.js';
 import { requireVisibleCaller, requireVisibleUser, type AppVisibility } from '../lib/visibility.js';
 import { DEFAULT_REVIEW_RETENTION_DAYS, MAX_REVIEW_RETENTION_DAYS, reviewRetentionDays } from '../lib/review-storage-reaper.js';
@@ -44,38 +44,7 @@ export const storageRoutes = new Hono<{ Bindings: Env }>();
 // Its uploader and holders of the app's declared review roles may read or
 // delete it at `_review/u/<uid>/<path>`; nobody else, the app team included.
 
-/** Documents only: a reviewer opens these on the API origin, so no active content. */
-export const REVIEW_CONTENT_TYPES = new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif']);
-const ROLE_NAME = /^[a-z][a-z0-9_-]{0,49}$/;
 const MAX_REVIEW_ROLES = 10;
-
-/** The app's declared review roles, read fresh on every request (revocation is immediate). */
-async function reviewRoles(db: D1Database, appId: string): Promise<string[]> {
-  const row = await db.prepare('SELECT review_roles FROM app_storage_config WHERE app_id = ?1').bind(appId).first<{ review_roles: string }>();
-  try {
-    const roles = JSON.parse(row?.review_roles ?? '[]') as unknown;
-    return Array.isArray(roles) ? roles.filter((r): r is string => typeof r === 'string' && ROLE_NAME.test(r) && r !== 'member') : [];
-  } catch {
-    return [];
-  }
-}
-
-/** Whether `user` holds one of the app's declared review roles right now. */
-export async function holdsReviewRole(db: D1Database, appId: string, user: { id: string; login: string }): Promise<boolean> {
-  const roles = await reviewRoles(db, appId);
-  if (roles.length === 0) return false;
-  return Boolean(await db.prepare(
-    `SELECT 1 FROM app_roles WHERE app_id = ?1 AND (user_id = ?2 OR user_id = ?3)
-       AND role_name IN (${roles.map((_, i) => `?${i + 4}`).join(', ')}) LIMIT 1`,
-  ).bind(appId, ...roleSubjects(user), ...roles).first());
-}
-
-/** One row of the reviewer access trail (#208): who read or deleted whose review document. */
-export async function recordReviewAccess(db: D1Database, appId: string, ownerId: string, path: string, actorId: string, action: 'read' | 'delete'): Promise<void> {
-  await db.prepare(
-    'INSERT INTO storage_review_access (app_id, owner_id, path, actor_id, action, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)',
-  ).bind(appId, ownerId, path, actorId, action, Date.now()).run();
-}
 
 /**
  * Authorize access to `_review/u/<ownerId>/<path>`: the uploader, or a live
@@ -388,7 +357,7 @@ storageRoutes.put('/apps/:appId/storage-config', wrap(async (c) => {
   let roles: string[] = [];
   if (setRoles) {
     const raw = body!.review_roles;
-    if (!Array.isArray(raw) || raw.length > MAX_REVIEW_ROLES || raw.some((r) => typeof r !== 'string' || !ROLE_NAME.test(r))) {
+    if (!Array.isArray(raw) || raw.length > MAX_REVIEW_ROLES || raw.some((r) => typeof r !== 'string' || !REVIEW_ROLE_NAME.test(r))) {
       return c.text(`review_roles must be an array of up to ${MAX_REVIEW_ROLES} app role names`, 400);
     }
     if (raw.includes('member')) return c.text("review_roles cannot include 'member' (every signed-in user holds it)", 400);
