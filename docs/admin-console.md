@@ -343,7 +343,7 @@ issue blocks `apply_admin_update`.
 | `secret_exposure` | error | A declared column or field is on the sensitive-field list |
 | `missing_action` | error | The referenced action isn't registered |
 | `destructive_without_step_up` | error | A `destructive` action whose tool doesn't declare `step_up` |
-| `unscoped_write` | error | An `UPDATE`/`DELETE` that uses no param mapped from the row |
+| `unscoped_write` | error | A write not scoped to its row (#339): an `UPDATE`/`DELETE` whose top-level `WHERE` doesn't compare a column (`=` or `IN`) with a param mapped from the row's key (the action's `target`, the resource's page column or detail key), or that widens it with a top-level `OR`; a `REPLACE` or upsert that uses no keyed param. Writes are found past leading comments and `WITH`. A plain `INSERT` is not checked |
 | `audit_role_error` / `admin_role_error` | error | `member` or `public` used as an audit or admin role |
 | `undefined_role` | warning | Nobody holds the role and no referenced action uses it |
 | `audit_role_unheld` | warning | The owner holds none of the `audit.app_roles` |

@@ -280,6 +280,70 @@ export interface RoleContext { granted: Set<string>; ownerHolds: Set<string> }
 const NO_ROLES: RoleContext = { granted: new Set(), ownerHolds: new Set() };
 
 const statementsOf = (t: ToolManifest) => [t.sql ?? '', ...(t.statements ?? [])].filter(Boolean);
+
+/** `sql` with string literals, comments and everything inside parentheses blanked, so only top-level SQL keeps its text and offsets. */
+function topLevel(sql: string): string {
+  let out = '';
+  let depth = 0;
+  for (let i = 0; i < sql.length; i++) {
+    const c = sql[i]!;
+    if (c === "'" || c === '"') {
+      const end = sql.indexOf(c, i + 1);
+      const stop = end < 0 ? sql.length - 1 : end;
+      out += ' '.repeat(stop - i + 1);
+      i = stop;
+    } else if (c === '-' && sql[i + 1] === '-') {
+      const end = sql.indexOf('\n', i);
+      const stop = end < 0 ? sql.length - 1 : end;
+      out += ' '.repeat(stop - i + 1);
+      i = stop;
+    } else if (c === '/' && sql[i + 1] === '*') {
+      const end = sql.indexOf('*/', i + 2);
+      const stop = end < 0 ? sql.length - 1 : end + 1;
+      out += ' '.repeat(stop - i + 1);
+      i = stop;
+    } else if (c === '(') { depth++; out += ' '; } else if (c === ')') { depth = Math.max(0, depth - 1); out += ' '; } else out += depth ? ' ' : c;
+  }
+  return out;
+}
+
+type WriteKind = 'update' | 'delete' | 'replace' | 'upsert' | 'insert';
+
+/**
+ * What a statement writes (#339), or null for a read. Comments and a `WITH …`
+ * prefix are skipped; `REPLACE` and `INSERT OR REPLACE` replace a row, and an
+ * `INSERT … ON CONFLICT … DO UPDATE` is an upsert.
+ */
+export function writeKind(sql: string): WriteKind | null {
+  const top = topLevel(sql);
+  const verb = /\b(UPDATE|DELETE|REPLACE|INSERT|SELECT|VALUES)\b/i.exec(top.replace(/^\s*WITH\b/i, ''))?.[1]?.toUpperCase();
+  if (verb === 'UPDATE') return 'update';
+  if (verb === 'DELETE') return 'delete';
+  if (verb === 'REPLACE' || (verb === 'INSERT' && /^\s*(?:WITH\b.*?)?\bINSERT\s+OR\s+REPLACE\b/is.test(top))) return 'replace';
+  if (verb === 'INSERT') return /\bON\s+CONFLICT\b[\s\S]*\bDO\s+UPDATE\b/i.test(top) ? 'upsert' : 'insert';
+  return null;
+}
+
+/**
+ * Whether a write is scoped to one row by one of `keyed` (#339): an UPDATE or
+ * DELETE must compare a column with a keyed param in its top-level WHERE (a
+ * param in the SET clause or a status guard alone would still match every row
+ * in that status); a REPLACE or upsert must use a keyed param, since the key it
+ * inserts picks the row it replaces. A plain INSERT changes no existing row.
+ */
+export function scopedWrite(sql: string, kind: WriteKind, keyed: string[]): boolean {
+  if (kind === 'insert') return true;
+  // Equality only (`=`, `==`, `IN (:p)`): `!=`, `<=` and `>=` select other rows too.
+  const uses = (text: string, p: string) => new RegExp(`(?:(?<![!<>=])==?|\\bIN)\\s*\\(?\\s*:${p}\\b|:${p}\\s*==?(?!=)`, 'i').test(text);
+  if (kind === 'replace' || kind === 'upsert') return keyed.some((p) => new RegExp(`:${p}\\b`).test(sql));
+  const top = topLevel(sql);
+  const where = [...top.matchAll(/\bWHERE\b/gi)].pop();
+  if (!where) return false;
+  const clause = sql.slice(where.index! + 5).replace(/\bRETURNING\b[\s\S]*$/i, '');
+  // A top-level OR widens the write past the keyed row (`WHERE id = :id OR …`).
+  if (/\bOR\b/i.test(top.slice(where.index! + 5))) return false;
+  return keyed.some((p) => uses(clause, p));
+}
 const objects = (v: unknown): [number, Record<string, unknown>][] =>
   (Array.isArray(v) ? v : []).flatMap((x, i) => (isObj(x) ? [[i, x] as [number, Record<string, unknown>]] : []));
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
@@ -336,11 +400,21 @@ export function securityReview(tools: ToolManifest[], proposal: unknown, roles: 
     if (stmts.some((s) => /\bDELETE\b/i.test(s)) && !(destructive && tool.step_up === true)) {
       add(`${at}.destructive`, 'delete_not_destructive', 'warning', `"${tool.name}" deletes rows: declare the action destructive with a step_up action`);
     }
-    const mapped = Object.keys(isObj(a.params) ? a.params : {});
+    // #339: a write must be scoped to the row it was run on: by a param mapped
+    // from one of the row's key columns (the action's target, the resource's
+    // page column or detail key), not just any mapped param.
+    const params = Object.entries(isObj(a.params) ? a.params : {}).filter((e): e is [string, string] => typeof e[1] === 'string');
+    const resource = resources.find(([, r]) => r.id === a.resource)?.[1];
+    const keys = new Set([
+      typeof a.target === 'string' ? a.target : params[0]?.[1],
+      isObj(resource?.page) ? resource.page.column : undefined,
+      isObj(resource?.detail) ? resource.detail.key : undefined,
+    ].filter((c): c is string => typeof c === 'string'));
+    const keyed = params.filter(([, column]) => keys.has(column)).map(([p]) => p);
     stmts.forEach((s, n) => {
-      if (!/^\s*(?:WITH\b[\s\S]*?\)\s*)?(UPDATE|DELETE)\b/i.test(s)) return;
-      if (!mapped.some((p) => new RegExp(`:${p}\\b`).test(s))) {
-        add(`${at}.params`, 'unscoped_write', 'error', `statement ${n + 1} of "${tool.name}" updates or deletes without any param mapped from the row — it could change every row`);
+      const kind = writeKind(s);
+      if (kind && !scopedWrite(s, kind, keyed)) {
+        add(`${at}.params`, 'unscoped_write', 'error', `statement ${n + 1} of "${tool.name}" (${kind}) is not scoped to the row: compare a column with a param mapped from its key (${[...keys].join(', ') || 'none mapped'}) in the WHERE clause — otherwise it could change every row`);
       }
     });
   }

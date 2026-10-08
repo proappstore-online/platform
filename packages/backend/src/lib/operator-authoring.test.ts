@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inspectAdminConsole, operatorCapabilities, OPERATOR_VIEW_SCHEMA, previewAdminConsole, proposeAdminUpdate, securityReview } from './operator-authoring.js';
+import { inspectAdminConsole, operatorCapabilities, OPERATOR_VIEW_SCHEMA, previewAdminConsole, proposeAdminUpdate, securityReview, writeKind } from './operator-authoring.js';
 import { validateOperatorView } from './operator-contract.js';
 import { schemaViolations } from './json-schema-check.js';
 import type { ToolManifest } from './action-sql.js';
@@ -182,6 +182,47 @@ describe('validate_admin_security (#296)', () => {
       expect.objectContaining({ path: 'operator_view.resources[0].action', code: 'missing_action', severity: 'error' }),
       expect.objectContaining({ path: `operator_view.actions[${lift}].params`, code: 'unscoped_write', severity: 'error' }),
     ]));
+  });
+
+  // #339: a write must be scoped by a param mapped from the row's key, in its WHERE clause.
+  it('classifies writes past comments and WITH, including REPLACE and upserts (#339)', () => {
+    expect([
+      'UPDATE t SET a = 1 WHERE id = :id',
+      'DELETE FROM t WHERE id = :id',
+      "-- close it\nUPDATE t SET s = 'x'",
+      '/* tidy */ DELETE FROM t',
+      'WITH old AS (SELECT id FROM t WHERE s = 1) UPDATE t SET s = 2 WHERE id IN (SELECT id FROM old)',
+      'REPLACE INTO t (id, s) VALUES (:id, 1)',
+      'INSERT OR REPLACE INTO t (id, s) VALUES (:id, 1)',
+      'INSERT INTO t (id, s) VALUES (:id, 1) ON CONFLICT (id) DO UPDATE SET s = excluded.s',
+      "INSERT INTO t (id, note) VALUES (:id, 'update me')",
+      'SELECT id FROM t WHERE note = \'DELETE\'',
+    ].map(writeKind)).toEqual(['update', 'delete', 'update', 'delete', 'update', 'replace', 'replace', 'upsert', 'insert', null]);
+  });
+
+  it('refuses writes not scoped to the row, and keeps keyed writes (#339)', () => {
+    const resolve = STASH.operator_view.actions.findIndex((a) => a.action === 'op_resolve_report');
+    const review = (sql: string) => {
+      const tools = clone(stashTools).map((t) => (t.name === 'op_resolve_report' ? { ...t, sql } : t)) as ToolManifest[];
+      return securityReview(tools, STASH.operator_view).issues.filter((i) => i.path === `operator_view.actions[${resolve}].params`).map((i) => i.code);
+    };
+    // The issue's example: the status guard is the only param, so every report in that status closes.
+    for (const sql of [
+      "UPDATE reports SET status = 'resolved' WHERE status = :from_status",
+      "UPDATE reports SET reviewer_id = :report_id WHERE status = 'open'", // the key only in SET
+      "UPDATE reports SET status = 'resolved' WHERE id != :report_id AND status = :from_status",
+      "UPDATE reports SET status = 'resolved' WHERE id = :report_id OR status = :from_status",
+      "-- close\nUPDATE reports SET status = 'resolved'", // comment-prefixed, no WHERE at all
+      "REPLACE INTO reports (status) VALUES ('resolved')",
+      "INSERT INTO reports (id, status) VALUES (:from_status, 'resolved') ON CONFLICT (id) DO UPDATE SET status = excluded.status",
+    ]) expect(review(sql), sql).toEqual(['unscoped_write']);
+    for (const sql of [
+      "UPDATE reports SET status = 'resolved', reviewer_id = :__user_id WHERE id = :report_id AND status = :from_status",
+      "UPDATE reports SET status = 'resolved' WHERE id IN (:report_id) AND status = :from_status",
+      "/* keyed */ UPDATE reports SET status = (SELECT 'resolved' WHERE 1 = 1) WHERE :report_id = id AND status = :from_status",
+      "INSERT INTO reports (id, status) VALUES (:report_id, 'resolved') ON CONFLICT (id) DO UPDATE SET status = excluded.status",
+      "INSERT INTO report_notes (report_id, note) VALUES (:report_id, 'resolved')",
+    ]) expect(review(sql), sql).toEqual([]);
   });
 
   it('warns on row-scoping smells in the referenced SQL', () => {
