@@ -666,7 +666,7 @@ per-app console code.
   name) never leave the platform: `caller_unscoped` is for aggregates that
   return no row data (PAS-AUTH-016).
 - **An action** is a row button on one resource. `action` names a registered
-  **write** action (`execute`, `batch` or `verify`). `params` maps each of its
+  **write** action (`execute` or `batch`; a `verify` action is refused). `params` maps each of its
   params to a column of the row, and every required param must be mapped.
   `confirm` is the question the owner confirms before it runs.
 - **Every referenced action** must require sign-in and declare `auth.app_roles`
