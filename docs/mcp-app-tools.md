@@ -603,6 +603,10 @@ app's **platform-held users** (#246). `GET /v1/apps/<app-id>/operator/users`
 returns every user with an app role or recorded activity: platform user id,
 login, avatar, roles, join date, last activity and `activity`
 (`active` within 30 days, `inactive`, `never_seen`). It never includes email.
+Each person appears once (#347): an older grant keyed by a GitHub login belongs
+to the `gh:` user with that login, as role checks match it, so its roles are
+merged there and it isn't counted twice. A grant keyed by a login nobody has
+signed in with yet stays its own entry.
 It returns 50 per page, `q` matches a login prefix or an exact id, and each read
 is audited as `read:platform-users`. The platform has no user suspension of its
 own; an app's suspensions are its contract's `suspensions` resource. An app

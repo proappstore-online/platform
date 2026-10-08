@@ -24,6 +24,7 @@ import { REVIEW_CONTENT_TYPES, holdsReviewRole, recordReviewAccess } from '../li
 import { isSensitiveField } from '../lib/sensitive-fields.js';
 import { textParam } from '../lib/text-param.js';
 import { CONSOLE_RP_ID } from './passkeys.js';
+import { ROLE_HOLDERS_CTE } from '../lib/role-subject.js';
 
 export const operatorRoutes = new Hono<{ Bindings: Env }>();
 
@@ -38,7 +39,8 @@ operatorRoutes.get('/apps/:appId/operator', async (c) => {
   const since = new Date(Date.now() - (ACTIVITY_DAYS - 1) * 86_400_000).toISOString().slice(0, 10);
   const [app, roles, activity, contract] = await Promise.all([
     c.env.DB.prepare('SELECT id, created_at FROM apps WHERE id = ?').bind(appId).first<{ id: string; created_at: number }>(),
-    c.env.DB.prepare('SELECT COUNT(DISTINCT user_id) AS users FROM app_roles WHERE app_id = ?')
+    // One person per holder (#347): a login-keyed legacy grant counts as its gh: user.
+    c.env.DB.prepare(`WITH ${ROLE_HOLDERS_CTE} SELECT COUNT(DISTINCT user_id) AS users FROM role_holders`)
       .bind(appId).first<{ users: number }>(),
     c.env.DB.prepare(
       `SELECT COUNT(DISTINCT user_id) AS users,

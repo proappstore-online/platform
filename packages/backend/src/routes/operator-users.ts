@@ -19,6 +19,7 @@ import type { Env } from '../types.js';
 import { markAudited, requireOperatorOwner } from '../lib/operator-audit-marks.js';
 import { PLATFORM_USERS_READ, writeRow } from './operator-audit.js';
 import { textParam } from '../lib/text-param.js';
+import { ROLE_HOLDERS_CTE } from '../lib/role-subject.js';
 
 export const operatorUsersRoutes = new Hono<{ Bindings: Env }>();
 
@@ -62,8 +63,8 @@ operatorUsersRoutes.get('/apps/:appId/operator/users', async (c) => {
   const cursor = textParam(c.req.query('cursor'), MAX_CURSOR, 'cursor');
 
   const { results } = await c.env.DB.prepare(
-    `WITH granted AS (
-       SELECT user_id, MIN(granted_at) AS first_granted FROM app_roles WHERE app_id = ?1 GROUP BY user_id
+    `WITH ${ROLE_HOLDERS_CTE}, granted AS (
+       SELECT user_id, MIN(granted_at) AS first_granted FROM role_holders GROUP BY user_id
      ), seen AS (
        SELECT user_id, MIN(day) AS first_day, MAX(last_seen) AS last_seen FROM usage_daily WHERE app_id = ?1 GROUP BY user_id
      ), everyone AS (
@@ -71,7 +72,7 @@ operatorUsersRoutes.get('/apps/:appId/operator/users', async (c) => {
      )
      SELECT e.user_id, u.login, u.avatar_url, g.first_granted, s.first_day, s.last_seen,
             (SELECT json_group_array(role_name) FROM
-               (SELECT role_name FROM app_roles WHERE app_id = ?1 AND user_id = e.user_id ORDER BY role_name)) AS roles
+               (SELECT DISTINCT role_name FROM role_holders WHERE user_id = e.user_id ORDER BY role_name)) AS roles
        FROM everyone e
        LEFT JOIN users u ON u.id = e.user_id
        LEFT JOIN granted g ON g.user_id = e.user_id

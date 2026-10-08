@@ -52,6 +52,30 @@ describe('platform-held users of an app (#246)', () => {
     expect(rows).toEqual([{ app_id: 'stash', actor_id: 'gh:1', status: 200, target: null }]);
   });
 
+  // #347: a grant keyed by a GitHub login (#272 legacy) is that gh: user's grant, so each person is listed once.
+  it('merges login-keyed grants into their gh: user, once, with every role; counts each person once', async () => {
+    const early = Date.parse('2026-07-01T00:00:00Z');
+    // bob: one grant by login, activity by id. alice: grants by id and by login, one role on both keys.
+    // erin: a Google account whose profile name is a login — never a GitHub identity, so its grant stays as stored.
+    await env.DB.prepare("INSERT OR IGNORE INTO users (id, provider, provider_id, login, avatar_url, created_at, last_login_at) VALUES ('google:7', 'google', '7', 'erin', NULL, 0, 0)").run();
+    await env.DB.prepare(
+      "INSERT INTO app_roles (app_id, user_id, role_name, granted_at) VALUES ('stash', 'bob', 'moderator', ?1), ('stash', 'alice', 'reviewer', ?1), ('stash', 'alice', 'moderator', ?1), ('stash', 'erin', 'member', ?1)",
+    ).bind(early).run();
+    const body = (await (await users('stash', '', await session('gh:1'))).json()) as Body;
+    expect(body.users.map((u) => u.user_id)).toEqual(['dave', 'erin', 'gh:10', 'gh:11']);
+    const byId = Object.fromEntries(body.users.map((u) => [u.user_id, u]));
+    expect(byId['gh:11']).toMatchObject({ login: 'bob', roles: ['moderator'], activity: 'inactive', join_date: early });
+    expect(byId['gh:10']).toMatchObject({ login: 'alice', roles: ['member', 'moderator', 'reviewer'], join_date: early });
+    expect(byId.erin).toMatchObject({ login: null, roles: ['member'] });
+    // Search finds the merged holder by its login.
+    expect(((await (await users('stash', '?q=bo', await session('gh:1'))).json()) as Body).users.map((u) => u.user_id)).toEqual(['gh:11']);
+
+    // The overview counts people, not keys: dave, erin, gh:10, gh:11 (before #347 it counted 5 keys: gh:10, dave, bob, alice, erin).
+    const overview = await SELF.fetch(`${BASE}/v1/apps/stash/operator`, json('GET', undefined, await session('gh:1')));
+    expect(overview.status, await overview.clone().text()).toBe(200);
+    expect(JSON.stringify(await overview.json())).toContain('"usersWithRoles":4');
+  });
+
   it('searches by login prefix or exact user id; LIKE wildcards are literal', async () => {
     const token = await session('gh:1');
     const ids = async (qs: string) => ((await (await users('stash', qs, token)).json()) as Body).users.map((u) => u.user_id);
