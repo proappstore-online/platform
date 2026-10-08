@@ -343,7 +343,7 @@ describe('operator reports & suspensions (#240)', () => {
     }));
   }
   afterEach(() => vi.unstubAllGlobals());
-  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 10, auth_method: 'passkey' } as never, TEST_SK);
+  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 10, auth_method: 'passkey', step_up_rp_id: 'console.proappstore.online' } as never, TEST_SK);
   const act = (appId: string, id: string, row: unknown, d: ReturnType<typeof mockD1>, token: string = OWNER) =>
     app.request(`/v1/apps/${appId}/operator/actions/${id}`, {
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ row }),
@@ -464,7 +464,7 @@ describe('operator ID verification (#240)', () => {
     if (!('contract' in r)) throw new Error(r.error);
     return JSON.stringify(r.contract);
   };
-  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 10, auth_method: 'passkey' } as never, TEST_SK);
+  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 10, auth_method: 'passkey', step_up_rp_id: 'console.proappstore.online' } as never, TEST_SK);
   let calls: string[] = [];
   function dataWorker(rows: Record<string, unknown>[], changes = 1) {
     calls = [];
@@ -629,4 +629,3 @@ describe('operator ID verification (#240)', () => {
     expect(audit.bind).toHaveBeenCalledWith('parents-clubs', 'op_verification_detail', 'gh:1', 'operator', 200, expect.any(Number), 'evidence:id_checks.licence_path', 'v1');
   });
 });
-

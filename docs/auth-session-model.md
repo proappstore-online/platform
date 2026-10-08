@@ -225,6 +225,10 @@ Sessions carry two claims that record the last active sign-in:
 
 - `auth_time`: epoch seconds.
 - `auth_method`: `github`, `google`, `password` or `passkey`.
+- `step_up_rp_id`: present only on a passkey step-up; the exact relying-party
+  hostname whose WebAuthn ceremony verified it. Privileged checks that name an
+  audience reject a missing or different value, so pre-#331 sessions cannot
+  become a wildcard step-up.
 
 They are stamped at the OAuth callback, at credentials login and at
 `/v1/auth/exchange`. Sessions minted before #230, and non-interactive ones
@@ -249,6 +253,11 @@ forwards them with the cookie session:
   entrypoint keeps them (#315, [authorization model](./authorization-model.md)).
   The API refuses a passkey request without an app hostname, so app passkeys
   work only through `/.pas/auth/passkey/*`.
+- **Creator Console.** The direct Console ceremony is admitted only when
+  Cloudflare Access has stamped `Cf-Access-Jwt-Assertion` on the request; its
+  `Origin` is validated by WebAuthn but is never used to select the Console
+  relying party. The API route must remain behind that Access boundary, which
+  strips caller-provided assertions before adding its own.
 - **Registration.** The browser sends `getPublicKey()` (SPKI) and
   `getPublicKeyAlgorithm()`; ES256 and RS256 are accepted. It needs a sign-in
   within the last 10 minutes. Once the user has a passkey on that host, adding
@@ -258,7 +267,7 @@ forwards them with the cookie session:
   `https://<host>`; the user must be present and verified (UP and UV); the
   signature must verify; the signature counter must not go backwards.
 - **Step-up result.** The API mints a session with `auth_time = now`,
-  `auth_method = 'passkey'` and a **1-hour** life. The host puts it in the cookie
+  `auth_method = 'passkey'`, the verified `step_up_rp_id`, and a **1-hour** life. The host puts it in the cookie
   with `Max-Age` equal to its remaining life, and returns only
   `{ ok, auth_time, expires_at }` to the page.
 

@@ -36,6 +36,13 @@ export interface SessionClaims {
   auth_time?: number;
   /** How that authentication happened: 'github' | 'google' | 'password' | 'passkey' (#230). */
   auth_method?: string;
+  /**
+   * The WebAuthn relying party that performed a passkey step-up (#331).
+   * This is deliberately absent from ordinary sign-ins: a privileged operation
+   * that requires a particular relying party must treat an absent value as a
+   * refusal, not as a backwards-compatible wildcard.
+   */
+  step_up_rp_id?: string;
   iat: number;
   exp: number;
 }

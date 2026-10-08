@@ -1,7 +1,7 @@
 import { SELF, env, fetchMock } from 'cloudflare:test';
 import { mintSession } from '@proappstore/build-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BASE, json, seedApp, seedUser, mockNetwork, resetTables } from './helpers';
+import { BASE, json, seedApp, seedUser, mockNetwork, resetTables, viaHostApi } from './helpers';
 
 // #231 (part of #228): an action declaring `step_up: true` runs only for a
 // session whose auth_time is within STEP_UP_MAX_AGE_SECONDS (default 300). A
@@ -32,14 +32,17 @@ async function registerTools(...tools: ReturnType<typeof tool>[]): Promise<void>
 }
 
 /** A session whose last active authentication was `ageSeconds` ago (none when null). */
-function sessionAged(ageSeconds: number | null): Promise<string> {
+function sessionAged(ageSeconds: number | null, rpId = 'ops.proappstore.online'): Promise<string> {
   return mintSession(
-    { uid: 'gh:2', login: 'op', avatarUrl: null, roles: ['user'], ...(ageSeconds === null ? {} : { auth_time: Math.floor(Date.now() / 1000) - ageSeconds, auth_method: 'passkey' }) },
+    { uid: 'gh:2', login: 'op', avatarUrl: null, roles: ['user'], ...(ageSeconds === null ? {} : { auth_time: Math.floor(Date.now() / 1000) - ageSeconds, auth_method: 'passkey', step_up_rp_id: rpId }) },
     env.SESSION_SIGNING_KEY,
   );
 }
 
-const call = (name: string, token: string) => SELF.fetch(`${BASE}/v1/apps/ops/actions/${name}`, json('POST', { params: { doc_id: 'd1' } }, token));
+const call = (name: string, token: string, host = 'ops.proappstore.online') => viaHostApi(`${BASE}/v1/apps/ops/actions/${name}`, {
+  ...json('POST', { params: { doc_id: 'd1' } }, token),
+  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-PAS-App': 'ops', 'X-PAS-Host': host },
+});
 const dataWorkerAnswers = () =>
   fetchMock.get(`https://pas-data-ops.${env.DATA_WORKER_HOST}`).intercept({ path: '/query', method: 'POST' }).reply(200, { rows: [{ id: 'd1' }], meta: {} });
 
@@ -57,6 +60,16 @@ describe('step_up actions (#231)', () => {
     const res = await call('view_id_document', await sessionAged(301));
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: 'step_up_required', message: 'Recent authentication required', max_age: 300 });
+  });
+
+  it('refuses a passkey step-up replayed from another app or a direct bearer request (#331)', async () => {
+    await registerTools(tool('view_id_document', { step_up: true }));
+    const fromAnotherApp = await call('view_id_document', await sessionAged(30, 'other.proappstore.online'));
+    expect(fromAnotherApp.status).toBe(403);
+    expect(await fromAnotherApp.json()).toMatchObject({ error: 'step_up_required' });
+
+    const direct = await SELF.fetch(`${BASE}/v1/apps/ops/actions/view_id_document`, json('POST', { params: { doc_id: 'd1' } }, await sessionAged(30)));
+    expect(direct.status).toBe(403);
   });
 
   it('a session with no auth_time (minted before #230) is refused the same way', async () => {

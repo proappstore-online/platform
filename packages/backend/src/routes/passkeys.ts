@@ -81,20 +81,22 @@ function nowSeconds(): number {
  */
 export const CONSOLE_RP_ID = 'console.proappstore.online';
 const CONSOLE_ORIGIN = `https://${CONSOLE_RP_ID}`;
+/** Set by Cloudflare Access after it authenticates the Console surface (#331). */
+const CONSOLE_ACCESS_HEADER = 'Cf-Access-Jwt-Assertion';
 
 /**
  * The relying party: the app hostname the host mediated this request from, or
- * — for a direct call from the console page, which carries neither host
- * header — the console. A mediated request always carries X-PAS-App, so the
+ * — for a direct call from the Console surface, which carries neither host
+ * header — the console. Cloudflare Access, not Origin, identifies that surface:
+ * Origin remains a WebAuthn ceremony check but is caller-controlled on an API
+ * request. A mediated request always carries X-PAS-App, so the
  * cookie data plane (which strips X-PAS-Host so page JS never receives a
- * step-up token) still gets no relying party. The console path also requires
- * the browser's Origin to be the console: an app page holding a fresh session
- * cannot enroll a key of its own for the console.
+ * step-up token) still gets no relying party.
  */
 function relyingParty(c: Context<{ Bindings: Env }>): { appId: string; rpId: string } {
   const appId = c.req.header(APP_CONTEXT_HEADER);
   const rpId = c.req.header(APP_HOST_HEADER)?.toLowerCase();
-  if (!appId && !rpId && c.req.header('Origin') === CONSOLE_ORIGIN) return { appId: 'console', rpId: CONSOLE_RP_ID };
+  if (!appId && !rpId && c.req.header(CONSOLE_ACCESS_HEADER)) return { appId: 'console', rpId: CONSOLE_RP_ID };
   if (!appId || !rpId || !HOSTNAME.test(rpId)) throw new HttpError('passkeys are only available on an app origin or the console', 400);
   return { appId, rpId };
 }
@@ -109,9 +111,9 @@ async function credentialIds(db: D1Database, userId: string, rpId: string): Prom
  * another needs a recent passkey step-up. Sessions without `auth_time` (minted
  * before #230) are never fresh.
  */
-function reauthRequired(claims: SessionClaims, hasPasskey: boolean): string | null {
+function reauthRequired(claims: SessionClaims, hasPasskey: boolean, rpId: string): string | null {
   const fresh = typeof claims.auth_time === 'number' && nowSeconds() - claims.auth_time <= FRESH_AUTH_SECONDS;
-  if (hasPasskey) return fresh && claims.auth_method === 'passkey' ? null : 'adding another passkey requires a passkey step-up first';
+  if (hasPasskey) return fresh && claims.auth_method === 'passkey' && claims.step_up_rp_id === rpId ? null : 'adding another passkey requires a passkey step-up for this relying party first';
   return fresh ? null : 'sign in again to add a passkey';
 }
 
@@ -200,7 +202,7 @@ passkeyRoutes.post('/auth/passkey/register/options', async (c) => {
   const claims = await requireClaims(c);
   const { appId, rpId } = relyingParty(c);
   const existing = await credentialIds(c.env.DB, claims.uid, rpId);
-  const refusal = reauthRequired(claims, existing.length > 0);
+  const refusal = reauthRequired(claims, existing.length > 0, rpId);
   if (refusal) return c.json({ error: refusal, code: 'reauth_required' }, 403);
 
   const challenge = await issueChallenge(c.env.DB, claims.uid, rpId, 'register');
@@ -222,7 +224,7 @@ passkeyRoutes.post('/auth/passkey/register', async (c) => {
   const { rpId } = relyingParty(c);
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const existing = await credentialIds(c.env.DB, claims.uid, rpId);
-  const refusal = reauthRequired(claims, existing.length > 0);
+  const refusal = reauthRequired(claims, existing.length > 0, rpId);
   if (refusal) return c.json({ error: refusal, code: 'reauth_required' }, 403);
 
   await verifyClientData(c.env.DB, body.clientDataJSON, { type: 'webauthn.create', userId: claims.uid, rpId, purpose: 'register' });
@@ -303,7 +305,10 @@ passkeyRoutes.post('/auth/passkey/step-up', async (c) => {
 
   const { iat: _iat, exp: _exp, ...rest } = claims;
   const authTime = nowSeconds();
-  const next: NewSession = { ...rest, auth_time: authTime, auth_method: 'passkey' };
+  // rpId has just been verified by both clientData.origin and authenticatorData's
+  // rpIdHash. Carry that exact value into the short-lived token so downstream
+  // privileged checks cannot replay it on another app or the Console.
+  const next: NewSession = { ...rest, auth_time: authTime, auth_method: 'passkey', step_up_rp_id: rpId };
   const token = await mintSession(next, c.env.SESSION_SIGNING_KEY, STEP_UP_SESSION_TTL_SECONDS);
   return c.json({ token, auth_time: authTime, expires_at: authTime + STEP_UP_SESSION_TTL_SECONDS });
 });

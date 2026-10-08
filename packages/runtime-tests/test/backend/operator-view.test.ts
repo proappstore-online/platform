@@ -224,7 +224,7 @@ describe('operator reports & suspensions (#240)', () => {
       sent.push({ app: appId, path, params: body.params ?? body.statements?.map((s) => s.params) });
       return reply;
     });
-  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 5, auth_method: 'passkey' } as never, env.SESSION_SIGNING_KEY);
+  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 5, auth_method: 'passkey', step_up_rp_id: 'console.proappstore.online' } as never, env.SESSION_SIGNING_KEY);
   const act = async (appId: string, id: string, row: unknown, token?: string) =>
     SELF.fetch(`${BASE}/v1/apps/${appId}/operator/actions/${id}`, json('POST', { row }, token ?? await session('gh:1')));
   const audit = (appId: string) => env.DB.prepare('SELECT action_name, actor_id, role_name, status, operator_action, target FROM app_action_audit WHERE app_id = ? ORDER BY id').bind(appId).all();
@@ -317,7 +317,7 @@ describe('operator reports & suspensions (#240)', () => {
 describe('operator ID verification (#240)', () => {
   const worker = (appId: string) => fetchMock.get(`https://pas-data-${appId}.${env.DATA_WORKER_HOST}`);
   const rows = (appId: string, reply: Record<string, unknown>[]) => worker(appId).intercept({ path: '/query', method: 'POST' }).reply(200, { rows: reply, meta: {} });
-  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 5, auth_method: 'passkey' } as never, env.SESSION_SIGNING_KEY);
+  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 5, auth_method: 'passkey', step_up_rp_id: 'console.proappstore.online' } as never, env.SESSION_SIGNING_KEY);
   const get = async (path: string, token?: string) => SELF.fetch(`${BASE}/v1/apps/${path}`, json('GET', undefined, token ?? await fresh()));
   const kyc = { request_id: 'k1', user_id: 'gh:10', full_name: 'Ada', document_type: 'passport', status: 'pending', submitted_at: 1, document_path: '_review/u/gh:10/id.png', selfie_path: null, internal_score: 97 };
 
@@ -373,7 +373,7 @@ describe('operator ID verification (#240)', () => {
 
     // The console's own ceremony: register a passkey (fresh sign-in), then step up with it.
     const passkey = (path: string, token: string, body: unknown = {}) => SELF.fetch(`${BASE}/v1/auth/passkey/${path}`, {
-      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Origin: 'https://console.proappstore.online' }, body: JSON.stringify(body),
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Origin: 'https://console.proappstore.online', 'Cf-Access-Jwt-Assertion': 'access-assertion' }, body: JSON.stringify(body),
     });
     const auth = await Authenticator.create('console.proappstore.online');
     const reg = (await (await passkey('register/options', githubFresh)).json()) as { challenge: string };
@@ -499,7 +499,7 @@ describe('operator metric time series (#240)', () => {
 // refusals recorded once, strangers never, and a paged, filtered, redacted trail.
 describe('operator audit trail (#240)', () => {
   const worker = (appId: string) => fetchMock.get(`https://pas-data-${appId}.${env.DATA_WORKER_HOST}`);
-  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 5, auth_method: 'passkey' } as never, env.SESSION_SIGNING_KEY);
+  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 5, auth_method: 'passkey', step_up_rp_id: 'console.proappstore.online' } as never, env.SESSION_SIGNING_KEY);
   const call = async (path: string, init: { method?: string; body?: unknown; uid?: string | null; token?: string } = {}) =>
     SELF.fetch(`${BASE}/v1/apps/${path}`, json(init.method ?? 'GET', init.body, init.token ?? (init.uid === null ? undefined : await session(init.uid ?? 'gh:1'))));
   const rows = async (appId: string) => (await env.DB.prepare('SELECT actor_id, role_name, status, operator_action, target FROM app_action_audit WHERE app_id = ? ORDER BY id').bind(appId).all()).results;

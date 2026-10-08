@@ -93,6 +93,7 @@ describe('passkey step-up (#230)', () => {
     const claims = (await verifySession(body.token, env.SESSION_SIGNING_KEY))!;
     expect(claims.uid).toBe(UID);
     expect(claims.auth_method).toBe('passkey');
+    expect(claims.step_up_rp_id).toBe(RP);
     expect(claims.auth_time).toBeGreaterThan(oldTime);
     expect(claims.auth_time).toBe(body.auth_time);
     expect(claims.exp - claims.iat).toBe(3600);
@@ -137,7 +138,7 @@ describe('passkey step-up (#230)', () => {
 // hostname, and only a ceremony from that origin can complete.
 describe('console relying party (#244)', () => {
   const CONSOLE = 'console.proappstore.online';
-  const direct = (path: string, token: string, body: unknown = {}, headers: Record<string, string> = { Origin: `https://${CONSOLE}` }) =>
+  const direct = (path: string, token: string, body: unknown = {}, headers: Record<string, string> = { Origin: `https://${CONSOLE}`, 'Cf-Access-Jwt-Assertion': 'access-assertion' }) =>
     SELF.fetch(`${BASE}/v1/auth/passkey/${path}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...headers },
@@ -163,7 +164,7 @@ describe('console relying party (#244)', () => {
     const res = await direct('step-up', stale, await auth.assert(opts.challenge));
     expect(res.status, await res.clone().text()).toBe(200);
     const claims = await verifySession(((await res.json()) as { token: string }).token, env.SESSION_SIGNING_KEY);
-    expect(claims).toMatchObject({ uid: UID, auth_method: 'passkey' });
+    expect(claims).toMatchObject({ uid: UID, auth_method: 'passkey', step_up_rp_id: CONSOLE });
     expect(now() - claims!.auth_time!).toBeLessThanOrEqual(2);
   });
 
@@ -179,6 +180,15 @@ describe('console relying party (#244)', () => {
       body: '{}',
     });
     expect(mediated.status).toBe(400);
+  });
+
+  it('does not let a forged Origin select the console relying party (#331)', async () => {
+    const token = await signIn({ authTime: now() });
+    const forged = await direct('register/options', token, {}, { Origin: `https://${CONSOLE}` });
+    expect(forged.status).toBe(400);
+    // A request that reached the Console through Cloudflare Access retains the
+    // assertion and remains a legitimate Console ceremony.
+    expect((await direct('register/options', token)).status).toBe(200);
   });
 
   it("an app page's key or ceremony cannot enroll or step up on the console", async () => {

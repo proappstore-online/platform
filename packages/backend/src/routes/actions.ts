@@ -14,8 +14,18 @@ import {
 import { looksLikeAppToken, rememberTokenUser, sha256Hex, touchLastUsed, verifyAppToken } from '../lib/app-tokens.js';
 import { getVerifier, runVerifier } from '../lib/verifiers/index.js';
 import { PUBLIC_VISIBILITY, requireVisible, visibilityFromRow, type AppVisibility } from '../lib/visibility.js';
+import { APP_HOST_HEADER } from '../lib/app-context.js';
 
 export const actionRoutes = new Hono<{ Bindings: Env }>();
+
+/**
+ * Only HostApi can supply this header. A direct bearer request therefore cannot
+ * claim an app relying party to replay a passkey step-up from another surface.
+ */
+function mediatedRelyingParty(c: Parameters<typeof requireUser>[0]): string | undefined {
+  const rpId = c.req.header(APP_HOST_HEADER)?.toLowerCase();
+  return rpId && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(rpId) ? rpId : undefined;
+}
 
 /**
  * Success audit of role-gated actions (#232). `enforceActionAuth` marks the
@@ -135,7 +145,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
       grantRole(c.req.raw, user, await enforceActionAuth(c.env.DB, appId, manifest, user));
       // #231: after the role check, so a caller without the role is told that,
       // not invited to re-authenticate for an action they could never run.
-      if (manifest.step_up) requireRecentAuth(user, c.env);
+      if (manifest.step_up) requireRecentAuth(user, c.env, { rpId: mediatedRelyingParty(c) ?? '' });
     }
   }
 

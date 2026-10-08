@@ -23,6 +23,7 @@ import { runOperatorQuery, runOperatorWrite } from './operator-exec.js';
 import { REVIEW_CONTENT_TYPES, holdsReviewRole, recordReviewAccess } from '../lib/review-access.js';
 import { isSensitiveField } from '../lib/sensitive-fields.js';
 import { textParam } from '../lib/text-param.js';
+import { CONSOLE_RP_ID } from './passkeys.js';
 
 export const operatorRoutes = new Hono<{ Bindings: Env }>();
 
@@ -222,7 +223,7 @@ operatorRoutes.get('/apps/:appId/operator/resources/:resourceId/records/:key/evi
   if (key === null) throw new HttpError('key is required', 400);
   // An identity document needs a recent passkey step-up (#244), not just a recent
   // sign-in — before the review role is read, the record re-run or R2 touched.
-  requireRecentAuth(caller, c.env, { method: 'passkey' });
+  requireRecentAuth(caller, c.env, { method: 'passkey', rpId: CONSOLE_RP_ID });
   if (!(await holdsReviewRole(c.env.DB, appId, caller))) throw new HttpError('not a reviewer for this app', 403);
 
   const rows = await runOperatorQuery(

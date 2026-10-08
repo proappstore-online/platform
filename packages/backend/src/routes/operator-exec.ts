@@ -10,6 +10,7 @@ import { HttpError, requireRecentAuth, type FasUser } from '../lib/auth.js';
 import { actionCallers, prepareActionBatch, prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
 import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from './actions.js';
 import { markAudited } from '../lib/operator-audit-marks.js';
+import { CONSOLE_RP_ID } from './passkeys.js';
 
 /** What an operator-view call adds to its audit row (#240): the contract action or read, and its target record. */
 export interface OperatorAudit {
@@ -84,7 +85,7 @@ async function runOperatorCall(
     throw new HttpError(`action ${name} cannot run from the operator view`, 409);
   }
   const role = await enforceActionAuth(env.DB, appId, manifest, user);
-  if (manifest.step_up) requireRecentAuth(user, env);
+  if (manifest.step_up) requireRecentAuth(user, env, { rpId: CONSOLE_RP_ID });
   let endpoint: string;
   let payload: unknown;
   try {

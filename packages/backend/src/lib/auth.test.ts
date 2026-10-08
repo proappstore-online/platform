@@ -126,7 +126,7 @@ describe('role escalation prevention', () => {
 // #231: the step-up window for step_up actions.
 describe('requireRecentAuth / stepUpMaxAgeSeconds', () => {
   afterEach(() => vi.useRealTimers());
-  const user = (authTime?: number) => ({ id: 'gh:1', login: 'u', avatarUrl: null, roles: ['user'], ...(authTime === undefined ? {} : { authTime }) });
+  const user = (authTime?: number, stepUpRpId?: string) => ({ id: 'gh:1', login: 'u', avatarUrl: null, roles: ['user'], ...(authTime === undefined ? {} : { authTime }), ...(stepUpRpId === undefined ? {} : { stepUpRpId }) });
 
   it('requireUser exposes the session auth_time, and omits it for sessions without one', async () => {
     const withTime = await mintSession({ uid: 'gh:1', roles: ['user'], auth_time: 1_800_000_000, auth_method: 'passkey' }, SK);
@@ -161,6 +161,17 @@ describe('requireRecentAuth / stepUpMaxAgeSeconds', () => {
         expect((e as HttpError).message).toBe('step_up_required');
         expect((e as HttpError).body).toEqual({ message: 'Recent authentication required', max_age: 300 });
       }
+    }
+  });
+
+  it('binds an audience-required step-up to its exact relying party and fails closed for legacy claims (#331)', () => {
+    const now = Math.floor(Date.now() / 1000);
+    expect(() => requireRecentAuth({ ...user(now - 1, 'a.proappstore.online'), authMethod: 'passkey' }, {}, { method: 'passkey', rpId: 'a.proappstore.online' })).not.toThrow();
+    for (const candidate of [
+      { ...user(now - 1), authMethod: 'passkey' }, // legacy step-up, no claim
+      { ...user(now - 1, 'b.proappstore.online'), authMethod: 'passkey' },
+    ]) {
+      expect(() => requireRecentAuth(candidate, {}, { method: 'passkey', rpId: 'a.proappstore.online' })).toThrow('step_up_required');
     }
   });
 });

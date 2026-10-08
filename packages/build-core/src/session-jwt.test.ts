@@ -69,14 +69,14 @@ describe('session-jwt', () => {
   });
 });
 
-// #230: auth_time / auth_method record the last active authentication, and a
+// #230/#331: auth_time / auth_method record the last active authentication, and a
 // privileged session can be minted with a short life.
 describe('session auth_time, auth_method and short TTL (#230)', () => {
   afterEach(() => vi.useRealTimers());
 
-  it('carries auth_time and auth_method through mint and verify', async () => {
-    const claims = await verifySession(await mintSession({ ...base, auth_time: 1_700_000_000, auth_method: 'passkey' }, KEY), KEY);
-    expect(claims).toMatchObject({ auth_time: 1_700_000_000, auth_method: 'passkey' });
+  it('carries auth_time, auth_method and a passkey relying-party audience through mint and verify', async () => {
+    const claims = await verifySession(await mintSession({ ...base, auth_time: 1_700_000_000, auth_method: 'passkey', step_up_rp_id: 'app.proappstore.online' }, KEY), KEY);
+    expect(claims).toMatchObject({ auth_time: 1_700_000_000, auth_method: 'passkey', step_up_rp_id: 'app.proappstore.online' });
   });
 
   it('leaves them absent on sessions minted without them (pre-#230 tokens stay valid)', async () => {

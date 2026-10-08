@@ -12,7 +12,11 @@ export async function handlePlatformMediation(request: Request, env: Env, route:
   if (url.pathname === API_PREFIX || url.pathname.startsWith(`${API_PREFIX}/`)) {
     // API/auth plane: the backend mints + verifies sessions with the same key,
     // so a 401 here is authoritative — the session really is invalid → clear it.
-    return forwardWithSession(request, env.API, upstreamApiUrl(url), true, route);
+    // The dedicated passkey handler is the only route that may select a
+    // relying party for a ceremony. Do not turn /.pas/api into a second way
+    // to obtain an app-host assertion and expose its token to page JS.
+    const isPasskeyRoute = url.pathname.startsWith(`${API_PREFIX}/v1/auth/passkey/`);
+    return forwardWithSession(request, env.API, upstreamApiUrl(url), true, route, undefined, !isPasskeyRoute);
   }
   if (url.pathname === DATA_PREFIX || url.pathname.startsWith(`${DATA_PREFIX}/`)) {
     // Data plane: each data-worker holds its own SESSION_SIGNING_KEY, which can
@@ -52,7 +56,7 @@ function upstreamDataUrl(url: URL, route: Route): string {
 /** Rewrite of the upstream request — the worker plane sends every method as a POST with the original in headers. */
 interface Upstream { method: string; headers: Record<string, string> }
 
-async function forwardWithSession(request: Request, binding: Fetcher | null, upstreamUrl: string, clearCookieOn401: boolean, route: Route, as?: Upstream): Promise<Response> {
+async function forwardWithSession(request: Request, binding: Fetcher | null, upstreamUrl: string, clearCookieOn401: boolean, route: Route, as?: Upstream, includeHostContext = true): Promise<Response> {
   const token = readCookie(request.headers.get("Cookie"), SESSION_COOKIE_NAME);
   if (!token) return noStore(Response.json({ error: "not signed in" }, { status: 401 }));
 
@@ -60,7 +64,7 @@ async function forwardWithSession(request: Request, binding: Fetcher | null, ups
     return noStore(new Response("Forbidden", { status: 403 }));
   }
 
-  const headers = forwardedHeaders(request.headers, token, route);
+  const headers = forwardedHeaders(request.headers, token, route, new URL(request.url).hostname, includeHostContext);
   for (const [name, value] of Object.entries(as?.headers ?? {})) headers.set(name, value);
   const init: RequestInit = {
     method: as?.method ?? request.method,
@@ -81,7 +85,7 @@ async function forwardWithSession(request: Request, binding: Fetcher | null, ups
   return response;
 }
 
-function forwardedHeaders(source: Headers, token: string, route: Route): Headers {
+function forwardedHeaders(source: Headers, token: string, route: Route, hostname: string, includeHostContext: boolean): Headers {
   const headers = new Headers(source);
   headers.delete("Authorization");
   headers.delete("Cookie");
@@ -98,10 +102,11 @@ function forwardedHeaders(source: Headers, token: string, route: Route): Headers
   // stays the session below.
   headers.delete("X-PAS-App");
   headers.set("X-PAS-App", route.slug);
-  // X-PAS-Host is set only by the host's own /.pas/auth/passkey handler (#230):
-  // the passkey routes refuse a request without it, so they are unreachable
-  // here — a step-up through this path would hand page JS the minted token.
+  // The resolved hostname is host-authenticated context too. App operations
+  // that declare step_up use it to require a passkey token from this exact
+  // relying party (#331); it does not expose the session token to page JS.
   headers.delete("X-PAS-Host");
+  if (includeHostContext) headers.set("X-PAS-Host", hostname);
   // Never let a browser-supplied internal token reach the data-worker's trusted
   // path — this cookie-mediation route is the browser data plane, so the
   // internal path must only ever be reachable from the backend actions-executor.

@@ -23,6 +23,8 @@ export interface FasUser {
   authTime?: number;
   /** Session `auth_method` (#230): how they did — 'github', 'google', 'password', 'passkey'. */
   authMethod?: string;
+  /** Verified WebAuthn relying party of a passkey step-up (#331). */
+  stepUpRpId?: string;
   /** Per-app roles: { appId: ['moderator', ...] }. */
 }
 
@@ -46,6 +48,7 @@ export async function requireUser(c: Context<{ Bindings: Env }>): Promise<FasUse
     roles: claims.roles ?? ['user'],
     ...(typeof claims.auth_time === 'number' ? { authTime: claims.auth_time } : {}),
     ...(typeof claims.auth_method === 'string' ? { authMethod: claims.auth_method } : {}),
+    ...(typeof claims.step_up_rp_id === 'string' ? { stepUpRpId: claims.step_up_rp_id } : {}),
   };
 }
 
@@ -69,7 +72,7 @@ export function stepUpMaxAgeSeconds(env: Pick<Env, 'STEP_UP_MAX_AGE_SECONDS'>): 
 export function requireRecentAuth(
   user: FasUser,
   env: Pick<Env, 'STEP_UP_MAX_AGE_SECONDS'>,
-  opts: { method?: 'passkey' } = {},
+  opts: { method?: 'passkey'; rpId?: string } = {},
 ): void {
   const maxAge = stepUpMaxAgeSeconds(env);
   const age = user.authTime === undefined ? Infinity : Math.floor(Date.now() / 1000) - user.authTime;
@@ -77,7 +80,10 @@ export function requireRecentAuth(
   // password sign-in does not. The body says so, so the client runs the passkey
   // ceremony rather than a sign-in that would be refused again.
   const wrongMethod = opts.method !== undefined && user.authMethod !== opts.method;
-  if (!(age <= maxAge) || wrongMethod) {
+  // An omitted claim is a refusal when an audience is required: tokens minted
+  // before #331 cannot become a wildcard step-up for every relying party.
+  const wrongRp = opts.rpId !== undefined && user.stepUpRpId !== opts.rpId;
+  if (!(age <= maxAge) || wrongMethod || wrongRp) {
     throw new HttpError('step_up_required', 403, {
       message: opts.method ? 'Recent passkey verification required' : 'Recent authentication required',
       max_age: maxAge,

@@ -100,7 +100,7 @@ describe('admin role gate (#293)', () => {
     env.DB.prepare("INSERT INTO app_roles (app_id, user_id, role_name) VALUES ('stash', ?1, ?2)").bind(uid, r)));
   const get = async (path: string, token: string) => SELF.fetch(`${BASE}/v1/apps/stash/operator${path}`, json('GET', undefined, token));
   const fresh = (uid: string, login: string) => mintSession(
-    { uid, login, avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 5, auth_method: 'passkey' } as never, env.SESSION_SIGNING_KEY);
+    { uid, login, avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 5, auth_method: 'passkey', step_up_rp_id: 'console.proappstore.online' } as never, env.SESSION_SIGNING_KEY);
 
   beforeEach(async () => {
     await seedUser('gh:4', 'admina');

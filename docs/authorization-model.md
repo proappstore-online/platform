@@ -325,10 +325,18 @@ on an app with no user behind them. They run with platform identities that are
   that must not take the page's word. Those checks are:
   - the secret proxy's app binding (#80);
   - passkey relying parties (#230);
+  - app action step-up audience checks (#331).
   - the app-worker browser route (#260);
   - usage attribution (#58);
   - `source = 'mediated'` on logs;
   - the operator view's refusal of app pages (#300).
+
+- **Console Access assertion** (`Cf-Access-Jwt-Assertion`, #331) is the edge's
+  assertion that a direct passkey ceremony originated on the Creator Console.
+  It selects the Console relying party only after Cloudflare Access has removed
+  caller-supplied copies and stamped its own; `Origin` is not an authorization
+  signal. Console-gated step-ups require `step_up_rp_id` to equal
+  `console.proappstore.online`.
 
   It is true only because of where it can arrive:
   - **Direct callers cannot send it.** `api.proappstore.online` has its own route
