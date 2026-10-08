@@ -13,79 +13,62 @@
  *    Here the read itself is the cost being bounded, so a successful validate is
  *    just as expensive as a failed one.
  *
- *  - **Keyed on (ip, appId), not on the credential.** Keying on the key being
- *    validated would let an attacker rotate keys to get an unlimited budget,
- *    which is exactly the guessing behaviour this bounds. IP is coarse and
+ *  - **Two buckets, both keyed on IP, not on the credential.** Keying on the
+ *    key being validated would let an attacker rotate keys to get an unlimited
+ *    budget, which is exactly the guessing behaviour this bounds. Each request
+ *    spends one claim from a per-IP ceiling (MAX_VALIDATE_IP_ATTEMPTS, across
+ *    all apps) and then one from a per-(ip, appId) bucket (MAX_VALIDATE_ATTEMPTS).
+ *    `appId` comes from the request body, so on its own it would hand a caller a
+ *    fresh bucket — and a fresh limiter row — per invented id (#324). The
+ *    ceiling caps that rotation, and the route only claims a per-app bucket
+ *    for an app that exists in the registry, so rows per IP are bounded by
+ *    one ceiling row plus the real apps it validates against. IP is coarse and
  *    shared-NAT callers share a budget; that is the accepted trade-off for an
- *    endpoint with no identity to key on. Raise the limit rather than switching
- *    to a key-derived dimension if legitimate traffic ever trips it.
+ *    endpoint with no identity to key on. Raise the limits rather than
+ *    switching to a key-derived dimension if legitimate traffic ever trips them.
  *
- * A blocked caller is NOT written back, so the limiter cannot be used to extend
- * its own window, and a caller that keeps hammering stops costing writes once
- * they are over the limit — the write cost per (ip, appId) is bounded at
- * MAX_VALIDATE_ATTEMPTS per window.
- *
- * Store is injected so the logic is unit-testable without D1.
+ * A claim is one atomic conditional upsert, so concurrent requests each get a
+ * distinct count and cannot overshoot a limit. A blocked caller is NOT written
+ * back (the upsert's WHERE fails and nothing is returned), so the limiter cannot
+ * be used to extend its own window, and a caller that keeps hammering stops
+ * costing writes once it is over the limit.
  */
 
 export const MAX_VALIDATE_ATTEMPTS = 10;
 export const VALIDATE_WINDOW_MS = 60 * 1000; // 1 minute
+/** Per-IP ceiling across every app id, so rotating ids buys no extra budget (#324). */
+export const MAX_VALIDATE_IP_ATTEMPTS = 30;
 
-export interface ValidateAttemptRow {
-  window_start: number;
-  count: number;
-}
-
-export interface ValidateAttemptStore {
-  read(key: string): Promise<ValidateAttemptRow | null>;
-  /** Upsert the row to exactly these values. */
-  set(key: string, row: ValidateAttemptRow): Promise<void>;
-}
-
-export function d1ValidateAttemptStore(db: D1Database): ValidateAttemptStore {
-  return {
-    async read(key) {
-      return db
-        .prepare('SELECT window_start, count FROM license_validate_attempts WHERE key = ?')
-        .bind(key)
-        .first<ValidateAttemptRow>();
-    },
-    async set(key, row) {
-      await db
-        .prepare(
-          `INSERT INTO license_validate_attempts (key, window_start, count) VALUES (?1, ?2, ?3)
-           ON CONFLICT(key) DO UPDATE SET window_start = ?2, count = ?3`,
-        )
-        .bind(key, row.window_start, row.count)
-        .run();
-    },
-  };
-}
-
-/** Bucket key for a caller. IP is whatever the edge saw; appId scopes the budget. */
+/** Bucket key for a caller against one app. IP is whatever the edge saw. */
 export function validateAttemptKey(ip: string, appId: string): string {
   return `${ip}:${appId}`;
 }
 
 /**
- * Consume one attempt. Returns false when the caller is already at the limit
- * for the current window, in which case nothing is written.
+ * Bucket key for a caller's per-IP ceiling. Cannot equal a per-app key: those
+ * end in an app id, which starts with a letter, never in an IP.
  */
-export async function consumeValidateAttempt(
-  store: ValidateAttemptStore,
-  key: string,
-  nowMs: number,
-): Promise<boolean> {
-  const row = await store.read(key);
+export function validateIpKey(ip: string): string {
+  return `ip:${ip}`;
+}
 
-  // No row, or the previous window has rolled over — start a fresh one.
-  if (!row || nowMs - row.window_start >= VALIDATE_WINDOW_MS) {
-    await store.set(key, { window_start: nowMs, count: 1 });
-    return true;
-  }
-
-  if (row.count >= MAX_VALIDATE_ATTEMPTS) return false;
-
-  await store.set(key, { window_start: row.window_start, count: row.count + 1 });
-  return true;
+/**
+ * Consume one attempt against `limit`. Returns false when the caller is already
+ * at the limit for the current window, in which case nothing is written. A row
+ * whose window has expired restarts at 1; SQLite evaluates every SET expression
+ * and the WHERE against the old row.
+ */
+export async function consumeValidateAttempt(db: D1Database, key: string, limit: number, nowMs: number): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `INSERT INTO license_validate_attempts (key, window_start, count) VALUES (?1, ?2, 1)
+       ON CONFLICT(key) DO UPDATE SET
+         window_start = CASE WHEN ?2 - window_start >= ?3 THEN ?2 ELSE window_start END,
+         count        = CASE WHEN ?2 - window_start >= ?3 THEN 1 ELSE count + 1 END
+       WHERE ?2 - window_start >= ?3 OR count < ?4
+       RETURNING count`,
+    )
+    .bind(key, nowMs, VALIDATE_WINDOW_MS, limit)
+    .first<{ count: number }>();
+  return row !== null;
 }

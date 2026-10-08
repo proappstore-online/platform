@@ -26,7 +26,7 @@ Maps answers are shared through the Cloudflare edge cache (#222). Geocode and re
 
 The per-request rate-limit ledgers are `maps_usage` (1-hour window), `sms_usage` (UTC day, in milliseconds) and `notification_log` (60 seconds). The daily `prune-app-logs` workflow deletes their rows once they are 2 days old (#223), well past every window. It deletes at most 10,000 rows per table per call. The endpoint reports rows deleted per table and whether a backlog remains. The workflow keeps draining the backlog and fails on a per-table error.
 
-The same prune covers the per-day and per-window rate-limit counters (#27), which are also read only for their current window: `app_proxy_usage` and `app_proxy_usage_user` (UTC day), `ai_daily_budget` (UTC day), `license_validate_attempts` (60 seconds, keyed by caller IP) and `provision_attempts` (1 hour or 1 day). Rows older than 2 days are deleted, so the current window is never touched.
+The same prune covers the per-day and per-window rate-limit counters (#27), which are also read only for their current window: `app_proxy_usage` and `app_proxy_usage_user` (UTC day), `ai_daily_budget` (UTC day), `license_validate_attempts` (60 seconds, one per-IP ceiling row plus one row per IP and registered app — an invented app id gets no row, #324) and `provision_attempts` (1 hour or 1 day). Rows older than 2 days are deleted, so the current window is never touched.
 
 The same prune keeps 30 days of scheduled-action run history (`scheduled_action_runs`, #27). It never deletes a `claimed` run, which is the live-claim overlap guard. The failure breaker lives in `scheduled_action_state` and is unaffected.
 

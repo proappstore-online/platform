@@ -6,19 +6,40 @@ import { mintLicenseKey, LICENSE_KEY_BYTES } from './license.js';
 const TOK = await testToken('gh:1');
 
 /**
- * SQL-aware D1 mock. The validate route reads and writes the throttle bucket
- * before it touches `licenses`, so ordering-based mocks (mockD1(stmt1, ...))
- * silently hand the license fixture to the limiter. Routing on the SQL keeps
- * each test's intent legible and immune to future reordering.
+ * SQL-aware D1 mock. The validate route claims its throttle buckets and checks
+ * the app registry before it touches `licenses`, so ordering-based mocks
+ * (mockD1(stmt1, ...)) silently hand the license fixture to the limiter. Routing
+ * on the SQL keeps each test's intent legible and immune to future reordering.
+ * `throttled` names the bucket whose claim is refused (its upsert returns no
+ * row); `claims` records every bucket key claimed, in order.
  */
-function licenseDb(opts: { license?: Record<string, unknown> | null; attempts?: { window_start: number; count: number } | null } = {}) {
+function licenseDb(opts: { license?: Record<string, unknown> | null; app?: boolean; throttled?: 'ip' | 'app' } = {}) {
+  const claims: string[] = [];
   const prepare = vi.fn((sql: string) => {
-    if (/license_validate_attempts/i.test(sql)) return mockStmt({ first: opts.attempts ?? null });
+    if (/license_validate_attempts/i.test(sql)) {
+      let key = '';
+      const stmt = {
+        bind: vi.fn((...args: unknown[]) => { key = String(args[0]); return stmt; }),
+        first: vi.fn(async () => {
+          claims.push(key);
+          const bucket = key.startsWith('ip:') ? 'ip' : 'app';
+          return opts.throttled === bucket ? null : { count: 1 };
+        }),
+      };
+      return stmt;
+    }
+    if (/FROM apps WHERE id/i.test(sql)) return mockStmt({ first: opts.app === false ? null : { ok: 1 } });
     if (/FROM licenses/i.test(sql)) return mockStmt({ first: opts.license ?? null });
     return mockStmt();
   });
-  return { prepare } as unknown as ReturnType<typeof mockD1>;
+  return { prepare, claims } as unknown as ReturnType<typeof mockD1> & { claims: string[] };
 }
+const validateReq = (body: unknown, ip = '203.0.113.7') => ({
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip },
+  body: JSON.stringify(body),
+});
+const sqlOf = (db: ReturnType<typeof licenseDb>) => (db.prepare as ReturnType<typeof vi.fn>).mock.calls.map((call) => String(call[0]));
 
 /** A license row joined to an ACTIVE subscription — the only entitled shape (#86). */
 function entitled(over: Record<string, unknown> = {}) {
@@ -116,8 +137,7 @@ describe('POST /v1/license/validate', () => {
   });
 
   it('returns {valid: false} when no matching license row', async () => {
-    const licenseStmt = mockStmt({ first: null });
-    const db = mockD1(licenseStmt);
+    const db = licenseDb({ license: null });
     const res = await app.request(
       '/v1/license/validate',
       {
@@ -140,8 +160,7 @@ describe('POST /v1/license/validate', () => {
       expires_at: Date.now() - 1000,
       revoked: 0,
     };
-    const licenseStmt = mockStmt({ first: expiredLicense });
-    const db = mockD1(licenseStmt);
+    const db = licenseDb({ license: expiredLicense });
     const res = await app.request(
       '/v1/license/validate',
       {
@@ -267,55 +286,48 @@ describe('license entitlement follows the subscription (#86)', () => {
   });
 });
 
-describe('POST /v1/license/validate — throttle (#86)', () => {
-  it('429s a caller already at the window limit', async () => {
-    const db = licenseDb({ license: entitled(), attempts: { window_start: Date.now(), count: 10 } });
-    const res = await app.request(
-      '/v1/license/validate',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.7' },
-        body: JSON.stringify({ appId: 'myapp', key: 'real-key' }),
-      },
-      makeEnv({}, db),
-    );
+describe('POST /v1/license/validate — throttle (#86, #324)', () => {
+  it('429s a caller over the per-app limit, without querying licenses', async () => {
+    const db = licenseDb({ license: entitled(), throttled: 'app' });
+    const res = await app.request('/v1/license/validate', validateReq({ appId: 'myapp', key: 'real-key' }), makeEnv({}, db));
     expect(res.status).toBe(429);
     // 429, not {valid:false}: a throttled caller has been told nothing about the
     // key, and answering "invalid" would read as revocation to a legitimate app.
     expect(await res.json()).toMatchObject({ error: expect.stringMatching(/too many/i) });
+    expect(sqlOf(db).some((s) => /FROM licenses/i.test(s))).toBe(false);
   });
 
-  it('does not query licenses at all once throttled', async () => {
-    const db = licenseDb({ license: entitled(), attempts: { window_start: Date.now(), count: 10 } });
-    await app.request(
-      '/v1/license/validate',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.7' },
-        body: JSON.stringify({ appId: 'myapp', key: 'real-key' }),
-      },
-      makeEnv({}, db),
-    );
-    const touchedLicenses = (db.prepare as ReturnType<typeof vi.fn>).mock.calls
-      .map((call) => String(call[0]))
-      .some((s) => /FROM licenses/i.test(s));
-    expect(touchedLicenses).toBe(false);
+  it('429s a caller over the per-IP ceiling before the registry or any per-app bucket', async () => {
+    const db = licenseDb({ license: entitled(), throttled: 'ip' });
+    const res = await app.request('/v1/license/validate', validateReq({ appId: 'myapp', key: 'real-key' }), makeEnv({}, db));
+    expect(res.status).toBe(429);
+    expect(db.claims).toEqual(['ip:203.0.113.7']);
+    expect(sqlOf(db).some((s) => /FROM (apps|licenses)/i.test(s))).toBe(false);
   });
 
-  it('serves a caller whose previous window has rolled over', async () => {
-    const stale = { window_start: Date.now() - 61_000, count: 999 };
-    const db = licenseDb({ license: entitled({ key: 'real-key' }), attempts: stale });
-    const res = await app.request(
-      '/v1/license/validate',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.7' },
-        body: JSON.stringify({ appId: 'myapp', key: 'real-key' }),
-      },
-      makeEnv({}, db),
-    );
-    expect(res.status).toBe(200);
+  it('a valid check spends the per-IP ceiling, then the per-(ip, app) bucket', async () => {
+    const db = licenseDb({ license: entitled({ key: 'real-key' }) });
+    const res = await app.request('/v1/license/validate', validateReq({ appId: 'myapp', key: 'real-key' }), makeEnv({}, db));
     expect(await res.json()).toEqual({ valid: true });
+    expect(db.claims).toEqual(['ip:203.0.113.7', '203.0.113.7:myapp']);
+  });
+
+  it('a nonexistent app answers {valid:false} and never gets a per-app bucket', async () => {
+    const db = licenseDb({ app: false });
+    const res = await app.request('/v1/license/validate', validateReq({ appId: 'no-such-app', key: 'k' }), makeEnv({}, db));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ valid: false });
+    expect(db.claims).toEqual(['ip:203.0.113.7']);
+    expect(sqlOf(db).some((s) => /FROM licenses/i.test(s))).toBe(false);
+  });
+
+  it('a malformed app id answers {valid:false} without touching D1', async () => {
+    for (const appId of ['UPPER', '1abc', 'a'.repeat(59), 'x:y', ' myapp', 42]) {
+      const db = licenseDb();
+      const res = await app.request('/v1/license/validate', validateReq({ appId, key: 'k' }), makeEnv({}, db));
+      expect(await res.json(), String(appId)).toEqual({ valid: false });
+      expect(db.prepare, String(appId)).not.toHaveBeenCalled();
+    }
   });
 });
 

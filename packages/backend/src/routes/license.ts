@@ -26,10 +26,13 @@ import type { Env, LicenseRow } from '../types.js';
 import { requireUser } from '../lib/auth.js';
 import { wrap } from '../lib/route-wrap.js';
 import {
+  MAX_VALIDATE_ATTEMPTS,
+  MAX_VALIDATE_IP_ATTEMPTS,
   consumeValidateAttempt,
-  d1ValidateAttemptStore,
   validateAttemptKey,
+  validateIpKey,
 } from '../lib/license-rate-limit.js';
+import { APP_ID_RE } from './validation.js';
 
 export const licenseRoutes = new Hono<{ Bindings: Env }>();
 
@@ -138,20 +141,27 @@ licenseRoutes.post('/license/validate', async (c) => {
   const body = await c.req.json<{ appId: string; key: string }>().catch(() => null);
   const appId = body?.appId;
   const key = body?.key;
-  if (!appId || !key) return c.json({ valid: false });
+  if (typeof appId !== 'string' || typeof key !== 'string' || !appId || !key) return c.json({ valid: false });
+  // A malformed app id can match no license: answer before touching D1.
+  if (!APP_ID_RE.test(appId)) return c.json({ valid: false });
 
   // Throttle BEFORE the lookup (#86): the DB read is the cost being bounded,
   // and a license key is a guessable bearer credential. 429 rather than a
   // `valid:false` — a throttled caller has not been told anything about the
   // key, and silently answering "invalid" would make a rate-limited legitimate
   // app believe its key had been revoked.
+  //
+  // Two buckets (#324). `appId` is caller-chosen, so the per-IP ceiling comes
+  // first and is spent whatever the id; rotating ids cannot buy budget. The
+  // per-(ip, app) bucket is claimed only for an app in the registry, so an
+  // invented id never creates a limiter row of its own.
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown';
-  const allowed = await consumeValidateAttempt(
-    d1ValidateAttemptStore(c.env.DB),
-    validateAttemptKey(ip, appId),
-    Date.now(),
-  );
-  if (!allowed) return c.json({ error: 'too many validation attempts' }, 429);
+  const now = Date.now();
+  const tooMany = () => c.json({ error: 'too many validation attempts' }, 429);
+  if (!(await consumeValidateAttempt(c.env.DB, validateIpKey(ip), MAX_VALIDATE_IP_ATTEMPTS, now))) return tooMany();
+  const known = await c.env.DB.prepare('SELECT 1 AS ok FROM apps WHERE id = ?').bind(appId).first();
+  if (!known) return c.json({ valid: false });
+  if (!(await consumeValidateAttempt(c.env.DB, validateAttemptKey(ip, appId), MAX_VALIDATE_ATTEMPTS, now))) return tooMany();
 
   // Inner join, and every failure returns the same bare `valid:false` — this
   // route is unauthenticated, so distinguishing "no such key" from "key exists
