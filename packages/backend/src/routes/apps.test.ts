@@ -90,6 +90,35 @@ describe('GET /v1/apps', () => {
     expect(a.submission_status).toBe('approved');
   });
 
+  it('sorts apps alphabetically by their displayed name', async () => {
+    const appsStmt = mockStmt({
+      all: {
+        results: [
+          { id: 'zebra', creator_id: 'gh:1', d1_database_id: 'db1', created_at: 3000 },
+          { id: 'alpha', creator_id: 'gh:1', d1_database_id: 'db2', created_at: 2000 },
+          { id: 'middle', creator_id: 'gh:1', d1_database_id: 'db3', created_at: 1000 },
+        ],
+      },
+    });
+    const subsStmt = mockStmt({
+      all: {
+        results: [
+          {
+            app_id: 'alpha', name: 'apple Notes', category: 'productivity', description: '', icon: null, icon_bg: null,
+            pro_features: null, status: 'approved', suggested_monthly_price_cents: null, created_at: 1000,
+          },
+        ],
+      },
+    });
+    const res = await app.request('/v1/apps', { headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({}, mockD1(appsStmt, subsStmt)));
+
+    expect((await res.json() as { apps: { name: string }[] }).apps.map((app) => app.name)).toEqual([
+      'apple Notes',
+      'Middle',
+      'Zebra',
+    ]);
+  });
+
   it('does not expose other creators apps to regular users', async () => {
     // The route filters by creator_id; we trust DB does the filtering.
     // Verify the query is bound with the user id by checking the call went through.
@@ -134,6 +163,33 @@ describe('GET /v1/apps', () => {
     expect(db.prepare).toHaveBeenCalledWith(
       expect.stringContaining('creator_id'),
     );
+  });
+});
+
+describe('GET /v1/me/administered-apps', () => {
+  it('sorts operator-only apps alphabetically by their displayed name', async () => {
+    const administeredStmt = mockStmt({
+      all: {
+        results: [
+          { id: 'zebra', name: 'Zebra', created_at: 3000 },
+          { id: 'alpha', name: 'apple Notes', created_at: 2000 },
+          { id: 'middle', name: null, created_at: 1000 },
+        ],
+      },
+    });
+
+    const res = await app.request(
+      '/v1/me/administered-apps',
+      { headers: { Authorization: `Bearer ${TOK}` } },
+      makeEnv({}, mockD1(administeredStmt)),
+    );
+
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store');
+    expect((await res.json() as { apps: { id: string; name: string }[] }).apps).toEqual([
+      { id: 'alpha', name: 'apple Notes', created_at: 2000 },
+      { id: 'middle', name: 'Middle', created_at: 1000 },
+      { id: 'zebra', name: 'Zebra', created_at: 3000 },
+    ]);
   });
 });
 

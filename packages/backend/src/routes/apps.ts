@@ -79,6 +79,13 @@ function toTitleCase(id: string): string {
     .join(' ');
 }
 
+const appNameCollator = new Intl.Collator('en', { sensitivity: 'base', numeric: true });
+
+/** Keep every apps menu predictable, regardless of provisioning date or database order. */
+function sortAppsByName<T extends { id: string; name: string }>(apps: T[]): T[] {
+  return apps.sort((a, b) => appNameCollator.compare(a.name, b.name) || appNameCollator.compare(a.id, b.id));
+}
+
 export const appsRoutes = new Hono<{ Bindings: Env }>();
 
 appsRoutes.get('/apps', wrap(async (c) => {
@@ -149,7 +156,7 @@ appsRoutes.get('/apps', wrap(async (c) => {
     };
   });
 
-  return c.json({ apps: dtos });
+  return c.json({ apps: sortAppsByName(dtos) });
 }));
 
 /**
@@ -177,7 +184,13 @@ appsRoutes.get('/me/administered-apps', wrap(async (c) => {
       LIMIT 200`,
   ).bind(...roleSubjects(user)).all<{ id: string; created_at: number; name: string | null }>();
   c.header('Cache-Control', 'private, no-store');
-  return c.json({ apps: (results ?? []).map((a) => ({ id: a.id, name: a.name ?? toTitleCase(a.id), created_at: a.created_at })) });
+  return c.json({
+    apps: sortAppsByName((results ?? []).map((a) => ({
+      id: a.id,
+      name: a.name ?? toTitleCase(a.id),
+      created_at: a.created_at,
+    }))),
+  });
 }));
 
 /**
