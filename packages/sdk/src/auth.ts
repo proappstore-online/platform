@@ -1,4 +1,5 @@
 import type { Unsubscribe, User } from './base-types.js';
+import type { AuthTelemetryEvent } from './logs.js';
 
 export type AuthProvider = 'github' | 'google' | 'email';
 export type AuthMode = 'legacy-bearer' | 'platform-cookie';
@@ -69,6 +70,22 @@ interface Session {
   user: User;
 }
 
+interface AuthTelemetryReporter {
+  captureAuthEvent(event: AuthTelemetryEvent): void;
+}
+
+interface InvalidationContext {
+  reason: 'api_401' | 'legacy_session_rejected';
+  phase: 'api_request' | 'cookie_hydration' | 'legacy_hydration';
+  route: 'platform.api' | 'auth.me';
+  correlationId: string;
+  status?: number;
+}
+
+const INVALIDATION_ID_HEADER = 'X-PAS-Session-Invalidation-Id';
+const INVALIDATION_REASON_HEADER = 'X-PAS-Session-Invalidation-Reason';
+const CORRELATION_ID_RE = /^[a-f0-9]{32}$/i;
+
 /** OAuth authentication — sign in, sign out, session management. */
 /** Options for {@link Auth.register}. */
 export interface RegisterOptions {
@@ -86,6 +103,8 @@ export class Auth {
   private initializing: Promise<void> | null = null;
   /** init() has run to completion once on this page. */
   private initialized = false;
+  private reporter: AuthTelemetryReporter | null = null;
+  private sessionStartedAt = Date.now();
 
   constructor(
     private readonly appId: string,
@@ -131,6 +150,11 @@ export class Auth {
   /** True when this SDK instance uses PAS-hosted HttpOnly cookie sessions. */
   get usesPlatformCookie(): boolean {
     return this.authMode === 'platform-cookie';
+  }
+
+  /** @internal Wired by ProAppStore after its existing Logs instance is created. */
+  setTelemetryReporter(reporter: AuthTelemetryReporter): void {
+    this.reporter = reporter;
   }
 
   /**
@@ -419,16 +443,14 @@ export class Auth {
 
   /** Clear the session and notify listeners. A sign-out is a definite answer: the status becomes `signed-out` at once. */
   signOut(): void {
-    this.session = null;
-    this.resolved = true;
+    this.transitionToSignedOut({
+      reason: 'explicit_sign_out', phase: 'explicit_sign_out', route: 'auth.logout', correlationId: newCorrelationId(),
+    });
     if (this.authMode === 'platform-cookie') {
       if (typeof fetch !== 'undefined') {
         fetch('/.pas/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
       }
-    } else {
-      this.clearStorage();
     }
-    this.emit();
   }
 
   /**
@@ -436,8 +458,19 @@ export class Auth {
    * Clears the stale session so the UI reacts immediately.
    * Do not call directly — use `signOut()` instead.
    */
-  handleUnauthorized(): void {
-    if (this.session) this.signOut();
+  handleUnauthorized(context?: InvalidationContext): void {
+    // SDK primitives still call this after `authenticatedFetch`. That fetch has
+    // already acted on a verified API-plane signal; a bare call must never turn
+    // a data-plane 401 into a logout.
+    if (context) {
+      this.transitionToSignedOut(context);
+    } else if (this.authMode === 'legacy-bearer') {
+      // Backward-compatible for legacy SDK primitives. Cookie-mode calls must
+      // be accompanied by the host's authoritative invalidation headers.
+      this.transitionToSignedOut({
+        reason: 'api_401', phase: 'api_request', route: 'platform.api', correlationId: newCorrelationId(), status: 401,
+      });
+    }
   }
 
   /**
@@ -508,7 +541,9 @@ export class Auth {
           this.emit();
           this.ensureMember();
         } catch {
-          this.signOut();
+          this.transitionToSignedOut({
+            reason: 'legacy_session_rejected', phase: 'legacy_hydration', route: 'auth.me', correlationId: newCorrelationId(),
+          });
         }
       }
       return;
@@ -577,6 +612,7 @@ export class Auth {
   async authenticatedFetch(input: string | URL, init: RequestInit = {}): Promise<Response> {
     if (!this.session) throw new Error('Not signed in.');
     const target = this.authMode === 'platform-cookie' ? this.platformMediatedUrl(input) : input;
+    const targetString = target.toString();
     const headers = new Headers(init.headers);
     if (this.authMode === 'legacy-bearer') {
       const token = this.session.token;
@@ -589,7 +625,26 @@ export class Auth {
     };
     if (this.authMode === 'platform-cookie') requestInit.credentials = 'same-origin';
     const response = await fetch(target, requestInit);
-    if (response.status === 401) this.handleUnauthorized();
+    if (response.status === 401) {
+      if (this.authMode === 'platform-cookie') {
+        // Only the host's API plane is the session authority. This preserves
+        // the data-plane 401 rule even when an app primitive calls the legacy
+        // bare `handleUnauthorized()` afterward. A new SDK with an old host
+        // still signs out safely; it simply cannot join that event to a host id.
+        if (targetString === '/.pas/api' || targetString.startsWith('/.pas/api/')) {
+          const fromHost = response.headers.get(INVALIDATION_ID_HEADER) ?? '';
+          const correlationId = (
+            response.headers.get(INVALIDATION_REASON_HEADER) === 'api_401'
+            && CORRELATION_ID_RE.test(fromHost)
+          ) ? fromHost : newCorrelationId();
+          this.handleUnauthorized({ reason: 'api_401', phase: 'api_request', route: 'platform.api', correlationId, status: 401 });
+        }
+      } else if (this.isPlatformApi(input)) {
+        this.handleUnauthorized({
+          reason: 'api_401', phase: 'api_request', route: 'platform.api', correlationId: newCorrelationId(), status: 401,
+        });
+      }
+    }
     return response;
   }
 
@@ -600,8 +655,15 @@ export class Auth {
         headers: { Accept: 'application/json' },
       });
       if (!response.ok) {
-        this.session = null;
-        this.emit();
+        if (response.status === 401) {
+          const correlationId = response.headers.get(INVALIDATION_ID_HEADER) ?? newCorrelationId();
+          this.handleUnauthorized({
+            reason: 'api_401', phase: 'cookie_hydration', route: 'auth.me', correlationId,
+            status: 401,
+          });
+        } else {
+          this.reportHydrationFailure('cookie_hydration', 'auth.me', response.status);
+        }
         return;
       }
       const user = normalizeUser((await response.json()) as User);
@@ -610,8 +672,10 @@ export class Auth {
       this.emit();
       this.ensureMember();
     } catch {
-      this.session = null;
-      this.emit();
+      // A transport failure is not proof that a previously authenticated
+      // session is invalid. Keep it, but leave a bounded diagnostic for the
+      // unresolved hydration attempt.
+      this.reportHydrationFailure('cookie_hydration', 'auth.me');
     }
   }
 
@@ -625,6 +689,56 @@ export class Auth {
     if (target.origin === appData.origin) return `/.pas/data${target.pathname}${target.search}`;
     if (target.origin === base) return `${target.pathname}${target.search}`;
     return raw;
+  }
+
+  private isPlatformApi(input: string | URL): boolean {
+    try {
+      return new URL(input.toString(), this.apiBase).origin === new URL(this.apiBase).origin;
+    } catch {
+      return false;
+    }
+  }
+
+  private transitionToSignedOut(context: InvalidationContext | {
+    reason: 'explicit_sign_out'; phase: 'explicit_sign_out'; route: 'auth.logout'; correlationId: string; status?: never;
+  }): void {
+    const priorAuthenticated = this.session !== null;
+    this.session = null;
+    this.resolved = true;
+    if (this.authMode === 'legacy-bearer') this.clearStorage();
+    if (priorAuthenticated) {
+      this.reporter?.captureAuthEvent({
+        category: 'auth.session_lost',
+        reason: context.reason,
+        phase: context.phase,
+        route: context.route,
+        correlationId: context.correlationId,
+        priorAuthenticated: true,
+        ...(context.status === undefined ? {} : { status: context.status }),
+        ...this.telemetryContext(),
+      });
+    }
+    this.emit();
+  }
+
+  private reportHydrationFailure(phase: 'cookie_hydration' | 'legacy_hydration', route: 'auth.me', status?: number): void {
+    this.reporter?.captureAuthEvent({
+      category: 'auth.hydration_failure', reason: status === undefined ? 'network_error' : 'http_error', phase, route,
+      correlationId: newCorrelationId(), priorAuthenticated: this.session !== null,
+      ...(status === undefined ? {} : { status }),
+      ...this.telemetryContext(),
+    });
+  }
+
+  private telemetryContext(): Pick<AuthTelemetryEvent, 'elapsedMs' | 'online' | 'visibility'> {
+    const navigatorLike = globalThis as { navigator?: { onLine?: boolean } };
+    const documentLike = globalThis as { document?: { visibilityState?: string } };
+    const visibility = documentLike.document?.visibilityState;
+    return {
+      elapsedMs: Math.min(10 * 60 * 1000, Math.max(0, Math.trunc(Date.now() - this.sessionStartedAt))),
+      online: typeof navigatorLike.navigator?.onLine === 'boolean' ? navigatorLike.navigator.onLine : null,
+      visibility: visibility === 'visible' || visibility === 'hidden' ? visibility : 'unknown',
+    };
   }
 
   private async fetchUser(token: string): Promise<User> {
@@ -681,6 +795,16 @@ export class Auth {
     for (const listener of this.listeners) listener(this.user);
     for (const listener of this.statusListeners) listener(this.status, this.user);
   }
+}
+
+function newCorrelationId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID().replace(/-/g, '').toLowerCase();
+    }
+  } catch { /* fall through */ }
+  // Correlation-only, never security material; fixed 32-hex shape for the log sink.
+  return `${Math.random().toString(16).slice(2).padEnd(16, '0')}${Math.random().toString(16).slice(2).padEnd(16, '0')}`.slice(0, 32);
 }
 
 function normalizeUser(data: User): User {

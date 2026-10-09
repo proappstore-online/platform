@@ -25,6 +25,27 @@ import { postTelemetry, type TelemetryAuth } from './telemetry-transport.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
+/** Fixed, privacy-reviewed session diagnostics emitted by {@link Auth}. */
+export type AuthTelemetryEvent = {
+  category: 'auth.session_lost' | 'auth.hydration_failure';
+  reason: 'api_401' | 'explicit_sign_out' | 'legacy_session_rejected' | 'http_error' | 'network_error';
+  phase: 'api_request' | 'cookie_hydration' | 'legacy_hydration' | 'explicit_sign_out';
+  route: 'platform.api' | 'auth.me' | 'auth.logout';
+  /** Anonymous 32-hex correlation id. It is persisted as the log trace id. */
+  correlationId: string;
+  priorAuthenticated: boolean;
+  status?: number;
+  elapsedMs: number;
+  online: boolean | null;
+  visibility: 'visible' | 'hidden' | 'unknown';
+};
+
+const AUTH_CATEGORIES = new Set<AuthTelemetryEvent['category']>(['auth.session_lost', 'auth.hydration_failure']);
+const AUTH_REASONS = new Set<AuthTelemetryEvent['reason']>(['api_401', 'explicit_sign_out', 'legacy_session_rejected', 'http_error', 'network_error']);
+const AUTH_PHASES = new Set<AuthTelemetryEvent['phase']>(['api_request', 'cookie_hydration', 'legacy_hydration', 'explicit_sign_out']);
+const AUTH_ROUTES = new Set<AuthTelemetryEvent['route']>(['platform.api', 'auth.me', 'auth.logout']);
+const CORRELATION_ID_RE = /^[a-f0-9]{32}$/i;
+
 export interface MonitoringOptions {
   /** Default true. Set false to disable auto-capture and the flush timer. */
   auto?: boolean;
@@ -219,6 +240,41 @@ export class Logs {
     this.capture('error', 'app', message, data);
   }
 
+  /**
+   * Record one fixed-shape auth diagnostic. This deliberately accepts neither a
+   * URL nor an Error/payload: auth state is security-sensitive and must never
+   * accidentally serialize query strings, headers, credentials, or app data.
+   */
+  captureAuthEvent(event: AuthTelemetryEvent): void {
+    if (
+      !AUTH_CATEGORIES.has(event.category)
+      || !AUTH_REASONS.has(event.reason)
+      || !AUTH_PHASES.has(event.phase)
+      || !AUTH_ROUTES.has(event.route)
+      || !CORRELATION_ID_RE.test(event.correlationId)
+      || !Number.isInteger(event.elapsedMs)
+      || event.elapsedMs < 0
+      || event.elapsedMs > 10 * 60 * 1000
+      || (event.status !== undefined && (!Number.isInteger(event.status) || event.status < 100 || event.status > 599))
+    ) return;
+
+    const data = {
+      reason: event.reason,
+      phase: event.phase,
+      route: event.route,
+      correlationId: event.correlationId,
+      priorAuthenticated: event.priorAuthenticated,
+      ...(event.status === undefined ? {} : { status: event.status }),
+      elapsedMs: event.elapsedMs,
+      online: event.online,
+      visibility: event.visibility,
+    };
+    const message = event.category === 'auth.session_lost'
+      ? 'PAS session was invalidated'
+      : 'PAS session hydration could not establish validity';
+    this.captureWithTrace('warn', event.category, message, data, event.correlationId);
+  }
+
   /** Number of entries waiting to be sent. Exposed for tests and diagnostics. */
   get pending(): number {
     return this.queue.length;
@@ -232,6 +288,10 @@ export class Logs {
    * (platform#106's client half) without another queue.
    */
   capture(level: LogLevel, category: string, message: string, data?: unknown): void {
+    this.captureWithTrace(level, category, message, data);
+  }
+
+  private captureWithTrace(level: LogLevel, category: string, message: string, data?: unknown, traceId?: string): void {
     if (this.disabled || this.capturing) return;
     if (LEVEL_ORDER[level] < LEVEL_ORDER[this.minLevel]) return;
     this.capturing = true;
@@ -243,7 +303,7 @@ export class Logs {
         message: redactClient(String(message)).slice(0, MESSAGE_MAX),
         data: data === undefined ? undefined : this.safeData(data),
         build: this.options.build,
-        traceId: this.newTraceId(),
+        traceId: traceId ?? this.newTraceId(),
       };
       this.queue.push(entry);
       // Drop the OLDEST on overflow: during a loop the newest entries are all

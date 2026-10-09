@@ -625,6 +625,24 @@ describe("host same-origin platform mediation routes", () => {
 
     expect(res.status).toBe(401);
     expect(res.headers.get("Set-Cookie")).toContain("__Host-pas_session=; Max-Age=0");
+    expect(res.headers.get("X-PAS-Session-Invalidation-Reason")).toBe("api_401");
+    expect(res.headers.get("X-PAS-Session-Invalidation-Id")).toMatch(/^[a-f0-9]{32}$/);
+  });
+
+  it("attaches the same anonymous invalidation contract on a custom domain", async () => {
+    const env = makeEnv({ apiFetch: async () => new Response("invalid", { status: 401 }) });
+    const res = await worker.fetch(
+      new Request("https://app.example.com/.pas/api/v1/apps/meetup/roles/me", {
+        headers: { Cookie: "__Host-pas_session=cookie-token" },
+      }),
+      env,
+      ctx(),
+    );
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("Set-Cookie")).toContain("__Host-pas_session=; Max-Age=0");
+    expect(res.headers.get("X-PAS-Session-Invalidation-Reason")).toBe("api_401");
+    expect(res.headers.get("X-PAS-Session-Invalidation-Id")).toMatch(/^[a-f0-9]{32}$/);
   });
 });
 

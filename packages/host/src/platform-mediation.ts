@@ -6,6 +6,8 @@ const API_PREFIX = "/.pas/api";
 const DATA_PREFIX = "/.pas/data";
 const WORKER_PREFIX = "/.pas/worker";
 const API_BASE = "https://api.proappstore.online";
+export const SESSION_INVALIDATION_ID_HEADER = "X-PAS-Session-Invalidation-Id";
+export const SESSION_INVALIDATION_REASON_HEADER = "X-PAS-Session-Invalidation-Reason";
 
 export async function handlePlatformMediation(request: Request, env: Env, route: Route): Promise<Response | null> {
   const url = new URL(request.url);
@@ -81,8 +83,20 @@ async function forwardWithSession(request: Request, binding: Fetcher | null, ups
   if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") return upstream;
 
   const response = noStore(upstream);
-  if (clearCookieOn401 && upstream.status === 401) response.headers.append("Set-Cookie", clearSessionCookie());
+  if (clearCookieOn401 && upstream.status === 401) {
+    const correlationId = invalidationId();
+    response.headers.append("Set-Cookie", clearSessionCookie());
+    // Same-origin response metadata only. It contains neither a credential nor
+    // identity, and lines up SDK telemetry with this host operational log.
+    response.headers.set(SESSION_INVALIDATION_ID_HEADER, correlationId);
+    response.headers.set(SESSION_INVALIDATION_REASON_HEADER, "api_401");
+    console.warn("[pas-session-invalidated]", { reason: "api_401", correlationId, plane: "api" });
+  }
   return response;
+}
+
+function invalidationId(): string {
+  return crypto.randomUUID().replace(/-/g, "").toLowerCase();
 }
 
 function forwardedHeaders(source: Headers, token: string, route: Route, hostname: string, includeHostContext: boolean): Headers {

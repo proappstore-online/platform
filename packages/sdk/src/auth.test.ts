@@ -84,6 +84,120 @@ describe('Auth.init', () => {
     expect(auth.token).toBeNull();
   });
 
+  it('deduplicates failed cookie hydration and reports one bounded unresolved-hydration event', async () => {
+    const captureAuthEvent = vi.fn();
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      if (String(input) === '/.pas/auth/me') throw new Error('offline');
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal('window', { location: { hash: '', href: 'https://demo.example/', origin: 'https://demo.example/', pathname: '/', search: '' } });
+    vi.stubGlobal('fetch', fetchMock);
+    const auth = new Auth('demo', 'https://api.proappstore.online', 'platform-cookie');
+    auth.setTelemetryReporter({ captureAuthEvent });
+
+    await Promise.all([auth.init(), auth.init(), auth.init()]);
+
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === '/.pas/auth/me')).toHaveLength(1);
+    expect(captureAuthEvent).toHaveBeenCalledTimes(1);
+    expect(captureAuthEvent).toHaveBeenCalledWith(expect.objectContaining({
+      category: 'auth.hydration_failure', reason: 'network_error', phase: 'cookie_hydration', route: 'auth.me', priorAuthenticated: false,
+      correlationId: expect.stringMatching(/^[a-f0-9]{32}$/),
+    }));
+  });
+
+  it('duplicate init with a transient authMe failure preserves an established session and emits zero session-loss events', async () => {
+    const captureAuthEvent = vi.fn();
+    let meAttempts = 0;
+    const location = { hash: '', href: 'https://demo.example/', origin: 'https://demo.example/', pathname: '/', search: '' };
+    vi.stubGlobal('window', { location });
+    vi.stubGlobal('history', { replaceState: vi.fn() });
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      if (String(input) === '/.pas/auth/me') {
+        meAttempts += 1;
+        if (meAttempts > 1) throw new Error('transient network failure');
+        return Response.json({ id: 'gh:1', login: 'owner', name: 'Owner', avatarUrl: null, roles: ['user'], appRoles: {} });
+      }
+      return new Response(null, { status: 204 });
+    }));
+    const auth = new Auth('demo', 'https://api.proappstore.online', 'platform-cookie');
+    auth.setTelemetryReporter({ captureAuthEvent });
+    await auth.init();
+    // A fresh callback hash makes `init()` eligible again. The shared promise
+    // is deliberately exercised twice: this is the historical duplicate-init
+    // shape, but the second, transient `/me` failure must not discard session.
+    location.hash = '#pas_session=callback';
+    await Promise.all([auth.init(), auth.init()]);
+
+    expect(auth.status).toBe('signed-in');
+    expect(meAttempts).toBe(2);
+    expect(captureAuthEvent).toHaveBeenCalledTimes(1);
+    expect(captureAuthEvent).toHaveBeenCalledWith(expect.objectContaining({ category: 'auth.hydration_failure', priorAuthenticated: true }));
+    expect(captureAuthEvent.mock.calls.flat()).not.toContainEqual(expect.objectContaining({ category: 'auth.session_lost' }));
+  });
+
+  it('records a hydration HTTP failure with only its numeric status', async () => {
+    const captureAuthEvent = vi.fn();
+    vi.stubGlobal('window', { location: { hash: '', href: 'https://demo.example/', origin: 'https://demo.example/', pathname: '/', search: '' } });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('upstream body must not be logged', { status: 503 })));
+    const auth = new Auth('demo', 'https://api.proappstore.online', 'platform-cookie');
+    auth.setTelemetryReporter({ captureAuthEvent });
+    await auth.init();
+
+    expect(captureAuthEvent).toHaveBeenCalledWith(expect.objectContaining({
+      category: 'auth.hydration_failure', reason: 'http_error', status: 503,
+    }));
+    expect(JSON.stringify(captureAuthEvent.mock.calls)).not.toContain('upstream body');
+  });
+
+  it('records one API-plane session-loss event correlated to the host invalidation', async () => {
+    const correlationId = 'b'.repeat(32);
+    const captureAuthEvent = vi.fn();
+    let requests = 0;
+    vi.stubGlobal('window', { location: { hash: '', href: 'https://demo.example/', origin: 'https://demo.example/', pathname: '/', search: '' } });
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      if (String(input) === '/.pas/auth/me') return Response.json({ id: 'gh:1', login: 'owner', name: 'Owner', avatarUrl: null, roles: ['user'], appRoles: {} });
+      if (String(input).endsWith('/roles/ensure-member')) return new Response(null, { status: 204 });
+      if (String(input).startsWith('/.pas/api/')) {
+        requests += 1;
+        return new Response('invalid', { status: 401, headers: {
+          'X-PAS-Session-Invalidation-Id': correlationId,
+          'X-PAS-Session-Invalidation-Reason': 'api_401',
+        } });
+      }
+      return new Response(null, { status: 204 });
+    }));
+    const auth = new Auth('demo', 'https://api.proappstore.online', 'platform-cookie');
+    auth.setTelemetryReporter({ captureAuthEvent });
+    await auth.init();
+    await auth.authenticatedFetch('https://api.proappstore.online/v1/apps/demo/roles/me');
+
+    expect(requests).toBe(1);
+    expect(auth.status).toBe('signed-out');
+    expect(captureAuthEvent).toHaveBeenCalledTimes(1);
+    expect(captureAuthEvent).toHaveBeenCalledWith(expect.objectContaining({
+      category: 'auth.session_lost', reason: 'api_401', phase: 'api_request', route: 'platform.api', status: 401,
+      correlationId,
+    }));
+  });
+
+  it('does not sign out or emit a session-loss event for a data-plane 401', async () => {
+    const captureAuthEvent = vi.fn();
+    vi.stubGlobal('window', { location: { hash: '', href: 'https://demo.example/', origin: 'https://demo.example/', pathname: '/', search: '' } });
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      if (String(input) === '/.pas/auth/me') return Response.json({ id: 'gh:1', login: 'owner', name: 'Owner', avatarUrl: null, roles: ['user'], appRoles: {} });
+      if (String(input).endsWith('/roles/ensure-member')) return new Response(null, { status: 204 });
+      if (String(input).startsWith('/.pas/data/')) return new Response('worker signing key drift', { status: 401 });
+      return new Response(null, { status: 204 });
+    }));
+    const auth = new Auth('demo', 'https://api.proappstore.online', 'platform-cookie');
+    auth.setTelemetryReporter({ captureAuthEvent });
+    await auth.init();
+    await auth.authenticatedFetch('https://data-demo.proappstore.online/query');
+
+    expect(auth.status).toBe('signed-in');
+    expect(captureAuthEvent).not.toHaveBeenCalled();
+  });
+
   it('keeps a callback session in memory when localStorage write/remove throws', async () => {
     const localStorage = {
       getItem: vi.fn(() => null),

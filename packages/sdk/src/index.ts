@@ -148,6 +148,7 @@ export class ProAppStore {
     this.worker = new WorkerHttp();
     // Constructed before Actions: Actions reports failed calls to the logger (#106).
     this.logs = new Logs(opts.appId, apiBase, this.auth, opts.monitoring ?? {});
+    this.auth.setTelemetryReporter(this.logs);
     this.actions = new Actions(opts.appId, apiBase, this.auth, this.logs);
     this.tokens = new Tokens(opts.appId, apiBase, this.auth);
     // Auto-start telemetry unless the app opts out. Wrapped in try-catch

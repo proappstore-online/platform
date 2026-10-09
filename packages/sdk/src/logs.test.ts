@@ -176,6 +176,57 @@ describe('queueing and flushing', () => {
   });
 });
 
+describe('auth session diagnostics (#353)', () => {
+  const correlationId = 'a'.repeat(32);
+
+  it('writes only the reviewed auth fields and uses the correlation id as trace id', async () => {
+    const logs = makeLogs();
+    logs.captureAuthEvent({
+      category: 'auth.session_lost', reason: 'api_401', phase: 'api_request', route: 'platform.api',
+      correlationId, priorAuthenticated: true, status: 401, elapsedMs: 42, online: true, visibility: 'visible',
+      // Deliberately hostile extra values must never cross the telemetry boundary.
+      token: 'secret-token', cookie: 'session=secret', authorization: 'Bearer secret',
+      query: '?email=parent@example.com', child: { name: 'student' },
+    } as unknown as Parameters<Logs['captureAuthEvent']>[0]);
+    await logs.flushAsync();
+
+    const entry = sent[0].body.entries[0]!;
+    expect(entry.category).toBe('auth.session_lost');
+    expect(entry.traceId).toBe(correlationId);
+    expect(entry.data).toEqual({
+      reason: 'api_401', phase: 'api_request', route: 'platform.api', correlationId: '[hex]',
+      priorAuthenticated: true, status: 401, elapsedMs: 42, online: true, visibility: 'visible',
+    });
+    const wire = JSON.stringify(entry);
+    for (const secret of ['secret-token', 'session=secret', 'parent@example.com', 'student']) expect(wire).not.toContain(secret);
+  });
+
+  it('rejects values outside the auth telemetry allowlist', async () => {
+    const logs = makeLogs();
+    logs.captureAuthEvent({
+      category: 'auth.session_lost', reason: 'api_401', phase: 'api_request', route: 'platform.api?token=leak',
+      correlationId, priorAuthenticated: true, status: 401, elapsedMs: 0, online: null, visibility: 'unknown',
+    } as unknown as Parameters<Logs['captureAuthEvent']>[0]);
+    expect(logs.pending).toBe(0);
+    await logs.flushAsync();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('does not recurse or retry an auth diagnostic when telemetry itself fails', async () => {
+    const fetchMock = vi.fn(async () => { throw new Error('telemetry offline'); });
+    vi.stubGlobal('fetch', fetchMock);
+    const logs = makeLogs();
+    logs.captureAuthEvent({
+      category: 'auth.hydration_failure', reason: 'network_error', phase: 'cookie_hydration', route: 'auth.me',
+      correlationId, priorAuthenticated: true, elapsedMs: 1, online: false, visibility: 'hidden',
+    });
+    await logs.flushAsync();
+    await logs.flushAsync();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(logs.pending).toBe(0);
+  });
+});
+
 describe('auth modes', () => {
   it('sends a bearer token in legacy mode', async () => {
     const logs = makeLogs({ token: 'session-tok' });

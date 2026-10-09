@@ -292,6 +292,21 @@ describe('GET /v1/apps/:appId/logs', () => {
     const body = await res.json() as { logs: Array<{ data: unknown }> };
     expect(body.logs[0].data).toEqual({ a: 1 });
   });
+
+  it('lets an owner query a session-loss event by its anonymous correlation trace id', async () => {
+    const correlationId = 'c'.repeat(32);
+    const query = mockStmt({ all: { results: [] } });
+    const db = mockD1(
+      mockStmt({ first: { creator_id: 'gh:1' } }),
+      query,
+    );
+    const res = await app.request(`/v1/apps/myapp/logs?category=auth.session_lost&trace_id=${correlationId}`, {
+      headers: { Authorization: `Bearer ${TOK}` },
+    }, makeEnv({}, db));
+
+    expect(res.status).toBe(200);
+    expect(query.bind).toHaveBeenCalledWith('myapp', 'auth.session_lost', correlationId, 100);
+  });
 });
 
 describe('GET /v1/apps/:appId/logs/groups', () => {
