@@ -8,6 +8,7 @@ const WORKER_PREFIX = "/.pas/worker";
 const API_BASE = "https://api.proappstore.online";
 export const SESSION_INVALIDATION_ID_HEADER = "X-PAS-Session-Invalidation-Id";
 export const SESSION_INVALIDATION_REASON_HEADER = "X-PAS-Session-Invalidation-Reason";
+const SESSION_INVALIDATION_EVENT_HEADER = "X-PAS-Session-Invalidation";
 
 export async function handlePlatformMediation(request: Request, env: Env, route: Route): Promise<Response | null> {
   const url = new URL(request.url);
@@ -85,6 +86,9 @@ async function forwardWithSession(request: Request, binding: Fetcher | null, ups
   const response = noStore(upstream);
   if (clearCookieOn401 && upstream.status === 401) {
     const correlationId = invalidationId();
+    // This private HostApi call is the durable record. Browser telemetry is
+    // best-effort only: the Set-Cookie below removes the credential it needs.
+    await persistSessionInvalidation(binding, route, correlationId);
     response.headers.append("Set-Cookie", clearSessionCookie());
     // Same-origin response metadata only. It contains neither a credential nor
     // identity, and lines up SDK telemetry with this host operational log.
@@ -93,6 +97,25 @@ async function forwardWithSession(request: Request, binding: Fetcher | null, ups
     console.warn("[pas-session-invalidated]", { reason: "api_401", correlationId, plane: "api" });
   }
   return response;
+}
+
+async function persistSessionInvalidation(api: Fetcher | null, route: Route, correlationId: string): Promise<void> {
+  if (!api) return;
+  try {
+    const response = await api.fetch(new Request(`${API_BASE}/v1/internal/session-invalidations`, {
+      method: "POST",
+      headers: {
+        "X-PAS-App": route.slug,
+        [SESSION_INVALIDATION_EVENT_HEADER]: "api_401",
+        [SESSION_INVALIDATION_ID_HEADER]: correlationId,
+      },
+    }));
+    if (!response.ok) console.error("[pas-session-invalidation-log-failed]", { status: response.status, correlationId });
+  } catch {
+    // The authoritative 401 still clears the stale cookie even if diagnostics
+    // storage is temporarily unavailable.
+    console.error("[pas-session-invalidation-log-failed]", { correlationId });
+  }
 }
 
 function invalidationId(): string {
@@ -106,6 +129,8 @@ function forwardedHeaders(source: Headers, token: string, route: Route, hostname
   headers.delete("Host");
   headers.delete("Origin");
   headers.delete("Referer");
+  headers.delete(SESSION_INVALIDATION_EVENT_HEADER);
+  headers.delete(SESSION_INVALIDATION_ID_HEADER);
   // App context, asserted by the host from the resolved route rather than taken
   // from the URL the page chose. Delete-then-set, in that order: page JS can send
   // this header itself, and without the delete a page on app A could claim app B

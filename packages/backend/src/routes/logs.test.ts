@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { app } from '../index.js';
 import { testToken, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 import { resetBurstState } from '../lib/log-quota.js';
+import { APP_CONTEXT_HEADER, HOST_SESSION_INVALIDATION_HEADER, HOST_SESSION_INVALIDATION_ID_HEADER } from '../lib/app-context.js';
 
 const TOK = await testToken('gh:1');
 
@@ -58,6 +59,34 @@ function post(body: unknown, opts: { headers?: Record<string, string>; env?: unk
 }
 
 beforeEach(() => resetBurstState());
+
+describe('POST /v1/internal/session-invalidations', () => {
+  it('refuses anything except the private host invalidation contract', async () => {
+    const res = await app.request('/v1/internal/session-invalidations', { method: 'POST' }, makeEnv());
+    expect(res.status).toBe(403);
+  });
+
+  it('persists one fixed, anonymous host event before the browser cookie is cleared', async () => {
+    const insert = mockStmt();
+    const db = mockD1(insert);
+    const correlationId = 'a'.repeat(32);
+    const res = await app.request('/v1/internal/session-invalidations', {
+      method: 'POST',
+      headers: {
+        [APP_CONTEXT_HEADER]: 'myapp',
+        [HOST_SESSION_INVALIDATION_HEADER]: 'api_401',
+        [HOST_SESSION_INVALIDATION_ID_HEADER]: correlationId,
+      },
+    }, makeEnv({}, db));
+
+    expect(res.status).toBe(204);
+    expect(insert.bind).toHaveBeenCalledWith(
+      'myapp', expect.any(Number), 'PAS session was invalidated by an API response',
+      JSON.stringify({ reason: 'api_401', phase: 'api_request', route: 'platform.api' }),
+      'auth-session-api-401', correlationId, expect.any(Number),
+    );
+  });
+});
 
 describe('POST /v1/apps/:appId/logs — identity', () => {
   // Changed by #108/ADR-008: ingestion no longer requires a session. A white
@@ -305,7 +334,37 @@ describe('GET /v1/apps/:appId/logs', () => {
     }, makeEnv({}, db));
 
     expect(res.status).toBe(200);
-    expect(query.bind).toHaveBeenCalledWith('myapp', 'auth.session_lost', correlationId, 100);
+    expect(query.bind).toHaveBeenCalledWith('myapp', 'auth.session_lost', correlationId, 101);
+  });
+
+  it('filters an owner page by anonymous client id and returns an opaque ordering cursor', async () => {
+    const query = mockStmt({
+      all: {
+        results: [
+          { id: 12, ts: 50, level: 'error', category: 'auth.session_lost', message: 'Session lost', data: null },
+          { id: 11, ts: 49, level: 'warn', category: 'auth.hydration_failure', message: 'Hydration failed', data: null },
+        ],
+      },
+    });
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), query);
+    const res = await app.request('/v1/apps/myapp/logs?client_id=install-abc12345&phase=auth_me&limit=1', {
+      headers: { Authorization: `Bearer ${TOK}` },
+    }, makeEnv({}, db));
+
+    expect(res.status).toBe(200);
+    expect(query.bind).toHaveBeenCalledWith('myapp', 'auth_me', 'install-abc12345', 2);
+    await expect(res.json()).resolves.toMatchObject({ nextCursor: '50:12', logs: [{ ts: 50 }] });
+  });
+
+  it('uses a cursor only as ordering data and keeps it app-scoped', async () => {
+    const query = mockStmt({ all: { results: [] } });
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), query);
+    const res = await app.request('/v1/apps/myapp/logs?cursor=50:12', {
+      headers: { Authorization: `Bearer ${TOK}` },
+    }, makeEnv({}, db));
+
+    expect(res.status).toBe(200);
+    expect(query.bind).toHaveBeenCalledWith('myapp', 50, 50, 12, 101);
   });
 });
 
@@ -337,6 +396,20 @@ describe('GET /v1/apps/:appId/logs/groups', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { groups: Array<Record<string, unknown>> };
     expect(body.groups[0]).toMatchObject({ occurrences: 400, affected: 12 });
+  });
+
+  it('applies the same supported filters as the log rows', async () => {
+    const query = mockStmt({ all: { results: [] } });
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), query);
+    const res = await app.request('/v1/apps/myapp/logs/groups?since=10&category=auth.session_lost&phase=api_request&client_id=install-abc12345&trace_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', {
+      headers: { Authorization: `Bearer ${TOK}` },
+    }, makeEnv({}, db));
+
+    expect(res.status).toBe(200);
+    expect(query.bind).toHaveBeenCalledWith(
+      'myapp', 10, 'auth.session_lost', 'api_request', 'install-abc12345',
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 50,
+    );
   });
 });
 

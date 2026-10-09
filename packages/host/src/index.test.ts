@@ -613,7 +613,17 @@ describe("host same-origin platform mediation routes", () => {
   });
 
   it("DOES clear the session cookie when the API plane returns 401 (backend is the session authority)", async () => {
-    const env = makeEnv({ apiFetch: async () => new Response("invalid", { status: 401 }) });
+    const apiFetch = vi.fn(async (request: Request) => {
+      if (new URL(request.url).pathname === "/v1/internal/session-invalidations") {
+        expect(request.method).toBe("POST");
+        expect(request.headers.get("X-PAS-App")).toBe("meetup");
+        expect(request.headers.get("X-PAS-Session-Invalidation")).toBe("api_401");
+        expect(request.headers.get("X-PAS-Session-Invalidation-Id")).toMatch(/^[a-f0-9]{32}$/);
+        return new Response(null, { status: 204 });
+      }
+      return new Response("invalid", { status: 401 });
+    });
+    const env = makeEnv({ apiFetch });
 
     const res = await worker.fetch(
       new Request("https://meetup.proappstore.online/.pas/api/v1/apps/meetup/roles/me", {
@@ -627,10 +637,17 @@ describe("host same-origin platform mediation routes", () => {
     expect(res.headers.get("Set-Cookie")).toContain("__Host-pas_session=; Max-Age=0");
     expect(res.headers.get("X-PAS-Session-Invalidation-Reason")).toBe("api_401");
     expect(res.headers.get("X-PAS-Session-Invalidation-Id")).toMatch(/^[a-f0-9]{32}$/);
+    expect(apiFetch).toHaveBeenCalledTimes(2);
   });
 
   it("attaches the same anonymous invalidation contract on a custom domain", async () => {
-    const env = makeEnv({ apiFetch: async () => new Response("invalid", { status: 401 }) });
+    const apiFetch = vi.fn(async (request: Request) => {
+      if (new URL(request.url).pathname === "/v1/internal/session-invalidations") {
+        return new Response(null, { status: 204 });
+      }
+      return new Response("invalid", { status: 401 });
+    });
+    const env = makeEnv({ apiFetch });
     const res = await worker.fetch(
       new Request("https://app.example.com/.pas/api/v1/apps/meetup/roles/me", {
         headers: { Cookie: "__Host-pas_session=cookie-token" },
@@ -643,6 +660,7 @@ describe("host same-origin platform mediation routes", () => {
     expect(res.headers.get("Set-Cookie")).toContain("__Host-pas_session=; Max-Age=0");
     expect(res.headers.get("X-PAS-Session-Invalidation-Reason")).toBe("api_401");
     expect(res.headers.get("X-PAS-Session-Invalidation-Id")).toMatch(/^[a-f0-9]{32}$/);
+    expect(apiFetch).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -21,7 +21,11 @@
  */
 
 import { Hono } from 'hono';
-import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
+import {
+  APP_CONTEXT_HEADER,
+  HOST_SESSION_INVALIDATION_HEADER,
+  HOST_SESSION_INVALIDATION_ID_HEADER,
+} from '../lib/app-context.js';
 import { HttpError, optionalUser, requireAppOwner } from '../lib/auth.js';
 import {
   MAX_BODY_BYTES,
@@ -35,6 +39,59 @@ import { checkLogQuota, d1LogUsageStore, publicLogBurstKey } from '../lib/log-qu
 import type { Env } from '../types.js';
 
 export const logsRoutes = new Hono<{ Bindings: Env }>();
+
+const MAX_LOG_PAGE_SIZE = 100;
+const SESSION_INVALIDATION_ID_RE = /^[a-f0-9]{32}$/i;
+
+/** A log cursor is deliberately only its stable ordering fields, never identity. */
+function parseLogCursor(raw: string | undefined): { ts: number; id: number } | null {
+  if (!raw || !/^\d{1,16}:\d{1,16}$/.test(raw)) return null;
+  const parts = raw.split(':');
+  const ts = Number(parts[0] ?? NaN);
+  const id = Number(parts[1] ?? NaN);
+  return Number.isSafeInteger(ts) && Number.isSafeInteger(id) ? { ts, id } : null;
+}
+
+function boundedPositiveInt(raw: string | undefined, fallback: number, max: number): number {
+  if (!raw || !/^\d+$/.test(raw)) return fallback;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value > 0 ? Math.min(value, max) : fallback;
+}
+
+/**
+ * The app host calls this only through the private HostApi service binding
+ * immediately after an authoritative API-plane 401 and before it clears the
+ * browser cookie. The default API entrypoint strips both marker headers, so an
+ * Internet request cannot forge this server-side row.
+ */
+logsRoutes.post('/internal/session-invalidations', async (c) => {
+  const appId = c.req.header(APP_CONTEXT_HEADER);
+  const reason = c.req.header(HOST_SESSION_INVALIDATION_HEADER);
+  const correlationId = c.req.header(HOST_SESSION_INVALIDATION_ID_HEADER);
+  if (!appId || reason !== 'api_401' || !correlationId || !SESSION_INVALIDATION_ID_RE.test(correlationId)) {
+    throw new HttpError('host session invalidation required', 403);
+  }
+
+  const now = Date.now();
+  await c.env.DB.prepare(
+    `INSERT INTO app_logs
+       (app_id, user_id, client_id, ts, level, category, message, data, build_meta,
+        fingerprint, trace_id, source, ingested_at)
+     VALUES (?, NULL, NULL, ?, 'warn', 'auth.session_lost', ?, ?, NULL, ?, ?, 'server', ?)`,
+  )
+    .bind(
+      appId,
+      now,
+      'PAS session was invalidated by an API response',
+      JSON.stringify({ reason: 'api_401', phase: 'api_request', route: 'platform.api' }),
+      'auth-session-api-401',
+      correlationId.toLowerCase(),
+      now,
+    )
+    .run();
+
+  return c.body(null, 204);
+});
 
 logsRoutes.post('/apps/:appId/logs', async (c) => {
   const appId = c.req.param('appId')!;
@@ -155,34 +212,49 @@ logsRoutes.get('/apps/:appId/logs', async (c) => {
 
   const level = c.req.query('level');
   const category = c.req.query('category');
+  // `phase` is an allowlisted #353 telemetry field inside the sanitized data
+  // envelope. Keep it parameterized: it is never interpolated into SQL.
+  const phase = c.req.query('phase');
   const since = c.req.query('since');
-  const limit = Math.min(Number(c.req.query('limit') || 100), 500);
+  const limit = boundedPositiveInt(c.req.query('limit'), MAX_LOG_PAGE_SIZE, MAX_LOG_PAGE_SIZE);
   const userId = c.req.query('user_id');
+  const clientId = c.req.query('client_id');
   const fingerprint = c.req.query('fingerprint');
   const sourceFilter = c.req.query('source');
   // #308: an app worker invocation's lines (PAS.log and its console) carry trace_id = the invocation id.
   const traceId = c.req.query('trace_id');
+  const cursor = parseLogCursor(c.req.query('cursor'));
 
-  let sql = `SELECT ts, level, category, message, data, user_id, client_id, build_meta,
+  let sql = `SELECT id, ts, level, category, message, data, user_id, client_id, build_meta,
                     fingerprint, trace_id, source
              FROM app_logs WHERE app_id = ?`;
   const params: unknown[] = [appId];
 
   if (level) { sql += ' AND level = ?'; params.push(level); }
   if (category) { sql += ' AND category = ?'; params.push(category); }
+  if (phase) { sql += " AND json_extract(data, '$.phase') = ?"; params.push(phase); }
   if (since) { sql += ' AND ts >= ?'; params.push(Number(since)); }
   if (userId) { sql += ' AND user_id = ?'; params.push(userId); }
+  if (clientId) { sql += ' AND client_id = ?'; params.push(clientId); }
   if (fingerprint) { sql += ' AND fingerprint = ?'; params.push(fingerprint); }
   if (sourceFilter) { sql += ' AND source = ?'; params.push(sourceFilter); }
   if (traceId) { sql += ' AND trace_id = ?'; params.push(traceId); }
+  if (cursor) {
+    sql += ' AND (ts < ? OR (ts = ? AND id < ?))';
+    params.push(cursor.ts, cursor.ts, cursor.id);
+  }
 
-  sql += ' ORDER BY ts DESC LIMIT ?';
-  params.push(limit);
+  // Ask for one extra row so the UI can show a truthful, bounded next page.
+  sql += ' ORDER BY ts DESC, id DESC LIMIT ?';
+  params.push(limit + 1);
 
   const result = await c.env.DB.prepare(sql).bind(...params).all();
+  const rows = (result.results ?? []) as Record<string, unknown>[];
+  const page = rows.slice(0, limit);
+  const last = page.at(-1);
 
   return c.json({
-    logs: (result.results ?? []).map((r: Record<string, unknown>) => {
+    logs: page.map((r) => {
       let data: unknown;
       let build: unknown;
       if (r.data) { try { data = JSON.parse(r.data as string); } catch { data = null; } }
@@ -201,6 +273,9 @@ logsRoutes.get('/apps/:appId/logs', async (c) => {
         source: r.source,
       };
     }),
+    nextCursor: rows.length > limit && last
+      ? `${String(last.ts)}:${String(last.id)}`
+      : null,
   });
 });
 
@@ -216,10 +291,16 @@ logsRoutes.get('/apps/:appId/logs/groups', async (c) => {
   await requireAppOwner(c, appId);
 
   const since = Number(c.req.query('since') || Date.now() - 24 * 60 * 60 * 1000);
-  const limit = Math.min(Number(c.req.query('limit') || 50), 200);
+  const limit = boundedPositiveInt(c.req.query('limit'), 50, 200);
+  const level = c.req.query('level');
+  const category = c.req.query('category');
+  const phase = c.req.query('phase');
+  const clientId = c.req.query('client_id');
+  const fingerprint = c.req.query('fingerprint');
+  const sourceFilter = c.req.query('source');
+  const traceId = c.req.query('trace_id');
 
-  const result = await c.env.DB.prepare(
-    `SELECT fingerprint,
+  let sql = `SELECT fingerprint,
             COUNT(*) AS occurrences,
             COUNT(DISTINCT COALESCE(user_id, client_id)) AS affected,
             MIN(ts) AS first_seen,
@@ -228,13 +309,20 @@ logsRoutes.get('/apps/:appId/logs/groups', async (c) => {
             MAX(category) AS category,
             MAX(message) AS sample_message
      FROM app_logs
-     WHERE app_id = ? AND fingerprint IS NOT NULL AND ts >= ? AND level IN ('warn', 'error')
-     GROUP BY fingerprint
-     ORDER BY occurrences DESC
-     LIMIT ?`,
-  )
-    .bind(appId, since, limit)
-    .all();
+     WHERE app_id = ? AND fingerprint IS NOT NULL AND ts >= ? AND level IN ('warn', 'error')`;
+  const params: unknown[] = [appId, since];
+
+  if (level) { sql += ' AND level = ?'; params.push(level); }
+  if (category) { sql += ' AND category = ?'; params.push(category); }
+  if (phase) { sql += " AND json_extract(data, '$.phase') = ?"; params.push(phase); }
+  if (clientId) { sql += ' AND client_id = ?'; params.push(clientId); }
+  if (fingerprint) { sql += ' AND fingerprint = ?'; params.push(fingerprint); }
+  if (sourceFilter) { sql += ' AND source = ?'; params.push(sourceFilter); }
+  if (traceId) { sql += ' AND trace_id = ?'; params.push(traceId); }
+  sql += ' GROUP BY fingerprint ORDER BY occurrences DESC LIMIT ?';
+  params.push(limit);
+
+  const result = await c.env.DB.prepare(sql).bind(...params).all();
 
   return c.json({ groups: result.results ?? [], since });
 });

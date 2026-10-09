@@ -29,8 +29,22 @@ export const APP_CONTEXT_HEADER = 'X-PAS-App';
  */
 export const APP_HOST_HEADER = 'X-PAS-Host';
 
+/**
+ * A fixed host-only event marker. It reaches the API only through the private
+ * HostApi service-binding entrypoint, never from an Internet request.
+ */
+export const HOST_SESSION_INVALIDATION_HEADER = 'X-PAS-Session-Invalidation';
+
+/** Anonymous correlation id for the host's fixed session-invalidation event. */
+export const HOST_SESSION_INVALIDATION_ID_HEADER = 'X-PAS-Session-Invalidation-Id';
+
 /** The headers only the host may assert. */
-export const HOST_CONTEXT_HEADERS = [APP_CONTEXT_HEADER, APP_HOST_HEADER] as const;
+export const HOST_CONTEXT_HEADERS = [
+  APP_CONTEXT_HEADER,
+  APP_HOST_HEADER,
+  HOST_SESSION_INVALIDATION_HEADER,
+  HOST_SESSION_INVALIDATION_ID_HEADER,
+] as const;
 
 /**
  * `request` without any host-context header (#315): what every request that did

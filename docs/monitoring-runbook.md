@@ -32,6 +32,31 @@ control plane (backend `api`, `host`, per-app `data-*`, `qa-worker`,
 4. **Recent change?** Compare the failing entries' `build` metadata to the last
    green deploy; a spike right after a deploy points at the diff.
 
+## Creator Console Logs: session-loss investigations
+
+The selected app's **Logs** workspace is owner-only. It reads
+`GET /v1/apps/:appId/logs` with the creator session in an HTTP header; the
+Console never puts a session credential in a URL. Use the time range, level,
+category, `phase`, anonymous `client_id`, fingerprint, source, and trace filters
+to narrow an incident. Pages are bounded to 100 records and use the returned
+cursor for older records.
+
+For the session-loss diagnostics introduced in #353, start with
+`category=auth.session_lost` and copy its trace/correlation ID into the trace
+filter. The host persists the same anonymous correlation ID before it clears an
+API-plane cookie, so the server event remains queryable even if the browser
+cannot upload its best-effort diagnostic. A transient
+hydration failure is `auth.hydration_failure`; it is evidence that validity was
+unresolved, not proof that the user was signed out. Data-plane 401s do not create
+session-loss events.
+
+The Logs view intentionally renders only the reviewed columns and never renders
+the arbitrary `data` envelope. Ingestion bounds and sanitizes telemetry; the
+Console additionally redacts credential-shaped text, cookies/authorization
+headers, URLs with query strings, and email-shaped text as defence in depth.
+Do not use logs to store request payloads, child/student data, cookies, tokens,
+or authentication headers.
+
 ## Thresholds (starting points; tune per app)
 
 - **Error rate:** > 5% of a route's sessions logging `level:error` in 15 min.
