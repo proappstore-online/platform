@@ -529,11 +529,14 @@ export function registerProjectTools(
             return text(`Error: ${org}/${app_id} already exists and its PAS app record could not be checked (backend unreachable). Retry, or ask a platform admin.`);
           }
           // state === "none": no record anywhere.
-          // A recovered receipt may resume only a repository this same receipt
-          // already recorded as created/adopted. Any other edited orphan stays
-          // refused, including one created between attempts by somebody else.
-          const receiptOwnsRepo = receipt.steps.some((step) => step.name === "repo_created" && (step.status === "ok" || step.status === "skip"));
-          if (!receiptOwnsRepo && !(await isUntouchedTemplate(app_id))) {
+          //
+          // Safe reconciliation: receipt steps are progress evidence, never
+          // proof that this caller owns a repository. A receipt owner can write
+          // `repo_created` evidence through the public PATCH endpoint, so it
+          // must not bypass this check. Edited orphan recovery remains refused
+          // until the platform has independent server-verified repository
+          // identity, ownership, and creation provenance.
+          if (!(await isUntouchedTemplate(app_id))) {
             await failOperation("existing repository has commits beyond the template scaffold");
             return text(
               `Error: ${org}/${app_id} already exists with no PAS app record, but it has commits beyond the template scaffold, ` +

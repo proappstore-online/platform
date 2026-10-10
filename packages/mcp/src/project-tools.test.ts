@@ -46,7 +46,16 @@ vi.stubGlobal('fetch', mockFetch);
  * deliberately mock only /v1/provision; this small in-memory service models
  * the durable backend contract while the route tests cover its D1 SQL.
  */
-type Operation = { receipt: string; appId: string; status: 'pending' | 'completed' | 'failed'; steps: any[]; attemptId: string; joined?: boolean };
+type Operation = {
+  receipt: string;
+  appId: string;
+  status: 'pending' | 'completed' | 'failed';
+  steps: any[];
+  attemptId: string;
+  joined?: boolean;
+  /** Synthetic failed-receipt recovery for adversarial retry tests. */
+  retryOnPost?: boolean;
+};
 const operations = new Map<string, Operation>();
 let nextReceipt = 1;
 async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -56,6 +65,12 @@ async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<R
   const appId = match[1] ? decodeURIComponent(match[1]) : JSON.parse(String(init?.body ?? '{}')).appId;
   if (init?.method === 'POST') {
     const existing = operations.get(appId);
+    if (existing?.retryOnPost) {
+      existing.retryOnPost = false;
+      existing.status = 'pending';
+      existing.attemptId = `attempt-retry-${nextReceipt++}`;
+      return new Response(JSON.stringify({ ...existing, joined: false }), { status: 200 });
+    }
     if (existing) return new Response(JSON.stringify({ ...existing, joined: true }), { status: 200 });
     const operation: Operation = { receipt: `receipt-${nextReceipt++}`, appId, status: 'pending', steps: [], attemptId: `attempt-${nextReceipt}`, joined: false };
     operations.set(appId, operation);
@@ -440,6 +455,36 @@ describe('provision_pas_app', () => {
 
     expect(out).toContain('commits beyond the template scaffold');
     expect(out).toContain('platform admin');
+    expect(mockGh.setRepoVariable).not.toHaveBeenCalled();
+    expect(mockFetch.mock.calls.map((c) => String(c[0]))).not.toContainEqual(expect.stringContaining('/v1/provision'));
+  });
+
+  it('does not let forged repo_created receipt evidence adopt an edited orphan (#358)', async () => {
+    // A receipt owner can PATCH progress evidence. Model a failed receipt that
+    // is retried with attacker-controlled `repo_created: ok` evidence already
+    // present; that evidence must not authorize repo adoption.
+    operations.set('school-clubs', {
+      receipt: 'receipt-forged',
+      appId: 'school-clubs',
+      status: 'failed',
+      steps: [{ name: 'repo_created', status: 'ok', detail: 'forged progress evidence' }],
+      attemptId: 'attempt-forged',
+      retryOnPost: true,
+    });
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: false, status: 422, data: { message: 'exists' } });
+    mockGh.repoExists.mockResolvedValue(true);
+    mockOwnership.mockResolvedValue(false);
+    mockGh.api.mockResolvedValue({ ok: true, status: 200, data: [{ sha: 'a' }, { sha: 'b' }] });
+    mockFetch.mockResolvedValue({ ok: false, status: 404, text: () => Promise.resolve('app not found') });
+
+    const result = await runProvisionPas({ app_id: 'school-clubs' });
+    const out = getText(result);
+
+    expect(out).toContain('commits beyond the template scaffold');
+    expect(mockGh.api).toHaveBeenCalledWith('/repos/test-org/school-clubs/commits?per_page=2');
+    // Refusal happens before configuration or downstream provisioning.
+    expect(mockGh.pullText).not.toHaveBeenCalled();
+    expect(mockGh.pushFiles).not.toHaveBeenCalled();
     expect(mockGh.setRepoVariable).not.toHaveBeenCalled();
     expect(mockFetch.mock.calls.map((c) => String(c[0]))).not.toContainEqual(expect.stringContaining('/v1/provision'));
   });
