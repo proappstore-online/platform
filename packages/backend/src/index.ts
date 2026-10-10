@@ -52,6 +52,7 @@ import { actionRoutes } from './routes/actions.js';
 import { secretsRoutes } from './routes/secrets.js';
 import { keysRoutes } from './routes/keys.js';
 import { authRoutes } from './routes/auth.js';
+import { mcpBrokerRoutes } from './routes/mcp-broker.js';
 import { passkeyRoutes } from './routes/passkeys.js';
 import { servicesRoutes } from './routes/services.js';
 import { engagementRoutes } from './routes/engagements.js';
@@ -241,6 +242,7 @@ app.get('/docs', (c) =>
 
 const v1 = new Hono<{ Bindings: Env }>();
 v1.route('/', authRoutes);
+v1.route('/', mcpBrokerRoutes);
 v1.route('/', passkeyRoutes);
 v1.route('/', subscriptionRoutes);
 v1.route('/', licenseRoutes);
