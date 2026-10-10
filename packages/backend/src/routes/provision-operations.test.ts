@@ -7,6 +7,7 @@ type Row = {
   creator_id: string;
   app_id: string;
   intent_hash: string;
+  bootstrap_intent_hash: string;
   status: string;
   steps_json: string;
   result_json: string | null;
@@ -22,7 +23,7 @@ type Row = {
 function operationDb(opts: { quotaUnavailable?: boolean } = {}) {
   const byApp = new Map<string, Row>();
   const byReceipt = new Map<string, Row>();
-  const admissions = new Set<string>();
+  const admissions = new Map<string, { operation_id: string; creator_id: string; app_id: string; intent_hash: string; attempt_id: string; lease_expires_at: number; created_at: number; claimed_at: number | null; status: string; status_updated_at: number }>();
   return {
     prepare(sql: string) {
       let values: unknown[] = [];
@@ -31,6 +32,7 @@ function operationDb(opts: { quotaUnavailable?: boolean } = {}) {
         async first() {
           if (/FROM apps\b/i.test(sql)) return null;
           if (/FROM provision_attempts\b/i.test(sql)) return null;
+          if (/FROM provision_admissions\b/i.test(sql)) return admissions.get(String(values[0])) ?? null;
           if (/WHERE app_id = \?/i.test(sql)) return byApp.get(String(values[0])) ?? null;
           if (/WHERE receipt_id = \?/i.test(sql)) return byReceipt.get(String(values[0])) ?? null;
           return null;
@@ -40,10 +42,10 @@ function operationDb(opts: { quotaUnavailable?: boolean } = {}) {
             throw new Error('UNIQUE constraint failed: provision_attempts.key');
           }
           if (/INSERT OR IGNORE INTO provision_operations/i.test(sql)) {
-            const [receipt, creator, appId, intentHash, leaseExpiresAt, attemptId, createdAt, updatedAt] = values as [string, string, string, string, number, string, number, number];
+            const [receipt, creator, appId, intentHash, bootstrapIntentHash, leaseExpiresAt, attemptId, createdAt, updatedAt] = values as [string, string, string, string, string, number, string, number, number];
             if (byApp.has(appId)) return { meta: { changes: 0 } };
             const row: Row = {
-              receipt_id: receipt, creator_id: creator, app_id: appId, intent_hash: intentHash, status: 'pending', steps_json: '[]', result_json: null,
+              receipt_id: receipt, creator_id: creator, app_id: appId, intent_hash: intentHash, bootstrap_intent_hash: bootstrapIntentHash, status: 'pending', steps_json: '[]', result_json: null,
               attempt_count: 1, lease_expires_at: leaseExpiresAt, attempt_id: attemptId,
               created_at: createdAt, updated_at: updatedAt, completed_at: null,
             };
@@ -51,13 +53,26 @@ function operationDb(opts: { quotaUnavailable?: boolean } = {}) {
             return { meta: { changes: 1 } };
           }
           if (/INSERT OR IGNORE INTO provision_admissions/i.test(sql)) {
-            const operationId = String(values[0]);
+            const [operationId, creatorId, appId, intentHash, attemptId, leaseExpiresAt, createdAt, statusUpdatedAt] = values as [string, string, string, string, string, number, number, number];
             if (admissions.has(operationId)) return { meta: { changes: 0 } };
-            admissions.add(operationId);
+            admissions.set(operationId, {
+              operation_id: operationId, creator_id: creatorId, app_id: appId, intent_hash: intentHash, attempt_id: attemptId,
+              lease_expires_at: leaseExpiresAt, created_at: createdAt, claimed_at: null, status: 'pending', status_updated_at: statusUpdatedAt,
+            });
             return { meta: { changes: 1 } };
           }
-          if (/DELETE FROM provision_admissions/i.test(sql)) {
-            admissions.delete(String(values[0]));
+          if (/UPDATE provision_admissions SET status = 'admitted'/i.test(sql)) {
+            const [updatedAt, operationId] = values as [number, string, number];
+            const admission = admissions.get(operationId);
+            if (!admission || admission.status !== 'pending') return { meta: { changes: 0 } };
+            admission.status = 'admitted'; admission.status_updated_at = updatedAt;
+            return { meta: { changes: 1 } };
+          }
+          if (/UPDATE provision_admissions SET status = \?/i.test(sql)) {
+            const [status, updatedAt, operationId] = values as [string, number, string];
+            const admission = admissions.get(operationId);
+            if (!admission || admission.status !== 'pending') return { meta: { changes: 0 } };
+            admission.status = status; admission.status_updated_at = updatedAt;
             return { meta: { changes: 1 } };
           }
           if (/UPDATE provision_operations/i.test(sql)) {
@@ -82,7 +97,7 @@ describe('durable provision receipts (#358)', () => {
   it('creates one receipt for concurrent retries, retains evidence, and completes after the interrupted response', async () => {
     const env = makeEnv({}, operationDb());
     const request = () => app.request('/v1/provision-operations', {
-      method: 'POST', headers: headers(ownerToken), body: JSON.stringify({ appId: 'interrupted-app', intent }),
+      method: 'POST', headers: headers(ownerToken), body: JSON.stringify({ appId: 'interrupted-app', intent, bootstrapIntent: intent }),
     }, env);
     const [first, retry] = await Promise.all([request(), request()]);
     const firstData = await first.json() as { receipt: string; status: string };
@@ -119,10 +134,10 @@ describe('durable provision receipts (#358)', () => {
   it('does not disclose or join a pending receipt owned by another caller', async () => {
     const env = makeEnv({}, operationDb());
     await app.request('/v1/provision-operations', {
-      method: 'POST', headers: headers(ownerToken), body: JSON.stringify({ appId: 'owned-app', intent }),
+      method: 'POST', headers: headers(ownerToken), body: JSON.stringify({ appId: 'owned-app', intent, bootstrapIntent: intent }),
     }, env);
     const retry = await app.request('/v1/provision-operations', {
-      method: 'POST', headers: headers(otherToken), body: JSON.stringify({ appId: 'owned-app', intent }),
+      method: 'POST', headers: headers(otherToken), body: JSON.stringify({ appId: 'owned-app', intent, bootstrapIntent: intent }),
     }, env);
     expect(retry.status).toBe(403);
     const status = await app.request('/v1/provision-operations/owned-app', { headers: headers(otherToken) }, env);
@@ -132,7 +147,7 @@ describe('durable provision receipts (#358)', () => {
   it('fails closed with retryable 503 when the receipt quota store is unavailable', async () => {
     const env = makeEnv({}, operationDb({ quotaUnavailable: true }));
     const response = await app.request('/v1/provision-operations', {
-      method: 'POST', headers: headers(ownerToken), body: JSON.stringify({ appId: 'quota-unavailable', intent }),
+      method: 'POST', headers: headers(ownerToken), body: JSON.stringify({ appId: 'quota-unavailable', intent, bootstrapIntent: intent }),
     }, env);
     expect(response.status).toBe(503);
     expect(response.headers.get('Retry-After')).toBe('60');

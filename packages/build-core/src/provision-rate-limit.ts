@@ -95,7 +95,12 @@ export interface ProvisionAdmissionLease {
   leaseExpiresAt: number;
   createdAt: number;
   claimedAt: number | null;
+  /** Only admitted rows may be claimed to perform provisioning side effects. */
+  status: ProvisionAdmissionStatus;
+  statusUpdatedAt: number;
 }
+
+export type ProvisionAdmissionStatus = 'pending' | 'admitted' | 'denied' | 'unavailable';
 
 interface ProvisionAdmissionRow {
   operation_id: string;
@@ -106,6 +111,8 @@ interface ProvisionAdmissionRow {
   lease_expires_at: number;
   created_at: number;
   claimed_at: number | null;
+  status: ProvisionAdmissionStatus;
+  status_updated_at: number;
 }
 
 function admissionFromRow(row: ProvisionAdmissionRow): ProvisionAdmissionLease {
@@ -118,25 +125,30 @@ function admissionFromRow(row: ProvisionAdmissionRow): ProvisionAdmissionLease {
     leaseExpiresAt: row.lease_expires_at,
     createdAt: row.created_at,
     claimedAt: row.claimed_at,
+    status: row.status,
+    statusUpdatedAt: row.status_updated_at,
   };
 }
 
 export interface ProvisionAdmissionStore {
-  /** Atomic create-if-absent. */
-  create(lease: Omit<ProvisionAdmissionLease, 'claimedAt'>): Promise<boolean>;
+  /** Atomically creates durable, non-executable evidence for an attempt. */
+  stage(lease: Omit<ProvisionAdmissionLease, 'claimedAt' | 'status' | 'statusUpdatedAt'>): Promise<boolean>;
   read(operationId: string): Promise<ProvisionAdmissionLease | null>;
+  /** Makes a staged admission executable only after its quota charge succeeds. */
+  admit(operationId: string, nowMs: number): Promise<boolean>;
+  /** Permanently fails a staged admission without erasing its evidence. */
+  fail(operationId: string, status: Extract<ProvisionAdmissionStatus, 'denied' | 'unavailable'>, nowMs: number): Promise<boolean>;
   /** Atomically grants the side-effecting provision execution to one caller. */
   claim(operationId: string, nowMs: number): Promise<boolean>;
-  remove(operationId: string): Promise<void>;
 }
 
 export function d1ProvisionAdmissionStore(db: D1Like): ProvisionAdmissionStore {
   return {
-    async create(lease) {
+    async stage(lease) {
       const result = await db.prepare(
         `INSERT OR IGNORE INTO provision_admissions
-           (operation_id, creator_id, app_id, intent_hash, attempt_id, lease_expires_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+           (operation_id, creator_id, app_id, intent_hash, attempt_id, lease_expires_at, created_at, status, status_updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
       ).bind(
         lease.operationId,
         lease.creatorId,
@@ -145,26 +157,38 @@ export function d1ProvisionAdmissionStore(db: D1Like): ProvisionAdmissionStore {
         lease.attemptId,
         lease.leaseExpiresAt,
         lease.createdAt,
+        lease.createdAt,
       ).run();
       return Number(result.meta?.changes ?? 0) > 0;
     },
     async read(operationId) {
       const row = await db.prepare(
         `SELECT operation_id, creator_id, app_id, intent_hash, attempt_id,
-                lease_expires_at, created_at, claimed_at
+                lease_expires_at, created_at, claimed_at, status, status_updated_at
            FROM provision_admissions WHERE operation_id = ?`,
       ).bind(operationId).first<ProvisionAdmissionRow>();
       return row ? admissionFromRow(row) : null;
     },
-    async claim(operationId, nowMs) {
+    async admit(operationId, nowMs) {
       const result = await db.prepare(
-        `UPDATE provision_admissions SET claimed_at = ?
-          WHERE operation_id = ? AND claimed_at IS NULL AND lease_expires_at > ?`,
+        `UPDATE provision_admissions SET status = 'admitted', status_updated_at = ?
+          WHERE operation_id = ? AND status = 'pending' AND lease_expires_at > ?`,
       ).bind(nowMs, operationId, nowMs).run();
       return Number(result.meta?.changes ?? 0) > 0;
     },
-    async remove(operationId) {
-      await db.prepare('DELETE FROM provision_admissions WHERE operation_id = ?').bind(operationId).run();
+    async fail(operationId, status, nowMs) {
+      const result = await db.prepare(
+        `UPDATE provision_admissions SET status = ?, status_updated_at = ?
+          WHERE operation_id = ? AND status = 'pending'`,
+      ).bind(status, nowMs, operationId).run();
+      return Number(result.meta?.changes ?? 0) > 0;
+    },
+    async claim(operationId, nowMs) {
+      const result = await db.prepare(
+        `UPDATE provision_admissions SET claimed_at = ?
+          WHERE operation_id = ? AND status = 'admitted' AND claimed_at IS NULL AND lease_expires_at > ?`,
+      ).bind(nowMs, operationId, nowMs).run();
+      return Number(result.meta?.changes ?? 0) > 0;
     },
   };
 }

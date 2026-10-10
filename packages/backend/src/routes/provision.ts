@@ -105,35 +105,47 @@ function redactStepDetail(detail: string): string {
     .slice(0, 1_000);
 }
 
-/** Undo a receipt lease that never passed quota admission. No remote work can
- * have started because the admission row is created only by this route. */
-async function rollbackUnadmittedOperation(
-  db: D1Database,
-  operation: ProvisionOperation,
-  previous: ProvisionOperation | null,
-): Promise<void> {
-  if (!previous) {
-    await db.prepare(
-      `DELETE FROM provision_operations
-        WHERE receipt_id = ? AND status = 'pending' AND attempt_id = ? AND attempt_count = 1`,
-    ).bind(operation.receiptId, operation.attemptId).run();
-    return;
+/**
+ * The receipt binds the effective request parameters, never its bearer-like
+ * receipt fields. This is deliberately server-side: a caller cannot present a
+ * stored hash for one template/options set and execute another request.
+ */
+function provisionRequestIntent(body: ProvisionBody): Record<string, unknown> {
+  const intent: Record<string, unknown> = { appId: body.appId };
+  for (const key of ['name', 'description', 'category', 'icon', 'iconBg', 'repoOwner', 'repoName', 'ref', 'template', 'templateRev'] as const) {
+    if (typeof body[key] === 'string') intent[key] = body[key];
   }
-  await db.prepare(
-    `UPDATE provision_operations
-        SET status = ?, attempt_count = ?, lease_expires_at = ?, attempt_id = ?,
-            updated_at = ?, completed_at = ?
-      WHERE receipt_id = ? AND status = 'pending' AND attempt_id = ?`,
-  ).bind(
-    previous.status,
-    previous.attemptCount,
-    previous.leaseExpiresAt,
-    previous.attemptId,
-    previous.updatedAt,
-    previous.completedAt,
-    operation.receiptId,
-    operation.attemptId,
-  ).run();
+  if (Array.isArray(body.proFeatures) && body.proFeatures.every((feature) => typeof feature === 'string')) {
+    intent.proFeatures = body.proFeatures;
+  }
+  for (const key of ['skipCompliance', 'skipPublish', 'allowUnapprovedTemplate'] as const) {
+    if (typeof body[key] === 'boolean') intent[key] = body[key];
+  }
+  return intent;
+}
+
+/** Reject invalid consequential types rather than silently canonicalising them away. */
+function validateProvisionRequest(body: ProvisionBody): string | null {
+  for (const key of ['name', 'description', 'category', 'icon', 'iconBg', 'repoOwner', 'repoName', 'ref', 'template', 'templateRev'] as const) {
+    if (body[key] !== undefined && typeof body[key] !== 'string') return `${key} must be a string`;
+  }
+  for (const key of ['skipCompliance', 'skipPublish', 'allowUnapprovedTemplate'] as const) {
+    if (body[key] !== undefined && typeof body[key] !== 'boolean') return `${key} must be a boolean`;
+  }
+  if (body.proFeatures !== undefined && (!Array.isArray(body.proFeatures) || !body.proFeatures.every((feature) => typeof feature === 'string'))) {
+    return 'proFeatures must be an array of strings';
+  }
+  return null;
+}
+
+async function admissionIdFor(operation: ProvisionOperation): Promise<string | null> {
+  if (!operation.attemptId || operation.leaseExpiresAt === null) return null;
+  return hashProvisionAdmissionOperation({
+    creatorId: operation.creatorId,
+    appId: operation.appId,
+    intentHash: operation.intentHash,
+    attemptId: operation.attemptId,
+  });
 }
 
 async function operationAccess(c: Parameters<typeof requireUser>[0], appId: string) {
@@ -153,14 +165,19 @@ async function operationAccess(c: Parameters<typeof requireUser>[0], appId: stri
  */
 provisionRoutes.post('/provision-operations', wrap(async (c) => {
   const user = await requireUser(c);
-  const body = await c.req.json<{ appId?: unknown; intent?: unknown }>();
+  const body = await c.req.json<{ appId?: unknown; intent?: unknown; bootstrapIntent?: unknown }>();
   if (!validAppId(body.appId)) return c.text('Invalid app ID', 400);
   if (!body.intent || typeof body.intent !== 'object' || Array.isArray(body.intent)) {
     return c.text('Provisioning intent is required', 400);
   }
+  if (!body.bootstrapIntent || typeof body.bootstrapIntent !== 'object' || Array.isArray(body.bootstrapIntent)) {
+    return c.text('Provisioning bootstrap intent is required', 400);
+  }
   let intentHash: string;
+  let bootstrapIntentHash: string;
   try {
     intentHash = await hashProvisionIntent(body.intent);
+    bootstrapIntentHash = await hashProvisionIntent(body.bootstrapIntent);
   } catch (error) {
     return c.text(`Invalid provisioning intent: ${(error as Error).message}`, 400);
   }
@@ -187,20 +204,20 @@ provisionRoutes.post('/provision-operations', wrap(async (c) => {
       reconciliation: 'legacy_unreconciled',
     }, 409);
   }
-  if (existing && existing.intentHash !== intentHash) {
-    return c.json({ error: 'a provisioning receipt already exists for this app with different intent' }, 409);
+  if (existing && existing.bootstrapIntentHash !== bootstrapIntentHash) {
+    return c.json({ error: 'a provisioning receipt already exists for this app with different bootstrap intent' }, 409);
   }
 
   const now = Date.now();
   // `beginProvisionOperation` is the atomic app-id/intent gate. Do it before
   // consuming quota so simultaneous identical receipt requests yield exactly
   // one created/recovered attempt; all other callers join it without spending.
-  const begun = await beginProvisionOperation(c.env.DB, { creatorId: user.id, appId: body.appId, intentHash, now });
+  const begun = await beginProvisionOperation(c.env.DB, { creatorId: user.id, appId: body.appId, intentHash, bootstrapIntentHash, now });
   if (begun.kind === 'owner_conflict') {
     return c.json({ error: 'provisioning operation belongs to another user' }, 403);
   }
   if (begun.kind === 'intent_conflict') {
-    return c.json({ error: 'a provisioning receipt already exists for this app with different intent' }, 409);
+    return c.json({ error: 'a provisioning receipt already exists for this app with different bootstrap intent' }, 409);
   }
   if (begun.kind === 'legacy_unreconciled') {
     return c.json({
@@ -211,52 +228,66 @@ provisionRoutes.post('/provision-operations', wrap(async (c) => {
   }
   if (begun.kind === 'created' || begun.kind === 'recovered') {
     const { operation } = begun;
-    if (!operation.attemptId || operation.leaseExpiresAt === null) {
-      await rollbackUnadmittedOperation(c.env.DB, operation, existing);
+    const operationId = await admissionIdFor(operation);
+    const attemptId = operation.attemptId;
+    const leaseExpiresAt = operation.leaseExpiresAt;
+    if (!operationId || !attemptId || leaseExpiresAt === null) {
       return c.text('provisioning receipt did not grant an active attempt lease', 503, { 'Retry-After': '60' });
     }
-    const operationId = await hashProvisionAdmissionOperation({
-      creatorId: operation.creatorId,
-      appId: operation.appId,
-      intentHash: operation.intentHash,
-      attemptId: operation.attemptId,
-    });
     const admissions = d1ProvisionAdmissionStore(c.env.DB);
     try {
-      // INSERT OR IGNORE is an atomic check-and-set. A duplicate means an
-      // inconsistent receipt transition, so fail closed rather than allowing a
-      // second quota charge or side-effecting execution.
-      if (!(await admissions.create({
+      // The durable row is intentionally non-executable while quota is being
+      // checked. A concurrent GET/join followed by /provision can observe it,
+      // but claim() accepts only a later admitted state.
+      if (!(await admissions.stage({
         operationId,
         creatorId: operation.creatorId,
         appId: operation.appId,
         intentHash: operation.intentHash,
-        attemptId: operation.attemptId,
-        leaseExpiresAt: operation.leaseExpiresAt,
+        attemptId,
+        leaseExpiresAt,
         createdAt: now,
       }))) {
-        await rollbackUnadmittedOperation(c.env.DB, operation, existing);
         return c.text('provisioning rate limit is temporarily unavailable — retry later', 503, { 'Retry-After': '60' });
       }
+    } catch (error) {
+      console.warn(`provision admission staging unavailable, refusing reservation: ${(error as Error).message}`);
+      return c.text('provisioning rate limit is temporarily unavailable — retry later', 503, { 'Retry-After': '60' });
+    }
+    try {
       const quota = await checkProvisionQuota(d1ProvisionAttemptStore(c.env.DB), {
         userKey: user.id,
         ip: c.req.header('CF-Connecting-IP'),
         nowMs: now,
       });
       if (!quota.allowed) {
-        await admissions.remove(operationId);
-        await rollbackUnadmittedOperation(c.env.DB, operation, existing);
+        await admissions.fail(operationId, 'denied', now);
         return c.text(
           `provisioning rate limit reached (${quota.scope}) — retry later`,
           429,
           quota.retryAfterSeconds ? { 'Retry-After': String(quota.retryAfterSeconds) } : undefined,
         );
       }
+      if (!(await admissions.admit(operationId, now))) {
+        // Do not repair this by deleting/recreating state: evidence of the
+        // failed hand-off remains inspectable and cannot be executed.
+        await admissions.fail(operationId, 'unavailable', now).catch(() => undefined);
+        return c.text('provisioning admission could not be activated — retry later', 503, { 'Retry-After': '60' });
+      }
     } catch (error) {
-      await admissions.remove(operationId).catch(() => undefined);
-      await rollbackUnadmittedOperation(c.env.DB, operation, existing).catch(() => undefined);
+      await admissions.fail(operationId, 'unavailable', now).catch(() => undefined);
       console.warn(`provision operation rate limit unavailable, refusing reservation: ${(error as Error).message}`);
       return c.text('provisioning rate limit is temporarily unavailable — retry later', 503, { 'Retry-After': '60' });
+    }
+  }
+  if (begun.kind === 'joined' && begun.operation.status === 'pending') {
+    const operationId = await admissionIdFor(begun.operation);
+    const admission = operationId ? await d1ProvisionAdmissionStore(c.env.DB).read(operationId) : null;
+    if (!admission || admission.status === 'unavailable') {
+      return c.text('provisioning admission is not executable yet — retry later', 503, { 'Retry-After': '60' });
+    }
+    if (admission.status === 'denied') {
+      return c.text('provisioning rate limit reached for this receipt — retry later', 429, { 'Retry-After': '60' });
     }
   }
   const joined = begun.kind === 'joined' || begun.kind === 'exhausted';
@@ -328,6 +359,8 @@ provisionRoutes.post('/provision', wrap(async (c) => {
   if (!body.appId || !/^[a-z][a-z0-9-]*$/.test(body.appId) || body.appId.length > 58) {
     return c.text('Invalid app ID', 400);
   }
+  const requestError = validateProvisionRequest(body);
+  if (requestError) return c.text(`Invalid provisioning request: ${requestError}`, 400);
 
   const appId = body.appId;
 
@@ -362,6 +395,12 @@ provisionRoutes.post('/provision', wrap(async (c) => {
     }
     const now = Date.now();
     const operation = await getProvisionOperation(c.env.DB, appId);
+    let actualIntentHash: string;
+    try {
+      actualIntentHash = await hashProvisionIntent(provisionRequestIntent(body));
+    } catch (error) {
+      return c.text(`Invalid provisioning request intent: ${(error as Error).message}`, 400);
+    }
     // Receipt fields are only a reference. All owner, app, intent and active
     // lease facts are read back from D1, never trusted from the request body.
     if (!operation || operation.receiptId !== body.provisionReceipt || operation.creatorId !== user.id
@@ -370,18 +409,22 @@ provisionRoutes.post('/provision', wrap(async (c) => {
       || operation.leaseExpiresAt === null || operation.leaseExpiresAt <= now) {
       return c.text('provision receipt is stale, forged, or does not belong to this active attempt', 409);
     }
+    if (operation.intentHash !== actualIntentHash) {
+      return c.text('provision request does not match the receipt-bound intent', 409);
+    }
     const operationId = await hashProvisionAdmissionOperation({
       creatorId: operation.creatorId,
       appId: operation.appId,
-      intentHash: operation.intentHash,
+      intentHash: actualIntentHash,
       attemptId: operation.attemptId,
     });
     const admissions = d1ProvisionAdmissionStore(c.env.DB);
     try {
       const admission = await admissions.read(operationId);
       if (!admission || admission.creatorId !== operation.creatorId || admission.appId !== operation.appId
-        || admission.intentHash !== operation.intentHash || admission.attemptId !== operation.attemptId
-        || admission.leaseExpiresAt !== operation.leaseExpiresAt || admission.leaseExpiresAt <= now) {
+        || admission.intentHash !== actualIntentHash || admission.attemptId !== operation.attemptId
+        || admission.leaseExpiresAt !== operation.leaseExpiresAt || admission.leaseExpiresAt <= now
+        || admission.status !== 'admitted') {
         return c.text('provision receipt has no valid quota admission', 409);
       }
       // Only one request can flip claimed_at from NULL. A replay must not run

@@ -5,15 +5,21 @@ import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from
 const OWNER = 'gh:receipt-owner';
 const OTHER = 'gh:receipt-other';
 const intent = { templateId: 'template-app', options: { privateRepo: true, verify: true } };
-const post = async (appId: string, token: string, requestIntent: unknown = intent) =>
-  SELF.fetch(`${BASE}/v1/provision-operations`, json('POST', { appId, intent: requestIntent }, token));
+const provisionIntent = (appId: string, overrides: Record<string, unknown> = {}) => ({
+  appId,
+  template: 'not-a-published-template',
+  ...overrides,
+});
+const post = async (appId: string, token: string, requestIntent: unknown = intent, bootstrapIntent: unknown = requestIntent) =>
+  SELF.fetch(`${BASE}/v1/provision-operations`, json('POST', { appId, intent: requestIntent, bootstrapIntent }, token));
 const patch = async (appId: string, token: string, body: unknown) =>
   SELF.fetch(`${BASE}/v1/provision-operations/${appId}`, json('PATCH', body, token));
-const provision = (appId: string, token: string, receipt?: { receipt: string; attemptId: string }) =>
+const provision = (appId: string, token: string, receipt?: { receipt: string; attemptId: string }, request: Record<string, unknown> = {}) =>
   SELF.fetch(`${BASE}/v1/provision`, json('POST', {
     appId,
     // Refuse after admission, before any network provisioning side effects.
     template: 'not-a-published-template',
+    ...request,
     ...(receipt ? { provisionReceipt: receipt.receipt, provisionAttemptId: receipt.attemptId } : {}),
   }, token));
 const body = <T>(response: Response) => response.json() as Promise<T>;
@@ -47,7 +53,24 @@ describe('provision operation receipts on real D1 (#358)', () => {
     expect(conflict.status).toBe(409);
   });
 
-  it('rejects wrong owners and exhausted quota before creating a reservation', async () => {
+  it('joins only an identical bootstrap plan, including name, privacy, and template source', async () => {
+    const token = await session(OWNER);
+    const appId = 'bootstrap-fingerprint';
+    const request = provisionIntent(appId);
+    const bootstrap = { name: 'Original', privateRepo: true, templateRepo: 'template-app', templateRef: 'main', reuseExistingRepo: true, verify: true };
+    expect((await post(appId, token, request, bootstrap)).status).toBe(201);
+    for (const changed of [
+      { ...bootstrap, name: 'Renamed' },
+      { ...bootstrap, privateRepo: false },
+      { ...bootstrap, templateRepo: 'template-map' },
+      { ...bootstrap, templateRef: 'release' },
+    ]) {
+      expect((await post(appId, token, request, changed)).status).toBe(409);
+    }
+    expect(await quotaCount(OWNER)).toBe(1);
+  });
+
+  it('rejects wrong owners and retains a non-executable denied receipt', async () => {
     await seedApp('claimed-receipt-app', OWNER);
     const denied = await post('claimed-receipt-app', await session(OTHER));
     expect(denied.status).toBe(403);
@@ -56,9 +79,17 @@ describe('provision operation receipts on real D1 (#358)', () => {
     const now = Date.now();
     await env.DB.prepare('INSERT INTO provision_attempts (key, window_start, count) VALUES (?, ?, ?)')
       .bind(`user:${OTHER}:h`, now, 10).run();
-    const limited = await post('quota-receipt-app', await session(OTHER));
+    const otherToken = await session(OTHER);
+    const limited = await post('quota-receipt-app', otherToken, provisionIntent('quota-receipt-app'));
     expect(limited.status).toBe(429);
-    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM provision_operations WHERE app_id = 'quota-receipt-app'").first<{ n: number }>())?.n).toBe(0);
+    const limitedReceipt = await body<{ receipt: string; attemptId: string }>(
+      await SELF.fetch(`${BASE}/v1/provision-operations/quota-receipt-app`, json('GET', undefined, otherToken)),
+    );
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM provision_operations WHERE app_id = 'quota-receipt-app'").first<{ n: number }>())?.n).toBe(1);
+    expect(await env.DB.prepare("SELECT status, claimed_at FROM provision_admissions WHERE app_id = 'quota-receipt-app'")
+      .first<{ status: string; claimed_at: number | null }>()).toEqual({ status: 'denied', claimed_at: null });
+    // A quota-denied receipt is evidence only; it cannot be raced into remote work.
+    expect((await provision('quota-receipt-app', otherToken, limitedReceipt)).status).toBe(409);
 
     const owned = await body<{ attemptId: string }>(await post('creator-only-receipt', await session(OWNER)));
     expect((await patch('creator-only-receipt', await session(OTHER), { attemptId: owned.attemptId, status: 'completed' })).status).toBe(403);
@@ -154,7 +185,7 @@ describe('provision operation receipts on real D1 (#358)', () => {
 
   it('charges a receipt-backed provision exactly once and atomically refuses a concurrent replay', async () => {
     const token = await session(OWNER);
-    const receipt = await body<{ receipt: string; attemptId: string }>(await post('single-admission', token));
+    const receipt = await body<{ receipt: string; attemptId: string }>(await post('single-admission', token, provisionIntent('single-admission')));
     expect(await quotaCount(OWNER)).toBe(1);
 
     // The first request claims the admission and reaches template validation;
@@ -180,18 +211,18 @@ describe('provision operation receipts on real D1 (#358)', () => {
     // Reset the ordinary direct-call row so this receipt must attempt the
     // failing insert rather than being rejected by a limit.
     await env.DB.prepare('DELETE FROM provision_attempts WHERE key = ?').bind(`user:${OTHER}:h`).run();
-    const unavailable = await post('unavailable-admission', token);
+    const unavailable = await post('unavailable-admission', token, provisionIntent('unavailable-admission'));
     expect(unavailable.status).toBe(503);
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM provision_operations WHERE app_id = 'unavailable-admission'")
-      .first<{ n: number }>())?.n).toBe(0);
-    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM provision_admissions WHERE app_id = 'unavailable-admission'")
-      .first<{ n: number }>())?.n).toBe(0);
+      .first<{ n: number }>())?.n).toBe(1);
+    expect(await env.DB.prepare("SELECT status, claimed_at FROM provision_admissions WHERE app_id = 'unavailable-admission'")
+      .first<{ status: string; claimed_at: number | null }>()).toEqual({ status: 'unavailable', claimed_at: null });
     await env.DB.prepare('DROP TRIGGER fail_receipt_quota').run();
   });
 
   it('refuses stale, wrong-owner, and intent-mismatched receipt references without charging quota', async () => {
     const ownerToken = await session(OWNER);
-    const receipt = await body<{ receipt: string; attemptId: string }>(await post('receipt-guarded', ownerToken));
+    const receipt = await body<{ receipt: string; attemptId: string }>(await post('receipt-guarded', ownerToken, provisionIntent('receipt-guarded')));
     const before = await quotaCount(OWNER);
 
     expect((await provision('receipt-guarded', await session(OTHER), receipt)).status).toBe(409);
@@ -202,6 +233,48 @@ describe('provision operation receipts on real D1 (#358)', () => {
     await env.DB.prepare('UPDATE provision_operations SET lease_expires_at = 0 WHERE app_id = ?')
       .bind('receipt-guarded').run();
     expect((await provision('receipt-guarded', ownerToken, receipt)).status).toBe(409);
+    expect(await quotaCount(OWNER)).toBe(before);
+  });
+
+  it('keeps staged evidence non-executable during a join and rejects a changed actual request body', async () => {
+    const token = await session(OWNER);
+    const appId = 'staged-admission';
+    const receipt = await body<{ receipt: string; attemptId: string }>(await post(appId, token, provisionIntent(appId, { skipCompliance: false })));
+    const before = await quotaCount(OWNER);
+
+    // This models the exact interleaving after the receipt route has staged a
+    // row but before it has promoted it after quota success. Joining is safe;
+    // claiming is refused because only admitted rows are executable.
+    await env.DB.prepare("UPDATE provision_admissions SET status = 'pending', claimed_at = NULL WHERE app_id = ?")
+      .bind(appId).run();
+    const [joined, blockedClaim] = await Promise.all([
+      post(appId, token, provisionIntent(appId, { skipCompliance: false })),
+      provision(appId, token, receipt, { skipCompliance: false }),
+    ]);
+    expect(joined.status).toBe(200);
+    expect(blockedClaim.status).toBe(409);
+    expect(await env.DB.prepare('SELECT status, claimed_at FROM provision_admissions WHERE app_id = ?').bind(appId)
+      .first<{ status: string; claimed_at: number | null }>()).toEqual({ status: 'pending', claimed_at: null });
+    expect(await quotaCount(OWNER)).toBe(before);
+
+    // A changed template is rejected against the server-hashed actual request
+    // before it can claim this now-admitted lease or touch remote provisioning.
+    await env.DB.prepare("UPDATE provision_admissions SET status = 'admitted' WHERE app_id = ?").bind(appId).run();
+    expect((await provision(appId, token, receipt, { template: 'template-map', skipCompliance: false })).status).toBe(409);
+    expect(await env.DB.prepare('SELECT claimed_at FROM provision_admissions WHERE app_id = ?').bind(appId)
+      .first<{ claimed_at: number | null }>()).toEqual({ claimed_at: null });
+    expect(await quotaCount(OWNER)).toBe(before);
+  });
+
+  it('rejects invalid consequential request types before hashing, claiming, or charging', async () => {
+    const token = await session(OWNER);
+    const appId = 'typed-request';
+    const receipt = await body<{ receipt: string; attemptId: string }>(await post(appId, token, provisionIntent(appId, { skipPublish: false })));
+    const before = await quotaCount(OWNER);
+    const response = await provision(appId, token, receipt, { skipPublish: 'true' });
+    expect(response.status).toBe(400);
+    expect(await env.DB.prepare('SELECT claimed_at FROM provision_admissions WHERE app_id = ?').bind(appId)
+      .first<{ claimed_at: number | null }>()).toEqual({ claimed_at: null });
     expect(await quotaCount(OWNER)).toBe(before);
   });
 });

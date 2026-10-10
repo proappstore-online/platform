@@ -217,8 +217,8 @@ export function registerProjectTools(
   }
 
   /** Acquire before GitHub work; pending retries join rather than duplicate it (#358). */
-  async function beginProvisionOperation(appId: string, token: string, intent: Record<string, unknown>): Promise<{ receipt?: ProvisionOperationReceipt; error?: string }> {
-    const started = await operationRequest("", token, { method: "POST", body: JSON.stringify({ appId, intent }) });
+  async function beginProvisionOperation(appId: string, token: string, intent: Record<string, unknown>, bootstrapIntent: Record<string, unknown>): Promise<{ receipt?: ProvisionOperationReceipt; error?: string }> {
+    const started = await operationRequest("", token, { method: "POST", body: JSON.stringify({ appId, intent, bootstrapIntent }) });
     if (!started.ok || typeof started.data.receipt !== "string" || started.data.status === undefined || !Array.isArray(started.data.steps)) {
       return { error: started.data.error ?? "provisioning receipt service returned an invalid response" };
     }
@@ -259,20 +259,27 @@ export function registerProjectTools(
     attemptId?: string;
   }
 
+  /** The exact request semantics bound into a durable receipt (never its receipt tokens). */
+  function provisionRequestIntent(appId: string, opts?: ProvisionOpts): Record<string, unknown> {
+    const request: Record<string, unknown> = {
+      appId,
+      repoOwner: org,
+      repoName: appId,
+      skipCompliance: opts?.skipCompliance ?? true,
+    };
+    if (opts?.template) request.template = opts.template;
+    if (opts?.templateRev) request.templateRev = opts.templateRev;
+    if (opts?.allowUnapprovedTemplate === true) request.allowUnapprovedTemplate = true;
+    return request;
+  }
+
   async function provisionDetailed(appId: string, token: string, opts?: ProvisionOpts): Promise<{ ok: boolean; status: number; data: ProvisionResult; text: string }> {
     try {
       const res = await env.API.fetch(`${apiBase}/v1/provision`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          appId,
-          skipCompliance: opts?.skipCompliance ?? true,
-          repoOwner: org,
-          repoName: appId,
-          // #178: provenance — which approved template, at which exact commit.
-          ...(opts?.template ? { template: opts.template } : {}),
-          ...(opts?.templateRev ? { templateRev: opts.templateRev } : {}),
-          ...(opts?.allowUnapprovedTemplate ? { allowUnapprovedTemplate: true } : {}),
+          ...provisionRequestIntent(appId, opts),
           ...(opts?.receipt && opts?.attemptId ? { provisionReceipt: opts.receipt, provisionAttemptId: opts.attemptId } : {}),
         }),
       });
@@ -459,11 +466,22 @@ export function registerProjectTools(
       }
       await gate("provision_pas_app", { app_id, name, template: templateId, template_repo: templateRepoName });
 
+      // Resolve provenance before acquiring the receipt so the receipt binds
+      // precisely the request that will later reach /v1/provision. This is a
+      // read-only GitHub operation; no repository mutation precedes the lease.
+      const templateRev = await resolveTemplateRev(templateRepoName, templateRef);
+      const provisionOptions: ProvisionOpts = {
+        skipCompliance: skip_compliance === true,
+        template: templateId,
+        ...(templateRev ? { templateRev } : {}),
+        ...(allow_unapproved_template && isAdmin && !selection.template ? { allowUnapprovedTemplate: true } : {}),
+      };
+
       // This is deliberately the last action before GitHub work. If the MCP
       // client loses its response, GitHub and /v1/provision may keep running;
       // the retry sees this receipt and joins rather than mistaking its own
       // configuration commit for an edited orphan.
-      const acquired = await beginProvisionOperation(app_id, auth.token, {
+      const bootstrapIntent = {
         templateId,
         templateRepo: templateRepoName,
         templateRef,
@@ -474,7 +492,8 @@ export function registerProjectTools(
         skipCompliance: skip_compliance === true,
         verify: verify !== false,
         allowUnapprovedTemplate: allow_unapproved_template === true,
-      });
+      };
+      const acquired = await beginProvisionOperation(app_id, auth.token, provisionRequestIntent(app_id, provisionOptions), bootstrapIntent);
       if (!acquired.receipt) return text(`Error: could not start durable provisioning receipt for ${app_id}: ${acquired.error}`);
       const receipt = acquired.receipt;
       if (receipt.joined) {
@@ -594,15 +613,11 @@ export function registerProjectTools(
       // #178: record the exact template revision that was copied (or, for an
       // adopted/reused repo, the template's current head — the best available
       // provenance) and hand it to /v1/provision with the template id.
-      const templateRev = await resolveTemplateRev(templateRepoName, templateRef);
       steps.push(templateRev
         ? `+ Template revision: ${templateId}@${templateRev.slice(0, 12)}`
         : `~ Template revision: could not resolve ${org}/${templateRepoName}@${templateRef} — recorded as unknown`);
       const prov = await provisionDetailed(app_id, auth.token, {
-        skipCompliance: skip_compliance ?? false,
-        template: templateId,
-        ...(templateRev ? { templateRev } : {}),
-        ...(allow_unapproved_template && isAdmin && !selection.template ? { allowUnapprovedTemplate: true } : {}),
+        ...provisionOptions,
         receipt: receipt.receipt,
         attemptId: receipt.attemptId,
       });

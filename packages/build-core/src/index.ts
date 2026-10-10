@@ -16,7 +16,7 @@ export {
   d1ProvisionAttemptStore,
   DEFAULT_PROVISION_LIMITS,
 } from './provision-rate-limit.js';
-export type { ProvisionAdmissionLease, ProvisionAdmissionStore } from './provision-rate-limit.js';
+export type { ProvisionAdmissionLease, ProvisionAdmissionStatus, ProvisionAdmissionStore } from './provision-rate-limit.js';
 export type {
   ProvisionAttemptRow,
   ProvisionAttemptStore,

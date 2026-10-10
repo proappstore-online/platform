@@ -17,7 +17,10 @@ export interface ProvisionOperation {
   receiptId: string;
   creatorId: string;
   appId: string;
+  /** Server-hashed, canonical /v1/provision request payload. */
   intentHash: string;
+  /** Server-hashed full MCP bootstrap plan used for retry equality. */
+  bootstrapIntentHash: string;
   status: ProvisionOperationStatus;
   steps: ProvisionOperationStep[];
   result: Record<string, unknown> | null;
@@ -34,6 +37,7 @@ interface OperationRow {
   creator_id: string;
   app_id: string;
   intent_hash: string;
+  bootstrap_intent_hash: string;
   status: ProvisionOperationStatus;
   steps_json: string;
   result_json: string | null;
@@ -88,6 +92,7 @@ function fromRow(row: OperationRow): ProvisionOperation {
     creatorId: row.creator_id,
     appId: row.app_id,
     intentHash: row.intent_hash,
+    bootstrapIntentHash: row.bootstrap_intent_hash,
     status: row.status,
     steps: parseSteps(row.steps_json),
     result: parseResult(row.result_json),
@@ -100,7 +105,7 @@ function fromRow(row: OperationRow): ProvisionOperation {
   };
 }
 
-const SELECT_OPERATION = `SELECT receipt_id, creator_id, app_id, intent_hash, status, steps_json, result_json,
+const SELECT_OPERATION = `SELECT receipt_id, creator_id, app_id, intent_hash, bootstrap_intent_hash, status, steps_json, result_json,
                                   attempt_count, lease_expires_at, attempt_id, created_at, updated_at, completed_at
                              FROM provision_operations`;
 
@@ -161,7 +166,7 @@ export function operationNeedsLease(operation: ProvisionOperation | null, now = 
  * can establish what it originally authorised.
  */
 export function isLegacyProvisionOperation(operation: ProvisionOperation): boolean {
-  return operation.intentHash === '';
+  return operation.intentHash === '' || operation.bootstrapIntentHash === '';
 }
 
 /**
@@ -179,7 +184,7 @@ export function operationIsExhausted(operation: ProvisionOperation, now = Date.n
 /** Atomically creates, joins, or recovers a lease. */
 export async function beginProvisionOperation(
   db: D1Database,
-  args: { creatorId: string; appId: string; intentHash: string; now?: number; leaseMs?: number },
+  args: { creatorId: string; appId: string; intentHash: string; bootstrapIntentHash: string; now?: number; leaseMs?: number },
 ): Promise<BeginProvisionOperationResult> {
   const now = args.now ?? Date.now();
   const leaseExpiresAt = now + (args.leaseMs ?? PROVISION_OPERATION_LEASE_MS);
@@ -187,9 +192,9 @@ export async function beginProvisionOperation(
   const attemptId = newAttemptId();
   const inserted = await db.prepare(
     `INSERT OR IGNORE INTO provision_operations
-       (receipt_id, creator_id, app_id, intent_hash, status, steps_json, attempt_count, lease_expires_at, attempt_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'pending', '[]', 1, ?, ?, ?, ?)`,
-  ).bind(receiptId, args.creatorId, args.appId, args.intentHash, leaseExpiresAt, attemptId, now, now).run();
+       (receipt_id, creator_id, app_id, intent_hash, bootstrap_intent_hash, status, steps_json, attempt_count, lease_expires_at, attempt_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'pending', '[]', 1, ?, ?, ?, ?)`,
+  ).bind(receiptId, args.creatorId, args.appId, args.intentHash, args.bootstrapIntentHash, leaseExpiresAt, attemptId, now, now).run();
   if (Number(inserted.meta.changes) > 0) {
     const created = await getProvisionOperation(db, args.appId);
     if (!created) throw new Error('provision operation insert was not readable');
@@ -200,7 +205,7 @@ export async function beginProvisionOperation(
   if (!existing) throw new Error('provision operation conflict was not readable');
   if (existing.creatorId !== args.creatorId) return { kind: 'owner_conflict', operation: existing };
   if (isLegacyProvisionOperation(existing)) return { kind: 'legacy_unreconciled', operation: existing };
-  if (existing.intentHash !== args.intentHash) return { kind: 'intent_conflict', operation: existing };
+  if (existing.bootstrapIntentHash !== args.bootstrapIntentHash) return { kind: 'intent_conflict', operation: existing };
   if (operationIsExhausted(existing, now)) return { kind: 'exhausted', operation: existing };
   if (!operationNeedsLease(existing, now)) return { kind: existing.status === 'failed' ? 'exhausted' : 'joined', operation: existing };
 
@@ -209,15 +214,15 @@ export async function beginProvisionOperation(
     `UPDATE provision_operations
         SET status = 'pending', attempt_count = attempt_count + 1, lease_expires_at = ?, attempt_id = ?,
             updated_at = ?, completed_at = NULL
-      WHERE receipt_id = ? AND creator_id = ? AND intent_hash = ? AND attempt_count < ?
+      WHERE receipt_id = ? AND creator_id = ? AND intent_hash = ? AND bootstrap_intent_hash = ? AND attempt_count < ?
         AND (status = 'failed' OR (status = 'pending' AND (lease_expires_at IS NULL OR lease_expires_at <= ?)))`,
-  ).bind(leaseExpiresAt, nextAttemptId, now, existing.receiptId, args.creatorId, args.intentHash, MAX_PROVISION_OPERATION_ATTEMPTS, now).run();
+  ).bind(leaseExpiresAt, nextAttemptId, now, existing.receiptId, args.creatorId, args.intentHash, args.bootstrapIntentHash, MAX_PROVISION_OPERATION_ATTEMPTS, now).run();
   const current = await getProvisionOperation(db, args.appId);
   if (!current) throw new Error('provision operation recovery was not readable');
   if (Number(recovered.meta.changes) > 0) return { kind: 'recovered', operation: current };
   if (current.creatorId !== args.creatorId) return { kind: 'owner_conflict', operation: current };
   if (isLegacyProvisionOperation(current)) return { kind: 'legacy_unreconciled', operation: current };
-  if (current.intentHash !== args.intentHash) return { kind: 'intent_conflict', operation: current };
+  if (current.bootstrapIntentHash !== args.bootstrapIntentHash) return { kind: 'intent_conflict', operation: current };
   return { kind: operationIsExhausted(current, now) ? 'exhausted' : 'joined', operation: current };
 }
 
