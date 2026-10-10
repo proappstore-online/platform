@@ -74,12 +74,17 @@ a single confirmation of the set.
 
 ### 3. Inspect the approved templates and choose
 
-Call `list_templates`. Explain the choice in one paragraph: which template,
-why it fits the category and data needs, its `status`, its **reviewed source
-commit**, and its **known deviations** (Application Standard clause ids the
-scaffold does not yet meet). Today the catalogue holds one approved template,
-`template-app` (the default); say so rather than inventing alternatives. The
-catalogue and contract are public at
+Call `list_templates` before discussing a choice; its live catalogue response
+is authoritative. Identify **every** entry with `status: approved`, present
+those choices to the user (id, title, fit for the stated category/data needs,
+reviewed source commit, and known deviations), then recommend or ask the user
+to choose the best fit. Do not assume a count of approved templates or repeat
+a hard-coded list. Explain the selected template in one paragraph: why it fits
+the category and data needs, its `status`, its **reviewed source commit**, and
+its **known deviations** (Application Standard clause ids the scaffold does not
+yet meet). Example only: if `list_templates` marks `template-app` as the
+default, omitting `template_repo` selects that default; it does not limit the
+other approved choices. The catalogue and contract are public at
 https://docs.proappstore.online/templates/ (data:
 https://docs.proappstore.online/templates/catalogue.json).
 
@@ -152,13 +157,13 @@ makes later.
 
 ## Follow-ups the report must include
 
-The template's `security_compliance.known_deviations` (from `list_templates`)
-are Application Standard clauses the new app fails on day one. For
-`template-app` today: set `authMode: 'platform-cookie'` in `initPro`
-(https://docs.proappstore.online/standard/auth/#pas-auth-001), switch the theme
-boot key to `stores-theme` (https://docs.proappstore.online/standard/ui/#pas-ui-002),
-and remove `user-scalable=no` (https://docs.proappstore.online/standard/ui/#pas-ui-007).
-List them as the first three tasks, with the clause URLs.
+After selecting a template, read that selected entry's current
+`security_compliance.known_deviations` from `list_templates` (call it again if
+the earlier response may be stale). This is the only source for day-one
+remediation: include follow-ups only for those listed deviations, using the
+entry's notes and clause URLs when supplied. If the selected template has an
+empty deviations list, report that it has no known deviation follow-ups and add
+zero remediation tasks. Never carry deviations from one template into another.
 
 Then hand off the build. The successful `provision_pas_app` result ends with a
 "Next — build the app on ProShell" block; carry it into **Next steps**:

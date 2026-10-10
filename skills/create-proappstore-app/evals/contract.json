@@ -45,6 +45,7 @@
     "idempotency": "test/skills-harness.test.ts",
     "failure-recovery": "test/skills-harness.test.ts",
     "citation-accuracy": "packages/mcp/src/skill-create-app.evals.test.ts",
+    "catalogue-guidance": "packages/mcp/src/skill-create-app.evals.test.ts",
     "secret-safety": "test/skills.test.ts",
     "context-size": "test/skills-harness.test.ts"
   }

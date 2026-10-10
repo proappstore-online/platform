@@ -44,6 +44,16 @@ interface Case {
 }
 const fixture = JSON.parse(readFileSync(resolve(__dirname, '../../../skills/create-proappstore-app/evals/cases.json'), 'utf8')) as { input: Record<string, unknown>; cases: Case[] };
 
+interface CatalogueTemplate {
+  id: string;
+  status: string;
+  release: { source_commit: string };
+  security_compliance: { known_deviations: string[] };
+}
+const catalogue = JSON.parse(readFileSync(resolve(__dirname, '../../../docs/templates/catalogue.json'), 'utf8')) as { templates: CatalogueTemplate[] };
+const approvedTemplates = catalogue.templates.filter((template) => template.status === 'approved');
+const skill = readFileSync(resolve(__dirname, '../../../skills/create-proappstore-app/SKILL.md'), 'utf8');
+
 function applyMocks(m: Case['mocks']) {
   mockGh.createRepoFromTemplate.mockResolvedValue({ ...(m.createRepo ?? { ok: true, status: 200 }), data: {} });
   mockGh.repoExists.mockResolvedValue(m.repoExists ?? false);
@@ -104,6 +114,46 @@ describe('create-proappstore-app — end-to-end evaluations', () => {
   it('the fixture covers every blocker class the skill documents', () => {
     const blockers = new Set(fixture.cases.filter((c) => c.class === 'blocker').map((c) => c.blocker));
     for (const b of ['credentials', 'ownership', 'template', 'compliance']) expect(blockers.has(b), b).toBe(true);
+  });
+});
+
+/**
+ * #357: template options and remediation come from the approved catalogue, not
+ * a stale list in the skill. Keep this tied to the published data so that a
+ * future template cannot silently make the guidance contradictory.
+ */
+describe('create-proappstore-app — catalogue-driven template guidance (#357)', () => {
+  const byId = (id: string) => approvedTemplates.find((template) => template.id === id)!;
+  const followUpsFor = (template: CatalogueTemplate) => template.security_compliance.known_deviations;
+
+  it('discovers and presents every currently approved template instead of claiming a fixed count', () => {
+    expect(approvedTemplates.map((template) => template.id)).toEqual(expect.arrayContaining(['template-app', 'template-marketplace']));
+    expect(approvedTemplates.length).toBeGreaterThan(1);
+    expect(skill).toMatch(/Call `list_templates` before discussing a choice/i);
+    expect(skill).toMatch(/every.*status: approved/i);
+    expect(skill).toMatch(/present\s+those choices to the user/i);
+    expect(skill).not.toMatch(/\b(?:only one|one) approved template\b/i);
+  });
+
+  it('derives selected-template follow-ups from the catalogue rather than a fixed deviation list', () => {
+    const templateApp = byId('template-app');
+    expect(followUpsFor(templateApp)).not.toEqual([]);
+    expect(skill).toMatch(/selected entry's current\n`security_compliance\.known_deviations` from `list_templates`/i);
+    expect(skill).toContain('include follow-ups only for those listed deviations');
+
+    // A static clause list in the skill would drift as the selected template
+    // changes. Its only contract is to read the selected catalogue entry.
+    for (const template of approvedTemplates) {
+      for (const deviation of followUpsFor(template)) expect(skill).not.toContain(deviation);
+    }
+  });
+
+  it('creates no deviation remediation tasks for an approved no-deviation template', () => {
+    const marketplace = byId('template-marketplace');
+    expect(marketplace.release.source_commit).toBe('4b000c9967dbd7981e4d45cbfdfffba680beb8e7');
+    expect(followUpsFor(marketplace)).toEqual([]);
+    expect(skill).toMatch(/empty deviations list.*no known deviation follow-ups.*zero remediation tasks/is);
+    expect(skill).toContain('Never carry deviations from one template into another.');
   });
 });
 

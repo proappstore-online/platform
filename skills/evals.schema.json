@@ -82,7 +82,7 @@
           "properties": {
             "triggering": { "type": "string" }, "non-triggering": { "type": "string" }, "tool-selection-order": { "type": "string" },
             "dry-run-confirmation": { "type": "string" }, "output-schema": { "type": "string" }, "idempotency": { "type": "string" },
-            "failure-recovery": { "type": "string" }, "citation-accuracy": { "type": "string" }, "secret-safety": { "type": "string" }, "context-size": { "type": "string" }
+            "failure-recovery": { "type": "string" }, "citation-accuracy": { "type": "string" }, "catalogue-guidance": { "type": "string" }, "secret-safety": { "type": "string" }, "context-size": { "type": "string" }
           }
         }
       }
