@@ -4,6 +4,7 @@ import {
   internalTokenOk,
   type Step,
   checkProvisionQuota,
+  d1ProvisionAdmissionStore,
   d1ProvisionAttemptStore,
 } from '@proappstore/build-core';
 import type { Env } from '../types.js';
@@ -13,10 +14,10 @@ import { provisionData } from '../lib/provision-data.js';
 import {
   beginProvisionOperation,
   getProvisionOperation,
+  hashProvisionAdmissionOperation,
   hashProvisionIntent,
   isLegacyProvisionOperation,
   operationIsExhausted,
-  operationNeedsLease,
   updateProvisionOperation,
   type ProvisionOperation,
   type ProvisionOperationStatus,
@@ -62,6 +63,9 @@ interface ProvisionBody {
   templateRev?: string;
   /** #178: platform admins only — proceed with a template outside the approved catalogue. */
   allowUnapprovedTemplate?: boolean;
+  /** Durable receipt context supplied only by the MCP worker that owns the active attempt. */
+  provisionReceipt?: string;
+  provisionAttemptId?: string;
 }
 
 export const provisionRoutes = new Hono<{ Bindings: Env }>();
@@ -99,6 +103,37 @@ function redactStepDetail(detail: string): string {
     .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
     .replace(/\b(?:gh[opsu]_|github_pat_)[A-Za-z0-9_]{12,}/g, '[redacted]')
     .slice(0, 1_000);
+}
+
+/** Undo a receipt lease that never passed quota admission. No remote work can
+ * have started because the admission row is created only by this route. */
+async function rollbackUnadmittedOperation(
+  db: D1Database,
+  operation: ProvisionOperation,
+  previous: ProvisionOperation | null,
+): Promise<void> {
+  if (!previous) {
+    await db.prepare(
+      `DELETE FROM provision_operations
+        WHERE receipt_id = ? AND status = 'pending' AND attempt_id = ? AND attempt_count = 1`,
+    ).bind(operation.receiptId, operation.attemptId).run();
+    return;
+  }
+  await db.prepare(
+    `UPDATE provision_operations
+        SET status = ?, attempt_count = ?, lease_expires_at = ?, attempt_id = ?,
+            updated_at = ?, completed_at = ?
+      WHERE receipt_id = ? AND status = 'pending' AND attempt_id = ?`,
+  ).bind(
+    previous.status,
+    previous.attemptCount,
+    previous.leaseExpiresAt,
+    previous.attemptId,
+    previous.updatedAt,
+    previous.completedAt,
+    operation.receiptId,
+    operation.attemptId,
+  ).run();
 }
 
 async function operationAccess(c: Parameters<typeof requireUser>[0], appId: string) {
@@ -157,29 +192,9 @@ provisionRoutes.post('/provision-operations', wrap(async (c) => {
   }
 
   const now = Date.now();
-  // Joining a live, exhausted, or terminal identical receipt is not a new
-  // provisioning attempt. Only a fresh/recovery lease consumes quota, so a
-  // retry that merely observes the UNIQUE(app_id) receipt cannot double-charge.
-  if (operationNeedsLease(existing, now)) {
-    try {
-      const quota = await checkProvisionQuota(d1ProvisionAttemptStore(c.env.DB), {
-        userKey: user.id,
-        ip: c.req.header('CF-Connecting-IP'),
-        nowMs: now,
-      });
-      if (!quota.allowed) {
-        return c.text(
-          `provisioning rate limit reached (${quota.scope}) — retry later`,
-          429,
-          quota.retryAfterSeconds ? { 'Retry-After': String(quota.retryAfterSeconds) } : undefined,
-        );
-      }
-    } catch (error) {
-      console.warn(`provision operation rate limit unavailable, refusing reservation: ${(error as Error).message}`);
-      return c.text('provisioning rate limit is temporarily unavailable — retry later', 503, { 'Retry-After': '60' });
-    }
-  }
-
+  // `beginProvisionOperation` is the atomic app-id/intent gate. Do it before
+  // consuming quota so simultaneous identical receipt requests yield exactly
+  // one created/recovered attempt; all other callers join it without spending.
   const begun = await beginProvisionOperation(c.env.DB, { creatorId: user.id, appId: body.appId, intentHash, now });
   if (begun.kind === 'owner_conflict') {
     return c.json({ error: 'provisioning operation belongs to another user' }, 403);
@@ -193,6 +208,56 @@ provisionRoutes.post('/provision-operations', wrap(async (c) => {
       error: 'legacy provisioning receipt has no verified intent; it remains read-only until independent server-verified app and repository provenance can reconcile it. Choose a different app id or contact platform support.',
       reconciliation: 'legacy_unreconciled',
     }, 409);
+  }
+  if (begun.kind === 'created' || begun.kind === 'recovered') {
+    const { operation } = begun;
+    if (!operation.attemptId || operation.leaseExpiresAt === null) {
+      await rollbackUnadmittedOperation(c.env.DB, operation, existing);
+      return c.text('provisioning receipt did not grant an active attempt lease', 503, { 'Retry-After': '60' });
+    }
+    const operationId = await hashProvisionAdmissionOperation({
+      creatorId: operation.creatorId,
+      appId: operation.appId,
+      intentHash: operation.intentHash,
+      attemptId: operation.attemptId,
+    });
+    const admissions = d1ProvisionAdmissionStore(c.env.DB);
+    try {
+      // INSERT OR IGNORE is an atomic check-and-set. A duplicate means an
+      // inconsistent receipt transition, so fail closed rather than allowing a
+      // second quota charge or side-effecting execution.
+      if (!(await admissions.create({
+        operationId,
+        creatorId: operation.creatorId,
+        appId: operation.appId,
+        intentHash: operation.intentHash,
+        attemptId: operation.attemptId,
+        leaseExpiresAt: operation.leaseExpiresAt,
+        createdAt: now,
+      }))) {
+        await rollbackUnadmittedOperation(c.env.DB, operation, existing);
+        return c.text('provisioning rate limit is temporarily unavailable — retry later', 503, { 'Retry-After': '60' });
+      }
+      const quota = await checkProvisionQuota(d1ProvisionAttemptStore(c.env.DB), {
+        userKey: user.id,
+        ip: c.req.header('CF-Connecting-IP'),
+        nowMs: now,
+      });
+      if (!quota.allowed) {
+        await admissions.remove(operationId);
+        await rollbackUnadmittedOperation(c.env.DB, operation, existing);
+        return c.text(
+          `provisioning rate limit reached (${quota.scope}) — retry later`,
+          429,
+          quota.retryAfterSeconds ? { 'Retry-After': String(quota.retryAfterSeconds) } : undefined,
+        );
+      }
+    } catch (error) {
+      await admissions.remove(operationId).catch(() => undefined);
+      await rollbackUnadmittedOperation(c.env.DB, operation, existing).catch(() => undefined);
+      console.warn(`provision operation rate limit unavailable, refusing reservation: ${(error as Error).message}`);
+      return c.text('provisioning rate limit is temporarily unavailable — retry later', 503, { 'Retry-After': '60' });
+    }
   }
   const joined = begun.kind === 'joined' || begun.kind === 'exhausted';
   return c.json(operationResponse(begun.operation, joined), begun.kind === 'created' ? 201 : 200);
@@ -288,31 +353,70 @@ provisionRoutes.post('/provision', wrap(async (c) => {
     return c.text('appId already claimed by another user', 403);
   }
 
-  // SECURITY (#83): publishing is self-service, so a session is not a scarcity
-  // signal. Bound how fast one caller can drive a loop that creates org repos,
-  // D1 databases, Workers and DNS. Keyed on the platform user id so the budget
-  // is shared with the admin worker's /api/publish-app rather than doubled.
-  //
-  // Checked after ownership so a squatting attempt does not spend the
-  // squatter's budget, and a legitimate owner gets "not yours" over a 429.
-  try {
-    const quota = await checkProvisionQuota(d1ProvisionAttemptStore(c.env.DB), {
-      userKey: user.id,
-      ip: c.req.header('CF-Connecting-IP'),
-      nowMs: Date.now(),
-    });
-    if (!quota.allowed) {
-      return c.text(
-        `provisioning rate limit reached (${quota.scope}) — retry later`,
-        429,
-        quota.retryAfterSeconds ? { 'Retry-After': String(quota.retryAfterSeconds) } : undefined,
-      );
+  const receiptSupplied = body.provisionReceipt !== undefined || body.provisionAttemptId !== undefined;
+  let admittedReceipt = false;
+  if (receiptSupplied) {
+    if (typeof body.provisionReceipt !== 'string' || !body.provisionReceipt
+      || typeof body.provisionAttemptId !== 'string' || !body.provisionAttemptId) {
+      return c.text('provision receipt and attempt id must be supplied together', 400);
     }
-  } catch (e) {
-    // Fail OPEN: the ownership check above is the security boundary; this is
-    // an abuse ceiling, and a limiter that cannot read its own table must not
-    // take publishing down.
-    console.warn(`provision rate limit unavailable, allowing: ${(e as Error).message}`);
+    const now = Date.now();
+    const operation = await getProvisionOperation(c.env.DB, appId);
+    // Receipt fields are only a reference. All owner, app, intent and active
+    // lease facts are read back from D1, never trusted from the request body.
+    if (!operation || operation.receiptId !== body.provisionReceipt || operation.creatorId !== user.id
+      || operation.appId !== appId || isLegacyProvisionOperation(operation)
+      || operation.status !== 'pending' || operation.attemptId !== body.provisionAttemptId
+      || operation.leaseExpiresAt === null || operation.leaseExpiresAt <= now) {
+      return c.text('provision receipt is stale, forged, or does not belong to this active attempt', 409);
+    }
+    const operationId = await hashProvisionAdmissionOperation({
+      creatorId: operation.creatorId,
+      appId: operation.appId,
+      intentHash: operation.intentHash,
+      attemptId: operation.attemptId,
+    });
+    const admissions = d1ProvisionAdmissionStore(c.env.DB);
+    try {
+      const admission = await admissions.read(operationId);
+      if (!admission || admission.creatorId !== operation.creatorId || admission.appId !== operation.appId
+        || admission.intentHash !== operation.intentHash || admission.attemptId !== operation.attemptId
+        || admission.leaseExpiresAt !== operation.leaseExpiresAt || admission.leaseExpiresAt <= now) {
+        return c.text('provision receipt has no valid quota admission', 409);
+      }
+      // Only one request can flip claimed_at from NULL. A replay must not run
+      // side effects concurrently and cannot buy another admission by retrying.
+      if (!(await admissions.claim(operationId, now))) {
+        return c.text('provision receipt is already being executed or has expired', 409);
+      }
+      admittedReceipt = true;
+    } catch (error) {
+      console.warn(`provision admission unavailable, refusing execution: ${(error as Error).message}`);
+      return c.text('provisioning admission is temporarily unavailable — retry later', 503, { 'Retry-After': '60' });
+    }
+  }
+
+  // SECURITY (#83): direct calls have no durable receipt admission and are
+  // charged here. Receipt-backed calls have already paid exactly once at the
+  // atomic receipt admission above. The limiter is fail-closed on either path.
+  if (!admittedReceipt) {
+    try {
+      const quota = await checkProvisionQuota(d1ProvisionAttemptStore(c.env.DB), {
+        userKey: user.id,
+        ip: c.req.header('CF-Connecting-IP'),
+        nowMs: Date.now(),
+      });
+      if (!quota.allowed) {
+        return c.text(
+          `provisioning rate limit reached (${quota.scope}) — retry later`,
+          429,
+          quota.retryAfterSeconds ? { 'Retry-After': String(quota.retryAfterSeconds) } : undefined,
+        );
+      }
+    } catch (error) {
+      console.warn(`provision rate limit unavailable, refusing: ${(error as Error).message}`);
+      return c.text('provisioning rate limit is temporarily unavailable — retry later', 503, { 'Retry-After': '60' });
+    }
   }
 
   // #178: the template selection contract. Unknown or withdrawn templates are

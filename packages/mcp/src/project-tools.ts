@@ -250,7 +250,14 @@ export function registerProjectTools(
   }
 
   /** Call /v1/provision and format the step results. */
-  interface ProvisionOpts { skipCompliance?: boolean; template?: string; templateRev?: string; allowUnapprovedTemplate?: boolean }
+  interface ProvisionOpts {
+    skipCompliance?: boolean;
+    template?: string;
+    templateRev?: string;
+    allowUnapprovedTemplate?: boolean;
+    receipt?: string;
+    attemptId?: string;
+  }
 
   async function provisionDetailed(appId: string, token: string, opts?: ProvisionOpts): Promise<{ ok: boolean; status: number; data: ProvisionResult; text: string }> {
     try {
@@ -266,6 +273,7 @@ export function registerProjectTools(
           ...(opts?.template ? { template: opts.template } : {}),
           ...(opts?.templateRev ? { templateRev: opts.templateRev } : {}),
           ...(opts?.allowUnapprovedTemplate ? { allowUnapprovedTemplate: true } : {}),
+          ...(opts?.receipt && opts?.attemptId ? { provisionReceipt: opts.receipt, provisionAttemptId: opts.attemptId } : {}),
         }),
       });
       let data: ProvisionResult;
@@ -595,6 +603,8 @@ export function registerProjectTools(
         template: templateId,
         ...(templateRev ? { templateRev } : {}),
         ...(allow_unapproved_template && isAdmin && !selection.template ? { allowUnapprovedTemplate: true } : {}),
+        receipt: receipt.receipt,
+        attemptId: receipt.attemptId,
       });
       if (prov.text) steps.push(prov.text);
       await recordEvidence((prov.data.steps ?? []).map((step) => ({

@@ -131,6 +131,21 @@ export async function hashProvisionIntent(intent: unknown): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+/** Stable server-side identity for one owner-bound receipt attempt. */
+export function hashProvisionAdmissionOperation(args: {
+  creatorId: string;
+  appId: string;
+  intentHash: string;
+  attemptId: string;
+}): Promise<string> {
+  return hashProvisionIntent({
+    creatorId: args.creatorId,
+    appId: args.appId,
+    intentHash: args.intentHash,
+    attemptId: args.attemptId,
+  });
+}
+
 export function operationNeedsLease(operation: ProvisionOperation | null, now = Date.now()): boolean {
   if (!operation) return true;
   if (operationIsExhausted(operation, now)) return false;

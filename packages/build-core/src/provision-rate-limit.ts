@@ -56,7 +56,7 @@ interface D1Like {
   prepare(sql: string): {
     bind(...values: unknown[]): {
       first<T>(): Promise<T | null>;
-      run(): Promise<unknown>;
+      run(): Promise<{ meta?: { changes?: number } }>;
     };
   };
 }
@@ -77,6 +77,94 @@ export function d1ProvisionAttemptStore(db: D1Like): ProvisionAttemptStore {
         )
         .bind(key, row.window_start, row.count)
         .run();
+    },
+  };
+}
+
+/**
+ * One quota admission for a durable provisioning attempt. The receipt route
+ * creates this row after it has admitted (and charged) an attempt; the actual
+ * provision route atomically claims it before performing side effects.
+ */
+export interface ProvisionAdmissionLease {
+  operationId: string;
+  creatorId: string;
+  appId: string;
+  intentHash: string;
+  attemptId: string;
+  leaseExpiresAt: number;
+  createdAt: number;
+  claimedAt: number | null;
+}
+
+interface ProvisionAdmissionRow {
+  operation_id: string;
+  creator_id: string;
+  app_id: string;
+  intent_hash: string;
+  attempt_id: string;
+  lease_expires_at: number;
+  created_at: number;
+  claimed_at: number | null;
+}
+
+function admissionFromRow(row: ProvisionAdmissionRow): ProvisionAdmissionLease {
+  return {
+    operationId: row.operation_id,
+    creatorId: row.creator_id,
+    appId: row.app_id,
+    intentHash: row.intent_hash,
+    attemptId: row.attempt_id,
+    leaseExpiresAt: row.lease_expires_at,
+    createdAt: row.created_at,
+    claimedAt: row.claimed_at,
+  };
+}
+
+export interface ProvisionAdmissionStore {
+  /** Atomic create-if-absent. */
+  create(lease: Omit<ProvisionAdmissionLease, 'claimedAt'>): Promise<boolean>;
+  read(operationId: string): Promise<ProvisionAdmissionLease | null>;
+  /** Atomically grants the side-effecting provision execution to one caller. */
+  claim(operationId: string, nowMs: number): Promise<boolean>;
+  remove(operationId: string): Promise<void>;
+}
+
+export function d1ProvisionAdmissionStore(db: D1Like): ProvisionAdmissionStore {
+  return {
+    async create(lease) {
+      const result = await db.prepare(
+        `INSERT OR IGNORE INTO provision_admissions
+           (operation_id, creator_id, app_id, intent_hash, attempt_id, lease_expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        lease.operationId,
+        lease.creatorId,
+        lease.appId,
+        lease.intentHash,
+        lease.attemptId,
+        lease.leaseExpiresAt,
+        lease.createdAt,
+      ).run();
+      return Number(result.meta?.changes ?? 0) > 0;
+    },
+    async read(operationId) {
+      const row = await db.prepare(
+        `SELECT operation_id, creator_id, app_id, intent_hash, attempt_id,
+                lease_expires_at, created_at, claimed_at
+           FROM provision_admissions WHERE operation_id = ?`,
+      ).bind(operationId).first<ProvisionAdmissionRow>();
+      return row ? admissionFromRow(row) : null;
+    },
+    async claim(operationId, nowMs) {
+      const result = await db.prepare(
+        `UPDATE provision_admissions SET claimed_at = ?
+          WHERE operation_id = ? AND claimed_at IS NULL AND lease_expires_at > ?`,
+      ).bind(nowMs, operationId, nowMs).run();
+      return Number(result.meta?.changes ?? 0) > 0;
+    },
+    async remove(operationId) {
+      await db.prepare('DELETE FROM provision_admissions WHERE operation_id = ?').bind(operationId).run();
     },
   };
 }

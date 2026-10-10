@@ -205,6 +205,7 @@ describe('provision_pas_app — template selection contract (#178)', () => {
     expect(out).toContain('+ Template revision: template-app@d8c2e08f32b8');
     const body = JSON.parse((mockFetch.mock.calls.find((c) => String(c[0]).includes('/v1/provision'))![1] as RequestInit).body as string);
     expect(body).toMatchObject({ template: 'template-app', templateRev: 'd8c2e08f32b8e30847b27c7092fd4b0e64341d2f' });
+    expect(body).toMatchObject({ provisionReceipt: expect.stringMatching(/^receipt-/), provisionAttemptId: expect.stringMatching(/^attempt-/) });
     expect(body.allowUnapprovedTemplate).toBeUndefined();
   });
 

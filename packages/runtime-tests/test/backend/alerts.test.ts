@@ -11,7 +11,9 @@ beforeEach(async () => { mockNetwork(); await resetTables(); await env.DB.prepar
 describe('error-spike alerts against real D1', () => {
   it('detects a client error spike, records it once across re-runs, and the owner reads it', async () => {
     await seedUser('gh:1'); await seedApp('demo', 'gh:1');
-    const now = Date.now();
+    // Keep the rows strictly inside a known 15-minute bucket. Real wall-clock
+    // time can roll over after these inserts but before the evaluator buckets.
+    const now = 1_800_000_450_000;
     const rows = Array.from({ length: 25 }, (_, i) =>
       env.DB.prepare("INSERT INTO app_logs (app_id, user_id, client_id, ts, level, category, message, data, build_meta, fingerprint, trace_id, source, ingested_at) VALUES ('demo', ?, NULL, ?, 'error', 'runtime', 'boom', '{\"route\":\"/\"}', '{\"sha\":\"abc123\"}', ?, NULL, 'mediated', ?)")
         .bind(`gh:u${i % 6}`, now - 1000, i % 2 ? 'fp-a' : 'fp-b', now - 1000));
@@ -42,7 +44,10 @@ describe('error-spike alerts against real D1', () => {
     // can land a fresh `queued` run for 'demo' after this test's cleanup, which
     // would sit in front of the two failures and hide them (order-dependent flake).
     await seedUser('gh:1'); await seedApp('qa-demo', 'gh:1');
-    const now = Date.now();
+    // This is deliberately midway through a 15-minute bucket. The evaluator
+    // snaps `now` to the next boundary, so real wall-clock time at a rollover
+    // could otherwise put these just-written rows in the previous bucket.
+    const now = 1_800_000_450_000;
     const run = (id: string, status: string, at: number) => env.DB.prepare("INSERT INTO app_test_runs (run_id, app_id, flow_id, trigger_kind, status, started_at, finished_at) VALUES (?, 'qa-demo', 'f1', 'deploy', ?, ?, ?)").bind(id, status, at - 10, at);
     await env.DB.batch([run('r1', 'passed', now - 30_000), run('r2', 'failed', now - 20_000), run('r3', 'error', now - 10_000)]);
     const r = await evaluateErrorSpikes({ env, now, appId: 'qa-demo' });

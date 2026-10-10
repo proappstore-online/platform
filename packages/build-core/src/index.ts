@@ -12,9 +12,11 @@ export type { CfConfig, Step } from './cloudflare.js';
 export { internalTokenOk } from './internal-auth.js';
 export {
   checkProvisionQuota,
+  d1ProvisionAdmissionStore,
   d1ProvisionAttemptStore,
   DEFAULT_PROVISION_LIMITS,
 } from './provision-rate-limit.js';
+export type { ProvisionAdmissionLease, ProvisionAdmissionStore } from './provision-rate-limit.js';
 export type {
   ProvisionAttemptRow,
   ProvisionAttemptStore,

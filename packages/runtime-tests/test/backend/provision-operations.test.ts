@@ -9,12 +9,22 @@ const post = async (appId: string, token: string, requestIntent: unknown = inten
   SELF.fetch(`${BASE}/v1/provision-operations`, json('POST', { appId, intent: requestIntent }, token));
 const patch = async (appId: string, token: string, body: unknown) =>
   SELF.fetch(`${BASE}/v1/provision-operations/${appId}`, json('PATCH', body, token));
+const provision = (appId: string, token: string, receipt?: { receipt: string; attemptId: string }) =>
+  SELF.fetch(`${BASE}/v1/provision`, json('POST', {
+    appId,
+    // Refuse after admission, before any network provisioning side effects.
+    template: 'not-a-published-template',
+    ...(receipt ? { provisionReceipt: receipt.receipt, provisionAttemptId: receipt.attemptId } : {}),
+  }, token));
 const body = <T>(response: Response) => response.json() as Promise<T>;
+const quotaCount = async (userId: string) => (await env.DB.prepare('SELECT count FROM provision_attempts WHERE key = ?')
+  .bind(`user:${userId}:h`).first<{ count: number }>())?.count ?? 0;
 
 beforeEach(async () => {
   mockNetwork();
   await resetTables();
   await env.DB.prepare('DELETE FROM provision_operations').run();
+  await env.DB.prepare('DELETE FROM provision_admissions').run();
   await env.DB.prepare('DELETE FROM provision_attempts').run();
   await seedUser(OWNER);
   await seedUser(OTHER);
@@ -140,5 +150,58 @@ describe('provision operation receipts on real D1 (#358)', () => {
     expect((await patch('interrupted-receipt', token, { attemptId: resumed.attemptId, status: 'completed' })).status).toBe(200);
     expect((await patch('interrupted-receipt', token, { attemptId: resumed.attemptId, status: 'failed' })).status).toBe(409);
     expect((await post('interrupted-receipt', token)).status).toBe(200);
+  });
+
+  it('charges a receipt-backed provision exactly once and atomically refuses a concurrent replay', async () => {
+    const token = await session(OWNER);
+    const receipt = await body<{ receipt: string; attemptId: string }>(await post('single-admission', token));
+    expect(await quotaCount(OWNER)).toBe(1);
+
+    // The first request claims the admission and reaches template validation;
+    // the concurrent replay cannot claim it or create a second execution.
+    const [first, replay] = await Promise.all([
+      provision('single-admission', token, receipt),
+      provision('single-admission', token, receipt),
+    ]);
+    expect([first.status, replay.status].sort()).toEqual([400, 409]);
+    expect(await quotaCount(OWNER)).toBe(1);
+  });
+
+  it('charges direct provision calls normally, and fails closed when quota storage is unavailable', async () => {
+    const token = await session(OTHER);
+    expect((await provision('direct-admission', token)).status).toBe(400);
+    expect(await quotaCount(OTHER)).toBe(1);
+
+    await env.DB.prepare(
+      `CREATE TRIGGER fail_receipt_quota BEFORE INSERT ON provision_attempts
+         WHEN NEW.key = 'user:${OTHER}:h'
+       BEGIN SELECT RAISE(ABORT, 'quota store unavailable'); END`,
+    ).run();
+    // Reset the ordinary direct-call row so this receipt must attempt the
+    // failing insert rather than being rejected by a limit.
+    await env.DB.prepare('DELETE FROM provision_attempts WHERE key = ?').bind(`user:${OTHER}:h`).run();
+    const unavailable = await post('unavailable-admission', token);
+    expect(unavailable.status).toBe(503);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM provision_operations WHERE app_id = 'unavailable-admission'")
+      .first<{ n: number }>())?.n).toBe(0);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM provision_admissions WHERE app_id = 'unavailable-admission'")
+      .first<{ n: number }>())?.n).toBe(0);
+    await env.DB.prepare('DROP TRIGGER fail_receipt_quota').run();
+  });
+
+  it('refuses stale, wrong-owner, and intent-mismatched receipt references without charging quota', async () => {
+    const ownerToken = await session(OWNER);
+    const receipt = await body<{ receipt: string; attemptId: string }>(await post('receipt-guarded', ownerToken));
+    const before = await quotaCount(OWNER);
+
+    expect((await provision('receipt-guarded', await session(OTHER), receipt)).status).toBe(409);
+    expect((await provision('different-receipt-app', ownerToken, receipt)).status).toBe(409);
+    await env.DB.prepare('UPDATE provision_admissions SET intent_hash = ? WHERE app_id = ?')
+      .bind('different-intent', 'receipt-guarded').run();
+    expect((await provision('receipt-guarded', ownerToken, receipt)).status).toBe(409);
+    await env.DB.prepare('UPDATE provision_operations SET lease_expires_at = 0 WHERE app_id = ?')
+      .bind('receipt-guarded').run();
+    expect((await provision('receipt-guarded', ownerToken, receipt)).status).toBe(409);
+    expect(await quotaCount(OWNER)).toBe(before);
   });
 });

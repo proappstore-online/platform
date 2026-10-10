@@ -22,6 +22,7 @@ type Row = {
 function operationDb(opts: { quotaUnavailable?: boolean } = {}) {
   const byApp = new Map<string, Row>();
   const byReceipt = new Map<string, Row>();
+  const admissions = new Set<string>();
   return {
     prepare(sql: string) {
       let values: unknown[] = [];
@@ -47,6 +48,16 @@ function operationDb(opts: { quotaUnavailable?: boolean } = {}) {
               created_at: createdAt, updated_at: updatedAt, completed_at: null,
             };
             byApp.set(appId, row); byReceipt.set(receipt, row);
+            return { meta: { changes: 1 } };
+          }
+          if (/INSERT OR IGNORE INTO provision_admissions/i.test(sql)) {
+            const operationId = String(values[0]);
+            if (admissions.has(operationId)) return { meta: { changes: 0 } };
+            admissions.add(operationId);
+            return { meta: { changes: 1 } };
+          }
+          if (/DELETE FROM provision_admissions/i.test(sql)) {
+            admissions.delete(String(values[0]));
             return { meta: { changes: 1 } };
           }
           if (/UPDATE provision_operations/i.test(sql)) {
