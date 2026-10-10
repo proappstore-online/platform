@@ -15,7 +15,6 @@ import { checkNoScroll } from './checks/no-scroll.js';
 import { checkNoTracking } from './checks/no-tracking.js';
 import { checkPwaMeta } from './checks/pwa-meta.js';
 import { checkPwaOffline } from './checks/pwa-offline.js';
-import { checkStoreLink } from './checks/store-link.js';
 import { checkUnsafeVh } from './checks/unsafe-vh.js';
 import { checkViewportSupport } from './checks/viewport-support.js';
 import { type FileSource, fsFileSource, mapFileSource } from './lib/file-source.js';
@@ -57,7 +56,6 @@ export {
   checkNoTracking,
   checkPwaMeta,
   checkPwaOffline,
-  checkStoreLink,
   checkUnsafeVh,
   checkViewportSupport,
   fsFileSource,
@@ -104,7 +102,6 @@ const RUNNERS: ReadonlyArray<{ id: string; run: (source: FileSource) => Promise<
   { id: 'pwa-offline', run: checkPwaOffline },
   { id: 'pwa-manifest', run: checkManifest },
   { id: 'pwa-maskable-icon', run: checkMaskableIcon },
-  { id: 'store-link', run: checkStoreLink },
   { id: 'dark-mode', run: checkDarkMode },
   { id: 'bundle-size', run: checkBundleSize },
   { id: 'claude-md-slim', run: checkClaudeMdSlim },

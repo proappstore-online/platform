@@ -59,6 +59,16 @@ export interface ProShellProps {
   /** App name shown in the topbar. */
   appName?: string;
   /**
+   * Controls only the default shell attribution chrome.
+   *
+   * `platform` preserves the legacy ProAppStore wordmark and footer for
+   * existing apps. New independently branded apps should use `app`, which
+   * keeps the app name, navigation, text-size control, and profile menu but
+   * renders no ProAppStore link or footer. A custom topbar/footer remains an
+   * explicit opt-in regardless of this setting.
+   */
+  branding?: 'platform' | 'app';
+  /**
    * The app's screens — the standard way to give an app navigation (#235).
    * ProShell renders them as a `<nav aria-label="Main">` in its topbar, marks
    * the current route, and collapses to a menu button on small screens.
@@ -144,6 +154,7 @@ export function ProShell({
   app,
   children,
   appName,
+  branding = 'platform',
   nav,
   renderNav,
   onNavigate,
@@ -262,7 +273,7 @@ export function ProShell({
   const topbar = renderTopbar ? renderTopbar(shellContext) : hideTopbar ? null : (
     <header className="pas-topbar sticky top-0 z-50 flex items-center justify-between border-b border-[var(--line)] bg-[var(--panel)] px-4 py-2">
       <div className="pas-topbar__brand flex items-center gap-3">
-        <a href="https://proappstore.online" className="pas-topbar__logo text-base font-extrabold text-[var(--accent)] no-underline">Pro</a>
+        {branding === 'platform' && <a href="https://proappstore.online" className="pas-topbar__logo text-base font-extrabold text-[var(--accent)] no-underline">Pro</a>}
         {appName && <span className="pas-topbar__app text-[0.85rem] font-semibold text-[var(--muted)]">{appName}</span>}
         {shellContext.proBadge}
       </div>
@@ -274,7 +285,7 @@ export function ProShell({
     </header>
   );
 
-  const footer = renderFooter ? renderFooter(shellContext) : hideFooter ? null : (
+  const footer = renderFooter ? renderFooter(shellContext) : hideFooter || branding === 'app' ? null : (
     <footer className="pas-footer border-t border-[var(--line)] p-4 text-center text-xs text-[var(--muted)]">
       Part of{' '}
       <a href="https://proappstore.online" className="pas-footer__link font-semibold text-[var(--accent)] no-underline">

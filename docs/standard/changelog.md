@@ -9,7 +9,11 @@ sections.
 Documentation sweep for the upgraded ProShell (#238).
 
 - **Added** — none.
-- **Changed** — none.
+- **Changed** — PAS-STACK-022 and PAS-UI-001 no longer require a visible
+  ProAppStore link, wordmark, advertising or URL. The `store-link` compliance
+  check is removed. New templates use `ProShell branding="app"`; the SDK keeps
+  its legacy platform attribution as the backwards-compatible default, with
+  `branding="platform"` as an explicit opt-in.
 - **Withdrawn** — none.
 - **Editorial** —
   - PAS-STACK-022: the recommended implementation and conforming example
@@ -24,7 +28,6 @@ Documentation sweep for the upgraded ProShell (#238).
   - The known scaffold defects table gains a Status column. The viewport,
     theme-key and token-alias defects are fixed in `template-app` `1297e90`
     (#239) but remain in older apps.
-  - The rules are unchanged.
 
 ## 1.8
 

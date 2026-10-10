@@ -54,6 +54,14 @@ describe('passing-app fixture', () => {
     const results = await runChecks(PASSING_APP);
     expect(summarise(results).warn).toEqual(['Bundle size']);
   });
+
+  it('REGRESSION: an independently branded app passes without a PAS attribution or URL in web/src', async () => {
+    const results = await runChecks(PASSING_APP);
+    expect(results.find((r) => r.name === 'Store link')).toBeUndefined();
+    expect(results.filter((r) => r.status === 'fail')).toEqual([]);
+    const footer = await readFile(join(PASSING_APP, 'web/src/Footer.tsx'), 'utf8');
+    expect(footer).not.toMatch(/proappstore|\bpas\b/i);
+  });
 });
 
 describe('failing-app fixture', () => {
@@ -82,7 +90,6 @@ describe('failing-app fixture', () => {
       'Dark mode support',
       'No unsafe 100vh',
       'PWA meta tags',
-      'Store link',
     ]);
     // Passing checks on a maximally-broken app:
     // - 'Accessibility static' finds no source-level controls in the fixture.

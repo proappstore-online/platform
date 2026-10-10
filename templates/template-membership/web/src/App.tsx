@@ -55,13 +55,9 @@ export default function App() {
     <ProShell
       app={app}
       appName="APPNAME"
+      branding="app"
       nav={NAV}
       renderNav={({ items }) => <HashNav items={items} />}
-      renderFooter={() => (
-        <footer className="border-t border-[var(--line)] px-6 py-4 text-center text-xs text-[var(--muted)]">
-          <a href="https://proappstore.online" className="font-semibold text-[var(--accent)] underline-offset-4 hover:underline">Built for ProAppStore</a>
-        </footer>
-      )}
     >
       <div className="flex-1"><Routed /></div>
     </ProShell>

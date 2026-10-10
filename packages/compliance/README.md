@@ -60,7 +60,6 @@ There is also a separate live-URL audit (`auditLive`, exported from
 | `PWA offline correctness` | Service worker / offline behaviour is correct | **fail** / warn |
 | `PWA manifest` | Static `web/public/manifest.json` (or inline VitePWA manifest) declares name / short_name / start_url / display | **fail** |
 | `PWA maskable icon` | Manifest declares at least one `purpose: "maskable"` icon | **fail** |
-| `Store link` | Some source file links back to `proappstore.online` | warn |
 | `Dark mode support` | Respects the system colour-scheme preference | warn |
 | `Bundle size` | Largest JS in `web/dist/assets/` is ≤ 300 KB gzipped | **fail** if too big; warn if not built yet |
 | `CLAUDE.md slim` | Per-repo `CLAUDE.md` stays slim (no drift-prone platform-wide content) | warn |

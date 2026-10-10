@@ -33,6 +33,15 @@ describe('seedFiles — platform owns CI, seed carries no workflow', () => {
       expect(content).not.toContain('pages deploy');
     }
   });
+
+  it('REGRESSION: the default generated app contains no PAS visual attribution or marketing', () => {
+    const app = files.get('src/App.tsx')!;
+    const html = files.get('index.html')!;
+    const image = files.get('public/og-image.svg')!;
+    expect(app).not.toMatch(/Part of|Built for|ProAppStore/);
+    expect(html).not.toMatch(/(?:description|twitter:description)[^>]*ProAppStore/i);
+    expect(image).not.toMatch(/proappstore|\bpas\b/i);
+  });
 });
 
 /**

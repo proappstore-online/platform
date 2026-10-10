@@ -81,8 +81,6 @@ export const CHECKS: readonly CheckMeta[] = [
     limits: 'The four required fields; the rest of the manifest is reviewed manually.' },
   { id: 'pwa-maskable-icon', name: 'PWA maskable icon', clauses: ['PAS-UI-020'], automation: 'full', evidenceClass: 'configuration', scope: 'all',
     limits: 'Declaration only; the icon\'s safe zone is not rendered.' },
-  { id: 'store-link', name: 'Store link', clauses: ['PAS-UI-001', 'PAS-STACK-022'], automation: 'full', evidenceClass: 'source', scope: 'all',
-    limits: 'That the domain appears somewhere under web/src; not that it is visible.' },
   { id: 'dark-mode', name: 'Dark mode support', clauses: ['PAS-UI-002'], automation: 'partial', evidenceClass: 'source', scope: 'apps',
     limits: 'Warn-only signal detection; the storage-key split (fas:theme vs stores-theme) and dark-scheme contrast are manual.' },
   { id: 'bundle-size', name: 'Bundle size', clauses: ['PAS-UI-021', 'PAS-STACK-024'], automation: 'partial', evidenceClass: 'process', scope: 'all',

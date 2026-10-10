@@ -26,7 +26,7 @@ and [OPS](./ops.md) chapters.
 | Registered actions in `mcp.json` | **Required** where the app stores data | repo root | [PAS-STACK-007](#pas-stack-007) |
 | `migrations.json` | **Required** where the app has a D1 schema | repo root | [PAS-STACK-008](#pas-stack-008) |
 | Runtime monitoring (`app.logs`, on by default) | **Required** | `initPro` options | [PAS-STACK-021](#pas-stack-021) |
-| SDK UI components and design tokens; store link | **Required** tokens and link; components recommended | `web/` | [PAS-STACK-022](#pas-stack-022) |
+| SDK UI components and design tokens | **Required** tokens; components recommended | `web/` | [PAS-STACK-022](#pas-stack-022) |
 | React 19 + Vite 8 + Tailwind 4 | **Optional** (template choice) | `web/` | [PAS-STACK-001](#pas-stack-001) |
 | KV, counters, storage, rooms, roles, proxy, AI, maps, notifications, email/SMS/webhooks, subscription gates, MCP | **Optional capabilities** — but when the need exists, the platform primitive is the required way to meet it | SDK modules | [PAS-STACK-009](#pas-stack-009) – [PAS-STACK-023](#pas-stack-023) |
 | `e2e/` Playwright suite | **Optional** | runs after deploy | [PAS-STACK-005](#pas-stack-005) |
@@ -56,7 +56,7 @@ clause that says why.
 | Send email, SMS, webhooks | `app.email`, `app.sms`, `app.webhooks` | SendGrid/Resend/Twilio from the browser | [019](#pas-stack-019) |
 | Charge for Pro features | Platform subscription: `useProGate`, `GateScreen`, `app.license` | Own Stripe/Paddle checkout, per-app prices | [020](#pas-stack-020) |
 | See failures in production | `app.logs` (auto) | GA/Mixpanel/PostHog/Sentry-style trackers | [021](#pas-stack-021) |
-| Look like a ProAppStore app | `@proappstore/sdk/ui`, design tokens | Brand overrides, custom fonts | [022](#pas-stack-022) |
+| Build an accessible app shell | `@proappstore/sdk/ui`, design tokens | Brand overrides, custom fonts | [022](#pas-stack-022) |
 | Let an AI agent operate it | The same `mcp.json` actions via `mcp.proappstore.online` | A second agent API or own MCP server | [023](#pas-stack-023) |
 | Add a library | Pure client-side libraries without network credentials | Any substitute in the table above | [024](#pas-stack-024) |
 | Run code on a schedule, hold server-authoritative state, bind services | Pro-tier platform capabilities — see the [Data chapter](./data.md) | Own Workers deployed with `wrangler` | [004](#pas-stack-004) |
@@ -188,7 +188,7 @@ const res = await fetch('https://data-my-app.proappstore.online/query', {
 
 **Remediation.** Replace each direct call with the SDK module that owns it (the table under [Choosing a platform service](#choosing-a-platform-service) maps needs to modules). Delete any token handling.
 
-**Tests.** `grep -rn "proappstore.online\|/.pas/\|pas:session" web/src` returns only the store link the compliance check requires (see [Store link](#pas-stack-022)) and no `fetch` calls.
+**Tests.** `pas check` passes the direct API-access checks and `web/src` contains no direct `fetch` calls to platform endpoints.
 
 **Supporting links.** [SDK overview](../sdk-overview.md), [Browser auth session model — app author rules](../auth-session-model.md#app-author-rules).
 
@@ -857,22 +857,22 @@ initPro({ appId: 'my-app', monitoring: { auto: false } })
 
 ### PAS-STACK-022 — UI is built on the SDK's components and design tokens {#pas-stack-022}
 
-**Severity:** Medium · **Verification:** Manual · **Enforcement:** automated — compliance checks *Brand fonts present*, *Brand tokens defined*, *No brand overrides*, *Dark mode support*, *Store link* · **Since:** 1.1
+**Severity:** Medium · **Verification:** Manual · **Enforcement:** automated — compliance checks *Brand fonts present*, *Brand tokens defined*, *No brand overrides*, *Dark mode support* · **Since:** 1.1
 
-**Rule.** The app SHOULD build its shell with `@proappstore/sdk/ui` (`ProShell`, or the composable `Avatar`, `ProfileMenu`, `ThemeToggle`, `SignInButton`, `GateScreen`, …) and MUST use the platform design tokens, fonts and dark-mode scheme rather than overriding the brand. Every app MUST link to `proappstore.online`.
+**Rule.** The app SHOULD build its shell with `@proappstore/sdk/ui` (`ProShell`, or the composable `Avatar`, `ProfileMenu`, `ThemeToggle`, `SignInButton`, `GateScreen`, …) and MUST use the platform design tokens, fonts and dark-mode scheme rather than overriding the brand. App owners control their product branding and MAY show no ProAppStore/PAS/PRO attribution, advertising or URL.
 
 **Applicability.** All apps with a user interface.
 
-**Rationale.** The shared design system is what makes the store feel like one product; the components carry the auth, subscription and profile behaviour the standard expects, so re-implementing them re-implements those bugs.
+**Rationale.** The shared design system and components provide accessible, well-tested auth, subscription and profile behaviour; re-implementing them re-implements those bugs. They do not require platform marketing in the app UI.
 
-**Recommended implementation.** Wrap the whole app in `<ProShell app={app} nav={…}>…</ProShell>`, listing every screen in `nav`. The shell provides the gates, the topbar, the main navigation and the resilience layer. Customise its chrome with `renderTopbar` and the exported components. Use the components and hooks inside screens, keeping the tokens and dark mode. Never override the `--md-*`/brand CSS variables.
+**Recommended implementation.** Wrap the whole app in `<ProShell app={app} branding="app" nav={…}>…</ProShell>`, listing every screen in `nav`. The shell provides the gates, the app-owned topbar, the main navigation and the resilience layer without platform advertising. Customise its chrome with `renderTopbar` and the exported components. Use the components and hooks inside screens, keeping the tokens and dark mode. `branding="platform"` remains an intentional opt-in for apps that want the legacy platform attribution. Never override the `--md-*`/brand CSS variables.
 
 **Conforming example.**
 
 ```tsx
 import { ProShell } from '@proappstore/sdk'
 export default () => (
-  <ProShell app={app} appName="Tasks" nav={[{ label: 'Tasks', href: '/' }, { label: 'Settings', href: '/settings' }]}>
+  <ProShell app={app} appName="Tasks" branding="app" nav={[{ label: 'Tasks', href: '/' }, { label: 'Settings', href: '/settings' }]}>
     <Screens />
   </ProShell>
 )
@@ -884,7 +884,7 @@ export default () => (
 :root { --brand-primary: #ff0000; font-family: "Comic Sans MS"; }   /* overrides brand tokens; no dark scheme */
 ```
 
-**Evidence.** Source: `@proappstore/sdk/ui` imports; CSS overriding brand variables; `web/index.html` fonts and meta; the store link; `pas check` output.
+**Evidence.** Source: `@proappstore/sdk/ui` imports; CSS overriding brand variables; `web/index.html` fonts and meta; `pas check` output.
 
 **Remediation.** Adopt `ProShell` or the composables; delete brand overrides; run `pas check` until the UI checks pass.
 

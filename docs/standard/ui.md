@@ -35,7 +35,7 @@ statically and needs a browser test or a person ([PAS-UI-023](#pas-ui-023)).
 
 | Compliance check | Status on fail | Evidences clause | What it does not prove |
 |---|---|---|---|
-| Brand fonts present · Brand tokens defined · No brand overrides · Store link | fail | [001](#pas-ui-001) | that the UI *looks* consistent |
+| Brand fonts present · Brand tokens defined · No brand overrides | fail | [001](#pas-ui-001) | that the UI *looks* consistent |
 | Dark mode support | warn | [002](#pas-ui-002) | that dark tokens have contrast; that the boot script and toggle agree |
 | Accessibility static | fail | [004](#pas-ui-004) | names on links/inputs/custom controls; focus; rendered ARIA |
 | HTML meta tags · Viewport support | fail | [008](#pas-ui-008) | that the app works at the declared width |
@@ -103,9 +103,9 @@ provides and are not restated here.
 
 ### PAS-UI-001 — The UI is built from the SDK shell or components on the platform's design tokens {#pas-ui-001}
 
-**Severity:** Medium · **Verification:** Manual · **Enforcement:** automated — compliance checks *Brand fonts present*, *Brand tokens defined*, *No brand overrides*, *Store link*; platform CI design-system lint (`scripts/check-design-system.sh`) · **Since:** 1.4 · **Kind:** Quality
+**Severity:** Medium · **Verification:** Manual · **Enforcement:** automated — compliance checks *Brand fonts present*, *Brand tokens defined*, *No brand overrides*; platform CI design-system lint (`scripts/check-design-system.sh`) · **Since:** 1.4 · **Kind:** Quality
 
-**Rule.** The app SHOULD build its chrome with `ProShell` or the composable `@proappstore/sdk/ui` components and MUST style with the canonical tokens (`--paper`, `--ink`, `--accent`, `--line`, `--panel`, `--muted`, the status and radius tokens) and the brand fonts (Manrope body, Fraunces display). It MUST NOT redefine those tokens, add other font families, or use the banned aliases `--bg`, `--surface`, `--border`, `--glass`, `--dock`. Every app MUST link to `proappstore.online`.
+**Rule.** The app SHOULD build its chrome with `ProShell` or the composable `@proappstore/sdk/ui` components and MUST style with the canonical tokens (`--paper`, `--ink`, `--accent`, `--line`, `--panel`, `--muted`, the status and radius tokens) and the brand fonts (Manrope body, Fraunces display). It MUST NOT redefine those tokens, add other font families, or use the banned aliases `--bg`, `--surface`, `--border`, `--glass`, `--dock`. An app MAY have no ProAppStore/PAS/PRO attribution, advertising or URL.
 
 **Applicability.** All apps with a user interface.
 

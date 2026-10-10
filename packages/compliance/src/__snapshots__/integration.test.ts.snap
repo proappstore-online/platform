@@ -407,31 +407,6 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
     ],
   },
   {
-    "automation": "full",
-    "checkId": "store-link",
-    "citations": [
-      {
-        "clauseId": "PAS-UI-001",
-        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-001",
-      },
-      {
-        "clauseId": "PAS-STACK-022",
-        "url": "https://docs.proappstore.online/standard/stack/#pas-stack-022",
-      },
-    ],
-    "detail": "no link to proappstore.online found in web/src/",
-    "evidence": {
-      "class": "source",
-      "detail": "no link to proappstore.online found in web/src/",
-    },
-    "name": "Store link",
-    "status": "warn",
-    "suggestions": [
-      "Add a small "Built for proappstore.online" link in the footer or about screen.",
-      "It helps visitors find the rest of the catalog — and it counts for storefront ranking.",
-    ],
-  },
-  {
     "automation": "partial",
     "checkId": "viewport-support",
     "citations": [

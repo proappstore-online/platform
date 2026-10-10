@@ -58,7 +58,7 @@ export function seedFiles(slug: string, template: TemplateType = 'blank'): Map<s
 
   // ── Docs ────────────────────────────────────────────────────
 
-  files.set('README.md', `# ${slug}\n\nA [ProAppStore](https://proappstore.online) web app.\n\n` +
+  files.set('README.md', `# ${slug}\n\nA web application.\n\n` +
     '## Development\n\n```bash\npnpm install\npnpm dev        # start dev server\n' +
     'pnpm build      # production build\npnpm test       # run tests\n' +
     'pnpm typecheck  # type-check without emit\n```\n\n' +
@@ -151,7 +151,7 @@ export default defineConfig({
       manifest: {
         name: '${slug}',
         short_name: '${slug}',
-        description: '${slug} on ProAppStore',
+        description: '${slug}',
         start_url: '/',
         scope: '/',
         display: 'standalone',
@@ -194,17 +194,17 @@ export default defineConfig({
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="theme-color" content="#000000" id="theme-color" />
     <meta name="darkreader-lock" />
-    <meta name="description" content="${slug} on ProAppStore" />
+    <meta name="description" content="${slug}" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="${slug}" />
-    <meta property="og:description" content="${slug} on ProAppStore" />
+    <meta property="og:description" content="${slug}" />
     <meta property="og:url" content="https://${slug}.proappstore.online/" />
     <meta property="og:image" content="https://${slug}.proappstore.online/og-image.svg" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="${slug}" />
-    <meta name="twitter:description" content="${slug} on ProAppStore" />
+    <meta name="twitter:description" content="${slug}" />
     <meta name="twitter:image" content="https://${slug}.proappstore.online/og-image.svg" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icon.svg" />
@@ -230,7 +230,7 @@ export default defineConfig({
   // Default icon so the PWA installs. Branded purple square + the app's initial.
   files.set('public/icon.svg', `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="104" fill="#7c3aed"/><text x="256" y="350" font-family="system-ui, -apple-system, sans-serif" font-size="300" font-weight="800" fill="#fff" text-anchor="middle">${(slug[0] ?? 'A').toUpperCase()}</text></svg>\n`);
 
-  files.set('public/og-image.svg', `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="${slug} on ProAppStore">
+  files.set('public/og-image.svg', `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="${slug}">
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
       <stop offset="0" stop-color="#111827"/>
@@ -241,7 +241,6 @@ export default defineConfig({
   <rect x="80" y="80" width="1040" height="470" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.18)" stroke-width="2"/>
   <rect x="80" y="80" width="12" height="470" fill="#7c3aed"/>
   <text x="600" y="310" text-anchor="middle" fill="#ffffff" font-family="Inter, Manrope, Arial, sans-serif" font-size="76" font-weight="800">${slug}</text>
-  <text x="600" y="390" text-anchor="middle" fill="#c4b5fd" font-family="Inter, Manrope, Arial, sans-serif" font-size="34" font-weight="700" letter-spacing="8">PROAPPSTORE</text>
 </svg>
 `);
 

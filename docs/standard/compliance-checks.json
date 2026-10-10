@@ -283,25 +283,6 @@
       "live": false
     },
     {
-      "id": "store-link",
-      "name": "Store link",
-      "clauses": [
-        {
-          "clauseId": "PAS-UI-001",
-          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-001"
-        },
-        {
-          "clauseId": "PAS-STACK-022",
-          "url": "https://docs.proappstore.online/standard/stack/#pas-stack-022"
-        }
-      ],
-      "automation": "full",
-      "evidenceClass": "source",
-      "scope": "all",
-      "limits": "That the domain appears somewhere under web/src; not that it is visible.",
-      "live": false
-    },
-    {
       "id": "dark-mode",
       "name": "Dark mode support",
       "clauses": [

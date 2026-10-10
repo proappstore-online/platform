@@ -637,6 +637,7 @@ export default function App() {
     <ProShell
       app={app}
       appName="Meetup"
+      branding="app"
       nav={[
         { label: 'Events', href: '/' },
         { label: 'Groups', href: '/groups' },
@@ -655,6 +656,7 @@ Props:
 | `app` | `ProAppStore` | SDK instance from `initPro()` |
 | `children` | `ReactNode` | App content (rendered only when gates pass) |
 | `appName` | `string?` | Name shown in the topbar |
+| `branding` | `'platform' \| 'app'?` | Default attribution chrome. `platform` is the backwards-compatible default; `app` keeps the app name, navigation and account controls but omits the ProAppStore wordmark/link and footer. New independently branded apps should pass `"app"`. |
 | `nav` | `{ label: string; href: string; icon?: ReactNode; title?: string }[]` | **The app's screens**, rendered as the main navigation in the topbar |
 | `onNavigate` | `(href: string) => void` | Client-side navigation for nav clicks (e.g. a router's `navigate`); without it items are links |
 | `renderNav` | `(ctx) => ReactNode` | Replace the built-in NavBar (`ctx`: `items`, `currentPath`, `onNavigate`) |
@@ -709,6 +711,12 @@ Do not build navigation into a page, and do not stack a second navbar under the 
 ```
 
 For a fully custom layout, use `<ProShell app={app} hideTopbar hideFooter>` and compose `NavBar`, `ProfileMenu`, `SignInButton`, `GateScreen`, and hooks from `@proappstore/sdk/ui` and `@proappstore/sdk/hooks`.
+
+`branding="app"` is the compatibility-safe default for new templates. It is
+explicit so upgrading an existing app does not silently change its visual
+chrome. Apps that intentionally want the legacy platform attribution can omit
+the prop or pass `branding="platform"`; `renderTopbar` and `renderFooter`
+remain explicit customisation hooks.
 
 The children render only after the gates pass: signed-out visitors see the sign-in screen with no topbar or navigation, and `platform-cookie` apps show it briefly to returning users while the session hydrates. Routing caveats (routers, hash routing) and a step-by-step guide to replacing a hand-rolled header or navbar are in the [SDK overview](https://docs.proappstore.online/sdk-overview/#proshell-component).
 

@@ -128,6 +128,29 @@ describe('ProShell navigation (#235)', () => {
     expect(container.querySelector('nav')).toBeNull();
   });
 
+  it('REGRESSION: app-owned branding removes PAS advertising without removing navigation, profile, or text-size controls', async () => {
+    await mount(<ProShell app={fakeApp()} appName="Independent" branding="app" nav={ITEMS}><p>content</p></ProShell>);
+    expect(container.textContent).toContain('Independent');
+    expect(container.textContent).not.toContain('ProAppStore');
+    expect(container.querySelector('[href="https://proappstore.online"]')).toBeNull();
+    expect(container.querySelector('footer.pas-footer')).toBeNull();
+    expect(container.querySelector('header nav[aria-label="Main"]')).not.toBeNull();
+    const textSize = container.querySelector('button[aria-label^="Text:"]') as HTMLButtonElement;
+    expect(textSize).not.toBeNull();
+    act(() => textSize.click());
+    expect(document.documentElement.dataset.text).toBe('lg');
+    const profile = container.querySelector('.pas-topbar__account > div > button') as HTMLButtonElement;
+    expect(profile).not.toBeNull();
+    act(() => profile.click());
+    expect(container.textContent).toContain('Sign out');
+  });
+
+  it('keeps platform attribution as an explicit, backwards-compatible opt-in', async () => {
+    await mount(<ProShell app={fakeApp()} appName="Demo" branding="platform"><p>content</p></ProShell>);
+    expect(container.querySelector('[href="https://proappstore.online"]')?.textContent).toBe('Pro');
+    expect(container.querySelector('footer.pas-footer')?.textContent).toContain('Part of');
+  });
+
   it('hands the nav to a custom renderTopbar, and renderNav replaces the built-in NavBar', async () => {
     await mount(
       <ProShell app={fakeApp()} nav={ITEMS} renderTopbar={({ nav }) => <header className="custom">{nav}</header>}>

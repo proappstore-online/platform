@@ -159,7 +159,6 @@ same from the clause side.
 | `pwa-offline` | PWA offline correctness | [PAS-UI-018](ui.md#pas-ui-018), [PAS-UI-019](ui.md#pas-ui-019) | partial | That a service worker is registered and the workbox config is sane; not that /.pas/* or authenticated responses stay uncached at runtime. |
 | `pwa-manifest` | PWA manifest | [PAS-UI-020](ui.md#pas-ui-020) | partial | The four required fields; the rest of the manifest is reviewed manually. |
 | `pwa-maskable-icon` | PWA maskable icon | [PAS-UI-020](ui.md#pas-ui-020) | full | Declaration only; the icon's safe zone is not rendered. |
-| `store-link` | Store link | [PAS-UI-001](ui.md#pas-ui-001), [PAS-STACK-022](stack.md#pas-stack-022) | full | That the domain appears somewhere under web/src; not that it is visible. |
 | `dark-mode` | Dark mode support | [PAS-UI-002](ui.md#pas-ui-002) | partial | Warn-only signal detection; the storage-key split (fas:theme vs stores-theme) and dark-scheme contrast are manual. |
 | `bundle-size` | Bundle size | [PAS-UI-021](ui.md#pas-ui-021), [PAS-STACK-024](stack.md#pas-stack-024) | partial | Warns when web/dist is unbuilt; measures the largest JS chunk only. |
 | `claude-md-slim` | CLAUDE.md is slim (no platform boilerplate) | [PAS-STACK-001](stack.md#pas-stack-001) | partial | Documentation hygiene of the scaffold's agent guide; warn-only and not a security signal. |

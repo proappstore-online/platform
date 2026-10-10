@@ -170,6 +170,10 @@ Then hand off the build. The successful `provision_pas_app` result ends with a
 - wrap the whole app in `<ProShell app={app} nav={[…]}>` **first**, listing
   every screen in `nav`. The shell renders `<nav aria-label="Main">`, so there
   is no navigation on a page and no second navbar;
+- new apps use app-owned branding: pass `branding="app"`. Do not add a
+  ProAppStore/PAS/PRO footer, wordmark, advertising or URL unless the app owner
+  explicitly requests it. `branding="platform"` is the intentional opt-in for
+  that legacy attribution;
 - build the screens from the SDK components (`PageHeader`, `Button`, `Card`,
   `Input`, `Modal`, `Tabs`, `EmptyState`, `useToast`), not hand-rolled chrome.
 
