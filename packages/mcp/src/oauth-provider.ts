@@ -15,6 +15,64 @@ export interface OAuthTokenResolution {
   session: string;
   appId: string | null;
   bound: boolean;
+  /** Present only for a credential issued to a remote-auth broker request. */
+  brokerRequestId?: string;
+}
+
+/**
+ * Mint an opaque credential for the remote-auth broker.  This is intentionally
+ * exported only for the MCP worker's authenticated service-binding endpoint:
+ * callers receive an opaque value whose resource binding is enforced by
+ * resolveOAuthToken/index.ts, never a PAS session JWT.
+ */
+export async function issueBrokerCredential(
+  config: Pick<OAuthConfig, "issuer" | "kv" | "sessionSigningKey">,
+  input: { session: string; ownerId: string; resource: string; requestId: string },
+): Promise<string | null> {
+  const target = resourceTarget(input.resource, config.issuer);
+  if (!target.ok) return null;
+  const claims = await verifySession(input.session, config.sessionSigningKey);
+  if (!claims || claims.uid !== input.ownerId) return null;
+
+  // The opaque value is deterministic for this one immutable request, but is
+  // an HMAC of the request id, not the request id itself.  This deliberately
+  // avoids KV's non-atomic get-then-put idempotency trap: concurrent recovery
+  // calls can only write the same token mapping and can never create a second
+  // usable credential.
+  const token = await brokerToken(config.sessionSigningKey, input.requestId);
+  const key = `broker-token:${input.requestId}`;
+  const existing = await config.kv.get(key);
+  if (existing) {
+    try {
+      const parsed = JSON.parse(existing) as { token?: unknown; ownerId?: unknown; appId?: unknown };
+      if (typeof parsed.token === "string" && parsed.ownerId === input.ownerId && parsed.appId === target.appId) return parsed.token;
+    } catch { /* fail closed below */ }
+    return null;
+  }
+
+  await config.kv.put(
+    `token:${token}`,
+    JSON.stringify({ session: input.session, appId: target.appId, brokerRequestId: input.requestId }),
+    { expirationTtl: 86_400 },
+  );
+  await config.kv.put(
+    key,
+    JSON.stringify({ token, ownerId: input.ownerId, appId: target.appId }),
+    { expirationTtl: 900 },
+  );
+  return token;
+}
+
+async function brokerToken(signingKey: string, requestId: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(signingKey),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`pas:mcp:broker:v2:${requestId}`)));
+  return base64url(mac);
 }
 
 export interface OAuthConfig {
@@ -127,7 +185,7 @@ export async function resolveOAuthToken(
   const raw = await kv.get(`token:${bearer}`);
   if (!raw) return null;
   try {
-    const data = JSON.parse(raw) as { session?: unknown; appId?: unknown };
+    const data = JSON.parse(raw) as { session?: unknown; appId?: unknown; brokerRequestId?: unknown };
     if (typeof data.session === "string" && data.session) {
       if (data.appId !== null && (typeof data.appId !== "string" || !APP_ID_RE.test(data.appId))) {
         return null;
@@ -136,6 +194,7 @@ export async function resolveOAuthToken(
         session: data.session,
         appId: data.appId,
         bound: true,
+        ...(typeof data.brokerRequestId === "string" ? { brokerRequestId: data.brokerRequestId } : {}),
       };
     }
   } catch {
@@ -144,6 +203,15 @@ export async function resolveOAuthToken(
     // force re-auth instead of silently widening an app-scoped grant.
   }
   return { session: raw, appId: null, bound: false };
+}
+
+/** Record that a broker credential reached a successful authenticated MCP route. */
+export async function recordBrokerMcpRead(kv: KVNamespace, requestId: string): Promise<void> {
+  await kv.put(`broker-read:${requestId}`, "1", { expirationTtl: 900 });
+}
+
+export async function brokerMcpReadSeen(kv: KVNamespace, requestId: string): Promise<boolean> {
+  return (await kv.get(`broker-read:${requestId}`)) === "1";
 }
 
 // ── Internals ──────────────────────────────────────────────
@@ -156,6 +224,12 @@ function json(data: unknown, status = 200): Response {
       "Access-Control-Allow-Origin": "*",
     },
   });
+}
+
+function base64url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 function cookieValue(request: Request, name: string): string | null {

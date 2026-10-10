@@ -34,6 +34,7 @@ command = "node scripts/embed-data-worker.mjs && node scripts/embed-app-worker-s
 [vars]
 # Public base URL of this API — used to build OAuth callback URLs (routes/auth.ts).
 APP_BASE = "https://api.proappstore.online"
+MCP_ORIGIN = "https://mcp.proappstore.online"
 # workers.dev host of the per-app data workers (#153). Backend-internal calls
 # (actions, registration-time /validate, provisioning) go straight to
 # https://pas-data-<app>.<DATA_WORKER_HOST> with X-Internal-Token, never via
@@ -228,6 +229,12 @@ zone_name = "proappstore.online"
 [[services]]
 binding = "SELF"
 service = "proappstore-api"
+
+# #355/#356: only this service binding may request resource-bound opaque MCP
+# credentials.  It is deliberately distinct from the public MCP transport.
+[[services]]
+binding = "MCP"
+service = "proappstore-mcp"
 
 # PAS provisioning is fully self-contained in packages/backend/src/routes/
 # provision.ts — see ADR notes there. The legacy [[services]] binding to

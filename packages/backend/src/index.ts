@@ -52,7 +52,7 @@ import { actionRoutes } from './routes/actions.js';
 import { secretsRoutes } from './routes/secrets.js';
 import { keysRoutes } from './routes/keys.js';
 import { authRoutes } from './routes/auth.js';
-import { mcpBrokerRoutes } from './routes/mcp-broker.js';
+import { cleanupRemoteAuthRequests, mcpBrokerRoutes } from './routes/mcp-broker.js';
 import { passkeyRoutes } from './routes/passkeys.js';
 import { servicesRoutes } from './routes/services.js';
 import { engagementRoutes } from './routes/engagements.js';
@@ -332,6 +332,9 @@ export default {
     // backfill behaviour; a delayed/missed tick never turns into a burst.
     // Worker schedules are only claimed and queued here; the queue() consumer below runs them (#257).
     ctx.waitUntil(runScheduledActions({ env, now: event.scheduledTime ?? Date.now() }).catch((e) => console.error(`[schedule] executor failed: ${(e as Error).message}`)));
+    // #355: broker delivery envelopes are intentionally short-lived. Sweep on
+    // every five-minute tick before the less frequent maintenance work.
+    ctx.waitUntil(cleanupRemoteAuthRequests(env, event.scheduledTime ?? Date.now()).catch((e) => console.error(`[broker] cleanup failed: ${(e as Error).message}`)));
     // The pre-existing checks remain every fifteen minutes even though the
     // Worker now receives a five-minute tick for scheduled app actions.
     const tickAt = event.scheduledTime ?? Date.now();

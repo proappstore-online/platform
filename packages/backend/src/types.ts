@@ -2,6 +2,10 @@ import type { AppEventMessage } from './lib/app-event-queue.js';
 
 export interface Env {
   DB: D1Database;
+  /** Authenticated service binding to the MCP worker.  The remote-auth broker
+   * may ask it to mint an opaque, resource-bound OAuth credential; it must
+   * never mint or return a PAS session from the API worker. */
+  MCP?: Fetcher;
   /** Self service binding — internal re-entry into this worker's own routes
    *  (same-zone subrequests bypass the api.proappstore.online route). */
   SELF: Fetcher;
@@ -119,6 +123,8 @@ export interface Env {
    * routes 403 when the secret is unset.
    */
   INTERNAL_TOKEN?: string;
+  /** Canonical public MCP origin used by the remote-auth broker. */
+  MCP_ORIGIN?: string;
   /**
    * Workers Analytics Engine dataset binding for first-party server-side
    * visitor + custom event analytics. Powers the in-platform dashboard

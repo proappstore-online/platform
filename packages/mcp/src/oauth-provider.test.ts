@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createAuthChallenge, handleOAuthRoute, resolveOAuthToken } from './oauth-provider.js';
+import { createAuthChallenge, handleOAuthRoute, issueBrokerCredential, resolveOAuthToken } from './oauth-provider.js';
+import { mintSession } from '@proappstore/build-core';
 
 function makeKv(seed: Record<string, string> = {}): KVNamespace {
   const data = new Map(Object.entries(seed));
@@ -278,6 +279,20 @@ describe('resolveOAuthToken', () => {
     await expect(resolveOAuthToken('tok', makeKv({
       'token:tok': JSON.stringify({ session: 'pas-session' }),
     }))).resolves.toBeNull();
+  });
+});
+
+describe('broker credential issuance (#355)', () => {
+  it('is request-id stable under concurrent recovery and remains app-resource bound', async () => {
+    const kv = makeKv();
+    const session = await mintSession({ uid: 'gh:owner', login: 'owner', roles: ['user'] }, 'test-key');
+    const config = { issuer: 'https://mcp.proappstore.online', kv, sessionSigningKey: 'test-key' };
+    const input = { session, ownerId: 'gh:owner', resource: 'https://mcp.proappstore.online/mcp/apps/crm', requestId: 'req_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG' };
+    const [first, second] = await Promise.all([issueBrokerCredential(config, input), issueBrokerCredential(config, input)]);
+    expect(first).toBeTruthy();
+    expect(second).toBe(first);
+    await expect(resolveOAuthToken(first!, kv)).resolves.toMatchObject({ appId: 'crm', bound: true, brokerRequestId: input.requestId });
+    await expect(issueBrokerCredential(config, { ...input, resource: 'https://mcp.proappstore.online/mcp?x=1' })).resolves.toBeNull();
   });
 });
 

@@ -50,12 +50,14 @@ export default defineWorkersConfig(async () => ({
             SELF: kCurrentWorker as unknown as string,
             HOST_API: { name: kCurrentWorker, entrypoint: 'HostApi' } as unknown as string,
             QA_WORKER: 'proappstore-qa-worker',
+            MCP: 'proappstore-mcp-broker-stub',
           },
           // #320: usage pings meter into Analytics Engine and fail closed without both.
           analyticsEngineDatasets: { PAYOUT_METER: { dataset: 'pas_payout_meter_test' } },
           bindings: {
             PAYOUT_METER_SALT: 'runtime-test-payout-salt',
             APP_BASE: 'https://api.test',
+            MCP_ORIGIN: 'https://mcp.test',
             DATA_WORKER_HOST: 'test.workers.dev',
             APP_WORKER_BACKEND: 'loader',
             // This workerd predates the platform's app-worker date (2026-01-01).
@@ -77,6 +79,7 @@ export default defineWorkersConfig(async () => ({
           },
           workers: [
             { name: 'proappstore-qa-worker', modules: [{ type: 'ESModule' as const, path: here('./stubs/qa-worker.js') }], compatibilityDate: COMPATIBILITY_DATE },
+            { name: 'proappstore-mcp-broker-stub', modules: [{ type: 'ESModule' as const, path: here('./stubs/mcp-broker.js') }], compatibilityDate: COMPATIBILITY_DATE, bindings: { INTERNAL_TOKEN } },
           ],
         },
       },

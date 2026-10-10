@@ -1,44 +1,96 @@
-# Remote MCP approval broker (withdrawn pending a safe implementation)
+# Remote MCP approval broker v2 (PAS #355)
 
-The `/v1/mcp/broker/v1/*` routes are disabled and return `503` with
-`remote_auth_unavailable`. They do not create requests, accept approvals,
-return credentials, or expose a status page. They are deliberately mounted to
-refuse old URLs explicitly, with `Cache-Control: no-store` and
-`Referrer-Policy: no-referrer`.
+`/v1/mcp/broker/v1/*` is permanently withdrawn and answers `503
+remote_auth_unavailable`. Supported companion clients use version
+`2026-10-10` at `/v1/mcp/broker/v2`.
 
-Do not integrate against this endpoint. PAS #356 and #1005 must use the
-existing OAuth 2.1 authorization-code + PKCE flow at
-`https://mcp.proappstore.online/authorize` until a replacement is published.
-That flow is the current supported credential boundary: it issues opaque
-24-hour credentials, and the MCP worker enforces each credential's resource
-binding at `/mcp` or `/mcp/apps/:appId` before dispatch.
+This is a PAS companion-client protocol, not OAuth Device Authorization and
+not a replacement for the standard MCP OAuth 2.1 authorization-code flow.
+Normal MCP OAuth clients remain supported unchanged.
 
-## Conditions to publish a broker contract
+## Request and approval
 
-PAS #355 remains open. A broker revision can be published only after all of
-the following are implemented and independently tested:
+An already authenticated first-party coordinator creates a request with its
+owner's PAS bearer:
 
-1. The API worker calls an authenticated MCP-worker service binding to issue
-   an opaque OAuth credential bound to one canonical MCP resource. It must
-   never return a PAS session JWT. PAS currently has no MCP scope taxonomy, so
-   an effective scope set must be empty rather than accepting cosmetic scope
-   labels.
-2. Resource input is limited to the configured MCP origin and exactly
-   `/mcp` or `/mcp/apps/:appId`; the MCP worker rejects that credential at any
-   other resource.
-3. Hosted approval uses the existing PAS GitHub/Google provider callback and
-   binds the returned user, browser state, request, machine proof, and PKCE
-   challenge. An existing PAGS bearer alone is not sufficient for first login
-   or expired-session recovery.
-4. Database claims include `expires_at > now` in every conditional mutation;
-   consumed-result retry has a short explicit retention deadline and a cleanup
-   job; deny, cancel, expiry, callback, and duplicate/reconnect races have
-   terminal state transitions.
-5. Polling has a server-enforced limit/backoff, not merely a client hint.
-   Tests use real D1 conditional semantics and cover cross-resource denial,
-   owner/machine/PKCE/state/request mismatch, expiry/replay/deny/cancel,
-   lost response/reconnect, secret redaction, provider return, and mobile E2E.
+`POST /requests`
 
-Until those prerequisites exist, there is no broker protocol version, request
-or response schema, approval URL, error-code contract, or supported client
-integration beyond the stable `503` refusal above.
+```json
+{
+  "agent": { "id": "codex", "label": "Codex" },
+  "machine": { "id": "mac-42", "label": "Remote Mac" },
+  "resource": "https://mcp.proappstore.online/mcp/apps/example",
+  "scopes": [],
+  "code_challenge": "PKCE-S256-base64url",
+  "machine_proof_hash": "sha256-hex",
+  "machine_public_key": "base64url-P-256-SPKI"
+}
+```
+
+PAS generates the immutable 256-bit `req_…` request id. Resource is exactly
+the configured MCP origin plus `/mcp` or `/mcp/apps/:appId`; query strings,
+fragments, alternate origins, and trailing-path variants are rejected. PAS has
+no MCP scope taxonomy today, so requests accept only `[]` and responses report
+`effective_scopes: []`.
+
+The response contains no credential: request id, `pending`, expiry, an
+`approval_url`, and neutral `status_url`. A bearer can inspect only its own
+request through `GET /requests/:requestId`; it cannot approve it.
+
+The approval URL shows immutable agent, machine, resource, and scopes. The
+owner explicitly selects GitHub or Google sign-in. PAS reuses its provider
+state cookie and redirects back with a short-lived HttpOnly cookie, never a
+PAS JWT or login code in the URL. The provider-verified user must equal the
+stored owner before PAS permits `POST /requests/:requestId/approve`, `deny`, or
+`cancel`. This binds owner, browser state, immutable request, machine proof,
+and PKCE without trusting a PAGS bearer as a login bootstrap.
+
+## Machine protocol
+
+The machine keeps its proof, PKCE verifier, and P-256 private key locally.
+It polls:
+
+`POST /requests/poll { "request_id", "machine_proof" }`
+
+Polls are server-limited to one per two seconds. Early polls receive `429
+slow_down`; successful responses contain only coarse status and expiry.
+
+After `approved_awaiting_machine`, redeem with:
+
+`POST /requests/redeem { "request_id", "machine_proof", "code_verifier", "redeem_attempt_id" }`
+
+The broker verifies SHA-256 proof and PKCE S256, then conditionally changes
+only an unexpired approved row to `consumed`, using `UPDATE ... WHERE
+status='approved_awaiting_machine' ... RETURNING`. `redeem_attempt_id` is a
+fresh, high-entropy machine value for one network attempt. A client may reuse
+it only to recover a lost response; a concurrent or later attempt using a
+different ID receives 409. Its response is an envelope
+`{ephemeral_public_key, iv, ciphertext}`. The payload is AES-GCM encrypted
+from a fresh P-256 ECDH ephemeral key to the immutable machine public key, with
+the request id as associated data. It contains only the opaque resource-bound
+MCP credential. PAS sessions are never returned or stored by the broker.
+
+A lost response may be retried by the same proof/verifier until the explicit
+five-minute result-retention deadline. It returns the same encrypted envelope;
+no second credential is minted. The five-minute cleanup sweep expires pending
+claims, wipes stale consumed results, and prunes terminal records.
+
+The companion then completes a harmless authenticated MCP transport read. The
+MCP worker records that successful resource-bound call. Only after the API
+broker verifies this service-bound receipt may the same machine report
+`POST /requests/connected`; otherwise it must report `failed`. Browser
+approval is never reported as connected.
+
+## States and errors
+
+States are `pending`, `approving`, `approved_awaiting_machine`, `consumed`,
+`connected`, `denied`, `expired`, `cancelled`, and `failed`. Every state claim
+uses a D1 conditional update that includes `expires_at > now`; denial,
+cancellation, expiry, callback, approval, redemption and reconnect races fail
+closed. Unknown request, wrong owner/proof/verifier, stale state and replay use
+the generic `409 remote_auth_unavailable` response. Malformed input is `400`.
+
+`GET /requests/:requestId/status` is deliberately neutral and sends
+`Cache-Control: no-store` and `Referrer-Policy: no-referrer`. No secret,
+account identity, proof, verifier, token, scope, or target details appear in a
+status page, URL, error, or logging contract.

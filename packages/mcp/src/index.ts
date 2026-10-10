@@ -12,7 +12,7 @@ import { registerLoopTools } from "./loop-tools.js";
 import { registerAgentsTools } from "./agents-tools.js";
 import { registerQaTools } from "./qa-tools.js";
 import { registerAdminConsoleTools } from "./admin-console-tools.js";
-import { createAuthChallenge, handleOAuthRoute, resolveOAuthToken } from "./oauth-provider.js";
+import { brokerMcpReadSeen, createAuthChallenge, handleOAuthRoute, issueBrokerCredential, recordBrokerMcpRead, resolveOAuthToken } from "./oauth-provider.js";
 
 const AUTH_PROVIDERS = ["github", "google"] as const;
 
@@ -219,6 +219,38 @@ export default {
     const url = new URL(request.url);
     const issuer = `${url.protocol}//${url.host}`;
 
+    // API-worker-only credential issuance for the remote approval broker.
+    // This is before public OAuth routing and is unavailable without the
+    // existing service-to-service secret. It returns an opaque MCP token only.
+    if (url.pathname === "/internal/broker/issue" && request.method === "POST") {
+      if (!env.INTERNAL_TOKEN || request.headers.get("X-Internal-Token") !== env.INTERNAL_TOKEN) {
+        return new Response("not found", { status: 404 });
+      }
+      let input: { session?: unknown; owner_id?: unknown; resource?: unknown; request_id?: unknown };
+      try { input = await request.json(); } catch { return new Response("invalid request", { status: 400 }); }
+      if (typeof input.session !== "string" || typeof input.owner_id !== "string" || typeof input.resource !== "string" || typeof input.request_id !== "string") {
+        return new Response("invalid request", { status: 400 });
+      }
+      const token = await issueBrokerCredential({ issuer, kv: env.OAUTH_KV!, sessionSigningKey: env.SESSION_SIGNING_KEY! }, {
+        session: input.session, ownerId: input.owner_id, resource: input.resource, requestId: input.request_id,
+      });
+      if (!token) return new Response("forbidden", { status: 403 });
+      return Response.json({ access_token: token }, { headers: { "Cache-Control": "no-store" } });
+    }
+
+    // The API broker asks this over the same authenticated service binding
+    // before accepting a machine's `connected` acknowledgement.  The marker is
+    // written only after this worker served a successful authenticated MCP
+    // transport request with that broker credential.
+    if (url.pathname.startsWith("/internal/broker/read-receipt/") && request.method === "GET") {
+      if (!env.INTERNAL_TOKEN || request.headers.get("X-Internal-Token") !== env.INTERNAL_TOKEN) {
+        return new Response("not found", { status: 404 });
+      }
+      const requestId = decodeURIComponent(url.pathname.slice("/internal/broker/read-receipt/".length));
+      if (!/^req_[A-Za-z0-9_-]{43}$/.test(requestId)) return new Response("not found", { status: 404 });
+      return Response.json({ seen: await brokerMcpReadSeen(env.OAUTH_KV!, requestId) }, { headers: { "Cache-Control": "no-store" } });
+    }
+
     // OAuth 2.1 routes (discovery, registration, authorize, token)
     if (env.OAUTH_KV && env.SESSION_SIGNING_KEY) {
       const oauthRes = await handleOAuthRoute(request, {
@@ -244,14 +276,14 @@ export default {
     const auth = request.headers.get("Authorization");
     let bearer = auth?.replace(/^Bearer\s+/i, "");
     let oauthToken:
-      | { appId: string | null; bound: boolean }
+      | { appId: string | null; bound: boolean; brokerRequestId: string | null }
       | null = null;
     if (bearer && env.OAUTH_KV) {
       try {
         const resolved = await resolveOAuthToken(bearer, env.OAUTH_KV);
         if (resolved) {
           bearer = resolved.session;
-          oauthToken = { appId: resolved.appId, bound: resolved.bound };
+          oauthToken = { appId: resolved.appId, bound: resolved.bound, brokerRequestId: resolved.brokerRequestId ?? null };
         }
       } catch (e) {
         console.warn(`MCP OAuth token resolution failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -306,7 +338,14 @@ export default {
       ...(mcpRoute.appScope ? { appScope: mcpRoute.appScope } : {}),
     };
 
-    return PasMcpAgent.serve("/mcp").fetch(rewriteToSharedMcpPath(request), env, ctx);
+    const response = await PasMcpAgent.serve("/mcp").fetch(rewriteToSharedMcpPath(request), env, ctx);
+    if (response.ok && oauthToken?.brokerRequestId && env.OAUTH_KV) {
+      // Best effort only: a marker failure must never turn a working MCP call
+      // into an error. The broker will remain unconnected until a later read is
+      // successfully observed.
+      await recordBrokerMcpRead(env.OAUTH_KV, oauthToken.brokerRequestId).catch(() => undefined);
+    }
+    return response;
   },
 };
 

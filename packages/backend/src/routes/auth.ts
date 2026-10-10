@@ -118,6 +118,8 @@ async function authUserDto(env: Env, claims: SessionClaims) {
 // __Host- prefix (#88): forces Secure + Path=/ + no Domain, so a sibling
 // *.proappstore.online app can't overwrite it (cookie-tossing the CSRF state).
 const STATE_COOKIE = '__Host-pas_oauth_state';
+/** One-time login code held only in the hosted broker callback's HttpOnly cookie. */
+export const BROKER_LOGIN_CODE_COOKIE = '__Secure-pas_broker_login_code';
 
 type Provider = 'github' | 'google';
 const PROVIDERS = new Set<Provider>(['github', 'google']);
@@ -130,6 +132,17 @@ type OAuthState = {
   n?: string;
   a?: string;
 };
+
+function brokerReturnToAllowed(env: Env, value: string): boolean {
+  try {
+    const url = new URL(value);
+    const base = new URL(env.APP_BASE || 'https://api.proappstore.online');
+    return url.origin === base.origin && /^\/v1\/mcp\/broker\/v2\/requests\/req_[A-Za-z0-9_-]{43}\/callback$/.test(url.pathname)
+      && !url.search && !url.hash;
+  } catch {
+    return false;
+  }
+}
 
 function platformReturnToAllowed(u: URL): boolean {
   return u.hostname === 'localhost' || u.hostname === '127.0.0.1'
@@ -275,20 +288,12 @@ async function hashExchangeCode(code: string): Promise<string> {
  * deleted before the session is minted so a race cannot yield two sessions
  * from one code.
  */
-authRoutes.post('/auth/code/exchange', async (c) => {
-  let code = '';
-  try {
-    const body = await c.req.json<{ code?: unknown }>();
-    if (typeof body?.code === 'string') code = body.code;
-  } catch {
-    /* handled by the empty check */
-  }
-  if (!code) return c.json({ error: 'invalid code' }, 400);
-
+export async function redeemExchangeCode(env: Pick<Env, 'DB' | 'SESSION_SIGNING_KEY'>, code: string): Promise<string | null> {
+  if (!code) return null;
   const codeHash = await hashExchangeCode(code);
   const now = Date.now();
 
-  const row = await c.env.DB.prepare(
+  const row = await env.DB.prepare(
     'SELECT claims FROM auth_exchange_codes WHERE code_hash = ? AND expires_at > ?',
   )
     .bind(codeHash, now)
@@ -297,22 +302,28 @@ authRoutes.post('/auth/code/exchange', async (c) => {
   // Consume unconditionally — before validating, and whether or not anything
   // was found. A wrong guess must not be retryable, and an expired row must not
   // linger.
-  await c.env.DB.prepare('DELETE FROM auth_exchange_codes WHERE code_hash = ?')
+  await env.DB.prepare('DELETE FROM auth_exchange_codes WHERE code_hash = ?')
     .bind(codeHash)
     .run()
     .catch(() => { /* the read already decided the outcome */ });
 
-  if (!row) return c.json({ error: 'invalid code' }, 400);
-
+  if (!row) return null;
   let claims: NewSession;
-  try {
-    claims = JSON.parse(row.claims) as NewSession;
-  } catch {
-    return c.json({ error: 'invalid code' }, 400);
-  }
-  if (!claims?.uid) return c.json({ error: 'invalid code' }, 400);
+  try { claims = JSON.parse(row.claims) as NewSession; } catch { return null; }
+  if (!claims?.uid) return null;
+  return mintSession(claims, env.SESSION_SIGNING_KEY);
+}
 
-  const token = await mintSession(claims, c.env.SESSION_SIGNING_KEY);
+authRoutes.post('/auth/code/exchange', async (c) => {
+  let code = '';
+  try {
+    const body = await c.req.json<{ code?: unknown }>();
+    if (typeof body?.code === 'string') code = body.code;
+  } catch {
+    /* handled by the empty check */
+  }
+  const token = await redeemExchangeCode(c.env, code);
+  if (!token) return c.json({ error: 'invalid code' }, 400);
   return c.json({ token });
 });
 
@@ -327,7 +338,9 @@ authRoutes.get('/auth/:provider/start', async (c) => {
   const returnTo = c.req.query('return_to') || '';
   const appId = c.req.query('app_id') || undefined;
   if (!(await returnToAllowed(c.env, returnTo, appId))) return c.text('invalid return_to', 400);
-  const responseMode = c.req.query('response_mode') === 'query' ? 'query' : 'fragment';
+  const requestedMode = c.req.query('response_mode');
+  const responseMode = requestedMode === 'query' ? 'query' : requestedMode === 'broker' ? 'broker' : 'fragment';
+  if (responseMode === 'broker' && !brokerReturnToAllowed(c.env, returnTo)) return c.text('invalid broker return_to', 400);
 
   const state = btoa(JSON.stringify({ r: returnTo, m: responseMode, n: crypto.randomUUID(), a: appId }))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -368,16 +381,17 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
   // instead of a bare error page.
   let returnTo = '';
   let appId: string | undefined;
-  let responseMode: 'fragment' | 'query' = 'fragment';
+  let responseMode: 'fragment' | 'query' | 'broker' = 'fragment';
   try {
     const b64 = stateRaw.replace(/-/g, '+').replace(/_/g, '/');
     const json = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
     const parsed = JSON.parse(json) as OAuthState;
     returnTo = parsed.r || '';
     appId = parsed.a || undefined;
-    if (parsed.m === 'query') responseMode = 'query';
+    if (parsed.m === 'query' || parsed.m === 'broker') responseMode = parsed.m;
   } catch { /* fall through to validation */ }
   if (!(await returnToAllowed(c.env, returnTo, appId))) return c.text('invalid state', 400);
+  if (responseMode === 'broker' && !brokerReturnToAllowed(c.env, returnTo)) return c.text('invalid state', 400);
 
   /** Bounce back to the app with `#auth_error=<reason>` (the SDK clears the hash). */
   const fail = (reason: string) => {
@@ -444,7 +458,14 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
     // the app-origin fragment into `#auth_error=fragment_delivery_retired`
     // (the SDK surfaces it via `auth.authError`) with no token issued.
     // First-party surfaces keep the fragment regardless of the flag.
-    if (responseMode === 'query') {
+    if (responseMode === 'broker') {
+      // The one-time code never enters a URL.  The broker callback consumes it
+      // directly from this short-lived HttpOnly cookie and binds the resulting
+      // session to the immutable request in its own route.
+      setCookie(c, BROKER_LOGIN_CODE_COOKIE, await issueExchangeCode(c.env.DB, claims, Date.now()), {
+        httpOnly: true, secure: true, sameSite: 'Lax', path: '/v1/mcp/broker/v2/', maxAge: 600,
+      });
+    } else if (responseMode === 'query') {
       dest.searchParams.set('code', await issueExchangeCode(c.env.DB, claims, Date.now()));
     } else if (!isFirstPartyHost(dest.hostname) && c.env.RETIRE_FRAGMENT_DELIVERY === '1') {
       dest.hash = 'auth_error=fragment_delivery_retired';
