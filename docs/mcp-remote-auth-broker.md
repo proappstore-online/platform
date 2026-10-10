@@ -1,63 +1,44 @@
-# Remote MCP authentication broker (PAS #355)
+# Remote MCP approval broker (withdrawn pending a safe implementation)
 
-`/v1/mcp/broker/v1` is the versioned PAS broker contract.  It is an internal
-companion-client protocol, not a replacement for the existing MCP OAuth 2.1
-authorization-code endpoints.  Those endpoints and app-scoped protected
-resources remain unchanged.
+The `/v1/mcp/broker/v1/*` routes are disabled and return `503` with
+`remote_auth_unavailable`. They do not create requests, accept approvals,
+return credentials, or expose a status page. They are deliberately mounted to
+refuse old URLs explicitly, with `Cache-Control: no-store` and
+`Referrer-Policy: no-referrer`.
 
-## Trust boundary and creation
+Do not integrate against this endpoint. PAS #356 and #1005 must use the
+existing OAuth 2.1 authorization-code + PKCE flow at
+`https://mcp.proappstore.online/authorize` until a replacement is published.
+That flow is the current supported credential boundary: it issues opaque
+24-hour credentials, and the MCP worker enforces each credential's resource
+binding at `/mcp` or `/mcp/apps/:appId` before dispatch.
 
-PAGS (or another first-party coordinator) creates a request with the owner's
-existing PAS bearer: `POST /v1/mcp/broker/v1/requests`.  It must never submit a
-user id supplied by a machine.  The body has immutable `request_id` (a 32+ char
-machine-generated opaque identifier), `{agent:{id,label},machine:{id,label}}`,
-`resource`, `scopes`, `code_challenge` (PKCE S256), `machine_proof_hash`
-(SHA-256 hex), and optional `expires_in_ms` (60,000–600,000; default 600,000).
-The actual machine proof and verifier never leave the waiting machine.
+## Conditions to publish a broker contract
 
-The successful response is version `2026-10-10`, contains only `request_id`,
-`pending`, expiry, and a neutral non-secret `status_url`.  A duplicate id is
-rejected; requests cannot be edited.  The coordinator's authenticated request
-page reads `GET /requests/:requestId` with that owner bearer and must display
-the returned immutable agent, machine, service/resource, and scopes before
-calling `POST /requests/:requestId/approve`.  That endpoint (as well as
-`deny` and `cancel`) requires the same owner bearer, so a wrong owner fails
-closed.  The hosted `GET /requests/:requestId/status` page is deliberately
-neutral: it exposes only a coarse state, sends `no-store`/`no-referrer`, and
-contains no token, code, proof, scope, or account information.
+PAS #355 remains open. A broker revision can be published only after all of
+the following are implemented and independently tested:
 
-## Waiting machine
+1. The API worker calls an authenticated MCP-worker service binding to issue
+   an opaque OAuth credential bound to one canonical MCP resource. It must
+   never return a PAS session JWT. PAS currently has no MCP scope taxonomy, so
+   an effective scope set must be empty rather than accepting cosmetic scope
+   labels.
+2. Resource input is limited to the configured MCP origin and exactly
+   `/mcp` or `/mcp/apps/:appId`; the MCP worker rejects that credential at any
+   other resource.
+3. Hosted approval uses the existing PAS GitHub/Google provider callback and
+   binds the returned user, browser state, request, machine proof, and PKCE
+   challenge. An existing PAGS bearer alone is not sufficient for first login
+   or expired-session recovery.
+4. Database claims include `expires_at > now` in every conditional mutation;
+   consumed-result retry has a short explicit retention deadline and a cleanup
+   job; deny, cancel, expiry, callback, and duplicate/reconnect races have
+   terminal state transitions.
+5. Polling has a server-enforced limit/backoff, not merely a client hint.
+   Tests use real D1 conditional semantics and cover cross-resource denial,
+   owner/machine/PKCE/state/request mismatch, expiry/replay/deny/cancel,
+   lost response/reconnect, secret redaction, provider return, and mobile E2E.
 
-The machine calls `POST /requests/poll` with `{request_id,machine_proof}`.
-It receives only `{protocol_version,request_id,status,retry_after_ms,expires_at}`;
-it must honor the 2s minimum retry interval.  States are `pending`,
-`approved_awaiting_machine`, `consumed`, `connected`, `denied`, `expired`,
-`cancelled`, and `failed`.  Pending/approved requests become expired
-deterministically on the next broker operation after expiry.
-
-After `approved_awaiting_machine`, it calls `POST /requests/redeem` with
-`{request_id,machine_proof,code_verifier}`.  The broker verifies both the
-machine proof and S256 PKCE challenge, then atomically changes only one
-approved row to `consumed`.  The PAS session result is encrypted at rest with a
-key derived from `SESSION_SIGNING_KEY`; a lost response can be safely retried
-only by the same proof/verifier and returns that same result.  Concurrent or
-replayed redemption cannot mint a second result.  Results are intentionally not
-logged or put in URLs, notification payloads, HTML, or status responses.
-
-The #356 client adapter uses the session only through the existing MCP OAuth
-flow for the originally requested protected resource.  After a harmless
-authenticated MCP read actually succeeds, it calls `POST /requests/connected`
-with the same proof and verifier.  Only then is the state `connected`; browser
-approval alone is never reported as a connection.  If that authenticated read
-cannot be completed, it instead calls `POST /requests/failed` with the same
-proof and verifier; a failed request is terminal and the coordinator starts a
-new request for an explicit retry.
-
-## Compatibility and error contract
-
-All normal responses carry `protocol_version: "2026-10-10"`.  Clients that do
-not support that version must leave their working OAuth path untouched.  Bad
-machine proof, unknown request, wrong owner, wrong PKCE, stale/terminal state,
-and redemption races fail closed with generic 409 `remote-auth result
-unavailable`; malformed requests are 400.  PAGS must treat these as a new
-request/retry path, never as permission to substitute redirects or widen scopes.
+Until those prerequisites exist, there is no broker protocol version, request
+or response schema, approval URL, error-code contract, or supported client
+integration beyond the stable `503` refusal above.
