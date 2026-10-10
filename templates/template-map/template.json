@@ -7,7 +7,7 @@
   "purpose": "Apps where the map is the primary workspace: places with a category, shown as markers with clustering, selection and a detail panel; search, filters, viewport and current-location behaviour; a keyboard-accessible list of the same records; owner-scoped add / edit / hide / delete; an admin table for records and categories. Maps through app.maps (geocoding, reverse geocoding, OpenStreetMap tiles), photos through app.storage. Not for two-sided markets (use template-marketplace with its map mode) or back-office records (template-workspace).",
   "supported_categories": ["travel", "transport", "logistics", "lifestyle", "community", "business"],
   "requires": {
-    "sdk": ">=1.16.77",
+    "sdk": ">=1.16.78",
     "cli": ">=2.6.0",
     "node": ">=22",
     "pnpm": "10.x"
