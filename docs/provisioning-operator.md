@@ -45,6 +45,21 @@ playbook:
 It reports every step it created, skipped or failed. Publishing to the storefront is a
 separate, deliberate step (`publish_app`).
 
+### Durable receipt recovery
+
+`provision_pas_app` creates one durable receipt for an app id before it starts
+GitHub work. A matching retry joins an active receipt and does not create a
+second repository or spend another provisioning-quota attempt. A receipt whose
+lease expired after five attempts is shown as **exhausted**: it is terminal and
+no worker is still making progress, so inspect its evidence rather than waiting
+or retrying it.
+
+Some older receipts predate the intent fingerprint and have no verified original
+request. They remain read-only reconciliation blockers; PAS will not attach a
+new caller's intent, infer provenance from receipt progress, or adopt an edited
+orphan. Use a different app id or contact platform support when independent
+server-verified app and repository provenance is available.
+
 ## Least privilege
 
 - **The owner's own session, nothing pasted.** The operator acts as the app owner

@@ -47,7 +47,7 @@ interface OperationRow {
 
 export type BeginProvisionOperationResult =
   | { kind: 'created' | 'recovered' | 'joined' | 'exhausted'; operation: ProvisionOperation }
-  | { kind: 'intent_conflict' | 'owner_conflict'; operation: ProvisionOperation };
+  | { kind: 'intent_conflict' | 'legacy_unreconciled' | 'owner_conflict'; operation: ProvisionOperation };
 
 export type UpdateProvisionOperationResult =
   | { kind: 'updated'; operation: ProvisionOperation }
@@ -133,10 +133,32 @@ export async function hashProvisionIntent(intent: unknown): Promise<string> {
 
 export function operationNeedsLease(operation: ProvisionOperation | null, now = Date.now()): boolean {
   if (!operation) return true;
+  if (operationIsExhausted(operation, now)) return false;
   if (operation.status === 'failed') return operation.attemptCount < MAX_PROVISION_OPERATION_ATTEMPTS;
   return operation.status === 'pending'
     && (operation.leaseExpiresAt === null || operation.leaseExpiresAt <= now)
     && operation.attemptCount < MAX_PROVISION_OPERATION_ATTEMPTS;
+}
+
+/**
+ * A receipt with no bound fingerprint predates intent binding (0084). It is
+ * historical evidence only: neither a caller-supplied intent nor receipt steps
+ * can establish what it originally authorised.
+ */
+export function isLegacyProvisionOperation(operation: ProvisionOperation): boolean {
+  return operation.intentHash === '';
+}
+
+/**
+ * An expired in-flight worker at the retry ceiling cannot make progress. Keep
+ * the durable receipt/history for inspection, but never misreport it as an
+ * active join or grant a sixth lease.
+ */
+export function operationIsExhausted(operation: ProvisionOperation, now = Date.now()): boolean {
+  if (operation.attemptCount < MAX_PROVISION_OPERATION_ATTEMPTS) return false;
+  if (operation.status === 'failed') return true;
+  return operation.status === 'pending'
+    && (operation.leaseExpiresAt === null || operation.leaseExpiresAt <= now);
 }
 
 /** Atomically creates, joins, or recovers a lease. */
@@ -162,7 +184,9 @@ export async function beginProvisionOperation(
   const existing = await getProvisionOperation(db, args.appId);
   if (!existing) throw new Error('provision operation conflict was not readable');
   if (existing.creatorId !== args.creatorId) return { kind: 'owner_conflict', operation: existing };
+  if (isLegacyProvisionOperation(existing)) return { kind: 'legacy_unreconciled', operation: existing };
   if (existing.intentHash !== args.intentHash) return { kind: 'intent_conflict', operation: existing };
+  if (operationIsExhausted(existing, now)) return { kind: 'exhausted', operation: existing };
   if (!operationNeedsLease(existing, now)) return { kind: existing.status === 'failed' ? 'exhausted' : 'joined', operation: existing };
 
   const nextAttemptId = newAttemptId();
@@ -177,8 +201,9 @@ export async function beginProvisionOperation(
   if (!current) throw new Error('provision operation recovery was not readable');
   if (Number(recovered.meta.changes) > 0) return { kind: 'recovered', operation: current };
   if (current.creatorId !== args.creatorId) return { kind: 'owner_conflict', operation: current };
+  if (isLegacyProvisionOperation(current)) return { kind: 'legacy_unreconciled', operation: current };
   if (current.intentHash !== args.intentHash) return { kind: 'intent_conflict', operation: current };
-  return { kind: current.status === 'failed' ? 'exhausted' : 'joined', operation: current };
+  return { kind: operationIsExhausted(current, now) ? 'exhausted' : 'joined', operation: current };
 }
 
 export async function getProvisionOperation(db: D1Database, appId: string): Promise<ProvisionOperation | null> {

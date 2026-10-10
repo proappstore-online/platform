@@ -49,7 +49,7 @@ vi.stubGlobal('fetch', mockFetch);
 type Operation = {
   receipt: string;
   appId: string;
-  status: 'pending' | 'completed' | 'failed';
+  status: 'pending' | 'completed' | 'failed' | 'exhausted';
   steps: any[];
   attemptId: string;
   joined?: boolean;
@@ -342,6 +342,24 @@ describe('provision_pas_app', () => {
     const status = await tools.get('provisioning_status')!({ app_id: 'school-clubs' });
     expect(getText(status)).toContain('Provisioning status: completed');
     expect(getText(status)).toContain('config_committed');
+  });
+
+  it('reports an exhausted receipt as terminal with no active worker (#358)', async () => {
+    operations.set('school-clubs', {
+      receipt: 'receipt-exhausted',
+      appId: 'school-clubs',
+      status: 'exhausted',
+      steps: [],
+      attemptId: 'attempt-exhausted',
+      joined: true,
+    });
+
+    const out = getText(await tools.get('provision_pas_app')!({ confirm: true, verify: false, ...args }));
+
+    expect(out).toContain('Provisioning status: exhausted');
+    expect(out).toContain('exhausted its retry budget');
+    expect(out).toContain('no worker is still making progress');
+    expect(mockGh.createRepoFromTemplate).not.toHaveBeenCalled();
   });
 
   describe('template placeholders (#205)', () => {

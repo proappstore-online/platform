@@ -19,7 +19,7 @@ type Row = {
 };
 
 /** Minimal D1 model for the receipt endpoints; it never creates app data. */
-function operationDb() {
+function operationDb(opts: { quotaUnavailable?: boolean } = {}) {
   const byApp = new Map<string, Row>();
   const byReceipt = new Map<string, Row>();
   return {
@@ -29,11 +29,15 @@ function operationDb() {
         bind(...args: unknown[]) { values = args; return this; },
         async first() {
           if (/FROM apps\b/i.test(sql)) return null;
+          if (/FROM provision_attempts\b/i.test(sql)) return null;
           if (/WHERE app_id = \?/i.test(sql)) return byApp.get(String(values[0])) ?? null;
           if (/WHERE receipt_id = \?/i.test(sql)) return byReceipt.get(String(values[0])) ?? null;
           return null;
         },
         async run() {
+          if (/INTO provision_attempts/i.test(sql) && opts.quotaUnavailable) {
+            throw new Error('UNIQUE constraint failed: provision_attempts.key');
+          }
           if (/INSERT OR IGNORE INTO provision_operations/i.test(sql)) {
             const [receipt, creator, appId, intentHash, leaseExpiresAt, attemptId, createdAt, updatedAt] = values as [string, string, string, string, number, string, number, number];
             if (byApp.has(appId)) return { meta: { changes: 0 } };
@@ -112,5 +116,15 @@ describe('durable provision receipts (#358)', () => {
     expect(retry.status).toBe(403);
     const status = await app.request('/v1/provision-operations/owned-app', { headers: headers(otherToken) }, env);
     expect(status.status).toBe(403);
+  });
+
+  it('fails closed with retryable 503 when the receipt quota store is unavailable', async () => {
+    const env = makeEnv({}, operationDb({ quotaUnavailable: true }));
+    const response = await app.request('/v1/provision-operations', {
+      method: 'POST', headers: headers(ownerToken), body: JSON.stringify({ appId: 'quota-unavailable', intent }),
+    }, env);
+    expect(response.status).toBe(503);
+    expect(response.headers.get('Retry-After')).toBe('60');
+    expect(await response.text()).toMatch(/rate limit is temporarily unavailable/i);
   });
 });

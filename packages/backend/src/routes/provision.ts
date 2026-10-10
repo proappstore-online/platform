@@ -14,6 +14,8 @@ import {
   beginProvisionOperation,
   getProvisionOperation,
   hashProvisionIntent,
+  isLegacyProvisionOperation,
+  operationIsExhausted,
   operationNeedsLease,
   updateProvisionOperation,
   type ProvisionOperation,
@@ -70,10 +72,16 @@ function validAppId(appId: unknown): appId is string {
 
 /** Do not expose the platform account id in a receipt response. */
 function operationResponse(operation: ProvisionOperation, joined?: boolean) {
+  const status = isLegacyProvisionOperation(operation)
+    ? 'legacy_unreconciled'
+    : operationIsExhausted(operation) ? 'exhausted' : operation.status;
   return {
     receipt: operation.receiptId,
     appId: operation.appId,
-    status: operation.status,
+    // `exhausted` is an API display state: 0083's CHECK constraint deliberately
+    // keeps the persisted history as pending/failed, while callers must not be
+    // told that an expired fifth attempt is still making progress.
+    status,
     steps: operation.steps,
     createdAt: operation.createdAt,
     updatedAt: operation.updatedAt,
@@ -133,13 +141,25 @@ provisionRoutes.post('/provision-operations', wrap(async (c) => {
   if (existing && existing.creatorId !== user.id && !user.roles.includes('admin')) {
     return c.json({ error: 'provisioning operation belongs to another user' }, 403);
   }
+  if (existing && isLegacyProvisionOperation(existing)) {
+    // 0083 rows have no trustworthy intent fingerprint. The apps table can
+    // prove only that an app record is absent; it cannot prove that the org repo
+    // is unused or who created it. Preserve the receipt read-only rather than
+    // attaching a new caller's intent or treating owner-writable steps as proof.
+    return c.json({
+      ...operationResponse(existing, true),
+      error: 'legacy provisioning receipt has no verified intent; it remains read-only until independent server-verified app and repository provenance can reconcile it. Choose a different app id or contact platform support.',
+      reconciliation: 'legacy_unreconciled',
+    }, 409);
+  }
   if (existing && existing.intentHash !== intentHash) {
     return c.json({ error: 'a provisioning receipt already exists for this app with different intent' }, 409);
   }
 
   const now = Date.now();
-  // Joining a live or terminal identical receipt is not a new provisioning
-  // attempt. Acquiring a fresh/recovery lease is, and is quota-governed.
+  // Joining a live, exhausted, or terminal identical receipt is not a new
+  // provisioning attempt. Only a fresh/recovery lease consumes quota, so a
+  // retry that merely observes the UNIQUE(app_id) receipt cannot double-charge.
   if (operationNeedsLease(existing, now)) {
     try {
       const quota = await checkProvisionQuota(d1ProvisionAttemptStore(c.env.DB), {
@@ -155,7 +175,8 @@ provisionRoutes.post('/provision-operations', wrap(async (c) => {
         );
       }
     } catch (error) {
-      console.warn(`provision operation rate limit unavailable, allowing: ${(error as Error).message}`);
+      console.warn(`provision operation rate limit unavailable, refusing reservation: ${(error as Error).message}`);
+      return c.text('provisioning rate limit is temporarily unavailable — retry later', 503, { 'Retry-After': '60' });
     }
   }
 
@@ -165,6 +186,13 @@ provisionRoutes.post('/provision-operations', wrap(async (c) => {
   }
   if (begun.kind === 'intent_conflict') {
     return c.json({ error: 'a provisioning receipt already exists for this app with different intent' }, 409);
+  }
+  if (begun.kind === 'legacy_unreconciled') {
+    return c.json({
+      ...operationResponse(begun.operation, true),
+      error: 'legacy provisioning receipt has no verified intent; it remains read-only until independent server-verified app and repository provenance can reconcile it. Choose a different app id or contact platform support.',
+      reconciliation: 'legacy_unreconciled',
+    }, 409);
   }
   const joined = begun.kind === 'joined' || begun.kind === 'exhausted';
   return c.json(operationResponse(begun.operation, joined), begun.kind === 'created' ? 201 : 200);

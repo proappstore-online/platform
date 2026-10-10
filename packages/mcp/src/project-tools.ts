@@ -58,11 +58,12 @@ interface ProvisionResult {
 }
 
 type ProvisionOperationStatus = "pending" | "completed" | "failed";
+type ProvisionOperationDisplayStatus = ProvisionOperationStatus | "exhausted" | "legacy_unreconciled";
 
 interface ProvisionOperationReceipt {
   receipt: string;
   appId: string;
-  status: ProvisionOperationStatus;
+  status: ProvisionOperationDisplayStatus;
   steps: ProvisionStep[];
   updatedAt?: number;
   completedAt?: number | null;
@@ -241,6 +242,9 @@ export function registerProjectTools(
       `Provisioning status: ${receipt.status}`,
       `Receipt: ${receipt.receipt}`,
       `App: ${receipt.appId}`,
+      receipt.status === "legacy_unreconciled"
+        ? "Reconciliation: legacy receipt has no verified intent and is read-only; use a different app id or contact platform support."
+        : "",
       formatSteps(receipt.steps),
     ].filter(Boolean).join("\n");
   }
@@ -469,7 +473,11 @@ export function registerProjectTools(
         return text([
           `Provisioning already has a durable receipt; no second GitHub bootstrap was started.`,
           formatProvisionOperation(receipt),
-          receipt.status === "pending" ? "The original request is still in progress. Re-check with provisioning_status using this app id." : "This operation is terminal; inspect its receipt before starting a new request.",
+          receipt.status === "pending"
+            ? "The original request is still in progress. Re-check with provisioning_status using this app id."
+            : receipt.status === "exhausted"
+              ? "This operation exhausted its retry budget and is terminal; no worker is still making progress. Inspect the receipt and use a different app id or contact platform support."
+              : "This operation is terminal; inspect its receipt before starting a new request.",
         ].join("\n"));
       }
       if (!receipt.attemptId) return text(`Error: provisioning receipt for ${app_id} did not grant an active attempt lease.`);
