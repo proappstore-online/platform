@@ -60,9 +60,6 @@ jobs:
       - name: PWA meta tags
         run: grep -qi "apple-mobile-web-app-capable\|mobile-web-app-capable" web/index.html
 
-      - name: ProAppStore link
-        run: grep -r "proappstore.online" web/src/ | grep -q .
-
       - name: Dark mode
         run: grep -rE "prefers-color-scheme|data-theme|color-scheme" web/src/ | grep -q .
 

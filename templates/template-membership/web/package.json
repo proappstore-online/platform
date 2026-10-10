@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@proappstore/sdk": "^1.16.69",
+    "@proappstore/sdk": "^1.16.77",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"
   },

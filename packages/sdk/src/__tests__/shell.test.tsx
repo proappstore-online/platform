@@ -80,6 +80,7 @@ function fakeApp(): ProAppStore {
     appId: 'demo',
     auth: {
       user,
+      token: 'test-token',
       status: 'signed-in',
       init: async () => {},
       onChange: () => () => {},
@@ -88,6 +89,23 @@ function fakeApp(): ProAppStore {
       signOut: async () => {},
     },
     subscription: { status: async () => ({ status: 'active' }) },
+  } as unknown as ProAppStore;
+}
+
+/** An SDK instance whose resolved auth state is signed out. */
+function signedOutApp(): ProAppStore {
+  return {
+    appId: 'demo',
+    auth: {
+      user: null,
+      status: 'signed-out',
+      init: async () => {},
+      onChange: () => () => {},
+      onStatus: (listener: (status: string, u: unknown) => void) => { listener('signed-out', null); return () => {}; },
+      signIn: () => {},
+      signOut: async () => {},
+    },
+    subscription: { status: async () => null },
   } as unknown as ProAppStore;
 }
 
@@ -142,6 +160,27 @@ describe('ProShell navigation (#235)', () => {
     const profile = container.querySelector('.pas-topbar__account > div > button') as HTMLButtonElement;
     expect(profile).not.toBeNull();
     act(() => profile.click());
+    expect(container.textContent).toContain('Sign out');
+  });
+
+  it('REGRESSION: app-owned branding keeps the signed-out gate neutral while preserving sign-in', async () => {
+    await mount(<ProShell app={signedOutApp()} appName="Independent" branding="app"><p>content</p></ProShell>);
+    expect(container.textContent).toContain('Independent');
+    expect(container.textContent).toContain('Sign in to continue.');
+    expect(container.textContent).not.toContain('ProAppStore');
+    expect(container.textContent).not.toContain('One account for all Pro apps.');
+    expect(container.querySelector('button')).not.toBeNull();
+    expect(container.textContent).not.toContain('content');
+  });
+
+  it('REGRESSION: app-owned branding hides automatic PRO badges for active subscribers but retains account controls', async () => {
+    await mount(<ProShell app={fakeApp()} appName="Independent" branding="app"><p>content</p></ProShell>);
+    expect(container.textContent).not.toMatch(/\bPRO\b/);
+    const profile = container.querySelector('.pas-topbar__account > div > button') as HTMLButtonElement;
+    act(() => profile.click());
+    await act(async () => { await Promise.resolve(); });
+    expect(container.textContent).not.toMatch(/\bPRO\b/);
+    expect(container.textContent).toContain('Manage billing');
     expect(container.textContent).toContain('Sign out');
   });
 

@@ -14,11 +14,13 @@ export interface ProfileMenuProps {
   app?: ProAppStore;
   showThemeToggle?: boolean;
   showBilling?: boolean;
+  /** Show the platform's PRO badge for active subscriptions. */
+  showSubscriptionBadge?: boolean;
   children?: ReactNode;
 }
 
 /** Avatar button that opens dropdown with Pro features: badge, billing, theme, sign out. */
-export function ProfileMenu({ app, showThemeToggle = true, showBilling = true, children }: ProfileMenuProps) {
+export function ProfileMenu({ app, showThemeToggle = true, showBilling = true, showSubscriptionBadge = true, children }: ProfileMenuProps) {
   const { user, signOut, deleteAccount } = useAuth(app);
   const { subscription, isPro, manageBilling } = useSubscription(app);
   const [open, setOpen] = useState(false);
@@ -81,7 +83,7 @@ export function ProfileMenu({ app, showThemeToggle = true, showBilling = true, c
           {/* Header with name + badge */}
           <div style={{ padding: '0.5rem 1rem', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <strong style={{ fontSize: '0.85rem', color: 'var(--ink)' }}>{user.login}</strong>
-            {isPro && <ProBadge />}
+            {showSubscriptionBadge && isPro && <ProBadge />}
           </div>
           {/* Theme toggle */}
           {showThemeToggle && (

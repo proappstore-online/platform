@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { app } from '../index.js';
 import { makeEnv, mockD1, mockStmt } from '../test-helpers.js';
 import { payoutUsageSql } from '../lib/payout-meter.js';
 import { backfillLegacyUsage, reconcileAiGateway } from './payout-metering.js';
@@ -47,5 +48,34 @@ describe('AI Gateway payout reconciliation (#25)', () => {
       blobs: ['meetup', '', 'ai', 'ai-gateway', 'anthropic', 'claude-sonnet-4-6', 'aigw:log-1'],
       doubles: [0, 0, 12, 34, 0.005, expect.any(Number)],
     });
+  });
+});
+
+describe('internal payout metering routes', () => {
+  const env = () => makeEnv({ INTERNAL_TOKEN: 'payout-internal-token' });
+
+  it('refuses an invalid request before parsing its dates when the internal token is absent', async () => {
+    const res = await app.request('/v1/internal/payouts/backfill-usage?start=not-a-date', { method: 'POST' }, env());
+    expect(res.status).toBe(403);
+  });
+
+  it('reports invalid backfill dates after authenticating the internal caller', async () => {
+    const res = await app.request(
+      '/v1/internal/payouts/backfill-usage?start=not-a-date',
+      { method: 'POST', headers: { 'X-Internal-Token': 'payout-internal-token' } },
+      env(),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'start and end must be YYYY-MM-DD' });
+  });
+
+  it('backfills a valid date range for an authenticated internal caller', async () => {
+    const res = await app.request(
+      '/v1/internal/payouts/backfill-usage?start=2026-06-01&end=2026-06-01',
+      { method: 'POST', headers: { 'X-Internal-Token': 'payout-internal-token' } },
+      env(),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ start: '2026-06-01', end: '2026-06-01', scanned: 0, written: 0 });
   });
 });

@@ -71,15 +71,12 @@ export function renderOgImagePng(appName: string): Buffer {
   rect(pixels, 96, 96, 208, 12, [45, 212, 191, 255]);
   rect(pixels, 96, 522, 336, 12, [251, 191, 36, 255]);
 
-  const title = cleanText(appName || 'Pro App');
+  // This is an app-owned social preview. The generated image must not add
+  // platform advertising to an app that chooses independent branding.
+  const title = cleanText(appName || 'App');
   const titleScale = fitScale(title, 920, 18, 7);
   const titleWidth = textWidth(title, titleScale);
   drawText(pixels, title, Math.round((WIDTH - titleWidth) / 2), 215, titleScale, [255, 255, 255, 255]);
-
-  const subtitle = 'PROAPPSTORE';
-  const subtitleScale = 6;
-  const subtitleWidth = textWidth(subtitle, subtitleScale);
-  drawText(pixels, subtitle, Math.round((WIDTH - subtitleWidth) / 2), 384, subtitleScale, [196, 181, 253, 255]);
 
   return encodePng(WIDTH, HEIGHT, pixels);
 }

@@ -287,7 +287,7 @@ describe('template-membership: scoped actions fail closed for the wrong user or 
   });
 
   // #299: the sample custom admin panel calls only declared admin actions through the SDK hooks,
-  // and the template locks an SDK release that has them (1.16.69), so the sample builds.
+  // and the template locks an SDK release that has them and app-owned branding (1.16.77), so the sample builds.
   it('the moderation sample uses AdminConsole/useAction on declared admin_* actions, against an SDK that has them', () => {
     const sample = readFileSync(new URL('web/src/pages/Moderation.tsx', ROOT), 'utf8');
     expect(sample).toMatch(/<AdminConsole app=\{app\}>/);
@@ -301,7 +301,7 @@ describe('template-membership: scoped actions fail closed for the wrong user or 
     expect(sample).toMatch(/setGroups\(r\.rows\); setLoadFailed\(false\); deleteGroup\.reset\(\)/);
     const range = (read('web/package.json') as { dependencies: Record<string, string> }).dependencies['@proappstore/sdk']!;
     const locked = /'@proappstore\/sdk':\s*\n\s*specifier: [^\n]+\n\s*version: (\d+)\.(\d+)\.(\d+)/.exec(readFileSync(new URL('pnpm-lock.yaml', ROOT), 'utf8'))!.slice(1).map(Number);
-    expect(range).toBe('^1.16.69');
-    expect(locked[0]! > 1 || (locked[0] === 1 && (locked[1]! > 16 || (locked[1] === 16 && locked[2]! >= 69)))).toBe(true);
+    expect(range).toBe('^1.16.77');
+    expect(locked[0]! > 1 || (locked[0] === 1 && (locked[1]! > 16 || (locked[1] === 16 && locked[2]! >= 77)))).toBe(true);
   });
 });

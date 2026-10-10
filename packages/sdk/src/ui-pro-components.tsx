@@ -144,6 +144,8 @@ export interface UpgradeCardProps {
   description?: string;
   priceLabel?: string;
   features?: string[];
+  /** Show the platform's PRO badge. */
+  showBadge?: boolean;
 }
 
 /** Styled card prompting the user to upgrade to Pro. */
@@ -153,6 +155,7 @@ export function UpgradeCard({
   description = 'Unlock all premium features with a Pro subscription.',
   priceLabel = '$5/month',
   features = ['Cloud sync across devices', 'AI-powered features', 'Unlimited storage', 'Priority support'],
+  showBadge = true,
 }: UpgradeCardProps) {
   const { upgrade } = useSubscription(app);
 
@@ -168,7 +171,7 @@ export function UpgradeCard({
         <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--ink-strong)', margin: 0 }}>
           {title}
         </h3>
-        <ProBadge size="md" />
+        {showBadge && <ProBadge size="md" />}
       </div>
       <p style={{ fontSize: '0.9rem', color: 'var(--muted)', marginBottom: '1rem' }}>{description}</p>
       {features.length > 0 && (

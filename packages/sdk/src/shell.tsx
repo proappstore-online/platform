@@ -36,7 +36,7 @@ export interface ProShellRenderContext {
   textSizeToggle: ReactNode;
   /** Platform profile dropdown, including any menuItems passed to ProShell. */
   profileMenu: ReactNode;
-  /** PRO badge when the current subscription is active; otherwise null. */
+  /** Subscription badge when the current subscription is active; otherwise null. */
   proBadge: ReactNode;
   /** The app's main navigation (`nav` / `renderNav`), or null when none is declared.
    *  A custom `renderTopbar` should place it. */
@@ -225,15 +225,15 @@ export function ProShell({
   // --- Gates ---
   if (gate === 'loading' && renderLoading) return <>{renderLoading()}</>;
   if (gate !== 'ready') {
-    return <GateScreen gate={gate} app={app} appName={appName} />;
+    return <GateScreen gate={gate} app={app} appName={appName} branding={branding} />;
   }
 
   if (!user) {
-    return <GateScreen gate="signed-out" app={app} appName={appName} />;
+    return <GateScreen gate="signed-out" app={app} appName={appName} branding={branding} />;
   }
 
   const profileMenu = (
-    <ProfileMenu app={app} showThemeToggle={showThemeToggle}>
+    <ProfileMenu app={app} showThemeToggle={showThemeToggle} showSubscriptionBadge={branding === 'platform'}>
       {menuItems?.map((item, i) => (
         <button key={i} type="button" onClick={item.onClick} className="pas-menu-item block w-full cursor-pointer border-0 bg-transparent px-4 py-2 text-left text-[0.85rem] text-[var(--ink)]">{item.label}</button>
       ))}
@@ -266,7 +266,7 @@ export function ProShell({
     subscription,
     textSizeToggle: <TextSizeToggle />,
     profileMenu,
-    proBadge: subscription?.status === 'active' ? <ProBadge /> : null,
+    proBadge: branding === 'platform' && subscription?.status === 'active' ? <ProBadge /> : null,
     nav: navNode,
   };
 
