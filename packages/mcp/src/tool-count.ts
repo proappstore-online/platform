@@ -12,7 +12,8 @@
  */
 
 /** Tools on the shared /mcp endpoint. Independent of how many apps exist. */
-export const MCP_SHARED_TOOL_COUNT = 60;
+// #358 added the read-only provisioning_status receipt inspector.
+export const MCP_SHARED_TOOL_COUNT = 61;
 
 /** Fixed tools on /mcp/apps/<id> besides that app's own tools (`whoami`, `mcp_audit_log`). */
 export const MCP_APP_SCOPED_FIXED = 2;

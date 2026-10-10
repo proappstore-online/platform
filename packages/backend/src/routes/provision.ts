@@ -10,6 +10,14 @@ import type { Env } from '../types.js';
 import { requireUser, TEAM_ROLES, type TeamRole } from '../lib/auth.js';
 import { wrap } from '../lib/route-wrap.js';
 import { provisionData } from '../lib/provision-data.js';
+import {
+  beginProvisionOperation,
+  getProvisionOperation,
+  updateProvisionOperation,
+  type ProvisionOperation,
+  type ProvisionOperationStatus,
+  type ProvisionOperationStep,
+} from '../lib/provision-operation.js';
 import { selectTemplate, TEMPLATE_REV_RE } from '@proappstore/build-core';
 import { fetchRepoFiles, type RepoLocation } from '../lib/github-fetch.js';
 
@@ -53,6 +61,114 @@ interface ProvisionBody {
 }
 
 export const provisionRoutes = new Hono<{ Bindings: Env }>();
+
+function validAppId(appId: unknown): appId is string {
+  return typeof appId === 'string' && /^[a-z][a-z0-9-]*$/.test(appId) && appId.length <= 58;
+}
+
+/** Do not expose the platform account id in a receipt response. */
+function operationResponse(operation: ProvisionOperation, joined?: boolean) {
+  return {
+    receipt: operation.receiptId,
+    appId: operation.appId,
+    status: operation.status,
+    steps: operation.steps,
+    createdAt: operation.createdAt,
+    updatedAt: operation.updatedAt,
+    completedAt: operation.completedAt,
+    ...(operation.result ? { result: operation.result } : {}),
+    ...(joined === undefined ? {} : { joined }),
+  };
+}
+
+async function operationAccess(c: Parameters<typeof requireUser>[0], appId: string) {
+  const user = await requireUser(c);
+  const operation = await getProvisionOperation(c.env.DB, appId);
+  if (!operation) return { user, operation: null, response: null };
+  if (operation.creatorId !== user.id && !user.roles.includes('admin')) {
+    return { user, operation, response: c.json({ error: 'provisioning operation belongs to another user' }, 403) };
+  }
+  return { user, operation, response: null };
+}
+
+/**
+ * #358: acquire a durable receipt before MCP calls GitHub. A second request for
+ * the same app joins the existing receipt; it must never manufacture a second
+ * repository bootstrap while the first request is still running.
+ */
+provisionRoutes.post('/provision-operations', wrap(async (c) => {
+  const user = await requireUser(c);
+  const body = await c.req.json<{ appId?: unknown }>();
+  if (!validAppId(body.appId)) return c.text('Invalid app ID', 400);
+
+  const claimed = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?')
+    .bind(body.appId).first<{ creator_id: string }>();
+  if (claimed && claimed.creator_id !== user.id && !user.roles.includes('admin')) {
+    return c.json({ error: 'appId already claimed by another user' }, 403);
+  }
+  const existing = await getProvisionOperation(c.env.DB, body.appId);
+  if (existing && existing.creatorId !== user.id && !user.roles.includes('admin')) {
+    return c.json({ error: 'provisioning operation belongs to another user' }, 403);
+  }
+
+  const begun = await beginProvisionOperation(c.env.DB, { creatorId: user.id, appId: body.appId });
+  // The unique app_id constraint closes a concurrent begin after the read above.
+  if (begun.operation.creatorId !== user.id && !user.roles.includes('admin')) {
+    return c.json({ error: 'provisioning operation belongs to another user' }, 403);
+  }
+  return c.json(operationResponse(begun.operation, !begun.created), begun.created ? 201 : 200);
+}));
+
+/** Read-only, owner-gated status for a provisioning receipt. */
+provisionRoutes.get('/provision-operations/:appId', wrap(async (c) => {
+  const appId = c.req.param('appId');
+  if (!validAppId(appId)) return c.text('Invalid app ID', 400);
+  const access = await operationAccess(c, appId);
+  if (access.response) return access.response;
+  if (!access.operation) return c.json({ error: 'provisioning operation not found' }, 404);
+  return c.json(operationResponse(access.operation));
+}));
+
+/** Owner-gated evidence updates used by the MCP worker as each remote step settles. */
+provisionRoutes.patch('/provision-operations/:appId', wrap(async (c) => {
+  const appId = c.req.param('appId');
+  if (!validAppId(appId)) return c.text('Invalid app ID', 400);
+  const access = await operationAccess(c, appId);
+  if (access.response) return access.response;
+  if (!access.operation) return c.json({ error: 'provisioning operation not found' }, 404);
+  const body = await c.req.json<{
+    status?: unknown;
+    steps?: unknown;
+    result?: unknown;
+  }>();
+  if (body.status !== undefined && body.status !== 'pending' && body.status !== 'completed' && body.status !== 'failed') {
+    return c.text('Invalid provisioning operation status', 400);
+  }
+  if (body.steps !== undefined && (!Array.isArray(body.steps) || !body.steps.every((step) => (
+    step && typeof step === 'object'
+    && typeof (step as Record<string, unknown>).name === 'string'
+    && typeof (step as Record<string, unknown>).detail === 'string'
+    && ['ok', 'skip', 'fail', 'pending'].includes(String((step as Record<string, unknown>).status))
+  )))) return c.text('Invalid provisioning operation steps', 400);
+  if (body.result !== undefined && (body.result === null || typeof body.result !== 'object' || Array.isArray(body.result))) {
+    return c.text('Invalid provisioning operation result', 400);
+  }
+  const now = Date.now();
+  const steps = (body.steps as Array<Omit<ProvisionOperationStep, 'completedAt'>> | undefined)?.map((step) => ({
+    name: step.name.slice(0, 80),
+    status: step.status,
+    detail: step.detail.slice(0, 2_000),
+    completedAt: now,
+  }));
+  const operation = await updateProvisionOperation(c.env.DB, access.operation.receiptId, {
+    ...(body.status ? { status: body.status as ProvisionOperationStatus } : {}),
+    ...(steps ? { steps } : {}),
+    ...(body.result !== undefined ? { result: body.result as Record<string, unknown> } : {}),
+    now,
+  });
+  if (!operation) return c.json({ error: 'provisioning operation not found' }, 404);
+  return c.json(operationResponse(operation));
+}));
 
 provisionRoutes.post('/provision', wrap(async (c) => {
   const user = await requireUser(c);

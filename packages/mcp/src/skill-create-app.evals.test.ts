@@ -64,8 +64,19 @@ function applyMocks(m: Case['mocks']) {
   mockOwnership.mockResolvedValue(m.ownsApp ?? true);
   mockFetch.mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
     const u = String(url);
+    if (u.includes('/v1/provision-operations')) {
+      const appId = u.split('/').pop() === 'provision-operations'
+        ? JSON.parse(String(init?.body ?? '{}')).appId
+        : decodeURIComponent(u.split('/').pop()!);
+      return {
+        ok: true,
+        status: init?.method === 'POST' ? 201 : 200,
+        text: async () => JSON.stringify({ receipt: 'eval-receipt', appId, status: 'pending', steps: [], joined: false }),
+        json: async () => ({ receipt: 'eval-receipt', appId, status: 'pending', steps: [], joined: false }),
+      };
+    }
     if (u.includes('/listing')) return { ok: m.listingStatus === undefined, status: m.listingStatus ?? 200, text: async () => '{}', json: async () => ({}) };
-    if (u.includes('/v1/provision')) {
+    if (/\/v1\/provision(?:$|\?)/.test(u)) {
       const p = m.provision ?? { status: 200, body: { success: true, steps: [] } };
       return { ok: p.status < 400, status: p.status, text: async () => JSON.stringify(p.body), json: async () => p.body, headers: new Headers(), _init: init };
     }
@@ -101,7 +112,7 @@ describe('create-proappstore-app — end-to-end evaluations', () => {
         for (const s of c.expect.notContains ?? []) expect(out, c.id).not.toContain(s);
       }
       if (c.expect.createCalled !== undefined) expect(mockGh.createRepoFromTemplate.mock.calls.length > 0, `${c.id}: createCalled`).toBe(c.expect.createCalled);
-      const provCall = mockFetch.mock.calls.find((call) => String(call[0]).includes('/v1/provision'));
+      const provCall = mockFetch.mock.calls.find((call) => /\/v1\/provision(?:$|\?)/.test(String(call[0])));
       if (c.expect.provisionCalled !== undefined) expect(Boolean(provCall), `${c.id}: provisionCalled`).toBe(c.expect.provisionCalled);
       if (c.expect.provisionBody || c.expect.provisionBodyLacks) {
         const body = JSON.parse((provCall![1] as RequestInit).body as string);

@@ -41,6 +41,40 @@ const mockOwnership = vi.mocked(verifyAppOwnership);
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
+/**
+ * Keep receipt traffic separate from the provision mock. Existing unit tests
+ * deliberately mock only /v1/provision; this small in-memory service models
+ * the durable backend contract while the route tests cover its D1 SQL.
+ */
+type Operation = { receipt: string; appId: string; status: 'pending' | 'completed' | 'failed'; steps: any[]; joined?: boolean };
+const operations = new Map<string, Operation>();
+let nextReceipt = 1;
+async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const url = String(input);
+  const match = url.match(/\/v1\/provision-operations(?:\/([^/?]+))?$/);
+  if (!match) return globalThis.fetch(input, init);
+  const appId = match[1] ? decodeURIComponent(match[1]) : JSON.parse(String(init?.body ?? '{}')).appId;
+  if (init?.method === 'POST') {
+    const existing = operations.get(appId);
+    if (existing) return new Response(JSON.stringify({ ...existing, joined: true }), { status: 200 });
+    const operation: Operation = { receipt: `receipt-${nextReceipt++}`, appId, status: 'pending', steps: [], joined: false };
+    operations.set(appId, operation);
+    return new Response(JSON.stringify(operation), { status: 201 });
+  }
+  const operation = operations.get(appId);
+  if (!operation) return new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
+  if (init?.method === 'PATCH') {
+    const body = JSON.parse(String(init.body ?? '{}')) as Partial<Operation>;
+    if (body.status) operation.status = body.status;
+    if (body.steps) {
+      const merged = new Map(operation.steps.map((step: any) => [step.name, step]));
+      for (const step of body.steps) merged.set(step.name, step);
+      operation.steps = [...merged.values()];
+    }
+  }
+  return new Response(JSON.stringify(operation), { status: 200 });
+}
+
 // Fake McpServer that captures tool handlers
 type Handler = (args: Record<string, unknown>) => Promise<{ content: { type: string; text: string }[]; isError?: boolean }>;
 const tools = new Map<string, Handler>();
@@ -53,7 +87,7 @@ const fakeServer = {
 // Import and register
 const { registerProjectTools } = await import('./project-tools.js');
 
-const svc = { fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) } as unknown as Fetcher;
+const svc = { fetch: apiFetch } as unknown as Fetcher;
 
 const env = {
   GITHUB_ORG: 'test-org',
@@ -78,6 +112,8 @@ function getText(result: { content: { type: string; text: string }[] }): string 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  operations.clear();
+  nextReceipt = 1;
   userCtx = { userId: 'u1', login: 'alice', token: 'tok-1' };
   mockOwnership.mockResolvedValue(true);
   mockGh.pullText.mockResolvedValue({ ok: true, sha: 'head', files: {} });
@@ -258,9 +294,39 @@ describe('provision_pas_app', () => {
       repoName: 'school-clubs',
     });
     expect(out).toContain('PAS app provisioned');
+    expect(out).toContain('Provisioning receipt: receipt-1');
     expect(out).toContain('Repo: https://github.com/test-org/school-clubs');
     expect(out).toContain('+ Template placeholders: replaced APPNAME in 2 file(s)');
     expect(out).toContain('+ route');
+  });
+
+  it('joins an interrupted in-progress bootstrap and exposes one eventual durable receipt (#358)', async () => {
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: { id: 1 } });
+    fakeRepo({ 'package.json': '{"name":"APPNAME"}' });
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ success: true, steps: [{ name: 'compliance', status: 'ok', detail: 'passed' }] }),
+    });
+
+    // The first client disconnects while GitHub's template copy is still in
+    // progress. Its server task continues; a retry must not attempt a second
+    // create or turn the first configuration commit into an "edited orphan".
+    const first = tools.get('provision_pas_app')!({ confirm: true, verify: false, ...args });
+    await vi.advanceTimersByTimeAsync(0);
+    const retry = await tools.get('provision_pas_app')!({ confirm: true, verify: false, ...args });
+    expect(getText(retry)).toContain('no second GitHub bootstrap was started');
+    expect(getText(retry)).toContain('Receipt: receipt-1');
+    expect(getText(retry)).toContain('Provisioning status: pending');
+    expect(mockGh.createRepoFromTemplate).toHaveBeenCalledTimes(1);
+    expect(operations).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(5000);
+    await first;
+    expect(operations.get('school-clubs')?.status).toBe('completed');
+    const status = await tools.get('provisioning_status')!({ app_id: 'school-clubs' });
+    expect(getText(status)).toContain('Provisioning status: completed');
+    expect(getText(status)).toContain('config_committed');
   });
 
   describe('template placeholders (#205)', () => {

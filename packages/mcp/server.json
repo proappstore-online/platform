@@ -72,6 +72,10 @@
       "description": "Operator workflow: create or reuse a PAS app GitHub repo from template-app, configure deploy credentials/placeholders, provision platform infrastru…"
     },
     {
+      "name": "provisioning_status",
+      "description": "Read the durable provisioning receipt, current state, and completed step evidence for one PAS app."
+    },
+    {
       "name": "scaffold_app",
       "description": "Create a new PAS app."
     },
@@ -319,6 +323,7 @@
         ],
         "project": [
           "provision_pas_app",
+          "provisioning_status",
           "scaffold_app",
           "write_file",
           "read_file",
