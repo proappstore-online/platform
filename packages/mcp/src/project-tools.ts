@@ -66,6 +66,9 @@ interface ProvisionOperationReceipt {
   steps: ProvisionStep[];
   updatedAt?: number;
   completedAt?: number | null;
+  attemptCount?: number;
+  leaseExpiresAt?: number | null;
+  attemptId?: string | null;
   result?: Record<string, unknown>;
   joined?: boolean;
 }
@@ -213,8 +216,8 @@ export function registerProjectTools(
   }
 
   /** Acquire before GitHub work; pending retries join rather than duplicate it (#358). */
-  async function beginProvisionOperation(appId: string, token: string): Promise<{ receipt?: ProvisionOperationReceipt; error?: string }> {
-    const started = await operationRequest("", token, { method: "POST", body: JSON.stringify({ appId }) });
+  async function beginProvisionOperation(appId: string, token: string, intent: Record<string, unknown>): Promise<{ receipt?: ProvisionOperationReceipt; error?: string }> {
+    const started = await operationRequest("", token, { method: "POST", body: JSON.stringify({ appId, intent }) });
     if (!started.ok || typeof started.data.receipt !== "string" || started.data.status === undefined || !Array.isArray(started.data.steps)) {
       return { error: started.data.error ?? "provisioning receipt service returned an invalid response" };
     }
@@ -224,11 +227,13 @@ export function registerProjectTools(
   async function updateProvisionOperation(
     appId: string,
     token: string,
-    body: { status?: ProvisionOperationStatus; steps?: ProvisionStep[]; result?: Record<string, unknown> },
+    body: { attemptId: string; status?: ProvisionOperationStatus; steps?: ProvisionStep[]; result?: Record<string, unknown> },
   ): Promise<void> {
-    // The receipt is durable even if a status update is temporarily unavailable;
-    // never turn successful infrastructure work into a duplicate GitHub attempt.
-    await operationRequest(`/${encodeURIComponent(appId)}`, token, { method: "PATCH", body: JSON.stringify(body) });
+    const updated = await operationRequest(`/${encodeURIComponent(appId)}`, token, { method: "PATCH", body: JSON.stringify(body) });
+    // A network hiccup leaves the durable lease intact and must not trigger a
+    // duplicate bootstrap. A 409 is different: another attempt owns the lease,
+    // so this worker must stop before doing more remote work.
+    if (updated.status === 409) throw new Error(updated.data.error ?? "provisioning attempt is stale");
   }
 
   function formatProvisionOperation(receipt: ProvisionOperationReceipt): string {
@@ -446,7 +451,18 @@ export function registerProjectTools(
       // client loses its response, GitHub and /v1/provision may keep running;
       // the retry sees this receipt and joins rather than mistaking its own
       // configuration commit for an edited orphan.
-      const acquired = await beginProvisionOperation(app_id, auth.token);
+      const acquired = await beginProvisionOperation(app_id, auth.token, {
+        templateId,
+        templateRepo: templateRepoName,
+        templateRef,
+        name,
+        description,
+        privateRepo: private_repo !== false,
+        reuseExistingRepo: reuse,
+        skipCompliance: skip_compliance === true,
+        verify: verify !== false,
+        allowUnapprovedTemplate: allow_unapproved_template === true,
+      });
       if (!acquired.receipt) return text(`Error: could not start durable provisioning receipt for ${app_id}: ${acquired.error}`);
       const receipt = acquired.receipt;
       if (receipt.joined) {
@@ -456,8 +472,9 @@ export function registerProjectTools(
           receipt.status === "pending" ? "The original request is still in progress. Re-check with provisioning_status using this app id." : "This operation is terminal; inspect its receipt before starting a new request.",
         ].join("\n"));
       }
+      if (!receipt.attemptId) return text(`Error: provisioning receipt for ${app_id} did not grant an active attempt lease.`);
       const recordEvidence = async (steps: ProvisionStep[], status?: ProvisionOperationStatus, result?: Record<string, unknown>) => {
-        await updateProvisionOperation(app_id, auth.token, { steps, ...(status ? { status } : {}), ...(result ? { result } : {}) });
+        await updateProvisionOperation(app_id, auth.token, { attemptId: receipt.attemptId!, steps, ...(status ? { status } : {}), ...(result ? { result } : {}) });
       };
       const failOperation = async (detail: string) => {
         await recordEvidence([{ name: "bootstrap", status: "fail", detail }], "failed", { error: detail });
@@ -512,7 +529,11 @@ export function registerProjectTools(
             return text(`Error: ${org}/${app_id} already exists and its PAS app record could not be checked (backend unreachable). Retry, or ask a platform admin.`);
           }
           // state === "none": no record anywhere.
-          if (!(await isUntouchedTemplate(app_id))) {
+          // A recovered receipt may resume only a repository this same receipt
+          // already recorded as created/adopted. Any other edited orphan stays
+          // refused, including one created between attempts by somebody else.
+          const receiptOwnsRepo = receipt.steps.some((step) => step.name === "repo_created" && (step.status === "ok" || step.status === "skip"));
+          if (!receiptOwnsRepo && !(await isUntouchedTemplate(app_id))) {
             await failOperation("existing repository has commits beyond the template scaffold");
             return text(
               `Error: ${org}/${app_id} already exists with no PAS app record, but it has commits beyond the template scaffold, ` +

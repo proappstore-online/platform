@@ -13,6 +13,8 @@ import { provisionData } from '../lib/provision-data.js';
 import {
   beginProvisionOperation,
   getProvisionOperation,
+  hashProvisionIntent,
+  operationNeedsLease,
   updateProvisionOperation,
   type ProvisionOperation,
   type ProvisionOperationStatus,
@@ -76,9 +78,19 @@ function operationResponse(operation: ProvisionOperation, joined?: boolean) {
     createdAt: operation.createdAt,
     updatedAt: operation.updatedAt,
     completedAt: operation.completedAt,
+    attemptCount: operation.attemptCount,
+    leaseExpiresAt: operation.leaseExpiresAt,
+    attemptId: operation.attemptId,
     ...(operation.result ? { result: operation.result } : {}),
     ...(joined === undefined ? {} : { joined }),
   };
+}
+
+function redactStepDetail(detail: string): string {
+  return detail
+    .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
+    .replace(/\b(?:gh[opsu]_|github_pat_)[A-Za-z0-9_]{12,}/g, '[redacted]')
+    .slice(0, 1_000);
 }
 
 async function operationAccess(c: Parameters<typeof requireUser>[0], appId: string) {
@@ -98,9 +110,20 @@ async function operationAccess(c: Parameters<typeof requireUser>[0], appId: stri
  */
 provisionRoutes.post('/provision-operations', wrap(async (c) => {
   const user = await requireUser(c);
-  const body = await c.req.json<{ appId?: unknown }>();
+  const body = await c.req.json<{ appId?: unknown; intent?: unknown }>();
   if (!validAppId(body.appId)) return c.text('Invalid app ID', 400);
+  if (!body.intent || typeof body.intent !== 'object' || Array.isArray(body.intent)) {
+    return c.text('Provisioning intent is required', 400);
+  }
+  let intentHash: string;
+  try {
+    intentHash = await hashProvisionIntent(body.intent);
+  } catch (error) {
+    return c.text(`Invalid provisioning intent: ${(error as Error).message}`, 400);
+  }
 
+  // Ownership always precedes quota/reservation, so an attacker cannot reserve
+  // or spend quota against another owner's app id.
   const claimed = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?')
     .bind(body.appId).first<{ creator_id: string }>();
   if (claimed && claimed.creator_id !== user.id && !user.roles.includes('admin')) {
@@ -110,13 +133,41 @@ provisionRoutes.post('/provision-operations', wrap(async (c) => {
   if (existing && existing.creatorId !== user.id && !user.roles.includes('admin')) {
     return c.json({ error: 'provisioning operation belongs to another user' }, 403);
   }
+  if (existing && existing.intentHash !== intentHash) {
+    return c.json({ error: 'a provisioning receipt already exists for this app with different intent' }, 409);
+  }
 
-  const begun = await beginProvisionOperation(c.env.DB, { creatorId: user.id, appId: body.appId });
-  // The unique app_id constraint closes a concurrent begin after the read above.
-  if (begun.operation.creatorId !== user.id && !user.roles.includes('admin')) {
+  const now = Date.now();
+  // Joining a live or terminal identical receipt is not a new provisioning
+  // attempt. Acquiring a fresh/recovery lease is, and is quota-governed.
+  if (operationNeedsLease(existing, now)) {
+    try {
+      const quota = await checkProvisionQuota(d1ProvisionAttemptStore(c.env.DB), {
+        userKey: user.id,
+        ip: c.req.header('CF-Connecting-IP'),
+        nowMs: now,
+      });
+      if (!quota.allowed) {
+        return c.text(
+          `provisioning rate limit reached (${quota.scope}) — retry later`,
+          429,
+          quota.retryAfterSeconds ? { 'Retry-After': String(quota.retryAfterSeconds) } : undefined,
+        );
+      }
+    } catch (error) {
+      console.warn(`provision operation rate limit unavailable, allowing: ${(error as Error).message}`);
+    }
+  }
+
+  const begun = await beginProvisionOperation(c.env.DB, { creatorId: user.id, appId: body.appId, intentHash, now });
+  if (begun.kind === 'owner_conflict') {
     return c.json({ error: 'provisioning operation belongs to another user' }, 403);
   }
-  return c.json(operationResponse(begun.operation, !begun.created), begun.created ? 201 : 200);
+  if (begun.kind === 'intent_conflict') {
+    return c.json({ error: 'a provisioning receipt already exists for this app with different intent' }, 409);
+  }
+  const joined = begun.kind === 'joined' || begun.kind === 'exhausted';
+  return c.json(operationResponse(begun.operation, joined), begun.kind === 'created' ? 201 : 200);
 }));
 
 /** Read-only, owner-gated status for a provisioning receipt. */
@@ -133,18 +184,23 @@ provisionRoutes.get('/provision-operations/:appId', wrap(async (c) => {
 provisionRoutes.patch('/provision-operations/:appId', wrap(async (c) => {
   const appId = c.req.param('appId');
   if (!validAppId(appId)) return c.text('Invalid app ID', 400);
-  const access = await operationAccess(c, appId);
-  if (access.response) return access.response;
-  if (!access.operation) return c.json({ error: 'provisioning operation not found' }, 404);
+  const user = await requireUser(c);
+  const operation = await getProvisionOperation(c.env.DB, appId);
+  if (!operation) return c.json({ error: 'provisioning operation not found' }, 404);
+  // Evidence is written by the operation's worker session only. Admins may
+  // inspect receipts, but may not impersonate a creator's active attempt.
+  if (operation.creatorId !== user.id) return c.json({ error: 'provisioning operation belongs to another user' }, 403);
   const body = await c.req.json<{
     status?: unknown;
     steps?: unknown;
     result?: unknown;
+    attemptId?: unknown;
   }>();
-  if (body.status !== undefined && body.status !== 'pending' && body.status !== 'completed' && body.status !== 'failed') {
+  if (typeof body.attemptId !== 'string' || !body.attemptId) return c.text('attemptId is required', 400);
+  if (body.status !== undefined && body.status !== 'completed' && body.status !== 'failed') {
     return c.text('Invalid provisioning operation status', 400);
   }
-  if (body.steps !== undefined && (!Array.isArray(body.steps) || !body.steps.every((step) => (
+  if (body.steps !== undefined && (!Array.isArray(body.steps) || body.steps.length > 12 || !body.steps.every((step) => (
     step && typeof step === 'object'
     && typeof (step as Record<string, unknown>).name === 'string'
     && typeof (step as Record<string, unknown>).detail === 'string'
@@ -154,20 +210,22 @@ provisionRoutes.patch('/provision-operations/:appId', wrap(async (c) => {
     return c.text('Invalid provisioning operation result', 400);
   }
   const now = Date.now();
-  const steps = (body.steps as Array<Omit<ProvisionOperationStep, 'completedAt'>> | undefined)?.map((step) => ({
+  const steps = (body.steps as Array<Omit<ProvisionOperationStep, 'completedAt' | 'attemptId'>> | undefined)?.map((step) => ({
     name: step.name.slice(0, 80),
     status: step.status,
-    detail: step.detail.slice(0, 2_000),
-    completedAt: now,
+    detail: redactStepDetail(step.detail),
   }));
-  const operation = await updateProvisionOperation(c.env.DB, access.operation.receiptId, {
-    ...(body.status ? { status: body.status as ProvisionOperationStatus } : {}),
+  const updated = await updateProvisionOperation(c.env.DB, operation.receiptId, {
+    attemptId: body.attemptId,
+    ...(body.status ? { status: body.status as Extract<ProvisionOperationStatus, 'completed' | 'failed'> } : {}),
     ...(steps ? { steps } : {}),
     ...(body.result !== undefined ? { result: body.result as Record<string, unknown> } : {}),
     now,
   });
-  if (!operation) return c.json({ error: 'provisioning operation not found' }, 404);
-  return c.json(operationResponse(operation));
+  if (updated.kind !== 'updated') {
+    return c.json({ error: updated.kind === 'terminal' ? 'provisioning operation is terminal' : 'stale or expired provisioning attempt' }, 409);
+  }
+  return c.json(operationResponse(updated.operation));
 }));
 
 provisionRoutes.post('/provision', wrap(async (c) => {

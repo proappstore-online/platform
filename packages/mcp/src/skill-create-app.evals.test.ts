@@ -71,8 +71,8 @@ function applyMocks(m: Case['mocks']) {
       return {
         ok: true,
         status: init?.method === 'POST' ? 201 : 200,
-        text: async () => JSON.stringify({ receipt: 'eval-receipt', appId, status: 'pending', steps: [], joined: false }),
-        json: async () => ({ receipt: 'eval-receipt', appId, status: 'pending', steps: [], joined: false }),
+        text: async () => JSON.stringify({ receipt: 'eval-receipt', appId, status: 'pending', steps: [], attemptId: 'eval-attempt', joined: false }),
+        json: async () => ({ receipt: 'eval-receipt', appId, status: 'pending', steps: [], attemptId: 'eval-attempt', joined: false }),
       };
     }
     if (u.includes('/listing')) return { ok: m.listingStatus === undefined, status: m.listingStatus ?? 200, text: async () => '{}', json: async () => ({}) };

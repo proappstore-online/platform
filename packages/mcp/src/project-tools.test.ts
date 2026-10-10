@@ -46,7 +46,7 @@ vi.stubGlobal('fetch', mockFetch);
  * deliberately mock only /v1/provision; this small in-memory service models
  * the durable backend contract while the route tests cover its D1 SQL.
  */
-type Operation = { receipt: string; appId: string; status: 'pending' | 'completed' | 'failed'; steps: any[]; joined?: boolean };
+type Operation = { receipt: string; appId: string; status: 'pending' | 'completed' | 'failed'; steps: any[]; attemptId: string; joined?: boolean };
 const operations = new Map<string, Operation>();
 let nextReceipt = 1;
 async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -57,7 +57,7 @@ async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<R
   if (init?.method === 'POST') {
     const existing = operations.get(appId);
     if (existing) return new Response(JSON.stringify({ ...existing, joined: true }), { status: 200 });
-    const operation: Operation = { receipt: `receipt-${nextReceipt++}`, appId, status: 'pending', steps: [], joined: false };
+    const operation: Operation = { receipt: `receipt-${nextReceipt++}`, appId, status: 'pending', steps: [], attemptId: `attempt-${nextReceipt}`, joined: false };
     operations.set(appId, operation);
     return new Response(JSON.stringify(operation), { status: 201 });
   }

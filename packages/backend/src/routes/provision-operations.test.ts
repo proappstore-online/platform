@@ -6,9 +6,13 @@ type Row = {
   receipt_id: string;
   creator_id: string;
   app_id: string;
+  intent_hash: string;
   status: string;
   steps_json: string;
   result_json: string | null;
+  attempt_count: number;
+  lease_expires_at: number | null;
+  attempt_id: string | null;
   created_at: number;
   updated_at: number;
   completed_at: number | null;
@@ -31,19 +35,20 @@ function operationDb() {
         },
         async run() {
           if (/INSERT OR IGNORE INTO provision_operations/i.test(sql)) {
-            const [receipt, creator, appId, createdAt, updatedAt] = values as [string, string, string, number, number];
+            const [receipt, creator, appId, intentHash, leaseExpiresAt, attemptId, createdAt, updatedAt] = values as [string, string, string, string, number, string, number, number];
             if (byApp.has(appId)) return { meta: { changes: 0 } };
             const row: Row = {
-              receipt_id: receipt, creator_id: creator, app_id: appId, status: 'pending', steps_json: '[]', result_json: null,
+              receipt_id: receipt, creator_id: creator, app_id: appId, intent_hash: intentHash, status: 'pending', steps_json: '[]', result_json: null,
+              attempt_count: 1, lease_expires_at: leaseExpiresAt, attempt_id: attemptId,
               created_at: createdAt, updated_at: updatedAt, completed_at: null,
             };
             byApp.set(appId, row); byReceipt.set(receipt, row);
             return { meta: { changes: 1 } };
           }
           if (/UPDATE provision_operations/i.test(sql)) {
-            const [status, steps, result, updatedAt, completedAt, receipt] = values as [string, string, string | null, number, number | null, string];
+            const [status, steps, result, updatedAt, completedAt, leaseExpiresAt, receipt] = values as [string, string, string | null, number, number | null, number | null, string];
             const row = byReceipt.get(receipt);
-            if (row) Object.assign(row, { status, steps_json: steps, result_json: result, updated_at: updatedAt, completed_at: completedAt });
+            if (row) Object.assign(row, { status, steps_json: steps, result_json: result, updated_at: updatedAt, completed_at: completedAt, lease_expires_at: leaseExpiresAt });
             return { meta: { changes: row ? 1 : 0 } };
           }
           return { meta: { changes: 0 } };
@@ -56,12 +61,13 @@ function operationDb() {
 const ownerToken = await testToken('gh:owner', { roles: ['user'] });
 const otherToken = await testToken('gh:other', { roles: ['user'] });
 const headers = (token: string) => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' });
+const intent = { templateId: 'template-app', options: { verify: true } };
 
 describe('durable provision receipts (#358)', () => {
   it('creates one receipt for concurrent retries, retains evidence, and completes after the interrupted response', async () => {
     const env = makeEnv({}, operationDb());
     const request = () => app.request('/v1/provision-operations', {
-      method: 'POST', headers: headers(ownerToken), body: JSON.stringify({ appId: 'interrupted-app' }),
+      method: 'POST', headers: headers(ownerToken), body: JSON.stringify({ appId: 'interrupted-app', intent }),
     }, env);
     const [first, retry] = await Promise.all([request(), request()]);
     const firstData = await first.json() as { receipt: string; status: string };
@@ -74,6 +80,7 @@ describe('durable provision receipts (#358)', () => {
     const patched = await app.request('/v1/provision-operations/interrupted-app', {
       method: 'PATCH', headers: headers(ownerToken),
       body: JSON.stringify({
+        attemptId: firstData.attemptId,
         status: 'completed',
         steps: [
           { name: 'repo_created', status: 'ok', detail: 'repo created' },
@@ -97,10 +104,10 @@ describe('durable provision receipts (#358)', () => {
   it('does not disclose or join a pending receipt owned by another caller', async () => {
     const env = makeEnv({}, operationDb());
     await app.request('/v1/provision-operations', {
-      method: 'POST', headers: headers(ownerToken), body: JSON.stringify({ appId: 'owned-app' }),
+      method: 'POST', headers: headers(ownerToken), body: JSON.stringify({ appId: 'owned-app', intent }),
     }, env);
     const retry = await app.request('/v1/provision-operations', {
-      method: 'POST', headers: headers(otherToken), body: JSON.stringify({ appId: 'owned-app' }),
+      method: 'POST', headers: headers(otherToken), body: JSON.stringify({ appId: 'owned-app', intent }),
     }, env);
     expect(retry.status).toBe(403);
     const status = await app.request('/v1/provision-operations/owned-app', { headers: headers(otherToken) }, env);
