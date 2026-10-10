@@ -1,7 +1,0 @@
-{
-  "web/src/**/*.{ts,tsx}": [
-    "pnpm typecheck",
-    "pnpm test"
-  ],
-  "web/**/*.json": ["pnpm test"]
-}
