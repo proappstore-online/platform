@@ -154,7 +154,7 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
           body: JSON.stringify({
             appId,
             name: appName,
-            description: `${appName} — pro app on ProAppStore.`,
+            description: `${appName}`,
             skipCompliance: true,
             skipPublish: true,
             template: template.id,

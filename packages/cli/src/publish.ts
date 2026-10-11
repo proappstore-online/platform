@@ -74,7 +74,7 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
   }
 
   const name = opts.name || toTitleCase(appId);
-  const description = opts.description || pkg.description || `${name} — pro app on ProAppStore.`;
+  const description = opts.description || pkg.description || `${name}`;
   const proFeatures = opts.proFeatures
     ? opts.proFeatures
         .split(',')
