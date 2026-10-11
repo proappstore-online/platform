@@ -379,4 +379,12 @@ describe('verifyAppOwnership', () => {
     mockFetch(() => ({ status: 401, body: {} }));
     expect(await verifyAppOwnership('https://api', 'tok', 'mine')).toBe(false);
   });
+  it('#374: asks through the given fetch (a Worker\'s service binding), never the global fetch', async () => {
+    mockFetch(() => ({ body: { apps: [] } }));
+    const global = globalThis.fetch;
+    const binding = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ apps: [{ id: 'mine', team_role: 'owner' }] })));
+    expect(await verifyAppOwnership('https://api', 'tok', 'mine', binding)).toBe(true);
+    expect(binding).toHaveBeenCalledWith('https://api/v1/apps', { headers: { Authorization: 'Bearer tok' } });
+    expect(global).not.toHaveBeenCalled();
+  });
 });

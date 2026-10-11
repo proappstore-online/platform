@@ -39,7 +39,7 @@ interface World {
 let world: World;
 let repoFiles: Record<string, string>;
 let calls: { kind: string; detail: string }[];
-const receipts = new Map<string, { receipt: string; appId: string; status: string; steps: { name: string; status: string; detail: string }[]; attemptId: string; intent: string; failureCode?: string }>();
+const receipts = new Map<string, { receipt: string; appId: string; status: string; steps: { name: string; status: string; detail: string }[]; attemptId: string; intent: string; failureCode?: string; result?: Record<string, unknown> }>();
 let patches: { body: Record<string, unknown>; internal: string | null }[];
 let nextReceipt = 1;
 
@@ -53,7 +53,9 @@ const gh = {
     }
     if (path === `/repos/${ORG}/${APP}/commits?per_page=2`) {
       if (world.commits === 'error') return { ok: false, status: 500, data: {} };
-      return { ok: true, status: 200, data: world.commits.map((c) => ({ sha: c.sha, commit: { tree: { sha: c.tree } } })) };
+      // Linear history, newest first: each commit's parent is the next; the last is the root (#374).
+      const list = world.commits;
+      return { ok: true, status: 200, data: list.map((c, i) => ({ sha: c.sha, parents: i + 1 < list.length ? [{ sha: list[i + 1]!.sha }] : [], commit: { tree: { sha: c.tree } } })) };
     }
     const m = path.match(/^\/repos\/test-org\/template-marketplace\/commits\/(.+)$/);
     if (m) {
@@ -77,6 +79,8 @@ const gh = {
   pushFiles: vi.fn(async (_id: string, files: { path: string; content: string }[]) => {
     calls.push({ kind: 'gh WRITE', detail: 'pushFiles' });
     for (const f of files) repoFiles[f.path] = f.content;
+    // #374: the commit lands on GitHub, on top of what was there.
+    if (Array.isArray(world.commits)) world.commits = [{ sha: 'c0ffee1234567', tree: 'patched-tree' }, ...world.commits];
     return { ok: true, commitSha: 'c0ffee1234567' };
   }),
   getDeployStatus: vi.fn(async () => ({ ok: true, status: 200, data: { workflow_runs: [] } })),
@@ -117,13 +121,14 @@ const api = {
       }
       if (!existing) return jsonResponse({ error: 'not found' }, 404);
       if (method === 'PATCH') {
-        const body = JSON.parse(String(init?.body)) as { status?: string; steps?: { name: string; status: string; detail: string }[]; failureCode?: string };
+        const body = JSON.parse(String(init?.body)) as { status?: string; steps?: { name: string; status: string; detail: string }[]; failureCode?: string; result?: Record<string, unknown> };
         const internal = new Headers(init?.headers).get('X-Internal-Token');
         patches.push({ body, internal });
         if (body.failureCode && internal !== 'internal-secret') return jsonResponse({ error: 'failureCode is set by the platform only' }, 403);
         if (body.status) existing.status = body.status;
         if (body.steps) existing.steps.push(...body.steps);
         if (body.failureCode) existing.failureCode = body.failureCode;
+        if (body.result) existing.result = body.result;
       }
       return jsonResponse(existing);
     }
@@ -389,9 +394,93 @@ describe('confirmPlan executes exactly the reviewed plan', () => {
     expect((outcome as { lines: string[] }).lines.join('\n')).toContain('! compliance: 1 rule(s) failed — Theme: missing');
     expect(receipts.get(APP)!.status).toBe('failed');
     expect(receipts.get(APP)!.steps).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'compliance', status: 'fail' })]));
-    // #369: an ordinary failure is never classified, so it cannot be retried under another revision.
-    expect(patches.every((p) => !('failureCode' in p.body) && p.internal === null)).toBe(true);
+    // #374: it failed after the platform's own placeholder commit and before any
+    // app record, so the platform classifies it — with that exact commit — and
+    // the next plan can adopt the repo (see "recoverable" below).
+    expect(receipts.get(APP)!.failureCode).toBe('provision_incomplete');
+    expect(receipts.get(APP)!.result).toMatchObject({ placeholderCommit: 'c0ffee1234567' });
+    expect(patches.filter((p) => 'failureCode' in p.body).every((p) => p.internal === 'internal-secret')).toBe(true);
+  });
+
+  it('a failure after the app record was written is never classified (#369/#374)', async () => {
+    world.provision = { status: 207, body: { success: false, steps: [{ name: 'record_app', status: 'ok', detail: 'creator: gh:1' }, { name: 'deploy_worker', status: 'fail', detail: 'boom' }] } };
+    await confirm(await plan());
+    expect(receipts.get(APP)!.status).toBe('failed');
     expect(receipts.get(APP)!.failureCode).toBeUndefined();
+    expect(patches.every((p) => !('failureCode' in p.body) && p.internal === null)).toBe(true);
+  });
+});
+
+describe('#374: a failure after the placeholder commit is recoverable without an admin', () => {
+  const failed412 = { status: 412, body: { success: false, steps: [{ name: 'compliance', status: 'fail', detail: 'Compliance check error: GitHub 502' }] } };
+  const ok = { status: 200, body: { success: true, appUrl: `https://${APP}.proappstore.online`, steps: [{ name: 'record_app', status: 'ok', detail: 'creator: gh:1' }] } };
+
+  async function strand() {
+    world.provision = failed412;
+    await confirm(await plan());
+    expect(world.commits).toEqual([{ sha: 'c0ffee1234567', tree: 'patched-tree' }, { sha: 'copy-initial', tree: HEAD_TREE }]);
+  }
+
+  it('the next preview adopts the repo, proven by its initial tree; the recovery confirm provisions it', async () => {
+    await strand();
+    const next = await plan();
+    expect(next).toMatchObject({ action: 'adopt_untouched', appRecord: 'none', blockers: [], template: { revision: HEAD, revisionSource: 'scaffold_tree_match' } });
+    expect(next.warnings.join(' ')).toContain("only commit beyond the scaffold is this platform's placeholder commit");
+
+    world.provision = ok;
+    const created = gh.createRepoFromTemplate.mock.calls.length;
+    const outcome = await confirm(next);
+    expect(outcome).toMatchObject({ kind: 'done', repoAction: 'adopted', succeeded: true });
+    expect(gh.createRepoFromTemplate.mock.calls.length).toBe(created);
+    expect(receipts.get(APP)!.status).toBe('completed');
+  });
+
+  it('a recovery that fails again stays recoverable: the adopted commit is recorded again', async () => {
+    await strand();
+    world.provision = failed412;
+    await confirm(await plan());
+    expect(receipts.get(APP)!).toMatchObject({ status: 'failed', failureCode: 'provision_incomplete', result: { placeholderCommit: 'c0ffee1234567' } });
+    expect((await plan()).blockers).toEqual([]);
+  });
+
+  it('a third-party commit on top still blocks', async () => {
+    await strand();
+    world.commits = [{ sha: 'someone-else', tree: 'x' }, ...(world.commits as { sha: string; tree: string }[])];
+    expect((await plan()).blockers.map((b) => b.code)).toEqual(['repository_edited']);
+  });
+
+  it('a two-commit repo whose head is not the recorded commit blocks', async () => {
+    await strand();
+    world.commits = [{ sha: 'other-second', tree: 'x' }, { sha: 'copy-initial', tree: HEAD_TREE }];
+    expect((await plan()).blockers.map((b) => b.code)).toEqual(['repository_edited']);
+  });
+
+  it('a receipt without the platform\'s classification proves nothing', async () => {
+    await strand();
+    receipts.get(APP)!.failureCode = undefined;
+    expect((await plan()).blockers.map((b) => b.code)).toEqual(['repository_edited']);
+  });
+});
+
+describe('#374: ownership', () => {
+  it('an owner whose ownership read fails, but whose app record says owner, reuses their repo', async () => {
+    world.repo = { status: 200, private: true };
+    world.commits = [{ sha: 'h2', tree: 'x' }, { sha: 'h1', tree: HEAD_TREE }];
+    world.record = 'owner';
+    ownership.mockResolvedValue(false);
+    const p = await plan();
+    expect(p).toMatchObject({ action: 'reuse_owned', appRecord: 'owner', blockers: [] });
+  });
+
+  it('the ownership read goes through the API service binding, never a same-zone fetch', async () => {
+    world.repo = { status: 200, private: true };
+    world.commits = [{ sha: 'h1', tree: HEAD_TREE }];
+    await plan();
+    const fetchApi = ownership.mock.calls[0]?.[3];
+    expect(typeof fetchApi).toBe('function');
+    const before = api.fetch.mock.calls.length;
+    await fetchApi!('https://api.test/v1/apps', { headers: {} });
+    expect(api.fetch.mock.calls.length).toBe(before + 1);
   });
 });
 
@@ -502,6 +591,20 @@ describe('handleInternalProvisioning', () => {
   const session = () => buildCore.mintSession({ uid: 'gh:1', login: 'alice', avatarUrl: null, roles: ['user', 'creator'] }, KEY);
   const post = async (path: string, body: unknown, headers: Record<string, string>) =>
     handleInternalProvisioning(new Request(`https://mcp${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) }), ienv, () => gh as never);
+
+  it.each([[403, null], [409, null], [429, '120']])('a %i receipt refusal keeps its status through execute, not 503 (#374)', async (status, retryAfter) => {
+    const headers = { 'X-Internal-Token': 'internal-secret', 'X-PAS-Session': await session() };
+    const { plan: p } = await (await post('/internal/provisioning/plan', { input }, headers))!.json() as { plan: Plan };
+    const real = api.fetch.getMockImplementation()!;
+    api.fetch.mockImplementation(async (url, init) => (new URL(String(url)).pathname === '/v1/provision-operations' && init?.method === 'POST'
+      ? new Response(JSON.stringify({ error: 'refused' }), { status, headers: retryAfter ? { 'Retry-After': retryAfter } : {} })
+      : real(url, init)));
+    const executed = await post('/internal/provisioning/execute', { plan: p }, headers);
+    api.fetch.mockImplementation(real);
+    expect(executed!.status).toBe(status);
+    expect(await executed!.json()).toEqual({ error: `Error: could not start durable provisioning receipt for ${APP}: refused`, ...(retryAfter ? { retryAfter } : {}) });
+    expect(writes().filter((c) => c.kind === 'gh WRITE')).toEqual([]);
+  });
 
   it('is invisible without the internal token, and needs a valid PAS session', async () => {
     expect((await post('/internal/provisioning/plan', { input }, {}))!.status).toBe(404);

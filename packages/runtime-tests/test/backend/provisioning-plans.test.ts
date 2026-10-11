@@ -2,6 +2,7 @@ import { SELF, env as testEnv } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { BASE, json, resetTables, seedUser, session } from './helpers';
+import { PLAN_RETENTION_MS, pruneProvisioningPlans } from '../../../backend/src/routes/provisioning-plans';
 
 const env = testEnv as unknown as Env;
 
@@ -23,7 +24,7 @@ const row = (planId: string) => env.DB.prepare('SELECT user_id, app_id, expires_
 
 beforeEach(async () => {
   await resetTables();
-  for (const t of ['provisioning_plans', 'provision_operations']) await env.DB.prepare(`DELETE FROM ${t}`).run();
+  for (const t of ['provisioning_plans', 'provision_operations', 'provision_attempts']) await env.DB.prepare(`DELETE FROM ${t}`).run();
   await seedUser('gh:1');
   await seedUser('gh:2');
 });
@@ -79,5 +80,29 @@ describe('provisioning plans on real D1 (#367)', () => {
     expect(plan.blockers).toHaveLength(1);
     expect((await confirm(planId)).status).toBe(422);
     expect(await row(planId)).toMatchObject({ executing_until: null, receipt_id: null });
+  });
+});
+
+describe('#374 on real D1: previews are metered apart from provisioning, and old plans are pruned', () => {
+  it('a preview spends only preview buckets, never a provisioning attempt', async () => {
+    await preview('metered-one');
+    const keys = ((await env.DB.prepare('SELECT key FROM provision_attempts').all<{ key: string }>()).results ?? []).map((r) => r.key);
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.every((k) => k.startsWith('user:preview:') || k.startsWith('ip:preview:'))).toBe(true);
+  });
+
+  it('the prune deletes only plans past expiry plus retention that hold no live lease', async () => {
+    const now = Date.now();
+    const old = now - PLAN_RETENTION_MS - 1;
+    const ids = { gone: (await preview('prune-a')).planId, recent: (await preview('prune-b')).planId, leased: (await preview('prune-c')).planId };
+    const set = (id: string, expires: number, lease: number | null) =>
+      env.DB.prepare('UPDATE provisioning_plans SET expires_at = ?, executing_until = ? WHERE plan_id = ?').bind(expires, lease, id).run();
+    await set(ids.gone, old, now - 1);
+    await set(ids.recent, now - 1, null);
+    await set(ids.leased, old, now + 60_000);
+    expect(await pruneProvisioningPlans(env.DB, now)).toBe(1);
+    expect(await row(ids.gone)).toBeNull();
+    expect(await row(ids.recent)).not.toBeNull();
+    expect(await row(ids.leased)).not.toBeNull();
   });
 });

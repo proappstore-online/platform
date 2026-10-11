@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
 import { makeEnv, testToken } from '../test-helpers.js';
-import { EXECUTION_LEASE_MS, PLAN_TTL_MS } from './provisioning-plans.js';
+import { EXECUTION_LEASE_MS, PLAN_RETENTION_MS, PLAN_TTL_MS, PREVIEW_LIMITS, pruneProvisioningPlans } from './provisioning-plans.js';
 
 // #367: the Console's preview/confirm routes over an in-memory model of the two
 // tables they touch (provisioning_plans, provision_operations) and a mocked MCP
@@ -17,6 +17,10 @@ const plan = (blockers: unknown[] = []) => ({ version: 1, appId: APP, action: 'c
 type PlanRow = Record<string, unknown> & { plan_id: string; executing_until: number | null; receipt_id: string | null; confirmed_at: number | null };
 let plans: Map<string, PlanRow>;
 let operations: Map<string, Record<string, unknown>>;
+/** #374: the provision_attempts rate-limit buckets, keyed as the limiter keys them. */
+let attempts: Map<string, { window_start: number; count: number }>;
+/** #374: make the lease release throw, as a D1 hiccup would. */
+let releaseThrows = false;
 
 function fakeDb() {
   return {
@@ -28,6 +32,13 @@ function fakeDb() {
         async first() {
           if (s.startsWith('SELECT plan_id')) return plans.get(String(args[0])) ?? null;
           if (s.startsWith('SELECT receipt_id')) return operations.get(String(args[0])) ?? null;
+          if (s.startsWith('INSERT INTO provision_attempts')) {
+            const [key, now, windowMs] = args as [string, number, number];
+            const row = attempts.get(key);
+            const next = !row || now - row.window_start >= windowMs ? { window_start: now, count: 1 } : { ...row, count: row.count + 1 };
+            attempts.set(key, next);
+            return next;
+          }
           throw new Error(`unexpected first(): ${s}`);
         },
         async run() {
@@ -44,9 +55,25 @@ function fakeDb() {
             row.executing_until = until;
             return { meta: { changes: 1 } };
           }
-          if (s.startsWith('UPDATE provisioning_plans SET executing_until = NULL')) {
-            plans.get(String(args[0]))!.executing_until = null;
+          if (s.startsWith('UPDATE provisioning_plans SET executing_until = NULL WHERE plan_id = ? AND executing_until = ?')) {
+            if (releaseThrows) throw new Error('D1_ERROR: database unavailable');
+            const row = plans.get(String(args[0]))!;
+            if (row.executing_until !== args[1]) return { meta: { changes: 0 } };
+            row.executing_until = null;
             return { meta: { changes: 1 } };
+          }
+          if (s.startsWith('UPDATE provision_attempts SET count = count - 1')) {
+            const row = attempts.get(String(args[0]));
+            if (row && row.window_start === args[1] && row.count > 0) row.count -= 1;
+            return { meta: { changes: 1 } };
+          }
+          if (s.startsWith('DELETE FROM provisioning_plans')) {
+            const [cutoff, now] = args as [number, number];
+            let n = 0;
+            for (const [id, row] of plans) {
+              if ((row.expires_at as number) < cutoff && (row.executing_until === null || row.executing_until <= now)) { plans.delete(id); n++; }
+            }
+            return { meta: { changes: n } };
           }
           if (s.startsWith('UPDATE provisioning_plans SET receipt_id')) {
             const row = plans.get(String(args[2]))!;
@@ -90,6 +117,8 @@ const confirm = (planId: string, tok = OWNER, e = env()) => post(`/v1/provisioni
 beforeEach(() => {
   plans = new Map();
   operations = new Map();
+  attempts = new Map();
+  releaseThrows = false;
   execute = async () => { operation('completed'); return Response.json({ joined: false, receipt: 'receipt-1', repoAction: 'created', succeeded: true, lines: ['+ GitHub repo: created'] }); };
   mcp = vi.fn(async (url: string, init: RequestInit) => {
     if (String(url).endsWith('/internal/provisioning/execute')) return execute(JSON.parse(String(init.body)).plan);
@@ -242,5 +271,74 @@ describe('POST /v1/provisioning/plans/:planId/confirm', () => {
     execute = async () => Response.json({ error: 'Error: could not start durable provisioning receipt' }, { status: 503 });
     const id2 = await createPlan();
     expect((await confirm(id2)).status).toBe(503);
+  });
+});
+
+describe('#374: previews are metered, refusals keep their status, and a confirm releases only its own lease', () => {
+  it('preview number N+1 in an hour answers 429 with Retry-After and asks GitHub nothing; provisioning buckets are untouched', async () => {
+    for (let i = 0; i < PREVIEW_LIMITS.userPerHour; i++) await createPlan();
+    const before = mcpCalls('plan').length;
+    const res = await post('/v1/provisioning/plans', body);
+    expect(res.status).toBe(429);
+    expect(Number(res.headers.get('Retry-After'))).toBeGreaterThan(0);
+    expect(mcpCalls('plan')).toHaveLength(before);
+    expect([...attempts.keys()].every((k) => k.startsWith('user:preview:'))).toBe(true);
+    expect(attempts.has('user:gh:1:h')).toBe(false);
+  });
+
+  it('another user is not limited by the first one\'s previews', async () => {
+    for (let i = 0; i < PREVIEW_LIMITS.userPerHour; i++) await createPlan();
+    mcp.mockImplementationOnce(async () => Response.json({ plan: plan() }));
+    expect((await post('/v1/provisioning/plans', body, OTHER)).status).toBe(201);
+  });
+
+  it.each([
+    [403, 'provisioning operation belongs to another user', undefined],
+    [409, 'a provisioning receipt already exists for this app with a different intent', undefined],
+    [429, 'provisioning rate limit reached (user-hour) — retry later', '120'],
+  ])('a %i refusal from the workflow passes through confirm as itself, not 503', async (status, error, retryAfter) => {
+    const id = await createPlan();
+    execute = async () => Response.json({ error, ...(retryAfter ? { retryAfter } : {}) }, { status });
+    const res = await confirm(id);
+    expect(res.status).toBe(status);
+    expect(await res.json()).toEqual({ error });
+    expect(res.headers.get('Retry-After')).toBe(retryAfter ?? null);
+  });
+
+  it('a 409 plan_changed is still plan_changed', async () => {
+    const id = await createPlan();
+    execute = async () => Response.json({ error: 'plan_changed', plan: plan() }, { status: 409 });
+    expect(await (await confirm(id)).json()).toMatchObject({ error: 'plan_changed' });
+  });
+
+  it('an execution that outlived its lease does not clear the newer confirm\'s lease', async () => {
+    const id = await createPlan();
+    const newer = Date.now() + 2 * EXECUTION_LEASE_MS;
+    // While this confirm runs, its lease expires and another confirm takes a new one.
+    execute = async () => { plans.get(id)!.executing_until = newer; operation('completed'); return Response.json({ joined: false, receipt: 'receipt-1', succeeded: true }); };
+    expect((await confirm(id)).status).toBe(200);
+    expect(plans.get(id)!.executing_until).toBe(newer);
+  });
+
+  it('a lease release that throws still returns the result and stores the receipt', async () => {
+    const id = await createPlan();
+    releaseThrows = true;
+    const res = await confirm(id);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ receipt: 'receipt-1', status: 'completed' });
+    expect(plans.get(id)!.receipt_id).toBe('receipt-1');
+  });
+
+  it('the daily prune deletes only plans past expiry plus the retention window that hold no live lease', async () => {
+    const now = Date.now();
+    const old = now - PLAN_TTL_MS - PLAN_RETENTION_MS - 1;
+    const ids = { gone: await createPlan(), recent: await createPlan(), leased: await createPlan(), live: await createPlan() };
+    plans.get(ids.gone)!.expires_at = old;
+    plans.get(ids.recent)!.expires_at = now - 1; // expired, inside the retention window
+    plans.get(ids.leased)!.expires_at = old;
+    plans.get(ids.leased)!.executing_until = now + 60_000;
+    expect(await pruneProvisioningPlans(fakeDb() as never, now)).toBe(1);
+    expect(plans.has(ids.gone)).toBe(false);
+    for (const id of [ids.recent, ids.leased, ids.live]) expect(plans.has(id)).toBe(true);
   });
 });

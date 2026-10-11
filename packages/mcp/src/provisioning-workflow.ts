@@ -61,6 +61,8 @@ export interface ProvisionOperationReceipt {
   attemptId?: string | null;
   result?: Record<string, unknown>;
   joined?: boolean;
+  /** #369/#374: the server-established failure classification, when one was recorded. */
+  failureCode?: string;
 }
 
 export interface ProvisionOpts {
@@ -82,8 +84,8 @@ export interface WorkflowEnv {
   INTERNAL_TOKEN?: string;
 }
 
-/** #369: the receipt failure classifications only this workflow may establish (INTERNAL_TOKEN). */
-export type ProvisionFailureCode = "template_copy_mismatch" | "template_copy_unverified";
+/** #369/#374: the receipt failure classifications only this workflow may establish (INTERNAL_TOKEN). */
+export type ProvisionFailureCode = "template_copy_mismatch" | "template_copy_unverified" | "provision_incomplete";
 
 export interface WorkflowUser {
   userId: string | null;
@@ -172,7 +174,7 @@ export type PlanOutcome = { ok: true; plan: ProvisionPlan } | { ok: false; error
 
 export type ExecuteOutcome =
   | { kind: "joined"; receipt: ProvisionOperationReceipt }
-  | { kind: "error"; error: string; receipt?: ProvisionOperationReceipt }
+  | { kind: "error"; error: string; receipt?: ProvisionOperationReceipt; status?: number; retryAfter?: string }
   | {
     kind: "done";
     receipt: ProvisionOperationReceipt;
@@ -222,7 +224,8 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
     const now = Date.now();
     const cached = ownershipCache.get(cacheKey);
     if (cached && cached.expiresAt > now) return cached.ok;
-    const ok = await verifyAppOwnership(apiBase, user.token, appId);
+    // #374: over the API service binding: a same-zone fetch never reaches the API worker.
+    const ok = await verifyAppOwnership(apiBase, user.token, appId, (url, init) => env.API.fetch(url, init));
     ownershipCache.set(cacheKey, { ok, expiresAt: now + OWNERSHIP_CACHE_TTL_MS });
     return ok;
   }
@@ -250,24 +253,46 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
   }
 
   /**
-   * The app repo's newest two commits. Exactly one commit (the template-generate
-   * "Initial commit") is the untouched scaffold: adopting an orphan is only
-   * allowed in that state, since anything with real commits could be someone's
-   * work-in-progress and stays admin-only. Its tree is the provenance proof.
+   * The app repo's newest two commits. Exactly one commit (the template-generate "Initial commit") is the untouched
+   * scaffold: adopting an orphan is only allowed in that state, since anything
+   * with real commits could be someone's work-in-progress and stays admin-only.
+   * Its tree is the provenance proof. `baseTree` is the initial commit's tree
+   * when there are exactly two: the head's only parent is the second commit,
+   * and that one is the root (no parents) (#374).
    */
-  async function repoCommits(appId: string): Promise<{ untouched: boolean; headSha: string | null; initialTree: string | null; count: number | null }> {
+  async function repoCommits(appId: string): Promise<{ untouched: boolean; headSha: string | null; initialTree: string | null; baseTree: string | null; count: number | null }> {
     try {
       const r = await gh.api(`/repos/${org}/${appId}/commits?per_page=2`);
-      const list = r && r.ok && Array.isArray(r.data) ? r.data as { sha?: unknown; commit?: { tree?: { sha?: unknown } } }[] : null;
-      if (!list) return { untouched: false, headSha: null, initialTree: null, count: null };
+      const list = r && r.ok && Array.isArray(r.data)
+        ? r.data as { sha?: unknown; parents?: { sha?: unknown }[]; commit?: { tree?: { sha?: unknown } } }[]
+        : null;
+      if (!list) return { untouched: false, headSha: null, initialTree: null, baseTree: null, count: null };
       const head = list[0];
       const headSha = typeof head?.sha === "string" ? head.sha : null;
       const untouched = list.length === 1;
       const tree = untouched ? head?.commit?.tree?.sha : undefined;
-      return { untouched, headSha, initialTree: typeof tree === "string" ? tree : null, count: list.length };
+      const root = list[1];
+      const base = list.length === 2 && head?.parents?.length === 1 && head.parents[0]?.sha === root?.sha
+        && Array.isArray(root?.parents) && root.parents.length === 0 ? root.commit?.tree?.sha : undefined;
+      return { untouched, headSha, initialTree: typeof tree === "string" ? tree : null, baseTree: typeof base === "string" ? base : null, count: list.length };
     } catch {
-      return { untouched: false, headSha: null, initialTree: null, count: null };
+      return { untouched: false, headSha: null, initialTree: null, baseTree: null, count: null };
     }
+  }
+
+  /**
+   * #374: a repo whose only commit beyond the scaffold is this platform's own
+   * placeholder commit, left by an attempt whose /v1/provision failed before
+   * any app record was written. Proven by the caller's own receipt: the
+   * platform classified it `provision_incomplete` (INTERNAL_TOKEN only) and
+   * recorded that exact commit in the same server-authenticated update. Returns
+   * the initial commit's tree (the provenance proof), or null.
+   */
+  async function platformPlaceholderOnly(appId: string, token: string, commits: Awaited<ReturnType<typeof repoCommits>>): Promise<string | null> {
+    if (commits.count !== 2 || !commits.headSha || !commits.baseTree) return null;
+    const receipt = await readProvisionOperation(appId, token);
+    if (!receipt || receipt.status !== "failed" || receipt.failureCode !== "provision_incomplete") return null;
+    return receipt.result?.placeholderCommit === commits.headSha ? commits.baseTree : null;
   }
 
   /**
@@ -315,7 +340,7 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
     path: string,
     token: string,
     init?: RequestInit,
-  ): Promise<{ ok: boolean; status: number; data: Partial<ProvisionOperationReceipt> & { error?: string } }> {
+  ): Promise<{ ok: boolean; status: number; data: Partial<ProvisionOperationReceipt> & { error?: string }; retryAfter?: string }> {
     try {
       const res = await env.API.fetch(`${apiBase}/v1/provision-operations${path}`, {
         ...init,
@@ -325,17 +350,23 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
       let data: Partial<ProvisionOperationReceipt> & { error?: string };
       try { data = raw ? JSON.parse(raw) as typeof data : {}; } catch { data = { error: raw || `HTTP ${res.status}` }; }
       if (!res.ok && !data.error) data.error = `HTTP ${res.status}`;
-      return { ok: res.ok, status: res.status, data };
+      const retryAfter = res.headers?.get?.("Retry-After") ?? null;
+      return { ok: res.ok, status: res.status, data, ...(retryAfter ? { retryAfter } : {}) };
     } catch (e) {
       return { ok: false, status: 0, data: { error: e instanceof Error ? e.message : "unknown error" } };
     }
   }
 
   /** Acquire before GitHub work; pending retries join rather than duplicate it (#358). */
-  async function beginProvisionOperation(appId: string, token: string, intent: Record<string, unknown>, bootstrapIntent: Record<string, unknown>): Promise<{ receipt?: ProvisionOperationReceipt; error?: string }> {
+  async function beginProvisionOperation(appId: string, token: string, intent: Record<string, unknown>, bootstrapIntent: Record<string, unknown>): Promise<{ receipt?: ProvisionOperationReceipt; error?: string; status?: number; retryAfter?: string }> {
     const started = await operationRequest("", token, { method: "POST", body: JSON.stringify({ appId, intent, bootstrapIntent }) });
     if (!started.ok || typeof started.data.receipt !== "string" || started.data.status === undefined || !Array.isArray(started.data.steps)) {
-      return { error: started.data.error ?? "provisioning receipt service returned an invalid response" };
+      // #374: keep the refusal's status (403 owner, 409 intent/legacy, 429 quota) so the caller can tell it from an outage.
+      return {
+        error: started.data.error ?? "provisioning receipt service returned an invalid response",
+        ...(started.status ? { status: started.status } : {}),
+        ...(started.retryAfter ? { retryAfter: started.retryAfter } : {}),
+      };
     }
     return { receipt: started.data as ProvisionOperationReceipt };
   }
@@ -452,7 +483,7 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
    * re-read the repo and fail if any survived (#205). A hard-coded file list went
    * stale the moment the template grew a placeholder elsewhere (compliance.yml).
    */
-  async function patchTemplatePlaceholders(appId: string): Promise<{ ok: boolean; lines: string[] }> {
+  async function patchTemplatePlaceholders(appId: string): Promise<{ ok: boolean; lines: string[]; commitSha?: string }> {
     const found = await filesWithPlaceholder(appId);
     if (found.error) return { ok: false, lines: [`! Template placeholders: ${found.error}`] };
     const files = Object.entries(found.files).map(([path, content]) => ({ path, content: content.replaceAll("APPNAME", appId) }));
@@ -468,7 +499,7 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
     if (remaining.length > 0) {
       return { ok: false, lines: [...lines, `! Template placeholders: APPNAME is still present in ${remaining.join(", ")} — re-run provision_pas_app to re-patch`] };
     }
-    return { ok: true, lines };
+    return { ok: true, lines, ...(res.commitSha ? { commitSha: res.commitSha } : {}) };
   }
 
   async function verifyProvision(appId: string, provisionResult: ProvisionResult): Promise<{ lines: string[]; host: ProvisionStep }> {
@@ -626,6 +657,7 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
         return { ok: true, plan };
       }
       let commits: Awaited<ReturnType<typeof repoCommits>> | null = null;
+      let recoveredTree: string | null = null;
       if (await ownsApp(appId, user)) {
         plan.action = "reuse_owned";
         plan.appRecord = "owner";
@@ -640,20 +672,28 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
         // Receipt steps are progress evidence, never proof of who owns a repo.
         const state = await appRecordState(appId, user.token);
         plan.appRecord = state;
-        if (state === "other") {
+        if (state === "owner") {
+          // #374: the ownership read fails closed on any error; the app record
+          // itself says this caller owns it, so it is theirs to reuse.
+          plan.action = "reuse_owned";
+        } else if (state === "other") {
           blockers.push({ code: "owned_by_another_account", message: `${org}/${appId} already exists and its PAS app record is owned by another account.` });
           return { ok: true, plan };
-        }
-        if (state === "unknown") {
+        } else if (state === "unknown") {
           blockers.push({ code: "app_record_unavailable", message: `${org}/${appId} already exists and its PAS app record could not be checked.` });
           return { ok: true, plan };
+        } else {
+          commits = await repoCommits(appId);
+          if (!commits.untouched) {
+            recoveredTree = await platformPlaceholderOnly(appId, user.token, commits);
+            if (!recoveredTree) {
+              blockers.push({ code: "repository_edited", message: `${org}/${appId} already exists with no PAS app record, but it has commits beyond the template scaffold.` });
+              return { ok: true, plan };
+            }
+            warnings.push(`${org}/${appId}'s only commit beyond the scaffold is this platform's placeholder commit from your earlier attempt, which stopped before the app record was written; it is adopted as is`);
+          }
+          plan.action = "adopt_untouched";
         }
-        commits = await repoCommits(appId);
-        if (!commits.untouched) {
-          blockers.push({ code: "repository_edited", message: `${org}/${appId} already exists with no PAS app record, but it has commits beyond the template scaffold.` });
-          return { ok: true, plan };
-        }
-        plan.action = "adopt_untouched";
       }
 
       // The caller may act on this repo: report what it is, change none of it.
@@ -668,10 +708,11 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
         ? [requested]
         : [templateRef, ...(reviewedCommit ? [reviewedCommit] : [])];
       let proven: string | null = null;
-      if (commits.initialTree) {
+      const scaffoldTree = commits.initialTree ?? recoveredTree;
+      if (scaffoldTree) {
         for (const ref of candidates) {
           const commit = await templateCommit(templateRepo, ref);
-          if (commit?.tree && commit.tree === commits.initialTree) { proven = commit.sha; plan.template.revisionTree = commit.tree; break; }
+          if (commit?.tree && commit.tree === scaffoldTree) { proven = commit.sha; plan.template.revisionTree = commit.tree; break; }
         }
       }
       if (proven) {
@@ -745,7 +786,14 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
       allowUnapprovedTemplate: opts.allowUnapprovedTemplate,
     };
     const acquired = await beginProvisionOperation(appId, user.token, provisionRequestIntent(appId, provisionOptions), bootstrapIntent);
-    if (!acquired.receipt) return { kind: "error", error: `Error: could not start durable provisioning receipt for ${appId}: ${acquired.error}` };
+    if (!acquired.receipt) {
+      return {
+        kind: "error",
+        error: `Error: could not start durable provisioning receipt for ${appId}: ${acquired.error}`,
+        ...(acquired.status ? { status: acquired.status } : {}),
+        ...(acquired.retryAfter ? { retryAfter: acquired.retryAfter } : {}),
+      };
+    }
     const receipt = acquired.receipt;
     if (receipt.joined) return { kind: "joined", receipt };
     if (!receipt.attemptId) return { kind: "error", error: `Error: provisioning receipt for ${appId} did not grant an active attempt lease.`, receipt };
@@ -863,11 +911,21 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
     }
 
     const succeeded = prov.ok && placeholders.ok;
+    // #374: /v1/provision failed (compliance 412, a transient error…) before
+    // writing any app record, on a repo whose only change is this platform's
+    // placeholder commit. Classify it, with that commit, so the next plan can
+    // adopt the repo instead of refusing it as edited. An adopted repo that had
+    // no placeholders left keeps the commit it was adopted at.
+    const recordWritten = (prov.data.steps ?? []).some((step) => step.name === "record_app" && step.status === "ok");
+    const placeholderCommit = placeholders.commitSha
+      ?? (plan.action === "adopt_untouched" && plan.repository.untouchedScaffold === false ? plan.repository.headSha ?? undefined : undefined);
+    const incomplete = !prov.ok && placeholders.ok && !recordWritten && repoAction !== "reused" && placeholderCommit !== undefined;
     await recordEvidence([], succeeded ? "completed" : "failed", {
       success: succeeded,
       appUrl: prov.data.appUrl ?? `https://${appId}.proappstore.online`,
       dataWorkerUrl: prov.data.dataWorkerUrl ?? `https://data-${appId}.proappstore.online`,
-    });
+      ...(incomplete ? { placeholderCommit } : {}),
+    }, incomplete ? "provision_incomplete" : undefined);
     return { kind: "done", receipt, repoAction, lines, provision: prov.data, succeeded };
   }
 
@@ -968,8 +1026,10 @@ export async function handleInternalProvisioning(
     case "plan_blocked": return json({ error: "plan_blocked", plan: outcome.plan }, 422);
     case "joined": return json({ joined: true, receipt: outcome.receipt.receipt, status: outcome.receipt.status });
     case "error":
-      return outcome.receipt
-        ? json({ joined: false, receipt: outcome.receipt.receipt, error: outcome.error })
+      if (outcome.receipt) return json({ joined: false, receipt: outcome.receipt.receipt, error: outcome.error });
+      // #374: a refusal keeps its status; only an outage (or no status) is 503.
+      return outcome.status === 403 || outcome.status === 409 || outcome.status === 429
+        ? json({ error: outcome.error, ...(outcome.retryAfter ? { retryAfter: outcome.retryAfter } : {}) }, outcome.status)
         : json({ error: outcome.error }, 503);
     case "done":
       return json({ joined: false, receipt: outcome.receipt.receipt, repoAction: outcome.repoAction, succeeded: outcome.succeeded, lines: outcome.lines });

@@ -19,7 +19,7 @@
  * Contract: docs/provisioning-api.md.
  */
 import { Hono, type Context } from 'hono';
-import { TEMPLATE_REV_RE } from '@proappstore/build-core';
+import { checkProvisionQuota, d1ProvisionAttemptStore, TEMPLATE_REV_RE, type ProvisionLimits } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { HttpError, requireUser } from '../lib/auth.js';
 import { wrap } from '../lib/route-wrap.js';
@@ -34,6 +34,28 @@ export const PLAN_TTL_MS = 10 * 60 * 1000;
 /** One confirmation at a time per plan; longer than a full bootstrap takes. */
 export const EXECUTION_LEASE_MS = 15 * 60 * 1000;
 const ORG = 'proappstore-online';
+/**
+ * #374: each preview makes several GitHub API calls on the org token and stores
+ * a row, so a looping caller could spend the org's GitHub budget for everyone.
+ * Metered on buckets of their own (`preview:` keys), so previews never spend
+ * provisioning attempts and provisioning never starves previews.
+ */
+export const PREVIEW_LIMITS: ProvisionLimits = { userPerHour: 60, userPerDay: 200, ipPerHour: 120 };
+/** #374: an expired plan is kept this long, so a repeat confirm can still join its receipt, then pruned. */
+export const PLAN_RETENTION_MS = 24 * 60 * 60 * 1000;
+/** Upstream refusals a confirm passes through as themselves rather than as 503 "retry later" (#374). */
+const PASSTHROUGH_STATUSES = new Set([403, 409, 429]);
+
+/**
+ * #374: delete plans past their expiry plus PLAN_RETENTION_MS that hold no live
+ * execution lease. Run from the daily cron (index.ts). Returns rows deleted.
+ */
+export async function pruneProvisioningPlans(db: D1Database, now = Date.now()): Promise<number> {
+  const res = await db.prepare(
+    'DELETE FROM provisioning_plans WHERE expires_at < ? AND (executing_until IS NULL OR executing_until <= ?)',
+  ).bind(now - PLAN_RETENTION_MS, now).run();
+  return Number(res.meta.changes ?? 0);
+}
 
 interface PlanRow {
   plan_id: string;
@@ -128,6 +150,26 @@ provisioningPlanRoutes.post('/provisioning/plans', wrap(async (c) => {
   }
   const input = { appId, name, description, template, repoUrl, ...(body.templateRev ? { templateRev: body.templateRev as string } : {}) };
 
+  // #374: metered before any GitHub call. Fail closed, like provisioning itself.
+  try {
+    const ip = c.req.header('CF-Connecting-IP');
+    const quota = await checkProvisionQuota(d1ProvisionAttemptStore(c.env.DB), {
+      userKey: `preview:${user.id}`,
+      // The limiter keys IPs as `ip:<ip>`; the prefix keeps preview IP buckets apart from provisioning's.
+      ip: ip ? `preview:${ip}` : undefined,
+      nowMs: Date.now(),
+      limits: PREVIEW_LIMITS,
+    });
+    if (!quota.allowed) {
+      if (quota.retryAfterSeconds) c.header('Retry-After', String(quota.retryAfterSeconds));
+      return c.json({ error: `provisioning preview rate limit reached (${quota.scope}) — retry later` }, 429);
+    }
+  } catch (error) {
+    console.warn(`provisioning preview rate limit unavailable, refusing: ${(error as Error).message}`);
+    c.header('Retry-After', '60');
+    return c.json({ error: 'provisioning preview rate limit is temporarily unavailable — retry later' }, 503);
+  }
+
   const planned = await callWorkflow(c, 'plan', token, { input });
   if (planned.status === 400) return c.json({ error: String(planned.data?.error ?? 'invalid provisioning request') }, 400);
   const plan = planned.data?.plan as StoredPlan | undefined;
@@ -176,10 +218,11 @@ provisioningPlanRoutes.post('/provisioning/plans/:planId/confirm', wrap(async (c
   if (plan.blockers.length > 0) return c.json({ error: 'plan_blocked', plan }, 422);
 
   // One execution at a time: a concurrent confirm joins the one in flight.
+  const leaseUntil = now + EXECUTION_LEASE_MS;
   const claimed = await c.env.DB.prepare(
     `UPDATE provisioning_plans SET executing_until = ?
       WHERE plan_id = ? AND user_id = ? AND (executing_until IS NULL OR executing_until <= ?)`,
-  ).bind(now + EXECUTION_LEASE_MS, planId, user.id, now).run();
+  ).bind(leaseUntil, planId, user.id, now).run();
   if (!claimed.meta.changes) {
     const operation = await ownOperation();
     return c.json({ planId, ...(operation ? operationResponse(operation, true) : { appId: row.app_id, status: 'pending', receipt: null, steps: [], joined: true }) }, 202);
@@ -189,12 +232,26 @@ provisioningPlanRoutes.post('/provisioning/plans/:planId/confirm', wrap(async (c
   try {
     executed = await callWorkflow(c, 'execute', token, { plan });
   } finally {
-    await c.env.DB.prepare('UPDATE provisioning_plans SET executing_until = NULL WHERE plan_id = ?').bind(planId).run();
+    // #374: release only the lease THIS request took. An execution that outlived
+    // it must not clear a newer confirm's lease; and a failed release must not
+    // hide the result, so it is logged and the lease simply expires.
+    try {
+      await c.env.DB.prepare('UPDATE provisioning_plans SET executing_until = NULL WHERE plan_id = ? AND executing_until = ?')
+        .bind(planId, leaseUntil).run();
+    } catch (error) {
+      console.warn(`provisioning plan lease release failed for ${planId}: ${(error as Error).message}`);
+    }
   }
   const data = executed.data ?? {};
-  if (executed.status === 409) return c.json({ error: 'plan_changed', plan: data.plan }, 409);
+  if (executed.status === 409 && data.error === 'plan_changed') return c.json({ error: 'plan_changed', plan: data.plan }, 409);
   if (executed.status === 422) return c.json({ error: 'plan_blocked', plan: data.plan }, 422);
   if (executed.status === 400) return c.json({ error: String(data.error ?? 'invalid plan') }, 400);
+  // #374: a refusal (another owner's receipt, a different intent, a legacy
+  // receipt, the provisioning quota) is not "retry later": pass it through.
+  if (PASSTHROUGH_STATUSES.has(executed.status)) {
+    if (typeof data.retryAfter === 'string') c.header('Retry-After', data.retryAfter);
+    return c.json({ error: String(data.error ?? 'provisioning was refused') }, executed.status as 403 | 409 | 429);
+  }
   if (executed.status === 503) return c.json({ error: String(data.error ?? 'provisioning is temporarily unavailable — retry later') }, 503);
   if (executed.status !== 200 || typeof data.receipt !== 'string') {
     return c.json({ error: 'provisioning service returned an unexpected response' }, 502);

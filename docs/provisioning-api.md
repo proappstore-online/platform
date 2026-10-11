@@ -105,13 +105,16 @@ and returned, so it can be shown.
 | `warnings` | Non-blocking notices: a deprecated template, or a template head that differs from the reviewed commit |
 
 A plan with any blocker cannot be confirmed. The plan expires 10 minutes after
-the preview.
+the preview. A day after that it is deleted (#374), and confirming it returns `404`.
 
 ### Preview errors
 
 - **`400`:** invalid id, missing field, a `repoUrl` that is not the app's own
   repository, a malformed `templateRev`, or an unknown or withdrawn template.
 - **`401`:** not signed in.
+- **`429`:** too many previews (#374): 60 an hour and 200 a day per user, 120 an
+  hour per IP. Wait for `Retry-After`. Previews have their own budget, separate
+  from provisioning's.
 - **`502` or `503`:** the workflow is unavailable. Retry the preview.
 
 ## 2. Confirm
@@ -140,6 +143,9 @@ empty JSON body.
 | `409` | `{ error: "plan_changed", plan }` | Something changed since the preview. `plan` is the fresh one. Show it and ask again. |
 | `410` | `{ error: "plan_expired" }` | Preview again |
 | `422` | `{ error: "plan_blocked", plan }` | The plan has blockers |
+| `403` | `{ error }` | The app's provisioning receipt belongs to another user (#374). Nothing ran. |
+| `409` | `{ error }` (no `plan`) | A receipt for this app is bound to a different request, or is a read-only legacy receipt (#374). Nothing ran. |
+| `429` | `{ error }` | Provisioning rate limit. Nothing ran. Wait for `Retry-After`. |
 | `503` | `{ error }` | No receipt was taken; nothing ran. Retry. |
 
 ### When the template moves during the copy (#369)
@@ -173,9 +179,24 @@ your session or from step text, and it is consumed by that one retry.
   expired.
 - **After a receipt failed:** confirming again re-plans first. Usually the
   repository now exists, so the answer is `409` with a fresh plan. A failed
-  receipt is retried only by the same request it was bound to, with one
-  exception: a template-copy failure (below).
-- **Across plans:** two plans for one app share one receipt; the second joins.
+  receipt is retried only by the same request it was bound to. The exceptions
+  are a template-copy failure (below) and a provisioning failure after the
+  placeholder commit (#374, below). Even then, only `templateRev` may differ;
+  the server checks this.
+- **Across plans:** two plans for one app share one receipt. If the second
+  plan's request differs (for example, the template head moved between the
+  previews), it gets `409` instead of joining an execution it never reviewed
+  (#374).
+
+### When provisioning fails after the placeholder commit (#374)
+
+`/v1/provision` can fail after the platform has committed the APPNAME
+replacements but before any app record exists, for example on a compliance
+`412`. The platform then classifies the receipt `provision_incomplete` and
+records that exact commit. The next preview adopts the repository (action
+`adopt_untouched`, with a warning), proven by its initial commit's tree, and
+confirming it provisions the app. Any other commit on top of the repository
+still blocks it as `repository_edited`.
 
 ## 3. Progress
 

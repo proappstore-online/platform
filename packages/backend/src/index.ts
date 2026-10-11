@@ -16,7 +16,7 @@ import { licenseRoutes } from './routes/license.js';
 import { storageRoutes } from './routes/storage.js';
 import { mapsRoutes } from './routes/maps.js';
 import { provisionRoutes } from './routes/provision.js';
-import { provisioningPlanRoutes } from './routes/provisioning-plans.js';
+import { provisioningPlanRoutes, pruneProvisioningPlans } from './routes/provisioning-plans.js';
 import { deployRoutes } from './routes/deploy.js';
 import { webhookRoutes } from './routes/webhook.js';
 import { notificationRoutes } from './routes/notifications.js';
@@ -348,6 +348,8 @@ export default {
     // #307: once a day, delete review uploads older than the app's retention (default 30 days).
     if (new Date(tickAt).getUTCHours() === 3 && new Date(tickAt).getUTCMinutes() === 45) {
       ctx.waitUntil(reapReviewUploads(env, tickAt).catch((e) => console.error(`[review-retention] run failed: ${(e as Error).message}`)));
+      // #374: provisioning plans are kept a day past expiry, then deleted.
+      ctx.waitUntil(pruneProvisioningPlans(env.DB, tickAt).catch((e) => console.error(`[provisioning-plans] prune failed: ${(e as Error).message}`)));
     }
     // #381: the hourly payout-meter AI Gateway reconciliation (reconcileAiGateway) is archived and no longer scheduled.
   },

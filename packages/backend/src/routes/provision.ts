@@ -17,6 +17,7 @@ import {
   getProvisionOperation,
   hashProvisionAdmissionOperation,
   hashProvisionIntent,
+  hashRevisionFreeIntent,
   isLegacyProvisionOperation,
   isProvisionFailureCode,
   operationIsExhausted,
@@ -183,9 +184,11 @@ provisionRoutes.post('/provision-operations', wrap(async (c) => {
     return c.text('Provisioning bootstrap intent is required', 400);
   }
   let intentHash: string;
+  let revisionFreeIntentHash: string;
   let bootstrapIntentHash: string;
   try {
     intentHash = await hashProvisionIntent(body.intent);
+    revisionFreeIntentHash = await hashRevisionFreeIntent(body.intent as Record<string, unknown>);
     bootstrapIntentHash = await hashProvisionIntent(body.bootstrapIntent);
   } catch (error) {
     return c.text(`Invalid provisioning intent: ${(error as Error).message}`, 400);
@@ -221,12 +224,13 @@ provisionRoutes.post('/provision-operations', wrap(async (c) => {
   // `beginProvisionOperation` is the atomic app-id/intent gate. Do it before
   // consuming quota so simultaneous identical receipt requests yield exactly
   // one created/recovered attempt; all other callers join it without spending.
-  const begun = await beginProvisionOperation(c.env.DB, { creatorId: user.id, appId: body.appId, intentHash, bootstrapIntentHash, now });
+  const begun = await beginProvisionOperation(c.env.DB, { creatorId: user.id, appId: body.appId, intentHash, revisionFreeIntentHash, bootstrapIntentHash, now });
   if (begun.kind === 'owner_conflict') {
     return c.json({ error: 'provisioning operation belongs to another user' }, 403);
   }
   if (begun.kind === 'intent_conflict') {
-    return c.json({ error: 'a provisioning receipt already exists for this app with different bootstrap intent' }, 409);
+    // #374: a different request intent too, not only a different bootstrap plan.
+    return c.json({ error: 'a provisioning receipt already exists for this app with a different intent' }, 409);
   }
   if (begun.kind === 'legacy_unreconciled') {
     return c.json({

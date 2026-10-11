@@ -139,7 +139,8 @@ describe('provision operation receipts on real D1 (#358)', () => {
     const first = await body<{ attemptId: string }>(await post('rebind-receipt', token, intentA, boot));
     const hashA = (await stored('rebind-receipt')).intent_hash;
     expect((await patch('rebind-receipt', token, { attemptId: first.attemptId, status: 'failed', steps: [{ name: 'template_revision', status: 'fail', detail: 'revision_mismatch: typed by hand' }] })).status).toBe(200);
-    expect(await body(await post('rebind-receipt', token, intentB, boot))).toMatchObject({ joined: true, status: 'failed', attemptCount: 1 });
+    // #374: and it is a conflict, never a "join" of an execution the caller did not review.
+    expect((await post('rebind-receipt', token, intentB, boot)).status).toBe(409);
     expect(await stored('rebind-receipt')).toMatchObject({ intent_hash: hashA, failure_code: null, attempt_count: 1 });
     // It still resumes with its own intent, as before.
     const resumed = await body<{ attemptId: string; attemptCount: number }>(await post('rebind-receipt', token, intentA, boot));
@@ -164,14 +165,63 @@ describe('provision operation receipts on real D1 (#358)', () => {
     expect(rebound.intent_hash).not.toBe(hashA);
     expect(rebound.failure_code).toBeNull(); // cleared: it authorised exactly one retry
 
-    // A live pending lease, or an expired one, is never re-bound.
-    expect(await body(await post('rebind-receipt', token, intentA, boot))).toMatchObject({ joined: true, status: 'pending', attemptCount: 3 });
+    // A live pending lease, or an expired one, is never re-bound — and (#374) a
+    // different intent is refused rather than reported as joining it.
+    expect((await post('rebind-receipt', token, intentA, boot)).status).toBe(409);
     expect((await stored('rebind-receipt')).intent_hash).toBe(rebound.intent_hash);
     await post('expired-rebind', token, { ...intentA, appId: 'expired-rebind' }, boot);
     const hashExpired = (await stored('expired-rebind')).intent_hash;
     await env.DB.prepare("UPDATE provision_operations SET lease_expires_at = 0 WHERE app_id = 'expired-rebind'").run();
-    expect(await body(await post('expired-rebind', token, { ...intentB, appId: 'expired-rebind' }, boot))).toMatchObject({ joined: true, attemptCount: 1 });
+    expect((await post('expired-rebind', token, { ...intentB, appId: 'expired-rebind' }, boot)).status).toBe(409);
     expect((await stored('expired-rebind')).intent_hash).toBe(hashExpired);
+  });
+
+  it('#374: a classified failure rebinds only an intent that differs in templateRev alone', async () => {
+    const token = await session(OWNER);
+    const boot = { templateId: 'template-marketplace', name: 'App', privateRepo: true, verify: true };
+    const intentA = { appId: 'rev-only', repoOwner: 'proappstore-online', repoName: 'rev-only', skipCompliance: false, template: 'template-marketplace', templateRev: 'a'.repeat(40) };
+    const internalFail = (attemptId: string, failureCode: string) => SELF.fetch(`${BASE}/v1/provision-operations/rev-only`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Internal-Token': (env as unknown as { INTERNAL_TOKEN: string }).INTERNAL_TOKEN },
+      body: JSON.stringify({ attemptId, status: 'failed', failureCode }),
+    });
+    const stored = async () => (await env.DB.prepare("SELECT intent_hash, attempt_count FROM provision_operations WHERE app_id = 'rev-only'").first<{ intent_hash: string; attempt_count: number }>())!;
+
+    const first = await body<{ attemptId: string }>(await post('rev-only', token, intentA, boot));
+    expect((await internalFail(first.attemptId, 'provision_incomplete')).status).toBe(200);
+    const before = await stored();
+    // Anything but the revision changed — another template, compliance skipped, the repo — is refused.
+    for (const changed of [{ template: 'template-app' }, { skipCompliance: true }, { repoName: 'elsewhere' }, { allowUnapprovedTemplate: true }]) {
+      expect((await post('rev-only', token, { ...intentA, ...changed }, boot)).status).toBe(409);
+    }
+    expect(await stored()).toEqual(before);
+    // The revision alone may change, or be dropped.
+    const rebound = await post('rev-only', token, { ...intentA, templateRev: 'b'.repeat(40) }, boot);
+    expect(rebound.status).toBe(200);
+    expect(await body(rebound)).toMatchObject({ status: 'pending', attemptCount: 2, joined: false });
+    expect((await stored()).intent_hash).not.toBe(before.intent_hash);
+  });
+
+  it('#374: a receipt from before migration 0096 recovers only under its identical intent', async () => {
+    const token = await session(OWNER);
+    const boot = { templateId: 'template-marketplace', name: 'App', privateRepo: true, verify: true };
+    const intentA = { appId: 'pre-0096', template: 'template-marketplace', templateRev: 'a'.repeat(40) };
+    const first = await body<{ attemptId: string }>(await post('pre-0096', token, intentA, boot));
+    await patch('pre-0096', token, { attemptId: first.attemptId, status: 'failed' });
+    await env.DB.prepare("UPDATE provision_operations SET failure_code = 'template_copy_mismatch', revision_free_intent_hash = NULL WHERE app_id = 'pre-0096'").run();
+    expect((await post('pre-0096', token, { ...intentA, templateRev: 'b'.repeat(40) }, boot)).status).toBe(409);
+    expect(await body(await post('pre-0096', token, intentA, boot))).toMatchObject({ status: 'pending', attemptCount: 2 });
+  });
+
+  it('#374: a different intent never reports joining a live receipt it did not start', async () => {
+    const token = await session(OWNER);
+    const boot = { templateId: 'template-marketplace', name: 'App', privateRepo: true, verify: true };
+    const intentA = { appId: 'two-plans', template: 'template-marketplace', templateRev: 'a'.repeat(40) };
+    expect((await post('two-plans', token, intentA, boot)).status).toBe(201);
+    const second = await post('two-plans', token, { ...intentA, templateRev: 'b'.repeat(40) }, boot);
+    expect(second.status).toBe(409);
+    expect(await body(second)).toEqual({ error: 'a provisioning receipt already exists for this app with a different intent' });
+    expect(await body(await post('two-plans', token, intentA, boot))).toMatchObject({ joined: true, status: 'pending' });
   });
 
   it('reports an expired fifth pending lease as terminal exhausted without renewing or charging quota', async () => {

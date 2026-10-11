@@ -7,6 +7,7 @@ type Row = {
   creator_id: string;
   app_id: string;
   intent_hash: string;
+  revision_free_intent_hash: string | null;
   bootstrap_intent_hash: string;
   status: string;
   steps_json: string;
@@ -45,10 +46,10 @@ function operationDb(opts: { quotaUnavailable?: boolean } = {}) {
             throw new Error('UNIQUE constraint failed: provision_attempts.key');
           }
           if (/INSERT OR IGNORE INTO provision_operations/i.test(sql)) {
-            const [receipt, creator, appId, intentHash, bootstrapIntentHash, leaseExpiresAt, attemptId, createdAt, updatedAt] = values as [string, string, string, string, string, number, string, number, number];
+            const [receipt, creator, appId, intentHash, revisionFreeIntentHash, bootstrapIntentHash, leaseExpiresAt, attemptId, createdAt, updatedAt] = values as [string, string, string, string, string, string, number, string, number, number];
             if (byApp.has(appId)) return { meta: { changes: 0 } };
             const row: Row = {
-              receipt_id: receipt, creator_id: creator, app_id: appId, intent_hash: intentHash, bootstrap_intent_hash: bootstrapIntentHash, status: 'pending', steps_json: '[]', result_json: null,
+              receipt_id: receipt, creator_id: creator, app_id: appId, intent_hash: intentHash, revision_free_intent_hash: revisionFreeIntentHash, bootstrap_intent_hash: bootstrapIntentHash, status: 'pending', steps_json: '[]', result_json: null,
               attempt_count: 1, lease_expires_at: leaseExpiresAt, attempt_id: attemptId,
               created_at: createdAt, updated_at: updatedAt, completed_at: null,
             };

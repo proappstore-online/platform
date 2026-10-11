@@ -7,11 +7,18 @@ export const MAX_PROVISION_OPERATION_STEPS = 48;
 
 /**
  * #369: server-established failure classifications (migration 0093). Only these
- * let a failed receipt be retried under a NEW request intent: the template copy
- * of a new repo was not provably the planned revision, so a fresh plan adopts it
- * at the revision it holds. Set only with INTERNAL_TOKEN (routes/provision.ts).
+ * let a failed receipt be retried under a NEW request intent, and only one that
+ * differs from the original in `templateRev` alone (#374, the receipt's
+ * revision-free intent hash):
+ *   - template_copy_mismatch / template_copy_unverified: the template copy of a
+ *     new repo was not provably the planned revision, so a fresh plan adopts it
+ *     at the revision it holds;
+ *   - provision_incomplete (#374): /v1/provision failed after the platform's own
+ *     placeholder commit and before any app record was written, so a fresh plan
+ *     adopts the repo at that commit.
+ * Set only with INTERNAL_TOKEN (routes/provision.ts).
  */
-export const REVISION_RECOVERY_FAILURE_CODES = ['template_copy_mismatch', 'template_copy_unverified'] as const;
+export const REVISION_RECOVERY_FAILURE_CODES = ['template_copy_mismatch', 'template_copy_unverified', 'provision_incomplete'] as const;
 export type ProvisionFailureCode = typeof REVISION_RECOVERY_FAILURE_CODES[number];
 export function isProvisionFailureCode(value: unknown): value is ProvisionFailureCode {
   return typeof value === 'string' && (REVISION_RECOVERY_FAILURE_CODES as readonly string[]).includes(value);
@@ -44,6 +51,8 @@ export interface ProvisionOperation {
   completedAt: number | null;
   /** #369: server-established failure classification, or null. */
   failureCode: ProvisionFailureCode | null;
+  /** #374: `intentHash` without `templateRev`; null on receipts from before migration 0096. */
+  revisionFreeIntentHash: string | null;
 }
 
 interface OperationRow {
@@ -62,6 +71,7 @@ interface OperationRow {
   updated_at: number;
   completed_at: number | null;
   failure_code: string | null;
+  revision_free_intent_hash: string | null;
 }
 
 export type BeginProvisionOperationResult =
@@ -118,11 +128,13 @@ function fromRow(row: OperationRow): ProvisionOperation {
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
     failureCode: isProvisionFailureCode(row.failure_code) ? row.failure_code : null,
+    revisionFreeIntentHash: row.revision_free_intent_hash,
   };
 }
 
 const SELECT_OPERATION = `SELECT receipt_id, creator_id, app_id, intent_hash, bootstrap_intent_hash, status, steps_json, result_json,
-                                  attempt_count, lease_expires_at, attempt_id, created_at, updated_at, completed_at, failure_code
+                                  attempt_count, lease_expires_at, attempt_id, created_at, updated_at, completed_at, failure_code,
+                                  revision_free_intent_hash
                              FROM provision_operations`;
 
 function newAttemptId(): string {
@@ -143,6 +155,15 @@ function canonicalJson(value: unknown, depth = 0): string {
     return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key], depth + 1)}`).join(',')}}`;
   }
   throw new Error('provisioning intent must be JSON data');
+}
+
+/**
+ * #374: the intent with `templateRev` removed, hashed. Two intents with equal
+ * revision-free hashes differ, if at all, only in the revision.
+ */
+export function hashRevisionFreeIntent(intent: Record<string, unknown>): Promise<string> {
+  const { templateRev: _revision, ...rest } = intent;
+  return hashProvisionIntent(rest);
 }
 
 export async function hashProvisionIntent(intent: unknown): Promise<string> {
@@ -200,7 +221,7 @@ export function operationIsExhausted(operation: ProvisionOperation, now = Date.n
 /** Atomically creates, joins, or recovers a lease. */
 export async function beginProvisionOperation(
   db: D1Database,
-  args: { creatorId: string; appId: string; intentHash: string; bootstrapIntentHash: string; now?: number; leaseMs?: number },
+  args: { creatorId: string; appId: string; intentHash: string; revisionFreeIntentHash: string; bootstrapIntentHash: string; now?: number; leaseMs?: number },
 ): Promise<BeginProvisionOperationResult> {
   const now = args.now ?? Date.now();
   const leaseExpiresAt = now + (args.leaseMs ?? PROVISION_OPERATION_LEASE_MS);
@@ -208,9 +229,9 @@ export async function beginProvisionOperation(
   const attemptId = newAttemptId();
   const inserted = await db.prepare(
     `INSERT OR IGNORE INTO provision_operations
-       (receipt_id, creator_id, app_id, intent_hash, bootstrap_intent_hash, status, steps_json, attempt_count, lease_expires_at, attempt_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'pending', '[]', 1, ?, ?, ?, ?)`,
-  ).bind(receiptId, args.creatorId, args.appId, args.intentHash, args.bootstrapIntentHash, leaseExpiresAt, attemptId, now, now).run();
+       (receipt_id, creator_id, app_id, intent_hash, revision_free_intent_hash, bootstrap_intent_hash, status, steps_json, attempt_count, lease_expires_at, attempt_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'pending', '[]', 1, ?, ?, ?, ?)`,
+  ).bind(receiptId, args.creatorId, args.appId, args.intentHash, args.revisionFreeIntentHash, args.bootstrapIntentHash, leaseExpiresAt, attemptId, now, now).run();
   if (Number(inserted.meta.changes) > 0) {
     const created = await getProvisionOperation(db, args.appId);
     if (!created) throw new Error('provision operation insert was not readable');
@@ -223,6 +244,12 @@ export async function beginProvisionOperation(
   if (isLegacyProvisionOperation(existing)) return { kind: 'legacy_unreconciled', operation: existing };
   if (existing.bootstrapIntentHash !== args.bootstrapIntentHash) return { kind: 'intent_conflict', operation: existing };
   if (operationIsExhausted(existing, now)) return { kind: 'exhausted', operation: existing };
+  // #374: a different request intent never joins: the caller would be told an
+  // execution they did not review is theirs. Only a recoverable failed receipt
+  // may take a new intent, and only one differing in templateRev alone.
+  if (existing.intentHash !== args.intentHash && !rebindable(existing, args.revisionFreeIntentHash)) {
+    return { kind: 'intent_conflict', operation: existing };
+  }
   if (!operationNeedsLease(existing, now)) return { kind: existing.status === 'failed' ? 'exhausted' : 'joined', operation: existing };
 
   const nextAttemptId = newAttemptId();
@@ -232,20 +259,22 @@ export async function beginProvisionOperation(
   // INTERNAL_TOKEN — never from owner-writable steps) may be retried under a
   // new intent: a fresh plan adopting the kept copy at the revision it holds.
   // Same creator, same bootstrap plan and the attempt budget still apply; a
-  // live or expired PENDING lease is never re-bound.
+  // live or expired PENDING lease is never re-bound. #374: the new intent must
+  // equal the old one but for templateRev (revision_free_intent_hash), checked
+  // here in the same statement; a receipt from before 0096 (NULL) never matches.
   const recovered = await db.prepare(
     `UPDATE provision_operations
         SET status = 'pending', attempt_count = attempt_count + 1, lease_expires_at = ?, attempt_id = ?,
-            updated_at = ?, completed_at = NULL, intent_hash = ?, failure_code = NULL
+            updated_at = ?, completed_at = NULL, intent_hash = ?, revision_free_intent_hash = ?, failure_code = NULL
       WHERE receipt_id = ? AND creator_id = ? AND bootstrap_intent_hash = ? AND attempt_count < ?
         AND (
-          (status = 'failed' AND (intent_hash = ? OR failure_code IN (${REVISION_RECOVERY_FAILURE_CODES.map(() => '?').join(', ')})))
+          (status = 'failed' AND (intent_hash = ? OR (failure_code IN (${REVISION_RECOVERY_FAILURE_CODES.map(() => '?').join(', ')}) AND revision_free_intent_hash = ?)))
           OR (status = 'pending' AND intent_hash = ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
         )`,
   ).bind(
-    leaseExpiresAt, nextAttemptId, now, args.intentHash,
+    leaseExpiresAt, nextAttemptId, now, args.intentHash, args.revisionFreeIntentHash,
     existing.receiptId, args.creatorId, args.bootstrapIntentHash, MAX_PROVISION_OPERATION_ATTEMPTS,
-    args.intentHash, ...REVISION_RECOVERY_FAILURE_CODES,
+    args.intentHash, ...REVISION_RECOVERY_FAILURE_CODES, args.revisionFreeIntentHash,
     args.intentHash, now,
   ).run();
   const current = await getProvisionOperation(db, args.appId);
@@ -254,7 +283,17 @@ export async function beginProvisionOperation(
   if (current.creatorId !== args.creatorId) return { kind: 'owner_conflict', operation: current };
   if (isLegacyProvisionOperation(current)) return { kind: 'legacy_unreconciled', operation: current };
   if (current.bootstrapIntentHash !== args.bootstrapIntentHash) return { kind: 'intent_conflict', operation: current };
-  return { kind: operationIsExhausted(current, now) ? 'exhausted' : 'joined', operation: current };
+  if (operationIsExhausted(current, now)) return { kind: 'exhausted', operation: current };
+  if (current.intentHash !== args.intentHash) return { kind: 'intent_conflict', operation: current };
+  return { kind: 'joined', operation: current };
+}
+
+/** #374: a failed receipt the platform classified as recoverable, whose intent differs from `revisionFreeIntentHash`'s in templateRev alone. */
+function rebindable(operation: ProvisionOperation, revisionFreeIntentHash: string): boolean {
+  return operation.status === 'failed'
+    && operation.failureCode !== null
+    && operation.revisionFreeIntentHash !== null
+    && operation.revisionFreeIntentHash === revisionFreeIntentHash;
 }
 
 export async function getProvisionOperation(db: D1Database, appId: string): Promise<ProvisionOperation | null> {

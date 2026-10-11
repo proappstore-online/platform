@@ -13,9 +13,15 @@ export async function verifyAppOwnership(
   apiBase: string,
   userToken: string,
   appId: string,
+  /**
+   * #374: how to reach the API. A Worker on the same zone must pass its service
+   * binding (`(url, init) => env.API.fetch(url, init)`): a same-zone fetch of
+   * api.proappstore.online never reaches the route-mapped API worker.
+   */
+  fetchApi: (url: string, init: RequestInit) => Promise<Response> = fetch,
 ): Promise<boolean> {
   try {
-    const res = await fetch(`${apiBase}/v1/apps`, {
+    const res = await fetchApi(`${apiBase}/v1/apps`, {
       headers: { Authorization: `Bearer ${userToken}` },
     });
     if (!res.ok) return false;
