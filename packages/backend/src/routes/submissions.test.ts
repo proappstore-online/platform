@@ -126,6 +126,29 @@ describe('POST /v1/submissions', () => {
     expect(res.status).toBe(409);
   });
 
+  describe('a concurrent duplicate that passed the pending check (#363)', () => {
+    const post = (db: ReturnType<typeof mockD1>) => app.request('/v1/submissions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'kanban', name: 'Kanban', category: 'productivity', description: 'desc' }),
+    }, makeEnv(db));
+
+    it('maps the partial unique index violation on INSERT to the same 409', async () => {
+      const insert = mockStmt();
+      insert.run.mockRejectedValue(new Error('D1_ERROR: UNIQUE constraint failed: submissions.app_id: SQLITE_CONSTRAINT'));
+      const res = await post(mockD1(mockStmt({ first: null }), mockStmt({ first: null }), insert));
+      expect(res.status).toBe(409);
+      expect(await res.text()).toBe('A pending submission already exists for that appId');
+    });
+
+    it('does not turn any other INSERT failure into a 409', async () => {
+      const insert = mockStmt();
+      insert.run.mockRejectedValue(new Error('D1_ERROR: database unavailable'));
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect((await post(mockD1(mockStmt({ first: null }), mockStmt({ first: null }), insert))).status).toBe(500);
+    });
+  });
+
   it('returns 401 without auth', async () => {
     const res = await app.request(
       '/v1/submissions',

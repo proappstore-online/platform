@@ -86,28 +86,38 @@ submissionRoutes.post('/submissions', wrap(async (c) => {
       ? JSON.stringify(body.proFeatures)
       : null;
 
-  await c.env.DB.prepare(
-    `INSERT INTO submissions (
-       id, app_id, creator_id, status, name, category, description,
-       icon, icon_bg, pro_features, suggested_monthly_price_cents,
-       repo_url, created_at
-     ) VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
-  )
-    .bind(
-      id,
-      appId,
-      user.id,
-      name,
-      category,
-      description,
-      body.icon ?? null,
-      body.iconBg ?? null,
-      proFeaturesJson,
-      body.suggestedMonthlyPriceCents ?? null,
-      body.repoUrl ?? null,
-      now,
+  // The SELECT above is the friendly fast path; the partial unique index from
+  // migration 0090 is the guarantee (#363). A concurrent submission that got past
+  // it loses here, writes nothing, and gets the same 409.
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO submissions (
+         id, app_id, creator_id, status, name, category, description,
+         icon, icon_bg, pro_features, suggested_monthly_price_cents,
+         repo_url, created_at
+       ) VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
     )
-    .run();
+      .bind(
+        id,
+        appId,
+        user.id,
+        name,
+        category,
+        description,
+        body.icon ?? null,
+        body.iconBg ?? null,
+        proFeaturesJson,
+        body.suggestedMonthlyPriceCents ?? null,
+        body.repoUrl ?? null,
+        now,
+      )
+      .run();
+  } catch (err) {
+    if (/UNIQUE constraint failed/i.test(err instanceof Error ? err.message : '')) {
+      return c.text('A pending submission already exists for that appId', 409);
+    }
+    throw err;
+  }
 
   const row: SubmissionRow = {
     id,
