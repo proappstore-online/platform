@@ -12,7 +12,8 @@ function makeEnv(opts: {
   invites?: { id: string; app_id: string; role: string; token: string; expires_at: number; invited_by: string }[];
 } = {}) {
   const members = opts.teamMembers ?? [];
-  const invites = opts.invites ?? [];
+  const invites = [...(opts.invites ?? [])];
+  const grants: unknown[][] = [];
 
   return {
     DB: {
@@ -29,16 +30,21 @@ function makeEnv(opts: {
             if (sql.includes('COUNT') && sql.includes('owner')) {
               return { c: members.filter(m => m.role === 'owner').length };
             }
-            if (sql.includes('FROM team_invites')) {
-              const token = args[0];
-              return invites.find(i => i.token === token) ?? null;
+            if (sql.includes('DELETE FROM team_invites') && sql.includes('RETURNING')) {
+              // SQLite's DELETE … RETURNING: the row goes to exactly one caller.
+              await Promise.resolve();
+              const i = invites.findIndex(inv => inv.token === args[0]);
+              return i === -1 ? null : invites.splice(i, 1)[0]!;
             }
             return null;
           },
           all: async () => ({
             results: sql.includes('team_members') ? members : [],
           }),
-          run: async () => ({ meta: {} }),
+          run: async () => {
+            if (sql.includes('INSERT INTO team_members')) grants.push(args);
+            return { meta: {} };
+          },
         }),
       }),
     } as unknown as D1Database,
@@ -50,6 +56,8 @@ function makeEnv(opts: {
     CF_ACCOUNT_ID: 'acct',
     VAPID_PUBLIC_KEY: 'vk',
     VAPID_PRIVATE_KEY: 'vs',
+    _grants: grants,
+    _invites: invites,
   };
 }
 
@@ -240,6 +248,50 @@ describe('POST /v1/team/accept/:token', () => {
   it('returns 404 for unknown token', async () => {
     const res = await app.fetch(req('POST', '/v1/team/accept/nonexistent'), makeEnv());
     expect(res.status).toBe(404);
+  });
+
+  it('consumes the invite: a second accept of the same token is 404 and grants nothing', async () => {
+    const env = makeEnv({
+      invites: [{ id: 'inv-3', app_id: 'myapp', role: 'developer', token: 'once', expires_at: Date.now() + 86400000, invited_by: 'gh:1' }],
+    });
+    expect((await app.fetch(req('POST', '/v1/team/accept/once'), env)).status).toBe(200);
+    expect((await app.fetch(req('POST', '/v1/team/accept/once'), env)).status).toBe(404);
+    expect(env._grants).toHaveLength(1);
+    expect(env._invites).toEqual([]);
+  });
+
+  it('two concurrent accepts of one invite: exactly one wins, the other is 404, one grant (#362)', async () => {
+    const env = makeEnv({
+      invites: [{ id: 'inv-4', app_id: 'myapp', role: 'admin', token: 'race', expires_at: Date.now() + 86400000, invited_by: 'gh:1' }],
+    });
+    const other = await testToken('gh:777');
+    const [a, b] = await Promise.all([
+      app.fetch(req('POST', '/v1/team/accept/race'), env),
+      app.fetch(req('POST', '/v1/team/accept/race', undefined, other), env),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 404]);
+    expect(env._grants).toHaveLength(1);
+    expect(env._invites).toEqual([]);
+  });
+
+  it('an expired invite is consumed and grants nothing', async () => {
+    const env = makeEnv({
+      invites: [{ id: 'inv-5', app_id: 'myapp', role: 'admin', token: 'old', expires_at: Date.now() - 1000, invited_by: 'gh:1' }],
+    });
+    expect((await app.fetch(req('POST', '/v1/team/accept/old'), env)).status).toBe(410);
+    expect(env._grants).toEqual([]);
+    expect(env._invites).toEqual([]);
+  });
+
+  it('an existing higher-role member keeps their role and the invite is still consumed', async () => {
+    const env = makeEnv({
+      teamMembers: [{ user_id: 'gh:1', role: 'owner' }],
+      invites: [{ id: 'inv-6', app_id: 'myapp', role: 'developer', token: 'lower', expires_at: Date.now() + 86400000, invited_by: 'gh:1' }],
+    });
+    const res = await app.fetch(req('POST', '/v1/team/accept/lower'), env);
+    expect(res.status).toBe(200);
+    expect(env._grants).toEqual([]);
+    expect(env._invites).toEqual([]);
   });
 });
 

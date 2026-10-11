@@ -210,17 +210,17 @@ teamRoutes.post('/team/accept/:token', wrap(async (c) => {
   const token = c.req.param('token')!;
   const user = await requireUser(c);
 
+  // Consume first (#362): one DELETE … RETURNING has exactly one winner, so concurrent accepts
+  // of a single-use invite cannot all read it and all be granted. An expired invite is consumed
+  // too, and grants nothing.
   const invite = await c.env.DB.prepare(
-    'SELECT * FROM team_invites WHERE token = ?',
+    'DELETE FROM team_invites WHERE token = ? RETURNING id, app_id, role, expires_at, invited_by',
   )
     .bind(token)
     .first<{ id: string; app_id: string; role: string; expires_at: number; invited_by: string }>();
 
   if (!invite) return c.text('Invite not found', 404);
-  if (invite.expires_at < Date.now()) {
-    await c.env.DB.prepare('DELETE FROM team_invites WHERE id = ?').bind(invite.id).run();
-    return c.text('Invite expired', 410);
-  }
+  if (invite.expires_at < Date.now()) return c.text('Invite expired', 410);
 
   // Add to team — but don't downgrade if already a higher role
   const existing = await c.env.DB.prepare(
@@ -239,9 +239,6 @@ teamRoutes.post('/team/accept/:token', wrap(async (c) => {
       .bind(invite.app_id, user.id, invite.role, invite.invited_by, Date.now())
       .run();
   }
-
-  // Delete the invite
-  await c.env.DB.prepare('DELETE FROM team_invites WHERE id = ?').bind(invite.id).run();
 
   return c.json({ ok: true, appId: invite.app_id, role: invite.role });
 }));
