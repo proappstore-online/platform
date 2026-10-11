@@ -79,11 +79,18 @@ The KB host answers a private app's KB only to a matching `INTERNAL_TOKEN` (#277
 any other caller gets a plain 404, the same as "no tests yet". Since #303 M5 the
 two sides log the difference:
 
-- **agent-teams** activity log (`agent_activity`) and Workers logs:
-  `Private KB refused request: check INTERNAL_TOKEN on proappstore-kb-host (slug: <app>)`,
-  or `Test harvest failed: HTTP <status> from KB host` for any other non-OK answer.
-  `INTERNAL_TOKEN is not set on agent-teams` means the caller side is missing it.
-  A public app's 404 is still silent: it has no published summary yet.
+- **agent-teams** activity log (`agent_activity`) and Workers logs. Each line
+  names the app, commit and ticket (`slug: …, sha: …, ticket: …`), never a token
+  or a response body. `harvestTestResults` returns the outcome (#371):
+
+  | Outcome | Log line | Meaning |
+  |---|---|---|
+  | `auth_failure` | `Private-app harvest authorization failure: HTTP <401/403/404> from KB host (…) — check INTERNAL_TOKEN on proappstore-kb-host` | The private KB refused agent-teams; a 401/403 for a public app reads `KB harvest authorization failure`. |
+  | `failed` | `Test harvest failed: HTTP <status> from KB host (…)` or `Test harvest error (…): …` | Any other non-OK answer (5xx, 429, …) or an error. Usually transient; the next deploy retries. |
+  | `no_summary` | `No e2e summary yet (…)` | A public app with no published summary yet. Expected. |
+  | `skipped` | `Private-app harvest skipped: INTERNAL_TOKEN is not set on proappstore-agent-teams (…)` | The caller side is missing the token. |
+  | `harvested` | `Test results harvested: <n> passed, <m> failed` | Normal. |
+
 - **kb-host** Workers logs (`wrangler tail proappstore-kb-host`):
   `KB private gate: token mismatch for <app> (server token configured: <bool>)`.
   `false` means the secret is missing on the KB host; `true` means the two

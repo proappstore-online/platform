@@ -461,35 +461,52 @@ export function declaresPrivate(files: Map<string, string>): boolean {
  * double-ingestion, and the next deploy will pick up the current results. The
  * primary ingest path is the e2e job POSTing directly to /test-history.
  *
- * Best-effort: never fails a green deploy. A public app's 404 is "no e2e tests
- * yet" and stays quiet; anything else is logged (#303 M5). A private app's KB
- * answers 404 to a missing or mismatched INTERNAL_TOKEN (#277), indistinguishable
- * from "no summary" on the wire, so for a private app a 404 is reported as the
- * likely configuration fault.
+ * Best-effort: never fails a green deploy, and never silent (#303 M5, #371).
+ * The outcome says which case it was:
+ *   harvested     a summary was ingested (or already was, for this commit)
+ *   no_summary    a public app has no e2e summary yet — expected, non-fatal
+ *   auth_failure  a private app's KB refused us: 401/403, or a 404, which is how
+ *                 the private gate (#277) answers a missing/mismatched INTERNAL_TOKEN
+ *   failed        any other non-OK answer, or an error
+ *   skipped       nothing to ask: no KB binding, or a private app with no token here
+ * Every log line carries the slug, commit and ticket; never a token or a body.
  */
+export type HarvestOutcome = 'harvested' | 'no_summary' | 'auth_failure' | 'failed' | 'skipped';
+
 export async function harvestTestResults(
   deps: DeployDeps,
   proj: { slug: string },
   ticketId: string,
   sha: string | undefined,
   isPrivate: boolean,
-): Promise<void> {
+): Promise<HarvestOutcome> {
+  const where = `slug: ${proj.slug}, sha: ${sha ?? 'unknown'}, ticket: ${ticketId}`;
+  const report = (outcome: HarvestOutcome, detail: string): HarvestOutcome => {
+    console.warn(`[harvest] ${detail}`);
+    deps.logActivity('test', detail.slice(0, 300), ticketId);
+    return outcome;
+  };
   try {
     // kb.proappstore.online is route-mapped — a plain same-zone fetch bypasses
     // the kb-host worker entirely, so this must go over the KB service binding.
-    if (!deps.env.KB) return;
-    if (!deps.env.INTERNAL_TOKEN) console.warn(`[harvest] INTERNAL_TOKEN is not set on agent-teams; a private KB will refuse ${proj.slug}`);
+    if (!deps.env.KB) return 'skipped';
+    if (!deps.env.INTERNAL_TOKEN) {
+      // A public KB needs no token; a private one would refuse, so do not ask it.
+      if (isPrivate) return report('skipped', `Private-app harvest skipped: INTERNAL_TOKEN is not set on proappstore-agent-teams (${where})`);
+      console.warn(`[harvest] INTERNAL_TOKEN is not set on agent-teams; only public KBs can be harvested (${where})`);
+    }
     const res = await deps.env.KB.fetch(`https://kb.proappstore.online/${proj.slug}/.e2e/summary.json`, {
       headers: deps.env.INTERNAL_TOKEN ? { "x-internal-token": deps.env.INTERNAL_TOKEN } : {},
     });
     if (!res.ok) {
-      if (res.status === 404 && !isPrivate) return; // no summary published (e.g. no e2e tests yet)
-      const detail = res.status === 404
-        ? `Private KB refused request: check INTERNAL_TOKEN on proappstore-kb-host (slug: ${proj.slug})`
-        : `Test harvest failed: HTTP ${res.status} from KB host (slug: ${proj.slug})`;
-      console.warn(`[harvest] ${detail}`);
-      deps.logActivity('test', detail, ticketId);
-      return;
+      if (res.status === 404 && !isPrivate) {
+        deps.logActivity('test', `No e2e summary yet (${where})`, ticketId);
+        return 'no_summary';
+      }
+      if (res.status === 401 || res.status === 403 || res.status === 404) {
+        return report('auth_failure', `${isPrivate ? 'Private-app' : 'KB'} harvest authorization failure: HTTP ${res.status} from KB host (${where}) — check INTERNAL_TOKEN on proappstore-kb-host`);
+      }
+      return report('failed', `Test harvest failed: HTTP ${res.status} from KB host (${where})`);
     }
 
     const summary = await res.json() as {
@@ -506,10 +523,10 @@ export async function harvestTestResults(
     // to prevent duplicates on repeated watchdog ticks.
     if (sha) {
       const existing = sql.exec('SELECT id FROM test_runs WHERE commit_sha = ? LIMIT 1', sha).toArray();
-      if (existing.length > 0) return;
+      if (existing.length > 0) return 'harvested'; // already, for this commit
     } else {
       const recent = sql.exec('SELECT triggered_at FROM test_runs ORDER BY triggered_at DESC LIMIT 1').toArray() as { triggered_at: number }[];
-      if (recent.length > 0 && Date.now() - recent[0]!.triggered_at < 60_000) return;
+      if (recent.length > 0 && Date.now() - recent[0]!.triggered_at < 60_000) return 'harvested';
     }
 
     const runId = crypto.randomUUID();
@@ -538,10 +555,12 @@ export async function harvestTestResults(
     }
 
     deps.logActivity('test', `Test results harvested: ${passed} passed, ${failed} failed`, ticketId);
+    return 'harvested';
   } catch (err) {
     // Best-effort — never fails a green deploy, but never silent either.
     console.warn('[harvest] harvestTestResults error:', err);
-    deps.logActivity('test', `Test harvest error: ${String(err)}`.slice(0, 300), ticketId);
+    deps.logActivity('test', `Test harvest error (${where}): ${String(err)}`.slice(0, 300), ticketId);
+    return 'failed';
   }
 }
 
