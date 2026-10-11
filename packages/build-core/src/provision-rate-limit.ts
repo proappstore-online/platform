@@ -20,6 +20,12 @@
  * Deliberately NOT keyed on appId: squatting many DIFFERENT ids is the abuse,
  * so a per-app key would defeat the purpose.
  *
+ * Each bucket is CLAIMED in one atomic upsert that opens or rolls the window,
+ * increments the count and returns it, so parallel provisions each get a
+ * distinct count from SQLite and at most `limit` of them pass a window (#303 S3,
+ * the same pattern as the credential limiter, #323). A read-then-write would let
+ * a burst all read the same count and all pass.
+ *
  * The store is injected and described structurally rather than against
  * `D1Database`, so this module needs no Cloudflare types and stays unit-testable
  * without a database.
@@ -31,9 +37,13 @@ export interface ProvisionAttemptRow {
 }
 
 export interface ProvisionAttemptStore {
-  read(key: string): Promise<ProvisionAttemptRow | null>;
-  /** Upsert the row to exactly these values. */
-  set(key: string, row: ProvisionAttemptRow): Promise<void>;
+  /**
+   * Atomically take one slot in `key`'s window, opening it (or rolling an
+   * expired one) at `nowMs`, and return the row as it is after the claim.
+   */
+  claim(key: string, nowMs: number, windowMs: number): Promise<ProvisionAttemptRow | null>;
+  /** Give back one slot claimed in the window that started at `windowStart`; a rolled window is left alone. */
+  release(key: string, windowStart: number): Promise<void>;
 }
 
 export const HOUR_MS = 60 * 60 * 1000;
@@ -63,19 +73,23 @@ interface D1Like {
 
 export function d1ProvisionAttemptStore(db: D1Like): ProvisionAttemptStore {
   return {
-    async read(key) {
+    // SQLite evaluates every SET expression against the old row, so both CASEs see the same window_start.
+    async claim(key, nowMs, windowMs) {
       return db
-        .prepare('SELECT window_start, count FROM provision_attempts WHERE key = ?')
-        .bind(key)
+        .prepare(
+          `INSERT INTO provision_attempts (key, window_start, count) VALUES (?1, ?2, 1)
+           ON CONFLICT(key) DO UPDATE SET
+             window_start = CASE WHEN ?2 - window_start >= ?3 THEN ?2 ELSE window_start END,
+             count        = CASE WHEN ?2 - window_start >= ?3 THEN 1 ELSE count + 1 END
+           RETURNING window_start, count`,
+        )
+        .bind(key, nowMs, windowMs)
         .first<ProvisionAttemptRow>();
     },
-    async set(key, row) {
+    async release(key, windowStart) {
       await db
-        .prepare(
-          `INSERT INTO provision_attempts (key, window_start, count) VALUES (?1, ?2, ?3)
-           ON CONFLICT(key) DO UPDATE SET window_start = ?2, count = ?3`,
-        )
-        .bind(key, row.window_start, row.count)
+        .prepare('UPDATE provision_attempts SET count = count - 1 WHERE key = ? AND window_start = ? AND count > 0')
+        .bind(key, windowStart)
         .run();
     },
   };
@@ -224,9 +238,11 @@ interface Bucket {
 }
 
 /**
- * Check every bucket, then consume. Nothing is written when the answer is no:
- * a blocked caller cannot push its own window forward, and hammering the
- * endpoint stops costing writes once it is over a limit.
+ * Claim a slot in every bucket, in order. The first bucket whose claimed count
+ * is over its limit refuses, and every slot this call claimed is given back, so
+ * a refused provision costs no budget and a blocked caller cannot push its own
+ * window forward. Between a claim and its release a concurrent call can see the
+ * extra slot and be refused too: under contention the limiter errs toward no.
  */
 export async function checkProvisionQuota(
   store: ProvisionAttemptStore,
@@ -245,12 +261,14 @@ export async function checkProvisionQuota(
     buckets.push({ key: `ip:${opts.ip}:h`, limit: limits.ipPerHour, windowMs: HOUR_MS, scope: 'ip-hour' });
   }
 
-  const observed: { bucket: Bucket; row: ProvisionAttemptRow | null; stale: boolean }[] = [];
+  const claimed: { key: string; windowStart: number }[] = [];
 
   for (const bucket of buckets) {
-    const row = await store.read(bucket.key);
-    const stale = row === null || now - row.window_start >= bucket.windowMs;
-    if (!stale && row !== null && row.count >= bucket.limit) {
+    const row = await store.claim(bucket.key, now, bucket.windowMs);
+    if (!row) continue;
+    claimed.push({ key: bucket.key, windowStart: row.window_start });
+    if (row.count > bucket.limit) {
+      for (const c of claimed) await store.release(c.key, c.windowStart);
       const elapsed = now - row.window_start;
       return {
         allowed: false,
@@ -258,14 +276,6 @@ export async function checkProvisionQuota(
         retryAfterSeconds: Math.max(1, Math.ceil((bucket.windowMs - elapsed) / 1000)),
       };
     }
-    observed.push({ bucket, row, stale });
-  }
-
-  for (const { bucket, row, stale } of observed) {
-    await store.set(
-      bucket.key,
-      stale ? { window_start: now, count: 1 } : { window_start: row!.window_start, count: row!.count + 1 },
-    );
   }
 
   return { allowed: true };

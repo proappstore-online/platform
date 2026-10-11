@@ -23,7 +23,12 @@ function db(opts: {
           if (/FROM apps/i.test(sql)) return (opts.owner ?? null) as T | null;
           if (/provision_attempts/i.test(sql)) {
             if (opts.failLimiter) throw new Error("no such table: provision_attempts");
-            return (buckets[String(args[0])] ?? null) as T | null;
+            // The atomic claim: open or roll the window, take a slot, return the row after it.
+            const [key, now, windowMs] = args as [string, number, number];
+            const row = buckets[key];
+            buckets[key] = !row || now - row.window_start >= windowMs ? { window_start: now, count: 1 } : { ...row, count: row.count + 1 };
+            writes.push(args);
+            return buckets[key] as T;
           }
           return null;
         },

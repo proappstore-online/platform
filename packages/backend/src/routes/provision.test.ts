@@ -578,13 +578,13 @@ describe('POST /v1/provision — appId ownership (#82)', () => {
 describe('POST /v1/provision — rate limit (#83)', () => {
   const NOW = 1_800_000_000_000;
 
-  /** Like mockD1, but with an exhausted hourly bucket for gh:1. */
+  /** Like mockD1, but with an exhausted hourly bucket for gh:1: every claim comes back one over the cap. */
   function rateLimitedDb() {
     const prepare = vi.fn((sql: string) => {
       if (/SELECT creator_id FROM apps\b/i.test(sql)) return mockStmt({ first: null });
       if (/FROM users\b/i.test(sql)) return mockStmt({ first: { 1: 1 } });
       if (/provision_attempts/i.test(sql)) {
-        return mockStmt({ first: { window_start: Date.now(), count: 10 } });
+        return mockStmt({ first: { window_start: Date.now(), count: 11 } });
       }
       return mockStmt();
     });

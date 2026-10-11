@@ -31,7 +31,10 @@ function operationDb(opts: { quotaUnavailable?: boolean } = {}) {
         bind(...args: unknown[]) { values = args; return this; },
         async first() {
           if (/FROM apps\b/i.test(sql)) return null;
-          if (/FROM provision_attempts\b/i.test(sql)) return null;
+          if (/INTO provision_attempts/i.test(sql) && opts.quotaUnavailable) {
+            throw new Error('UNIQUE constraint failed: provision_attempts.key');
+          }
+          if (/provision_attempts\b/i.test(sql)) return null;
           if (/FROM provision_admissions\b/i.test(sql)) return admissions.get(String(values[0])) ?? null;
           if (/WHERE app_id = \?/i.test(sql)) return byApp.get(String(values[0])) ?? null;
           if (/WHERE receipt_id = \?/i.test(sql)) return byReceipt.get(String(values[0])) ?? null;

@@ -8,12 +8,30 @@ import {
   type ProvisionAttemptStore,
 } from './provision-rate-limit.ts';
 
+/**
+ * The D1 store's semantics in memory. Each claim is one indivisible step, as
+ * SQLite's upsert is, but it yields before and after it, so calls started
+ * together interleave the way parallel requests do.
+ */
 function fakeStore(seed: Record<string, ProvisionAttemptRow> = {}) {
   const rows = new Map<string, ProvisionAttemptRow>(Object.entries(seed));
   const writes: string[] = [];
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
   const store: ProvisionAttemptStore = {
-    async read(key) { return rows.get(key) ?? null; },
-    async set(key, row) { writes.push(key); rows.set(key, row); },
+    async claim(key, nowMs, windowMs) {
+      await tick();
+      const row = rows.get(key);
+      const next = !row || nowMs - row.window_start >= windowMs ? { window_start: nowMs, count: 1 } : { ...row, count: row.count + 1 };
+      rows.set(key, next);
+      writes.push(key);
+      await tick();
+      return { ...next };
+    },
+    async release(key, windowStart) {
+      await tick();
+      const row = rows.get(key);
+      if (row && row.window_start === windowStart && row.count > 0) rows.set(key, { ...row, count: row.count - 1 });
+    },
   };
   return { store, rows, writes };
 }
@@ -67,17 +85,64 @@ describe('checkProvisionQuota', () => {
     expect(r.scope).toBe('ip-hour');
   });
 
-  it('writes nothing when refusing', async () => {
-    // Two reasons: a blocked caller must not push its own window forward, and
-    // hammering should stop costing writes once over the limit.
+  it('a refusal costs no budget: every slot it claimed is given back', async () => {
+    // A blocked caller must not push its own window forward or spend budget,
+    // and buckets after the refusing one are never touched.
     const { store, writes, rows } = fakeStore({
       [`user:${USER}:h`]: { window_start: NOW, count: DEFAULT_PROVISION_LIMITS.userPerHour },
     });
     await checkProvisionQuota(store, { userKey: USER, ip: IP, nowMs: NOW + 1000 });
 
-    expect(writes).toEqual([]);
-    expect(rows.get(`user:${USER}:h`)!.count).toBe(DEFAULT_PROVISION_LIMITS.userPerHour);
+    expect(writes).toEqual([`user:${USER}:h`]);
+    expect(rows.get(`user:${USER}:h`)).toEqual({ window_start: NOW, count: DEFAULT_PROVISION_LIMITS.userPerHour });
     expect(rows.get(`user:${USER}:d`)).toBeUndefined();
+  });
+
+  it('an IP refusal gives back the user buckets it claimed first', async () => {
+    const { store, rows } = fakeStore({
+      [`ip:${IP}:h`]: { window_start: NOW, count: DEFAULT_PROVISION_LIMITS.ipPerHour },
+    });
+    const r = await checkProvisionQuota(store, { userKey: USER, ip: IP, nowMs: NOW });
+
+    expect(r.scope).toBe('ip-hour');
+    expect(rows.get(`user:${USER}:h`)).toEqual({ window_start: NOW, count: 0 });
+    expect(rows.get(`user:${USER}:d`)).toEqual({ window_start: NOW, count: 0 });
+    expect(rows.get(`ip:${IP}:h`)!.count).toBe(DEFAULT_PROVISION_LIMITS.ipPerHour);
+  });
+
+  describe('parallel provisions cannot exceed a cap (#303 S3)', () => {
+    const allowedOf = (rs: { allowed: boolean }[]) => rs.filter((r) => r.allowed).length;
+
+    it('per user per hour: a burst of 25 from one user admits exactly the cap', async () => {
+      const { store, rows } = fakeStore();
+      const rs = await Promise.all(Array.from({ length: 25 }, () => checkProvisionQuota(store, { userKey: USER, nowMs: NOW })));
+
+      expect(allowedOf(rs)).toBe(DEFAULT_PROVISION_LIMITS.userPerHour);
+      expect(rs.filter((r) => !r.allowed).every((r) => r.scope === 'user-hour')).toBe(true);
+      // The refusals gave their slots back: the windows hold exactly the admitted provisions.
+      expect(rows.get(`user:${USER}:h`)!.count).toBe(DEFAULT_PROVISION_LIMITS.userPerHour);
+      expect(rows.get(`user:${USER}:d`)!.count).toBe(DEFAULT_PROVISION_LIMITS.userPerHour);
+    });
+
+    it('per IP per hour: a burst spread over 40 fresh accounts on one IP admits exactly the cap', async () => {
+      const { store, rows } = fakeStore();
+      const rs = await Promise.all(Array.from({ length: 40 }, (_, i) => checkProvisionQuota(store, { userKey: `gh:${i}`, ip: IP, nowMs: NOW })));
+
+      expect(allowedOf(rs)).toBe(DEFAULT_PROVISION_LIMITS.ipPerHour);
+      expect(rs.filter((r) => !r.allowed).every((r) => r.scope === 'ip-hour')).toBe(true);
+      expect(rows.get(`ip:${IP}:h`)!.count).toBe(DEFAULT_PROVISION_LIMITS.ipPerHour);
+    });
+
+    it('over the cap, a burst admits nothing and leaves the count where it was', async () => {
+      const { store, rows } = fakeStore({
+        [`user:${USER}:h`]: { window_start: NOW, count: DEFAULT_PROVISION_LIMITS.userPerHour },
+      });
+      const rs = await Promise.all(Array.from({ length: 10 }, () => checkProvisionQuota(store, { userKey: USER, ip: IP, nowMs: NOW + 1000 })));
+
+      expect(allowedOf(rs)).toBe(0);
+      expect(rows.get(`user:${USER}:h`)!.count).toBe(DEFAULT_PROVISION_LIMITS.userPerHour);
+      expect(rows.get(`ip:${IP}:h`)).toBeUndefined();
+    });
   });
 
   it('reports seconds until the refusing window rolls over', async () => {
