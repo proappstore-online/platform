@@ -199,6 +199,13 @@ Delivery rows are kept 14 days and invocation rows 30 days.
 `/.pas/worker/*`, to its team and the listed roles. See
 [MCP app tools](./mcp-app-tools.md#private-apps-visibility).
 
+The owner (or a platform admin) reads the declared value back with
+`GET /v1/apps/:id/visibility`, which returns `{ mode, allowed_roles }`.
+`allowed_roles` is empty for a public app. Anyone else gets a refusal, and an
+unknown app id gets 404. A visitor's own answer is
+`GET /v1/apps/:id/visibility/me`, which returns `{ mode, allowed }` and never
+the roles.
+
 ### `connectors`
 
 ```json
@@ -427,11 +434,17 @@ pas worker disable <appId>              # stop the app worker
 
 The same data is available over HTTP (owner session):
 
-- `GET /v1/apps/:id/worker`
+- `GET /v1/apps/:id/worker` returns the enabled flag, `last_deploy`, and
+  `deploys`: the last 20 deploy attempts, newest first. Each has `id`,
+  `repository`, `ref`, `sha`, `bundle_sha256`, `status` (`deployed`, `refused`
+  or `failed`), `detail` and `created_at`; none of them is a credential. The
+  response also has the last 20 `invocations` and the `schedules` with their
+  breaker state.
 - `GET /v1/apps/:id/worker/usage?days=30`
 - `GET /v1/apps/:id/scheduled-runs`
 - `GET /v1/apps/:id/hooks`
 - `GET /v1/apps/:id/hook-deliveries`
+- `GET /v1/apps/:id/visibility`: the declared mode and allowed roles
 - `GET /v1/apps/:id/logs?category=worker`
 - `GET /v1/apps/:id/logs?trace_id=<invocation id>`
 

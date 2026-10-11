@@ -9,7 +9,7 @@
  *
  *   PUT    /v1/apps/:appId/worker/oidc            the app's main-branch workflow uploads its bundle
  *   PUT    /v1/admin/apps/:appId/worker-enabled   admin: { enabled } — off runs remove()
- *   GET    /v1/apps/:appId/worker                 owner: status, last deploy, last 20 invocations, schedules
+ *   GET    /v1/apps/:appId/worker                 owner: status, last deploy, last 20 deploys and invocations, schedules
  *   DELETE /v1/apps/:appId/worker                 owner: disable + remove()
  *   POST   /v1/apps/:appId/worker/rotate          owner: rotate token + event key
  *   POST   /v1/apps/:appId/worker/schedules/:name/run   owner: queue a schedule run now (#255)
@@ -114,15 +114,17 @@ appWorkerRoutes.get('/apps/:appId/worker', async (c) => {
   const appId = c.req.param('appId');
   await requireAppOwner(c, appId);
   // Explicit columns: the token, its hash and the sealed keys are never selected.
-  const [worker, lastDeploy, invocations, schedules] = await Promise.all([
+  const [worker, deploys, invocations, schedules] = await Promise.all([
     c.env.DB.prepare(
       `SELECT enabled, backend, bundle_sha256, config_version, deployed_sha, deployed_ref, deployed_at, enabled_by, enabled_at,
               prev_key_until AS rotation_overlap_until
          FROM app_workers WHERE app_id = ?`,
     ).bind(appId).first(),
+    // #261: the deploy history, newest first. Every column is a fact about the
+    // upload (repository, ref, sha, the bundle's hash, outcome) — no credential.
     c.env.DB.prepare(
-      'SELECT repository, ref, sha, bundle_sha256, status, detail, created_at FROM app_worker_deploys WHERE app_id = ? ORDER BY created_at DESC LIMIT 1',
-    ).bind(appId).first(),
+      'SELECT id, repository, ref, sha, bundle_sha256, status, detail, created_at FROM app_worker_deploys WHERE app_id = ? ORDER BY created_at DESC LIMIT 20',
+    ).bind(appId).all<{ id: string; repository: string; ref: string | null; sha: string | null; bundle_sha256: string | null; status: string; detail: string | null; created_at: number }>(),
     c.env.DB.prepare(
       `SELECT id, event_id, type, name, attempt, status, http_status, body_excerpt, pas_calls, started_at, finished_at, error,
               child_cpu_ms, child_wall_ms, child_outcome
@@ -137,7 +139,10 @@ appWorkerRoutes.get('/apps/:appId/worker', async (c) => {
     ).bind(WORKER_RUN_PREFIX, appId).all(),
   ]);
   c.header('Cache-Control', 'private, no-store');
-  return c.json({ app_id: appId, worker: worker ?? { enabled: 0 }, last_deploy: lastDeploy ?? null, invocations: invocations.results ?? [], schedules: schedules.results ?? [] });
+  const history = deploys.results ?? [];
+  // `last_deploy` keeps its original shape (no id) for existing readers.
+  const lastDeploy = history[0] ? (({ id: _id, ...rest }) => rest)(history[0]) : null;
+  return c.json({ app_id: appId, worker: worker ?? { enabled: 0 }, last_deploy: lastDeploy, deploys: history, invocations: invocations.results ?? [], schedules: schedules.results ?? [] });
 });
 
 appWorkerRoutes.get('/apps/:appId/worker/usage', async (c) => {

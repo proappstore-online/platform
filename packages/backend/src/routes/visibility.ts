@@ -1,9 +1,25 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
-import { requireUser, type FasUser } from '../lib/auth.js';
+import { HttpError, requireAppOwner, requireUser, type FasUser } from '../lib/auth.js';
 import { getAppVisibility, visibilityAllows } from '../lib/visibility.js';
 
 export const visibilityRoutes = new Hono<{ Bindings: Env }>();
+
+/**
+ * GET /v1/apps/:appId/visibility — the app's declared visibility for its owner
+ * (#261): `{ mode, allowed_roles }`, the app roles whose holders may use a
+ * private app besides the owner (empty for a public app). Owner or platform
+ * admin only; an app with no record is a 404 for both. Visitors ask `/me`.
+ */
+visibilityRoutes.get('/apps/:appId/visibility', async (c) => {
+  const appId = c.req.param('appId');
+  await requireAppOwner(c, appId);
+  // requireAppOwner admits a platform admin before it looks the app up.
+  if (!(await c.env.DB.prepare('SELECT 1 AS found FROM apps WHERE id = ?').bind(appId).first())) throw new HttpError('app not found', 404);
+  const visibility = await getAppVisibility(c.env.DB, appId);
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({ mode: visibility.mode, allowed_roles: visibility.roles });
+});
 
 /**
  * GET /v1/apps/:appId/visibility/me — may the caller use this app? (#259)
