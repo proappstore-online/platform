@@ -85,6 +85,7 @@ const mainSidebar = [
       { text: "AI Gateway (Agent Teams)", link: "/ai-gateway" },
       { text: "Agent Skills", link: "/skills/" },
       { text: "Provisioning Operator", link: "/provisioning-operator" },
+      { text: "Provisioning API (Console)", link: "/provisioning-api" },
     ],
   },
   {

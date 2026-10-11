@@ -81,7 +81,7 @@ function validAppId(appId: unknown): appId is string {
 }
 
 /** Do not expose the platform account id in a receipt response. */
-function operationResponse(operation: ProvisionOperation, joined?: boolean) {
+export function operationResponse(operation: ProvisionOperation, joined?: boolean) {
   const status = isLegacyProvisionOperation(operation)
     ? 'legacy_unreconciled'
     : operationIsExhausted(operation) ? 'exhausted' : operation.status;

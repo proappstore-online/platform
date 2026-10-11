@@ -263,13 +263,13 @@
         "scaffold_app"
       ],
       "mutating": true,
-      "bytes": 31690,
-      "digest": "849a1213c5b0850fc887b769695161a1dd00575be105582006911334396f27a4",
+      "bytes": 31691,
+      "digest": "afb1b93ae8f3ecd190c5a0bd9a5fe3726a9c17b7d4ca3698859990897a2495c7",
       "files": [
         {
           "path": "evals/cases.json",
-          "bytes": 7369,
-          "sha256": "72735633e962a51a30be0befb910f83692e776e32cec20aaf41988013a411485"
+          "bytes": 7370,
+          "sha256": "d42f4aef1a24d5363ca533446490f03340b26c47167f26f3d0924ef03ed7d4d5"
         },
         {
           "path": "evals/contract.json",
@@ -334,7 +334,7 @@
         "actual": {
           "skill_md_bytes": 11049,
           "references_bytes": 9415,
-          "bundle_bytes": 31690
+          "bundle_bytes": 31691
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",

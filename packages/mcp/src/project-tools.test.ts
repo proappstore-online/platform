@@ -531,7 +531,8 @@ describe('provision_pas_app', () => {
 
   it('reports best-effort verification when requested', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: { id: 1 } });
-    mockGh.repoExists.mockResolvedValue(true);
+    // As on GitHub: absent before the copy (#367 checks first, read-only), present for verification after it.
+    mockGh.repoExists.mockResolvedValueOnce(false).mockResolvedValue(true);
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
     mockGh.getDeployStatus.mockResolvedValue({
       ok: true,

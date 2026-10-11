@@ -8,6 +8,7 @@ import { listAuditEvents } from "./safety.js";
 import { registerPlatformTools } from "./platform-tools.js";
 import { fetchTools, registerAppDiscoveryTools, registerAppToolsProgressive } from "./tool-loader.js";
 import { registerProjectTools } from "./project-tools.js";
+import { handleInternalProvisioning } from "./provisioning-workflow.js";
 import { registerLoopTools } from "./loop-tools.js";
 import { registerAgentsTools } from "./agents-tools.js";
 import { registerQaTools } from "./qa-tools.js";
@@ -250,6 +251,12 @@ export default {
       if (!/^req_[A-Za-z0-9_-]{43}$/.test(requestId)) return new Response("not found", { status: 404 });
       return Response.json({ seen: await brokerMcpReadSeen(env.OAUTH_KV!, requestId) }, { headers: { "Cache-Control": "no-store" } });
     }
+
+    // #367: the Creator Console's provisioning preview/confirm, reached only
+    // through the API worker's service binding with INTERNAL_TOKEN; the user is
+    // the PAS session it forwards, verified again inside.
+    const provisioning = await handleInternalProvisioning(request, env);
+    if (provisioning) return provisioning;
 
     // OAuth 2.1 routes (discovery, registration, authorize, token)
     if (env.OAUTH_KV && env.SESSION_SIGNING_KEY) {
