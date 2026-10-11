@@ -13,7 +13,7 @@ import type { Env } from '../types.js';
 // dead-lettering are the consumer's: runtime-tests/test/backend/app-events.test.ts. A stateful D1 double; the
 // real-D1 + real Worker Loader path is runtime-tests/test/backend/worker-schedules.test.ts.
 
-interface Run { run_id: string; app_id: string; action_name: string; due_at: number; status: string; error?: string | null; claimed_at?: number | null }
+interface Run { run_id: string; app_id: string; action_name: string; due_at: number; status: string; error?: string | null; claimed_at?: number | null; queued_token?: string | null }
 interface Sched { app_id: string; name: string; cron: string; params: string }
 
 function fakeDb(schedules: Sched[], seeded: Run[] = []) {
@@ -38,6 +38,13 @@ function fakeDb(schedules: Sched[], seeded: Run[] = []) {
         return { results: [] };
       },
       first: async () => {
+        if (s.startsWith("UPDATE scheduled_action_runs SET status = 'queued', queued_token")) {
+          const r = runs.find((x) => x.run_id === args[1] && (x.status === 'claimed' || x.status === 'queued'));
+          if (!r) return null;
+          r.status = 'queued';
+          r.queued_token ??= String(args[0]);
+          return { queued_token: r.queued_token };
+        }
         if (s.startsWith('SELECT schedule_disabled_at')) return state.get(key(args[0], args[1]))?.disabled ? { schedule_disabled_at: 1 } : null;
         if (s.startsWith('SELECT 1 AS active')) return runs.some((r) => r.app_id === args[0] && r.action_name === args[1] && (r.status === 'claimed' || r.status === 'queued')) ? { active: 1 } : null;
         if (s.startsWith('SELECT run_id FROM scheduled_action_runs')) {
@@ -71,7 +78,7 @@ function fakeDb(schedules: Sched[], seeded: Run[] = []) {
           return { meta: { changes: r ? 1 : 0 } };
         }
         if (s.startsWith("UPDATE scheduled_action_runs SET status = 'succeeded'") || s.startsWith("UPDATE scheduled_action_runs SET status = 'failed'")) {
-          const from = s.match(/AND status = '(\w+)'$/)![1];
+          const from = s.match(/AND status = '(\w+)'/)![1];
           const r = runs.find((x) => x.run_id === args[2] && x.status === from);
           if (!r) return { meta: { changes: 0 } };
           r.status = s.includes("'succeeded'") ? 'succeeded' : 'failed';
@@ -112,7 +119,7 @@ describe('worker schedules on the platform tick (#255, #257)', () => {
     const report = await runWorkerSchedules(db.env, TICK, TICK);
     expect(report).toEqual({ due: 1, claimed: 1, queued: 1, failed: 0, skipped: 0 });
     const runId = db.runs[0]!.run_id;
-    expect(db.sent).toEqual([{ v: 1, id: runId, app_id: 't', type: 'schedule', name: 'tick', attempt: 1, issued_at: TICK, payload: { n: 1 }, ref: { table: 'scheduled_action_runs', id: runId } }]);
+    expect(db.sent).toEqual([expect.objectContaining({ v: 1, id: runId, app_id: 't', type: 'schedule', name: 'tick', attempt: 1, attempt_token: expect.any(String), issued_at: TICK, payload: { n: 1 }, ref: { table: 'scheduled_action_runs', id: runId } })]);
     expect(db.runs[0]).toMatchObject({ action_name: 'worker:tick', due_at: TICK, status: 'queued' });
   });
 

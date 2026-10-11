@@ -123,7 +123,8 @@ describe('worker schedules on the platform tick (#255, #257)', () => {
       await env.DB.prepare('DELETE FROM scheduled_action_state').run();
       const runId = crypto.randomUUID();
       await env.DB.prepare("INSERT INTO scheduled_action_runs (run_id, app_id, action_name, source, due_at, claimed_at, status) VALUES (?, 't', 'worker:tick', 'code', ?, ?, 'queued')").bind(runId, TICK, TICK).run();
-      const message = { v: 1 as const, id: runId, app_id: 't', type: 'schedule' as const, name: 'tick', attempt: 1, issued_at: TICK, payload: {}, ref: { table: 'scheduled_action_runs' as const, id: runId } };
+      const message = { v: 1 as const, id: runId, app_id: 't', type: 'schedule' as const, name: 'tick', attempt: 1, attempt_token: 'sweep-token', issued_at: TICK, payload: {}, ref: { table: 'scheduled_action_runs' as const, id: runId } };
+      await env.DB.prepare("UPDATE scheduled_action_runs SET queued_token = 'sweep-token' WHERE run_id = ?").bind(runId).run();
       const sweep = () => runScheduledActions({ env, now: TICK + STALE_QUEUED_RUN_MS + 1 });
       if (order === 'sweep-first') { expect((await sweep()).recovered).toBe(1); await consumeAppEvent(message, 1, APP_EVENTS_DLQ); } else { await consumeAppEvent(message, 1, APP_EVENTS_DLQ); expect((await sweep()).recovered).toBe(0); }
       expect(await failures(), order).toBe(1);
@@ -146,6 +147,17 @@ describe('worker schedules on the platform tick (#255, #257)', () => {
     expect(sent).toHaveLength(1);
     await drainAppEvents(sent);
     expect(await runs()).toEqual([expect.objectContaining({ status: 'succeeded' })]);
+  });
+
+  it('acks a stale queued-token message without invoking the worker', async () => {
+    await register([{ name: 'tick', cron: '*/5 * * * *', params: {} }]);
+    await enableAndDeploy();
+    await runScheduledActions({ env, now: TICK });
+    const stale = sent.shift()!;
+    await env.DB.prepare('UPDATE scheduled_action_runs SET queued_token = ? WHERE run_id = ?').bind('new-owner', stale.id).run();
+    expect((await consumeAppEvent(stale, 1)).acked).toBe(true);
+    expect(await env.DB.prepare('SELECT status FROM scheduled_action_runs WHERE run_id = ?').bind(stale.id).first()).toEqual({ status: 'queued' });
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM app_worker_invocations WHERE event_id = ?').bind(stale.id).first<{ n: number }>()).toEqual({ n: 0 });
   });
 });
 

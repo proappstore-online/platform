@@ -21,7 +21,7 @@ function fakeEnv(opts: { failSend?: boolean } = {}) {
 }
 
 const delivery = (body: Uint8Array, over: Partial<HookDelivery> = {}): HookDelivery => ({
-  appId: 't', hook: 'ping', target: 'worker', rowId: 'row-1', attempt: 2, body,
+  appId: 't', hook: 'ping', target: 'worker', rowId: 'row-1', attempt: 2, attemptToken: 'attempt-2', body,
   headers: new Headers({ 'content-type': 'application/json', 'x-github-event': 'push', cookie: 'nope' }), ...over,
 });
 
@@ -30,7 +30,7 @@ describe('enqueueHookDelivery (#257)', () => {
     const { env, sent, objects } = fakeEnv();
     await enqueueHookDelivery(env, delivery(new TextEncoder().encode('{"a":1}')));
     expect(sent).toEqual([{
-      v: 1, id: 'row-1', app_id: 't', type: 'hook', name: 'ping', attempt: 2, issued_at: expect.any(Number),
+      v: 1, id: 'row-1', app_id: 't', type: 'hook', name: 'ping', attempt: 2, attempt_token: 'attempt-2', issued_at: expect.any(Number),
       payload: { headers: { 'content-type': 'application/json', 'x-github-event': 'push' }, body: '{"a":1}', body_encoding: 'utf8' },
       ref: { table: 'app_hook_deliveries', id: 'row-1' },
     }]);
@@ -42,7 +42,7 @@ describe('enqueueHookDelivery (#257)', () => {
     const body = new Uint8Array(300 * 1024).map((_, i) => i % 251);
     await enqueueHookDelivery(env, delivery(body));
     const [m] = sent;
-    expect(m!.body_key).toBe('_hook-bodies/t/row-1');
+    expect(m!.body_key).toBe('_hook-bodies/t/row-1/attempt-2');
     expect(new TextEncoder().encode(JSON.stringify(m)).byteLength).toBeLessThan(MAX_MESSAGE_BYTES);
     expect(m!.payload).toEqual({ headers: { 'content-type': 'application/json', 'x-github-event': 'push' } });
     expect(objects.has(m!.body_key!)).toBe(true);

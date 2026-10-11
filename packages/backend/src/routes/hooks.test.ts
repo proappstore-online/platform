@@ -25,7 +25,7 @@ describe('hook param paths', () => {
 });
 
 const delivery = (over: Partial<HookDelivery> = {}): HookDelivery => ({
-  appId: 't', hook: 'ping', target: { action: 'record_ping', params: { source: '$.source' } }, rowId: 'row-1', attempt: 1,
+  appId: 't', hook: 'ping', target: { action: 'record_ping', params: { source: '$.source' } }, rowId: 'row-1', attempt: 1, attemptToken: 'attempt-1',
   body: new TextEncoder().encode(JSON.stringify(body)), headers: new Headers({ 'content-type': 'application/json', 'x-pas-hook-token': 'secret' }), ...over,
 });
 function envWithManifest(manifest: Record<string, unknown> | null): Env {

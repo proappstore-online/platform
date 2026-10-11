@@ -158,16 +158,17 @@ async function claimDue(
   return actual?.run_id ?? null;
 }
 
-export async function recordSuccess(env: Env, runId: string, appId: string, action: string, source: string, changes: number | null, now: number, from: LiveRunStatus = 'claimed'): Promise<void> {
+export async function recordSuccess(env: Env, runId: string, appId: string, action: string, source: string, changes: number | null, now: number, from: LiveRunStatus = 'claimed', queuedToken?: string): Promise<boolean> {
   const finished = await env.DB.prepare(
-    `UPDATE scheduled_action_runs SET status = 'succeeded', finished_at = ?, changes = ?, error = NULL WHERE run_id = ? AND status = '${from}'`,
-  ).bind(now, changes, runId).run();
+    `UPDATE scheduled_action_runs SET status = 'succeeded', finished_at = ?, changes = ?, error = NULL WHERE run_id = ? AND status = '${from}'${queuedToken === undefined ? '' : ' AND queued_token = ?'}`,
+  ).bind(now, changes, runId, ...(queuedToken === undefined ? [] : [queuedToken])).run();
   // Do not let a late completion clear a breaker after stale-claim recovery
   // has already converted this run to failed.
-  if (!finished.meta?.changes) return;
+  if (!finished.meta?.changes) return false;
   await env.DB.prepare(
     "INSERT INTO scheduled_action_state (app_id, action_name, source, consecutive_failures, schedule_disabled_at) VALUES (?, ?, ?, 0, NULL) ON CONFLICT(app_id, action_name) DO UPDATE SET source = excluded.source, consecutive_failures = 0, schedule_disabled_at = NULL",
   ).bind(appId, action, source).run();
+  return true;
 }
 
 /** Increment the durable streak. Exactly the transition to five creates an
@@ -247,7 +248,7 @@ export const WORKER_RUN_PREFIX = 'worker:';
 /** A worker schedule gets 5 minutes, under the 10-minute stale-claim window, so a hung run fails before recovery sees it. */
 export const WORKER_SCHEDULE_TIMEOUT_MS = 5 * 60_000;
 
-export interface ClaimedWorkerRun { appId: string; schedule: string; params: Record<string, unknown>; runId: string; attempt?: number }
+export interface ClaimedWorkerRun { appId: string; schedule: string; params: Record<string, unknown>; runId: string; attempt?: number; queuedToken?: string }
 
 /** One invocation of a worker schedule, as the queue consumer (#257) runs it; the outcome is the consumer's to act on. */
 export async function invokeWorkerRun(env: Env, run: ClaimedWorkerRun, ctx?: AppWorkerExports): Promise<{ ok: true } | { ok: false; error: string; final?: true }> {
@@ -273,10 +274,16 @@ export async function invokeWorkerRun(env: Env, run: ClaimedWorkerRun, ctx?: App
  */
 export async function queueWorkerRun(env: Env, run: ClaimedWorkerRun, now: number): Promise<boolean> {
   const action = `${WORKER_RUN_PREFIX}${run.schedule}`;
-  // A no-op for an owner's run-now row, which is inserted `queued`.
-  await env.DB.prepare("UPDATE scheduled_action_runs SET status = 'queued' WHERE run_id = ? AND status = 'claimed'").bind(run.runId).run();
+  // A run-now row is already queued. `COALESCE` makes recovering a pre-token
+  // row safe while preserving the one token if this function is retried.
+  const minted = crypto.randomUUID();
+  const queued = await env.DB.prepare(
+    "UPDATE scheduled_action_runs SET status = 'queued', queued_token = COALESCE(queued_token, ?) WHERE run_id = ? AND status IN ('claimed', 'queued') RETURNING queued_token",
+  ).bind(minted, run.runId).first<{ queued_token: string | null }>();
+  if (!queued?.queued_token) return false;
+  const queuedRun = { ...run, queuedToken: queued.queued_token };
   try {
-    await sendAppEvent(env, scheduleMessage(run, now));
+    await sendAppEvent(env, scheduleMessage(queuedRun, now));
     return true;
   } catch (e) {
     await failRun(env, run.appId, action, 'code', run.runId, `could not enqueue: ${errorText(e)}`, Date.now(), 'queued');

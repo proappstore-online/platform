@@ -23,6 +23,15 @@ async function changed(stmt: D1PreparedStatement): Promise<boolean> {
   return Boolean((await stmt.run()).meta?.changes);
 }
 
+/** A queue message may be redelivered long after its durable row was reclaimed. */
+async function ownsCurrentAttempt(env: Env, m: AppEventMessage): Promise<boolean> {
+  if (!m.attempt_token) return false; // pre-#303 messages are never allowed to invoke app code.
+  const sql = m.type === 'schedule'
+    ? "SELECT 1 AS current FROM scheduled_action_runs WHERE run_id = ? AND status = 'queued' AND queued_token = ?"
+    : "SELECT 1 AS current FROM app_hook_deliveries WHERE id = ? AND status = 'received' AND attempt_token = ?";
+  return Boolean(await env.DB.prepare(sql).bind(m.id, m.attempt_token).first());
+}
+
 /** The error of a failed try, or null on success. `final`: retrying cannot help (the app's daily quota is spent), so the delivery ends now. */
 async function deliver(env: Env, m: AppEventMessage, queueAttempts: number, ctx?: AppWorkerExports): Promise<{ error: string | null; final?: true }> {
   const attempt = m.attempt + queueAttempts - 1;
@@ -32,7 +41,7 @@ async function deliver(env: Env, m: AppEventMessage, queueAttempts: number, ctx?
   }
   try {
     const headers = new Headers((m.payload as { headers?: Record<string, string> }).headers ?? {});
-    return { error: await deliverHook(env, { appId: m.app_id, hook: m.name, target: 'worker', rowId: m.id, attempt, body: await hookBodyOf(env, m), headers }, ctx) };
+    return { error: await deliverHook(env, { appId: m.app_id, hook: m.name, target: 'worker', rowId: m.id, attempt, attemptToken: m.attempt_token, body: await hookBodyOf(env, m), headers }, ctx) };
   } catch (e) {
     if (e instanceof AppWorkerQuotaError) return { error: `quota exceeded (${e.quota}); redeliver it from the sender after 00:00 UTC`, final: true };
     return { error: errorText(e) };
@@ -41,26 +50,33 @@ async function deliver(env: Env, m: AppEventMessage, queueAttempts: number, ctx?
 
 async function finishDelivered(env: Env, m: AppEventMessage): Promise<void> {
   const now = Date.now();
+  let won: boolean;
   if (m.type === 'schedule') {
-    await recordSuccess(env, m.id, m.app_id, `${WORKER_RUN_PREFIX}${m.name}`, 'code', null, now, 'queued');
+    won = await recordSuccess(env, m.id, m.app_id, `${WORKER_RUN_PREFIX}${m.name}`, 'code', null, now, 'queued', m.attempt_token);
   } else {
-    await env.DB.prepare("UPDATE app_hook_deliveries SET status = 'delivered', finished_at = ?, error = NULL WHERE id = ? AND status = 'received'").bind(now, m.id).run();
+    won = await changed(env.DB.prepare("UPDATE app_hook_deliveries SET status = 'delivered', finished_at = ?, error = NULL WHERE id = ? AND attempt_token = ? AND status = 'received'")
+      .bind(now, m.id, m.attempt_token));
   }
-  await deleteSpilledBody(env, m);
+  if (won) await deleteSpilledBody(env, m);
 }
 
 /** Keep the last error; a hook's `attempts` counts tries, so it advances for the retry that follows — and not after the last try. */
 async function noteFailedTry(env: Env, m: AppEventMessage, error: string, retrying: boolean): Promise<void> {
   if (m.type === 'schedule') {
-    await env.DB.prepare("UPDATE scheduled_action_runs SET error = ? WHERE run_id = ? AND status = 'queued'").bind(error, m.id).run();
+    await env.DB.prepare("UPDATE scheduled_action_runs SET error = ? WHERE run_id = ? AND status = 'queued' AND queued_token = ?").bind(error, m.id, m.attempt_token).run();
   } else {
-    await env.DB.prepare(`UPDATE app_hook_deliveries SET attempts = attempts + ${retrying ? 1 : 0}, error = ? WHERE id = ? AND status = 'received'`).bind(error, m.id).run();
+    await env.DB.prepare(`UPDATE app_hook_deliveries SET attempts = attempts + ${retrying ? 1 : 0}, error = ? WHERE id = ? AND attempt_token = ? AND status = 'received'`).bind(error, m.id, m.attempt_token).run();
   }
 }
 
 async function handleEvent(env: Env, message: Msg, ctx?: AppWorkerExports): Promise<void> {
   const m = message.body;
   if (m.v !== 1) { console.error(`[app-events] dropping message with unknown version ${String(m.v)}`); message.ack(); return; }
+  if (!(await ownsCurrentAttempt(env, m))) {
+    console.warn(`[app-events] dropping stale ${m.type} ${m.app_id}/${m.name} id=${m.id}`);
+    message.ack();
+    return;
+  }
   const { error, final } = await deliver(env, m, message.attempts, ctx);
   if (error === null) {
     await finishDelivered(env, m);
@@ -85,18 +101,21 @@ async function failQueued(env: Env, m: AppEventMessage, message: string, hookSta
   const now = Date.now();
   if (m.type === 'schedule') {
     const won = await changed(env.DB.prepare(
-      "UPDATE scheduled_action_runs SET status = 'failed', finished_at = ?, error = ? WHERE run_id = ? AND status = 'queued'",
-    ).bind(now, message, m.id));
+      "UPDATE scheduled_action_runs SET status = 'failed', finished_at = ?, error = ? WHERE run_id = ? AND status = 'queued' AND queued_token = ?",
+    ).bind(now, message, m.id, m.attempt_token));
     if (won) await recordFailure(env, m.app_id, `${WORKER_RUN_PREFIX}${m.name}`, 'code', now);
   } else {
-    await env.DB.prepare("UPDATE app_hook_deliveries SET status = ?, finished_at = ?, error = ? WHERE id = ? AND status = 'received'")
-      .bind(hookStatus, now, message.slice(0, 500), m.id).run();
+    const won = await changed(env.DB.prepare("UPDATE app_hook_deliveries SET status = ?, finished_at = ?, error = ? WHERE id = ? AND attempt_token = ? AND status = 'received'")
+      .bind(hookStatus, now, message.slice(0, 500), m.id, m.attempt_token));
+    if (won) await deleteSpilledBody(env, m);
+    return;
   }
-  await deleteSpilledBody(env, m);
+  if (m.type === 'schedule') await deleteSpilledBody(env, m);
 }
 
 async function deadLetter(env: Env, message: Msg): Promise<void> {
   const m = message.body;
+  if (!(await ownsCurrentAttempt(env, m))) return;
   const text = `dead-lettered after ${APP_EVENT_MAX_RETRIES + 1} attempts`;
   // The consumer kept the last try's error on the row: say what it was.
   const row = await env.DB.prepare(m.type === 'schedule' ? 'SELECT error FROM scheduled_action_runs WHERE run_id = ?' : 'SELECT error FROM app_hook_deliveries WHERE id = ?')

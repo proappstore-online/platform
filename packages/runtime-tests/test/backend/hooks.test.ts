@@ -5,7 +5,7 @@ import { appWorkerHost, disableAppWorker } from '../../../backend/src/lib/app-wo
 import { sealSecret } from '../../../backend/src/lib/encryption';
 import { HOOK_TIMEOUT_MS, STALE_HOOK_WORKER_LEASE_MS, SYSTEM_HOOK_USER } from '../../../backend/src/routes/hooks';
 import { runScheduledActions } from '../../../backend/src/lib/scheduled-actions';
-import { BASE, captureAppEvents, drainAppEvents, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
+import { BASE, captureAppEvents, consumeAppEvent, drainAppEvents, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
 const env = providedEnv as unknown as Env;
 
@@ -65,7 +65,7 @@ async function github(event: string, delivery: string, body = '{"zen":"ok"}', se
   });
 }
 // By the sender's delivery id (#317: the row's delivery_id is now its replay key, the sender's id sits beside it).
-const delivery = (deliveryId: string) => env.DB.prepare('SELECT id, status, attempts, error, event FROM app_hook_deliveries WHERE COALESCE(sender_delivery_id, delivery_id) = ?').bind(deliveryId).first<{ id: string; status: string; attempts: number; error: string | null; event: string | null }>();
+const delivery = (deliveryId: string) => env.DB.prepare('SELECT id, status, attempts, error, event, attempt_token FROM app_hook_deliveries WHERE COALESCE(sender_delivery_id, delivery_id) = ?').bind(deliveryId).first<{ id: string; status: string; attempts: number; error: string | null; event: string | null; attempt_token: string | null }>();
 let sent: ReturnType<typeof captureAppEvents>;
 /** Run what the 202 queued through the consumer, then read the row. */
 async function settled(deliveryId: string) {
@@ -145,7 +145,7 @@ describe('inbound webhooks to the app worker (#256)', () => {
       headers: { 'content-type': 'application/octet-stream', 'x-signature': await hmacHex(BIN_SECRET, bytes), 'x-delivery': 'big-1', 'x-github-event': `big:${bytes.length}:${sum}` },
     });
     expect(res.status).toBe(202);
-    const key = `_hook-bodies/t/${(await delivery('big-1'))!.id}`;
+    const key = sent[0]!.body_key!;
     expect(sent[0]!.body_key).toBe(key);
     expect(await env.STORAGE.head(key)).not.toBeNull();
     expect(await settled('big-1')).toMatchObject({ status: 'delivered' });
@@ -392,5 +392,53 @@ describe('a delivery cut off mid-processing is recovered, never doubled (#319)',
     expect((await github('issues', 'gh-319', BODY)).status).toBe(202); // received two leases ago: stale
     await drainAppEvents(sent);
     expect(await row()).toMatchObject({ status: 'delivered', attempts: 2 });
+  });
+});
+
+describe('queue attempt ownership (#303)', () => {
+  it('acks an expired lease message with its old token without invoking the worker after redelivery takes ownership', async () => {
+    expect((await github('issues', 'old-token')).status).toBe(202);
+    const old = sent.shift()!;
+    const row = (await delivery('old-token'))!;
+    await env.DB.prepare('UPDATE app_hook_deliveries SET lease_until = ? WHERE id = ?').bind(Date.now() - 1, row.id).run();
+    expect((await github('issues', 'old-token')).status).toBe(202);
+    const current = sent[0]!;
+    expect(current.attempt_token).not.toBe(old.attempt_token);
+    expect((await consumeAppEvent(old, 1)).acked).toBe(true);
+    expect(await invocations(row.id)).toEqual([]);
+    await drainAppEvents(sent);
+    expect(await invocations(row.id)).toHaveLength(1);
+  });
+
+  it('two deliveries of one token run only the first consumer; the later duplicate is a no-op', async () => {
+    expect((await github('issues', 'same-token')).status).toBe(202);
+    const first = sent.shift()!;
+    const duplicate = structuredClone(first);
+    const row = (await delivery('same-token'))!;
+    expect((await consumeAppEvent(first, 1)).acked).toBe(true);
+    expect((await consumeAppEvent(duplicate, 1)).acked).toBe(true);
+    expect(await invocations(row.id)).toHaveLength(1);
+  });
+
+  it('a stale spilled-body message cannot remove the current attempt body', async () => {
+    const bytes = new Uint8Array(300 * 1024).fill(7);
+    const first = await SELF.fetch(`${BASE}/v1/apps/t/hooks/bin`, {
+      method: 'POST', body: bytes,
+      headers: { 'content-type': 'application/octet-stream', 'x-signature': await hmacHex(BIN_SECRET, bytes), 'x-delivery': 'body-owner', 'x-github-event': 'big:1:1' },
+    });
+    expect(first.status).toBe(202);
+    const old = sent.shift()!;
+    const row = (await delivery('body-owner'))!;
+    await env.DB.prepare('UPDATE app_hook_deliveries SET lease_until = ? WHERE id = ?').bind(Date.now() - 1, row.id).run();
+    expect((await SELF.fetch(`${BASE}/v1/apps/t/hooks/bin`, {
+      method: 'POST', body: bytes,
+      headers: { 'content-type': 'application/octet-stream', 'x-signature': await hmacHex(BIN_SECRET, bytes), 'x-delivery': 'body-owner', 'x-github-event': 'big:1:1' },
+    })).status).toBe(202);
+    const current = sent[0]!;
+    expect(current.body_key).not.toBe(old.body_key);
+    expect((await consumeAppEvent(old, 1)).acked).toBe(true);
+    expect(await env.STORAGE.head(current.body_key!)).not.toBeNull();
+    await drainAppEvents(sent);
+    expect(await env.STORAGE.head(current.body_key!)).toBeNull();
   });
 });

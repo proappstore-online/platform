@@ -31,6 +31,8 @@ export interface AppEventMessage {
   name: string;
   /** The attempt number of the first try; the consumer adds the queue's own retries. */
   attempt: number;
+  /** Opaque ownership of this durable queue attempt; never inferred from `attempt`. */
+  attempt_token: string;
   issued_at: number;
   payload: unknown;
   ref: { table: 'scheduled_action_runs' | 'app_hook_deliveries'; id: string };
@@ -43,9 +45,10 @@ export async function sendAppEvent(env: Env, message: AppEventMessage): Promise<
   await env.APP_EVENTS.send(message);
 }
 
-export function scheduleMessage(run: { runId: string; appId: string; schedule: string; params: Record<string, unknown> }, now: number): AppEventMessage {
+export function scheduleMessage(run: { runId: string; appId: string; schedule: string; params: Record<string, unknown>; queuedToken: string }, now: number): AppEventMessage {
   return {
     v: 1, id: run.runId, app_id: run.appId, type: 'schedule', name: run.schedule, attempt: 1, issued_at: now,
+    attempt_token: run.queuedToken,
     payload: run.params, ref: { table: 'scheduled_action_runs', id: run.runId },
   };
 }
@@ -55,11 +58,12 @@ export async function enqueueHookDelivery(env: Env, d: HookDelivery): Promise<vo
   const headers = hookHeaders(d.headers);
   const message: AppEventMessage = {
     v: 1, id: d.rowId, app_id: d.appId, type: 'hook', name: d.hook, attempt: d.attempt, issued_at: Date.now(),
+    attempt_token: d.attemptToken,
     payload: { headers, ...encodeEnvelopeBody(d.body, d.headers.get('content-type')) },
     ref: { table: 'app_hook_deliveries', id: d.rowId },
   };
   if (new TextEncoder().encode(JSON.stringify(message)).byteLength > MAX_MESSAGE_BYTES) {
-    message.body_key = `${HOOK_BODY_PREFIX}${d.appId}/${d.rowId}`;
+    message.body_key = `${HOOK_BODY_PREFIX}${d.appId}/${d.rowId}/${d.attemptToken}`;
     message.payload = { headers };
     await env.STORAGE.put(message.body_key, d.body);
     try {
