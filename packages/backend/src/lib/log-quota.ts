@@ -33,28 +33,50 @@ import { BURST_ENTRIES_PER_SECOND, DAILY_ENTRY_LIMIT } from './log-ingest.js';
 
 export interface LogUsageStore {
   read(appId: string, day: string): Promise<number>;
-  bump(appId: string, day: string, by: number): Promise<void>;
+  /**
+   * Add `by` to the day's count if it is below `limit`, in one statement (#376),
+   * and return the count before this batch; null when it was refused. A read
+   * followed by a separate bump let every batch in flight pass the same read.
+   */
+  claim(appId: string, day: string, by: number, limit: number): Promise<number | null>;
 }
 
-export function d1LogUsageStore(db: D1Database): LogUsageStore {
+/**
+ * A per-(app, UTC day) counter column. `table` and `column` are this module's
+ * constants, never caller input. The conditional upsert admits a batch while
+ * the count before it is below the limit — the semantics the separate read had
+ * — so a lone batch behaves as before; only concurrent overshoot is gone.
+ */
+function dailyCounterStore(db: D1Database, table: 'app_log_usage' | 'app_worker_usage', column: 'count' | 'server_count' | 'log_entries'): LogUsageStore {
   return {
     async read(appId, day) {
       const row = await db
-        .prepare('SELECT count FROM app_log_usage WHERE app_id = ?1 AND day = ?2')
+        .prepare(`SELECT ${column} AS n FROM ${table} WHERE app_id = ?1 AND day = ?2`)
         .bind(appId, day)
-        .first<{ count: number }>();
-      return row?.count ?? 0;
+        .first<{ n: number }>();
+      return row?.n ?? 0;
     },
-    async bump(appId, day, by) {
-      await db
+    async claim(appId, day, by, limit) {
+      const row = await db
         .prepare(
-          `INSERT INTO app_log_usage (app_id, day, count) VALUES (?1, ?2, ?3)
-           ON CONFLICT(app_id, day) DO UPDATE SET count = count + ?3`,
+          `INSERT INTO ${table} (app_id, day, ${column}) SELECT ?1, ?2, ?3 WHERE ?4 > 0
+           ON CONFLICT(app_id, day) DO UPDATE SET ${column} = ${column} + ?3 WHERE ${column} < ?4
+           RETURNING ${column} AS n`,
         )
-        .bind(appId, day, by)
-        .run();
+        .bind(appId, day, by, limit)
+        .first<{ n: number }>();
+      return row ? row.n - by : null;
     },
   };
+}
+
+export function d1LogUsageStore(db: D1Database): LogUsageStore {
+  return dailyCounterStore(db, 'app_log_usage', 'count');
+}
+
+/** The worker-log counter: `app_worker_usage.log_entries`, which only invocations write (#316). */
+export function workerLogUsageStore(db: D1Database): LogUsageStore {
+  return dailyCounterStore(db, 'app_worker_usage', 'log_entries');
 }
 
 /**
@@ -75,24 +97,7 @@ export const SERVER_FAILURE_BURST_KEY = 'server';
  * Only recordOperationFailure writes it; anonymous ingestion spends `count`.
  */
 export function serverFailureUsageStore(db: D1Database): LogUsageStore {
-  return {
-    async read(appId, day) {
-      const row = await db
-        .prepare('SELECT server_count FROM app_log_usage WHERE app_id = ?1 AND day = ?2')
-        .bind(appId, day)
-        .first<{ server_count: number }>();
-      return row?.server_count ?? 0;
-    },
-    async bump(appId, day, by) {
-      await db
-        .prepare(
-          `INSERT INTO app_log_usage (app_id, day, server_count) VALUES (?1, ?2, ?3)
-           ON CONFLICT(app_id, day) DO UPDATE SET server_count = server_count + ?3`,
-        )
-        .bind(appId, day, by)
-        .run();
-    },
-  };
+  return dailyCounterStore(db, 'app_log_usage', 'server_count');
 }
 
 // Per-isolate burst state, keyed `appId:clientKey`. Bounded so a spray of
@@ -156,15 +161,14 @@ export async function checkLogQuota(
 ): Promise<QuotaVerdict> {
   const dailyLimit = opts.dailyLimit ?? DAILY_ENTRY_LIMIT;
   const day = utcDayKey(opts.nowMs);
-  const dayCount = await store.read(opts.appId, day);
 
   if (!checkBurst(opts.appId, opts.clientKey, opts.nowMs, opts.entries)) {
-    return { persist: false, reason: 'burst', dayCount };
+    return { persist: false, reason: 'burst', dayCount: await store.read(opts.appId, day) };
   }
-  if (dayCount >= dailyLimit) {
-    return { persist: false, reason: 'daily_quota', dayCount };
+  // #376: the check and the spend are one statement.
+  const before = await store.claim(opts.appId, day, opts.entries, dailyLimit);
+  if (before === null) {
+    return { persist: false, reason: 'daily_quota', dayCount: await store.read(opts.appId, day) };
   }
-
-  await store.bump(opts.appId, day, opts.entries);
-  return { persist: true, reason: 'ok', dayCount };
+  return { persist: true, reason: 'ok', dayCount: before };
 }

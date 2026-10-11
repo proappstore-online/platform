@@ -440,13 +440,23 @@ describe('POST /v1/notifications/notify-user — push unchanged, email channel (
       if (sql.includes('INSERT OR IGNORE INTO notification_email_optout')) { state.optouts.add(`${args[0]}:${args[1]}`); return { run: {} }; }
       if (sql.includes('SELECT email FROM users')) return { first: state.emails.has(args[0] as string) ? { email: state.emails.get(args[0] as string) } : null };
       if (sql.includes('FROM app_custom_domains')) return { first: state.domains.has(args[1] as string) ? { 1: 1 } : null };
+      // #376: the guarded writes check their caps in the same statement, as SQLite does.
+      if (sql.includes('INSERT INTO notification_log')) {
+        const ok = state.log.filter((l) => l.sender === args[0]).length < (args[5] as number) && state.log.filter((l) => l.target === args[2]).length < (args[6] as number);
+        if (ok) state.log.push({ sender: args[0] as string, target: args[2] as string });
+        return { run: { meta: { changes: ok ? 1 : 0 } } };
+      }
+      if (sql.includes('INSERT INTO email_usage')) {
+        const ok = state.usage.length < (args[5] as number) && state.usage.filter((u) => u.target === args[3]).length < (args[6] as number);
+        if (!ok) return { run: { meta: { changes: 0 } } };
+        const id = state.usage.length + 1; state.usage.push({ id, target: args[3] as string });
+        return { run: { meta: { changes: 1, last_row_id: id } } };
+      }
       if (sql.includes('FROM notification_log') && sql.includes('sender_id = ?1')) return { first: { n: state.log.filter((l) => l.sender === args[0]).length } };
       if (sql.includes('FROM notification_log')) return { first: { n: state.log.filter((l) => l.target === args[0]).length } };
-      if (sql.includes('INSERT INTO notification_log')) { state.log.push({ sender: args[0] as string, target: args[2] as string }); return { run: {} }; }
       if (sql.includes('DELETE FROM email_usage')) { state.usage = state.usage.filter((u) => u.id !== args[0]); return { run: {} }; }
       if (sql.includes('FROM email_usage') && sql.includes('target_user_id')) return { first: { n: state.usage.filter((u) => u.target === args[1]).length } };
       if (sql.includes('FROM email_usage')) return { first: { n: state.usage.length } };
-      if (sql.includes('INSERT INTO email_usage')) { const id = state.usage.length + 1; state.usage.push({ id, target: args[3] as string }); return { run: { meta: { last_row_id: id } } }; }
       return {};
     };
     return {

@@ -63,8 +63,9 @@ function fakeDb(): D1Database {
     if (s.startsWith('INSERT INTO app_action_audit')) { audits.push(args); return { changes: 1 }; }
     // #316: worker log lines are metered on app_worker_usage.log_entries. app_log_usage — the counter anonymous
     // ingestion spends — is deliberately unhandled here, so any worker path that touches it fails the test.
-    if (s.startsWith('SELECT log_entries FROM app_worker_usage')) return { first: null };
-    if (s.startsWith('INSERT INTO app_worker_usage')) return { changes: 1 };
+    if (s.startsWith('SELECT log_entries AS n FROM app_worker_usage')) return { first: null };
+    // #376: claimed by one conditional upsert; admitted, it RETURNs the new count.
+    if (s.startsWith('INSERT INTO app_worker_usage (app_id, day, log_entries)')) return { first: { n: args[2] }, changes: 1 };
     if (s.startsWith('INSERT INTO app_logs')) { logs.push(args); return { changes: 1 }; }
     throw new Error(`fake D1: unexpected SQL ${s.slice(0, 90)}`);
   };

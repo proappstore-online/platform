@@ -67,22 +67,19 @@ emailRoutes.post('/email/send', wrap(async (c) => {
     return c.text('not authorized to send email for this app', 403);
   }
 
-  // Rate limit: 100 emails per day per app.
-  // Insert the usage row BEFORE sending to prevent concurrent requests
-  // from bypassing the limit (check-then-act race condition).
+  // Rate limit: 100 emails per day per app. The slot is reserved BEFORE sending,
+  // and (#376) the cap is checked inside the same INSERT: a separate COUNT then
+  // INSERT let N concurrent sends at limit - 1 all pass the count.
   const now = Math.floor(Date.now() / 1000);
   const dayAgo = now - 86400;
-  const usage = await c.env.DB.prepare(
-    'SELECT COUNT(*) as n FROM email_usage WHERE app_id = ?1 AND sent_at > ?2',
-  ).bind(appId, dayAgo).first<{ n: number }>();
-  if (usage && usage.n >= DAILY_LIMIT) {
+  const insert = await c.env.DB.prepare(
+    `INSERT INTO email_usage (app_id, user_id, sent_at)
+     SELECT ?1, ?2, ?3
+      WHERE (SELECT COUNT(*) FROM email_usage WHERE app_id = ?1 AND sent_at > ?4) < ?5`,
+  ).bind(appId, user.id, now, dayAgo, DAILY_LIMIT).run();
+  if (!insert.meta.changes) {
     return c.text(`daily email limit reached (${DAILY_LIMIT}/day)`, 429);
   }
-
-  // Reserve the slot before sending so concurrent requests can't bypass the limit
-  const insert = await c.env.DB.prepare(
-    'INSERT INTO email_usage (app_id, user_id, sent_at) VALUES (?1, ?2, ?3)',
-  ).bind(appId, user.id, now).run();
   const rowId = insert.meta.last_row_id;
 
   const from = c.env.EMAIL_FROM ?? 'ProAppStore <noreply@proappstore.online>';

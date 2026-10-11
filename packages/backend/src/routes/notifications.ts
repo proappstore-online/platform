@@ -136,6 +136,8 @@ notificationRoutes.post('/notifications/unsubscribe', wrap(async (c) => {
 
 /** notify-user email caps (#209): the per-app budget is shared with app.email.send. */
 const EMAIL_APP_DAILY_LIMIT = 100;
+const SENDER_PER_MINUTE = 30;
+const RECIPIENT_PER_MINUTE = 10;
 const EMAIL_RECIPIENT_DAILY_LIMIT = 10;
 const EMAIL_MAX_TITLE = 150;
 const EMAIL_MAX_BODY = 2000;
@@ -207,28 +209,32 @@ notificationRoutes.post('/notifications/notify-user', wrap(async (c) => {
     }
   }
 
-  // Rate limit: 30 sends per minute per sender per app
+  // Rate limits: 30 sends per minute per sender per app, 10 per minute per
+  // recipient (anti-spam). #376: the attempt is logged by the same statement that
+  // checks both counts, so concurrent sends cannot all pass a count read before
+  // any of them wrote. Logged now, before anything is sent, so rejected attempts
+  // still count toward these limits.
   const now = Math.floor(Date.now() / 1000);
   const windowStart = now - 60;
-  const senderCount = await c.env.DB.prepare(
-    `SELECT COUNT(*) as n FROM notification_log
-     WHERE sender_id = ?1 AND app_id = ?2 AND sent_at > ?3`,
-  ).bind(user.id, appId, windowStart).first<{ n: number }>();
-  if (senderCount && senderCount.n >= 30) {
-    return c.text('rate limit exceeded: max 30 notifications per minute per app', 429);
-  }
-
-  // Rate limit: 10 pushes per minute per recipient (anti-spam)
-  const recipientCount = await c.env.DB.prepare(
-    `SELECT COUNT(*) as n FROM notification_log
-     WHERE target_user_id = ?1 AND app_id = ?2 AND sent_at > ?3`,
-  ).bind(targetUserId, appId, windowStart).first<{ n: number }>();
-  if (recipientCount && recipientCount.n >= 10) {
-    return c.text('rate limit exceeded: target user receiving too many notifications', 429);
+  const logged = await c.env.DB.prepare(
+    `INSERT INTO notification_log (sender_id, app_id, target_user_id, sent_at)
+     SELECT ?1, ?2, ?3, ?4
+      WHERE (SELECT COUNT(*) FROM notification_log WHERE sender_id = ?1 AND app_id = ?2 AND sent_at > ?5) < ?6
+        AND (SELECT COUNT(*) FROM notification_log WHERE target_user_id = ?3 AND app_id = ?2 AND sent_at > ?5) < ?7`,
+  ).bind(user.id, appId, targetUserId, now, windowStart, SENDER_PER_MINUTE, RECIPIENT_PER_MINUTE).run();
+  if (!logged.meta.changes) {
+    // Refused: read once more only to name which limit it was.
+    const sender = await c.env.DB.prepare(
+      'SELECT COUNT(*) as n FROM notification_log WHERE sender_id = ?1 AND app_id = ?2 AND sent_at > ?3',
+    ).bind(user.id, appId, windowStart).first<{ n: number }>();
+    return (sender?.n ?? 0) >= SENDER_PER_MINUTE
+      ? c.text(`rate limit exceeded: max ${SENDER_PER_MINUTE} notifications per minute per app`, 429)
+      : c.text('rate limit exceeded: target user receiving too many notifications', 429);
   }
 
   // Email decision BEFORE anything is sent: a daily-cap 429 must not follow a push.
   let emailTo: string | null = null;
+  let reservation: number | null = null;
   let skipped: EmailSkip | undefined;
   if (wantsEmail) {
     const optedOut = await c.env.DB.prepare(
@@ -244,24 +250,30 @@ notificationRoutes.post('/notifications/notify-user', wrap(async (c) => {
       else skipped = 'no_address';
     }
     if (emailTo) {
+      // #376: reserve the daily slot here, before any push, in one statement
+      // that checks both caps (shared with app.email.send). Given back below if
+      // no email goes out after all.
       const dayAgo = now - 86400;
-      const appUsage = await c.env.DB.prepare(
-        'SELECT COUNT(*) as n FROM email_usage WHERE app_id = ?1 AND sent_at > ?2',
-      ).bind(appId, dayAgo).first<{ n: number }>();
-      if (appUsage && appUsage.n >= EMAIL_APP_DAILY_LIMIT) return c.text(`daily email limit reached (${EMAIL_APP_DAILY_LIMIT}/day per app)`, 429);
-      const recipientUsage = await c.env.DB.prepare(
-        'SELECT COUNT(*) as n FROM email_usage WHERE app_id = ?1 AND target_user_id = ?2 AND sent_at > ?3',
-      ).bind(appId, targetUserId, dayAgo).first<{ n: number }>();
-      if (recipientUsage && recipientUsage.n >= EMAIL_RECIPIENT_DAILY_LIMIT) {
-        return c.text(`daily email limit reached for this recipient (${EMAIL_RECIPIENT_DAILY_LIMIT}/day)`, 429);
+      const reserved = await c.env.DB.prepare(
+        `INSERT INTO email_usage (app_id, user_id, sent_at, target_user_id)
+         SELECT ?1, ?2, ?3, ?4
+          WHERE (SELECT COUNT(*) FROM email_usage WHERE app_id = ?1 AND sent_at > ?5) < ?6
+            AND (SELECT COUNT(*) FROM email_usage WHERE app_id = ?1 AND target_user_id = ?4 AND sent_at > ?5) < ?7`,
+      ).bind(appId, user.id, now, targetUserId, dayAgo, EMAIL_APP_DAILY_LIMIT, EMAIL_RECIPIENT_DAILY_LIMIT).run();
+      if (!reserved.meta.changes) {
+        const appUsage = await c.env.DB.prepare(
+          'SELECT COUNT(*) as n FROM email_usage WHERE app_id = ?1 AND sent_at > ?2',
+        ).bind(appId, dayAgo).first<{ n: number }>();
+        return (appUsage?.n ?? 0) >= EMAIL_APP_DAILY_LIMIT
+          ? c.text(`daily email limit reached (${EMAIL_APP_DAILY_LIMIT}/day per app)`, 429)
+          : c.text(`daily email limit reached for this recipient (${EMAIL_RECIPIENT_DAILY_LIMIT}/day)`, 429);
       }
+      reservation = reserved.meta.last_row_id;
     }
   }
-
-  // Log this send for rate limiting
-  await c.env.DB.prepare(
-    'INSERT INTO notification_log (sender_id, app_id, target_user_id, sent_at) VALUES (?1, ?2, ?3, ?4)',
-  ).bind(user.id, appId, targetUserId, now).run();
+  const release = async () => {
+    if (reservation !== null) await c.env.DB.prepare('DELETE FROM email_usage WHERE id = ?1').bind(reservation).run();
+  };
 
   // #213: caller-written text leaves under the platform's sending domain, so it
   // is moderated before anything is sent. Only when an email will really go out
@@ -272,9 +284,11 @@ notificationRoutes.post('/notifications/notify-user', wrap(async (c) => {
     const moderation = await moderateText(c.env.AI, `${title}\n\n${body}`);
     auditModeration('notify_user_moderation', { app_id: appId, sender_id: user.id, target_user_id: targetUserId }, moderation);
     if (moderation.verdict === 'unsafe') {
+      await release();
       return c.json({ error: 'message rejected by content moderation', categories: moderation.categories }, 422);
     }
     if (moderation.verdict === 'error') {
+      await release();
       return c.text('email content moderation is unavailable; try again later', 503, { 'Retry-After': '60' });
     }
   }
@@ -286,10 +300,6 @@ notificationRoutes.post('/notifications/notify-user', wrap(async (c) => {
   if (!wantsEmail) return c.json(result);
   if (!emailTo) return c.json({ ...result, email: 'skipped', skipped });
 
-  // Reserve the daily slot before sending (check-then-act, as app.email.send does).
-  const reserved = await c.env.DB.prepare(
-    'INSERT INTO email_usage (app_id, user_id, sent_at, target_user_id) VALUES (?1, ?2, ?3, ?4)',
-  ).bind(appId, user.id, now, targetUserId).run();
   const apiBase = c.env.APP_BASE ?? 'https://api.proappstore.online';
   const unsubscribeUrl = `${apiBase}/v1/notifications/email/unsubscribe?t=${await signUnsubscribeToken(c.env.SESSION_SIGNING_KEY, appId, targetUserId)}`;
   const message = renderNotifyEmail({ appId, title, body, link: url ?? `https://${appId}.proappstore.online/`, unsubscribeUrl });
@@ -303,7 +313,7 @@ notificationRoutes.post('/notifications/notify-user', wrap(async (c) => {
       },
     );
   } catch (err) {
-    await c.env.DB.prepare('DELETE FROM email_usage WHERE id = ?1').bind(reserved.meta.last_row_id).run();
+    await release();
     console.error('[notify-user] email send failed', err instanceof Error ? err.message : err);
     return channel === 'email' ? c.text('email send failed', 502) : c.json({ ...result, email: 'failed' });
   }

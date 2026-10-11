@@ -112,6 +112,36 @@ describe('metering (#275)', () => {
   });
 });
 
+describe('#376: a duplicate invocation spends no quota', () => {
+  const event = (id: string, attempt = 1) => ({ id, type: 'schedule' as const, name: 'tick', attempt, payload: {} });
+
+  it('a redelivered envelope (same id and attempt) is refused before any quota is spent', async () => {
+    expect((await appWorkerHost(env).invoke('t', event('dup-1'), { timeoutMs: 10_000 })).status).toBe('succeeded');
+    const before = (await usage()).today.invocations;
+    const again = await Promise.allSettled([1, 2, 3].map(() => appWorkerHost(env).invoke('t', event('dup-1'), { timeoutMs: 10_000 })));
+    expect(again.every((r) => r.status === 'rejected' && /already exists/.test(String(r.reason)))).toBe(true);
+    expect((await usage()).today.invocations).toBe(before);
+    expect(await invocationCount()).toBe(1);
+  });
+
+  it('a duplicate at the quota\'s last slot does not take it from a real invocation', async () => {
+    expect((await setQuotas({ invocations: 2 })).status).toBe(200);
+    await appWorkerHost(env).invoke('t', event('dup-2'), { timeoutMs: 10_000 });
+    await expect(appWorkerHost(env).invoke('t', event('dup-2'), { timeoutMs: 10_000 })).rejects.toThrow(/already exists/);
+    expect((await appWorkerHost(env).invoke('t', event('fresh'), { timeoutMs: 10_000 })).status).toBe('succeeded');
+    expect((await usage()).today.invocations).toBe(2);
+  });
+
+  it('a quota-refused invocation leaves no row, so its retry is not taken for a duplicate', async () => {
+    expect((await setQuotas({ invocations: 1 })).status).toBe(200);
+    await appWorkerHost(env).invoke('t', event('first'), { timeoutMs: 10_000 });
+    await expect(appWorkerHost(env).invoke('t', event('over'), { timeoutMs: 10_000 })).rejects.toThrow(/quota/i);
+    expect(await env.DB.prepare("SELECT 1 FROM app_worker_invocations WHERE event_id = 'over'").first()).toBeNull();
+    expect((await setQuotas({ invocations: 5 })).status).toBe(200);
+    expect((await appWorkerHost(env).invoke('t', event('over'), { timeoutMs: 10_000 })).status).toBe('succeeded');
+  });
+});
+
 describe('the daily invocation quota (#275)', () => {
   it('with invocations 3: the 4th http request is 429 + Retry-After, a schedule fails, a hook is recorded quota_exceeded with a 202 and no invocation', async () => {
     expect((await setQuotas({ invocations: 3 })).status).toBe(200);

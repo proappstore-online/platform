@@ -19,9 +19,12 @@ function fakeStore(seed: Record<string, number> = {}): LogUsageStore & { counts:
     async read(appId, day) {
       return counts.get(`${appId}:${day}`) ?? 0;
     },
-    async bump(appId, day, by) {
+    async claim(appId, day, by, limit) {
       const key = `${appId}:${day}`;
-      counts.set(key, (counts.get(key) ?? 0) + by);
+      const before = counts.get(key) ?? 0;
+      if (before >= limit) return null;
+      counts.set(key, before + by);
+      return before;
     },
   };
 }

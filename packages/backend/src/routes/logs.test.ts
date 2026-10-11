@@ -21,18 +21,29 @@ function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
 }
 
 /**
- * Ingestion reads before it writes, so the mock order matters:
- *   1. app existence     SELECT id FROM apps
- *   2. daily quota read  SELECT count FROM app_log_usage
- *   3. quota bump        INSERT ... app_log_usage
- * then the batched entry INSERT, prepared last.
+ * Ingestion, answered by SQL: the app-existence read; the daily quota claim
+ * (#376: one conditional upsert, `RETURNING n`, admitting the batch while the
+ * day's count is below the bound limit); on a refusal a read of the count; and
+ * the batched entry INSERT, prepared last.
  */
 function ingestDb(opts: { appExists?: boolean; dayCount?: number } = {}) {
-  return mockD1(
-    mockStmt({ first: opts.appExists === false ? null : { id: 'myapp' } }),
-    mockStmt({ first: { count: opts.dayCount ?? 0 } }),
-    mockStmt(),
-  );
+  const dayCount = opts.dayCount ?? 0;
+  const stmt = (sql: string) => {
+    let args: unknown[] = [];
+    const st = {
+      bind: vi.fn((...a: unknown[]) => { args = a; return st; }),
+      first: vi.fn(async () => {
+        if (/FROM apps\b/i.test(sql)) return opts.appExists === false ? null : { id: 'myapp' };
+        if (/INSERT INTO app_log_usage/i.test(sql)) return dayCount < (args[3] as number) ? { n: dayCount + (args[2] as number) } : null;
+        if (/FROM app_log_usage/i.test(sql)) return { n: dayCount };
+        return null;
+      }),
+      all: vi.fn(async () => ({ results: [] })),
+      run: vi.fn(async () => ({ meta: { changes: 1 } })),
+    };
+    return st;
+  };
+  return { prepare: vi.fn((sql: string) => stmt(sql)), batch: vi.fn().mockResolvedValue([{ meta: { changes: 1 } }]) } as unknown as ReturnType<typeof mockD1>;
 }
 
 function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof mockD1>) {
@@ -70,7 +81,8 @@ describe('POST /v1/internal/session-invalidations', () => {
 
   it('persists one fixed, anonymous host event before the browser cookie is cleared', async () => {
     const insert = mockStmt();
-    const db = mockD1(mockStmt({ first: { count: 0 } }), mockStmt(), insert);
+    // #376: the quota claim (admitted: RETURNING n), then the row.
+    const db = mockD1(mockStmt({ first: { n: 1 } }), insert);
     const correlationId = 'a'.repeat(32);
     const res = await app.request('/v1/internal/session-invalidations', {
       method: 'POST',
@@ -91,8 +103,10 @@ describe('POST /v1/internal/session-invalidations', () => {
 
   it('drops host diagnostics after the daily quota without rejecting the authoritative invalidation', async () => {
     const insert = mockStmt();
+    // #376: the claim refuses (no row RETURNed), then the count is read for the verdict.
     const db = mockD1(
-      mockStmt({ first: { server_count: 999_999 } }),
+      mockStmt({ first: null }),
+      mockStmt({ first: { n: 999_999 } }),
       insert,
     );
     const res = await app.request('/v1/internal/session-invalidations', {
@@ -109,7 +123,7 @@ describe('POST /v1/internal/session-invalidations', () => {
   });
 
   it('spends the server budget, not the client-ingestion count an anonymous flood can exhaust (#303)', async () => {
-    const db = mockD1(mockStmt({ first: { server_count: 0 } }), mockStmt(), mockStmt());
+    const db = mockD1(mockStmt({ first: { n: 1 } }), mockStmt());
     const res = await app.request('/v1/internal/session-invalidations', {
       method: 'POST',
       headers: {
@@ -121,8 +135,9 @@ describe('POST /v1/internal/session-invalidations', () => {
 
     expect(res.status).toBe(204);
     const sql = db.prepare.mock.calls.map(([q]) => q as string);
-    expect(sql[0]).toMatch(/SELECT server_count FROM app_log_usage/);
-    expect(sql[1]).toMatch(/server_count = server_count \+/);
+    // #376: one statement claims the server budget: INSERT … server_count = server_count + … WHERE server_count < limit.
+    expect(sql[0]).toMatch(/INSERT INTO app_log_usage \(app_id, day, server_count\)/);
+    expect(sql[0]).toMatch(/server_count = server_count \+ \?3 WHERE server_count < \?4/);
   });
 
   it('bounds concurrent host invalidation diagnostics with the shared burst quota', async () => {
@@ -132,7 +147,7 @@ describe('POST /v1/internal/session-invalidations', () => {
       const request = (n: number) => {
         const insert = mockStmt();
         inserts.push(insert);
-        const db = mockD1(mockStmt({ first: { count: 0 } }), mockStmt(), insert);
+        const db = mockD1(mockStmt({ first: { n: 1 } }), insert);
         return app.request('/v1/internal/session-invalidations', {
           method: 'POST',
           headers: {

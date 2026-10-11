@@ -423,10 +423,8 @@ function loaderHost(env: Env, loader: WorkerLoader, ctx?: AppWorkerExports): App
 
       // Logging never gates an invocation (#316): the app's log quota is spendable by anonymous ingestion,
       // and worker log lines have their own budget (checkWorkerLogQuota), which only drops lines.
-      // #275: today's quota, reserved before any work. Throws AppWorkerQuotaError, or 503 if the check cannot run.
-      const quotas = quotasFrom(w.quota_overrides);
-      await reserveInvocation(env, appId, quotas, now);
-
+      // The invocation row is the duplicate check: a redelivered envelope (same id
+      // and attempt) is refused here, before it can spend any quota (#376).
       const invocationId = `${event.id}:${event.attempt}`;
       try {
         await env.DB.prepare(
@@ -435,6 +433,17 @@ function loaderHost(env: Env, loader: WorkerLoader, ctx?: AppWorkerExports): App
         ).bind(invocationId, appId, event.id, event.type, event.name ?? null, event.attempt, now).run();
       } catch (e) {
         if (/UNIQUE/i.test(String((e as Error).message))) throw new HttpError(`invocation ${invocationId} already exists`, 409);
+        throw e;
+      }
+
+      // #275: today's quota, reserved before any work. Throws AppWorkerQuotaError, or 503 if the check cannot run.
+      // Refused, the invocation never ran: its row goes, so the event's retry is not taken for a duplicate.
+      const quotas = quotasFrom(w.quota_overrides);
+      try {
+        await reserveInvocation(env, appId, quotas, now);
+      } catch (e) {
+        await env.DB.prepare('DELETE FROM app_worker_invocations WHERE id = ?').bind(invocationId).run()
+          .catch((err) => console.error(`[app-worker] could not remove refused invocation ${invocationId}: ${(err as Error)?.message ?? err}`));
         throw e;
       }
 

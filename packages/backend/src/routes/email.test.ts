@@ -140,8 +140,8 @@ describe('POST /v1/email/send', () => {
 
   it('returns 429 when daily rate limit is reached', async () => {
     const appsStmt = mockStmt({ first: { creator_id: 'gh:1' } });
-    // COUNT(*) returns 100 — at the limit
-    const usageStmt = mockStmt({ first: { n: 100 } });
+    // #376: the guarded INSERT admits nothing at the limit (changes 0)
+    const usageStmt = mockStmt({ run: { meta: { changes: 0 } } });
     const db = mockD1(appsStmt, usageStmt);
     const res = await app.request(
       '/v1/email/send',
@@ -166,11 +166,9 @@ describe('POST /v1/email/send', () => {
     });
 
     const appsStmt = mockStmt({ first: { creator_id: 'gh:1' } });
-    // COUNT(*) = 0, under limit
-    const usageStmt = mockStmt({ first: { n: 0 } });
-    // INSERT usage row
+    // #376: one guarded INSERT reserves the slot under the limit
     const insertStmt = mockStmt({ run: { meta: { changes: 1, last_row_id: 7 } } });
-    const db = mockD1(appsStmt, usageStmt, insertStmt);
+    const db = mockD1(appsStmt, insertStmt);
 
     const res = await app.request(
       '/v1/email/send',
@@ -280,9 +278,6 @@ describe('POST /v1/email/send', () => {
         }
         if (sql.includes('FROM app_roles')) {
           return { bind: vi.fn().mockReturnThis(), first: vi.fn().mockResolvedValue({ 1: 1 }) };
-        }
-        if (sql.includes('SELECT COUNT(*)')) {
-          return { bind: vi.fn().mockReturnThis(), first: vi.fn().mockResolvedValue({ n: 0 }) };
         }
         if (sql.includes('INSERT INTO email_usage')) {
           return { bind: vi.fn().mockReturnThis(), run: vi.fn().mockResolvedValue({ meta: { changes: 1, last_row_id: 1 } }) };

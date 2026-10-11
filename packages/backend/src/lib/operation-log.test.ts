@@ -23,8 +23,10 @@ function fakeDb(clientCount = 0, serverCount = 0, relationship: Relationship = O
       if (sql.includes('INSERT INTO app_log_usage')) bumps.push(sql.replace(/\s+/g, ' '));
       return {
         first: vi.fn().mockResolvedValue(
-          sql.includes('app_log_usage') ? { count: clientCount, server_count: serverCount }
-            : sql.includes('FROM apps') ? relationship : null,
+          // #376: the server counter is claimed by one conditional upsert (RETURNING n).
+          sql.includes('INSERT INTO app_log_usage') ? (serverCount < (args[3] as number) ? { n: serverCount + 1 } : null)
+            : sql.includes('app_log_usage') ? { n: sql.includes('server_count') ? serverCount : clientCount }
+              : sql.includes('FROM apps') ? relationship : null,
         ),
         run: vi.fn().mockResolvedValue({ meta: { changes: 1 } }),
       };

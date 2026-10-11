@@ -33,7 +33,7 @@ import { HttpError } from './auth.js';
 import { secondsUntilUtcMidnight } from './ai-budget.js';
 import { utcDayKey } from './day-key.js';
 import { dispatchWebhook } from './webhook-dispatch.js';
-import { checkLogQuota, type LogUsageStore, type QuotaVerdict } from './log-quota.js';
+import { checkLogQuota, workerLogUsageStore, type QuotaVerdict } from './log-quota.js';
 
 export interface AppWorkerQuotas { invocations: number; cpu_ms: number; hook_deliveries: number }
 export type QuotaName = keyof AppWorkerQuotas;
@@ -61,22 +61,6 @@ export const WORKER_LOG_DAILY_LIMIT = 50_000;
  * (`user:`, `client:`, `ip:`), so no caller-chosen clientId can name this bucket.
  */
 export const WORKER_LOG_BURST_KEY = 'worker';
-
-/** The worker-log counter: `app_worker_usage.log_entries`, which only invocations write. */
-export function workerLogUsageStore(db: D1Database): LogUsageStore {
-  return {
-    async read(appId, day) {
-      const row = await db.prepare('SELECT log_entries FROM app_worker_usage WHERE app_id = ?1 AND day = ?2').bind(appId, day).first<{ log_entries: number }>();
-      return row?.log_entries ?? 0;
-    },
-    async bump(appId, day, by) {
-      await db.prepare(
-        `INSERT INTO app_worker_usage (app_id, day, log_entries) VALUES (?1, ?2, ?3)
-         ON CONFLICT(app_id, day) DO UPDATE SET log_entries = log_entries + ?3`,
-      ).bind(appId, day, by).run();
-    },
-  };
-}
 
 /** May `entries` worker log lines be stored? Drop them when not; never a reason to fail the invocation. */
 export function checkWorkerLogQuota(env: Pick<Env, 'DB'>, appId: string, entries: number, now: number): Promise<QuotaVerdict> {
