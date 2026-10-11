@@ -2050,6 +2050,7 @@ describe('connectors (#258)', () => {
       [[{ ...github, extra: 1 }], /unknown field "extra"/],
       [[{ ...github, events: ['Issues'] }], /GitHub event names/],
       [[github, github], /duplicate name/],
+      [[github, { ...github, name: 'gh' }], /at most one github connector/],
       ['github', /must be an array/],
     ];
     for (const [connectors, message] of cases) {

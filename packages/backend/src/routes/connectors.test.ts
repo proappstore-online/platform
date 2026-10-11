@@ -115,7 +115,14 @@ describe('setup', () => {
     expect(res.headers.get('location')).toContain('console.proappstore.online');
     expect(prove.mock.calls[0]![3]).toBe('c0de');
     expect(upserts()).toHaveLength(1);
-    expect(upserts()[0]!.args.slice(0, 5)).toEqual(['a', 5, 'acme', 'Organization', 'gh:1']);
+    expect(upserts()[0]!.args.slice(0, 6)).toEqual(['a', 'github', 5, 'acme', 'Organization', 'gh:1']);
+  });
+
+  it('stores the declared connector\'s own name in the binding, not a fixed "github" (#303 G2)', async () => {
+    routes['SELECT name, modes, pat_secret, events, hook FROM app_connectors'] = () => ({ first: { name: 'gh', modes: '["app"]', pat_secret: null, events: '["issues"]', hook: 'gh' } });
+    vi.spyOn(ghApp, 'proveInstallationControl').mockResolvedValue({ ok: true });
+    await setup(await signConnectorState({ SESSION_SIGNING_KEY: TEST_SK }, 'a', 'gh:1'), TOK, 'c0de');
+    expect(upserts()[0]!.args.slice(0, 2)).toEqual(['a', 'gh']);
   });
 
   it('403s, writing nothing, when control is not proved (non-admin member, wrong code, Google user)', async () => {
@@ -206,6 +213,56 @@ describe('webhook demux', () => {
     expect(await res.json()).toEqual({ accepted: true, delivered: 1 });
     expect(ingest).toHaveBeenCalledTimes(1);
     expect(ingest.mock.calls[0]!.slice(1, 5)).toEqual(['a', 'github', '"worker"', { replayKey: expect.stringMatching(/^[0-9a-f]{64}$/), deliveryId: 'd-1', event: 'issues' }]);
+  });
+
+  it('routes by the github connector\'s kind, so a connector not named "github" still receives events (#303 G2)', async () => {
+    bound({ app_id: 'a', events: '["issues"]', hook: 'gh', target: '"worker"' });
+    const res = await post({ installation: { id: 5 }, action: 'opened' }, 'issues');
+    expect(await res.json()).toEqual({ accepted: true, delivered: 1 });
+    const demux = seen.find((s) => s.sql.startsWith('SELECT i.app_id'))!;
+    expect(demux.sql).toContain("JOIN app_connectors k ON k.app_id = i.app_id AND k.kind = 'github'");
+    expect(demux.sql).not.toContain("i.connector = 'github'");
+    expect(demux.args).toEqual([5]);
+  });
+
+  describe('per-app outcome (#303 G3)', () => {
+    const two = () => bound(
+      { app_id: 'a', events: '["issues"]', hook: 'github', target: '"worker"' },
+      { app_id: 'b', events: '["issues"]', hook: 'github', target: '"worker"' },
+    );
+    const json = (body: unknown, status: number) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+    it('503s when one app\'s enqueue fails, so GitHub redelivers; the other app still gets it', async () => {
+      two();
+      ingest.mockImplementation(async (_c, appId) => appId === 'a' ? json({ error: 'could not queue the delivery' }, 503) : json({ accepted: true, delivery: 'r' }, 202));
+      const res = await post({ installation: { id: 5 }, action: 'opened' }, 'issues');
+      expect(res.status).toBe(503);
+      expect(await res.json()).toMatchObject({ delivered: 1, failed: 1 });
+      expect(ingest).toHaveBeenCalledTimes(2);
+    });
+
+    it('a throw for one app does not stop the apps after it, and answers 503', async () => {
+      two();
+      ingest.mockImplementation(async (_c, appId) => { if (appId === 'a') throw new Error('D1 down'); return json({ accepted: true, delivery: 'r' }, 202); });
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const res = await post({ installation: { id: 5 }, action: 'opened' }, 'issues');
+      expect(res.status).toBe(503);
+      expect(ingest.mock.calls.map((c) => c[1])).toEqual(['a', 'b']);
+      expect(await res.json()).toMatchObject({ delivered: 1, failed: 1 });
+    });
+
+    it('202s when every app accepted it, counting neither a duplicate nor an over-quota answer as delivered', async () => {
+      bound(
+        { app_id: 'a', events: '["issues"]', hook: 'github', target: '"worker"' },
+        { app_id: 'b', events: '["issues"]', hook: 'github', target: '"worker"' },
+        { app_id: 'c', events: '["issues"]', hook: 'github', target: '"worker"' },
+      );
+      ingest.mockImplementation(async (_c, appId) => appId === 'a' ? json({ accepted: true, delivery: 'r' }, 202)
+        : appId === 'b' ? json({ duplicate: true }, 200) : json({ accepted: true, delivery: 'r', processed: false }, 202));
+      const res = await post({ installation: { id: 5 }, action: 'opened' }, 'issues');
+      expect(res.status).toBe(202);
+      expect(await res.json()).toEqual({ accepted: true, delivered: 1 });
+    });
   });
 
   it('removes bindings and cached tokens when the installation is deleted', async () => {

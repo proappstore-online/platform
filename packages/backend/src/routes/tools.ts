@@ -880,6 +880,8 @@ export function validateConnectors(raw: unknown, hooks: HookDef[]): { error: str
     if (typeof name !== 'string' || !HOOK_NAME.test(name)) return { error: `${at}.name must match ${HOOK_NAME.source}` };
     if (out.some((x) => x.name === name)) return { error: `${at}: duplicate name "${name}"` };
     if (kind !== 'github') return { error: `${at}.kind must be "github"` };
+    // Installations bind to the app, not to a connector name, so a second github connector would be ambiguous (#303 G2).
+    if (out.some((x) => x.kind === 'github')) return { error: `${at}: an app declares at most one github connector` };
     if (!Array.isArray(modes) || modes.length === 0 || modes.some((m) => !CONNECTOR_MODES.includes(m as never)) || new Set(modes).size !== modes.length) {
       return { error: `${at}.modes must be a non-empty list of ${CONNECTOR_MODES.join(', ')}` };
     }

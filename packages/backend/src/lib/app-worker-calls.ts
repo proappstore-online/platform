@@ -304,7 +304,7 @@ export async function workerConnectorToken(env: Env, appId: string, name: unknow
     // An installation covers the owner; without a repo there is no owner, so the app's earliest binding.
     const owner = repo?.split('/')[0]!.toLowerCase();
     const installation = await env.DB.prepare(
-      `SELECT installation_id FROM app_connector_installations WHERE app_id = ? AND connector = 'github'${owner ? ' AND lower(account_login) = ?' : ''} ORDER BY created_at LIMIT 1`,
+      `SELECT installation_id FROM app_connector_installations WHERE app_id = ?${owner ? ' AND lower(account_login) = ?' : ''} ORDER BY created_at LIMIT 1`,
     ).bind(appId, ...(owner ? [owner] : [])).first<{ installation_id: number }>();
     if (installation) {
       const token = await installationToken(env, installation.installation_id, repo).catch(() => null);

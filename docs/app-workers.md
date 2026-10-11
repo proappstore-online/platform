@@ -211,7 +211,8 @@ Delivery rows are kept 14 days and invocation rows 30 days.
 or admin approves it), `pat` (an app secret you set, named by `pat_secret`), or
 both. `events` are the GitHub events delivered to the `hook`, which must use
 `verify.kind: "github-app"`; the platform receives every App webhook on one
-endpoint and routes it by installation, so you configure nothing per repo.
+endpoint and routes it by installation, so you configure nothing per repo. An app
+declares at most one github connector; its `name` is what the worker passes below.
 
 Connect an installation from the console (owner only). The platform proves you
 control the installation through GitHub before binding it; a non-admin org member

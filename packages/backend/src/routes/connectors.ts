@@ -75,7 +75,8 @@ async function completeSetup(c: Context<{ Bindings: Env }>, p: SetupParams): Pro
   if (state.userId !== user.id) throw new HttpError('this connection was started by a different user', 403);
   const installationId = Number(p.installation_id);
   if (!Number.isSafeInteger(installationId) || installationId <= 0) throw new HttpError('installation_id is required', 400);
-  if (!(await githubConnector(c.env.DB, state.appId))) throw new HttpError('this app declares no github connector', 404);
+  const connector = await githubConnector(c.env.DB, state.appId);
+  if (!connector) throw new HttpError('this app declares no github connector', 404);
 
   const installation = await getInstallation(c.env, installationId).catch(() => null);
   if (!installation) throw new HttpError('installation not found', 404);
@@ -84,9 +85,9 @@ async function completeSetup(c: Context<{ Bindings: Env }>, p: SetupParams): Pro
 
   await c.env.DB.prepare(
     `INSERT INTO app_connector_installations (app_id, connector, installation_id, account_login, account_type, created_by, created_at)
-     VALUES (?, 'github', ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (app_id, connector, installation_id) DO UPDATE SET account_login = excluded.account_login, account_type = excluded.account_type`,
-  ).bind(state.appId, installation.id, installation.account.login, installation.account.type, user.id, Date.now()).run();
+  ).bind(state.appId, connector.name, installation.id, installation.account.login, installation.account.type, user.id, Date.now()).run();
   return { appId: state.appId, installationId: installation.id, account: installation.account.login };
 }
 
@@ -116,7 +117,7 @@ connectorRoutes.delete('/apps/:appId/connectors/github/installations/:id', async
   await requireAppOwner(c, appId);
   const id = Number(c.req.param('id'));
   if (!Number.isSafeInteger(id) || id <= 0) throw new HttpError('invalid installation id', 400);
-  const res = await c.env.DB.prepare("DELETE FROM app_connector_installations WHERE app_id = ? AND connector = 'github' AND installation_id = ?").bind(appId, id).run();
+  const res = await c.env.DB.prepare("DELETE FROM app_connector_installations WHERE app_id = ? AND installation_id = ?").bind(appId, id).run();
   if (!res.meta.changes) throw new HttpError('installation not bound to this app', 404);
   return c.json({ ok: true });
 });
@@ -152,22 +153,33 @@ connectorRoutes.post('/connectors/github/webhook', async (c) => {
   if (typeof installationId !== 'number') return c.json({ accepted: true, delivered: 0 }, 202);
   const event = verified.event ?? '';
 
+  // An app declares at most one github connector (routes/tools.ts), so the join is by kind: a binding made
+  // before the connector was renamed, or stored as 'github' before #303 G2, still routes.
   const bound = await c.env.DB.prepare(
     `SELECT i.app_id, k.events, k.hook, h.target
        FROM app_connector_installations i
-       JOIN app_connectors k ON k.app_id = i.app_id AND k.name = i.connector
+       JOIN app_connectors k ON k.app_id = i.app_id AND k.kind = 'github'
        JOIN app_hooks h ON h.app_id = k.app_id AND h.name = k.hook AND h.verify_kind = 'github-app'
-      WHERE i.installation_id = ? AND i.connector = 'github'`,
+      WHERE i.installation_id = ?`,
   ).bind(installationId).all<{ app_id: string; events: string; hook: string; target: string }>();
 
   await applyInstallationEvent(c.env.DB, event, payload, installationId);
 
   let delivered = 0;
+  let failed = 0;
   for (const row of bound.results ?? []) {
     if (!(JSON.parse(row.events) as string[]).includes(event)) continue;
     // De-dupe per app is the #256 pipeline's own (app, hook, replay key): the signed body's hash, never X-GitHub-Delivery (#317).
-    await ingestVerifiedDelivery(c, row.app_id, row.hook, row.target, verified, body);
-    delivered++;
+    // That is also what makes a 503 safe: GitHub's redelivery is a duplicate for every app that already has it.
+    try {
+      const res = await ingestVerifiedDelivery(c, row.app_id, row.hook, row.target, verified, body);
+      if (res.status >= 500) failed++;
+      else if (res.status === 202 && (await res.json().catch(() => ({})) as { processed?: boolean }).processed !== false) delivered++;
+    } catch (e) {
+      console.error(`[connectors] delivering to ${row.app_id} failed: ${(e as Error)?.message ?? e}`);
+      failed++;
+    }
   }
+  if (failed) return c.json({ error: 'could not queue the delivery for every app; redeliver it', delivered, failed }, 503);
   return c.json({ accepted: true, delivered }, 202);
 });
