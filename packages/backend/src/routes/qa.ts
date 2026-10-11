@@ -138,18 +138,19 @@ qaRoutes.put(
     if (problem) throw new HttpError(problem, 400);
     if (flow!.id !== flowId) throw new HttpError('flow.id must match the URL flow id', 400);
 
-    const existing = await c.env.DB.prepare(
-      'SELECT COUNT(*) AS n FROM app_test_flows WHERE app_id = ?1 AND flow_id != ?2',
-    ).bind(appId, flowId).first<{ n: number }>();
-    if ((existing?.n ?? 0) >= MAX_FLOWS_PER_APP) {
+    // One statement admits and writes (#364): the cap is checked inside the INSERT,
+    // so concurrent creates of distinct new flows cannot all see a count under it.
+    // A flow that already exists is always updatable, even at (or over) the cap.
+    const written = await c.env.DB.prepare(
+      `INSERT INTO app_test_flows (app_id, flow_id, name, spec, updated_by, updated_at)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6
+        WHERE (SELECT COUNT(*) FROM app_test_flows WHERE app_id = ?1 AND flow_id != ?2) < ?7
+           OR EXISTS (SELECT 1 FROM app_test_flows WHERE app_id = ?1 AND flow_id = ?2)
+       ON CONFLICT(app_id, flow_id) DO UPDATE SET name = ?3, spec = ?4, updated_by = ?5, updated_at = ?6`,
+    ).bind(appId, flowId, flow!.name, JSON.stringify(flow), actor, Date.now(), MAX_FLOWS_PER_APP).run();
+    if (!written.meta.changes) {
       throw new HttpError(`an app can have at most ${MAX_FLOWS_PER_APP} flows`, 400);
     }
-
-    await c.env.DB.prepare(
-      `INSERT INTO app_test_flows (app_id, flow_id, name, spec, updated_by, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-       ON CONFLICT(app_id, flow_id) DO UPDATE SET name = ?3, spec = ?4, updated_by = ?5, updated_at = ?6`,
-    ).bind(appId, flowId, flow!.name, JSON.stringify(flow), actor, Date.now()).run();
     return c.json({ ok: true, flowId });
   }),
 );

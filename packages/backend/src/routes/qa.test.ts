@@ -112,16 +112,16 @@ function req(path: string, init: RequestInit = {}, headers: Record<string, strin
 
 describe('PUT /v1/apps/:appId/qa/flows/:flowId', () => {
   it('stores a validated flow for the owner', async () => {
-    // stmts: owner lookup, count, upsert
+    // stmts: owner lookup, the admitting upsert (#364: the cap is checked inside it)
     const upsert = mockStmt({ run: { meta: { changes: 1 } } });
-    const db = mockD1(ownerStmt(), mockStmt({ first: { n: 0 } }), upsert);
+    const db = mockD1(ownerStmt(), upsert);
     const res = await app.request(
       req('/v1/apps/chess-academy/qa/flows/sign-in', { method: 'PUT', body: JSON.stringify({ flow: validFlow }) }),
       undefined, makeEnv(db) as never,
     );
     expect(res.status).toBe(200);
     expect(upsert.bind).toHaveBeenCalledWith(
-      'chess-academy', 'sign-in', 'Sign-in page renders', JSON.stringify(validFlow), 'gh:1', expect.any(Number),
+      'chess-academy', 'sign-in', 'Sign-in page renders', JSON.stringify(validFlow), 'gh:1', expect.any(Number), 20,
     );
   });
 
@@ -146,7 +146,8 @@ describe('PUT /v1/apps/:appId/qa/flows/:flowId', () => {
     );
     expect(mismatch.status).toBe(400);
 
-    const db2 = mockD1(ownerStmt(), mockStmt({ first: { n: 20 } }));
+    // The admitting upsert wrote nothing: the app is at the cap and this flow is new.
+    const db2 = mockD1(ownerStmt(), mockStmt({ run: { meta: { changes: 0 } } }));
     const capped = await app.request(
       req('/v1/apps/chess-academy/qa/flows/sign-in', { method: 'PUT', body: JSON.stringify({ flow: validFlow }) }),
       undefined, makeEnv(db2) as never,
