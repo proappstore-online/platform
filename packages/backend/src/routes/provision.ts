@@ -63,6 +63,12 @@ interface ProvisionBody {
   templateRev?: string;
   /** #178: platform admins only — proceed with a template outside the approved catalogue. */
   allowUnapprovedTemplate?: boolean;
+  /**
+   * #366: platform admins only — the template provenance is not known (a legacy
+   * submission). Records template_id/template_rev as NULL instead of defaulting
+   * to template-app. Exclusive with `template` and `templateRev`.
+   */
+  templateUnknown?: boolean;
   /** Durable receipt context supplied only by the MCP worker that owns the active attempt. */
   provisionReceipt?: string;
   provisionAttemptId?: string;
@@ -118,7 +124,7 @@ function provisionRequestIntent(body: ProvisionBody): Record<string, unknown> {
   if (Array.isArray(body.proFeatures) && body.proFeatures.every((feature) => typeof feature === 'string')) {
     intent.proFeatures = body.proFeatures;
   }
-  for (const key of ['skipCompliance', 'skipPublish', 'allowUnapprovedTemplate'] as const) {
+  for (const key of ['skipCompliance', 'skipPublish', 'allowUnapprovedTemplate', 'templateUnknown'] as const) {
     if (typeof body[key] === 'boolean') intent[key] = body[key];
   }
   return intent;
@@ -129,7 +135,7 @@ function validateProvisionRequest(body: ProvisionBody): string | null {
   for (const key of ['name', 'description', 'category', 'icon', 'iconBg', 'repoOwner', 'repoName', 'ref', 'template', 'templateRev'] as const) {
     if (body[key] !== undefined && typeof body[key] !== 'string') return `${key} must be a string`;
   }
-  for (const key of ['skipCompliance', 'skipPublish', 'allowUnapprovedTemplate'] as const) {
+  for (const key of ['skipCompliance', 'skipPublish', 'allowUnapprovedTemplate', 'templateUnknown'] as const) {
     if (body[key] !== undefined && typeof body[key] !== 'boolean') return `${key} must be a boolean`;
   }
   if (body.proFeatures !== undefined && (!Array.isArray(body.proFeatures) || !body.proFeatures.every((feature) => typeof feature === 'string'))) {
@@ -469,9 +475,19 @@ provisionRoutes.post('/provision', wrap(async (c) => {
   if (body.templateRev !== undefined && !TEMPLATE_REV_RE.test(String(body.templateRev))) {
     return c.text('templateRev must be a git object id (7–40 hex chars)', 400);
   }
-  const selection = selectTemplate(body.template, { allowUnapproved: body.allowUnapprovedTemplate === true && user.roles.includes('admin') });
+  // #366: an admin approving a submission with no recorded provenance says so
+  // explicitly; the app row then carries NULL, never a default it was not shown to use.
+  if (body.templateUnknown === true) {
+    if (!user.roles.includes('admin')) return c.text('templateUnknown is restricted to platform admins', 403);
+    if (body.template !== undefined || body.templateRev !== undefined) {
+      return c.text('templateUnknown cannot be combined with template or templateRev', 400);
+    }
+  }
+  const selection = body.templateUnknown === true
+    ? { ok: true as const, template: undefined, warnings: ['template provenance unknown — recorded as NULL, not attributed to a template'] }
+    : selectTemplate(body.template, { allowUnapproved: body.allowUnapprovedTemplate === true && user.roles.includes('admin') });
   if (!selection.ok) return c.text(`template: ${selection.reason}`, 400);
-  const templateId = selection.template?.id ?? body.template;
+  const templateId = body.templateUnknown === true ? undefined : selection.template?.id ?? body.template;
   const templateRev = body.templateRev;
 
   const cfToken = c.env.CF_API_TOKEN;

@@ -1,9 +1,10 @@
 import type { Hono } from 'hono';
+import { selectTemplate } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { requireUser } from '../lib/auth.js';
 import { wrap } from '../lib/route-wrap.js';
 import type { ApproveBody, RejectBody } from './submissions-types.js';
-import { isAdmin, rowToSubmission } from './submissions-helpers.js';
+import { isAdmin, rowToSubmission, submissionRepoUrl } from './submissions-helpers.js';
 
 /**
  * Admin review handlers — approve (runs the provisioner) and reject. Attached
@@ -28,6 +29,21 @@ export function registerReviewRoutes(
     if (submission.status !== 'pending') {
       return c.text(`Submission is ${submission.status}, not pending`, 422);
     }
+
+    // #366: the provenance the submission carried, re-checked against today's
+    // catalogue (a template may have been withdrawn since) before anything changes.
+    // No admin override here: approving does not widen what was submitted.
+    let templateId: string | null = null;
+    if (submission.template_id) {
+      const selection = selectTemplate(submission.template_id);
+      if (!selection.ok || !selection.template) {
+        return c.text(`Submission template can no longer be provisioned: ${selection.reason}`, 422);
+      }
+      templateId = selection.template.id;
+    }
+    // Only the pinned repository is ever forwarded, and only when the stored URL
+    // is exactly it: the approval runs with an admin token, which may name any repo.
+    const pinnedRepo = submission.repo_url === submissionRepoUrl(submission.app_id);
 
     const overridePrice =
       body.suggestedMonthlyPriceCents != null &&
@@ -85,6 +101,18 @@ export function registerReviewRoutes(
     if (submission.icon) provisionBody.icon = submission.icon;
     if (submission.icon_bg) provisionBody.iconBg = submission.icon_bg;
     if (proFeatures) provisionBody.proFeatures = proFeatures;
+    if (templateId) {
+      provisionBody.template = templateId;
+      if (submission.template_rev) provisionBody.templateRev = submission.template_rev;
+    } else {
+      // Legacy or provenance-less submission: say so, rather than let provisioning
+      // default it to template-app.
+      provisionBody.templateUnknown = true;
+    }
+    if (pinnedRepo) {
+      provisionBody.repoOwner = 'proappstore-online';
+      provisionBody.repoName = submission.app_id;
+    }
 
     let provisionResult: unknown = null;
     try {

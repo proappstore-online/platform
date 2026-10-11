@@ -497,6 +497,33 @@ describe('POST /v1/provision — template selection contract (#178)', () => {
     expect(data.steps.find((s) => s.name === 'template')!.detail).toContain('not in the approved catalogue');
     expect(appStmt.bind.mock.calls[0]![4]).toBe('internal-experiment');
   });
+
+  describe('templateUnknown (#366)', () => {
+    it('records NULL provenance, not template-app, with a warning step', async () => {
+      const appStmt = mockStmt();
+      globalThis.fetch = multiFetch({ 'd1/database': { status: 200, body: { success: true, result: { uuid: 'db-1' } } } });
+      const res = await post({ templateUnknown: true }, TOK, mockD1(appStmt));
+      expect(res.status).toBe(200);
+      const bind = appStmt.bind.mock.calls[0]!;
+      expect(bind[4]).toBeNull();
+      expect(bind[5]).toBeNull();
+      const data = await res.json() as { steps: { name: string; detail: string }[] };
+      expect(data.steps.find((s) => s.name === 'template')!.detail).toContain('provenance unknown');
+      expect(data.steps.find((s) => s.name === 'record_app')!.detail).not.toContain('template:');
+    });
+
+    it('is refused for a non-admin, and with a template or revision, touching no Cloudflare API', async () => {
+      const fetchSpy = multiFetch(); globalThis.fetch = fetchSpy;
+      expect((await post({ templateUnknown: true }, NON_ADMIN_TOK)).status).toBe(403);
+      for (const extra of [{ template: 'template-app' }, { templateRev: 'abc1234' }]) {
+        const res = await post({ templateUnknown: true, ...extra });
+        expect(res.status).toBe(400);
+        expect(await res.text()).toContain('cannot be combined');
+      }
+      expect((await post({ templateUnknown: 'yes' })).status).toBe(400);
+      expect(fetchSpy.mock.calls.filter(([u]: [unknown]) => String(u).includes('api.cloudflare.com'))).toHaveLength(0);
+    });
+  });
 });
 
 describe('POST /v1/provision — appId ownership (#82)', () => {

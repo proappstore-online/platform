@@ -33,6 +33,14 @@ catalogue's `release.source_commit` is the *reviewed* revision; the app's
 `template_rev` is the *copied* one — normally equal, and the difference is
 exactly what an audit wants to see.
 
+A console submission (`POST /v1/submissions`) carries the same two facts as
+`template` and `templateRev`, checked against the catalogue with no override,
+and its `repoUrl` may only be `https://github.com/proappstore-online/<appId>`.
+Approval re-checks the template against the catalogue and provisions exactly
+what was submitted (#366). A submission that names no template, including every
+one made before this, is approved with its provenance recorded as unknown
+(`template_id` NULL), never attributed to `template-app`.
+
 ## How the create-app workflow uses it
 
 1. Read [`catalogue.json`](./catalogue.json) (or call `list_templates`).

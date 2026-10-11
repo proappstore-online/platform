@@ -26,6 +26,8 @@ export function rowToSubmission(row: Record<string, unknown>): SubmissionRow {
         ? null
         : Number(row.suggested_monthly_price_cents),
     repo_url: (row.repo_url as string | null) ?? null,
+    template_id: (row.template_id as string | null) ?? null,
+    template_rev: (row.template_rev as string | null) ?? null,
     reviewer_id: (row.reviewer_id as string | null) ?? null,
     rejection_reason: (row.rejection_reason as string | null) ?? null,
     created_at: Number(row.created_at),
@@ -34,3 +36,12 @@ export function rowToSubmission(row: Record<string, unknown>): SubmissionRow {
 }
 
 export { APP_ID_RE } from './validation.js';
+
+/**
+ * #366: the only repository a submission may name — the one the platform
+ * provisions for the app and reads with its own credentials. Anything else is a
+ * submitter-chosen location that must never reach a privileged fetch.
+ */
+export function submissionRepoUrl(appId: string): string {
+  return `https://github.com/proappstore-online/${appId}`;
+}

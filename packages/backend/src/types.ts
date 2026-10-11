@@ -259,6 +259,10 @@ export interface SubmissionRow {
   pro_features: string | null;
   suggested_monthly_price_cents: number | null;
   repo_url: string | null;
+  /** #366: approved template the app was created from; null when provenance is unknown. */
+  template_id: string | null;
+  /** #366: exact template source commit; null when unknown. */
+  template_rev: string | null;
   reviewer_id: string | null;
   rejection_reason: string | null;
   created_at: number;

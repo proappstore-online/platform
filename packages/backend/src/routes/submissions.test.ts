@@ -80,6 +80,8 @@ describe('POST /v1/submissions', () => {
       500,
       null, // repoUrl
       expect.any(Number),
+      null, // template_id (#366: unknown unless submitted)
+      null, // template_rev
     );
   });
 
@@ -356,6 +358,49 @@ describe('POST /v1/submissions/:id/approve', () => {
     expect(res.status).toBe(200);
     const data = (await res.json()) as { submission: { status: string } };
     expect(data.submission.status).toBe('published');
+  });
+
+  describe('forwards the submission\'s provenance to /v1/provision (#366)', () => {
+    const base = {
+      id: 'sub1', app_id: 'kanban', creator_id: 'gh:2', status: 'pending', name: 'K', category: 'c', description: 'd',
+      icon: null, icon_bg: null, pro_features: null, suggested_monthly_price_cents: null, repo_url: null,
+      template_id: null, template_rev: null, reviewer_id: null, rejection_reason: null, created_at: 1, reviewed_at: null,
+    };
+    async function approveRow(row: Record<string, unknown>) {
+      const db = mockD1(mockStmt({ first: row }), mockStmt(), mockStmt(), mockStmt({ first: { ...row, status: 'published' } }));
+      const res = await app.request('/v1/submissions/sub1/approve', {
+        method: 'POST', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: '{}',
+      }, makeEnv(db, { ADMIN_GITHUB_IDS: 'gh:1' }));
+      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter((c) => String(c[0]).endsWith('/v1/provision'));
+      return { res, db, sent: calls.map((c) => JSON.parse(String((c[1] as RequestInit).body)) as Record<string, unknown>) };
+    }
+
+    it('an approved non-default template, its pinned revision and the pinned repo', async () => {
+      const { res, sent } = await approveRow({
+        ...base, template_id: 'template-marketplace', template_rev: '4b000c9', repo_url: 'https://github.com/proappstore-online/kanban',
+      });
+      expect(res.status).toBe(200);
+      expect(sent).toEqual([expect.objectContaining({
+        appId: 'kanban', template: 'template-marketplace', templateRev: '4b000c9', repoOwner: 'proappstore-online', repoName: 'kanban',
+      })]);
+      expect(sent[0]).not.toHaveProperty('templateUnknown');
+    });
+
+    it('a legacy row: provenance explicitly unknown, and a foreign repo_url is never forwarded', async () => {
+      const { res, sent } = await approveRow({ ...base, repo_url: 'https://github.com/attacker/private-thing' });
+      expect(res.status).toBe(200);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({ appId: 'kanban', templateUnknown: true });
+      for (const key of ['template', 'templateRev', 'repoOwner', 'repoName']) expect(sent[0]).not.toHaveProperty(key);
+    });
+
+    it('a stored template no longer in the catalogue is refused before anything changes', async () => {
+      const { res, sent, db } = await approveRow({ ...base, template_id: 'template-gone', template_rev: '4b000c9' });
+      expect(res.status).toBe(422);
+      expect(await res.text()).toMatch(/can no longer be provisioned: unknown template "template-gone"/);
+      expect(sent).toEqual([]);
+      expect(db.prepare).toHaveBeenCalledTimes(1); // the read only: no status update
+    });
   });
 });
 

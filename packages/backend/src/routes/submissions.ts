@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
+import { selectTemplate, TEMPLATE_REV_RE } from '@proappstore/build-core';
 import type { Env, SubmissionRow } from '../types.js';
 import { requireUser } from '../lib/auth.js';
 import { wrap } from '../lib/route-wrap.js';
 import type { CreateBody } from './submissions-types.js';
-import { isAdmin, rowToSubmission, APP_ID_RE } from './submissions-helpers.js';
+import { isAdmin, rowToSubmission, submissionRepoUrl, APP_ID_RE } from './submissions-helpers.js';
 import { registerReviewRoutes } from './submissions-review.js';
 
 /**
@@ -62,6 +63,34 @@ submissionRoutes.post('/submissions', wrap(async (c) => {
     return c.text('suggestedMonthlyPriceCents must be a non-negative number', 400);
   }
 
+  // #366: provenance. The repository is pinned to the one the platform provisions
+  // for this app id; a submitter-chosen URL never reaches a privileged fetch.
+  let repoUrl: string | null = null;
+  if (body.repoUrl != null && body.repoUrl !== '') {
+    const expected = submissionRepoUrl(appId);
+    if (typeof body.repoUrl !== 'string' || body.repoUrl.trim().replace(/\/$/, '') !== expected) {
+      return c.text(`repoUrl must be ${expected}`, 400);
+    }
+    repoUrl = expected;
+  }
+  // The template is checked against the approved catalogue (#178) with no
+  // override: only a platform admin may provision outside it, never a submitter.
+  let templateId: string | null = null;
+  let templateRev: string | null = null;
+  if (body.template != null) {
+    if (typeof body.template !== 'string' || !body.template.trim()) return c.text('template must be a catalogue id', 400);
+    const selection = selectTemplate(body.template);
+    if (!selection.ok || !selection.template) return c.text(`template: ${selection.reason}`, 400);
+    templateId = selection.template.id;
+  }
+  if (body.templateRev != null) {
+    if (typeof body.templateRev !== 'string' || !TEMPLATE_REV_RE.test(body.templateRev)) {
+      return c.text('templateRev must be a git object id (7–40 hex chars)', 400);
+    }
+    if (!templateId) return c.text('templateRev requires template', 400);
+    templateRev = body.templateRev;
+  }
+
   // 409 if an app with this id already exists or there's an open submission.
   const existingApp = await c.env.DB.prepare(
     `SELECT id FROM apps WHERE id = ?1`,
@@ -94,8 +123,8 @@ submissionRoutes.post('/submissions', wrap(async (c) => {
       `INSERT INTO submissions (
          id, app_id, creator_id, status, name, category, description,
          icon, icon_bg, pro_features, suggested_monthly_price_cents,
-         repo_url, created_at
-       ) VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
+         repo_url, created_at, template_id, template_rev
+       ) VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`,
     )
       .bind(
         id,
@@ -108,8 +137,10 @@ submissionRoutes.post('/submissions', wrap(async (c) => {
         body.iconBg ?? null,
         proFeaturesJson,
         body.suggestedMonthlyPriceCents ?? null,
-        body.repoUrl ?? null,
+        repoUrl,
         now,
+        templateId,
+        templateRev,
       )
       .run();
   } catch (err) {
@@ -131,7 +162,9 @@ submissionRoutes.post('/submissions', wrap(async (c) => {
     icon_bg: body.iconBg ?? null,
     pro_features: proFeaturesJson,
     suggested_monthly_price_cents: body.suggestedMonthlyPriceCents ?? null,
-    repo_url: body.repoUrl ?? null,
+    repo_url: repoUrl,
+    template_id: templateId,
+    template_rev: templateRev,
     reviewer_id: null,
     rejection_reason: null,
     created_at: now,
