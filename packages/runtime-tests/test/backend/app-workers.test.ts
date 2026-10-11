@@ -90,6 +90,31 @@ describe('admin flag: first-party only, cap of 5 (#253)', () => {
   });
 });
 
+describe('admin enable/disable: the named app only, admins only (#261)', () => {
+  // Rows are never deleted (see beforeEach), so "not enabled" is 0 or no row at all.
+  const enabledOf = async (appId: string) => Number((await row(appId))?.enabled ?? 0);
+  it('enabling or disabling one app leaves every other app as it was', async () => {
+    const p3Before = await row('p3');
+    expect((await enable('first')).status).toBe(200);
+    expect((await enable('p2')).status).toBe(200);
+    expect([await enabledOf('first'), await enabledOf('p2'), await enabledOf('p3')]).toEqual([1, 1, 0]);
+    expect((await enable('first', false)).status).toBe(200);
+    expect([await enabledOf('first'), await enabledOf('p2'), await enabledOf('p3')]).toEqual([0, 1, 0]);
+    expect(await row('p3')).toEqual(p3Before);
+  });
+
+  it('a non-admin — even the app\'s own creator — cannot disable it either', async () => {
+    expect((await enable('first')).status).toBe(200);
+    for (const uid of ['gh:7', 'gh:admin']) {
+      // gh:admin without the admin role in its session is an ordinary owner here.
+      const res = await SELF.fetch(`${BASE}/v1/admin/apps/first/worker-enabled`, json('PUT', { enabled: false }, await session(uid)));
+      expect(res.status, uid).toBe(403);
+      expect(await res.text()).toContain('admin only');
+    }
+    expect(await enabledOf('first')).toBe(1);
+  });
+});
+
 describe('keyless deploy (#253)', () => {
   it('with the flag off: 403, nothing stored, the refusal recorded', async () => {
     const res = await deploy('first');

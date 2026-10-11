@@ -132,6 +132,39 @@ describe('owner commands (#261)', () => {
     expect(out.join('')).toContain('✓ Worker disabled for demo');
   });
 
+  it('a non-admin session is refused by the server on enable and disable, and the 403 is printed', async () => {
+    for (const action of ['enable', 'disable'] as const) {
+      routes['PUT /v1/admin/apps/demo/worker-enabled'] = Response.json({ error: 'admin only' }, { status: 403 });
+      err.length = 0;
+      await expect(workerCommand.parseAsync(['node', 'worker', action, 'demo'])).rejects.toThrow('exit 1');
+      expect(err.join('')).toContain(`${action} worker failed (403): admin only`);
+      expect(out.join('')).not.toContain(`✓ Worker ${action}d`);
+    }
+  });
+
+  it('refuses a missing or invalid app id before calling anything', async () => {
+    for (const action of ['enable', 'disable']) {
+      err.length = 0;
+      await expect(workerCommand.parseAsync(['node', 'worker', action])).rejects.toThrow();
+      expect(err.join('')).toContain("missing required argument 'appId'");
+      err.length = 0;
+      await expect(workerCommand.parseAsync(['node', 'worker', action, 'Bad_App'])).rejects.toThrow('exit 1');
+      expect(err.join('')).toContain('pas: invalid app id "Bad_App"');
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it('touches only the named app', async () => {
+    routes['PUT /v1/admin/apps/alpha/worker-enabled'] = { ok: true, enabled: true };
+    routes['PUT /v1/admin/apps/beta/worker-enabled'] = { ok: true, enabled: false };
+    await workerCommand.parseAsync(['node', 'worker', 'enable', 'alpha']);
+    await workerCommand.parseAsync(['node', 'worker', 'disable', 'beta']);
+    expect(calls.map((c) => [c.method, c.url, c.body])).toEqual([
+      ['PUT', 'https://api.test/v1/admin/apps/alpha/worker-enabled', JSON.stringify({ enabled: true })],
+      ['PUT', 'https://api.test/v1/admin/apps/beta/worker-enabled', JSON.stringify({ enabled: false })],
+    ]);
+  });
+
   it.each([
     [403, 'app workers are limited to first-party apps during the prototype'],
     [409, 'app worker cap reached (5)'],
