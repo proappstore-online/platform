@@ -32,6 +32,8 @@ interface World {
   templateCommits: Record<string, { sha: string; tree: string }>;
   listing: number;
   provision: { status: number; body: Record<string, unknown> };
+  /** #369: what GitHub's generate call copies — by default the template head at that moment. */
+  onCopy?: () => { sha: string; tree: string } | null;
 }
 let world: World;
 let repoFiles: Record<string, string>;
@@ -63,6 +65,9 @@ const gh = {
   createRepoFromTemplate: vi.fn(async (id: string, opts: unknown) => {
     calls.push({ kind: 'gh WRITE', detail: `create ${id} ${JSON.stringify(opts)}` });
     world.repo = { status: 200, private: (opts as { private?: boolean }).private };
+    // As on GitHub: the new repo's one commit carries the tree of whatever was copied.
+    const copied = world.onCopy ? world.onCopy() : world.templateHead;
+    world.commits = copied ? [{ sha: 'copy-initial', tree: copied.tree }] : [];
     return { ok: true, status: 201, data: {} };
   }),
   // A stateful scaffold: pullText reads what pushFiles last wrote.
@@ -94,6 +99,12 @@ const api = {
       const appId = op[1] ? decodeURIComponent(op[1]) : (JSON.parse(String(init?.body)) as { appId: string }).appId;
       const existing = receipts.get(appId);
       if (method === 'POST') {
+        if (existing?.status === 'failed') {
+          // The backend recovers a failed receipt with a new attempt lease (#358, #369).
+          existing.status = 'pending';
+          existing.attemptId = `attempt-${nextReceipt++}`;
+          return jsonResponse({ ...existing, joined: false });
+        }
         if (existing) return jsonResponse({ ...existing, joined: true });
         const created = { receipt: `receipt-${nextReceipt++}`, appId, status: 'pending', steps: [], attemptId: 'attempt-1' };
         receipts.set(appId, created);
@@ -368,6 +379,103 @@ describe('confirmPlan executes exactly the reviewed plan', () => {
     expect((outcome as { lines: string[] }).lines.join('\n')).toContain('! compliance: 1 rule(s) failed — Theme: missing');
     expect(receipts.get(APP)!.status).toBe('failed');
     expect(receipts.get(APP)!.steps).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'compliance', status: 'fail' })]));
+  });
+});
+
+describe('a new copy is checked against the planned revision before anything else (#369)', () => {
+  const B = 'b'.repeat(40);
+  const B_TREE = 'u'.repeat(40);
+  /** Confirm with room for the bounded wait on GitHub's asynchronous copy. */
+  async function confirmSlowly(p: Plan) {
+    const pending = workflow.confirmPlan(user, p);
+    await vi.advanceTimersByTimeAsync(20_000);
+    return pending;
+  }
+  const ghWrites = () => calls.filter((c) => c.kind === 'gh WRITE').map((c) => c.detail);
+
+  it('matching copy — proceeds normally and records the proven revision', async () => {
+    const p = await plan();
+    expect(p.template).toMatchObject({ revision: HEAD, revisionTree: HEAD_TREE });
+    const outcome = await confirm(p);
+    expect(outcome).toMatchObject({ kind: 'done', repoAction: 'created', succeeded: true });
+    expect((outcome as { lines: string[] }).lines).toContain(`+ Template copy: ${ORG}/${APP}'s initial tree matches template-marketplace@${HEAD.slice(0, 12)}`);
+    expect(ghWrites()).toEqual([expect.stringMatching(/^create /), 'pushFiles']);
+    expect(provisionBodies).toEqual([expect.objectContaining({ templateRev: HEAD })]);
+    expect(receipts.get(APP)!.status).toBe('completed');
+    expect(receipts.get(APP)!.steps.map((s) => s.name)).not.toContain('template_revision');
+  });
+
+  it('A→B race — the template moves during the copy: mismatch stops before placeholder/provision writes', async () => {
+    const p = await plan();
+    expect(p.template.revision).toBe(HEAD);
+    // The confirming read sees A; GitHub's generate call then copies B.
+    world.onCopy = () => { world.templateHead = { sha: B, tree: B_TREE }; return world.templateHead; };
+    const outcome = await confirmSlowly(p);
+    expect(outcome.kind).toBe('error');
+    expect((outcome as { error: string }).error).toMatch(/revision_mismatch: test-org\/school-clubs was created, but its initial tree uuuuuuuuuuuu is not the tree tttttttttttt of template-marketplace@aaaaaaaaaaaa/);
+    expect((outcome as { error: string }).error).toContain('The repository is kept as created');
+    // Created, then nothing: no placeholder commit, no provisioning, no deletion.
+    expect(ghWrites()).toEqual([expect.stringMatching(/^create school-clubs /)]);
+    expect(gh.pushFiles).not.toHaveBeenCalled();
+    expect(provisionBodies).toEqual([]);
+    expect(world.repo.status).toBe(200);
+    // The durable receipt says exactly that.
+    const receipt = receipts.get(APP)!;
+    expect(receipt.status).toBe('failed');
+    expect(receipt.steps).toEqual([
+      expect.objectContaining({ name: 'repo_created', status: 'ok' }),
+      expect.objectContaining({ name: 'template_revision', status: 'fail', detail: expect.stringMatching(/^revision_mismatch: /) }),
+    ]);
+  });
+
+  it('unavailable tree proof — an unreadable copy stops before placeholder/provision writes', async () => {
+    world.onCopy = () => null; // the copy never shows a commit
+    const outcome = await confirmSlowly(await plan());
+    expect(outcome.kind).toBe('error');
+    expect((outcome as { error: string }).error).toMatch(/revision_unverified: .*could not be compared with template-marketplace@aaaaaaaaaaaa/);
+    expect(gh.pushFiles).not.toHaveBeenCalled();
+    expect(provisionBodies).toEqual([]);
+    expect(world.repo.status).toBe(200);
+    expect(receipts.get(APP)!.status).toBe('failed');
+    expect(receipts.get(APP)!.steps.at(-1)).toMatchObject({ name: 'template_revision', status: 'fail', detail: expect.stringMatching(/^revision_unverified: /) });
+    // It polled GitHub's copy a bounded number of times before giving up.
+    expect(calls.filter((c) => c.detail === `/repos/${ORG}/${APP}/commits?per_page=2`)).toHaveLength(5);
+  });
+
+  it('a planned revision without a known tree is never claimed either', async () => {
+    const p = await plan();
+    const outcome = await confirmSlowly({ ...p, template: { ...p.template, revisionTree: null } });
+    // The re-plan restores the tree, so this executes the fresh plan and proves it.
+    expect(outcome).toMatchObject({ kind: 'done', succeeded: true });
+    world.templateHead = { sha: HEAD, tree: null as unknown as string };
+    world.repo = { status: 404 };
+    receipts.clear();
+    const fresh = await plan();
+    expect(fresh.template).toMatchObject({ revision: HEAD, revisionTree: null });
+    const refused = await confirmSlowly(fresh);
+    expect((refused as { error: string }).error).toMatch(/revision_unverified/);
+  });
+
+  it('receipt truthfulness — a fresh plan adopts the kept repo at the revision it actually holds', async () => {
+    const p = await plan();
+    world.onCopy = () => { world.templateHead = { sha: B, tree: B_TREE }; return world.templateHead; };
+    expect((await confirmSlowly(p)).kind).toBe('error');
+    world.onCopy = undefined;
+
+    // The repo exists, has no PAS app record yet, and is the untouched copy of B.
+    const fresh = await plan();
+    expect(fresh).toMatchObject({
+      action: 'adopt_untouched', blockers: [],
+      repository: { exists: true, untouchedScaffold: true },
+      template: { revision: B, revisionSource: 'scaffold_tree_match', revisionTree: B_TREE },
+    });
+    // The stale plan for A cannot run: it no longer matches.
+    expect((await confirmSlowly(p)).kind).toBe('plan_changed');
+    // The fresh plan adopts it under the same durable receipt, recording B, not A.
+    const adopted = await confirmSlowly(fresh);
+    expect(adopted).toMatchObject({ kind: 'done', repoAction: 'adopted', succeeded: true, receipt: { receipt: 'receipt-1' } });
+    expect(gh.createRepoFromTemplate).toHaveBeenCalledTimes(1);
+    expect(provisionBodies).toEqual([expect.objectContaining({ templateRev: B })]);
   });
 });
 

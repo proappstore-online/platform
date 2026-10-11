@@ -210,13 +210,18 @@ export async function beginProvisionOperation(
   if (!operationNeedsLease(existing, now)) return { kind: existing.status === 'failed' ? 'exhausted' : 'joined', operation: existing };
 
   const nextAttemptId = newAttemptId();
+  // A FAILED receipt may be retried under a new request intent (same creator,
+  // same bootstrap plan): its attempt is over, and the new request is what the
+  // new lease binds — e.g. #369, where a template copy proved to be a different
+  // revision than planned and a fresh plan adopts it at the revision it holds.
+  // An expired PENDING lease is only ever resumed with the identical intent.
   const recovered = await db.prepare(
     `UPDATE provision_operations
         SET status = 'pending', attempt_count = attempt_count + 1, lease_expires_at = ?, attempt_id = ?,
-            updated_at = ?, completed_at = NULL
-      WHERE receipt_id = ? AND creator_id = ? AND intent_hash = ? AND bootstrap_intent_hash = ? AND attempt_count < ?
-        AND (status = 'failed' OR (status = 'pending' AND (lease_expires_at IS NULL OR lease_expires_at <= ?)))`,
-  ).bind(leaseExpiresAt, nextAttemptId, now, existing.receiptId, args.creatorId, args.intentHash, args.bootstrapIntentHash, MAX_PROVISION_OPERATION_ATTEMPTS, now).run();
+            updated_at = ?, completed_at = NULL, intent_hash = ?
+      WHERE receipt_id = ? AND creator_id = ? AND bootstrap_intent_hash = ? AND attempt_count < ?
+        AND (status = 'failed' OR (status = 'pending' AND intent_hash = ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?)))`,
+  ).bind(leaseExpiresAt, nextAttemptId, now, args.intentHash, existing.receiptId, args.creatorId, args.bootstrapIntentHash, MAX_PROVISION_OPERATION_ATTEMPTS, args.intentHash, now).run();
   const current = await getProvisionOperation(db, args.appId);
   if (!current) throw new Error('provision operation recovery was not readable');
   if (Number(recovered.meta.changes) > 0) return { kind: 'recovered', operation: current };

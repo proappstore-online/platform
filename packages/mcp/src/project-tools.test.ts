@@ -163,6 +163,19 @@ function fakeRepo(initial: Record<string, string> = TEMPLATE_FILES, opts: { drop
 }
 const withPlaceholder = (files: Record<string, string>) => Object.keys(files).filter((path) => files[path]!.includes('APPNAME'));
 
+/**
+ * #369: GitHub as the workflow sees it around a template copy — the template
+ * branch head (sha + tree) and the new repo's one initial commit, whose tree is
+ * what was copied. A creation's revision is recorded only when they match.
+ */
+function templateCopy(sha: string, tree = `tree-of-${sha}`, copiedTree = tree) {
+  mockGh.api.mockImplementation(async (path: string) => {
+    if (/\/repos\/test-org\/template-[a-z-]+\/commits\//.test(path)) return { ok: true, status: 200, data: { sha, commit: { tree: { sha: tree } } } };
+    if (/\/repos\/test-org\/[a-z0-9-]+\/commits\?per_page=2$/.test(path)) return { ok: true, status: 200, data: [{ sha: 'copy-initial', commit: { tree: { sha: copiedTree } } }] };
+    return { ok: false, status: 404, data: {} };
+  });
+}
+
 describe('provision_pas_app — template selection contract (#178)', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
@@ -198,7 +211,7 @@ describe('provision_pas_app — template selection contract (#178)', () => {
   it('records the copied template revision and forwards template + rev to /v1/provision', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
-    mockGh.api.mockResolvedValue({ ok: true, status: 200, data: { sha: 'd8c2e08f32b8e30847b27c7092fd4b0e64341d2f' } });
+    templateCopy('d8c2e08f32b8e30847b27c7092fd4b0e64341d2f');
     okProvision();
     const out = getText(await run());
     expect(mockGh.api).toHaveBeenCalledWith('/repos/test-org/template-app/commits/main');
@@ -221,10 +234,34 @@ describe('provision_pas_app — template selection contract (#178)', () => {
     expect(body.templateRev).toBeUndefined();
   });
 
+  it('#369: provision_pas_app stops when the template moved during the copy — no placeholder commit, no provisioning', async () => {
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
+    templateCopy('d8c2e08f32b8e30847b27c7092fd4b0e64341d2f', 'tree-A', 'tree-B');
+    okProvision();
+    const out = getText(await run());
+    expect(out).toMatch(/^Error: revision_mismatch: test-org\/school-clubs was created, but its initial tree tree-B is not the tree tree-A of template-app@d8c2e08f32b8/);
+    expect(out).toContain('The repository is kept as created');
+    expect(mockGh.pushFiles).not.toHaveBeenCalled();
+    expect(mockFetch.mock.calls.map((c) => String(c[0]))).not.toContainEqual(expect.stringMatching(/\/v1\/provision$/));
+  });
+
+  it('#369: scaffold_app records the revision as unknown when the copy is not provably the head it read', async () => {
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
+    mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
+    templateCopy('abc1234', 'tree-A', 'tree-B');
+    okProvision();
+    const p = tools.get('scaffold_app')!({ ...args, confirm: true });
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(getText(await p)).toContain('~ Template revision: the copy is not provably template-app@abc1234 — recorded as unknown');
+    const call = mockFetch.mock.calls.find((c) => String(c[0]).includes('/v1/provision'));
+    expect(JSON.parse((call![1] as RequestInit).body as string)).toMatchObject({ template: 'template-app' });
+    expect(JSON.parse((call![1] as RequestInit).body as string).templateRev).toBeUndefined();
+  });
+
   it('scaffold_app forwards the default template and its revision too', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
-    mockGh.api.mockResolvedValue({ ok: true, status: 200, data: { sha: 'abc1234' } });
+    templateCopy('abc1234');
     okProvision();
     const p = tools.get('scaffold_app')!({ ...args, confirm: true });
     await vi.advanceTimersByTimeAsync(10000);
@@ -236,7 +273,7 @@ describe('provision_pas_app — template selection contract (#178)', () => {
 });
 
 describe('provision_pas_app', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  beforeEach(() => { vi.useFakeTimers(); templateCopy('d8c2e08f32b8e30847b27c7092fd4b0e64341d2f'); });
   afterEach(() => { vi.useRealTimers(); });
 
   const args = {

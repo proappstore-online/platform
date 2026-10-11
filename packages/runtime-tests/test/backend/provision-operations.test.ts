@@ -122,6 +122,35 @@ describe('provision operation receipts on real D1 (#358)', () => {
     expect((await patch('expired-receipt', token, { attemptId: expired.attemptId, status: 'completed' })).status).toBe(409);
   });
 
+  it('#369: a FAILED receipt is retried under a new request intent; a live or expired pending lease never is', async () => {
+    const token = await session(OWNER);
+    const boot = { templateId: 'template-marketplace', name: 'App', privateRepo: true, verify: true };
+    const intentA = { appId: 'rebind-receipt', template: 'template-marketplace', templateRev: 'a'.repeat(40) };
+    const intentB = { ...intentA, templateRev: 'b'.repeat(40) };
+    const boundIntent = async (appId: string) => (await env.DB.prepare('SELECT intent_hash FROM provision_operations WHERE app_id = ?').bind(appId).first<{ intent_hash: string }>())!.intent_hash;
+
+    const first = await body<{ attemptId: string }>(await post('rebind-receipt', token, intentA, boot));
+    const hashA = await boundIntent('rebind-receipt');
+    // While the attempt is live, a different request joins it and binds nothing.
+    expect(await body(await post('rebind-receipt', token, intentB, boot))).toMatchObject({ joined: true, status: 'pending', attemptCount: 1 });
+    expect(await boundIntent('rebind-receipt')).toBe(hashA);
+    // Once it has failed, the new request is a new attempt bound to its own intent.
+    expect((await patch('rebind-receipt', token, { attemptId: first.attemptId, status: 'failed' })).status).toBe(200);
+    const retried = await body<{ attemptId: string; attemptCount: number; status: string; joined: boolean }>(await post('rebind-receipt', token, intentB, boot));
+    expect(retried).toMatchObject({ status: 'pending', attemptCount: 2, joined: false });
+    expect(await boundIntent('rebind-receipt')).not.toBe(hashA);
+    // A changed bootstrap plan is still a conflict, failed or not.
+    expect((await patch('rebind-receipt', token, { attemptId: retried.attemptId, status: 'failed' })).status).toBe(200);
+    expect((await post('rebind-receipt', token, intentA, { ...boot, name: 'Renamed' })).status).toBe(409);
+
+    // An expired PENDING lease resumes only with the identical intent.
+    await post('expired-rebind', token, { ...intentA, appId: 'expired-rebind' }, boot);
+    const hashExpired = await boundIntent('expired-rebind');
+    await env.DB.prepare("UPDATE provision_operations SET lease_expires_at = 0 WHERE app_id = 'expired-rebind'").run();
+    expect(await body(await post('expired-rebind', token, { ...intentB, appId: 'expired-rebind' }, boot))).toMatchObject({ joined: true, attemptCount: 1 });
+    expect(await boundIntent('expired-rebind')).toBe(hashExpired);
+  });
+
   it('reports an expired fifth pending lease as terminal exhausted without renewing or charging quota', async () => {
     const token = await session(OWNER);
     const started = await body<{ attemptId: string }>(await post('fifth-expired-receipt', token));

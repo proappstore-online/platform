@@ -27,8 +27,11 @@ Every path — `pas create` → `pas publish`, the MCP `provision_pas_app` and
 `scaffold_app` tools, and `POST /v1/provision` — records **which template and
 which exact source commit** was copied on the app row (`apps.template_id`,
 `apps.template_rev`, returned by `GET /v1/apps` and the `app_info` tool). The
-revision is the template repository's branch head at the moment of the copy;
-if it cannot be resolved it is recorded as unknown, never guessed. The
+revision is the template repository's branch head read just before the copy,
+recorded only when the new repository's initial tree proves it is what GitHub
+copied (#369): the copy API takes no revision, so a template that moves during
+the copy is caught, and provisioning stops with the repository kept. If it
+cannot be resolved or proven it is recorded as unknown, never guessed. The
 catalogue's `release.source_commit` is the *reviewed* revision; the app's
 `template_rev` is the *copied* one — normally equal, and the difference is
 exactly what an audit wants to see.

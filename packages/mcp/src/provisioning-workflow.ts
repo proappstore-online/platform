@@ -154,6 +154,8 @@ export interface ProvisionPlan {
     requestedRevision: string | null;
     revision: string | null;
     revisionSource: RevisionSource;
+    /** #369: the tree of `revision`. A new copy is accepted only when its initial tree equals it. */
+    revisionTree: string | null;
   };
   changes: string[];
   compliance: { required: boolean };
@@ -183,6 +185,9 @@ export type ConfirmOutcome =
 
 const APP_ID_RE = /^[a-z][a-z0-9-]*$/;
 const OWNERSHIP_CACHE_TTL_MS = 60_000;
+/** #369: how long to wait for GitHub to finish a template copy before its tree counts as unreadable. */
+const COPY_TREE_ATTEMPTS = 5;
+const COPY_TREE_RETRY_MS = 1_000;
 
 const stepIcon = (status: string) => status === "ok" ? "+" : status === "skip" ? "~" : "!";
 export const formatSteps = (steps: ProvisionStep[] = []) =>
@@ -245,19 +250,36 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
    * allowed in that state, since anything with real commits could be someone's
    * work-in-progress and stays admin-only. Its tree is the provenance proof.
    */
-  async function repoCommits(appId: string): Promise<{ untouched: boolean; headSha: string | null; initialTree: string | null }> {
+  async function repoCommits(appId: string): Promise<{ untouched: boolean; headSha: string | null; initialTree: string | null; count: number | null }> {
     try {
       const r = await gh.api(`/repos/${org}/${appId}/commits?per_page=2`);
       const list = r && r.ok && Array.isArray(r.data) ? r.data as { sha?: unknown; commit?: { tree?: { sha?: unknown } } }[] : null;
-      if (!list) return { untouched: false, headSha: null, initialTree: null };
+      if (!list) return { untouched: false, headSha: null, initialTree: null, count: null };
       const head = list[0];
       const headSha = typeof head?.sha === "string" ? head.sha : null;
       const untouched = list.length === 1;
       const tree = untouched ? head?.commit?.tree?.sha : undefined;
-      return { untouched, headSha, initialTree: typeof tree === "string" ? tree : null };
+      return { untouched, headSha, initialTree: typeof tree === "string" ? tree : null, count: list.length };
     } catch {
-      return { untouched: false, headSha: null, initialTree: null };
+      return { untouched: false, headSha: null, initialTree: null, count: null };
     }
+  }
+
+  /**
+   * #369: the tree GitHub actually copied into a new repo — its single initial
+   * commit's. The template-generate API takes no ref and returns no revision,
+   * and it fills the repo asynchronously, so poll a bounded number of times
+   * while the repo is still empty or unreadable. Null when it cannot be read,
+   * or when the repo already holds more than the copy (nothing to prove).
+   */
+  async function copiedTree(appId: string, attempts = COPY_TREE_ATTEMPTS, delayMs = COPY_TREE_RETRY_MS): Promise<string | null> {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      const commits = await repoCommits(appId);
+      if (commits.count !== null && commits.count > 1) return null;
+      if (commits.count === 1 && commits.initialTree) return commits.initialTree;
+      if (attempt < attempts) await new Promise((r) => setTimeout(r, delayMs));
+    }
+    return null;
   }
 
   /** A template commit and its tree, or null when GitHub cannot show it. */
@@ -535,6 +557,7 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
         requestedRevision: requested ?? null,
         revision: null,
         revisionSource: "unknown",
+        revisionTree: null,
       },
       changes: [],
       compliance: { required: !(opts.skipCompliance === true && isAdmin) },
@@ -571,6 +594,7 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
       if (head) {
         plan.template.revision = head.sha;
         plan.template.revisionSource = "template_head";
+        plan.template.revisionTree = head.tree;
         if (reviewedCommit && head.sha !== reviewedCommit) {
           warnings.push(`template head ${head.sha.slice(0, 7)} is not the reviewed commit ${reviewedCommit.slice(0, 7)}; GitHub copies the head`);
         }
@@ -633,7 +657,7 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
       if (commits.initialTree) {
         for (const ref of candidates) {
           const commit = await templateCommit(templateRepo, ref);
-          if (commit?.tree && commit.tree === commits.initialTree) { proven = commit.sha; break; }
+          if (commit?.tree && commit.tree === commits.initialTree) { proven = commit.sha; plan.template.revisionTree = commit.tree; break; }
         }
       }
       if (proven) {
@@ -735,6 +759,29 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
         for (const w of plan.warnings) lines.push(`! template: ${w}`);
         await recordEvidence([{ name: "repo_created", status: "ok", detail: `${org}/${appId} created from ${org}/${templateRepoName}` }]);
         await new Promise((r) => setTimeout(r, 4000));
+        // #369: GitHub copies whatever the template head is at this moment, so
+        // the planned revision is claimed only if the copy is provably it.
+        // Otherwise stop before any further write; the repo is kept as created.
+        if (templateRev) {
+          const copied = await copiedTree(appId);
+          const expected = plan.template.revisionTree;
+          if (!copied || !expected || copied !== expected) {
+            const code = copied && expected ? "revision_mismatch" : "revision_unverified";
+            const what = code === "revision_mismatch"
+              ? `its initial tree ${copied!.slice(0, 12)} is not the tree ${expected!.slice(0, 12)} of ${plan.template.id}@${templateRev.slice(0, 12)} (the template changed during the copy)`
+              : `its initial tree could not be compared with ${plan.template.id}@${templateRev.slice(0, 12)}`;
+            const detail = `${code}: ${org}/${appId} was created, but ${what}; nothing further was changed`;
+            await recordEvidence([{ name: "template_revision", status: "fail", detail }], "failed", {
+              error: detail, code, partial: true, repositoryCreated: true, repository: `https://github.com/${org}/${appId}`,
+            });
+            return {
+              kind: "error",
+              receipt,
+              error: `Error: ${detail}. The repository is kept as created. Preview again: a fresh plan can adopt it at the revision it actually holds.`,
+            };
+          }
+          lines.push(`+ Template copy: ${org}/${appId}'s initial tree matches ${plan.template.id}@${templateRev.slice(0, 12)}`);
+        }
       } else if (createRes.status === 422) {
         // The repo appeared after the plan was made: whose it is was never
         // checked, so nothing proceeds on it.
@@ -832,6 +879,8 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
     ownsApp,
     appRecordState,
     resolveTemplateRev,
+    templateCommit,
+    copiedTree,
     operationRequest,
     readProvisionOperation,
     formatProvisionOperation,

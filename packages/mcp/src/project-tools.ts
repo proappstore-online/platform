@@ -80,7 +80,7 @@ export function registerProjectTools(
   const { GITHUB_ORG: org, GITHUB_TOKEN: ghToken, API_BASE: apiBase } = env;
   const gh = makeGitHub(ghToken, org);
   const workflow = createProvisioningWorkflow(env, gh);
-  const { operationRequest, formatProvisionOperation, provision, resolveTemplateRev, patchTemplatePlaceholders } = workflow;
+  const { operationRequest, formatProvisionOperation, provision, templateCommit, copiedTree, patchTemplatePlaceholders } = workflow;
 
   /** Gate a mutating tool: read-only block (throws) + audit, attributed to the connection user. */
   const gate = (tool: string, input?: Record<string, unknown>) =>
@@ -275,6 +275,13 @@ export function registerProjectTools(
         return text(`Refused: scaffold_app creates a GitHub repo + deploy secrets + infra for "${app_id}". Re-call with confirm: true to proceed.`);
       await gate("scaffold_app", { app_id, name });
 
+      // #178/#369: scaffold_app always copies the default approved template. Read
+      // its head before the copy; the revision is recorded only if the copy's
+      // initial tree proves it is what GitHub copied.
+      const scaffoldTemplate = getTemplate(DEFAULT_TEMPLATE_ID)!;
+      const scaffoldHead = await templateCommit(scaffoldTemplate.repo.split("/")[1]!, scaffoldTemplate.ref);
+      let scaffoldRev: string | null = null;
+
       // 1. Create repo from template
       const createRes = await gh.createRepoFromTemplate(app_id, { description });
       let repoCreated = false;
@@ -301,8 +308,11 @@ export function registerProjectTools(
       if (repoCreated) {
         steps.push("+ Repo created from template");
 
-        // 2. Replace APPNAME placeholders (wait for GitHub to finish template copy)
+        // 2. Replace APPNAME placeholders (wait for GitHub to finish template copy),
+        //    after proving which revision the copy is.
         await new Promise((r) => setTimeout(r, 4000));
+        if (scaffoldHead?.tree && (await copiedTree(app_id)) === scaffoldHead.tree) scaffoldRev = scaffoldHead.sha;
+        else steps.push(`~ Template revision: the copy is not provably ${scaffoldTemplate.id}@${scaffoldHead?.sha.slice(0, 12) ?? "(unresolved)"} — recorded as unknown`);
         steps.push(...(await patchTemplatePlaceholders(app_id)).lines);
       } else {
         steps.push("~ Repo already existed");
@@ -313,11 +323,8 @@ export function registerProjectTools(
         if ('content' in owner) return owner;
       }
 
-      // 4. Provision (route + D1 + data worker)
-      // #178: scaffold_app always uses the default approved template; record which
-      // revision was copied.
-      const scaffoldTemplate = getTemplate(DEFAULT_TEMPLATE_ID)!;
-      const scaffoldRev = await resolveTemplateRev(scaffoldTemplate.repo.split("/")[1]!, scaffoldTemplate.ref);
+      // 4. Provision (route + D1 + data worker). An existing repo's revision is
+      //    unknown: today's head is not what it was copied from.
       const provResult = await provision(app_id, auth.token, { template: scaffoldTemplate.id, ...(scaffoldRev ? { templateRev: scaffoldRev } : {}) });
       if (provResult) steps.push(provResult);
 

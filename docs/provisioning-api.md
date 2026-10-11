@@ -27,7 +27,9 @@ platform's MCP worker, which the API reaches over a service binding.
   - **Refused:** someone else's app, an edited orphan, or anything that cannot
     be checked.
 - **The revision is proven, or recorded as unknown.**
-  - **New repository:** the template head read just before the copy.
+  - **New repository:** the template head read just before the copy, and only
+    once the new repository's initial tree is verified to be that commit's tree
+    (#369).
   - **Existing scaffold:** the template commit whose tree equals the scaffold's
     first commit.
   - An existing repository is never credited with today's template head.
@@ -140,6 +142,25 @@ empty JSON body.
 | `422` | `{ error: "plan_blocked", plan }` | The plan has blockers |
 | `503` | `{ error }` | No receipt was taken; nothing ran. Retry. |
 
+### When the template moves during the copy (#369)
+
+GitHub's template copy takes no revision: it copies whatever the template head
+is at that moment. So after the copy, and before anything else is written, the
+new repository's initial tree is compared with the planned revision's tree.
+
+If they differ (`revision_mismatch`), or the copy cannot be read within a few
+seconds (`revision_unverified`), confirmation stops:
+- the repository is kept exactly as GitHub created it: no placeholder commit,
+  no provisioning, nothing deleted or rewritten;
+- the receipt's status is `failed`, with steps `repo_created` and then
+  `template_revision` (`fail`, detail prefixed with the code);
+- the `200` response carries `status: "failed"` and the `error`.
+
+Preview again. The new repository is then an untouched scaffold with no app
+record, so the fresh plan offers `adopt_untouched` at the revision the copy
+actually holds (`revisionSource: "scaffold_tree_match"`). Confirming it retries
+the same receipt under that plan.
+
 ### Repeated confirmations
 
 - **Concurrent:** while one confirmation of a plan is in flight, another gets
@@ -148,7 +169,8 @@ empty JSON body.
   receipt (`joined: true`) and does not execute again, even after the preview
   expired.
 - **After a receipt failed:** confirming again re-plans first. Usually the
-  repository now exists, so the answer is `409` with a fresh plan.
+  repository now exists, so the answer is `409` with a fresh plan. Confirming
+  that fresh plan retries the failed receipt with a new attempt bound to it.
 - **Across plans:** two plans for one app share one receipt; the second joins.
 
 ## 3. Progress
