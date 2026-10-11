@@ -212,11 +212,13 @@ export function resolveToolParams(
         case 'integer':
           value = Number(value);
           if (!Number.isInteger(value)) throw new Error(`${name} must be an integer`);
+          if (schema.max !== undefined && (value as number) < 0) throw new Error(`${name} must be >= 0`);
           if (schema.max !== undefined && (value as number) > schema.max) value = schema.max;
           break;
         case 'number':
           value = Number(value);
           if (Number.isNaN(value)) throw new Error(`${name} must be a number`);
+          if (schema.max !== undefined && (value as number) < 0) throw new Error(`${name} must be >= 0`);
           if (schema.max !== undefined && (value as number) > schema.max) value = schema.max;
           break;
         case 'boolean':

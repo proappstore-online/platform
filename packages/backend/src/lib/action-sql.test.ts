@@ -25,6 +25,21 @@ describe('prepareActionQuery', () => {
     expect(query.params).toEqual(['gh:1', false, 100]);
   });
 
+  it('rejects a negative bounded LIMIT parameter', () => {
+    expect(() => prepareActionQuery(manifest, { active: true, limit: -1 }, 'gh:1'))
+      .toThrow('limit must be >= 0');
+  });
+
+  it('keeps bounded numeric input in range and clamps it at the maximum', () => {
+    const bounded = {
+      ...manifest,
+      params: { ...manifest.params, limit: { type: 'integer', max: 10 } },
+    };
+
+    expect(prepareActionQuery(bounded, { active: true, limit: 5 }, 'gh:1').params).toEqual(['gh:1', true, 5]);
+    expect(prepareActionQuery(bounded, { active: true, limit: 15 }, 'gh:1').params).toEqual(['gh:1', true, 10]);
+  });
+
   it('rejects unresolved SQL params', () => {
     expect(() => prepareActionQuery(
       {
