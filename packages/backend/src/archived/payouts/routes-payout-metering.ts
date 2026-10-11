@@ -1,14 +1,15 @@
+// ARCHIVED: payout feature disabled per issue #381. Code preserved for history; nothing imports this file.
 import { Hono } from 'hono';
 import { internalTokenOk } from '@proappstore/build-core';
-import type { Env } from '../types.js';
-import { APP_ID_RE } from './validation.js';
+import type { Env } from '../../types.js';
+import { APP_ID_RE } from '../../routes/validation.js';
 import {
   legacyUsageEventKey,
   legacyUsageOccurredAt,
   payoutActorId,
   type LegacyUsageRow,
   writePayoutUsagePoint,
-} from '../lib/payout-meter.js';
+} from './lib-payout-meter.js';
 
 export const payoutMeteringRoutes = new Hono<{ Bindings: Env }>();
 

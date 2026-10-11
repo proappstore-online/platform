@@ -52,3 +52,18 @@ describe('per-user KV behind the private-app gate (#276)', () => {
     expect(d.sql).toHaveLength(0);
   });
 });
+
+describe('GET /apps/:appId/kv/:key', () => {
+  it('returns the stored bytes whichever shape D1 hands the BLOB back in', async () => {
+    for (const value of [new Uint8Array([34, 118, 34]), new Uint8Array([34, 118, 34]).buffer, [34, 118, 34]]) {
+      const stmt = (q: string) => ({
+        bind: () => stmt(q),
+        first: async () => (q.includes('SELECT value FROM kv') ? { value } : null),
+      });
+      const env = makeEnv({ DB: { prepare: (q: string) => stmt(q) } as unknown as D1Database });
+      const res = await app.request('/v1/apps/open/kv/x', { headers: { Authorization: `Bearer ${TOK}` } }, env);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('"v"');
+    }
+  });
+});

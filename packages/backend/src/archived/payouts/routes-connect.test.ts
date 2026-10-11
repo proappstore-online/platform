@@ -1,6 +1,7 @@
+// Skipped: payout feature archived per issue #381. The routes below are no longer registered.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { app } from '../index.js';
-import { testToken, TEST_SK, mockStmt, mockD1, makeEnv as sharedMakeEnv } from '../test-helpers.js';
+import { app } from '../../index.js';
+import { testToken, TEST_SK, mockStmt, mockD1, makeEnv as sharedMakeEnv } from '../../test-helpers.js';
 
 const TOK = await testToken('gh:1');
 
@@ -26,7 +27,7 @@ function mockStripe(stripeResponses: Response[]) {
 }
 afterEach(() => { globalThis.fetch = originalFetch; });
 
-describe('POST /v1/connect/onboard', () => {
+describe.skip('POST /v1/connect/onboard', () => {
   it('creates a Stripe Express account on first call and stores it', async () => {
     mockStripe([
       new Response(JSON.stringify({ id: 'acct_test_1', country: 'US' }), { status: 200 }),
@@ -123,7 +124,7 @@ describe('POST /v1/connect/onboard', () => {
   });
 });
 
-describe('GET /v1/connect/status', () => {
+describe.skip('GET /v1/connect/status', () => {
   it('returns connected:false when no row exists', async () => {
     const noRow = mockStmt({ first: null });
     const db = mockD1(noRow);

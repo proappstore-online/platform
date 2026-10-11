@@ -1,11 +1,12 @@
-import { PLATFORM_FEE_BPS } from '../lib/platform-fee.js';
+// ARCHIVED: payout feature disabled per issue #381. Code preserved for history; nothing imports this file.
+import { PLATFORM_FEE_BPS } from '../../lib/platform-fee.js';
 import { Hono } from 'hono';
-import type { Env } from '../types.js';
-import { requireUser } from '../lib/auth.js';
-import { wrap } from '../lib/route-wrap.js';
-import { cfAnalyticsSql } from './analytics-shared.js';
-import { payoutAiCostSql, payoutUsageSql } from '../lib/payout-meter.js';
-import { utcDayKey } from '../lib/day-key.js';
+import type { Env } from '../../types.js';
+import { requireUser } from '../../lib/auth.js';
+import { wrap } from '../../lib/route-wrap.js';
+import { cfAnalyticsSql } from '../../routes/analytics-shared.js';
+import { payoutAiCostSql, payoutUsageSql } from './lib-payout-meter.js';
+import { utcDayKey } from '../../lib/day-key.js';
 
 /**
  * Creator payout preview — what would this month's payout be if usage froze

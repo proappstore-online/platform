@@ -1,9 +1,10 @@
+// ARCHIVED: payout feature disabled per issue #381. Code preserved for history; nothing imports this file.
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import type { Env } from '../types.js';
-import { requireUser, HttpError } from '../lib/auth.js';
-import { wrap } from '../lib/route-wrap.js';
-import { Stripe } from '../lib/stripe.js';
+import type { Env } from '../../types.js';
+import { requireUser, HttpError } from '../../lib/auth.js';
+import { wrap } from '../../lib/route-wrap.js';
+import { Stripe } from '../../lib/stripe.js';
 
 /**
  * Stripe Connect onboarding for creators.

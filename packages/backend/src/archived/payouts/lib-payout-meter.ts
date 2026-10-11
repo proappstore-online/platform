@@ -1,5 +1,6 @@
-import { PAYOUT_METER_DATASET } from './telemetry-datasets.js';
-import { sha256Hex } from './app-tokens.js';
+// ARCHIVED: payout feature disabled per issue #381. Code preserved for history; nothing imports this file.
+import { PAYOUT_METER_DATASET } from '../../lib/telemetry-datasets.js';
+import { sha256Hex } from '../../lib/app-tokens.js';
 
 /** Analytics Engine dataset that is the source of truth for usage-share payouts. */
 export { PAYOUT_METER_DATASET };

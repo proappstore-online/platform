@@ -27,8 +27,6 @@ import { analyticsRoutes } from './routes/analytics.js';
 import { appsRoutes } from './routes/apps.js';
 import { listingsRoutes } from './routes/listings.js';
 import { usageRoutes } from './routes/usage.js';
-import { connectRoutes } from './routes/connect.js';
-import { payoutsRoutes } from './routes/payouts.js';
 import { domainRoutes } from './routes/domains.js';
 import { emailRoutes } from './routes/email.js';
 import { webhookConfigRoutes } from './routes/webhooks-config.js';
@@ -58,8 +56,7 @@ import { cleanupRemoteAuthRequests, mcpBrokerRoutes } from './routes/mcp-broker.
 import { passkeyRoutes } from './routes/passkeys.js';
 import { servicesRoutes } from './routes/services.js';
 import { engagementRoutes } from './routes/engagements.js';
-import { payoutCronRoutes, runScheduledPayouts } from './routes/payout-cron.js';
-import { payoutMeteringRoutes, reconcileAiGateway } from './routes/payout-metering.js';
+import { internalRoutes } from './routes/internal.js';
 import { teamRoutes } from './routes/teams.js';
 import { inviteRoutes } from './routes/invites.js';
 import { rolesRoutes } from './routes/roles.js';
@@ -262,8 +259,6 @@ v1.route('/', appsRoutes);
 v1.route('/', analyticsRoutes);
 v1.route('/', listingsRoutes);
 v1.route('/', usageRoutes);
-v1.route('/', connectRoutes);
-v1.route('/', payoutsRoutes);
 v1.route('/', domainRoutes);
 v1.route('/', emailRoutes);
 v1.route('/', webhookConfigRoutes);
@@ -282,8 +277,7 @@ v1.route('/', secretsRoutes);
 v1.route('/', keysRoutes);
 v1.route('/', servicesRoutes);
 v1.route('/', engagementRoutes);
-v1.route('/', payoutCronRoutes);
-v1.route('/', payoutMeteringRoutes);
+v1.route('/', internalRoutes);
 v1.route('/', teamRoutes);
 v1.route('/', inviteRoutes);
 v1.route('/', rolesRoutes);
@@ -345,9 +339,7 @@ export default {
     const tickAt = event.scheduledTime ?? Date.now();
     if (new Date(tickAt).getUTCMinutes() % 15 !== 0) return;
     ctx.waitUntil(checkSessionKeyDrift({ env }));
-    // The long-standing payout route is idempotent but used to have no
-    // scheduler. Run the exact same internal-token-protected route here.
-    ctx.waitUntil(runScheduledPayouts(env).catch((e) => console.error(`[payout] scheduled run failed: ${(e as Error).message}`)));
+    // #381: the payout run (runScheduledPayouts) is archived in archived/payouts/ and no longer scheduled.
     // #107: aggregate app_logs + QA runs per app for the last window and record
     // spikes (lib/error-alerts.ts). Failures here must not take the drift check down.
     ctx.waitUntil(evaluateErrorSpikes({ env }).catch((e) => console.error(`[alert] evaluation failed: ${(e as Error).message}`)));
@@ -357,12 +349,6 @@ export default {
     if (new Date(tickAt).getUTCHours() === 3 && new Date(tickAt).getUTCMinutes() === 45) {
       ctx.waitUntil(reapReviewUploads(env, tickAt).catch((e) => console.error(`[review-retention] run failed: ${(e as Error).message}`)));
     }
-    // Reconcile provider-authoritative token/cost rows once hourly. This is
-    // independent of payout execution; operators can run the same endpoint on
-    // demand before closing a month.
-    if (new Date(tickAt).getUTCMinutes() === 0 && env.CF_AI_GATEWAY_API_TOKEN && env.AI_GATEWAY_ID) {
-      const today = new Date().toISOString().slice(0, 10);
-      ctx.waitUntil(reconcileAiGateway(env, today, today).catch((e) => console.error(`[payout-meter] AI Gateway reconciliation failed: ${(e as Error).message}`)));
-    }
+    // #381: the hourly payout-meter AI Gateway reconciliation (reconcileAiGateway) is archived and no longer scheduled.
   },
 };

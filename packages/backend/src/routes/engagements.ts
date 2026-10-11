@@ -3,6 +3,7 @@ import type { Env } from '../types.js';
 import { requireUser } from '../lib/auth.js';
 import { wrap } from '../lib/route-wrap.js';
 import { developerShareCents } from '../lib/platform-fee.js';
+import { PAYOUTS_ENABLED } from '../lib/payouts-flag.js';
 import { sendEmail } from '../lib/email.js';
 import { auditModeration, chunkText, moderateChunks } from '../lib/moderation.js';
 import { withinModerationRate } from '../lib/ai-budget.js';
@@ -569,7 +570,8 @@ engagementRoutes.post('/services/engagements/:id/refund', wrap(async (c) => {
   // Record what the decrement could not recover, in the SAME batch as the
   // client credit — the ledger entry and the refund it offsets must both land
   // or neither, or the platform credits the client and forgets the debt.
-  if (unrecoveredClawback > 0) {
+  // #381: payouts are archived, so there is no next payout to net a developer debt against.
+  if (PAYOUTS_ENABLED && unrecoveredClawback > 0) {
     statements.push(
       c.env.DB.prepare(
         `INSERT INTO developer_clawbacks (developer_id, pending_clawback_cents, updated_at)
@@ -595,7 +597,7 @@ engagementRoutes.post('/services/engagements/:id/refund', wrap(async (c) => {
     devClawbackCents: devClawbackApplied,
     clawbackAlreadyPaid,
     /** Cents added to the developer's debt ledger, netted from their next payout. */
-    pendingClawbackCents: unrecoveredClawback,
+    pendingClawbackCents: PAYOUTS_ENABLED ? unrecoveredClawback : 0,
   });
 }));
 

@@ -337,7 +337,8 @@ describe('POST /v1/services/engagements/:id/refund', () => {
   // engagement is still unpaid — the payout cron sums `WHERE payout_month IS
   // NULL` and never reads a settled row again. What the decrement cannot
   // recover is banked against the developer instead of being lost.
-  it('banks the FULL clawback as debt when the engagement was already paid', async () => {
+  // Skipped: payout feature archived per issue #381 (no developer debt is banked against a payout).
+  it.skip('banks the FULL clawback as debt when the engagement was already paid', async () => {
     const db = mockD1(
       mockStmt({
         first: {
@@ -361,6 +362,30 @@ describe('POST /v1/services/engagements/:id/refund', () => {
     expect(ledgerWrite).toBeDefined();
   });
 
+  // #381: payouts are archived. A refund of a settled engagement still credits the
+  // client and records the refund, but banks no developer debt against a payout.
+  it('credits the client and banks no developer debt (#381)', async () => {
+    const db = mockD1(
+      mockStmt({
+        first: {
+          client_id: 'gh:2', developer_id: 'gh:3',
+          total_charged_cents: 1000, total_dev_earned_cents: 900,
+          total_platform_fee_cents: 100, total_refunded_cents: 0, payout_month: '2026-07',
+        },
+      }),
+    );
+    const res = await app.request('/v1/services/engagements/test-id/refund', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amountCents: 1000 }),
+    }, env({ ADMIN_GITHUB_IDS: 'gh:1' }, db));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, refundedCents: 1000, pendingClawbackCents: 0 });
+    expect(db.sqlSeen.some((q) => /UPDATE client_balances/i.test(q))).toBe(true);
+    expect(db.sqlSeen.some((q) => /developer_clawbacks/i.test(q))).toBe(false);
+  });
+
   it('banks nothing when the engagement is unpaid — the decrement does the work', async () => {
     const db = mockD1(
       mockStmt({
@@ -382,7 +407,8 @@ describe('POST /v1/services/engagements/:id/refund', () => {
     expect(db.sqlSeen.some((q) => /developer_clawbacks/i.test(q))).toBe(false);
   });
 
-  it('banks the clamped-off remainder on an unpaid engagement', async () => {
+  // Skipped: payout feature archived per issue #381 (no developer debt is banked against a payout).
+  it.skip('banks the clamped-off remainder on an unpaid engagement', async () => {
     // A prior partial refund already pulled the balance down, so the decrement
     // clamps. The old code dropped the difference silently.
     const db = mockD1(

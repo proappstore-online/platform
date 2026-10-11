@@ -6356,66 +6356,6 @@ export const openapiSpec: Record<string, unknown> = {
         }
       }
     },
-    "/v1/connect/onboard": {
-      "post": {
-        "tags": [
-          "Stripe Connect"
-        ],
-        "summary": "Onboard connect",
-        "operationId": "post_v1_connect_onboard",
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/connect/status": {
-      "get": {
-        "tags": [
-          "Stripe Connect"
-        ],
-        "summary": "List status",
-        "operationId": "get_v1_connect_status",
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
-      }
-    },
     "/v1/email/send": {
       "post": {
         "tags": [
@@ -6482,41 +6422,6 @@ export const openapiSpec: Record<string, unknown> = {
             "schema": {
               "type": "string"
             }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/internal/payouts/run": {
-      "post": {
-        "tags": [
-          "Payouts"
-        ],
-        "summary": "Run payouts",
-        "operationId": "post_v1_internal_payouts_run",
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          }
-        },
-        "security": [
-          {
-            "internalToken": []
           }
         ],
         "requestBody": {
@@ -7071,31 +6976,6 @@ export const openapiSpec: Record<string, unknown> = {
         "security": []
       }
     },
-    "/v1/payouts/me/preview": {
-      "get": {
-        "tags": [
-          "Payouts"
-        ],
-        "summary": "List preview",
-        "operationId": "get_v1_payouts_me_preview",
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
-      }
-    },
     "/v1/portal": {
       "post": {
         "tags": [
@@ -7402,31 +7282,6 @@ export const openapiSpec: Record<string, unknown> = {
             "schema": {
               "type": "string"
             }
-          }
-        ]
-      }
-    },
-    "/v1/services/earnings": {
-      "get": {
-        "tags": [
-          "Services"
-        ],
-        "summary": "List earnings",
-        "operationId": "get_v1_services_earnings",
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
           }
         ]
       }

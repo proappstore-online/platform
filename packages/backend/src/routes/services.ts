@@ -5,6 +5,7 @@ import { requireUser, HttpError } from '../lib/auth.js';
 import { wrap } from '../lib/route-wrap.js';
 import { internalTokenOk } from '@proappstore/build-core';
 import { Stripe } from '../lib/stripe.js';
+import { PAYOUTS_ENABLED } from '../lib/payouts-flag.js';
 import { auditModeration, moderateText } from '../lib/moderation.js';
 import { withinModerationRate } from '../lib/ai-budget.js';
 
@@ -214,6 +215,8 @@ servicesRoutes.patch('/services/profile/availability', wrap(async (c) => {
 
 // Auth: earnings breakdown for the developer
 servicesRoutes.get('/services/earnings', wrap(async (c) => {
+  // #381: developer earnings and Connect payout status are part of the archived payout feature.
+  if (!PAYOUTS_ENABLED) return c.json({ error: 'Payout feature is disabled' }, 410);
   const user = await requireUser(c);
 
   // Total earnings across all engagements

@@ -5,7 +5,8 @@ import { wrap } from '../lib/route-wrap.js';
 import { APP_ID_RE } from './validation.js';
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { utcDayKey } from '../lib/day-key.js';
-import { payoutActorId, writePayoutUsagePoint } from '../lib/payout-meter.js';
+// #381: payouts are archived; the payout meter (archived/payouts/lib-payout-meter.ts) is no longer written.
+// import { payoutActorId, writePayoutUsagePoint } from '../lib/payout-meter.js';
 
 /**
  * Usage telemetry — powers usage-proportional creator payouts.
@@ -234,9 +235,8 @@ usageRoutes.post('/usage/ping', wrap(async (c) => {
     return c.json({ ok: true, recorded: false, reason: 'no-subscription', day, sessionSeconds: 0, apiCalls: 0 });
   }
 
-  // Fail closed before updating the legacy projection: a successful heartbeat
-  // that is absent from the financial ledger would make payouts unauditable.
-  const actor = await payoutActorId(user.id, c.env.PAYOUT_METER_SALT);
+  // #381: payouts are archived, so there is no financial ledger to fail closed for.
+  // const actor = await payoutActorId(user.id, c.env.PAYOUT_METER_SALT);
 
   const claim = await claimPingInterval(c.env.DB, { appId, userId: user.id, day, now }, body);
   if (!claim) {
@@ -245,19 +245,20 @@ usageRoutes.post('/usage/ping', wrap(async (c) => {
     return c.json({ ok: true, recorded: false, reason: 'no-elapsed-time', day, sessionSeconds: 0, apiCalls: 0 });
   }
 
-  // AE is append-only. A unique event key makes every accepted heartbeat an
-  // independently auditable delta; backfilled legacy rows use deterministic
-  // keys and the payout SQL deduplicates key replays. Written only for the ping
-  // that won its interval (#320), so one stretch of time is metered once.
-  writePayoutUsagePoint(c.env.PAYOUT_METER, {
-    appId,
-    actor,
-    eventKey: `sdk:${crypto.randomUUID()}`,
-    source: 'sdk',
-    occurredAt: now,
-    sessionSeconds: claim.deltaSeconds,
-    apiCalls: claim.deltaApiCalls,
-  });
+  // #381: the payout-meter write below is disabled; payouts are archived.
+  // // AE is append-only. A unique event key makes every accepted heartbeat an
+  // // independently auditable delta; backfilled legacy rows use deterministic
+  // // keys and the payout SQL deduplicates key replays. Written only for the ping
+  // // that won its interval (#320), so one stretch of time is metered once.
+  // writePayoutUsagePoint(c.env.PAYOUT_METER, {
+  //   appId,
+  //   actor,
+  //   eventKey: `sdk:${crypto.randomUUID()}`,
+  //   source: 'sdk',
+  //   occurredAt: now,
+  //   sessionSeconds: claim.deltaSeconds,
+  //   apiCalls: claim.deltaApiCalls,
+  // });
 
   return c.json({
     ok: true,

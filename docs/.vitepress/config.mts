@@ -70,7 +70,8 @@ const mainSidebar = [
       { text: "Publishing Flow", link: "/publishing-flow" },
       { text: "Approved Templates", link: "/templates/" },
       { text: "Stripe & Entitlements", link: "/stripe-entitlements" },
-      { text: "Payout Metering", link: "/payout-metering" },
+      // #381: payouts archived; page kept, link hidden.
+      // { text: "Payout Metering", link: "/payout-metering" },
     ],
   },
   {

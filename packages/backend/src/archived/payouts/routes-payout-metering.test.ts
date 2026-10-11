@@ -1,12 +1,13 @@
+// Skipped: payout feature archived per issue #381. The routes below are no longer registered.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { app } from '../index.js';
-import { makeEnv, mockD1, mockStmt } from '../test-helpers.js';
-import { payoutUsageSql } from '../lib/payout-meter.js';
-import { backfillLegacyUsage, reconcileAiGateway } from './payout-metering.js';
+import { app } from '../../index.js';
+import { makeEnv, mockD1, mockStmt } from '../../test-helpers.js';
+import { payoutUsageSql } from './lib-payout-meter.js';
+import { backfillLegacyUsage, reconcileAiGateway } from './routes-payout-metering.js';
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe('payout meter legacy backfill (#25)', () => {
+describe.skip('payout meter legacy backfill (#25)', () => {
   it('uses a deterministic event key, so a repeated backfill cannot increase a payout', async () => {
     const rows = [{ app_id: 'meetup', user_id: 'gh:42', day: '2026-06-01', session_seconds: 90, api_calls: 3 }];
     const db = mockD1(mockStmt({ all: { results: rows } }), mockStmt({ all: { results: rows } }));
@@ -27,7 +28,7 @@ describe('payout meter legacy backfill (#25)', () => {
   });
 });
 
-describe('AI Gateway payout reconciliation (#25)', () => {
+describe.skip('AI Gateway payout reconciliation (#25)', () => {
   it('records provider/model/token/cost against metadata appId and ignores unattributed logs', async () => {
     const meter = { writeDataPoint: vi.fn() } as unknown as AnalyticsEngineDataset;
     const env = makeEnv({
@@ -51,7 +52,7 @@ describe('AI Gateway payout reconciliation (#25)', () => {
   });
 });
 
-describe('internal payout metering routes', () => {
+describe.skip('internal payout metering routes', () => {
   const env = () => makeEnv({ INTERNAL_TOKEN: 'payout-internal-token' });
 
   it('refuses an invalid request before parsing its dates when the internal token is absent', async () => {

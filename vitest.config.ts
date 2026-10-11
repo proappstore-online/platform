@@ -31,6 +31,8 @@ export default defineConfig({
         'packages/*/src/__snapshots__/**',
         'packages/*/src/test-helpers.ts',
         'packages/backend/src/openapi-spec.ts',
+        // #381: archived payout code, unrouted and imported by nothing.
+        'packages/backend/src/archived/**',
         'packages/runtime-tests/**',
         'packages/e2e/**',
       ],

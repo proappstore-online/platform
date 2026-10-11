@@ -1,7 +1,8 @@
+// Skipped: payout feature archived per issue #381. The routes below are no longer registered.
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { app } from '../index.js';
-import { computeMonthPreview } from './payouts.js';
-import { testToken, TEST_SK, mockStmt, mockD1, makeEnv as sharedMakeEnv } from '../test-helpers.js';
+import { app } from '../../index.js';
+import { computeMonthPreview } from './routes-payouts.js';
+import { testToken, TEST_SK, mockStmt, mockD1, makeEnv as sharedMakeEnv } from '../../test-helpers.js';
 
 const TOK = await testToken('gh:1');
 
@@ -26,7 +27,7 @@ const fakeBucket = {
   totalDays: 31,
 };
 
-describe('computeMonthPreview', () => {
+describe.skip('computeMonthPreview', () => {
   it('returns zeros when there are no usage rows', () => {
     const r = computeMonthPreview(fakeBucket, new Set(['meetup']), []);
     expect(r.activeUsers).toBe(0);
@@ -115,7 +116,7 @@ describe('computeMonthPreview', () => {
 
 // ── HTTP route tests ────────────────────────────────────────────────────
 
-describe('GET /v1/payouts/me/preview', () => {
+describe.skip('GET /v1/payouts/me/preview', () => {
   it('returns zero months when the caller owns no apps', async () => {
     const ownedApps = mockStmt({ all: { results: [] } });
     const db = mockD1(ownedApps);
