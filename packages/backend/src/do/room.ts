@@ -88,9 +88,12 @@ export class Room {
     if (request.method === 'POST' && target.pathname === ROOM_PUBLISH_PATH) return this.publish(request);
 
     // Idle eviction clears the room's storage only — and only when the room is
-    // empty. Connected peers are never evicted (#119).
+    // empty. Connected peers are never evicted (#119). The event sequence is put
+    // back: it must never restart, or a client returning after the idle period
+    // could not see the events it missed (#365).
     if (this.peers.size === 0 && Date.now() - this.lastActivity > IDLE_EVICT_MS) {
       await this.state.storage.deleteAll();
+      if (this.seq > 0) await this.state.storage.put('seq', this.seq);
     }
     this.lastActivity = Date.now();
     void this.state.storage.put('lastActivity', this.lastActivity);
@@ -158,7 +161,8 @@ export class Room {
    * An app worker's event (#351): `{ kind: 'event', from: SERVER_PEER, data,
    * at, seq }` to every open socket. Answers how many got it; 0 when nobody is
    * connected, which is not an error. `seq` grows by one per event in this room
-   * and survives the room going idle, so a client that sees a gap refetches.
+   * and survives the room going idle, idle eviction and a restart of this object,
+   * so a client that sees a gap refetches.
    */
   private async publish(request: Request): Promise<Response> {
     const body = await request.json<{ app?: string; room?: string; data?: unknown }>().catch(() => null);
@@ -166,7 +170,10 @@ export class Room {
     this.appId ??= body.app;
     this.roomId ??= body.room;
     this.seq += 1;
-    await this.state.storage.put('seq', this.seq);
+    // A publish is room activity (#365): persisted with the sequence, so the next
+    // join after an idle stretch does not treat the room as idle and clear it.
+    this.lastActivity = Date.now();
+    await this.state.storage.put({ seq: this.seq, lastActivity: this.lastActivity });
     const frame = JSON.stringify({ kind: 'event', from: SERVER_PEER, data: body.data ?? null, at: Date.now(), seq: this.seq });
     let delivered = 0;
     for (const peer of this.peers.values()) {
