@@ -1,5 +1,5 @@
 import { env, SELF } from 'cloudflare:test';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 beforeAll(async () => {
   await env.DB.exec("CREATE TABLE app_visibility (app_id TEXT PRIMARY KEY, mode TEXT); INSERT INTO app_visibility VALUES ('private-app', 'private'), ('public-app', 'public');");
@@ -10,6 +10,7 @@ beforeAll(async () => {
     await env.KB_R2.put(`${app}/.e2e/summary.json`, '{"passed":3}');
   }
 });
+afterEach(() => vi.restoreAllMocks());
 const read = (path: string, headers: Record<string, string> = {}, method = 'GET') =>
   SELF.fetch(`https://kb.proappstore.online/${path}`, { headers, method });
 
@@ -24,6 +25,18 @@ describe('KB visibility (#277)', () => {
       }
     }
     expect((await read('private-app/', { 'x-internal-token': 'wrong' })).status).toBe(404);
+  });
+
+  it('a refused platform token gets the same 404 as no token, and is logged without the token (#303 M5)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const anonymous = await read('private-app/.e2e/summary.json');
+    expect(warn).not.toHaveBeenCalled();
+    const refused = await read('private-app/.e2e/summary.json', { 'x-internal-token': 'wrong-token' });
+    expect(refused.status).toBe(404);
+    expect(await refused.text()).toBe(await anonymous.text());
+    expect([...refused.headers]).toEqual([...anonymous.headers]);
+    expect(warn).toHaveBeenCalledWith('KB private gate: token mismatch for private-app (server token configured: true)');
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('wrong-token');
   });
 
   it('serves public and undeclared apps and platform docs', async () => {

@@ -71,6 +71,30 @@ or authentication headers.
   (migrations apply before registration).
 - Compliance/provision failure on publish → check the app's Deploy-to-R2 run.
 
+## Troubleshooting: private-app e2e results not appearing
+
+After a green deploy, agent-teams harvests `kb.proappstore.online/<app>/.e2e/summary.json`
+into the console Test tab over the `KB` service binding, sending `x-internal-token`.
+The KB host answers a private app's KB only to a matching `INTERNAL_TOKEN` (#277);
+any other caller gets a plain 404, the same as "no tests yet". Since #303 M5 the
+two sides log the difference:
+
+- **agent-teams** activity log (`agent_activity`) and Workers logs:
+  `Private KB refused request: check INTERNAL_TOKEN on proappstore-kb-host (slug: <app>)`,
+  or `Test harvest failed: HTTP <status> from KB host` for any other non-OK answer.
+  `INTERNAL_TOKEN is not set on agent-teams` means the caller side is missing it.
+  A public app's 404 is still silent: it has no published summary yet.
+- **kb-host** Workers logs (`wrangler tail proappstore-kb-host`):
+  `KB private gate: token mismatch for <app> (server token configured: <bool>)`.
+  `false` means the secret is missing on the KB host; `true` means the two
+  workers hold different values.
+
+Fix: `INTERNAL_TOKEN` on `proappstore-kb-host` must equal the value agent-teams
+holds. `wrangler secret list --name proappstore-kb-host` shows whether it is set
+(names only). Setting it is a credential-holder step: pipe the value from the
+secrets store (`wrangler secret put INTERNAL_TOKEN --name proappstore-kb-host`),
+never type or paste it, and keep the inventory's `consumers:` in step.
+
 ## Alerts (automated — #107)
 
 The backend cron (`*/15`, `index.ts` `scheduled`) runs `lib/error-alerts.ts`

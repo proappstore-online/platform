@@ -413,7 +413,7 @@ async function finishGreenDeploy(
 
   // Harvest CI test results, ensure the data plane, register MCP tools. All
   // best-effort: never fail an already-green deploy.
-  await harvestTestResults(deps, proj, ticketId, sha);
+  await harvestTestResults(deps, proj, ticketId, sha, declaresPrivate(files));
   await ensureDataInfra(deps, proj, ticketId);
   // Schema before actions: apply migrations.json, and only register mcp.json
   // actions if it succeeded — an action that references a column the migration
@@ -461,22 +461,36 @@ export function declaresPrivate(files: Map<string, string>): boolean {
  * double-ingestion, and the next deploy will pick up the current results. The
  * primary ingest path is the e2e job POSTing directly to /test-history.
  *
- * Best-effort: failures are logged and silently ignored.
+ * Best-effort: never fails a green deploy. A public app's 404 is "no e2e tests
+ * yet" and stays quiet; anything else is logged (#303 M5). A private app's KB
+ * answers 404 to a missing or mismatched INTERNAL_TOKEN (#277), indistinguishable
+ * from "no summary" on the wire, so for a private app a 404 is reported as the
+ * likely configuration fault.
  */
-async function harvestTestResults(
+export async function harvestTestResults(
   deps: DeployDeps,
   proj: { slug: string },
   ticketId: string,
   sha: string | undefined,
+  isPrivate: boolean,
 ): Promise<void> {
   try {
     // kb.proappstore.online is route-mapped — a plain same-zone fetch bypasses
     // the kb-host worker entirely, so this must go over the KB service binding.
     if (!deps.env.KB) return;
+    if (!deps.env.INTERNAL_TOKEN) console.warn(`[harvest] INTERNAL_TOKEN is not set on agent-teams; a private KB will refuse ${proj.slug}`);
     const res = await deps.env.KB.fetch(`https://kb.proappstore.online/${proj.slug}/.e2e/summary.json`, {
       headers: deps.env.INTERNAL_TOKEN ? { "x-internal-token": deps.env.INTERNAL_TOKEN } : {},
     });
-    if (!res.ok) return; // no summary published (e.g. no e2e tests yet)
+    if (!res.ok) {
+      if (res.status === 404 && !isPrivate) return; // no summary published (e.g. no e2e tests yet)
+      const detail = res.status === 404
+        ? `Private KB refused request: check INTERNAL_TOKEN on proappstore-kb-host (slug: ${proj.slug})`
+        : `Test harvest failed: HTTP ${res.status} from KB host (slug: ${proj.slug})`;
+      console.warn(`[harvest] ${detail}`);
+      deps.logActivity('test', detail, ticketId);
+      return;
+    }
 
     const summary = await res.json() as {
       passed?: number; failed?: number; skipped?: number; flaky?: number;
@@ -524,8 +538,10 @@ async function harvestTestResults(
     }
 
     deps.logActivity('test', `Test results harvested: ${passed} passed, ${failed} failed`, ticketId);
-  } catch {
-    // Best-effort — never fails a green deploy
+  } catch (err) {
+    // Best-effort — never fails a green deploy, but never silent either.
+    console.warn('[harvest] harvestTestResults error:', err);
+    deps.logActivity('test', `Test harvest error: ${String(err)}`.slice(0, 300), ticketId);
   }
 }
 

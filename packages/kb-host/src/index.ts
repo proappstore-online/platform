@@ -168,6 +168,11 @@ export default {
     }
     const privateHeaders: Record<string, string> = privateApp ? { "cache-control": "private, no-store" } : {};
     if (privateApp && !(env.INTERNAL_TOKEN && equalToken(request.headers.get("x-internal-token"), env.INTERNAL_TOKEN))) {
+      // A platform caller presented a token and was refused: say so in the logs (#303 M5), never in
+      // the answer, which stays the same 404 so an outside caller learns nothing about the app.
+      if (request.headers.has("x-internal-token")) {
+        console.warn(`KB private gate: token mismatch for ${app} (server token configured: ${Boolean(env.INTERNAL_TOKEN)})`);
+      }
       return new Response("Not found", { status: 404, headers: privateHeaders });
     }
 

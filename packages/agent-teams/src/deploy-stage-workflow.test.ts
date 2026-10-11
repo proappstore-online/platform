@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { declaresPrivate, registerMcpTools, runDeployViaWorkflow, type WorkflowDeployArgs } from './deploy-stage.ts';
+import { declaresPrivate, harvestTestResults, registerMcpTools, runDeployViaWorkflow, type DeployDeps, type WorkflowDeployArgs } from './deploy-stage.ts';
 
 /**
  * Tests the canary deploy path's outcome mapping: start the provisioning
@@ -265,5 +265,81 @@ describe('private apps: visibility registration on a green deploy (#259 review)'
     await runDeployViaWorkflow(h.args);
     expect(h.exec.find((e) => e.sql.startsWith("UPDATE tickets SET status = 'needs-input'"))).toBeUndefined();
     expect(h.events).toContainEqual(expect.objectContaining({ type: 'transition', to: 'done' }));
+  });
+});
+
+describe('harvestTestResults (#303 M5)', () => {
+  const SUMMARY = { passed: 3, failed: 1, ok: false, specs: [{ title: 'loads', ok: true }] };
+
+  function harvestDeps(kb: (() => Promise<Response>) | null, env: Record<string, unknown> = { INTERNAL_TOKEN: 'tok' }) {
+    const activities: { type: string; detail: string }[] = [];
+    const inserts: string[] = [];
+    const fetchKb = vi.fn(async (_url: string, _init?: RequestInit) => kb!());
+    const deps = {
+      sql: { exec: (sql: string) => { if (sql.startsWith('INSERT')) inserts.push(sql); return { toArray: () => [] }; } },
+      env: { ...env, ...(kb ? { KB: { fetch: fetchKb } } : {}) },
+      logActivity: (type: string, detail: string) => { activities.push({ type, detail }); return 'log'; },
+    } as unknown as DeployDeps;
+    return { deps, activities, inserts, fetchKb };
+  }
+  const run = (deps: DeployDeps, isPrivate: boolean) => harvestTestResults(deps, { slug: 'myapp' }, 't1', 'abc1234', isPrivate);
+
+  it('a public app\'s 404 is "no e2e tests yet": nothing logged', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = harvestDeps(async () => new Response('Not found', { status: 404 }));
+    await run(h.deps, false);
+    expect(h.activities).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+    expect(h.inserts).toEqual([]);
+  });
+
+  it('a private app\'s 404 points at INTERNAL_TOKEN on the KB host', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = harvestDeps(async () => new Response('Not found', { status: 404 }));
+    await run(h.deps, true);
+    expect(h.activities).toEqual([{ type: 'test', detail: 'Private KB refused request: check INTERNAL_TOKEN on proappstore-kb-host (slug: myapp)' }]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('check INTERNAL_TOKEN on proappstore-kb-host'));
+    expect(h.fetchKb.mock.calls[0]![1]).toEqual({ headers: { 'x-internal-token': 'tok' } });
+  });
+
+  it.each([401, 403, 503])('HTTP %i is logged with its status, public or private', async (status) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = harvestDeps(async () => new Response('', { status }));
+    await run(h.deps, false);
+    expect(h.activities).toEqual([{ type: 'test', detail: `Test harvest failed: HTTP ${status} from KB host (slug: myapp)` }]);
+    expect(h.inserts).toEqual([]);
+  });
+
+  it('a thrown error is logged, never swallowed, and never throws out of a green deploy', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = harvestDeps(async () => { throw new Error('binding down'); });
+    await expect(run(h.deps, false)).resolves.toBeUndefined();
+    expect(h.activities).toEqual([{ type: 'test', detail: 'Test harvest error: Error: binding down' }]);
+    expect(warn).toHaveBeenCalledWith('[harvest] harvestTestResults error:', expect.any(Error));
+  });
+
+  it('a published summary is still harvested', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = harvestDeps(async () => Response.json(SUMMARY));
+    await run(h.deps, true);
+    expect(h.activities).toEqual([{ type: 'test', detail: 'Test results harvested: 3 passed, 1 failed' }]);
+    expect(h.inserts.map((q) => q.split('(')[0]!.trim())).toEqual(['INSERT OR REPLACE INTO test_runs', 'INSERT INTO test_results']);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('warns when agent-teams has no INTERNAL_TOKEN, and sends no token header', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = harvestDeps(async () => new Response('Not found', { status: 404 }), {});
+    await run(h.deps, false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('INTERNAL_TOKEN is not set on agent-teams'));
+    expect(h.fetchKb.mock.calls[0]![1]).toEqual({ headers: {} });
+  });
+
+  it('without a KB binding (dev) does nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = harvestDeps(null);
+    await run(h.deps, true);
+    expect(h.activities).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
   });
 });
