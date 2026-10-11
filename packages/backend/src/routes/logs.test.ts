@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { app } from '../index.js';
 import { testToken, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
@@ -5,6 +6,7 @@ import { resetBurstState } from '../lib/log-quota.js';
 import { APP_CONTEXT_HEADER, HOST_SESSION_INVALIDATION_HEADER, HOST_SESSION_INVALIDATION_ID_HEADER } from '../lib/app-context.js';
 
 const TOK = await testToken('gh:1');
+const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 
 function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
   const prepare = vi.fn();
@@ -68,7 +70,7 @@ describe('POST /v1/internal/session-invalidations', () => {
 
   it('persists one fixed, anonymous host event before the browser cookie is cleared', async () => {
     const insert = mockStmt();
-    const db = mockD1(insert);
+    const db = mockD1(mockStmt({ first: { count: 0 } }), mockStmt(), insert);
     const correlationId = 'a'.repeat(32);
     const res = await app.request('/v1/internal/session-invalidations', {
       method: 'POST',
@@ -85,6 +87,51 @@ describe('POST /v1/internal/session-invalidations', () => {
       JSON.stringify({ reason: 'api_401', phase: 'api_request', route: 'platform.api' }),
       'auth-session-api-401', correlationId, expect.any(Number),
     );
+  });
+
+  it('drops host diagnostics after the daily quota without rejecting the authoritative invalidation', async () => {
+    const insert = mockStmt();
+    const db = mockD1(
+      mockStmt({ first: { count: 999_999 } }),
+      insert,
+    );
+    const res = await app.request('/v1/internal/session-invalidations', {
+      method: 'POST',
+      headers: {
+        [APP_CONTEXT_HEADER]: 'myapp',
+        [HOST_SESSION_INVALIDATION_HEADER]: 'api_401',
+        [HOST_SESSION_INVALIDATION_ID_HEADER]: 'a'.repeat(32),
+      },
+    }, makeEnv({}, db));
+
+    expect(res.status).toBe(204);
+    expect(insert.run).not.toHaveBeenCalled();
+  });
+
+  it('bounds concurrent host invalidation diagnostics with the shared burst quota', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    try {
+      const inserts: ReturnType<typeof mockStmt>[] = [];
+      const request = (n: number) => {
+        const insert = mockStmt();
+        inserts.push(insert);
+        const db = mockD1(mockStmt({ first: { count: 0 } }), mockStmt(), insert);
+        return app.request('/v1/internal/session-invalidations', {
+          method: 'POST',
+          headers: {
+            [APP_CONTEXT_HEADER]: 'myapp',
+            [HOST_SESSION_INVALIDATION_HEADER]: 'api_401',
+            [HOST_SESSION_INVALIDATION_ID_HEADER]: n.toString(16).padStart(32, 'a'),
+          },
+        }, makeEnv({}, db));
+      };
+
+      const results = await Promise.all(Array.from({ length: 201 }, (_, n) => request(n)));
+      expect(results.every((res) => res.status === 204)).toBe(true);
+      expect(inserts.filter((insert) => insert.run.mock.calls.length > 0)).toHaveLength(200);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
 
@@ -210,6 +257,29 @@ describe('POST /v1/apps/:appId/logs — validation', () => {
     await post({ entries: [entry({ message: 'load failed for user 987' })] }, { env: makeEnv({}, b) });
     expect(insertedRow(a)[9]).toMatch(/^[0-9a-f]{16}$/);
     expect(insertedRow(a)[9]).toBe(insertedRow(b)[9]);
+  });
+
+  it('persists an SDK bare correlation id as the anonymous trace id', async () => {
+    const db = ingestDb();
+    await post({ entries: [entry({ traceId: 'A'.repeat(32) })] }, { env: makeEnv({}, db) });
+    expect(insertedRow(db)[10]).toBe('a'.repeat(32));
+  });
+
+  it('round-trips an SDK-shaped bare correlation id through ingest to the owner trace filter', async () => {
+    const correlationId = 'A'.repeat(32);
+    const ingest = ingestDb();
+    await post({ entries: [entry({ traceId: correlationId })] }, { env: makeEnv({}, ingest) });
+    const persistedTraceId = insertedRow(ingest)[10] as string;
+    expect(persistedTraceId).toBe(correlationId.toLowerCase());
+
+    const query = mockStmt({ all: { results: [] } });
+    const ownerDb = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), query);
+    const res = await app.request(`/v1/apps/myapp/logs?trace_id=${persistedTraceId}`, {
+      headers: { Authorization: `Bearer ${TOK}` },
+    }, makeEnv({}, ownerDb));
+
+    expect(res.status).toBe(200);
+    expect(query.bind).toHaveBeenCalledWith('myapp', correlationId.toLowerCase(), 101);
   });
 });
 
@@ -356,6 +426,35 @@ describe('GET /v1/apps/:appId/logs', () => {
     await expect(res.json()).resolves.toMatchObject({ nextCursor: '50:12', logs: [{ ts: 50 }] });
   });
 
+  it('guards phase extraction from malformed historical JSON', async () => {
+    const query = mockStmt({ all: { results: [] } });
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), query);
+    const res = await app.request('/v1/apps/myapp/logs?phase=api_request', {
+      headers: { Authorization: `Bearer ${TOK}` },
+    }, makeEnv({}, db));
+
+    expect(res.status).toBe(200);
+    expect(query.bind).toHaveBeenCalledWith('myapp', 'api_request', 101);
+    expect(db.prepare.mock.calls.at(-1)?.[0]).toContain("CASE WHEN json_valid(data) THEN json_extract(data, '$.phase') END = ?");
+  });
+
+  it('executes the guarded phase predicate against malformed historical SQLite rows', () => {
+    const sqlite = new DatabaseSync(':memory:');
+    try {
+      sqlite.exec('CREATE TABLE app_logs (app_id TEXT NOT NULL, data TEXT, fingerprint TEXT, ts INTEGER, level TEXT)');
+      sqlite.prepare('INSERT INTO app_logs VALUES (?, ?, ?, ?, ?)').run('myapp', '{"phase":', 'bad', 1, 'warn');
+      sqlite.prepare('INSERT INTO app_logs VALUES (?, ?, ?, ?, ?)').run('myapp', '{"phase":"api_request"}', 'good', 2, 'warn');
+
+      const rows = sqlite.prepare(
+        "SELECT fingerprint FROM app_logs WHERE app_id = ? AND CASE WHEN json_valid(data) THEN json_extract(data, '$.phase') END = ?",
+      ).all('myapp', 'api_request');
+
+      expect(rows).toEqual([{ fingerprint: 'good' }]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it('uses a cursor only as ordering data and keeps it app-scoped', async () => {
     const query = mockStmt({ all: { results: [] } });
     const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), query);
@@ -410,6 +509,35 @@ describe('GET /v1/apps/:appId/logs/groups', () => {
       'myapp', 10, 'auth.session_lost', 'api_request', 'install-abc12345',
       'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 50,
     );
+  });
+
+  it('guards grouped phase extraction from malformed historical JSON', async () => {
+    const query = mockStmt({ all: { results: [] } });
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), query);
+    const res = await app.request('/v1/apps/myapp/logs/groups?phase=api_request', {
+      headers: { Authorization: `Bearer ${TOK}` },
+    }, makeEnv({}, db));
+
+    expect(res.status).toBe(200);
+    expect(query.bind).toHaveBeenCalledWith('myapp', expect.any(Number), 'api_request', 50);
+    expect(db.prepare.mock.calls.at(-1)?.[0]).toContain("CASE WHEN json_valid(data) THEN json_extract(data, '$.phase') END = ?");
+  });
+
+  it('executes the guarded grouped predicate against malformed historical SQLite rows', () => {
+    const sqlite = new DatabaseSync(':memory:');
+    try {
+      sqlite.exec('CREATE TABLE app_logs (app_id TEXT NOT NULL, data TEXT, fingerprint TEXT, ts INTEGER, level TEXT)');
+      sqlite.prepare('INSERT INTO app_logs VALUES (?, ?, ?, ?, ?)').run('myapp', '{"phase":', 'bad', 1, 'warn');
+      sqlite.prepare('INSERT INTO app_logs VALUES (?, ?, ?, ?, ?)').run('myapp', '{"phase":"api_request"}', 'good', 2, 'warn');
+
+      const groups = sqlite.prepare(
+        "SELECT fingerprint, COUNT(*) AS occurrences FROM app_logs WHERE app_id = ? AND level IN ('warn', 'error') AND CASE WHEN json_valid(data) THEN json_extract(data, '$.phase') END = ? GROUP BY fingerprint",
+      ).all('myapp', 'api_request');
+
+      expect(groups).toEqual([{ fingerprint: 'good', occurrences: 1 }]);
+    } finally {
+      sqlite.close();
+    }
   });
 });
 

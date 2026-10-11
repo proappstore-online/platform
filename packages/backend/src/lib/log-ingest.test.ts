@@ -62,6 +62,32 @@ describe('traceIdFromTraceparent', () => {
   });
 });
 
+describe('entry trace ids', () => {
+  it('accepts the SDK bare correlation id while keeping traceparent parsing separate', async () => {
+    const traceId = 'A'.repeat(32);
+    expect((await normalizeEntry(raw({ traceId }), NOW))!.traceId).toBe(traceId.toLowerCase());
+  });
+
+  it('rejects an all-zero bare correlation id', async () => {
+    expect((await normalizeEntry(raw({ traceId: '0'.repeat(32) }), NOW))!.traceId).toBeNull();
+  });
+
+  it('preserves a valid legacy W3C traceparent entry', async () => {
+    expect((await normalizeEntry(raw({
+      traceId: '00-0AF7651916CD43DD8448EB211C80319C-b7ad6b7169203331-01',
+    }), NOW))!.traceId).toBe('0af7651916cd43dd8448eb211c80319c');
+  });
+
+  it.each([
+    '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01?debug=1',
+    '00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01',
+    `00-${'0'.repeat(32)}-b7ad6b7169203331-01`,
+    'parent@example.com',
+  ])('rejects malformed legacy entry trace ids (%s)', async (traceId) => {
+    expect((await normalizeEntry(raw({ traceId }), NOW))!.traceId).toBeNull();
+  });
+});
+
 describe('messageShape', () => {
   it('collapses ids and numbers so one fault is one group', () => {
     expect(messageShape('load failed for user 123')).toBe(messageShape('load failed for user 987'));

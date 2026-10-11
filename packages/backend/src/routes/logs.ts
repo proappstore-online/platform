@@ -42,6 +42,7 @@ export const logsRoutes = new Hono<{ Bindings: Env }>();
 
 const MAX_LOG_PAGE_SIZE = 100;
 const SESSION_INVALIDATION_ID_RE = /^[a-f0-9]{32}$/i;
+const HOST_INVALIDATION_BURST_KEY = 'host:session-invalidation';
 
 /** A log cursor is deliberately only its stable ordering fields, never identity. */
 function parseLogCursor(raw: string | undefined): { ts: number; id: number } | null {
@@ -73,6 +74,15 @@ logsRoutes.post('/internal/session-invalidations', async (c) => {
   }
 
   const now = Date.now();
+  const quota = await checkLogQuota(d1LogUsageStore(c.env.DB), {
+    appId,
+    clientKey: HOST_INVALIDATION_BURST_KEY,
+    entries: 1,
+    nowMs: now,
+  });
+  // The host's authoritative 401 and cookie clearing must never be held up by
+  // diagnostics. The bounded row is best-effort, just like browser telemetry.
+  if (!quota.persist) return c.body(null, 204);
   await c.env.DB.prepare(
     `INSERT INTO app_logs
        (app_id, user_id, client_id, ts, level, category, message, data, build_meta,
@@ -232,7 +242,7 @@ logsRoutes.get('/apps/:appId/logs', async (c) => {
 
   if (level) { sql += ' AND level = ?'; params.push(level); }
   if (category) { sql += ' AND category = ?'; params.push(category); }
-  if (phase) { sql += " AND json_extract(data, '$.phase') = ?"; params.push(phase); }
+  if (phase) { sql += " AND CASE WHEN json_valid(data) THEN json_extract(data, '$.phase') END = ?"; params.push(phase); }
   if (since) { sql += ' AND ts >= ?'; params.push(Number(since)); }
   if (userId) { sql += ' AND user_id = ?'; params.push(userId); }
   if (clientId) { sql += ' AND client_id = ?'; params.push(clientId); }
@@ -314,7 +324,7 @@ logsRoutes.get('/apps/:appId/logs/groups', async (c) => {
 
   if (level) { sql += ' AND level = ?'; params.push(level); }
   if (category) { sql += ' AND category = ?'; params.push(category); }
-  if (phase) { sql += " AND json_extract(data, '$.phase') = ?"; params.push(phase); }
+  if (phase) { sql += " AND CASE WHEN json_valid(data) THEN json_extract(data, '$.phase') END = ?"; params.push(phase); }
   if (clientId) { sql += ' AND client_id = ?'; params.push(clientId); }
   if (fingerprint) { sql += ' AND fingerprint = ?'; params.push(fingerprint); }
   if (sourceFilter) { sql += ' AND source = ?'; params.push(sourceFilter); }

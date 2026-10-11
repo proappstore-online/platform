@@ -198,6 +198,42 @@ describe("host auth token-handler routes", () => {
     });
   });
 
+  it.each([
+    'https://meetup.proappstore.online/.pas/auth/me',
+    'https://app.example.com/.pas/auth/me',
+  ])('keeps the host cookie on a transient /me 503 (%s)', async (url) => {
+    const env = makeEnv({ apiFetch: vi.fn(async () => new Response('upstream unavailable', { status: 503 })) });
+    const res = await worker.fetch(new Request(url, {
+      headers: { Cookie: '__Host-pas_session=cookie-token' },
+    }), env, ctx());
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get('Set-Cookie')).toBeNull();
+  });
+
+  it('keeps the host cookie on a network failure while failing the request closed', async () => {
+    const env = makeEnv({ apiFetch: vi.fn(async () => { throw new Error('offline'); }) });
+    const res = await worker.fetch(new Request('https://meetup.proappstore.online/.pas/auth/me', {
+      headers: { Cookie: '__Host-pas_session=cookie-token' },
+    }), env, ctx());
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get('Set-Cookie')).toBeNull();
+  });
+
+  it.each([
+    'https://meetup.proappstore.online/.pas/auth/me',
+    'https://app.example.com/.pas/auth/me',
+  ])('clears the host cookie on an authoritative /me 401 (%s)', async (url) => {
+    const env = makeEnv({ apiFetch: vi.fn(async () => new Response('invalid', { status: 401 })) });
+    const res = await worker.fetch(new Request(url, {
+      headers: { Cookie: '__Host-pas_session=cookie-token' },
+    }), env, ctx());
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('Set-Cookie')).toContain('__Host-pas_session=; Max-Age=0');
+  });
+
   it("mediates self-registration to the API without a session and passes the 202 through (#118)", async () => {
     const apiFetch = vi.fn(async (request: Request) => {
       const url = new URL(request.url);
@@ -637,6 +673,30 @@ describe("host same-origin platform mediation routes", () => {
     expect(res.headers.get("Set-Cookie")).toContain("__Host-pas_session=; Max-Age=0");
     expect(res.headers.get("X-PAS-Session-Invalidation-Reason")).toBe("api_401");
     expect(res.headers.get("X-PAS-Session-Invalidation-Id")).toMatch(/^[a-f0-9]{32}$/);
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['throws', async () => { throw new Error('diagnostic binding unavailable'); }],
+    ['returns 500', async () => new Response('diagnostic unavailable', { status: 500 })],
+  ] as const)('still clears the cookie when the private 401 recorder %s', async (_case, recorder) => {
+    const apiFetch = vi.fn(async (request: Request) => {
+      if (new URL(request.url).pathname === '/v1/internal/session-invalidations') return recorder();
+      return new Response('invalid', { status: 401 });
+    });
+
+    const res = await worker.fetch(
+      new Request('https://meetup.proappstore.online/.pas/api/v1/apps/meetup/roles/me', {
+        headers: { Cookie: '__Host-pas_session=cookie-token' },
+      }),
+      makeEnv({ apiFetch }),
+      ctx(),
+    );
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('Set-Cookie')).toContain('__Host-pas_session=; Max-Age=0');
+    expect(res.headers.get('X-PAS-Session-Invalidation-Reason')).toBe('api_401');
+    expect(res.headers.get('X-PAS-Session-Invalidation-Id')).toMatch(/^[a-f0-9]{32}$/);
     expect(apiFetch).toHaveBeenCalledTimes(2);
   });
 

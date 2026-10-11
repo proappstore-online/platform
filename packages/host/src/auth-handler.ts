@@ -124,12 +124,20 @@ async function authMe(request: Request, env: Env): Promise<Response> {
   const token = readCookie(request.headers.get("Cookie"), SESSION_COOKIE_NAME);
   if (!token) return json({ error: "not signed in" }, 401);
 
-  const upstream = await fetchMe(env, token);
+  let upstream: Awaited<ReturnType<typeof fetchMe>>;
+  try {
+    upstream = await fetchMe(env, token);
+  } catch {
+    // The credential remains authoritative until the API says otherwise. A
+    // transport failure must stay fail-closed for this request without turning
+    // an API outage into a browser-wide logout.
+    return noStore(Response.json({ error: "session unavailable" }, { status: 503 }));
+  }
   const headers = new Headers({
     "Cache-Control": "no-store",
     "Content-Type": upstream.contentType ?? "application/json; charset=utf-8",
   });
-  if (!upstream.ok) headers.set("Set-Cookie", clearSessionCookie());
+  if (upstream.status === 401) headers.set("Set-Cookie", clearSessionCookie());
   return new Response(upstream.body, { status: upstream.status, headers });
 }
 

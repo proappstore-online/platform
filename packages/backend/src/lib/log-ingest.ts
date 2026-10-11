@@ -87,6 +87,27 @@ export function traceIdFromTraceparent(header: string | null | undefined): strin
 }
 
 /**
+ * Trace ids on a log entry may be a W3C traceparent or the SDK's anonymous
+ * 32-hex correlation id. Request headers remain traceparent-only above: an
+ * entry is application telemetry, not an HTTP propagation header.
+ */
+function traceIdFromEntry(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (/^[0-9a-f]{32}$/i.test(trimmed) && !/^0+$/.test(trimmed)) return trimmed.toLowerCase();
+
+  // Entry traceparents are legacy application payloads, not request headers.
+  // Keep their accepted W3C v00 shape exact so a URL/query fragment or other
+  // arbitrary string cannot turn into a searchable correlation id.
+  const legacy = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i.exec(trimmed);
+  if (!legacy) return null;
+  const traceId = legacy[1]!;
+  const spanId = legacy[2]!;
+  if (/^0+$/.test(traceId) || /^0+$/.test(spanId)) return null;
+  return traceId.toLowerCase();
+}
+
+/**
  * Mask the variable parts of a message so occurrences of one fault collapse to
  * one group: ids, numbers, and quoted values become placeholders.
  *
@@ -165,7 +186,7 @@ export async function normalizeEntry(
     message,
     data,
     buildMeta,
-    traceId: traceIdFromTraceparent(typeof raw.traceId === 'string' ? raw.traceId : null),
+    traceId: traceIdFromEntry(typeof raw.traceId === 'string' ? raw.traceId : null),
     fingerprint: await fingerprintEntry(level, category, rawMessage),
   };
 }
