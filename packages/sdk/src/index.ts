@@ -12,6 +12,7 @@ import { Maps } from './maps.js';
 import { Notifications } from './notifications.js';
 import { SMS } from './sms.js';
 import { Storage } from './storage.js';
+import { Account } from './account.js';
 import { SubscriptionApi } from './subscription.js';
 import { LicenseApi } from './license.js';
 import { Usage } from './usage.js';
@@ -64,6 +65,8 @@ export { TenantScope } from './tenant.js';
 export { Usage } from './usage.js';
 export type { UsageOptions } from './usage.js';
 export { Email } from './email.js';
+export { Account } from './account.js';
+export type { DeleteHandler, PublicFileInfo } from './account.js';
 export { Webhooks } from './webhooks.js';
 export type { WebhookConfig, WebhookTestResult } from './webhooks.js';
 
@@ -104,6 +107,8 @@ export class ProAppStore {
   readonly license: LicenseApi;
   readonly db: Database;
   readonly storage: Storage;
+  /** Per-app account deletion (#379): `onDelete(handler)`, `delete()`. */
+  readonly account: Account;
   readonly maps: Maps;
   readonly notifications: Notifications;
   readonly sms: SMS;
@@ -137,6 +142,7 @@ export class ProAppStore {
     this.license = new LicenseApi(opts.appId, apiBase, this.auth);
     this.db = new Database(opts.appId, dataApiBase, this.auth);
     this.storage = new Storage(opts.appId, apiBase, this.auth, resolvePrivateApp(opts.visibility));
+    this.account = new Account(opts.appId, apiBase, this.auth);
     this.maps = new Maps(apiBase, this.auth);
     this.notifications = new Notifications(opts.appId, apiBase, this.auth);
     this.sms = new SMS(opts.appId, apiBase, this.auth);

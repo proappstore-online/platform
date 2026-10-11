@@ -265,6 +265,8 @@ Auto-scopes all queries by tenant_id. Tables need a \`tenant_id TEXT\` column.`,
 import { useProAuth, useProSubscription, useProGate, useProNotifications, useTheme, useToast, useOnline, useDocumentTitle } from '@proappstore/sdk'
 
 const { user, loading, signIn, signOut, deleteAccount } = useProAuth(app)
+// deleteAccount: THIS app only — runs app.account.onDelete(handler) first (delete/anonymise your own db rows),
+// then the platform removes kv, files, public uploads, roles for this user in this app, then signs out.
 const { isPro, upgrade, manageBilling } = useProSubscription(app)
 const { gate, user, signIn, upgrade } = useProGate(app)
 const { theme, preference, setPreference } = useTheme()

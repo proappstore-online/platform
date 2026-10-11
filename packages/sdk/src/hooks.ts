@@ -124,15 +124,8 @@ export function useAuth(app?: ProAppStore) {
   const signIn = useCallback(() => app.auth.signIn(), [app]);
   const signOut = useCallback(() => app.auth.signOut(), [app]);
 
-  const deleteAccount = useCallback(async () => {
-    try {
-      const keys = await app.kv.list();
-      for (const key of keys) {
-        await app.kv.delete(key).catch(() => {});
-      }
-    } catch {}
-    app.auth.signOut();
-  }, [app]);
+  // Deletes the account in THIS app only, running the app's `app.account.onDelete` handler first (#379).
+  const deleteAccount = useCallback(() => app.account.delete(), [app]);
 
   return { user, status, loading, signIn, signOut, deleteAccount };
 }

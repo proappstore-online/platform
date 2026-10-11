@@ -40,10 +40,9 @@ export function ProfileMenu({ app, showThemeToggle = true, showBilling = true, s
   const handleSignOut = () => { signOut(); setOpen(false); };
   const handleBilling = async () => { await manageBilling(); setOpen(false); };
   const handleDelete = async () => {
-    const subClause = subscription?.status === 'active' ? ' and cancels your subscription' : '';
-    if (!confirm(`Delete your account? This permanently removes ALL your data across ALL apps${subClause}. This cannot be undone.`)) return;
+    if (!confirm('Delete your account in this app? This permanently removes your data in this app only. Your ProAppStore sign-in, your subscription and your other apps are not affected. This cannot be undone.')) return;
     if (!confirm('Are you absolutely sure? Last chance.')) return;
-    await deleteAccount();
+    try { await deleteAccount(); } catch (e) { alert(`Could not delete your account: ${(e as Error).message}`); return; }
     setOpen(false);
   };
 

@@ -35,10 +35,9 @@ export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePagePr
   }
 
   const handleDelete = async () => {
-    const subClause = subscription?.status === 'active' ? ' and cancels your subscription' : '';
-    if (!confirm(`Delete your account? This permanently removes ALL your data across ALL apps${subClause}. This cannot be undone.`)) return;
+    if (!confirm('Delete your account in this app? This permanently removes your data in this app only. Your ProAppStore sign-in, your subscription and your other apps are not affected. This cannot be undone.')) return;
     if (!confirm('Are you absolutely sure? Last chance.')) return;
-    await deleteAccount();
+    try { await deleteAccount(); } catch (e) { alert(`Could not delete your account: ${(e as Error).message}`); return; }
   };
 
   const themeOptions: Array<{ value: 'light' | 'dark' | 'system'; label: string }> = [
@@ -148,8 +147,7 @@ export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePagePr
       <div style={{ border: '1px solid #fecaca', borderRadius: 'var(--radius, 0.75rem)', padding: '1.25rem' }}>
         <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--danger, #dc2626)', marginBottom: '0.5rem' }}>Danger zone</div>
         <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '0.75rem' }}>
-          Permanently delete your account and all data across all apps.
-          {isPro && ' Your subscription will be cancelled.'}
+          Permanently delete your account and your data in this app. Your ProAppStore sign-in, subscription and other apps are not affected.
         </p>
         <button
           onClick={handleDelete}

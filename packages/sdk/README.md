@@ -532,6 +532,26 @@ const all = await app.roles.listAll()
 
 Every app is wrapped in [`ProShell`](#proshell-component), which already runs the sign-in and subscription gates. Use these hooks inside its screens to read identity and subscription state, or to gate a single screen. Import from `@proappstore/sdk` or `@proappstore/sdk/hooks`.
 
+### Account deletion (per app)
+
+Deleting an account removes the user's data in **this app only**. The ProAppStore
+sign-in, the subscription and every other app are untouched. `useProAuth().deleteAccount`
+and the built-in "Delete account" menu items call `app.account.delete()`, which:
+
+1. runs your handler first. Delete or anonymise your own database rows there. If
+   the handler throws, the deletion stops.
+2. has the platform delete the user's kv, files, public uploads (including
+   unreferenced ones), review uploads, app roles, push subscriptions and app
+   tokens in this app, and record the user as deleted for this app.
+3. signs out.
+
+```ts
+app.account.onDelete(async () => { await app.actions.call('delete_my_data', {}); });
+await app.account.delete();
+await app.account.isDeleted();   // true once deleted in this app, so the app can refuse them
+await app.account.publicFiles(); // the user's public uploads in this app
+```
+
 ### useProAuth
 
 Auth state + actions. The primary way apps interact with platform identity.
@@ -673,7 +693,7 @@ Props:
 ProShell handles:
 - Auth initialization and the sign-in gate
 - The subscription check and upgrade wall (unless `allowFree=true`)
-- The topbar with app name, text size toggle and user menu (sign out, manage billing, delete account)
+- The topbar with app name, text size toggle and user menu (sign out, manage billing, delete account; deletion is per app, see `app.account` below)
 - The main navigation from `nav`:
   - a `<nav aria-label="Main">` landmark;
   - `aria-current="page"` on the current route, following `location.pathname` and back/forward;

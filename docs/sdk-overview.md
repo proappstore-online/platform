@@ -230,6 +230,55 @@ prompt takedown matters, upload each version under a fresh path (for example
 key from your data then stops new page loads from referencing it, and the delete
 removes the bytes from the server.
 
+## Account deletion (per app)
+
+Every ProAppStore app is independent. **Deleting an account in one app deletes the
+user's data in that app only** (#379). Their ProAppStore sign-in (GitHub/Google),
+their subscription and their data in every other app are not touched.
+
+`app.account.delete()`, which `useAuth().deleteAccount` and the built-in
+"Delete account" items in `ProfileMenu` and `ProProfilePage` call, runs in this order:
+
+1. **The app's own handler**, registered with `app.account.onDelete(handler)`. The
+   platform can't tell which rows in the app's own database are personal data, or
+   which should be anonymised for other users (an order the other party keeps, say),
+   so the handler deletes or anonymises them. If it throws, the deletion stops and
+   the platform deletes nothing.
+2. **The platform**, through `DELETE /v1/apps/:appId/users/:userId/account`, removes
+   everything it holds for the user in this app:
+   - kv
+   - private files
+   - every public upload under `_public/u/<userId>/`, including ones the app no
+     longer references
+   - review uploads
+   - app roles and group-admin grants
+   - push subscriptions
+   - personal app tokens
+
+   It keeps billing, usage, log and audit records. It then records the user as
+   deleted for this app.
+3. **Sign-out.**
+
+```ts
+app.account.onDelete(async () => {
+  await app.actions.call('delete_my_data', {}); // the app's own rows
+});
+
+if (await app.account.isDeleted()) app.auth.signOut(); // refuse a deleted user
+const leftovers = await app.account.publicFiles();     // [{ key: 'u/<id>/…', size, uploaded }]
+```
+
+| Route | Who may call it |
+|---|---|
+| `DELETE /v1/apps/:appId/users/:userId/account` | the user, or the app team `admin` and above |
+| `GET /v1/apps/:appId/users/:userId/account` returns `{ deleted, deleted_at }` | the user, or any member of the app team |
+| `GET /v1/apps/:appId/users/:userId/public-files` | the user, or the app team `admin` and above |
+
+Deletion is safe to repeat. The deleted marker is not a ban: the user can still
+sign in to the app, so the app decides whether to refuse them (`isDeleted()`).
+Deleted public files can still be served from browser caches for a while (see
+above). Retention of the platform's audit records is tracked in stash#29.
+
 ## Review uploads (documents for verification)
 
 Some documents should be seen by the uploader and the app's reviewers only:

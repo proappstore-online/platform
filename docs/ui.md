@@ -133,7 +133,7 @@ import { ProBadge } from '@proappstore/sdk/ui'
 
 ## ProfileMenu
 
-Avatar button that opens dropdown with Pro features: PRO badge, billing link, theme toggle, sign out, delete account (with double-confirm).
+Avatar button that opens dropdown with Pro features: PRO badge, billing link, theme toggle, sign out, delete account (with double-confirm). Delete account removes the user's data in this app only and runs the app's `app.account.onDelete` handler first. See [Account deletion](./sdk-overview.md#account-deletion-per-app).
 
 ```
 import { ProfileMenu } from '@proappstore/sdk/ui'
@@ -342,6 +342,8 @@ import { useProAuth } from '@proappstore/sdk/hooks'
 
 const { user, loading, signIn, signOut, deleteAccount } = useProAuth(app)
 ```
+
+`deleteAccount()` is `app.account.delete()`. It runs the app's `app.account.onDelete` handler, then deletes the platform's data for the user in **this app only**, then signs out. The ProAppStore sign-in and other apps are untouched.
 
 ### useTheme()
 
