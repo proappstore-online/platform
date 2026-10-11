@@ -35,7 +35,7 @@ function recordingDb() {
       const first = sql.includes('app_log_usage')
         ? { count: 0 }
         : sql.includes('FROM apps')
-          ? { id: 'chess-academy', creator_id: 'gh:7' }
+          ? { id: 'chess-academy', creator_id: 'gh:7', owner: 1, team: 0, role: 0 } // #375: the caller owns the app
           : null;
       return {
         first: vi.fn().mockResolvedValue(first),

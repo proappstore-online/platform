@@ -95,6 +95,9 @@ describe('success audit of role-gated actions (#232)', () => {
 
   it('a refused caller writes no audit row, and the failure is still logged to app_logs as before', async () => {
     await registerTools(tool('lookup_case', { app_roles: ['operator'] }));
+    // #375: logged because gh:2 belongs to the app (a role, just not the one the action
+    // needs). A caller with no relationship to the app is counted in Analytics Engine only.
+    await grant('gh:2', 'viewer');
     const res = await call('lookup_case', await session('gh:2'));
     expect(res.status).toBe(403);
     await res.text();

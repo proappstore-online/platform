@@ -9,8 +9,12 @@ import { resetBurstState, SERVER_FAILURE_DAILY_LIMIT } from './log-quota.js';
 
 const NOW = 1_800_000_000_000;
 
+/** The #375 app/relationship lookup's answer; null is an app that does not exist. */
+type Relationship = { owner: number; team: number; role: number } | null;
+const OWNER: Relationship = { owner: 1, team: 0, role: 0 };
+
 /** `clientCount` is app_log_usage.count (client ingestion), `serverCount` its server_count (#372). */
-function fakeDb(clientCount = 0, serverCount = 0) {
+function fakeDb(clientCount = 0, serverCount = 0, relationship: Relationship = OWNER) {
   const inserts: unknown[][] = [];
   const bumps: string[] = [];
   const prepare = vi.fn((sql: string) => ({
@@ -18,7 +22,10 @@ function fakeDb(clientCount = 0, serverCount = 0) {
       if (sql.includes('INSERT INTO app_logs')) inserts.push(args);
       if (sql.includes('INSERT INTO app_log_usage')) bumps.push(sql.replace(/\s+/g, ' '));
       return {
-        first: vi.fn().mockResolvedValue(sql.includes('app_log_usage') ? { count: clientCount, server_count: serverCount } : null),
+        first: vi.fn().mockResolvedValue(
+          sql.includes('app_log_usage') ? { count: clientCount, server_count: serverCount }
+            : sql.includes('FROM apps') ? relationship : null,
+        ),
         run: vi.fn().mockResolvedValue({ meta: { changes: 1 } }),
       };
     }),
@@ -209,6 +216,53 @@ describe('recordOperationFailure', () => {
     );
     expect(errors.points).toHaveLength(1);
     expect(db.inserts).toHaveLength(0);
+  });
+
+  describe('only an app the caller belongs to gets their 4xx (#375)', () => {
+    const record = async (relationship: Relationship, status = 403) => {
+      resetBurstState();
+      const db = fakeDb(0, 0, relationship);
+      const errors = fakeErrors();
+      await recordOperationFailure({ DB: db.DB, ERRORS: errors.ERRORS }, { ...failure, status }, NOW);
+      return { db, errors };
+    };
+
+    it('a signed-in non-member\'s 403 writes no row and spends no budget, but is still counted in AE', async () => {
+      const { db, errors } = await record({ owner: 0, team: 0, role: 0 });
+      expect(db.inserts).toEqual([]);
+      expect(db.bumps).toEqual([]);
+      expect(errors.points).toHaveLength(1);
+      expect(errors.points[0]!.indexes).toEqual(['chess-academy']);
+    });
+
+    it('the owner, a team member and an app-role holder are still recorded', async () => {
+      for (const rel of [OWNER, { owner: 0, team: 1, role: 0 }, { owner: 0, team: 0, role: 1 }]) {
+        const { db } = await record(rel);
+        expect(db.inserts).toHaveLength(1);
+        expect(db.bumps).toHaveLength(1);
+      }
+    });
+
+    it('a non-member\'s 5xx is still recorded: it is the platform\'s or the app\'s failure', async () => {
+      const { db } = await record({ owner: 0, team: 0, role: 0 }, 500);
+      expect(db.inserts).toHaveLength(1);
+    });
+
+    it('an app id that does not exist gets no row, not even for a 5xx, and spends nothing', async () => {
+      for (const status of [403, 500]) {
+        const { db, errors } = await record(null, status);
+        expect(db.inserts).toEqual([]);
+        expect(db.bumps).toEqual([]);
+        expect(errors.points).toHaveLength(1);
+      }
+    });
+
+    it('asks about this app and this caller', async () => {
+      const { db } = await record(OWNER);
+      const call = db.prepare.mock.calls.findIndex(([q]) => String(q).includes('FROM apps'));
+      expect(call).toBeGreaterThanOrEqual(0);
+      expect(db.prepare.mock.results[call]!.value.bind).toHaveBeenCalledWith('chess-academy', 'gh:7');
+    });
   });
 
   it('never throws when the database fails', async () => {

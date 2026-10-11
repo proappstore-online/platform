@@ -150,6 +150,26 @@ export async function recordOperationFailure(
     // it is still counted in Analytics Engine above, so a spike stays visible.
     if (!failure.userId) return;
 
+    // #375: a row (and the budget it spends) needs an app that exists and, below
+    // 5xx, a caller with a relationship to it. Otherwise any free account could
+    // send failing requests to /v1/apps/<other-app>/…, write rows stamped with its
+    // id into that app's log, and spend its server_count until the owner's own
+    // failures were dropped for the day. A relationship is ownership, a team seat,
+    // or an app role other than `member`, which every signed-in user can grant
+    // themselves (routes/roles.ts ensure-member). A 5xx is the platform's or the
+    // app's fault, whoever triggered it, so it is kept. Refused 4xx are still
+    // counted in Analytics Engine above.
+    const app = await env.DB.prepare(
+      `SELECT creator_id = ?2 AS owner,
+              EXISTS (SELECT 1 FROM team_members WHERE app_id = ?1 AND user_id = ?2) AS team,
+              EXISTS (SELECT 1 FROM app_roles WHERE app_id = ?1 AND user_id = ?2 AND role_name <> 'member') AS role
+         FROM apps WHERE id = ?1`,
+    )
+      .bind(failure.appId, failure.userId)
+      .first<{ owner: number; team: number; role: number }>();
+    if (!app) return;
+    if (failure.status < 500 && !app.owner && !app.team && !app.role) return;
+
     // #372: a budget of their own (app_log_usage.server_count). On the shared
     // client counter, anonymous POST /logs traffic could spend the app's day and
     // silence these trusted rows; the AE count above was never affected.
