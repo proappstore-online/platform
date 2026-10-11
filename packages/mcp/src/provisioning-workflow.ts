@@ -228,22 +228,22 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
   }
 
   /**
-   * Whether a PAS app record exists for `appId`, and whose it is (#144). Uses an
-   * owner-gated, side-effect-free backend GET with the caller's own token:
-   * 200 → the caller owns it, 403 → someone else's, 404 → no record at all.
-   * That last state is the orphan case — a repo whose provisioning died before
-   * the app-record step — and `ownsApp` alone cannot tell it from "someone
-   * else's app". Over the API service binding, never a same-zone fetch.
+   * Whether a PAS app record exists for `appId`, and whose it is (#144, #370):
+   * `owner`, `other`, `none`, or `unknown` when it could not be read. `none` is
+   * the orphan case — a repo whose provisioning died before the app-record step.
+   * Asked of the backend's side-effect-free record-state read, which answers
+   * from the apps table itself; an admin-authorised read (the listing route
+   * answers a platform admin 200 for any id) is not evidence of existence or
+   * ownership. Over the API service binding, never a same-zone fetch.
    */
   async function appRecordState(appId: string, token: string): Promise<AppRecordState> {
     try {
-      const res = await env.API.fetch(`${apiBase}/v1/apps/${encodeURIComponent(appId)}/listing`, {
+      const res = await env.API.fetch(`${apiBase}/v1/apps/${encodeURIComponent(appId)}/record-state`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.status === 200) return "owner";
-      if (res.status === 403) return "other";
-      if (res.status === 404) return "none";
-      return "unknown";
+      if (res.status !== 200) return "unknown";
+      const state = ((await res.json()) as { state?: unknown } | null)?.state;
+      return state === "owner" || state === "other" || state === "none" ? state : "unknown";
     } catch {
       return "unknown";
     }
@@ -630,8 +630,9 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
         plan.action = "reuse_owned";
         plan.appRecord = "owner";
       } else if (isAdmin) {
+        // Admin support may operate the app; whose record it is is a separate fact.
         plan.action = "reuse_admin";
-        plan.appRecord = consoleMode ? await appRecordState(appId, user.token) : "unknown";
+        plan.appRecord = await appRecordState(appId, user.token);
       } else {
         // #144: "not owned by this account" is two different situations.
         // Someone else's app stays refused. A repo with NO app record at all is

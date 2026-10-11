@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * #367: the shared provisioning workflow, driven directly with synthetic
- * fixtures. GitHub, the backend (listing, receipts, /v1/provision) and the
+ * fixtures. GitHub, the backend (app-record state, receipts, /v1/provision) and the
  * host are fakes that record every call, so "read-only" is asserted on the
  * calls actually made. The catalogue + selection contract are the real ones.
  */
@@ -24,13 +24,14 @@ const HEAD = 'a'.repeat(40);
 const HEAD_TREE = 't'.repeat(40);
 const REVIEWED_TREE = 'r'.repeat(40);
 
-/** The synthetic world: GitHub repos/commits, the PAS listing, receipts, provision. */
+/** The synthetic world: GitHub repos/commits, the PAS app record, receipts, provision. */
 interface World {
   repo: { status: number; private?: boolean } ;
   commits: { sha: string; tree: string }[] | 'error';
   templateHead: { sha: string; tree: string } | null;
   templateCommits: Record<string, { sha: string; tree: string }>;
-  listing: number;
+  /** #370: the caller's relation to the app record, as the backend's record-state read reports it. */
+  record: 'owner' | 'other' | 'none' | 'error';
   provision: { status: number; body: Record<string, unknown> };
   /** #369: what GitHub's generate call copies — by default the template head at that moment. */
   onCopy?: () => { sha: string; tree: string } | null;
@@ -90,7 +91,9 @@ const api = {
     const url = new URL(String(input));
     const method = init?.method ?? 'GET';
     calls.push({ kind: `api ${method}`, detail: url.pathname });
-    if (url.pathname === `/v1/apps/${APP}/listing`) return new Response('', { status: world.listing });
+    if (url.pathname === `/v1/apps/${APP}/record-state`) {
+      return world.record === 'error' ? new Response('', { status: 500 }) : jsonResponse({ appId: APP, state: world.record });
+    }
     if (url.pathname === '/v1/provision') {
       provisionBodies.push(JSON.parse(String(init?.body)));
       return jsonResponse(world.provision.body, world.provision.status);
@@ -161,7 +164,7 @@ beforeEach(() => {
     commits: [],
     templateHead: { sha: HEAD, tree: HEAD_TREE },
     templateCommits: { [reviewed.release.source_commit]: { sha: reviewed.release.source_commit, tree: REVIEWED_TREE } },
-    listing: 404,
+    record: 'none',
     provision: { status: 200, body: { success: true, appUrl: `https://${APP}.proappstore.online`, steps: [{ name: 'compliance', status: 'ok', detail: '19 rules passed' }] } },
   };
   ownership.mockResolvedValue(false);
@@ -186,7 +189,7 @@ describe('planProvision (preview) is read-only', () => {
 
   it('every kind of preview, refused or not, writes nothing', async () => {
     for (const setup of [
-      () => { world.repo = { status: 200, private: false }; world.listing = 403; },
+      () => { world.repo = { status: 200, private: false }; world.record = 'other'; },
       () => { world.repo = { status: 200, private: true }; world.commits = [{ sha: 'h2', tree: 'x' }, { sha: 'h1', tree: HEAD_TREE }]; },
       () => { world.repo = { status: 200, private: false }; world.commits = [{ sha: 'h1', tree: HEAD_TREE }]; },
       () => { world.repo = { status: 500 }; },
@@ -217,7 +220,7 @@ describe('planProvision (preview) is read-only', () => {
 describe('ownership: only the existing owner/admin and untouched-scaffold adoption are allowed', () => {
   it('another account\'s app is refused, and nothing past existence is disclosed', async () => {
     world.repo = { status: 200, private: true };
-    world.listing = 403;
+    world.record = 'other';
     world.commits = [{ sha: 'secret-head', tree: HEAD_TREE }];
     const p = await plan();
     expect(p.action).toBe('refused');
@@ -237,7 +240,7 @@ describe('ownership: only the existing owner/admin and untouched-scaffold adopti
 
   it('an unknown app record, or an unreadable repo, fails closed', async () => {
     world.repo = { status: 200, private: true };
-    world.listing = 500;
+    world.record = 'error';
     expect((await plan()).blockers.map((b) => b.code)).toEqual(['app_record_unavailable']);
     world.repo = { status: 502 };
     const p = await plan();
@@ -247,7 +250,7 @@ describe('ownership: only the existing owner/admin and untouched-scaffold adopti
 
   it('a platform admin may reuse an unowned repo, as on the MCP path; the route grants nothing more', async () => {
     world.repo = { status: 200, private: true };
-    world.listing = 200;
+    world.record = 'other';
     world.commits = [{ sha: 'h2', tree: 'x' }, { sha: 'h1', tree: 'y' }];
     const p = await plan({}, { ...user, roles: ['user', 'admin'] });
     expect(p).toMatchObject({ action: 'reuse_admin', blockers: [], compliance: { required: true } });
@@ -346,7 +349,7 @@ describe('confirmPlan executes exactly the reviewed plan', () => {
   it('a plan whose repo appeared, or whose owner changed, cannot execute', async () => {
     const p = await plan();
     world.repo = { status: 200, private: true };
-    world.listing = 403;
+    world.record = 'other';
     const outcome = await confirm(p);
     expect(outcome.kind).toBe('plan_changed');
     expect((outcome as { plan: Plan }).plan.blockers.map((b) => b.code)).toEqual(['owned_by_another_account']);
@@ -363,7 +366,7 @@ describe('confirmPlan executes exactly the reviewed plan', () => {
 
   it('a blocked plan is not executed even when unchanged', async () => {
     world.repo = { status: 200, private: true };
-    world.listing = 403;
+    world.record = 'other';
     const outcome = await confirm(await plan());
     expect(outcome.kind).toBe('plan_blocked');
     expect(writes()).toEqual([]);

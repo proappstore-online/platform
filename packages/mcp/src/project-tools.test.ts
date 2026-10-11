@@ -161,6 +161,9 @@ function fakeRepo(initial: Record<string, string> = TEMPLATE_FILES, opts: { drop
   });
   return files;
 }
+/** #370: the backend's app-record state read, as the workflow consumes it. */
+const recordState = (state: 'owner' | 'other' | 'none') =>
+  ({ ok: true, status: 200, json: () => Promise.resolve({ appId: 'x', state }), text: () => Promise.resolve(JSON.stringify({ state })) });
 const withPlaceholder = (files: Record<string, string>) => Object.keys(files).filter((path) => files[path]!.includes('APPNAME'));
 
 /**
@@ -461,8 +464,10 @@ describe('provision_pas_app', () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: false, status: 422, data: { message: 'exists' } });
     mockGh.repoExists.mockResolvedValue(true);
     mockOwnership.mockResolvedValue(false);
-    // #144: the record-state probe answers 403 → someone else's app.
-    mockFetch.mockResolvedValue({ ok: false, status: 403, text: () => Promise.resolve('not the app owner') });
+    // #144/#370: the record-state read answers that the record is someone else's.
+    mockFetch.mockImplementation(async (url: string) => String(url).includes('/record-state')
+      ? recordState('other')
+      : { ok: false, status: 403, text: () => Promise.resolve('not the app owner') });
 
     const result = await runProvisionPas({ app_id: 'manual-repo' });
     const out = getText(result);
@@ -481,7 +486,7 @@ describe('provision_pas_app', () => {
     mockGh.api.mockResolvedValue({ ok: true, status: 200, data: [{ sha: '0572725' }] }); // one commit
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
     mockFetch.mockImplementation((url: string) => {
-      if (String(url).includes('/listing')) return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve('app not found') });
+      if (String(url).includes('/record-state')) return Promise.resolve(recordState('none'));
       return Promise.resolve({
         ok: true, status: 200,
         text: () => Promise.resolve(JSON.stringify({ success: true, steps: [{ name: 'record_app', status: 'ok', detail: 'creator: alice' }] })),
@@ -504,7 +509,9 @@ describe('provision_pas_app', () => {
     mockGh.repoExists.mockResolvedValue(true);
     mockOwnership.mockResolvedValue(false);
     mockGh.api.mockResolvedValue({ ok: true, status: 200, data: [{ sha: 'a' }, { sha: 'b' }] }); // two commits
-    mockFetch.mockResolvedValue({ ok: false, status: 404, text: () => Promise.resolve('app not found') });
+    mockFetch.mockImplementation(async (url: string) => String(url).includes('/record-state')
+      ? recordState('none')
+      : { ok: false, status: 404, text: () => Promise.resolve('app not found') });
 
     const result = await runProvisionPas({ app_id: 'school-clubs' });
     const out = getText(result);
@@ -531,7 +538,9 @@ describe('provision_pas_app', () => {
     mockGh.repoExists.mockResolvedValue(true);
     mockOwnership.mockResolvedValue(false);
     mockGh.api.mockResolvedValue({ ok: true, status: 200, data: [{ sha: 'a' }, { sha: 'b' }] });
-    mockFetch.mockResolvedValue({ ok: false, status: 404, text: () => Promise.resolve('app not found') });
+    mockFetch.mockImplementation(async (url: string) => String(url).includes('/record-state')
+      ? recordState('none')
+      : { ok: false, status: 404, text: () => Promise.resolve('app not found') });
 
     const result = await runProvisionPas({ app_id: 'school-clubs' });
     const out = getText(result);

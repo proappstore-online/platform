@@ -4,6 +4,7 @@
  *   POST /v1/provisioning/plans                    read-only preview → a stored plan
  *   POST /v1/provisioning/plans/:planId/confirm    execute exactly that plan, once
  *   GET  /v1/provision-operations/:appId           progress (existing, provision.ts)
+ *   GET  /v1/apps/:appId/record-state                  whose PAS app record this is (#370)
  *
  * The workflow is the `provision_pas_app` one, run by the MCP worker (which holds
  * the org GitHub credential) over the MCP service binding with INTERNAL_TOKEN and
@@ -84,6 +85,28 @@ function stringField(value: unknown, field: string, max: number): string {
   if (trimmed.length > max) throw new HttpError(`${field} must be at most ${max} characters`, 400);
   return trimmed;
 }
+
+/**
+ * #370: the caller's relation to an app record, read from the apps and
+ * team_members tables — `owner` (the creator, or the team `owner` role),
+ * `other` (it exists and is not theirs), `none` (no record). A platform admin's
+ * role is deliberately ignored: being allowed to operate an app is not owning
+ * it, and an admin-authorised read must not stand in for existence (the
+ * listing route answers an admin 200 with an empty DTO for any id). Read-only.
+ */
+provisioningPlanRoutes.get('/apps/:appId/record-state', wrap(async (c) => {
+  const user = await requireUser(c);
+  const appId = c.req.param('appId') ?? '';
+  if (!APP_ID_RE.test(appId)) throw new HttpError('Invalid app ID', 400);
+  const row = await c.env.DB.prepare(
+    `SELECT a.creator_id, tm.role AS team_role
+       FROM apps a LEFT JOIN team_members tm ON tm.app_id = a.id AND tm.user_id = ?
+      WHERE a.id = ?`,
+  ).bind(user.id, appId).first<{ creator_id: string; team_role: string | null }>();
+  const state = !row ? 'none' : row.creator_id === user.id || row.team_role === 'owner' ? 'owner' : 'other';
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({ appId, state });
+}));
 
 provisioningPlanRoutes.post('/provisioning/plans', wrap(async (c) => {
   const user = await requireUser(c);

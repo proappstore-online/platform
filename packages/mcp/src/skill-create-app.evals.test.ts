@@ -81,7 +81,13 @@ function applyMocks(m: Case['mocks']) {
         json: async () => ({ receipt: 'eval-receipt', appId, status: 'pending', steps: [], attemptId: 'eval-attempt', joined: false }),
       };
     }
-    if (u.includes('/listing')) return { ok: m.listingStatus === undefined, status: m.listingStatus ?? 200, text: async () => '{}', json: async () => ({}) };
+    // listingStatus keeps the fixture's old vocabulary (200 yours / 403 another's / 404 none); #370 answers it as a record state.
+    if (u.includes('/record-state')) {
+      const state = ({ 200: 'owner', 403: 'other', 404: 'none' } as Record<number, string>)[m.listingStatus ?? 200];
+      return state
+        ? { ok: true, status: 200, text: async () => JSON.stringify({ state }), json: async () => ({ state }) }
+        : { ok: false, status: m.listingStatus, text: async () => '{}', json: async () => ({}) };
+    }
     if (/\/v1\/provision(?:$|\?)/.test(u)) {
       const p = m.provision ?? { status: 200, body: { success: true, steps: [] } };
       return { ok: p.status < 400, status: p.status, text: async () => JSON.stringify(p.body), json: async () => p.body, headers: new Headers(), _init: init };

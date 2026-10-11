@@ -99,7 +99,7 @@ and returned, so it can be shown.
 |---|---|
 | `action` | `create`, `reuse_owned`, `reuse_admin`, `adopt_untouched`, `refused` |
 | `repository` | `exists` is `true`, `false`, or `null` when GitHub could not be read. `private`, `headSha` and `untouchedScaffold` appear only when you may act on the repository. For someone else's or an edited repository, nothing beyond its existence is shown. |
-| `appRecord` | `none`, `owner`, `other`, `unknown` |
+| `appRecord` | Whose PAS app record this is, read from the apps table (#370). `owner` means you created the app or hold its team `owner` role; `other` means it exists and isn't yours; `none` means there is no record; `unknown` means the record couldn't be read. A platform admin's role never counts as ownership: an admin may still get `action: "reuse_admin"`, with `appRecord` reporting the actual owner. `GET /v1/apps/{appId}/record-state` returns the same fact as `{ appId, state }`. |
 | `template.revisionSource` | `template_head` (a new copy), `scaffold_tree_match` (proven for an existing scaffold), `unknown` |
 | `blockers[].code` | `repository_unavailable`, `owned_by_another_account`, `app_record_unavailable`, `repository_edited`, `revision_unresolved`, `revision_not_current`, `revision_mismatch`, `revision_unverified` |
 | `warnings` | Non-blocking notices: a deprecated template, or a template head that differs from the reviewed commit |
