@@ -25,6 +25,11 @@ on:
       - 'packages/compliance/**' # routes/provision.ts imports @proappstore/compliance
       - 'packages/qa-spec/**' # routes/qa.ts imports @proappstore/qa-spec
       - 'packages/data-worker/**' # scripts/embed-data-worker.mjs embeds its bundle at build time
+      # These inputs affect the runtime-integration gate this workflow runs before deploy.
+      - 'packages/runtime-tests/**'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
       - 'migrations/**'
       - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:

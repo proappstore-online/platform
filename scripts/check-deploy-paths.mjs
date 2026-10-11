@@ -10,7 +10,8 @@
 //   - every package a build step embeds (EMBEDS);
 //   - transitively, whatever those packages import in turn.
 // It then requires the workflow's `packages/*/**` triggers to be exactly the
-// deployed package plus that set. A missing glob is a stale deploy; an extra one
+// deployed package plus that set, plus any declared gate inputs the workflow
+// executes before deploy. A missing path is a stale deploy; an extra package glob
 // is an unrelated deploy on every change to that package. Type-only imports do
 // not bundle and are ignored.
 //
@@ -50,6 +51,12 @@ export const DEPLOYS = {
  */
 export const EMBEDS = {
   backend: [{ pkg: 'data-worker', via: 'packages/backend/scripts/embed-data-worker.mjs' }],
+};
+
+/** Inputs to pre-deploy gates that are not bundled into the deployed worker. */
+export const GATE_PATHS = {
+  // deploy-backend.yml runs pnpm test:runtime before applying migrations/deploying.
+  'deploy-backend.yml': ['packages/runtime-tests/**', 'pnpm-lock.yaml', 'package.json', 'pnpm-workspace.yaml'],
 };
 
 const packageDirs = readdirSync(packagesDir).filter((d) => existsSync(join(packagesDir, d, 'package.json')));
@@ -125,8 +132,8 @@ export function bundledDeps(pkg) {
   return seen;
 }
 
-/** The `packages/<name>/**` globs in a workflow's `paths:` lists (block or inline form; comments allowed). */
-export function triggerPackages(yaml) {
+/** Every path in a workflow's `paths:` lists (block or inline form; comments allowed). */
+export function triggerPaths(yaml) {
   const items = [];
   const lines = yaml.split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -142,9 +149,14 @@ export function triggerPackages(yaml) {
       items.push(item[1]);
     }
   }
+  return new Set(items.map((raw) => raw.trim().replace(/^['"]|['"]$/g, '')));
+}
+
+/** The `packages/<name>/**` globs in a workflow's `paths:` lists. */
+export function triggerPackages(yaml) {
   const out = new Set();
-  for (const raw of items) {
-    const m = raw.trim().replace(/^['"]|['"]$/g, '').match(/^packages\/([a-z0-9-]+)\/\*\*$/);
+  for (const path of triggerPaths(yaml)) {
+    const m = path.match(/^packages\/([a-z0-9-]+)\/\*\*$/);
     if (m) out.add(m[1]);
   }
   return out;
@@ -154,13 +166,20 @@ export function triggerPackages(yaml) {
 export function problemsFor(workflow, pkg, yaml) {
   const problems = [];
   const triggers = triggerPackages(yaml);
+  const paths = triggerPaths(yaml);
   const deps = bundledDeps(pkg);
   const expected = new Set([pkg, ...deps.keys()]);
+  const gatePackages = new Set((GATE_PATHS[workflow] ?? [])
+    .map((path) => path.match(/^packages\/([a-z0-9-]+)\/\*\*$/)?.[1])
+    .filter(Boolean));
   for (const need of expected) {
     if (!triggers.has(need)) problems.push(`${workflow}: missing 'packages/${need}/**'${need === pkg ? ' (the package it deploys)' : ` — ${deps.get(need)}`}`);
   }
   for (const extra of triggers) {
-    if (!expected.has(extra)) problems.push(`${workflow}: 'packages/${extra}/**' triggers it, but ${pkg} does not bundle ${extra} (an unrelated deploy)`);
+    if (!expected.has(extra) && !gatePackages.has(extra)) problems.push(`${workflow}: 'packages/${extra}/**' triggers it, but ${pkg} does not bundle ${extra} (an unrelated deploy)`);
+  }
+  for (const gatePath of GATE_PATHS[workflow] ?? []) {
+    if (!paths.has(gatePath)) problems.push(`${workflow}: missing '${gatePath}' required by its pre-deploy gate`);
   }
   return problems;
 }

@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error -- a plain .mjs CI script, no type declarations
-import { bundledDeps, checkDeployPaths, deploysTriggeredBy, packageDirs, problemsFor, runtimeImports, triggerPackages } from '../scripts/check-deploy-paths.mjs';
+import { bundledDeps, checkDeployPaths, deploysTriggeredBy, packageDirs, problemsFor, runtimeImports, triggerPackages, triggerPaths } from '../scripts/check-deploy-paths.mjs';
 
 // #322: a deploy workflow must trigger on every workspace package its worker
 // bundles, and on nothing else. scripts/check-deploy-paths.mjs computes the
@@ -25,7 +26,8 @@ describe('deploy path filters track workspace imports (#322)', () => {
       compliance: ['deploy-backend.yml'],
       'data-worker': ['deploy-backend.yml'],
       // Bundled by no deployed worker: their changes deploy nothing (sdk and cli are published by publish.yml).
-      sdk: [], cli: [], 'mcp-registry': [], 'runtime-tests': [],
+      // runtime-tests is an explicit backend pre-deploy gate, so changes must deploy it.
+      sdk: [], cli: [], 'mcp-registry': [], 'runtime-tests': ['deploy-backend.yml'],
     };
     for (const pkg of packageDirs as string[]) {
       expect(deploysTriggeredBy(pkg), pkg).toEqual(expected[pkg] ?? []);
@@ -41,6 +43,10 @@ describe('deploy path filters track workspace imports (#322)', () => {
       - 'packages/build-core/**' # comment
       - 'packages/compliance/**'
       - 'packages/data-worker/**'
+      - 'packages/runtime-tests/**'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
 `;
     expect(problemsFor('deploy-backend.yml', 'backend', backendMissingQaSpec)).toEqual([
       expect.stringMatching(/missing 'packages\/qa-spec\/\*\*' — packages\/backend\/src\/routes\/qa\.ts imports @proappstore\/qa-spec/),
@@ -72,5 +78,22 @@ describe('deploy path filters track workspace imports (#322)', () => {
     expect([...triggerPackages("paths:\n  # why\n  - 'packages/a/**'   # a\n\n  - \"packages/b/**\"\n  - 'migrations/**'\nnext: 1\n  - 'packages/c/**'\n")])
       .toEqual(['a', 'b']);
     expect([...triggerPackages("    paths: ['packages/kb-host/**', 'packages/x/**'] # inline\n")]).toEqual(['kb-host', 'x']);
+  });
+
+  it('requires backend runtime-gate inputs to trigger the deploy workflow', () => {
+    const backendWorkflow = readFileSync('.github/workflows/deploy-backend.yml', 'utf8');
+    const gatePaths = [
+      'packages/runtime-tests/**',
+      'pnpm-lock.yaml',
+      'package.json',
+      'pnpm-workspace.yaml',
+    ];
+    for (const gatePath of gatePaths) {
+      expect(triggerPaths(backendWorkflow)).toContain(gatePath);
+      const withoutGatePath = backendWorkflow.replace(`      - '${gatePath}'\n`, '');
+      expect(problemsFor('deploy-backend.yml', 'backend', withoutGatePath)).toContain(
+        `deploy-backend.yml: missing '${gatePath}' required by its pre-deploy gate`,
+      );
+    }
   });
 });
