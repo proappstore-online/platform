@@ -17,6 +17,7 @@ import {
   hashProvisionAdmissionOperation,
   hashProvisionIntent,
   isLegacyProvisionOperation,
+  isProvisionFailureCode,
   operationIsExhausted,
   updateProvisionOperation,
   type ProvisionOperation,
@@ -100,6 +101,7 @@ export function operationResponse(operation: ProvisionOperation, joined?: boolea
     leaseExpiresAt: operation.leaseExpiresAt,
     attemptId: operation.attemptId,
     ...(operation.result ? { result: operation.result } : {}),
+    ...(operation.failureCode ? { failureCode: operation.failureCode } : {}),
     ...(joined === undefined ? {} : { joined }),
   };
 }
@@ -325,8 +327,15 @@ provisionRoutes.patch('/provision-operations/:appId', wrap(async (c) => {
     steps?: unknown;
     result?: unknown;
     attemptId?: unknown;
+    failureCode?: unknown;
   }>();
   if (typeof body.attemptId !== 'string' || !body.attemptId) return c.text('attemptId is required', 400);
+  // #369: a failure classification is server-established — the provisioning
+  // workflow sends it with INTERNAL_TOKEN. An owner's own session cannot set it.
+  if (body.failureCode !== undefined) {
+    if (!internalTokenOk(c.req.header('X-Internal-Token'), c.env.INTERNAL_TOKEN)) return c.text('failureCode is set by the platform only', 403);
+    if (!isProvisionFailureCode(body.failureCode) || body.status !== 'failed') return c.text('Invalid provisioning failure code', 400);
+  }
   if (body.status !== undefined && body.status !== 'completed' && body.status !== 'failed') {
     return c.text('Invalid provisioning operation status', 400);
   }
@@ -350,6 +359,7 @@ provisionRoutes.patch('/provision-operations/:appId', wrap(async (c) => {
     ...(body.status ? { status: body.status as Extract<ProvisionOperationStatus, 'completed' | 'failed'> } : {}),
     ...(steps ? { steps } : {}),
     ...(body.result !== undefined ? { result: body.result as Record<string, unknown> } : {}),
+    ...(isProvisionFailureCode(body.failureCode) ? { failureCode: body.failureCode } : {}),
     now,
   });
   if (updated.kind !== 'updated') {

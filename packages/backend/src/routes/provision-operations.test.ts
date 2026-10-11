@@ -79,9 +79,9 @@ function operationDb(opts: { quotaUnavailable?: boolean } = {}) {
             return { meta: { changes: 1 } };
           }
           if (/UPDATE provision_operations/i.test(sql)) {
-            const [status, steps, result, updatedAt, completedAt, leaseExpiresAt, receipt] = values as [string, string, string | null, number, number | null, number | null, string];
+            const [status, steps, result, updatedAt, completedAt, leaseExpiresAt, failureCode, receipt] = values as [string, string, string | null, number, number | null, number | null, string | null, string];
             const row = byReceipt.get(receipt);
-            if (row) Object.assign(row, { status, steps_json: steps, result_json: result, updated_at: updatedAt, completed_at: completedAt, lease_expires_at: leaseExpiresAt });
+            if (row) Object.assign(row, { status, steps_json: steps, result_json: result, updated_at: updatedAt, completed_at: completedAt, lease_expires_at: leaseExpiresAt, failure_code: failureCode });
             return { meta: { changes: row ? 1 : 0 } };
           }
           return { meta: { changes: 0 } };

@@ -78,7 +78,12 @@ export interface WorkflowEnv {
   /** Service bindings — same-zone subrequests bypass route-mapped Workers. */
   API: Fetcher;
   HOST: Fetcher;
+  /** #369: lets the workflow record a server-established failure classification on a receipt. */
+  INTERNAL_TOKEN?: string;
 }
+
+/** #369: the receipt failure classifications only this workflow may establish (INTERNAL_TOKEN). */
+export type ProvisionFailureCode = "template_copy_mismatch" | "template_copy_unverified";
 
 export interface WorkflowUser {
   userId: string | null;
@@ -338,9 +343,17 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
   async function updateProvisionOperation(
     appId: string,
     token: string,
-    body: { attemptId: string; status?: ProvisionOperationStatus; steps?: ProvisionStep[]; result?: Record<string, unknown> },
+    body: { attemptId: string; status?: ProvisionOperationStatus; steps?: ProvisionStep[]; result?: Record<string, unknown>; failureCode?: ProvisionFailureCode },
   ): Promise<void> {
-    const updated = await operationRequest(`/${encodeURIComponent(appId)}`, token, { method: "PATCH", body: JSON.stringify(body) });
+    // A failure classification is the platform's word, not the session's: it
+    // travels with INTERNAL_TOKEN, and without one it is simply not recorded.
+    const { failureCode, ...rest } = body;
+    const classified = failureCode && env.INTERNAL_TOKEN ? { ...rest, failureCode } : rest;
+    const updated = await operationRequest(`/${encodeURIComponent(appId)}`, token, {
+      method: "PATCH",
+      body: JSON.stringify(classified),
+      ...("failureCode" in classified ? { headers: { "X-Internal-Token": env.INTERNAL_TOKEN! } } : {}),
+    });
     // A network hiccup leaves the durable lease intact and must not trigger a
     // duplicate bootstrap. A 409 is different: another attempt owns the lease,
     // so this worker must stop before doing more remote work.
@@ -735,8 +748,11 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
     const receipt = acquired.receipt;
     if (receipt.joined) return { kind: "joined", receipt };
     if (!receipt.attemptId) return { kind: "error", error: `Error: provisioning receipt for ${appId} did not grant an active attempt lease.`, receipt };
-    const recordEvidence = async (steps: ProvisionStep[], status?: ProvisionOperationStatus, result?: Record<string, unknown>) => {
-      await updateProvisionOperation(appId, user.token, { attemptId: receipt.attemptId!, steps, ...(status ? { status } : {}), ...(result ? { result } : {}) });
+    const recordEvidence = async (steps: ProvisionStep[], status?: ProvisionOperationStatus, result?: Record<string, unknown>, failureCode?: ProvisionFailureCode) => {
+      await updateProvisionOperation(appId, user.token, {
+        attemptId: receipt.attemptId!, steps,
+        ...(status ? { status } : {}), ...(result ? { result } : {}), ...(failureCode ? { failureCode } : {}),
+      });
     };
     const fail = async (detail: string, error: string): Promise<ExecuteOutcome> => {
       await recordEvidence([{ name: "bootstrap", status: "fail", detail }], "failed", { error: detail });
@@ -771,9 +787,11 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
               ? `its initial tree ${copied!.slice(0, 12)} is not the tree ${expected!.slice(0, 12)} of ${plan.template.id}@${templateRev.slice(0, 12)} (the template changed during the copy)`
               : `its initial tree could not be compared with ${plan.template.id}@${templateRev.slice(0, 12)}`;
             const detail = `${code}: ${org}/${appId} was created, but ${what}; nothing further was changed`;
+            // The classification (not the step text) is what lets a fresh plan
+            // retry this receipt under a different revision.
             await recordEvidence([{ name: "template_revision", status: "fail", detail }], "failed", {
               error: detail, code, partial: true, repositoryCreated: true, repository: `https://github.com/${org}/${appId}`,
-            });
+            }, code === "revision_mismatch" ? "template_copy_mismatch" : "template_copy_unverified");
             return {
               kind: "error",
               receipt,

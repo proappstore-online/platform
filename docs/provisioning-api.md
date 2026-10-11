@@ -159,7 +159,10 @@ seconds (`revision_unverified`), confirmation stops:
 Preview again. The new repository is then an untouched scaffold with no app
 record, so the fresh plan offers `adopt_untouched` at the revision the copy
 actually holds (`revisionSource: "scaffold_tree_match"`). Confirming it retries
-the same receipt under that plan.
+the same receipt under that plan. This works because the platform itself marks
+the failed receipt (`failureCode: "template_copy_mismatch"` or
+`"template_copy_unverified"`). That mark is set only by the platform, never from
+your session or from step text, and it is consumed by that one retry.
 
 ### Repeated confirmations
 
@@ -169,8 +172,9 @@ the same receipt under that plan.
   receipt (`joined: true`) and does not execute again, even after the preview
   expired.
 - **After a receipt failed:** confirming again re-plans first. Usually the
-  repository now exists, so the answer is `409` with a fresh plan. Confirming
-  that fresh plan retries the failed receipt with a new attempt bound to it.
+  repository now exists, so the answer is `409` with a fresh plan. A failed
+  receipt is retried only by the same request it was bound to, with one
+  exception: a template-copy failure (below).
 - **Across plans:** two plans for one app share one receipt; the second joins.
 
 ## 3. Progress

@@ -122,33 +122,56 @@ describe('provision operation receipts on real D1 (#358)', () => {
     expect((await patch('expired-receipt', token, { attemptId: expired.attemptId, status: 'completed' })).status).toBe(409);
   });
 
-  it('#369: a FAILED receipt is retried under a new request intent; a live or expired pending lease never is', async () => {
+  it('#369: only a platform-classified template-copy failure may be retried under a new intent', async () => {
     const token = await session(OWNER);
     const boot = { templateId: 'template-marketplace', name: 'App', privateRepo: true, verify: true };
     const intentA = { appId: 'rebind-receipt', template: 'template-marketplace', templateRev: 'a'.repeat(40) };
     const intentB = { ...intentA, templateRev: 'b'.repeat(40) };
-    const boundIntent = async (appId: string) => (await env.DB.prepare('SELECT intent_hash FROM provision_operations WHERE app_id = ?').bind(appId).first<{ intent_hash: string }>())!.intent_hash;
+    const stored = async (appId: string) => (await env.DB.prepare('SELECT intent_hash, failure_code, attempt_count FROM provision_operations WHERE app_id = ?')
+      .bind(appId).first<{ intent_hash: string; failure_code: string | null; attempt_count: number }>())!;
+    const internalPatch = (appId: string, body: unknown) => SELF.fetch(`${BASE}/v1/provision-operations/${appId}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Internal-Token': (env as unknown as { INTERNAL_TOKEN: string }).INTERNAL_TOKEN },
+      body: JSON.stringify(body),
+    });
 
+    // An unrelated failure (no classification) cannot change the receipt's intent.
     const first = await body<{ attemptId: string }>(await post('rebind-receipt', token, intentA, boot));
-    const hashA = await boundIntent('rebind-receipt');
-    // While the attempt is live, a different request joins it and binds nothing.
-    expect(await body(await post('rebind-receipt', token, intentB, boot))).toMatchObject({ joined: true, status: 'pending', attemptCount: 1 });
-    expect(await boundIntent('rebind-receipt')).toBe(hashA);
-    // Once it has failed, the new request is a new attempt bound to its own intent.
-    expect((await patch('rebind-receipt', token, { attemptId: first.attemptId, status: 'failed' })).status).toBe(200);
-    const retried = await body<{ attemptId: string; attemptCount: number; status: string; joined: boolean }>(await post('rebind-receipt', token, intentB, boot));
-    expect(retried).toMatchObject({ status: 'pending', attemptCount: 2, joined: false });
-    expect(await boundIntent('rebind-receipt')).not.toBe(hashA);
-    // A changed bootstrap plan is still a conflict, failed or not.
-    expect((await patch('rebind-receipt', token, { attemptId: retried.attemptId, status: 'failed' })).status).toBe(200);
-    expect((await post('rebind-receipt', token, intentA, { ...boot, name: 'Renamed' })).status).toBe(409);
+    const hashA = (await stored('rebind-receipt')).intent_hash;
+    expect((await patch('rebind-receipt', token, { attemptId: first.attemptId, status: 'failed', steps: [{ name: 'template_revision', status: 'fail', detail: 'revision_mismatch: typed by hand' }] })).status).toBe(200);
+    expect(await body(await post('rebind-receipt', token, intentB, boot))).toMatchObject({ joined: true, status: 'failed', attemptCount: 1 });
+    expect(await stored('rebind-receipt')).toMatchObject({ intent_hash: hashA, failure_code: null, attempt_count: 1 });
+    // It still resumes with its own intent, as before.
+    const resumed = await body<{ attemptId: string; attemptCount: number }>(await post('rebind-receipt', token, intentA, boot));
+    expect(resumed.attemptCount).toBe(2);
 
-    // An expired PENDING lease resumes only with the identical intent.
+    // The owner's session cannot establish the classification.
+    expect((await patch('rebind-receipt', token, { attemptId: resumed.attemptId, status: 'failed', failureCode: 'template_copy_mismatch' })).status).toBe(403);
+    expect(await stored('rebind-receipt')).toMatchObject({ failure_code: null });
+    // Nor can the platform attach it to anything but a failure.
+    expect((await internalPatch('rebind-receipt', { attemptId: resumed.attemptId, failureCode: 'template_copy_mismatch' })).status).toBe(400);
+    expect((await internalPatch('rebind-receipt', { attemptId: resumed.attemptId, status: 'failed', failureCode: 'anything' })).status).toBe(400);
+
+    // The platform classifies a template-copy mismatch: now, and only now, a new intent may retry it.
+    expect((await internalPatch('rebind-receipt', { attemptId: resumed.attemptId, status: 'failed', failureCode: 'template_copy_mismatch' })).status).toBe(200);
+    expect(await stored('rebind-receipt')).toMatchObject({ failure_code: 'template_copy_mismatch' });
+    // A changed bootstrap plan is still a conflict.
+    expect((await post('rebind-receipt', token, intentB, { ...boot, name: 'Renamed' })).status).toBe(409);
+    const retried = await body<{ attemptCount: number; status: string; joined: boolean; failureCode?: string }>(await post('rebind-receipt', token, intentB, boot));
+    expect(retried).toMatchObject({ status: 'pending', attemptCount: 3, joined: false });
+    expect(retried.failureCode).toBeUndefined();
+    const rebound = await stored('rebind-receipt');
+    expect(rebound.intent_hash).not.toBe(hashA);
+    expect(rebound.failure_code).toBeNull(); // cleared: it authorised exactly one retry
+
+    // A live pending lease, or an expired one, is never re-bound.
+    expect(await body(await post('rebind-receipt', token, intentA, boot))).toMatchObject({ joined: true, status: 'pending', attemptCount: 3 });
+    expect((await stored('rebind-receipt')).intent_hash).toBe(rebound.intent_hash);
     await post('expired-rebind', token, { ...intentA, appId: 'expired-rebind' }, boot);
-    const hashExpired = await boundIntent('expired-rebind');
+    const hashExpired = (await stored('expired-rebind')).intent_hash;
     await env.DB.prepare("UPDATE provision_operations SET lease_expires_at = 0 WHERE app_id = 'expired-rebind'").run();
     expect(await body(await post('expired-rebind', token, { ...intentB, appId: 'expired-rebind' }, boot))).toMatchObject({ joined: true, attemptCount: 1 });
-    expect(await boundIntent('expired-rebind')).toBe(hashExpired);
+    expect((await stored('expired-rebind')).intent_hash).toBe(hashExpired);
   });
 
   it('reports an expired fifth pending lease as terminal exhausted without renewing or charging quota', async () => {

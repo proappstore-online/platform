@@ -38,7 +38,8 @@ interface World {
 let world: World;
 let repoFiles: Record<string, string>;
 let calls: { kind: string; detail: string }[];
-const receipts = new Map<string, { receipt: string; appId: string; status: string; steps: { name: string; status: string; detail: string }[]; attemptId: string }>();
+const receipts = new Map<string, { receipt: string; appId: string; status: string; steps: { name: string; status: string; detail: string }[]; attemptId: string; intent: string; failureCode?: string }>();
+let patches: { body: Record<string, unknown>; internal: string | null }[];
 let nextReceipt = 1;
 
 const gh = {
@@ -99,22 +100,27 @@ const api = {
       const appId = op[1] ? decodeURIComponent(op[1]) : (JSON.parse(String(init?.body)) as { appId: string }).appId;
       const existing = receipts.get(appId);
       if (method === 'POST') {
-        if (existing?.status === 'failed') {
-          // The backend recovers a failed receipt with a new attempt lease (#358, #369).
-          existing.status = 'pending';
-          existing.attemptId = `attempt-${nextReceipt++}`;
+        const intent = JSON.stringify((JSON.parse(String(init?.body)) as { intent: unknown }).intent);
+        // As the backend (#358, #369): a failed receipt resumes with its own
+        // intent, or a new one only when the platform classified the failure.
+        if (existing?.status === 'failed' && (existing.intent === intent || existing.failureCode)) {
+          Object.assign(existing, { status: 'pending', attemptId: `attempt-${nextReceipt++}`, intent, failureCode: undefined });
           return jsonResponse({ ...existing, joined: false });
         }
         if (existing) return jsonResponse({ ...existing, joined: true });
-        const created = { receipt: `receipt-${nextReceipt++}`, appId, status: 'pending', steps: [], attemptId: 'attempt-1' };
+        const created = { receipt: `receipt-${nextReceipt++}`, appId, status: 'pending', steps: [], attemptId: 'attempt-1', intent };
         receipts.set(appId, created);
         return jsonResponse({ ...created, joined: false }, 201);
       }
       if (!existing) return jsonResponse({ error: 'not found' }, 404);
       if (method === 'PATCH') {
-        const body = JSON.parse(String(init?.body)) as { status?: string; steps?: { name: string; status: string; detail: string }[] };
+        const body = JSON.parse(String(init?.body)) as { status?: string; steps?: { name: string; status: string; detail: string }[]; failureCode?: string };
+        const internal = new Headers(init?.headers).get('X-Internal-Token');
+        patches.push({ body, internal });
+        if (body.failureCode && internal !== 'internal-secret') return jsonResponse({ error: 'failureCode is set by the platform only' }, 403);
         if (body.status) existing.status = body.status;
         if (body.steps) existing.steps.push(...body.steps);
+        if (body.failureCode) existing.failureCode = body.failureCode;
       }
       return jsonResponse(existing);
     }
@@ -122,7 +128,7 @@ const api = {
   }),
 };
 const host = { fetch: vi.fn(async () => new Response(null, { status: 200 })) };
-const env = { GITHUB_ORG: ORG, API_BASE: 'https://api.test', API: api as unknown as Fetcher, HOST: host as unknown as Fetcher };
+const env = { GITHUB_ORG: ORG, API_BASE: 'https://api.test', API: api as unknown as Fetcher, HOST: host as unknown as Fetcher, INTERNAL_TOKEN: 'internal-secret' };
 const user = { userId: 'gh:1', token: 'tok-1', roles: ['user', 'creator'] };
 const input = { appId: APP, name: 'School Clubs', description: 'Clubs.', template: 'template-marketplace', repoUrl: REPO_URL };
 const CONSOLE = { mode: 'console' as const, privateRepo: true };
@@ -145,6 +151,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
   calls = [];
+  patches = [];
   repoFiles = { 'package.json': '{"name":"APPNAME"}', 'LICENSE': 'MIT' };
   provisionBodies = [];
   receipts.clear();
@@ -379,6 +386,9 @@ describe('confirmPlan executes exactly the reviewed plan', () => {
     expect((outcome as { lines: string[] }).lines.join('\n')).toContain('! compliance: 1 rule(s) failed — Theme: missing');
     expect(receipts.get(APP)!.status).toBe('failed');
     expect(receipts.get(APP)!.steps).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'compliance', status: 'fail' })]));
+    // #369: an ordinary failure is never classified, so it cannot be retried under another revision.
+    expect(patches.every((p) => !('failureCode' in p.body) && p.internal === null)).toBe(true);
+    expect(receipts.get(APP)!.failureCode).toBeUndefined();
   });
 });
 
@@ -426,6 +436,9 @@ describe('a new copy is checked against the planned revision before anything els
       expect.objectContaining({ name: 'repo_created', status: 'ok' }),
       expect.objectContaining({ name: 'template_revision', status: 'fail', detail: expect.stringMatching(/^revision_mismatch: /) }),
     ]);
+    // The classification travels with the platform's INTERNAL_TOKEN, not the session alone.
+    expect(patches.at(-1)).toMatchObject({ body: { status: 'failed', failureCode: 'template_copy_mismatch' }, internal: 'internal-secret' });
+    expect(receipt.failureCode).toBe('template_copy_mismatch');
   });
 
   it('unavailable tree proof — an unreadable copy stops before placeholder/provision writes', async () => {
@@ -438,6 +451,7 @@ describe('a new copy is checked against the planned revision before anything els
     expect(world.repo.status).toBe(200);
     expect(receipts.get(APP)!.status).toBe('failed');
     expect(receipts.get(APP)!.steps.at(-1)).toMatchObject({ name: 'template_revision', status: 'fail', detail: expect.stringMatching(/^revision_unverified: /) });
+    expect(receipts.get(APP)!.failureCode).toBe('template_copy_unverified');
     // It polled GitHub's copy a bounded number of times before giving up.
     expect(calls.filter((c) => c.detail === `/repos/${ORG}/${APP}/commits?per_page=2`)).toHaveLength(5);
   });

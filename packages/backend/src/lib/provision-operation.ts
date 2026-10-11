@@ -5,6 +5,18 @@ export const PROVISION_OPERATION_LEASE_MS = 30 * 60 * 1_000;
 export const MAX_PROVISION_OPERATION_ATTEMPTS = 5;
 export const MAX_PROVISION_OPERATION_STEPS = 48;
 
+/**
+ * #369: server-established failure classifications (migration 0093). Only these
+ * let a failed receipt be retried under a NEW request intent: the template copy
+ * of a new repo was not provably the planned revision, so a fresh plan adopts it
+ * at the revision it holds. Set only with INTERNAL_TOKEN (routes/provision.ts).
+ */
+export const REVISION_RECOVERY_FAILURE_CODES = ['template_copy_mismatch', 'template_copy_unverified'] as const;
+export type ProvisionFailureCode = typeof REVISION_RECOVERY_FAILURE_CODES[number];
+export function isProvisionFailureCode(value: unknown): value is ProvisionFailureCode {
+  return typeof value === 'string' && (REVISION_RECOVERY_FAILURE_CODES as readonly string[]).includes(value);
+}
+
 export interface ProvisionOperationStep {
   name: string;
   status: 'ok' | 'skip' | 'fail' | 'pending';
@@ -30,6 +42,8 @@ export interface ProvisionOperation {
   createdAt: number;
   updatedAt: number;
   completedAt: number | null;
+  /** #369: server-established failure classification, or null. */
+  failureCode: ProvisionFailureCode | null;
 }
 
 interface OperationRow {
@@ -47,6 +61,7 @@ interface OperationRow {
   created_at: number;
   updated_at: number;
   completed_at: number | null;
+  failure_code: string | null;
 }
 
 export type BeginProvisionOperationResult =
@@ -102,11 +117,12 @@ function fromRow(row: OperationRow): ProvisionOperation {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
+    failureCode: isProvisionFailureCode(row.failure_code) ? row.failure_code : null,
   };
 }
 
 const SELECT_OPERATION = `SELECT receipt_id, creator_id, app_id, intent_hash, bootstrap_intent_hash, status, steps_json, result_json,
-                                  attempt_count, lease_expires_at, attempt_id, created_at, updated_at, completed_at
+                                  attempt_count, lease_expires_at, attempt_id, created_at, updated_at, completed_at, failure_code
                              FROM provision_operations`;
 
 function newAttemptId(): string {
@@ -210,18 +226,28 @@ export async function beginProvisionOperation(
   if (!operationNeedsLease(existing, now)) return { kind: existing.status === 'failed' ? 'exhausted' : 'joined', operation: existing };
 
   const nextAttemptId = newAttemptId();
-  // A FAILED receipt may be retried under a new request intent (same creator,
-  // same bootstrap plan): its attempt is over, and the new request is what the
-  // new lease binds — e.g. #369, where a template copy proved to be a different
-  // revision than planned and a fresh plan adopts it at the revision it holds.
-  // An expired PENDING lease is only ever resumed with the identical intent.
+  // A failed or expired attempt resumes with the identical request intent.
+  // The one exception (#369): a FAILED receipt the platform itself classified
+  // as a template-copy mismatch/unverified copy (failure_code, set only with
+  // INTERNAL_TOKEN — never from owner-writable steps) may be retried under a
+  // new intent: a fresh plan adopting the kept copy at the revision it holds.
+  // Same creator, same bootstrap plan and the attempt budget still apply; a
+  // live or expired PENDING lease is never re-bound.
   const recovered = await db.prepare(
     `UPDATE provision_operations
         SET status = 'pending', attempt_count = attempt_count + 1, lease_expires_at = ?, attempt_id = ?,
-            updated_at = ?, completed_at = NULL, intent_hash = ?
+            updated_at = ?, completed_at = NULL, intent_hash = ?, failure_code = NULL
       WHERE receipt_id = ? AND creator_id = ? AND bootstrap_intent_hash = ? AND attempt_count < ?
-        AND (status = 'failed' OR (status = 'pending' AND intent_hash = ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?)))`,
-  ).bind(leaseExpiresAt, nextAttemptId, now, args.intentHash, existing.receiptId, args.creatorId, args.bootstrapIntentHash, MAX_PROVISION_OPERATION_ATTEMPTS, args.intentHash, now).run();
+        AND (
+          (status = 'failed' AND (intent_hash = ? OR failure_code IN (${REVISION_RECOVERY_FAILURE_CODES.map(() => '?').join(', ')})))
+          OR (status = 'pending' AND intent_hash = ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
+        )`,
+  ).bind(
+    leaseExpiresAt, nextAttemptId, now, args.intentHash,
+    existing.receiptId, args.creatorId, args.bootstrapIntentHash, MAX_PROVISION_OPERATION_ATTEMPTS,
+    args.intentHash, ...REVISION_RECOVERY_FAILURE_CODES,
+    args.intentHash, now,
+  ).run();
   const current = await getProvisionOperation(db, args.appId);
   if (!current) throw new Error('provision operation recovery was not readable');
   if (Number(recovered.meta.changes) > 0) return { kind: 'recovered', operation: current };
@@ -245,6 +271,8 @@ export async function updateProvisionOperation(
     status?: Extract<ProvisionOperationStatus, 'completed' | 'failed'>;
     steps?: Omit<ProvisionOperationStep, 'completedAt' | 'attemptId'>[];
     result?: Record<string, unknown> | null;
+    /** #369: only with status 'failed', and only from an INTERNAL_TOKEN caller (the route enforces it). */
+    failureCode?: ProvisionFailureCode;
     now?: number;
   },
 ): Promise<UpdateProvisionOperationResult> {
@@ -266,9 +294,13 @@ export async function updateProvisionOperation(
   const leaseExpiresAt = status === 'pending' ? existing.leaseExpiresAt : null;
   const changed = await db.prepare(
     `UPDATE provision_operations
-        SET status = ?, steps_json = ?, result_json = ?, updated_at = ?, completed_at = ?, lease_expires_at = ?
+        SET status = ?, steps_json = ?, result_json = ?, updated_at = ?, completed_at = ?, lease_expires_at = ?, failure_code = ?
       WHERE receipt_id = ? AND status = 'pending' AND attempt_id = ? AND lease_expires_at > ?`,
-  ).bind(status, JSON.stringify(steps), result === null ? null : JSON.stringify(result), now, completedAt, leaseExpiresAt, receiptId, update.attemptId, now).run();
+  ).bind(
+    status, JSON.stringify(steps), result === null ? null : JSON.stringify(result), now, completedAt, leaseExpiresAt,
+    status === 'failed' && update.failureCode ? update.failureCode : null,
+    receiptId, update.attemptId, now,
+  ).run();
   const current = await getProvisionOperation(db, existing.appId);
   if (!current) return { kind: 'stale', operation: null };
   return Number(changed.meta.changes) > 0 ? { kind: 'updated', operation: current } : { kind: 'stale', operation: current };
