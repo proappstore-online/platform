@@ -356,7 +356,9 @@ a replay inside the signature window. **Make every handler idempotent on
 output count against a worker log budget of 50,000 lines per app per UTC day.
 That counter is `log_entries` on `GET /v1/apps/:id/worker/usage`, and the
 limit is `worker_log_limit`. It is separate from the app's log quota, which the
-app's browser clients and anonymous log ingestion spend. Over the budget, lines
+app's browser clients and anonymous log ingestion spend, and from the
+platform's server operation-failure rows, which have a 10,000-row daily budget
+of their own (#372). Over the budget, lines
 are dropped and `pas.log` resolves `false`. Nothing else changes: the
 invocation runs, a schedule run still succeeds, and no breaker counts it.
 

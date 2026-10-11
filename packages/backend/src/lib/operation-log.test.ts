@@ -5,22 +5,25 @@ import {
   recordOperationFailure,
   shouldLogOperationFailure,
 } from './operation-log.js';
-import { resetBurstState } from './log-quota.js';
+import { resetBurstState, SERVER_FAILURE_DAILY_LIMIT } from './log-quota.js';
 
 const NOW = 1_800_000_000_000;
 
-function fakeDb(dayCount = 0) {
+/** `clientCount` is app_log_usage.count (client ingestion), `serverCount` its server_count (#372). */
+function fakeDb(clientCount = 0, serverCount = 0) {
   const inserts: unknown[][] = [];
+  const bumps: string[] = [];
   const prepare = vi.fn((sql: string) => ({
     bind: vi.fn((...args: unknown[]) => {
       if (sql.includes('INSERT INTO app_logs')) inserts.push(args);
+      if (sql.includes('INSERT INTO app_log_usage')) bumps.push(sql.replace(/\s+/g, ' '));
       return {
-        first: vi.fn().mockResolvedValue(sql.includes('app_log_usage') ? { count: dayCount } : null),
+        first: vi.fn().mockResolvedValue(sql.includes('app_log_usage') ? { count: clientCount, server_count: serverCount } : null),
         run: vi.fn().mockResolvedValue({ meta: { changes: 1 } }),
       };
     }),
   }));
-  return { DB: { prepare } as unknown as D1Database, inserts, prepare };
+  return { DB: { prepare } as unknown as D1Database, inserts, bumps, prepare };
 }
 
 function fakeErrors() {
@@ -155,13 +158,41 @@ describe('recordOperationFailure', () => {
     expect(a.inserts[0][7]).toBe(b.inserts[0][7]);
   });
 
-  it('counts in AE but skips the row when the app is over its daily budget', async () => {
+  it('counts in AE but skips the row when the app is over its server-failure budget (#372)', async () => {
     resetBurstState();
-    const db = fakeDb(999_999);
+    const db = fakeDb(0, SERVER_FAILURE_DAILY_LIMIT);
     const errors = fakeErrors();
     await recordOperationFailure({ DB: db.DB, ERRORS: errors.ERRORS }, failure, NOW);
     expect(errors.points).toHaveLength(1);
     expect(db.inserts).toHaveLength(0);
+  });
+
+  it('a client-ingestion budget spent by anonymous traffic does not silence server rows (#372)', async () => {
+    resetBurstState();
+    const db = fakeDb(999_999, 0);
+    const errors = fakeErrors();
+    await recordOperationFailure({ DB: db.DB, ERRORS: errors.ERRORS }, failure, NOW);
+    expect(errors.points).toHaveLength(1);
+    expect(db.inserts).toHaveLength(1);
+    // It spends only its own counter.
+    expect(db.bumps).toEqual([expect.stringContaining('ON CONFLICT(app_id, day) DO UPDATE SET server_count = server_count + ?3')]);
+    expect(db.bumps[0]).not.toMatch(/SET count = count/);
+  });
+
+  it('before migration 0094 (no server_count column) the row is skipped quietly; AE still counts', async () => {
+    resetBurstState();
+    const errors = fakeErrors();
+    const inserts: unknown[] = [];
+    const DB = {
+      prepare: (sql: string) => {
+        if (sql.includes('server_count')) throw new Error('D1_ERROR: no such column: server_count');
+        if (sql.includes('INSERT INTO app_logs')) inserts.push(sql);
+        return { bind: () => ({ first: async () => null, run: async () => ({ meta: { changes: 1 } }) }) };
+      },
+    } as unknown as D1Database;
+    await expect(recordOperationFailure({ DB, ERRORS: errors.ERRORS }, failure, NOW)).resolves.toBeUndefined();
+    expect(errors.points).toHaveLength(1);
+    expect(inserts).toEqual([]);
   });
 
   it('counts but never persists a row for an unauthenticated caller', async () => {

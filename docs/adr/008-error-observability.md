@@ -155,6 +155,14 @@ an attacker can spend:
   `app_worker_usage.log_entries`, which only invocations write. Before this, about
   500 anonymous 100-entry batches stopped every app worker of an app for the day
   and tripped its schedule breakers.
+- **Nothing an owner relies on to diagnose draws on it either (#372).** Server
+  operation-failure rows (`source = 'server'`, decision 7's hook) count against
+  `app_log_usage.server_count`, capped at `SERVER_FAILURE_DAILY_LIMIT` (10,000)
+  per app per UTC day. Only `recordOperationFailure` writes that counter;
+  client ingestion spends `count` (`DAILY_ENTRY_LIMIT`, 50,000). Before this, an
+  anonymous flood that spent `count` silenced the trusted failure rows for the
+  rest of the day. Over the server budget, as everywhere else, the Analytics
+  Engine count still lands and only the detail row is skipped.
 
 **App-context binding is real work, not a URL change.** #108 proposes preferring
 the mediated `/.pas/api/.../logs` route "so the host can bind the log to the app

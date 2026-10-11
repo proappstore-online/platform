@@ -20,6 +20,11 @@
  * When the daily budget is spent we stop writing D1 rows but keep counting in
  * Analytics Engine — the spike stays visible, only the detail stops. That is
  * Sentry-style spike protection, and it is why exceeding the cap is not a 500.
+ *
+ * Three daily budgets, none of which another can spend:
+ *  - client ingestion (POST /v1/apps/:id/logs, anonymous included): `app_log_usage.count`, DAILY_ENTRY_LIMIT;
+ *  - app-worker log lines (#316): `app_worker_usage.log_entries`, WORKER_LOG_DAILY_LIMIT;
+ *  - server operation-failure rows (#372): `app_log_usage.server_count`, SERVER_FAILURE_DAILY_LIMIT.
  */
 
 import { consume, newRateLimitState, type RateLimitState } from './rate-limit.js';
@@ -45,6 +50,44 @@ export function d1LogUsageStore(db: D1Database): LogUsageStore {
         .prepare(
           `INSERT INTO app_log_usage (app_id, day, count) VALUES (?1, ?2, ?3)
            ON CONFLICT(app_id, day) DO UPDATE SET count = count + ?3`,
+        )
+        .bind(appId, day, by)
+        .run();
+    },
+  };
+}
+
+/**
+ * #372: server operation-failure rows (`source = 'server'`) kept per app per UTC
+ * day. Each is one failed authenticated request, so this is generous for a real
+ * incident and still bounds an app stuck failing in a loop.
+ */
+export const SERVER_FAILURE_DAILY_LIMIT = 10_000;
+/**
+ * The burst key of server failure rows. The public logs route namespaces its
+ * keys (`user:`, `client:`, `ip:` — publicLogBurstKey), so no caller-chosen
+ * clientId can name this bucket either.
+ */
+export const SERVER_FAILURE_BURST_KEY = 'server';
+
+/**
+ * The server-failure counter: `app_log_usage.server_count` (migration 0094).
+ * Only recordOperationFailure writes it; anonymous ingestion spends `count`.
+ */
+export function serverFailureUsageStore(db: D1Database): LogUsageStore {
+  return {
+    async read(appId, day) {
+      const row = await db
+        .prepare('SELECT server_count FROM app_log_usage WHERE app_id = ?1 AND day = ?2')
+        .bind(appId, day)
+        .first<{ server_count: number }>();
+      return row?.server_count ?? 0;
+    },
+    async bump(appId, day, by) {
+      await db
+        .prepare(
+          `INSERT INTO app_log_usage (app_id, day, server_count) VALUES (?1, ?2, ?3)
+           ON CONFLICT(app_id, day) DO UPDATE SET server_count = server_count + ?3`,
         )
         .bind(appId, day, by)
         .run();

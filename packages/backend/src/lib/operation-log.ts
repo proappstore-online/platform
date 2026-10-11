@@ -21,7 +21,7 @@
 
 import { hash16, redact } from './error-telemetry.js';
 import { messageShape } from './log-ingest.js';
-import { checkLogQuota, d1LogUsageStore } from './log-quota.js';
+import { checkLogQuota, SERVER_FAILURE_BURST_KEY, SERVER_FAILURE_DAILY_LIMIT, serverFailureUsageStore } from './log-quota.js';
 
 /** Route families worth logging, keyed by the segment after `/apps/:appId/`.
  *  Anything not listed falls back to the segment itself, so a new route is
@@ -150,13 +150,15 @@ export async function recordOperationFailure(
     // it is still counted in Analytics Engine above, so a spike stays visible.
     if (!failure.userId) return;
 
-    const verdict = await checkLogQuota(d1LogUsageStore(env.DB), {
+    // #372: a budget of their own (app_log_usage.server_count). On the shared
+    // client counter, anonymous POST /logs traffic could spend the app's day and
+    // silence these trusted rows; the AE count above was never affected.
+    const verdict = await checkLogQuota(serverFailureUsageStore(env.DB), {
       appId: failure.appId,
-      // A dedicated key so server records do not spend a user's burst budget,
-      // while still drawing on the app's daily total.
-      clientKey: 'server',
+      clientKey: SERVER_FAILURE_BURST_KEY,
       entries: 1,
       nowMs,
+      dailyLimit: SERVER_FAILURE_DAILY_LIMIT,
     });
     if (!verdict.persist) return;
 

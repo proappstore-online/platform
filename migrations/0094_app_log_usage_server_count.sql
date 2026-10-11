@@ -1,0 +1,15 @@
+-- #372 (#303 F10): a server-side operation-failure budget anonymous log
+-- ingestion cannot spend. recordOperationFailure (lib/operation-log.ts) used to
+-- draw on app_log_usage.count — the same per-app daily counter anonymous
+-- POST /v1/apps/:id/logs spends — so a flood there silenced the trusted
+-- source='server' rows for the rest of the UTC day. Those rows now meter on
+-- their own column (SERVER_FAILURE_DAILY_LIMIT per app per day); `count` stays
+-- the client-ingestion counter, unchanged.
+--
+-- Additive with a default, so the row shape the ingestion route writes (it
+-- names only `count`) keeps working, and the existing day-based prune
+-- (routes/logs-prune.ts) covers it. Code deployed before this column exists
+-- fails the server-row write, which recordOperationFailure already swallows:
+-- the detail row is skipped, the request outcome and the Analytics Engine count
+-- are not affected.
+ALTER TABLE app_log_usage ADD COLUMN server_count INTEGER NOT NULL DEFAULT 0;
