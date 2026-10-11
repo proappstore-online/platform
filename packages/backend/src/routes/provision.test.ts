@@ -669,3 +669,18 @@ describe('POST /v1/provision — rate limit (#83)', () => {
     expect(d.prepare.mock.calls.some((c: unknown[]) => /provision_attempts/i.test(String(c[0])))).toBe(false);
   });
 });
+
+describe('POST /v1/provision with a receipt', () => {
+  it('refuses a receipt no stored operation issued, before any quota or Cloudflare call', async () => {
+    const db = mockD1();
+    globalThis.fetch = vi.fn();
+    const res = await app.request('/v1/provision', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${NON_ADMIN_TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'test-app', name: 'T', proFeatures: ['db'], skipPublish: true, provisionReceipt: 'forged', provisionAttemptId: 'attempt-1' }),
+    }, makeEnv({}, db));
+    expect(res.status).toBe(409);
+    expect(await res.text()).toMatch(/stale, forged/);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+});

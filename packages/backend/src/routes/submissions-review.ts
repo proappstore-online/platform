@@ -4,7 +4,8 @@ import type { Env } from '../types.js';
 import { requireUser } from '../lib/auth.js';
 import { wrap } from '../lib/route-wrap.js';
 import type { ApproveBody, RejectBody } from './submissions-types.js';
-import { isAdmin, rowToSubmission, submissionRepoUrl } from './submissions-helpers.js';
+import { isAdmin, rowToSubmission } from './submissions-helpers.js';
+import { provisionApp, type ProvisionBody } from './provision.js';
 
 /**
  * Admin review handlers — approve (runs the provisioner) and reject. Attached
@@ -41,9 +42,6 @@ export function registerReviewRoutes(
       }
       templateId = selection.template.id;
     }
-    // Only the pinned repository is ever forwarded, and only when the stored URL
-    // is exactly it: the approval runs with an admin token, which may name any repo.
-    const pinnedRepo = submission.repo_url === submissionRepoUrl(submission.app_id);
 
     const overridePrice =
       body.suggestedMonthlyPriceCents != null &&
@@ -89,9 +87,11 @@ export function registerReviewRoutes(
         })()
       : undefined;
 
-    // Provision the app using PAS's own provision endpoint (self-contained).
-    const token = c.req.header('Authorization')?.slice(7) || '';
-    const provisionBody: Record<string, unknown> = {
+    // #382: provision as the SUBMITTER, not the approving admin. The admin's role
+    // only unlocks skipCompliance/templateUnknown; the app, its owner row and
+    // its data plane belong to submission.creator_id. No repo is forwarded: with
+    // compliance skipped, provisioning never reads one.
+    const provisionBody: ProvisionBody = {
       appId: submission.app_id,
       name: submission.name,
       category: submission.category,
@@ -109,22 +109,14 @@ export function registerReviewRoutes(
       // default it to template-app.
       provisionBody.templateUnknown = true;
     }
-    if (pinnedRepo) {
-      provisionBody.repoOwner = 'proappstore-online';
-      provisionBody.repoName = submission.app_id;
-    }
 
     let provisionResult: unknown = null;
     try {
-      const provRes = await c.env.SELF.fetch(`https://api.proappstore.online/v1/provision`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(provisionBody),
-      });
-      provisionResult = await provRes.json();
+      const provRes = await provisionApp(c, provisionBody, user, submission.creator_id);
+      // A refusal (403/429/503) answers in plain text; surface it rather than a JSON parse error.
+      provisionResult = (provRes.headers.get('Content-Type') ?? '').includes('json')
+        ? await provRes.json()
+        : { error: await provRes.text(), status: provRes.status };
       const provisionSucceeded =
         provisionResult &&
         typeof provisionResult === 'object' &&

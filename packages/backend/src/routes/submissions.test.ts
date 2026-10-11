@@ -5,6 +5,11 @@ import { testToken, TEST_SK, mockStmt, mockD1, makeEnv as sharedMakeEnv } from '
 
 const TOK = await testToken('gh:1');
 
+// #382: approval provisions through provisionApp directly, as the submitter.
+// Capture what it is asked; the provisioner itself is covered by provision.test.ts.
+const provisionApp = vi.hoisted(() => vi.fn());
+vi.mock('./provision.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('./provision.js')>()), provisionApp }));
+
 interface EnvOverrides {
   ADMIN_GITHUB_IDS?: string;
 }
@@ -30,7 +35,10 @@ function mockProvisionFetch() {
     async () => new Response(JSON.stringify({ success: true, steps: [], appId: 'test' }), { status: 200 }),
   );
 }
-beforeEach(() => { mockProvisionFetch(); });
+beforeEach(() => {
+  mockProvisionFetch();
+  provisionApp.mockReset().mockImplementation(async () => Response.json({ success: true, steps: [], appId: 'test' }));
+});
 afterEach(() => { globalThis.fetch = originalFetch; });
 
 describe('POST /v1/submissions', () => {
@@ -371,19 +379,22 @@ describe('POST /v1/submissions/:id/approve', () => {
       const res = await app.request('/v1/submissions/sub1/approve', {
         method: 'POST', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: '{}',
       }, makeEnv(db, { ADMIN_GITHUB_IDS: 'gh:1' }));
-      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter((c) => String(c[0]).endsWith('/v1/provision'));
-      return { res, db, sent: calls.map((c) => JSON.parse(String((c[1] as RequestInit).body)) as Record<string, unknown>) };
+      const calls = provisionApp.mock.calls as unknown as [unknown, Record<string, unknown>, { id: string }, string][];
+      return { res, db, sent: calls.map((c) => c[1]), actors: calls.map((c) => c[2].id), owners: calls.map((c) => c[3]) };
     }
 
-    it('an approved non-default template, its pinned revision and the pinned repo', async () => {
-      const { res, sent } = await approveRow({
+    it('an approved non-default template and its pinned revision, provisioned for the submitter (#382)', async () => {
+      const { res, sent, actors, owners } = await approveRow({
         ...base, template_id: 'template-marketplace', template_rev: '4b000c9', repo_url: 'https://github.com/proappstore-online/kanban',
       });
       expect(res.status).toBe(200);
-      expect(sent).toEqual([expect.objectContaining({
-        appId: 'kanban', template: 'template-marketplace', templateRev: '4b000c9', repoOwner: 'proappstore-online', repoName: 'kanban',
-      })]);
+      expect(sent).toEqual([expect.objectContaining({ appId: 'kanban', template: 'template-marketplace', templateRev: '4b000c9', skipCompliance: true })]);
       expect(sent[0]).not.toHaveProperty('templateUnknown');
+      // #382: compliance is skipped, so no repository is forwarded — not even the pinned one.
+      for (const key of ['repoOwner', 'repoName']) expect(sent[0]).not.toHaveProperty(key);
+      // The admin approves; the app is the submitter's.
+      expect(actors).toEqual(['gh:1']);
+      expect(owners).toEqual(['gh:2']);
     });
 
     it('a legacy row: provenance explicitly unknown, and a foreign repo_url is never forwarded', async () => {

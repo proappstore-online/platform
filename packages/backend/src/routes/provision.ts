@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { runChecksFromFiles } from '@proappstore/compliance';
 import {
   internalTokenOk,
@@ -8,7 +9,7 @@ import {
   d1ProvisionAttemptStore,
 } from '@proappstore/build-core';
 import type { Env } from '../types.js';
-import { requireUser, TEAM_ROLES, type TeamRole } from '../lib/auth.js';
+import { requireUser, TEAM_ROLES, type FasUser, type TeamRole } from '../lib/auth.js';
 import { wrap } from '../lib/route-wrap.js';
 import { provisionData } from '../lib/provision-data.js';
 import {
@@ -45,7 +46,7 @@ import { fetchRepoFiles, type RepoLocation } from '../lib/github-fetch.js';
 const ORG = 'proappstore-online';
 const DOMAIN = 'proappstore.online';
 
-interface ProvisionBody {
+export interface ProvisionBody {
   appId: string;
   name?: string;
   description?: string;
@@ -370,7 +371,17 @@ provisionRoutes.patch('/provision-operations/:appId', wrap(async (c) => {
 
 provisionRoutes.post('/provision', wrap(async (c) => {
   const user = await requireUser(c);
-  const body = await c.req.json<ProvisionBody>();
+  return provisionApp(c, await c.req.json<ProvisionBody>(), user, user.id);
+}));
+
+/**
+ * Provision `body.appId` for `ownerId` (#382). `user` is who asked: its platform
+ * admin role unlocks the admin-only options and it is charged the provision
+ * quota. `ownerId` is whose app it becomes: the caller on POST /provision, and
+ * the submitter when an admin approves a submission (submissions-review.ts).
+ * The owner is never read from a request body.
+ */
+export async function provisionApp(c: Context<{ Bindings: Env }>, body: ProvisionBody, user: FasUser, ownerId: string): Promise<Response> {
 
   if (!body.appId || !/^[a-z][a-z0-9-]*$/.test(body.appId) || body.appId.length > 58) {
     return c.text('Invalid app ID', 400);
@@ -398,7 +409,9 @@ provisionRoutes.post('/provision', wrap(async (c) => {
   const claimed = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?')
     .bind(appId)
     .first<{ creator_id: string }>();
-  if (claimed && claimed.creator_id !== user.id && !user.roles.includes('admin')) {
+  // #382: an admin's support bypass covers provisioning as themselves only; an
+  // approval provisioning for a submitter must not land on someone else's app.
+  if (claimed && claimed.creator_id !== ownerId && !(ownerId === user.id && user.roles.includes('admin'))) {
     return c.text('appId already claimed by another user', 403);
   }
 
@@ -419,7 +432,7 @@ provisionRoutes.post('/provision', wrap(async (c) => {
     }
     // Receipt fields are only a reference. All owner, app, intent and active
     // lease facts are read back from D1, never trusted from the request body.
-    if (!operation || operation.receiptId !== body.provisionReceipt || operation.creatorId !== user.id
+    if (!operation || operation.receiptId !== body.provisionReceipt || operation.creatorId !== ownerId
       || operation.appId !== appId || isLegacyProvisionOperation(operation)
       || operation.status !== 'pending' || operation.attemptId !== body.provisionAttemptId
       || operation.leaseExpiresAt === null || operation.leaseExpiresAt <= now) {
@@ -583,8 +596,8 @@ provisionRoutes.post('/provision', wrap(async (c) => {
   //      deploy stage via /v1/provision-data so both paths get the same layer.
   const data = await provisionData({
     appId,
-    creatorId: user.id,
-    creatorLabel: user.login,
+    creatorId: ownerId,
+    ...(ownerId === user.id ? { creatorLabel: user.login } : {}),
     cfToken,
     cfAccount,
     db: c.env.DB,
@@ -599,7 +612,7 @@ provisionRoutes.post('/provision', wrap(async (c) => {
 
   const success = !steps.some((s) => s.status === 'fail');
   return c.json({ appId, steps, dataWorkerUrl, appUrl: `https://${appId}.${DOMAIN}`, success }, success ? 200 : 207);
-}));
+}
 
 /**
  * Internal (service-to-service): provision ONLY an app's data plane (D1 + data
