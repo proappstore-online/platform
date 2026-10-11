@@ -347,7 +347,7 @@ describe('POST /v1/submissions/:id/approve', () => {
       reviewed_at: null,
     };
     const fetchStmt = mockStmt({ first: pendingRow });
-    const updateApprovedStmt = mockStmt();
+    const updateApprovedStmt = mockStmt({ run: { meta: { changes: 1 } } }); // #383: the claim wins
     const updatePublishedStmt = mockStmt();
     const finalFetchStmt = mockStmt({
       first: { ...pendingRow, status: 'published', reviewer_id: 'gh:1', reviewed_at: 999 },
@@ -375,7 +375,7 @@ describe('POST /v1/submissions/:id/approve', () => {
       template_id: null, template_rev: null, reviewer_id: null, rejection_reason: null, created_at: 1, reviewed_at: null,
     };
     async function approveRow(row: Record<string, unknown>) {
-      const db = mockD1(mockStmt({ first: row }), mockStmt(), mockStmt(), mockStmt({ first: { ...row, status: 'published' } }));
+      const db = mockD1(mockStmt({ first: row }), mockStmt({ run: { meta: { changes: 1 } } }), mockStmt(), mockStmt({ first: { ...row, status: 'published' } }));
       const res = await app.request('/v1/submissions/sub1/approve', {
         method: 'POST', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: '{}',
       }, makeEnv(db, { ADMIN_GITHUB_IDS: 'gh:1' }));

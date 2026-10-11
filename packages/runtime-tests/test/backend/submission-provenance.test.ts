@@ -23,7 +23,9 @@ async function approve(appId: string) {
   fetchMock.get('https://api.cloudflare.com').intercept({ path: `/client/v4/accounts/${env.CF_ACCOUNT_ID}/d1/database`, method: 'POST' })
     .reply(200, { success: true, result: { uuid: `d1-${appId}` } });
   const res = await SELF.fetch(`${BASE}/v1/submissions/${row!.id}/approve`, json('POST', {}, await session(ADMIN, { roles: ['user', 'creator', 'admin'] })));
-  expect(res.status).toBe(200);
+  // Offline, provisioning stops at the data-worker deploy (after record_app), so the
+  // approval reports the failure and releases the submission for a retry (#383).
+  expect(res.status).toBe(500);
   return res.json() as Promise<{ provisionResult: { steps?: { name: string; status: string; detail: string }[] } }>;
 }
 const provenance = (appId: string) =>
