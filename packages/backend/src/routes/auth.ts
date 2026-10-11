@@ -302,21 +302,18 @@ export async function redeemExchangeCode(env: Pick<Env, 'DB' | 'SESSION_SIGNING_
   const codeHash = await hashExchangeCode(code);
   const now = Date.now();
 
+  // Read and consume in ONE statement (#303 L7): only one redemption can get
+  // the row back, so two concurrent exchanges of a code cannot both mint a
+  // session (a SELECT followed by a DELETE let both read it first). It consumes
+  // whatever matched, expired or not, so an expired row does not linger and a
+  // guessed code is never retryable.
   const row = await env.DB.prepare(
-    'SELECT claims FROM auth_exchange_codes WHERE code_hash = ? AND expires_at > ?',
+    'DELETE FROM auth_exchange_codes WHERE code_hash = ? RETURNING claims, expires_at',
   )
-    .bind(codeHash, now)
-    .first<{ claims: string }>();
-
-  // Consume unconditionally — before validating, and whether or not anything
-  // was found. A wrong guess must not be retryable, and an expired row must not
-  // linger.
-  await env.DB.prepare('DELETE FROM auth_exchange_codes WHERE code_hash = ?')
     .bind(codeHash)
-    .run()
-    .catch(() => { /* the read already decided the outcome */ });
+    .first<{ claims: string; expires_at: number }>();
 
-  if (!row) return null;
+  if (!row || row.expires_at <= now) return null;
   let claims: NewSession;
   try { claims = JSON.parse(row.claims) as NewSession; } catch { return null; }
   if (!claims?.uid) return null;

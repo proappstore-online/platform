@@ -282,6 +282,24 @@ describe('POST /webhooks/stripe', () => {
     expect(updateStmt.bind).toHaveBeenCalledWith(expect.any(Number), 'sub_overdue77');
   });
 
+  it('handles invoice.payment_failed in the 2025-03-31+ shape (parent.subscription_details)', async () => {
+    const payload = JSON.stringify({
+      type: 'invoice.payment_failed',
+      data: { object: { parent: { type: 'subscription_details', subscription_details: { subscription: 'sub_basil1' } } } },
+    });
+    const signature = await buildStripeSignature(payload, 'whsec_test');
+    const updateStmt = mockStmt({ run: { meta: { changes: 1 } } });
+    const db = mockD1(updateStmt);
+
+    const res = await app.request(
+      '/webhooks/stripe',
+      { method: 'POST', headers: { 'Content-Type': 'application/json', 'stripe-signature': signature }, body: payload },
+      makeEnv({}, db),
+    );
+    expect(res.status).toBe(200);
+    expect(updateStmt.bind).toHaveBeenCalledWith(expect.any(Number), 'sub_basil1');
+  });
+
   it('returns 200 for unknown event types without touching DB', async () => {
     const payload = JSON.stringify({
       type: 'some.unknown.event',

@@ -92,7 +92,7 @@ describe('POST /v1/internal/session-invalidations', () => {
   it('drops host diagnostics after the daily quota without rejecting the authoritative invalidation', async () => {
     const insert = mockStmt();
     const db = mockD1(
-      mockStmt({ first: { count: 999_999 } }),
+      mockStmt({ first: { server_count: 999_999 } }),
       insert,
     );
     const res = await app.request('/v1/internal/session-invalidations', {
@@ -106,6 +106,23 @@ describe('POST /v1/internal/session-invalidations', () => {
 
     expect(res.status).toBe(204);
     expect(insert.run).not.toHaveBeenCalled();
+  });
+
+  it('spends the server budget, not the client-ingestion count an anonymous flood can exhaust (#303)', async () => {
+    const db = mockD1(mockStmt({ first: { server_count: 0 } }), mockStmt(), mockStmt());
+    const res = await app.request('/v1/internal/session-invalidations', {
+      method: 'POST',
+      headers: {
+        [APP_CONTEXT_HEADER]: 'myapp',
+        [HOST_SESSION_INVALIDATION_HEADER]: 'api_401',
+        [HOST_SESSION_INVALIDATION_ID_HEADER]: 'b'.repeat(32),
+      },
+    }, makeEnv({}, db));
+
+    expect(res.status).toBe(204);
+    const sql = db.prepare.mock.calls.map(([q]) => q as string);
+    expect(sql[0]).toMatch(/SELECT server_count FROM app_log_usage/);
+    expect(sql[1]).toMatch(/server_count = server_count \+/);
   });
 
   it('bounds concurrent host invalidation diagnostics with the shared burst quota', async () => {

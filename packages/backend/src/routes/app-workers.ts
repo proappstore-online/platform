@@ -207,8 +207,10 @@ appWorkerRoutes.post('/apps/:appId/worker/schedules/:name/run', async (c) => {
     'SELECT 1 AS off FROM scheduled_action_state WHERE app_id = ? AND action_name = ? AND schedule_disabled_at IS NOT NULL',
   ).bind(appId, action).first();
   if (disabled) throw new HttpError('this schedule is disabled after repeated failures; redeploy the manifest to re-enable it', 409);
+  // A minute-aligned 'due' row is a tick's orphan that nothing ever reclaims (#303): it must not block
+  // run-now forever. Only a run-now 'due' row (never minute-aligned, runNowDueAt) is still pending.
   const inFlight = await c.env.DB.prepare(
-    "SELECT 1 AS busy FROM scheduled_action_runs WHERE app_id = ? AND action_name = ? AND status IN ('due', 'claimed', 'queued') LIMIT 1",
+    "SELECT 1 AS busy FROM scheduled_action_runs WHERE app_id = ? AND action_name = ? AND (status IN ('claimed', 'queued') OR (status = 'due' AND due_at % 60000 <> 0)) LIMIT 1",
   ).bind(appId, action).first();
   if (inFlight) throw new HttpError('a run is already in progress', 409);
 

@@ -26,6 +26,9 @@ function fakeDb(): D1Database {
       if (!worker || (s.includes('enabled = 1') && worker.enabled !== 1)) return { first: null };
       return { first: { token_hash: worker.token_hash ?? null } };
     }
+    if (s.startsWith('SELECT token_hash, prev_token_until FROM app_workers')) {
+      return { first: worker ? { token_hash: worker.token_hash ?? null, prev_token_until: worker.prev_token_until ?? null } : null };
+    }
     if (s.startsWith('SELECT w.* FROM app_workers')) return { first: worker && worker.enabled === 1 && worker.deployed_at ? { ...worker } : null };
     if (s.startsWith("UPDATE app_workers SET backend = 'loader'")) {
       const minting = s.includes('token_hash = ?5');
@@ -38,7 +41,7 @@ function fakeDb(): D1Database {
       return { changes: 1 };
     }
     if (s.startsWith('UPDATE app_workers SET prev_token_hash = token_hash')) {
-      if (!worker || worker.token_hash !== args[9]) return { first: null };
+      if (!worker || worker.token_hash !== args[9] || (worker.prev_token_until != null && Number(worker.prev_token_until) > Number(args[10]))) return { first: null };
       Object.assign(worker, {
         prev_token_hash: worker.token_hash, prev_token_until: args[0],
         prev_event_key_ct: worker.event_key_ct, prev_event_key_dek: worker.event_key_dek, prev_event_key_iv: worker.event_key_iv, prev_key_until: args[0],

@@ -1065,22 +1065,21 @@ describe('POST /v1/auth/exchange — token audience (#84)', () => {
 describe('POST /v1/auth/code/exchange', () => {
   const CLAIMS = { uid: 'gh:1', login: 'alice', avatarUrl: null, roles: ['user'] };
 
-  /** D1 stub holding one code row keyed by hash, with a delete recorder. */
+  /** D1 stub holding one code row, consumed by the first DELETE … RETURNING (as SQLite does), with a delete recorder. */
   function codeDb(row: { claims: string; expires_at: number } | null) {
     const deletes: unknown[][] = [];
+    let stored = row;
     const prepare = vi.fn((sql: string) => ({
       bind: (...args: unknown[]) => ({
         async first() {
-          if (!/SELECT claims/i.test(sql)) return null;
-          if (!row) return null;
-          // Mirror the endpoint's `expires_at > ?` predicate.
-          const now = Number(args[1]);
-          return row.expires_at > now ? { claims: row.claims } : null;
+          if (!/DELETE FROM auth_exchange_codes .*RETURNING/is.test(sql)) return null;
+          deletes.push(args);
+          await Promise.resolve(); // let a concurrent redemption interleave
+          const taken = stored;
+          stored = null;
+          return taken;
         },
-        async run() {
-          if (/DELETE FROM auth_exchange_codes/i.test(sql)) deletes.push(args);
-          return { meta: { changes: 1 } };
-        },
+        async run() { return { meta: { changes: 0 } }; },
       }),
     }));
     return { prepare, deletes };
@@ -1131,10 +1130,17 @@ describe('POST /v1/auth/code/exchange', () => {
     expect(db.deletes).toHaveLength(1);
   });
 
-  it('rejects an expired code', async () => {
+  it('rejects an expired code, and consumes it', async () => {
     const db = codeDb({ claims: JSON.stringify(CLAIMS), expires_at: Date.now() - 1 });
     const res = await post({ code: 'stale' }, db);
     expect(res.status).toBe(400);
+    expect(db.deletes).toHaveLength(1);
+  });
+
+  it('two concurrent redemptions of one code mint exactly one session (#303 L7)', async () => {
+    const db = codeDb({ claims: JSON.stringify(CLAIMS), expires_at: Date.now() + 60_000 });
+    const [a, b] = await Promise.all([post({ code: 'a-code' }, db), post({ code: 'a-code' }, db)]);
+    expect([a.status, b.status].sort()).toEqual([200, 400]);
   });
 
   it('answers uniformly for missing, malformed and unknown codes', async () => {

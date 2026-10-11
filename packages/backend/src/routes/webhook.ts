@@ -139,7 +139,10 @@ webhookRoutes.post('/webhooks/stripe', async (c) => {
     }
 
     case 'invoice.payment_failed': {
-      const subscriptionId = obj.subscription as string;
+      // Stripe API 2025-03-31 moved the invoice's subscription under `parent`; no version is
+      // pinned, so the payload's shape is the account default's. Read both (#303).
+      const parent = obj.parent as { subscription_details?: { subscription?: string } } | undefined;
+      const subscriptionId = (obj.subscription as string | undefined) ?? parent?.subscription_details?.subscription;
       if (subscriptionId) {
         await c.env.DB.prepare(
           `UPDATE subscriptions SET status = 'past_due', updated_at = ? WHERE stripe_subscription_id = ? AND status != 'canceled'`,

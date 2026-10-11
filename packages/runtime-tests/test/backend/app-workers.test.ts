@@ -226,6 +226,18 @@ describe('invocation through the platform shim on the Worker Loader (#253)', () 
     expect(loaderId('first', String(after.bundle_sha256), configVersion, shim)).not.toBe(loaderId('first', String(before.bundle_sha256), Number(before.config_version), shim));
     expect((await appWorkerHost(env).invoke('first', event({}), { timeoutMs: 10_000 })).status).toBe('succeeded');
   });
+
+  it('a second rotation inside the overlap is refused (409) and keeps the token in-flight callers hold (#303)', async () => {
+    const before = (await row('first'))!;
+    await rotateAppWorkerCredentials(env, 'first');
+    const mid = (await row('first'))!;
+    await expect(rotateAppWorkerCredentials(env, 'first')).rejects.toMatchObject({ status: 409 });
+    expect(await row('first')).toMatchObject({ prev_token_hash: before.token_hash, token_hash: mid.token_hash, config_version: mid.config_version });
+    // Once the overlap has ended, rotation works again.
+    const later = await rotateAppWorkerCredentials(env, 'first', Number(mid.prev_token_until) + 1);
+    expect(later.configVersion).toBe(Number(mid.config_version) + 1);
+    expect((await row('first'))!.prev_token_hash).toBe(mid.token_hash);
+  });
 });
 
 describe('removal (#253, ADR-009 §5)', () => {

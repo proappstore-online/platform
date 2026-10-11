@@ -35,7 +35,7 @@ import {
   traceIdFromTraceparent,
   type RawLogEntry,
 } from '../lib/log-ingest.js';
-import { checkLogQuota, d1LogUsageStore, publicLogBurstKey } from '../lib/log-quota.js';
+import { checkLogQuota, d1LogUsageStore, publicLogBurstKey, SERVER_FAILURE_DAILY_LIMIT, serverFailureUsageStore } from '../lib/log-quota.js';
 import type { Env } from '../types.js';
 
 export const logsRoutes = new Hono<{ Bindings: Env }>();
@@ -74,11 +74,14 @@ logsRoutes.post('/internal/session-invalidations', async (c) => {
   }
 
   const now = Date.now();
-  const quota = await checkLogQuota(d1LogUsageStore(c.env.DB), {
+  // A source = 'server' row: it spends the server budget (#372), which anonymous
+  // POST /logs cannot exhaust, not the client-ingestion `count`.
+  const quota = await checkLogQuota(serverFailureUsageStore(c.env.DB), {
     appId,
     clientKey: HOST_INVALIDATION_BURST_KEY,
     entries: 1,
     nowMs: now,
+    dailyLimit: SERVER_FAILURE_DAILY_LIMIT,
   });
   // The host's authoritative 401 and cookie clearing must never be held up by
   // diagnostics. The bounded row is best-effort, just like browser telemetry.

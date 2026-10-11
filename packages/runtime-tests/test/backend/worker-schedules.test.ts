@@ -190,6 +190,18 @@ describe('run-now (#255, #257)', () => {
     expect((await runNow()).status).toBe(429);
   });
 
+  it('a tick\'s orphaned minute-aligned due row does not block run-now; a pending run-now due row still does (#303)', async () => {
+    await env.DB.prepare("INSERT INTO scheduled_action_runs (run_id, app_id, action_name, source, due_at, status) VALUES ('orphan', 't', 'worker:tick', 'code', ?, 'due')").bind(TICK).run();
+    const res = await runNow();
+    expect(res.status, await res.clone().text()).toBe(202);
+    await drainAppEvents(sent);
+
+    await env.DB.prepare("DELETE FROM scheduled_action_runs WHERE app_id = 't'").run();
+    await env.DB.prepare("UPDATE app_worker_schedules SET last_manual_run_at = NULL WHERE app_id = 't'").run();
+    await env.DB.prepare("INSERT INTO scheduled_action_runs (run_id, app_id, action_name, source, due_at, status) VALUES ('pending', 't', 'worker:tick', 'code', ?, 'due')").bind(TICK + 1).run();
+    expect((await runNow()).status).toBe(409);
+  });
+
   it('refuses a breaker-disabled schedule and a worker that is not active (409)', async () => {
     await env.DB.prepare("INSERT INTO scheduled_action_state (app_id, action_name, source, consecutive_failures, schedule_disabled_at) VALUES ('t', 'worker:tick', 'code', 5, 1)").run();
     expect((await runNow()).status).toBe(409);

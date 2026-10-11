@@ -145,9 +145,10 @@ export interface QuotaVerdict {
 /**
  * Decide whether this batch's detail rows may be persisted, and record the spend.
  *
- * Counts the spend even when persistence is refused: an app in a loop should not
- * get its budget back by being throttled, or it oscillates in and out of the cap
- * forever.
+ * Only a persisted batch spends the daily budget; a refused one (burst or
+ * daily_quota) is not counted in D1 (callers that want the spike visible count
+ * it in Analytics Engine). The counter is a UTC-day bucket, so a throttled app
+ * gets no budget back within the day either way.
  */
 export async function checkLogQuota(
   store: LogUsageStore,

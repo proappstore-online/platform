@@ -271,12 +271,15 @@ const sealed = (ct: unknown, dek: unknown, iv: unknown): SealedSecret => ({ keyC
  * current credentials move to `prev_*` for `ROTATION_OVERLAP_MS`, so in-flight
  * invocations and `PAS` calls holding the old token are not dropped, and
  * `config_version` bumps so the loader starts a new isolate with the new env.
- * Refused (409) for a worker that has never been deployed.
+ * Refused (409) for a worker that has never been deployed, and while a previous
+ * rotation's overlap is still open: a second rotation would overwrite `prev_*`
+ * and drop the token in-flight callers still hold (#303).
  */
 export async function rotateAppWorkerCredentials(env: Pick<Env, 'DB' | 'APP_SECRET_KEK'>, appId: string, now = Date.now()): Promise<{ configVersion: number }> {
   const kek = kekOf(env);
-  const row = await env.DB.prepare('SELECT token_hash FROM app_workers WHERE app_id = ?').bind(appId).first<{ token_hash: string | null }>();
+  const row = await env.DB.prepare('SELECT token_hash, prev_token_until FROM app_workers WHERE app_id = ?').bind(appId).first<{ token_hash: string | null; prev_token_until: number | null }>();
   if (!row?.token_hash) throw new HttpError('this app worker has not been deployed; there is nothing to rotate', 409);
+  if (row.prev_token_until !== null && row.prev_token_until > now) throw new HttpError('the previous rotation is still in its overlap window; retry after it ends', 409);
   const next = await mintCredentials(kek);
   const until = now + ROTATION_OVERLAP_MS;
   const updated = await env.DB.prepare(
@@ -286,11 +289,11 @@ export async function rotateAppWorkerCredentials(env: Pick<Env, 'DB' | 'APP_SECR
        token_hash = ?2, token_ct = ?3, token_dek = ?4, token_iv = ?5,
        event_key_ct = ?6, event_key_dek = ?7, event_key_iv = ?8,
        config_version = config_version + 1
-     WHERE app_id = ?9 AND token_hash = ?10
+     WHERE app_id = ?9 AND token_hash = ?10 AND (prev_token_until IS NULL OR prev_token_until <= ?11)
      RETURNING config_version`,
   ).bind(
     until, next.tokenHash, next.token.keyCiphertext, next.token.dekWrapped, next.token.iv,
-    next.eventKey.keyCiphertext, next.eventKey.dekWrapped, next.eventKey.iv, appId, row.token_hash,
+    next.eventKey.keyCiphertext, next.eventKey.dekWrapped, next.eventKey.iv, appId, row.token_hash, now,
   ).first<{ config_version: number }>();
   if (!updated) throw new HttpError('the app worker changed during rotation; retry', 409);
   return { configVersion: updated.config_version };

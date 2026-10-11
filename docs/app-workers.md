@@ -416,7 +416,7 @@ The owner commands use your `pas login` session:
 ```bash
 pas worker status                       # enabled, today's usage vs quota, last deploy, schedules (and breaker state), recent invocations
 pas worker logs --since 10m [--follow]  # PAS.log lines + invocation outcomes
-pas worker rotate                       # new token + event key; the old pair works for 10 more minutes
+pas worker rotate                       # new token + event key; the old pair works for 10 more minutes (a second rotate inside that window is refused)
 pas schedule runs [--status failed]     # scheduled-action and worker-schedule runs
 pas schedule run reconcile              # queue a worker schedule now (202)
 pas hook list                           # each hook's URL, verifier, and whether its secret is set
