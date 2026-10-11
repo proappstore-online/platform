@@ -3,6 +3,7 @@ import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { verifyGithubOidc, type OidcClaims } from '../lib/github-oidc.js';
 import { HttpError, requireAdmin, requireAppOwner } from '../lib/auth.js';
+import { dataWorkerUrl } from '../lib/data-worker-url.js';
 import { replaceAppTools, siteManifestFrom, type SiteManifest } from './tools.js';
 
 /**
@@ -371,12 +372,14 @@ async function applyMigrations(
     }
   }
 
-  // Forward to the app's data worker over its custom domain (reachable by subrequest)
-  // with the platform internal token — the same trusted path the actions executor uses.
-  // The data worker's _migrations table makes this idempotent.
+  // Forward straight to the app's data worker on its workers.dev host with the platform
+  // internal token — the same trusted path the actions executor uses (#153, #303 N20),
+  // never the public data-* proxy hop. A missing DATA_WORKER_HOST throws inside the try,
+  // so it is recorded as a failed migration. The data worker's _migrations table makes
+  // this idempotent.
   let res: Response;
   try {
-    res = await fetch(`https://data-${appId}.proappstore.online/migrate`, {
+    res = await fetch(dataWorkerUrl(env, appId, '/migrate'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

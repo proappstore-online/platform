@@ -143,7 +143,7 @@ describe('POST /apps/:appId/deploy-credentials', () => {
 describe('POST /apps/:appId/migrate/oidc', () => {
   let migrateBody: unknown;
   let migrateHeaders: Record<string, string>;
-  const MIGRATE_ENV = { DB: mockDB, INTERNAL_TOKEN: 'internal-secret' } as never;
+  const MIGRATE_ENV = { DB: mockDB, INTERNAL_TOKEN: 'internal-secret', DATA_WORKER_HOST: 'serge-the-dev.workers.dev' } as never;
 
   beforeEach(async () => {
     _resetJwksCache();
@@ -183,10 +183,10 @@ describe('POST /apps/:appId/migrate/oidc', () => {
     const body = await res.json() as Record<string, unknown>;
     expect(body.ok).toBe(true);
     expect(body.applied).toEqual(['0001_init']);
-    // it hit the app's data worker over its custom domain, with the internal token
+    // #303 N20: it hit the app's data worker on its internal workers.dev host, never the public data-* hop
     const call0 = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
       .find((c) => String(c[0]).includes('/migrate'));
-    expect(String(call0![0])).toBe('https://data-aiuniversity.proappstore.online/migrate');
+    expect(String(call0![0])).toBe('https://pas-data-aiuniversity.serge-the-dev.workers.dev/migrate');
     expect(migrateHeaders['X-Internal-Token']).toBe('internal-secret');
     expect(migrateBody).toEqual({ migrations: [additive] });
     // the attempt is audited as applied (#33 — pending/failed migrations visible)
@@ -290,6 +290,17 @@ describe('POST /apps/:appId/migrate/oidc', () => {
     const res = await call('aiuniversity', { migrations: [additive] }, { Authorization: `Bearer ${await signToken()}` });
     expect(res.status).toBe(502);
     // failure is audited too, so unresolved drift is visible in schema-status
+    expect(migrationRows).toHaveLength(1);
+    expect(migrationRows[0]!.slice(0, 3)).toEqual(['aiuniversity', 'oidc', 'failed']);
+  });
+
+  it('without DATA_WORKER_HOST: 502, audited as failed, and never sent to the public data-* host (#303 N20)', async () => {
+    const res = await deployRoutes.request('/apps/aiuniversity/migrate/oidc', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await signToken()}` },
+      body: JSON.stringify({ migrations: [additive] }),
+    }, { DB: mockDB, INTERNAL_TOKEN: 'internal-secret' } as never);
+    expect(res.status).toBe(502);
+    expect(migrateBody).toBeUndefined();
     expect(migrationRows).toHaveLength(1);
     expect(migrationRows[0]!.slice(0, 3)).toEqual(['aiuniversity', 'oidc', 'failed']);
   });
@@ -450,7 +461,7 @@ describe('GET /migrations/reconcile', () => {
 describe('POST /apps/:appId/migrate/internal', () => {
   let migrateBody: unknown;
   let migrateHeaders: Record<string, string>;
-  const INTERNAL_ENV = { DB: mockDB, INTERNAL_TOKEN: 'internal-secret' } as never;
+  const INTERNAL_ENV = { DB: mockDB, INTERNAL_TOKEN: 'internal-secret', DATA_WORKER_HOST: 'serge-the-dev.workers.dev' } as never;
   const additive = { name: '0001_init', sql: 'CREATE TABLE t (id TEXT PRIMARY KEY);' };
 
   beforeEach(() => {
@@ -507,7 +518,7 @@ describe('POST /apps/:appId/migrate/admin', () => {
   let migrateBody: unknown;
   let migrateHeaders: Record<string, string>;
   const SK = TEST_SK;
-  const ADMIN_ENV = { DB: mockDB, SESSION_SIGNING_KEY: SK, INTERNAL_TOKEN: 'internal-secret' } as never;
+  const ADMIN_ENV = { DB: mockDB, SESSION_SIGNING_KEY: SK, INTERNAL_TOKEN: 'internal-secret', DATA_WORKER_HOST: 'serge-the-dev.workers.dev' } as never;
   const repair = { name: '0007_repair_missing_column', sql: "ALTER TABLE items ADD COLUMN priority TEXT DEFAULT 'normal';" };
 
   beforeEach(() => {

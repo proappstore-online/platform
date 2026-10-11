@@ -23,6 +23,7 @@ import { hashPassword, verifyPassword, dummyPasswordHash } from '../lib/password
 import { checkSelfRegistrationPassword } from '../lib/password-policy.js';
 import { sendEmail } from '../lib/email.js';
 import { prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
+import { dataWorkerUrl } from '../lib/data-worker-url.js';
 import {
   generateLogin, generatePassword, normalizeLogin, isValidLogin,
   normalizeEmail, isValidEmail, looksLikeEmail,
@@ -85,15 +86,22 @@ async function appActionAllows(
     return false;
   }
 
-  const upstream = await fetch(`https://data-${appId}.proappstore.online/query`, {
-    method: 'POST',
-    headers: {
-      ...(c.env.INTERNAL_TOKEN ? { 'X-Internal-Token': c.env.INTERNAL_TOKEN } : {}),
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  }).catch(() => null);
-  if (!upstream?.ok) return false;
+  // Internal call: straight to the worker's workers.dev host (#153, #303 M4). Any failure,
+  // a missing DATA_WORKER_HOST included, is a "no".
+  let upstream: Response;
+  try {
+    upstream = await fetch(dataWorkerUrl(c.env, appId, '/query'), {
+      method: 'POST',
+      headers: {
+        ...(c.env.INTERNAL_TOKEN ? { 'X-Internal-Token': c.env.INTERNAL_TOKEN } : {}),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    return false;
+  }
+  if (!upstream.ok) return false;
 
   const data = await upstream.json().catch(() => null) as { rows?: unknown[] } | null;
   return Array.isArray(data?.rows) && data.rows.length > 0;

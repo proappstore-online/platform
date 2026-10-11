@@ -33,6 +33,7 @@ describe('isFirstPartyHost (#56 platform-role gate)', () => {
 const b64url = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 const KEY = 'test-signing-key';
+const DWH = 'serge-the-dev.workers.dev';
 type CustomDomain = {
   app_id: string;
   domain: string;
@@ -383,7 +384,7 @@ describe('POST /v1/auth/credentials/provision', () => {
   const post = (body: unknown, headers: Record<string, string>, db: ReturnType<typeof fakeDb>) =>
     app.request('/v1/auth/credentials/provision', {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
-    }, { DB: db, SESSION_SIGNING_KEY: KEY } as never);
+    }, { DB: db, SESSION_SIGNING_KEY: KEY, DATA_WORKER_HOST: DWH } as never);
 
   it('401s without a bearer token', async () => {
     const res = await post({}, {}, fakeDb());
@@ -437,6 +438,27 @@ describe('POST /v1/auth/credentials/provision', () => {
     expect(res.status).toBe(200);
     expect(db._users[0]!.created_by).toBe('gh:kid');
     expect(db._users[0]!.credential_app_id).toBe('chess-academy');
+    // #303 M4: the app action runs on the data worker's internal host, never the public data-* hop.
+    expect(vi.mocked(fetch).mock.calls.map((c) => String(c[0]))).toEqual([`https://pas-data-chess-academy.${DWH}/query`]);
+  });
+
+  it('refuses the app path, without calling out, when DATA_WORKER_HOST is not configured (#303 M4)', async () => {
+    const db = fakeDb({
+      tools: {
+        can_provision_student_credentials: allowTool('can_provision_student_credentials', {
+          org_id: { type: 'string' },
+          school_id: { type: 'string', optional: true },
+        }),
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ rows: [{ ok: 1 }] }), { status: 200 })));
+    const res = await app.request('/v1/auth/credentials/provision', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await userToken()}` },
+      body: JSON.stringify({ appId: 'chess-academy', orgId: 'org-1' }),
+    }, { DB: db, SESSION_SIGNING_KEY: KEY } as never);
+    expect(res.status).toBe(403);
+    expect(db._users).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('provisions a child: returns login+password once, records created_by', async () => {
@@ -700,7 +722,7 @@ describe('POST /v1/auth/credentials/reset-password', () => {
   const resetPw = async (body: unknown, db: ReturnType<typeof fakeDb>, token = creatorToken()) =>
     app.request('/v1/auth/credentials/reset-password', {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await token}` }, body: JSON.stringify(body),
-    }, { DB: db, SESSION_SIGNING_KEY: KEY } as never);
+    }, { DB: db, SESSION_SIGNING_KEY: KEY, DATA_WORKER_HOST: DWH } as never);
 
   it('resets password and old password stops working', async () => {
     const db = fakeDb();
@@ -748,6 +770,7 @@ describe('POST /v1/auth/credentials/reset-password', () => {
     const resetRes = await resetPw({ targetUserId: prov.uid, appId: 'chess-academy' }, db, userToken());
 
     expect(resetRes.status).toBe(200);
+    expect(vi.mocked(fetch).mock.calls.map((c) => String(c[0]))).toEqual([`https://pas-data-chess-academy.${DWH}/query`]);
     const { password: newPw } = await resetRes.json() as { password: string };
     expect(newPw).toBeTruthy();
     expect(newPw).not.toBe(prov.password);
