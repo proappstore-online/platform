@@ -7,6 +7,7 @@ import type { Context } from 'hono';
 import { HttpError, optionalUser } from './lib/auth.js';
 import { checkSessionKeyDrift } from './lib/session-key-drift.js';
 import { recordServerError } from './lib/error-telemetry.js';
+import { traceIdFromTraceparent } from './lib/log-ingest.js';
 import { recordOperationFailure, shouldLogOperationFailure } from './lib/operation-log.js';
 import type { Env } from './types.js';
 import { openapiSpec, openapiYaml } from './openapi-spec.js';
@@ -171,7 +172,7 @@ app.onError(async (err, c) => {
       errorType: err instanceof Error ? err.name : typeof err,
       message: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack ?? null : null,
-      traceId: c.req.header('traceparent')?.split('-')[1] ?? null,
+      traceId: traceIdFromTraceparent(c.req.header('traceparent') ?? null),
       cfRay: c.req.header('cf-ray') ?? null,
     });
     background(c, written);
@@ -194,7 +195,7 @@ app.onError(async (err, c) => {
         params: c.req.param() as Record<string, string | undefined>,
         status,
         message: err instanceof Error ? err.message : String(err),
-        traceId: c.req.header('traceparent')?.split('-')[1] ?? null,
+        traceId: traceIdFromTraceparent(c.req.header('traceparent') ?? null),
         cfRay: c.req.header('cf-ray') ?? null,
         mediated: Boolean(c.req.header(APP_CONTEXT_HEADER)),
       }),

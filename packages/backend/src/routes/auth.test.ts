@@ -3,6 +3,7 @@ import { app } from '../index.js';
 import { mintSession, verifySession } from '@proappstore/build-core';
 import { TEST_SK, makeEnv } from '../test-helpers.js';
 import { isFirstPartyHost } from './auth.js';
+import * as operationLog from '../lib/operation-log.js';
 
 // #56: only first-party PAS surfaces may receive a session carrying platform
 // creator/admin; every creator-controlled app origin must be de-privileged.
@@ -392,6 +393,25 @@ describe('POST /v1/auth/credentials/provision', () => {
   it('403s for a non-creator (e.g. a provisioned child)', async () => {
     const res = await post({}, { Authorization: `Bearer ${await userToken()}` }, fakeDb());
     expect(res.status).toBe(403);
+  });
+
+  it.each([
+    ['garbage-abc-def', null],
+    ['00-00000000000000000000000000000000-anything-00', null],
+    ['00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01', '4bf92f3577b34da6a3ce929d0e0e4736'],
+  ])('uses the validated request trace id when recording an unauthorized provision (%s)', async (traceparent, expected) => {
+    const recorder = vi.spyOn(operationLog, 'recordOperationFailure').mockResolvedValue();
+    try {
+      const res = await post(
+        { appId: 'chess-academy' },
+        { Authorization: `Bearer ${await userToken()}`, traceparent },
+        fakeDb(),
+      );
+      expect(res.status).toBe(403);
+      expect(recorder).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ traceId: expected }));
+    } finally {
+      recorder.mockRestore();
+    }
   });
 
   it('allows an app-authorized non-creator to provision a child', async () => {

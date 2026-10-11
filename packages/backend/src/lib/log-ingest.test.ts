@@ -60,6 +60,7 @@ describe('traceIdFromTraceparent', () => {
     expect(traceIdFromTraceparent('garbage')).toBeNull();
     expect(traceIdFromTraceparent(null)).toBeNull();
   });
+
 });
 
 describe('entry trace ids', () => {

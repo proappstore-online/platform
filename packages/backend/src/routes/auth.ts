@@ -28,6 +28,7 @@ import {
   normalizeEmail, isValidEmail, looksLikeEmail,
 } from '../lib/credential-gen.js';
 import { claimAttempt, recordSuccess } from '../lib/credential-rate-limit.js';
+import { traceIdFromTraceparent } from '../lib/log-ingest.js';
 import { recordAuthFailure, recordOperationFailure } from '../lib/operation-log.js';
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
@@ -645,7 +646,7 @@ authRoutes.post('/auth/credentials/provision', async (c) => {
           params: { name: 'provisionChild' },
           status: 403,
           message: 'not allowed to provision credential accounts',
-          traceId: c.req.header('traceparent')?.split('-')[1] ?? null,
+          traceId: traceIdFromTraceparent(c.req.header('traceparent') ?? null),
           cfRay: c.req.header('cf-ray') ?? null,
           mediated: Boolean(c.req.header(APP_CONTEXT_HEADER)),
         });
