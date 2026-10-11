@@ -247,7 +247,8 @@ same app either.
   for delivery only: deleted on ack and on dead-letter, with a 14-day lifecycle
   rule as a backstop. A schedule run is `queued` from enqueue until the consumer
   finishes it; only a run that is finally dead-lettered (or swept after 60 min)
-  counts one failure toward the breaker, never one per attempt. A hook the
+  counts one failure toward the breaker, never one per attempt. A run refused
+  by the daily quota fails without counting (#303 G5). A hook the
   consumer cannot deliver ends `failed`; the owner redelivers it from the sender.
   Action-target hooks (`to: { action }`) do not touch an app worker and still run
   in `waitUntil`.

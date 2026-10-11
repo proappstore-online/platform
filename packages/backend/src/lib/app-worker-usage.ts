@@ -20,7 +20,7 @@
  *                    reserved by the hooks route before anything is delivered.
  *
  * Over quota throws {@link AppWorkerQuotaError}; each caller maps it (#275):
- * a schedule run fails with `quota exceeded` (counts toward the breaker), a hook
+ * a schedule run fails with `quota exceeded` (never counted toward the breaker), a hook
  * delivery is recorded `quota_exceeded` with a 202, an http request gets 429 with
  * Retry-After. A failed lookup is never an allow (#229/#230): it throws
  * `quota check unavailable` and no work starts.

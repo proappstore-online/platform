@@ -1,7 +1,7 @@
 import { SELF, env as providedEnv, fetchMock } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../../../backend/src/types';
-import { runScheduledActions } from '../../../backend/src/lib/scheduled-actions';
+import { runScheduledActions, SCHEDULE_FAILURE_BREAKER } from '../../../backend/src/lib/scheduled-actions';
 import { appWorkerHost, disableAppWorker } from '../../../backend/src/lib/app-worker-host';
 import { sealSecret } from '../../../backend/src/lib/encryption';
 import { BASE, captureAppEvents, drainAppEvents, json, mockNetwork, resetTables, seedApp, seedUser, session, viaHostApi } from './helpers';
@@ -124,7 +124,7 @@ describe('the daily invocation quota (#275)', () => {
 
     const report = await runScheduledActions({ env, now: TICK });
     expect(report.workers).toMatchObject({ claimed: 1, queued: 1 });
-    // Retrying cannot help once the quota is spent: the consumer ends the run on the first try, counting one failure.
+    // Retrying cannot help once the quota is spent: the consumer ends the run on the first try.
     expect(await drainAppEvents(sent)).toEqual([expect.objectContaining({ tries: 1, deadLettered: false })]);
     expect(await env.DB.prepare("SELECT status, error FROM scheduled_action_runs WHERE action_name = 'worker:tick'").first()).toEqual({ status: 'failed', error: 'quota exceeded' });
 
@@ -181,6 +181,35 @@ describe('APP_WORKER_OPEN (#275)', () => {
     expect((await SELF.fetch(`${BASE}/v1/admin/app-workers/open`, json('PUT', { open: true }, await session('gh:42')))).status).toBe(403);
     expect((await SELF.fetch(`${BASE}/v1/admin/app-workers/open`, json('PUT', { open: true }, await admin()))).status).toBe(200);
     expect((await SELF.fetch(`${BASE}/v1/admin/apps/second/worker-enabled`, json('PUT', { enabled: true }, await admin()))).status).toBe(200);
+  });
+});
+
+describe('a visitor spending the invocations quota cannot trip the schedule breaker (#303 G5)', () => {
+  const failures = async () => (await env.DB.prepare("SELECT consecutive_failures, schedule_disabled_at FROM scheduled_action_state WHERE app_id = 't' AND action_name = 'worker:tick'")
+    .first<{ consecutive_failures: number; schedule_disabled_at: number | null }>()) ?? { consecutive_failures: 0, schedule_disabled_at: null };
+
+  it('more quota-refused runs than the breaker allows leave the schedule enabled; a genuine failure still counts', async () => {
+    expect((await setQuotas({ invocations: 3 })).status).toBe(200);
+    // One signed-in visitor spends the day's invocations through the app origin.
+    for (let i = 0; i < 3; i++) expect((await viaHost()).status).toBe(200);
+    expect((await viaHost()).status).toBe(429);
+
+    for (let i = 0; i <= SCHEDULE_FAILURE_BREAKER; i++) {
+      expect((await runScheduledActions({ env, now: TICK + i * 300_000 })).workers).toMatchObject({ queued: 1 });
+      expect(await drainAppEvents(sent)).toEqual([expect.objectContaining({ tries: 1, deadLettered: false })]);
+    }
+    const runs = await env.DB.prepare("SELECT status, error FROM scheduled_action_runs WHERE action_name = 'worker:tick'").all();
+    expect(runs.results).toHaveLength(SCHEDULE_FAILURE_BREAKER + 1);
+    expect(runs.results.every((r) => r.status === 'failed' && r.error === 'quota exceeded')).toBe(true);
+    expect(await failures()).toEqual({ consecutive_failures: 0, schedule_disabled_at: null });
+
+    // The next UTC day, at the default quota: a worker that genuinely fails is still counted, once per run.
+    await env.DB.prepare("DELETE FROM app_worker_usage WHERE app_id = 't'").run();
+    expect((await setQuotas(null)).status).toBe(200);
+    await appWorkerHost(env).deploy('t', { modules: { 'app.js': 'export default { async fetch() { return new Response("boom", { status: 500 }); } };' } });
+    await runScheduledActions({ env, now: TICK + (SCHEDULE_FAILURE_BREAKER + 1) * 300_000 });
+    expect(await drainAppEvents(sent)).toEqual([expect.objectContaining({ deadLettered: true })]);
+    expect(await failures()).toEqual({ consecutive_failures: 1, schedule_disabled_at: null });
   });
 });
 

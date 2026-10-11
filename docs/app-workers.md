@@ -376,8 +376,10 @@ app workers open to all apps. A platform admin can raise one app's quotas with
 
 What happens over quota:
 
-- **Schedule:** the run fails with `quota exceeded`. It counts toward the
-  five-failure breaker.
+- **Schedule:** the run fails with `quota exceeded`. It does not count toward
+  the five-failure breaker: signed-in visitors spend the same `invocations`
+  quota through `/.pas/worker/*`, so counting it would let one of them disable
+  your schedules. The next run after the quota resets at 00:00 UTC runs normally.
 - **Hook:** the sender still gets `202`. The delivery is recorded with
   `status: "quota_exceeded"`, and no app code runs.
   **Events over quota are recorded but not processed. Redeliver them from the

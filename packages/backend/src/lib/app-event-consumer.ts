@@ -82,7 +82,7 @@ async function handleEvent(env: Env, message: Msg, ctx?: AppWorkerExports): Prom
     await finishDelivered(env, m);
     message.ack();
   } else if (final) {
-    // A schedule fails (and counts once toward the breaker); a hook is recorded `quota_exceeded`, as it was before the queue.
+    // A schedule fails without counting toward the breaker; a hook is recorded `quota_exceeded`, as it was before the queue.
     await failQueued(env, m, error, 'quota_exceeded');
     message.ack();
   } else {
@@ -95,7 +95,9 @@ async function handleEvent(env: Env, message: Msg, ctx?: AppWorkerExports): Prom
 /**
  * End a queued delivery as failed. Only the update that wins the row counts a
  * schedule toward the breaker: the 60-minute queued sweep may have failed it
- * already, and the two must never both count one run.
+ * already, and the two must never both count one run. A quota refusal never
+ * counts (#303 G5): signed-in visitors spend the same invocations quota through
+ * `/.pas/worker/*`, so counting it would let any of them disable the schedule.
  */
 async function failQueued(env: Env, m: AppEventMessage, message: string, hookStatus: 'failed' | 'quota_exceeded' = 'failed'): Promise<void> {
   const now = Date.now();
@@ -103,7 +105,7 @@ async function failQueued(env: Env, m: AppEventMessage, message: string, hookSta
     const won = await changed(env.DB.prepare(
       "UPDATE scheduled_action_runs SET status = 'failed', finished_at = ?, error = ? WHERE run_id = ? AND status = 'queued' AND queued_token = ?",
     ).bind(now, message, m.id, m.attempt_token));
-    if (won) await recordFailure(env, m.app_id, `${WORKER_RUN_PREFIX}${m.name}`, 'code', now);
+    if (won && hookStatus !== 'quota_exceeded') await recordFailure(env, m.app_id, `${WORKER_RUN_PREFIX}${m.name}`, 'code', now);
   } else {
     const won = await changed(env.DB.prepare("UPDATE app_hook_deliveries SET status = ?, finished_at = ?, error = ? WHERE id = ? AND attempt_token = ? AND status = 'received'")
       .bind(hookStatus, now, message.slice(0, 500), m.id, m.attempt_token));
