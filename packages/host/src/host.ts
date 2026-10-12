@@ -423,6 +423,18 @@ export function isUpdateSensitivePath(pathname: string): boolean {
   );
 }
 
+/**
+ * A build output whose name carries its content hash (Vite: `assets/<name>-<hash>.<ext>`).
+ * Only these may be cached as immutable (#378): any other key can be overwritten by
+ * the next deploy, and an immutable copy of it would stay stale in caches for a year.
+ */
+export function isContentAddressed(pathname: string): boolean {
+  // Rollup hashes are base64url, so may contain `-`: split the name at its first `-`.
+  const hash = /(?:^|\/)assets\/(?:[^/]+\/)*[^/-]+?-([A-Za-z0-9_-]{8,})\.[a-z0-9]+$/i.exec(pathname)?.[1];
+  // A word is not a hash: `hero-background.png` keeps a stable name across deploys.
+  return hash !== undefined && /[0-9A-Z_]/.test(hash);
+}
+
 /** Security + cache headers. HTML and update-sensitive files get short cache; hashed assets get immutable. */
 export function securityHeaders(isHtml: boolean, updateSensitive = false): Headers {
   const h = new Headers();

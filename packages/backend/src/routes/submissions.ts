@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { selectTemplate, TEMPLATE_REV_RE } from '@proappstore/build-core';
 import type { Env, SubmissionRow } from '../types.js';
 import { requireUser } from '../lib/auth.js';
-import { wrap } from '../lib/route-wrap.js';
+import { wrap, privateNoStore } from '../lib/route-wrap.js';
 import type { CreateBody } from './submissions-types.js';
 import { isAdmin, rowToSubmission, submissionRepoUrl, APP_ID_RE } from './submissions-helpers.js';
 import { registerReviewRoutes } from './submissions-review.js';
@@ -25,6 +25,10 @@ import { registerReviewRoutes } from './submissions-review.js';
  * `gh:<id>` strings). Non-admins see only their own submissions.
  */
 export const submissionRoutes = new Hono<{ Bindings: Env }>();
+// #378: owner-only reads are never cached.
+submissionRoutes.use('/me/is-admin', privateNoStore);
+submissionRoutes.use('/submissions', privateNoStore);
+submissionRoutes.use('/submissions/*', privateNoStore);
 
 /**
  * Lightweight admin probe used by the Console to decide whether to render

@@ -221,6 +221,12 @@ appWorkerRoutes.post('/apps/:appId/worker/schedules/:name/run', async (c) => {
   ).bind(now, appId, name, now - RUN_NOW_INTERVAL_MS).run();
   if (!allowed.meta.changes) throw new HttpError('one manual run per schedule per minute', 429);
 
+  // #378: the minute is spent only by a run that was queued. Released (this
+  // request's claim only) when the run cannot be inserted or queued.
+  const releaseMinute = () => c.env.DB.prepare(
+    'UPDATE app_worker_schedules SET last_manual_run_at = NULL WHERE app_id = ? AND name = ? AND last_manual_run_at = ?',
+  ).bind(appId, name, now).run();
+
   const runId = crypto.randomUUID();
   // `claimed_at` is when it was queued: the queued sweep ages it from there. The NOT EXISTS is the
   // same overlap guard the tick's claim uses, so a tick cannot slip a run in between the check above and here.
@@ -229,8 +235,12 @@ appWorkerRoutes.post('/apps/:appId/worker/schedules/:name/run', async (c) => {
      SELECT ?, ?, ?, 'code', ?, ?, 'queued'
       WHERE NOT EXISTS (SELECT 1 FROM scheduled_action_runs WHERE app_id = ? AND action_name = ? AND status IN ('claimed', 'queued'))`,
   ).bind(runId, appId, action, runNowDueAt(now), now, appId, action).run();
-  if (!inserted.meta.changes) throw new HttpError('a run is already in progress', 409);
+  if (!inserted.meta.changes) {
+    await releaseMinute();
+    throw new HttpError('a run is already in progress', 409);
+  }
   if (!(await queueWorkerRun(c.env, { appId, schedule: name, params: paramsOf(schedule.params), runId }, now))) {
+    await releaseMinute();
     throw new HttpError('could not queue the run', 503);
   }
   return c.json({ run_id: runId, status: 'queued' }, 202);

@@ -215,4 +215,15 @@ describe('run-now (#255, #257)', () => {
     expect((await runNow()).status).toBe(503);
     expect(await runs()).toEqual([expect.objectContaining({ status: 'failed', error: 'could not enqueue: queue down' })]);
   });
+
+  it('#378: a queue outage spends neither the minute nor the breaker', async () => {
+    const send = vi.spyOn(env.APP_EVENTS!, 'send').mockRejectedValue(new Error('queue down'));
+    // More presses during the outage than the breaker allows: none of them is the schedule's failure.
+    for (let i = 0; i <= SCHEDULE_FAILURE_BREAKER; i++) expect((await runNow()).status).toBe(503);
+    expect(await failures() ?? 0).toBe(0);
+    expect(await env.DB.prepare("SELECT schedule_disabled_at FROM scheduled_action_state WHERE app_id = 't' AND action_name = 'worker:tick'").first()).toBeNull();
+    // The queue is back: the next press, within the same minute, is admitted.
+    send.mockRestore();
+    expect((await runNow()).status).toBe(202);
+  });
 });

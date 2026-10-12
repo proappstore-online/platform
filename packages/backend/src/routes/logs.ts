@@ -37,8 +37,12 @@ import {
 } from '../lib/log-ingest.js';
 import { checkLogQuota, d1LogUsageStore, publicLogBurstKey, SERVER_FAILURE_DAILY_LIMIT, serverFailureUsageStore } from '../lib/log-quota.js';
 import type { Env } from '../types.js';
+import { privateNoStore } from '../lib/route-wrap.js';
 
 export const logsRoutes = new Hono<{ Bindings: Env }>();
+// #378: owner-only reads are never cached.
+logsRoutes.use('/apps/:appId/logs', privateNoStore);
+logsRoutes.use('/apps/:appId/logs/*', privateNoStore);
 
 const MAX_LOG_PAGE_SIZE = 100;
 const SESSION_INVALIDATION_ID_RE = /^[a-f0-9]{32}$/i;

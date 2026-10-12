@@ -20,6 +20,10 @@ function makeEnv(opts: {
       prepare: (sql: string) => ({
         bind: (...args: unknown[]) => ({
           first: async () => {
+            // #378: the inviter's standing on accept — the app's creator and the inviter's team role.
+            if (sql.includes('LEFT JOIN team_members')) {
+              return opts.creatorId ? { creator_id: opts.creatorId, role: members.find(m => m.user_id === args[1])?.role ?? null } : null;
+            }
             if (sql.includes('FROM apps')) {
               return opts.creatorId ? { creator_id: opts.creatorId } : null;
             }
@@ -222,6 +226,7 @@ describe('POST /v1/apps/:appId/team/invite', () => {
 describe('POST /v1/team/accept/:token', () => {
   it('accepts a valid invite', async () => {
     const env = makeEnv({
+      creatorId: 'gh:1',
       invites: [{
         id: 'inv-1', app_id: 'myapp', role: 'developer',
         token: 'abc123', expires_at: Date.now() + 86400000, invited_by: 'gh:1',
@@ -236,6 +241,7 @@ describe('POST /v1/team/accept/:token', () => {
 
   it('rejects expired invite', async () => {
     const env = makeEnv({
+      creatorId: 'gh:1',
       invites: [{
         id: 'inv-2', app_id: 'myapp', role: 'viewer',
         token: 'expired', expires_at: Date.now() - 1000, invited_by: 'gh:1',
@@ -252,6 +258,7 @@ describe('POST /v1/team/accept/:token', () => {
 
   it('consumes the invite: a second accept of the same token is 404 and grants nothing', async () => {
     const env = makeEnv({
+      creatorId: 'gh:1',
       invites: [{ id: 'inv-3', app_id: 'myapp', role: 'developer', token: 'once', expires_at: Date.now() + 86400000, invited_by: 'gh:1' }],
     });
     expect((await app.fetch(req('POST', '/v1/team/accept/once'), env)).status).toBe(200);
@@ -262,6 +269,7 @@ describe('POST /v1/team/accept/:token', () => {
 
   it('two concurrent accepts of one invite: exactly one wins, the other is 404, one grant (#362)', async () => {
     const env = makeEnv({
+      creatorId: 'gh:1',
       invites: [{ id: 'inv-4', app_id: 'myapp', role: 'admin', token: 'race', expires_at: Date.now() + 86400000, invited_by: 'gh:1' }],
     });
     const other = await testToken('gh:777');
@@ -276,6 +284,7 @@ describe('POST /v1/team/accept/:token', () => {
 
   it('an expired invite is consumed and grants nothing', async () => {
     const env = makeEnv({
+      creatorId: 'gh:1',
       invites: [{ id: 'inv-5', app_id: 'myapp', role: 'admin', token: 'old', expires_at: Date.now() - 1000, invited_by: 'gh:1' }],
     });
     expect((await app.fetch(req('POST', '/v1/team/accept/old'), env)).status).toBe(410);
@@ -285,6 +294,7 @@ describe('POST /v1/team/accept/:token', () => {
 
   it('an existing higher-role member keeps their role and the invite is still consumed', async () => {
     const env = makeEnv({
+      creatorId: 'gh:9',
       teamMembers: [{ user_id: 'gh:1', role: 'owner' }],
       invites: [{ id: 'inv-6', app_id: 'myapp', role: 'developer', token: 'lower', expires_at: Date.now() + 86400000, invited_by: 'gh:1' }],
     });
@@ -292,6 +302,65 @@ describe('POST /v1/team/accept/:token', () => {
     expect(res.status).toBe(200);
     expect(env._grants).toEqual([]);
     expect(env._invites).toEqual([]);
+  });
+
+  // #378: an invite grants only what its inviter may still grant.
+  it('an invite from an admin who has since been demoted grants nothing, and is consumed', async () => {
+    const env = makeEnv({
+      creatorId: 'gh:9',
+      teamMembers: [{ user_id: 'gh:5', role: 'viewer' }],
+      invites: [{ id: 'inv-7', app_id: 'myapp', role: 'developer', token: 'stale', expires_at: Date.now() + 86400000, invited_by: 'gh:5' }],
+    });
+    const res = await app.fetch(req('POST', '/v1/team/accept/stale'), env);
+    expect(res.status).toBe(403);
+    expect(env._grants).toEqual([]);
+    expect(env._invites).toEqual([]);
+  });
+
+  it('an invite from an admin who has since been removed grants nothing', async () => {
+    const env = makeEnv({
+      creatorId: 'gh:9',
+      invites: [{ id: 'inv-8', app_id: 'myapp', role: 'admin', token: 'gone', expires_at: Date.now() + 86400000, invited_by: 'gh:5' }],
+    });
+    expect((await app.fetch(req('POST', '/v1/team/accept/gone'), env)).status).toBe(403);
+    expect(env._grants).toEqual([]);
+  });
+
+  it('an invite from a team admin who still holds the role still works', async () => {
+    const env = makeEnv({
+      creatorId: 'gh:9',
+      teamMembers: [{ user_id: 'gh:5', role: 'admin' }],
+      invites: [{ id: 'inv-9', app_id: 'myapp', role: 'developer', token: 'fine', expires_at: Date.now() + 86400000, invited_by: 'gh:5' }],
+    });
+    expect((await app.fetch(req('POST', '/v1/team/accept/fine'), env)).status).toBe(200);
+    expect(env._grants).toHaveLength(1);
+  });
+
+  it('an invite for an app that no longer exists grants nothing', async () => {
+    const env = makeEnv({
+      invites: [{ id: 'inv-10', app_id: 'myapp', role: 'viewer', token: 'orphan', expires_at: Date.now() + 86400000, invited_by: 'gh:1' }],
+    });
+    expect((await app.fetch(req('POST', '/v1/team/accept/orphan'), env)).status).toBe(404);
+    expect(env._grants).toEqual([]);
+  });
+});
+
+describe('team routes answer malformed JSON with 400 (#378)', () => {
+  it('PUT /apps/:appId/team/:userRef and POST /apps/:appId/team/invite', async () => {
+    const env = makeEnv({ creatorId: 'gh:1', teamMembers: [{ user_id: 'gh:2', role: 'viewer' }] });
+    const bad = (method: string, path: string) => app.fetch(new Request(`https://api.test${path}`, {
+      method, headers: { Authorization: req('GET', '/').headers.get('Authorization')!, 'Content-Type': 'application/json' }, body: '{not json',
+    }), env);
+    expect((await bad('PUT', '/v1/apps/myapp/team/gh:2')).status).toBe(400);
+    expect((await bad('POST', '/v1/apps/myapp/team/invite')).status).toBe(400);
+  });
+
+  it('an admin cannot invite to an app that does not exist (#378)', async () => {
+    const admin = await testToken('gh:1', { roles: ['user', 'admin'] });
+    const res = await app.fetch(new Request('https://api.test/v1/apps/ghost/team/invite', {
+      method: 'POST', headers: { Authorization: `Bearer ${admin}`, 'Content-Type': 'application/json' }, body: '{}',
+    }), makeEnv());
+    expect(res.status).toBe(404);
   });
 });
 

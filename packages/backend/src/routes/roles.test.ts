@@ -14,9 +14,11 @@ function mockStmt(opts: { first?: unknown; all?: unknown; run?: unknown } = {}) 
 }
 
 function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
-  const prepare = vi.fn();
-  for (const stmt of stmts) prepare.mockReturnValueOnce(stmt);
-  prepare.mockReturnValue(mockStmt());
+  const queue = [...stmts];
+  // #378: the app exists — answered by SQL, so the access check's lookup takes no positional slot.
+  const prepare = vi.fn((sql: string) => (/SELECT creator_id FROM apps WHERE id = \?/.test(sql)
+    ? mockStmt({ first: { creator_id: 'gh:owner' } })
+    : queue.shift() ?? mockStmt()));
   return { prepare };
 }
 

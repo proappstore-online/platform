@@ -134,25 +134,27 @@ describe('host: private apps (#259)', () => {
 
   it('a public app with a warm edge cache flips to private: the next request is gated, never served from cache', async () => {
     await seedApp('vis-flip', 'public');
+    // A content-addressed asset: the only kind the edge keeps (#378).
+    await env.APPS.put('apps/vis-flip/assets/x-Ab12Cd34.js', SECRET);
     for (let i = 0; i < 2; i++) {
-      const warm = await get('https://vis-flip.proappstore.online/assets/x.js');
+      const warm = await get('https://vis-flip.proappstore.online/assets/x-Ab12Cd34.js');
       expect(warm.res.status).toBe(200);
     }
-    expect(await caches.default.match('https://vis-flip.proappstore.online/assets/x.js')).toBeDefined();
+    expect(await caches.default.match('https://vis-flip.proappstore.online/assets/x-Ab12Cd34.js')).toBeDefined();
 
     await env.DB.prepare("INSERT OR REPLACE INTO app_visibility (app_id, mode, roles, created_at) VALUES ('vis-flip', 'private', '[\"viewer\"]', ?)").bind(Date.now()).run();
-    const after = await get('https://vis-flip.proappstore.online/assets/x.js');
+    const after = await get('https://vis-flip.proappstore.online/assets/x-Ab12Cd34.js');
     expect(after.res.status).toBe(403);
     expect(after.text).not.toContain('private app bundle');
     expect(after.res.headers.get('X-PAS-Visibility')).toBe('private');
     // An allowed caller is served from R2, never the copy cached while public:
     // fails if `privateApp` is dropped from skipEdgeCache.
-    await env.APPS.put('apps/vis-flip/assets/x.js', 'console.log("v2")');
-    const owner = await get('https://vis-flip.proappstore.online/assets/x.js', session('owner-token'));
+    await env.APPS.put('apps/vis-flip/assets/x-Ab12Cd34.js', 'console.log("v2")');
+    const owner = await get('https://vis-flip.proappstore.online/assets/x-Ab12Cd34.js', session('owner-token'));
     expect(owner.res.status).toBe(200);
     expect(owner.text).toBe('console.log("v2")');
     expect(owner.res.headers.get('Cache-Control')).toBe('private, no-store');
-    await caches.default.delete('https://vis-flip.proappstore.online/assets/x.js');
+    await caches.default.delete('https://vis-flip.proappstore.online/assets/x-Ab12Cd34.js');
   });
 
   it('gates a private app reached through an active custom domain (visibility rides on the route lookup)', async () => {

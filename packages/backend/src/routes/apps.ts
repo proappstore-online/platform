@@ -219,6 +219,12 @@ appsRoutes.delete('/apps/:id', wrap(async (c) => {
   // code and credentials first. Best-effort — a failure is logged, never a
   // reason to keep the app.
   await disableAppWorker(c.env, id).catch((e) => console.error(`[apps] app worker removal failed for ${id}: ${(e as Error).message}`));
-  await c.env.DB.prepare('DELETE FROM apps WHERE id = ?').bind(id).run();
+  // #378: nor its connectors: their installation bindings would keep routing
+  // GitHub deliveries to this id, and to whoever registers it next.
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM app_connector_installations WHERE app_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM app_connectors WHERE app_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM apps WHERE id = ?').bind(id),
+  ]);
   return c.json({ ok: true });
 }));

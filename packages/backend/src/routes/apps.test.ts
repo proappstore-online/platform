@@ -227,8 +227,7 @@ describe('DELETE /v1/apps/:id', () => {
 
   it('deletes the app row and returns ok when caller is the owner', async () => {
     const lookupStmt = mockStmt({ first: { creator_id: 'gh:1' } });
-    const deleteStmt = mockStmt({ run: { meta: { changes: 1 } } });
-    const db = mockD1(lookupStmt, deleteStmt);
+    const db = { ...mockD1(lookupStmt), batch: vi.fn().mockResolvedValue([]) };
     const res = await app.request(
       '/v1/apps/myapp',
       { method: 'DELETE', headers: { Authorization: `Bearer ${TOK}` } },
@@ -236,13 +235,20 @@ describe('DELETE /v1/apps/:id', () => {
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
+    // #378: the app's connectors and their installation bindings go with it, in one batch.
+    const deleted = db.prepare.mock.calls.map(([q]) => String(q)).filter((q) => q.startsWith('DELETE'));
+    expect(deleted).toEqual([
+      'DELETE FROM app_connector_installations WHERE app_id = ?',
+      'DELETE FROM app_connectors WHERE app_id = ?',
+      'DELETE FROM apps WHERE id = ?',
+    ]);
+    expect(db.batch).toHaveBeenCalledTimes(1);
   });
 
   it('allows admin to delete any app', async () => {
     const TOK_ADMIN = await testToken('gh:admin');
     const lookupStmt = mockStmt({ first: { creator_id: 'gh:other' } });
-    const deleteStmt = mockStmt({ run: { meta: { changes: 1 } } });
-    const db = mockD1(lookupStmt, deleteStmt);
+    const db = { ...mockD1(lookupStmt), batch: vi.fn().mockResolvedValue([]) };
     const res = await app.request(
       '/v1/apps/anyapp',
       { method: 'DELETE', headers: { Authorization: `Bearer ${TOK_ADMIN}` } },

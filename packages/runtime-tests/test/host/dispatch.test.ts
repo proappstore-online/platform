@@ -21,19 +21,21 @@ describe('host: reserved-subdomain dispatch over service bindings', () => {
     expect(api.worker).toBe('api-echo');
     expect(api.headers['x-pas-app']).toBeUndefined();
     expect(api.headers['x-other']).toBe('kept');
-    // (/health is answered by the host itself on every hostname, so use another path.)
     const admin = (await (await SELF.fetch('https://admin.proappstore.online/api/publish-app', { headers: { 'X-PAS-App': 'kept' } })).json()) as Echo;
     expect(admin.worker).toBe('admin-echo');
     expect(admin.headers['x-pas-app']).toBe('kept');
   });
 
-  it('www redirects to the apex; /health answers on any hostname without touching a binding', async () => {
+  it('www redirects to the apex; /.pas/health answers on any hostname, and /health is left to the app (#378)', async () => {
     const www = await SELF.fetch('https://www.proappstore.online/apps?x=1', { redirect: 'manual' });
     expect(www.status).toBe(301);
     expect(www.headers.get('Location')).toBe('https://proappstore.online/apps?x=1');
     await www.text();
-    const health = await SELF.fetch('https://anything.proappstore.online/health');
+    const health = await SELF.fetch('https://anything.proappstore.online/.pas/health');
     expect(await health.json()).toEqual({ ok: true, worker: 'proappstore-host', version: '1.0.0' });
+    // Not shadowed: /health reaches whatever serves the hostname.
+    const admin = (await (await SELF.fetch('https://admin.proappstore.online/health')).json()) as Echo;
+    expect(admin.worker).toBe('admin-echo');
   });
 
   it('data-<app> is proxied by fetch to the workers.dev host from DATA_WORKER_HOST (#153); console/dashboard go to Pages', async () => {

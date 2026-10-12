@@ -115,6 +115,14 @@ const RETENTION_PRUNES = [
     where: 'started_at < ?',
     binds: (nowMs: number) => [cutoffMs(nowMs, SCHEDULED_RUN_RETENTION_DAYS)],
   },
+  {
+    // #378: one row per deploy attempt, refused OIDC deploys included. Kept as
+    // long as invocations, except each app's newest, which the worker status shows.
+    key: 'app_worker_deploys',
+    table: 'app_worker_deploys',
+    where: `created_at < ? AND id != (SELECT d.id FROM app_worker_deploys d WHERE d.app_id = app_worker_deploys.app_id ORDER BY d.created_at DESC, d.id DESC LIMIT 1)`,
+    binds: (nowMs: number) => [cutoffMs(nowMs, SCHEDULED_RUN_RETENTION_DAYS)],
+  },
 ] as const;
 
 export function cutoffMs(nowMs: number, days: number): number {

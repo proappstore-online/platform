@@ -308,10 +308,10 @@ describe('private apps: public storage, counters and rooms (#259 review)', () =>
     expect(ok.headers.get('cache-control')).toBe('private, no-store');
   });
 
-  it('public storage of a public app is unchanged: anonymous and immutable', async () => {
+  it('public storage of a public app is served anonymously, publicly cacheable for five minutes, never immutable (#378)', async () => {
     const res = await SELF.fetch(`${BASE}/v1/apps/open/public/logo.png`);
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=300');
     await res.text();
   });
 

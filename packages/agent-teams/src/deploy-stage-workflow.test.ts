@@ -331,6 +331,32 @@ describe('harvestTestResults (#303 M5, #371)', () => {
     clean(h, warn);
   });
 
+  it('#378: a summary published before this deploy started is not filed under this commit', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const started = Date.parse('2026-10-12T10:00:00Z');
+    const h = harvestDeps(async () => Response.json({ ...SUMMARY, ranAt: '2026-10-12T09:59:00Z' }));
+    const exec = h.deps.sql.exec;
+    h.deps.sql.exec = ((q: string, ...a: unknown[]) => (q.startsWith('SELECT deploy_pushed_at') ? { toArray: () => [{ deploy_pushed_at: started }] } : exec(q, ...a))) as never;
+    await expect(run(h.deps, false)).resolves.toBe('no_summary');
+    expect(h.inserts).toEqual([]);
+    expect(h.activities[0]!.detail).toContain('predates it');
+
+    // This deploy's own summary is harvested as before.
+    const fresh = harvestDeps(async () => Response.json({ ...SUMMARY, ranAt: '2026-10-12T10:05:00Z' }));
+    const freshExec = fresh.deps.sql.exec;
+    fresh.deps.sql.exec = ((q: string, ...a: unknown[]) => (q.startsWith('SELECT deploy_pushed_at') ? { toArray: () => [{ deploy_pushed_at: started }] } : freshExec(q, ...a))) as never;
+    await expect(run(fresh.deps, false)).resolves.toBe('harvested');
+  });
+
+  it('#378: a malformed spec never leaves a partial run', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = harvestDeps(async () => Response.json({ ...SUMMARY, specs: [{ ok: true }, null, 'x', { title: 7, ok: false }, { title: 'named', ok: true }] }));
+    await expect(run(h.deps, false)).resolves.toBe('harvested');
+    expect(h.inserts.map((q) => q.split('(')[0]!.trim())).toEqual([
+      'INSERT OR REPLACE INTO test_runs', 'INSERT INTO test_results', 'INSERT INTO test_results', 'INSERT INTO test_results',
+    ]);
+  });
+
   it('a public app\'s 401/403 is not mistaken for "no summary"', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     for (const status of [401, 403]) {

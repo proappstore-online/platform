@@ -25,6 +25,7 @@ import {
   getSitemapUrls,
   getTenantMeta,
   isBlockedAssetPath,
+  isContentAddressed,
   isUpdateSensitivePath,
   r2KeyFor,
   renderSitemap,
@@ -44,8 +45,9 @@ export default {
 async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
 
-  // Health check (any hostname)
-  if (url.pathname === "/health") {
+  // Platform health check (any hostname). Under the platform's /.pas/ namespace
+  // (#378): on `/health` it shadowed every app's own /health.
+  if (url.pathname === "/.pas/health") {
     return Response.json({ ok: true, worker: "proappstore-host", version: "1.0.0" });
   }
 
@@ -222,7 +224,8 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
 
   // Serve the object
   const isHtml = key.endsWith(".html");
-  const updateSensitive = isUpdateSensitivePath(key);
+  // #378: only a content-addressed build output is immutable; every other key revalidates.
+  const updateSensitive = isUpdateSensitivePath(key) || !isContentAddressed(key);
   const headers = securityHeaders(isHtml, updateSensitive);
   headers.set("Content-Type", contentType(key));
   headers.set("ETag", etag);

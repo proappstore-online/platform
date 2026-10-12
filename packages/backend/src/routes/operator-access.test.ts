@@ -122,11 +122,19 @@ describe('operator routes refuse every caller who is not the owner or a declared
   for (const route of ROUTES) {
     it(`${route.method} ${route.pattern}: a platform admin passes the ownership check`, async () => {
       const token = await testToken('gh:7', { roles: ['user', 'admin'] });
-      const db = mockD1();
+      const db = mockD1(mockStmt({ first: { creator_id: 'gh:9' } }));
       const res = await request(route, token, db, { get: vi.fn() });
       expect([401, 403]).not.toContain(res.status);
-      // Admitted without a creator/team lookup.
-      expect(db.prepare.mock.calls.map(([s]) => String(s)).some((s) => OWNER_GATE_SQL.test(s))).toBe(false);
+      // #378: the app must exist; then admitted without a team lookup.
+      const sql = db.prepare.mock.calls.map(([s]) => String(s));
+      expect(sql[0]).toMatch(/SELECT creator_id FROM apps WHERE id = \?/);
+      expect(sql.some((s) => /FROM team_members/.test(s))).toBe(false);
+    });
+
+    it(`${route.method} ${route.pattern}: a platform admin gets 404 for an app that does not exist (#378)`, async () => {
+      const token = await testToken('gh:7', { roles: ['user', 'admin'] });
+      const res = await request(route, token, mockD1(mockStmt({ first: null })), { get: vi.fn() });
+      expect(res.status).toBe(404);
     });
   }
 
@@ -135,6 +143,7 @@ describe('operator routes refuse every caller who is not the owner or a declared
     if (!('contract' in r)) throw new Error(r.error);
     const manifest = STASH.tools.find((t) => t.name === 'op_list_users')!;
     const db = mockD1(
+      mockStmt({ first: { creator_id: 'gh:9' } }),
       mockStmt({ first: { contract: JSON.stringify(r.contract) } }),
       mockStmt({ first: { manifest: JSON.stringify(manifest) } }),
       mockStmt({ all: { results: [] } }),

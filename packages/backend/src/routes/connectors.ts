@@ -21,7 +21,7 @@ import type { Env } from '../types.js';
 import { HttpError, optionalUser, requireAppOwner, requireUser } from '../lib/auth.js';
 import { connectorConfigured, getInstallation, proveInstallationControl, signConnectorState, verifyConnectorState } from '../lib/github-app.js';
 import { verifyHookDelivery } from '../lib/hook-verifiers.js';
-import { ingestVerifiedDelivery, MAX_HOOK_BODY_BYTES } from './hooks.js';
+import { ingestVerifiedDelivery, MAX_HOOK_BODY_BYTES, readCapped } from './hooks.js';
 
 export const connectorRoutes = new Hono<{ Bindings: Env }>();
 
@@ -138,11 +138,28 @@ async function applyInstallationEvent(db: D1Database, event: string, body: Githu
   }
 }
 
+/**
+ * The apps a GitHub App installation delivers to. An app declares at most one github connector
+ * (routes/tools.ts), so the join is by kind: a binding made before the connector was renamed, or stored
+ * as 'github' before #303 G2, still routes. #378: only apps that still exist — a binding left behind by a
+ * deleted app must not route deliveries to its id.
+ */
+export function boundInstallations(db: D1Database, installationId: number) {
+  return db.prepare(
+    `SELECT i.app_id, k.events, k.hook, h.target
+       FROM app_connector_installations i
+       JOIN apps a ON a.id = i.app_id
+       JOIN app_connectors k ON k.app_id = i.app_id AND k.kind = 'github'
+       JOIN app_hooks h ON h.app_id = k.app_id AND h.name = k.hook AND h.verify_kind = 'github-app'
+      WHERE i.installation_id = ?`,
+  ).bind(installationId).all<{ app_id: string; events: string; hook: string; target: string }>();
+}
+
 connectorRoutes.post('/connectors/github/webhook', async (c) => {
   if (!connectorConfigured(c.env)) return unavailable(c);
   if (Number(c.req.header('content-length') ?? 0) > MAX_HOOK_BODY_BYTES) return c.json({ error: `body exceeds ${MAX_HOOK_BODY_BYTES} bytes` }, 413);
-  const body = new Uint8Array(await c.req.arrayBuffer());
-  if (body.byteLength > MAX_HOOK_BODY_BYTES) return c.json({ error: `body exceeds ${MAX_HOOK_BODY_BYTES} bytes` }, 413);
+  const body = await readCapped(c.req.raw, MAX_HOOK_BODY_BYTES);
+  if (!body) return c.json({ error: `body exceeds ${MAX_HOOK_BODY_BYTES} bytes` }, 413);
   const verified = await verifyHookDelivery({ kind: 'github-hmac-sha256' }, c.env.GH_APP_WEBHOOK_SECRET!, body, c.req.raw.headers);
   if (!verified) return c.json({ error: 'signature verification failed' }, 401);
 
@@ -153,15 +170,7 @@ connectorRoutes.post('/connectors/github/webhook', async (c) => {
   if (typeof installationId !== 'number') return c.json({ accepted: true, delivered: 0 }, 202);
   const event = verified.event ?? '';
 
-  // An app declares at most one github connector (routes/tools.ts), so the join is by kind: a binding made
-  // before the connector was renamed, or stored as 'github' before #303 G2, still routes.
-  const bound = await c.env.DB.prepare(
-    `SELECT i.app_id, k.events, k.hook, h.target
-       FROM app_connector_installations i
-       JOIN app_connectors k ON k.app_id = i.app_id AND k.kind = 'github'
-       JOIN app_hooks h ON h.app_id = k.app_id AND h.name = k.hook AND h.verify_kind = 'github-app'
-      WHERE i.installation_id = ?`,
-  ).bind(installationId).all<{ app_id: string; events: string; hook: string; target: string }>();
+  const bound = await boundInstallations(c.env.DB, installationId);
 
   await applyInstallationEvent(c.env.DB, event, payload, installationId);
 

@@ -5,6 +5,7 @@ import {
   getPageMeta,
   getSitemapUrls,
   getTenantMeta,
+  isContentAddressed,
   isUpdateSensitivePath,
   matchPagePath,
   PAGE_META_TIMEOUT_MS,
@@ -444,5 +445,18 @@ describe("getSitemapUrls / renderSitemap", () => {
     expect(out).toContain('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
     expect(out).toContain("<url><loc>https://tradeport.proappstore.online/p/a&amp;b&lt;c&gt;</loc><lastmod>2026-09-01T00:00:00.000Z</lastmod></url>");
     expect(out).toContain("<url><loc>https://tradeport.proappstore.online/</loc></url>");
+  });
+});
+
+describe("isContentAddressed (#378): only hashed build output may be cached as immutable", () => {
+  it("accepts Vite's hashed assets", () => {
+    for (const key of ["apps/demo/assets/index-B3x9Kq_7.js", "apps/demo/assets/index-DdKf8wQ2.css", "assets/logo-a1b2c3d4.png", "apps/demo/assets/fonts/inter-Zx91aBcd.woff2", "apps/demo/assets/index-B3x9-q_7.js", "apps/demo/assets/my-widget-Dk2_f9Qa.js"]) {
+      expect(isContentAddressed(key), key).toBe(true);
+    }
+  });
+  it("refuses stable names that a deploy can overwrite", () => {
+    for (const key of ["apps/demo/logo.png", "apps/demo/images/hero.jpg", "apps/demo/assets/logo.png", "apps/demo/assets/hero-image.png", "apps/demo/assets/hero-background.png", "apps/demo/assets/big-hero-image.png", "apps/demo/robots.txt", "apps/demo/index.html"]) {
+      expect(isContentAddressed(key), key).toBe(false);
+    }
   });
 });

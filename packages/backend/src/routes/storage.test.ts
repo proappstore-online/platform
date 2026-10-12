@@ -639,7 +639,7 @@ describe('GET /v1/apps/:appId/public/* — active documents are sandboxed (#216)
     for (const [key, type] of [['listing/icon-3.png', 'image/png'], ['u/gh:1/doc.pdf', 'application/pdf']] as const) {
       const res = await serve(key, type);
       expect(res.headers.get('content-security-policy'), key).toBeNull();
-      expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+      expect(res.headers.get('cache-control')).toBe('public, max-age=300');
     }
   });
 });
@@ -757,10 +757,10 @@ describe('GET /v1/apps/:appId/storage/* — cache headers and isolation (#220)',
     expect((await get('/v1/apps/myapp/storage/notes/contract.pdf', OUTSIDER)).status).toBe(404);
   });
 
-  it('public downloads are unchanged: public, max-age=31536000, immutable', async () => {
+  it('public downloads are publicly cacheable, briefly: public, max-age=300, never immutable (#378)', async () => {
     const res = await get('/v1/apps/myapp/public/banner.png');
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=300');
   });
 
   it('_review downloads are unchanged: private, no-store', async () => {

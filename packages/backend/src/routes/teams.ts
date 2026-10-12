@@ -1,10 +1,12 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
-import { requireUser, requireAppAccess, TEAM_ROLES, type TeamRole } from '../lib/auth.js';
-import { wrap } from '../lib/route-wrap.js';
+import { HttpError, isAdminId, requireUser, requireAppAccess, TEAM_ROLES, type TeamRole } from '../lib/auth.js';
+import { wrap, privateNoStore } from '../lib/route-wrap.js';
 import { sendEmail, type EmailConfig } from '../lib/email.js';
 
 export const teamRoutes = new Hono<{ Bindings: Env }>();
+// #378: owner-only reads are never cached.
+teamRoutes.use('/apps/:appId/team', privateNoStore);
 
 /** Resolve a GitHub username to a gh:<id> user ID. Returns null on failure. */
 async function resolveGitHubUser(username: string, ghToken?: string): Promise<string | null> {
@@ -42,6 +44,13 @@ async function resolveTeamUserRef(db: D1Database, appId: string, userRef: string
 /**
  * List team members for an app. Any team member can see the list.
  */
+/** A JSON object body, or a 400 (#378): malformed JSON was a 500. */
+async function jsonBody<T>(request: Request): Promise<T> {
+  const body: unknown = await request.json().catch(() => null);
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError('request body must be a JSON object', 400);
+  return body as T;
+}
+
 teamRoutes.get('/apps/:appId/team', wrap(async (c) => {
   const appId = c.req.param('appId')!;
   await requireAppAccess(c, appId, 'viewer');
@@ -67,7 +76,7 @@ teamRoutes.put('/apps/:appId/team/:userRef', wrap(async (c) => {
   const userId = await resolveTeamUserRef(c.env.DB, appId, userRef, c.env.GITHUB_TOKEN);
   if (!userId) return c.text(`Member "${userRef}" not found`, 404);
 
-  const body = await c.req.json<{ role?: string }>();
+  const body = await jsonBody<{ role?: string }>(c.req.raw);
   const role = (body.role ?? 'viewer') as TeamRole;
 
   // Owner role can only be assigned via ownership transfer
@@ -165,7 +174,7 @@ teamRoutes.post('/apps/:appId/team/invite', wrap(async (c) => {
   const appId = c.req.param('appId')!;
   const user = await requireAppAccess(c, appId, 'admin');
 
-  const body = await c.req.json<{ role?: string; email?: string }>();
+  const body = await jsonBody<{ role?: string; email?: string }>(c.req.raw);
   const role = (body.role ?? 'viewer') as TeamRole;
   if (!TEAM_ROLES.includes(role) || role === 'owner') {
     return c.text(`Invalid invite role. Must be one of: ${TEAM_ROLES.filter(r => r !== 'owner').join(', ')}`, 400);
@@ -221,6 +230,20 @@ teamRoutes.post('/team/accept/:token', wrap(async (c) => {
 
   if (!invite) return c.text('Invite not found', 404);
   if (invite.expires_at < Date.now()) return c.text('Invite expired', 410);
+
+  // #378: an invite grants only what its inviter may still grant. One minted by
+  // an app admin who has since been demoted or removed grants nothing (it is
+  // consumed above either way), as does one for an app that no longer exists.
+  const inviter = await c.env.DB.prepare(
+    `SELECT a.creator_id, tm.role FROM apps a
+       LEFT JOIN team_members tm ON tm.app_id = a.id AND tm.user_id = ?2
+      WHERE a.id = ?1`,
+  ).bind(invite.app_id, invite.invited_by).first<{ creator_id: string; role: string | null }>();
+  if (!inviter) return c.text('Invite not found', 404);
+  const inviterMay = inviter.creator_id === invite.invited_by
+    || isAdminId(invite.invited_by, c.env)
+    || TEAM_ROLES.indexOf(inviter.role as TeamRole) >= TEAM_ROLES.indexOf('admin');
+  if (!inviterMay) return c.text('This invite is no longer valid: whoever sent it can no longer add team members', 403);
 
   // Add to team — but don't downgrade if already a higher role
   const existing = await c.env.DB.prepare(

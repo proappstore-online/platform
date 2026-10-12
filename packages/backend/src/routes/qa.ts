@@ -22,7 +22,7 @@ import { MAX_FLOWS_PER_APP, toPlaywright, validateFlow, type TestFlow } from '@p
 import { HttpError, requireAppOwner } from '../lib/auth.js';
 import { verifyGithubOidc } from '../lib/github-oidc.js';
 import { sha256Hex } from '../lib/app-tokens.js';
-import { wrap } from '../lib/route-wrap.js';
+import { wrap, privateNoStore } from '../lib/route-wrap.js';
 import type { Env } from '../types.js';
 
 // Same trust model as deploy-credentials (routes/deploy.ts): the VERIFIED
@@ -35,6 +35,8 @@ const OIDC_REF = 'refs/heads/main';
 const GITHUB_OIDC_ISSUER = 'https://token.actions.githubusercontent.com';
 
 export const qaRoutes = new Hono<{ Bindings: Env }>();
+// #378: owner-only reads are never cached.
+qaRoutes.use('/apps/:appId/qa/*', privateNoStore);
 
 type Ctx = Context<{ Bindings: Env }>;
 

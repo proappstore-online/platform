@@ -168,16 +168,18 @@ export async function requireAppAccess(
 ): Promise<FasUser & { teamRole: TeamRole }> {
   const user = await requireUser(c);
 
-  // Platform admin bypasses everything
-  if (user.roles.includes('admin')) {
-    return { ...user, teamRole: 'owner' };
-  }
-
   // Fast path: check creator_id first (backwards compatible, most common case)
   const app = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?')
     .bind(appId)
     .first<{ creator_id: string }>();
+  // #378: before the admin bypass, so an unknown or deleted id is a 404 for an
+  // admin too — never a 200 over orphaned rows, nor invites for an app that is not there.
   if (!app) throw new HttpError('app not found', 404);
+
+  // Platform admin bypasses every role check on an app that exists.
+  if (user.roles.includes('admin')) {
+    return { ...user, teamRole: 'owner' };
+  }
 
   let teamRole: TeamRole;
 

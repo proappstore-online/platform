@@ -510,12 +510,35 @@ export async function harvestTestResults(
     }
 
     const summary = await res.json() as {
-      passed?: number; failed?: number; skipped?: number; flaky?: number;
+      ranAt?: unknown; passed?: number; failed?: number; skipped?: number; flaky?: number;
       ok?: boolean; durationMs?: number;
-      specs?: { title: string; ok: boolean; durationMs?: number; error?: string }[];
+      specs?: unknown;
     };
 
     const { sql } = deps;
+
+    // #378: the summary served is whatever CI published last. One that ran
+    // before this deploy started is the previous deploy's: filed under this
+    // commit it would block this commit's real results (the dedup below), so it
+    // is not harvested now; a later tick will see this deploy's own.
+    const ranAt = typeof summary.ranAt === 'string' ? Date.parse(summary.ranAt) : NaN;
+    const ticket = sql.exec('SELECT deploy_pushed_at FROM tickets WHERE id = ?', ticketId).toArray()[0] as { deploy_pushed_at: number | null } | undefined;
+    if (sha && ticket?.deploy_pushed_at && Number.isFinite(ranAt) && ranAt < ticket.deploy_pushed_at) {
+      deps.logActivity('test', `No e2e results for this deploy yet: the published summary predates it (${where})`, ticketId);
+      return 'no_summary';
+    }
+
+    // #378: normalised before anything is written, so a malformed spec cannot
+    // throw after the run row exists and leave a partial run.
+    const specs = (Array.isArray(summary.specs) ? summary.specs as unknown[] : [])
+      .filter((spec): spec is Record<string, unknown> => !!spec && typeof spec === 'object')
+      .slice(0, 500)
+      .map((spec) => ({
+        title: (typeof spec.title === 'string' && spec.title ? spec.title : '(untitled)').slice(0, 500),
+        ok: spec.ok === true,
+        durationMs: typeof spec.durationMs === 'number' ? spec.durationMs : null,
+        error: typeof spec.error === 'string' ? spec.error.slice(0, 5000) : null,
+      }));
 
     // Deduplicate: skip if we already have a recent run for this commit SHA
     // (the same summary.json is served until the next test run overwrites it).
@@ -542,16 +565,11 @@ export async function harvestTestResults(
       summary.durationMs ?? null, null,
     );
 
-    if (summary.specs) {
-      for (const spec of summary.specs.slice(0, 500)) {
-        sql.exec(
-          'INSERT INTO test_results (id, run_id, spec_file, test_name, status, duration_ms, error_text) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          crypto.randomUUID(), runId,
-          spec.title.slice(0, 500), spec.title.slice(0, 500),
-          spec.ok ? 'pass' : 'fail',
-          spec.durationMs ?? null, spec.error ? spec.error.slice(0, 5000) : null,
-        );
-      }
+    for (const spec of specs) {
+      sql.exec(
+        'INSERT INTO test_results (id, run_id, spec_file, test_name, status, duration_ms, error_text) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        crypto.randomUUID(), runId, spec.title, spec.title, spec.ok ? 'pass' : 'fail', spec.durationMs, spec.error,
+      );
     }
 
     deps.logActivity('test', `Test results harvested: ${passed} passed, ${failed} failed`, ticketId);

@@ -142,6 +142,32 @@ function notProcessed(e: unknown): { error: string; status: 'failed' | 'quota_ex
     : { error: String((e as Error)?.message ?? e), status: 'failed' };
 }
 
+/**
+ * The request body, or null once it passes `max` bytes (#378). Read as a stream
+ * and cancelled at the limit, so a chunked body with no Content-Length is never
+ * buffered whole before the size check.
+ */
+export async function readCapped(request: Request, max: number): Promise<Uint8Array | null> {
+  if (!request.body) return new Uint8Array(0);
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) { body.set(chunk, at); at += chunk.byteLength; }
+  return body;
+}
+
 function runAfterResponse(c: Context<{ Bindings: Env }>, work: Promise<void>): void {
   try { c.executionCtx.waitUntil(work); } catch { void work; }
 }
@@ -158,8 +184,8 @@ hookRoutes.post('/apps/:appId/hooks/:name', async (c) => {
   // github-app hooks are fed only by the platform's GitHub App demux (#258).
   if (!hook || hook.verify_kind === 'github-app') return c.json({ error: 'not found' }, 404);
 
-  const body = new Uint8Array(await c.req.arrayBuffer());
-  if (body.byteLength > MAX_HOOK_BODY_BYTES) return c.json({ error: `body exceeds ${MAX_HOOK_BODY_BYTES} bytes` }, 413);
+  const body = await readCapped(c.req.raw, MAX_HOOK_BODY_BYTES);
+  if (!body) return c.json({ error: `body exceeds ${MAX_HOOK_BODY_BYTES} bytes` }, 413);
 
   const verify: HookVerify = { kind: hook.verify_kind as HookVerify['kind'], ...(hook.verify_opts ? JSON.parse(hook.verify_opts) as object : {}) };
   const secret = c.env.APP_SECRET_KEK && hook.secret_name ? await openAppSecret(c.env, c.env.APP_SECRET_KEK, appId, hook.secret_name) : null;

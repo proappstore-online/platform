@@ -1,4 +1,4 @@
-import type { Context } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { HttpError } from './auth.js';
 import type { Env } from '../types.js';
@@ -26,3 +26,14 @@ export function wrap(handler: (c: Context<{ Bindings: Env }>) => Promise<Respons
     }
   };
 }
+
+/**
+ * #378: owner-only reads must never be stored by a shared or browser cache —
+ * another account on the same browser, or a proxy, must not be served them. Sets
+ * `Cache-Control: private, no-store` on GET responses whose handler set none.
+ * Register before the routes it covers.
+ */
+export const privateNoStore: MiddlewareHandler<{ Bindings: Env }> = async (c, next) => {
+  await next();
+  if (c.req.method === 'GET' && !c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'private, no-store');
+};

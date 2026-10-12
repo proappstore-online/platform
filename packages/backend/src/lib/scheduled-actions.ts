@@ -233,11 +233,16 @@ async function executeClaimed(env: Env, row: ScheduledToolRow, manifest: ToolMan
 }
 
 /** Finish a claimed run as failed and advance the breaker — once, even if recovery got there first. */
-async function failRun(env: Env, appId: string, action: string, source: string, runId: string, message: string, now: number, from: LiveRunStatus = 'claimed'): Promise<void> {
+/**
+ * Fail one run. `countsTowardBreaker` false (#378) is for a failure that is the
+ * platform's, not the schedule's — the queue refusing the message — so an outage
+ * cannot trip the breaker that disables a healthy schedule.
+ */
+async function failRun(env: Env, appId: string, action: string, source: string, runId: string, message: string, now: number, from: LiveRunStatus = 'claimed', countsTowardBreaker = true): Promise<void> {
   const failedRun = await env.DB.prepare(
     `UPDATE scheduled_action_runs SET status = 'failed', finished_at = ?, error = ? WHERE run_id = ? AND status = '${from}'`,
   ).bind(now, message, runId).run();
-  const failures = failedRun.meta?.changes ? await recordFailure(env, appId, action, source, now) : null;
+  const failures = failedRun.meta?.changes && countsTowardBreaker ? await recordFailure(env, appId, action, source, now) : null;
   console.error(`[schedule] failed app=${appId} action=${action} run=${runId} failures=${failures}: ${message}`);
 }
 
@@ -286,7 +291,7 @@ export async function queueWorkerRun(env: Env, run: ClaimedWorkerRun, now: numbe
     await sendAppEvent(env, scheduleMessage(queuedRun, now));
     return true;
   } catch (e) {
-    await failRun(env, run.appId, action, 'code', run.runId, `could not enqueue: ${errorText(e)}`, Date.now(), 'queued');
+    await failRun(env, run.appId, action, 'code', run.runId, `could not enqueue: ${errorText(e)}`, Date.now(), 'queued', false);
     return false;
   }
 }

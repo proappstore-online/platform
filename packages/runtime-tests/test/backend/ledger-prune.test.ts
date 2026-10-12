@@ -50,6 +50,7 @@ describe('rate-limit ledger retention against real D1', () => {
       maps_usage: 0, sms_usage: 0, notification_log: 0, webhook_deliveries: 0, webhook_deliveries_orphaned: 0,
       app_proxy_usage: 0, app_proxy_usage_user: 0, ai_daily_budget: 0, license_validate_attempts: 0, provision_attempts: 0,
       scheduled_action_runs: 0, app_hook_deliveries: 0, app_worker_usage: 0, app_worker_invocations: 0,
+      app_worker_deploys: 0,
     });
     expect(await count('maps_usage')).toBe(1);
   });
@@ -84,6 +85,25 @@ describe('app-worker invocation retention against real D1', () => {
     expect(body.ledgerRowsDeleted).toMatchObject({ app_worker_invocations: 1 });
     expect((await env.DB.prepare('SELECT id FROM app_worker_invocations').all()).results).toEqual([{ id: 'new:1' }]);
     await env.DB.prepare('DELETE FROM app_worker_invocations').run();
+  });
+});
+
+// #378: app-worker deploy records (refused OIDC deploys included) keep 30 days, but never an app's newest.
+describe('app-worker deploy retention against real D1', () => {
+  it('deletes deploy rows older than 30 days, keeping recent ones and each app\'s newest', async () => {
+    await env.DB.prepare('DELETE FROM app_worker_deploys').run();
+    const old = Date.now() - 31 * 24 * 60 * 60 * 1000;
+    const add = (id: string, appId: string, createdAt: number) => env.DB.prepare(
+      "INSERT INTO app_worker_deploys (id, app_id, repository, status, created_at) VALUES (?, ?, 'proappstore-online/x', 'refused', ?)",
+    ).bind(id, appId, createdAt).run();
+    await add('busy-old', 'busy', old);
+    await add('busy-new', 'busy', Date.now() - 60_000);
+    await add('quiet-older', 'quiet', old - 1000);
+    await add('quiet-last', 'quiet', old); // old, but the quiet app's newest deploy
+    const body = await (await prune()).json() as { ledgerRowsDeleted: Record<string, number> };
+    expect(body.ledgerRowsDeleted).toMatchObject({ app_worker_deploys: 2 });
+    expect(((await env.DB.prepare('SELECT id FROM app_worker_deploys ORDER BY id').all<{ id: string }>()).results ?? []).map((r) => r.id)).toEqual(['busy-new', 'quiet-last']);
+    await env.DB.prepare('DELETE FROM app_worker_deploys').run();
   });
 });
 

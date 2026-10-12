@@ -67,9 +67,10 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('admin provisioning previews report the actual app record (#370)', () => {
   it('admin + no apps row: the record is none, though admin support may still reuse the repo', async () => {
-    // The listing route still answers an admin 200 with an empty DTO for an absent id — unchanged, and no longer consulted.
+    // #378: the admin bypass needs an app that exists, so the listing route now answers an admin 404 for
+    // an absent id (it used to be 200 with an empty DTO). The preview never consulted it either way.
     const listing = await SELF.fetch(`${BASE}/v1/apps/absent-app/listing`, json('GET', undefined, (await admin()).token));
-    expect(listing.status).toBe(200);
+    expect(listing.status).toBe(404);
     expect(await preview(await admin(), 'absent-app')).toMatchObject({ action: 'reuse_admin', appRecord: 'none', blockers: [] });
   });
 

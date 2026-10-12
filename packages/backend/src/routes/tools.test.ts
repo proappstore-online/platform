@@ -469,8 +469,8 @@ describe('GET tool listings — SQL only to the app team (#158)', () => {
     expect(res.headers.get('Cache-Control')).toBe('private, no-store');
   });
 
-  it('platform admin: full manifests without any app lookup', async () => {
-    const db = mockD1(rows(validTool));
+  it('platform admin: full manifests, once the app is known to exist (#378), without a team lookup', async () => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:2' } }), rows(validTool));
     const { res, tools } = await list({ Authorization: `Bearer ${ADMIN_TOK}` }, db);
     expect(tools[0].sql).toBe(validTool.sql);
     expect(res.headers.get('Cache-Control')).toBe('private, no-store');

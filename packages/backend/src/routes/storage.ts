@@ -202,7 +202,9 @@ storageRoutes.get('/apps/:appId/public/*', async (c) => {
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
-  headers.set('cache-control', visibility.mode === 'private' ? 'private, no-store' : 'public, max-age=31536000, immutable');
+  // #378: never `immutable`: a public key can be overwritten or deleted, and an
+  // immutable copy would outlive that for a year. Five minutes, then revalidate.
+  headers.set('cache-control', visibility.mode === 'private' ? 'private, no-store' : 'public, max-age=300');
   // Never let the browser sniff a user-uploaded blob into an executable type
   // (e.g. HTML/JS) on the API origin.
   headers.set('x-content-type-options', 'nosniff');

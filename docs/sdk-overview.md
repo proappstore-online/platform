@@ -222,9 +222,10 @@ wrong key is never reported as a success. `delete` still resolves for a missing
 file. App-role moderators who are not on the app team cannot delete public files
 directly; route their takedowns through the team (see #208).
 
-**Deleted public files can outlive the delete in browser caches.** Public files
-are served with `Cache-Control: public, max-age=31536000, immutable`, so a browser
-that already fetched one may keep showing it for up to a year after deletion. When
+**Deleted or replaced public files can outlive the change in caches for a few
+minutes.** Public files are served with `Cache-Control: public, max-age=300` (#378;
+never `immutable`, since a public path can be overwritten), so a browser or proxy
+that already fetched one may keep showing it for up to five minutes. When
 prompt takedown matters, upload each version under a fresh path (for example
 `logos/<id>-<timestamp>.png`) and never overwrite a path in place: removing the
 key from your data then stops new page loads from referencing it, and the delete

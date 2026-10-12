@@ -137,12 +137,12 @@ describe('worker schedules on the platform tick (#255, #257)', () => {
     expect(db.sent).toHaveLength(1);
   });
 
-  it('a queue that rejects the send fails the run once, with the breaker advanced once', async () => {
+  it('a queue that rejects the send fails the run once, and leaves the breaker alone (#378: an outage is not the schedule failing)', async () => {
     const db = fakeDb([sched('t', 'tick')]);
     db.queue.fail = true;
     expect(await runWorkerSchedules(db.env, TICK, TICK)).toMatchObject({ claimed: 1, queued: 0, failed: 1 });
     expect(db.runs[0]).toMatchObject({ status: 'failed', error: 'could not enqueue: queue down' });
-    expect(db.state.get('t|worker:tick')?.failures).toBe(1);
+    expect(db.state.get('t|worker:tick')?.failures ?? 0).toBe(0);
   });
 
   it('claims a run-now row left due (ms due_at) first and does not double-run the same schedule on the tick', async () => {

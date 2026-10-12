@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { deliverHook, HOOK_TIMEOUT_MS, mapHookParams, resolveHookPath, SYSTEM_HOOK_USER, type HookDelivery } from './hooks.js';
+import { deliverHook, HOOK_TIMEOUT_MS, MAX_HOOK_BODY_BYTES, mapHookParams, readCapped, resolveHookPath, SYSTEM_HOOK_USER, type HookDelivery } from './hooks.js';
+import { app } from '../index.js';
+import { makeEnv } from '../test-helpers.js';
 import * as host from '../lib/app-worker-host.js';
 import type { Env } from '../types.js';
 
@@ -78,5 +80,39 @@ describe('deliverHook → worker (#256)', () => {
     expect(await deliverHook({} as Env, workerTarget)).toBe(`worker timed out after ${HOOK_TIMEOUT_MS} ms`);
     stubHost(true, { status: 'failed', httpStatus: 500 });
     expect(await deliverHook({} as Env, workerTarget)).toBe('worker answered 500');
+  });
+});
+
+describe('#378: a hook body is read against its size limit, never buffered whole first', () => {
+  const CHUNK = 256 * 1024;
+  /** A body that would stream `total` bytes, counting how many were actually pulled. */
+  function stream(total: number) {
+    let pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= total) return controller.close();
+        pulled += CHUNK;
+        controller.enqueue(new Uint8Array(CHUNK));
+      },
+    });
+    return { body, pulled: () => pulled };
+  }
+
+  it('readCapped stops pulling once the limit is passed, and returns small bodies whole', async () => {
+    const big = stream(64 * CHUNK);
+    expect(await readCapped(new Request('https://x/', { method: 'POST', body: big.body, duplex: 'half' } as RequestInit), 4 * CHUNK)).toBeNull();
+    expect(big.pulled()).toBeLessThanOrEqual(6 * CHUNK);
+    const small = await readCapped(new Request('https://x/', { method: 'POST', body: 'hello' }), 4 * CHUNK);
+    expect(new TextDecoder().decode(small!)).toBe('hello');
+  });
+
+  it('a chunked delivery with no Content-Length over MAX_HOOK_BODY_BYTES is a 413, read only to the limit', async () => {
+    const big = stream(MAX_HOOK_BODY_BYTES * 4);
+    const DB = {
+      prepare: () => ({ bind: () => ({ first: async () => ({ name: 'h', verify_kind: 'github-hmac-sha256', secret_name: 'S', verify_opts: null, target: 'worker' }) }) }),
+    } as unknown as D1Database;
+    const res = await app.request('/v1/apps/a/hooks/h', { method: 'POST', body: big.body, duplex: 'half' } as RequestInit, makeEnv({ DB }));
+    expect(res.status).toBe(413);
+    expect(big.pulled()).toBeLessThanOrEqual(MAX_HOOK_BODY_BYTES + 2 * CHUNK);
   });
 });
