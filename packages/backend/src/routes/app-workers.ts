@@ -28,6 +28,8 @@ import { activeAppWorker, appWorkerHost, disableAppWorker, parseBundle, rotateAp
 import { paramsOf, queueWorkerRun, runNowDueAt, WORKER_RUN_PREFIX } from '../lib/scheduled-actions.js';
 import { requireVisibleUser } from '../lib/visibility.js';
 import { mintCallerGrant } from '../lib/caller-grant.js';
+import { MAX_WORKER_OBJECT_BYTES } from '../lib/app-worker-calls.js';
+import { readCapped } from './hooks.js';
 import { decodeEnvelopeBody, encodeEnvelopeBody } from '../app-worker-shim/body.js';
 import type { AppWorkerExports } from '../lib/app-worker-host.js';
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
@@ -248,8 +250,14 @@ appWorkerRoutes.post('/apps/:appId/worker/schedules/:name/run', async (c) => {
 
 // ── Browser requests to the app worker (#260) ───────────────────────────────
 
-export const WORKER_HTTP_MAX_REQUEST_BYTES = 1024 * 1024;
-export const WORKER_HTTP_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+/**
+ * #385: a document the worker may store (MAX_WORKER_OBJECT_BYTES, 10 MiB) plus
+ * 1 MiB for multipart/form-data framing, so a full-size document fits either
+ * raw or in a form. Responses get the same bound, so a stored document can be
+ * downloaded back through the same path.
+ */
+export const WORKER_HTTP_MAX_REQUEST_BYTES = MAX_WORKER_OBJECT_BYTES + 1024 * 1024;
+export const WORKER_HTTP_MAX_RESPONSE_BYTES = WORKER_HTTP_MAX_REQUEST_BYTES;
 /** ADR-009 §4: http events get 30 s. They are never retried. */
 export const WORKER_HTTP_TIMEOUT_MS = 30_000;
 const WORKER_HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -277,8 +285,13 @@ appWorkerRoutes.post('/apps/:appId/worker/http', async (c) => {
   if (!target.startsWith('/') || target.length > 2048 || /[\r\n]/.test(target)) throw new HttpError('invalid worker path', 400);
   if (!(await activeAppWorker(c.env, appId))) throw new HttpError('not found', 404);
 
-  const bytes = new Uint8Array(await c.req.arrayBuffer());
-  if (bytes.byteLength > WORKER_HTTP_MAX_REQUEST_BYTES) throw new HttpError(`request body exceeds ${WORKER_HTTP_MAX_REQUEST_BYTES} bytes`, 413);
+  // #385: refused on a declared length before reading, and otherwise read only up
+  // to the limit — an oversized or chunked body is never buffered whole.
+  if (Number(c.req.header('content-length') ?? 0) > WORKER_HTTP_MAX_REQUEST_BYTES) {
+    throw new HttpError(`request body exceeds ${WORKER_HTTP_MAX_REQUEST_BYTES} bytes`, 413);
+  }
+  const bytes = await readCapped(c.req.raw, WORKER_HTTP_MAX_REQUEST_BYTES);
+  if (!bytes) throw new HttpError(`request body exceeds ${WORKER_HTTP_MAX_REQUEST_BYTES} bytes`, 413);
   const q = target.indexOf('?');
   const headers: Record<string, string> = {};
   for (const name of REQUEST_HEADERS) {

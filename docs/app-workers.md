@@ -309,7 +309,9 @@ A request from the app's own page to `/.pas/worker/<path>` reaches `fetch` as a
 standard `Request`:
 
 - **Who:** signed-in users only, with the same CSRF rules as `/.pas/api`.
-- **Request:** at most 1 MB. It is never retried.
+- **Request:** at most 11 MiB: a full worker file (10 MiB) plus 1 MiB of `multipart/form-data`
+  framing (#385). A larger body is refused with `413` before it is read and before the worker runs.
+  It is never retried.
 - **Actions:** inside the request, `pas.actions` run **as that user**, with their
   rows and their role gates. The platform passes a 30-second caller grant for
   this. Only actions whose `callers` include `"user"` can run this way. The
@@ -317,8 +319,8 @@ standard `Request`:
   that request's own invocation, which the SDK passes for you, while the request
   is running. Keeping it for a later request, a schedule or a hook gets
   `Unauthorized`.
-- **Response:** only `Content-Type` and `ETag` pass through, and
-  `Cache-Control` is always `private, no-store`.
+- **Response:** at most 11 MiB, so a stored document can be downloaded back. Only `Content-Type`
+  and `ETag` pass through, and `Cache-Control` is always `private, no-store`.
 
 ```ts
 // web: const res = await fetch('/.pas/worker/v1/report', { credentials: 'include' });
@@ -347,6 +349,7 @@ a replay inside the signature window. **Make every handler idempotent on
 | Schedules | ≤ 3 per app, ≥ 5 min apart, minutes on the 5-minute tick |
 | Schedule failures | 5 in a row disable the schedule and raise one alert. Redeploying the manifest re-enables it. |
 | Run now | one manual run per schedule per minute; it is queued at once (status `queued`) |
+| Browser requests (`/.pas/worker`) | request and response bodies ≤ 11 MiB each |
 | Hooks | ≤ 10 per app, body ≤ 5 MB |
 | `pas.rooms.publish` | `data` is JSON, ≤ 4 KB serialized; 60 publishes a minute per app; each publish is one `PAS` call |
 | Worker files | 10 MB per object |

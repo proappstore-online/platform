@@ -5,6 +5,7 @@ import { appWorkerHost, disableAppWorker } from '../../../backend/src/lib/app-wo
 import { mintCallerGrant } from '../../../backend/src/lib/caller-grant';
 import { sha256Hex } from '../../../backend/src/lib/app-tokens';
 import { AppWorkerApi } from '../../../backend/src/rpc/app-worker-api';
+import { WORKER_HTTP_MAX_REQUEST_BYTES } from '../../../backend/src/routes/app-workers';
 import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session, viaHostApi } from './helpers';
 
 const env = providedEnv as unknown as Env;
@@ -35,6 +36,11 @@ export default { async fetch(req) {
     return Response.json({ sha: [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, '0')).join(''), enc: p.body_encoding });
   }
   if (p.path === '/png') return new Response(new Uint8Array(${JSON.stringify(PNG)}), { headers: { 'content-type': 'image/png' } });
+  if (p.path === '/big') {
+    const b = new Uint8Array(10 * 1024 * 1024);
+    for (let i = 0; i < b.length; i++) b[i] = i % 251;
+    return new Response(b, { headers: { 'content-type': 'application/pdf' } });
+  }
   return new Response('no such route', { status: 404 });
 } };`;
 
@@ -91,8 +97,59 @@ describe('browser requests to the app worker (#260)', () => {
     expect([...new Uint8Array(await png.arrayBuffer())]).toEqual(PNG);
   });
 
-  it('refuses a request body over 1 MB', async () => {
-    expect((await viaHost('/v1/echo', { method: 'POST', body: new Uint8Array(1024 * 1024 + 1), contentType: 'application/octet-stream' })).status).toBe(413);
+  // #385: club documents up to 10 MiB, raw or in a multipart form, through the same mediated route.
+  const MiB = 1024 * 1024;
+  const random = (n: number) => {
+    const b = new Uint8Array(n);
+    for (let i = 0; i < n; i += 65536) crypto.getRandomValues(b.subarray(i, Math.min(i + 65536, n)));
+    return b;
+  };
+  const hex = async (b: BufferSource) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map((x) => x.toString(16).padStart(2, '0')).join('');
+  const invocations = async () => ((await env.DB.prepare("SELECT type, status FROM app_worker_invocations WHERE app_id = 't'").all<{ type: string; status: string }>()).results ?? []);
+
+  it('#385: a 10 MiB document reaches the worker byte-identical, and the invocation is recorded', async () => {
+    const doc = random(10 * MiB);
+    const res = await viaHost('/v1/echo', { method: 'POST', body: doc, contentType: 'application/pdf' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ sha: await hex(doc), enc: 'base64' });
+    expect(await invocations()).toEqual([{ type: 'http', status: 'succeeded' }]);
+  });
+
+  it('#385: a 10 MiB document in a multipart form fits under the cap', async () => {
+    const form = new FormData();
+    form.append('file', new Blob([random(10 * MiB)], { type: 'application/pdf' }), 'club.pdf');
+    const encoded = new Response(form);
+    const contentType = encoded.headers.get('content-type')!;
+    const body = new Uint8Array(await encoded.arrayBuffer());
+    expect(body.byteLength).toBeGreaterThan(10 * MiB);
+    expect(body.byteLength).toBeLessThanOrEqual(WORKER_HTTP_MAX_REQUEST_BYTES);
+    const res = await viaHost('/v1/echo', { method: 'POST', body, contentType });
+    expect(res.status).toBe(200);
+    expect((await res.json() as { sha: string }).sha).toBe(await hex(body));
+  });
+
+  it('#385: one byte over the cap is 413, and the worker is never invoked', async () => {
+    const res = await viaHost('/v1/echo', { method: 'POST', body: new Uint8Array(WORKER_HTTP_MAX_REQUEST_BYTES + 1), contentType: 'application/octet-stream' });
+    expect(res.status).toBe(413);
+    expect(await res.json()).toMatchObject({ error: `request body exceeds ${WORKER_HTTP_MAX_REQUEST_BYTES} bytes` });
+    expect(await invocations()).toEqual([]);
+  });
+
+  it('#385: a 10 MiB document comes back down intact', async () => {
+    const res = await viaHost('/big');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/pdf');
+    const got = new Uint8Array(await res.arrayBuffer());
+    expect(got.byteLength).toBe(10 * MiB);
+    expect(got[0]).toBe(0);
+    expect(got[got.length - 1]).toBe((got.length - 1) % 251);
+  });
+
+  it('#385: a large upload is still refused before reading for a caller who is signed out or not on the app origin', async () => {
+    const doc = random(10 * MiB);
+    expect((await viaHost('/v1/echo', { method: 'POST', body: doc, contentType: 'application/pdf', uid: null })).status).toBe(401);
+    expect((await viaHost('/v1/echo', { method: 'POST', body: doc, contentType: 'application/pdf', app: 'other' })).status).toBe(403);
+    expect(await invocations()).toEqual([]);
   });
 });
 
