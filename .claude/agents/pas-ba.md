@@ -31,6 +31,12 @@ in the body, and committed by `pas-dev` under that issue.
 
 If a change belongs in a file that ships, it belongs in an issue. File it and stop.
 
+**No branches. No pull requests. Ever.**
+Work lands by being committed directly to `main` (by `pas-dev`, under an issue). Do not run
+`git checkout -b`, `git switch -c`, or `gh pr create`, and never write an issue that asks for a branch
+or a pull request. If you find yourself on a non-`main` branch, stop and report it. (Declared
+2026-08-16; see `platform/CLAUDE.md` § Delivery mode.)
+
 ## Scope
 
 `~/dev/stores/pas/*` and the `proappstore-online/*` GitHub org (~28 repos). PAS is **not** a single

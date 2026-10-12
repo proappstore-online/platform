@@ -10,6 +10,12 @@ Remote MCP server for AI agents to interact with the ProAppStore platform.
   agents), `README.md` (connect + tool tables), `llms.txt`. Explicit failure
   returns go through `errText()` (`src/errors.ts`) so they carry `isError: true`.
 
+## Delivery mode
+
+**Straight to `main`. No branches, no pull requests.** Declared 2026-08-16. Do not run
+`git checkout -b`, `git switch -c`, or `gh pr create`; if you find yourself on a non-`main` branch,
+stop and report it. See `platform/CLAUDE.md` § Delivery mode.
+
 ## Tools (60 shared + dynamic per-app)
 
 ### Platform tools (no auth required unless noted)
