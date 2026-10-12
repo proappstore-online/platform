@@ -198,7 +198,7 @@ describe('auth session diagnostics (#353)', () => {
       priorAuthenticated: true, status: 401, elapsedMs: 42, online: true, visibility: 'visible',
     });
     const wire = JSON.stringify(entry);
-    for (const secret of ['secret-token', 'session=secret', 'parent@example.com', 'student']) expect(wire).not.toContain(secret);
+    for (const secret of ['secret-token', 'session=secret', 'Bearer secret', '?email', 'parent@example.com', 'student']) expect(wire).not.toContain(secret);
   });
 
   it('rejects values outside the auth telemetry allowlist', async () => {

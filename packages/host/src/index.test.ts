@@ -700,6 +700,31 @@ describe("host same-origin platform mediation routes", () => {
     expect(apiFetch).toHaveBeenCalledTimes(2);
   });
 
+  it("does NOT clear the session cookie for a data-plane 401 on a custom domain either (#353)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("invalid session", { status: 401 })));
+    const apiFetch = vi.fn(async (_request: Request) => new Response(null, { status: 204 }));
+    const res = await worker.fetch(
+      new Request("https://app.example.com/.pas/data/query", {
+        method: "POST",
+        headers: {
+          Cookie: "__Host-pas_session=cookie-token",
+          Origin: "https://app.example.com",
+          "Sec-Fetch-Site": "same-origin",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ sql: "select 1" }),
+      }),
+      makeEnv({ apiFetch }),
+      ctx(),
+    );
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("Set-Cookie")).toBeNull();
+    expect(res.headers.get("X-PAS-Session-Invalidation-Id")).toBeNull();
+    // No host invalidation is recorded for the data plane.
+    expect(apiFetch.mock.calls.some(([r]) => new URL(r.url).pathname === "/v1/internal/session-invalidations")).toBe(false);
+  });
+
   it("attaches the same anonymous invalidation contract on a custom domain", async () => {
     const apiFetch = vi.fn(async (request: Request) => {
       if (new URL(request.url).pathname === "/v1/internal/session-invalidations") {
