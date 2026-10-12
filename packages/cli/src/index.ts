@@ -16,6 +16,7 @@ import { integrateCommand } from './integrate.js';
 import { workerCommand } from './worker.js';
 import { hookCommand } from './hook.js';
 import { scheduleCommand } from './schedule.js';
+import { mcpAuthCommand } from './mcp-auth.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as { version: string };
@@ -67,6 +68,7 @@ program.addCommand(integrateCommand);
 program.addCommand(workerCommand);
 program.addCommand(hookCommand);
 program.addCommand(scheduleCommand);
+program.addCommand(mcpAuthCommand);
 
 program.parseAsync().catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err);
