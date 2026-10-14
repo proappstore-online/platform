@@ -21,15 +21,15 @@ import { type Context, Hono } from 'hono';
 import { MAX_FLOWS_PER_APP, toPlaywright, validateFlow, type TestFlow } from '@proappstore/qa-spec';
 import { HttpError, requireAppOwner } from '../lib/auth.js';
 import { verifyGithubOidc } from '../lib/github-oidc.js';
+import { isAppRepository } from '../lib/app-deploy-oidc.js';
 import { sha256Hex } from '../lib/app-tokens.js';
 import { wrap, privateNoStore } from '../lib/route-wrap.js';
 import type { Env } from '../types.js';
 
 // Same trust model as deploy-credentials (routes/deploy.ts): the VERIFIED
-// GitHub OIDC `repository` claim must be this org's repo named exactly the
-// app id, from main. Lets the deploy workflow trigger post-deploy QA runs
+// GitHub OIDC claims must identify the app's authorized repository, from main.
+// Lets the deploy workflow trigger post-deploy QA runs
 // with no stored secret.
-const OIDC_ORG = 'proappstore-online';
 const OIDC_AUDIENCE = 'https://api.proappstore.online';
 const OIDC_REF = 'refs/heads/main';
 const GITHUB_OIDC_ISSUER = 'https://token.actions.githubusercontent.com';
@@ -97,7 +97,7 @@ async function requireRunAccess(c: Ctx, appId: string): Promise<string> {
   if (token && !c.req.header('X-QA-Key') && looksLikeGithubOidcToken(token)) {
     try {
       const claims = await verifyGithubOidc(token, { audience: OIDC_AUDIENCE });
-      if (claims.repository !== `${OIDC_ORG}/${appId}`) {
+      if (!isAppRepository(claims, appId)) {
         throw new HttpError(`repository ${claims.repository} is not authorized for app ${appId}`, 403);
       }
       if (claims.ref !== OIDC_REF) throw new HttpError('runs may only be triggered from main', 403);

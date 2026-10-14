@@ -28,12 +28,12 @@ async function makeKey() {
   priv = pair.privateKey;
 }
 
-async function signToken(repository = 'proappstore-online/aiuniversity', ref = 'refs/heads/main'): Promise<string> {
+async function signToken(repository = 'proappstore-online/aiuniversity', ref = 'refs/heads/main', identity: Record<string, string> = {}): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const header = b64urlJson({ alg: 'RS256', typ: 'JWT', kid: KID });
   const payload = b64urlJson({
     iss: ISSUER, aud: AUD, repository, repository_owner: repository.split('/')[0],
-    ref, sha: 'deadbeef', iat: now, nbf: now, exp: now + 300,
+    ref, sha: 'deadbeef', iat: now, nbf: now, exp: now + 300, ...identity,
   });
   const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', priv, new TextEncoder().encode(`${header}.${payload}`));
   return `${header}.${payload}.${b64url(new Uint8Array(sig))}`;
@@ -102,6 +102,21 @@ describe('POST /apps/:appId/deploy-credentials', () => {
 
   it('401 when no token', async () => {
     expect((await call('aiuniversity')).status).toBe(401);
+  });
+
+  it('mints only the existing chess prefix for the transferred repo and refuses other refs/IDs', async () => {
+    const repo = 'ChessClubs-online/chess-clubs';
+    const identity = { repository_id: '1261947598', repository_owner_id: '342714948' };
+    const res = await call('chess-academy', { Authorization: `Bearer ${await signToken(repo, 'refs/heads/main', identity)}` });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ prefix: 'apps/chess-academy/' });
+    for (const [appId, ref, ids] of [
+      ['chess-clubs', 'refs/heads/main', identity],
+      ['chess-academy', 'refs/heads/feature', identity],
+      ['chess-academy', 'refs/heads/main', { ...identity, repository_id: '999' }],
+    ] as const) {
+      expect((await call(appId, { Authorization: `Bearer ${await signToken(repo, ref, ids)}` })).status).toBe(403);
+    }
   });
 
   it('401 on an unverifiable token', async () => {

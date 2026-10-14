@@ -10,6 +10,21 @@ import { HttpError } from './auth.js';
 import { verifyGithubOidc, type OidcClaims } from './github-oidc.js';
 
 export const APP_ORG = 'proappstore-online';
+export const CHESS_REPOSITORY = 'ChessClubs-online/chess-clubs';
+
+/** #386: pin the transferred repo and owner IDs so a reused name cannot inherit access. */
+export function isChessRepository(claims: OidcClaims): boolean {
+  return claims.repository === CHESS_REPOSITORY
+    && claims.repository_id === '1261947598'
+    && claims.repository_owner === 'ChessClubs-online'
+    && claims.repository_owner_id === '342714948';
+}
+
+export function isAppRepository(claims: OidcClaims, appId: string): boolean {
+  if (appId === 'chess-academy') return isChessRepository(claims);
+  return claims.repository === `${APP_ORG}/${appId}`;
+}
+
 /** Audience the canonical deploy workflow requests its OIDC token for. */
 export const APP_DEPLOY_AUDIENCE = 'https://api.proappstore.online';
 export const APP_DEPLOY_REF = 'refs/heads/main';
@@ -27,7 +42,7 @@ export async function requireAppDeployOidc(c: Context<{ Bindings: Env }>, appId:
   } catch (e) {
     throw new HttpError(`OIDC verification failed: ${(e as Error).message}`, 401);
   }
-  if (claims.repository !== `${APP_ORG}/${appId}`) {
+  if (!isAppRepository(claims, appId)) {
     throw new HttpError(`repository ${claims.repository} is not authorized for app ${appId}`, 403);
   }
   if (claims.ref !== APP_DEPLOY_REF) {

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
-import { requireAppDeployOidc } from './app-deploy-oidc.js';
+import { requireAppDeployOidc, isAppRepository, isChessRepository } from './app-deploy-oidc.js';
 import { HttpError } from './auth.js';
-import { _resetJwksCache } from './github-oidc.js';
+import { _resetJwksCache, type OidcClaims } from './github-oidc.js';
 
 // #253: the keyless app-deploy check — the token must be a genuine GitHub
 // Actions OIDC token from proappstore-online/<appId> on refs/heads/main.
@@ -55,5 +55,37 @@ describe('requireAppDeployOidc (#253)', () => {
     expect((await call('demo', await token('proappstore-online/other'))).status).toBe(403);
     expect((await call('demo', await token('proappstore-online/demo', 'refs/heads/feature'))).status).toBe(403);
     expect((await call('demo', await token('proappstore-online/demo', 'refs/heads/main', 'https://evil.example'))).status).toBe(401);
+  });
+});
+
+const chess = {
+  repository: 'ChessClubs-online/chess-clubs', repository_id: '1261947598',
+  repository_owner: 'ChessClubs-online', repository_owner_id: '342714948',
+} as OidcClaims;
+
+describe('transferred chess repository authority', () => {
+  it('authorizes the permanent repository only for its existing PAS app', () => {
+    expect(isChessRepository(chess)).toBe(true);
+    expect(isAppRepository(chess, 'chess-academy')).toBe(true);
+    expect(isAppRepository(chess, 'chess-clubs')).toBe(false);
+    expect(isAppRepository(chess, 'other-app')).toBe(false);
+  });
+
+  it.each([
+    { repository: 'proappstore-online/chess-academy' },
+    { repository: 'proappstore-online/chess-clubs' },
+    { repository: 'attacker/chess-clubs' },
+    { repository_id: '999' }, { repository_id: undefined },
+    { repository_owner: 'attacker' },
+    { repository_owner_id: '999' }, { repository_owner_id: undefined },
+  ])('refuses a mismatched or missing identity: %j', (override) => {
+    expect(isAppRepository({ ...chess, ...override }, 'chess-academy')).toBe(false);
+    expect(isChessRepository({ ...chess, ...override })).toBe(false);
+  });
+
+  it('preserves existing app isolation', () => {
+    const existing = { repository: 'proappstore-online/widget' } as OidcClaims;
+    expect(isAppRepository(existing, 'widget')).toBe(true);
+    expect(isAppRepository(existing, 'other-app')).toBe(false);
   });
 });

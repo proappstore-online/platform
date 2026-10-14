@@ -62,6 +62,21 @@ beforeEach(async () => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('POST /v1/auth/exchange/oidc (#146)', () => {
+  it('requires the transferred repo identity and an explicit migrated grant', async () => {
+    const repository = 'ChessClubs-online/chess-clubs';
+    const identity = {
+      repository, repository_owner: 'ChessClubs-online', repository_id: '1261947598', repository_owner_id: '342714948',
+      workflow_ref: `${repository}/.github/workflows/e2e-full.yml@refs/heads/main`,
+    };
+    const migrated = grant({ repository, workflow: '.github/workflows/e2e-full.yml' });
+    const db = () => mockD1(mockStmt({ all: { results: [migrated] } }), e2eUser());
+    expect((await app.request('/v1/auth/exchange/oidc', exchange(await signToken(identity)), makeEnv(db()))).status).toBe(200);
+    for (const override of [{ repository_id: '999' }, { repository_owner_id: '999' }, { ref: 'refs/heads/feature' }]) {
+      expect((await app.request('/v1/auth/exchange/oidc', exchange(await signToken({ ...identity, ...override })), makeEnv(db()))).status).toBe(403);
+    }
+    expect((await app.request('/v1/auth/exchange/oidc', exchange(await signToken(identity)), makeEnv(mockD1(mockStmt({ all: { results: [] } }))))).status).toBe(403);
+  });
+
   it('happy path: a granted repository gets a short-lived creator session for the e2e account, and the mint is recorded', async () => {
     const db = mockD1(mockStmt({ all: { results: [grant()] } }), e2eUser());
     const res = await app.request('/v1/auth/exchange/oidc', exchange(await signToken()), makeEnv(db));
@@ -128,6 +143,17 @@ describe('POST /v1/auth/exchange/oidc (#146)', () => {
 });
 
 describe('admin grant management', () => {
+  it('allows an admin to grant the transferred repository, but not its other org repositories', async () => {
+    const admin = await testToken('gh:1', { roles: ['user', 'creator', 'admin'] });
+    for (const [repository, status] of [['ChessClubs-online/chess-clubs', 201], ['ChessClubs-online/other-app', 400]] as const) {
+      const res = await app.request('/v1/admin/oidc-session-grants', {
+        method: 'POST', headers: { Authorization: `Bearer ${admin}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repository, user_id: 'gh:42', workflow: '.github/workflows/e2e-full.yml' }),
+      }, makeEnv(mockD1(e2eUser(), mockStmt())));
+      expect(res.status).toBe(status);
+    }
+  });
+
   it('platform admins create, list and revoke grants; everyone else is 403', async () => {
     const ADMIN = await testToken('gh:1', { roles: ['user', 'creator', 'admin'] });
     const CREATOR = await testToken('gh:2', { roles: ['user', 'creator'] });

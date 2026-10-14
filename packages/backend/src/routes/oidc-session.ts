@@ -13,6 +13,7 @@ import { mintSession, type NewSession } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { HttpError, requireUser } from '../lib/auth.js';
 import { verifyGithubOidc, type OidcClaims } from '../lib/github-oidc.js';
+import { CHESS_REPOSITORY, isChessRepository } from '../lib/app-deploy-oidc.js';
 
 export const oidcSessionRoutes = new Hono<{ Bindings: Env }>();
 
@@ -75,7 +76,7 @@ oidcSessionRoutes.post('/auth/exchange/oidc', async (c) => {
   } catch (e) {
     return c.json({ error: `OIDC verification failed: ${(e as Error).message}` }, 401);
   }
-  if (claims.repository_owner !== ORG || !claims.repository?.startsWith(`${ORG}/`)) {
+  if (!isChessRepository(claims) && (claims.repository_owner !== ORG || !claims.repository?.startsWith(`${ORG}/`))) {
     return c.json({ error: `repository ${claims.repository} is not in ${ORG}` }, 403);
   }
 
@@ -143,7 +144,7 @@ oidcSessionRoutes.post('/admin/oidc-session-grants', async (c) => {
   const admin = await requireAdmin(c);
   const body = await c.req.json<{ repository?: unknown; user_id?: unknown; workflow?: unknown; ref?: unknown; label?: unknown }>().catch(() => null);
   if (!body || typeof body !== 'object') throw new HttpError('JSON body required', 400);
-  if (typeof body.repository !== 'string' || !REPO_RE.test(body.repository)) throw new HttpError(`repository must be ${ORG}/<repo>`, 400);
+  if (typeof body.repository !== 'string' || (!REPO_RE.test(body.repository) && body.repository !== CHESS_REPOSITORY)) throw new HttpError(`repository must be ${ORG}/<repo> or ${CHESS_REPOSITORY}`, 400);
   if (typeof body.user_id !== 'string' || !/^gh:\d+$/.test(body.user_id)) throw new HttpError('user_id must be a gh:<id> account', 400);
   const workflow = body.workflow === undefined || body.workflow === null ? null : String(body.workflow);
   if (workflow !== null && !WORKFLOW_RE.test(workflow)) throw new HttpError('workflow must be a .github/workflows/<file>.yml path', 400);

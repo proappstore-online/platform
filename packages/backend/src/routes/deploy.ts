@@ -5,6 +5,7 @@ import { verifyGithubOidc, type OidcClaims } from '../lib/github-oidc.js';
 import { HttpError, requireAdmin, requireAppOwner } from '../lib/auth.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
 import { replaceAppTools, siteManifestFrom, type SiteManifest } from './tools.js';
+import { isAppRepository } from '../lib/app-deploy-oidc.js';
 
 /**
  * Keyless deploy credentials.
@@ -20,7 +21,6 @@ import { replaceAppTools, siteManifestFrom, type SiteManifest } from './tools.js
  * `repository` claim — a repo can only ever mint credentials for its own app.
  */
 
-const ORG = 'proappstore-online';
 const BUCKET = 'pas-apps';
 /** Audience the deploy workflow must request its OIDC token for. */
 const AUDIENCE = 'https://api.proappstore.online';
@@ -34,7 +34,7 @@ export const deployRoutes = new Hono<{ Bindings: Env }>();
 
 /**
  * The OIDC preamble shared by the keyless deploy routes: a GitHub Actions token
- * for our audience, from this org's repo named exactly the app id, on main.
+ * for our audience, from the app's authorized repository, on main.
  * Returns the verified claims, or the refusal to send.
  */
 async function authorizeDeployOidc(
@@ -54,10 +54,9 @@ async function authorizeDeployOidc(
     return { refusal: c.json({ error: `OIDC verification failed: ${(e as Error).message}` }, 401) };
   }
 
-  // 3. Authorize: the deploying repo must be this org's repo named exactly the
-  //    app id. Since the R2 prefix is derived from appId and appId must equal
-  //    the verified repo name, a repo can only ever mint creds for its own prefix.
-  if (claims.repository !== `${ORG}/${appId}`) {
+  // 3. Resolve the app's repository, including explicitly pinned transfers.
+  //    A repo can only ever mint credentials for its own app's prefix.
+  if (!isAppRepository(claims, appId)) {
     return { refusal: c.json({ error: `repository ${claims.repository} is not authorized for app ${appId}` }, 403) };
   }
   if (claims.ref !== DEPLOY_REF) {
