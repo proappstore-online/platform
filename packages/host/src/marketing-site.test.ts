@@ -51,6 +51,15 @@ describe("dedicated marketing hostname", () => {
     expect(get).toHaveBeenCalledWith("marketing/chess/revisions/rev_123/assets/hero.png");
   });
 
+  it("returns an uncached 503 when R2 is unavailable", async () => {
+    const { env, ctx, get } = fixture(active);
+    get.mockRejectedValueOnce(new Error("R2 unavailable"));
+    const response = await worker.fetch(new Request("https://about-chess.proappstore.online/"), env, ctx);
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("Retry-After")).toBe("30");
+  });
+
   it.each(["/other", "/artifact-manifest.json", "/assets/app.js.map", "/assets/%2eenv"])(
     "rejects unknown or private paths (%s)", async (path) => {
       const { env, ctx, get } = fixture(active);

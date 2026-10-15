@@ -49,7 +49,15 @@ export async function serveMarketingSite(request: Request, env: Env, appId: stri
     return new Response("Not found", { status: 404, headers: NO_STORE });
   }
 
-  const object = await env.APPS.get(`marketing/${appId}/revisions/${revision}/${path}`);
+  let object: R2ObjectBody | null;
+  try {
+    object = await env.APPS.get(`marketing/${appId}/revisions/${revision}/${path}`);
+  } catch {
+    return new Response("Site temporarily unavailable", {
+      status: 503,
+      headers: { ...NO_STORE, "Retry-After": "30" },
+    });
+  }
   if (!object) return new Response("Not found", { status: 404, headers: NO_STORE });
 
   const headers = securityHeaders(path.endsWith(".html"), true);
