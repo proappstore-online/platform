@@ -21,6 +21,8 @@
  *   share only the transport.
  */
 
+import { SDK_VERSION } from './sdk-version.js';
+import type { CaptureContext } from './trace.js';
 import { postTelemetry, type TelemetryAuth } from './telemetry-transport.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -46,6 +48,25 @@ const AUTH_PHASES = new Set<AuthTelemetryEvent['phase']>(['api_request', 'cookie
 const AUTH_ROUTES = new Set<AuthTelemetryEvent['route']>(['platform.api', 'auth.me', 'auth.logout']);
 const CORRELATION_ID_RE = /^[a-f0-9]{32}$/i;
 
+export type { CaptureContext } from './trace.js';
+
+/** Envelope version on every entry; the ingest allowlist keys on it. */
+export const LOG_ENVELOPE_VERSION = 1;
+const SPAN_ID_RE = /^[a-f0-9]{16}$/i;
+const CODE_RE = /^[A-Za-z0-9._:-]{1,64}$/;
+const MAX_DURATION_MS = 60 * 60 * 1000;
+
+function envelopeFields(ctx: CaptureContext | undefined): Partial<QueuedEntry> {
+  if (!ctx) return {};
+  const out: Partial<QueuedEntry> = {};
+  if (typeof ctx.spanId === 'string' && SPAN_ID_RE.test(ctx.spanId) && !/^0+$/.test(ctx.spanId)) out.spanId = ctx.spanId.toLowerCase();
+  if (typeof ctx.operation === 'string' && CODE_RE.test(ctx.operation)) out.operation = ctx.operation;
+  if (ctx.result === 'ok' || ctx.result === 'error') out.result = ctx.result;
+  if (typeof ctx.errorCode === 'string' && CODE_RE.test(ctx.errorCode)) out.errorCode = ctx.errorCode;
+  if (Number.isInteger(ctx.durationMs) && ctx.durationMs! >= 0 && ctx.durationMs! <= MAX_DURATION_MS) out.durationMs = ctx.durationMs!;
+  return out;
+}
+
 export interface MonitoringOptions {
   /** Default true. Set false to disable auto-capture and the flush timer. */
   auto?: boolean;
@@ -65,6 +86,13 @@ interface QueuedEntry {
   data?: unknown | undefined;
   build?: Record<string, unknown> | undefined;
   traceId?: string | undefined;
+  v: number;
+  sdkVersion: string;
+  operation?: string;
+  spanId?: string;
+  result?: 'ok' | 'error';
+  errorCode?: string;
+  durationMs?: number;
 }
 
 const FLUSH_INTERVAL_MS = 10_000;
@@ -272,7 +300,7 @@ export class Logs {
     const message = event.category === 'auth.session_lost'
       ? 'PAS session was invalidated'
       : 'PAS session hydration could not establish validity';
-    this.captureWithTrace('warn', event.category, message, data, event.correlationId);
+    this.capture('warn', event.category, message, data, { traceId: event.correlationId });
   }
 
   /** Number of entries waiting to be sent. Exposed for tests and diagnostics. */
@@ -285,13 +313,10 @@ export class Logs {
    *
    * Public so app code can record its own categories (`app.logs.capture('warn',
    * 'checkout', ...)`), and so SDK primitives can report their own failures
-   * (platform#106's client half) without another queue.
+   * (platform#106's client half) without another queue. `context` (#390) joins
+   * the entry to a request: pass the trace and span ids the call was sent with.
    */
-  capture(level: LogLevel, category: string, message: string, data?: unknown): void {
-    this.captureWithTrace(level, category, message, data);
-  }
-
-  private captureWithTrace(level: LogLevel, category: string, message: string, data?: unknown, traceId?: string): void {
+  capture(level: LogLevel, category: string, message: string, data?: unknown, context?: CaptureContext): void {
     if (this.disabled || this.capturing) return;
     if (LEVEL_ORDER[level] < LEVEL_ORDER[this.minLevel]) return;
     this.capturing = true;
@@ -303,7 +328,12 @@ export class Logs {
         message: redactClient(String(message)).slice(0, MESSAGE_MAX),
         data: data === undefined ? undefined : this.safeData(data),
         build: this.options.build,
-        traceId: traceId ?? this.newTraceId(),
+        traceId: typeof context?.traceId === 'string' && CORRELATION_ID_RE.test(context.traceId) && !/^0+$/.test(context.traceId)
+          ? context.traceId.toLowerCase()
+          : this.newTraceId(),
+        v: LOG_ENVELOPE_VERSION,
+        sdkVersion: SDK_VERSION,
+        ...envelopeFields(context),
       };
       this.queue.push(entry);
       // Drop the OLDEST on overflow: during a loop the newest entries are all
@@ -314,6 +344,21 @@ export class Logs {
       // Never let capture throw into app code.
     } finally {
       this.capturing = false;
+    }
+  }
+
+  /**
+   * Record a thrown value as an `error` entry: its name, message and stack
+   * (redacted like every entry), plus the request context when there is one.
+   * Category defaults to `exception`.
+   */
+  captureException(error: unknown, context?: CaptureContext & { category?: string }): void {
+    try {
+      const described = describeError(error);
+      const { category, ...rest } = context ?? {};
+      this.capture('error', category ?? 'exception', described.message, described.stack ? { stack: described.stack } : undefined, { result: 'error', ...rest });
+    } catch {
+      // Never let capture throw into app code.
     }
   }
 

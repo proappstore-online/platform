@@ -35,7 +35,10 @@ describe('change-password is rate-limited like credential login (#323)', () => {
     for (let i = 0; i < MAX; i++) expect((await change(`wrong-${i}`)).status).toBe(403);
     const locked = await change('wrong-again');
     expect(locked.status).toBe(429);
-    expect(JSON.stringify(locked.body)).not.toMatch(/\d/); // no count, limit or retry time
+    // No count, limit or retry time. traceId (#390) is a random hex correlation id, not one of them.
+    const { traceId, ...rest } = locked.body as { traceId?: string };
+    expect(traceId).toMatch(/^[0-9a-f]{32}$/);
+    expect(JSON.stringify(rest)).not.toMatch(/\d/);
   });
 
   it('a locked account cannot change its password even with the correct current password', async () => {

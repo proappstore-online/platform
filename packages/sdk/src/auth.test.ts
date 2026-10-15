@@ -492,6 +492,39 @@ describe('Auth.init', () => {
     expect(new Headers(init.headers).get('Authorization')).toBeNull();
   });
 
+  // #390: a request context becomes a traceparent, only to platform endpoints, in both auth modes.
+  it('sends traceparent with a request context, only to platform endpoints, in both auth modes', async () => {
+    const ctx = { traceId: 'ab'.repeat(16), spanId: 'cd'.repeat(8), operation: 'action.x', startedAt: 0 };
+    const expected = `00-${ctx.traceId}-${ctx.spanId}-01`;
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 'gh:1', login: 'u', roles: [], appRoles: {} }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const sentTraceparent = () => new Headers((fetchMock.mock.calls.at(-1) as unknown as [string, RequestInit])[1].headers).get('traceparent');
+
+    vi.stubGlobal('window', { location: { hash: '', href: 'https://interns.proappstore.online/', origin: 'https://interns.proappstore.online', pathname: '/', search: '' } });
+    const cookie = new Auth('interns', 'https://api.proappstore.online', 'platform-cookie');
+    await cookie.init();
+    for (const url of ['https://api.proappstore.online/v1/apps/interns/actions/x', 'https://data-interns.proappstore.online/query']) {
+      await cookie.authenticatedFetch(url, {}, ctx);
+      expect(sentTraceparent(), url).toBe(expected);
+    }
+    await cookie.authenticatedFetch('https://hooks.example/x', {}, ctx);
+    expect(sentTraceparent()).toBeNull();
+    // No context, no header: callers that predate #390 are unchanged.
+    await cookie.authenticatedFetch('https://api.proappstore.online/v1/apps/interns/roles/me');
+    expect(sentTraceparent()).toBeNull();
+
+    const storage = new Map([['pas:session', JSON.stringify({ token: 'tok', user: { id: 'gh:1', login: 'u' } })]]);
+    vi.stubGlobal('window', {
+      location: { hash: '', href: 'https://interns.example/', origin: 'https://interns.example', pathname: '/', search: '' },
+      localStorage: { getItem: (k: string) => storage.get(k) ?? null, setItem: () => {}, removeItem: () => {} },
+    });
+    const legacy = new Auth('interns', 'https://api.proappstore.online', 'legacy-bearer');
+    await legacy.authenticatedFetch('https://api.proappstore.online/v1/apps/interns/actions/x', {}, ctx);
+    expect(sentTraceparent()).toBe(expected);
+    await legacy.authenticatedFetch('https://data-other.proappstore.online/query', {}, ctx);
+    expect(sentTraceparent()).toBeNull();
+  });
+
   it('posts to same-origin logout in platform-cookie mode', () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
     vi.stubGlobal('window', {

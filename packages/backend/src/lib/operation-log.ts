@@ -20,7 +20,7 @@
  */
 
 import { hash16, redact } from './error-telemetry.js';
-import { messageShape } from './log-ingest.js';
+import { messageShape, type LogContext } from './log-ingest.js';
 import { checkLogQuota, SERVER_FAILURE_BURST_KEY, SERVER_FAILURE_DAILY_LIMIT, serverFailureUsageStore } from './log-quota.js';
 
 /** Route families worth logging, keyed by the segment after `/apps/:appId/`.
@@ -89,6 +89,10 @@ export interface OperationFailure extends OperationContext {
   /** Error message as thrown. Redacted here before it is persisted. */
   message: string;
   traceId?: string | null;
+  /** #390: the server's span for this request, the caller's span (from its traceparent) and the safe error code sent back. */
+  spanId?: string | null;
+  parentSpanId?: string | null;
+  errorCode?: string | null;
   cfRay?: string | null;
   /** True when the request came through the host's same-origin mediation, which
    *  is also how we infer the SDK's auth mode (#106 asks for it and the server
@@ -194,11 +198,20 @@ export async function recordOperationFailure(
       cfRay: failure.cfRay ?? null,
     });
 
+    const context: LogContext = {
+      v: 1,
+      operation,
+      result: 'error',
+      ...(failure.spanId ? { spanId: failure.spanId } : {}),
+      ...(failure.parentSpanId ? { parentSpanId: failure.parentSpanId } : {}),
+      ...(failure.errorCode ? { errorCode: failure.errorCode } : {}),
+    };
+
     await env.DB.prepare(
       `INSERT INTO app_logs
          (app_id, user_id, client_id, ts, level, category, message, data, build_meta,
-          fingerprint, trace_id, source, ingested_at)
-       VALUES (?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, 'server', ?)`,
+          fingerprint, trace_id, source, ingested_at, context)
+       VALUES (?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, 'server', ?, ?)`,
     )
       .bind(
         failure.appId,
@@ -211,6 +224,7 @@ export async function recordOperationFailure(
         fingerprint,
         failure.traceId ?? null,
         nowMs,
+        JSON.stringify(context),
       )
       .run();
   } catch {

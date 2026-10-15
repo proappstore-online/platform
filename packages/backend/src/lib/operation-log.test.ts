@@ -121,6 +121,21 @@ describe('recordOperationFailure', () => {
     expect(data).toMatchObject({ operation: 'provision_student', status: 403, authMode: 'legacy-bearer' });
   });
 
+  // #390: the row's context names the server span, the caller's span and the safe code — and nothing else.
+  it('records the server span, the caller span and the error code in the row context', async () => {
+    resetBurstState();
+    const db = fakeDb();
+    await recordOperationFailure({ DB: db.DB }, { ...failure, traceId: 'ab'.repeat(16), spanId: '11'.repeat(8), parentSpanId: '22'.repeat(8), errorCode: 'forbidden' }, NOW);
+    const row = db.inserts[0]!;
+    expect(row[8]).toBe('ab'.repeat(16));
+    expect(JSON.parse(row[10] as string)).toEqual({ v: 1, operation: 'provision_student', result: 'error', spanId: '11'.repeat(8), parentSpanId: '22'.repeat(8), errorCode: 'forbidden' });
+
+    resetBurstState();
+    const bare = fakeDb();
+    await recordOperationFailure({ DB: bare.DB }, failure, NOW);
+    expect(JSON.parse(bare.inserts[0]![10] as string)).toEqual({ v: 1, operation: 'provision_student', result: 'error' });
+  });
+
   it('uses warn for 4xx and error for 5xx', async () => {
     resetBurstState();
     const warn = fakeDb();

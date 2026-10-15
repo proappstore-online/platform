@@ -26,6 +26,7 @@ describe('Actions', () => {
         method: 'POST',
         body: JSON.stringify({ params: { limit: 5 } }),
       }),
+      expect.objectContaining({ operation: 'action.list_orgs', traceId: expect.stringMatching(/^[0-9a-f]{32}$/), spanId: expect.stringMatching(/^[0-9a-f]{16}$/) }),
     );
   });
 
@@ -51,6 +52,7 @@ describe('Actions', () => {
       'action',
       'action list_orgs failed',
       { action: 'list_orgs', status: 500 },
+      expect.objectContaining({ operation: 'action.list_orgs', result: 'error' }),
     );
     expect(JSON.stringify(logger.capture.mock.calls)).not.toContain('hunter2');
   });
@@ -66,6 +68,7 @@ describe('Actions', () => {
       'action',
       'action list_orgs unauthorized',
       { action: 'list_orgs', status: 401 },
+      expect.objectContaining({ operation: 'action.list_orgs', result: 'error', errorCode: 'unauthorized' }),
     );
   });
 
@@ -108,5 +111,41 @@ describe('Actions', () => {
       expect(err(403, { error: code }).forbidden, code).toBe(false);
     }
     expect(err(401, { error: 'requires app role' }).forbidden).toBe(false);
+  });
+
+  // #390: every call has its own trace; failures carry it to the log and the error.
+  it('a failed call carries its trace id and duration on the ActionError and the log entry, with the server error code', async () => {
+    const logger = { capture: vi.fn() };
+    const a = auth(Response.json({ error: 'action not found', errorCode: 'not_found', traceId: 'ignored' }, { status: 404 }));
+    const err = await new Actions('interns', 'https://api.proappstore.online', a, logger).call('save_lead', { email: 'x@y.z' }).catch((e) => e);
+    const sent = a.authenticatedFetch.mock.calls[0]![2] as { traceId: string; spanId: string };
+    expect(err).toBeInstanceOf(ActionError);
+    expect(err.traceId).toBe(sent.traceId);
+    expect(err.durationMs).toEqual(expect.any(Number));
+    const context = logger.capture.mock.calls[0]![4];
+    expect(context).toEqual({ traceId: sent.traceId, spanId: sent.spanId, operation: 'action.save_lead', result: 'error', durationMs: err.durationMs, errorCode: 'not_found' });
+    expect(JSON.stringify(logger.capture.mock.calls)).not.toContain('x@y.z');
+  });
+
+  it('concurrent calls get distinct traces and spans', async () => {
+    const a = auth(Response.json({}));
+    a.authenticatedFetch.mockImplementation(async () => Response.json({}));
+    const actions = new Actions('interns', 'https://api.proappstore.online', a);
+    await Promise.all([actions.call('a'), actions.call('b'), actions.call('c')]);
+    const ctxs = a.authenticatedFetch.mock.calls.map((c) => c[2] as { traceId: string; spanId: string; operation: string });
+    expect(ctxs.map((c) => c.operation)).toEqual(['action.a', 'action.b', 'action.c']);
+    expect(new Set(ctxs.map((c) => c.traceId)).size).toBe(3);
+    expect(new Set(ctxs.map((c) => c.spanId)).size).toBe(3);
+  });
+
+  it('a signed-out public call sends a traceparent, and its failure is logged with that trace', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ error: 'not signed in', errorCode: 'unauthorized' }, { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const logger = { capture: vi.fn() };
+    const err = await new Actions('interns', 'https://api.proappstore.online', auth(Response.json({})), logger).callPublic('lookup').catch((e) => e);
+    const header = (fetchMock.mock.calls[0]![1] as { headers: Record<string, string> }).headers.traceparent!;
+    const [, traceId, spanId] = /^00-([0-9a-f]{32})-([0-9a-f]{16})-01$/.exec(header)!;
+    expect(err).toMatchObject({ status: 401, traceId });
+    expect(logger.capture.mock.calls[0]![4]).toMatchObject({ traceId, spanId, errorCode: 'unauthorized' });
   });
 });

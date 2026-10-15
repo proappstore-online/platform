@@ -194,7 +194,7 @@ describe('useAction (#299)', () => {
     let result: unknown;
     await act(async () => { result = await seen.run!({ group_id: 'g-secret' }); });
     expect(result).toEqual({ meta: { changes: 1 } });
-    expect(authenticatedFetch).toHaveBeenCalledWith(`${API}/v1/apps/moder/actions/admin_delete_group`, expect.objectContaining({ body: JSON.stringify({ params: { group_id: 'g-secret' } }) }));
+    expect(authenticatedFetch).toHaveBeenCalledWith(`${API}/v1/apps/moder/actions/admin_delete_group`, expect.objectContaining({ body: JSON.stringify({ params: { group_id: 'g-secret' } }) }), expect.objectContaining({ operation: 'action.admin_delete_group' }));
     expect(capture).toHaveBeenCalledWith('info', 'admin.action', 'admin action admin_delete_group ok', { action: 'admin_delete_group', outcome: 'ok', status: undefined });
     expect(JSON.stringify(capture.mock.calls)).not.toContain('g-secret');
     expect(seen.run!.pending).toBe(false);

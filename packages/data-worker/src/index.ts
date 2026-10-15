@@ -50,7 +50,7 @@ function setCorsHeaders(res: Response, origin: string | null): void {
   if (!origin) return;
   res.headers.set('Access-Control-Allow-Origin', origin);
   res.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, traceparent');
 }
 
 app.use(
@@ -62,7 +62,7 @@ app.use(
     // this per-app worker without adding a platform round trip to preflight.
     origin: corsOrigin,
     allowMethods: ['GET', 'POST', 'OPTIONS'],
-    allowHeaders: ['Authorization', 'Content-Type'],
+    allowHeaders: ['Authorization', 'Content-Type', 'traceparent'], // traceparent: #390 trace context
     maxAge: 600,
   }),
 );

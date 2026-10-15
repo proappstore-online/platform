@@ -1,5 +1,6 @@
 import type { Unsubscribe, User } from './base-types.js';
 import type { AuthTelemetryEvent } from './logs.js';
+import { isAllowedTracePropagationTarget, makeTraceparent, type RequestContext } from './trace.js';
 
 export type AuthProvider = 'github' | 'google' | 'email';
 export type AuthMode = 'legacy-bearer' | 'platform-cookie';
@@ -608,12 +609,19 @@ export class Auth {
     return user;
   }
 
-  /** Authenticated platform request. In cookie mode this goes through same-origin PAS mediation. */
-  async authenticatedFetch(input: string | URL, init: RequestInit = {}): Promise<Response> {
+  /**
+   * Authenticated platform request. In cookie mode this goes through same-origin PAS mediation.
+   * With a `context` (#390) the request carries its W3C `traceparent`, but only to the
+   * platform's own endpoints ({@link isAllowedTracePropagationTarget}).
+   */
+  async authenticatedFetch(input: string | URL, init: RequestInit = {}, context?: RequestContext): Promise<Response> {
     if (!this.session) throw new Error('Not signed in.');
     const target = this.authMode === 'platform-cookie' ? this.platformMediatedUrl(input) : input;
     const targetString = target.toString();
     const headers = new Headers(init.headers);
+    if (context && isAllowedTracePropagationTarget(targetString, this.apiBase, this.dataOrigin())) {
+      headers.set('traceparent', makeTraceparent(context.traceId, context.spanId));
+    }
     if (this.authMode === 'legacy-bearer') {
       const token = this.session.token;
       if (!token) throw new Error('Not signed in.');
@@ -685,10 +693,14 @@ export class Auth {
     const target = new URL(raw, base);
     const api = new URL(this.apiBase);
     if (target.origin === api.origin) return `/.pas/api${target.pathname}${target.search}`;
-    const appData = new URL(`https://data-${this.appId}.proappstore.online`);
+    const appData = new URL(this.dataOrigin());
     if (target.origin === appData.origin) return `/.pas/data${target.pathname}${target.search}`;
     if (target.origin === base) return `${target.pathname}${target.search}`;
     return raw;
+  }
+
+  private dataOrigin(): string {
+    return `https://data-${this.appId}.proappstore.online`;
   }
 
   private isPlatformApi(input: string | URL): boolean {

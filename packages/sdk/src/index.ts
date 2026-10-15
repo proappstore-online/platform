@@ -38,6 +38,8 @@ export type {
 } from './invites.js';
 export { Actions, ActionError } from './actions.js';
 export type { ActionVerifyResult } from './actions.js';
+// #390: request context for app.logs.capture / captureException.
+export type { CaptureContext } from './trace.js';
 export { Tokens } from './tokens.js';
 export type { AppToken, MintedAppToken, CreateTokenOptions, TokenAccess } from './tokens.js';
 

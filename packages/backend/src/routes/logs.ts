@@ -196,8 +196,8 @@ logsRoutes.post('/apps/:appId/logs', async (c) => {
   const stmt = c.env.DB.prepare(
     `INSERT INTO app_logs
        (app_id, user_id, client_id, ts, level, category, message, data, build_meta,
-        fingerprint, trace_id, source, ingested_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        fingerprint, trace_id, source, ingested_at, context)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const requestTraceId = traceIdFromTraceparent(c.req.header('traceparent'));
 
@@ -216,6 +216,7 @@ logsRoutes.post('/apps/:appId/logs', async (c) => {
       e.traceId ?? requestTraceId,
       source,
       now,
+      e.context,
     ),
   );
   await c.env.DB.batch(batch);
@@ -243,7 +244,7 @@ logsRoutes.get('/apps/:appId/logs', async (c) => {
   const cursor = parseLogCursor(c.req.query('cursor'));
 
   let sql = `SELECT id, ts, level, category, message, data, user_id, client_id, build_meta,
-                    fingerprint, trace_id, source
+                    fingerprint, trace_id, source, context
              FROM app_logs WHERE app_id = ?`;
   const params: unknown[] = [appId];
 
@@ -274,8 +275,10 @@ logsRoutes.get('/apps/:appId/logs', async (c) => {
     logs: page.map((r) => {
       let data: unknown;
       let build: unknown;
+      let context: unknown = null;
       if (r.data) { try { data = JSON.parse(r.data as string); } catch { data = null; } }
       if (r.build_meta) { try { build = JSON.parse(r.build_meta as string); } catch { build = null; } }
+      if (r.context) { try { context = JSON.parse(r.context as string); } catch { context = null; } }
       return {
         ts: r.ts,
         level: r.level,
@@ -288,6 +291,8 @@ logsRoutes.get('/apps/:appId/logs', async (c) => {
         fingerprint: r.fingerprint,
         traceId: r.trace_id,
         source: r.source,
+        // #390: the row's allowlisted request context (span, operation, error code…); null before the envelope.
+        context,
       };
     }),
     nextCursor: rows.length > limit && last

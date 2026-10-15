@@ -39,8 +39,9 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc && node scripts/emit-shell-css.mjs",
-    "typecheck": "tsc --noEmit"
+    "build": "tsc && node scripts/emit-shell-css.mjs && node scripts/stamp-version.mjs",
+    "typecheck": "tsc --noEmit",
+    "prepack": "node scripts/stamp-version.mjs"
   },
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0"

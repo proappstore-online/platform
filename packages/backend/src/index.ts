@@ -7,7 +7,7 @@ import type { Context } from 'hono';
 import { HttpError, optionalUser } from './lib/auth.js';
 import { checkSessionKeyDrift } from './lib/session-key-drift.js';
 import { recordServerError } from './lib/error-telemetry.js';
-import { traceIdFromTraceparent } from './lib/log-ingest.js';
+import { newSpanId, newTraceId, parseTraceparent, safeErrorCode, TRACE_ID_HEADER } from './lib/log-ingest.js';
 import { recordOperationFailure, shouldLogOperationFailure } from './lib/operation-log.js';
 import type { Env } from './types.js';
 import { openapiSpec, openapiYaml } from './openapi-spec.js';
@@ -116,7 +116,8 @@ app.use(
   cors({
     origin: (origin, c) => corsOrigin(c.env, origin),
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Authorization', 'Content-Type'],
+    // traceparent (#390): the SDK's W3C trace context on platform calls.
+    allowHeaders: ['Authorization', 'Content-Type', 'traceparent'],
     maxAge: 600,
   }),
 );
@@ -150,9 +151,17 @@ async function userIdForLog(c: Context<{ Bindings: Env }>): Promise<string | nul
 
 app.onError(async (err, c) => {
   const status = err instanceof HttpError ? err.status as ContentfulStatusCode : 500;
+  // #390: every error answers with a safe machine code and the trace it belongs
+  // to — the caller's (a valid traceparent) or a fresh one — so a client can hand
+  // the owner one id that finds the server's row. The server records its own
+  // span, with the caller's as parent. Correlation only: nothing authorizes on it.
+  const incoming = parseTraceparent(c.req.header('traceparent'));
+  const traceId = incoming?.traceId ?? newTraceId();
+  const spanId = newSpanId();
+  const errorCode = safeErrorCode(status, err instanceof HttpError ? err.message : null);
   const body = err instanceof HttpError
-    ? { ...err.body, error: err.message }
-    : { error: 'Internal server error' };
+    ? { ...err.body, error: err.message, errorCode, traceId }
+    : { error: 'Internal server error', errorCode, traceId };
 
   if (!(err instanceof HttpError)) console.error('Unhandled error:', err);
 
@@ -171,7 +180,7 @@ app.onError(async (err, c) => {
       errorType: err instanceof Error ? err.name : typeof err,
       message: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack ?? null : null,
-      traceId: traceIdFromTraceparent(c.req.header('traceparent') ?? null),
+      traceId,
       cfRay: c.req.header('cf-ray') ?? null,
     });
     background(c, written);
@@ -194,7 +203,10 @@ app.onError(async (err, c) => {
         params: c.req.param() as Record<string, string | undefined>,
         status,
         message: err instanceof Error ? err.message : String(err),
-        traceId: traceIdFromTraceparent(c.req.header('traceparent') ?? null),
+        traceId,
+        spanId,
+        parentSpanId: incoming?.spanId ?? null,
+        errorCode,
         cfRay: c.req.header('cf-ray') ?? null,
         mediated: Boolean(c.req.header(APP_CONTEXT_HEADER)),
       }),
@@ -204,10 +216,12 @@ app.onError(async (err, c) => {
   // CORS middleware doesn't run on error responses, so set headers here
   const origin = await corsOrigin(c.env, c.req.header('Origin'));
   const res = c.json(body, status);
+  res.headers.set(TRACE_ID_HEADER, traceId);
   if (origin) {
     res.headers.set('Access-Control-Allow-Origin', origin);
     res.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, traceparent');
+    res.headers.set('Access-Control-Expose-Headers', TRACE_ID_HEADER);
   }
   return res;
 });

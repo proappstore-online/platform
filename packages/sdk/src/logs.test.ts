@@ -349,3 +349,57 @@ describe('auto-capture', () => {
     expect(() => logs.stop()).not.toThrow();
   });
 });
+
+describe('diagnostic envelope (#390)', () => {
+  const TRACE = 'ab'.repeat(16);
+  const SPAN = 'cd'.repeat(8);
+
+  it('every entry carries the envelope version, the SDK version and the build stamp', async () => {
+    const logs = makeLogs({}, { build: { sha: 'abc1234' } });
+    logs.capture('info', 'app', 'hello');
+    await logs.flushAsync();
+    expect(sent[0]!.body.entries[0]).toMatchObject({ v: 1, sdkVersion: expect.any(String), build: { sha: 'abc1234' }, traceId: expect.stringMatching(/^[0-9a-f]{32}$/) });
+  });
+
+  it('a capture context joins the entry to its request; only allowlisted, well-formed fields are kept', async () => {
+    const logs = makeLogs();
+    logs.capture('error', 'action', 'action x failed', { status: 500 }, {
+      traceId: TRACE.toUpperCase(), spanId: SPAN, operation: 'action.save_lead', result: 'error', errorCode: 'internal_error', durationMs: 42,
+      // Not part of the contract: dropped.
+      ...({ url: 'https://x.example/?token=secret', body: '{"password":"p"}' } as object),
+    });
+    logs.capture('error', 'action', 'bad context', undefined, {
+      traceId: 'not-a-trace', spanId: '0000000000000000', operation: 'https://x.example/a?b=c', result: 'maybe' as 'ok', errorCode: 'has spaces in it', durationMs: -1,
+    });
+    await logs.flushAsync();
+    const [good, bad] = sent[0]!.body.entries;
+    expect(good).toMatchObject({ traceId: TRACE, spanId: SPAN, operation: 'action.save_lead', result: 'error', errorCode: 'internal_error', durationMs: 42 });
+    expect(good).not.toHaveProperty('url');
+    expect(good).not.toHaveProperty('body');
+    expect(JSON.stringify(good)).not.toMatch(/secret|password|x\.example/);
+    expect(bad!.traceId).toMatch(/^[0-9a-f]{32}$/);
+    expect(bad!.traceId).not.toBe('not-a-trace');
+    for (const k of ['spanId', 'operation', 'result', 'errorCode', 'durationMs']) expect(bad, k).not.toHaveProperty(k);
+  });
+
+  it('captureException records the error with its stack and the request context', async () => {
+    const logs = makeLogs();
+    logs.captureException(new TypeError('boom'), { traceId: TRACE, spanId: SPAN, operation: 'checkout' });
+    logs.captureException('plain string', { category: 'billing' });
+    await logs.flushAsync();
+    const [first, second] = sent[0]!.body.entries;
+    expect(first).toMatchObject({ level: 'error', category: 'exception', message: 'TypeError: boom', traceId: TRACE, spanId: SPAN, operation: 'checkout', result: 'error' });
+    expect((first!.data as { stack: string }).stack).toContain('boom');
+    expect(second).toMatchObject({ level: 'error', category: 'billing', message: 'plain string', result: 'error' });
+  });
+
+  it('auth diagnostics keep their correlation id as the trace id (#353)', async () => {
+    const logs = makeLogs();
+    logs.captureAuthEvent({
+      category: 'auth.session_lost', reason: 'api_401', phase: 'api_request', route: 'platform.api', correlationId: TRACE,
+      priorAuthenticated: true, status: 401, elapsedMs: 5, online: true, visibility: 'visible',
+    });
+    await logs.flushAsync();
+    expect(sent[0]!.body.entries[0]).toMatchObject({ category: 'auth.session_lost', traceId: TRACE, v: 1 });
+  });
+});

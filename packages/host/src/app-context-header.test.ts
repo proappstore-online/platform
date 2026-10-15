@@ -81,3 +81,29 @@ describe("X-PAS-App app-context binding", () => {
     expect(seen).toHaveLength(0);
   });
 });
+
+// #390: page-supplied trace context reaches upstream only when well-formed.
+describe("traceparent through mediation", () => {
+  const VALID = `00-${"ab".repeat(16)}-${"cd".repeat(8)}-01`;
+
+  it("forwards a valid traceparent and its tracestate unchanged", async () => {
+    const { env, seen } = envWithCapture();
+    await handlePlatformMediation(mediatedRequest({ traceparent: VALID, tracestate: "pas=1" }), env, route);
+    expect(seen[0]!.headers.get("traceparent")).toBe(VALID);
+    expect(seen[0]!.headers.get("tracestate")).toBe("pas=1");
+  });
+
+  it.each([
+    ["garbage", "garbage-abc-def"],
+    ["all-zero trace", `00-${"0".repeat(32)}-${"cd".repeat(8)}-01`],
+    ["a URL", "https://evil.example/?token=x"],
+    ["unknown version", `ff-${"ab".repeat(16)}-${"cd".repeat(8)}-01`],
+  ])("drops a malformed traceparent (%s) and its tracestate; the request still goes through", async (_what, traceparent) => {
+    const { env, seen } = envWithCapture();
+    const res = await handlePlatformMediation(mediatedRequest({ traceparent, tracestate: "pas=1" }), env, route);
+    expect(res!.status).toBe(200);
+    expect(seen[0]!.headers.get("traceparent")).toBeNull();
+    expect(seen[0]!.headers.get("tracestate")).toBeNull();
+    expect(seen[0]!.headers.get("X-PAS-App")).toBe("chess-academy");
+  });
+});

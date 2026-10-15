@@ -1424,7 +1424,7 @@ describe('Turnstile on self-registration (#26)', () => {
     const db = fakeDb();
     const res = await register(GOOD, db, TS);
     expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: 'bot check required' });
+    expect(await res.json()).toMatchObject({ error: 'bot check required', errorCode: 'forbidden' });
     expect(db._users).toHaveLength(0);
     expect(fetchMock).not.toHaveBeenCalled();
     // The same address can still register with a good token afterwards.
@@ -1453,7 +1453,7 @@ describe('Turnstile on self-registration (#26)', () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ success: false, 'error-codes': ['timeout-or-duplicate'] })));
     let res = await register({ ...GOOD, turnstileToken: 'stale' }, fakeDb(), TS);
     expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: 'bot check failed' });
+    expect(await res.json()).toMatchObject({ error: 'bot check failed', errorCode: 'forbidden' });
 
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ success: true, action: 'publish' })));
     res = await register({ ...GOOD, turnstileToken: 'publish-token' }, fakeDb(), TS);
@@ -1462,7 +1462,7 @@ describe('Turnstile on self-registration (#26)', () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('fetch failed'); }));
     res = await register({ ...GOOD, turnstileToken: 'tok' }, fakeDb(), TS);
     expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: 'bot check unavailable — please try again' });
+    expect(await res.json()).toMatchObject({ error: 'bot check unavailable — please try again', errorCode: 'internal_error' });
   });
 
   it('GET /v1/auth/turnstile publishes the site key only when enforcement is on', async () => {

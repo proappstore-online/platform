@@ -51,6 +51,31 @@ export interface RawLogEntry {
   data?: unknown;
   build?: unknown;
   traceId?: unknown;
+  // #390 versioned diagnostic envelope (SDK 1.16.81+). Absent on older SDKs.
+  v?: unknown;
+  sdkVersion?: unknown;
+  operation?: unknown;
+  spanId?: unknown;
+  result?: unknown;
+  errorCode?: unknown;
+  durationMs?: unknown;
+}
+
+/**
+ * The stored request context of a row (`app_logs.context`, #390): only these
+ * fields, each validated, so a URL, body, credential or child data cannot be
+ * smuggled in through it. Client rows carry the SDK's span; server rows the
+ * server's span and the client span as parent.
+ */
+export interface LogContext {
+  v: 1;
+  sdkVersion?: string;
+  operation?: string;
+  spanId?: string;
+  parentSpanId?: string;
+  result?: 'ok' | 'error';
+  errorCode?: string;
+  durationMs?: number;
 }
 
 export interface NormalizedEntry {
@@ -61,6 +86,8 @@ export interface NormalizedEntry {
   data: string | null;
   buildMeta: string | null;
   traceId: string | null;
+  /** JSON {@link LogContext}, or null for an entry without the envelope. */
+  context: string | null;
   fingerprint: string;
 }
 
@@ -71,19 +98,72 @@ export function normalizeClientId(value: unknown): string | null {
 }
 
 /**
- * W3C traceparent → trace-id, or null.
- *
- * Format: `00-<32 hex trace-id>-<16 hex span-id>-<flags>`. We keep only the
- * trace-id, which is the part that correlates this row with the backend and
- * data-worker lines for the same logical request.
+ * A version-00 W3C traceparent (`00-<32 hex trace-id>-<16 hex span-id>-<2 hex
+ * flags>`), or null when malformed or carrying an all-zero id. Untrusted input:
+ * correlation only, never an authorization input. Vendored in the SDK
+ * (sdk/src/trace.ts) and the host (platform-mediation.ts).
  */
+export function parseTraceparent(header: string | null | undefined): { traceId: string; spanId: string } | null {
+  if (typeof header !== 'string') return null;
+  const m = /^00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/.exec(header.trim().toLowerCase());
+  if (!m || /^0+$/.test(m[1]!) || /^0+$/.test(m[2]!)) return null;
+  return { traceId: m[1]!, spanId: m[2]! };
+}
+
+/** W3C traceparent → trace-id, or null. The trace-id correlates this row with the
+ *  client and data-worker lines for the same logical request. */
 export function traceIdFromTraceparent(header: string | null | undefined): string | null {
-  if (!header) return null;
-  const parts = header.trim().split('-');
-  if (parts.length < 4) return null;
-  const traceId = parts[1] ?? '';
-  if (!/^[0-9a-f]{32}$/i.test(traceId) || /^0+$/.test(traceId)) return null;
-  return traceId.toLowerCase();
+  return parseTraceparent(header)?.traceId ?? null;
+}
+
+function randomHex(bytes: number): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** Response header naming an error's trace id (also `traceId` in its JSON body). */
+export const TRACE_ID_HEADER = 'X-PAS-Trace-Id';
+
+/** A fresh 32-hex trace id, for a request that arrived without a valid traceparent. */
+export function newTraceId(): string {
+  return randomHex(16);
+}
+
+/** A fresh 16-hex span id: the server's own span for a request. */
+export function newSpanId(): string {
+  return randomHex(8);
+}
+
+const CODE_RE = /^[A-Za-z0-9._:-]{1,64}$/;
+const SPAN_RE = /^[0-9a-f]{16}$/i;
+const SDK_VERSION_RE = /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[0-9A-Za-z.]{1,24})?$/;
+const MAX_DURATION_MS = 60 * 60 * 1000;
+
+/** The allowlisted {@link LogContext} of a client entry; null when it has none of it. */
+export function normalizeContext(raw: RawLogEntry): LogContext | null {
+  if (raw.v !== 1) return null;
+  const ctx: LogContext = { v: 1 };
+  if (typeof raw.sdkVersion === 'string' && SDK_VERSION_RE.test(raw.sdkVersion)) ctx.sdkVersion = raw.sdkVersion;
+  if (typeof raw.operation === 'string' && CODE_RE.test(raw.operation)) ctx.operation = raw.operation;
+  if (typeof raw.spanId === 'string' && SPAN_RE.test(raw.spanId) && !/^0+$/.test(raw.spanId)) ctx.spanId = raw.spanId.toLowerCase();
+  if (raw.result === 'ok' || raw.result === 'error') ctx.result = raw.result;
+  if (typeof raw.errorCode === 'string' && CODE_RE.test(raw.errorCode)) ctx.errorCode = raw.errorCode;
+  if (typeof raw.durationMs === 'number' && Number.isInteger(raw.durationMs) && raw.durationMs >= 0 && raw.durationMs <= MAX_DURATION_MS) ctx.durationMs = raw.durationMs;
+  return ctx;
+}
+
+const CODE_BY_STATUS: Record<number, string> = {
+  400: 'bad_request', 401: 'unauthorized', 403: 'forbidden', 404: 'not_found', 405: 'method_not_allowed', 409: 'conflict',
+  410: 'gone', 413: 'payload_too_large', 415: 'unsupported_media_type', 422: 'unprocessable', 428: 'precondition_required', 429: 'rate_limited',
+};
+
+/**
+ * A safe machine code for an error response (#390): the thrown message only when
+ * it is already a snake_case code (`step_up_required`), else one derived from the
+ * status. Never free text, so it cannot carry ids, paths or internal detail.
+ */
+export function safeErrorCode(status: number, message: string | null): string {
+  if (status < 500 && message && /^[a-z][a-z0-9_]{2,63}$/.test(message)) return message;
+  return CODE_BY_STATUS[status] ?? (status >= 500 ? 'internal_error' : `http_${status}`);
 }
 
 /**
@@ -187,6 +267,7 @@ export async function normalizeEntry(
     data,
     buildMeta,
     traceId: traceIdFromEntry(typeof raw.traceId === 'string' ? raw.traceId : null),
+    context: (() => { const ctx = normalizeContext(raw); return ctx ? JSON.stringify(ctx) : null; })(),
     fingerprint: await fingerprintEntry(level, category, rawMessage),
   };
 }

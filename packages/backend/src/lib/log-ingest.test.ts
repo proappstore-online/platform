@@ -8,6 +8,8 @@ import {
   normalizeBatch,
   normalizeClientId,
   normalizeEntry,
+  parseTraceparent,
+  safeErrorCode,
   traceIdFromTraceparent,
 } from './log-ingest.js';
 
@@ -200,5 +202,44 @@ describe('normalizeBatch', () => {
 
   it('returns an empty array rather than throwing on an empty batch', async () => {
     expect(await normalizeBatch([], NOW)).toEqual([]);
+  });
+});
+
+describe('request context envelope (#390)', () => {
+  const ENVELOPE = { v: 1, sdkVersion: '1.16.81', operation: 'action.save_lead', spanId: 'CD'.repeat(8), result: 'error', errorCode: 'not_found', durationMs: 42 };
+
+  it('keeps the allowlisted, well-formed envelope fields', async () => {
+    const e = await normalizeEntry(raw({ traceId: 'ab'.repeat(16), ...ENVELOPE }), NOW);
+    expect(e!.traceId).toBe('ab'.repeat(16));
+    expect(JSON.parse(e!.context!)).toEqual({ ...ENVELOPE, spanId: 'cd'.repeat(8) });
+  });
+
+  it('strips unknown fields and drops malformed ones', async () => {
+    const e = await normalizeEntry(raw({
+      ...ENVELOPE, url: 'https://x.example/?token=t', headers: { authorization: 'Bearer t' }, child: { name: 'kid' },
+      operation: 'https://x.example/a?b=c', spanId: '0'.repeat(16), result: 'maybe', errorCode: 'has spaces', durationMs: -5, sdkVersion: '<script>',
+    }), NOW);
+    expect(JSON.parse(e!.context!)).toEqual({ v: 1 });
+    expect(e!.context).not.toMatch(/token|Bearer|kid|x\.example|script/);
+  });
+
+  it('an entry from an SDK without the envelope (or another version) has no context', async () => {
+    expect((await normalizeEntry(raw({ spanId: 'cd'.repeat(8) }), NOW))!.context).toBeNull();
+    expect((await normalizeEntry(raw({ ...ENVELOPE, v: 2 }), NOW))!.context).toBeNull();
+  });
+
+  it('parses a traceparent strictly', () => {
+    expect(parseTraceparent(`00-${'AB'.repeat(16)}-${'cd'.repeat(8)}-01`)).toEqual({ traceId: 'ab'.repeat(16), spanId: 'cd'.repeat(8) });
+    for (const bad of ['', 'garbage-abc-def', `00-${'ab'.repeat(16)}-${'0'.repeat(16)}-01`, `01-${'ab'.repeat(16)}-${'cd'.repeat(8)}-01`, `00-${'ab'.repeat(16)}-${'cd'.repeat(8)}-01-x`]) {
+      expect(parseTraceparent(bad), bad).toBeNull();
+    }
+  });
+
+  it('error codes are machine codes, never free text', () => {
+    expect(safeErrorCode(403, 'step_up_required')).toBe('step_up_required');
+    expect(safeErrorCode(403, 'requires app role')).toBe('forbidden');
+    expect(safeErrorCode(404, 'app chess-academy not found')).toBe('not_found');
+    expect(safeErrorCode(418, null)).toBe('http_418');
+    expect(safeErrorCode(500, 'database_locked_for_user_gh_7')).toBe('internal_error');
   });
 });

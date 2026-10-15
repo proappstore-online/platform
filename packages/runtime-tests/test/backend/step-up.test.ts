@@ -61,7 +61,7 @@ describe('step_up actions (#231)', () => {
     await registerTools(tool('view_id_document', { step_up: true }));
     const res = await call('view_id_document', await sessionAged(301));
     expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: 'step_up_required', message: 'Recent passkey verification required', max_age: 300, method: 'passkey' });
+    expect(await res.json()).toEqual({ error: 'step_up_required', message: 'Recent passkey verification required', max_age: 300, method: 'passkey', errorCode: 'step_up_required', traceId: expect.stringMatching(/^[0-9a-f]{32}$/) });
   });
 
   // #337: since #331 a step_up action is bound to the app's relying party, which
@@ -76,7 +76,7 @@ describe('step_up actions (#231)', () => {
     const refused = await call('view_id_document', oauth);
     expect(refused.status).toBe(403);
     const text = await refused.text();
-    expect(JSON.parse(text)).toEqual({ error: 'step_up_required', message: 'Recent passkey verification required', max_age: 300, method: 'passkey' });
+    expect(JSON.parse(text)).toEqual({ error: 'step_up_required', message: 'Recent passkey verification required', max_age: 300, method: 'passkey', errorCode: 'step_up_required', traceId: expect.stringMatching(/^[0-9a-f]{32}$/) });
     const err = new ActionError('view_id_document', 403, text);
     expect([err.stepUpRequired, err.needsPasskey, err.forbidden]).toEqual([true, true, false]);
 
@@ -134,7 +134,7 @@ describe('step_up actions (#231)', () => {
     await registerTools(tool('view_id_document', { step_up: true, auth: { app_roles: ['operator'] } }));
     const res = await call('view_id_document', await sessionAged(3600));
     expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: 'requires app role' });
+    expect(await res.json()).toEqual({ error: 'requires app role', errorCode: 'forbidden', traceId: expect.stringMatching(/^[0-9a-f]{32}$/) });
   });
 
   it('a personal app token can never satisfy step_up', async () => {

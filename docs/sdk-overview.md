@@ -114,7 +114,10 @@ app.license.current() / .issue() / .revoke() / .validate(key)
 app.usage.start() / .stop() / .flush()
 
 // Runtime monitoring (auto-on — captures errors + failed ops into app_logs)
-app.logs.error(category, message, data?) / .warn(...) / .info(...) / .capture(err) / .flush()
+app.logs.error(message, data?) / .warn(...) / .info(...) / .debug(...)
+app.logs.capture(level, category, message, data?, context?)   // context: see "Trace correlation"
+app.logs.captureException(err, { category?, traceId?, spanId?, operation? }?)
+app.logs.flush()
 ```
 
 ## Monitoring
@@ -688,6 +691,67 @@ GET /v1/apps/:appId/logs/groups   # occurrences, affected clients, first + last 
 
 Failures with no session are **counted** but not stored as rows, so an
 unauthenticated caller cannot write into another app's log.
+
+### Trace correlation
+
+Every `app.actions.call()` / `callPublic()` gets its own W3C trace context (#390).
+The request carries `traceparent: 00-<traceId>-<spanId>-01`, and the same trace
+id is on:
+
+- the client log entry the SDK writes when the call fails;
+- the server's `source = 'server'` row for the same failure;
+- the error response: `{ error, errorCode, traceId }` in the body and the
+  `X-PAS-Trace-Id` header;
+- the thrown `ActionError` (`err.traceId`, `err.durationMs`).
+
+So one id finds both sides: `GET /v1/apps/:appId/logs?trace_id=<traceId>`.
+The two rows are told apart by their spans. The client row has the SDK's span,
+and the server row has its own span, with the client's as `parentSpanId`.
+
+Each row's `context` is a small, versioned envelope. Only these fields are
+accepted, and each is validated. Anything else is dropped at ingest:
+
+```json
+{
+  "v": 1,
+  "sdkVersion": "1.16.81",
+  "operation": "action.save_lead",
+  "spanId": "cdcdcdcdcdcdcdcd",
+  "parentSpanId": "abababababababab",
+  "result": "error",
+  "errorCode": "not_found",
+  "durationMs": 42
+}
+```
+
+`parentSpanId` appears only on server rows, and `sdkVersion` only on client
+rows. Rows from SDKs before the envelope, and older rows, read with
+`context: null`.
+
+- **Rules for the trace header:**
+  - `traceparent` is sent only to the platform's own endpoints: same-origin
+    `/.pas/` mediation, the PAS API, and this app's data worker. It never goes
+    to a third-party URL.
+  - The host drops a malformed `traceparent` before forwarding.
+  - A request without a valid one gets a fresh trace id from the server.
+- **Correlation, not authorization:** nothing on the platform trusts or
+  authorizes on a trace id. It carries no identity.
+- **`errorCode` is a machine code,** never free text: `not_found`,
+  `forbidden`, `step_up_required`, `internal_error`…
+- **Recording your own failures with context.** Use `captureException`, or
+  `capture` with the context argument:
+
+  ```ts
+  try { await checkout() } catch (err) {
+    app.logs.captureException(err, { operation: 'checkout' })
+  }
+  app.logs.capture('warn', 'billing', 'card declined', { step: 'confirm' }, { operation: 'checkout', errorCode: 'card_declined' })
+  ```
+
+- **Release stamp:** stamp entries with `monitoring: { build: { sha } }` (the
+  deployed commit), and the client row will name the exact build.
+- **Older data stays valid:** #308 app-worker invocation ids remain plain
+  `trace_id` values (not W3C), and the `trace_id` filter finds them as before.
 
 ### What is deliberately never recorded
 

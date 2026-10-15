@@ -150,10 +150,23 @@ function forwardedHeaders(source: Headers, token: string, route: Route, hostname
   // path — this cookie-mediation route is the browser data plane, so the
   // internal path must only ever be reachable from the backend actions-executor.
   headers.delete("X-Internal-Token");
+  // W3C trace context (#390) is page-supplied: forward it only when it is a
+  // well-formed version-00 traceparent, and drop its tracestate with it otherwise.
+  // Correlation only — upstream never authorizes on it.
+  if (!isValidTraceparent(headers.get("traceparent"))) {
+    headers.delete("traceparent");
+    headers.delete("tracestate");
+  }
   headers.set("Authorization", `Bearer ${token}`);
   return headers;
 }
 
 function isMutation(method: string): boolean {
   return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+}
+
+/** Vendored from backend lib/log-ingest.ts parseTraceparent: version 00, no all-zero ids. */
+export function isValidTraceparent(header: string | null): boolean {
+  const m = header === null ? null : /^00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/.exec(header.trim().toLowerCase());
+  return Boolean(m && !/^0+$/.test(m[1]!) && !/^0+$/.test(m[2]!));
 }
