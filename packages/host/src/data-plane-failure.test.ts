@@ -29,7 +29,7 @@ function setup(upstream: () => Promise<Response>) {
   } as unknown as ExecutionContext;
   const dataFetch = vi.fn(async (_req: Request) => upstream());
   vi.stubGlobal("fetch", dataFetch);
-  return { env: { API } as unknown as Env, ctx, reports, waits, dataFetch };
+  return { env: { API, DATA_WORKER_HOST: "acct.workers.dev" } as unknown as Env, ctx, reports, waits, dataFetch };
 }
 
 function dataRequest(headers: Record<string, string> = {}, path = "/.pas/data/query?debug=secret") {
@@ -122,6 +122,7 @@ describe("data-plane failure reporting (#394)", () => {
   it("the report never holds up or changes the browser's answer when HostApi fails", async () => {
     const { ctx, waits } = setup(async () => new Response("x", { status: 500 }));
     const env = {
+      DATA_WORKER_HOST: "acct.workers.dev",
       API: {
         fetch: vi.fn(async () => {
           throw new Error("binding down");

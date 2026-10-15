@@ -35,8 +35,9 @@ export async function handlePlatformMediation(request: Request, env: Env, route:
     //
     // #394: the API never sees this plane, so the host reports its 5xx over
     // HostApi — after the response, never holding it up.
+    if (!env.DATA_WORKER_HOST) return noStore(new Response("DATA_WORKER_HOST is not configured", { status: 503 }));
     const endpoint = url.pathname.slice(DATA_PREFIX.length).split("/")[1] ?? "";
-    return forwardWithSession(request, null, upstreamDataUrl(url, route), false, route, undefined, true, (upstream, traceparent) => {
+    return forwardWithSession(request, null, upstreamDataUrl(url, route, env.DATA_WORKER_HOST), false, route, undefined, true, (upstream, traceparent) => {
       ctx.waitUntil(persistDataPlaneFailure(env.API, route, endpoint, upstream, traceparent));
     });
   }
@@ -61,9 +62,17 @@ function upstreamApiUrl(url: URL): string {
   return upstream.toString();
 }
 
-function upstreamDataUrl(url: URL, route: Route): string {
+/**
+ * #403: straight to the data worker's workers.dev host — the same target the
+ * host's own `data-*` proxy and every backend caller use (#153). The previous
+ * target, `data-<app>.proappstore.online`, is a subrequest to this Worker's own
+ * zone that then re-entered the host: the hop that answered a healthy worker with
+ * HTTP 522 for chess-academy in #153. The browser path still took it when #403's
+ * 522 was reported (cause not confirmed from the status alone).
+ */
+function upstreamDataUrl(url: URL, route: Route, dataWorkerHost: string): string {
   const suffix = url.pathname.slice(DATA_PREFIX.length) || "/";
-  const upstream = new URL(`https://data-${route.slug}.proappstore.online${suffix}`);
+  const upstream = new URL(`https://pas-data-${route.slug}.${dataWorkerHost}${suffix}`);
   upstream.search = url.search;
   return upstream.toString();
 }

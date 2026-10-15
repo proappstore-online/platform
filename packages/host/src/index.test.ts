@@ -566,14 +566,15 @@ describe("host same-origin platform mediation routes", () => {
   });
 
   it("forwards same-origin data requests to the current app's canonical data worker", async () => {
+    const env = makeEnv();
     const dataFetch = vi.fn(async (request: Request) => {
-      expect(request.url).toBe("https://data-meetup.proappstore.online/query");
+      // #403: straight to the workers.dev host, never back through data-<app>.proappstore.online.
+      expect(request.url).toBe(`https://pas-data-meetup.${env.DATA_WORKER_HOST}/query`);
       expect(request.headers.get("Authorization")).toBe("Bearer cookie-token");
       expect(request.headers.get("Cookie")).toBeNull();
       return Response.json({ rows: [{ id: 1 }], meta: { changes: 0, duration: 1 } });
     });
     vi.stubGlobal("fetch", dataFetch);
-    const env = makeEnv();
 
     const res = await worker.fetch(
       new Request("https://meetup.proappstore.online/.pas/data/query", {
@@ -646,6 +647,75 @@ describe("host same-origin platform mediation routes", () => {
 
     expect(res.status).toBe(401);
     expect(res.headers.get("Set-Cookie")).toBeNull();
+  });
+
+  it.each([
+    ["an exact custom domain", "https://app.example.com"],
+    ["a tenant domain", "https://academy.chessclubs.online"],
+  ])("on %s, data mediation goes to the route's workers.dev data worker with the cookie's session (#403)", async (_what, origin) => {
+    const env = makeEnv();
+    const dataFetch = vi.fn(async (request: Request) => {
+      expect(request.url).toBe(`https://pas-data-meetup.${env.DATA_WORKER_HOST}/query`);
+      expect(request.headers.get("Authorization")).toBe("Bearer cookie-token");
+      expect(request.headers.get("Cookie")).toBeNull();
+      return Response.json({ rows: [] });
+    });
+    vi.stubGlobal("fetch", dataFetch);
+    const res = await worker.fetch(
+      new Request(`${origin}/.pas/data/query`, {
+        method: "POST",
+        headers: { Cookie: "__Host-pas_session=cookie-token", Origin: origin, "Content-Type": "application/json" },
+        body: JSON.stringify({ sql: "select 1" }),
+      }),
+      env,
+      ctx(),
+    );
+    expect(res.status).toBe(200);
+    expect(dataFetch).toHaveBeenCalledOnce();
+  });
+
+  it("returns 522 with a safe attributable error and no cookie/session loss when the data worker is unreachable (#403)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 522, headers: { "cf-ray": "8f1e2d3c4b5a6978-SYD" } })));
+    const reports: Request[] = [];
+    const apiFetch = vi.fn(async (request: Request) => { reports.push(request); return new Response(null, { status: 204 }); });
+    const waits: Promise<unknown>[] = [];
+    const context = { waitUntil: vi.fn((p: Promise<unknown>) => { waits.push(p); }), passThroughOnException: vi.fn() } as unknown as ExecutionContext;
+
+    const res = await worker.fetch(
+      new Request("https://app.example.com/.pas/data/migrate", {
+        method: "POST",
+        headers: {
+          Cookie: "__Host-pas_session=cookie-token",
+          Origin: "https://app.example.com",
+          "Sec-Fetch-Site": "same-origin",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ migrations: [{ name: "0001", sql: "CREATE TABLE secret_children (id TEXT)" }] }),
+      }),
+      makeEnv({ apiFetch }),
+      context,
+    );
+    await Promise.all(waits);
+
+    // The upstream status reaches the page unchanged — no false success — with a trace to quote.
+    expect(res.status).toBe(522);
+    expect(res.headers.get("X-PAS-Trace-Id")).toMatch(/^[0-9a-f]{32}$/);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    // The session survives: no cookie clearing, no invalidation event.
+    expect(res.headers.get("Set-Cookie")).toBeNull();
+    expect(res.headers.get("X-PAS-Session-Invalidation-Id")).toBeNull();
+    const paths = reports.map((r) => new URL(r.url).pathname);
+    expect(paths).not.toContain("/v1/internal/session-invalidations");
+    // #394: the failure is recorded for the route's app with status, endpoint, ray and the same trace — no cookie, SQL or body.
+    expect(paths).toEqual(["/v1/internal/data-plane-failures"]);
+    const report = reports[0]!;
+    expect(report.headers.get("X-PAS-App")).toBe("meetup");
+    expect(report.headers.get("traceparent")!.slice(3, 35)).toBe(res.headers.get("X-PAS-Trace-Id"));
+    const body = await report.text();
+    expect(JSON.parse(body)).toEqual({ status: 522, fault: null, endpoint: "migrate", cfRay: "8f1e2d3c4b5a6978-SYD" });
+    expect(body).not.toMatch(/cookie-token|secret_children|CREATE TABLE/);
+    expect(report.headers.get("Cookie")).toBeNull();
+    expect(report.headers.get("Authorization")).toBeNull();
   });
 
   it("DOES clear the session cookie when the API plane returns 401 (backend is the session authority)", async () => {
