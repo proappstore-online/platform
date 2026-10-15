@@ -17,6 +17,7 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
+    "@jridgewell/trace-mapping": "^0.3.31",
     "@proappstore/build-core": "workspace:*",
     "@proappstore/compliance": "workspace:*",
     "@proappstore/qa-spec": "workspace:*",

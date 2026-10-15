@@ -223,6 +223,28 @@ describe("canonical deploy workflow — single source of truth", () => {
     expect(deployWorkflowYaml(ENV)).toBe(golden);
   });
 
+  // #393: hidden source maps go to the platform's private store (opt-in, keyless) and
+  // are always stripped before the public upload, so the public bucket never has a map.
+  it("uploads opted-in source maps keyless and always strips maps before the public sync", () => {
+    const yaml = deployWorkflowYaml(ENV);
+    const at = (name: string) => yaml.indexOf(`- name: ${name}`);
+    const upload = yaml.slice(at("Upload browser source maps (opt-in, keyless)"), at("Strip source maps from the public build"));
+    const strip = yaml.slice(at("Strip source maps from the public build"), at("Mint deploy credentials (keyless — GitHub OIDC → platform)"));
+    expect(at("Upload browser source maps (opt-in, keyless)")).toBeGreaterThan(at("Locate build output"));
+    expect(at("Strip source maps from the public build")).toBeLessThan(at("Upload to R2"));
+    // Keyless: the runner's OIDC token for the platform audience, no stored secret, to this commit's release.
+    expect(upload).toContain("ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.proappstore.online");
+    expect(upload).toContain("/v1/apps/${{ github.event.repository.name }}/sourcemaps?commitSha=${{ github.sha }}");
+    expect(upload).not.toMatch(/secrets\./);
+    // Opt-in by building maps; never fatal; manifest digest verified.
+    expect(upload).toContain("continue-on-error: true");
+    expect(upload).toContain("-name '*.map' -print -quit");
+    expect(upload).toContain("sha256sum");
+    // The strip step is unconditional and deletes every map in the build output.
+    expect(strip).not.toContain("if:");
+    expect(strip).toContain("find \"$DIR\" -type f -name '*.map' -delete");
+  });
+
   it("the golden never reintroduces the lockfile-coupled cache or CF Pages", () => {
     const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
     expect(golden).not.toContain("cache: pnpm");

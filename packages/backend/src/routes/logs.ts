@@ -38,6 +38,7 @@ import {
   type RawLogEntry,
 } from '../lib/log-ingest.js';
 import { dataFaultOf } from '../lib/data-worker-url.js';
+import { COMMIT_SHA_RE, loadRelease, mapFrames, parseStack, type Release } from '../lib/sourcemap.js';
 import { recordDataPlaneFailure } from '../lib/operation-log.js';
 import { incrementMetrics } from '../lib/metric-aggregates.js';
 import { checkLogQuota, d1LogUsageStore, publicLogBurstKey, SERVER_FAILURE_DAILY_LIMIT, serverFailureUsageStore } from '../lib/log-quota.js';
@@ -319,8 +320,7 @@ logsRoutes.get('/apps/:appId/logs', async (c) => {
   const page = rows.slice(0, limit);
   const last = page.at(-1);
 
-  return c.json({
-    logs: page.map((r) => {
+  const logs = page.map((r) => {
       let data: unknown;
       let build: unknown;
       let context: unknown = null;
@@ -342,7 +342,12 @@ logsRoutes.get('/apps/:appId/logs', async (c) => {
         // #390: the row's allowlisted request context (span, operation, error code…); null before the envelope.
         context,
       };
-    }),
+    });
+  // #393: optional, owner-only, bounded symbolication of each row's stack against its own release.
+  const symbolicated = c.req.query('symbolicate') === 'true' ? await symbolicateLogs(c.env, appId, logs) : logs;
+
+  return c.json({
+    logs: symbolicated,
     nextCursor: rows.length > limit && last
       ? `${String(last.ts)}:${String(last.id)}`
       : null,
@@ -502,3 +507,39 @@ logsRoutes.get('/apps/:appId/incidents/:traceId', async (c) => {
     truncated: rows.length > MAX_INCIDENT_RECORDS,
   });
 });
+
+/** #393: per logs request, at most this many rows symbolicated across this many releases. */
+export const MAX_SYMBOLICATED_ROWS = 20;
+export const MAX_SYMBOLICATED_RELEASES = 3;
+
+/**
+ * Attach `symbolication` to each row that has a stack (`data.stack`): its frames
+ * mapped through the release its own `build.sha` names — never another — and an
+ * explicit status. A release is loaded once per request; past the row or release
+ * limit a row says `skipped`, and a row without a build SHA says `missing`.
+ * The raw stack stays in `data`.
+ */
+async function symbolicateLogs<T extends { data?: unknown; build?: unknown }>(env: Env, appId: string, logs: T[]): Promise<T[]> {
+  const releases = new Map<string, Release>();
+  let done = 0;
+  const out: T[] = [];
+  for (const row of logs) {
+    const stack = (row.data as { stack?: unknown } | null | undefined)?.stack;
+    if (typeof stack !== 'string' || !stack) { out.push(row); continue; }
+    const sha = String((row.build as { sha?: unknown } | null | undefined)?.sha ?? '').toLowerCase();
+    const frames = parseStack(stack);
+    if (!COMMIT_SHA_RE.test(sha)) {
+      out.push({ ...row, symbolication: { status: 'missing', reason: 'no_build_sha', frames } });
+      continue;
+    }
+    if (done >= MAX_SYMBOLICATED_ROWS || (!releases.has(sha) && releases.size >= MAX_SYMBOLICATED_RELEASES)) {
+      out.push({ ...row, symbolication: { status: 'skipped', reason: 'per_request_limit', frames } });
+      continue;
+    }
+    let release = releases.get(sha);
+    if (!release) { release = await loadRelease(env, appId, sha); releases.set(sha, release); }
+    done += 1;
+    out.push({ ...row, symbolication: { ...mapFrames(release, frames), commitSha: sha } });
+  }
+  return out;
+}

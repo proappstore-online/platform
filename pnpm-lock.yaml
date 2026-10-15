@@ -82,6 +82,9 @@ importers:
 
   packages/backend:
     dependencies:
+      '@jridgewell/trace-mapping':
+        specifier: ^0.3.31
+        version: 0.3.31
       '@proappstore/build-core':
         specifier: workspace:*
         version: link:../build-core

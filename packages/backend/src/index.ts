@@ -35,6 +35,8 @@ import { webhookConfigRoutes } from './routes/webhooks-config.js';
 import { logsRoutes } from './routes/logs.js';
 import { logsPruneRoutes } from './routes/logs-prune.js';
 import { telemetryHealthRoutes } from './routes/telemetry-health.js';
+import { sourcemapRoutes } from './routes/sourcemaps.js';
+import { sweepSourceMaps } from './lib/sourcemap.js';
 import { toolsRoutes } from './routes/tools.js';
 import { visibilityRoutes } from './routes/visibility.js';
 import { endpointsRoutes } from './routes/endpoints.js';
@@ -319,6 +321,7 @@ v1.route('/', webhookConfigRoutes);
 v1.route('/', logsRoutes);
 v1.route('/', logsPruneRoutes);
 v1.route('/', telemetryHealthRoutes);
+v1.route('/', sourcemapRoutes);
 v1.route('/', toolsRoutes);
 v1.route('/', visibilityRoutes);
 v1.route('/', endpointsRoutes);
@@ -410,6 +413,10 @@ export default {
       ctx.waitUntil(reapReviewUploads(env, tickAt).catch((e) => console.error(`[review-retention] run failed: ${(e as Error).message}`)));
       // #374: provisioning plans are kept a day past expiry, then deleted.
       ctx.waitUntil(pruneProvisioningPlans(env.DB, tickAt).catch((e) => console.error(`[provisioning-plans] prune failed: ${(e as Error).message}`)));
+      // #393: browser source maps past their 30-day window — bundle deleted, release kept as an `expired` tombstone.
+      ctx.waitUntil(sweepSourceMaps(env, tickAt)
+        .then((r) => console.log(`[sourcemaps] sweep expired=${r.expired} removed=${r.removed}`))
+        .catch((e) => console.error(`[sourcemaps] sweep failed: ${(e as Error).message}`)));
     }
     // #381: the hourly payout-meter AI Gateway reconciliation (reconcileAiGateway) is archived and no longer scheduled.
   },

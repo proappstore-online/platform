@@ -384,8 +384,18 @@ Limits: `debug` is dropped unless you set `monitoring: { level: 'debug' }`; 100
 entries per upload, 4 KB per entry; each app has a daily budget, and past it
 entries are still *counted* (so spikes stay visible) while detail stops and the
 SDK goes quiet for a minute rather than retrying. Detail rows are pruned after 30
-days. Stack traces are not symbolicated yet — grouping still works, and `build`
-identifies the deploy.
+days. Grouping works on minified stacks, and `build` identifies the deploy.
+
+**Readable stacks (opt-in).** Build with hidden source maps
+(`build: { sourcemap: 'hidden' }` in `vite.config`) and pass the commit as
+`build.sha`: the canonical deploy then uploads the maps to the platform's
+private store for that commit (keyless, no secret) and strips them before the
+public upload, so they are never served. The owner reads mapped frames with
+`GET /v1/apps/:appId/logs?symbolicate=true`; each row resolves only against the
+release its own `build.sha` names, for 30 days, and otherwise says why
+(`missing`, `unavailable`, `mismatched`) with the raw stack kept. Outside the
+canonical workflow, `pas sourcemaps upload` does the same from GitHub Actions.
+See `docs/build-and-deploy.md`.
 
 **Best-effort, and never in the way.** Telemetry never delays a move or an
 operation result, and never changes one. Delivery can lose entries:

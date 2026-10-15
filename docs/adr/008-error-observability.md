@@ -71,7 +71,7 @@ rather than only greppable as a log.
 **`upload_source_maps` is Worker-side only.** It does nothing for browser app
 code, which ships as static assets to R2 via each app's GitHub Actions. Browser
 symbolication is deliberately out of scope for the first slice; see
-Consequences.
+Consequences. *Amended by #393:* browser source maps are decision 7.
 
 ### 2. Two-tier client error storage — AE for signal, bounded D1 for detail
 
@@ -223,6 +223,40 @@ delivered on a registered `app.alert` webhook through `dispatchWebhook`, as this
 decision prescribes — no vendor, no egress unless an owner registers a URL.
 Thresholds and payload shape: `docs/monitoring-runbook.md` § Alerts.
 
+### 7. Browser source maps are private release artifacts (amended by #393)
+
+Browser symbolication, deferred by decision 1, is done on read from source maps
+the app's own deploy uploads. Where and how long they live:
+
+- **Private storage only.** Maps are stored in the private `STORAGE` R2 bucket
+  (`pas-storage`) under `_sourcemaps/{appId}/{commitSha}/`, never in the public
+  `pas-apps` bucket the host serves app assets from, and never under an app's
+  own storage prefixes (`{appId}/…`): no app id can begin with `_`. The deploy
+  removes `.map` files from the build output before the public upload; the
+  host's refusal to serve any `*.map` path stays as defence in depth. This
+  supersedes the "unlisted R2 prefix" wording under Consequences: unlisted is
+  not private.
+- **A manifest per release.** Each upload is one row in
+  `release_sourcemap_manifests`, keyed by app and immutable commit SHA (the
+  build's `VITE_COMMIT_SHA`, reported by the SDK as `build.sha`), with the
+  SHA-256 digest of the uploaded bundle and its storage key. A release is
+  uploaded once; it is not overwritten.
+- **Retention at least as long as log detail** (30 days, `RETENTION_DAYS`):
+  `expires_at = uploaded_at + 30 days`. A release's maps are kept for that
+  whole window even after newer deploys, so a crash reported by an older build
+  — a cached PWA, or a rolled-back release — still resolves.
+- **Late events and rollback.** Symbolication uses the release whose SHA
+  equals the event's `build.sha`, exactly; it never falls back to the latest
+  release. A missing, expired or digest-mismatched release yields an explicit
+  `missing` / `unavailable` / `mismatched` status and the raw stack, never a
+  guess.
+- **No fetching from stacks.** Frames name files, and files are looked up only
+  inside the release's own manifest. A URL in a stack is never a fetch
+  destination.
+
+Uploads authenticate with the app repository's GitHub OIDC token, like the
+deploy's migrate, worker and tools steps; no new secret. Reads are owner-only.
+
 ### Third-party surface: none
 
 With decision 6, the design is entirely Cloudflare-native and adds no
@@ -278,7 +312,9 @@ dependencies:
   own CI. Accepted knowingly: fingerprinting still groups reliably on normalized
   minified frames, and `build_meta` identifies the deploy. The follow-up is
   sourcemaps to an unlisted R2 prefix at publish time plus read-time
-  symbolication in the console — a separate issue, not a blocker.
+  symbolication in the console — a separate issue, not a blocker. *Amended by
+  #393:* that follow-up is decision 7, and the maps are private, not merely
+  unlisted.
 - The AE tier cannot be deleted per-user, so it must hold no PII beyond
   `client_id`. That is a hard constraint on what the SDK may put in AE blobs.
 - Console-only alerting is **pull, not push**: an error spike is visible but

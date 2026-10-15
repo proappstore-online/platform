@@ -70,6 +70,46 @@ guards (e.g. agents inventing new workflow variants, lockfile breakage on new
 apps, per-repo edits). If it keeps recurring — or once private-repo Actions cost
 or multi-org demand bites — that's the signal to migrate (below).
 
+### Browser source maps (#393, ADR-008 decision 7)
+
+Browser crashes are symbolicated on read from source maps the app's own deploy
+uploads as a **private release artifact**: never the public `pas-apps` bucket.
+
+- **Upload.** `POST /v1/apps/:appId/sourcemaps?commitSha=<sha>`, authenticated
+  with the app repository's GitHub OIDC token on `main` (no secret). The commit
+  must be the one the workflow runs for. Body: one JSON bundle
+  `{ "files": { "<asset path>": <v3 source map> } }` covering every chunk of the
+  build, at most 20 MB and 500 maps, relative paths only. It is stored in the
+  private `STORAGE` bucket under `_sourcemaps/{appId}/{sha}/bundle.json` with
+  its SHA-256 in `release_sourcemap_manifests`. A release is immutable: a second
+  upload for the same commit is `409`.
+- **Read.** Owner-only: `POST /v1/apps/:appId/sourcemaps/:sha/symbolicate`
+  with frames, or `GET /v1/apps/:appId/logs?symbolicate=true`, which maps each
+  row's `data.stack` through the release its own `build.sha` names. Every
+  result carries a status: `ok`, `missing` (no release for that SHA, or the row
+  has no build SHA), `unavailable` (expired or its bundle is gone),
+  `mismatched` (stored bytes differ from the recorded digest) or `skipped`
+  (per-request limit). Anything but `ok` leaves the frames raw and marked
+  `unresolved`; the raw stack is always kept. A frame's URL is only parsed for
+  its path inside the release, never fetched.
+- **Retention: 30 days**, the log-detail window. A release's maps stay valid
+  for that whole window even after newer deploys.
+- **Late events and rollback.** Symbolication uses the release whose SHA equals
+  the event's `build.sha`, exactly — never the latest. A crash from an older
+  cached PWA build, or an app rolled back to an older release, resolves while
+  that release is inside its 30 days; after that its frames come back
+  `unavailable`, never mapped against another release.
+- **Sweep.** Daily on the backend cron (03:45 UTC), at most 100 releases per
+  step: an expired release's bundle is deleted and its row kept as an `expired`
+  tombstone (so it reads `unavailable`, not `missing`); tombstones are deleted
+  a year after upload. Each run logs `[sourcemaps] sweep expired=… removed=…`.
+- **Cost.** A bundle is stored once and parsed on each read; there is no
+  cross-request cache. One logs request loads at most 3 releases and
+  symbolicates at most 20 rows; the symbolicate endpoint takes at most 50
+  frames for one release.
+- **No public maps.** The deploy must not publish `.map` files to `pas-apps`,
+  and the host refuses to serve any `*.map` path regardless.
+
 ### Known limitations of the current state
 - A CI workflow lives in every repo (the root cause of drift).
 - Private repos burn metered GitHub Actions minutes.

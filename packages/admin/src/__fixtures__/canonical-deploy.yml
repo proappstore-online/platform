@@ -145,6 +145,46 @@ jobs:
             exit 1
           fi
 
+      - name: Upload browser source maps (opt-in, keyless)
+        continue-on-error: true
+        run: |
+          # #393 (ADR-008 decision 7): an app opts in by building hidden source maps
+          # (vite: build.sourcemap: 'hidden'). They go to the platform's PRIVATE store
+          # as one bundle for this commit, with the same verified GitHub OIDC claims
+          # as every keyless step, never to the public bucket. Diagnostics never block
+          # a deploy: a refused upload is a warning, and the next step strips the maps
+          # whatever happened here.
+          DIR="${{ steps.dist.outputs.dir }}"
+          if [ -z "$(find "$DIR" -type f -name '*.map' -print -quit)" ]; then
+            echo "No source maps in $DIR (opt in with build.sourcemap: 'hidden')"; exit 0
+          fi
+          node -e 'const fs=require("fs"),p=require("path"),d=process.argv[1],files={};for(const f of fs.readdirSync(d,{recursive:true}).map(String)){if(f.endsWith(".map")&&fs.statSync(p.join(d,f)).isFile())files[f.split(p.sep).join("/").slice(0,-4)]=JSON.parse(fs.readFileSync(p.join(d,f),"utf8"))}process.stdout.write(JSON.stringify({files}))' "$DIR" > "$RUNNER_TEMP/sourcemaps.json"
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.proappstore.online" | jq -r '.value')
+          if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then echo "::warning::could not obtain an OIDC token; source maps not uploaded"; exit 0; fi
+          CODE=$(curl -sS -o "$RUNNER_TEMP/sourcemaps-resp.json" -w '%{http_code}' -X POST \
+            "https://api.proappstore.online/v1/apps/${{ github.event.repository.name }}/sourcemaps?commitSha=${{ github.sha }}" \
+            -H "Authorization: Bearer $OIDC" -H "Content-Type: application/json" --data-binary @"$RUNNER_TEMP/sourcemaps.json")
+          case "$CODE" in
+            201)
+              # Manifest verification: the platform recorded exactly the bytes sent.
+              if [ "$(jq -r '.assetDigest' "$RUNNER_TEMP/sourcemaps-resp.json")" = "$(sha256sum "$RUNNER_TEMP/sourcemaps.json" | cut -d' ' -f1)" ]; then
+                echo "Uploaded source maps for ${{ github.sha }} (digest verified)"
+              else
+                echo "::warning::source-map manifest digest does not match the uploaded bundle"
+              fi ;;
+            409) echo "Source maps for ${{ github.sha }} were already uploaded (releases are immutable)" ;;
+            *) echo "::warning::source-map upload refused (HTTP $CODE): $(jq -c '.error // .' "$RUNNER_TEMP/sourcemaps-resp.json" 2>/dev/null)" ;;
+          esac
+
+      - name: Strip source maps from the public build
+        run: |
+          # Always, opted in or not: the public bucket never carries a map (#393).
+          DIR="${{ steps.dist.outputs.dir }}"
+          N=$(find "$DIR" -type f -name '*.map' | wc -l | tr -d ' ')
+          find "$DIR" -type f -name '*.map' -delete
+          echo "Removed $N source map(s) from $DIR"
+
       - name: Mint deploy credentials (keyless — GitHub OIDC → platform)
         run: |
           # 1. Ask GitHub for an OIDC token scoped to the platform audience.
