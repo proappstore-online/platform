@@ -11,6 +11,7 @@ import type { Route } from "./host.js";
  * client-supplied copy can never survive.
  */
 
+const ctx = { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext;
 const route = { slug: "chess-academy" } as unknown as Route;
 
 function envWithCapture() {
@@ -40,7 +41,7 @@ function mediatedRequest(headers: Record<string, string>, method = "POST") {
 describe("X-PAS-App app-context binding", () => {
   it("sets the header from the resolved route", async () => {
     const { env, seen } = envWithCapture();
-    await handlePlatformMediation(mediatedRequest({}), env, route);
+    await handlePlatformMediation(mediatedRequest({}), env, route, ctx);
     expect(seen[0].headers.get("X-PAS-App")).toBe("chess-academy");
   });
 
@@ -48,13 +49,13 @@ describe("X-PAS-App app-context binding", () => {
     // Without the delete-then-set, a page on chess-academy could claim another
     // app through the trusted path — the one thing this header must prevent.
     const { env, seen } = envWithCapture();
-    await handlePlatformMediation(mediatedRequest({ "X-PAS-App": "victim-app" }), env, route);
+    await handlePlatformMediation(mediatedRequest({ "X-PAS-App": "victim-app" }), env, route, ctx);
     expect(seen[0].headers.get("X-PAS-App")).toBe("chess-academy");
   });
 
   it("applies to reads as well as mutations", async () => {
     const { env, seen } = envWithCapture();
-    await handlePlatformMediation(mediatedRequest({}, "GET"), env, route);
+    await handlePlatformMediation(mediatedRequest({}, "GET"), env, route, ctx);
     expect(seen[0].headers.get("X-PAS-App")).toBe("chess-academy");
   });
 
@@ -64,6 +65,7 @@ describe("X-PAS-App app-context binding", () => {
       mediatedRequest({ "X-Internal-Token": "stolen", "X-PAS-App": "victim-app" }),
       env,
       route,
+      ctx,
     );
     expect(seen[0].headers.get("X-Internal-Token")).toBeNull();
     expect(seen[0].headers.get("X-PAS-App")).toBe("chess-academy");
@@ -76,7 +78,7 @@ describe("X-PAS-App app-context binding", () => {
       headers: { Origin: "https://chess-academy.proappstore.online" },
       body: "{}",
     });
-    const res = await handlePlatformMediation(req, env, route);
+    const res = await handlePlatformMediation(req, env, route, ctx);
     expect(res?.status).toBe(401);
     expect(seen).toHaveLength(0);
   });
@@ -88,7 +90,7 @@ describe("traceparent through mediation", () => {
 
   it("forwards a valid traceparent and its tracestate unchanged", async () => {
     const { env, seen } = envWithCapture();
-    await handlePlatformMediation(mediatedRequest({ traceparent: VALID, tracestate: "pas=1" }), env, route);
+    await handlePlatformMediation(mediatedRequest({ traceparent: VALID, tracestate: "pas=1" }), env, route, ctx);
     expect(seen[0]!.headers.get("traceparent")).toBe(VALID);
     expect(seen[0]!.headers.get("tracestate")).toBe("pas=1");
   });
@@ -98,11 +100,13 @@ describe("traceparent through mediation", () => {
     ["all-zero trace", `00-${"0".repeat(32)}-${"cd".repeat(8)}-01`],
     ["a URL", "https://evil.example/?token=x"],
     ["unknown version", `ff-${"ab".repeat(16)}-${"cd".repeat(8)}-01`],
-  ])("drops a malformed traceparent (%s) and its tracestate; the request still goes through", async (_what, traceparent) => {
+  ])("replaces a malformed traceparent (%s) with a fresh trace and drops its tracestate; the request still goes through", async (_what, traceparent) => {
     const { env, seen } = envWithCapture();
-    const res = await handlePlatformMediation(mediatedRequest({ traceparent, tracestate: "pas=1" }), env, route);
+    const res = await handlePlatformMediation(mediatedRequest({ traceparent, tracestate: "pas=1" }), env, route, ctx);
     expect(res!.status).toBe(200);
-    expect(seen[0]!.headers.get("traceparent")).toBeNull();
+    // #394: every hop past the host shares one trace, minted here when the page sent none.
+    expect(seen[0]!.headers.get("traceparent")).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-00$/);
+    expect(seen[0]!.headers.get("traceparent")).not.toBe(traceparent);
     expect(seen[0]!.headers.get("tracestate")).toBeNull();
     expect(seen[0]!.headers.get("X-PAS-App")).toBe("chess-academy");
   });

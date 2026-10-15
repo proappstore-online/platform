@@ -7,6 +7,7 @@ import type { Route } from "./host.js";
 // #260: `/.pas/worker/*` on the app origin reaches the app's worker through the
 // backend, with the same cookie, CSRF and X-PAS-App rules as `/.pas/api`.
 
+const ctx = { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext;
 const route = { slug: "doordrop" } as unknown as Route;
 const ORIGIN = "https://doordrop.proappstore.online";
 
@@ -23,7 +24,7 @@ const req = (path: string, init: RequestInit & { cookie?: boolean } = {}) => new
 describe("/.pas/worker mediation (#260)", () => {
   it("forwards any method as a POST to the backend's worker route, carrying method, path and query", async () => {
     const { env, seen } = capture();
-    const res = await handlePlatformMediation(req("/.pas/worker/v1/campaigns?page=2"), env, route);
+    const res = await handlePlatformMediation(req("/.pas/worker/v1/campaigns?page=2"), env, route, ctx);
     expect(res!.status).toBe(200);
     expect(seen[0]!.method).toBe("POST");
     expect(seen[0]!.url).toBe("https://api.proappstore.online/v1/apps/doordrop/worker/http");
@@ -36,7 +37,7 @@ describe("/.pas/worker mediation (#260)", () => {
 
   it("passes a same-origin mutation's body; the bare prefix maps to /", async () => {
     const { env, seen } = capture();
-    await handlePlatformMediation(req("/.pas/worker", { method: "PUT", body: "x=1", headers: { Origin: ORIGIN } }), env, route);
+    await handlePlatformMediation(req("/.pas/worker", { method: "PUT", body: "x=1", headers: { Origin: ORIGIN } }), env, route, ctx);
     expect(seen[0]!.headers.get("X-PAS-Worker-Method")).toBe("PUT");
     expect(seen[0]!.headers.get("X-PAS-Worker-Path")).toBe("/");
     expect(await seen[0]!.text()).toBe("x=1");
@@ -44,22 +45,22 @@ describe("/.pas/worker mediation (#260)", () => {
 
   it("signed out → 401; a cross-origin POST → 403; neither reaches the backend", async () => {
     const { env, seen } = capture();
-    expect((await handlePlatformMediation(req("/.pas/worker/v1/ping", { cookie: false }), env, route))!.status).toBe(401);
-    const cross = await handlePlatformMediation(req("/.pas/worker/x", { method: "POST", body: "{}", headers: { Origin: "https://evil.example" } }), env, route);
+    expect((await handlePlatformMediation(req("/.pas/worker/v1/ping", { cookie: false }), env, route, ctx))!.status).toBe(401);
+    const cross = await handlePlatformMediation(req("/.pas/worker/x", { method: "POST", body: "{}", headers: { Origin: "https://evil.example" } }), env, route, ctx);
     expect(cross!.status).toBe(403);
     expect(seen).toHaveLength(0);
   });
 
   it("a 401 from the worker plane never clears the session cookie", async () => {
     const { env } = capture(401);
-    const res = await handlePlatformMediation(req("/.pas/worker/v1/ping"), env, route);
+    const res = await handlePlatformMediation(req("/.pas/worker/v1/ping"), env, route, ctx);
     expect(res!.status).toBe(401);
     expect(res!.headers.get("Set-Cookie")).toBeNull();
   });
 
   it("matches the prefix strictly: /.pas/workers is not the worker plane", async () => {
     const { env, seen } = capture();
-    expect(await handlePlatformMediation(req("/.pas/workers/x"), env, route)).toBeNull();
+    expect(await handlePlatformMediation(req("/.pas/workers/x"), env, route, ctx)).toBeNull();
     expect(seen).toHaveLength(0);
   });
 });

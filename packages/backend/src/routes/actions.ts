@@ -2,7 +2,8 @@ import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, optionalUser, requireRecentAuth, requireUser, type FasUser } from '../lib/auth.js';
 import { roleSubjects } from '../lib/role-subject.js';
-import { dataWorkerUrl } from '../lib/data-worker-url.js';
+import { DATA_FAULT_HEADER, dataFaultOf, dataWorkerUrl, DataWorkerFailure } from '../lib/data-worker-url.js';
+import { downstreamTraceparent, requestTrace } from '../lib/log-ingest.js';
 import {
   actionCallers,
   prepareActionBatch,
@@ -159,7 +160,10 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
         ? body.params
         : null;
   if (!input) throw new HttpError('params must be an object', 400);
-  if (manifest.operation === 'verify') return runVerifyAction(c.env, appId, manifest, input, userId, token);
+  // #394: the data worker receives this request's trace with the API's span as
+  // parent, so its Workers Logs line and this API's failure row join one trace.
+  const traceparent = downstreamTraceparent(requestTrace(c.req.raw));
+  if (manifest.operation === 'verify') return runVerifyAction(c.env, appId, manifest, input, userId, token, traceparent);
   let endpoint: string;
   let payload: unknown;
   try {
@@ -186,9 +190,9 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   // worker's direct Workers URL — built from DATA_WORKER_HOST, never a literal
   // account subdomain — protected by the internal token.
   if (publicAction && manifest.cache_ttl) {
-    return cachedPublicQuery(c.env, c.req.url, appId, name, payload, manifest.cache_ttl, (p) => c.executionCtx.waitUntil(p));
+    return cachedPublicQuery(c.env, c.req.url, appId, name, payload, manifest.cache_ttl, (p) => c.executionCtx.waitUntil(p), traceparent);
   }
-  const upstream = await forwardToDataWorker(c.env, appId, endpoint, payload, token);
+  const upstream = await forwardToDataWorker(c.env, appId, endpoint, payload, token, traceparent);
   return passThrough(upstream, await upstream.text());
 });
 
@@ -215,6 +219,7 @@ async function cachedPublicQuery(
   payload: unknown,
   ttl: number,
   waitUntil: (p: Promise<unknown>) => void,
+  traceparent: string,
 ): Promise<Response> {
   const hash = await sha256Hex(JSON.stringify(payload));
   const key = new Request(`${new URL(requestUrl).origin}/__action-cache/${appId}/${name}/${hash}`);
@@ -222,7 +227,7 @@ async function cachedPublicQuery(
   // Re-wrapped: a cache match has immutable headers, and CORS middleware appends to them.
   if (hit) return new Response(hit.body, hit);
 
-  const upstream = await forwardToDataWorker(env, appId, 'query', payload, null);
+  const upstream = await forwardToDataWorker(env, appId, 'query', payload, null, traceparent);
   const text = await upstream.text();
   if (upstream.status !== 200) return passThrough(upstream, text);
   const res = new Response(text, {
@@ -243,11 +248,12 @@ function actionWrites(manifest: ToolManifest): boolean {
 
 /** Shared prepared-action forwarder. Scheduled actions use this exact trusted
  * data-worker hop with a synthetic identity, never the public HTTP action route. */
-export async function forwardToDataWorker(env: Env, appId: string, endpoint: string, payload: unknown, token: string | null): Promise<Response> {
+export async function forwardToDataWorker(env: Env, appId: string, endpoint: string, payload: unknown, token: string | null, traceparent?: string): Promise<Response> {
   return fetch(dataWorkerUrl(env, appId, endpoint), {
     method: 'POST',
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(traceparent ? { traceparent } : {}),
       ...(env.INTERNAL_TOKEN ? { 'X-Internal-Token': env.INTERNAL_TOKEN } : {}),
       'Content-Type': 'application/json',
     },
@@ -255,7 +261,9 @@ export async function forwardToDataWorker(env: Env, appId: string, endpoint: str
   });
 }
 
+/** A data-worker answer as the action's answer. A 5xx is thrown instead (#394): see DataWorkerFailure. */
 function passThrough(upstream: Response, text: string): Response {
+  if (upstream.status >= 500) throw new DataWorkerFailure(upstream.status, dataFaultOf(upstream.headers.get(DATA_FAULT_HEADER)));
   return new Response(text, {
     status: upstream.status,
     headers: {
@@ -277,7 +285,8 @@ function passThrough(upstream: Response, text: string): Response {
  *
  * `ok: false` (no rows, malformed input) is a 200 with the error and no write:
  * the app decides what "could not verify" means. Data-worker failures pass
- * through with their status, as for every other action.
+ * through with their status, as for every other action (a 5xx as a recorded
+ * DataWorkerFailure, #394).
  */
 async function runVerifyAction(
   env: Env,
@@ -286,6 +295,7 @@ async function runVerifyAction(
   input: Record<string, unknown>,
   userId: string,
   token: string | null,
+  traceparent: string,
 ): Promise<Response> {
   const verifier = getVerifier(manifest.verifier);
   if (!verifier) throw new HttpError('action manifest is invalid: unknown verifier', 500);
@@ -296,7 +306,7 @@ async function runVerifyAction(
   } catch (e) {
     throw new HttpError(e instanceof Error ? e.message : String(e), 400);
   }
-  const read = await forwardToDataWorker(env, appId, 'query', query, token);
+  const read = await forwardToDataWorker(env, appId, 'query', query, token, traceparent);
   const readText = await read.text();
   if (!read.ok) return passThrough(read, readText);
   let rows: unknown;
@@ -315,7 +325,7 @@ async function runVerifyAction(
   const writes = prepareVerifyWrites(manifest, input, userId, outcome.output);
   if (writes.length === 0) return Response.json({ ok: true, verifier: verifier.id, output: outcome.output }, { headers });
 
-  const written = await forwardToDataWorker(env, appId, 'batch', { statements: writes }, token);
+  const written = await forwardToDataWorker(env, appId, 'batch', { statements: writes }, token, traceparent);
   const writtenText = await written.text();
   if (!written.ok) return passThrough(written, writtenText);
   let results: { meta?: unknown }[] = [];

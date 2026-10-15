@@ -38,12 +38,19 @@ export const HOST_SESSION_INVALIDATION_HEADER = 'X-PAS-Session-Invalidation';
 /** Anonymous correlation id for the host's fixed session-invalidation event. */
 export const HOST_SESSION_INVALIDATION_ID_HEADER = 'X-PAS-Session-Invalidation-Id';
 
+/**
+ * #394: the host's marker on its report of a browser data-plane 5xx. Like the
+ * session-invalidation marker it reaches the API only through HostApi.
+ */
+export const HOST_DATA_PLANE_FAILURE_HEADER = 'X-PAS-Data-Plane-Failure';
+
 /** The headers only the host may assert. */
 export const HOST_CONTEXT_HEADERS = [
   APP_CONTEXT_HEADER,
   APP_HOST_HEADER,
   HOST_SESSION_INVALIDATION_HEADER,
   HOST_SESSION_INVALIDATION_ID_HEADER,
+  HOST_DATA_PLANE_FAILURE_HEADER,
 ] as const;
 
 /**

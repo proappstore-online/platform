@@ -133,6 +133,36 @@ export function newSpanId(): string {
   return randomHex(8);
 }
 
+export interface RequestTrace {
+  traceId: string;
+  /** This server's span for the request. */
+  spanId: string;
+  /** The caller's span, from a valid traceparent; null when the trace was minted here. */
+  parentSpanId: string | null;
+}
+
+const requestTraces = new WeakMap<Request, RequestTrace>();
+
+/**
+ * #394: one trace and one server span per request, however many places ask —
+ * the data-worker hop an action forwards and the error handler's row must name
+ * the same span, or the hop cannot be followed.
+ */
+export function requestTrace(request: Request): RequestTrace {
+  let trace = requestTraces.get(request);
+  if (!trace) {
+    const incoming = parseTraceparent(request.headers.get('traceparent'));
+    trace = { traceId: incoming?.traceId ?? newTraceId(), spanId: newSpanId(), parentSpanId: incoming?.spanId ?? null };
+    requestTraces.set(request, trace);
+  }
+  return trace;
+}
+
+/** The traceparent this server sends on a downstream hop: its own span as the parent. */
+export function downstreamTraceparent(trace: RequestTrace): string {
+  return `00-${trace.traceId}-${trace.spanId}-00`;
+}
+
 const CODE_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 const SPAN_RE = /^[0-9a-f]{16}$/i;
 const SDK_VERSION_RE = /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[0-9A-Za-z.]{1,24})?$/;

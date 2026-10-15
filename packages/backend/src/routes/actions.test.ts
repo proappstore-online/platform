@@ -162,6 +162,7 @@ describe('POST /v1/apps/:appId/actions/:name', () => {
         headers: {
           'X-Internal-Token': 'internal-secret',
           'Content-Type': 'application/json',
+          traceparent: expect.stringMatching(/^00-[0-9a-f]{32}-[0-9a-f]{16}-00$/),
         },
       }),
     );
@@ -550,10 +551,11 @@ describe('verify actions (#148): a trusted, platform-owned execution path', () =
   });
 
   it('data-worker failures pass through with their status; malformed upstream JSON is a 502; a missing param is a 400', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response('{"error":"no such table: games"}', { status: 500, headers: { 'Content-Type': 'application/json' } })));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response('{"error":"no such table: games"}', { status: 500, headers: { 'Content-Type': 'application/json', 'X-PAS-Fault': 'tenant' } })));
     const failedRead = await call(claim());
     expect(failedRead.status).toBe(500);
-    expect(await failedRead.json()).toEqual({ error: 'no such table: games' });
+    // #394: a 5xx is recorded and answered with a trace, never the worker's body.
+    expect(await failedRead.json()).toEqual({ error: 'data worker returned 500 (tenant fault)', errorCode: 'internal_error', traceId: expect.stringMatching(/^[0-9a-f]{32}$/) });
 
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(Response.json({ rows: [{ moves: 'f3 e5 g4 Qh4#' }] }))

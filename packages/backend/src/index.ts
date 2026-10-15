@@ -7,7 +7,8 @@ import type { Context } from 'hono';
 import { HttpError, optionalUser } from './lib/auth.js';
 import { checkSessionKeyDrift } from './lib/session-key-drift.js';
 import { recordServerError } from './lib/error-telemetry.js';
-import { newSpanId, newTraceId, parseTraceparent, safeErrorCode, TRACE_ID_HEADER } from './lib/log-ingest.js';
+import { requestTrace, safeErrorCode, TRACE_ID_HEADER } from './lib/log-ingest.js';
+import { DataWorkerFailure, isPlatformFault } from './lib/data-worker-url.js';
 import { recordOperationFailure, shouldLogOperationFailure } from './lib/operation-log.js';
 import type { Env } from './types.js';
 import { openapiSpec, openapiYaml } from './openapi-spec.js';
@@ -155,9 +156,10 @@ app.onError(async (err, c) => {
   // to — the caller's (a valid traceparent) or a fresh one — so a client can hand
   // the owner one id that finds the server's row. The server records its own
   // span, with the caller's as parent. Correlation only: nothing authorizes on it.
-  const incoming = parseTraceparent(c.req.header('traceparent'));
-  const traceId = incoming?.traceId ?? newTraceId();
-  const spanId = newSpanId();
+  // #394: the same trace and span a data-worker hop of this request was sent.
+  const { traceId, spanId, parentSpanId } = requestTrace(c.req.raw);
+  // #394: a data-worker 5xx is that worker's, with its own fault verdict, not the API's.
+  const dataFailure = err instanceof DataWorkerFailure ? err : null;
   const errorCode = safeErrorCode(status, err instanceof HttpError ? err.message : null);
   const body = err instanceof HttpError
     ? { ...err.body, error: err.message, errorCode, traceId }
@@ -168,10 +170,12 @@ app.onError(async (err, c) => {
   // Make server failures countable, not just greppable (ADR-008 §1). Only 5xx:
   // a 4xx is an expected outcome, and indexing those would bury real faults.
   // Never awaited on the response path and never throws — see recordServerError.
-  if (status >= 500) {
+  // A data-worker 5xx the worker blames on the app's SQL or the request is not a
+  // server error (#394); the operation-failure point below still counts it, fault included.
+  if (status >= 500 && (!dataFailure || isPlatformFault(dataFailure.fault))) {
     const written = recordServerError(c.env, {
       appId: c.req.param('appId') ?? null,
-      service: 'backend',
+      service: dataFailure ? 'data-worker' : 'backend',
       method: c.req.method,
       // Route pattern, not concrete path: `/v1/apps/:appId/logs` groups, while
       // `/v1/apps/chess-academy/logs` mints one error group per app.
@@ -205,10 +209,11 @@ app.onError(async (err, c) => {
         message: err instanceof Error ? err.message : String(err),
         traceId,
         spanId,
-        parentSpanId: incoming?.spanId ?? null,
+        parentSpanId,
         errorCode,
         cfRay: c.req.header('cf-ray') ?? null,
         mediated: Boolean(c.req.header(APP_CONTEXT_HEADER)),
+        fault: dataFailure?.fault ?? null,
       }),
     );
   }
@@ -217,6 +222,8 @@ app.onError(async (err, c) => {
   const origin = await corsOrigin(c.env, c.req.header('Origin'));
   const res = c.json(body, status);
   res.headers.set(TRACE_ID_HEADER, traceId);
+  // A data-worker failure kept passThrough's no-store, so no cache keeps the error.
+  if (dataFailure) res.headers.set('Cache-Control', 'no-store');
   if (origin) {
     res.headers.set('Access-Control-Allow-Origin', origin);
     res.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');

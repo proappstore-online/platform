@@ -149,6 +149,25 @@ describe('deployDataWorker', () => {
     mockFetch.mockClear();
     expect(await bindingsFromUpload('')).not.toContain('INTERNAL_TOKEN');
   });
+
+  it('uploads the #394 observability policy: logs at 100%, traces head-sampled, query strings redacted, no exporter', async () => {
+    mockSequence(
+      { ok: true, body: { success: true } },
+      { ok: true, body: {} },
+      { ok: true, body: { success: true, result: [{ id: 'z1' }] } },
+      { ok: true, body: { success: true, result: [] } },
+      { ok: true, body: { success: true } },
+    );
+    await deployDataWorker('test-app', 'db-456', 'tok', 'acct', 'sk', 'internal-secret');
+    const form = (mockFetch.mock.calls[0] as [string, RequestInit])[1].body as FormData;
+    const meta = JSON.parse(await (form.get('metadata') as Blob).text()) as { observability: unknown };
+    expect(meta.observability).toEqual({
+      enabled: true,
+      redact_query_string: true,
+      logs: { enabled: true, invocation_logs: true, head_sampling_rate: 1 },
+      traces: { enabled: true, head_sampling_rate: 0.1 },
+    });
+  });
 });
 
 // #82: `override_existing_origin: true` used to be unconditional, so a provision

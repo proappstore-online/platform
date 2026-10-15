@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   classifyOperation,
   recordAuthFailure,
+  recordDataPlaneFailure,
   recordOperationFailure,
   shouldLogOperationFailure,
 } from './operation-log.js';
@@ -317,5 +318,59 @@ describe('recordAuthFailure', () => {
 
   it('is a no-op without the dataset binding', async () => {
     await expect(recordAuthFailure({}, { reason: 'lockout', status: 429 })).resolves.toBeUndefined();
+  });
+});
+
+// #394: data-worker 5xx — fault verdicts decide whether it is a platform 5xx, and
+// the count never depends on the detail budget (or on any trace sampling).
+describe('data-worker failures (#394)', () => {
+  const plane = { appId: 'chess-academy', status: 500, endpoint: 'query', traceId: 'ab'.repeat(16), parentSpanId: 'cd'.repeat(8), cfRay: null };
+  const levelOf = (db: ReturnType<typeof fakeDb>) => db.inserts[0]![2];
+
+  it.each([
+    ['platform', 'error'],
+    ['unknown', 'error'],
+    ['tenant', 'warn'],
+    ['client', 'warn'],
+  ] as const)('a host-reported %s fault is an %s row, counted in AE with its fault', async (fault, level) => {
+    resetBurstState();
+    const db = fakeDb();
+    const errors = fakeErrors();
+    await recordDataPlaneFailure({ DB: db.DB, ERRORS: errors.ERRORS }, { ...plane, fault }, NOW);
+    expect(levelOf(db)).toBe(level);
+    expect(errors.points[0]!.blobs).toEqual(['data-worker', level, 'db', expect.any(String), 'db.query', '500', 'platform-cookie', fault]);
+    expect(db.inserts[0]).toContain('ab'.repeat(16));
+    expect(JSON.parse(db.inserts[0]![4] as string)).toEqual({ operation: 'db.query', status: 500, fault, route: 'platform.data', observedBy: 'host', cfRay: null });
+  });
+
+  it('an unknown endpoint is named `other`, never echoed', async () => {
+    resetBurstState();
+    const db = fakeDb();
+    const errors = fakeErrors();
+    await recordDataPlaneFailure({ DB: db.DB, ERRORS: errors.ERRORS }, { ...plane, fault: 'platform', endpoint: 'x?token=1' }, NOW);
+    expect(errors.points[0]!.blobs[4]).toBe('db.other');
+    expect(JSON.stringify(db.inserts)).not.toContain('token');
+  });
+
+  it('over the server budget, or for an app that does not exist, AE still counts and no row is written', async () => {
+    resetBurstState();
+    const over = fakeDb(0, SERVER_FAILURE_DAILY_LIMIT);
+    const missing = fakeDb(0, 0, null);
+    const errors = fakeErrors();
+    await recordDataPlaneFailure({ DB: over.DB, ERRORS: errors.ERRORS }, { ...plane, fault: 'platform' }, NOW);
+    await recordDataPlaneFailure({ DB: missing.DB, ERRORS: errors.ERRORS }, { ...plane, fault: 'platform' }, NOW);
+    expect(errors.points).toHaveLength(2);
+    expect(over.inserts).toHaveLength(0);
+    expect(missing.inserts).toHaveLength(0);
+  });
+
+  it('an API-observed data-worker 5xx with a tenant verdict is a warn operation row, not a platform 5xx', async () => {
+    resetBurstState();
+    const db = fakeDb();
+    const errors = fakeErrors();
+    await recordOperationFailure({ DB: db.DB, ERRORS: errors.ERRORS }, { ...failure, status: 500, fault: 'tenant' }, NOW);
+    expect(db.inserts[0]![3]).toBe('warn');
+    expect(errors.points[0]!.blobs.at(-1)).toBe('tenant');
+    expect(JSON.parse(db.inserts[0]![6] as string)).toMatchObject({ fault: 'tenant', status: 500 });
   });
 });

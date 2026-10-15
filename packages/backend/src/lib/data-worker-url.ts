@@ -44,3 +44,36 @@ export function dataWorkerUrl(env: { DATA_WORKER_HOST?: string }, appId: string,
   return `https://${dataWorkerName(appId)}.${dataWorkerHost(env)}${suffix}`;
 }
 
+
+/**
+ * #394: the data worker's own verdict on a 5xx it answered, so a failure is not
+ * blamed on the platform when the app's SQL or the caller's request caused it.
+ *
+ *  - `platform` — D1 or the worker itself failed; counts as a platform 5xx.
+ *  - `tenant`   — the app's SQL or schema (no such column, constraint failed, …).
+ *  - `client`   — a malformed request body.
+ *  - `unknown`  — no verdict: a data worker deployed before #394 sends none.
+ */
+export const DATA_FAULT_HEADER = 'X-PAS-Fault';
+export type DataFault = 'platform' | 'tenant' | 'client' | 'unknown';
+
+export function dataFaultOf(value: string | null | undefined): DataFault {
+  return value === 'platform' || value === 'tenant' || value === 'client' ? value : 'unknown';
+}
+
+/** A tenant or client fault is the app's or caller's doing, not a platform failure. */
+export function isPlatformFault(fault: DataFault): boolean {
+  return fault === 'platform' || fault === 'unknown';
+}
+
+/**
+ * A data-worker 5xx surfaced by the API (#394). Thrown instead of passing the
+ * body through, so the error handler records it — with the trace the data
+ * worker received — and answers with the usual safe code and trace id. The
+ * data worker's body is never copied: it can quote the app's SQL.
+ */
+export class DataWorkerFailure extends HttpError {
+  constructor(status: number, readonly fault: DataFault) {
+    super(`data worker returned ${status} (${fault} fault)`, status);
+  }
+}

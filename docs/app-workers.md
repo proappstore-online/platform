@@ -48,6 +48,10 @@ There is **no** D1, KV, R2, queue or AI binding, and no app secret in `env`:
   there too (source `worker-console`), delivered by the platform's Tail Worker
   (`AppWorkerTail`, #308) after each invocation: at most 100 lines per
   invocation, within the worker's own log budget (below).
+  The invocation id is also an incident id (#394):
+  `GET /v1/apps/:appId/incidents/<invocation id>` returns those lines with the
+  invocation's CPU, wall time and outcome. See the
+  [monitoring runbook](./monitoring-runbook.md#following-an-incident-across-hops-394).
 
 Outbound `fetch` to the Internet works: it leaves through the platform's egress gateway (`AppWorkerEgress`, #311), which logs the app, method and host.
 

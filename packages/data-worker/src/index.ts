@@ -138,8 +138,10 @@ async function requireUser(c: { req: { header(name: string): string | undefined 
   // membership. Fail closed on any error.
   let teamRole: string | null = null;
   try {
+    // #394: carry the caller's trace, so a failing authorization call joins it.
+    const traceparent = c.req.header('traceparent');
     const res = await c.env.API.fetch(`${c.env.API_BASE}/v1/apps`, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${token}`, ...(traceparent ? { traceparent } : {}) },
     });
     if (res.ok) {
       const data = (await res.json()) as { apps?: Array<{ id: string; team_role?: string }> };
@@ -465,6 +467,28 @@ app.post('/validate', async (c) => {
 // Error handler
 // ---------------------------------------------------------------------------
 
+/**
+ * #394: whose fault a 500 is, sent back as `X-PAS-Fault` so the host and API do
+ * not count the app's own SQL as a platform failure. Raw SQL and registered
+ * actions are the app's statements: SQLite rejecting them (no such column,
+ * constraint failed, syntax error, …) is a `tenant` fault. A body that is not
+ * JSON is a `client` fault. Anything else — D1 unavailable, overloaded, reset,
+ * timed out, or a bug here — is `platform`, the safe default for outage counts.
+ */
+export function faultOf(err: unknown): 'platform' | 'tenant' | 'client' {
+  if (err instanceof SyntaxError) return 'client';
+  const message = err instanceof Error ? err.message : String(err);
+  if (/SQLITE_(ERROR|CONSTRAINT|MISMATCH|RANGE|TOOBIG)|D1_TYPE_ERROR|no such (table|column|function|index)|syntax error|constraint failed|datatype mismatch|has no column|already exists|incomplete input|too many SQL variables|wrong number of arguments|ambiguous column/i.test(message)) {
+    return 'tenant';
+  }
+  return 'platform';
+}
+
+/** The trace id of the caller's W3C traceparent, for this worker's own log line. Correlation only. */
+function traceIdOf(header: string | undefined): string | null {
+  return /^00-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$/.exec(header?.trim().toLowerCase() ?? '')?.[1] ?? null;
+}
+
 app.onError((err, c) => {
   const origin = corsOrigin(c.req.header('Origin'));
   if (err instanceof HTTPException) {
@@ -472,8 +496,11 @@ app.onError((err, c) => {
     setCorsHeaders(res, origin);
     return res;
   }
-  console.error('Unhandled error:', err);
+  const fault = faultOf(err);
+  // Route pattern, not URL; the trace joins this line to the host's and the API's records.
+  console.error('Unhandled error:', { traceId: traceIdOf(c.req.header('traceparent')), route: c.req.routePath, fault, err });
   const res = c.json({ error: 'internal server error' }, 500);
+  res.headers.set('X-PAS-Fault', fault);
   setCorsHeaders(res, origin);
   return res;
 });

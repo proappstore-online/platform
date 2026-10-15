@@ -15,6 +15,8 @@ control plane (backend `api`, `host`, per-app `data-*`, `qa-worker`,
 | **Visitor analytics / diagnostics** | Workers Analytics Engine | `GET /v1/apps/:appId/analytics` |
 | **QA flow failures** | `app_test_flows` / runs | `qa_list_runs` MCP tool / `GET .../qa/runs` |
 | **Worker exceptions (5xx)** | Cloudflare Workers logs | `wrangler tail proappstore-api` (and `-host`, `pas-data-<app>`) |
+| **Data-worker 5xx** (#394) | `app_logs` `source = 'server'`: category `action` (through the API) or `db` with `data.route = 'platform.data'` (browser `app.db`, reported by the host) | `GET /v1/apps/:appId/logs?source=server` or the incident lookup below; still in `wrangler tail pas-data-<app>` with the trace id |
+| **One incident, every hop** (#394) | `app_logs` rows sharing a trace id + the `app_worker_invocations` row of that id | `GET /v1/apps/:appId/incidents/:traceId` (owner) |
 | **Agent build/deploy failures** | agent-teams activity log | `agent_activity` MCP tool |
 | **Alerts** (spikes detected from the rows above) | `app_alerts` (#107) | `GET /v1/apps/:appId/alerts` (owner) — the console's per-app workspace; `open=1` for unacknowledged |
 
@@ -147,6 +149,81 @@ nothing is sent unless one exists. `POST /v1/apps/:appId/alerts/evaluate` runs
 the evaluation for one app on demand; `POST …/alerts/:id/ack` acknowledges.
 Every recorded alert is also a `[alert] …` line in Workers Logs.
 
-**Not automated**: the "5% of sessions" rate; data-worker 5xx (they are not in
-`app_logs` — see Workers logs); cross-app platform-wide spikes (each alert is
-per app).
+**Not automated**: the "5% of sessions" rate; cross-app platform-wide spikes
+(each alert is per app). Data-worker 5xx with a `platform` or `unknown` fault
+verdict are `error` rows and so count towards `server_5xx` (#394); `tenant` and
+`client` faults are `warn` rows and do not.
+
+## Following an incident across hops (#394)
+
+A request can cross four hops: browser → host → API → data worker (or app
+worker). They share one W3C trace id:
+
+- The SDK sends a `traceparent` (#390). The host forwards a valid one unchanged
+  and **mints one when the page sent none or a malformed one**, so every hop past
+  the host carries a trace. It never authorizes on it.
+- The API keeps the trace, takes its own span, and sends
+  `traceparent: 00-<trace>-<api span>-00` to the data worker on action calls.
+  Every error answer names the trace in `traceId` / `X-PAS-Trace-Id`.
+- The data worker logs `Unhandled error: { traceId, route, fault }` (route
+  pattern, never the URL or SQL) and answers its 500 with `X-PAS-Fault`.
+
+**Where each hop's evidence lands**
+
+| Hop | Evidence | `hop` in the lookup |
+|---|---|---|
+| Browser | SDK rows (`source` `mediated` / `direct`), best-effort | `browser` |
+| Host | session-loss rows (`auth.session_lost`, #353); `[pas-data-plane-failure]` in host Workers Logs | `host` |
+| API | operation-failure rows (`source = 'server'`), span and parent span in `context` | `api` |
+| Data worker | via API: the action row with `data.fault`; via the browser data plane: a `db` row the host reported over HostApi (`POST /v1/internal/data-plane-failures`, HostApi-only like session invalidations) | `api` / `data-worker` |
+| App worker | `worker-console` rows and the invocation's CPU/wall/outcome (#308), keyed by the invocation id | `app-worker` |
+
+**Fault attribution.** The data worker's verdict decides whether a 5xx is the
+platform's: `platform` (D1 unavailable/overloaded/reset, or a bug — the default)
+and `unknown` (a data worker deployed before #394, which sends no verdict) are
+`error` rows and count as platform 5xx; `tenant` (SQLite rejected the app's own
+SQL: no such column, constraint failed, syntax error, …) and `client` (a body
+that is not JSON) are `warn` rows. Analytics Engine (`pas_app_errors`) carries
+the verdict as the last blob of each point, so a shared platform outage reads as
+`platform` faults across many app indexes at once, and an app's own bad SQL
+never does.
+
+**Lookup.** `GET /v1/apps/:appId/incidents/:traceId` — owner-only, `no-store`,
+every query scoped to `:appId`, so owner A cannot read app B's rows even with
+B's id. It returns the app's rows for the id oldest first (at most 200, with
+`truncated`), a `hops` count, and the app-worker invocation of that id. The id
+may be a W3C trace id, a #353 session-loss correlation id or a #308 invocation
+id: the lookup is by stored value, so old ids keep working. Rows never carry a
+request URL, SQL, body, cookie or authorization header; the data-plane report
+sends only status, verdict, endpoint name (`query`, `execute`, … else `other`),
+the trace and `cf-ray`.
+
+**Missing hops are gaps, not all-clears.** A hop that succeeded writes no row;
+browser rows are best-effort and may never arrive; detail rows are budgeted per
+app per day (`SERVER_FAILURE_DAILY_LIMIT`, #372) and dropped over it; and a data
+worker not yet redeployed sends no verdict. The lookup shows what was recorded.
+
+**Sampling and retention.** Cloudflare Workers traces are on for `proappstore-api`,
+`proappstore-host` (wrangler.toml) and every data worker (upload metadata in
+`lib/deploy-worker.ts`), **head-sampled at 10%** and kept 7 days by Cloudflare,
+with no external exporter. Head sampling means **most failures have no retained
+span**, and nothing here claims otherwise. It does not affect failure counting:
+Analytics Engine points and `app_logs` rows are written for every failure
+before any detail budget is checked, and Workers Logs stay at 100%. Spans are a
+dashboard aid; the trace id in headers and rows is what finds an incident.
+`app_logs` retention is the logs-prune schedule, not Cloudflare's.
+
+**Rollout.** The backend and host settings apply on their next deploy. A NEW
+data worker gets the trace settings and the fault verdict at provision. An
+EXISTING one keeps its old bundle and settings until it is re-uploaded by the
+**Redeploy data workers** workflow (`redeploy-data-workers.yml`, one app or the
+fleet); until then its 5xx are recorded with fault `unknown`.
+
+**Still open — aggregates (#391).** These failures feed the existing per-app
+signals: `app_logs` (and so the `server_5xx` / `action_failures` alerts) and the
+`pas_app_errors` points. The quota-independent incident aggregates of
+observability 03 (#391) are not delivered; when they are, they should consume
+the same trusted outcomes — `recordOperationFailure` (API-observed, with
+`fault`) and `recordDataPlaneFailure` (host-observed) in
+`packages/backend/src/lib/operation-log.ts` — counting `platform`/`unknown`
+faults as platform failures and `tenant`/`client` separately.

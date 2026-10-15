@@ -124,3 +124,21 @@ describe.each([
     expect(prod >= '2024-12-01').toBe(true);
   });
 });
+
+// #394: the trace policy lives in two wrangler.toml files and the generated data-worker
+// metadata (backend deploy-worker.test.ts). Head sampling stays bounded and no
+// exporter is configured; logs are not sampled down by the traces block.
+describe.each(['backend', 'host'])('%s wrangler.toml trace settings (#394)', (pkg) => {
+  const cfg = readFileSync(root(`packages/${pkg}/wrangler.toml`), 'utf8');
+  const traces = /\[observability\.traces\]([^[]*)/.exec(cfg)?.[1] ?? '';
+
+  it('enables Workers traces with bounded head sampling and no external destination', () => {
+    expect(cfg).toMatch(/\[observability\]\s*enabled\s*=\s*true/);
+    expect(traces).toMatch(/^enabled\s*=\s*true/m);
+    const rate = Number(/^head_sampling_rate\s*=\s*([\d.]+)/m.exec(traces)?.[1]);
+    expect(rate).toBeGreaterThan(0);
+    expect(rate).toBeLessThanOrEqual(0.1);
+    expect(cfg).not.toMatch(/destinations\s*=/);
+    expect(cfg).not.toMatch(/\[observability\.logs\][^[]*head_sampling_rate/);
+  });
+});

@@ -136,7 +136,7 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
     if (refusal) return refusal;
   }
 
-  const mediationResponse = await handlePlatformMediation(request, env, route);
+  const mediationResponse = await handlePlatformMediation(request, env, route, ctx);
   if (mediationResponse) return mediationResponse;
 
   // Observable QA runner (#38) — platform page on the app's own origin;

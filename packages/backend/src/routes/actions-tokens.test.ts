@@ -48,7 +48,8 @@ describe('POST /v1/apps/:appId/actions/:name with a pas_at_ token', () => {
     expect(await res.json()).toEqual({ rows: [{ id: 'i1' }] });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://pas-data-leads.serge-the-dev.workers.dev/query');
-    expect(init.headers).toEqual({ 'X-Internal-Token': 'internal-secret', 'Content-Type': 'application/json' });
+    // #394: the request's trace travels with the hop; never the token.
+    expect(init.headers).toEqual({ 'X-Internal-Token': 'internal-secret', 'Content-Type': 'application/json', traceparent: expect.stringMatching(/^00-[0-9a-f]{32}-[0-9a-f]{16}-00$/) });
     expect(JSON.parse(init.body as string).params).toEqual(['gh:7']);
     expect(String(db.prepare.mock.calls[3]![0])).toContain('UPDATE user_app_tokens SET last_used_at');
     expect(touch.bind.mock.calls[0]![1]).toBeDefined();

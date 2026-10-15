@@ -23,6 +23,7 @@
 import { Hono } from 'hono';
 import {
   APP_CONTEXT_HEADER,
+  HOST_DATA_PLANE_FAILURE_HEADER,
   HOST_SESSION_INVALIDATION_HEADER,
   HOST_SESSION_INVALIDATION_ID_HEADER,
 } from '../lib/app-context.js';
@@ -32,9 +33,12 @@ import {
   METRIC_LEVELS,
   normalizeBatch,
   normalizeClientId,
+  parseTraceparent,
   traceIdFromTraceparent,
   type RawLogEntry,
 } from '../lib/log-ingest.js';
+import { dataFaultOf } from '../lib/data-worker-url.js';
+import { recordDataPlaneFailure } from '../lib/operation-log.js';
 import { checkLogQuota, d1LogUsageStore, publicLogBurstKey, SERVER_FAILURE_DAILY_LIMIT, serverFailureUsageStore } from '../lib/log-quota.js';
 import type { Env } from '../types.js';
 import { privateNoStore } from '../lib/route-wrap.js';
@@ -43,10 +47,15 @@ export const logsRoutes = new Hono<{ Bindings: Env }>();
 // #378: owner-only reads are never cached.
 logsRoutes.use('/apps/:appId/logs', privateNoStore);
 logsRoutes.use('/apps/:appId/logs/*', privateNoStore);
+logsRoutes.use('/apps/:appId/incidents/*', privateNoStore);
 
 const MAX_LOG_PAGE_SIZE = 100;
 const SESSION_INVALIDATION_ID_RE = /^[a-f0-9]{32}$/i;
 const HOST_INVALIDATION_BURST_KEY = 'host:session-invalidation';
+const CF_RAY_RE = /^[0-9a-f]{16}(-[A-Z]{3})?$/i;
+/** An incident id: a W3C trace id, a #353 correlation id or a #308 invocation id. */
+const INCIDENT_ID_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
+const MAX_INCIDENT_RECORDS = 200;
 
 /** A log cursor is deliberately only its stable ordering fields, never identity. */
 function parseLogCursor(raw: string | undefined): { ts: number; id: number } | null {
@@ -107,6 +116,36 @@ logsRoutes.post('/internal/session-invalidations', async (c) => {
     )
     .run();
 
+  return c.body(null, 204);
+});
+
+/**
+ * #394: the host's report of a browser data-plane 5xx — the one hop the API never
+ * sees, since browser `app.db` calls go host → data worker. Same trust model as
+ * session invalidations above: the marker and X-PAS-App survive only on the
+ * private HostApi entrypoint. The body names the status, the data worker's fault
+ * verdict and endpoint; the host's forwarded traceparent names the trace.
+ */
+logsRoutes.post('/internal/data-plane-failures', async (c) => {
+  const appId = c.req.header(APP_CONTEXT_HEADER);
+  if (!appId || c.req.header(HOST_DATA_PLANE_FAILURE_HEADER) !== '1') {
+    throw new HttpError('host data-plane failure required', 403);
+  }
+  const body = await c.req.json<{ status?: unknown; fault?: unknown; endpoint?: unknown; cfRay?: unknown }>().catch(() => null);
+  const status = body?.status;
+  if (typeof status !== 'number' || !Number.isInteger(status) || status < 500 || status > 599) {
+    throw new HttpError('5xx status required', 400);
+  }
+  const trace = parseTraceparent(c.req.header('traceparent'));
+  await recordDataPlaneFailure(c.env, {
+    appId,
+    status,
+    fault: dataFaultOf(typeof body?.fault === 'string' ? body.fault : null),
+    endpoint: typeof body?.endpoint === 'string' ? body.endpoint : '',
+    traceId: trace?.traceId ?? null,
+    parentSpanId: trace?.spanId ?? null,
+    cfRay: typeof body?.cfRay === 'string' && CF_RAY_RE.test(body.cfRay) ? body.cfRay : null,
+  });
   return c.body(null, 204);
 });
 
@@ -365,4 +404,92 @@ logsRoutes.get('/apps/:appId/logs/build', async (c) => {
   let build: unknown = null;
   try { build = JSON.parse(row.build_meta); } catch { /* corrupted JSON — return null */ }
   return c.json({ build, ts: row.ts });
+});
+
+/** Which hop a log row is evidence from (#394). */
+function hopOf(source: unknown, category: unknown, data: unknown): string {
+  if (source === 'mediated' || source === 'direct') return 'browser';
+  if (source === 'worker-console' || category === 'worker') return 'app-worker';
+  if (category === 'auth.session_lost') return 'host';
+  if ((data as { route?: unknown } | null)?.route === 'platform.data') return 'data-worker';
+  return 'api';
+}
+
+/**
+ * One incident, every hop (#394): the app's log rows that share an id, oldest
+ * first, each labelled with the hop it is evidence from, plus the app-worker
+ * invocation of that id with its CPU/wall/outcome (#308).
+ *
+ * The id is whatever the rows were stored under: a W3C trace id (#390), the
+ * anonymous session-loss correlation id (#353) or an invocation id (#308) — old
+ * ids keep working because the lookup is by stored value. Owner-only, scoped to
+ * this app on every query, so owner A's id cannot surface app B's rows.
+ *
+ * A hop with no row is a gap, not an all-clear: browser rows are best-effort,
+ * detail rows are budgeted, and a hop that succeeded writes none.
+ */
+logsRoutes.get('/apps/:appId/incidents/:traceId', async (c) => {
+  const appId = c.req.param('appId')!;
+  await requireAppOwner(c, appId);
+  const raw = c.req.param('traceId')!;
+  if (!INCIDENT_ID_RE.test(raw)) throw new HttpError('invalid trace id', 400);
+  // W3C and #353 ids are stored lower-case hex; any other id is matched as stored.
+  const traceId = /^[0-9a-f]{32}$/i.test(raw) ? raw.toLowerCase() : raw;
+
+  const [logs, invocation] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT id, ts, level, category, message, data, build_meta, fingerprint, source, context
+         FROM app_logs WHERE app_id = ? AND trace_id = ?
+        ORDER BY ts ASC, id ASC LIMIT ?`,
+    ).bind(appId, traceId, MAX_INCIDENT_RECORDS + 1).all<Record<string, unknown>>(),
+    c.env.DB.prepare(
+      `SELECT id, type, name, status, http_status, started_at, finished_at,
+              child_cpu_ms, child_wall_ms, child_outcome
+         FROM app_worker_invocations WHERE app_id = ? AND id = ?`,
+    ).bind(appId, traceId).first<Record<string, unknown>>(),
+  ]);
+
+  const rows = logs.results ?? [];
+  const parse = (v: unknown): unknown => {
+    if (typeof v !== 'string') return null;
+    try { return JSON.parse(v); } catch { return null; }
+  };
+  const records = rows.slice(0, MAX_INCIDENT_RECORDS).map((r) => {
+    const data = parse(r.data);
+    return {
+      ts: r.ts,
+      hop: hopOf(r.source, r.category, data),
+      source: r.source,
+      level: r.level,
+      category: r.category,
+      message: r.message,
+      data,
+      build: parse(r.build_meta),
+      fingerprint: r.fingerprint,
+      context: parse(r.context),
+    };
+  });
+  const hops: Record<string, number> = {};
+  for (const r of records) hops[r.hop] = (hops[r.hop] ?? 0) + 1;
+
+  return c.json({
+    traceId,
+    hops,
+    records,
+    invocation: invocation
+      ? {
+          id: invocation.id,
+          type: invocation.type,
+          name: invocation.name,
+          status: invocation.status,
+          httpStatus: invocation.http_status,
+          startedAt: invocation.started_at,
+          finishedAt: invocation.finished_at,
+          cpuMs: invocation.child_cpu_ms,
+          wallMs: invocation.child_wall_ms,
+          outcome: invocation.child_outcome,
+        }
+      : null,
+    truncated: rows.length > MAX_INCIDENT_RECORDS,
+  });
 });

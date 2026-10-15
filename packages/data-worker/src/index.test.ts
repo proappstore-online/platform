@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import app, { splitSqlStatements } from "./index.js";
+import app, { faultOf, splitSqlStatements } from "./index.js";
 
 const TEST_SK = 'test-signing-key';
 const API_BASE = 'https://api.test';
@@ -528,5 +528,75 @@ describe("team-role gating on raw SQL (#78)", () => {
   it("an unknown/absent role defaults to least privilege (denied)", async () => {
     callerRole = "banana";
     expect((await post("/execute", makeEnv())).status).toBe(403);
+  });
+});
+
+// #394: a 500 carries the worker's fault verdict, so the app's own SQL is not
+// counted as a platform failure, and the caller's trace reaches its auth call.
+describe("fault verdict and trace context (#394)", () => {
+  const TRACEPARENT = `00-${"ab".repeat(16)}-${"cd".repeat(8)}-01`;
+  const failingDb = (message: string) => ({
+    prepare: vi.fn().mockReturnValue({
+      bind: vi.fn().mockReturnThis(),
+      all: vi.fn().mockRejectedValue(new Error(message)),
+    }),
+  });
+  const internalQuery = (body: string) => ({
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Internal-Token": INTERNAL_TOKEN, traceparent: TRACEPARENT },
+    body,
+  });
+
+  it.each([
+    ["D1_ERROR: no such column: emial: SQLITE_ERROR", "tenant"],
+    ["D1_ERROR: UNIQUE constraint failed: users.email: SQLITE_CONSTRAINT", "tenant"],
+    ["near \"SELEC\": syntax error", "tenant"],
+    ["D1_TYPE_ERROR: Type 'object' not supported for value '[object Object]'", "tenant"],
+    ["D1_ERROR: Network connection lost.", "platform"],
+    ["D1 DB is overloaded. Too many requests queued.", "platform"],
+    ["something unexpected", "platform"],
+  ])("%s → %s", async (message, fault) => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await app.request("/query", internalQuery(JSON.stringify({ sql: "SELECT secret FROM t" })), makeEnv(failingDb(message) as never, INTERNAL_TOKEN));
+    expect(res.status).toBe(500);
+    expect(res.headers.get("X-PAS-Fault")).toBe(fault);
+    expect(await res.json()).toEqual({ error: "internal server error" });
+    // Its own log line names the trace, route pattern and verdict.
+    expect(errSpy).toHaveBeenCalledWith("Unhandled error:", expect.objectContaining({ traceId: "ab".repeat(16), route: "/query", fault }));
+    errSpy.mockRestore();
+  });
+
+  it("a body that is not JSON is a client fault", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await app.request("/query", internalQuery("{not json"), makeEnv(mockD1(), INTERNAL_TOKEN));
+    expect(res.status).toBe(500);
+    expect(res.headers.get("X-PAS-Fault")).toBe("client");
+    errSpy.mockRestore();
+  });
+
+  it("HTTP errors (401/403/400) carry no verdict: they are not failures", async () => {
+    const res = await app.request("/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }, makeEnv());
+    expect(res.status).toBe(401);
+    expect(res.headers.get("X-PAS-Fault")).toBeNull();
+  });
+
+  it("forwards the caller's traceparent on the authorization call, and none when there is none", async () => {
+    const token = await mint("gh:owner", TEST_SK);
+    const call = (headers: Record<string, string>) => app.request("/query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...headers },
+      body: JSON.stringify({ sql: "SELECT 1" }),
+    }, makeEnv());
+    await call({ traceparent: TRACEPARENT });
+    expect(new Headers((apiFetch.mock.calls[0] as unknown as [string, RequestInit])[1].headers).get("traceparent")).toBe(TRACEPARENT);
+    apiFetch.mockClear();
+    await call({});
+    expect(new Headers((apiFetch.mock.calls[0] as unknown as [string, RequestInit])[1].headers).get("traceparent")).toBeNull();
+  });
+
+  it("faultOf defaults to platform for anything it does not recognise", () => {
+    expect(faultOf(new Error("storage caused object to be reset"))).toBe("platform");
+    expect(faultOf("weird")).toBe("platform");
+    expect(faultOf(new SyntaxError("Unexpected token"))).toBe("client");
   });
 });

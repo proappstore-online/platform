@@ -20,7 +20,8 @@
  */
 
 import { hash16, redact } from './error-telemetry.js';
-import { messageShape, type LogContext } from './log-ingest.js';
+import { isPlatformFault, type DataFault } from './data-worker-url.js';
+import { messageShape, safeErrorCode, type LogContext } from './log-ingest.js';
 import { checkLogQuota, SERVER_FAILURE_BURST_KEY, SERVER_FAILURE_DAILY_LIMIT, serverFailureUsageStore } from './log-quota.js';
 
 /** Route families worth logging, keyed by the segment after `/apps/:appId/`.
@@ -98,6 +99,9 @@ export interface OperationFailure extends OperationContext {
    *  is also how we infer the SDK's auth mode (#106 asks for it and the server
    *  cannot observe it directly). */
   mediated?: boolean;
+  /** #394: the data worker's verdict when it answered the 5xx. A tenant or client
+   *  fault is recorded at `warn`, so it never counts as a platform 5xx. */
+  fault?: DataFault | null;
 }
 
 /**
@@ -114,7 +118,7 @@ export async function recordOperationFailure(
 ): Promise<void> {
   try {
     const { category, operation } = classifyOperation(failure);
-    const level = failure.status >= 500 ? 'error' : 'warn';
+    const level = failure.status >= 500 && (!failure.fault || isPlatformFault(failure.fault)) ? 'error' : 'warn';
     const message = redact(failure.message).slice(0, 1024);
     const fingerprint = await hash16([
       category,
@@ -136,6 +140,7 @@ export async function recordOperationFailure(
             operation,
             String(failure.status),
             authMode,
+            failure.fault ?? '',
           ],
           doubles: [1, failure.status],
         });
@@ -196,6 +201,7 @@ export async function recordOperationFailure(
       route: failure.routePath,
       method: failure.method,
       cfRay: failure.cfRay ?? null,
+      ...(failure.fault ? { fault: failure.fault } : {}),
     });
 
     const context: LogContext = {
@@ -223,6 +229,106 @@ export async function recordOperationFailure(
         data,
         fingerprint,
         failure.traceId ?? null,
+        nowMs,
+        JSON.stringify(context),
+      )
+      .run();
+  } catch {
+    // Logging a failure must never turn it into a different failure.
+  }
+}
+
+/** Data-worker endpoints a data-plane failure may name; anything else is `other`. */
+const DATA_OPERATIONS = new Set(['query', 'execute', 'batch', 'tables', 'migrate']);
+/** Host-reported data-plane failures spend the server budget under their own burst key. */
+const DATA_PLANE_FAILURE_BURST_KEY = 'host:data-plane-failure';
+
+export interface DataPlaneFailure {
+  appId: string;
+  status: number;
+  fault: DataFault;
+  /** The data-worker endpoint, e.g. `query`. Never the URL. */
+  endpoint: string;
+  traceId: string | null;
+  /** The caller's span from the traceparent the host forwarded (the page's, or the host's when it minted the trace). */
+  parentSpanId: string | null;
+  cfRay: string | null;
+}
+
+/**
+ * Record a browser data-plane 5xx the host observed (#394). Never throws.
+ *
+ * Browser `app.db` calls go host → data worker and never touch the API, so until
+ * the host reports them they were visible only in `wrangler tail`. The host is
+ * the trusted observer: it sends this over HostApi only, after the response.
+ * No user id (the host does not resolve one), no SQL, no URL.
+ *
+ * Metrics first and regardless of the detail budget, like every other recorder:
+ * the count must survive a throttled day and any trace sampling. A platform (or
+ * unverdicted) fault is an `error` row and so counts towards the `server_5xx`
+ * alert; a tenant or client fault is a `warn` row and does not.
+ */
+export async function recordDataPlaneFailure(
+  env: { DB: D1Database; ERRORS?: AnalyticsEngineDataset },
+  failure: DataPlaneFailure,
+  nowMs: number = Date.now(),
+): Promise<void> {
+  try {
+    const operation = `db.${DATA_OPERATIONS.has(failure.endpoint) ? failure.endpoint : 'other'}`;
+    const level = isPlatformFault(failure.fault) ? 'error' : 'warn';
+    const fingerprint = await hash16(['db', operation, String(failure.status), failure.fault]);
+
+    if (env.ERRORS) {
+      try {
+        env.ERRORS.writeDataPoint({
+          indexes: [failure.appId.slice(0, 96)],
+          blobs: ['data-worker', level, 'db', fingerprint, operation, String(failure.status), 'platform-cookie', failure.fault],
+          doubles: [1, failure.status],
+        });
+      } catch {
+        // Metrics are best-effort.
+      }
+    }
+
+    const app = await env.DB.prepare('SELECT id FROM apps WHERE id = ?').bind(failure.appId).first();
+    if (!app) return;
+    const verdict = await checkLogQuota(serverFailureUsageStore(env.DB), {
+      appId: failure.appId,
+      clientKey: DATA_PLANE_FAILURE_BURST_KEY,
+      entries: 1,
+      nowMs,
+      dailyLimit: SERVER_FAILURE_DAILY_LIMIT,
+    });
+    if (!verdict.persist) return;
+
+    const context: LogContext = {
+      v: 1,
+      operation,
+      result: 'error',
+      ...(failure.parentSpanId ? { parentSpanId: failure.parentSpanId } : {}),
+      errorCode: safeErrorCode(failure.status, null),
+    };
+    await env.DB.prepare(
+      `INSERT INTO app_logs
+         (app_id, user_id, client_id, ts, level, category, message, data, build_meta,
+          fingerprint, trace_id, source, ingested_at, context)
+       VALUES (?, NULL, NULL, ?, ?, 'db', ?, ?, NULL, ?, ?, 'server', ?, ?)`,
+    )
+      .bind(
+        failure.appId,
+        nowMs,
+        level,
+        `Data worker returned ${failure.status} (${failure.fault} fault)`,
+        JSON.stringify({
+          operation,
+          status: failure.status,
+          fault: failure.fault,
+          route: 'platform.data',
+          observedBy: 'host',
+          cfRay: failure.cfRay,
+        }),
+        fingerprint,
+        failure.traceId,
         nowMs,
         JSON.stringify(context),
       )

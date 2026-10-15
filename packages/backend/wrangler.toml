@@ -25,6 +25,16 @@ upload_source_maps = true
 [observability]
 enabled = true
 
+# Workers traces (#394): automatic spans for this worker's fetches, bindings and
+# D1 calls, head-sampled at 10% and kept 7 days by Cloudflare; no external
+# exporter. Sampling decides only which requests get spans: failure COUNTS are
+# written to Analytics Engine and app_logs on every failure, sampled or not, and
+# the X-PAS-Trace-Id an owner sees is a W3C id carried in headers, so an
+# incident is found by id even when its spans were sampled out. Logs stay at 100%.
+[observability.traces]
+enabled = true
+head_sampling_rate = 0.1
+
 # Embed the data-worker bundle and the app-worker entry shim (#253) before
 # bundling this worker, so both ship with the backend (no runtime GitHub fetch).
 # Runs on `wrangler deploy` and `wrangler dev`. See scripts/embed-*.mjs.

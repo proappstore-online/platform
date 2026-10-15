@@ -9,8 +9,14 @@ const API_BASE = "https://api.proappstore.online";
 export const SESSION_INVALIDATION_ID_HEADER = "X-PAS-Session-Invalidation-Id";
 export const SESSION_INVALIDATION_REASON_HEADER = "X-PAS-Session-Invalidation-Reason";
 const SESSION_INVALIDATION_EVENT_HEADER = "X-PAS-Session-Invalidation";
+/** #394: the host-only marker on a data-plane failure report (backend lib/app-context.ts). */
+const DATA_PLANE_FAILURE_HEADER = "X-PAS-Data-Plane-Failure";
+/** The data worker's fault verdict on a 5xx (backend lib/data-worker-url.ts). */
+const DATA_FAULT_HEADER = "X-PAS-Fault";
+/** Same name as the backend's error responses use (#390). */
+export const TRACE_ID_HEADER = "X-PAS-Trace-Id";
 
-export async function handlePlatformMediation(request: Request, env: Env, route: Route): Promise<Response | null> {
+export async function handlePlatformMediation(request: Request, env: Env, route: Route, ctx: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname === API_PREFIX || url.pathname.startsWith(`${API_PREFIX}/`)) {
     // API/auth plane: the backend mints + verifies sessions with the same key,
@@ -26,7 +32,13 @@ export async function handlePlatformMediation(request: Request, env: Env, route:
     // drift from the backend's (e.g. before a reconcile) and 401 a perfectly
     // valid session. Never let that sign the user out — surface it as a data
     // error and keep the cookie. See #65/#66.
-    return forwardWithSession(request, null, upstreamDataUrl(url, route), false, route);
+    //
+    // #394: the API never sees this plane, so the host reports its 5xx over
+    // HostApi — after the response, never holding it up.
+    const endpoint = url.pathname.slice(DATA_PREFIX.length).split("/")[1] ?? "";
+    return forwardWithSession(request, null, upstreamDataUrl(url, route), false, route, undefined, true, (upstream, traceparent) => {
+      ctx.waitUntil(persistDataPlaneFailure(env.API, route, endpoint, upstream, traceparent));
+    });
   }
   if (url.pathname === WORKER_PREFIX || url.pathname.startsWith(`${WORKER_PREFIX}/`)) {
     // App worker plane (#260): the backend resolves the user, mints a caller
@@ -59,7 +71,16 @@ function upstreamDataUrl(url: URL, route: Route): string {
 /** Rewrite of the upstream request — the worker plane sends every method as a POST with the original in headers. */
 interface Upstream { method: string; headers: Record<string, string> }
 
-async function forwardWithSession(request: Request, binding: Fetcher | null, upstreamUrl: string, clearCookieOn401: boolean, route: Route, as?: Upstream, includeHostContext = true): Promise<Response> {
+async function forwardWithSession(
+  request: Request,
+  binding: Fetcher | null,
+  upstreamUrl: string,
+  clearCookieOn401: boolean,
+  route: Route,
+  as?: Upstream,
+  includeHostContext = true,
+  on5xx?: (upstream: Response, traceparent: string) => void,
+): Promise<Response> {
   const token = readCookie(request.headers.get("Cookie"), SESSION_COOKIE_NAME);
   if (!token) return noStore(Response.json({ error: "not signed in" }, { status: 401 }));
 
@@ -80,10 +101,24 @@ async function forwardWithSession(request: Request, binding: Fetcher | null, ups
   }
 
   const upstreamRequest = new Request(upstreamUrl, init);
-  const upstream = binding ? await binding.fetch(upstreamRequest) : await fetch(upstreamRequest);
+  let upstream: Response;
+  try {
+    upstream = binding ? await binding.fetch(upstreamRequest) : await fetch(upstreamRequest);
+  } catch (e) {
+    // An unreachable upstream is a platform 502 with a trace id, where it is observed.
+    if (!on5xx) throw e;
+    upstream = Response.json({ error: "data worker unreachable" }, { status: 502, headers: { [DATA_FAULT_HEADER]: "platform" } });
+  }
   if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") return upstream;
 
   const response = noStore(upstream);
+  if (on5xx && upstream.status >= 500) {
+    // forwardedHeaders always leaves a valid traceparent; its trace id is the incident id.
+    const traceparent = headers.get("traceparent")!;
+    response.headers.set(TRACE_ID_HEADER, traceparent.slice(3, 35));
+    console.error("[pas-data-plane-failure]", { app: route.slug, status: upstream.status, fault: upstream.headers.get(DATA_FAULT_HEADER), traceparent });
+    on5xx(upstream, traceparent);
+  }
   if (clearCookieOn401 && upstream.status === 401) {
     const correlationId = invalidationId();
     // This private HostApi call is the durable record. Browser telemetry is
@@ -118,6 +153,30 @@ async function persistSessionInvalidation(api: Fetcher | null, route: Route, cor
   }
 }
 
+/**
+ * #394: the durable record of a browser data-plane 5xx, over the private HostApi
+ * binding (the backend strips the marker from every other caller). Carries the
+ * status, the data worker's fault verdict, the endpoint name and the trace — no
+ * URL, no SQL, no credential. Best-effort: the browser already has its answer.
+ */
+async function persistDataPlaneFailure(api: Fetcher, route: Route, endpoint: string, upstream: Response, traceparent: string): Promise<void> {
+  try {
+    const response = await api.fetch(new Request(`${API_BASE}/v1/internal/data-plane-failures`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-PAS-App": route.slug, [DATA_PLANE_FAILURE_HEADER]: "1", traceparent },
+      body: JSON.stringify({
+        status: upstream.status,
+        fault: upstream.headers.get(DATA_FAULT_HEADER),
+        endpoint,
+        cfRay: upstream.headers.get("cf-ray"),
+      }),
+    }));
+    if (!response.ok) console.error("[pas-data-plane-failure-log-failed]", { status: response.status, traceparent });
+  } catch {
+    console.error("[pas-data-plane-failure-log-failed]", { traceparent });
+  }
+}
+
 function invalidationId(): string {
   return crypto.randomUUID().replace(/-/g, "").toLowerCase();
 }
@@ -131,6 +190,7 @@ function forwardedHeaders(source: Headers, token: string, route: Route, hostname
   headers.delete("Referer");
   headers.delete(SESSION_INVALIDATION_EVENT_HEADER);
   headers.delete(SESSION_INVALIDATION_ID_HEADER);
+  headers.delete(DATA_PLANE_FAILURE_HEADER);
   // App context, asserted by the host from the resolved route rather than taken
   // from the URL the page chose. Delete-then-set, in that order: page JS can send
   // this header itself, and without the delete a page on app A could claim app B
@@ -152,10 +212,11 @@ function forwardedHeaders(source: Headers, token: string, route: Route, hostname
   headers.delete("X-Internal-Token");
   // W3C trace context (#390) is page-supplied: forward it only when it is a
   // well-formed version-00 traceparent, and drop its tracestate with it otherwise.
-  // Correlation only — upstream never authorizes on it.
+  // Correlation only — upstream never authorizes on it. #394: a request without
+  // one gets a fresh trace here, so every hop past the host shares one id.
   if (!isValidTraceparent(headers.get("traceparent"))) {
-    headers.delete("traceparent");
     headers.delete("tracestate");
+    headers.set("traceparent", newTraceparent());
   }
   headers.set("Authorization", `Bearer ${token}`);
   return headers;
@@ -163,6 +224,11 @@ function forwardedHeaders(source: Headers, token: string, route: Route, hostname
 
 function isMutation(method: string): boolean {
   return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+}
+
+function newTraceparent(): string {
+  const hex = (bytes: number) => Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
+  return `00-${hex(16)}-${hex(8)}-00`;
 }
 
 /** Vendored from backend lib/log-ingest.ts parseTraceparent: version 00, no all-zero ids. */

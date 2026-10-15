@@ -44,6 +44,22 @@ export interface DeployDataWorkerOptions {
   dataWorkerHost?: string | undefined;
 }
 
+/**
+ * Observability of every data worker this backend deploys (#394), the same policy
+ * as the platform workers' wrangler.toml: Workers Logs at 100% (its console line
+ * carries the caller's trace id and fault verdict), traces head-sampled at 10%,
+ * query strings redacted from both. No external destination.
+ *
+ * Applied on upload, so it reaches a NEW worker at provision and an EXISTING one
+ * only when it is re-uploaded — the `redeploy-data-workers.yml` fleet rollout.
+ */
+export const DATA_WORKER_OBSERVABILITY = {
+  enabled: true,
+  redact_query_string: true,
+  logs: { enabled: true, invocation_logs: true, head_sampling_rate: 1 },
+  traces: { enabled: true, head_sampling_rate: 0.1 },
+} as const;
+
 export async function deployDataWorker(
   appId: string,
   dbId: string,
@@ -80,6 +96,7 @@ export async function deployDataWorker(
     main_module: 'worker.js',
     compatibility_date: '2026-01-01',
     compatibility_flags: ['nodejs_compat'],
+    observability: DATA_WORKER_OBSERVABILITY,
     bindings: [
       { type: 'plain_text', name: 'APP_ID', text: appId },
       // API_BASE lets the data-worker authorize callers against APP_ID via the
