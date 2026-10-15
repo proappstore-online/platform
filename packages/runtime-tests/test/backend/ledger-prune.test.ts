@@ -50,9 +50,25 @@ describe('rate-limit ledger retention against real D1', () => {
       maps_usage: 0, sms_usage: 0, notification_log: 0, webhook_deliveries: 0, webhook_deliveries_orphaned: 0,
       app_proxy_usage: 0, app_proxy_usage_user: 0, ai_daily_budget: 0, license_validate_attempts: 0, provision_attempts: 0,
       scheduled_action_runs: 0, app_hook_deliveries: 0, app_worker_usage: 0, app_worker_invocations: 0,
-      app_worker_deploys: 0,
+      app_worker_deploys: 0, app_metric_buckets: 0,
     });
     expect(await count('maps_usage')).toBe(1);
+  });
+});
+
+// #391: incident counters keep the app-log retention (30 days).
+describe('incident counter retention against real D1', () => {
+  it('deletes buckets older than 30 days and keeps recent ones', async () => {
+    await env.DB.prepare('DELETE FROM app_metric_buckets').run();
+    const day = 24 * 60 * 60 * 1000;
+    const bucket = (ms: number) => Math.floor(ms / 300_000) * 300_000;
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO app_metric_buckets (app_id, bucket_start, signal, n) VALUES ('demo', ?, 'server_5xx', 3)").bind(bucket(Date.now() - 31 * day)),
+      env.DB.prepare("INSERT INTO app_metric_buckets (app_id, bucket_start, signal, n) VALUES ('demo', ?, 'server_5xx', 2)").bind(bucket(Date.now() - 29 * day)),
+    ]);
+    const body = await (await prune()).json() as { ledgerRowsDeleted: Record<string, number> };
+    expect(body.ledgerRowsDeleted).toMatchObject({ app_metric_buckets: 1 });
+    expect((await env.DB.prepare('SELECT n FROM app_metric_buckets').all()).results).toEqual([{ n: 2 }]);
   });
 });
 

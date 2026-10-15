@@ -3,7 +3,7 @@ import {
   ACTION_FAILURE_MIN, ACTION_FAILURE_WINDOW_MS, ALERT_WINDOW_MS, CATCH_UP_MS, ERROR_SPIKE_MIN, QA_CONSECUTIVE_FAILURES, SERVER_5XX_MIN, evaluateErrorSpikes,
 } from './error-alerts.js';
 
-// A D1 that answers by SQL shape. Log signals are scripted as timestamped events
+// A D1 that answers by SQL shape (#391: counts from the counters, affected users from rows). Log signals are scripted as timestamped events
 // and bucketed exactly as the evaluator's grouped query asks (slice size and
 // [since, until) from its binds), so the time edges are exercised here; the real
 // SQL runs against workerd D1 in runtime-tests/test/backend/alerts.test.ts.
@@ -35,6 +35,13 @@ function fakeDb(s: Scenario) {
   const prepare = vi.fn((sql: string) => ({
     bind: (...args: unknown[]) => ({
       all: async () => {
+        // #391: the counters hold the same events, bucketed to 5 minutes; affected users are not in them.
+        if (/FROM app_metric_buckets/.test(sql)) {
+          const [sliceMs, since, until, signal, appId] = args;
+          const events = { client_error: s.clientErrors, action_failure: s.actionFailures, server_5xx: s.server5xx }[signal as string];
+          const bucketed = (events ?? []).map((e) => ({ ...e, at: Math.floor(e.at / 300_000) * 300_000 }));
+          return { results: grouped(bucketed, [sliceMs, since, until, appId]).map(({ affected: _a, ...r }) => r) };
+        }
         if (/GROUP BY app_id, slice/.test(sql)) {
           if (/source != 'server'/.test(sql)) return { results: grouped(s.clientErrors, args) };
           if (/category = 'action'/.test(sql)) return { results: grouped(s.actionFailures, args) };

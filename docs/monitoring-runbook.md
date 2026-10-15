@@ -18,7 +18,8 @@ control plane (backend `api`, `host`, per-app `data-*`, `qa-worker`,
 | **Data-worker 5xx** (#394) | `app_logs` `source = 'server'`: category `action` (through the API) or `db` with `data.route = 'platform.data'` (browser `app.db`, reported by the host) | `GET /v1/apps/:appId/logs?source=server` or the incident lookup below; still in `wrangler tail pas-data-<app>` with the trace id |
 | **One incident, every hop** (#394) | `app_logs` rows sharing a trace id + the `app_worker_invocations` row of that id | `GET /v1/apps/:appId/incidents/:traceId` (owner) |
 | **Agent build/deploy failures** | agent-teams activity log | `agent_activity` MCP tool |
-| **Alerts** (spikes detected from the rows above) | `app_alerts` (#107) | `GET /v1/apps/:appId/alerts` (owner) — the console's per-app workspace; `open=1` for unacknowledged |
+| **Alerts** (spikes detected from the incident counters, #391) | `app_alerts` (#107) | `GET /v1/apps/:appId/alerts` (owner) — the console's per-app workspace; `open=1` for unacknowledged |
+| **Telemetry health + counts** (#391) | `telemetry_health`, `app_metric_buckets`, AE `pas_app_requests` | `GET /v1/apps/:appId/telemetry/health` (owner) — `ok` / `degraded` / `unknown`, failure counts, request totals and latency |
 
 ## Triage: "an app is failing"
 
@@ -124,11 +125,15 @@ windows for error spikes, 5xx and QA, 5-minute slices for action failures.
 
 Kinds and the implemented thresholds:
 
-| Kind | Source rows | Fires when |
+Since #391 the counts come from the incident counters (`app_metric_buckets`,
+below), which every recorder writes **before** its detail budget, so a day
+whose detail rows were throttled still alerts on what happened.
+
+| Kind | Counter signal | Fires when |
 |---|---|---|
-| `error_spike` | `app_logs` `level = 'error'`, client-sourced | ≥ 20 in the 15-minute window **and** ≥ 3× the previous window |
-| `action_failures` | `app_logs` `source = 'server'`, `category = 'action'` | ≥ 20 in one completed 5-minute slice (the "> 20 / 5 min" rule above); a burst that straddles a slice boundary is counted per slice |
-| `server_5xx` | `app_logs` `source = 'server'`, `level = 'error'` (backend 5xx recorded by the operation-log hook) | ≥ 5 in the window ("sustained") |
+| `error_spike` | `client_error` (client-reported `error` entries) | ≥ 20 in the 15-minute window **and** ≥ 3× the previous window |
+| `action_failures` | `action_failure` (server-observed failed actions, any status) | ≥ 20 in one completed 5-minute slice (the "> 20 / 5 min" rule above); a burst that straddles a slice boundary is counted per slice |
+| `server_5xx` | `server_5xx` (API 5xx with a `platform`/`unknown` verdict, host-reported data-plane 5xx) | ≥ 5 in the window ("sustained") |
 | `qa_failures` | `app_test_runs`, deploy/cron triggers | ≥ 2 consecutive failed runs with no pass since, raised in the window holding the latest failure (the "2+ consecutive" rule; live now that #62 fixed stuck runs) |
 | `scheduled_action_failures` | scheduled registered-action runs | 5 consecutive failures disable that action until its manifest is re-registered; inspect `GET /v1/apps/:appId/scheduled-runs` or MCP `list_scheduled_runs` |
 
@@ -136,10 +141,12 @@ The runbook's "5% of a route's sessions" is not computed yet (it needs session
 counts joined to routes); the absolute-plus-jump rule above is the starting
 point — tune the constants at the top of `lib/error-alerts.ts`.
 
-**Payload** (`GET /v1/apps/:appId/alerts`): app id, kind, window, count,
-affected users (a count of distinct sessions or anonymous client ids), the
-previous window's baseline, top categories / operations / fingerprints, and the
-latest build metadata seen in the window. Never a log message, request body,
+**Payload** (`GET /v1/apps/:appId/alerts`): app id, kind, window, count (from
+the counters), the previous window's baseline, and — marked
+`detail_basis: "retained_rows_sample"` — affected users (distinct sessions or
+anonymous client ids **among retained detail rows**: a lower bound, never an
+exact affected-user count; 0 when every row was withheld), top categories /
+operations / fingerprints, and the latest build metadata seen in the window. Never a log message, request body,
 token, credential or user id.
 
 **Where it goes**: the console (pull — ADR-008 decision 6). Owners who want a
@@ -219,11 +226,72 @@ EXISTING one keeps its old bundle and settings until it is re-uploaded by the
 **Redeploy data workers** workflow (`redeploy-data-workers.yml`, one app or the
 fleet); until then its 5xx are recorded with fault `unknown`.
 
-**Still open — aggregates (#391).** These failures feed the existing per-app
-signals: `app_logs` (and so the `server_5xx` / `action_failures` alerts) and the
-`pas_app_errors` points. The quota-independent incident aggregates of
-observability 03 (#391) are not delivered; when they are, they should consume
-the same trusted outcomes — `recordOperationFailure` (API-observed, with
-`fault`) and `recordDataPlaneFailure` (host-observed) in
-`packages/backend/src/lib/operation-log.ts` — counting `platform`/`unknown`
-faults as platform failures and `tenant`/`client` separately.
+**Aggregates (#391).** Both recorders above — `recordOperationFailure`
+(API-observed, with `fault`) and `recordDataPlaneFailure` (host-observed) — add
+to the incident counters below before their detail budget: `platform`/`unknown`
+faults as `server_5xx`, `tenant`/`client` as `tenant_fault`/`client_fault`.
+
+## Incident counters and telemetry health (#391)
+
+Detail rows (`app_logs`) are budgeted — client entries 50,000 per app per day
+plus a per-key burst limit, server failure rows 10,000 per app per day (#372) —
+so counting rows undercounts an app when it is failing hardest. Counts that
+alerts and the health API rely on are kept separately.
+
+**Incident counters — `app_metric_buckets` (D1).** One row per app, 5-minute
+bucket and signal; signals are a fixed set (`lib/metric-aggregates.ts`), so
+cardinality is apps × buckets × signals and never user, trace, game or path:
+
+| Signal | Written by | Trust |
+|---|---|---|
+| `client_error`, `detail_dropped_client` | `POST /v1/apps/:appId/logs` (every batch, persisted or not) | untrusted: public ingestion can only ever add `client_*` |
+| `action_failure`, `server_5xx`, `tenant_fault`, `client_fault`, `detail_dropped_server` | the API's operation-failure hook; the host's HostApi data-plane report | trusted: past the #375 gate (app exists; below 5xx the caller must belong to it). An anonymous 5xx is counted (a server status cannot be forged) but still writes no row |
+
+Every write is one D1 batch per failure or ingested batch, never per request.
+Counters are pruned with app logs (30 days, `/internal/logs/prune`).
+
+**Request denominators and latency — AE `pas_app_requests`.** One point per
+app-scoped API request (`/v1/apps/:appId/…`): outcome class (`ok` / `4xx` /
+`5xx`) and latency bucket (`lt_100ms` / `lt_500ms` / `lt_2s` / `ge_2s`), with the
+exact latency as a double. No route, user or trace. Excluded: the telemetry
+plane itself (`logs`, `incidents`, `telemetry`, `alerts`), CORS preflights,
+WebSocket upgrades, and ids that are not app slugs. In Analytics Engine, not
+D1, so no API request waits on or writes to the platform database for it.
+Analytics Engine **samples**: totals are weighted by `_sample_interval`, so
+they are estimates, and AE data can lag by minutes. The 5xx rate is
+`5xx / (ok + 4xx + 5xx)` from the same points; it is `null`, not 0, when
+nothing was counted. These request 5xx include every app-scoped API 5xx; the
+`server_5xx` counter excludes tenant/client faults — compare like with like.
+
+**Pipeline health — `telemetry_health` (D1).** Each component stamps its last
+success and last failure:
+
+| Component | Stamped by | Stale after |
+|---|---|---|
+| `evaluator` (platform) | the five-minute cron, success or failure | 15 minutes (three missed ticks) |
+| `prune` (platform) | `/internal/logs/prune` (daily, `prune-app-logs.yml`); a partial run is a failure | 2 days |
+| `aggregates` (per app) | every counter write; a failed write stamps a failure when D1 accepts it | never (a quiet app writes nothing): `no_data` until its first write |
+
+A component is `degraded` when its latest attempt failed, `unknown` when it has
+never succeeded or its last success is stale, `ok` otherwise; the next success
+clears `degraded`.
+
+**`GET /v1/apps/:appId/telemetry/health`** (owner-only, `no-store`):
+
+- `status`: `unknown` when the evaluator is unknown; `degraded` when any
+  component is degraded or AE request data cannot be read; else `ok`.
+- `countsReliable`: false when the evaluator is unknown — a zero then means
+  "cannot tell", not "none". With `status: ok`, zero is zero.
+- `windows.lastHour` / `lastDay`: per-signal counter sums and detail-dropped
+  counts (the current 5-minute bucket is partial).
+- `requests`: weighted AE totals, 5xx rate and latency histogram for the last
+  hour and day, `sampled: true`; `status: unknown`, `reason:
+  analytics_unavailable` and null windows when AE cannot be read (missing
+  `CF_ANALYTICS_API_TOKEN`, an AE outage) — never zeros.
+
+Analytics Engine is not on the alerting path: an AE outage degrades the request
+denominators and the `pas_app_errors` points, not alerts.
+
+**Deploy note.** The counters start empty when migration 0100 is applied: an
+alert window that straddles that deploy counts only failures recorded after it,
+so a spike already under way can be undercounted for up to 30 minutes.

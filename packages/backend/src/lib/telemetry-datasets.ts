@@ -26,3 +26,9 @@ export const ERRORS_DATASET = 'pas_app_errors';
  * evidence, not dashboard events. Do not rename it (AE has no rename).
  */
 export const PAYOUT_METER_DATASET = 'pas_payout_meter';
+/**
+ * #391: request outcomes and latency of app-scoped API routes — the denominators
+ * for failure rates. Written by the request-metrics middleware (index.ts), read
+ * by routes/telemetry-health.ts. Sampled by AE: always read with _sample_interval.
+ */
+export const REQUEST_METRICS_DATASET = 'pas_app_requests';

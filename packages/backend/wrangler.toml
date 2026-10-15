@@ -184,6 +184,13 @@ dataset = "pas_analytics"
 binding = "ERRORS"
 dataset = "pas_app_errors"
 
+# #391: request outcomes and latency of app-scoped routes — the failure-rate
+# denominators. AE, not D1: a D1 write on every app request would put the
+# platform database's write path behind all API traffic. Sampled; read weighted.
+[[analytics_engine_datasets]]
+binding = "REQUEST_METRICS"
+dataset = "pas_app_requests"
+
 # Financial usage ledger for #25. Kept distinct from visitor analytics: rows
 # carry a different schema and are payout evidence. PAYOUT_METER_SALT and the
 # read tokens are secrets; see docs/payout-metering.md before enabling it.

@@ -321,7 +321,11 @@ describe('POST /v1/apps/:appId/logs — quota', () => {
     const res = await post({ entries: [entry()] }, { env: makeEnv({}, db) });
     expect(res.status).toBe(202);
     expect(await res.json()).toMatchObject({ ingested: 0, counted: 1, throttled: 'daily_quota' });
-    expect(db.batch).not.toHaveBeenCalled();
+    // No detail row; the #391 incident counters still record the entry and the drop.
+    const sqls = (db.prepare as unknown as { mock: { calls: [string][] } }).mock.calls.map(([sql]) => sql);
+    expect(sqls.some((sql) => sql.includes('INSERT INTO app_logs'))).toBe(false);
+    expect(sqls.some((sql) => sql.includes('INSERT INTO app_metric_buckets'))).toBe(true);
+    expect(db.batch).toHaveBeenCalledTimes(1);
   });
 
   it('throttles a burst from one client without a 4xx that would trigger retries', async () => {

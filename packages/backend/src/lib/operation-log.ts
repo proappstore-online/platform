@@ -21,6 +21,7 @@
 
 import { hash16, redact } from './error-telemetry.js';
 import { isPlatformFault, type DataFault } from './data-worker-url.js';
+import { incrementMetrics, type MetricSignal } from './metric-aggregates.js';
 import { messageShape, safeErrorCode, type LogContext } from './log-ingest.js';
 import { checkLogQuota, SERVER_FAILURE_BURST_KEY, SERVER_FAILURE_DAILY_LIMIT, serverFailureUsageStore } from './log-quota.js';
 
@@ -157,7 +158,9 @@ export async function recordOperationFailure(
     // app's log — exactly the cross-app spoofing #108 closed, reintroduced
     // through the trusted path. An unauthenticated 4xx is usually probing anyway;
     // it is still counted in Analytics Engine above, so a spike stays visible.
-    if (!failure.userId) return;
+    // #391: an anonymous 5xx is still counted in the aggregates below (a server
+    // status cannot be forged); only its detail row needs a caller.
+    if (!failure.userId && failure.status < 500) return;
 
     // #375: a row (and the budget it spends) needs an app that exists and, below
     // 5xx, a caller with a relationship to it. Otherwise any free account could
@@ -174,10 +177,20 @@ export async function recordOperationFailure(
               EXISTS (SELECT 1 FROM app_roles WHERE app_id = ?1 AND user_id = ?2 AND role_name <> 'member') AS role
          FROM apps WHERE id = ?1`,
     )
-      .bind(failure.appId, failure.userId)
+      .bind(failure.appId, failure.userId ?? null)
       .first<{ owner: number; team: number; role: number }>();
     if (!app) return;
     if (failure.status < 500 && !app.owner && !app.team && !app.role) return;
+
+    // #391: the incident counters, past the same anti-spoofing gate and BEFORE the
+    // detail budget, so a throttled day still alerts on what actually happened.
+    const counts: Partial<Record<MetricSignal, number>> = {};
+    if (category === 'action') counts.action_failure = 1;
+    if (level === 'error') counts.server_5xx = 1;
+    else if (failure.status >= 500 && failure.fault === 'tenant') counts.tenant_fault = 1;
+    else if (failure.status >= 500 && failure.fault === 'client') counts.client_fault = 1;
+    await incrementMetrics(env.DB, failure.appId, counts, nowMs);
+    if (!failure.userId) return;
 
     // #372: a budget of their own (app_log_usage.server_count). On the shared
     // client counter, anonymous POST /logs traffic could spend the app's day and
@@ -189,7 +202,10 @@ export async function recordOperationFailure(
       nowMs,
       dailyLimit: SERVER_FAILURE_DAILY_LIMIT,
     });
-    if (!verdict.persist) return;
+    if (!verdict.persist) {
+      await incrementMetrics(env.DB, failure.appId, { detail_dropped_server: 1 }, nowMs);
+      return;
+    }
 
     // Structured context, no params and no bodies: #106 is explicit that request
     // payloads, SQL params, and credential fields must never be logged. What an
@@ -292,6 +308,9 @@ export async function recordDataPlaneFailure(
 
     const app = await env.DB.prepare('SELECT id FROM apps WHERE id = ?').bind(failure.appId).first();
     if (!app) return;
+    // #391: counted before the detail budget; the host is the trusted observer.
+    const signal: MetricSignal = isPlatformFault(failure.fault) ? 'server_5xx' : failure.fault === 'tenant' ? 'tenant_fault' : 'client_fault';
+    await incrementMetrics(env.DB, failure.appId, { [signal]: 1 }, nowMs);
     const verdict = await checkLogQuota(serverFailureUsageStore(env.DB), {
       appId: failure.appId,
       clientKey: DATA_PLANE_FAILURE_BURST_KEY,
@@ -299,7 +318,10 @@ export async function recordDataPlaneFailure(
       nowMs,
       dailyLimit: SERVER_FAILURE_DAILY_LIMIT,
     });
-    if (!verdict.persist) return;
+    if (!verdict.persist) {
+      await incrementMetrics(env.DB, failure.appId, { detail_dropped_server: 1 }, nowMs);
+      return;
+    }
 
     const context: LogContext = {
       v: 1,

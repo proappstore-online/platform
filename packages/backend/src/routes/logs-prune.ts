@@ -18,6 +18,7 @@
 
 import { Hono } from 'hono';
 import { internalTokenOk } from '@proappstore/build-core';
+import { recordHealth } from '../lib/metric-aggregates.js';
 import { HttpError } from '../lib/auth.js';
 import type { Env } from '../types.js';
 
@@ -75,6 +76,14 @@ export const SCHEDULED_RUN_RETENTION_DAYS = 30;
 /** #256: inbound-hook delivery rows (the de-dupe record). */
 export const HOOK_DELIVERY_RETENTION_DAYS = 14;
 const RETENTION_PRUNES = [
+  {
+    // #391: incident counters keep the app-log retention; the evaluator reads
+    // at most the last 30 minutes plus one baseline window.
+    key: 'app_metric_buckets',
+    table: 'app_metric_buckets',
+    where: 'bucket_start < ?',
+    binds: (nowMs: number) => [cutoffMs(nowMs, RETENTION_DAYS)],
+  },
   {
     key: 'webhook_deliveries',
     table: 'webhook_deliveries',
@@ -190,6 +199,9 @@ logsPruneRoutes.post('/internal/logs/prune', async (c) => {
       console.error(`[logs-prune] retention prune failed key=${key}`, ledgerErrors[key]);
     }
   }
+
+  // #391: the prune's own health; a partial run (any retention prune failed) is degraded.
+  await recordHealth(c.env.DB, 'prune', '', Object.keys(ledgerErrors).length === 0, 'retention_prune_failed');
 
   return c.json({
     ok: true,

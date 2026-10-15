@@ -6,7 +6,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { requireAppOwner } from '../lib/auth.js';
-import { evaluateErrorSpikes } from '../lib/error-alerts.js';
+import { DETAIL_BASIS, evaluateErrorSpikes } from '../lib/error-alerts.js';
 
 export const alertRoutes = new Hono<{ Bindings: Env }>();
 
@@ -16,7 +16,8 @@ interface AlertRow {
 }
 
 const parse = (s: string | null) => { if (!s) return null; try { return JSON.parse(s) as unknown; } catch { return null; } };
-const view = (r: AlertRow) => ({ ...r, top: parse(r.top) ?? {}, build: parse(r.build_meta), build_meta: undefined });
+// #391: affected_users, top and build are a sample from retained detail rows; say so.
+const view = (r: AlertRow) => ({ ...r, top: parse(r.top) ?? {}, build: parse(r.build_meta), build_meta: undefined, detail_basis: DETAIL_BASIS });
 
 // ── GET /v1/apps/:appId/alerts?since&limit&open ──────────────────
 alertRoutes.get('/apps/:appId/alerts', async (c) => {

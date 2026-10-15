@@ -10,6 +10,7 @@ import { recordServerError } from './lib/error-telemetry.js';
 import { requestTrace, safeErrorCode, TRACE_ID_HEADER } from './lib/log-ingest.js';
 import { DataWorkerFailure, isPlatformFault } from './lib/data-worker-url.js';
 import { recordOperationFailure, shouldLogOperationFailure } from './lib/operation-log.js';
+import { latencyBucket, recordHealth } from './lib/metric-aggregates.js';
 import type { Env } from './types.js';
 import { openapiSpec, openapiYaml } from './openapi-spec.js';
 import { subscriptionRoutes } from './routes/subscription.js';
@@ -33,6 +34,7 @@ import { emailRoutes } from './routes/email.js';
 import { webhookConfigRoutes } from './routes/webhooks-config.js';
 import { logsRoutes } from './routes/logs.js';
 import { logsPruneRoutes } from './routes/logs-prune.js';
+import { telemetryHealthRoutes } from './routes/telemetry-health.js';
 import { toolsRoutes } from './routes/tools.js';
 import { visibilityRoutes } from './routes/visibility.js';
 import { endpointsRoutes } from './routes/endpoints.js';
@@ -122,6 +124,37 @@ app.use(
     maxAge: 600,
   }),
 );
+
+/**
+ * #391: app-scoped route families NOT counted as request outcomes — the
+ * telemetry plane itself (ingesting logs would count itself; reading incidents,
+ * health or alerts is not app traffic). Everything else under
+ * `/v1/apps/:appId/…` is counted once, by status, with its latency bucket.
+ * Also excluded: CORS preflights and WebSocket upgrades (101, long-lived).
+ */
+const REQUEST_METRIC_EXCLUDED = new Set(['logs', 'incidents', 'telemetry', 'alerts']);
+
+app.use('/v1/apps/:appId/*', async (c, next) => {
+  const started = Date.now();
+  await next();
+  const appId = c.req.param('appId');
+  const status = c.res.status;
+  // The id is whatever the URL said: only a well-formed app id is a label (bounded, no paths).
+  if (!appId || !/^[a-z][a-z0-9-]{0,57}$/.test(appId) || c.req.method === 'OPTIONS' || status === 101
+    || REQUEST_METRIC_EXCLUDED.has(c.req.path.split('/')[4] ?? '')) return;
+  const ms = Date.now() - started;
+  try {
+    // One point per request, in its own dataset: outcome class and latency bucket
+    // only (no route, user or trace), the exact latency as a double for quantiles.
+    c.env.REQUEST_METRICS?.writeDataPoint({
+      indexes: [appId],
+      blobs: [status >= 500 ? '5xx' : status >= 400 ? '4xx' : 'ok', latencyBucket(ms)],
+      doubles: [1, ms],
+    });
+  } catch {
+    // Metrics never fail a request.
+  }
+});
 
 /**
  * Run telemetry outside the response path.
@@ -285,6 +318,7 @@ v1.route('/', emailRoutes);
 v1.route('/', webhookConfigRoutes);
 v1.route('/', logsRoutes);
 v1.route('/', logsPruneRoutes);
+v1.route('/', telemetryHealthRoutes);
 v1.route('/', toolsRoutes);
 v1.route('/', visibilityRoutes);
 v1.route('/', endpointsRoutes);
@@ -359,7 +393,11 @@ export default {
     // #107/#389: alert evaluation runs on every five-minute tick at the tick's scheduled
     // time, over completed intervals only, catching up on late or missed ticks
     // (lib/error-alerts.ts). Failures here must not take the other checks down.
-    ctx.waitUntil(evaluateErrorSpikes({ env, now: tickAt }).catch((e) => console.error(`[alert] evaluation failed: ${(e as Error).message}`)));
+    // #391: stamp the evaluator's health either way, so a stalled or failing evaluator reads unknown/degraded, never healthy.
+    ctx.waitUntil(evaluateErrorSpikes({ env, now: tickAt }).then(
+      () => recordHealth(env.DB, 'evaluator', '', true, null),
+      (e) => { console.error(`[alert] evaluation failed: ${(e as Error).message}`); return recordHealth(env.DB, 'evaluator', '', false, 'evaluation_failed'); },
+    ));
     // The pre-existing checks remain every fifteen minutes even though the
     // Worker now receives a five-minute tick for scheduled app actions.
     if (new Date(tickAt).getUTCMinutes() % 15 !== 0) return;

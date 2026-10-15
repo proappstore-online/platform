@@ -14,6 +14,7 @@
  * a count.
  */
 import { dispatchWebhook } from './webhook-dispatch.js';
+import type { MetricSignal } from './metric-aggregates.js';
 
 export const ALERT_WINDOW_MS = 15 * 60_000;
 /**
@@ -48,12 +49,21 @@ export interface Alert {
   kind: AlertKind;
   window_start: number;
   window_end: number;
+  /** #391: from the incident counters (app_metric_buckets), independent of detail budgets. */
   count: number;
+  /** A SAMPLE: distinct users/clients among the retained detail rows, which are
+   *  budgeted — a lower bound, never an exact affected-user count. */
   affected_users: number;
   baseline: number;
+  /** A sample from retained detail rows, like affected_users. */
   top: AlertTop;
   build: unknown | null;
+  /** #391: names which fields come from retained detail rows rather than the counters. */
+  detail_basis: typeof DETAIL_BASIS;
 }
+
+/** `affected_users`, `top` and `build` are drawn from budgeted detail rows (#391). */
+export const DETAIL_BASIS = 'retained_rows_sample' as const;
 
 export interface AlertReport {
   checkedAt: string;
@@ -111,6 +121,18 @@ function completedEnds(now: number, stepMs: number): number[] {
   return ends;
 }
 
+/**
+ * #391: alert counts per app and slice from the incident counters, which every
+ * recorder writes before its detail budget. `sliceMs` is a multiple of the
+ * 5-minute metric bucket. Keyed `${app_id}|${sliceStart}` like perSlice.
+ */
+async function countSlices(db: D1Database, sliceMs: number, since: number, until: number, signal: MetricSignal, appId?: string) {
+  const rows = await db.prepare(
+    `SELECT app_id, CAST(bucket_start / ?1 AS INTEGER) * ?1 AS slice, SUM(n) AS n FROM app_metric_buckets WHERE bucket_start >= ?2 AND bucket_start < ?3 AND signal = ?4${appId ? ' AND app_id = ?5' : ''} GROUP BY app_id, slice`,
+  ).bind(sliceMs, since, until, signal, ...(appId ? [appId] : [])).all<{ app_id: string; slice: number; n: number }>();
+  return new Map((rows.results ?? []).map((r) => [`${r.app_id}|${Number(r.slice)}`, { app_id: r.app_id, n: r.n }]));
+}
+
 const CLIENT_ERRORS = "level = 'error' AND source != 'server'";
 const ACTION_FAILURES = "source = 'server' AND category = 'action'";
 const SERVER_5XX = "source = 'server' AND level = 'error'";
@@ -131,35 +153,39 @@ export async function evaluateErrorSpikes(opts: { env: Env; now?: number; appId?
 
   // 1. Client runtime error spike (many errors, and a jump against the previous window)
   // and 2. sustained backend 5xx recorded server-side for an app, per completed window.
-  const client = await perSlice(db, windowMs, firstStart - windowMs, lastEnd, CLIENT_ERRORS, opts.appId);
-  const s5 = await perSlice(db, windowMs, firstStart, lastEnd, SERVER_5XX, opts.appId);
+  // #391: counts from the incident counters; affected users from detail rows (a sample).
+  const client = await countSlices(db, windowMs, firstStart - windowMs, lastEnd, 'client_error', opts.appId);
+  const s5 = await countSlices(db, windowMs, firstStart, lastEnd, 'server_5xx', opts.appId);
+  const clientSample = await perSlice(db, windowMs, firstStart, lastEnd, CLIENT_ERRORS, opts.appId);
+  const s5Sample = await perSlice(db, windowMs, firstStart, lastEnd, SERVER_5XX, opts.appId);
   for (const windowEnd of windows) {
     const windowStart = windowEnd - windowMs;
     for (const [key, c] of client) {
       if (!key.endsWith(`|${windowStart}`)) continue;
       const baseline = client.get(`${c.app_id}|${windowStart - windowMs}`)?.n ?? 0;
       if (c.n >= ERROR_SPIKE_MIN && c.n >= baseline * SPIKE_FACTOR) {
-        alerts.push({ app_id: c.app_id, kind: 'error_spike', window_start: windowStart, window_end: windowEnd, count: c.n, affected_users: c.affected, baseline,
-          top: await topFor(db, c.app_id, windowStart, windowEnd, CLIENT_ERRORS, []), build: await latestBuild(db, c.app_id, windowStart, windowEnd) });
+        alerts.push({ app_id: c.app_id, kind: 'error_spike', window_start: windowStart, window_end: windowEnd, count: c.n, affected_users: clientSample.get(key)?.affected ?? 0, baseline,
+          top: await topFor(db, c.app_id, windowStart, windowEnd, CLIENT_ERRORS, []), build: await latestBuild(db, c.app_id, windowStart, windowEnd), detail_basis: DETAIL_BASIS });
       }
     }
     for (const [key, c] of s5) {
       if (!key.endsWith(`|${windowStart}`) || c.n < SERVER_5XX_MIN) continue;
-      alerts.push({ app_id: c.app_id, kind: 'server_5xx', window_start: windowStart, window_end: windowEnd, count: c.n, affected_users: c.affected, baseline: 0,
-        top: await topFor(db, c.app_id, windowStart, windowEnd, SERVER_5XX, []), build: await latestBuild(db, c.app_id, windowStart, windowEnd) });
+      alerts.push({ app_id: c.app_id, kind: 'server_5xx', window_start: windowStart, window_end: windowEnd, count: c.n, affected_users: s5Sample.get(key)?.affected ?? 0, baseline: 0,
+        top: await topFor(db, c.app_id, windowStart, windowEnd, SERVER_5XX, []), build: await latestBuild(db, c.app_id, windowStart, windowEnd), detail_basis: DETAIL_BASIS });
     }
   }
 
   // 3. Action failures: the runbook's "> 20 in 5 minutes", per completed five-minute slice.
   const slices = completedEnds(now, ACTION_FAILURE_WINDOW_MS);
-  const act = await perSlice(db, ACTION_FAILURE_WINDOW_MS, slices[0]! - 2 * ACTION_FAILURE_WINDOW_MS, slices[slices.length - 1]!, ACTION_FAILURES, opts.appId);
+  const act = await countSlices(db, ACTION_FAILURE_WINDOW_MS, slices[0]! - 2 * ACTION_FAILURE_WINDOW_MS, slices[slices.length - 1]!, 'action_failure', opts.appId);
+  const actSample = await perSlice(db, ACTION_FAILURE_WINDOW_MS, slices[0]! - ACTION_FAILURE_WINDOW_MS, slices[slices.length - 1]!, ACTION_FAILURES, opts.appId);
   for (const sliceEnd of slices) {
     const sliceStart = sliceEnd - ACTION_FAILURE_WINDOW_MS;
     for (const [key, c] of act) {
       if (!key.endsWith(`|${sliceStart}`) || c.n < ACTION_FAILURE_MIN) continue;
-      alerts.push({ app_id: c.app_id, kind: 'action_failures', window_start: sliceStart, window_end: sliceEnd, count: c.n, affected_users: c.affected,
+      alerts.push({ app_id: c.app_id, kind: 'action_failures', window_start: sliceStart, window_end: sliceEnd, count: c.n, affected_users: actSample.get(key)?.affected ?? 0,
         baseline: act.get(`${c.app_id}|${sliceStart - ACTION_FAILURE_WINDOW_MS}`)?.n ?? 0,
-        top: await topFor(db, c.app_id, sliceStart, sliceEnd, ACTION_FAILURES, []), build: await latestBuild(db, c.app_id, sliceStart, sliceEnd) });
+        top: await topFor(db, c.app_id, sliceStart, sliceEnd, ACTION_FAILURES, []), build: await latestBuild(db, c.app_id, sliceStart, sliceEnd), detail_basis: DETAIL_BASIS });
     }
   }
 
@@ -179,7 +205,7 @@ export async function evaluateErrorSpikes(opts: { env: Env; now?: number; appId?
     for (const [appId, s] of streak) {
       if (s.n >= QA_CONSECUTIVE_FAILURES && s.latest >= windowStart) {
         alerts.push({ app_id: appId, kind: 'qa_failures', window_start: windowStart, window_end: windowEnd, count: s.n, affected_users: 0, baseline: 0,
-          top: { categories: [{ category: 'qa', count: s.n }], operations: [], fingerprints: [] }, build: await latestBuild(db, appId, windowStart - 24 * 60 * 60_000, windowEnd) });
+          top: { categories: [{ category: 'qa', count: s.n }], operations: [], fingerprints: [] }, build: await latestBuild(db, appId, windowStart - 24 * 60 * 60_000, windowEnd), detail_basis: DETAIL_BASIS });
       }
     }
   }

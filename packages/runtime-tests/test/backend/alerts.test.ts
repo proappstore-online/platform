@@ -3,13 +3,22 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { evaluateErrorSpikes } from '../../../backend/src/lib/error-alerts';
 import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
-beforeEach(async () => { mockNetwork(); await resetTables(); await env.DB.prepare('DELETE FROM app_alerts').run(); await env.DB.prepare('DELETE FROM app_test_runs').run(); });
+beforeEach(async () => { mockNetwork(); await resetTables(); await env.DB.prepare('DELETE FROM app_alerts').run(); await env.DB.prepare('DELETE FROM app_test_runs').run(); await env.DB.prepare('DELETE FROM app_metric_buckets').run(); });
 
 // A quarter-hour boundary (1_800_000_000_000 is a multiple of 15 minutes).
 const B = 1_800_000_000_000;
-const log = (app: string, at: number, source: string, category: string, level = 'error') =>
+/** #391: one incident-counter increment, as the recorders write it before any detail budget. */
+const counter = (app: string, at: number, signal: string, n = 1) =>
+  env.DB.prepare('INSERT INTO app_metric_buckets (app_id, bucket_start, signal, n) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(app_id, bucket_start, signal) DO UPDATE SET n = n + excluded.n')
+    .bind(app, Math.floor(at / 300_000) * 300_000, signal, n);
+/** A recorded failure: its detail row plus the counters its recorder adds. */
+const log = (app: string, at: number, source: string, category: string, level = 'error') => [
   env.DB.prepare("INSERT INTO app_logs (app_id, user_id, client_id, ts, level, category, message, data, build_meta, fingerprint, trace_id, source, ingested_at) VALUES (?, 'gh:u1', NULL, ?, ?, ?, 'boom', '{\"action\":\"save\"}', NULL, 'fp', NULL, ?, ?)")
-    .bind(app, at, level, category, source, at);
+    .bind(app, at, level, category, source, at),
+  ...(source !== 'server' && level === 'error' ? [counter(app, at, 'client_error')] : []),
+  ...(source === 'server' && category === 'action' ? [counter(app, at, 'action_failure')] : []),
+  ...(source === 'server' && level === 'error' ? [counter(app, at, 'server_5xx')] : []),
+];
 
 // #107 on a real D1: the evaluator's GROUP BY / json_extract / DISTINCT queries
 // run against the actual app_logs schema, the unique bucket index absorbs a
@@ -23,7 +32,7 @@ describe('error-spike alerts against real D1', () => {
     const rows = Array.from({ length: 25 }, (_, i) =>
       env.DB.prepare("INSERT INTO app_logs (app_id, user_id, client_id, ts, level, category, message, data, build_meta, fingerprint, trace_id, source, ingested_at) VALUES ('demo', ?, NULL, ?, 'error', 'runtime', 'boom', '{\"route\":\"/\"}', '{\"sha\":\"abc123\"}', ?, NULL, 'mediated', ?)")
         .bind(`gh:u${i % 6}`, at, i % 2 ? 'fp-a' : 'fp-b', at));
-    await env.DB.batch(rows);
+    await env.DB.batch([...rows, counter('demo', at, 'client_error', 25)]);
     // #389: while the interval is still open nothing is evaluated over it.
     expect((await evaluateErrorSpikes({ env, now: at + 1000 })).alerts).toEqual([]);
     const now = B + 15 * 60_000;
@@ -67,8 +76,8 @@ describe('error-spike alerts against real D1', () => {
     await seedUser('gh:1'); await seedApp('edge', 'gh:1');
     const end = B + 15 * 60_000;
     await env.DB.batch([
-      ...Array.from({ length: 20 }, () => log('edge', end - 1, 'mediated', 'runtime')),
-      ...Array.from({ length: 30 }, () => log('edge', end, 'mediated', 'runtime')),
+      ...Array.from({ length: 20 }, () => log('edge', end - 1, 'mediated', 'runtime')).flat(),
+      ...Array.from({ length: 30 }, () => log('edge', end, 'mediated', 'runtime')).flat(),
     ]);
     const r = await evaluateErrorSpikes({ env, now: end, appId: 'edge' });
     expect(r.alerts.map((a) => [a.kind, a.window_start, a.window_end, a.count])).toEqual([['error_spike', B, end, 20]]);
@@ -77,7 +86,7 @@ describe('error-spike alerts against real D1', () => {
   it('action failures are counted per completed five-minute slice, at every tick through the period', async () => {
     await seedUser('gh:1'); await seedApp('act', 'gh:1');
     // A burst straddling no boundary, in the middle slice [B + 5m, B + 10m).
-    await env.DB.batch(Array.from({ length: 20 }, (_, i) => log('act', B + 6 * 60_000 + i * 1000, 'server', 'action')));
+    await env.DB.batch(Array.from({ length: 20 }, (_, i) => log('act', B + 6 * 60_000 + i * 1000, 'server', 'action')).flat());
     const seen: number[] = [];
     for (let tick = B; tick <= B + 15 * 60_000; tick += 5 * 60_000) seen.push((await evaluateErrorSpikes({ env, now: tick, appId: 'act' })).recorded);
     // The slice alerts at the B + 10m tick; the same server error rows also raise the
@@ -96,12 +105,38 @@ describe('error-spike alerts against real D1', () => {
     await env.DB.prepare("INSERT INTO app_webhooks (id, app_id, event, url, secret, created_at) VALUES ('wh1', 'dup', 'app.alert', 'https://hooks.example/alert', 's', ?)").bind(B).run();
     let deliveries = 0;
     fetchMock.get('https://hooks.example').intercept({ path: '/alert', method: 'POST' }).reply(200, () => { deliveries += 1; return 'ok'; }).persist();
-    await env.DB.batch(Array.from({ length: 25 }, () => log('dup', B + 1000, 'mediated', 'runtime')));
+    await env.DB.batch(Array.from({ length: 25 }, () => log('dup', B + 1000, 'mediated', 'runtime')).flat());
     const now = B + 15 * 60_000;
     const recorded: number[] = [];
     for (const t of [now, now, now + 5 * 60_000]) recorded.push((await evaluateErrorSpikes({ env, now: t })).recorded);
     expect(recorded).toEqual([1, 0, 0]);
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM app_alerts WHERE app_id = 'dup'").first<{ n: number }>())?.n).toBe(1);
     expect(deliveries).toBe(1);
+  });
+
+  // #391: the counts no longer depend on detail rows surviving their budgets.
+  it('with every detail row withheld, the counters alone still raise each alert; affected users are a labelled sample (0 here)', async () => {
+    await seedUser('gh:1'); await seedApp('throttled', 'gh:1');
+    await env.DB.batch([
+      counter('throttled', B + 1000, 'client_error', 40),
+      counter('throttled', B + 6 * 60_000, 'action_failure', 25),
+      counter('throttled', B + 6 * 60_000, 'server_5xx', 25),
+    ]);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM app_logs WHERE app_id = 'throttled'").first<{ n: number }>())?.n).toBe(0);
+    const r = await evaluateErrorSpikes({ env, now: B + 15 * 60_000, appId: 'throttled' });
+    expect(r.alerts.map((a) => [a.kind, a.count, a.affected_users, a.detail_basis]).sort()).toEqual([
+      ['action_failures', 25, 0, 'retained_rows_sample'],
+      ['error_spike', 40, 0, 'retained_rows_sample'],
+      ['server_5xx', 25, 0, 'retained_rows_sample'],
+    ]);
+    const res = await SELF.fetch(`${BASE}/v1/apps/throttled/alerts`, json('GET', undefined, await session('gh:1')));
+    const body = (await res.json()) as { alerts: { detail_basis: string }[] };
+    expect(body.alerts.every((a) => a.detail_basis === 'retained_rows_sample')).toBe(true);
+  });
+
+  it('tenant and client faults never raise server_5xx', async () => {
+    await seedUser('gh:1'); await seedApp('tenant', 'gh:1');
+    await env.DB.batch([counter('tenant', B + 1000, 'tenant_fault', 50), counter('tenant', B + 1000, 'client_fault', 50)]);
+    expect((await evaluateErrorSpikes({ env, now: B + 15 * 60_000, appId: 'tenant' })).alerts).toEqual([]);
   });
 });

@@ -39,6 +39,7 @@ import {
 } from '../lib/log-ingest.js';
 import { dataFaultOf } from '../lib/data-worker-url.js';
 import { recordDataPlaneFailure } from '../lib/operation-log.js';
+import { incrementMetrics } from '../lib/metric-aggregates.js';
 import { checkLogQuota, d1LogUsageStore, publicLogBurstKey, SERVER_FAILURE_DAILY_LIMIT, serverFailureUsageStore } from '../lib/log-quota.js';
 import type { Env } from '../types.js';
 import { privateNoStore } from '../lib/route-wrap.js';
@@ -222,6 +223,14 @@ logsRoutes.post('/apps/:appId/logs', async (c) => {
       }
     }
   }
+
+  // #391: the incident counters, regardless of the detail verdict. Public
+  // ingestion is untrusted, so it can only ever add client_* signals.
+  const clientErrors = entries.filter((e) => e.level === 'error').length;
+  await incrementMetrics(c.env.DB, appId, {
+    client_error: clientErrors,
+    ...(verdict.persist ? {} : { detail_dropped_client: entries.length }),
+  }, now);
 
   if (!verdict.persist) {
     // 202, not 429: the entries were accepted as signal and deliberately not

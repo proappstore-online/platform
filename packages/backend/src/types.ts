@@ -142,6 +142,8 @@ export interface Env {
    * verdict, which counts every row for an app.
    */
   ERRORS?: AnalyticsEngineDataset;
+  /** #391: request outcomes + latency of app-scoped routes (REQUEST_METRICS_DATASET). */
+  REQUEST_METRICS?: AnalyticsEngineDataset;
   /**
    * CF API token with 'Account Analytics:Read' permission. Used by the
    * /stats endpoint to query Analytics Engine via the SQL API.

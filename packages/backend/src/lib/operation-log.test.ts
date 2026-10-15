@@ -18,9 +18,12 @@ const OWNER: Relationship = { owner: 1, team: 0, role: 0 };
 function fakeDb(clientCount = 0, serverCount = 0, relationship: Relationship = OWNER) {
   const inserts: unknown[][] = [];
   const bumps: string[] = [];
+  /** #391 aggregate increments, as `signal` → n. */
+  const metrics: Record<string, number> = {};
   const prepare = vi.fn((sql: string) => ({
     bind: vi.fn((...args: unknown[]) => {
       if (sql.includes('INSERT INTO app_logs')) inserts.push(args);
+      if (sql.includes('INSERT INTO app_metric_buckets')) metrics[args[2] as string] = (metrics[args[2] as string] ?? 0) + (args[3] as number);
       if (sql.includes('INSERT INTO app_log_usage')) bumps.push(sql.replace(/\s+/g, ' '));
       return {
         first: vi.fn().mockResolvedValue(
@@ -33,7 +36,8 @@ function fakeDb(clientCount = 0, serverCount = 0, relationship: Relationship = O
       };
     }),
   }));
-  return { DB: { prepare } as unknown as D1Database, inserts, bumps, prepare };
+  const batch = vi.fn(async (stmts: unknown[]) => stmts.map(() => ({ meta: { changes: 1 } })));
+  return { DB: { prepare, batch } as unknown as D1Database, inserts, bumps, prepare, metrics };
 }
 
 function fakeErrors() {
@@ -372,5 +376,72 @@ describe('data-worker failures (#394)', () => {
     expect(db.inserts[0]![3]).toBe('warn');
     expect(errors.points[0]!.blobs.at(-1)).toBe('tenant');
     expect(JSON.parse(db.inserts[0]![6] as string)).toMatchObject({ fault: 'tenant', status: 500 });
+  });
+});
+
+// #391: incident counters are written past the anti-spoofing gate and before the
+// detail budget, so a throttled day still counts and nobody can mint server signals.
+describe('incident aggregates (#391)', () => {
+  const action5xx = { ...failure, status: 500, message: 'boom' };
+
+  it('an action 5xx counts as an action failure and a server 5xx', async () => {
+    resetBurstState();
+    const db = fakeDb();
+    await recordOperationFailure({ DB: db.DB }, action5xx, NOW);
+    expect(db.metrics).toEqual({ action_failure: 1, server_5xx: 1 });
+    expect(db.inserts).toHaveLength(1);
+  });
+
+  it('over the server detail budget the aggregate still counts, plus the drop; no row', async () => {
+    resetBurstState();
+    const db = fakeDb(0, SERVER_FAILURE_DAILY_LIMIT);
+    await recordOperationFailure({ DB: db.DB }, action5xx, NOW);
+    expect(db.metrics).toEqual({ action_failure: 1, server_5xx: 1, detail_dropped_server: 1 });
+    expect(db.inserts).toHaveLength(0);
+  });
+
+  it('an anonymous 4xx and an outsider 4xx raise no server signal', async () => {
+    resetBurstState();
+    const anon = fakeDb();
+    await recordOperationFailure({ DB: anon.DB }, { ...failure, userId: null }, NOW);
+    expect(anon.metrics).toEqual({});
+    expect(anon.prepare).not.toHaveBeenCalled();
+    const outsider = fakeDb(0, 0, { owner: 0, team: 0, role: 0 });
+    await recordOperationFailure({ DB: outsider.DB }, failure, NOW);
+    expect(outsider.metrics).toEqual({});
+  });
+
+  it('an anonymous 5xx is counted (a server status cannot be forged) but writes no row', async () => {
+    resetBurstState();
+    const db = fakeDb(0, 0, { owner: 0, team: 0, role: 0 });
+    await recordOperationFailure({ DB: db.DB }, { ...action5xx, userId: null }, NOW);
+    expect(db.metrics).toEqual({ action_failure: 1, server_5xx: 1 });
+    expect(db.inserts).toHaveLength(0);
+  });
+
+  it('a tenant-fault data-worker 5xx is a tenant fault, not a server 5xx', async () => {
+    resetBurstState();
+    const db = fakeDb();
+    await recordOperationFailure({ DB: db.DB }, { ...action5xx, fault: 'tenant' }, NOW);
+    expect(db.metrics).toEqual({ action_failure: 1, tenant_fault: 1 });
+  });
+
+  it('host-reported data-plane failures count by fault, before the budget', async () => {
+    resetBurstState();
+    const db = fakeDb(0, SERVER_FAILURE_DAILY_LIMIT);
+    const plane = { appId: 'chess-academy', status: 500, endpoint: 'query', traceId: null, parentSpanId: null, cfRay: null };
+    await recordDataPlaneFailure({ DB: db.DB }, { ...plane, fault: 'platform' }, NOW);
+    await recordDataPlaneFailure({ DB: db.DB }, { ...plane, fault: 'client' }, NOW);
+    expect(db.metrics).toEqual({ server_5xx: 1, client_fault: 1, detail_dropped_server: 2 });
+  });
+
+  it('an aggregate write failure never breaks the recorder', async () => {
+    resetBurstState();
+    const db = fakeDb();
+    (db.DB as unknown as { batch: () => never }).batch = () => { throw new Error('D1 down'); };
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(recordOperationFailure({ DB: db.DB }, action5xx, NOW)).resolves.toBeUndefined();
+    expect(db.inserts).toHaveLength(1);
+    err.mockRestore();
   });
 });
