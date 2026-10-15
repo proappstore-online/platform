@@ -4,7 +4,8 @@ import type { Env, SubmissionRow } from '../types.js';
 import { requireUser } from '../lib/auth.js';
 import { wrap, privateNoStore } from '../lib/route-wrap.js';
 import type { CreateBody } from './submissions-types.js';
-import { isAdmin, rowToSubmission, submissionRepoUrl, APP_ID_RE } from './submissions-helpers.js';
+import { isAdmin, rowToSubmission, submissionRepoUrl } from './submissions-helpers.js';
+import { validNewAppId } from './validation.js';
 import { registerReviewRoutes } from './submissions-review.js';
 
 /**
@@ -49,7 +50,7 @@ submissionRoutes.post('/submissions', wrap(async (c) => {
   const category = (body.category ?? '').trim();
   const description = (body.description ?? '').trim();
 
-  if (!appId || !APP_ID_RE.test(appId) || appId.length > 58) {
+  if (!validNewAppId(appId)) {
     return c.text('Invalid appId', 400);
   }
   if (!name) return c.text('Missing name', 400);

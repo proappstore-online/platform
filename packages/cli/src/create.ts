@@ -71,8 +71,8 @@ interface CreateOptions {
 }
 
 export async function createApp(appId: string, opts: CreateOptions = {}): Promise<void> {
-  if (!/^[a-z][a-z0-9-]*$/.test(appId) || appId.length > 58) {
-    process.stderr.write(`Invalid app ID "${appId}". Use lowercase letters, numbers, hyphens. Max 58 chars.\n`);
+  if (!/^[a-z][a-z0-9-]*$/.test(appId) || appId.length > 57 || appId.startsWith('about-')) {
+    process.stderr.write(`Invalid app ID "${appId}". Use lowercase letters, numbers, hyphens; max 57 chars; no about- prefix.\n`);
     process.exit(1);
   }
 

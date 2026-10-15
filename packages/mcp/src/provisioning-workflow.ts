@@ -559,7 +559,7 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
    */
   async function planProvision(user: WorkflowUser, input: PlanInput, opts: PlanOptions): Promise<PlanOutcome> {
     const { appId } = input;
-    if (typeof appId !== "string" || !APP_ID_RE.test(appId) || appId.length > 58) return { ok: false, error: "Invalid app ID" };
+    if (typeof appId !== "string" || !APP_ID_RE.test(appId) || appId.length > 57 || appId.startsWith("about-")) return { ok: false, error: "Invalid app ID" };
     const url = `https://github.com/${org}/${appId}`;
     const isAdmin = user.roles.includes("admin");
     const consoleMode = opts.mode === "console";

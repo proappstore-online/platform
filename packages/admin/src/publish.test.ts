@@ -486,6 +486,23 @@ describe("documented divergences", () => {
     expect(agent.steps[0]!.name).toBe("Validation");
     expect(agent.repoUrl).toBeNull();
   });
+
+  it("reserves the about hostname and its DNS length on both publish paths", async () => {
+    for (const id of ["about-kanban", "a".repeat(58)]) {
+      install();
+      const pub = await handlePublish(
+        { id, name: "X", category: "C", icon: "x", iconBg: "#000", description: "d" },
+        ENV,
+      );
+      expect(pub.steps[0]!.name).toBe("Validation");
+      expect(pub.success).toBe(false);
+
+      install();
+      const agent = await handleAgentDeploy({ id, name: "X", files: {} }, ENV);
+      expect(agent.steps[0]!.name).toBe("Validation");
+      expect(agent.success).toBe(false);
+    }
+  });
 });
 
 describe("canonical KB workflow — single source of truth (#57)", () => {

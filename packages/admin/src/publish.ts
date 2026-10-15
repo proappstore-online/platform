@@ -451,6 +451,14 @@ function validateId(id: string): string | null {
   return null;
 }
 
+function validateAppId(id: string): string | null {
+  const error = validateId(id);
+  if (error) return error;
+  if (id.length > 57) return "app id must be 57 chars or less (marketing hostname limit)";
+  if (id.startsWith("about-")) return "app id must not start with 'about-'";
+  return null;
+}
+
 // GitHub repo (via build-core). R2 route + analytics are shared; only the
 // DNS, analytics) are the shared build-core primitives — see provisionApp.
 async function createRepo(env: Env, req: PublishRequest): Promise<Step> {
@@ -790,7 +798,7 @@ async function provisionApp(
   let repoUrl: string | null = null;
   const stop = (commitSha?: string) => ({ steps, success: false, repoUrl, commitSha });
 
-  const idError = validateId(req.id);
+  const idError = validateAppId(req.id);
   if (idError) {
     steps.push({ name: "Validation", status: "fail", detail: idError });
     return stop();
@@ -1068,7 +1076,7 @@ export async function runProvisionSteps(
   const steps: Step[] = [];
 
   // Validation — deterministic; never worth retrying.
-  const idError = validateId(req.id);
+  const idError = validateAppId(req.id);
   if (idError) throw new ProvisionValidationError(`Validation: ${idError}`);
   if (!req.name) throw new ProvisionValidationError("Validation: name is required");
 

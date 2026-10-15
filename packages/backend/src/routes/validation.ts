@@ -9,3 +9,8 @@
  * validated segment before parameterized SQL / subrequest paths.
  */
 export const APP_ID_RE = /^[a-z][a-z0-9-]{0,57}$/;
+
+/** New IDs must leave room for the `about-` marketing hostname (63-byte DNS label). */
+export function validNewAppId(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 57 && APP_ID_RE.test(value) && !value.startsWith('about-');
+}

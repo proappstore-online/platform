@@ -28,6 +28,7 @@ import {
 } from '../lib/provision-operation.js';
 import { selectTemplate, TEMPLATE_REV_RE } from '@proappstore/build-core';
 import { fetchRepoFiles, type RepoLocation } from '../lib/github-fetch.js';
+import { validNewAppId } from './validation.js';
 
 /**
  * PAS app provisioning — fully self-contained.
@@ -176,7 +177,7 @@ async function operationAccess(c: Parameters<typeof requireUser>[0], appId: stri
 provisionRoutes.post('/provision-operations', wrap(async (c) => {
   const user = await requireUser(c);
   const body = await c.req.json<{ appId?: unknown; intent?: unknown; bootstrapIntent?: unknown }>();
-  if (!validAppId(body.appId)) return c.text('Invalid app ID', 400);
+  if (!validNewAppId(body.appId)) return c.text('Invalid app ID', 400);
   if (!body.intent || typeof body.intent !== 'object' || Array.isArray(body.intent)) {
     return c.text('Provisioning intent is required', 400);
   }
@@ -387,7 +388,7 @@ provisionRoutes.post('/provision', wrap(async (c) => {
  */
 export async function provisionApp(c: Context<{ Bindings: Env }>, body: ProvisionBody, user: FasUser, ownerId: string): Promise<Response> {
 
-  if (!body.appId || !/^[a-z][a-z0-9-]*$/.test(body.appId) || body.appId.length > 58) {
+  if (!validNewAppId(body.appId)) {
     return c.text('Invalid app ID', 400);
   }
   const requestError = validateProvisionRequest(body);
@@ -631,7 +632,7 @@ provisionRoutes.post('/provision-data', async (c) => {
     return c.json({ error: 'forbidden' }, 403);
   }
   const body = await c.req.json<{ appId?: string; creatorId?: string }>();
-  if (!body.appId || !/^[a-z][a-z0-9-]*$/.test(body.appId) || body.appId.length > 58) {
+  if (!validNewAppId(body.appId)) {
     return c.text('Invalid app ID', 400);
   }
   if (!body.creatorId) return c.text('creatorId required', 400);

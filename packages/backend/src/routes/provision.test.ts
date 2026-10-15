@@ -206,14 +206,16 @@ describe('POST /v1/provision', () => {
     expect(res.status).toBe(400);
   });
 
-  it('rejects app IDs over 58 chars', async () => {
+  it('reserves marketing hostnames and rejects IDs too long for them', async () => {
     globalThis.fetch = multiFetch();
-    const res = await app.request('/v1/provision', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ appId: 'a'.repeat(59), skipCompliance: true }),
-    }, makeEnv());
-    expect(res.status).toBe(400);
+    for (const appId of ['a'.repeat(58), 'about-kanban']) {
+      const res = await app.request('/v1/provision', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId, skipCompliance: true }),
+      }, makeEnv());
+      expect(res.status).toBe(400);
+    }
   });
 
   it('calls D1 API for data plane provisioning', async () => {

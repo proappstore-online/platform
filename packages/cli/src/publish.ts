@@ -60,8 +60,8 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
   }
 
   const appId = pkg.name;
-  if (!/^[a-z][a-z0-9-]*$/.test(appId) || appId.length > 58) {
-    process.stderr.write(`pas publish: package.json name "${appId}" is not a valid app id (lowercase, hyphens, max 58 chars).\n`);
+  if (!/^[a-z][a-z0-9-]*$/.test(appId) || appId.length > 57 || appId.startsWith('about-')) {
+    process.stderr.write(`pas publish: package.json name "${appId}" is not a valid app id (lowercase, hyphens, max 57 chars, no about- prefix).\n`);
     process.exit(1);
   }
 

@@ -1,8 +1,9 @@
 # App marketing websites — investigation and delivery plan
 
-Status: **proposed**, 2026-10-15. This document describes a new platform feature;
-it does not claim that marketing websites are currently generated. The owner
-selected the default URL shape on 2026-10-15.
+Status: **implementation started**, 2026-10-15. This document describes a new
+platform feature; it does not claim that marketing websites are currently
+generated. The first code slice reserves the selected URL namespace for new
+apps. The owner selected the default URL shape on 2026-10-15.
 
 ## Problem and current state
 
@@ -68,8 +69,10 @@ Astro references: [static rendering](https://docs.astro.build/en/guides/on-deman
    a draft from listing data, then require an owner review of the headline,
    description, benefits and primary CTA before the first publish. Provide
    owner-only preview and publish controls. Reuse listing assets and moderation
-   rules where applicable; do not treat unreviewed repository text as trusted
-   HTML. A private app is ineligible for public publish.
+   rules where applicable, but copy approved images into each immutable site
+   revision so later listing-asset pruning cannot break a live site. Do not
+   treat unreviewed repository text as trusted HTML. A private app is
+   ineligible for public publish.
 2. **Static build.** Put a reusable Astro marketing template in the storefront
    repository, where the current catalogue build and design live. Build from a
    versioned, validated content snapshot, not a live browser fetch. Render
@@ -81,7 +84,14 @@ Astro references: [static rendering](https://docs.astro.build/en/guides/on-deman
    create a Cloudflare project per app. Upload each build to a revisioned R2
    prefix, verify the expected files, then atomically switch the app's active
    revision. The host maps the marketing hostname to the owning app and checks
-   current visibility **before** serving or using a public cache. Use a
+   current app visibility, explicit storefront publication and active marketing
+   revision in D1 **before** serving or using a public cache. `registry.json`
+   is currently the storefront listing source; the public API's non-private
+   app list also includes apps that were never listed. Add an authoritative D1
+   publication flag, update it before unlisting and only after a successful
+   listing, and reconcile failures with `registry.json`. Backfill listed status
+   from the existing registry before enabling host serving; unknown status
+   fails closed. Use a
    narrowly scoped, OIDC-minted upload credential for the trusted storefront
    workflow; do not add standing account keys to app repositories.
 4. **Lifecycle.** `publish_app` remains the decision to list an app. Marketing
@@ -95,11 +105,14 @@ Astro references: [static rendering](https://docs.astro.build/en/guides/on-deman
 
 The first release uses `https://about-<app-id>.proappstore.online/` with a
 reserved `about-` hostname prefix. It is a dedicated, crawlable origin while
-`https://<app-id>.proappstore.online/` remains the runnable app. Check all
-existing app IDs for prefix collisions and reserve the namespace before
-shipping. Existing BYO app domains should not silently switch to marketing.
-The public storefront API had no app ID beginning with `about-` on 2026-10-15;
-the complete registry must still be checked before reserving the prefix.
+`https://<app-id>.proappstore.online/` remains the runnable app. Reserve that
+prefix for marketing and cap new app IDs at 57 characters: `about-` adds six
+characters, and a DNS label cannot exceed 63. Existing BYO app domains should
+not silently switch to marketing. A read-only check of the complete production
+`apps` registry on 2026-10-15 found 41 IDs, a maximum length of 24 and no
+`about-` IDs. The pending submission and provisioning-operation records had no
+incompatible IDs either. The first implementation slice adds the new-ID guard
+to the CLI, MCP preview, backend and admin creation paths.
 
 Alternatives considered:
 
