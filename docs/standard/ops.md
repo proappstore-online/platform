@@ -40,7 +40,7 @@ clause below states its verification class for that reason.
 | Tests | QA flows stored in platform D1, run headless after each deploy and every 15 min, observable at `/__qa/`, exportable to Playwright; `pas check` compliance | the flows or `e2e/`; unit and manifest tests; negative tests ([001](#pas-ops-001)–[004](#pas-ops-004)) |
 | Secrets | `pas secret` vault + proxy; short-lived R2 credentials; scoped QA keys (30-day) instead of owner tokens | no repo/bundle secrets; e2e token hygiene ([006](#pas-ops-006)) |
 | Logs | server-side failed-operation records (unspoofable), client capture via SDK, redaction at ingest, 30-day pruning, owner-only reads | no personal data in what it sends; build stamps; weekly review ([011](#pas-ops-011), [012](#pas-ops-012)) |
-| Monitoring | signals and thresholds in the runbook; **no alerting yet** (#107) | the owner looking ([012](#pas-ops-012)) |
+| Monitoring | signals and thresholds in the runbook; automated alerts (#107) evaluated on every five-minute cron tick, shown in the console and sent to an `app.alert` webhook if the owner registers one | reading or receiving the alerts, and the weekly review ([012](#pas-ops-012)) |
 | Quotas | per-app and per-user limits on logs, proxy, sign-in, KV, rooms, uploads, actions | graceful 429/202 handling ([013](#pas-ops-013)) |
 | Backups | R2 daily backups; D1 restore by platform support only; **no app-facing restore** | export/import actions, soft deletes, a written recovery path ([014](#pas-ops-014)) |
 | Privacy | minimal first-party telemetry; cookieless analytics; log pruning; **no server-side account deletion** | minimisation, retention table, deletion action, disclosure ([016](#pas-ops-016)–[018](#pas-ops-018)) |
@@ -437,13 +437,13 @@ app.logs.info('action', 'create_task', { params })            // whole payload
 
 ### PAS-OPS-012 — Runtime monitoring is on, build-stamped, read by the owner, and error states are user-visible {#pas-ops-012}
 
-**Severity:** Medium · **Verification:** Manual · **Enforcement:** none (recommended) — platform alerting (#107) is not built; monitoring is pull · **Since:** 1.5
+**Severity:** Medium · **Verification:** Manual · **Enforcement:** none (recommended) — platform alerting (#107) runs on every five-minute cron tick; notification is the console, plus an `app.alert` webhook when the owner registers one · **Since:** 1.5
 
 **Rule.** The app MUST keep `app.logs` auto-capture on, MUST stamp entries with the deployed SHA (`monitoring.build`), and the owner MUST review `GET /v1/apps/:id/logs?level=error` (or the console) after each deploy and on a weekly cadence, applying the runbook thresholds. Every handled failure MUST both reach `app.logs` and render an error state ([PAS-UI-011](./ui.md#pas-ui-011)); the app MUST NOT swallow failures into success paths.
 
 **Applicability.** All apps.
 
-**Rationale.** Until the alerting cron ships, nobody is notified: an app can fail for every user for days if the owner does not look. Server-side failed operations are recorded automatically; client-side throws only reach the platform if capture is on.
+**Rationale.** Platform alerts (#107) only cover the runbook thresholds, and they reach nobody outside the console unless the owner registers an `app.alert` webhook: an app can fail for every user for days if the owner neither looks nor subscribes. Server-side failed operations are recorded automatically; client-side throws only reach the platform if capture is on.
 
 **Recommended implementation.** `initPro({ monitoring: { build: { sha: import.meta.env.VITE_COMMIT_SHA } } })`; a weekly owner check; the runbook's triage order (scope → app-or-platform → blast radius → recent change).
 

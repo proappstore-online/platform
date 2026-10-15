@@ -104,17 +104,30 @@ never type or paste it, and keep the inventory's `consumers:` in step.
 
 ## Alerts (automated — #107)
 
-The backend cron (`*/15`, `index.ts` `scheduled`) runs `lib/error-alerts.ts`
-`evaluateErrorSpikes` over the signals above and records one `app_alerts` row
-per app, kind and 15-minute window (a re-run never doubles an alert). Kinds and
-the implemented thresholds:
+The backend cron (`*/5`, `index.ts` `scheduled`) runs `lib/error-alerts.ts`
+`evaluateErrorSpikes` on every five-minute tick, at the tick's scheduled time.
+It evaluates **completed** intervals only — never one that ends after the
+tick — and records one `app_alerts` row per app, kind and interval: 15-minute
+windows for error spikes, 5xx and QA, 5-minute slices for action failures.
+
+- **Idempotent.** Each tick re-evaluates every interval that ended in the last
+  30 minutes (`CATCH_UP_MS`). The unique `(app_id, kind, window_start)` index
+  turns the repeats into one row and one webhook delivery per interval.
+- **Late or missed ticks** are caught up within those 30 minutes. An interval
+  that ended more than 30 minutes before the next tick that runs is not
+  evaluated: an outage of the cron is a gap in alerting, not a burst of stale
+  alerts. Check the period by hand (`GET /v1/apps/:appId/logs`) after one.
+- **On demand** (`POST /v1/apps/:appId/alerts/evaluate`) evaluates the same
+  completed intervals for one app; the interval in progress is not included.
+
+Kinds and the implemented thresholds:
 
 | Kind | Source rows | Fires when |
 |---|---|---|
-| `error_spike` | `app_logs` `level = 'error'`, client-sourced | ≥ 20 in the window **and** ≥ 3× the previous window |
-| `action_failures` | `app_logs` `source = 'server'`, `category = 'action'` | ≥ 20 in the last 5 minutes (the "> 20 / 5 min" rule above) |
+| `error_spike` | `app_logs` `level = 'error'`, client-sourced | ≥ 20 in the 15-minute window **and** ≥ 3× the previous window |
+| `action_failures` | `app_logs` `source = 'server'`, `category = 'action'` | ≥ 20 in one completed 5-minute slice (the "> 20 / 5 min" rule above); a burst that straddles a slice boundary is counted per slice |
 | `server_5xx` | `app_logs` `source = 'server'`, `level = 'error'` (backend 5xx recorded by the operation-log hook) | ≥ 5 in the window ("sustained") |
-| `qa_failures` | `app_test_runs`, deploy/cron triggers | ≥ 2 consecutive failed runs with no pass since (the "2+ consecutive" rule; live now that #62 fixed stuck runs) |
+| `qa_failures` | `app_test_runs`, deploy/cron triggers | ≥ 2 consecutive failed runs with no pass since, raised in the window holding the latest failure (the "2+ consecutive" rule; live now that #62 fixed stuck runs) |
 | `scheduled_action_failures` | scheduled registered-action runs | 5 consecutive failures disable that action until its manifest is re-registered; inspect `GET /v1/apps/:appId/scheduled-runs` or MCP `list_scheduled_runs` |
 
 The runbook's "5% of a route's sessions" is not computed yet (it needs session

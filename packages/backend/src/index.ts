@@ -334,15 +334,16 @@ export default {
     // #355: broker delivery envelopes are intentionally short-lived. Sweep on
     // every five-minute tick before the less frequent maintenance work.
     ctx.waitUntil(cleanupRemoteAuthRequests(env, event.scheduledTime ?? Date.now()).catch((e) => console.error(`[broker] cleanup failed: ${(e as Error).message}`)));
+    const tickAt = event.scheduledTime ?? Date.now();
+    // #107/#389: alert evaluation runs on every five-minute tick at the tick's scheduled
+    // time, over completed intervals only, catching up on late or missed ticks
+    // (lib/error-alerts.ts). Failures here must not take the other checks down.
+    ctx.waitUntil(evaluateErrorSpikes({ env, now: tickAt }).catch((e) => console.error(`[alert] evaluation failed: ${(e as Error).message}`)));
     // The pre-existing checks remain every fifteen minutes even though the
     // Worker now receives a five-minute tick for scheduled app actions.
-    const tickAt = event.scheduledTime ?? Date.now();
     if (new Date(tickAt).getUTCMinutes() % 15 !== 0) return;
     ctx.waitUntil(checkSessionKeyDrift({ env }));
     // #381: the payout run (runScheduledPayouts) is archived in archived/payouts/ and no longer scheduled.
-    // #107: aggregate app_logs + QA runs per app for the last window and record
-    // spikes (lib/error-alerts.ts). Failures here must not take the drift check down.
-    ctx.waitUntil(evaluateErrorSpikes({ env }).catch((e) => console.error(`[alert] evaluation failed: ${(e as Error).message}`)));
     // #275: close new app-worker enables when today's account-wide usage passes the ceiling.
     ctx.waitUntil(checkAccountCeiling(env, tickAt).catch((e) => console.error(`[app-worker-usage] account check failed: ${(e as Error).message}`)));
     // #307: once a day, delete review uploads older than the app's retention (default 30 days).

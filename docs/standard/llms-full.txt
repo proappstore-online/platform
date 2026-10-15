@@ -4892,7 +4892,7 @@ Supporting links: [ADR-008 — error observability](../adr/008-error-observabili
 
 ### PAS-OPS-012 — Runtime monitoring is on, build-stamped, read by the owner, and error states are user-visible
 URL: https://docs.proappstore.online/standard/ops/#pas-ops-012
-Severity: medium · Verification: manual (Manual) · Enforcement: none (recommended) — platform alerting (#107) is not built; monitoring is pull · Since: 1.5
+Severity: medium · Verification: manual (Manual) · Enforcement: none (recommended) — platform alerting (#107) runs on every five-minute cron tick; notification is the console, plus an `app.alert` webhook when the owner registers one · Since: 1.5
 
 Rule: The app MUST keep `app.logs` auto-capture on, MUST stamp entries with the deployed SHA (`monitoring.build`), and the owner MUST review `GET /v1/apps/:id/logs?level=error` (or the console) after each deploy and on a weekly cadence, applying the runbook thresholds. Every handled failure MUST both reach `app.logs` and render an error state ([PAS-UI-011](./ui.md#pas-ui-011)); the app MUST NOT swallow failures into success paths.
 
@@ -4902,7 +4902,7 @@ Applicability: All apps.
 
 *
 
-Rationale: Until the alerting cron ships, nobody is notified: an app can fail for every user for days if the owner does not look. Server-side failed operations are recorded automatically; client-side throws only reach the platform if capture is on.
+Rationale: Platform alerts (#107) only cover the runbook thresholds, and they reach nobody outside the console unless the owner registers an `app.alert` webhook: an app can fail for every user for days if the owner neither looks nor subscribes. Server-side failed operations are recorded automatically; client-side throws only reach the platform if capture is on.
 
 *
 
