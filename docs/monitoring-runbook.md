@@ -295,3 +295,29 @@ denominators and the `pas_app_errors` points, not alerts.
 **Deploy note.** The counters start empty when migration 0100 is applied: an
 alert window that straddles that deploy counts only failures recorded after it,
 so a spike already under way can be undercounted for up to 30 minutes.
+
+## Visitor analytics on app origins (#402)
+
+Visitor analytics (pageviews and `window.pasAnalytics.event()` custom events,
+the `pas_analytics` AE dataset) is separate from `app.logs` diagnostics. An app
+embeds `<script src="https://api.proappstore.online/v1/analytics.js?app=<id>">`.
+
+- **On an app origin** (`<id>.proappstore.online`, a custom apex, a tenant
+  domain) the host rewrites that tag to `/.pas/analytics.js`, and the loader it
+  serves posts to `/.pas/analytics/event` on the same origin. An app whose own
+  meta CSP is `connect-src 'self'` therefore needs no change and no CSP
+  exception. Signed-out visitors count; no cookie or credential is forwarded.
+  - The app is the **resolved route's**, sent to the API as `X-PAS-App` over
+    HostApi; a body's `app` is ignored, so one app's page cannot post as another.
+  - The event endpoint takes `POST` from the same origin only (`Origin`, else
+    `Sec-Fetch-Site`), bodies up to 64 KB, to one fixed upstream path.
+  - Private apps: the private-app gate runs first, so only admitted users count.
+- **On any other site** the loader and `POST /v1/analytics/event` on the API are
+  unchanged: the event names its app in the body (unverified, as before).
+- The loader sends an event once: a queued beacon is never also fetched or
+  buffered, the offline outbox deletes only what a drain delivered, and a
+  pageview is a change of path (same-path `replaceState`, query and hash
+  changes are not new pages).
+
+Check: in the browser console of the app, no CSP violation for
+`/.pas/analytics/event`; the Network tab shows the beacon `POST` with 204.

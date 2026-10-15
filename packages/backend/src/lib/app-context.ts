@@ -44,6 +44,12 @@ export const HOST_SESSION_INVALIDATION_ID_HEADER = 'X-PAS-Session-Invalidation-I
  */
 export const HOST_DATA_PLANE_FAILURE_HEADER = 'X-PAS-Data-Plane-Failure';
 
+/**
+ * #402: the visitor's country on a host-forwarded analytics event — a
+ * service-binding request carries no `cf` of its own. Host-only, like the rest.
+ */
+export const HOST_COUNTRY_HEADER = 'X-PAS-Country';
+
 /** The headers only the host may assert. */
 export const HOST_CONTEXT_HEADERS = [
   APP_CONTEXT_HEADER,
@@ -51,6 +57,7 @@ export const HOST_CONTEXT_HEADERS = [
   HOST_SESSION_INVALIDATION_HEADER,
   HOST_SESSION_INVALIDATION_ID_HEADER,
   HOST_DATA_PLANE_FAILURE_HEADER,
+  HOST_COUNTRY_HEADER,
 ] as const;
 
 /**

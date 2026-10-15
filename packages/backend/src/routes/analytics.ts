@@ -19,7 +19,8 @@ import { HttpError, requireAppOwner } from '../lib/auth.js';
 import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { registerEventIngestRoute } from './analytics-ingest.js';
-import { buildLoaderJs } from './analytics-loader.js';
+import { API_EVENT_URL, buildLoaderJs, SAME_ORIGIN_EVENT_URL } from './analytics-loader.js';
+import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import {
   APP_ID_RE,
   type AnalyticsBody,
@@ -147,19 +148,22 @@ registerEventIngestRoute(analyticsRoutes);
 const LOADER_CACHE_TTL_SECONDS = 3600;
 
 analyticsRoutes.get('/analytics.js', async (c) => {
-  const appId = c.req.query('app') ?? '';
+  // #402: the host's same-origin loader (GET /.pas/analytics.js on an app origin)
+  // names the app from its route over HostApi and posts to the same origin.
+  const hostApp = c.req.header(APP_CONTEXT_HEADER);
+  const appId = hostApp ?? c.req.query('app') ?? '';
   if (!APP_ID_RE.test(appId)) {
     return new Response('/* invalid app id */\n', { status: 200, headers: jsHeaders() });
   }
   // Worker cache hit short-circuits the D1 lookup — most page views never
   // touch the origin, which is the single biggest cost saving in the loader path.
-  const cacheUrl = `https://loader-cache/${appId}`;
+  const cacheUrl = `https://loader-cache/${appId}${hostApp ? '/same-origin' : ''}`;
   const cache = caches.default;
   const cached = await cache.match(cacheUrl);
   if (cached) return cached;
 
   const row = await loadRow(c, appId);
-  const body = buildLoaderJs(row, appId);
+  const body = buildLoaderJs(row, appId, hostApp ? SAME_ORIGIN_EVENT_URL : API_EVENT_URL);
   const res = new Response(body, { status: 200, headers: jsHeaders() });
   c.executionCtx.waitUntil(cache.put(cacheUrl, res.clone()));
   return res;

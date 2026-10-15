@@ -11,10 +11,15 @@ import {
   GA4_RE,
 } from './analytics-shared.js';
 
+/** Where an external site's loader posts. On an app origin the host serves a
+ *  loader posting same-origin instead (#402: SAME_ORIGIN_EVENT_URL). */
+export const API_EVENT_URL = 'https://api.proappstore.online/v1/analytics/event';
+export const SAME_ORIGIN_EVENT_URL = '/.pas/analytics/event';
+
 export function buildLoaderJs(
   row: AnalyticsRow | null,
   appId: string,
-  apiBase = 'https://api.proappstore.online',
+  eventUrl: string = API_EVENT_URL,
 ): string {
   const parts: string[] = [];
   if (row?.cf_beacon_token && CF_TOKEN_RE.test(row.cf_beacon_token)) {
@@ -40,11 +45,13 @@ export function buildLoaderJs(
   }
   // First-party event pipeline with IndexedDB offline buffer + drain-on-reconnect.
   // Each event carries client-recorded timestamp so replayed events land on
-  // the right day in the dashboard.
-  const beaconBase = JSON.stringify(apiBase);
+  // the right day in the dashboard. An event is sent once: buffered only when
+  // it could not be handed to the browser, and the outbox deletes exactly the
+  // rows a drain delivered (#402).
+  const urlLit = JSON.stringify(eventUrl);
   const idLit = JSON.stringify(appId);
   parts.push(`(function(){
-    var URL = ${beaconBase}+"/v1/analytics/event";
+    var URL = ${urlLit};
     var APP = ${idLit};
     var DB_NAME = "pasA", STORE = "outbox", MAX_BUFFER = 200;
     function openDB(){
@@ -74,7 +81,10 @@ export function buildLoaderJs(
       return fetch(URL,{method:"POST",headers:{"Content-Type":"application/json"},body:body,keepalive:true})
         .then(function(r){ return r.ok; }).catch(function(){ return false; });
     }
+    var draining = false;
     function drain(){
+      if (draining) return;
+      draining = true;
       openDB().then(function(db){
         try{
           var tx = db.transaction(STORE, "readwrite");
@@ -82,37 +92,44 @@ export function buildLoaderJs(
           var req = s.getAll();
           req.onsuccess = function(){
             var rows = req.result || [];
-            if (!rows.length) return;
+            if (!rows.length) { draining = false; return; }
             postBatch(rows.map(function(r){ return r.evt; })).then(function(ok){
+              draining = false;
               if (!ok) return;
-              var tx2 = db.transaction(STORE, "readwrite");
-              tx2.objectStore(STORE).clear();
+              // Only the rows sent: anything buffered meanwhile waits for the next drain.
+              var s2 = db.transaction(STORE, "readwrite").objectStore(STORE);
+              rows.forEach(function(r){ s2.delete(r.id); });
             });
           };
-        }catch(e){}
-      }).catch(function(){});
+          req.onerror = function(){ draining = false; };
+        }catch(e){ draining = false; }
+      }).catch(function(){ draining = false; });
     }
     function send(kind, props){
       var evt = {app:APP,kind:kind,path:location.pathname,referrer:document.referrer,props:props||null,t:Date.now()};
       if (navigator.onLine === false) { buffer(evt); return; }
-      try{
-        var body = JSON.stringify(evt);
-        var ok = navigator.sendBeacon ? navigator.sendBeacon(URL, body) : false;
-        if (!ok) {
-          fetch(URL,{method:"POST",headers:{"Content-Type":"application/json"},body:body,keepalive:true})
-            .catch(function(){ buffer(evt); });
-        }
-      }catch(e){ buffer(evt); }
+      var body;
+      try{ body = JSON.stringify(evt); }catch(e){ return; }
+      var queued = false;
+      try{ queued = navigator.sendBeacon ? navigator.sendBeacon(URL, body) : false; }catch(e){}
+      // A queued beacon is never also fetched or buffered: that would count it twice.
+      if (queued) return;
+      fetch(URL,{method:"POST",headers:{"Content-Type":"application/json"},body:body,keepalive:true})
+        .catch(function(){ buffer(evt); });
     }
+    // A pageview is a change of path: query, hash and same-path replaceState
+    // calls (routers make them on load) are not new pages.
+    var lastPath = location.pathname;
+    function navigated(){ if (location.pathname !== lastPath) { lastPath = location.pathname; send("pageview"); } }
     send("pageview");
     drain();
     window.addEventListener("online", drain);
     window.pasAnalytics = window.pasAnalytics || {};
     window.pasAnalytics.event = function(kind, props){ send(String(kind||"event"), props); };
     var _push = history.pushState, _replace = history.replaceState;
-    history.pushState = function(){ _push.apply(this, arguments); send("pageview"); };
-    history.replaceState = function(){ _replace.apply(this, arguments); send("pageview"); };
-    window.addEventListener("popstate", function(){ send("pageview"); });
+    history.pushState = function(){ _push.apply(this, arguments); navigated(); };
+    history.replaceState = function(){ _replace.apply(this, arguments); navigated(); };
+    window.addEventListener("popstate", navigated);
   })();`);
   return `(function(){
   var _pasAnalytics = {

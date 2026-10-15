@@ -13,6 +13,7 @@
 import type { Env } from "./env.js";
 import { handleAuthRoute } from "./auth-handler.js";
 import { handlePlatformMediation } from "./platform-mediation.js";
+import { handleAnalyticsMediation } from "./analytics-mediation.js";
 import { handleQaRunner } from "./qa-runner.js";
 import { getOperatorGate, isUnderPrefix, refuseUnlessOperator } from "./operator-gate.js";
 import { refuseUnlessVisible } from "./visibility-gate.js";
@@ -142,6 +143,10 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
     const refusal = await refuseUnlessVisible(request, env, route.slug);
     if (refusal) return refusal;
   }
+
+  // #402: same-origin visitor analytics, signed in or not (after the private-app gate).
+  const analyticsResponse = await handleAnalyticsMediation(request, env, route);
+  if (analyticsResponse) return analyticsResponse;
 
   const mediationResponse = await handlePlatformMediation(request, env, route, ctx);
   if (mediationResponse) return mediationResponse;

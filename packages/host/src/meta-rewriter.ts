@@ -4,6 +4,7 @@
  * tags before </head> if the app HTML doesn't include them.
  */
 
+import { ANALYTICS_LOADER_PATH } from "./analytics-mediation.js";
 import type { ListingMeta } from "./host.js";
 
 export interface SocialMeta extends ListingMeta {
@@ -198,12 +199,19 @@ class HeadEndInjector implements HTMLRewriterElementContentHandlers {
  * Apply listing metadata to an HTML response using HTMLRewriter.
  * Rewrites existing tags and injects any that are missing.
  */
+/** The cross-origin loader URL apps embed; rewritten to the same-origin one (#402). */
+const API_ANALYTICS_LOADER = "https://api.proappstore.online/v1/analytics.js";
+
 export function rewriteMetaTags(response: Response, meta: SocialMeta, canonicalUrl: string): Response {
   const tracker = new MetaTagTracker(meta, canonicalUrl);
   let rewriter = new HTMLRewriter()
     .on(`meta[name="${AUTH_MODE_META_NAME}"]`, new FoundTagMarker(AUTH_MODE_META_NAME, tracker))
     // An app's own pas-visibility tag is dropped: only the host may say it.
-    .on(`meta[name="${VISIBILITY_META_NAME}"]`, { element: (el: Element) => { el.remove(); } });
+    .on(`meta[name="${VISIBILITY_META_NAME}"]`, { element: (el: Element) => { el.remove(); } })
+    // #402: the platform analytics loader is served same-origin on app origins, so an
+    // app's own `connect-src 'self'` CSP admits its beacons. The app comes from the
+    // route there, so the ?app= query is dropped with the cross-origin URL.
+    .on(`script[src^="${API_ANALYTICS_LOADER}"]`, { element: (el: Element) => { el.setAttribute("src", ANALYTICS_LOADER_PATH); } });
 
   if (meta.title) {
     rewriter = rewriter

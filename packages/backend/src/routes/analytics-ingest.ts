@@ -5,6 +5,7 @@
 
 import type { Hono } from 'hono';
 import { APP_ID_RE, EVENT_KIND_RE } from './analytics-shared.js';
+import { APP_CONTEXT_HEADER, HOST_COUNTRY_HEADER } from '../lib/app-context.js';
 import type { Env } from '../types.js';
 
 const PATH_MAX = 256;
@@ -94,8 +95,16 @@ export function registerEventIngestRoute(routes: Hono<{ Bindings: Env }>) {
     if (uaClass === 'bot') return new Response(null, { status: 204 });
 
     const ip = c.req.header('cf-connecting-ip') ?? '';
-    const country =
-      (c.req.raw as Request & { cf?: { country?: string } }).cf?.country?.slice(0, 2) ?? '';
+    // #402: from an app origin the host forwards events over HostApi and names the
+    // app from its resolved route — that wins over whatever the body says, so one
+    // app's page cannot post as another. Both headers are stripped from every
+    // other caller (#315), so a direct POST still names its app in the body.
+    const hostApp = c.req.header(APP_CONTEXT_HEADER) ?? null;
+    const country = (
+      (c.req.raw as Request & { cf?: { country?: string } }).cf?.country
+        ?? (hostApp ? c.req.header(HOST_COUNTRY_HEADER) : undefined)
+        ?? ''
+    ).slice(0, 2);
     const dataset = (c.env as Env & { ANALYTICS?: AnalyticsEngineDataset }).ANALYTICS;
 
     // Body can be a single event or { events: [...] } — the loader drains its
@@ -104,7 +113,7 @@ export function registerEventIngestRoute(routes: Hono<{ Bindings: Env }>) {
     const nowMs = Date.now();
     let accepted = 0;
     for (const item of items) {
-      const appId = (item.app ?? '').trim();
+      const appId = hostApp ?? (item.app ?? '').trim();
       if (!APP_ID_RE.test(appId)) continue;
       const kind = (item.kind ?? 'pageview').trim().toLowerCase();
       if (!EVENT_KIND_RE.test(kind)) continue;
