@@ -35,6 +35,7 @@ import {
   withCodeHealthCors,
 } from "./host.js";
 import { rewriteMetaTags } from "./meta-rewriter.js";
+import { serveMarketingSite } from "./marketing-site.js";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -52,6 +53,12 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
   }
 
   const slug = slugFromHostname(url.hostname);
+
+  // Reserved marketing namespace: never resolve about-* as a runnable app.
+  // Publication, visibility and active revision are checked before R2 access.
+  if (slug?.startsWith("about-")) {
+    return serveMarketingSite(request, env, slug.slice("about-".length));
+  }
 
   // ── Reserved subdomain dispatch ──────────────────────────────
 

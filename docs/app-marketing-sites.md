@@ -1,9 +1,11 @@
 # App marketing websites — investigation and delivery plan
 
-Status: **implementation started**, 2026-10-15. This document describes a new
-platform feature; it does not claim that marketing websites are currently
-generated. The first code slice reserves the selected URL namespace for new
-apps. The owner selected the default URL shape on 2026-10-15.
+Status: **implementation in progress**, 2026-10-15. The Astro template builds
+a sample artifact, and the shared host has a fail-closed `about-` route backed
+by separate storefront-listing and active-revision D1 tables. No production
+marketing site is activated yet. Owner content approval, trusted upload,
+activation and storefront backfill remain to be implemented. The owner selected
+the default URL shape on 2026-10-15.
 
 ## Problem and current state
 
@@ -94,6 +96,13 @@ Astro references: [static rendering](https://docs.astro.build/en/guides/on-deman
    fails closed. Use a
    narrowly scoped, OIDC-minted upload credential for the trusted storefront
    workflow; do not add standing account keys to app repositories.
+
+   The host's first slice reads `app_storefront_publication.listed` and
+   `app_marketing_sites.active_revision` before R2 and serves only
+   `marketing/<app-id>/revisions/<revision>/` on the dedicated hostname.
+   Both tables start closed; the migration does not mark existing catalogue
+   entries as listed or activate any revision. Until the trusted publisher and
+   registry reconciliation land, every marketing hostname returns 404.
 4. **Lifecycle.** `publish_app` remains the decision to list an app. Marketing
    publish is an explicit second step after preview. A listing edit creates or
    updates a draft and never silently replaces a reviewed live website.
