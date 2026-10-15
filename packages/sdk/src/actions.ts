@@ -8,6 +8,29 @@ interface AuthLike {
 /** Minimal logger surface (satisfied by Logs) — failures only, never params. */
 interface LoggerLike {
   capture(level: 'error', category: string, message: string, data?: Record<string, unknown>, context?: CaptureContext): void;
+  captureException?(error: unknown, context?: CaptureContext & { category?: string }): void;
+  addBreadcrumb?(category: 'action', message: string, data?: Record<string, number>): void;
+}
+
+/** Options for one action call (#392). */
+export interface ActionCallOptions {
+  /** Cancels the call. A cancellation you asked for is recorded as a breadcrumb, not an error; `AbortSignal.timeout(ms)` counts as a timeout. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Why a call never got a response (#392): `cancelled` (expected — the caller
+ * aborted), `timeout`, or `network` (the browser could not reach the API, so no
+ * server ever logs it). Null for anything else, e.g. signed out before sending.
+ */
+function classifyTransportError(error: unknown, signal: AbortSignal | undefined): 'cancelled' | 'timeout' | 'network' | null {
+  const name = (error as { name?: unknown } | null)?.name;
+  if (name === 'TimeoutError') return 'timeout';
+  if (name === 'AbortError') {
+    return (signal?.reason as { name?: unknown } | undefined)?.name === 'TimeoutError' ? 'timeout' : 'cancelled';
+  }
+  if (error instanceof TypeError) return 'network';
+  return null;
 }
 
 const ERROR_CODE_RE = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -89,18 +112,25 @@ export class Actions {
     private readonly logger?: LoggerLike,
   ) {}
 
-  async call<T = unknown>(name: string, params: Record<string, unknown> = {}): Promise<T> {
+  async call<T = unknown>(name: string, params: Record<string, unknown> = {}, options: ActionCallOptions = {}): Promise<T> {
     // A context per call (#390): concurrent calls never share a trace.
     const ctx = createRequestContext(`action.${name}`);
-    const response = await this.auth.authenticatedFetch(
-      `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/actions/${encodeURIComponent(name)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ params }),
-      },
-      ctx,
-    );
+    let response: Response;
+    try {
+      response = await this.auth.authenticatedFetch(
+        `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/actions/${encodeURIComponent(name)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ params }),
+          ...(options.signal ? { signal: options.signal } : {}),
+        },
+        ctx,
+      );
+    } catch (error) {
+      this.transportFailed(name, ctx, error, options.signal);
+      throw error;
+    }
     if (response.status === 401) {
       // #106: record the failure (action name + status only — never the params).
       this.logger?.capture('error', 'action', `action ${name} unauthorized`, { action: name, status: 401 }, failureContext(ctx, Date.now() - ctx.startedAt, 'unauthorized'));
@@ -111,19 +141,46 @@ export class Actions {
     return (await response.json()) as T;
   }
 
-  async callPublic<T = unknown>(name: string, params: Record<string, unknown> = {}): Promise<T> {
+  async callPublic<T = unknown>(name: string, params: Record<string, unknown> = {}, options: ActionCallOptions = {}): Promise<T> {
     const ctx = createRequestContext(`action.${name}`);
-    const response = await fetch(
-      `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/actions/${encodeURIComponent(name)}`,
-      {
-        method: 'POST',
-        // The URL is always the PAS API, so the trace header is allowlisted.
-        headers: { 'Content-Type': 'application/json', traceparent: makeTraceparent(ctx.traceId, ctx.spanId) },
-        body: JSON.stringify({ params }),
-      },
-    );
+    let response: Response;
+    try {
+      response = await fetch(
+        `${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/actions/${encodeURIComponent(name)}`,
+        {
+          method: 'POST',
+          // The URL is always the PAS API, so the trace header is allowlisted.
+          headers: { 'Content-Type': 'application/json', traceparent: makeTraceparent(ctx.traceId, ctx.spanId) },
+          body: JSON.stringify({ params }),
+          ...(options.signal ? { signal: options.signal } : {}),
+        },
+      );
+    } catch (error) {
+      this.transportFailed(name, ctx, error, options.signal);
+      throw error;
+    }
     if (!response.ok) throw await this.failed(name, ctx, response);
     return (await response.json()) as T;
+  }
+
+  /**
+   * The request never got a response (#392). A cancellation the caller asked
+   * for is a breadcrumb; a timeout or network failure is one error event with
+   * the call's trace, since no server saw it. The caller still gets the
+   * original error, unchanged.
+   */
+  private transportFailed(name: string, ctx: RequestContext, error: unknown, signal: AbortSignal | undefined): void {
+    try {
+      const kind = classifyTransportError(error, signal);
+      const durationMs = Date.now() - ctx.startedAt;
+      if (kind === 'cancelled') {
+        this.logger?.addBreadcrumb?.('action', `action ${name} cancelled`, { durationMs });
+      } else if (kind) {
+        this.logger?.captureException?.(error, { ...failureContext(ctx, durationMs, kind === 'timeout' ? 'timeout' : 'network_error'), category: 'action' });
+      }
+    } catch {
+      // Telemetry never changes the call's outcome.
+    }
   }
 
   private async failed(name: string, ctx: RequestContext, response: Response): Promise<ActionError> {

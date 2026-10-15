@@ -15,15 +15,19 @@
  *   SSR-safe.
  * - **Silent.** No throw path, ever. A logger that breaks the app it observes is
  *   worse than no logger.
- * - **Backs off instead of retrying.** The server answers 202 when an app is over
- *   its budget; retrying would turn an error loop into a flood. See `cooldown`.
+ * - **Backs off instead of retrying into a flood.** The server answers 202 when an
+ *   app is over its budget; the SDK goes quiet (see `COOLDOWN_MS`). Only a
+ *   transient failure (network, timeout, 5xx) is retried, a few times with
+ *   backoff and within a TTL (#392); offline, the queue waits for `online`.
+ * - **Best effort.** The queue is bounded and lives in memory: a closed tab, a
+ *   long outage or an over-budget app loses entries. `health()` says how many.
  * - **Not a replacement for usage telemetry.** `app.usage` is unchanged; the two
  *   share only the transport.
  */
 
 import { SDK_VERSION } from './sdk-version.js';
 import type { CaptureContext } from './trace.js';
-import { postTelemetry, type TelemetryAuth } from './telemetry-transport.js';
+import { sendTelemetry, type TelemetryAuth, type TelemetryResult } from './telemetry-transport.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -67,6 +71,38 @@ function envelopeFields(ctx: CaptureContext | undefined): Partial<QueuedEntry> {
   return out;
 }
 
+/** What a breadcrumb records (#392). Anything else is ignored. */
+export type BreadcrumbCategory = 'navigation' | 'ui' | 'network' | 'room' | 'auth' | 'action';
+const BREADCRUMB_CATEGORIES = new Set<BreadcrumbCategory>(['navigation', 'ui', 'network', 'room', 'auth', 'action']);
+
+/** Primitive values only: a breadcrumb never carries an object, DOM node or form payload. */
+export type BreadcrumbData = Record<string, string | number | boolean | null>;
+
+export interface Breadcrumb {
+  ts: number;
+  category: BreadcrumbCategory;
+  message: string;
+  data?: BreadcrumbData;
+}
+
+/** Delivery health of `app.logs` (#392). Counts are since the logger started. */
+export interface LogHealth {
+  /** Entries waiting to be sent. */
+  queued: number;
+  /** Entries the server accepted, or handed to `sendBeacon`. */
+  sent: number;
+  /** Entries lost: queue overflow, retries exhausted, over budget (202/429), unknown app (404). */
+  dropped: number;
+  /** Repeats folded into an earlier queued entry instead of sent again. */
+  duplicates: number;
+  /** Breadcrumbs held in memory. */
+  breadcrumbs: number;
+  /** True once the server said this app cannot accept logs (404). Permanent for the page. */
+  disabled: boolean;
+  /** Epoch ms until which nothing is sent (server backpressure), or null. */
+  quietUntil: number | null;
+}
+
 export interface MonitoringOptions {
   /** Default true. Set false to disable auto-capture and the flush timer. */
   auto?: boolean;
@@ -103,6 +139,23 @@ const MAX_QUEUE = 200;
 /** How long to stay quiet after the server says we are over budget. */
 const COOLDOWN_MS = 60_000;
 const MESSAGE_MAX = 4096;
+/** Backoff before each retry of a batch that failed transiently. */
+const RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
+/** A batch still failing this long after its first failure is dropped, not retried. */
+const RETRY_TTL_MS = 60_000;
+const MAX_BREADCRUMBS = 50;
+/** The most recent breadcrumbs attached to an error entry. */
+const ATTACHED_BREADCRUMBS = 20;
+const BREADCRUMB_MESSAGE_MAX = 200;
+const BREADCRUMB_VALUE_MAX = 120;
+const BREADCRUMB_DATA_KEYS = 8;
+/** An identical entry among the last few queued is folded into it (`repeats`). */
+const DEDUPE_WINDOW = 5;
+/** Ingest keeps `data` up to 4 KB of JSON; leave room for its redaction. */
+const DATA_BUDGET = 3500;
+const STACK_MAX = 2500;
+const MAX_CAUSE_DEPTH = 5;
+const CAUSE_LINES = 4;
 
 const CLIENT_ID_KEY = 'pas:client-id';
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -162,8 +215,7 @@ export function readOrCreateClientId(): string | null {
   }
 }
 
-/** Serialize an unknown thrown value into a message + stack. */
-export function describeError(value: unknown): { message: string; stack?: string | undefined } {
+function describeOne(value: unknown): { message: string; stack?: string | undefined } {
   if (value instanceof Error) {
     return { message: `${value.name}: ${value.message}`, stack: value.stack ?? undefined };
   }
@@ -174,6 +226,65 @@ export function describeError(value: unknown): { message: string; stack?: string
     return { message: String(value) };
   }
 }
+
+/**
+ * Serialize an unknown thrown value into a message + stack. An Error's `cause`
+ * chain (#392, up to five levels) is appended to the stack as `Caused by:`
+ * sections, so a wrapped failure keeps its root. Bounded; never throws.
+ */
+export function describeError(value: unknown): { message: string; stack?: string | undefined } {
+  const head = describeOne(value);
+  const causes: string[] = [];
+  try {
+    const seen = new Set<unknown>([value]);
+    let cause = value instanceof Error ? (value as { cause?: unknown }).cause : undefined;
+    for (let depth = 0; cause !== undefined && cause !== null && depth < MAX_CAUSE_DEPTH && !seen.has(cause); depth++) {
+      seen.add(cause);
+      const described = describeOne(cause);
+      // The message and the top frames: enough to place the root, small enough to keep every level.
+      causes.push(`Caused by: ${(described.stack ?? described.message).split('\n').slice(0, CAUSE_LINES).join('\n')}`);
+      cause = cause instanceof Error ? (cause as { cause?: unknown }).cause : undefined;
+    }
+  } catch {
+    // A hostile `cause` getter: keep what we have.
+  }
+  if (!head.stack && causes.length === 0) return { message: head.message };
+  const tail = causes.join('\n').slice(0, STACK_MAX);
+  // The outer stack gives way first, so the root cause always survives the cap.
+  const outer = head.stack ? head.stack.slice(0, Math.max(0, STACK_MAX - tail.length - 1)) : '';
+  return { message: head.message, stack: [outer, tail].filter(Boolean).join('\n') };
+}
+
+/** Category of a render error a React error boundary caught. */
+export const REACT_ERROR_CATEGORY = 'react.error-boundary';
+
+/**
+ * The entry for a render error a React error boundary caught: the message and
+ * stack (with causes), the component stack and the path. Shared by ProShell's
+ * boundary and {@link Logs.captureReactError}, so both read the same.
+ */
+export function describeReactError(error: unknown, componentStack?: string | null): { message: string; data: Record<string, unknown> } {
+  const described = describeError(error);
+  return {
+    message: described.message,
+    data: {
+      stack: described.stack,
+      componentStack: componentStack ? componentStack.slice(0, STACK_MAX) : undefined,
+      path: typeof window === 'undefined' ? undefined : window.location?.pathname,
+    },
+  };
+}
+
+function isOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** The logger that owns auto-capture for each app id, so a second init does not double it. */
+const activeLoggers = new Map<string, Logs>();
 
 export class Logs {
   private queue: QueuedEntry[] = [];
@@ -190,6 +301,18 @@ export class Logs {
   /** Guards against an error raised inside our own handler re-entering. */
   private capturing = false;
   private minLevel: LogLevel;
+  private onOnline: (() => void) | null = null;
+  /** In-memory only, never persisted (#392). */
+  private breadcrumbs: Breadcrumb[] = [];
+  /** Errors already recorded, so a caught-then-rethrown error is one event. */
+  private reported = new WeakSet<object>();
+  private stats = { sent: 0, dropped: 0, duplicates: 0 };
+  /** A non-unload send is in flight: the next one waits for it. */
+  private sending = false;
+  private retryAttempt = 0;
+  private retryStartedAt = 0;
+  private retryAt = 0;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly appId: string,
@@ -203,10 +326,19 @@ export class Logs {
   /** Begin auto-capture and periodic flushing. Idempotent. */
   start(): void {
     if (this.running || !hasBrowser()) return;
+    // A second init for the same app (StrictMode, HMR, a re-created instance)
+    // takes over auto-capture rather than registering every handler twice.
+    const previous = activeLoggers.get(this.appId);
+    if (previous && previous !== this) {
+      previous.flush();
+      previous.stop();
+    }
+    activeLoggers.set(this.appId, this);
     this.running = true;
     this.clientId = readOrCreateClientId();
 
     this.onError = (event: ErrorEvent) => {
+      if (this.alreadyReported(event.error)) return;
       const described = event.error
         ? describeError(event.error)
         : { message: event.message || 'unknown error' };
@@ -219,6 +351,7 @@ export class Logs {
     window.addEventListener('error', this.onError);
 
     this.onRejection = (event: PromiseRejectionEvent) => {
+      if (this.alreadyReported(event.reason)) return;
       const described = describeError(event.reason);
       this.capture('error', 'unhandledrejection', described.message, {
         stack: described.stack,
@@ -229,6 +362,13 @@ export class Logs {
     this.onPageHide = () => this.flush();
     window.addEventListener('pagehide', this.onPageHide);
 
+    // Offline, `send` holds the queue; back online, deliver it now.
+    this.onOnline = () => {
+      this.retryAt = 0;
+      void this.send(false);
+    };
+    window.addEventListener('online', this.onOnline);
+
     this.timer = setInterval(() => {
       void this.send(false);
     }, FLUSH_INTERVAL_MS);
@@ -238,18 +378,25 @@ export class Logs {
   stop(): void {
     if (!this.running) return;
     this.running = false;
+    if (activeLoggers.get(this.appId) === this) activeLoggers.delete(this.appId);
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
     }
     if (hasBrowser()) {
       if (this.onError) window.removeEventListener('error', this.onError);
       if (this.onRejection) window.removeEventListener('unhandledrejection', this.onRejection);
       if (this.onPageHide) window.removeEventListener('pagehide', this.onPageHide);
+      if (this.onOnline) window.removeEventListener('online', this.onOnline);
     }
     this.onError = null;
     this.onRejection = null;
     this.onPageHide = null;
+    this.onOnline = null;
   }
 
   debug(message: string, data?: unknown): void {
@@ -308,6 +455,51 @@ export class Logs {
     return this.queue.length;
   }
 
+  /** Delivery health: queued, sent and dropped entries, breadcrumbs, backpressure. */
+  health(): LogHealth {
+    return {
+      queued: this.queue.length,
+      sent: this.stats.sent,
+      dropped: this.stats.dropped,
+      duplicates: this.stats.duplicates,
+      breadcrumbs: this.breadcrumbs.length,
+      disabled: this.disabled,
+      quietUntil: this.quietUntil > Date.now() ? this.quietUntil : null,
+    };
+  }
+
+  /**
+   * Record a breadcrumb (#392): a short, redacted note of what happened before a
+   * failure. Kept in a bounded in-memory buffer (the newest 50) and attached to
+   * the next error entries; never persisted and never sent on its own. Only the
+   * listed categories are kept, and `data` keeps up to eight primitive values —
+   * do not pass form text, DOM content, tokens or user data.
+   */
+  addBreadcrumb(category: BreadcrumbCategory, message: string, data?: BreadcrumbData): void {
+    try {
+      if (!BREADCRUMB_CATEGORIES.has(category)) return;
+      const crumb: Breadcrumb = { ts: Date.now(), category, message: redactClient(String(message)).slice(0, BREADCRUMB_MESSAGE_MAX) };
+      if (isPlainObject(data)) {
+        const clean: BreadcrumbData = {};
+        for (const key of Object.keys(data).slice(0, BREADCRUMB_DATA_KEYS)) {
+          const value = data[key];
+          if (typeof value === 'string') clean[key] = redactClient(value).slice(0, BREADCRUMB_VALUE_MAX);
+          else if ((typeof value === 'number' && Number.isFinite(value)) || typeof value === 'boolean' || value === null) clean[key] = value;
+        }
+        if (Object.keys(clean).length) crumb.data = clean;
+      }
+      this.breadcrumbs.push(crumb);
+      if (this.breadcrumbs.length > MAX_BREADCRUMBS) this.breadcrumbs.splice(0, this.breadcrumbs.length - MAX_BREADCRUMBS);
+    } catch {
+      // Never let capture throw into app code.
+    }
+  }
+
+  /** Forget every breadcrumb. The SDK calls this when the signed-in user changes. */
+  clearBreadcrumbs(): void {
+    this.breadcrumbs = [];
+  }
+
   /**
    * Queue one entry.
    *
@@ -321,12 +513,27 @@ export class Logs {
     if (LEVEL_ORDER[level] < LEVEL_ORDER[this.minLevel]) return;
     this.capturing = true;
     try {
+      const redactedMessage = redactClient(String(message)).slice(0, MESSAGE_MAX);
+      // An error loop repeats one fault: fold it into the queued entry. Not for
+      // request-correlated entries — each failed call keeps its own trace.
+      if (!context?.spanId) {
+        const twin = this.queue.slice(-DEDUPE_WINDOW).find((e) =>
+          !e.spanId && e.level === level && e.category === category && e.message === redactedMessage);
+        if (twin && (twin.data === undefined || isPlainObject(twin.data))) {
+          const prior = isPlainObject(twin.data) && typeof twin.data.repeats === 'number' ? twin.data.repeats : 1;
+          twin.data = { ...(twin.data as Record<string, unknown> | undefined), repeats: prior + 1 };
+          this.stats.duplicates++;
+          return;
+        }
+      }
+      let payload = data === undefined ? undefined : this.safeData(data);
+      if (level === 'error') payload = this.withBreadcrumbs(payload);
       const entry: QueuedEntry = {
         ts: Date.now(),
         level,
         category,
-        message: redactClient(String(message)).slice(0, MESSAGE_MAX),
-        data: data === undefined ? undefined : this.safeData(data),
+        message: redactedMessage,
+        data: payload,
         build: this.options.build,
         traceId: typeof context?.traceId === 'string' && CORRELATION_ID_RE.test(context.traceId) && !/^0+$/.test(context.traceId)
           ? context.traceId.toLowerCase()
@@ -336,9 +543,7 @@ export class Logs {
         ...envelopeFields(context),
       };
       this.queue.push(entry);
-      // Drop the OLDEST on overflow: during a loop the newest entries are all
-      // the same fault, while the first entries include what preceded it.
-      if (this.queue.length > MAX_QUEUE) this.queue.splice(0, this.queue.length - MAX_QUEUE);
+      this.trimQueue();
       if (this.queue.length >= MAX_BATCH) void this.send(false);
     } catch {
       // Never let capture throw into app code.
@@ -354,9 +559,29 @@ export class Logs {
    */
   captureException(error: unknown, context?: CaptureContext & { category?: string }): void {
     try {
+      if (this.alreadyReported(error)) return;
+      this.markReported(error);
       const described = describeError(error);
       const { category, ...rest } = context ?? {};
       this.capture('error', category ?? 'exception', described.message, described.stack ? { stack: described.stack } : undefined, { result: 'error', ...rest });
+    } catch {
+      // Never let capture throw into app code.
+    }
+  }
+
+  /**
+   * Record a render error your own React error boundary caught (#392). React
+   * does not pass a caught error to `window.onerror`, so call this from
+   * `componentDidCatch(error, info)`: `app.logs.captureReactError(error,
+   * info.componentStack)`. Same entry as ProShell's boundary (category
+   * `react.error-boundary`, stack with causes, component stack, path).
+   */
+  captureReactError(error: unknown, componentStack?: string | null): void {
+    try {
+      if (this.alreadyReported(error)) return;
+      this.markReported(error);
+      const { message, data } = describeReactError(error, componentStack);
+      this.capture('error', REACT_ERROR_CATEGORY, message, data, { result: 'error' });
     } catch {
       // Never let capture throw into app code.
     }
@@ -370,6 +595,35 @@ export class Logs {
   /** Await a flush. For tests and deliberate checkpoints. */
   async flushAsync(): Promise<void> {
     await this.send(false);
+  }
+
+  private alreadyReported(error: unknown): boolean {
+    return error !== null && typeof error === 'object' && this.reported.has(error);
+  }
+
+  private markReported(error: unknown): void {
+    if (error !== null && typeof error === 'object') this.reported.add(error);
+  }
+
+  /** The newest breadcrumbs that fit the ingest size budget, on an object payload only. */
+  private withBreadcrumbs(payload: unknown): unknown {
+    if (this.breadcrumbs.length === 0 || (payload !== undefined && !isPlainObject(payload))) return payload;
+    const recent = this.breadcrumbs.slice(-ATTACHED_BREADCRUMBS);
+    while (recent.length) {
+      const candidate = { ...(payload as Record<string, unknown> | undefined), breadcrumbs: recent };
+      if (JSON.stringify(candidate).length <= DATA_BUDGET) return candidate;
+      recent.shift();
+    }
+    return payload;
+  }
+
+  /** Drop the OLDEST on overflow: during a loop the newest entries are all the
+   *  same fault, while the first entries include what preceded it. */
+  private trimQueue(): void {
+    if (this.queue.length <= MAX_QUEUE) return;
+    const excess = this.queue.length - MAX_QUEUE;
+    this.queue.splice(0, excess);
+    this.stats.dropped += excess;
   }
 
   private safeData(data: unknown): unknown {
@@ -397,11 +651,12 @@ export class Logs {
   private async send(keepalive: boolean): Promise<void> {
     if (this.disabled || this.queue.length === 0) return;
     if (Date.now() < this.quietUntil) return;
+    // Offline: keep the queue; the `online` listener resumes.
+    if (isOffline()) return;
+    // The unload path goes regardless: it is the last chance.
+    if (!keepalive && (this.sending || Date.now() < this.retryAt)) return;
 
     const batch = this.queue.slice(0, MAX_BATCH);
-    // Remove before sending: a retry loop is worse than losing a log line, and
-    // the entries most likely to be dropped are duplicates of a fault we already
-    // reported.
     this.queue = this.queue.slice(batch.length);
 
     const body = JSON.stringify({
@@ -409,24 +664,82 @@ export class Logs {
       ...(this.clientId ? { clientId: this.clientId } : {}),
     });
 
-    const res = await postTelemetry(this.auth, this.apiBase, `/v1/apps/${this.appId}/logs`, body, {
-      keepalive,
-      // A beacon cannot carry the bearer token, so only use it where the
-      // same-origin cookie speaks for us. In legacy-bearer mode a keepalive
-      // fetch still attaches the token and still survives unload in practice.
-      beacon: this.auth.usesPlatformCookie === true,
-    });
-    if (!res) return;
+    if (!keepalive) this.sending = true;
+    try {
+      const result = await sendTelemetry(this.auth, this.apiBase, `/v1/apps/${this.appId}/logs`, body, {
+        keepalive,
+        // A beacon cannot carry the bearer token, so only use it where the
+        // same-origin cookie speaks for us. In legacy-bearer mode a keepalive
+        // fetch still attaches the token and still survives unload in practice.
+        beacon: this.auth.usesPlatformCookie === true,
+      });
+      this.settle(batch, result, keepalive);
+    } finally {
+      if (!keepalive) this.sending = false;
+    }
+  }
 
-    if (res.status === 404) {
+  private settle(batch: QueuedEntry[], result: TelemetryResult, keepalive: boolean): void {
+    if (result.kind === 'beacon') {
+      this.stats.sent += batch.length;
+      return;
+    }
+    if (result.kind === 'failed' || result.response.status >= 500) {
+      this.retryLater(batch, keepalive);
+      return;
+    }
+    const { status } = result.response;
+    if (status === 404) {
       // Unknown app id — a misconfigured `appId` will never succeed, so stop
       // rather than retry every ten seconds for the life of the page.
       this.disabled = true;
+      this.stats.dropped += batch.length + this.queue.length;
+      this.queue = [];
       return;
     }
-    if (res.status === 202 || res.status === 429) {
-      // Over budget. Go quiet; the server is still counting the spike.
+    if (status === 202 || status === 429) {
+      // Over budget. Go quiet; the server is still counting the spike, and the
+      // batch was not stored.
       this.quietUntil = Date.now() + COOLDOWN_MS;
+      this.stats.dropped += batch.length;
+      return;
     }
+    this.resetRetry();
+    if (result.response.ok) this.stats.sent += batch.length;
+    else this.stats.dropped += batch.length; // a 4xx will not succeed on retry
+  }
+
+  /**
+   * A transient failure: put the batch back and retry with backoff, a bounded
+   * number of times within {@link RETRY_TTL_MS}. Offline is a pause, not a
+   * failed attempt. One timer at most, so a failing endpoint cannot cause a
+   * retry storm, and the transport never logs, so it cannot recurse.
+   */
+  private retryLater(batch: QueuedEntry[], keepalive: boolean): void {
+    if (!keepalive && !isOffline()) {
+      const now = Date.now();
+      if (this.retryAttempt === 0) this.retryStartedAt = now;
+      if (this.retryAttempt >= RETRY_DELAYS_MS.length || now - this.retryStartedAt > RETRY_TTL_MS) {
+        this.stats.dropped += batch.length;
+        this.resetRetry();
+        return;
+      }
+      const delay = RETRY_DELAYS_MS[this.retryAttempt++]!;
+      this.retryAt = now + delay;
+      if (this.running && !this.retryTimer) {
+        this.retryTimer = setTimeout(() => {
+          this.retryTimer = null;
+          void this.send(false);
+        }, delay);
+      }
+    }
+    this.queue = batch.concat(this.queue);
+    this.trimQueue();
+  }
+
+  private resetRetry(): void {
+    this.retryAttempt = 0;
+    this.retryStartedAt = 0;
+    this.retryAt = 0;
   }
 }

@@ -1,5 +1,9 @@
 import type { Auth } from './auth.js';
 import type { Unsubscribe } from './base-types.js';
+import type { Logs } from './logs.js';
+
+/** The logger surface rooms report through (#392). */
+type RoomLogger = Pick<Logs, 'addBreadcrumb' | 'capture'>;
 
 /**
  * Light realtime room — Durable-Object-backed WebSocket fan-out.
@@ -88,15 +92,18 @@ export class Rooms {
     private readonly appId: string,
     private readonly apiBase: string,
     private readonly auth: Auth,
+    private readonly logger?: RoomLogger,
   ) {}
 
   join(roomId: string): Room {
-    return new Room(this.appId, this.apiBase, this.auth, roomId);
+    return new Room(this.appId, this.apiBase, this.auth, roomId, this.logger);
   }
 }
 
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
+/** Reconnect attempts (about a minute of backoff) before a failing recovery is reported (#392). */
+const RECOVERY_REPORT_ATTEMPTS = 6;
 
 export class Room {
   private socket: WebSocket | null = null;
@@ -113,6 +120,10 @@ export class Room {
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private explicitlyClosed = false;
+  /** A dropped connection is being restored; cleared by the first frame after a reconnect. */
+  private recovering = false;
+  /** One error event per outage: set once a failed recovery is reported. */
+  private recoveryReported = false;
 
   /** Enable to log all WebSocket traffic to console. */
   debug = false;
@@ -122,6 +133,7 @@ export class Room {
     private readonly apiBase: string,
     private readonly auth: Auth,
     private readonly roomId: string,
+    private readonly logger?: RoomLogger,
   ) {
     this.connect();
   }
@@ -212,6 +224,7 @@ export class Room {
 
   /** Permanently close the room. Stops any pending reconnect. */
   close(): void {
+    if (!this.explicitlyClosed) this.breadcrumb('room closed');
     this.explicitlyClosed = true;
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
@@ -241,6 +254,7 @@ export class Room {
     this.socket = socket;
 
     socket.addEventListener('open', () => {
+      if (this.recovering) this.breadcrumb('room reconnected', { attempts: this.reconnectAttempt });
       this.reconnectAttempt = 0;
       this.setState('open');
       if (this.everOpened) for (const l of this.reconnectListeners) l();
@@ -250,6 +264,12 @@ export class Room {
 
     socket.addEventListener('message', (ev) => {
       if (this.debug) console.log('[rooms] ←', ev.data);
+      // The server accepted the join (a refusal closes without a frame): recovered.
+      if (this.recovering) {
+        this.recovering = false;
+        this.recoveryReported = false;
+        this.breadcrumb('room recovered');
+      }
       try {
         const parsed = JSON.parse(ev.data as string) as
           | { kind: 'msg'; from: RoomPeer; data: unknown; at: number }
@@ -287,9 +307,15 @@ export class Room {
       const willReconnect = kind === 'network' || kind === 'server';
       const info: RoomCloseInfo = { code: ev.code, reason: ev.reason ?? '', kind, willReconnect, at: Date.now() };
       this._lastClose = info;
+      this.breadcrumb('room disconnected', { code: ev.code, kind, willReconnect });
       for (const l of this.closeListeners) l(info);
       this.setState('closed');
       if (willReconnect) this.scheduleReconnect();
+      // A reconnect the server refused (full room, session gone) ends the recovery.
+      else if (this.recovering && (kind === 'capacity' || kind === 'auth')) {
+        this.reportRecoveryFailure(ev.code, 'refused');
+        this.recovering = false;
+      }
     });
 
     socket.addEventListener('error', () => {
@@ -307,11 +333,36 @@ export class Room {
     const backoff = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** this.reconnectAttempt);
     const jitter = Math.random() * 1000;
     this.reconnectAttempt++;
+    this.recovering = true;
+    this.breadcrumb('room reconnecting', { attempt: this.reconnectAttempt });
+    if (this.reconnectAttempt >= RECOVERY_REPORT_ATTEMPTS) this.reportRecoveryFailure(this._lastClose?.code ?? 0, 'still_failing');
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (this.explicitlyClosed) return;
       this.connect();
     }, backoff + jitter);
+  }
+
+  private breadcrumb(message: string, data?: Record<string, string | number | boolean>): void {
+    this.logger?.addBreadcrumb('room', message, { room: this.roomLabel(), ...data });
+  }
+
+  /**
+   * One error event when recovery fails (#392): the reconnects ran out of
+   * useful retries, or the server refused one. The client keeps its own retry
+   * behaviour; this only reports, once per outage.
+   */
+  private reportRecoveryFailure(code: number, outcome: 'refused' | 'still_failing'): void {
+    if (this.recoveryReported) return;
+    this.recoveryReported = true;
+    this.logger?.capture('error', 'room', 'room recovery failed', {
+      room: this.roomLabel(), code, outcome, attempts: this.reconnectAttempt,
+    });
+  }
+
+  /** The room id without the uid a `user:<uid>` room carries. */
+  private roomLabel(): string {
+    return this.roomId.startsWith('user:') ? 'user:*' : this.roomId.slice(0, 64);
   }
 
   private isAuthenticated(): boolean {

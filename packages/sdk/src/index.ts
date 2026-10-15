@@ -37,7 +37,9 @@ export type {
   DelegatedInvitePolicy, GroupAdminGrant,
 } from './invites.js';
 export { Actions, ActionError } from './actions.js';
-export type { ActionVerifyResult } from './actions.js';
+export type { ActionVerifyResult, ActionCallOptions } from './actions.js';
+// #392: breadcrumbs, delivery health and React error-boundary capture.
+export type { Breadcrumb, BreadcrumbCategory, BreadcrumbData, LogHealth } from './logs.js';
 // #390: request context for app.logs.capture / captureException.
 export type { CaptureContext } from './trace.js';
 export { Tokens } from './tokens.js';
@@ -137,7 +139,10 @@ export class ProAppStore {
     const dataApiBase = opts.dataApiBase ?? (this.auth.usesPlatformCookie ? '/.pas/data' : `https://data-${opts.appId}.proappstore.online`);
     this.kv = new Kv(opts.appId, apiBase, this.auth);
     this.counters = new Counters(opts.appId, apiBase, this.auth);
-    this.rooms = new Rooms(opts.appId, apiBase, this.auth);
+    // Constructed before Rooms and Actions: both report to the logger (#106, #392).
+    this.logs = new Logs(opts.appId, apiBase, this.auth, opts.monitoring ?? {});
+    this.auth.setTelemetryReporter(this.logs);
+    this.rooms = new Rooms(opts.appId, apiBase, this.auth, this.logs);
     this.roles = new Roles(opts.appId, apiBase, this.auth);
     this.proxy = new ApiProxy(opts.appId, apiBase, this.auth);
     this.subscription = new SubscriptionApi(opts.appId, apiBase, this.auth);
@@ -154,9 +159,6 @@ export class ProAppStore {
     this.webhooks = new Webhooks(opts.appId, apiBase, this.auth);
     this.invites = new Invites(opts.appId, apiBase, this.auth);
     this.worker = new WorkerHttp();
-    // Constructed before Actions: Actions reports failed calls to the logger (#106).
-    this.logs = new Logs(opts.appId, apiBase, this.auth, opts.monitoring ?? {});
-    this.auth.setTelemetryReporter(this.logs);
     this.actions = new Actions(opts.appId, apiBase, this.auth, this.logs);
     this.tokens = new Tokens(opts.appId, apiBase, this.auth);
     // Auto-start telemetry unless the app opts out. Wrapped in try-catch
@@ -172,6 +174,14 @@ export class ProAppStore {
     if (opts.monitoring?.auto !== false) {
       try { this.logs.start(); } catch { /* non-fatal — app runs without monitoring */ }
     }
+    // Breadcrumbs belong to one session: forget them when the signed-in user
+    // signs out or changes (#392).
+    let lastUserId: string | null = null;
+    this.auth.onChange((user) => {
+      const id = user?.id ?? null;
+      if (lastUserId !== null && id !== lastUserId) this.logs.clearBreadcrumbs();
+      lastUserId = id;
+    });
   }
 }
 

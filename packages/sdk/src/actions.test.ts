@@ -149,3 +149,67 @@ describe('Actions', () => {
     expect(logger.capture.mock.calls[0]![4]).toMatchObject({ traceId, spanId, errorCode: 'unauthorized' });
   });
 });
+
+// #392: a call that never got a response. The caller always gets the original error.
+describe('transport failures (#392)', () => {
+  function failingAuth(error: unknown) {
+    return { handleUnauthorized: vi.fn(), authenticatedFetch: vi.fn().mockRejectedValue(error) };
+  }
+  function logger() {
+    return { capture: vi.fn(), captureException: vi.fn(), addBreadcrumb: vi.fn() };
+  }
+
+  it('a cancellation the caller asked for is a breadcrumb, not an error', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const abort = new DOMException('The operation was aborted.', 'AbortError');
+    const a = failingAuth(abort);
+    const log = logger();
+    const err = await new Actions('chess', 'https://api.proappstore.online', a, log).call('move', { to: 'e4' }, { signal: controller.signal }).catch((e) => e);
+    expect(err).toBe(abort);
+    expect(a.authenticatedFetch.mock.calls[0]![1]).toMatchObject({ signal: controller.signal });
+    expect(log.addBreadcrumb).toHaveBeenCalledWith('action', 'action move cancelled', { durationMs: expect.any(Number) });
+    expect(log.captureException).not.toHaveBeenCalled();
+    expect(log.capture).not.toHaveBeenCalled();
+  });
+
+  it('a timeout is one error event with the call trace and errorCode timeout', async () => {
+    const signal = AbortSignal.abort(new DOMException('timed out', 'TimeoutError'));
+    const abort = new DOMException('The operation was aborted.', 'AbortError');
+    const log = logger();
+    const err = await new Actions('chess', 'https://api.proappstore.online', failingAuth(abort), log).call('move', {}, { signal }).catch((e) => e);
+    expect(err).toBe(abort);
+    expect(log.captureException).toHaveBeenCalledOnce();
+    expect(log.captureException.mock.calls[0]![1]).toMatchObject({ category: 'action', operation: 'action.move', errorCode: 'timeout', result: 'error' });
+    expect(log.addBreadcrumb).not.toHaveBeenCalled();
+  });
+
+  it('a network failure no server saw is recorded client-side with its trace; params never ride along', async () => {
+    const network = new TypeError('Failed to fetch');
+    const log = logger();
+    const err = await new Actions('chess', 'https://api.proappstore.online', failingAuth(network), log).call('move', { secret: 'hunter2' }).catch((e) => e);
+    expect(err).toBe(network);
+    expect(log.captureException).toHaveBeenCalledWith(network, expect.objectContaining({
+      category: 'action', operation: 'action.move', errorCode: 'network_error',
+      traceId: expect.stringMatching(/^[0-9a-f]{32}$/), spanId: expect.stringMatching(/^[0-9a-f]{16}$/),
+    }));
+    expect(JSON.stringify(log.captureException.mock.calls)).not.toContain('hunter2');
+  });
+
+  it('callPublic classifies the same way', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+    const log = logger();
+    await expect(new Actions('chess', 'https://api.proappstore.online', auth(Response.json({})), log).callPublic('leaderboard')).rejects.toThrow('Failed to fetch');
+    expect(log.captureException.mock.calls[0]![1]).toMatchObject({ errorCode: 'network_error', operation: 'action.leaderboard' });
+  });
+
+  it('records nothing for an error that is not a transport failure, and works with a capture-only logger', async () => {
+    const log = logger();
+    await expect(new Actions('chess', 'https://api.proappstore.online', failingAuth(new Error('Not signed in.')), log).call('move')).rejects.toThrow('Not signed in.');
+    expect(log.captureException).not.toHaveBeenCalled();
+    expect(log.addBreadcrumb).not.toHaveBeenCalled();
+
+    const legacy = { capture: vi.fn() };
+    await expect(new Actions('chess', 'https://api.proappstore.online', failingAuth(new TypeError('Failed to fetch')), legacy).call('move')).rejects.toThrow('Failed to fetch');
+  });
+});

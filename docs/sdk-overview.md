@@ -663,8 +663,10 @@ the report most worth keeping. Anonymous entries carry a rotating per-install
 
 Transport is shared with `app.usage` (`telemetry-transport.ts`): batched, flushed
 every 10s, `sendBeacon` on `pagehide` in platform-cookie mode, keepalive fetch
-otherwise. On a 202 (app over budget) the SDK goes quiet for a minute rather than
-retrying; on a 404 (unknown `appId`) it stops permanently.
+otherwise, with a 10 s request timeout. On a 202 or 429 (app over budget) the SDK
+goes quiet for a minute rather than retrying; on a 404 (unknown `appId`) it stops
+permanently. Retries for transient failures are described under
+[Exceptions, breadcrumbs and delivery health](#exceptions-breadcrumbs-and-delivery-health).
 
 ### Recorded for you, with no SDK code
 
@@ -752,6 +754,93 @@ rows. Rows from SDKs before the envelope, and older rows, read with
   deployed commit), and the client row will name the exact build.
 - **Older data stays valid:** #308 app-worker invocation ids remain plain
   `trace_id` values (not W3C), and the `trace_id` filter finds them as before.
+
+### Exceptions, breadcrumbs and delivery health
+
+The SDK adds client-side context to a failure (#392). It does not wrap `console`
+or third-party `fetch`, it does not record sessions, and it never persists
+anything but the per-install `clientId`.
+
+- **One event per failure.** An error recorded by `captureException` or
+  `captureReactError` is not recorded again when it is rethrown to
+  `window.onerror` or becomes an unhandled rejection. If an entry repeats
+  without a request trace, and the earlier copy is still among the last five
+  queued, it is merged into that copy. Its `data.repeats` counts the
+  occurrences.
+- **Error causes.** `describeError` keeps `err.cause`, up to five levels. Each
+  level is appended to the stack as a `Caused by:` section with its top frames.
+  The outer stack is shortened first, so the root cause survives the size cap.
+- **Your own React error boundary.** ProShell's boundary records render errors
+  already. Outside ProShell, call `captureReactError` from your boundary. The
+  entry is the same as ProShell's, and the SDK still does not depend on React:
+
+  ```tsx
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    app.logs.captureReactError(error, info.componentStack)
+  }
+  ```
+
+- **Actions that get no response.** `app.actions.call(name, params, { signal })`
+  and `callPublic` treat three cases differently:
+  - A cancellation the caller asked for (`AbortError`) is a breadcrumb, not an
+    error.
+  - A timeout (`AbortSignal.timeout`) is one error entry, `errorCode: 'timeout'`.
+  - A network failure is one error entry, `errorCode: 'network_error'`.
+
+  Both error entries carry the call's trace. No server saw these requests, so
+  this client entry is the only record of them. The entry is sent later, after
+  the connection returns. The caller always gets the original error, unchanged.
+- **Rooms.**
+  - Disconnects, reconnect attempts and recovery are breadcrumbs (category
+    `room`).
+  - A failed recovery is one `error` entry (category `room`, message
+    `room recovery failed`). It carries the room, the close code, the attempt
+    count and an outcome:
+    - `still_failing`: about a minute of reconnects without success. The client
+      keeps retrying.
+    - `refused`: the server turned down the reconnect (room full, or the session
+      is gone).
+  - A first join that is refused is not a recovery failure.
+  - A `user:<uid>` room is recorded as `user:*`.
+- **Breadcrumbs.**
+  - `app.logs.addBreadcrumb(category, message, data?)` records what led up to a
+    failure.
+  - Categories are `navigation`, `ui`, `network`, `room`, `auth` and `action`.
+    Any other category is ignored.
+  - `data` keeps at most eight primitive values. Strings are cut to 120
+    characters, and objects or arrays are dropped.
+  - Messages and values are redacted when recorded, and again at ingest.
+  - The buffer is in memory only and holds the newest 50.
+  - Error entries carry the newest 20 that fit the 4 KB `data` limit, in
+    `data.breadcrumbs`.
+  - The SDK clears the buffer when the signed-in user signs out or changes.
+    `clearBreadcrumbs()` clears it on demand.
+  - Never put form input, DOM content, tokens or user data in a breadcrumb.
+- **One logger per app.** A second `initPro()` for the same app (StrictMode,
+  HMR) takes over automatic capture. The handlers are not registered twice.
+
+**Delivery is best-effort.** Telemetry never waits on the network before a
+move or an operation result, and it never changes either. It can lose
+entries:
+
+- **Size limits:** the queue holds at most 200 entries, and the oldest go first.
+- **Transient failures:** a network error, a timeout or a 5xx is retried after
+  1, 2 and 4 seconds. If the batch still fails, or 60 seconds have passed since
+  its first failure, it is dropped.
+- **Offline:** sending pauses and the queue is kept. It flushes on the `online`
+  event.
+- **Over budget:** 202 and 429 mean a minute of quiet, and that batch is not
+  stored.
+- **Unknown app:** a 404 stops logging for the page.
+- **Closing the tab:** `pagehide` sends one last batch. What does not fit, or
+  fails, is lost when the tab closes.
+
+`app.logs.health()` reports what happened:
+
+```ts
+app.logs.health()
+// { queued, sent, dropped, duplicates, breadcrumbs, disabled, quietUntil }
+```
 
 ### What is deliberately never recorded
 

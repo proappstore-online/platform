@@ -187,3 +187,70 @@ describe('Room close reasons (#119)', () => {
   });
 });
 
+
+// #392: disconnect/reconnect breadcrumbs, and one error event when recovery fails.
+describe('room recovery diagnostics (#392)', () => {
+  const auth = { token: 'tok', isSignedIn: true, usesPlatformCookie: false };
+  function fire(sock: MockWebSocket, type: string, ev: unknown) {
+    for (const call of sock.addEventListener.mock.calls) if (call[0] === type) (call[1] as (e: unknown) => void)(ev);
+  }
+  function join(roomId: string) {
+    const logger = { capture: vi.fn(), addBreadcrumb: vi.fn() };
+    const room = new Rooms('chess', 'https://api.proappstore.online', auth as never, logger as never).join(roomId);
+    return { room, logger };
+  }
+
+  it('a recovery that keeps failing is reported exactly once, and the client keeps retrying', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    try {
+      const { room, logger } = join('user:gh:42');
+      fire(sockets[0]!, 'open', {});
+      for (let i = 0; i < 12; i++) {
+        fire(sockets[sockets.length - 1]!, 'close', { code: 1006, reason: '' });
+        vi.advanceTimersByTime(31_000);
+      }
+      expect(sockets.length).toBeGreaterThan(12); // still retrying
+      expect(logger.capture).toHaveBeenCalledTimes(1);
+      expect(logger.capture).toHaveBeenCalledWith('error', 'room', 'room recovery failed', expect.objectContaining({ room: 'user:*', code: 1006, outcome: 'still_failing' }));
+      expect(JSON.stringify(logger.addBreadcrumb.mock.calls)).not.toContain('gh:42');
+      expect(logger.addBreadcrumb).toHaveBeenCalledWith('room', 'room disconnected', expect.objectContaining({ code: 1006, kind: 'network', willReconnect: true }));
+      expect(logger.addBreadcrumb).toHaveBeenCalledWith('room', 'room reconnecting', expect.objectContaining({ attempt: 1 }));
+      room.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a reconnect the server refuses ends recovery with one error; a successful one is a breadcrumb', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    try {
+      const { room, logger } = join('game-7');
+      fire(sockets[0]!, 'close', { code: 1006, reason: '' });
+      vi.advanceTimersByTime(3_000);
+      fire(sockets[1]!, 'open', {});
+      fire(sockets[1]!, 'message', { data: JSON.stringify({ kind: 'peers', peers: [] }) });
+      expect(logger.addBreadcrumb).toHaveBeenCalledWith('room', 'room recovered', { room: 'game-7' });
+      expect(logger.capture).not.toHaveBeenCalled();
+
+      fire(sockets[1]!, 'close', { code: 1006, reason: '' });
+      vi.advanceTimersByTime(3_000);
+      fire(sockets[2]!, 'open', {});
+      fire(sockets[2]!, 'close', { code: 4401, reason: 'invalid_session' });
+      vi.advanceTimersByTime(60_000);
+      expect(logger.capture).toHaveBeenCalledTimes(1);
+      expect(logger.capture.mock.calls[0]![3]).toMatchObject({ room: 'game-7', code: 4401, outcome: 'refused' });
+      room.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a first join refused (room full) is not a recovery failure', () => {
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    const { logger } = join('lobby');
+    fire(sockets[0]!, 'close', { code: 4429, reason: 'room_full' });
+    expect(logger.capture).not.toHaveBeenCalled();
+  });
+});

@@ -34,17 +34,27 @@ export interface PostOptions {
   beacon?: boolean;
 }
 
+/** A telemetry request that has not answered in this long counts as a transient failure. */
+export const TELEMETRY_TIMEOUT_MS = 10_000;
+
 /**
- * POST a JSON body. Returns the Response, or null when the request could not be
- * made or was sent via `sendBeacon` (which yields no response).
+ * How one telemetry POST ended (#392): a server response, a beacon handed to
+ * the browser (no response), or a transient failure — network error, offline,
+ * or no answer within {@link TELEMETRY_TIMEOUT_MS}. Retrying is the caller's
+ * call; this layer never retries and never logs.
  */
-export async function postTelemetry(
+export type TelemetryResult =
+  | { kind: 'response'; response: Response }
+  | { kind: 'beacon' }
+  | { kind: 'failed' };
+
+export async function sendTelemetry(
   auth: TelemetryAuth,
   apiBase: string,
   path: string,
   body: string,
   opts: PostOptions = {},
-): Promise<Response | null> {
+): Promise<TelemetryResult> {
   const url = telemetryUrl(auth, apiBase, path);
   const keepalive = opts.keepalive === true;
 
@@ -56,16 +66,19 @@ export async function postTelemetry(
   ) {
     try {
       const blob = new Blob([body], { type: 'application/json' });
-      if (navigator.sendBeacon(url, blob)) return null;
+      if (navigator.sendBeacon(url, blob)) return { kind: 'beacon' };
     } catch {
       // Fall through to fetch.
     }
   }
 
-  if (typeof fetch === 'undefined') return null;
+  if (typeof fetch === 'undefined') return { kind: 'failed' };
+  const controller = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), TELEMETRY_TIMEOUT_MS) : null;
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     const init: RequestInit = { method: 'POST', headers, body, keepalive };
+    if (controller) init.signal = controller.signal;
     if (auth.usesPlatformCookie) {
       init.credentials = 'same-origin';
     } else if (auth.token) {
@@ -74,8 +87,25 @@ export async function postTelemetry(
     // No token and no cookie is not an error here: log ingestion accepts
     // anonymous reports on purpose, since a failure before sign-in is exactly
     // the one worth having.
-    return await fetch(url, init);
+    return { kind: 'response', response: await fetch(url, init) };
   } catch {
-    return null;
+    return { kind: 'failed' };
+  } finally {
+    if (timer !== null) clearTimeout(timer);
   }
+}
+
+/**
+ * POST a JSON body. Returns the Response, or null when the request could not be
+ * made or was sent via `sendBeacon` (which yields no response).
+ */
+export async function postTelemetry(
+  auth: TelemetryAuth,
+  apiBase: string,
+  path: string,
+  body: string,
+  opts: PostOptions = {},
+): Promise<Response | null> {
+  const result = await sendTelemetry(auth, apiBase, path, body, opts);
+  return result.kind === 'response' ? result.response : null;
 }

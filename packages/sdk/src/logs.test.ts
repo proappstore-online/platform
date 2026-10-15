@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Logs, describeError, readOrCreateClientId, redactClient } from './logs.js';
+import { Logs, describeError, readOrCreateClientId, redactClient, type BreadcrumbCategory } from './logs.js';
 
 interface Captured {
   url: string;
@@ -212,7 +212,7 @@ describe('auth session diagnostics (#353)', () => {
     expect(sent).toHaveLength(0);
   });
 
-  it('does not recurse or retry an auth diagnostic when telemetry itself fails', async () => {
+  it('does not recurse or retry immediately when telemetry itself fails', async () => {
     const fetchMock = vi.fn(async () => { throw new Error('telemetry offline'); });
     vi.stubGlobal('fetch', fetchMock);
     const logs = makeLogs();
@@ -223,7 +223,8 @@ describe('auth session diagnostics (#353)', () => {
     await logs.flushAsync();
     await logs.flushAsync();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(logs.pending).toBe(0);
+    // Kept for a bounded, backed-off retry (#392) — and the failure logged nothing about itself.
+    expect(logs.pending).toBe(1);
   });
 });
 
@@ -401,5 +402,227 @@ describe('diagnostic envelope (#390)', () => {
     });
     await logs.flushAsync();
     expect(sent[0]!.body.entries[0]).toMatchObject({ category: 'auth.session_lost', traceId: TRACE, v: 1 });
+  });
+});
+
+describe('exceptions, breadcrumbs and delivery health (#392)', () => {
+  function handler(type: string): (e?: unknown) => void {
+    const calls = (window.addEventListener as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === type);
+    return calls[calls.length - 1]![1] as (e?: unknown) => void;
+  }
+
+  it('describeError keeps the cause chain, bounded and cycle-safe', () => {
+    const root = new TypeError('socket reset');
+    const out = describeError(new Error('save failed', { cause: new Error('fetch failed', { cause: root }) }));
+    expect(out.message).toBe('Error: save failed');
+    expect(out.stack).toContain('Caused by: Error: fetch failed');
+    expect(out.stack).toContain('Caused by: TypeError: socket reset');
+
+    const a = new Error('a');
+    const b = new Error('b', { cause: a });
+    (a as { cause?: unknown }).cause = b;
+    expect(() => describeError(a)).not.toThrow();
+    expect(describeError(a).stack!.match(/Caused by/g)).toHaveLength(1);
+    expect(describeError(new Error('x', { cause: 'plain reason' })).stack).toContain('Caused by: plain reason');
+  });
+
+  it('captureReactError records the boundary entry with causes and the component stack', async () => {
+    const logs = makeLogs();
+    logs.captureReactError(new Error('render broke', { cause: new Error('bad prop') }), '\n    at Board\n    at GamePlay');
+    await logs.flushAsync();
+    const entry = sent[0]!.body.entries[0]!;
+    expect(entry).toMatchObject({ level: 'error', category: 'react.error-boundary', message: 'Error: render broke', result: 'error' });
+    const data = entry.data as { stack: string; componentStack: string };
+    expect(data.stack).toContain('Caused by: Error: bad prop');
+    expect(data.componentStack).toContain('GamePlay');
+  });
+
+  it('one event per failure: an error captured, then rethrown to window, is recorded once', async () => {
+    const logs = makeLogs();
+    logs.start();
+    const err = new Error('move rejected');
+    logs.captureException(err);
+    handler('error')({ error: err, message: err.message, filename: '', lineno: 0 });
+    handler('unhandledrejection')({ reason: err });
+    logs.captureReactError(err, null);
+    expect(logs.pending).toBe(1);
+    logs.stop();
+  });
+
+  it('folds an identical repeat into the queued entry instead of queueing it again', async () => {
+    const logs = makeLogs();
+    logs.error('board failed to load', { board: 1 });
+    logs.error('board failed to load', { board: 1 });
+    logs.error('board failed to load');
+    // Request-correlated entries are separate failures, each with its trace.
+    logs.capture('error', 'action', 'action x failed', undefined, { spanId: 'cd'.repeat(8) });
+    logs.capture('error', 'action', 'action x failed', undefined, { spanId: 'ef'.repeat(8) });
+    expect(logs.pending).toBe(3);
+    expect(logs.health().duplicates).toBe(2);
+    await logs.flushAsync();
+    expect(sent[0]!.body.entries[0]!.data).toMatchObject({ board: 1, repeats: 3 });
+  });
+
+  it('breadcrumbs are bounded, allowlisted, redacted, primitive-only and ride on error entries only', async () => {
+    const logs = makeLogs();
+    for (let i = 0; i < 60; i++) logs.addBreadcrumb('ui', `tap ${i}`);
+    expect(logs.health().breadcrumbs).toBe(50);
+    logs.addBreadcrumb('dom' as BreadcrumbCategory, 'ignored');
+    logs.addBreadcrumb('navigation', 'opened parent@example.com', {
+      route: '/game?token=abc123', ok: true, n: 2,
+      node: { outerHTML: '<input value="secret">' } as unknown as string, list: ['form text'] as unknown as string,
+    });
+    expect(logs.health().breadcrumbs).toBe(50);
+
+    logs.info('not an error');
+    logs.error('boom');
+    await logs.flushAsync();
+    const [info, error] = sent[0]!.body.entries;
+    expect(info!.data).toBeUndefined();
+    const crumbs = (error!.data as { breadcrumbs: Array<{ category: string; message: string; data?: Record<string, unknown> }> }).breadcrumbs;
+    expect(crumbs.length).toBeLessThanOrEqual(20);
+    const last = crumbs[crumbs.length - 1]!;
+    expect(last).toMatchObject({ category: 'navigation', message: 'opened [email]', data: { route: '/game?token=[redacted]', ok: true, n: 2 } });
+    expect(JSON.stringify(sent[0]!.body)).not.toMatch(/dom|secret|form text|outerHTML|abc123/);
+    expect(JSON.stringify(error!.data).length).toBeLessThanOrEqual(3500);
+  });
+
+  it('breadcrumbs are never persisted and clear on request', () => {
+    const logs = makeLogs();
+    logs.start();
+    logs.addBreadcrumb('action', 'saved');
+    expect(localStorage.getItem('pas:client-id')).toBeTruthy();
+    const setItem = vi.spyOn(localStorage, 'setItem');
+    logs.addBreadcrumb('action', 'saved again');
+    expect(setItem).not.toHaveBeenCalled();
+    logs.clearBreadcrumbs();
+    expect(logs.health().breadcrumbs).toBe(0);
+    logs.stop();
+  });
+
+  it('offline holds the queue; online flushes it', async () => {
+    vi.stubGlobal('navigator', { onLine: false });
+    const logs = makeLogs();
+    logs.start();
+    logs.error('lost connection mid-game');
+    await logs.flushAsync();
+    expect(sent).toHaveLength(0);
+    expect(logs.health()).toMatchObject({ queued: 1, dropped: 0 });
+
+    vi.stubGlobal('navigator', { onLine: true });
+    handler('online')();
+    await vi.waitFor(() => expect(logs.health()).toMatchObject({ queued: 0, sent: 1, dropped: 0 }));
+    expect(sent).toHaveLength(1);
+    logs.stop();
+  });
+
+  it('pagehide sends best-effort and does not discard what it could not send', async () => {
+    const beacon = vi.fn(() => true);
+    vi.stubGlobal('navigator', { sendBeacon: beacon });
+    const cookie = makeLogs({ usesPlatformCookie: true, token: null });
+    cookie.start();
+    cookie.error('tab closing');
+    handler('pagehide')();
+    await vi.waitFor(() => expect(beacon).toHaveBeenCalledTimes(1));
+    expect(cookie.health()).toMatchObject({ queued: 0, sent: 1 });
+    cookie.stop();
+
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    const bearer = makeLogs();
+    bearer.start();
+    bearer.error('tab closing');
+    handler('pagehide')();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(bearer.health()).toMatchObject({ queued: 1, dropped: 0 });
+    bearer.stop();
+  });
+
+  it('queue overflow drops the oldest and counts them', () => {
+    vi.stubGlobal('navigator', { onLine: false });
+    const logs = makeLogs();
+    for (let i = 0; i < 250; i++) logs.error(`e${i}`);
+    expect(logs.health()).toMatchObject({ queued: 200, dropped: 50 });
+  });
+
+  it('a second init for the same app hands over capture instead of doubling the handlers', () => {
+    const add = window.addEventListener as ReturnType<typeof vi.fn>;
+    const remove = window.removeEventListener as ReturnType<typeof vi.fn>;
+    const first = makeLogs();
+    first.start();
+    const second = makeLogs();
+    second.start();
+    second.start();
+    const count = (fn: ReturnType<typeof vi.fn>, type: string) => fn.mock.calls.filter((c) => c[0] === type).length;
+    for (const type of ['error', 'unhandledrejection', 'pagehide', 'online']) {
+      expect(count(add, type), type).toBe(2);
+      expect(count(remove, type), type).toBe(1); // the first logger's
+    }
+    first.stop(); // already stopped: removes nothing of the second's
+    expect(count(remove, 'error')).toBe(1);
+    second.stop();
+  });
+
+  it('202 and 429 go quiet and count the batch as dropped; 404 disables permanently', async () => {
+    for (const code of [202, 429]) {
+      sent = [];
+      status = code;
+      const logs = makeLogs();
+      logs.error('loop');
+      await logs.flushAsync();
+      logs.error('loop again');
+      await logs.flushAsync();
+      expect(sent, String(code)).toHaveLength(1);
+      expect(logs.health()).toMatchObject({ dropped: 1, queued: 1, disabled: false, quietUntil: expect.any(Number) });
+    }
+
+    sent = [];
+    status = 404;
+    const gone = makeLogs();
+    gone.error('a');
+    gone.error('b');
+    await gone.flushAsync();
+    expect(gone.health()).toMatchObject({ disabled: true, dropped: 2, queued: 0 });
+  });
+
+  it('retries a transient failure with bounded backoff, then drops it — no retry storm', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const logs = makeLogs();
+    logs.start();
+    logs.error('boom');
+    await logs.flushAsync();
+    await logs.flushAsync(); // inside the backoff: no extra request
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    // The failing transport recorded nothing about itself.
+    expect(logs.health()).toMatchObject({ queued: 0, sent: 0, dropped: 1 });
+    logs.stop();
+  });
+
+  it('a retried batch is delivered once the endpoint recovers', async () => {
+    vi.useFakeTimers();
+    let fail = true;
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      if (fail) { fail = false; throw new TypeError('Failed to fetch'); }
+      sent.push({ url, body: JSON.parse(String(init.body)), init });
+      return new Response(null, { status: 200 });
+    }));
+    const logs = makeLogs();
+    logs.start();
+    logs.error('flaky');
+    await logs.flushAsync();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(sent).toHaveLength(1);
+    expect(logs.health()).toMatchObject({ queued: 0, sent: 1, dropped: 0 });
+    logs.stop();
   });
 });

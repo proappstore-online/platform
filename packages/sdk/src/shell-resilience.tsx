@@ -12,7 +12,7 @@ import {
   type RefObject,
 } from 'react';
 import type { ProAppStore } from './index.js';
-import { describeError } from './logs.js';
+import { describeReactError, REACT_ERROR_CATEGORY } from './logs.js';
 
 // ── Error boundary ──────────────────────────────────────────────
 
@@ -53,12 +53,8 @@ export class ShellErrorBoundary extends Component<BoundaryProps, BoundaryState> 
   }
 
   override componentDidCatch(error: unknown, info: ErrorInfo): void {
-    const described = describeError(error);
-    this.props.app.logs.capture('error', 'react.error-boundary', described.message, {
-      stack: described.stack,
-      componentStack: info.componentStack ?? undefined,
-      path: typeof window === 'undefined' ? undefined : window.location.pathname,
-    });
+    const { message, data } = describeReactError(error, info.componentStack);
+    this.props.app.logs.capture('error', REACT_ERROR_CATEGORY, message, data);
   }
 
   reset = (): void => this.setState({ error: null });

@@ -79,3 +79,30 @@ describe('initPro authMode default', () => {
     expect(initPro({ appId: 'myapp' }).auth.usesPlatformCookie).toBe(false);
   });
 });
+
+// #392: breadcrumbs belong to one session.
+describe('initPro breadcrumb session lifecycle', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('clears breadcrumbs when the signed-in user signs out or changes, not on the first sign-in', async () => {
+    const { Auth } = await import('./auth.js');
+    let emit: (user: { id: string } | null) => void = () => {};
+    vi.spyOn(Auth.prototype, 'onChange').mockImplementation((listener) => {
+      emit = listener as typeof emit;
+      return () => {};
+    });
+    const app = initPro({ appId: 'demo', monitoring: { auto: false } });
+    emit(null);
+    app.logs.addBreadcrumb('ui', 'before sign-in');
+    emit({ id: 'u1' });
+    expect(app.logs.health().breadcrumbs).toBe(1);
+    emit(null);
+    expect(app.logs.health().breadcrumbs).toBe(0);
+    emit({ id: 'u2' });
+    app.logs.addBreadcrumb('ui', 'as u2');
+    emit({ id: 'u3' });
+    expect(app.logs.health().breadcrumbs).toBe(0);
+  });
+});

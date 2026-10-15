@@ -347,6 +347,16 @@ app.logs.warn('slow board render')
 app.logs.info('tournament joined')
 app.logs.capture('warn', 'checkout', 'card declined')  // your own category
 
+// A caught error, with its cause chain; a render error from your own boundary
+app.logs.captureException(err, { operation: 'checkout' })
+app.logs.captureReactError(error, info.componentStack)  // in componentDidCatch
+
+// Breadcrumbs: what led up to a failure (in memory only, newest 50, redacted)
+app.logs.addBreadcrumb('navigation', 'opened game', { mode: 'blitz' })
+
+// Delivery health: { queued, sent, dropped, duplicates, breadcrumbs, disabled, quietUntil }
+app.logs.health()
+
 // Manual controls (rarely needed)
 app.logs.flush()            // fire-and-forget; also runs on pagehide
 await app.logs.flushAsync() // await the upload
@@ -376,6 +386,27 @@ entries are still *counted* (so spikes stay visible) while detail stops and the
 SDK goes quiet for a minute rather than retrying. Detail rows are pruned after 30
 days. Stack traces are not symbolicated yet — grouping still works, and `build`
 identifies the deploy.
+
+**Best-effort, and never in the way.** Telemetry never delays a move or an
+operation result, and never changes one. Delivery can lose entries:
+
+- The queue keeps at most 200 entries; the oldest are dropped first.
+- A network error, timeout (10 s) or 5xx is retried after 1, 2 and 4 seconds.
+  The batch is dropped if it still fails, or 60 seconds after its first failure.
+- Offline, the queue waits and is sent on `online`.
+- A closing tab gets one last best-effort send.
+
+Breadcrumbs (`navigation`, `ui`, `network`, `room`, `auth`, `action`) take up to
+eight primitive values; other categories, objects and arrays are ignored. The
+buffer clears when the user signs out or changes. Never put form text, DOM
+content, tokens or user data in a breadcrumb.
+
+A call to `app.actions.call()` that gets no response is recorded client-side: a
+network failure or a timeout is one error entry with the call's trace (no server
+saw it). A cancellation you asked for (`{ signal }`) is only a breadcrumb. Rooms
+record disconnects and reconnects as breadcrumbs, and a failed recovery as one
+error entry. See `docs/sdk-overview.md` → "Exceptions, breadcrumbs and delivery
+health".
 
 `app.logs` is independent of `app.usage`: usage measures engagement, logs record
 faults.
@@ -778,7 +809,9 @@ app.logs.error('billing', 'checkout failed', { code });  // your own entries
 app.logs.capture(err, 'payments');                       // a caught exception
 ```
 
-Entries include route, auth mode, and any `monitoring.build` metadata. The SDK
+Entries include route, auth mode, and any `monitoring.build` metadata. Error entries
+also carry recent breadcrumbs, and `app.logs.health()` reports how many entries were
+queued, sent and dropped. The SDK
 **never** logs tokens, credentials, SQL params, or request bodies. Works in both
 `legacy-bearer` and `platform-cookie` modes; flushes on an interval and on
 `pagehide`. Opt out with `initPro({ monitoring: { auto: false } })`.
