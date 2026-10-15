@@ -57,6 +57,7 @@ resilience layer. See
 - [Recipes](./recipes.md)
 - [CLI overview](./cli-overview.md)
 - [Publishing flow](./publishing-flow.md)
+- [App marketing websites — proposed design](./app-marketing-sites.md)
 - [Browser auth session model](./auth-session-model.md)
 - [Bot protection with Cloudflare Turnstile](./turnstile.md)
 - [MCP app tools and auth](./mcp-app-tools.md)

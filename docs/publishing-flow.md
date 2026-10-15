@@ -76,6 +76,10 @@ laptop runs.
 
 ## Storefront listing copy
 
+The existing storefront detail page is separate from the proposed templated
+one-page marketing website. See [App marketing websites](./app-marketing-sites.md)
+for the Astro investigation, proposed publish lifecycle and delivery gates.
+
 After publishing, the owner edits the storefront copy with
 `PUT /v1/apps/:id/listing`, which merges the fields sent and leaves the rest
 unchanged. The `tagline` and `longDescription` appear under the platform's name: on
