@@ -1,8 +1,8 @@
 # App marketing websites — investigation and delivery plan
 
 Status: **proposed**, 2026-10-15. This document describes a new platform feature;
-it does not claim that marketing websites are currently generated. The URL shape
-is a product decision to settle before implementation.
+it does not claim that marketing websites are currently generated. The owner
+selected the default URL shape on 2026-10-15.
 
 ## Problem and current state
 
@@ -91,20 +91,22 @@ Astro references: [static rendering](https://docs.astro.build/en/guides/on-deman
    making the app private removes public access immediately. The catalogue
    links to the live marketing site only after successful activation.
 
-### Default URL decision
+### Default URL
 
-Recommended first release: `https://site-<app-id>.proappstore.online/` with a
-reserved `site-` hostname prefix. It is a dedicated, crawlable origin while
+The first release uses `https://about-<app-id>.proappstore.online/` with a
+reserved `about-` hostname prefix. It is a dedicated, crawlable origin while
 `https://<app-id>.proappstore.online/` remains the runnable app. Check all
 existing app IDs for prefix collisions and reserve the namespace before
 shipping. Existing BYO app domains should not silently switch to marketing.
+The public storefront API had no app ID beginning with `about-` on 2026-10-15;
+the complete registry must still be checked before reserving the prefix.
 
-Alternatives to settle with the owner before route implementation:
+Alternatives considered:
 
 | URL | Consequence |
 |---|---|
 | `proappstore.online/apps/<id>/` | Reuses the current storefront origin but conflates a catalogue entry with the dedicated site the feature is meant to provide. |
-| `site-<id>.proappstore.online` | Fits the current wildcard host Worker; needs a marketing route and revision lookup. Recommended. |
+| `about-<id>.proappstore.online` | Selected by the owner. Fits the current wildcard host Worker; needs a marketing route and revision lookup. |
 | Owner's custom domain | Best branding, but conflicts with domains already serving the interactive app; requires a separate explicit domain attachment workflow. Follow-on work. |
 
 ## Acceptance and release evidence
@@ -129,7 +131,7 @@ with child tickets for [content and publish contract](https://github.com/proapps
 [Astro template/build](https://github.com/proappstore-online/proappstore/issues/4),
 [R2 deployment and host routing](https://github.com/proappstore-online/platform/issues/399),
 and [owner preview and catalogue integration](https://github.com/proappstore-online/console/issues/8).
-The URL decision and a small representative content example are the first
-acceptance gates.
+The URL is decided. A small representative content example is the first
+remaining acceptance gate.
 Do not close the epic from local tests or a green CI run alone; it requires a
 live published site and visibility/rollback evidence.
