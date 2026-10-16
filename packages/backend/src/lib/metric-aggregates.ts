@@ -98,3 +98,14 @@ export async function recordHealth(db: D1Database, component: HealthComponent, a
     console.error('[telemetry-health] write failed', { component, appId, err: String(e).slice(0, 200) });
   }
 }
+
+/**
+ * #391: the operation family a request is counted under, so a failure rate can be
+ * read per family with a matching denominator. A fixed set of route segments in
+ * code; any other segment is `other` — never a path, id or user value. #395's
+ * reliability objectives are set per family from this same set.
+ */
+export const REQUEST_METRIC_FAMILIES = new Set([
+  'actions', 'kv', 'counters', 'storage', 'files', 'rooms', 'roles', 'invites', 'secrets', 'proxy',
+  'worker', 'tools', 'endpoints', 'record-state', 'public', 'users', 'tokens', 'connectors', 'qa', 'domains',
+]);

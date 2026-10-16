@@ -10,7 +10,7 @@ import { recordServerError } from './lib/error-telemetry.js';
 import { requestTrace, safeErrorCode, TRACE_ID_HEADER } from './lib/log-ingest.js';
 import { DataWorkerFailure, isPlatformFault } from './lib/data-worker-url.js';
 import { recordOperationFailure, shouldLogOperationFailure } from './lib/operation-log.js';
-import { latencyBucket, recordHealth } from './lib/metric-aggregates.js';
+import { latencyBucket, recordHealth, REQUEST_METRIC_FAMILIES } from './lib/metric-aggregates.js';
 import type { Env } from './types.js';
 import { openapiSpec, openapiYaml } from './openapi-spec.js';
 import { subscriptionRoutes } from './routes/subscription.js';
@@ -36,6 +36,9 @@ import { logsRoutes } from './routes/logs.js';
 import { logsPruneRoutes } from './routes/logs-prune.js';
 import { telemetryHealthRoutes } from './routes/telemetry-health.js';
 import { sourcemapRoutes } from './routes/sourcemaps.js';
+import { reliabilityRoutes } from './routes/reliability.js';
+import { evaluateReliability } from './lib/reliability.js';
+import { retryDueDeliveries } from './lib/webhook-dispatch.js';
 import { sweepSourceMaps } from './lib/sourcemap.js';
 import { toolsRoutes } from './routes/tools.js';
 import { visibilityRoutes } from './routes/visibility.js';
@@ -135,15 +138,6 @@ app.use(
  * Also excluded: CORS preflights and WebSocket upgrades (101, long-lived).
  */
 const REQUEST_METRIC_EXCLUDED = new Set(['logs', 'incidents', 'telemetry', 'alerts']);
-/**
- * #391: the operation family a request is counted under, so a failure rate can be
- * read per family with a matching denominator. A fixed set of route segments in
- * code; any other segment is `other` — never a path, id or user value.
- */
-export const REQUEST_METRIC_FAMILIES = new Set([
-  'actions', 'kv', 'counters', 'storage', 'files', 'rooms', 'roles', 'invites', 'secrets', 'proxy',
-  'worker', 'tools', 'endpoints', 'record-state', 'public', 'users', 'tokens', 'connectors', 'qa', 'domains',
-]);
 
 app.use('/v1/apps/:appId/*', async (c, next) => {
   const started = Date.now();
@@ -332,6 +326,7 @@ v1.route('/', logsRoutes);
 v1.route('/', logsPruneRoutes);
 v1.route('/', telemetryHealthRoutes);
 v1.route('/', sourcemapRoutes);
+v1.route('/', reliabilityRoutes);
 v1.route('/', toolsRoutes);
 v1.route('/', visibilityRoutes);
 v1.route('/', endpointsRoutes);
@@ -411,6 +406,10 @@ export default {
       () => recordHealth(env.DB, 'evaluator', '', true, null),
       (e) => { console.error(`[alert] evaluation failed: ${(e as Error).message}`); return recordHealth(env.DB, 'evaluator', '', false, 'evaluation_failed'); },
     ));
+    // #395: reliability objectives (burn rates, outages, degraded telemetry) beside the
+    // #107 alerts above, and the bounded retry of failed app.alert webhook deliveries.
+    ctx.waitUntil(evaluateReliability({ env, now: tickAt }).catch((e) => console.error(`[reliability] evaluation failed: ${(e as Error).message}`)));
+    ctx.waitUntil(retryDueDeliveries(env.DB, tickAt));
     // The pre-existing checks remain every fifteen minutes even though the
     // Worker now receives a five-minute tick for scheduled app actions.
     if (new Date(tickAt).getUTCMinutes() % 15 !== 0) return;

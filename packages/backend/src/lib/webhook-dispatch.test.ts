@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
-const { dispatchWebhook, MAX_WEBHOOKS_PER_APP, WEBHOOK_TIMEOUT_MS } = await import('./webhook-dispatch.js');
+const { dispatchWebhook, MAX_WEBHOOKS_PER_APP, WEBHOOK_TIMEOUT_MS, retryDueDeliveries, MAX_DELIVERY_ATTEMPTS } = await import('./webhook-dispatch.js');
 
 function fakeDb(hooks: { id: string; url: string; secret: string }[] = []) {
   const deliveries: { id: string; webhook_id: string; event: string; status: number | null }[] = [];
@@ -196,5 +196,51 @@ describe('dispatchWebhook hardening (#224)', () => {
     mockFetch.mockResolvedValueOnce(new Response('ok'));
     await dispatchWebhook(fakeDb([hook]), 'app1', 'test', {});
     expect(log).not.toHaveBeenCalled();
+  });
+});
+
+// #395: due app.alert retries, bounded attempts, removed hooks, and a DB failure.
+describe('retryDueDeliveries (#395)', () => {
+  function retryDb(rows: Record<string, unknown>[]) {
+    const updates: unknown[][] = [];
+    const db = {
+      prepare: (sql: string) => ({
+        bind: (...args: unknown[]) => ({
+          all: async () => ({ results: sql.includes('FROM webhook_deliveries d') ? rows : [] }),
+          run: async () => { if (sql.startsWith('UPDATE')) updates.push([sql.includes("'webhook removed'") ? 'removed' : 'attempt', ...args]); return { meta: { changes: 1 } }; },
+        }),
+      }),
+    } as unknown as D1Database;
+    return { db, updates };
+  }
+  const due = (over: Record<string, unknown> = {}) => ({ id: 'd1', event: 'app.alert', payload: '{}', attempts: 1, url: 'https://h.example/x', secret: 's', active: 1, ...over });
+
+  it('resends a due delivery, records success, and schedules the next try on failure until the cap', async () => {
+    mockFetch.mockResolvedValueOnce(new Response('ok', { status: 200 }));
+    const ok = retryDb([due()]);
+    expect(await retryDueDeliveries(ok.db, 1_000_000)).toBe(1);
+    expect(ok.updates[0]).toEqual(['attempt', 'd1', 200, 2, 1000, null, null]);
+
+    mockFetch.mockResolvedValueOnce(new Response('x', { status: 503 }));
+    const failing = retryDb([due({ attempts: 2 })]);
+    await retryDueDeliveries(failing.db, 1_000_000);
+    expect(failing.updates[0]).toEqual(['attempt', 'd1', 503, 3, 1000, 1000 + 1800, 'HTTP 503']);
+
+    mockFetch.mockResolvedValueOnce(new Response('x', { status: 503 }));
+    const last = retryDb([due({ attempts: MAX_DELIVERY_ATTEMPTS - 1 })]);
+    await retryDueDeliveries(last.db, 1_000_000);
+    expect(last.updates[0]![5]).toBeNull(); // the cap: no further attempt
+  });
+
+  it('a removed or deactivated webhook stops its retries without a request; a DB error returns 0', async () => {
+    mockFetch.mockClear();
+    const gone = retryDb([due({ url: null, secret: null, active: null }), due({ id: 'd2', active: 0 })]);
+    await retryDueDeliveries(gone.db, 1_000_000);
+    expect(gone.updates.map((u) => u[0])).toEqual(['removed', 'removed']);
+    expect(mockFetch).not.toHaveBeenCalled();
+    const broken = { prepare: () => { throw new Error('D1 down'); } } as unknown as D1Database;
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(await retryDueDeliveries(broken, 1)).toBe(0);
+    err.mockRestore();
   });
 });

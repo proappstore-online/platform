@@ -180,7 +180,8 @@ the evaluation for one app on demand; `POST …/alerts/:id/ack` acknowledges.
 Every recorded alert is also a `[alert] …` line in Workers Logs.
 
 **Not automated**: the "5% of sessions" rate; cross-app platform-wide spikes
-(each alert is per app). Data-worker 5xx with a `platform` or `unknown` fault
+(each alert is per app). Rate-based alerting against an owner's objective is
+#395's burn-rate rules (below). Data-worker 5xx with a `platform` or `unknown` fault
 verdict are `error` rows and so count towards `server_5xx` (#394); `tenant` and
 `client` faults are `warn` rows and do not.
 
@@ -282,7 +283,7 @@ most the 30-minute catch-up plus one baseline window.
 app-scoped API request (`/v1/apps/:appId/…`): outcome class (`ok` / `4xx` /
 `5xx`), latency bucket (`lt_100ms` / `lt_500ms` / `lt_2s` / `ge_2s`) and
 operation family — one of a fixed set of route segments (`actions`, `kv`,
-`storage`, `rooms`, …; `REQUEST_METRIC_FAMILIES` in `index.ts`), anything else
+`storage`, `rooms`, …; `REQUEST_METRIC_FAMILIES` in `lib/metric-aggregates.ts`), anything else
 `other` — with the exact latency as a double. No path, user or trace. Excluded: the telemetry
 plane itself (`logs`, `incidents`, `telemetry`, `alerts`), CORS preflights,
 WebSocket upgrades, and ids that are not app slugs. In Analytics Engine, not
@@ -354,3 +355,89 @@ embeds `<script src="https://api.proappstore.online/v1/analytics.js?app=<id>">`.
 
 Check: in the browser console of the app, no CSP violation for
 `/.pas/analytics/event`; the Network tab shows the beacon `POST` with 204.
+
+## Reliability objectives and burn-rate alerts (#395)
+
+Alongside the per-window #107 alerts above (which are unchanged and keep
+running), an owner may set **reliability objectives** and get burn-rate,
+outage and degraded-telemetry incidents. Nothing is evaluated for an app until
+its owner sets an objective: the platform does not invent a target.
+
+**Configure** (owner session):
+
+```
+PUT /v1/apps/:appId/reliability/objectives/:family   { "target": 0.99, "enabled": true }
+GET /v1/apps/:appId/reliability/objectives            → objectives + the allowed families
+DELETE /v1/apps/:appId/reliability/objectives/:family
+```
+
+`family` is one of the request-metric families (`actions`, `kv`, `storage`, …;
+`REQUEST_METRIC_FAMILIES`). `target` is the fraction of requests that must not
+be a 5xx, in [0.5, 1). **0.99 is a fixture value, not a recommendation**:
+production targets are the owner's call (operator gate below).
+
+**What is measured.** From #391's request outcomes in Analytics Engine, per
+family: bad = 5xx; total = every counted request. A 4xx — validation, a refusal,
+a caller's cancellation — is a good event and never burns budget. Excluded
+requests (telemetry routes, preflights, WebSocket upgrades) count as neither.
+AE samples and lags, so windows end 5 minutes before evaluation, aligned to
+5-minute buckets. burn = (bad / total) / (1 − target).
+
+| Rule | Fires when |
+|---|---|
+| `burn_fast:<family>` | burn ≥ 14.4 over 1 h **and** over the last 5 min (severe, short) |
+| `burn_slow:<family>` | burn ≥ 6 over 6 h **and** over the last 30 min (moderate, long) |
+| `outage:<family>` | the last 3 completed 5-min buckets each have ≥ 3 requests and ≥ 90% 5xx |
+| `monitoring_degraded` | Analytics Engine could not be read (no token, an outage) |
+
+- **Low traffic:** with fewer than 50 requests in a burn rule's long window the
+  rule is `low_traffic` — not evaluated and no incident change; a rate over a
+  handful of requests is noise. For low-traffic apps the synthetic signal is the
+  #107 `qa_failures` alert from scheduled and post-deploy QA flows.
+- **Degraded telemetry** opens `monitoring_degraded` and leaves every burn and
+  outage incident as it was: missing data is never read as success or as a burn
+  rate. It recovers on the next successful read.
+
+**Lifecycle** (`app_incidents`; one open incident per app and rule):
+`firing` → optionally `acknowledged` (`POST /v1/apps/:appId/reliability/incidents/:id/ack`)
+→ `recovered` when the rule next evaluates false. A firing rule re-evaluated
+every five minutes updates its incident, never opens another. Notifications go
+out on **firing** and **recovered** only — not on re-evaluation, not after an
+acknowledgement. List with `GET …/reliability/incidents?open=1`.
+
+**Delivery.** Only to the app's existing opt-in `app.alert` webhooks (the same
+mechanism as #107; nothing is sent when the owner registered none, and no new
+destination exists). Payload: `{ event, kind: "reliability", state, app_id,
+rule, detail, at }`, where `detail` holds rates, counts and window bounds only —
+no secrets, user ids or payloads. A failed delivery (network error, timeout,
+5xx, 408 or 429) is retried after 1, 5 and 30 minutes, **4 attempts at most**,
+by the cron (50 due per tick); a refusing 4xx is not retried; a webhook removed
+meanwhile stops its retries. Only `app.alert` is retried — every other event
+keeps its single attempt. The owner sees each attempt:
+`GET /v1/apps/:appId/reliability/deliveries` (status, attempts, last error,
+next retry; never the payload, URL or secret).
+
+**Dry run** (writes and sends nothing): `POST /v1/apps/:appId/reliability/evaluate`
+assesses live telemetry, or a fixture when the body carries one:
+
+```json
+{
+  "now": 1800002160000,
+  "objectives": [{ "family": "actions", "target": 0.99 }],
+  "buckets": [
+    { "family": "actions", "start": 1800000000000, "total": 50, "bad": 30 }
+  ]
+}
+```
+
+`buckets` are 5-minute buckets (`start` in ms, on a 5-minute boundary) with
+request totals and 5xx counts. The response lists each rule with `firing`,
+`ok`, `low_traffic` or `degraded` and its rates.
+
+**Operator gates (not verified by this change):**
+- the production targets per app — owners set them; nothing is on by default;
+- `CF_ANALYTICS_API_TOKEN` present on the backend with read access to
+  `pas_app_requests` — until then every app with objectives shows
+  `monitoring_degraded`;
+- each owner's `app.alert` destination and responder actually receiving and
+  acting on a delivery.
