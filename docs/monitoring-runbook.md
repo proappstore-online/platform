@@ -271,19 +271,29 @@ cardinality is apps × buckets × signals and never user, trace, game or path:
 | `action_failure`, `server_5xx`, `tenant_fault`, `client_fault`, `detail_dropped_server` | the API's operation-failure hook; the host's HostApi data-plane report | trusted: past the #375 gate (app exists; below 5xx the caller must belong to it). An anonymous 5xx is counted (a server status cannot be forged) but still writes no row |
 
 Every write is one D1 batch per failure or ingested batch, never per request.
-Counters are pruned with app logs (30 days, `/internal/logs/prune`).
+Counters are pruned with app logs (30 days, `/internal/logs/prune`). Every read
+— the evaluator (all apps or one), the health API and the prune — is an index
+range on `app_metric_buckets`, never a table scan; a real-D1 test asserts the
+query plans (`runtime-tests/test/backend/metric-aggregates.test.ts`). The health
+API reads at most one day of 5-minute buckets for one app, and the evaluator at
+most the 30-minute catch-up plus one baseline window.
 
 **Request denominators and latency — AE `pas_app_requests`.** One point per
 app-scoped API request (`/v1/apps/:appId/…`): outcome class (`ok` / `4xx` /
-`5xx`) and latency bucket (`lt_100ms` / `lt_500ms` / `lt_2s` / `ge_2s`), with the
-exact latency as a double. No route, user or trace. Excluded: the telemetry
+`5xx`), latency bucket (`lt_100ms` / `lt_500ms` / `lt_2s` / `ge_2s`) and
+operation family — one of a fixed set of route segments (`actions`, `kv`,
+`storage`, `rooms`, …; `REQUEST_METRIC_FAMILIES` in `index.ts`), anything else
+`other` — with the exact latency as a double. No path, user or trace. Excluded: the telemetry
 plane itself (`logs`, `incidents`, `telemetry`, `alerts`), CORS preflights,
 WebSocket upgrades, and ids that are not app slugs. In Analytics Engine, not
 D1, so no API request waits on or writes to the platform database for it.
 Analytics Engine **samples**: totals are weighted by `_sample_interval`, so
 they are estimates, and AE data can lag by minutes. The 5xx rate is
-`5xx / (ok + 4xx + 5xx)` from the same points; it is `null`, not 0, when
-nothing was counted. These request 5xx include every app-scoped API 5xx; the
+`5xx / (ok + 4xx + 5xx)` from the same points, overall and per family
+(`requests.lastHour.byFamily`); it is `null`, not 0, when nothing was counted.
+Points written before the family label read `unlabelled`. Client-reported
+`client_error` has no denominator (browser sessions are not counted): it is an
+absolute count, which is how `error_spike` uses it. These request 5xx include every app-scoped API 5xx; the
 `server_5xx` counter excludes tenant/client faults — compare like with like.
 
 **Pipeline health — `telemetry_health` (D1).** Each component stamps its last

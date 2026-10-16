@@ -71,4 +71,24 @@ describe('incident aggregates (#391 stage a)', () => {
     expect(Object.keys(m).every((s) => s.startsWith('client_') || s === 'detail_dropped_client')).toBe(true);
     expect(m.client_error).toBe(1);
   });
+
+  // #391 bounded cost: every counter read is an index range, never a scan of the table.
+  it('the evaluator and health queries search an index, never scan app_metric_buckets', async () => {
+    const plan = async (sql: string, ...binds: unknown[]) =>
+      ((await env.DB.prepare(`EXPLAIN QUERY PLAN ${sql}`).bind(...binds).all<{ detail: string }>()).results ?? []).map((r) => r.detail).join(' | ');
+    const evaluatorAll = await plan(
+      'SELECT app_id, CAST(bucket_start / ?1 AS INTEGER) * ?1 AS slice, SUM(n) AS n FROM app_metric_buckets WHERE bucket_start >= ?2 AND bucket_start < ?3 AND signal = ?4 GROUP BY app_id, slice',
+      900_000, 0, 1, 'client_error');
+    const evaluatorOne = await plan(
+      'SELECT app_id, CAST(bucket_start / ?1 AS INTEGER) * ?1 AS slice, SUM(n) AS n FROM app_metric_buckets WHERE bucket_start >= ?2 AND bucket_start < ?3 AND signal = ?4 AND app_id = ?5 GROUP BY app_id, slice',
+      900_000, 0, 1, 'client_error', APP);
+    const health = await plan(
+      'SELECT signal, SUM(CASE WHEN bucket_start >= ?2 THEN n ELSE 0 END) AS last_hour, SUM(n) AS last_day FROM app_metric_buckets WHERE app_id = ?1 AND bucket_start >= ?3 GROUP BY signal',
+      APP, 0, 0);
+    const sweep = await plan('DELETE FROM app_metric_buckets WHERE rowid IN (SELECT rowid FROM app_metric_buckets WHERE bucket_start < ? LIMIT ?)', 0, 10);
+    for (const [name, p] of Object.entries({ evaluatorAll, evaluatorOne, health, sweep })) {
+      expect(p, name).toMatch(/SEARCH app_metric_buckets USING (COVERING )?INDEX/);
+      expect(p, name).not.toMatch(/SCAN app_metric_buckets(?! USING)/);
+    }
+  });
 });

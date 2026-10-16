@@ -22,9 +22,10 @@ describe('GET /v1/apps/:appId/telemetry/health — request denominators (#391)',
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
       sql.push(String(init.body));
       return Response.json({ data: [
-        { outcome: 'ok', latency: 'lt_100ms', n: '90' },
-        { outcome: '4xx', latency: 'lt_500ms', n: 6 },
-        { outcome: '5xx', latency: 'ge_2s', n: 4 },
+        { outcome: 'ok', latency: 'lt_100ms', family: 'actions', n: '80' },
+        { outcome: 'ok', latency: 'lt_100ms', family: 'kv', n: '10' },
+        { outcome: '4xx', latency: 'lt_500ms', family: 'actions', n: 6 },
+        { outcome: '5xx', latency: 'ge_2s', family: 'actions', n: 4 },
       ] });
     }));
     const env = sharedMakeEnv({ CF_ANALYTICS_API_TOKEN: 'tok', CF_ACCOUNT_ID: 'acct' }, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), healthy()));
@@ -32,7 +33,16 @@ describe('GET /v1/apps/:appId/telemetry/health — request denominators (#391)',
     expect(res.status).toBe(200);
     const body = await res.json() as { status: string; requests: { status: string; sampled: boolean; lastHour: Record<string, unknown> } };
     expect(body.requests).toMatchObject({ status: 'ok', sampled: true });
-    expect(body.requests.lastHour).toEqual({ total: 100, ok: 90, clientErrors: 6, serverErrors: 4, serverErrorRate: 0.04, latency: { lt_100ms: 90, lt_500ms: 6, lt_2s: 0, ge_2s: 4 } });
+    expect(body.requests.lastHour).toEqual({
+      total: 100, ok: 90, clientErrors: 6, serverErrors: 4, serverErrorRate: 0.04,
+      latency: { lt_100ms: 90, lt_500ms: 6, lt_2s: 0, ge_2s: 4 },
+      // Per family, each rate over that family's own total.
+      byFamily: {
+        actions: { total: 90, ok: 80, clientErrors: 6, serverErrors: 4, serverErrorRate: 4 / 90 },
+        kv: { total: 10, ok: 10, clientErrors: 0, serverErrors: 0, serverErrorRate: 0 },
+      },
+    });
+    expect(sql[0]).toContain('blob3 AS family');
     expect(sql[0]).toContain('SUM(_sample_interval)');
     expect(sql[0]).toContain("index1 = 'leads'");
   });
@@ -53,7 +63,7 @@ describe('request-outcome middleware (#391)', () => {
     await app.request('/v1/apps/leads/kv/some-secret-key', {}, env);
     expect(points).toHaveLength(1);
     expect(points[0]!.indexes).toEqual(['leads']);
-    expect(points[0]!.blobs).toEqual(['4xx', expect.stringMatching(/^(lt_100ms|lt_500ms|lt_2s|ge_2s)$/)]);
+    expect(points[0]!.blobs).toEqual(['4xx', expect.stringMatching(/^(lt_100ms|lt_500ms|lt_2s|ge_2s)$/), 'kv']);
     expect(JSON.stringify(points)).not.toContain('some-secret-key');
   });
 
@@ -65,6 +75,17 @@ describe('request-outcome middleware (#391)', () => {
     await app.request('/v1/apps/leads/kv/x', { method: 'OPTIONS' }, env);
     await app.request('/v1/apps/NOT_A_SLUG/kv/x', {}, env);
     expect(points).toHaveLength(0);
+  });
+});
+
+describe('request family label (#391)', () => {
+  it('is a fixed family name or `other` — never a path segment the caller chose', async () => {
+    const points: { blobs: string[] }[] = [];
+    const env = sharedMakeEnv({ REQUEST_METRICS: { writeDataPoint: (p: never) => points.push(p) } }, mockD1());
+    await app.request('/v1/apps/leads/actions/save_lead', { method: 'POST', body: '{}' }, env);
+    await app.request('/v1/apps/leads/some-secret-path-segment/x', {}, env);
+    expect(points.map((p) => p.blobs[2])).toEqual(['actions', 'other']);
+    expect(JSON.stringify(points)).not.toContain('some-secret');
   });
 });
 

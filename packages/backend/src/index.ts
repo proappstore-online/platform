@@ -135,6 +135,15 @@ app.use(
  * Also excluded: CORS preflights and WebSocket upgrades (101, long-lived).
  */
 const REQUEST_METRIC_EXCLUDED = new Set(['logs', 'incidents', 'telemetry', 'alerts']);
+/**
+ * #391: the operation family a request is counted under, so a failure rate can be
+ * read per family with a matching denominator. A fixed set of route segments in
+ * code; any other segment is `other` — never a path, id or user value.
+ */
+export const REQUEST_METRIC_FAMILIES = new Set([
+  'actions', 'kv', 'counters', 'storage', 'files', 'rooms', 'roles', 'invites', 'secrets', 'proxy',
+  'worker', 'tools', 'endpoints', 'record-state', 'public', 'users', 'tokens', 'connectors', 'qa', 'domains',
+]);
 
 app.use('/v1/apps/:appId/*', async (c, next) => {
   const started = Date.now();
@@ -145,12 +154,13 @@ app.use('/v1/apps/:appId/*', async (c, next) => {
   if (!appId || !/^[a-z][a-z0-9-]{0,57}$/.test(appId) || c.req.method === 'OPTIONS' || status === 101
     || REQUEST_METRIC_EXCLUDED.has(c.req.path.split('/')[4] ?? '')) return;
   const ms = Date.now() - started;
+  const segment = c.req.path.split('/')[4] ?? '';
   try {
-    // One point per request, in its own dataset: outcome class and latency bucket
-    // only (no route, user or trace), the exact latency as a double for quantiles.
+    // One point per request, in its own dataset: outcome class, latency bucket and
+    // operation family (no path, user or trace), the exact latency as a double.
     c.env.REQUEST_METRICS?.writeDataPoint({
       indexes: [appId],
-      blobs: [status >= 500 ? '5xx' : status >= 400 ? '4xx' : 'ok', latencyBucket(ms)],
+      blobs: [status >= 500 ? '5xx' : status >= 400 ? '4xx' : 'ok', latencyBucket(ms), REQUEST_METRIC_FAMILIES.has(segment) ? segment : 'other'],
       doubles: [1, ms],
     });
   } catch {

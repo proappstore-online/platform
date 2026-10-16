@@ -52,22 +52,29 @@ function summarise(sums: Map<MetricSignal, number>) {
   };
 }
 
-type RequestWindow = { total: number; ok: number; clientErrors: number; serverErrors: number; serverErrorRate: number | null; latency: Record<string, number> };
+type FamilyCounts = { total: number; ok: number; clientErrors: number; serverErrors: number; serverErrorRate: number | null };
+type RequestWindow = FamilyCounts & { latency: Record<string, number>; byFamily: Record<string, FamilyCounts> };
 
 /** Weighted request outcomes and latency buckets for one window, from AE. Throws when AE cannot be read. */
 async function requestWindow(env: Env, appId: string, interval: '1' | '24'): Promise<RequestWindow> {
-  const rows = await cfAnalyticsSql<{ outcome: string; latency: string; n: number | string }>(env,
-    `SELECT blob1 AS outcome, blob2 AS latency, SUM(_sample_interval) AS n FROM ${REQUEST_METRICS_DATASET}
-     WHERE index1 = '${appId}' AND timestamp > NOW() - INTERVAL '${interval}' HOUR GROUP BY outcome, latency`);
-  const w: RequestWindow = { total: 0, ok: 0, clientErrors: 0, serverErrors: 0, serverErrorRate: null, latency: { lt_100ms: 0, lt_500ms: 0, lt_2s: 0, ge_2s: 0 } };
+  const rows = await cfAnalyticsSql<{ outcome: string; latency: string; family: string; n: number | string }>(env,
+    `SELECT blob1 AS outcome, blob2 AS latency, blob3 AS family, SUM(_sample_interval) AS n FROM ${REQUEST_METRICS_DATASET}
+     WHERE index1 = '${appId}' AND timestamp > NOW() - INTERVAL '${interval}' HOUR GROUP BY outcome, latency, family`);
+  const empty = (): FamilyCounts => ({ total: 0, ok: 0, clientErrors: 0, serverErrors: 0, serverErrorRate: null });
+  const add = (c: FamilyCounts, outcome: string, n: number) => {
+    c.total += n;
+    if (outcome === 'ok') c.ok += n; else if (outcome === '4xx') c.clientErrors += n; else if (outcome === '5xx') c.serverErrors += n;
+  };
+  const w: RequestWindow = { ...empty(), latency: { lt_100ms: 0, lt_500ms: 0, lt_2s: 0, ge_2s: 0 }, byFamily: {} };
   for (const r of rows) {
     const n = Number(r.n) || 0;
-    w.total += n;
-    if (r.outcome === 'ok') w.ok += n; else if (r.outcome === '4xx') w.clientErrors += n; else if (r.outcome === '5xx') w.serverErrors += n;
+    add(w, r.outcome, n);
     if (r.latency in w.latency) w.latency[r.latency]! += n;
+    // Points written before the family label read `unlabelled`, never as another family.
+    add((w.byFamily[r.family || 'unlabelled'] ??= empty()), r.outcome, n);
   }
   // Numerator and denominator from the same points; null, not 0, when nothing was counted.
-  w.serverErrorRate = w.total ? w.serverErrors / w.total : null;
+  for (const c of [w, ...Object.values(w.byFamily)]) c.serverErrorRate = c.total ? c.serverErrors / c.total : null;
   return w;
 }
 
