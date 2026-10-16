@@ -243,3 +243,17 @@ describe('request context envelope (#390)', () => {
     expect(safeErrorCode(500, 'database_locked_for_user_gh_7')).toBe('internal_error');
   });
 });
+
+// #393/#396: a full commit SHA survives ingest (source maps are found by it); everything else stays redacted.
+describe('build metadata', () => {
+  const build = async (b: unknown) => (await normalizeBatch([{ level: 'error', category: 'runtime', message: 'x', ts: Date.now(), build: b }], Date.now()))[0]!.buildMeta;
+  it('keeps a 7–40 hex commit sha (lower-cased) and still redacts token-like values in other fields', async () => {
+    const sha = 'A'.repeat(20) + 'b'.repeat(20);
+    expect(JSON.parse((await build({ sha, version: '1.4.2', note: 'key ' + 'f'.repeat(40) }))!)).toEqual({ sha: sha.toLowerCase(), version: '1.4.2', note: 'key [hex]' });
+    expect(JSON.parse((await build({ sha: 'abc1234' }))!)).toEqual({ sha: 'abc1234' });
+  });
+  it('a sha that is not a pure commit id is redacted like any other field', async () => {
+    expect(await build({ sha: 'Bearer ' + 'f'.repeat(40) })).not.toContain('f'.repeat(40));
+    expect(JSON.parse((await build({ version: '2' }))!)).toEqual({ version: '2' });
+  });
+});

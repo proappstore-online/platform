@@ -6,6 +6,57 @@ How to see, triage, and act on app/runtime failures across the PAS Workers
 control plane (backend `api`, `host`, per-app `data-*`, `qa-worker`,
 `agent-teams`). Tracks issue #107.
 
+## Synthetic conformance checks (#396)
+
+`packages/runtime-tests/test/backend/e2e-conformance.test.ts` drives the whole
+diagnostics path — capture → sanitize → ingest → aggregate → correlate →
+symbolize → owner query → alert/recovery — through the real SDK and backend on
+workerd with real D1 and R2, using two synthetic fixture apps (`diag-e2e`,
+`diag-e2e-other`) and synthetic owners. It never touches a real app, user or
+student. CI runs it with the rest of `pnpm test:runtime`; on its own:
+
+```
+pnpm --filter @proappstore/runtime-tests exec vitest run --config vitest.backend.ts test/backend/e2e-conformance.test.ts
+```
+
+| # | Scenario | What it proves |
+|---|---|---|
+| 1 | Browser crash | SDK capture redacts, ingest stores, `client_error` counts, owner `logs?symbolicate=true` maps the frame against the row's own `build.sha` |
+| 2 | Caught React error | one event with its component stack, counted |
+| 3 | Action failure | client and server rows share one trace; `action_failure` counts |
+| 4 | Auth loss | the host's session-loss record, found by its correlation id |
+| 5 | Offline | a failed telemetry upload does not fail the app's action; nothing reports as sent |
+| 6 | Room recovery failure | the SDK's error entry is ingested and counted |
+| 7 | Data-worker 5xx | API and host both record it; `server_5xx` counts; the incident lookup shows the api and data-worker hops |
+| 8 | Quota exhaustion | detail stops (202 `throttled`), the count and the drop are explicit, health is not `ok` |
+| 9 | Map mismatch | altered release bytes read `mismatched`, frames stay raw |
+| 10 | Alert delivery failure and recovery | one incident; a failed delivery is visible and retried; one recovery |
+| 11 | Owner query | filters return only this app; another owner is refused on every owner route |
+| — | Unavailable components | Analytics Engine down opens `monitoring_degraded`; a missing map reads `missing`; health says counts are not reliable |
+
+A passing suite proves the contracts in code. It does not prove a deployed
+environment — see "Manual gates" below and `docs/deployed-acceptance-gates.md`.
+
+## Manual gates
+
+Steps no automated check can close; each stays open on its issue until done:
+
+1. **Analytics Engine read access** — `CF_ANALYTICS_API_TOKEN` on
+   `proappstore-api` able to read `pas_app_requests` (#391, #395). Without it,
+   request totals read `unknown` and objectives show `monitoring_degraded`.
+2. **A controlled deployed test app** published through the admin flow, with
+   owner credentials for readback — real source-map upload, a real crash, trace
+   and alert delivery observed in production (#396).
+3. **Console readback** of the same incident in the Logs workspace — pending
+   proappstore-online/console#7.
+4. **template-app sync** — `node scripts/sync-template-workflow.mjs` by someone
+   with push rights to `proappstore-online/template-app` (#393; CI's
+   `template-workflow-drift` is red until then).
+5. **Data-worker fleet rollout** — `redeploy-data-workers.yml`, so existing data
+   workers send fault verdicts, log trace ids and accept `traceparent` (#394, #390).
+6. **Owner choices** — reliability targets and each `app.alert` destination and
+   responder (#395).
+
 ## Signals — where failures show up
 
 | Signal | Source | How to read |

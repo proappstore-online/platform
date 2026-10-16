@@ -668,6 +668,13 @@ goes quiet for a minute rather than retrying; on a 404 (unknown `appId`) it stop
 permanently. Retries for transient failures are described under
 [Exceptions, breadcrumbs and delivery health](#exceptions-breadcrumbs-and-delivery-health).
 
+Verified contract: `sendTelemetry` resolves to `{ kind: 'response' | 'beacon' |
+'failed' }` and never throws or logs, so a failed upload cannot fail or delay
+the app's own operation. Over budget is not silent: the cooldown shows as
+`app.logs.health().quietUntil`, and dropped entries as `dropped`. Covered by
+`logs.test.ts`, `transport-diagnostics.test.ts`, and conformance scenarios 5
+and 8 (`docs/monitoring-runbook.md` → "Synthetic conformance checks").
+
 ### Recorded for you, with no SDK code
 
 Every failed app-scoped API operation is logged **server-side** — `app.actions`,

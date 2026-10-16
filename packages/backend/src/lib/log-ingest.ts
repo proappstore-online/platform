@@ -283,7 +283,7 @@ export async function normalizeEntry(
   let buildMeta: string | null = null;
   if (raw.build && typeof raw.build === 'object') {
     try {
-      buildMeta = redact(JSON.stringify(raw.build) ?? '').slice(0, MAX_ENTRY_SIZE) || null;
+      buildMeta = normalizeBuildMeta(raw.build as Record<string, unknown>);
     } catch {
       buildMeta = null;
     }
@@ -303,6 +303,23 @@ export async function normalizeEntry(
 }
 
 /** Normalize a whole batch, dropping unusable entries and capping the count. */
+/**
+ * Build metadata, redacted like everything else — except a `sha` that is a pure
+ * git commit id (7–40 hex). The redactor masks any 32+ hex run as a possible
+ * token, which turned a full 40-hex commit SHA into `[hex]`; #393 resolves a
+ * crash's source maps by that exact `build.sha`, so it must survive ingest
+ * (found by the #396 conformance suite). A commit id is not a secret.
+ */
+function normalizeBuildMeta(build: Record<string, unknown>): string | null {
+  const { sha, ...rest } = build;
+  const commit = typeof sha === 'string' && /^[0-9a-f]{7,40}$/i.test(sha) ? sha.toLowerCase() : null;
+  const redacted = redact(JSON.stringify(commit ? rest : build) ?? '');
+  if (!commit) return redacted.slice(0, MAX_ENTRY_SIZE) || null;
+  let others: Record<string, unknown> = {};
+  try { others = JSON.parse(redacted) as Record<string, unknown>; } catch { /* keep the commit alone */ }
+  return JSON.stringify({ ...others, sha: commit }).slice(0, MAX_ENTRY_SIZE);
+}
+
 export async function normalizeBatch(
   entries: RawLogEntry[],
   nowMs: number,

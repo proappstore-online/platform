@@ -2804,7 +2804,7 @@
       "recommended_implementation": "An `incidents/` folder or issue label; a template with the fields above; link the fix.\n\n*",
       "conforming_example": "```text\nincident-2026-09-24.md: window 09:10–09:40Z · logs: action/close_task 403 ×212 (build 3f9c2e1) · deploy run …/runs/181 · schema-status ok · QA run r_…/failed-step-3.png · users: 14 ids · fix: 8b1d0aa\n```\n\n*",
       "non_conforming_example": "```text\n\"Something broke last month, we pushed a fix\"   (no window, no logs, evidence pruned)\n```\n\n*",
-      "evidence": "Documentation: incident records; Process: their timestamps versus the retention windows.\n\n*",
+      "evidence": "Documentation: incident records; Process: their timestamps versus the retention windows.\n\n**Platform note.** The platform's own diagnostics path — capture, ingest, counters, trace correlation, source maps, owner queries and alert delivery — is checked by the synthetic conformance suite `packages/runtime-tests/test/backend/e2e-conformance.test.ts`, which runs with every CI build of the platform; its deployed counterpart is listed in `docs/deployed-acceptance-gates.md`.\n\n*",
       "remediation": "Create the template; back-fill what is still within retention.\n\n*",
       "tests": "The most recent incident record contains every field.\n\n*",
       "supporting_links": "[Monitoring runbook — triage](../monitoring-runbook.md#triage-an-app-is-failing), [ADR-008](../adr/008-error-observability.md), [PAS-OPS-010](#pas-ops-010)."

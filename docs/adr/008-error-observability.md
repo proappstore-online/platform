@@ -2,6 +2,8 @@
 
 ## Status
 
+**Accepted** (2026-10-17) — implemented and verified by the #396 conformance
+suite; see "Implementation and amendment history" below. Originally
 **Proposed** (2026-07-30). Written to unblock platform#105, #106, #107, #108 and
 proappstore-online/console#1, which together propose turning on automatic error
 capture but do not decide *where error data lives* or *what we build vs. adopt*.
@@ -273,6 +275,35 @@ dependencies:
 - **The only third party is the opt-in per-app BYO tracker (decision 5)** — a
   creator's own account, their own app's data, off by default, and no platform
   egress if nobody opts in.
+
+## Implementation and amendment history
+
+- **First slice** (#105–#108): Workers Logs, the `pas_app_errors` dataset, the
+  bounded `app_logs` detail tier, server-side operation logging and the #107
+  owner alerts (decisions 1–6).
+- **#389** — the alert evaluator runs on every five-minute tick over completed
+  intervals only, with bounded catch-up (decision 6's evaluator).
+- **#390** — W3C trace context and the versioned diagnostic envelope join client
+  and server rows (decision 3).
+- **#391** — budget-independent incident counters (`app_metric_buckets`),
+  request denominators and telemetry health; alerts count from the counters
+  (decisions 2 and 6).
+- **#392** — SDK exception, breadcrumb and transport diagnostics (decision 2's
+  client tier).
+- **#393** — *amendment*: decision 7, browser source maps as private release
+  artifacts; supersedes the "unlisted R2 prefix" wording under Consequences.
+- **#394** — host, API and data-worker failures joined to app incident traces;
+  Workers traces head-sampled at 10% (decision 1).
+- **#395** — owner reliability objectives, burn-rate incidents and retried,
+  owner-visible `app.alert` delivery (extends decision 6; still console-first,
+  webhook only when the owner registers one).
+- **#396** — the end-to-end conformance suite
+  (`packages/runtime-tests/test/backend/e2e-conformance.test.ts`); it found and
+  fixed ingest redacting a full commit SHA out of `build`, which had kept #393
+  from matching real crashes to their release.
+
+Live and deployed acceptance for these is tracked on each issue and in
+`docs/deployed-acceptance-gates.md`.
 
 ## Alternatives Considered
 

@@ -558,6 +558,8 @@ incident-2026-09-24.md: window 09:10–09:40Z · logs: action/close_task 403 ×2
 
 **Evidence.** Documentation: incident records; Process: their timestamps versus the retention windows.
 
+**Platform note.** The platform's own diagnostics path — capture, ingest, counters, trace correlation, source maps, owner queries and alert delivery — is checked by the synthetic conformance suite `packages/runtime-tests/test/backend/e2e-conformance.test.ts`, which runs with every CI build of the platform; its deployed counterpart is listed in `docs/deployed-acceptance-gates.md`.
+
 **Remediation.** Create the template; back-fill what is still within retention.
 
 **Tests.** The most recent incident record contains every field.
