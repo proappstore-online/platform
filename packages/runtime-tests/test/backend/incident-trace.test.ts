@@ -49,7 +49,11 @@ function failingDataWorker(fault: string | null, status = 500) {
   return seen;
 }
 
+const counters = async () =>
+  Object.fromEntries(((await env.DB.prepare('SELECT signal, SUM(n) AS n FROM app_metric_buckets WHERE app_id = ? GROUP BY signal').bind(APP).all<{ signal: string; n: number }>()).results ?? []).map((r) => [r.signal, r.n]));
+
 beforeEach(async () => {
+  await env.DB.prepare('DELETE FROM app_metric_buckets').run();
   mockNetwork();
   resetBurstState();
   await resetTables();
@@ -215,5 +219,29 @@ describe('data-worker failures in incident traces (#394)', () => {
     expect(inc.records).toHaveLength(200);
     expect(inc.truncated).toBe(true);
     expect(inc.hops).toEqual({ browser: 200 });
+  });
+
+  // #394 x #391: trusted data-worker failures feed the incident counters, by fault, before any detail budget.
+  it('host-reported data-plane failures count by fault in the #391 counters; a forged report counts nothing', async () => {
+    const report = (fault: string, status = 500, hostApi = true) =>
+      (hostApi ? viaHostApi : (u: string, i: RequestInit) => SELF.fetch(u, i))(`${BASE}/v1/internal/data-plane-failures`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-PAS-App': APP, 'X-PAS-Data-Plane-Failure': '1', traceparent: TRACEPARENT },
+        body: JSON.stringify({ status, fault, endpoint: 'query' }),
+      });
+    expect((await report('platform')).status).toBe(204);
+    expect((await report('tenant')).status).toBe(204);
+    expect((await report('client')).status).toBe(204);
+    expect((await report('', 522)).status).toBe(204); // an edge 522 carries no verdict: unknown, a platform 5xx
+    expect((await report('platform', 500, false)).status).toBe(403);
+    expect(await counters()).toEqual({ server_5xx: 2, tenant_fault: 1, client_fault: 1 });
+  });
+
+  it('a data-worker 5xx on an action counts as an action failure, by fault', async () => {
+    const token = await session('gh:1');
+    failingDataWorker('tenant');
+    await SELF.fetch(`${BASE}/v1/apps/${APP}/actions/list_cases`, json('POST', { params: {} }, token));
+    const c = await eventually(counters, (v) => v.action_failure === 1);
+    expect(c).toEqual({ action_failure: 1, tenant_fault: 1 });
   });
 });
