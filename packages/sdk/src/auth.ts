@@ -1,6 +1,6 @@
 import type { Unsubscribe, User } from './base-types.js';
 import type { AuthTelemetryEvent } from './logs.js';
-import { isAllowedTracePropagationTarget, makeTraceparent, type RequestContext } from './trace.js';
+import { createRequestContext, isAllowedTracePropagationTarget, makeTraceparent, type RequestContext } from './trace.js';
 
 export type AuthProvider = 'github' | 'google' | 'email';
 export type AuthMode = 'legacy-bearer' | 'platform-cookie';
@@ -611,17 +611,22 @@ export class Auth {
 
   /**
    * Authenticated platform request. In cookie mode this goes through same-origin PAS mediation.
-   * With a `context` (#390) the request carries its W3C `traceparent`, but only to the
-   * platform's own endpoints ({@link isAllowedTracePropagationTarget}).
+   * Every request carries a W3C `traceparent` (#390), but only to the platform's own
+   * endpoints ({@link isAllowedTracePropagationTarget}). With a `context` it is that
+   * context's trace; without one a fresh trace is minted per request, sent only to
+   * same-origin `/.pas/` mediation and the PAS API — not cross-origin to the data
+   * worker, whose CORS admits `traceparent` only once redeployed after 336d56e.
    */
   async authenticatedFetch(input: string | URL, init: RequestInit = {}, context?: RequestContext): Promise<Response> {
     if (!this.session) throw new Error('Not signed in.');
     const target = this.authMode === 'platform-cookie' ? this.platformMediatedUrl(input) : input;
     const targetString = target.toString();
     const headers = new Headers(init.headers);
-    if (context && isAllowedTracePropagationTarget(targetString, this.apiBase, this.dataOrigin())) {
-      headers.set('traceparent', makeTraceparent(context.traceId, context.spanId));
-    }
+    const trace = context ?? createRequestContext('platform');
+    const allowed = context
+      ? isAllowedTracePropagationTarget(targetString, this.apiBase, this.dataOrigin())
+      : isAllowedTracePropagationTarget(targetString, this.apiBase, this.apiBase);
+    if (allowed) headers.set('traceparent', makeTraceparent(trace.traceId, trace.spanId));
     if (this.authMode === 'legacy-bearer') {
       const token = this.session.token;
       if (!token) throw new Error('Not signed in.');

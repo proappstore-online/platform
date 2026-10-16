@@ -509,8 +509,14 @@ describe('Auth.init', () => {
     }
     await cookie.authenticatedFetch('https://hooks.example/x', {}, ctx);
     expect(sentTraceparent()).toBeNull();
-    // No context, no header: callers that predate #390 are unchanged.
+    // No context: a fresh trace per request, to the API and same-origin mediation only (#390).
     await cookie.authenticatedFetch('https://api.proappstore.online/v1/apps/interns/roles/me');
+    const minted = sentTraceparent();
+    expect(minted).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+    expect(minted).not.toBe(expected);
+    await cookie.authenticatedFetch('https://api.proappstore.online/v1/apps/interns/roles/me');
+    expect(sentTraceparent()).not.toBe(minted);
+    await cookie.authenticatedFetch('https://hooks.example/x');
     expect(sentTraceparent()).toBeNull();
 
     const storage = new Map([['pas:session', JSON.stringify({ token: 'tok', user: { id: 'gh:1', login: 'u' } })]]);
@@ -522,6 +528,12 @@ describe('Auth.init', () => {
     await legacy.authenticatedFetch('https://api.proappstore.online/v1/apps/interns/actions/x', {}, ctx);
     expect(sentTraceparent()).toBe(expected);
     await legacy.authenticatedFetch('https://data-other.proappstore.online/query', {}, ctx);
+    expect(sentTraceparent()).toBeNull();
+    // A minted trace reaches the API cross-origin, but not the data worker's own origin:
+    // data workers admit `traceparent` in CORS only once redeployed after 336d56e.
+    await legacy.authenticatedFetch('https://api.proappstore.online/v1/apps/interns/kv/x');
+    expect(sentTraceparent()).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+    await legacy.authenticatedFetch('https://data-interns.proappstore.online/query');
     expect(sentTraceparent()).toBeNull();
   });
 

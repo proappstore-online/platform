@@ -710,6 +710,14 @@ So one id finds both sides: `GET /v1/apps/:appId/logs?trace_id=<traceId>`.
 The two rows are told apart by their spans. The client row has the SDK's span,
 and the server row has its own span, with the client's as `parentSpanId`.
 
+Every other platform call the SDK makes (`app.db`, `app.kv`, storage, rooms and
+the rest) also sends a fresh `traceparent`, so its server-side failure rows and
+the host's data-plane report share one trace with the request. These calls send
+it only to same-origin `/.pas/` mediation and the PAS API; a legacy-bearer call
+straight to the data worker's own origin carries none until data workers are
+redeployed with `traceparent` in their CORS allowlist. A failing server answer
+names its trace in `X-PAS-Trace-Id` (and `traceId` in the API's error body).
+
 Each row's `context` is a small, versioned envelope. Only these fields are
 accepted, and each is validated. Anything else is dropped at ingest:
 
