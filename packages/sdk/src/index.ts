@@ -142,6 +142,15 @@ export class ProAppStore {
     // Constructed before Rooms and Actions: both report to the logger (#106, #392).
     this.logs = new Logs(opts.appId, apiBase, this.auth, opts.monitoring ?? {});
     this.auth.setTelemetryReporter(this.logs);
+    // #392: platform calls that never got a response (offline, DNS, CORS, timeout)
+    // are seen by no server. A cancellation the caller asked for is a breadcrumb;
+    // anything else one error event, with no trace (nothing correlates to it), so
+    // repeats fold into one entry instead of flooding the queue.
+    const logs = this.logs;
+    this.auth.observeTransportFailures(({ kind, operation, durationMs, error }) => {
+      if (kind === 'cancelled') logs.addBreadcrumb('network', `${operation} cancelled`, { durationMs });
+      else logs.captureException(error, { operation, result: 'error', errorCode: kind === 'timeout' ? 'timeout' : 'network_error', durationMs, category: 'network' });
+    });
     this.rooms = new Rooms(opts.appId, apiBase, this.auth, this.logs);
     this.roles = new Roles(opts.appId, apiBase, this.auth);
     this.proxy = new ApiProxy(opts.appId, apiBase, this.auth);

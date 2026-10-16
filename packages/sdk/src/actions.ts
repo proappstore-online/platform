@@ -1,4 +1,4 @@
-import { createRequestContext, makeTraceparent, type CaptureContext, type RequestContext } from './trace.js';
+import { classifyTransportError, createRequestContext, makeTraceparent, type CaptureContext, type RequestContext } from './trace.js';
 
 interface AuthLike {
   handleUnauthorized(): void;
@@ -16,21 +16,6 @@ interface LoggerLike {
 export interface ActionCallOptions {
   /** Cancels the call. A cancellation you asked for is recorded as a breadcrumb, not an error; `AbortSignal.timeout(ms)` counts as a timeout. */
   signal?: AbortSignal;
-}
-
-/**
- * Why a call never got a response (#392): `cancelled` (expected — the caller
- * aborted), `timeout`, or `network` (the browser could not reach the API, so no
- * server ever logs it). Null for anything else, e.g. signed out before sending.
- */
-function classifyTransportError(error: unknown, signal: AbortSignal | undefined): 'cancelled' | 'timeout' | 'network' | null {
-  const name = (error as { name?: unknown } | null)?.name;
-  if (name === 'TimeoutError') return 'timeout';
-  if (name === 'AbortError') {
-    return (signal?.reason as { name?: unknown } | undefined)?.name === 'TimeoutError' ? 'timeout' : 'cancelled';
-  }
-  if (error instanceof TypeError) return 'network';
-  return null;
 }
 
 const ERROR_CODE_RE = /^[A-Za-z0-9._:-]{1,64}$/;

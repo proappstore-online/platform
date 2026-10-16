@@ -413,7 +413,9 @@ content, tokens or user data in a breadcrumb.
 
 A call to `app.actions.call()` that gets no response is recorded client-side: a
 network failure or a timeout is one error entry with the call's trace (no server
-saw it). A cancellation you asked for (`{ signal }`) is only a breadcrumb. Rooms
+saw it). A cancellation you asked for (`{ signal }`) is only a breadcrumb. Every
+other platform call (`app.db`, `app.kv`, storage, …) is recorded the same way,
+as `operation: 'platform.<family>'` with no trace, so repeats fold into one entry. Rooms
 record disconnects and reconnects as breadcrumbs, and a failed recovery as one
 error entry. See `docs/sdk-overview.md` → "Exceptions, breadcrumbs and delivery
 health".

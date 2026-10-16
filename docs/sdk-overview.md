@@ -798,6 +798,17 @@ anything but the per-install `clientId`.
   Both error entries carry the call's trace. No server saw these requests, so
   this client entry is the only record of them. The entry is sent later, after
   the connection returns. The caller always gets the original error, unchanged.
+
+- **Every other platform call that gets no response.** `app.db`, `app.kv`,
+  storage, rooms' HTTP calls, roles and the rest are recorded the same way:
+  a cancellation you asked for is a `network` breadcrumb; a timeout or network
+  failure is one `network` error entry with `operation: 'platform.<family>'`
+  (`platform.db` for the data plane — never the path, ids or query) and
+  `errorCode` `timeout` / `network_error`. These carry no trace (nothing
+  correlates to a request no server saw), so a repeating fault — every call
+  failing while offline — folds into one entry's `repeats` instead of filling
+  the queue. An HTTP error response is not a transport failure; the server
+  records those. The caller always gets the original error.
 - **Rooms.**
   - Disconnects, reconnect attempts and recovery are breadcrumbs (category
     `room`).

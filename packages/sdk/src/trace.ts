@@ -96,3 +96,37 @@ export interface CaptureContext {
   errorCode?: string;
   durationMs?: number;
 }
+
+/**
+ * Why a call never got a response (#392): `cancelled` (expected — the caller
+ * aborted), `timeout`, or `network` (the browser could not reach the API, so no
+ * server ever logs it). Null for anything else, e.g. signed out before sending.
+ */
+export function classifyTransportError(error: unknown, signal: AbortSignal | null | undefined): 'cancelled' | 'timeout' | 'network' | null {
+  const name = (error as { name?: unknown } | null)?.name;
+  if (name === 'TimeoutError') return 'timeout';
+  if (name === 'AbortError') {
+    return (signal?.reason as { name?: unknown } | undefined)?.name === 'TimeoutError' ? 'timeout' : 'cancelled';
+  }
+  if (error instanceof TypeError) return 'network';
+  return null;
+}
+
+/**
+ * A platform call's operation for diagnostics (#392): `platform.db` for the data
+ * plane, `platform.<family>` for `/v1/apps/<id>/<family>/…`, else `platform` —
+ * a bounded label, never the path, ids or query of the request.
+ */
+export function platformOperation(url: string): string {
+  if (url.startsWith('/.pas/data') || /^https?:\/\/data-[a-z0-9-]+\./.test(url)) return 'platform.db';
+  const family = /\/v1\/apps\/[^/?#]+\/([a-z][a-z-]{0,31})(?:[/?#]|$)/.exec(url)?.[1];
+  return family ? `platform.${family}` : 'platform';
+}
+
+/** What `Auth` reports when a platform call it made never got a response (#392). */
+export interface TransportFailure {
+  kind: 'cancelled' | 'timeout' | 'network';
+  operation: string;
+  durationMs: number;
+  error: unknown;
+}

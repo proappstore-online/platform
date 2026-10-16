@@ -1,6 +1,6 @@
 import type { Unsubscribe, User } from './base-types.js';
 import type { AuthTelemetryEvent } from './logs.js';
-import { createRequestContext, isAllowedTracePropagationTarget, makeTraceparent, type RequestContext } from './trace.js';
+import { classifyTransportError, createRequestContext, isAllowedTracePropagationTarget, makeTraceparent, platformOperation, type RequestContext, type TransportFailure } from './trace.js';
 
 export type AuthProvider = 'github' | 'google' | 'email';
 export type AuthMode = 'legacy-bearer' | 'platform-cookie';
@@ -96,6 +96,7 @@ export interface RegisterOptions {
 
 export class Auth {
   private session: Session | null = null;
+  private transportObserver: ((failure: TransportFailure) => void) | null = null;
   private listeners = new Set<(user: User | null) => void>();
   private statusListeners = new Set<(status: AuthStatus, user: User | null) => void>();
   private lastAuthError: string | null = null;
@@ -610,6 +611,23 @@ export class Auth {
   }
 
   /**
+   * #392: who hears about platform calls that never got a response. `initPro`
+   * wires it to `app.logs`; one observer, replaced on a second registration.
+   */
+  observeTransportFailures(observer: ((failure: TransportFailure) => void) | null): void {
+    this.transportObserver = observer;
+  }
+
+  private reportTransportFailure(error: unknown, target: string, signal: AbortSignal | null | undefined, startedAt: number): void {
+    try {
+      const kind = classifyTransportError(error, signal);
+      if (kind) this.transportObserver?.({ kind, operation: platformOperation(target), durationMs: Date.now() - startedAt, error });
+    } catch {
+      // Diagnostics never change the call's outcome.
+    }
+  }
+
+  /**
    * Authenticated platform request. In cookie mode this goes through same-origin PAS mediation.
    * Every request carries a W3C `traceparent` (#390), but only to the platform's own
    * endpoints ({@link isAllowedTracePropagationTarget}). With a `context` it is that
@@ -637,7 +655,16 @@ export class Auth {
       headers,
     };
     if (this.authMode === 'platform-cookie') requestInit.credentials = 'same-origin';
-    const response = await fetch(target, requestInit);
+    let response: Response;
+    try {
+      response = await fetch(target, requestInit);
+    } catch (error) {
+      // #392: a call that never got a response is invisible to every server, so it
+      // is reported here — unless the caller passed a context and reports its own
+      // (actions). The caller always gets the original error.
+      if (!context) this.reportTransportFailure(error, targetString, init.signal, trace.startedAt);
+      throw error;
+    }
     if (response.status === 401) {
       if (this.authMode === 'platform-cookie') {
         // Only the host's API plane is the session authority. This preserves
