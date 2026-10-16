@@ -99,9 +99,10 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
     );
 
   // data-* → proxy to per-app D1 Workers (dynamically created, no static
-  // binding). This is the BROWSER path only — cookie mediation lands here.
-  // Backend-internal calls (actions, /validate, provisioning) never come
-  // through this hop; they use DATA_WORKER_HOST directly (#153).
+  // binding). Only DIRECT callers of data-<app>.proappstore.online land here
+  // (legacy-bearer SDK calls). Cookie mediation (/.pas/data/*) goes straight to
+  // DATA_WORKER_HOST since #403, and backend-internal calls (actions,
+  // /validate, provisioning) always have (#153).
   if (slug?.startsWith("data-")) {
     if (!env.DATA_WORKER_HOST) {
       return new Response("DATA_WORKER_HOST is not configured", { status: 503 });

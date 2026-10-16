@@ -4,8 +4,9 @@
  * Two paths exist to a data worker, and they are NOT interchangeable:
  *
  *  - Browser traffic goes through cookie mediation: the app origin's
- *    `/.pas/data/*` → host worker → `data-<app>.proappstore.online` → (host
- *    worker again, wildcard route) → the worker on its workers.dev host.
+ *    `/.pas/data/*` → host worker → the worker on its workers.dev host (since
+ *    #403; before, it detoured through `data-<app>.proappstore.online` and
+ *    back into the host worker).
  *  - Backend-internal traffic (the action executor, registration-time schema
  *    validation, provisioning diagnostics) goes STRAIGHT to the worker's
  *    workers.dev host, authenticated with `X-Internal-Token`. Routing it via

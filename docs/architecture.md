@@ -231,9 +231,11 @@ interchangeable (#153):
 
 - **Browser path — cookie mediation.** The app's page calls its own origin
   (`/.pas/data/*`); the host worker swaps the HttpOnly session cookie for a
-  bearer and forwards to `data-<app>.proappstore.online`, which the wildcard
-  route brings back to the host worker, which proxies to
-  `https://pas-data-<app>.<DATA_WORKER_HOST>`. Every hop is a platform Worker.
+  bearer and forwards straight to `https://pas-data-<app>.<DATA_WORKER_HOST>`.
+  Until #403 (`9a43260`) it went to `data-<app>.proappstore.online` instead —
+  a subrequest to the host's own zone that the wildcard route brought back to
+  the host — the hop that answered a healthy worker with HTTP 522 in #153.
+  `data-<app>.proappstore.online` still serves direct (legacy-bearer) callers.
 - **Backend path — direct and internal.** The action executor, registration-time
   schema validation (`/validate`) and provisioning call
   `https://pas-data-<app>.<DATA_WORKER_HOST>` straight away, authenticated with

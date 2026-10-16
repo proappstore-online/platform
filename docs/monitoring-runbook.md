@@ -74,6 +74,29 @@ or authentication headers.
   (migrations apply before registration).
 - Compliance/provision failure on publish → check the app's Deploy-to-R2 run.
 
+## Troubleshooting: a data-plane 5xx such as HTTP 522 (#403)
+
+A browser `app.db` call goes app origin `/.pas/data/*` → host → the data worker
+on `pas-data-<app>.<DATA_WORKER_HOST>`. Since #403 (`9a43260`) there is no
+intermediate `data-<app>.proappstore.online` hop; that same-zone detour is the
+one that answered a healthy chess-academy worker with 522 in #153. A 522 is
+Cloudflare failing to connect upstream; the status alone does not name the hop.
+
+1. Get the failing response's `X-PAS-Trace-Id` (set on every data-plane 5xx
+   since #394), or its time, page hostname and `cf-ray`.
+2. Owner: `GET /v1/apps/:appId/incidents/:traceId`. The `data-worker` hop row
+   carries `status`, `fault` (an edge 522 has no data-worker verdict, so
+   `unknown`), the endpoint name and `cfRay`.
+3. Operator: the host's `[pas-data-plane-failure]` Workers Logs line has the
+   same trace; `wrangler tail pas-data-<app>` shows whether the request ever
+   reached the worker (an `Unhandled error` line with that `traceId` means it
+   did, so the fault was inside the operation, not the connection). Only a
+   data worker redeployed since #394 logs the trace id; older ones log the
+   error without it, so match by time.
+4. `/health` on the worker returning 200 is not evidence the failing request
+   would succeed. Never clear sessions or force a migration to "fix" it: a
+   data-plane 401/5xx never signs the user out (#65/#66/#353).
+
 ## Troubleshooting: private-app e2e results not appearing
 
 After a green deploy, agent-teams harvests `kb.proappstore.online/<app>/.e2e/summary.json`
