@@ -1,17 +1,17 @@
 /**
- * Marketing-site deploys (#399): upload, activation and rollback of the static
- * site the storefront's Astro build produces for `about-<appId>.proappstore.online`.
+ * Marketing-site deploys (#399, #408): upload, activation and rollback of the
+ * static site an app's own deploy builds from its `marketing/` folder, served at
+ * `about-<appId>.proappstore.online`.
  *
- *   PUT  /v1/apps/:appId/marketing/revisions/:revision   storefront workflow (OIDC); multipart artifact
- *   POST /v1/apps/:appId/marketing/activate              storefront workflow (OIDC); { revision }
- *   POST /v1/apps/:appId/marketing/rollback              storefront workflow (OIDC) or a platform admin; { revision? }
+ *   PUT  /v1/apps/:appId/marketing/revisions/:revision   the app's deploy (OIDC); multipart artifact
+ *   POST /v1/apps/:appId/marketing/activate              the app's deploy (OIDC); { revision }
+ *   POST /v1/apps/:appId/marketing/rollback              the app's deploy (OIDC) or a platform admin; { revision? }
  *   GET  /v1/apps/:appId/marketing/deployments           the app owner or a platform admin: receipts
  *
- * Trust. Only one workflow may write: `.github/workflows/marketing-deploy.yml`
- * in `proappstore-online/proappstore` (pinned by repository, repository and
- * owner IDs) on main, with a token minted for a marketing-only audience. That
- * token is useless at every app-deploy route, and an app repository's token is
- * useless here. No standing secret is involved.
+ * Trust (#408). The same keyless rule as every other deploy step
+ * (lib/app-deploy-oidc.ts): a GitHub Actions OIDC token from the app's own
+ * repository on main. A repository can only ever write its own app's site, and
+ * an upload's revision is the commit that run is building. No standing secret.
  *
  * Upload writes `marketing/<appId>/revisions/<revision>/` in pas-apps only after
  * every file matches the manifest's size and SHA-256, and never activates. A
@@ -24,7 +24,7 @@
 
 import { Hono, type Context } from 'hono';
 import { HttpError, requireAdmin, requireAppOwner } from '../lib/auth.js';
-import { verifyGithubOidc, type OidcClaims } from '../lib/github-oidc.js';
+import { requireAppDeployOidc } from '../lib/app-deploy-oidc.js';
 import {
   MANIFEST_FILE,
   MARKETING_REVISION_RE,
@@ -37,12 +37,6 @@ import {
 import { privateNoStore } from '../lib/route-wrap.js';
 import type { Env } from '../types.js';
 
-export const STOREFRONT_REPOSITORY = 'proappstore-online/proappstore';
-export const STOREFRONT_REPOSITORY_ID = '1228358346';
-export const STOREFRONT_OWNER_ID = '281497052';
-export const MARKETING_WORKFLOW_REF = `${STOREFRONT_REPOSITORY}/.github/workflows/marketing-deploy.yml@refs/heads/main`;
-/** Distinct from the app-deploy audience, so neither token works at the other's routes. */
-export const MARKETING_AUDIENCE = 'https://api.proappstore.online/marketing';
 const APP_ID_RE = /^[a-z][a-z0-9-]*$/;
 
 export const marketingDeployRoutes = new Hono<{ Bindings: Env }>();
@@ -61,25 +55,6 @@ function claimedIssuer(token: string): unknown {
   } catch {
     return undefined;
   }
-}
-
-/** The verified claims of the storefront's marketing workflow, or an HttpError (401 token, 403 claims). */
-export async function requireMarketingWorkflow(c: Context<{ Bindings: Env }>): Promise<OidcClaims> {
-  const token = bearer(c);
-  if (!token) throw new HttpError('missing OIDC token', 401);
-  let claims: OidcClaims;
-  try {
-    claims = await verifyGithubOidc(token, { audience: MARKETING_AUDIENCE });
-  } catch (e) {
-    throw new HttpError(`OIDC verification failed: ${(e as Error).message}`, 401);
-  }
-  if (claims.repository !== STOREFRONT_REPOSITORY || claims.repository_id !== STOREFRONT_REPOSITORY_ID
-    || claims.repository_owner_id !== STOREFRONT_OWNER_ID) {
-    throw new HttpError(`repository ${claims.repository} may not deploy marketing sites`, 403);
-  }
-  if (claims.ref !== 'refs/heads/main') throw new HttpError('marketing deploys must run from refs/heads/main', 403);
-  if (claims.workflow_ref !== MARKETING_WORKFLOW_REF) throw new HttpError('this workflow may not deploy marketing sites', 403);
-  return claims;
 }
 
 function appIdParam(c: Context<{ Bindings: Env }>): string {
@@ -150,7 +125,9 @@ async function switchActive(db: D1Database, appId: string, revision: string, pre
 marketingDeployRoutes.put('/apps/:appId/marketing/revisions/:revision', async (c) => {
   const appId = appIdParam(c);
   const revision = revisionOf(c.req.param('revision'));
-  const claims = await requireMarketingWorkflow(c);
+  const claims = await requireAppDeployOidc(c, appId);
+  // The revision is the commit this run builds: a repository cannot plant one under another name.
+  if (claims.sha?.toLowerCase() !== revision) throw new HttpError('revision must be the commit this deploy is running for', 403);
   const store = bucket(c.env);
 
   if (Number(c.req.header('content-length') ?? 0) > MAX_ARTIFACT_BYTES + 1024 * 1024) throw new HttpError('artifact too large', 413);
@@ -224,7 +201,7 @@ marketingDeployRoutes.put('/apps/:appId/marketing/revisions/:revision', async (c
 
 marketingDeployRoutes.post('/apps/:appId/marketing/activate', async (c) => {
   const appId = appIdParam(c);
-  await requireMarketingWorkflow(c);
+  await requireAppDeployOidc(c, appId);
   const body = await c.req.json<{ revision?: unknown }>().catch(() => null);
   const revision = revisionOf(body?.revision);
 
@@ -244,7 +221,7 @@ marketingDeployRoutes.post('/apps/:appId/marketing/activate', async (c) => {
 marketingDeployRoutes.post('/apps/:appId/marketing/rollback', async (c) => {
   const appId = appIdParam(c);
   const token = bearer(c);
-  if (token && claimedIssuer(token) === 'https://token.actions.githubusercontent.com') await requireMarketingWorkflow(c);
+  if (token && claimedIssuer(token) === 'https://token.actions.githubusercontent.com') await requireAppDeployOidc(c, appId);
   else await requireAdmin(c);
   const body = await c.req.json<{ revision?: unknown }>().catch(() => null);
 

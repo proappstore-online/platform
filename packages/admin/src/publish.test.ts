@@ -274,6 +274,28 @@ describe("canonical deploy workflow — single source of truth", () => {
     expect(golden).toContain("hashFiles('worker/package.json') != '' && github.event.repository.name != 'template-app'");
   });
 
+  // #408: the app's own deploy builds marketing/ and publishes it to about-<app> through the
+  // platform's verified upload + activation, after the app itself is live, never blocking it.
+  it("publishes the marketing site after the app is live: keyless, by commit, verified, rolled back on failure", () => {
+    const yaml = deployWorkflowYaml(ENV);
+    const at = (name: string) => yaml.indexOf(`- name: ${name}`);
+    const name = "Publish marketing site (marketing/ -> about-<app>, keyless)";
+    expect(at(name)).toBeGreaterThan(at("Upload to R2"));
+    expect(at(name)).toBeLessThan(at("Trigger post-deploy QA flows (keyless — GitHub OIDC)"));
+    const step = yaml.slice(at(name), at("Trigger post-deploy QA flows (keyless — GitHub OIDC)"));
+    expect(step).toContain("if: hashFiles('marketing/package.json') != ''");
+    expect(step).toContain("continue-on-error: true");
+    expect(step).toContain("pnpm --dir marketing build");
+    expect(step).toContain("REVISION: ${{ github.sha }}");
+    expect(step).toContain("encodeURIComponent('https://api.proappstore.online')"); // the app-deploy audience
+    for (const route of ["'revisions/' + REVISION", "'activate'", "'rollback'"]) expect(step).toContain(route);
+    expect(step).toContain("x-pas-marketing-revision");
+    expect(step).not.toMatch(/secrets\./);
+    // Rollback only after a failed live check, and only to a revision that was actually live.
+    expect(step.indexOf("'rollback'")).toBeGreaterThan(step.indexOf("live check failed"));
+    expect(step).toContain("if (activation.previous && !activation.unchanged)");
+  });
+
   it("skips schema/action registration only in the canonical template source repo", () => {
     const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
     expect(golden).toContain("hashFiles('migrations.json') != '' && github.event.repository.name != 'template-app'");

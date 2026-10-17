@@ -15,10 +15,16 @@ export const MAX_ARTIFACT_FILES = 200;
 export const MAX_ARTIFACT_FILE_BYTES = 10 * 1024 * 1024;
 export const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 256 * 1024;
-const REQUIRED = ['/index.html', '/robots.txt', '/sitemap.xml'];
+/** The one file a site must have. robots.txt and sitemap.xml are optional (#408). */
+const REQUIRED = ['/index.html'];
 
-/** The content type the storefront build records for each extension it emits. */
-const TYPES: Record<string, string> = {
+/**
+ * The content type recorded for each extension a marketing build may contain.
+ * The canonical deploy step writes the manifest with exactly this map
+ * (packages/admin/src/publish.ts deployWorkflowYaml); the host serves the same
+ * types (host.ts contentType).
+ */
+export const MARKETING_CONTENT_TYPES: Record<string, string> = {
   html: 'text/html; charset=utf-8',
   css: 'text/css; charset=utf-8',
   xml: 'application/xml; charset=utf-8',
@@ -27,7 +33,11 @@ const TYPES: Record<string, string> = {
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
   webp: 'image/webp',
+  ico: 'image/x-icon',
+  svg: 'image/svg+xml',
+  woff2: 'font/woff2',
 };
+const TYPES = MARKETING_CONTENT_TYPES;
 
 export interface ArtifactFile {
   path: string;
@@ -52,15 +62,19 @@ export function marketingPrefix(appId: string, revision: string): string {
 /**
  * Whether the host would serve this path — the same rule as host
  * marketing-site.ts `assetPath`, so nothing unservable (a source map, a
- * dotfile, the manifest itself) is ever uploaded. HTML only at /index.html.
+ * dotfile, the manifest itself) is ever uploaded. Every segment is a plain
+ * name; HTML only as an `index.html`, so `/privacy/` resolves to
+ * `/privacy/index.html` (Astro's directory output).
  */
 export function servablePath(path: string): boolean {
-  if (path.length > 200 || path.includes('//')) return false;
-  if (!['/index.html', '/robots.txt', '/sitemap.xml'].includes(path)
-    && !/^\/(?:_astro|assets)\/[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(path)) return false;
-  if (path.split('/').some((part) => part === '.' || part === '..' || part.startsWith('.'))) return false;
-  if (/\.map$/i.test(path)) return false;
-  return !path.endsWith('.html') || path === '/index.html';
+  if (path.length > 200 || !path.startsWith('/')) return false;
+  const parts = path.slice(1).split('/');
+  if (!parts.every((part) => /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(part))) return false;
+  const name = parts[parts.length - 1]!;
+  if (/\.map$/i.test(name) || path === `/${MANIFEST_FILE}`) return false;
+  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
+  if (!TYPES[ext]) return false;
+  return ext !== 'html' || name === 'index.html';
 }
 
 /** The validated manifest, or the first problem with it. */

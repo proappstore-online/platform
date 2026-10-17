@@ -1,7 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { MANIFEST_FILE, parseArtifactManifest, servablePath, sha256Hex, verifyStoredArtifact } from './marketing-artifact.js';
+import { MANIFEST_FILE, MARKETING_CONTENT_TYPES, parseArtifactManifest, servablePath, sha256Hex, verifyStoredArtifact } from './marketing-artifact.js';
 
-// #399: the storefront build's artifact manifest, and re-verification of a stored artifact.
+// #399/#408: the marketing build's artifact manifest, and re-verification of a stored artifact.
 
 const enc = (s: string) => new TextEncoder().encode(s);
 async function manifestFor(files: Record<string, string>, over: Record<string, unknown> = {}) {
@@ -12,11 +13,19 @@ async function manifestFor(files: Record<string, string>, over: Record<string, u
 }
 const SITE = { '/index.html': '<h1>x</h1>', '/robots.txt': 'User-agent: *', '/sitemap.xml': '<urlset/>', '/_astro/site.css': 'h1{}' };
 
-describe('servablePath (#399)', () => {
-  it('accepts exactly what the marketing host serves', () => {
-    for (const ok of ['/index.html', '/robots.txt', '/sitemap.xml', '/_astro/a.b1c.css', '/assets/hero.webp', '/assets/img/a.png']) expect(servablePath(ok), ok).toBe(true);
-    for (const bad of ['/', '/other.html', '/assets/page.html', '/assets/a.js.map', '/assets/../x.png', '/assets/./x.png', '/assets/.env', '/assets//x.png',
-      '/artifact-manifest.json', 'index.html', '/assets/x%2e.png', `/assets/${'a'.repeat(200)}.png`]) expect(servablePath(bad), bad).toBe(false);
+describe('servablePath (#399, #408)', () => {
+  it('accepts exactly what the marketing host serves: directory pages, root static files, _astro and assets', () => {
+    for (const ok of ['/index.html', '/robots.txt', '/sitemap.xml', '/_astro/a.b1c.css', '/assets/hero.webp', '/assets/img/a.png',
+      '/privacy/index.html', '/legal/terms/index.html', '/icon-192.png', '/favicon.ico', '/logo.svg', '/fonts/inter.woff2']) expect(servablePath(ok), ok).toBe(true);
+    for (const bad of ['/', '/other.html', '/assets/page.html', '/privacy.html', '/assets/a.js.map', '/assets/../x.png', '/assets/./x.png', '/assets/.env', '/assets//x.png',
+      '/.well-known/x.txt', '/artifact-manifest.json', 'index.html', '/assets/x%2e.png', '/app.js', '/noext', `/assets/${'a'.repeat(200)}.png`]) expect(servablePath(bad), bad).toBe(false);
+  });
+
+  it("the canonical deploy step records content types with exactly the platform's map", () => {
+    const golden = readFileSync(new URL('../../../admin/src/__fixtures__/canonical-deploy.yml', import.meta.url), 'utf8');
+    const literal = /const TYPES = (\{[^\n]*\});/.exec(golden)?.[1];
+    expect(literal).toBeTruthy();
+    expect(new Function(`return ${literal}`)()).toEqual(MARKETING_CONTENT_TYPES);
   });
 });
 
@@ -51,14 +60,17 @@ describe('parseArtifactManifest (#399)', () => {
     expect(parseArtifactManifest(withFile({ path: '/assets/app.js.map' }), 'shop', 'rev-1')).toMatch(/publishable/);
     expect(parseArtifactManifest(withFile({}), 'shop', 'rev-1')).toMatch(/duplicate/);
     expect(parseArtifactManifest(withFile({ path: '/assets/x.css', contentType: 'text/html; charset=utf-8' }), 'shop', 'rev-1')).toMatch(/content type/);
-    expect(parseArtifactManifest(withFile({ path: '/assets/x.js', contentType: 'application/javascript' }), 'shop', 'rev-1')).toMatch(/content type/);
+    expect(parseArtifactManifest(withFile({ path: '/assets/x.js', contentType: 'application/javascript' }), 'shop', 'rev-1')).toMatch(/publishable/); // no script in a static site
     expect(parseArtifactManifest(withFile({ path: '/assets/x.css', size: 11 * 1024 * 1024 }), 'shop', 'rev-1')).toMatch(/size/);
     expect(parseArtifactManifest(withFile({ path: '/assets/x.css', size: 1.5 }), 'shop', 'rev-1')).toMatch(/size/);
     expect(parseArtifactManifest(withFile({ path: '/assets/x.css', sha256: 'ABC' }), 'shop', 'rev-1')).toMatch(/sha256/);
     const big = Array.from({ length: 4 }, (_, i) => ({ ...base.files[3], path: `/assets/big${i}.css`, size: 9 * 1024 * 1024 }));
     expect(parseArtifactManifest(JSON.stringify({ ...base, files: [...base.files, ...big] }), 'shop', 'rev-1')).toMatch(/artifact too large/);
-    const noRobots = await manifestFor({ '/index.html': 'x', '/sitemap.xml': 'y' });
-    expect(parseArtifactManifest(JSON.stringify(noRobots), 'shop', 'rev-1')).toMatch(/robots\.txt/);
+    // #408: only index.html is required; robots.txt and sitemap.xml are optional.
+    const noIndex = await manifestFor({ '/robots.txt': 'x', '/sitemap.xml': 'y' });
+    expect(parseArtifactManifest(JSON.stringify(noIndex), 'shop', 'rev-1')).toMatch(/index\.html/);
+    const bare = parseArtifactManifest(JSON.stringify(await manifestFor({ '/index.html': 'x' })), 'shop', 'rev-1');
+    expect(typeof bare === 'object' && bare.files.map((f) => f.path)).toEqual(['/index.html']);
   });
 });
 

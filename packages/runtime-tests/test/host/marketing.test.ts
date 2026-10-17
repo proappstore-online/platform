@@ -25,6 +25,8 @@ async function artifact(id: string, revision: string, heading: string): Promise<
   await env.APPS.put(`${prefix}index.html`, `<!doctype html><h1>${heading}</h1>`);
   await env.APPS.put(`${prefix}robots.txt`, 'User-agent: *\nAllow: /\n');
   await env.APPS.put(`${prefix}assets/hero.png`, new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+  await env.APPS.put(`${prefix}privacy/index.html`, `<!doctype html><h1>${heading} privacy</h1>`);
+  await env.APPS.put(`${prefix}icon-192.png`, new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1]));
   await env.APPS.put(`${prefix}assets/app.js.map`, '{"version":3}');
   await env.APPS.put(`${prefix}artifact-manifest.json`, '{"schemaVersion":1}');
 }
@@ -71,6 +73,20 @@ describe('host: about-<app> marketing origin (#399)', () => {
     const app = await get('https://shop.proappstore.online/');
     expect(app.status).toBe(200);
     expect(app.body).toBe('<html>the runnable app</html>');
+  });
+
+  it('#408: serves directory pages and root static files from the active revision', async () => {
+    await publish('shop', 'rev-1');
+    for (const path of ['/privacy/', '/privacy']) {
+      const page = await get(`${ABOUT}${path}`);
+      expect(page.status, path).toBe(200);
+      expect(page.body, path).toContain('Shop v1 privacy');
+      expect(page.headers.get('Content-Type'), path).toBe('text/html; charset=utf-8');
+    }
+    const icon = await get(`${ABOUT}/icon-192.png`);
+    expect(icon.status).toBe(200);
+    expect(icon.headers.get('Content-Type')).toBe('image/png');
+    expect((await get(`${ABOUT}/terms/`)).status).toBe(404); // not in this revision: a real 404, no fallback
   });
 
   it('a revision switch and an unpublish take effect on the next request', async () => {

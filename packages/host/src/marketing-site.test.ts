@@ -80,6 +80,22 @@ describe("dedicated marketing hostname", () => {
     expect(get.mock.calls.every(([key]) => key.startsWith("marketing/rival/"))).toBe(true);
   });
 
+  it("#408: maps directory pages to their index.html and serves root static files, as Astro builds them", async () => {
+    const { env, ctx, get } = fixture(active);
+    for (const [path, key] of [
+      ["/privacy/", "privacy/index.html"],
+      ["/privacy", "privacy/index.html"],
+      ["/legal/terms/", "legal/terms/index.html"],
+      ["/icon-192.png", "icon-192.png"],
+      ["/favicon.ico", "favicon.ico"],
+      ["/_astro/Layout.CxYGxjFr.css", "_astro/Layout.CxYGxjFr.css"],
+    ]) {
+      const res = await worker.fetch(new Request(`https://about-chess.proappstore.online${path}`), env, ctx);
+      expect(res.status, path).toBe(200);
+      expect(get, path).toHaveBeenLastCalledWith(`marketing/chess/revisions/rev_123/${key}`);
+    }
+  });
+
   it("returns an uncached 503 when R2 is unavailable", async () => {
     const { env, ctx, get } = fixture(active);
     get.mockRejectedValueOnce(new Error("R2 unavailable"));
@@ -89,7 +105,7 @@ describe("dedicated marketing hostname", () => {
     expect(response.headers.get("Retry-After")).toBe("30");
   });
 
-  it.each(["/other", "/artifact-manifest.json", "/assets/app.js.map", "/assets/%2eenv", "/assets/..%2f..%2frival/x.png", "/_astro/.hidden.css", "/assets//x.png"])(
+  it.each(["/artifact-manifest.json", "/assets/app.js.map", "/assets/%2eenv", "/assets/..%2f..%2frival/x.png", "/_astro/.hidden.css", "/assets//x.png", "/.well-known/security.txt", "/privacy.html", "/app.js", "/sub/page.htm"])(
     "rejects unknown or private paths (%s)", async (path) => {
       const { env, ctx, get } = fixture(active);
       const response = await worker.fetch(new Request(`https://about-chess.proappstore.online${path}`), env, ctx);

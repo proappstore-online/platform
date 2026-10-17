@@ -1,6 +1,7 @@
 # App marketing websites
 
-Status: **design changed 2026-10-18** (#409, split from #398). Every app gets a
+Status: **design changed 2026-10-18** (#409, split from #398); the deploy path
+landed with #408. Every app gets a
 public marketing site at `https://about-<app-id>.proappstore.online/`, private
 apps included. The site is an ordinary static build that lives in the app's own
 repository and ships with the app's normal deploy. The platform stores no
@@ -42,9 +43,32 @@ inside their app; PAS had no common way to publish one beside the app.
 
 Astro fits the build: it prerenders static HTML, needs no SSR adapter, and its
 `dist/` output fits the shared R2/host model, so no Worker or Pages project is
-created per app. The storefront repo's `marketing/` builder (proappstore#4)
-is the reference implementation of the template and its
-`artifact-manifest.json`.
+created per app. The template is `marketing/` in `template-app` (#407): Astro
+and Tailwind pinned, copy and brand colours in `marketing/src/site.ts`, a home
+page plus Privacy Policy and Terms; `pnpm build:marketing` writes
+`marketing/dist/`.
+
+## How an app publishes (#408)
+
+The canonical deploy workflow (`packages/admin/src/publish.ts`
+`deployWorkflowYaml`, golden `packages/admin/src/__fixtures__/canonical-deploy.yml`)
+has a **Publish marketing site** step. It runs only when `marketing/package.json`
+exists, after the app itself is live in R2:
+
+1. `pnpm --dir marketing build`;
+2. hashes every file in `marketing/dist/` into an `artifact-manifest.json`
+   (content types are the platform's `MARKETING_CONTENT_TYPES`; source maps are
+   never published; any other file type fails the step);
+3. uploads it as revision `${{ github.sha }}` and activates it, with the run's
+   keyless GitHub OIDC token;
+4. checks that `about-<app>` answers GET and HEAD `/` from the new revision
+   (`X-PAS-Marketing-Revision`), and if it does not, rolls back to the revision
+   the activation replaced.
+
+The step is `continue-on-error`: a broken marketing build never blocks the app
+deploy, and because only a successful, verified activation moves the pointer,
+the previous site keeps serving. Editing the folder and pushing publishes a new
+revision; re-running a deploy for the same commit is a no-op.
 
 ## Default URL
 
@@ -69,10 +93,14 @@ of 24 and no `about-` IDs. Existing BYO app domains do not switch to marketing.
   an active revision it serves `marketing/<id>/revisions/<revision>/` from the
   `pas-apps` bucket; without one, 404. A missing table is a 404, any other D1
   error a 503, an R2 failure an uncached 503.
-- Paths: `/`, `/index.html`, `/robots.txt`, `/sitemap.xml`, `/_astro/*` and
-  `/assets/*`. Everything else — unknown paths, dotfiles, `..`, source maps,
-  the artifact manifest — is a real 404, never the app's SPA fallback. R2 keys
-  are built from the hostname's own app id only.
+- Paths map as Astro builds them: `/` and a directory path (`/privacy/` or
+  `/privacy`) are that directory's `index.html`; other files are served as
+  named (`/icon-192.png`, `/_astro/*.css`, `/assets/*`). Every segment must be
+  a plain name, the extension one the platform publishes (HTML, CSS, XML,
+  text, PNG, JPEG, WebP, ICO, SVG, WOFF2), and HTML only as `index.html`.
+  Dotfiles, `..`, source maps, scripts, the artifact manifest and anything not
+  in the revision are a real 404, never the app's SPA fallback. R2 keys are
+  built from the hostname's own app id only.
 - GET and HEAD, with accurate content types and ETag/304. Nothing is
   edge-cached: every response is `public, max-age=0, must-revalidate`, so a
   revision switch or an unpublish is seen on the next request. Responses carry
@@ -82,35 +110,25 @@ of 24 and no `about-` IDs. Existing BYO app domains do not switch to marketing.
 
 ## Upload, activation and rollback (`packages/backend/src/routes/marketing-deploy.ts`)
 
+Every write route takes the same credential as the app's other keyless deploy
+steps (`lib/app-deploy-oidc.ts`): a GitHub Actions OIDC token for audience
+`https://api.proappstore.online` from the app's own repository on main. A
+repository can only write its own app's site; no standing secret is involved.
+
 | Route | Effect |
 |---|---|
-| `PUT /v1/apps/:id/marketing/revisions/:revision` | multipart: `manifest` (the build's `artifact-manifest.json`) plus one part per listed path. Every file must match its size and SHA-256 and be a path the host serves; the files, then the manifest, go to `marketing/<id>/revisions/<revision>/`. Never activates. A revision is immutable: the same bytes again are a no-op, other bytes a 409. |
-| `POST /v1/apps/:id/marketing/activate` `{revision}` | re-reads and re-hashes the stored artifact (409 on any difference), then sets `active_revision` in one statement and returns `{active, previous}`. Any app may activate, private and unlisted ones included. |
-| `POST /v1/apps/:id/marketing/rollback` `{revision?}` | back to the named revision, or the most recently active one before the current, after the same integrity check. Refused when no site is active: an unpublished site is republished, never resurrected. |
-| `GET /v1/apps/:id/marketing/deployments` | owner or admin: receipts (`app_marketing_deploys`, migration 0103) — revision, status, hashes, sizes, workflow run and commit, activation time, which one is live. |
-
-Only a successful activation moves the pointer, so a failed build, upload,
-manifest or verification leaves the previous site serving.
-
-**Not yet aligned with this model.** These routes were built for the earlier
-design (#399), in which the storefront repository built every site: they accept
-only a GitHub OIDC token for audience `https://api.proappstore.online/marketing`
-from `proappstore-online/proappstore`'s `marketing-deploy.yml` on main, and
-`docs/storefront-marketing-deploy.yml` is that workflow's template. Under this
-model the **app's own deploy** uploads, so the remaining platform work is:
-
-1. accept the app repository's own deploy OIDC token for its own app id (the
-   rule `lib/app-deploy-oidc.ts` already applies to the other keyless deploy
-   steps), and retire the storefront-only pin and template;
-2. add a step to the canonical deploy workflow (`packages/admin/src/publish.ts`
-   `deployWorkflowYaml`, then `scripts/sync-template-workflow.mjs`) that builds
-   the app's marketing template when present, uploads it and activates it,
-   checking the live site and rolling back on failure;
-3. add the template to `template-app`.
+| `PUT /v1/apps/:id/marketing/revisions/:revision` | multipart: `manifest` (`artifact-manifest.json`) plus one part per listed path. The revision must be the commit the run is building. Every file must match its size and SHA-256 and be a path the host serves; only `/index.html` is required (`robots.txt` and `sitemap.xml` are optional). The files, then the manifest, go to `marketing/<id>/revisions/<revision>/`. Never activates. A revision is immutable: the same bytes again are a no-op, other bytes a 409. |
+| `POST /v1/apps/:id/marketing/activate` `{revision}` | re-reads and re-hashes the stored artifact (409 on any difference), then sets `active_revision` in one statement and returns `{active, previous}`. Any app may activate, private and unlisted ones included (#409). |
+| `POST /v1/apps/:id/marketing/rollback` `{revision?}` | the app's deploy or a platform admin: back to the named revision, or the most recently active one before the current, after the same integrity check. Refused when no site is active: an unpublished site is republished, never resurrected. |
+| `GET /v1/apps/:id/marketing/deployments` | owner or admin: receipts (`app_marketing_deploys`, migration 0103) — revision, status, hashes, sizes, repository, workflow run and commit, activation time, which one is live. |
 
 `app_storefront_publication.listed` (written by the admin publish step and
-reconciled hourly from `registry.json`) remains the storefront catalogue's
-listing state; it no longer affects the marketing site.
+reconciled hourly from `registry.json`) is the storefront catalogue's listing
+state; it does not affect the marketing site.
+
+**Rollout.** New apps get the step from the canonical workflow. `template-app`
+receives it through `node scripts/sync-template-workflow.mjs`, and an existing
+app gets it when its `deploy.yml` is regenerated from the golden.
 
 ## Acceptance and release evidence
 

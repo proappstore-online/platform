@@ -270,6 +270,83 @@ jobs:
             --delete --no-progress
           echo "Deployed apps/\${{ github.event.repository.name }} from \${{ github.sha }}"
 
+      - name: Publish marketing site (marketing/ -> about-<app>, keyless)
+        if: hashFiles('marketing/package.json') != ''
+        continue-on-error: true
+        env:
+          APP_ID: \${{ github.event.repository.name }}
+          REVISION: \${{ github.sha }}
+        run: |
+          # #408: build the app's marketing/ folder and publish it to
+          # https://about-<app>.proappstore.online/ as an immutable revision named by
+          # this commit. The platform re-verifies every file before it goes live, and
+          # only a successful activation switches the site, so a broken build, upload
+          # or activation leaves the previous revision serving. Same keyless OIDC
+          # trust as the steps above; never blocks the app deploy (continue-on-error).
+          [ -x marketing/node_modules/.bin/astro ] || pnpm --dir marketing install --no-frozen-lockfile
+          pnpm --dir marketing build
+          node --input-type=module <<'JS'
+          import { createHash } from 'node:crypto';
+          import { readdirSync, readFileSync, statSync } from 'node:fs';
+          import { join, relative, sep } from 'node:path';
+          const { APP_ID, REVISION, ACTIONS_ID_TOKEN_REQUEST_URL: tokenUrl, ACTIONS_ID_TOKEN_REQUEST_TOKEN: tokenAuth } = process.env;
+          const API = 'https://api.proappstore.online/v1/apps/' + APP_ID + '/marketing/';
+          const SITE = 'https://about-' + APP_ID + '.proappstore.online';
+          // The platform's MARKETING_CONTENT_TYPES (backend lib/marketing-artifact.ts).
+          const TYPES = { html: 'text/html; charset=utf-8', css: 'text/css; charset=utf-8', xml: 'application/xml; charset=utf-8', txt: 'text/plain; charset=utf-8', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', ico: 'image/x-icon', svg: 'image/svg+xml', woff2: 'font/woff2' };
+          const DIST = 'marketing/dist';
+          const files = [];
+          const walk = (dir) => {
+            for (const name of readdirSync(dir).sort()) {
+              const full = join(dir, name);
+              if (statSync(full).isDirectory()) { walk(full); continue; }
+              const path = '/' + relative(DIST, full).split(sep).join('/');
+              if (path.endsWith('.map')) continue; // source maps are never published
+              const type = TYPES[path.split('.').pop().toLowerCase()];
+              if (!type) throw new Error('unsupported file in marketing/dist: ' + path);
+              const bytes = readFileSync(full);
+              files.push({ path, contentType: type, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), bytes });
+            }
+          };
+          walk(DIST);
+          const manifest = JSON.stringify({ schemaVersion: 1, appId: APP_ID, revision: REVISION, preview: false, origin: SITE,
+            files: files.map(({ path, contentType, size, sha256 }) => ({ path, contentType, size, sha256 })) });
+          const token = async () => {
+            const r = await fetch(tokenUrl + '&audience=' + encodeURIComponent('https://api.proappstore.online'), { headers: { Authorization: 'bearer ' + tokenAuth } });
+            if (!r.ok) throw new Error('OIDC token request failed (' + r.status + ')');
+            return (await r.json()).value;
+          };
+          const call = async (method, path, body, json) => {
+            const r = await fetch(API + path, { method, body, headers: { Authorization: 'Bearer ' + (await token()), ...(json ? { 'Content-Type': 'application/json' } : {}) } });
+            const text = await r.text();
+            if (!r.ok) throw new Error(method + ' ' + path + ' -> ' + r.status + ': ' + text.slice(0, 300));
+            return JSON.parse(text);
+          };
+          const form = new FormData();
+          form.set('manifest', manifest);
+          for (const f of files) form.append(f.path, new Blob([f.bytes], { type: f.contentType }), f.path.split('/').pop());
+          console.log('Uploaded', JSON.stringify(await call('PUT', 'revisions/' + REVISION, form, false)));
+          const activation = await call('POST', 'activate', JSON.stringify({ revision: REVISION }), true);
+          console.log('Activated', JSON.stringify(activation));
+          // Live check: the site answers from this revision.
+          let problem = 'not checked';
+          for (let attempt = 0; attempt < 5 && problem; attempt++) {
+            if (attempt) await new Promise((r) => setTimeout(r, 3000));
+            problem = null;
+            for (const method of ['GET', 'HEAD']) {
+              const r = await fetch(SITE + '/', { method, cache: 'no-store' });
+              const served = r.headers.get('x-pas-marketing-revision');
+              if (r.status !== 200 || served !== REVISION) problem = method + ' / -> ' + r.status + ' revision ' + served;
+            }
+          }
+          if (!problem) { console.log('Marketing site live: ' + SITE + '/ (' + REVISION + ')'); process.exit(0); }
+          console.log('::error::marketing site live check failed: ' + problem);
+          if (activation.previous && !activation.unchanged) {
+            console.log('Rolled back', JSON.stringify(await call('POST', 'rollback', JSON.stringify({ revision: activation.previous }), true)));
+          }
+          process.exit(1);
+          JS
+
       - name: Trigger post-deploy QA flows (keyless — GitHub OIDC)
         continue-on-error: true
         run: |

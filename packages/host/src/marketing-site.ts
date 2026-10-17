@@ -42,13 +42,28 @@ function marketingHeaders(path: string, revision: string): Headers {
   return h;
 }
 
+/** Extensions a marketing artifact may contain: the backend's MARKETING_CONTENT_TYPES (lib/marketing-artifact.ts). */
+const MARKETING_EXTENSIONS = new Set(["html", "css", "xml", "txt", "png", "jpg", "jpeg", "webp", "ico", "svg", "woff2"]);
+
+/**
+ * The artifact key for a request path, or null. `/` and a directory path
+ * (`/privacy/` or `/privacy`) are their `index.html`, as Astro builds them.
+ * Every segment must be a plain name — no dotfiles, `.` or `..`, no empty
+ * segment — and source maps, the artifact manifest and any HTML file but an
+ * `index.html` are never served. Same rule as the backend's `servablePath`.
+ */
 function assetPath(pathname: string): string | null {
-  if (pathname === "/") return "index.html";
-  if (!["/index.html", "/robots.txt", "/sitemap.xml"].includes(pathname)
-    && !/^\/(?:_astro|assets)\/[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(pathname)) return null;
-  if (pathname.split("/").some((part) => part === "." || part === ".." || part.startsWith("."))) return null;
-  if (/\.map$/i.test(pathname) || pathname.includes("//")) return null;
-  return pathname.slice(1);
+  let key = pathname.slice(1);
+  if (key === "" || key.endsWith("/")) key += "index.html";
+  else if (!key.split("/").pop()!.includes(".")) key += "/index.html";
+  if (key.length > 200) return null;
+  const parts = key.split("/");
+  if (!parts.every((part) => /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(part))) return null;
+  const name = parts[parts.length - 1]!;
+  if (/\.map$/i.test(name) || key === "artifact-manifest.json") return null;
+  const ext = name.split(".").pop()!.toLowerCase();
+  if (!MARKETING_EXTENSIONS.has(ext)) return null;
+  return ext !== "html" || name === "index.html" ? key : null;
 }
 
 /** The marketing origin is independent of the runnable app and fails closed. */
