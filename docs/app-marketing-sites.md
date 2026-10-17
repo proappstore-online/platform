@@ -130,6 +130,27 @@ state; it does not affect the marketing site.
 receives it through `node scripts/sync-template-workflow.mjs`, and an existing
 app gets it when its `deploy.yml` is regenerated from the golden.
 
+## Enquiries (#412, epic #411)
+
+A marketing site can carry an enquiry form. Submissions are stored in the
+platform per app (`app_enquiries`, migration 0104), never emailed out and never
+in the app's own data, and every app takes them, private ones included.
+
+| Route | Caller | Effect |
+|---|---|---|
+| `POST /v1/apps/:id/enquiries` | the `about-<id>` site | `name` (≤ 100), `email` (≤ 254, an address), `message` (≤ 5,000). A plain HTML form (`application/x-www-form-urlencoded`) is answered with a 303 to `https://about-<id>.proappstore.online/?enquiry=sent|invalid|rate-limited#enquiry`, so it works without JavaScript; JSON callers get 201/400/429. |
+| `GET /v1/apps/:id/enquiries?status=new\|handled&before=&limit=` | owner or admin | newest first (≤ 100), plus `counts: { new, total }` for an overview. |
+| `GET /v1/apps/:id/enquiries/:enquiryId` | owner or admin | one enquiry. |
+| `PATCH /v1/apps/:id/enquiries/:enquiryId` `{status}` | owner or admin | `new` or `handled`; records who handled it and when. |
+
+Spam protection: the POST must carry `Origin: https://about-<id>.proappstore.online`
+(403 otherwise); a filled `website` honeypot field is answered like a success
+and stored nowhere; at most 5 enquiries per client IP per app per hour and 200
+per app per day are stored (429 with `Retry-After`). The client IP is kept only
+as a SHA-256 hash of app id and IP, for that limit. The marketing site's CSP
+allows `form-action https://api.proappstore.online` for this form and nothing
+else.
+
 ## Acceptance and release evidence
 
 - An app with an active revision — public or private, listed or not — serves
