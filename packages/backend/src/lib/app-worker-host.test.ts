@@ -121,6 +121,16 @@ describe('data-worker provisioning never reaches app workers (#253 §6)', () => 
     }
   });
 
+  // #264: the other two paths that re-provision `pas-data-<id>` — the automatic
+  // session-key drift repair and the fleet redeploy workflow — reverted doordrop's
+  // override silently. Neither may reach app-worker code or state either.
+  it('the drift repair and the fleet redeploy workflow do not reach app workers (#264)', () => {
+    expect(src('./session-key-drift.ts')).not.toMatch(/app-worker-host|appWorkerHost|app_workers/);
+    const fleet = src('../../../../.github/workflows/redeploy-data-workers.yml');
+    expect(fleet).toMatch(/provisionData|provision-data/);
+    expect(fleet).not.toMatch(/app_worker|appWorker|app-worker|pas-app-|_app-workers\//);
+  });
+
   it('deployDataWorker uploads only to dataWorkerName(appId)', () => {
     expect(src('./deploy-worker.ts')).toMatch(/const workerName = dataWorkerName\(appId\);/);
     expect(src('./deploy-worker.ts')).toMatch(/workers\/scripts\/\$\{workerName\}`/);

@@ -223,6 +223,17 @@ describe("canonical deploy workflow — single source of truth", () => {
     expect(deployWorkflowYaml(ENV)).toBe(golden);
   });
 
+  // #264: doordrop's own workflow redeployed a Worker named `pas-data-doordrop` with the
+  // account-wide Cloudflare token, and every platform redeploy silently reverted it. The
+  // canonical app workflow never deploys a Cloudflare script and never reads a platform
+  // credential: its worker goes through the keyless platform step, nothing else.
+  it("never deploys a Cloudflare script or reads a platform credential (#264)", () => {
+    const yaml = deployWorkflowYaml(ENV);
+    expect(yaml).not.toMatch(/wrangler|workers\/scripts|pas-data-|pas-app-/);
+    expect(yaml).not.toMatch(/secrets\.(CLOUDFLARE|CF_|SESSION_SIGNING_KEY|INTERNAL_TOKEN|R2_)/);
+    expect(yaml).toContain("https://api.proappstore.online/v1/apps/${{ github.event.repository.name }}/worker/oidc");
+  });
+
   // #393: hidden source maps go to the platform's private store (opt-in, keyless) and
   // are always stripped before the public upload, so the public bucket never has a map.
   it("uploads opted-in source maps keyless and always strips maps before the public sync", () => {
