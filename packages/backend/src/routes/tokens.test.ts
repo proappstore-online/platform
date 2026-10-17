@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
 import { testToken, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 import { sha256Hex } from '../lib/app-tokens.js';
@@ -85,8 +85,14 @@ describe('POST /v1/apps/:appId/tokens', () => {
 });
 
 describe('GET /v1/apps/:appId/tokens and /v1/me/tokens', () => {
+  // #401: expiry is judged against the clock at request time, so the clock is
+  // pinned per test — a slow run between collection and request cannot expire
+  // the "future" fixture. Restored after each test.
+  const now = Date.now();
+  beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(now); });
+  afterEach(() => { vi.restoreAllMocks(); });
   const rows = [
-    { token_id: 'a'.repeat(32), app_id: 'leads', label: 'zapier', scopes: '{"access":"read","actions":null}', created_origin: 'leads.proappstore.online', created_at: 1, last_used_at: 2, expires_at: Date.now() + 1000 },
+    { token_id: 'a'.repeat(32), app_id: 'leads', label: 'zapier', scopes: '{"access":"read","actions":null}', created_origin: 'leads.proappstore.online', created_at: 1, last_used_at: 2, expires_at: now + 1000 },
     { token_id: 'b'.repeat(32), app_id: 'crm', label: null, scopes: '{"access":"write","actions":["api_x"]}', created_origin: null, created_at: 1, last_used_at: null, expires_at: 1 },
   ];
   it('lists mine with access / actions / origin and never the token or hash', async () => {
@@ -102,6 +108,17 @@ describe('GET /v1/apps/:appId/tokens and /v1/me/tokens', () => {
     const res = await app.request('/v1/me/tokens', { headers: { Authorization: `Bearer ${TOK}` } }, makeEnv(mockD1(mockStmt({ all: { results: rows } }))));
     const body = (await res.json()) as { tokens: { app_id: string; access: string; actions: string[] | null; expired: boolean }[] };
     expect(body.tokens.map((t) => [t.app_id, t.access, t.actions, t.expired])).toEqual([['leads', 'read', null, false], ['crm', 'write', ['api_x'], true]]);
+  });
+  it('a token is expired from its expires_at instant onwards (#401)', async () => {
+    const list = async () => {
+      const res = await app.request('/v1/me/tokens', { headers: { Authorization: `Bearer ${TOK}` } }, makeEnv(mockD1(mockStmt({ all: { results: [rows[0]] } }))));
+      return ((await res.json()) as { tokens: { expired: boolean }[] }).tokens[0]!.expired;
+    };
+    expect(await list()).toBe(false);
+    vi.spyOn(Date, 'now').mockReturnValue(now + 1000); // exactly at expires_at
+    expect(await list()).toBe(true);
+    vi.spyOn(Date, 'now').mockReturnValue(now + 60_000);
+    expect(await list()).toBe(true);
   });
 });
 
