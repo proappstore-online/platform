@@ -129,6 +129,12 @@ migrations_dir = "../../migrations"
 binding = "STORAGE"
 bucket_name = "pas-storage"
 
+# pas-apps, served by the host. The backend writes only marketing-site
+# artifacts here, under marketing/<app>/revisions/<revision>/ (#399).
+[[r2_buckets]]
+binding = "APPS"
+bucket_name = "pas-apps"
+
 # Workers AI binding — backs the app.ai SDK primitive.
 # Free quota included with Workers Paid; pay-as-you-go beyond.
 [ai]

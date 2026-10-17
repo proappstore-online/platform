@@ -1,11 +1,13 @@
 # App marketing websites — investigation and delivery plan
 
-Status: **implementation in progress**, 2026-10-15. The Astro template builds
+Status: **implementation in progress**, 2026-10-17. The Astro template builds
 a sample artifact, and the shared host has a fail-closed `about-` route backed
-by separate storefront-listing and active-revision D1 tables. No production
-marketing site is activated yet. Owner content approval, trusted upload,
-activation and storefront backfill remain to be implemented. The owner selected
-the default URL shape on 2026-10-15.
+by separate storefront-listing and active-revision D1 tables. The trusted
+upload, verified activation, rollback and the storefront-listing backfill are
+implemented on the platform side ([Deploy contract](#deploy-contract-399));
+owner content approval (#398) and the storefront workflow that calls the
+contract remain. No production marketing site is activated yet. The owner
+selected the default URL shape on 2026-10-15.
 
 ## Problem and current state
 
@@ -130,6 +132,58 @@ Alternatives considered:
 | `proappstore.online/apps/<id>/` | Reuses the current storefront origin but conflates a catalogue entry with the dedicated site the feature is meant to provide. |
 | `about-<id>.proappstore.online` | Selected by the owner. Fits the current wildcard host Worker; needs a marketing route and revision lookup. |
 | Owner's custom domain | Best branding, but conflicts with domains already serving the interactive app; requires a separate explicit domain attachment workflow. Follow-on work. |
+
+## Deploy contract (#399)
+
+The platform half of steps 3 and 4. Routes are in
+`packages/backend/src/routes/marketing-deploy.ts`, artifact checks in
+`packages/backend/src/lib/marketing-artifact.ts`, receipts in
+`app_marketing_deploys` (migration 0103).
+
+| Route | Caller | Effect |
+|---|---|---|
+| `PUT /v1/apps/:id/marketing/revisions/:revision` | storefront workflow | multipart: `manifest` (the build's `artifact-manifest.json`) plus one part per listed path. Every file must match its size and SHA-256 and be a path the host serves; then the files, and the manifest last, go to `marketing/<id>/revisions/<revision>/` in `pas-apps`. Never activates. A revision is immutable: the same bytes again are a no-op, other bytes a 409. |
+| `POST /v1/apps/:id/marketing/activate` `{revision}` | storefront workflow | refuses an unlisted or private app (409); re-reads and re-hashes the stored artifact (409 on any difference); then sets `app_marketing_sites.active_revision` in one statement and returns `{active, previous}`. |
+| `POST /v1/apps/:id/marketing/rollback` `{revision?}` | storefront workflow or a platform admin | back to the named revision, or the most recently active one before the current, after the same eligibility and integrity checks. Refused when no site is active: an unpublished site is republished, never resurrected. |
+| `GET /v1/apps/:id/marketing/deployments` | app owner or admin | receipts: revision, status, hashes, sizes, workflow run and commit, activation time, which one is live. |
+
+**Credential.** A GitHub Actions OIDC token for the audience
+`https://api.proappstore.online/marketing`, whose `repository`,
+`repository_id` and `repository_owner_id` are those of
+`proappstore-online/proappstore`, `ref` is `refs/heads/main` and `workflow_ref`
+is `proappstore-online/proappstore/.github/workflows/marketing-deploy.yml@refs/heads/main`.
+An app repository's deploy token is refused here, and this token is refused at
+every app-deploy route (different audience). No standing secret exists. The
+workflow template is `docs/storefront-marketing-deploy.yml`.
+
+**Failure and rollback.** Only a successful activation moves the pointer, so a
+failed build, upload, manifest or verification leaves the previous site
+serving. The template checks the live site after activating (`X-PAS-Marketing-Revision`
+must be the new revision on GET/HEAD `/`, `/robots.txt` and `/sitemap.xml`) and
+rolls back to the `previous` the activation returned when it is not.
+
+**Listing state.** `app_storefront_publication.listed` is written by the admin
+publish step — 0 *before* a private app is removed from `registry.json`, 1 only
+*after* a successful add — and reconciled against `registry.json` at the
+storefront's HEAD every hour (admin `scheduled`) or on demand
+(`POST admin…/api/storefront-publication/reconcile`, internal token). The first
+run after deploy is the backfill. An app absent from the table is unlisted.
+
+**Serving and caches.** The host resolves listing, visibility and the active
+revision in D1 on every request before R2, and nothing on the marketing origin
+is edge-cached: every response is `public, max-age=0, must-revalidate` with an
+ETag, so a revision switch, an unlisting or a private switch is seen on the
+next request and a browser revalidates instead of reusing a stale copy. That is
+also why hashed `_astro/` assets do not get a long `max-age`. Responses carry a
+static-site CSP (`default-src 'none'`, `script-src 'self'`,
+`frame-ancestors 'none'`), `X-Frame-Options: DENY`, `nosniff`, HSTS, and the
+serving revision in `X-PAS-Marketing-Revision`.
+
+**Integration point with #398.** The revision id is the content snapshot's
+`revision`. The workflow builds only from #398's build snapshot of an
+owner-published revision; the platform does not yet check, at activation, that
+an owner-published content revision with that id exists — #398 adds that check
+when its revision table lands. #398's unpublish clears `active_revision`.
 
 ## Acceptance and release evidence
 

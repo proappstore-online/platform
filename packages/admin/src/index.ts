@@ -10,6 +10,7 @@ import {
   handlePublish,
   handlePublishKb,
   handleRepoPull,
+  reconcileStorefrontPublication,
   type PublishKbRequest,
   type PublishRequest,
 } from "./publish.js";
@@ -313,12 +314,34 @@ export default {
       return Response.json({ id, status: await instance.status() });
     }
 
+    // Internal: make the D1 storefront-listing flag match registry.json now (#399).
+    if (url.pathname === "/api/storefront-publication/reconcile" && request.method === "POST") {
+      if (!internalTokenOk(request.headers.get("X-Internal-Token"), env.INTERNAL_TOKEN)) {
+        return Response.json({ error: "forbidden" }, { status: 403 });
+      }
+      try {
+        return Response.json(await reconcileStorefrontPublication(env));
+      } catch (e) {
+        return Response.json({ error: (e as Error).message }, { status: 502 });
+      }
+    }
+
     // Public read: list apps from registry
     if (url.pathname === "/api/apps" && request.method === "GET") {
       return Response.json({ error: "not_implemented" }, { status: 501 });
     }
 
     return Response.json({ error: "not_found", route: url.pathname }, { status: 404 });
+  },
+
+  /** Hourly: repair the storefront-listing flag from registry.json (#399). */
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      reconcileStorefrontPublication(env).then(
+        (r) => console.log(`[storefront-publication] reconcile listed=${r.listed} unlisted=${r.unlisted}`),
+        (e) => console.error(`[storefront-publication] reconcile failed: ${(e as Error).message}`),
+      ),
+    );
   },
 };
 

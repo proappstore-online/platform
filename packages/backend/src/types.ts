@@ -11,6 +11,9 @@ export interface Env {
   SELF: Fetcher;
   /** Shared R2 bucket for file storage. Files keyed as {appId}/{userId}/{path}. */
   STORAGE: R2Bucket;
+  /** pas-apps, the bucket the host serves. The backend writes only marketing
+   *  artifacts to it, under marketing/<appId>/revisions/<revision>/ (#399). */
+  APPS?: R2Bucket;
   /** Optional service binding to the headless QA executor (packages/qa-worker). */
   QA_WORKER?: Fetcher;
   /** Per-(app, client IP) limit on anonymous registered-action calls (#211):

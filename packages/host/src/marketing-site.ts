@@ -1,5 +1,5 @@
 import type { Env } from "./env.js";
-import { contentType, etagsMatch, securityHeaders } from "./host.js";
+import { contentType, etagsMatch } from "./host.js";
 
 interface MarketingState {
   listed: number;
@@ -8,6 +8,41 @@ interface MarketingState {
 }
 
 const NO_STORE = { "Cache-Control": "no-store" };
+
+/**
+ * A static, zero-JS site: tighter than the runnable app's policy. Nothing may
+ * frame it, run a script from elsewhere or submit a form; the JSON-LD block is
+ * data, not script. Every response revalidates (no edge cache, `max-age=0`),
+ * so an unlisting or private switch is a 404 on the very next request.
+ */
+const MARKETING_CSP = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self'",
+  "connect-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+].join("; ");
+
+function marketingHeaders(path: string, revision: string): Headers {
+  const h = new Headers();
+  h.set("Content-Type", contentType(path));
+  h.set("Cache-Control", "public, max-age=0, must-revalidate");
+  h.set("Content-Security-Policy", MARKETING_CSP);
+  h.set("X-Content-Type-Options", "nosniff");
+  h.set("X-Frame-Options", "DENY");
+  h.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  h.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  h.set("Cross-Origin-Opener-Policy", "same-origin");
+  h.set("Permissions-Policy", "geolocation=(), camera=(), microphone=(), payment=()");
+  // Which immutable revision answered: the deploy receipt's live observation.
+  h.set("X-PAS-Marketing-Revision", revision);
+  return h;
+}
 
 function assetPath(pathname: string): string | null {
   if (pathname === "/") return "index.html";
@@ -60,9 +95,7 @@ export async function serveMarketingSite(request: Request, env: Env, appId: stri
   }
   if (!object) return new Response("Not found", { status: 404, headers: NO_STORE });
 
-  const headers = securityHeaders(path.endsWith(".html"), true);
-  headers.set("Content-Type", contentType(path));
-  headers.set("Cache-Control", "public, max-age=0, must-revalidate");
+  const headers = marketingHeaders(path, revision);
   headers.set("ETag", object.httpEtag);
   if (!path.endsWith(".html")) headers.set("Content-Length", String(object.size));
   if (etagsMatch(request.headers.get("If-None-Match"), object.httpEtag)) {

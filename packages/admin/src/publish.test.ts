@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "./env.js";
-import { addToRegistry, buildAgentBundle, deployWorkflowYaml, handleAgentDeploy, handlePublish, isPrivateForRegistry, kbWorkflowYaml } from "./publish.js";
+import { addToRegistry, buildAgentBundle, deployWorkflowYaml, handleAgentDeploy, handlePublish, isPrivateForRegistry, kbWorkflowYaml, reconcileStorefrontPublication } from "./publish.js";
 
 /**
  * The two ways an app repo gets provisioned must yield the SAME hosting:
@@ -648,9 +648,22 @@ describe("storefront registry: private apps (#259)", () => {
     }) as typeof fetch;
     return puts;
   }
-  const dbWith = (mode: string | null, fail?: string) => ({
-    prepare: () => ({ bind: () => ({ first: async () => { if (fail) throw new Error(fail); return mode ? { mode } : null; } }) }),
-  }) as unknown as D1Database;
+  /** app_visibility answers `mode`; every app_storefront_publication write (#399) lands in `listedWrites`. */
+  let listedWrites: [string, number][] = [];
+  const dbWith = (mode: string | null, fail?: string) => {
+    listedWrites = [];
+    return {
+      prepare: (sql: string) => ({
+        bind: (...args: unknown[]) => ({
+          first: async () => { if (fail) throw new Error(fail); return mode ? { mode } : null; },
+          run: async () => {
+            if (sql.includes("app_storefront_publication")) listedWrites.push([args[0] as string, args[1] as number]);
+            return { meta: { changes: 1 } };
+          },
+        }),
+      }),
+    } as unknown as D1Database;
+  };
   const REQ = { id: "diary", name: "Diary", category: "x", icon: "d", iconBg: "#000", description: "d" };
 
   it("never adds an app the publish request declares private", async () => {
@@ -658,6 +671,53 @@ describe("storefront registry: private apps (#259)", () => {
     const step = await addToRegistry({ ...ENV, DB: dbWith(null) }, { ...REQ, visibility: "private" });
     expect(step).toMatchObject({ status: "skip" });
     expect(puts).toEqual([]);
+    expect(listedWrites).toEqual([["diary", 0]]);
+  });
+
+  it("#399: records the D1 listing flag — unlisted before the registry write, listed only after a successful one", async () => {
+    let puts = registryMock([{ id: "diary" }]);
+    expect(await addToRegistry({ ...ENV, DB: dbWith("private") }, REQ)).toMatchObject({ status: "ok" });
+    expect(puts).toHaveLength(1);
+    expect(listedWrites).toEqual([["diary", 0]]);
+
+    puts = registryMock([]);
+    expect(await addToRegistry({ ...ENV, DB: dbWith("public") }, REQ)).toMatchObject({ status: "ok", detail: "Added Diary" });
+    expect(listedWrites).toEqual([["diary", 1]]);
+    registryMock([{ id: "diary" }]);
+    expect(await addToRegistry({ ...ENV, DB: dbWith("public") }, REQ)).toMatchObject({ status: "skip", detail: "Already listed" });
+    expect(listedWrites).toEqual([["diary", 1]]); // a republish repairs a missing flag
+
+    // A failed registry write never marks the app listed.
+    globalThis.fetch = vi.fn(async (_i: RequestInfo | URL, init?: RequestInit) => init?.method === "PUT"
+      ? new Response(JSON.stringify({ message: "boom" }), { status: 500 })
+      : new Response(JSON.stringify({ sha: "s", content: Buffer.from(JSON.stringify({ apps: [] })).toString("base64") }), { status: 200 })) as typeof fetch;
+    expect(await addToRegistry({ ...ENV, DB: dbWith("public") }, REQ)).toMatchObject({ status: "fail" });
+    expect(listedWrites).toEqual([]);
+  });
+
+  it("#399: an unlisting the D1 flag cannot record is not attempted", async () => {
+    const puts = registryMock([{ id: "diary" }]);
+    const db = {
+      prepare: (sql: string) => ({ bind: () => ({
+        first: async () => ({ mode: "private" }),
+        run: async () => { if (sql.includes("app_storefront_publication")) throw new Error("D1 down"); return {}; },
+      }) }),
+    } as unknown as D1Database;
+    expect(await addToRegistry({ ...ENV, DB: db }, REQ)).toMatchObject({ status: "fail", detail: expect.stringContaining("unlisting") });
+    expect(puts).toEqual([]);
+  });
+
+  it("#399: a listing whose D1 flag cannot be recorded still succeeds, closed, and says so", async () => {
+    registryMock([]);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = {
+      prepare: (sql: string) => ({ bind: () => ({
+        first: async () => ({ mode: "public" }),
+        run: async () => { if (sql.includes("app_storefront_publication")) throw new Error("D1 down"); return {}; },
+      }) }),
+    } as unknown as D1Database;
+    expect(await addToRegistry({ ...ENV, DB: db }, REQ)).toMatchObject({ status: "ok", detail: expect.stringContaining("reconcile will repair") });
+    err.mockRestore();
   });
 
   it("never adds an app whose registered manifest is private, and removes a stale entry", async () => {
@@ -713,5 +773,40 @@ describe("storefront registry: private apps (#259)", () => {
 
   it("isPrivateForRegistry trusts a private declaration without a lookup", async () => {
     expect(await isPrivateForRegistry({ DB: dbWith(null, "should not be called") }, { id: "x", visibility: "private" })).toBe(true);
+  });
+});
+
+describe("storefront-publication reconcile (#399)", () => {
+  function registry(apps: unknown, status = 200) {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (!String(input).includes("/contents/registry.json")) throw new Error(`unexpected fetch ${String(input)}`);
+      if (status !== 200) return new Response("{}", { status });
+      return new Response(JSON.stringify({ sha: "s", content: Buffer.from(JSON.stringify({ apps })).toString("base64") }), { status: 200 });
+    }) as typeof fetch;
+  }
+  function db(rows: { id: string; listed: number | null }[]) {
+    const written: [string, number][] = [];
+    const statement = { bind: (id: string, listed: number) => ({ id, listed }) };
+    const d = {
+      prepare: (sql: string) => sql.startsWith("SELECT") ? { all: async () => ({ results: rows }) } : statement,
+      batch: async (stmts: { id: string; listed: number }[]) => { for (const s of stmts) written.push([s.id, s.listed]); return []; },
+    } as unknown as D1Database;
+    return { d, written };
+  }
+
+  it("backfills listed apps from registry.json and unlists the rest, touching only what differs", async () => {
+    registry([{ id: "a" }, { id: "b" }, { id: "ghost" }, { name: "no id" }]);
+    const { d, written } = db([{ id: "a", listed: null }, { id: "b", listed: 1 }, { id: "c", listed: 1 }, { id: "d", listed: null }, { id: "e", listed: 0 }]);
+    expect(await reconcileStorefrontPublication({ ...ENV, DB: d })).toEqual({ listed: 1, unlisted: 1 });
+    expect(written).toEqual([["a", 1], ["c", 0]]); // ghost has no apps row; d and e stay closed
+  });
+
+  it("changes nothing when registry.json cannot be read or has no apps list", async () => {
+    const { d, written } = db([{ id: "a", listed: 1 }]);
+    registry([], 502);
+    await expect(reconcileStorefrontPublication({ ...ENV, DB: d })).rejects.toThrow(/registry.json/);
+    registry(undefined);
+    await expect(reconcileStorefrontPublication({ ...ENV, DB: d })).rejects.toThrow(/no apps list/);
+    expect(written).toEqual([]);
   });
 });

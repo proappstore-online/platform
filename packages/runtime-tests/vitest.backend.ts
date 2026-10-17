@@ -27,7 +27,7 @@ export default defineWorkersConfig(async () => ({
           compatibilityDate: COMPATIBILITY_DATE,
           compatibilityFlags: ['nodejs_compat', 'global_fetch_strictly_public'], // parity with backend/wrangler.toml (#310)
           d1Databases: ['DB'],
-          r2Buckets: ['STORAGE'],
+          r2Buckets: ['STORAGE', 'APPS'],
           durableObjects: { ROOM: 'Room' },
           // #253: the app-worker `loader` backend, on the real Worker Loader. Production
           // has neither the binding nor APP_WORKER_BACKEND yet (app workers stay off).

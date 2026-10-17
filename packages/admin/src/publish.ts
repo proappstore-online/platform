@@ -616,6 +616,60 @@ export function manifestDeclaresPrivate(text: string | undefined): boolean {
   }
 }
 
+/**
+ * The authoritative storefront-listing flag the marketing host reads
+ * (`app_storefront_publication`, #399). registry.json stays the catalogue
+ * source; this mirrors it in D1, written before an unlisting and only after a
+ * successful listing, and repaired by reconcileStorefrontPublication. An app
+ * with no apps row is not recorded (the foreign key), which reads as unlisted.
+ */
+export async function setStorefrontListed(db: D1Database, appId: string, listed: boolean): Promise<void> {
+  await db.prepare(
+    `INSERT INTO app_storefront_publication (app_id, listed, updated_at)
+     SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM apps WHERE id = ?1)
+     ON CONFLICT(app_id) DO UPDATE SET listed = excluded.listed, updated_at = excluded.updated_at`,
+  ).bind(appId, listed ? 1 : 0, Date.now()).run();
+}
+
+/**
+ * Backfill and repair (#399): make `app_storefront_publication.listed` match
+ * registry.json at the storefront's HEAD for every app in `apps`. Unreadable
+ * registry → throws, changing nothing. Runs hourly (index.ts `scheduled`) and
+ * on demand (POST /api/storefront-publication/reconcile).
+ */
+export async function reconcileStorefrontPublication(env: Env): Promise<{ listed: number; unlisted: number }> {
+  const file = await ghFor(env).getFile("proappstore", "registry.json");
+  if (!file.ok || !file.content) throw new Error(`could not read registry.json (${file.status})`);
+  const apps = (JSON.parse(file.content) as { apps?: { id?: unknown }[] }).apps;
+  if (!Array.isArray(apps)) throw new Error("registry.json has no apps list");
+  const inRegistry = new Set(apps.map((a) => a?.id).filter((id): id is string => typeof id === "string"));
+  const rows = await env.DB.prepare(
+    "SELECT a.id, p.listed FROM apps a LEFT JOIN app_storefront_publication p ON p.app_id = a.id",
+  ).all<{ id: string; listed: number | null }>();
+  const now = Date.now();
+  const changes = (rows.results ?? []).filter((r) => (r.listed === 1) !== inRegistry.has(r.id));
+  const statement = env.DB.prepare(
+    `INSERT INTO app_storefront_publication (app_id, listed, updated_at) VALUES (?1, ?2, ?3)
+     ON CONFLICT(app_id) DO UPDATE SET listed = excluded.listed, updated_at = excluded.updated_at`,
+  );
+  for (let i = 0; i < changes.length; i += 50) {
+    await env.DB.batch(changes.slice(i, i + 50).map((r) => statement.bind(r.id, inRegistry.has(r.id) ? 1 : 0, now)));
+  }
+  const listed = changes.filter((r) => inRegistry.has(r.id)).length;
+  return { listed, unlisted: changes.length - listed };
+}
+
+/** After a successful listing: record it (#399). A failed write leaves the app unlisted in D1 — closed — until reconcile repairs it. */
+async function recordListed(env: Env, appId: string): Promise<string> {
+  try {
+    await setStorefrontListed(env.DB, appId, true);
+    return "";
+  } catch (e) {
+    console.error(`[registry] listed flag for ${appId} not recorded: ${(e as Error).message}`);
+    return " (storefront publication flag not recorded; reconcile will repair it)";
+  }
+}
+
 export async function addToRegistry(env: Env, req: PublishRequest): Promise<Step> {
   const gh = ghFor(env);
   // #259: a private app has no public listing. registry.json is public and the
@@ -627,6 +681,15 @@ export async function addToRegistry(env: Env, req: PublishRequest): Promise<Step
     isPrivate = await isPrivateForRegistry(env, req, gh);
   } catch (e) {
     return { name: "Registry", status: "fail", detail: `Could not read app visibility: ${(e as Error).message}` };
+  }
+  if (isPrivate) {
+    // #399: unlisted in D1 first, so the marketing host stops serving before
+    // the registry write, whatever happens to that write.
+    try {
+      await setStorefrontListed(env.DB, req.id, false);
+    } catch (e) {
+      return { name: "Registry", status: "fail", detail: `Could not record the unlisting: ${(e as Error).message}` };
+    }
   }
   for (let attempt = 1; ; attempt++) {
     // registry.json lives in the storefront repo (org/proappstore).
@@ -654,7 +717,7 @@ export async function addToRegistry(env: Env, req: PublishRequest): Promise<Step
     // Re-checked on every attempt: the writer that beat us may have been a
     // retry of this very app, in which case the entry now exists.
     if (listed) {
-      return { name: "Registry", status: "skip", detail: "Already listed" };
+      return { name: "Registry", status: "skip", detail: `Already listed${await recordListed(env, req.id)}` };
     }
 
     apps.push({
@@ -681,7 +744,7 @@ export async function addToRegistry(env: Env, req: PublishRequest): Promise<Step
       `Add ${req.name} to registry`,
       file.sha,
     );
-    if (update.ok) return { name: "Registry", status: "ok", detail: `Added ${req.name}` };
+    if (update.ok) return { name: "Registry", status: "ok", detail: `Added ${req.name}${await recordListed(env, req.id)}` };
     if (update.status === 409) {
       if (attempt < REGISTRY_WRITE_ATTEMPTS) {
         await new Promise((r) => setTimeout(r, REGISTRY_WRITE_BACKOFF_MS * attempt));

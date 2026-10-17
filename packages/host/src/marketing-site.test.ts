@@ -51,6 +51,26 @@ describe("dedicated marketing hostname", () => {
     expect(get).toHaveBeenCalledWith("marketing/chess/revisions/rev_123/assets/hero.png");
   });
 
+  it("#399: sends a static-site policy, the serving revision and a working ETag", async () => {
+    const { env, ctx } = fixture(active);
+    const res = await worker.fetch(new Request("https://about-chess.proappstore.online/"), env, ctx);
+    expect(res.headers.get("Content-Security-Policy")).toMatch(/default-src 'none'.*script-src 'self'.*frame-ancestors 'none'/);
+    expect(res.headers.get("X-Frame-Options")).toBe("DENY");
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(res.headers.get("X-PAS-Marketing-Revision")).toBe("rev_123");
+    expect(res.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
+    expect(res.headers.get("ETag")).toBe('"abc"');
+    const cached = await worker.fetch(new Request("https://about-chess.proappstore.online/", { headers: { "If-None-Match": '"abc"' } }), env, ctx);
+    expect(cached.status).toBe(304);
+  });
+
+  it("#399: looks up and reads only the hostname's own app", async () => {
+    const { env, ctx, get } = fixture(active);
+    await worker.fetch(new Request("https://about-rival.proappstore.online/robots.txt"), env, ctx);
+    expect(get).toHaveBeenCalledWith("marketing/rival/revisions/rev_123/robots.txt");
+    expect(get.mock.calls.every(([key]) => key.startsWith("marketing/rival/"))).toBe(true);
+  });
+
   it("returns an uncached 503 when R2 is unavailable", async () => {
     const { env, ctx, get } = fixture(active);
     get.mockRejectedValueOnce(new Error("R2 unavailable"));
@@ -60,7 +80,7 @@ describe("dedicated marketing hostname", () => {
     expect(response.headers.get("Retry-After")).toBe("30");
   });
 
-  it.each(["/other", "/artifact-manifest.json", "/assets/app.js.map", "/assets/%2eenv"])(
+  it.each(["/other", "/artifact-manifest.json", "/assets/app.js.map", "/assets/%2eenv", "/assets/..%2f..%2frival/x.png", "/_astro/.hidden.css", "/assets//x.png"])(
     "rejects unknown or private paths (%s)", async (path) => {
       const { env, ctx, get } = fixture(active);
       const response = await worker.fetch(new Request(`https://about-chess.proappstore.online${path}`), env, ctx);
