@@ -189,23 +189,18 @@ describe('marketing deploy: upload, activation, rollback (#399)', () => {
     expect((await rollback(APP, { revision: 'rev-nope' })).status).toBe(404);
   });
 
-  it('an unlisted or private app cannot activate or roll back; an unpublished site is not resurrected', async () => {
-    expect((await upload(APP, 'rev-1', await build(APP, 'rev-1', 'One'))).status).toBe(201);
+  it('#409: a private, unlisted app activates and rolls back like any other; an unpublished site is not resurrected', async () => {
     await listed(APP, 0);
-    expect((await activate(APP, 'rev-1')).status).toBe(409);
-    expect(await active()).toBeNull();
-
-    await listed(APP, 1);
-    await ship('rev-2');
     await env.DB.prepare("INSERT INTO app_visibility (app_id, mode, roles, created_at) VALUES (?, 'private', '[]', 1)").bind(APP).run();
-    expect((await activate(APP, 'rev-1')).status).toBe(409);
-    expect((await rollback(APP, { revision: 'rev-1' })).status).toBe(409);
+    await ship('rev-1');
+    await ship('rev-2');
     expect(await active()).toBe('rev-2');
+    expect(await (await rollback(APP, {})).json()).toMatchObject({ active: 'rev-1', previous: 'rev-2' });
 
-    await env.DB.prepare('DELETE FROM app_visibility').run();
     await env.DB.prepare('UPDATE app_marketing_sites SET active_revision = NULL WHERE app_id = ?').bind(APP).run(); // unpublished
-    expect((await rollback(APP, { revision: 'rev-1' })).status).toBe(409);
+    expect((await rollback(APP, { revision: 'rev-2' })).status).toBe(409);
     expect(await active()).toBeNull();
+    expect((await activate('no-such-app', 'rev-1')).status).toBe(404);
   });
 
   it("one app's revision or prefix is never another's", async () => {

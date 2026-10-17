@@ -16,7 +16,7 @@
  * Upload writes `marketing/<appId>/revisions/<revision>/` in pas-apps only after
  * every file matches the manifest's size and SHA-256, and never activates. A
  * revision is immutable. Activation re-reads and re-hashes the stored artifact,
- * refuses an unlisted or private app, then switches the host's one pointer —
+ * then switches the host's one pointer —
  * `app_marketing_sites.active_revision` — in a single statement. A failed
  * upload, a bad manifest or a failed verification leaves the pointer alone,
  * so the previous site keeps serving. Rollback re-verifies its target first.
@@ -114,18 +114,9 @@ async function activeRevision(db: D1Database, appId: string): Promise<string | n
   return row?.active_revision ?? null;
 }
 
-/** Null when the app may have a public marketing site; otherwise why not. */
-async function ineligibility(db: D1Database, appId: string): Promise<string | null> {
-  const row = await db.prepare(
-    `SELECT p.listed, v.mode FROM apps a
-       LEFT JOIN app_storefront_publication p ON p.app_id = a.id
-       LEFT JOIN app_visibility v ON v.app_id = a.id
-      WHERE a.id = ?`,
-  ).bind(appId).first<{ listed: number | null; mode: string | null }>();
-  if (!row) return 'app not found';
-  if (row.mode === 'private') return 'a private app cannot have a public marketing site';
-  if (row.listed !== 1) return 'the app is not listed on the storefront';
-  return null;
+/** #409: every app may have a public marketing site, private and unlisted ones included. */
+async function requireApp(db: D1Database, appId: string): Promise<void> {
+  if (!(await db.prepare('SELECT 1 FROM apps WHERE id = ?').bind(appId).first())) throw new HttpError('app not found', 404);
 }
 
 /** Re-verify a recorded, fully uploaded revision; 404 unknown, 409 not uploaded or not intact, 503 R2. */
@@ -239,8 +230,7 @@ marketingDeployRoutes.post('/apps/:appId/marketing/activate', async (c) => {
 
   const previous = await activeRevision(c.env.DB, appId);
   if (previous === revision) return c.json({ appId, active: revision, previous, unchanged: true });
-  const refused = await ineligibility(c.env.DB, appId);
-  if (refused) throw new HttpError(refused, refused === 'app not found' ? 404 : 409);
+  await requireApp(c.env.DB, appId);
   await requireIntact(c.env, appId, revision);
   await switchActive(c.env.DB, appId, revision, previous);
   return c.json({ appId, active: revision, previous });
@@ -273,8 +263,7 @@ marketingDeployRoutes.post('/apps/:appId/marketing/rollback', async (c) => {
     target = prior.revision;
   }
   if (target === current) return c.json({ appId, active: current, previous: current, unchanged: true });
-  const refused = await ineligibility(c.env.DB, appId);
-  if (refused) throw new HttpError(refused, refused === 'app not found' ? 404 : 409);
+  await requireApp(c.env.DB, appId);
   await requireIntact(c.env, appId, target);
   await switchActive(c.env.DB, appId, target, current);
   return c.json({ appId, active: target, previous: current, rolledBack: true });

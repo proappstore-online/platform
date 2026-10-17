@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Env } from "./env.js";
 import worker from "./index.js";
 
-function fixture(state: { listed: number; active_revision: string | null; visibility_mode: string | null } | null, missingTable = false) {
+function fixture(state: { active_revision: string | null } | null, missingTable = false) {
   const get = vi.fn(async (_key: string) => ({
     body: new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("<h1>Market</h1>")); controller.close(); } }),
     httpEtag: '"abc"', size: 15,
@@ -17,11 +17,11 @@ function fixture(state: { listed: number; active_revision: string | null; visibi
   return { env, ctx, get, prepare };
 }
 
-const active = { listed: 1, active_revision: "rev_123", visibility_mode: "public" };
+const active = { active_revision: "rev_123" };
 
 describe("dedicated marketing hostname", () => {
-  it.each([null, { ...active, listed: 0 }, { ...active, visibility_mode: "private" }, { ...active, active_revision: null }])(
-    "does not serve inactive, unlisted or private site (%j)", async (state) => {
+  it.each([null, { active_revision: null }, { active_revision: "../escape" }])(
+    "does not serve an app with no valid active revision (%j)", async (state) => {
       const { env, ctx, get } = fixture(state);
       const response = await worker.fetch(new Request("https://about-chess.proappstore.online/"), env, ctx);
       expect(response.status).toBe(404);
@@ -29,6 +29,15 @@ describe("dedicated marketing hostname", () => {
       expect(get).not.toHaveBeenCalled();
     },
   );
+
+  it("#409: neither visibility nor the storefront listing gates the site — only the active revision", async () => {
+    const { env, ctx, prepare } = fixture(active);
+    const res = await worker.fetch(new Request("https://about-chess.proappstore.online/"), env, ctx);
+    expect(res.status).toBe(200);
+    const sql = String(prepare.mock.calls[0]![0]);
+    expect(sql).toContain("app_marketing_sites");
+    expect(sql).not.toMatch(/app_visibility|app_storefront_publication/);
+  });
 
   it("fails closed before the migration exists", async () => {
     const { env, ctx, get } = fixture(active, true);

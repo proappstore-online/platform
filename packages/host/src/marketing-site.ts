@@ -2,9 +2,7 @@ import type { Env } from "./env.js";
 import { contentType, etagsMatch } from "./host.js";
 
 interface MarketingState {
-  listed: number;
   active_revision: string | null;
-  visibility_mode: string | null;
 }
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -13,7 +11,7 @@ const NO_STORE = { "Cache-Control": "no-store" };
  * A static, zero-JS site: tighter than the runnable app's policy. Nothing may
  * frame it, run a script from elsewhere or submit a form; the JSON-LD block is
  * data, not script. Every response revalidates (no edge cache, `max-age=0`),
- * so an unlisting or private switch is a 404 on the very next request.
+ * so a revision switch or an unpublish is seen on the very next request.
  */
 const MARKETING_CSP = [
   "default-src 'none'",
@@ -66,11 +64,12 @@ export async function serveMarketingSite(request: Request, env: Env, appId: stri
   let state: MarketingState | null;
   try {
     state = await env.DB.prepare(
-      `SELECT p.listed, m.active_revision, v.mode AS visibility_mode
+      // #409: every app's marketing site is public, private apps included —
+      // it is served whenever the app has an active revision. Neither the
+      // app's visibility nor its storefront listing gates it.
+      `SELECT m.active_revision
        FROM apps a
-       JOIN app_storefront_publication p ON p.app_id = a.id
        JOIN app_marketing_sites m ON m.app_id = a.id
-       LEFT JOIN app_visibility v ON v.app_id = a.id
        WHERE a.id = ?1`,
     ).bind(appId).first<MarketingState>();
   } catch (error) {
@@ -79,8 +78,7 @@ export async function serveMarketingSite(request: Request, env: Env, appId: stri
     return new Response("Site temporarily unavailable", { status: 503, headers: NO_STORE });
   }
   const revision = state?.active_revision;
-  if (state?.listed !== 1 || state.visibility_mode === "private" || !revision
-    || !/^[A-Za-z0-9_-]{1,80}$/.test(revision)) {
+  if (!revision || !/^[A-Za-z0-9_-]{1,80}$/.test(revision)) {
     return new Response("Not found", { status: 404, headers: NO_STORE });
   }
 
