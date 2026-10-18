@@ -260,6 +260,7 @@ export default {
 
     // OAuth 2.1 routes (discovery, registration, authorize, token)
     if (env.OAUTH_KV && env.SESSION_SIGNING_KEY) {
+      const refreshTtl = env.OAUTH_REFRESH_TTL_SECONDS ? parseInt(env.OAUTH_REFRESH_TTL_SECONDS, 10) : undefined;
       const oauthRes = await handleOAuthRoute(request, {
         issuer,
         authStart: env.AUTH_START ?? `${env.API_BASE}/v1/auth/github/start`,
@@ -267,6 +268,7 @@ export default {
         authProviders: configuredAuthProviders(env.AUTH_PROVIDERS),
         kv: env.OAUTH_KV,
         sessionSigningKey: env.SESSION_SIGNING_KEY,
+        ...(refreshTtl && !Number.isNaN(refreshTtl) ? { refreshTokenTtlSeconds: refreshTtl } : {}),
       });
       if (oauthRes) return oauthRes;
     }

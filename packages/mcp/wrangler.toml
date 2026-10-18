@@ -41,6 +41,10 @@ AUTH_PROVIDERS = "github,google"
 # Optional read-only mode — set to "1" to block every mutating MCP tool and
 # audit the denial. Leave unset for normal read/write operation.
 #   MCP_READ_ONLY = "1"
+#
+# Optional refresh-token lifetime override, in seconds (#418). Defaults to 90
+# days (7776000) when unset.
+#   OAUTH_REFRESH_TTL_SECONDS = "7776000"
 
 [[routes]]
 pattern = "mcp.proappstore.online/*"

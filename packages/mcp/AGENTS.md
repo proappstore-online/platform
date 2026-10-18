@@ -92,7 +92,7 @@ Project-local `.mcp.json`:
 ## Not supported
 
 - **No per-app tools on `/mcp`.** The shared endpoint has a fixed tool set; app tools live on `/mcp/apps/<app_id>` or behind `call_app_tool`.
-- **No token revocation or refresh** — OAuth access tokens are opaque and expire after 24 hours; reconnect to get a new one. Session JWTs last 30 days.
+- **OAuth access tokens expire after 24 hours** but auto-renew via the `refresh_token` issued alongside them (90-day sliding window by default; rotates on every use) — a well-behaved MCP client never needs to reconnect through the browser. There is no refresh-token revocation endpoint yet: a compromised token is cut off only by expiry or by its family being revoked on reuse detection.
 - **No delegated or third-party scopes** — every caller is the owner/operator of what they touch (single-admin model); there is no read/write/destructive scope taxonomy. Ownership is enforced per call instead.
 - **No raw SQL, no secrets, no billing.** Data goes through registered actions; keys stay in the platform vault; the platform subscription is the only billing.
 - **Rate limiting** applies to `POST /register` only, not to tool calls.

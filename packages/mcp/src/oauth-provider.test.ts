@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAuthChallenge, handleOAuthRoute, issueBrokerCredential, resolveOAuthToken } from './oauth-provider.js';
-import { mintSession } from '@proappstore/build-core';
+import { mintSession, verifySession } from '@proappstore/build-core';
 
 function makeKv(seed: Record<string, string> = {}): KVNamespace {
   const data = new Map(Object.entries(seed));
@@ -482,6 +482,231 @@ describe('token exchange resource binding', () => {
       appId: 'crm',
       bound: true,
     });
+  });
+});
+
+// #418: MCP sign-ins should survive more than 24h without a browser visit.
+// Refresh tokens rotate on every use, are single-use, bound to client_id and
+// to the resource/appId they were issued for, and last 90 days by default —
+// a replayed (already-rotated) token kills the whole family.
+describe('refresh tokens (#418)', () => {
+  function config(kv: KVNamespace, extra: Record<string, unknown> = {}) {
+    return {
+      issuer: 'https://mcp.proappstore.online',
+      authStart: 'https://api.proappstore.online/v1/auth/github/start',
+      kv,
+      sessionSigningKey: 'test-key',
+      ...extra,
+    };
+  }
+
+  async function seedAuthCode(kv: KVNamespace, codeChallenge: string): Promise<void> {
+    await kv.put('code:code-1', JSON.stringify({
+      session: await mintSession({ uid: 'gh:1', login: 'alice', roles: ['user'] }, 'test-key'),
+      codeChallenge,
+      redirectUri: 'https://client.example/cb',
+      clientId: 'client-1',
+      appId: 'crm',
+    }));
+  }
+
+  async function exchangeAuthCode(
+    kv: KVNamespace,
+    verifier: string,
+    cfg: ReturnType<typeof config>,
+  ): Promise<{ access_token: string; refresh_token?: string; expires_in: number }> {
+    const res = await handleOAuthRoute(
+      new Request('https://mcp.proappstore.online/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: 'code-1',
+          redirect_uri: 'https://client.example/cb',
+          client_id: 'client-1',
+          code_verifier: verifier,
+        }),
+      }),
+      cfg,
+    );
+    expect(res?.status).toBe(200);
+    return res!.json() as Promise<{ access_token: string; refresh_token?: string; expires_in: number }>;
+  }
+
+  function refreshRequest(refreshToken: string, clientId = 'client-1'): Request {
+    return new Request('https://mcp.proappstore.online/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: clientId }),
+    });
+  }
+
+  it('issues a refresh token alongside the access token on the authorization_code grant', async () => {
+    const verifier = 'verifier-1';
+    const kv = makeKv();
+    await seedAuthCode(kv, await pkceChallenge(verifier));
+
+    const body = await exchangeAuthCode(kv, verifier, config(kv));
+
+    expect(body.access_token).toBeTruthy();
+    expect(body.refresh_token).toBeTruthy();
+  });
+
+  it('happy path: refreshing rotates to a new access + refresh token, same client and appId binding', async () => {
+    const verifier = 'verifier-1';
+    const kv = makeKv();
+    await seedAuthCode(kv, await pkceChallenge(verifier));
+    const issued = await exchangeAuthCode(kv, verifier, config(kv));
+
+    const res = await handleOAuthRoute(refreshRequest(issued.refresh_token!), config(kv));
+    expect(res?.status).toBe(200);
+    const refreshed = await res!.json() as { access_token: string; refresh_token: string; expires_in: number };
+
+    expect(refreshed.access_token).not.toBe(issued.access_token);
+    expect(refreshed.refresh_token).not.toBe(issued.refresh_token);
+    expect(refreshed.expires_in).toBe(86_400);
+    await expect(resolveOAuthToken(refreshed.access_token, kv)).resolves.toMatchObject({ appId: 'crm', bound: true });
+  });
+
+  it('rotation: the old refresh token no longer works once a new one has been issued', async () => {
+    const verifier = 'verifier-1';
+    const kv = makeKv();
+    await seedAuthCode(kv, await pkceChallenge(verifier));
+    const issued = await exchangeAuthCode(kv, verifier, config(kv));
+
+    await handleOAuthRoute(refreshRequest(issued.refresh_token!), config(kv));
+
+    const reused = await handleOAuthRoute(refreshRequest(issued.refresh_token!), config(kv));
+    expect(reused?.status).toBe(400);
+    await expect(reused?.json()).resolves.toEqual({ error: 'invalid_grant' });
+  });
+
+  it('reuse detection: replaying a rotated-away token revokes the whole family, including its successor', async () => {
+    const verifier = 'verifier-1';
+    const kv = makeKv();
+    await seedAuthCode(kv, await pkceChallenge(verifier));
+    const issued = await exchangeAuthCode(kv, verifier, config(kv));
+
+    const firstRefresh = await handleOAuthRoute(refreshRequest(issued.refresh_token!), config(kv));
+    const { refresh_token: rotatedToken } = await firstRefresh!.json() as { refresh_token: string };
+
+    // Replay the token that was already rotated away.
+    const replay = await handleOAuthRoute(refreshRequest(issued.refresh_token!), config(kv));
+    expect(replay?.status).toBe(400);
+    await expect(replay?.json()).resolves.toEqual({ error: 'invalid_grant' });
+
+    // Its successor — the one legitimately rotated to — is now dead too.
+    const afterRevoke = await handleOAuthRoute(refreshRequest(rotatedToken), config(kv));
+    expect(afterRevoke?.status).toBe(400);
+    await expect(afterRevoke?.json()).resolves.toEqual({ error: 'invalid_grant' });
+  });
+
+  it('wrong client_id: refuses a refresh token presented by a different client', async () => {
+    const verifier = 'verifier-1';
+    const kv = makeKv();
+    await seedAuthCode(kv, await pkceChallenge(verifier));
+    const issued = await exchangeAuthCode(kv, verifier, config(kv));
+
+    const res = await handleOAuthRoute(refreshRequest(issued.refresh_token!, 'someone-elses-client'), config(kv));
+    expect(res?.status).toBe(400);
+    await expect(res?.json()).resolves.toEqual({ error: 'invalid_grant' });
+  });
+
+  it('expiry: refuses a refresh token past its 90-day deadline', async () => {
+    const kv = makeKv({
+      'refresh:expired-token': JSON.stringify({
+        claims: { uid: 'gh:1', login: 'alice', roles: ['user'] },
+        clientId: 'client-1',
+        appId: 'crm',
+        familyId: 'family-1',
+        usedAt: null,
+        expiresAt: Math.floor(Date.now() / 1000) - 1,
+      }),
+    });
+
+    const res = await handleOAuthRoute(refreshRequest('expired-token'), config(kv));
+    expect(res?.status).toBe(400);
+    await expect(res?.json()).resolves.toEqual({ error: 'invalid_grant' });
+  });
+
+  it('defaults the refresh token deadline to 90 days out', async () => {
+    const verifier = 'verifier-1';
+    const kv = makeKv();
+    await seedAuthCode(kv, await pkceChallenge(verifier));
+    const issued = await exchangeAuthCode(kv, verifier, config(kv));
+
+    const raw = await kv.get(`refresh:${issued.refresh_token}`);
+    const record = JSON.parse(raw!) as { expiresAt: number };
+    const now = Math.floor(Date.now() / 1000);
+    expect(record.expiresAt).toBeGreaterThan(now + 89 * 24 * 60 * 60);
+    expect(record.expiresAt).toBeLessThanOrEqual(now + 90 * 24 * 60 * 60);
+  });
+
+  it('honours a configured refresh-token TTL instead of the 90-day default', async () => {
+    const verifier = 'verifier-1';
+    const kv = makeKv();
+    await seedAuthCode(kv, await pkceChallenge(verifier));
+    const issued = await exchangeAuthCode(kv, verifier, config(kv, { refreshTokenTtlSeconds: 10 }));
+
+    const raw = await kv.get(`refresh:${issued.refresh_token}`);
+    const record = JSON.parse(raw!) as { expiresAt: number };
+    const now = Math.floor(Date.now() / 1000);
+    expect(record.expiresAt).toBeGreaterThan(now);
+    expect(record.expiresAt).toBeLessThanOrEqual(now + 10);
+  });
+
+  it('re-mints the session fresh on every refresh, independent of the original session TTL', async () => {
+    // A refresh record crafted directly (as if issued long ago) proves the
+    // new access token's session comes from re-minting the stored claims,
+    // not from reusing any previously-stored session JWT.
+    const kv = makeKv({
+      'refresh:tok-1': JSON.stringify({
+        claims: { uid: 'gh:1', login: 'alice', roles: ['user'] },
+        clientId: 'client-1',
+        appId: 'crm',
+        familyId: 'family-1',
+        usedAt: null,
+        expiresAt: Math.floor(Date.now() / 1000) + 100,
+      }),
+    });
+
+    const res = await handleOAuthRoute(refreshRequest('tok-1'), config(kv));
+    expect(res?.status).toBe(200);
+    const { access_token } = await res!.json() as { access_token: string };
+
+    const resolved = await resolveOAuthToken(access_token, kv);
+    expect(resolved?.bound).toBe(true);
+    const claims = await verifySession(resolved!.session, 'test-key');
+    expect(claims).not.toBeNull();
+    // Freshly minted just now, so it's got (near enough) a full 30-day life —
+    // nowhere near the refresh record's own 100-second deadline above.
+    expect(claims!.exp - Math.floor(Date.now() / 1000)).toBeGreaterThan(29 * 24 * 60 * 60);
+  });
+});
+
+describe('AS metadata and dynamic client registration (#418)', () => {
+  it('advertises refresh_token support in the authorization server metadata', async () => {
+    const res = await handleOAuthRoute(
+      new Request('https://mcp.proappstore.online/.well-known/oauth-authorization-server'),
+      { issuer: 'https://mcp.proappstore.online', authStart: 'https://api.proappstore.online/v1/auth/github/start', kv: makeKv(), sessionSigningKey: 'test-key' },
+    );
+    await expect(res?.json()).resolves.toMatchObject({
+      grant_types_supported: ['authorization_code', 'refresh_token'],
+    });
+  });
+
+  it('registers dynamic clients with refresh_token in their grant_types', async () => {
+    const res = await handleOAuthRoute(
+      new Request('https://mcp.proappstore.online/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ redirect_uris: ['https://client.example/cb'] }),
+      }),
+      { issuer: 'https://mcp.proappstore.online', authStart: 'https://api.proappstore.online/v1/auth/github/start', kv: makeKv(), sessionSigningKey: 'test-key' },
+    );
+    expect(res?.status).toBe(201);
+    const body = await res!.json() as { grant_types: string[] };
+    expect(body.grant_types).toEqual(['authorization_code', 'refresh_token']);
   });
 });
 

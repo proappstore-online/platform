@@ -142,6 +142,15 @@ from the reference is present:
   refused. Access tokens are opaque, KV-stored, 24h TTL, and bound to the
   requested MCP resource (`/mcp` or `/mcp/apps/<app_id>`). `mcp-remote`
   compatible.
+- **Refresh tokens (#418)** — issued alongside the access token on both the
+  `authorization_code` and `refresh_token` grants. Opaque, KV-stored, rotate on
+  every use (single-use; a replayed/already-rotated token revokes the whole
+  family), bound to `client_id` and to the appId/resource they were issued for.
+  Lifetime is a sliding 90-day window by default (`OAUTH_REFRESH_TTL_SECONDS` to
+  override), reset on every successful rotation — a client that keeps renewing
+  never needs the browser again. Each refresh re-mints the underlying PAS
+  session from its original claims, so it keeps working for the full 90 days
+  even though a session JWT's own TTL is 30 days.
 - **Session tokens** — the alternative to browser OAuth: pass a PAS session JWT as
   `Authorization: Bearer` (connection-level) or a per-call `token` arg on the loop
   tools. Verified locally via `verifySession` (`@proappstore/build-core`,
@@ -172,7 +181,8 @@ from the reference is present:
   before being interpolated into service-binding subrequest paths.
 
 **Known gaps vs. the PAGS reference** (intentional / deferred, not holes): no scope
-taxonomy (single-admin model); no token revocation or refresh; rate limiting only
+taxonomy (single-admin model); no refresh-token revocation endpoint (expiry +
+reuse-family revocation only — see Refresh tokens above); rate limiting only
 on `POST /register`, not `/token` or tool calls; audit skips reads and
 subject-less calls. Revisit if PAS ever authorizes third-party/delegated agents.
 

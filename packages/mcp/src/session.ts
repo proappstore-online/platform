@@ -2,5 +2,5 @@
 // @proappstore/build-core (already a workspace dep). The previous local copy had
 // drifted and was weaker — it accepted a token with no `exp` claim (`undefined <
 // now` is false) and skipped the `uid` check. Keep a single audited verifier.
-export { verifySession } from "@proappstore/build-core";
-export type { SessionClaims as SessionPayload } from "@proappstore/build-core";
+export { verifySession, mintSession } from "@proappstore/build-core";
+export type { SessionClaims as SessionPayload, NewSession } from "@proappstore/build-core";

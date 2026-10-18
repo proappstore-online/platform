@@ -4,11 +4,14 @@
  * Needs: OAUTH_KV binding, SESSION_SIGNING_KEY, AUTH_START var.
  */
 
-import { verifySession } from "./session.js";
+import { mintSession, verifySession } from "./session.js";
+import type { NewSession } from "./session.js";
 
 const AUTH_NONCE_COOKIE = "pas_mcp_oauth_nonce";
 const AUTH_PROVIDERS = ["github", "google"] as const;
 const APP_ID_RE = /^[a-z][a-z0-9-]{0,57}$/;
+/** Refresh-token lifetime default (#418): "sign-ins should last 90 days". */
+const DEFAULT_REFRESH_TTL_SECONDS = 90 * 86_400;
 type AuthProvider = typeof AUTH_PROVIDERS[number];
 
 export interface OAuthTokenResolution {
@@ -88,6 +91,13 @@ export interface OAuthConfig {
   kv: KVNamespace;
   /** HMAC signing key for session verification */
   sessionSigningKey: string;
+  /**
+   * Refresh-token lifetime in seconds (#418). Defaults to 90 days. Every
+   * successful refresh rotates to a new token and resets this window, so a
+   * client that keeps its access token renewed never has to send the user
+   * back through the browser.
+   */
+  refreshTokenTtlSeconds?: number;
 }
 
 export function createAuthChallenge(
@@ -151,7 +161,7 @@ export async function handleOAuthRoute(
       token_endpoint: `${config.issuer}/token`,
       registration_endpoint: `${config.issuer}/register`,
       response_types_supported: ["code"],
-      grant_types_supported: ["authorization_code"],
+      grant_types_supported: ["authorization_code", "refresh_token"],
       code_challenge_methods_supported: ["S256"],
       token_endpoint_auth_methods_supported: ["none"],
     });
@@ -391,7 +401,7 @@ async function register(request: Request, config: OAuthConfig): Promise<Response
     client_id: clientId,
     redirect_uris: redirectUris,
     client_name: body.client_name ?? null,
-    grant_types: ["authorization_code"],
+    grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],
     token_endpoint_auth_method: "none",
   };
@@ -590,7 +600,7 @@ async function oauthCallback(request: Request, config: OAuthConfig): Promise<Res
   });
 }
 
-/** POST /token — exchange auth code for access token (PKCE S256 verified) */
+/** POST /token — exchange auth code or refresh token for an access token */
 async function tokenExchange(request: Request, config: OAuthConfig): Promise<Response> {
   let body: URLSearchParams;
   try {
@@ -599,10 +609,18 @@ async function tokenExchange(request: Request, config: OAuthConfig): Promise<Res
     return json({ error: "invalid_request" }, 400);
   }
 
-  if (body.get("grant_type") !== "authorization_code") {
+  const grantType = body.get("grant_type");
+  if (grantType === "refresh_token") {
+    return refreshTokenGrant(body, config);
+  }
+  if (grantType !== "authorization_code") {
     return json({ error: "unsupported_grant_type" }, 400);
   }
+  return authorizationCodeGrant(body, config);
+}
 
+/** grant_type=authorization_code — PKCE S256 verified, single-use code. */
+async function authorizationCodeGrant(body: URLSearchParams, config: OAuthConfig): Promise<Response> {
   const code = body.get("code");
   const redirectUri = body.get("redirect_uri");
   const clientId = body.get("client_id");
@@ -636,10 +654,7 @@ async function tokenExchange(request: Request, config: OAuthConfig): Promise<Res
     "SHA-256",
     new TextEncoder().encode(codeVerifier),
   );
-  const computed = btoa(String.fromCharCode(...new Uint8Array(digest)))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+  const computed = base64url(new Uint8Array(digest));
 
   if (computed !== codeData.codeChallenge) {
     return json({ error: "invalid_grant", error_description: "PKCE verification failed" }, 400);
@@ -653,9 +668,139 @@ async function tokenExchange(request: Request, config: OAuthConfig): Promise<Res
     { expirationTtl: 86_400 },
   );
 
+  // Issue a refresh token (#418) so the client can renew without the browser
+  // for up to 90 days. This needs the session's claims (not the JWT itself —
+  // that may be only days from its own 30-day exp) so every later refresh can
+  // re-mint a fresh session regardless of how stale this one gets. Best
+  // effort: a session that doesn't verify (e.g. a legacy/raw value) still
+  // gets its access token, just no refresh_token.
+  const claims = await verifySession(codeData.session, config.sessionSigningKey);
+  const refreshToken = claims
+    ? await issueRefreshToken(config, {
+      claims: sessionSeed(claims),
+      clientId,
+      appId: codeData.appId ?? null,
+      familyId: crypto.randomUUID(),
+    })
+    : null;
+
   return json({
     access_token: accessToken,
     token_type: "bearer",
     expires_in: 86_400,
+    ...(refreshToken ? { refresh_token: refreshToken } : {}),
   });
+}
+
+interface RefreshTokenRecord {
+  /** Session claims to re-mint from, minus iat/exp (always fresh on rotation). */
+  claims: NewSession;
+  /** Public PKCE client this token is bound to (#418). */
+  clientId: string;
+  appId: string | null;
+  /** Shared by every token descended from one authorization — reuse revokes it all. */
+  familyId: string;
+  /** Set once this token has been redeemed; a second redemption is reuse. */
+  usedAt: number | null;
+  /** Epoch seconds. Reset to +refreshTokenTtlSeconds on every rotation (sliding window). */
+  expiresAt: number;
+}
+
+/** grant_type=refresh_token — rotates on every use; reuse revokes the family. */
+async function refreshTokenGrant(body: URLSearchParams, config: OAuthConfig): Promise<Response> {
+  const refreshToken = body.get("refresh_token");
+  const clientId = body.get("client_id");
+  if (!refreshToken || !clientId) {
+    return json({ error: "invalid_request" }, 400);
+  }
+
+  const key = `refresh:${refreshToken}`;
+  const raw = await config.kv.get(key);
+  if (!raw) {
+    return json({ error: "invalid_grant" }, 400);
+  }
+  const record = JSON.parse(raw) as RefreshTokenRecord;
+  const now = Math.floor(Date.now() / 1000);
+
+  if (record.clientId !== clientId) {
+    return json({ error: "invalid_grant" }, 400);
+  }
+  if (record.expiresAt < now) {
+    return json({ error: "invalid_grant" }, 400);
+  }
+  if (await familyRevoked(config.kv, record.familyId)) {
+    return json({ error: "invalid_grant" }, 400);
+  }
+  if (record.usedAt !== null) {
+    // This token was already rotated away. Someone is replaying an old one —
+    // kill the whole family, including whatever token it was rotated into.
+    await revokeFamily(config, record.familyId);
+    return json({ error: "invalid_grant" }, 400);
+  }
+
+  // Single-use: mark this one spent but keep the record (not delete it) until
+  // its own expiry, so a later replay is still caught by the check above.
+  await config.kv.put(key, JSON.stringify({ ...record, usedAt: now }), {
+    expirationTtl: Math.max(60, record.expiresAt - now),
+  });
+
+  // Re-mint the session fresh (#418): this is what makes the refresh work for
+  // the full 90 days even though the underlying session JWT's own TTL is 30
+  // days — we never read its exp, only the claims it was minted with.
+  const session = await mintSession(record.claims, config.sessionSigningKey);
+  const accessToken = crypto.randomUUID();
+  await config.kv.put(
+    `token:${accessToken}`,
+    JSON.stringify({ session, appId: record.appId }),
+    { expirationTtl: 86_400 },
+  );
+  const nextRefreshToken = await issueRefreshToken(config, {
+    claims: record.claims,
+    clientId: record.clientId,
+    appId: record.appId,
+    familyId: record.familyId,
+  });
+
+  return json({
+    access_token: accessToken,
+    token_type: "bearer",
+    expires_in: 86_400,
+    refresh_token: nextRefreshToken,
+  });
+}
+
+function sessionSeed(claims: { iat: number; exp: number } & NewSession): NewSession {
+  const { iat: _iat, exp: _exp, ...seed } = claims;
+  return seed;
+}
+
+async function issueRefreshToken(
+  config: Pick<OAuthConfig, "kv" | "refreshTokenTtlSeconds">,
+  input: { claims: NewSession; clientId: string; appId: string | null; familyId: string },
+): Promise<string> {
+  const ttlSeconds = config.refreshTokenTtlSeconds ?? DEFAULT_REFRESH_TTL_SECONDS;
+  const token = crypto.randomUUID();
+  const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const record: RefreshTokenRecord = {
+    claims: input.claims,
+    clientId: input.clientId,
+    appId: input.appId,
+    familyId: input.familyId,
+    usedAt: null,
+    expiresAt,
+  };
+  await config.kv.put(`refresh:${token}`, JSON.stringify(record), { expirationTtl: ttlSeconds });
+  return token;
+}
+
+async function familyRevoked(kv: KVNamespace, familyId: string): Promise<boolean> {
+  return (await kv.get(`revoked-refresh-family:${familyId}`)) === "1";
+}
+
+async function revokeFamily(
+  config: Pick<OAuthConfig, "kv" | "refreshTokenTtlSeconds">,
+  familyId: string,
+): Promise<void> {
+  const ttlSeconds = config.refreshTokenTtlSeconds ?? DEFAULT_REFRESH_TTL_SECONDS;
+  await config.kv.put(`revoked-refresh-family:${familyId}`, "1", { expirationTtl: ttlSeconds });
 }
