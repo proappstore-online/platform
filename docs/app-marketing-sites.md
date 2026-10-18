@@ -138,7 +138,7 @@ in the app's own data, and every app takes them, private ones included.
 
 | Route | Caller | Effect |
 |---|---|---|
-| `POST /v1/apps/:id/enquiries` | the `about-<id>` site | `name` (≤ 100), `email` (≤ 254, an address), `message` (≤ 5,000). A plain HTML form (`application/x-www-form-urlencoded`) is answered with a 303 to `https://about-<id>.proappstore.online/?enquiry=sent|invalid|rate-limited#enquiry`, so it works without JavaScript; JSON callers get 201/400/429. |
+| `POST /v1/apps/:id/enquiries` | the `about-<id>` site | `name` (≤ 100), `email` (≤ 254, an address), `message` (≤ 5,000). A plain HTML form (`application/x-www-form-urlencoded`) is answered with a 303 to `https://about-<id>.proappstore.online/?enquiry=<outcome>#enquiry-<outcome>` (`sent`, `invalid` or `rate-limited`), so the form can show the outcome with CSS `:target` and no JavaScript; JSON callers get 201/400/429. |
 | `GET /v1/apps/:id/enquiries?status=new\|handled&before=&limit=` | owner or admin | newest first (≤ 100), plus `counts: { new, total }` for an overview. |
 | `GET /v1/apps/:id/enquiries/:enquiryId` | owner or admin | one enquiry. |
 | `PATCH /v1/apps/:id/enquiries/:enquiryId` `{status}` | owner or admin | `new` or `handled`; records who handled it and when. |

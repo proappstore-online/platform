@@ -50,7 +50,7 @@ describe('POST /v1/apps/:appId/enquiries (#412)', () => {
 
     const f = await app.request('/v1/apps/shop/enquiries', form(good), db().env);
     expect(f.status).toBe(303);
-    expect(f.headers.get('Location')).toBe(`${ORIGIN}/?enquiry=sent#enquiry`);
+    expect(f.headers.get('Location')).toBe(`${ORIGIN}/?enquiry=sent#enquiry-sent`);
   });
 
   it('refuses a foreign or missing origin (403), an unknown or invalid app (404) and an oversized body (413)', async () => {
@@ -72,7 +72,7 @@ describe('POST /v1/apps/:appId/enquiries (#412)', () => {
     expect((await app.request('/v1/apps/shop/enquiries', post('{not json', 'application/json'), db().env)).status).toBe(400);
     expect((await app.request('/v1/apps/shop/enquiries', post('null', 'application/json'), db().env)).status).toBe(400);
     const f = await app.request('/v1/apps/shop/enquiries', form({ ...good, email: 'nope' }), db().env);
-    expect(f.headers.get('Location')).toBe(`${ORIGIN}/?enquiry=invalid#enquiry`);
+    expect(f.headers.get('Location')).toBe(`${ORIGIN}/?enquiry=invalid#enquiry-invalid`);
   });
 
   it('a filled honeypot looks like success and writes nothing', async () => {
@@ -91,7 +91,7 @@ describe('POST /v1/apps/:appId/enquiries (#412)', () => {
       expect(runs).toEqual([]);
     }
     const f = await app.request('/v1/apps/shop/enquiries', form(good), db({ counts: { from_ip: 99, today: 99 } }).env);
-    expect(f.headers.get('Location')).toBe(`${ORIGIN}/?enquiry=rate-limited#enquiry`);
+    expect(f.headers.get('Location')).toBe(`${ORIGIN}/?enquiry=rate-limited#enquiry-rate-limited`);
   });
 });
 

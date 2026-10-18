@@ -46,7 +46,7 @@ describe('enquiries: public POST (#412)', () => {
 
     const form = await postForm({ ...good, name: 'Grace' });
     expect(form.status).toBe(303);
-    expect(form.headers.get('Location')).toBe(`${ORIGIN}/?enquiry=sent#enquiry`);
+    expect(form.headers.get('Location')).toBe(`${ORIGIN}/?enquiry=sent#enquiry-sent`);
     expect(await stored()).toEqual([
       { ...good, status: 'new' },
       { ...good, name: 'Grace', status: 'new' },
@@ -73,7 +73,7 @@ describe('enquiries: public POST (#412)', () => {
     }
     const form = await postForm({ ...good, email: 'nope' });
     expect(form.status).toBe(303);
-    expect(form.headers.get('Location')).toBe(`${ORIGIN}/?enquiry=invalid#enquiry`);
+    expect(form.headers.get('Location')).toBe(`${ORIGIN}/?enquiry=invalid#enquiry-invalid`);
     expect(await stored()).toEqual([]);
   });
 
@@ -82,7 +82,7 @@ describe('enquiries: public POST (#412)', () => {
     expect(res.status).toBe(201);
     expect(await res.json()).toMatchObject({ ok: true });
     const form = await postForm({ ...good, [ENQUIRY_HONEYPOT]: 'x' });
-    expect(form.headers.get('Location')).toBe(`${ORIGIN}/?enquiry=sent#enquiry`);
+    expect(form.headers.get('Location')).toBe(`${ORIGIN}/?enquiry=sent#enquiry-sent`);
     expect(await stored()).toEqual([]);
   });
 
@@ -91,7 +91,7 @@ describe('enquiries: public POST (#412)', () => {
     const limited = await postJson(good);
     expect(limited.status).toBe(429);
     expect(limited.headers.get('Retry-After')).toBe('3600');
-    expect((await postForm(good, '203.0.113.7')).headers.get('Location')).toBe(`${ORIGIN}/?enquiry=rate-limited#enquiry`);
+    expect((await postForm(good, '203.0.113.7')).headers.get('Location')).toBe(`${ORIGIN}/?enquiry=rate-limited#enquiry-rate-limited`);
     // Another IP, and the same IP at another app, are not limited by it.
     expect((await postJson(good, { ip: '198.51.100.1' })).status).toBe(201);
     expect((await postJson(good, { appId: 'rival' })).status).toBe(201);

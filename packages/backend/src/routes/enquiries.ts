@@ -64,7 +64,7 @@ enquiryRoutes.post('/apps/:appId/enquiries', async (c) => {
   /** A form post goes back to the site with the outcome; an API caller gets JSON. */
   const answer = (outcome: Outcome, status: 201 | 400 | 429, extra: Record<string, unknown> = {}) =>
     isForm
-      ? c.redirect(`${aboutOrigin(appId)}/?enquiry=${outcome}#enquiry`, 303)
+      ? c.redirect(`${aboutOrigin(appId)}/?enquiry=${outcome}#enquiry-${outcome}`, 303)
       : c.json({ ok: outcome === 'sent', ...(outcome === 'sent' ? {} : { error: outcome }), ...extra }, status);
 
   if (!/^[a-z][a-z0-9-]{0,56}$/.test(appId) || !(await c.env.DB.prepare('SELECT 1 FROM apps WHERE id = ?').bind(appId).first())) {
