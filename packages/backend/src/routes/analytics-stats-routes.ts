@@ -235,6 +235,64 @@ export function registerStatsRoutes(analyticsRoutes: Hono<{ Bindings: Env }>) {
   );
 
   // ---------------------------------------------------------------------------
+  // Admin per-app usage (#417) — every registered app with its page views and
+  // daily series, zero-view apps included, plus platform totals. One AE query
+  // grouped by app and day, merged with the `apps` registry. There are no
+  // unique-visitor numbers: ingest records no visitor identifier, and #417
+  // rules out new tracking.
+  // ---------------------------------------------------------------------------
+
+  analyticsRoutes.get(
+    '/analytics/admin/apps',
+    wrap(async (c) => {
+      await requireAdmin(c);
+      const days = Math.min(
+        STATS_DAYS_MAX,
+        Math.max(1, Number(c.req.query('days') ?? STATS_DAYS_DEFAULT) | 0),
+      );
+      const effectiveTime = EFFECTIVE_TIME;
+      const q = `SELECT blob1 AS app, toStartOfDay(${effectiveTime}) AS t, SUM(_sample_interval) AS views FROM ${STATS_DATASET} WHERE blob2 = 'pageview' AND ${effectiveTime} > NOW() - INTERVAL '${days}' DAY GROUP BY app, t ORDER BY t ASC`;
+
+      const env = c.env as Env & { CF_ACCOUNT_ID?: string; CF_ANALYTICS_API_TOKEN?: string };
+      let rows: Array<{ app: string; t: string; views: number | string }>;
+      try {
+        rows = await cfAnalyticsSql(env, q);
+      } catch (err) {
+        if (err instanceof HttpError) throw err;
+        throw new HttpError(err instanceof Error ? err.message : 'app usage query failed', 502);
+      }
+      const { results: registered } = await c.env.DB.prepare('SELECT id FROM apps').all<{ id: string }>();
+
+      const apps = new Map<string, { app_id: string; registered: boolean; views: number; series: Array<{ t: string; views: number }> }>();
+      for (const { id } of registered) apps.set(id, { app_id: id, registered: true, views: 0, series: [] });
+      const platformSeries = new Map<string, number>();
+      for (const r of rows) {
+        const views = Number(r.views) || 0;
+        let app = apps.get(r.app);
+        // Views for an id no longer in the registry (a deleted app) still count.
+        if (!app) apps.set(r.app, (app = { app_id: r.app, registered: false, views: 0, series: [] }));
+        app.views += views;
+        app.series.push({ t: r.t, views });
+        platformSeries.set(r.t, (platformSeries.get(r.t) ?? 0) + views);
+      }
+
+      const list = [...apps.values()].sort((a, b) => b.views - a.views || a.app_id.localeCompare(b.app_id));
+      const withViews = list.filter((a) => a.views > 0).length;
+      return c.json({
+        days,
+        totals: {
+          views: list.reduce((sum, a) => sum + a.views, 0),
+          apps: list.length,
+          apps_with_views: withViews,
+          apps_without_views: list.length - withViews,
+        },
+        series: [...platformSeries].map(([t, views]) => ({ t, views })),
+        apps: list,
+      });
+    }),
+  );
+
+  // ---------------------------------------------------------------------------
   // Diagnostics — what's blocking analytics from showing data for this app.
   // Called by the dashboard when total_views=0; vendored from FAS shape.
   // ---------------------------------------------------------------------------
