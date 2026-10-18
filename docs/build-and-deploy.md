@@ -26,6 +26,10 @@ goes if we ever centralize. Decision record: [ADR-006](./adr/006-centralized-bui
      - The platform refuses the upload with `403` unless an admin has enabled
        app workers for the app.
      - Apps without `worker/` skip the step.
+     - When Actions cannot run, the owner can upload the same bundle with a
+       session instead: `pas worker deploy` uploads to
+       `PUT /v1/apps/<app>/worker`, which applies the same flag and bundle
+       checks (#406).
 
      The step is not yet in the canonical `deploy.yml` (#305).
 2. **`proappstore-host`** (one Worker, route `*.proappstore.online/*`) serves every

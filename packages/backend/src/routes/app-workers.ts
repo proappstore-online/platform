@@ -8,6 +8,7 @@
  * closed (ADR-009, "Trust assumptions").
  *
  *   PUT    /v1/apps/:appId/worker/oidc            the app's main-branch workflow uploads its bundle
+ *   PUT    /v1/apps/:appId/worker?sha=&ref=       owner: uploads the bundle from a session, same gate and checks (#406)
  *   PUT    /v1/admin/apps/:appId/worker-enabled   admin: { enabled } — off runs remove()
  *   GET    /v1/apps/:appId/worker                 owner: status, last deploy, last 20 deploys and invocations, schedules
  *   DELETE /v1/apps/:appId/worker                 owner: disable + remove()
@@ -20,7 +21,7 @@
  *
  * No route returns or logs the worker's token or event key.
  */
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, isAdminId, requireAdmin, requireAppOwner } from '../lib/auth.js';
 import { requireAppDeployOidc } from '../lib/app-deploy-oidc.js';
@@ -43,7 +44,7 @@ export const APP_WORKER_CAP = 5;
 export const appWorkerRoutes = new Hono<{ Bindings: Env }>();
 
 async function recordDeploy(
-  env: Env, appId: string, claims: { repository: string; ref?: string; sha?: string },
+  env: Env, appId: string, claims: { repository: string; ref?: string | undefined; sha?: string | undefined },
   status: 'deployed' | 'refused' | 'failed', detail: string, bundleSha: string | null = null,
 ): Promise<void> {
   await env.DB.prepare(
@@ -52,16 +53,19 @@ async function recordDeploy(
   ).bind(crypto.randomUUID(), appId, claims.repository, claims.ref ?? null, claims.sha ?? null, bundleSha, status, detail.slice(0, 500), Date.now()).run();
 }
 
-appWorkerRoutes.put('/apps/:appId/worker/oidc', async (c) => {
-  const appId = c.req.param('appId');
-  const claims = await requireAppDeployOidc(c, appId);
-
+/**
+ * Deploy an uploaded bundle: the admin flag before anything is read or stored,
+ * then `parseBundle`, then the host. Every attempt is recorded in app_worker_deploys.
+ */
+async function deployBundle(
+  c: Context<{ Bindings: Env }>, appId: string, source: { repository: string; ref?: string | undefined; sha?: string | undefined },
+): Promise<Response> {
   // The flag before anything is read or stored: a disabled app uploads nothing.
   const flag = await c.env.DB.prepare(
     'SELECT w.enabled FROM app_workers w INNER JOIN apps a ON a.id = w.app_id WHERE w.app_id = ?',
   ).bind(appId).first<{ enabled: number }>();
   if (flag?.enabled !== 1) {
-    await recordDeploy(c.env, appId, claims, 'refused', 'app workers are not enabled for this app');
+    await recordDeploy(c.env, appId, source, 'refused', 'app workers are not enabled for this app');
     throw new HttpError('app workers are not enabled for this app', 403);
   }
 
@@ -69,15 +73,39 @@ appWorkerRoutes.put('/apps/:appId/worker/oidc', async (c) => {
   let bundleSha: string | null = null;
   try {
     const form = await c.req.formData().catch(() => { throw new HttpError('the body must be multipart/form-data with one part per module', 400); });
-    const result = await host.deploy(appId, await parseBundle(form), { sha: claims.sha, ref: claims.ref });
+    const result = await host.deploy(appId, await parseBundle(form), { sha: source.sha, ref: source.ref });
     bundleSha = result.bundleSha256;
-    await recordDeploy(c.env, appId, claims, 'deployed', result.firstDeploy ? 'first deploy: credentials minted' : 'redeploy', bundleSha);
+    await recordDeploy(c.env, appId, source, 'deployed', result.firstDeploy ? 'first deploy: credentials minted' : 'redeploy', bundleSha);
     return c.json({ ok: true, backend: result.backend, bundle_sha256: result.bundleSha256, first_deploy: result.firstDeploy });
   } catch (e) {
     const status = e instanceof HttpError ? e.status : 500;
-    await recordDeploy(c.env, appId, claims, status < 500 ? 'refused' : 'failed', String((e as Error)?.message ?? e), bundleSha);
+    await recordDeploy(c.env, appId, source, status < 500 ? 'refused' : 'failed', String((e as Error)?.message ?? e), bundleSha);
     throw e;
   }
+}
+
+appWorkerRoutes.put('/apps/:appId/worker/oidc', async (c) => {
+  const appId = c.req.param('appId');
+  return deployBundle(c, appId, await requireAppDeployOidc(c, appId));
+});
+
+/** A git commit sha and ref the owner's upload may name, so status shows what is live. */
+const UPLOAD_SHA = /^[0-9a-f]{7,40}$/;
+const UPLOAD_REF = /^[\w./-]{1,200}$/;
+
+/**
+ * The owner's own upload (#406): the same flag gate and bundle checks as the
+ * workflow's keyless deploy, for when GitHub Actions cannot run. Recorded with
+ * repository `session:<user id>` so the deploy history shows who uploaded it.
+ */
+appWorkerRoutes.put('/apps/:appId/worker', async (c) => {
+  const appId = c.req.param('appId');
+  const user = await requireAppOwner(c, appId);
+  const sha = c.req.query('sha') || undefined;
+  const ref = c.req.query('ref') || undefined;
+  if (sha !== undefined && !UPLOAD_SHA.test(sha)) throw new HttpError('sha must be a 7-40 character lowercase hex commit sha', 400);
+  if (ref !== undefined && !UPLOAD_REF.test(ref)) throw new HttpError('ref must be a git ref name', 400);
+  return deployBundle(c, appId, { repository: `session:${user.id}`, sha, ref });
 });
 
 appWorkerRoutes.put('/admin/apps/:appId/worker-enabled', async (c) => {

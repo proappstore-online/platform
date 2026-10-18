@@ -418,9 +418,18 @@ new apps until an admin reopens it. Apps already running are not affected.
 
 ## Operating it
 
-The owner commands use your `pas login` session:
+The owner commands use your `pas login` session.
+
+`pas worker deploy` is the deploy path that does not need GitHub Actions (#406).
+It runs `pnpm --dir worker build`, then uploads every `.js`/`.mjs` file under
+`worker/dist` to `PUT /v1/apps/<app>/worker`. That route is owner-only and
+applies the same checks as the workflow's keyless deploy: the admin flag, then
+the bundle rules. The deploy history records it with repository
+`session:<user id>`. It also records the commit and branch, but only when the
+working tree is clean. Use `pas publish` to re-register `mcp.json` the same way.
 
 ```bash
+pas worker deploy [--no-build]          # build worker/ and upload worker/dist/*.js with your session (#406)
 pas worker status                       # enabled, today's usage vs quota, last deploy, schedules (and breaker state), recent invocations
 pas worker logs --since 10m [--follow]  # PAS.log lines + invocation outcomes
 pas worker rotate                       # new token + event key; the old pair works for 10 more minutes (a second rotate inside that window is refused)

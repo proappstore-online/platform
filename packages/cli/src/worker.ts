@@ -1,6 +1,10 @@
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { readdir, readFile } from 'node:fs/promises';
+import { join, relative, sep } from 'node:path';
 import { Command } from 'commander';
 import { type CliConfig } from './lib/config.js';
-import { ownerApi, requireSession, resolveAppIdOrExit } from './secret.js';
+import { dieFromHttp, ownerApi, requireSession, resolveAppIdOrExit } from './secret.js';
 
 // `pas worker` (#261): the app worker's state (ADR-009), owner-authenticated.
 
@@ -74,8 +78,41 @@ export async function workerLogLines(cfg: CliConfig, appId: string, since: numbe
 
 const FOLLOW_INTERVAL_MS = 5_000;
 
+/**
+ * Every .js/.mjs file under `dir`, one multipart part per module named by its
+ * path relative to `dir`: the parts the deploy workflow uploads (#406).
+ */
+export async function workerBundleForm(dir: string): Promise<FormData> {
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+  const names = entries
+    .filter((e) => e.isFile() && /\.m?js$/.test(e.name))
+    .map((e) => relative(dir, join(e.parentPath, e.name)).split(sep).join('/'))
+    .sort();
+  const form = new FormData();
+  for (const name of names) form.append(name, new Blob([await readFile(join(dir, name))], { type: 'application/javascript' }), name);
+  return form;
+}
+
+/**
+ * The commit and branch to record with an upload. Nothing when the tree has
+ * uncommitted changes (the bundle is not that commit) or `cwd` is not a git repo.
+ */
+export function gitSource(cwd: string): { sha?: string; ref?: string } {
+  const git = (...args: string[]) => {
+    try {
+      return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    } catch {
+      return null;
+    }
+  };
+  if (git('status', '--porcelain') !== '') return {};
+  const sha = git('rev-parse', 'HEAD');
+  const ref = git('symbolic-ref', '-q', 'HEAD');
+  return { ...(sha ? { sha } : {}), ...(ref ? { ref } : {}) };
+}
+
 export const workerCommand = new Command('worker')
-  .description('Inspect and manage the app worker (status, logs, keys, and admin enablement).')
+  .description('Deploy, inspect and manage the app worker (status, logs, keys, and admin enablement).')
   .addCommand(
     new Command('enable')
       .description('Enable an app worker (platform admin only).')
@@ -108,6 +145,37 @@ export const workerCommand = new Command('worker')
           { enabled: false },
         );
         process.stdout.write(`✓ Worker disabled for ${appId}\n`);
+      }),
+  )
+  .addCommand(
+    new Command('deploy')
+      .description('Build worker/ and upload its bundle with your session, for when the deploy workflow cannot run (#406).')
+      .option('--app <id>', 'app id (defaults to package.json name in cwd)')
+      .option('--no-build', 'upload worker/dist as it is, without `pnpm --dir worker build`')
+      .action(async (opts: { app?: string; build: boolean }) => {
+        const cfg = await requireSession();
+        const appId = await resolveAppIdOrExit(opts.app);
+        const cwd = process.cwd();
+        if (opts.build && spawnSync('pnpm', ['--dir', 'worker', 'build'], { cwd, stdio: 'inherit' }).status !== 0) {
+          process.stderr.write('pas: worker build failed\n');
+          process.exit(1);
+        }
+        const dist = join(cwd, 'worker', 'dist');
+        if (!existsSync(join(dist, 'app.js'))) {
+          process.stderr.write('pas: worker build must produce worker/dist/app.js\n');
+          process.exit(1);
+        }
+        const source = gitSource(cwd);
+        const query = new URLSearchParams(source).toString();
+        const res = await fetch(`${cfg.apiBase}/v1/apps/${appId}/worker${query ? `?${query}` : ''}`, {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${cfg.session!.token}` },
+          body: await workerBundleForm(dist),
+        });
+        if (!res.ok) await dieFromHttp(res, 'deploy worker');
+        const r = (await res.json()) as { backend: string; bundle_sha256: string; first_deploy: boolean };
+        const from = source.sha ? ` from ${source.sha.slice(0, 12)}` : ' (uncommitted changes: no commit recorded)';
+        process.stdout.write(`✓ Deployed app worker for ${appId}: ${r.bundle_sha256.slice(0, 12)} on ${r.backend}${from}${r.first_deploy ? ', first deploy' : ''}\n`);
       }),
   )
   .addCommand(

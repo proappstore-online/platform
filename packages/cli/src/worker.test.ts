@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -9,7 +13,7 @@ vi.mock('./lib/config.js', () => ({
 }));
 
 const { readSecretValue } = await import('./secret.js');
-const { parseSince, workerLogLines, workerCommand } = await import('./worker.js');
+const { gitSource, parseSince, workerBundleForm, workerLogLines, workerCommand } = await import('./worker.js');
 const { hookCommand } = await import('./hook.js');
 const { scheduleCommand } = await import('./schedule.js');
 
@@ -224,5 +228,66 @@ describe('owner commands (#261)', () => {
     expect(out.join('')).toContain('config version 3');
     await expect(run(scheduleCommand, ['run', 'nope'])).rejects.toThrow('exit 1');
     expect(err.join('')).toContain('run nope failed (404): not found');
+  });
+});
+
+describe('pas worker deploy (#406)', () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'pas-worker-')); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+  const write = (path: string, text: string) => {
+    mkdirSync(join(dir, path, '..'), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  };
+  const git = (...args: string[]) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: dir, stdio: 'ignore' });
+
+  it('uploads every .js/.mjs module under the directory, named by its relative path', async () => {
+    write('app.js', 'export default {}');
+    write('lib/util.mjs', 'export const x = 1');
+    write('app.js.map', '{}');
+    write('README.md', '#');
+    const form = await workerBundleForm(dir);
+    expect([...form.keys()]).toEqual(['app.js', 'lib/util.mjs']);
+    expect(await (form.get('lib/util.mjs') as File).text()).toBe('export const x = 1');
+  });
+
+  it('records the commit and branch only for a clean git tree', () => {
+    expect(gitSource(dir)).toEqual({});
+    git('init', '-q', '-b', 'main');
+    write('a.txt', 'a');
+    git('add', '.');
+    git('commit', '-q', '-m', 'a');
+    const clean = gitSource(dir);
+    expect(clean.sha).toMatch(/^[0-9a-f]{40}$/);
+    expect(clean.ref).toBe('refs/heads/main');
+    write('a.txt', 'changed');
+    expect(gitSource(dir)).toEqual({});
+  });
+
+  it('PUTs worker/dist to the owner upload route with the session and prints the result', async () => {
+    write('worker/dist/app.js', 'export default {}');
+    vi.spyOn(process, 'cwd').mockReturnValue(dir);
+    let sent: FormData | undefined;
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      calls.push({ method: init.method ?? 'GET', url, headers: new Headers(init.headers), body: undefined });
+      sent = init.body as FormData;
+      return Response.json({ ok: true, backend: 'loader', bundle_sha256: 'abcdef0123456789', first_deploy: false });
+    }));
+    await workerCommand.parseAsync(['node', 'worker', 'deploy', '--no-build', '--app', 'demo']);
+    expect(calls.map((c) => [c.method, c.url, c.headers.get('Authorization')])).toEqual([['PUT', 'https://api.test/v1/apps/demo/worker', 'Bearer tok']]);
+    expect([...sent!.keys()]).toEqual(['app.js']);
+    expect(out.join('')).toContain('✓ Deployed app worker for demo: abcdef012345 on loader (uncommitted changes: no commit recorded)');
+  });
+
+  it('refuses a missing worker/dist/app.js before calling anything, and prints a server refusal', async () => {
+    vi.spyOn(process, 'cwd').mockReturnValue(dir);
+    await expect(workerCommand.parseAsync(['node', 'worker', 'deploy', '--no-build', '--app', 'demo'])).rejects.toThrow('exit 1');
+    expect(err.join('')).toContain('worker/dist/app.js');
+    expect(calls).toEqual([]);
+
+    write('worker/dist/app.js', 'export default {}');
+    routes['PUT /v1/apps/demo/worker'] = Response.json({ error: 'app workers are not enabled for this app' }, { status: 403 });
+    await expect(workerCommand.parseAsync(['node', 'worker', 'deploy', '--no-build', '--app', 'demo'])).rejects.toThrow('exit 1');
+    expect(err.join('')).toContain('deploy worker failed (403): app workers are not enabled for this app');
   });
 });

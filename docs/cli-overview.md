@@ -47,6 +47,7 @@ pas proxy list                      # show proxy allowlist
 pas proxy deny <pattern>            # remove a proxy rule
 
 # App workers (owner; see docs/app-workers.md)
+pas worker deploy                   # build worker/ and upload it with your session (no CI needed)
 pas worker status                   # enabled flag, last deploy, schedules, recent invocations
 pas worker logs --since 10m -f      # PAS.log lines + invocation outcomes, following
 pas worker rotate                   # rotate the worker token + event key

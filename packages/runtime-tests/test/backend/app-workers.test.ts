@@ -165,6 +165,58 @@ describe('keyless deploy (#253)', () => {
   });
 });
 
+describe('owner upload from a session (#406)', () => {
+  const upload = async (appId: string, uid: string | null, modules: Record<string, string> = { 'app.js': APP_OK }, query = '') =>
+    SELF.fetch(`${BASE}/v1/apps/${appId}/worker${query}`, {
+      method: 'PUT',
+      headers: uid ? { Authorization: `Bearer ${await session(uid)}` } : {},
+      body: bundle(modules),
+    });
+  const deploys = async (appId: string) =>
+    (await env.DB.prepare('SELECT repository, sha, ref, status FROM app_worker_deploys WHERE app_id = ? ORDER BY created_at').bind(appId).all()).results;
+
+  it('needs a session, and only the owner may upload', async () => {
+    await enable('first');
+    expect((await upload('first', null)).status).toBe(401);
+    expect((await upload('first', 'gh:7')).status).toBe(403);
+    expect(await stored('first')).toEqual([]);
+    expect(await deploys('first')).toEqual([]);
+  });
+
+  it('with the flag off: 403, nothing stored, the refusal recorded against the session', async () => {
+    const res = await upload('first', 'gh:admin');
+    expect(res.status).toBe(403);
+    expect(await res.text()).toContain('app workers are not enabled for this app');
+    expect(await stored('first')).toEqual([]);
+    expect(await deploys('first')).toEqual([{ repository: 'session:gh:admin', sha: null, ref: null, status: 'refused' }]);
+  });
+
+  it('applies the same bundle checks, and refuses a malformed sha or ref', async () => {
+    await enable('first');
+    const bads: Record<string, string>[] = [{ 'app.js': APP_OK, 'wrangler.toml': 'x' }, { 'app.js': APP_OK, '__pas_entry.js': 'evil' }, { 'main.js': APP_OK }];
+    for (const bad of bads) {
+      expect((await upload('first', 'gh:admin', bad)).status, Object.keys(bad).join(',')).toBe(400);
+    }
+    expect((await upload('first', 'gh:admin', undefined, '?sha=NOTHEX')).status).toBe(400);
+    expect((await upload('first', 'gh:admin', undefined, '?ref=a%20b')).status).toBe(400);
+    expect(await stored('first')).toEqual([]);
+    expect((await row('first'))?.token_hash).toBeNull();
+  });
+
+  it('deploys like the keyless path and records the session, sha and ref', async () => {
+    await enable('first');
+    const res = await upload('first', 'gh:admin', { 'app.js': APP_OK }, '?sha=785913d&ref=refs%2Fheads%2Fmain');
+    expect(res.status, await res.clone().text()).toBe(200);
+    const body = await res.json() as { backend: string; bundle_sha256: string; first_deploy: boolean };
+    expect(body).toMatchObject({ ok: true, backend: 'loader', first_deploy: true });
+    expect(await stored('first')).toEqual([`_app-workers/first/${body.bundle_sha256}/app.js`]);
+    const w = (await row('first'))!;
+    expect(w.token_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(w.bundle_sha256).toBe(body.bundle_sha256);
+    expect(await deploys('first')).toEqual([{ repository: 'session:gh:admin', sha: '785913d', ref: 'refs/heads/main', status: 'deployed' }]);
+  });
+});
+
 describe('invocation through the platform shim on the Worker Loader (#253)', () => {
   const event = (payload: unknown, id = crypto.randomUUID()) => ({ id, type: 'schedule' as const, name: 'sync', attempt: 1, payload });
 
