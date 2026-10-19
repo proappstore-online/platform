@@ -16,7 +16,7 @@ Remote MCP server for AI agents to interact with the ProAppStore platform.
 `git checkout -b`, `git switch -c`, or `gh pr create`; if you find yourself on a non-`main` branch,
 stop and report it. See `platform/CLAUDE.md` § Delivery mode.
 
-## Tools (67 shared + dynamic per-app)
+## Tools (68 shared + dynamic per-app)
 
 ### Platform tools (no auth required unless noted)
 
@@ -27,6 +27,7 @@ stop and report it. See `platform/CLAUDE.md` § Delivery mode.
 | `deploy_status` | None | Check GitHub Actions deploy status |
 | `schema_status` | Session token | Show an app's D1 migration status (#33) — recent migrate attempts + whether the latest applied or FAILED (surfaces schema drift). Owner-only |
 | `app_info` | None | Get app URLs, repo, data worker, status |
+| `find_apps` | Connection | Read-only app directory (#424): every app you reach plus your drafts, searchable by id, name, live/store/repo URL or custom domain, filtered by lifecycle (`status`) and access; an exact id reports `yours` / `accessible` / `unclaimed` / `reserved` / `exists_inaccessible` (never the holder). `check_health` adds live `routeHealth` for the first 25 |
 | `list_templates` | None | Approved-template catalogue + selection contract (#178) — read-only; the same data as https://docs.proappstore.online/templates/catalogue.json. Pass an id as `template_repo` to `provision_pas_app`; unknown/withdrawn ids are refused, deprecated ones warn, and the copied source commit is recorded on the app |
 | `platform_guide` | None | Fetch skills.md (full platform guide), with the current build-on-ProShell block appended (#237) |
 | `sdk_reference` | None | Quick SDK reference. `shell` first: the ProShell-with-`nav` app frame and a complete minimal app. `components`: every UI component. Then auth, db, storage, maps, AI, subscriptions, hooks, UI, recipes, design_system. |

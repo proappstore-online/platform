@@ -68,6 +68,7 @@ checked against `server.json` by `src/server-json.test.ts`). Tools marked
 | `list_scheduled_runs` | List recent platform-scheduled registered-action runs for one app, including failures and the change count. Owner-only. |
 | `list_templates` | List the approved ProAppStore app templates and the selection contract: id, purpose, supported categories, required SDK/CLI/Node, capabilities, sec… |
 | `app_info` | Get info about any app on ProAppStore — live URL, repo, data worker, store listing. |
+| `find_apps` | Read-only app directory (#424): every app you reach plus your drafts, searchable by id, name, live/store/repo URL or custom domain, filtered by lifecycle (`status`) and access; an exact id reports `yours` / `accessible` / `unclaimed` / `reserved` / `exists_inaccessible` (never the holder). `check_health` adds live `routeHealth` for the first 25 |
 | `platform_guide` | Get the ProAppStore platform guide (skills.md) for AI-assisted development, plus current build-on-ProShell instructions. |
 | `sdk_reference` | Quick reference for @proappstore/sdk. `shell`: wrap the app in `<ProShell app={app} nav={…}>` (a complete minimal app, how to add navigation). `components`: every UI component. Then the data APIs and hooks. |
 | `recipe` | Get a pre-built code recipe for common PAS app patterns (CRUD list, forms, modals, maps, AI chat, notifications, etc.). |

@@ -13,8 +13,8 @@
 
 /** Tools on the shared /mcp endpoint. Independent of how many apps exist. */
 // #358 added the read-only provisioning_status receipt inspector; #421 add_marketing_site;
-// #423 the five ownership transfer/recovery tools.
-export const MCP_SHARED_TOOL_COUNT = 67;
+// #423 the five ownership transfer/recovery tools; #424 find_apps.
+export const MCP_SHARED_TOOL_COUNT = 68;
 
 /** Fixed tools on /mcp/apps/<id> besides that app's own tools (`whoami`, `mcp_audit_log`). */
 export const MCP_APP_SCOPED_FIXED = 2;

@@ -282,6 +282,10 @@
     {
       "name": "resolve_ownership_request",
       "description": "Platform admins: approve (confirm: true) or reject an escalated ownership request, with a required reason recorded in the audit record."
+    },
+    {
+      "name": "find_apps",
+      "description": "Read-only: search the app directory you can reach (and your drafts) by id, name, live/store/repo URL or custom domain; filter by lifecycle and access; an exact id reports yours/accessible/unclaimed/reserved/exists_inaccessible; optional live route health."
     }
   ],
   "_meta": {
@@ -345,7 +349,8 @@
           "app_info",
           "platform_guide",
           "sdk_reference",
-          "recipe"
+          "recipe",
+          "find_apps"
         ],
         "app tools": [
           "list_app_tools",

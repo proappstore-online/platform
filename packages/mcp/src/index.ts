@@ -14,6 +14,7 @@ import { registerAgentsTools } from "./agents-tools.js";
 import { registerQaTools } from "./qa-tools.js";
 import { registerAdminConsoleTools } from "./admin-console-tools.js";
 import { registerOwnershipTools } from "./ownership-tools.js";
+import { registerDirectoryTools } from "./directory-tools.js";
 import { brokerMcpReadSeen, createAuthChallenge, handleOAuthRoute, issueBrokerCredential, recordBrokerMcpRead, resolveOAuthToken } from "./oauth-provider.js";
 
 const AUTH_PROVIDERS = ["github", "google"] as const;
@@ -114,6 +115,12 @@ export class PasMcpAgent extends McpAgent<Env> {
 
       // ── App ownership transfer and recovery (#423) ──────────────
       registerOwnershipTools(this.server, this.env, () => ({
+        userId: this.userId,
+        token: this.userToken,
+      }));
+
+      // ── App directory discovery, read-only (#424) ───────────────
+      registerDirectoryTools(this.server, this.env, () => ({
         userId: this.userId,
         token: this.userToken,
       }));
