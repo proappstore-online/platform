@@ -70,6 +70,43 @@ deploy, and because only a successful, verified activation moves the pointer,
 the previous site keeps serving. Editing the folder and pushing publishes a new
 revision; re-running a deploy for the same commit is a no-op.
 
+## Adding the site to an existing app: `pas marketing add` (#410)
+
+New apps get `marketing/` from `template-app`. For an app created before it,
+run in the app repo's root:
+
+```bash
+pas marketing add
+pnpm --dir marketing install --ignore-workspace   # once
+pnpm dev:marketing                                # preview locally
+git add marketing package.json && git commit -m "Add marketing site" && git push
+```
+
+`pas marketing add` (`packages/cli/src/marketing.ts`):
+
+- shallow-clones the default approved template (`template-app`) and copies its
+  `marketing/` folder file by file — a file that already exists is **never
+  overwritten**, only reported as skipped, so re-running it is safe;
+- replaces `APPNAME` with the app id (from `.pas.json`, else the root
+  `package.json` name) in the files it adds, and pre-fills
+  `marketing/src/site.ts`: the app's name, headline, call to action and owner,
+  and — from the app's public listing (`GET /v1/storefront/apps/:id`), when it
+  has one — the summary (tagline), an https support link and the brand colours
+  (theme colour, with darker and lighter shades derived from it). A private or
+  unlisted app keeps the template's placeholders; review the copy before you
+  push;
+- adds root `dev:marketing` and `build:marketing` scripts
+  (`pnpm --dir marketing --ignore-workspace …`) only if they are absent.
+
+It leaves `pnpm-workspace.yaml` and the lockfile alone: `marketing/` is a
+standalone package with its own `pnpm-lock.yaml`, so the app's
+`pnpm install --frozen-lockfile` is unaffected, and the deploy step installs
+it on its own (`pnpm --dir marketing install --ignore-workspace`).
+
+The next push publishes it **if the app's `.github/workflows/deploy.yml` has
+the "Publish marketing site" step**; the command says so when it does not. An
+app on an older workflow needs it updated to the canonical one first.
+
 ## Default URL
 
 `https://about-<app-id>.proappstore.online/` with a reserved `about-` hostname

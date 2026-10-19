@@ -56,6 +56,9 @@ pas schedule run <name>             # run a worker schedule on the next tick
 pas hook list                       # hook URLs, verifiers, secret set/missing
 pas hook deliveries <name> --status failed
 
+# Marketing site at about-<app> (see docs/app-marketing-sites.md)
+pas marketing add                   # add marketing/ from template-app to an existing app; never overwrites
+
 # Remote MCP sign-in from your phone (see docs/mcp-remote-auth-client.md)
 pas mcp-auth connect                # approve this headless machine on your phone; stores the MCP credential
 pas mcp-auth status                 # the stored connection and its expiry (never the credential)

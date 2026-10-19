@@ -286,6 +286,8 @@ describe("canonical deploy workflow — single source of truth", () => {
     expect(step).toContain("if: hashFiles('marketing/package.json') != ''");
     expect(step).toContain("continue-on-error: true");
     expect(step).toContain("pnpm --dir marketing build");
+    // #410: a marketing/ outside the pnpm workspace is installed on its own.
+    expect(step).toContain("pnpm --dir marketing install --ignore-workspace --no-frozen-lockfile");
     expect(step).toContain("REVISION: ${{ github.sha }}");
     expect(step).toContain("encodeURIComponent('https://api.proappstore.online')"); // the app-deploy audience
     for (const route of ["'revisions/' + REVISION", "'activate'", "'rollback'"]) expect(step).toContain(route);

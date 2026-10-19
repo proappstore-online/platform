@@ -229,7 +229,10 @@ jobs:
           # only a successful activation switches the site, so a broken build, upload
           # or activation leaves the previous revision serving. Same keyless OIDC
           # trust as the steps above; never blocks the app deploy (continue-on-error).
-          [ -x marketing/node_modules/.bin/astro ] || pnpm --dir marketing install --no-frozen-lockfile
+          # A marketing/ added to an existing app (pas marketing add, #410) is not a
+          # pnpm workspace member, so the Install step above skipped it: install it
+          # on its own, leaving the app's lockfile alone.
+          [ -x marketing/node_modules/.bin/astro ] || pnpm --dir marketing install --ignore-workspace --no-frozen-lockfile
           pnpm --dir marketing build
           node --input-type=module <<'JS'
           import { createHash } from 'node:crypto';

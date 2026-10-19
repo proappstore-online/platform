@@ -237,7 +237,7 @@ async function* walk(dir: string): AsyncGenerator<string> {
   }
 }
 
-async function exists(path: string): Promise<boolean> {
+export async function exists(path: string): Promise<boolean> {
   try {
     await access(path);
     return true;
@@ -254,7 +254,7 @@ async function runCapture(cmd: string, args: string[], cwd?: string): Promise<st
   });
 }
 
-function run(cmd: string, args: string[], cwd?: string): Promise<void> {
+export function run(cmd: string, args: string[], cwd?: string): Promise<void> {
   return new Promise((resolveFn, rejectFn) => {
     const child = spawn(cmd, args, { stdio: 'inherit', cwd });
     child.on('exit', (code) => {
