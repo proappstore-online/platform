@@ -48,3 +48,10 @@ export {
   verifyTurnstile,
 } from './turnstile.js';
 export type { TurnstileConfig, TurnstileReason, TurnstileResult } from './turnstile.js';
+export {
+  MARKETING_DEPLOY_STEP,
+  MARKETING_SCRIPTS,
+  MARKETING_TEXT_EXTENSIONS,
+  prefillSite,
+} from './marketing-site.js';
+export type { MarketingListing } from './marketing-site.js';

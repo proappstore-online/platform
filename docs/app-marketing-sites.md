@@ -107,6 +107,18 @@ The next push publishes it **if the app's `.github/workflows/deploy.yml` has
 the "Publish marketing site" step**; the command says so when it does not. An
 app on an older workflow needs it updated to the canonical one first.
 
+### Over MCP: `add_marketing_site` (#421)
+
+The same thing without a checkout: `add_marketing_site { app_id }` on
+`mcp.proappstore.online/mcp` (owner only; `dry_run: true` previews the plan).
+It reads `template-app`'s `marketing/` through the GitHub API, skips every file
+the app repo already has, applies the same `APPNAME` replacement, `site.ts`
+pre-fill (`prefillSite` in `packages/build-core/src/marketing-site.ts`, held
+equal to the CLI's copy by its test) and root scripts, and commits the result
+to `main` in **one** commit, so the push deploys it. Binary files (the icon)
+go in that same commit as base64 blobs. It reports whether `deploy.yml`
+publishes the site, as the CLI does; it never writes under `.github/`.
+
 ## Default URL
 
 `https://about-<app-id>.proappstore.online/` with a reserved `about-` hostname

@@ -1261,3 +1261,157 @@ describe('safety: read-only mode', () => {
     expect(getText(result)).toBe('hello');
   });
 });
+
+describe('add_marketing_site (#421)', () => {
+  const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64');
+  const ICON = 'iVBORw0KGgoAAAANSUhEUg==';
+  /** template-app's marketing/ (#407), trimmed: text with APPNAME, the site config, and a binary icon. */
+  const TEMPLATE: Record<string, string> = {
+    'marketing/package.json': b64('{"name":"@APPNAME/marketing"}'),
+    'marketing/astro.config.ts': b64("site: 'https://about-APPNAME.proappstore.online'"),
+    'marketing/src/site.ts': b64("export const site = {\n  appId: 'APPNAME',\n  name: 'APPNAME',\n  summary: 'Describe APPNAME.',\n  colors: {\n    accent: '#d86f4d',\n    accentDeep: '#9f4427',\n    accentSoft: '#ffd4bf',\n  },\n}\n"),
+    'marketing/src/pages/index.astro': b64('<form action={`https://api.proappstore.online/v1/apps/${site.appId}/enquiries`}>'),
+    'marketing/public/icon-192.png': ICON,
+  };
+  const DEPLOY_OLD = 'jobs:\n  deploy:\n    steps:\n      - name: Upload to R2\n';
+  const DEPLOY_NEW = `${DEPLOY_OLD}      - name: Publish marketing site (marketing/ -> about-<app>, keyless)\n`;
+
+  /** GitHub as the tool reads it: template-app's tree + blobs, the app's tree, package.json and deploy.yml. */
+  function github(opts: { appFiles?: string[]; truncated?: boolean; unlisted?: string[]; pkg?: string | null; deploy?: string; templateStatus?: number } = {}) {
+    const appFiles = opts.appFiles ?? ['package.json', 'web/src/App.tsx'];
+    mockGh.api.mockImplementation(async (path: string) => {
+      if (path === '/repos/proappstore-online/template-app/git/trees/main?recursive=1') {
+        if (opts.templateStatus) return { ok: false, status: opts.templateStatus, data: {} };
+        const tree = [
+          { path: 'marketing', type: 'tree', sha: 'd' },
+          ...Object.keys(TEMPLATE).map((p) => ({ path: p, type: 'blob', sha: `sha:${p}` })),
+          { path: 'marketing/node_modules/x/index.js', type: 'blob', sha: 'junk' },
+          { path: 'web/src/App.tsx', type: 'blob', sha: 'web' },
+        ];
+        return { ok: true, status: 200, data: { tree } };
+      }
+      const blob = path.match(/^\/repos\/proappstore-online\/template-app\/git\/blobs\/sha:(.+)$/);
+      if (blob) return { ok: true, status: 200, data: { encoding: 'base64', content: TEMPLATE[blob[1]!]!.replace(/(.{8})/g, '$1\n') } };
+      if (path === '/repos/test-org/shop/git/trees/main?recursive=1') {
+        return { ok: true, status: 200, data: { truncated: opts.truncated ?? false, tree: appFiles.map((p) => ({ path: p, type: 'blob', sha: p })) } };
+      }
+      return { ok: false, status: 404, data: {} };
+    });
+    mockGh.getFile.mockImplementation(async (_id: string, path: string) => {
+      if (path === 'package.json' && opts.pkg !== null) return { ok: true, status: 200, sha: 'p', content: opts.pkg ?? '{"name":"shop","scripts":{"build":"vite build"}}' };
+      if (path === '.github/workflows/deploy.yml') return { ok: true, status: 200, sha: 'w', content: opts.deploy ?? DEPLOY_NEW };
+      if (opts.unlisted?.includes(path)) return { ok: true, status: 200, sha: 'x', content: '' };
+      return { ok: false, status: 404 };
+    });
+    mockGh.pushFiles.mockResolvedValue({ ok: true, commitSha: 'abcdef1234567890' });
+  }
+  const listing = (body: unknown, status = 200) =>
+    mockFetch.mockImplementation(async (url: string) =>
+      url === 'https://api.test.com/v1/storefront/apps/shop'
+        ? new Response(JSON.stringify(body), { status })
+        : new Response('{}', { status: 404 }));
+  const pushed = () => mockGh.pushFiles.mock.calls[0]![1] as { path: string; content: string; encoding?: string }[];
+  const run = (args: Record<string, unknown> = {}) => tools.get('add_marketing_site')!({ app_id: 'shop', ...args });
+
+  it('adds every template file in one commit: APPNAME replaced, site.ts pre-filled, the icon as base64, root scripts added', async () => {
+    github();
+    listing({ tagline: 'Sell anything.', themeColor: '#336699' });
+    const out = getText(await run());
+
+    expect(mockGh.pushFiles).toHaveBeenCalledTimes(1);
+    const files = Object.fromEntries(pushed().map((f) => [f.path, f]));
+    expect(Object.keys(files).sort()).toEqual([...Object.keys(TEMPLATE), 'package.json'].sort());
+    expect(files['marketing/package.json']!.content).toBe('{"name":"@shop/marketing"}');
+    expect(files['marketing/src/pages/index.astro']!.content).toContain('/v1/apps/${site.appId}/enquiries');
+    expect(files['marketing/src/site.ts']!.content).toContain("appId: 'shop'");
+    expect(files['marketing/src/site.ts']!.content).toContain('name: "Shop"');
+    expect(files['marketing/src/site.ts']!.content).toContain('summary: "Sell anything."');
+    expect(files['marketing/src/site.ts']!.content).toContain('accent: "#336699"');
+    expect(files['marketing/public/icon-192.png']).toEqual({ path: 'marketing/public/icon-192.png', content: ICON, encoding: 'base64' });
+    expect(JSON.parse(files['package.json']!.content).scripts).toEqual({
+      build: 'vite build',
+      'dev:marketing': 'pnpm --dir marketing --ignore-workspace dev',
+      'build:marketing': 'pnpm --dir marketing --ignore-workspace build',
+    });
+    expect(Object.keys(files).some((p) => p.includes('node_modules') || p.startsWith('web/'))).toBe(false);
+
+    expect(out).toContain('committed to main (abcdef1)');
+    expect(out).toContain('5 file(s) added, 0 skipped, 2 script(s) added.');
+    expect(out).toContain('Pre-filled in marketing/src/site.ts: name, summary, colors');
+    expect(out).toContain('publishes it to https://about-shop.proappstore.online/');
+  });
+
+  it('never overwrites: existing files and scripts are skipped and reported', async () => {
+    github({
+      appFiles: ['package.json', 'marketing/src/site.ts', 'marketing/public/icon-192.png'],
+      pkg: '{"name":"shop","scripts":{"dev:marketing":"custom"}}',
+    });
+    listing({}, 404);
+    const out = getText(await run());
+    const paths = pushed().map((f) => f.path);
+    expect(paths).not.toContain('marketing/src/site.ts');
+    expect(paths).not.toContain('marketing/public/icon-192.png');
+    expect(JSON.parse(pushed().find((f) => f.path === 'package.json')!.content).scripts).toEqual({
+      'dev:marketing': 'custom',
+      'build:marketing': 'pnpm --dir marketing --ignore-workspace build',
+    });
+    expect(out).toContain('= marketing/src/site.ts (exists, left as is)');
+    expect(out).toContain('3 file(s) added, 2 skipped, 1 script(s) added.');
+    expect(out).not.toContain('Pre-filled');
+  });
+
+  it('checks each file one by one when the app tree listing is truncated', async () => {
+    // In the repo, but beyond what the truncated listing shows.
+    github({ appFiles: ['package.json'], truncated: true, unlisted: ['marketing/astro.config.ts'] });
+    listing({}, 404);
+    await run();
+    expect(pushed().map((f) => f.path)).not.toContain('marketing/astro.config.ts');
+    expect(mockGh.getFile).toHaveBeenCalledWith('shop', 'marketing/astro.config.ts');
+  });
+
+  it('commits nothing when everything is already there', async () => {
+    github({ appFiles: ['package.json', ...Object.keys(TEMPLATE)], pkg: '{"name":"shop","scripts":{"dev:marketing":"a","build:marketing":"b"}}' });
+    const out = getText(await run());
+    expect(mockGh.pushFiles).not.toHaveBeenCalled();
+    expect(out).toContain('Nothing to add');
+  });
+
+  it('dry_run previews the plan and writes nothing', async () => {
+    github();
+    const out = getText(await run({ dry_run: true }));
+    expect(mockGh.pushFiles).not.toHaveBeenCalled();
+    expect(out).toContain('+ marketing/src/site.ts');
+    expect(out).toContain('+ package.json script build:marketing');
+  });
+
+  it('says when deploy.yml will not publish the site yet', async () => {
+    github({ deploy: DEPLOY_OLD });
+    listing({}, 404);
+    const out = getText(await run());
+    expect(out).toContain('has no "Publish marketing site" step, so a push will not publish it yet');
+  });
+
+  it('refuses a caller who does not own the app, before reading anything', async () => {
+    mockOwnership.mockResolvedValue(false);
+    const out = getText(await run({ app_id: 'rival' })); // ownership is cached per app; a fresh id
+    expect(mockOwnership).toHaveBeenCalled();
+    expect(out).toContain("you don't own app \"rival\"");
+    expect(mockGh.api).not.toHaveBeenCalled();
+    expect(mockGh.pushFiles).not.toHaveBeenCalled();
+  });
+
+  it('fails cleanly when the template cannot be read, or the commit is refused', async () => {
+    github({ templateStatus: 502 });
+    const unreadable = await run();
+    expect(unreadable.isError).toBe(true);
+    expect(getText(unreadable)).toContain('Could not read marketing/ from proappstore-online/template-app@main (HTTP 502)');
+    expect(mockGh.pushFiles).not.toHaveBeenCalled();
+
+    github();
+    listing({}, 404);
+    mockGh.pushFiles.mockResolvedValue({ ok: false, error: 'ref update failed: conflict' });
+    const refused = await run();
+    expect(refused.isError).toBe(true);
+    expect(getText(refused)).toContain('ref update failed: conflict');
+  });
+});

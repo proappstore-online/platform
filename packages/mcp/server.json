@@ -116,6 +116,10 @@
       "description": "Write multiple files in a single commit to a PAS app's GitHub repo."
     },
     {
+      "name": "add_marketing_site",
+      "description": "Add template-app's Astro marketing site (home, Privacy, Terms, contact form) to an existing app repo in one commit, never overwriting; equivalent to `pas marketing add`."
+    },
+    {
       "name": "create_app",
       "description": "Create a new Agent Teams project (an app the AI team builds)."
     },
@@ -296,7 +300,8 @@
           "provision_pas_app",
           "publish_app",
           "scaffold_app",
-          "apply_admin_update"
+          "apply_admin_update",
+          "add_marketing_site"
         ],
         "audit": "every mutating call, dry-run and read-only denial is recorded per user (90 days, secrets redacted); read it with mcp_audit_log",
         "errors": "failures return isError: true"
@@ -333,7 +338,8 @@
           "get_deploy_status",
           "provision_app",
           "publish_app",
-          "batch_write_files"
+          "batch_write_files",
+          "add_marketing_site"
         ],
         "agent teams": [
           "create_app",

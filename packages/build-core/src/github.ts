@@ -63,7 +63,8 @@ export interface GitHub {
   /** Push many files as ONE commit (Git Data API). Seeds empty repos when asked. */
   pushFiles(
     id: string,
-    files: { path: string; content: string }[],
+    /** `encoding: 'base64'` marks a binary file: `content` is its bytes in base64. */
+    files: { path: string; content: string; encoding?: 'utf-8' | 'base64' }[],
     message: string,
     opts?: { initIfEmpty?: boolean },
   ): Promise<{ ok: boolean; commitSha?: string; error?: string }>;
@@ -263,7 +264,16 @@ export function makeGitHub(token: string, org: string): GitHub {
       // which stranded deploys. The create-tree API builds the blobs from inline
       // utf-8 content in ONE request. App source is text (the blob path already
       // assumed utf-8), so no behaviour change — just far fewer API calls.
-      const treeItems = files.map((f) => ({ path: f.path, mode: '100644', type: 'blob' as const, content: f.content }));
+      // A binary file cannot go inline (tree content is utf-8), so it gets its
+      // own blob first; there are few of them (an icon, an image).
+      const treeItems: ({ path: string; mode: '100644'; type: 'blob' } & ({ content: string } | { sha: string }))[] = [];
+      for (const f of files) {
+        if (f.encoding !== 'base64') { treeItems.push({ path: f.path, mode: '100644', type: 'blob', content: f.content }); continue; }
+        const blob = await api(`/repos/${r}/git/blobs`, { method: 'POST', body: { content: f.content, encoding: 'base64' } });
+        const sha = d(blob).sha as string | undefined;
+        if (!sha) return { ok: false, error: `blob creation failed for ${f.path}: ${(d(blob).message as string | undefined) ?? `HTTP ${blob.status}`}` };
+        treeItems.push({ path: f.path, mode: '100644', type: 'blob', sha });
+      }
 
       // GitHub returns the real reason in `.message` — surface it (e.g. "refusing
       // to allow a Personal Access Token to create or update workflow

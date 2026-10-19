@@ -16,7 +16,7 @@ Remote MCP server for AI agents to interact with the ProAppStore platform.
 `git checkout -b`, `git switch -c`, or `gh pr create`; if you find yourself on a non-`main` branch,
 stop and report it. See `platform/CLAUDE.md` § Delivery mode.
 
-## Tools (60 shared + dynamic per-app)
+## Tools (62 shared + dynamic per-app)
 
 ### Platform tools (no auth required unless noted)
 
@@ -51,6 +51,7 @@ Tools marked **confirm** need `confirm: true` to execute; **dry_run** tools acce
 | `delete_file` | Delete a file from an app's repo — **confirm**, **dry_run** |
 | `search_files` | Search file contents in an app's repo |
 | `batch_write_files` | Write multiple files in one commit |
+| `add_marketing_site` | Add template-app's Astro marketing site (`marketing/`) in one commit, never overwriting; pre-fills `site.ts`, adds root scripts, reports whether `deploy.yml` publishes it (#421, = `pas marketing add`) — **dry_run** |
 | `get_deploy_status` | Check deploy status for a specific app |
 | `provision_app` | Provision platform resources (route, D1, data worker) — **confirm**, **dry_run** |
 | `publish_app` | Provision + list the app on the public storefront — **confirm**, **dry_run** |
@@ -167,7 +168,7 @@ from the reference is present:
   return the plan they *would* execute and make no changes. A preview needs no
   `confirm` and is allowed even in read-only mode. Tools: `scaffold_app`,
   `provision_pas_app`, `provision_app`, `publish_app`, `delete_file`, `deploy_project`,
-  `delete_project_files`, `apply_admin_update`.
+  `delete_project_files`, `apply_admin_update`, `add_marketing_site`.
 - **Ownership** — project tools (`write_file`, `read_file`, `provision_app`,
   `publish_app`, …) call `requireOwner` (`verifyAppOwnership`, 60s-cached) so a
   session can only touch apps it owns. Loop/agents/QA tools forward the token and

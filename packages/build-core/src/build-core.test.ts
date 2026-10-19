@@ -117,6 +117,43 @@ describe('makeGitHub', () => {
     expect(calls.some((c) => c.startsWith('PATCH') && c.endsWith('/git/refs/heads/main'))).toBe(true);
   });
 
+  it('pushFiles gives a base64 (binary) file its own blob and keeps text inline (#421)', async () => {
+    let treeBody: { tree: Record<string, unknown>[] } | undefined;
+    const blobBodies: unknown[] = [];
+    mockFetch((url, init) => {
+      if (url.endsWith('/git/ref/heads/main')) return { body: { object: { sha: 'parent' } } };
+      if (url.endsWith('/git/commits/parent')) return { body: { tree: { sha: 'basetree' } } };
+      if (url.endsWith('/git/blobs')) { blobBodies.push(JSON.parse(init!.body as string)); return { status: 201, body: { sha: 'blob1' } }; }
+      if (url.endsWith('/git/trees')) { treeBody = JSON.parse(init!.body as string); return { body: { sha: 'tree1' } }; }
+      if (url.endsWith('/git/commits')) return { body: { sha: 'commit1' } };
+      return { body: { ref: 'refs/heads/main' } };
+    });
+    const gh = makeGitHub('t', 'org');
+    const res = await gh.pushFiles('app', [
+      { path: 'a.ts', content: 'x' },
+      { path: 'icon.png', content: 'iVBORw0KGgo=', encoding: 'base64' },
+    ], 'msg');
+    expect(res.ok).toBe(true);
+    expect(blobBodies).toEqual([{ content: 'iVBORw0KGgo=', encoding: 'base64' }]);
+    expect(treeBody!.tree).toEqual([
+      { path: 'a.ts', mode: '100644', type: 'blob', content: 'x' },
+      { path: 'icon.png', mode: '100644', type: 'blob', sha: 'blob1' },
+    ]);
+  });
+
+  it('pushFiles stops before any commit when a binary blob is refused', async () => {
+    const calls: string[] = [];
+    mockFetch((url, init) => {
+      calls.push(`${init?.method ?? 'GET'} ${url}`);
+      if (url.endsWith('/git/ref/heads/main')) return { body: { object: { sha: 'parent' } } };
+      if (url.endsWith('/git/blobs')) return { status: 403, body: { message: 'Resource not accessible' } };
+      return { body: {} };
+    });
+    const res = await makeGitHub('t', 'org').pushFiles('app', [{ path: 'icon.png', content: 'AA==', encoding: 'base64' }], 'msg');
+    expect(res).toEqual({ ok: false, error: 'blob creation failed for icon.png: Resource not accessible' });
+    expect(calls.some((c) => c.endsWith('/git/trees') || c.endsWith('/git/commits'))).toBe(false);
+  });
+
   it('pushFiles refuses an empty repo unless initIfEmpty', async () => {
     mockFetch((url) => (url.endsWith('/git/ref/heads/main') ? { status: 404, body: {} } : { body: {} }));
     const gh = makeGitHub('t', 'org');

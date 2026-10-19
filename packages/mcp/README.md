@@ -102,6 +102,7 @@ found with `discover_tools` / `describe_tool` on the app endpoint).
 | `provision_app` | Provision platform resources for a PAS app (R2 route, D1 database, data worker). — **confirm**, **dry_run** |
 | `publish_app` | Publish a PAS app to the storefront. — **confirm**, **dry_run** |
 | `batch_write_files` | Write multiple files in a single commit to a PAS app's GitHub repo. |
+| `add_marketing_site` | Add template-app's Astro marketing site to an existing app repo in one commit, never overwriting (= `pas marketing add`). `dry_run` previews. |
 
 ### Agent Teams (drive the autonomous build loop)
 

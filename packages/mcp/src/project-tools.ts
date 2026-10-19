@@ -11,6 +11,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { makeGitHub } from "@proappstore/build-core";
 import { selectTemplate, getTemplate, DEFAULT_TEMPLATE_ID } from "@proappstore/build-core";
+import { b64decode, prefillSite, MARKETING_DEPLOY_STEP, MARKETING_SCRIPTS, MARKETING_TEXT_EXTENSIONS, type MarketingListing } from "@proappstore/build-core";
 import { createProvisioningWorkflow, type ProvisionOperationReceipt } from "./provisioning-workflow.js";
 import { gateMutation, dryRun } from "./safety.js";
 import { BUILD_WITH_PROSHELL } from "./sdk-reference.js";
@@ -607,6 +608,93 @@ export function registerProjectTools(
       const res = await gh.pushFiles(app_id, files, message, { initIfEmpty: true });
       if (!res.ok) return text(`Error committing files: ${res.error ?? "unknown"}`);
       return text(`Committed ${files.length} file(s): ${message}\n${files.map((f) => `  + ${f.path}`).join("\n")}`);
+    },
+  );
+
+  // ── add_marketing_site ────────────────────────────────────
+  // #421: the MCP form of `pas marketing add` (#410). Reads template-app's
+  // marketing/ through the GitHub API (a Worker cannot clone) and adds it to the
+  // app repo in ONE commit, never overwriting a file that is already there.
+  server.tool(
+    "add_marketing_site",
+    "Add the Astro marketing site (home, Privacy, Terms, contact form) from template-app to an existing PAS app repo, equivalent to `pas marketing add`. Never overwrites: existing files are skipped and reported. Pre-fills marketing/src/site.ts from the app id and public listing, adds dev:marketing/build:marketing root scripts where absent, and commits once to main. The deploy publishes it to https://about-<app_id>.proappstore.online/.",
+    { app_id: APP_ID, dry_run: DRY_RUN },
+    async ({ app_id, dry_run }) => {
+      const auth = await requireOwner(app_id);
+      if ('content' in auth) return auth;
+      const template = getTemplate(DEFAULT_TEMPLATE_ID)!;
+      const blobsOf = (res: { ok: boolean; data: unknown }) =>
+        ((res.data as { tree?: { path: string; type: string; sha: string }[] } | null)?.tree ?? []).filter((t) => t.type === "blob");
+
+      const templateTree = await gh.api(`/repos/${template.repo}/git/trees/${template.ref}?recursive=1`);
+      const sources = blobsOf(templateTree).filter((t) => t.path.startsWith("marketing/") && !/(^|\/)(node_modules|dist|\.astro)\//.test(t.path));
+      if (!templateTree.ok || sources.length === 0) return errText(`Could not read marketing/ from ${template.repo}@${template.ref} (HTTP ${templateTree.status}). Nothing was written.`);
+
+      const appTree = await gh.api(`/repos/${org}/${app_id}/git/trees/main?recursive=1`);
+      if (!appTree.ok) return errText(`Could not read ${org}/${app_id} (HTTP ${appTree.status}); the repo needs a main branch. Nothing was written.`);
+      const present = new Set(blobsOf(appTree).map((t) => t.path));
+      // A truncated listing cannot prove a file is absent: ask for each one instead.
+      const exists = async (path: string) =>
+        present.has(path) || ((appTree.data as { truncated?: boolean }).truncated === true && (await gh.getFile(app_id, path)).ok);
+
+      const toAdd = [] as typeof sources;
+      const skipped: string[] = [];
+      for (const s of sources) {
+        if (await exists(s.path)) skipped.push(s.path);
+        else toAdd.push(s);
+      }
+
+      const pkgFile = await gh.getFile(app_id, "package.json");
+      let pkg: ({ scripts?: Record<string, string> } & Record<string, unknown>) | null = null;
+      try { pkg = pkgFile.ok && pkgFile.content ? JSON.parse(pkgFile.content) : null; } catch { pkg = null; }
+      const scripts = pkg ? Object.keys(MARKETING_SCRIPTS).filter((k) => pkg!.scripts?.[k] === undefined) : [];
+      const deploy = await gh.getFile(app_id, ".github/workflows/deploy.yml");
+      const deployPublishes = deploy.ok && (deploy.content ?? "").includes(MARKETING_DEPLOY_STEP);
+
+      const summary = (prefilled: string[]) => [
+        ...toAdd.map((f) => `  + ${f.path}`),
+        ...skipped.map((p) => `  = ${p} (exists, left as is)`),
+        ...scripts.map((k) => `  + package.json script ${k}`),
+        "",
+        `${toAdd.length} file(s) added, ${skipped.length} skipped, ${scripts.length} script(s) added.`,
+        ...(prefilled.length ? [`Pre-filled in marketing/src/site.ts: ${prefilled.join(", ")}. Review the copy there before you rely on it.`] : []),
+        deployPublishes
+          ? `The next deploy publishes it to https://about-${app_id}.proappstore.online/`
+          : `Note: .github/workflows/deploy.yml has no "${MARKETING_DEPLOY_STEP}" step, so a push will not publish it yet. Update the workflow to the current canonical one (${template.repo} .github/workflows/deploy.yml).`,
+      ].join("\n");
+
+      const preview = await dry("add_marketing_site", dry_run, `Would commit to ${org}/${app_id} main:\n${summary([])}`, { app_id });
+      if (preview) return text(preview);
+      if (toAdd.length === 0 && scripts.length === 0) return text(`Nothing to add: ${org}/${app_id} already has every marketing/ file and script.\n${summary([])}`);
+
+      await gate("add_marketing_site", { app_id, files: toAdd.length, scripts });
+      let listing: MarketingListing | null = null;
+      try {
+        const res = await env.API.fetch(`${apiBase}/v1/storefront/apps/${app_id}`);
+        listing = res.ok ? ((await res.json()) as MarketingListing) : null;
+      } catch { /* private (404), unlisted or unreachable: the template's defaults stay */ }
+
+      let prefilled: string[] = [];
+      const files: { path: string; content: string; encoding?: "base64" }[] = [];
+      for (const s of toAdd) {
+        const blob = await gh.api(`/repos/${template.repo}/git/blobs/${s.sha}`);
+        const content = (blob.data as { content?: string } | null)?.content?.replace(/\n/g, "");
+        if (!blob.ok || content === undefined) return errText(`Could not read ${s.path} from ${template.repo} (HTTP ${blob.status}). Nothing was written.`);
+        const ext = s.path.slice(s.path.lastIndexOf(".")).toLowerCase();
+        if (!MARKETING_TEXT_EXTENSIONS.has(ext)) { files.push({ path: s.path, content, encoding: "base64" }); continue; }
+        let body = b64decode(content).split("APPNAME").join(app_id);
+        if (s.path === "marketing/src/site.ts") ({ text: body, prefilled } = prefillSite(body, app_id, listing));
+        files.push({ path: s.path, content: body });
+      }
+      if (pkg && scripts.length) {
+        const all = { ...(pkg.scripts ?? {}) };
+        for (const k of scripts) all[k] = MARKETING_SCRIPTS[k]!;
+        files.push({ path: "package.json", content: JSON.stringify({ ...pkg, scripts: all }, null, 2) + "\n" });
+      }
+
+      const res = await gh.pushFiles(app_id, files, "feat(marketing): add the Astro marketing site (add_marketing_site)");
+      if (!res.ok) return errText(`Error committing the marketing site: ${res.error ?? "unknown"}. Nothing was written.`);
+      return text(`Marketing site for ${app_id} committed to main (${res.commitSha?.slice(0, 7)}):\n${summary(prefilled)}`);
     },
   );
 }
