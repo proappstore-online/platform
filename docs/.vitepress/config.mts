@@ -67,6 +67,7 @@ const mainSidebar = [
       { text: "System Overview", link: "/architecture" },
       { text: "Browser Auth Sessions", link: "/auth-session-model" },
       { text: "App Ownership Transfer", link: "/app-ownership" },
+      { text: "App Directory", link: "/app-directory" },
       { text: "Bot Protection (Turnstile)", link: "/turnstile" },
       { text: "Publishing Flow", link: "/publishing-flow" },
       { text: "Approved Templates", link: "/templates/" },

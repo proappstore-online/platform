@@ -146,6 +146,7 @@ jobs:
             - Auth & Sessions: auth-session-model.md
             - Authorization Model: authorization-model.md
             - App Ownership Transfer: app-ownership.md
+            - App Directory: app-directory.md
             - Monitoring Runbook: monitoring-runbook.md
             - ADRs:
                 - Cloudflare Workers Only: adr/001-cloudflare-workers-only.md

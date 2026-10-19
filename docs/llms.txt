@@ -68,6 +68,7 @@
 - [Bot protection with Cloudflare Turnstile](https://docs.proappstore.online/turnstile/): Turnstile on self-registration and browser publishes — where it applies, fail-closed rules, enabling it, rendering the widget.
 - [Authorization model](https://docs.proappstore.online/authorization-model/): The three role scopes and which check to use.
 - [App ownership transfer](https://docs.proappstore.online/app-ownership/): Owner-to-user transfer, recovery requests, admin resolution, the append-only audit record.
+- [App directory](https://docs.proappstore.online/app-directory/): Find any app you can reach, its lifecycle and access, and whether an id is free.
 - [Build and deploy](https://docs.proappstore.online/build-and-deploy/): Per-repo keyless workflow → R2 → host worker.
 - [Monitoring runbook](https://docs.proappstore.online/monitoring-runbook/): Signals, triage, thresholds.
 - [Migration repair runbook](https://docs.proappstore.online/migration-repair-runbook/): Detect, interpret, repair schema drift.
