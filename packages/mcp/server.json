@@ -262,6 +262,26 @@
     {
       "name": "apply_admin_update",
       "description": "Commit a validated operator_view to the app repo's mcp.json (one file, never .github/), then report the registration after deploy. Owner only; confirm: true; dry_run."
+    },
+    {
+      "name": "ownership_status",
+      "description": "Read-only: your relationship to an app's ownership, open transfer/recovery requests you are party to, and the immutable audit record — other parties by login only, never the owner's identity to a non-party."
+    },
+    {
+      "name": "request_ownership_transfer",
+      "description": "Owner offers an app to a verified PAS account; shows repo/route/data worker/deploy/billing implications first; confirm: true creates a 7-day pending request the recipient must accept."
+    },
+    {
+      "name": "respond_ownership_transfer",
+      "description": "Accept (confirm: true) or decline a transfer offered to you; cancel one you sent or a recovery request you filed; escalate a stuck transfer to a platform admin."
+    },
+    {
+      "name": "request_ownership_recovery",
+      "description": "Non-owner with a verified sign-in asks a platform admin to recover an app created under another sign-in; needs evidence; never moves ownership by itself."
+    },
+    {
+      "name": "resolve_ownership_request",
+      "description": "Platform admins: approve (confirm: true) or reject an escalated ownership request, with a required reason recorded in the audit record."
     }
   ],
   "_meta": {
@@ -290,7 +310,10 @@
           "provision_pas_app",
           "publish_app",
           "scaffold_app",
-          "apply_admin_update"
+          "apply_admin_update",
+          "request_ownership_transfer",
+          "respond_ownership_transfer",
+          "resolve_ownership_request"
         ],
         "dry_run_supported": [
           "delete_file",
@@ -301,7 +324,9 @@
           "publish_app",
           "scaffold_app",
           "apply_admin_update",
-          "add_marketing_site"
+          "add_marketing_site",
+          "request_ownership_transfer",
+          "respond_ownership_transfer"
         ],
         "audit": "every mutating call, dry-run and read-only denial is recorded per user (90 days, secrets redacted); read it with mcp_audit_log",
         "errors": "failures return isError: true"
@@ -384,6 +409,13 @@
           "propose_admin_update",
           "validate_admin_security",
           "apply_admin_update"
+        ],
+        "ownership": [
+          "ownership_status",
+          "request_ownership_transfer",
+          "respond_ownership_transfer",
+          "request_ownership_recovery",
+          "resolve_ownership_request"
         ]
       },
       "docs": {

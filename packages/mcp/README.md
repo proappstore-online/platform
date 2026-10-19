@@ -160,6 +160,18 @@ found with `discover_tools` / `describe_tool` on the app endpoint).
 | `validate_admin_security` | Security and compatibility checks: secret exposure, missing actions, destructive actions without `step_up`, audit/admin role errors, undefined roles, row-scoping smells in the referenced SQL. Returns `passesSecurityGates`. |
 | `apply_admin_update` | **confirm**, **dry_run**. Validates against the repo's own `mcp.json` tools, refuses anything invalid or failing a security gate, commits one change to `mcp.json` (never `.github/`), then waits for the deploy and reports the registration status. The only writing tool in this group. |
 
+### Ownership transfer and recovery (#423)
+
+Every rule is the backend's (`/v1/apps/:appId/ownership`); ownership moves only when a recipient accepts or a platform admin approves, and every step lands in an append-only audit record both owners can read.
+
+| Tool | Description |
+|---|---|
+| `ownership_status` | Your relationship to an app's ownership (owner, recipient, sender, requester, admin or none), open transfer/recovery requests you are party to, and the immutable audit record. Other parties appear by login only; a non-party never learns who the owner is. Read-only. |
+| `request_ownership_transfer` | Owner offers the app to a verified PAS account (GitHub login, email or user id). Shows repository, route, data worker, deploy and billing implications first; `confirm: true` creates a 7-day pending request the recipient must accept — **confirm**, **dry_run** |
+| `respond_ownership_transfer` | `accept` (needs `confirm`) or `decline` a transfer offered to you; `cancel` one you sent or a recovery request you filed; `escalate` a stuck transfer to a platform admin — **confirm** (accept), **dry_run** (accept) |
+| `request_ownership_recovery` | A verified non-owner asks a platform admin to recover an app created under another sign-in, with evidence. Never moves ownership by itself; the owner is not told who asked |
+| `resolve_ownership_request` | Platform admins: `approve` (needs `confirm`) or `reject` an escalated request with a required reason, recorded in the audit record. Never to yourself; refused if the owner changed since filing — **confirm** (approve) |
+
 ## Safety
 
 - **Read-only mode** — `MCP_READ_ONLY=1` on the worker blocks every mutating tool (they throw, so a caller cannot misreport success); reads and dry-runs still work.

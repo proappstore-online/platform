@@ -16,7 +16,7 @@ Remote MCP server for AI agents to interact with the ProAppStore platform.
 `git checkout -b`, `git switch -c`, or `gh pr create`; if you find yourself on a non-`main` branch,
 stop and report it. See `platform/CLAUDE.md` § Delivery mode.
 
-## Tools (62 shared + dynamic per-app)
+## Tools (67 shared + dynamic per-app)
 
 ### Platform tools (no auth required unless noted)
 
@@ -111,6 +111,19 @@ report the registration.
 | `validate_admin_security` | Security/compatibility checks; `passesSecurityGates` |
 | `apply_admin_update` | Commit to `mcp.json`, then report the registration after deploy — **confirm**, **dry_run** |
 
+### Ownership transfer and recovery (#423)
+
+`src/ownership-tools.ts`, thin over the backend's `/v1/apps/:appId/ownership` routes with the
+connection's session: the backend enforces who may act and shows other parties by login only.
+
+| Tool | Description |
+|------|-------------|
+| `ownership_status` | Your relationship to an app's ownership (owner, recipient, sender, requester, admin or none), open transfer/recovery requests you are party to, and the immutable audit record. Other parties appear by login only; a non-party never learns who the owner is. Read-only. |
+| `request_ownership_transfer` | Owner offers the app to a verified PAS account (GitHub login, email or user id). Shows repository, route, data worker, deploy and billing implications first; `confirm: true` creates a 7-day pending request the recipient must accept — **confirm**, **dry_run** |
+| `respond_ownership_transfer` | `accept` (needs `confirm`) or `decline` a transfer offered to you; `cancel` one you sent or a recovery request you filed; `escalate` a stuck transfer to a platform admin — **confirm** (accept), **dry_run** (accept) |
+| `request_ownership_recovery` | A verified non-owner asks a platform admin to recover an app created under another sign-in, with evidence. Never moves ownership by itself; the owner is not told who asked |
+| `resolve_ownership_request` | Platform admins: `approve` (needs `confirm`) or `reject` an escalated request with a required reason, recorded in the audit record. Never to yourself; refused if the owner changed since filing — **confirm** (approve) |
+
 ### Per-app tools
 
 An app's `mcp.json` tools are registered **only** on that app's endpoint,
@@ -163,12 +176,15 @@ from the reference is present:
 - **Read-only mode** — set `MCP_READ_ONLY=1` (server-wide) to block every mutating
   tool (they throw, so a caller can't misreport success). Reads + dry-runs still work.
 - **confirm** — irreversible/public/infrastructure tools (`provision_pas_app`, `scaffold_app`,
-  `provision_app`, `delete_file`, `publish_app`, `apply_admin_update`) refuse unless called with `confirm: true`.
+  `provision_app`, `delete_file`, `publish_app`, `apply_admin_update`, `request_ownership_transfer`, and
+  the accept/approve actions of `respond_ownership_transfer` / `resolve_ownership_request`) refuse unless
+  called with `confirm: true`.
 - **dry_run** — expensive/irreversible tools accept `dry_run: true` to audit +
   return the plan they *would* execute and make no changes. A preview needs no
   `confirm` and is allowed even in read-only mode. Tools: `scaffold_app`,
   `provision_pas_app`, `provision_app`, `publish_app`, `delete_file`, `deploy_project`,
-  `delete_project_files`, `apply_admin_update`, `add_marketing_site`.
+  `delete_project_files`, `apply_admin_update`, `add_marketing_site`, `request_ownership_transfer`,
+  `respond_ownership_transfer` (accept).
 - **Ownership** — project tools (`write_file`, `read_file`, `provision_app`,
   `publish_app`, …) call `requireOwner` (`verifyAppOwnership`, 60s-cached) so a
   session can only touch apps it owns. Loop/agents/QA tools forward the token and

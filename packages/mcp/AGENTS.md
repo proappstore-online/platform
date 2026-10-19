@@ -55,6 +55,7 @@ Project-local `.mcp.json`:
 | Agent introspection | `agent_project_status`, `agent_board`, `agent_activity`, `agent_ticket_detail`, `agent_cost` | read-only views of a team's work and spend |
 | QA | `qa_list_flows`, `qa_save_flow`, `qa_delete_flow`, `qa_run`, `qa_list_runs`, `qa_run_artifacts`, `qa_flow_playwright`, `qa_mint_key` | browser e2e flows stored on the platform and run headlessly after every deploy |
 | Admin console | `inspect_admin_console`, `list_admin_capabilities`, `preview_admin_console`, `propose_admin_update`, `validate_admin_security`, `apply_admin_update` | inspect an app's `operator_view`, learn what it may contain, preview / propose / security-check a proposal; `apply_admin_update` (confirm, dry_run) commits it to `mcp.json` and reports the registration |
+| Ownership | `ownership_status`, `request_ownership_transfer`, `respond_ownership_transfer`, `request_ownership_recovery`, `resolve_ownership_request` | see who owns an app from your side; offer it, accept/decline/cancel/escalate a transfer, ask an admin to recover an app made under another sign-in; admins resolve. Other parties by login only |
 
 ## Workflow recipes
 

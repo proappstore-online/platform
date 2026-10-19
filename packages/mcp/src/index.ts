@@ -13,6 +13,7 @@ import { registerLoopTools } from "./loop-tools.js";
 import { registerAgentsTools } from "./agents-tools.js";
 import { registerQaTools } from "./qa-tools.js";
 import { registerAdminConsoleTools } from "./admin-console-tools.js";
+import { registerOwnershipTools } from "./ownership-tools.js";
 import { brokerMcpReadSeen, createAuthChallenge, handleOAuthRoute, issueBrokerCredential, recordBrokerMcpRead, resolveOAuthToken } from "./oauth-provider.js";
 
 const AUTH_PROVIDERS = ["github", "google"] as const;
@@ -107,6 +108,12 @@ export class PasMcpAgent extends McpAgent<Env> {
 
       // ── Admin-console authoring, read-only (#295): inspect, capabilities, preview ─
       registerAdminConsoleTools(this.server, this.env, () => ({
+        userId: this.userId,
+        token: this.userToken,
+      }));
+
+      // ── App ownership transfer and recovery (#423) ──────────────
+      registerOwnershipTools(this.server, this.env, () => ({
         userId: this.userId,
         token: this.userToken,
       }));
