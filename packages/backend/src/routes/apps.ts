@@ -110,11 +110,15 @@ appsRoutes.get('/apps', wrap(async (c) => {
     return c.json({ apps: [] satisfies AppDto[] });
   }
 
-  // Pull all submissions for the same creator(s) and bucket by app_id, latest-first.
-  // (For admins listing all apps, we pull all submissions; for devs, only theirs.)
+  // Pull the submissions of exactly these apps and bucket by app_id, latest-first.
+  // By app, not by submitter (#424): a team member's app was filed by its
+  // creator, and filtering on the caller's creator_id left it nameless.
   const subsQuery = creatorFilter
     ? c.env.DB.prepare(
-        'SELECT app_id, name, category, description, icon, icon_bg, pro_features, status, suggested_monthly_price_cents, created_at FROM submissions WHERE creator_id = ? ORDER BY created_at DESC',
+        `SELECT app_id, name, category, description, icon, icon_bg, pro_features, status, suggested_monthly_price_cents, created_at FROM submissions
+          WHERE app_id IN (SELECT a.id FROM apps a WHERE a.creator_id = ?1
+                           UNION SELECT tm.app_id FROM team_members tm WHERE tm.user_id = ?1)
+          ORDER BY created_at DESC`,
       ).bind(creatorFilter)
     : c.env.DB.prepare(
         'SELECT app_id, name, category, description, icon, icon_bg, pro_features, status, suggested_monthly_price_cents, created_at FROM submissions ORDER BY created_at DESC',

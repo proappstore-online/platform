@@ -79,6 +79,7 @@ import { appWorkerRoutes } from './routes/app-workers.js';
 import { hookRoutes } from './routes/hooks.js';
 import { connectorRoutes } from './routes/connectors.js';
 import { ownershipRoutes } from './routes/ownership.js';
+import { appDirectoryRoutes } from './routes/app-directory.js';
 
 export const app = new Hono<{ Bindings: Env }>();
 
@@ -318,6 +319,7 @@ v1.route('/', notificationRoutes);
 v1.route('/', smsRoutes);
 v1.route('/', aiRoutes);
 v1.route('/', submissionRoutes);
+v1.route('/', appDirectoryRoutes); // #424: before any /apps/:appId route
 v1.route('/', appsRoutes);
 v1.route('/', analyticsRoutes);
 v1.route('/', listingsRoutes);
