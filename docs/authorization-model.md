@@ -122,6 +122,14 @@ metadata is a coarse gate, not the whole model** — the tool SQL must *also* sc
 rows to the caller (`:__user_id`, membership sub-queries). See
 [App Actions and Data Access Security](./app-actions-security.md).
 
+**Before any of that, the action must be live (#428).** A staged action is
+registered but the app has not gone live. On the actions route it admits only
+the app's team, using the `requireAppAccess(viewer)` test, which includes the
+owner and platform admins. It refuses every other session, every app token and
+anonymous callers. It is not a role: the app's own roles grant nothing on a
+staged action. The worker, hooks and the scheduler reach actions by other paths
+and are unaffected.
+
 ### The admin console (`operator_view.admin_access`)
 
 The console's operator view ([Admin console](./admin-console.md)) is the one place where a

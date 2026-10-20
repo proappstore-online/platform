@@ -1117,6 +1117,55 @@ There are two paths, both idempotent (re-registering replaces the app's tool set
 > never touched by a deploy; manage them in Console → Data → API. The `api_`
 > prefix is reserved, and `mcp.json` tools may not use it.
 
+### Staged until the app goes live (#428)
+
+Registering an action does not, by itself, open it to the app's users. Each
+code action is **staged** or **live** (`app_tools.state`).
+
+- **Staged:** callable on `POST /v1/apps/:appId/actions/:name` only by the
+  app's owner, its team members and platform admins, by session. Users,
+  anonymous callers, personal app tokens and MCP `call_app_tool` get
+  `403 action is staged`.
+  - The app's worker (`PAS.actions`), its hooks and the scheduler are not
+    affected. They do not use that route, so an app can be built and tested end
+    to end before it goes live.
+  - A staged public action is never served from the edge cache.
+- **Live:** callable by anyone the action's own auth admits, as before.
+
+An app is **live** when its worker is enabled or it already serves a live
+action.
+
+**What a deploy registers:**
+- An action whose statements and access (`requires_auth`, `auth`, `callers`,
+  `schedule`) are unchanged keeps its state. A description or param-doc edit
+  is not a change.
+- A new or changed action is live in a live app, and staged in one that is not.
+- The registration result lists `staged: [...]` and warns with the count.
+- Every action registered before #428 was migrated as live.
+
+**Going live:**
+- `POST /v1/apps/:appId/tools/promote` with `{ "names": ["list_items"] }`, or
+  `{}` for every staged action. Owner or platform admin only. It answers
+  `{ promoted, not_staged, staged_remaining }`. Once one action is live the app
+  is live, so later deploys register new actions live.
+- Enabling the app worker promotes every staged action.
+
+**Visibility:**
+- `GET /v1/apps/:appId/tools` shows `state` to the team, and hides staged actions
+  from everyone else.
+- MCP `list_app_tools` marks the team's staged actions.
+
+**Dry run.** `POST /v1/apps/:appId/actions/:name` with `"dry_run": true` (the
+owner, team or a platform admin, by session) does everything a call does except
+run it:
+- It validates params, applies the auth and role gates, and binds the
+  statement. A bad param is the same 400.
+- It answers `{ "dry_run": true, "state": "staged", "rows": [] }` for a query
+  and `{ …, "changes": 0 }` for a write.
+- It never reaches the data worker.
+- A verify action's dry run stops after the auth checks.
+- Anyone else gets 403.
+
 ### Console-defined endpoints
 
 A creator can also expose a **read** or **insert** action without writing SQL:

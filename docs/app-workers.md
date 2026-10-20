@@ -418,6 +418,13 @@ new apps until an admin reopens it. Apps already running are not affected.
 
 ## Operating it
 
+**Enabling the worker is the app going live (#428).** Actions registered before
+then are staged: only the owner, team, worker, hooks and scheduler can call them.
+The enable promotes them all to live, and every later deploy registers new and
+changed actions live. An app without a worker goes live by
+`POST /v1/apps/:appId/tools/promote`. See
+[MCP app tools](./mcp-app-tools.md#staged-until-the-app-goes-live-428).
+
 The owner commands use your `pas login` session.
 
 `pas worker deploy` is the deploy path that does not need GitHub Actions (#406).

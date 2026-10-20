@@ -49,6 +49,7 @@ After publish, the same action is available to authenticated MCP clients as
 Browser SDK or MCP client
   -> api.proappstore.online/v1/apps/:appId/actions/:name
   -> validates PAS session
+  -> refuses a staged action unless the caller is the app's owner/team (#428)
   -> enforces manifest platform/app role metadata
   -> injects :__user_id, :__now, :__uuid server-side
   -> forwards prepared SQL to data-{app}.proappstore.online
@@ -231,6 +232,15 @@ tools therefore cannot drift from the repo.
 
 Registration validates every statement (SELECT/INSERT/UPDATE/DELETE only, no
 semicolons, no DDL, every `:param` declared) and caps apps at 500 tools.
+
+**Exposure starts at go-live, not at registration (#428).** In an app that is
+not live yet (no enabled worker, no live action), new and changed actions
+register **staged**. A staged action can be called only by the app's owner and
+team (and its worker, hooks and scheduler) until the owner promotes it
+(`POST /v1/apps/:appId/tools/promote`) or the app worker is enabled. In a live
+app, a deploy's new and changed actions register live. Owners can exercise any
+action without running it with `"dry_run": true`. See
+[MCP app tools](./mcp-app-tools.md#staged-until-the-app-goes-live-428).
 
 **Schema coherence (#33).** Registration also compiles every action's SQL against
 the app's LIVE schema (data worker `/validate` → `EXPLAIN`, no execution). An
