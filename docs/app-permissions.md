@@ -73,6 +73,17 @@ and the marketing site. A permission requested in a way the patterns cannot see
 
 App cards on the storefront show the same permissions as a compact icon row.
 
+On a phone, light and dark (live data: Meet's detected permissions, Kanban's
+none, and the homepage card rows):
+
+| Listing, light | Listing, dark | No permissions | Cards |
+|---|---|---|---|
+| ![Meet listing, light](/app-permissions/meet-light.png) | ![Meet listing, dark](/app-permissions/meet-dark.png) | ![Kanban: no special permissions](/app-permissions/kanban-light.png) | ![Homepage cards, dark](/app-permissions/home-dark.png) |
+
+With declared reasons, each permission carries its line:
+
+![Declared permissions with reasons](/app-permissions/meet-declared-light.png)
+
 API: `GET /v1/storefront/apps/:id` returns
 `permissions: [{ id, name, icon, reason, source }]` (`source` is `declared`,
 `detected` or `both`); `GET /v1/storefront/apps` returns each app's `permissions`
