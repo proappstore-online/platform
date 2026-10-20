@@ -305,7 +305,7 @@ pnpm-lock.yaml in .gitignore; last dependency update 14 months ago; no audit ste
 
 ### PAS-OPS-008 — Schema changes are forward-only, applied by the deploy, and never rolled back by editing history {#pas-ops-008}
 
-**Severity:** High · **Verification:** Automated (migration lint) + Manual · **Enforcement:** automated — `POST /v1/apps/:id/migrate/oidc` rejects non-additive statements; `_migrations` is idempotent by name; schema coherence blocks registration on missing columns · **Since:** 1.5
+**Severity:** High · **Verification:** Automated (migration lint) + Manual · **Enforcement:** automated — `POST /v1/apps/:id/migrate/oidc` rejects non-additive statements, classified from SQLite's token stream (rule table: [migration repair runbook](../migration-repair-runbook.md));  `_migrations` is idempotent by name; schema coherence blocks registration on missing columns · **Since:** 1.5
 
 **Rule.** Schema MUST change only by appending to `migrations.json` ([PAS-DATA-002](./data.md#pas-data-002)). A bad migration MUST be corrected by a new migration, never by editing or deleting the applied one; a failed migration step fails the deploy and MUST be investigated via `GET /v1/apps/:id/schema-status` (or the `schema_status` MCP tool) before re-pushing. The app MUST NOT run `app.db.migrate` against production as a repair path.
 

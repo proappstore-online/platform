@@ -2614,7 +2614,7 @@
       "verification": "automated",
       "verification_detail": "Automated (migration lint) + Manual",
       "enforcement": "automated",
-      "enforcement_detail": "automated — `POST /v1/apps/:id/migrate/oidc` rejects non-additive statements; `_migrations` is idempotent by name; schema coherence blocks registration on missing columns",
+      "enforcement_detail": "automated — `POST /v1/apps/:id/migrate/oidc` rejects non-additive statements, classified from SQLite's token stream (rule table: [migration repair runbook](../migration-repair-runbook.md));  `_migrations` is idempotent by name; schema coherence blocks registration on missing columns",
       "since": "1.5",
       "rule": "Schema MUST change only by appending to `migrations.json` ([PAS-DATA-002](./data.md#pas-data-002)). A bad migration MUST be corrected by a new migration, never by editing or deleting the applied one; a failed migration step fails the deploy and MUST be investigated via `GET /v1/apps/:id/schema-status` (or the `schema_status` MCP tool) before re-pushing. The app MUST NOT run `app.db.migrate` against production as a repair path.\n\n*",
       "applicability": "Apps with a D1 schema.\n\n*",

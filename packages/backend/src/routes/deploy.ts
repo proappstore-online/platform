@@ -1,4 +1,6 @@
 import { Hono, type Context } from 'hono';
+import { lintMigration } from '../lib/migration-lint.js';
+import { splitSqlStatements } from '../../../data-worker/src/sql-statements.js';
 import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { verifyGithubOidc, type OidcClaims } from '../lib/github-oidc.js';
@@ -173,169 +175,28 @@ deployRoutes.put('/apps/:appId/tools/oidc', async (c) => {
  * a compromised repo can't DROP/RENAME its way through history via CI. Destructive
  * changes stay on the in-browser OWNER path (`app.db.migrate`), which is a human.
  */
-// An FTS5 index is the one virtual table allowed (#206): any other module (rtree,
-// extension modules) stays refused. The index is kept in sync by the app's batch
-// actions, not triggers, so the trigger rules below are unchanged.
-const IDENT = String.raw`(?:"[^"]+"|` + '`[^`]+`' + String.raw`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*)`;
-const MIGRATE_ALLOWED_START = new RegExp(
-  String.raw`^(CREATE\s+(TABLE|(UNIQUE\s+)?INDEX|VIEW|TRIGGER)\b|ALTER\s+TABLE\b|INSERT\s+INTO\b|` +
-    String.raw`CREATE\s+VIRTUAL\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?${IDENT}\s+USING\s+fts5\s*\()`,
-  'i',
-);
-const MIGRATE_FORBIDDEN = /\b(DROP|DELETE|UPDATE|RENAME|PRAGMA|ATTACH|DETACH|VACUUM|REINDEX|REPLACE)\b/i;
-const MIGRATE_ADD_COLUMN = /^ALTER\s+TABLE\s+(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|\S+)\s+ADD(?:\s+COLUMN)?\s+/i;
+// The additive-only lint reads each statement from the SQLite tokenizer's token
+// stream (lib/migration-lint.ts, #455), the same tokenizer the data worker uses to
+// split what it runs, so the lint judges exactly the statements the executor cuts.
+// An FTS5 index is the one virtual table allowed (#206); the index is kept in sync by
+// the app's batch actions, and a trigger body's writes are allowed with a warning.
 
 /**
- * Split a migration body on TOP-LEVEL semicolons exactly as the data worker's
- * `/migrate` does (packages/data-worker/src/index.ts `splitSqlStatements`, a
- * verbatim copy — keep them identical). The lint must see the same statements
- * the executor runs, or text judged harmless here could run as its own statement
- * there. Honors '…' "…" `…` [ … ] quoting, -- and block comments, BEGIN/END nesting.
+ * Split a migration body into statements exactly as the data worker's `/migrate`
+ * does: the same function (packages/data-worker/src/sql-statements.ts). The lint must
+ * see the statements the executor runs, or text judged harmless here could run as its
+ * own statement there.
  */
 export function splitMigrationStatements(sql: string): string[] {
-  const out: string[] = [];
-  let buf = '';
-  let i = 0;
-  let beginDepth = 0;
-  const n = sql.length;
-  while (i < n) {
-    const ch = sql[i]!;
-    if (ch === '-' && sql[i + 1] === '-') {
-      const nl = sql.indexOf('\n', i);
-      const end = nl === -1 ? n : nl;
-      buf += sql.slice(i, end);
-      i = end;
-      continue;
-    }
-    if (ch === '/' && sql[i + 1] === '*') {
-      const close = sql.indexOf('*/', i + 2);
-      const end = close === -1 ? n : close + 2;
-      buf += sql.slice(i, end);
-      i = end;
-      continue;
-    }
-    if (ch === "'" || ch === '"' || ch === '`') {
-      const quote = ch;
-      buf += ch;
-      i++;
-      while (i < n) {
-        const c = sql[i]!;
-        buf += c;
-        if (c === quote) {
-          if (sql[i + 1] === quote) { buf += quote; i += 2; continue; }
-          i++;
-          break;
-        }
-        i++;
-      }
-      continue;
-    }
-    if (ch === '[') {
-      const close = sql.indexOf(']', i + 1);
-      const end = close === -1 ? n : close + 1;
-      buf += sql.slice(i, end);
-      i = end;
-      continue;
-    }
-    if (ch === 'b' || ch === 'B' || ch === 'e' || ch === 'E') {
-      const prev = buf.length ? buf[buf.length - 1]! : ' ';
-      if (/[^a-zA-Z0-9_]/.test(prev)) {
-        const rest = sql.slice(i);
-        const beginM = /^begin\b/i.exec(rest);
-        if (beginM) { beginDepth++; buf += beginM[0]; i += beginM[0].length; continue; }
-        const endM = /^end\b/i.exec(rest);
-        if (endM) { if (beginDepth > 0) beginDepth--; buf += endM[0]; i += endM[0].length; continue; }
-      }
-    }
-    if (ch === ';' && beginDepth === 0) {
-      const trimmed = buf.trim();
-      if (trimmed) out.push(trimmed);
-      buf = '';
-      i++;
-      continue;
-    }
-    buf += ch;
-    i++;
-  }
-  const tail = buf.trim();
-  if (tail) out.push(tail);
-  return out;
-}
-
-/**
- * One statement as code only: each '…' string literal becomes '' and each comment a
- * space, in one quote-aware pass — so seed text ('Vacuum Pumps') never trips the
- * keyword guard, and a `--` inside a literal can't hide the code after it. Quoted
- * identifiers are kept verbatim (a table named "drop" is still refused).
- */
-function sqlCode(stmt: string): string {
-  let out = '';
-  let i = 0;
-  const n = stmt.length;
-  while (i < n) {
-    const ch = stmt[i]!;
-    if (ch === '-' && stmt[i + 1] === '-') {
-      const nl = stmt.indexOf('\n', i);
-      i = nl === -1 ? n : nl;
-      out += ' ';
-      continue;
-    }
-    if (ch === '/' && stmt[i + 1] === '*') {
-      const close = stmt.indexOf('*/', i + 2);
-      i = close === -1 ? n : close + 2;
-      out += ' ';
-      continue;
-    }
-    if (ch === "'" || ch === '"' || ch === '`') {
-      let j = i + 1;
-      while (j < n) {
-        if (stmt[j] === ch) {
-          if (stmt[j + 1] === ch) { j += 2; continue; }
-          break;
-        }
-        j++;
-      }
-      out += ch === "'" ? "''" : stmt.slice(i, j + 1);
-      i = j + 1;
-      continue;
-    }
-    if (ch === '[') {
-      const close = stmt.indexOf(']', i + 1);
-      const end = close === -1 ? n : close + 1;
-      out += stmt.slice(i, end);
-      i = end;
-      continue;
-    }
-    out += ch;
-    i++;
-  }
-  return out.trim();
-}
-
-function hasUnsafeNotNullAddColumn(code: string): boolean {
-  if (!MIGRATE_ADD_COLUMN.test(code)) return false;
-  if (!/\bNOT\s+NULL\b/i.test(code)) return false;
-  return !/\bDEFAULT\b/i.test(code) || /\bDEFAULT\s*(?:\(\s*)?NULL\b/i.test(code);
+  return splitSqlStatements(sql);
 }
 
 type MigrationLintError = { statement: string; reason: string };
 
-/** Returns the first unsafe statement, or null if all pass. */
+/** Returns the first unsafe statement (whole, with the rule that refused it), or null if all pass. */
 export function forbiddenMigrationStatement(sql: string): MigrationLintError | null {
-  for (const stmt of splitMigrationStatements(sql)) {
-    const code = sqlCode(stmt);
-    if (!code) continue; // a comment-only fragment runs nothing
-    if (MIGRATE_FORBIDDEN.test(code) || !MIGRATE_ALLOWED_START.test(code)) {
-      return { statement: stmt.slice(0, 80), reason: 'the deploy path allows CREATE / ALTER … ADD / INSERT / CREATE VIRTUAL TABLE … USING fts5 only' };
-    }
-    if (hasUnsafeNotNullAddColumn(code)) {
-      return {
-        statement: stmt.slice(0, 80),
-        reason: 'ALTER TABLE … ADD COLUMN … NOT NULL must include a non-null DEFAULT so existing rows stay valid',
-      };
-    }
-  }
-  return null;
+  const { error } = lintMigration(sql);
+  return error ? { statement: error.statement, reason: error.reason } : null;
 }
 
 /**
@@ -356,11 +217,13 @@ async function applyMigrations(
   }
   if (migrations.length === 0) return { status: 200, body: { ok: true, applied: [], note: 'no migrations' } };
 
+  const warnings: string[] = [];
   for (const m of migrations as { name?: unknown; sql?: unknown }[]) {
     if (typeof m?.name !== 'string' || typeof m?.sql !== 'string') {
       return { status: 400, body: { error: 'each migration must be {name, sql}' } };
     }
-    const bad = forbiddenMigrationStatement(m.sql);
+    const { error: bad, warnings: lintWarnings } = lintMigration(m.sql);
+    warnings.push(...lintWarnings.map((x) => `migration "${m.name}": ${x}`));
     if (bad) {
       return {
         status: 422,
@@ -400,7 +263,7 @@ async function applyMigrations(
   }
   const result = (data && typeof data === 'object' ? data : {}) as { applied?: string[]; already?: string[] };
   await recordMigrationAudit(env, appId, source, 'applied', result.applied ?? null, result.already ?? null, null);
-  return { status: 200, body: { ok: true, ...result } };
+  return { status: 200, body: { ok: true, ...result, ...(warnings.length ? { warnings } : {}) } };
 }
 
 /** Record one migrate attempt so pending/failed migrations are visible (#33).

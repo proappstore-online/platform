@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { splitSqlStatements } from './sql-statements.js';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 
@@ -289,87 +290,10 @@ app.post('/batch', async (c) => {
 // Migrations
 // ---------------------------------------------------------------------------
 
-/**
- * Split a migration body into statements on TOP-LEVEL semicolons only. A naive
- * split(';') corrupts any statement with a semicolon inside a string literal
- * (`'a;b'`) or inside a CREATE TRIGGER ... BEGIN ...; ...; END body. This
- * respects '…' "…" `…` [ … ] quoting, -- line + /* *\/ block comments, and
- * BEGIN/END nesting (trigger/compound bodies).
- */
-export function splitSqlStatements(sql: string): string[] {
-  const out: string[] = [];
-  let buf = '';
-  let i = 0;
-  let beginDepth = 0;
-  const n = sql.length;
-  while (i < n) {
-    const ch = sql[i]!;
-    // -- line comment
-    if (ch === '-' && sql[i + 1] === '-') {
-      const nl = sql.indexOf('\n', i);
-      const end = nl === -1 ? n : nl;
-      buf += sql.slice(i, end);
-      i = end;
-      continue;
-    }
-    // /* block comment */
-    if (ch === '/' && sql[i + 1] === '*') {
-      const close = sql.indexOf('*/', i + 2);
-      const end = close === -1 ? n : close + 2;
-      buf += sql.slice(i, end);
-      i = end;
-      continue;
-    }
-    // quoted string / quoted identifier — copy verbatim, honoring '' escaping
-    if (ch === "'" || ch === '"' || ch === '`') {
-      const quote = ch;
-      buf += ch;
-      i++;
-      while (i < n) {
-        const c = sql[i]!;
-        buf += c;
-        if (c === quote) {
-          if (sql[i + 1] === quote) { buf += quote; i += 2; continue; } // escaped
-          i++;
-          break;
-        }
-        i++;
-      }
-      continue;
-    }
-    // [bracket identifier]
-    if (ch === '[') {
-      const close = sql.indexOf(']', i + 1);
-      const end = close === -1 ? n : close + 1;
-      buf += sql.slice(i, end);
-      i = end;
-      continue;
-    }
-    // BEGIN / END keyword nesting (only at a word boundary, outside quotes)
-    if (ch === 'b' || ch === 'B' || ch === 'e' || ch === 'E') {
-      const prev = buf.length ? buf[buf.length - 1]! : ' ';
-      if (/[^a-zA-Z0-9_]/.test(prev)) {
-        const rest = sql.slice(i);
-        const beginM = /^begin\b/i.exec(rest);
-        if (beginM) { beginDepth++; buf += beginM[0]; i += beginM[0].length; continue; }
-        const endM = /^end\b/i.exec(rest);
-        if (endM) { if (beginDepth > 0) beginDepth--; buf += endM[0]; i += endM[0].length; continue; }
-      }
-    }
-    if (ch === ';' && beginDepth === 0) {
-      const trimmed = buf.trim();
-      if (trimmed) out.push(trimmed);
-      buf = '';
-      i++;
-      continue;
-    }
-    buf += ch;
-    i++;
-  }
-  const tail = buf.trim();
-  if (tail) out.push(tail);
-  return out;
-}
+// The statement splitter is the SQLite tokenizer shared with the backend's migration
+// lint (sql-statements.ts, #455): one implementation decides every boundary, so what
+// the lint judged is exactly what runs here. Re-exported for the tests.
+export { splitSqlStatements };
 
 app.post('/migrate', async (c) => {
   await authorize(c, 'owner');

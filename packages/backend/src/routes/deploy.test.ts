@@ -251,6 +251,28 @@ describe('POST /apps/:appId/migrate/oidc', () => {
     expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.some((c) => String(c[0]).includes('/migrate'))).toBe(false);
   });
 
+  // #455: the route names the rule and quotes the whole statement; a trigger's body DML is allowed with a warning.
+  it('422 names the rule and quotes the whole statement; nothing is forwarded', async () => {
+    const stmt = `DROP TABLE ${'long_name_'.repeat(12)}x`;
+    const res = await call('aiuniversity', { migrations: [{ name: '0009_x', sql: `CREATE TABLE a (id); ${stmt};` }] }, { Authorization: `Bearer ${await signToken()}` });
+    expect(res.status).toBe(422);
+    const error = String(((await res.json()) as { error: string }).error);
+    expect(error).toContain('no-drop: DROP removes schema or data');
+    expect(error.endsWith(stmt)).toBe(true);
+  });
+
+  it('200 for a CASE … END trigger, INSERT OR IGNORE and ON DELETE CASCADE, warning about the trigger body writes', async () => {
+    const sql = [
+      'CREATE TABLE m (id TEXT PRIMARY KEY, w TEXT REFERENCES w(id) ON DELETE CASCADE);',
+      "CREATE TRIGGER m_handle AFTER INSERT ON m BEGIN UPDATE m SET w = CASE WHEN NEW.w IS NULL THEN 'none' ELSE NEW.w END WHERE id = NEW.id; END;",
+      "INSERT OR IGNORE INTO m (id) VALUES ('a');",
+    ].join('\n');
+    const res = await call('aiuniversity', { migrations: [{ name: '0006_triggers', sql }] }, { Authorization: `Bearer ${await signToken()}` });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { warnings?: string[] };
+    expect(body.warnings).toEqual([expect.stringMatching(/^migration "0006_triggers": trigger m_handle runs UPDATE on future writes/)]);
+  });
+
   it('allows ADD COLUMN when the new column is nullable or defaulted', async () => {
     for (const sql of [
       'ALTER TABLE t ADD COLUMN nickname TEXT;',
@@ -643,9 +665,11 @@ describe('forbiddenMigrationStatement — literal-aware, FTS5-only virtual table
     ok("INSERT INTO t (note) VALUES ('first; then DROP TABLE t; --')");
   });
 
-  it('keeps refusing triggers whose body or event names a guarded operation', () => {
-    refused('CREATE TRIGGER s AFTER UPDATE ON products BEGIN INSERT INTO log VALUES (new.id); END');
-    refused('CREATE TRIGGER s AFTER INSERT ON products BEGIN DELETE FROM products_fts WHERE rowid = new.rowid; END');
+  it('triggers are clauses and future writes, not statements (#455): allowed, a body DROP still is not', () => {
+    // Was refused by keyword: the UPDATE event and a DELETE in the body are not top-level statements.
+    ok('CREATE TRIGGER s AFTER UPDATE ON products BEGIN INSERT INTO log VALUES (new.id); END');
+    ok('CREATE TRIGGER s AFTER INSERT ON products BEGIN DELETE FROM products_fts WHERE rowid = new.rowid; END');
+    refused('CREATE TRIGGER s AFTER INSERT ON products BEGIN DROP TABLE products; END');
   });
 
   it('still requires a non-null DEFAULT on an added NOT NULL column, literals aside', () => {

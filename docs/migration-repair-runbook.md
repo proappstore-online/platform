@@ -101,6 +101,29 @@ The platform applies the same additive-only lint to repair migrations. Destructi
 changes, renames, deletes, updates, and `ADD COLUMN ... NOT NULL` without a
 non-null default are rejected.
 
+### What the lint accepts and refuses (#455)
+
+It reads each statement from SQLite's own token stream, not from keywords in the
+text, and judges it where the data worker's executor cuts it. A word inside a
+string, a comment, a quoted name or a clause is not a statement.
+
+| Statement | Verdict |
+|---|---|
+| `CREATE TABLE`, `[UNIQUE] INDEX`, `VIEW`, `TRIGGER`, `IF NOT EXISTS` | allowed |
+| `CREATE VIRTUAL TABLE … USING fts5(…)` | allowed; any other module is refused |
+| `ALTER TABLE … ADD [COLUMN]` | allowed; `NOT NULL` needs a non-null `DEFAULT` |
+| `INSERT [OR IGNORE\|ABORT\|FAIL\|ROLLBACK] INTO … VALUES / SELECT`, `WITH … INSERT`, `ON CONFLICT DO NOTHING` | allowed |
+| `ON DELETE …`, `ON UPDATE …` in foreign keys; `BEFORE/AFTER UPDATE [OF]` and `DELETE` trigger events | allowed (clauses, not statements) |
+| `INSERT/UPDATE/DELETE` in a trigger body | allowed with a **warning** (it runs only on future writes); platform guidance still discourages triggers |
+| `DROP`, `DELETE`, `UPDATE`, `REPLACE`, `INSERT OR REPLACE`, `ON CONFLICT DO UPDATE`, `ALTER … RENAME`, `ALTER … DROP COLUMN`, `PRAGMA`, `ATTACH`, `DETACH`, `VACUUM`, `REINDEX`, `TEMP` objects, anything else | refused |
+| SQL that does not tokenize or balance | refused, naming the line and column |
+
+A refusal names the rule (`no-drop`, `no-update`, `not-null-needs-default`,
+`syntax`, …) and quotes the whole statement. A trigger ends at the `END;` that
+follows a `;`, as `sqlite3_complete` decides, so a `CASE … END` inside its body
+is no longer taken for the end of the trigger. A data backfill (`UPDATE … SET`)
+is still refused; do it from the app's own batch action or as an owner repair.
+
 ## Do Not
 
 - Do not run manual `wrangler d1 execute --remote` as the first repair move.
