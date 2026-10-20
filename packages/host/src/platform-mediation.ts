@@ -6,8 +6,8 @@ const API_PREFIX = "/.pas/api";
 const DATA_PREFIX = "/.pas/data";
 const WORKER_PREFIX = "/.pas/worker";
 const API_BASE = "https://api.proappstore.online";
-export const SESSION_INVALIDATION_ID_HEADER = "X-PAS-Session-Invalidation-Id";
-export const SESSION_INVALIDATION_REASON_HEADER = "X-PAS-Session-Invalidation-Reason";
+const SESSION_INVALIDATION_ID_HEADER = "X-PAS-Session-Invalidation-Id";
+const SESSION_INVALIDATION_REASON_HEADER = "X-PAS-Session-Invalidation-Reason";
 const SESSION_INVALIDATION_EVENT_HEADER = "X-PAS-Session-Invalidation";
 /** #394: the host-only marker on a data-plane failure report (backend lib/app-context.ts). */
 const DATA_PLANE_FAILURE_HEADER = "X-PAS-Data-Plane-Failure";
@@ -244,7 +244,7 @@ function newTraceparent(): string {
 }
 
 /** Vendored from backend lib/log-ingest.ts parseTraceparent: version 00, no all-zero ids. */
-export function isValidTraceparent(header: string | null): boolean {
+function isValidTraceparent(header: string | null): boolean {
   const m = header === null ? null : /^00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/.exec(header.trim().toLowerCase());
   return Boolean(m && !/^0+$/.test(m[1]!) && !/^0+$/.test(m[2]!));
 }

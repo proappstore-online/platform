@@ -104,7 +104,7 @@ export function clearVisibilityAllowCache(): void {
 }
 
 /** Forget this isolate's answer for one session on one app — after an invite is redeemed, so the grant is seen at once. */
-export async function forgetVisibility(appId: string, token: string): Promise<void> {
+async function forgetVisibility(appId: string, token: string): Promise<void> {
   visibilityCache.delete(await visibilityCacheKey(appId, token));
 }
 

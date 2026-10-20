@@ -34,7 +34,7 @@ export const AUTH_MODE_META_TAG = `<meta name="${AUTH_MODE_META_NAME}" content="
  * a choice the app makes.
  */
 export const VISIBILITY_META_NAME = "pas-visibility";
-export const VISIBILITY_META_TAG = `<meta name="${VISIBILITY_META_NAME}" content="private">`;
+const VISIBILITY_META_TAG = `<meta name="${VISIBILITY_META_NAME}" content="private">`;
 
 /** Track which meta tags were found so we can inject missing ones. */
 export class MetaTagTracker {

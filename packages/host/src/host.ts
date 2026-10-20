@@ -69,7 +69,7 @@ export function slugFromHostname(hostname: string): string | null {
   return slug;
 }
 
-export function normalizeHostname(hostname: string): string {
+function normalizeHostname(hostname: string): string {
   return hostname.toLowerCase().split(":")[0]!;
 }
 
@@ -87,7 +87,7 @@ export const RESERVED_SUBDOMAINS = new Set([
 ]);
 
 /** Look up a route from D1. Returns null if no matching row. */
-export async function resolveRoute(db: D1Database, slug: string): Promise<Route | null> {
+async function resolveRoute(db: D1Database, slug: string): Promise<Route | null> {
   const row = await withVisibility((join) =>
     db
       .prepare(
@@ -217,7 +217,7 @@ export interface SitemapUrl {
 /** Page meta sits on the HTML hot path: a slow app action must not hold the page. */
 export const PAGE_META_TIMEOUT_MS = 1500;
 /** Pages fetched per sitemap build (each at most the public LIMIT of 500 rows). */
-export const SITEMAP_MAX_PAGES = 20;
+const SITEMAP_MAX_PAGES = 20;
 
 /** The value of the pattern's one `:param` segment if `pathname` matches it, else null. */
 export function matchPagePath(pattern: string, pathname: string): string | null {

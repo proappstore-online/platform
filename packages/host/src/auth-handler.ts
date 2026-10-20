@@ -398,7 +398,7 @@ export function readCookie(header: string | null, name: string): string | null {
 }
 
 /** `maxAge` defaults to the ordinary 30 days; a step-up session passes its own shorter life (#230). */
-export function sessionCookie(token: string, maxAge = SESSION_TTL_SECONDS): string {
+function sessionCookie(token: string, maxAge = SESSION_TTL_SECONDS): string {
   return [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
     `Max-Age=${maxAge}`,
