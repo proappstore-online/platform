@@ -42,55 +42,7 @@ export function extractInlineManifest(viteConfig: string): InlineManifest | null
   // Balance braces to find the end of the manifest object literal.
   // Handles nested objects (icons array entries) and quoted strings
   // (so a `}` inside a quoted value isn't counted).
-  let depth = 0;
-  let inSingle = false;
-  let inDouble = false;
-  let inBacktick = false;
-  let escaped = false;
-  let endIdx = -1;
-  for (let i = openIdx; i < viteConfig.length; i++) {
-    const ch = viteConfig[i]!;
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === '\\') {
-      escaped = true;
-      continue;
-    }
-    if (inSingle) {
-      if (ch === "'") inSingle = false;
-      continue;
-    }
-    if (inDouble) {
-      if (ch === '"') inDouble = false;
-      continue;
-    }
-    if (inBacktick) {
-      if (ch === '`') inBacktick = false;
-      continue;
-    }
-    if (ch === "'") {
-      inSingle = true;
-      continue;
-    }
-    if (ch === '"') {
-      inDouble = true;
-      continue;
-    }
-    if (ch === '`') {
-      inBacktick = true;
-      continue;
-    }
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        endIdx = i;
-        break;
-      }
-    }
-  }
+  const endIdx = matchingClose(viteConfig, openIdx, '{', '}');
   if (endIdx < 0) return null;
 
   const block = viteConfig.slice(openIdx + 1, endIdx);
@@ -128,13 +80,25 @@ function extractIconsArray(block: string): string | undefined {
   if (!m || m.index === undefined) return undefined;
   const openIdx = block.indexOf('[', m.index);
   if (openIdx < 0) return undefined;
+  const closeIdx = matchingClose(block, openIdx, '[', ']');
+  if (closeIdx >= 0) return block.slice(openIdx, closeIdx + 1);
+  return undefined;
+}
+
+/**
+ * The index of the bracket that closes the one at `openIdx`, or -1. Quote-aware:
+ * a bracket inside a '…', "…" or `…` string is not counted, and a backslash
+ * escapes the next character (inside a string or not). Shared by the manifest
+ * object and its icons array (#430).
+ */
+function matchingClose(text: string, openIdx: number, open: string, close: string): number {
   let depth = 0;
   let inSingle = false;
   let inDouble = false;
   let inBacktick = false;
   let escaped = false;
-  for (let i = openIdx; i < block.length; i++) {
-    const ch = block[i]!;
+  for (let i = openIdx; i < text.length; i++) {
+    const ch = text[i]!;
     if (escaped) {
       escaped = false;
       continue;
@@ -167,11 +131,11 @@ function extractIconsArray(block: string): string | undefined {
       inBacktick = true;
       continue;
     }
-    if (ch === '[') depth++;
-    else if (ch === ']') {
+    if (ch === open) depth++;
+    else if (ch === close) {
       depth--;
-      if (depth === 0) return block.slice(openIdx, i + 1);
+      if (depth === 0) return i;
     }
   }
-  return undefined;
+  return -1;
 }
