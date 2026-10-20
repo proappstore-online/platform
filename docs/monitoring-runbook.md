@@ -155,6 +155,44 @@ Cloudflare failing to connect upstream; the status alone does not name the hop.
    would succeed. Never clear sessions or force a migration to "fix" it: a
    data-plane 401/5xx never signs the user out (#65/#66/#353).
 
+### The #403 incident (resolved 2026-10-15)
+
+**Cause:** the host was routing the data-plane through a same-zone re-entry hop
+(`data-<slug>.proappstore.online`) before reaching the worker. Cloudflare's edge
+could not connect upstream through that detour, returning 522.
+
+**Failures:** four `POST /.pas/data/migrate` returned 522 between 05:25 and
+06:00 UTC on 2026-10-15. The host recorded all four with `fault: unknown`
+(no data-worker verdict). cf-ray IDs, with the trace each row is filed under
+(`GET /v1/apps/chess-academy/incidents/<traceId>`):
+- `a4ac67998cf20c64-SYD` — `00485e38462983c26b6f206acd3202ec`
+- `a4ac67b6dac80c64-SYD` — `9f066033a4f289b6ee0ea255bde4a8c0`
+- `a4ac7932eb16e69d-MEL` — `bf281d907594b0028c1dd1972be5dbbb`
+- `a4ac9a28bdb1b3e8-MEL` — `93ce38ec299325b87d9104b898dcdfd1`
+
+**Worker was healthy:** `pas-data-chess-academy` logged zero exceptions from
+2026-10-11 to 2026-10-20; the failures were entirely at the edge/host layer.
+
+**Fix:** commit `9a43260`, deployed at 2026-10-15 06:18:45 UTC — the host now
+sends the data plane straight to `pas-data-<slug>.<DATA_WORKER_HOST>`, removing
+the same-zone detour.
+
+**No recurrence:** zero data-plane failures since the fix. All 7 recorded
+sign-ins in the 10-15→10-18 window called `migrate` through the new path
+without error. Signed-in nightly E2E against `chess-academy.proappstore.online`
+has been green since 2026-10-18.
+
+**chess-clubs#218:** separately removed the browser-side `migrate` call; it was
+not the root cause of the 522s, but it does mean chess-clubs no longer calls
+`migrate` at all on sign-in.
+
+**Not verified:** an owner-session readback of these incident rows over HTTP
+(they were read from the record directly), and a signed-in check on
+`chessclubs.online` specifically (the nightly E2E targets the PAS subdomain).
+
+**How to use this:** if a future 522 appears on `/.pas/data/*`, follow steps
+1–4 above. The four cf-rays above are the correlation anchor for this incident.
+
 ## Troubleshooting: private-app e2e results not appearing
 
 After a green deploy, agent-teams harvests `kb.proappstore.online/<app>/.e2e/summary.json`
