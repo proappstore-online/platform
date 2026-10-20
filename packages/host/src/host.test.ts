@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { HOSTED_APP_FEATURES, openPermissionsPolicy, PREVIEW_IFRAME_ALLOW } from "./capabilities.js";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -366,6 +367,11 @@ describe("securityHeaders", () => {
       expect(entries, feature).toContain(`${feature}=(self)`);
     }
     expect(pp).not.toMatch(/=\(\)/);
+  });
+
+  it("the creator capability matrix documents every feature (docs/app-capabilities.md)", () => {
+    const doc = readFileSync(new URL("../../../docs/app-capabilities.md", import.meta.url), "utf8");
+    for (const feature of HOSTED_APP_FEATURES) expect(doc, feature).toContain(`\`${feature}\``);
   });
 
   it("an app preview iframe delegates every feature to the framed app", () => {

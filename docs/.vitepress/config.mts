@@ -95,6 +95,7 @@ const mainSidebar = [
     text: "Reference",
     items: [
       { text: "SDK Overview", link: "/sdk-overview" },
+      { text: "App Capabilities", link: "/app-capabilities" },
       { text: "UI Components", link: "/ui" },
       { text: "Recipes", link: "/recipes" },
       { text: "CLI Overview", link: "/cli-overview" },
