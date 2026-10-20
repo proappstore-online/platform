@@ -260,9 +260,18 @@ jobs:
         run: |
           # Always, opted in or not: the public bucket never carries a map (#393).
           DIR="\${{ steps.dist.outputs.dir }}"
-          N=$(find "$DIR" -type f -name '*.map' | wc -l | tr -d ' ')
+          ( cd "$DIR" && find . -type f -name '*.map' | sed 's|^\\./||' ) > "$RUNNER_TEMP/stripped-maps.txt"
+          N=$(wc -l < "$RUNNER_TEMP/stripped-maps.txt" | tr -d ' ')
           find "$DIR" -type f -name '*.map' -delete
           echo "Removed $N source map(s) from $DIR"
+          # Nothing left may need a map (the ChessClubs gate, chess-clubs#217): a service
+          # worker that precaches a deleted map fails to install.
+          if [ -n "$(find "$DIR" -type f -name '*.map' -print -quit)" ]; then
+            echo "::error::source maps are still in $DIR"; exit 1
+          fi
+          if grep -rlE '"?url"?[[:space:]]*:[[:space:]]*"[^"]+\\.map"' "$DIR" --include='*.js' >/dev/null; then
+            echo "::error::a service-worker precache lists a .map file: keep maps out of workbox globPatterns and set workbox sourcemap: false"; exit 1
+          fi
 
       - name: Mint deploy credentials (keyless — GitHub OIDC → platform)
         run: |
@@ -294,6 +303,24 @@ jobs:
             --endpoint-url "$R2_ENDPOINT" \\
             --delete --no-progress
           echo "Deployed apps/\${{ github.event.repository.name }} from \${{ github.sha }}"
+
+      - name: Verify source maps are not public
+        run: |
+          # #393: the maps went to the private store only. Prove the public origin does
+          # not serve them (chess-clubs#217): a response that is a source map fails the
+          # deploy, whatever its status; an SPA fallback or a private app's refusal is not one.
+          LIST="$RUNNER_TEMP/stripped-maps.txt"
+          if [ ! -s "$LIST" ]; then echo "No source maps in this build"; exit 0; fi
+          ORIGIN="https://\${{ github.event.repository.name }}.proappstore.online"
+          LEAKED=0; CHECKED=0
+          while IFS= read -r P; do
+            CHECKED=$((CHECKED + 1))
+            case "$(curl -sS --max-time 10 "$ORIGIN/$P" || true)" in
+              *'"mappings"'*) echo "::error::$ORIGIN/$P serves a source map"; LEAKED=1 ;;
+            esac
+          done < <(head -n 5 "$LIST")
+          [ "$LEAKED" = 0 ] && echo "Checked $CHECKED map path(s): none served publicly"
+          exit $LEAKED
 
       - name: Publish marketing site (marketing/ -> about-<app>, keyless)
         if: hashFiles('marketing/package.json') != ''

@@ -223,6 +223,110 @@ describe("canonical deploy workflow — single source of truth", () => {
     expect(deployWorkflowYaml(ENV)).toBe(golden);
   });
 
+  // #393: the ChessClubs gates (chess-clubs#217), platform-wide. The strip step must
+  // leave nothing that needs a map, and after the upload the public origin must not
+  // serve one. Both scripts run here as Actions would, in a scratch build.
+  describe("no public source maps (#393)", () => {
+    /** One step's `run: |` script from the generated workflow, with its expressions filled in. */
+    function stepScript(name: string, dir: string): string {
+      const y = deployWorkflowYaml(ENV);
+      const at = y.indexOf(`- name: ${name}`);
+      expect(at, name).toBeGreaterThan(0);
+      const body = y.slice(y.indexOf("run: |", at) + "run: |".length, y.indexOf("\n      - ", at + 1));
+      return body.split("\n").map((l) => l.replace(/^ {10}/, "")).join("\n")
+        .replaceAll("${{ steps.dist.outputs.dir }}", dir)
+        .replaceAll("${{ github.event.repository.name }}", "demo");
+    }
+    function run(script: string, cwd: string, env: Record<string, string> = {}) {
+      return spawnSync("bash", ["-c", script], { cwd, env: { ...process.env, ...env }, encoding: "utf8" });
+    }
+    function scratch(files: Record<string, string>): { root: string; dist: string; temp: string } {
+      const root = mkdtempSync(join(tmpdir(), "maps-"));
+      const dist = join(root, "dist");
+      const temp = join(root, "tmp");
+      mkdirSync(temp, { recursive: true });
+      for (const [path, content] of Object.entries(files)) {
+        mkdirSync(dirname(join(dist, path)), { recursive: true });
+        writeFileSync(join(dist, path), content);
+      }
+      return { root, dist, temp };
+    }
+    const roots: string[] = [];
+    afterEach(() => { for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true }); });
+
+    it("strip removes every map, records the paths, and passes a service worker that precaches none", () => {
+      const s = scratch({
+        "index.html": "<html></html>",
+        "assets/index-a1.js": "console.log(1)",
+        "assets/index-a1.js.map": '{"version":3,"mappings":"AAAA"}',
+        "assets/vendor-b2.js.map": '{"version":3,"mappings":"AAAA"}',
+        "sw.js": 'precacheAndRoute([{url:"assets/index-a1.js",revision:null},{url:"index.html",revision:"x"}])',
+      });
+      roots.push(s.root);
+      const r = run(stepScript("Strip source maps from the public build", s.dist), s.root, { RUNNER_TEMP: s.temp });
+      expect(r.status, r.stderr + r.stdout).toBe(0);
+      expect(r.stdout).toContain("Removed 2 source map(s)");
+      expect(readdirSync(join(s.dist, "assets")).sort()).toEqual(["index-a1.js"]);
+      expect(readFileSync(join(s.temp, "stripped-maps.txt"), "utf8").trim().split("\n").sort()).toEqual(["assets/index-a1.js.map", "assets/vendor-b2.js.map"]);
+    });
+
+    it.each([
+      ["minified Workbox", 'precacheAndRoute([{url:"assets/index-a1.js.map",revision:null}])'],
+      ["JSON", '{"url": "assets/index-a1.js.map", "revision": null}'],
+    ])("strip fails the deploy when a %s precache still lists a map", (_label, sw) => {
+      const s = scratch({ "index.html": "x", "assets/index-a1.js.map": "{}", "sw.js": sw });
+      roots.push(s.root);
+      const r = run(stepScript("Strip source maps from the public build", s.dist), s.root, { RUNNER_TEMP: s.temp });
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain("precache lists a .map file");
+    });
+
+    /** The probe with `curl` stubbed to answer `body` for every URL, recording the URLs asked for. */
+    function probe(maps: string[], body: string | null) {
+      const s = scratch({});
+      roots.push(s.root);
+      writeFileSync(join(s.temp, "stripped-maps.txt"), maps.map((m) => m + "\n").join(""));
+      const bin = join(s.root, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "curl"), `#!/bin/bash\necho "\${@: -1}" >> "${s.root}/asked"\n${body === null ? "exit 7" : `printf '%s' '${body}'`}\n`);
+      chmodSync(join(bin, "curl"), 0o755);
+      const r = run(stepScript("Verify source maps are not public", s.dist), s.root, { RUNNER_TEMP: s.temp, PATH: `${bin}:${process.env.PATH}` });
+      const asked = existsSync(join(s.root, "asked")) ? readFileSync(join(s.root, "asked"), "utf8").trim().split("\n") : [];
+      return { ...r, asked };
+    }
+
+    it("the public probe fails the deploy when the origin serves a map", () => {
+      const r = probe(["assets/index-a1.js.map"], '{"version":3,"sources":["src/App.tsx"],"mappings":"AAAA"}');
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain("https://demo.proappstore.online/assets/index-a1.js.map serves a source map");
+    });
+
+    it.each([
+      ["an SPA fallback page", "<!doctype html><title>demo</title>"],
+      ["a refusal", "Forbidden"],
+      ["an unreachable origin", null],
+    ])("the public probe passes on %s, and checks at most five paths", (_label, body) => {
+      const r = probe(Array.from({ length: 7 }, (_, i) => `assets/c${i}.js.map`), body);
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.asked).toHaveLength(5);
+      expect(r.asked[0]).toBe("https://demo.proappstore.online/assets/c0.js.map");
+    });
+
+    it("the public probe has nothing to do when the build had no maps", () => {
+      const r = probe([], "irrelevant");
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("No source maps in this build");
+      expect(r.asked).toEqual([]);
+    });
+
+    it("runs strip before the public upload and the probe after it", () => {
+      const y = deployWorkflowYaml(ENV);
+      const order = ["Upload browser source maps", "Strip source maps from the public build", "Upload to R2", "Verify source maps are not public"].map((n) => y.indexOf(`- name: ${n}`));
+      expect(order.every((i) => i > 0)).toBe(true);
+      expect([...order].sort((a, b) => a - b)).toEqual(order);
+    });
+  });
+
   // #425: template-app's CLAUDE.md "CI runner rules" — every workflow starts with
   // the runner-router job and no other job hard-codes a runner. The owner applied
   // it to template-app by hand; the generator must carry it, or every sync reverts it.

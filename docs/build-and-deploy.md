@@ -112,7 +112,15 @@ uploads as a **private release artifact**: never the public `pas-apps` bucket.
   symbolicates at most 20 rows; the symbolicate endpoint takes at most 50
   frames for one release.
 - **No public maps.** The deploy must not publish `.map` files to `pas-apps`,
-  and the host refuses to serve any `*.map` path regardless.
+  and the host refuses to serve any `*.map` path regardless. The canonical
+  workflow enforces it twice, after ChessClubs (chess-clubs#217):
+  - *Strip* deletes every map from the build, then fails the deploy if one is
+    left, or if a service-worker precache still lists a `.map` (a precached map
+    that was deleted makes the service worker fail to install).
+  - *Verify source maps are not public* runs after the R2 upload. It requests up
+    to five of the stripped paths from `https://<app>.proappstore.online/` and
+    fails if any response is a source map, whatever its status, so an SPA
+    fallback or a private app's refusal is not a false alarm.
 
 ### Known limitations of the current state
 - A CI workflow lives in every repo (the root cause of drift).
