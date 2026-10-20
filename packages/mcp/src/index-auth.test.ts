@@ -48,6 +48,10 @@ function makeKv(seed: Record<string, string> = {}): KVNamespace {
     get: async (key: string) => data.get(key) ?? null,
     put: async (key: string, value: string) => { data.set(key, value); },
     delete: async (key: string) => { data.delete(key); },
+    list: async ({ prefix = '' }: { prefix?: string } = {}) => ({
+      keys: [...data.keys()].filter((name) => name.startsWith(prefix)).map((name) => ({ name })),
+      list_complete: true,
+    }),
   } as unknown as KVNamespace;
 }
 
@@ -337,5 +341,95 @@ describe('MCP app-scoped sessions on private apps (#259)', () => {
     const res = await worker.fetch(new Request('https://mcp.proappstore.online/mcp', { method: 'POST', headers: { Authorization: 'Bearer good-token' } }), env, ctx);
     expect(res.status).toBe(200);
     expect(visibilityMe).not.toHaveBeenCalled();
+  });
+});
+
+// #457: a token authorized for one app endpoint is good for that endpoint only.
+describe('per-app scoped OAuth tokens (#457)', () => {
+  const rpc = (tool: string, args: Record<string, unknown>) => JSON.stringify({
+    jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: tool, arguments: args },
+  });
+  const call = (path: string, token: string, body: string, e: Env) => worker.fetch(new Request(`https://mcp.proappstore.online${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body,
+  }), e, ctx);
+  const withTokens = (tokens: Record<string, unknown>, extra: Partial<Env> = {}) => ({
+    ...env,
+    ...extra,
+    OAUTH_KV: makeKv(Object.fromEntries(Object.entries(tokens).map(([k, v]) => [`token:${k}`, typeof v === 'string' ? v : JSON.stringify(v)]))),
+  }) as Env;
+
+  afterEach(() => {
+    verifyTokenMock.mockReset();
+    clearVisibilityCache();
+    servedMock.calls.length = 0;
+    delete (ctx as ExecutionContext & { props?: Record<string, unknown> }).props;
+  });
+
+  it.each([
+    ['list_app_tools', { app_id: 'hiring' }],
+    ['call_app_tool', { app_id: 'hiring', tool: 'list_candidates' }],
+  ])('refuses a hiring token calling %s on the shared /mcp endpoint', async (tool, args) => {
+    verifyTokenMock.mockResolvedValue({ id: 'user-1', login: 'a' });
+    const res = await call('/mcp', 'hiring-token', rpc(tool, args), withTokens({ 'hiring-token': { session: 'sess-1', appId: 'hiring' } }));
+    expect(res.status).toBe(401);
+    expect(res.headers.get('WWW-Authenticate')).toContain('error="invalid_token"');
+    expect(servedMock.calls).toEqual([]);
+  });
+
+  it.each(['list_app_tools', 'call_app_tool'])('refuses a hiring token calling %s through another app endpoint', async (tool) => {
+    verifyTokenMock.mockResolvedValue({ id: 'user-1', login: 'a' });
+    const res = await call('/mcp/apps/crm', 'hiring-token', rpc(tool, { app_id: 'hiring', tool: 'x' }), withTokens({ 'hiring-token': { session: 'sess-1', appId: 'hiring' } }));
+    expect(res.status).toBe(401);
+    expect(servedMock.calls).toEqual([]);
+  });
+
+  it('serves a hiring token on its own endpoint', async () => {
+    verifyTokenMock.mockResolvedValue({ id: 'user-1', login: 'a' });
+    const res = await call('/mcp/apps/hiring', 'hiring-token', rpc('whoami', {}), withTokens({ 'hiring-token': { session: 'sess-1', appId: 'hiring' } }));
+    expect(res.status).toBe(200);
+    expect(servedMock.calls[0]?.props).toEqual({ authToken: 'sess-1', appScope: 'hiring' });
+  });
+
+  it('keeps an unscoped token working on the shared /mcp endpoint and refuses it on an app endpoint', async () => {
+    verifyTokenMock.mockResolvedValue({ id: 'user-1', login: 'a' });
+    const e = withTokens({ 'full-token': { session: 'sess-1', appId: null } });
+    const shared = await call('/mcp', 'full-token', rpc('list_app_tools', { app_id: 'hiring' }), e);
+    expect(shared.status).toBe(200);
+    expect(servedMock.calls[0]?.props).toEqual({ authToken: 'sess-1' });
+    expect((await call('/mcp/apps/hiring', 'full-token', rpc('whoami', {}), e)).status).toBe(401);
+  });
+
+  it('runs two accounts on the same app endpoint as their own users, and revoking one leaves the other working', async () => {
+    verifyTokenMock.mockImplementation(async (_key: string, session: string) => {
+      if (session !== 'sess-a' && session !== 'sess-b') throw new Error('not a session'); // an opaque token id is no JWT
+      return { id: session === 'sess-a' ? 'gh:1' : 'gh:2', login: session };
+    });
+    const kv = {
+      'token:tok-a': JSON.stringify({ session: 'sess-a', appId: 'crm', familyId: 'family-aaaaaaaa' }),
+      'token:tok-b': JSON.stringify({ session: 'sess-b', appId: 'crm', familyId: 'family-bbbbbbbb' }),
+      'grant:gh:1:crm:family-aaaaaaaa': JSON.stringify({ client_name: 'Claude', created_at: 1, last_used_at: 2 }),
+      'grant:gh:2:crm:family-bbbbbbbb': JSON.stringify({ client_name: 'Codex', created_at: 1, last_used_at: 2 }),
+    };
+    const e = { ...env, INTERNAL_TOKEN: 'internal', OAUTH_KV: makeKv(kv) } as Env;
+    await call('/mcp/apps/crm', 'tok-a', rpc('whoami', {}), e);
+    await call('/mcp/apps/crm', 'tok-b', rpc('whoami', {}), e);
+    expect(servedMock.calls.map((c) => c.props)).toEqual([
+      { authToken: 'sess-a', appScope: 'crm' },
+      { authToken: 'sess-b', appScope: 'crm' },
+    ]);
+
+    const internal = (path: string, method: string, token = 'internal') => worker.fetch(new Request(`https://mcp.proappstore.online${path}`, { method, headers: { 'X-Internal-Token': token } }), e, ctx);
+    const listed = await internal('/internal/users/gh%3A1/apps/crm/grants', 'GET');
+    expect(await listed.json()).toEqual({ grants: [{ id: 'family-aaaaaaaa', client_name: 'Claude', scope: 'app', app_id: 'crm', created_at: 1, last_used_at: 2 }] });
+    expect((await internal('/internal/users/gh%3A1/apps/crm/grants', 'GET', 'wrong')).status).toBe(404);
+    expect((await internal('/internal/users/gh%3A1/grants/family-bbbbbbbb', 'DELETE')).status).toBe(404); // someone else's
+    expect((await internal('/internal/users/gh%3A1/grants/family-aaaaaaaa', 'DELETE')).status).toBe(200);
+
+    servedMock.calls.length = 0;
+    expect((await call('/mcp/apps/crm', 'tok-a', rpc('whoami', {}), e)).status).toBe(401);
+    expect((await call('/mcp/apps/crm', 'tok-b', rpc('whoami', {}), e)).status).toBe(200);
+    expect(servedMock.calls.map((c) => c.props)).toEqual([{ authToken: 'sess-b', appScope: 'crm' }]);
   });
 });

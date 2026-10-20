@@ -15,7 +15,7 @@ import { registerQaTools } from "./qa-tools.js";
 import { registerAdminConsoleTools } from "./admin-console-tools.js";
 import { registerOwnershipTools } from "./ownership-tools.js";
 import { registerDirectoryTools } from "./directory-tools.js";
-import { brokerMcpReadSeen, createAuthChallenge, handleOAuthRoute, issueBrokerCredential, recordBrokerMcpRead, resolveOAuthToken } from "./oauth-provider.js";
+import { brokerMcpReadSeen, createAuthChallenge, handleOAuthRoute, issueBrokerCredential, listGrants, recordBrokerMcpRead, resolveOAuthToken, revokeGrant } from "./oauth-provider.js";
 
 const AUTH_PROVIDERS = ["github", "google"] as const;
 
@@ -264,6 +264,28 @@ export default {
       const requestId = decodeURIComponent(url.pathname.slice("/internal/broker/read-receipt/".length));
       if (!/^req_[A-Za-z0-9_-]{43}$/.test(requestId)) return new Response("not found", { status: 404 });
       return Response.json({ seen: await brokerMcpReadSeen(env.OAUTH_KV!, requestId) }, { headers: { "Cache-Control": "no-store" } });
+    }
+
+    // #457: an account's OAuth grants for one app endpoint, listed and revoked by
+    // the API worker for the Creator Console. Same service-binding gate as the
+    // broker routes; the API worker supplies the uid from the caller's session.
+    const grantsList = url.pathname.match(/^\/internal\/users\/([^/]+)\/apps\/([a-z][a-z0-9-]{0,57})\/grants$/);
+    const grantsOne = url.pathname.match(/^\/internal\/users\/([^/]+)\/grants\/([A-Za-z0-9-]{8,64})$/);
+    if ((grantsList && request.method === "GET") || (grantsOne && request.method === "DELETE")) {
+      if (!env.INTERNAL_TOKEN || request.headers.get("X-Internal-Token") !== env.INTERNAL_TOKEN || !env.OAUTH_KV) {
+        return new Response("not found", { status: 404 });
+      }
+      const refreshTtl = env.OAUTH_REFRESH_TTL_SECONDS ? parseInt(env.OAUTH_REFRESH_TTL_SECONDS, 10) : undefined;
+      const headers = { "Cache-Control": "no-store" };
+      let uid: string;
+      try { uid = decodeURIComponent((grantsList ?? grantsOne)![1]!); } catch { return new Response("not found", { status: 404 }); }
+      if (grantsList) return Response.json({ grants: await listGrants(env.OAUTH_KV, uid, grantsList[2]!) }, { headers });
+      const revoked = await revokeGrant(
+        { kv: env.OAUTH_KV, ...(refreshTtl && !Number.isNaN(refreshTtl) ? { refreshTokenTtlSeconds: refreshTtl } : {}) },
+        uid,
+        grantsOne![2]!,
+      );
+      return revoked ? Response.json({ revoked: true }, { headers }) : new Response("not found", { status: 404, headers });
     }
 
     // #367: the Creator Console's provisioning preview/confirm, reached only

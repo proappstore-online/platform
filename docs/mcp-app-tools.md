@@ -1105,6 +1105,40 @@ Access**). Only the app's owner and its admitted admins can read the contract, t
 `GET /v1/apps/:appId/operator`. It is not part of the public tool listing or MCP
 discovery. The actions it names stay ordinary MCP tools.
 
+## Per-app scoped tokens and grants (#457)
+
+An OAuth sign-in that starts from `/mcp/apps/<app_id>` is bound to that endpoint (the OAuth
+`resource`). Its access and refresh tokens are good for that app and nothing else:
+
+| Token bound to | `/mcp/apps/<same app>` | `/mcp` | `/mcp/apps/<other app>` |
+|---|---|---|---|
+| `hiring` (app-scoped) | works | 401 `invalid_token` | 401 `invalid_token` |
+| none (sign-in from `/mcp`) | 401 `invalid_token` | works | 401 `invalid_token` |
+
+The refusal happens at the transport, before any tool runs, so an app-scoped token cannot reach
+`list_app_tools` or `call_app_tool` (they only exist inside a transport), nor another app's tools.
+A refresh keeps the binding, with the 90-day sliding window unchanged. Tokens issued before
+resource binding existed are refused on app endpoints. A raw PAS session JWT is not an OAuth token
+and is not scoped.
+
+Each authorization is its own **grant**. Several accounts, or several clients of one account, can
+authorize the same app endpoint at once; each gets separate tokens and runs as its own user, and one
+sign-in never replaces or revokes another. A grant record holds the client name, scope and
+timestamps, never a token or session. `last_used_at` is the last time a token was issued from the
+grant (sign-in or refresh).
+
+API for the Creator Console (console#4). Both routes act as the signed-in account and return only that
+account's grants:
+
+- `GET /v1/apps/:appId/mcp` returns
+  `{ app_id, endpoint_url, grants: [{ id, client_name, scope: "app", created_at, last_used_at }] }`
+  (epoch seconds). `endpoint_url` is the app's own MCP URL.
+- `DELETE /v1/apps/:appId/mcp/grants/:grantId` revokes one grant: its refresh chain and its live
+  access tokens stop working at once. `404` if the grant is not this account's on this app.
+
+Both read the MCP worker over the authenticated service binding (`/internal/users/:uid/...`,
+`X-Internal-Token`); those internal routes are not public.
+
 ## How tools get registered
 
 There are two paths, both idempotent (re-registering replaces the app's tool set):

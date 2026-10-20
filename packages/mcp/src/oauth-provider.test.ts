@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createAuthChallenge, handleOAuthRoute, issueBrokerCredential, resolveOAuthToken } from './oauth-provider.js';
+import { createAuthChallenge, handleOAuthRoute, issueBrokerCredential, listGrants, resolveOAuthToken, revokeGrant } from './oauth-provider.js';
 import { mintSession, verifySession } from '@proappstore/build-core';
 
 function makeKv(seed: Record<string, string> = {}): KVNamespace {
@@ -8,6 +8,10 @@ function makeKv(seed: Record<string, string> = {}): KVNamespace {
     get: async (key: string) => data.get(key) ?? null,
     put: async (key: string, value: string) => { data.set(key, value); },
     delete: async (key: string) => { data.delete(key); },
+    list: async ({ prefix = '' }: { prefix?: string } = {}) => ({
+      keys: [...data.keys()].filter((name) => name.startsWith(prefix)).map((name) => ({ name })),
+      list_complete: true,
+    }),
   } as unknown as KVNamespace;
 }
 
@@ -777,3 +781,92 @@ async function pkceChallenge(verifier: string): Promise<string> {
   for (const b of new Uint8Array(digest)) bin += String.fromCharCode(b);
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
+
+// #457: every authorization is a grant, listed per account and endpoint and
+// revocable; revoking one kills its live access tokens and its refresh chain.
+describe('grants (#457)', () => {
+  const cfg = (kv: KVNamespace) => ({
+    issuer: 'https://mcp.proappstore.online',
+    authStart: 'https://api.proappstore.online/v1/auth/github/start',
+    kv,
+    sessionSigningKey: 'test-key',
+  });
+
+  async function authorize(kv: KVNamespace, uid: string, appId: string | null, n: string) {
+    const verifier = `verifier-${n}`;
+    await kv.put(`code:code-${n}`, JSON.stringify({
+      session: await mintSession({ uid, login: uid.replace('gh:', ''), roles: ['user'] }, 'test-key'),
+      codeChallenge: await pkceChallenge(verifier),
+      redirectUri: 'https://client.example/cb',
+      clientId: 'client-1',
+      appId,
+    }));
+    const res = await handleOAuthRoute(new Request('https://mcp.proappstore.online/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'authorization_code', code: `code-${n}`, redirect_uri: 'https://client.example/cb', client_id: 'client-1', code_verifier: verifier }),
+    }), cfg(kv));
+    return await res!.json() as { access_token: string; refresh_token: string };
+  }
+  const refresh = (kv: KVNamespace, token: string) => handleOAuthRoute(new Request('https://mcp.proappstore.online/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: token, client_id: 'client-1' }),
+  }), cfg(kv));
+
+  it('records a grant per authorization, with no credential in it', async () => {
+    const kv = makeKv({ 'client:client-1': JSON.stringify({ redirect_uris: ['https://client.example/cb'], client_name: 'Claude' }) });
+    const issued = await authorize(kv, 'gh:1', 'hiring', 'a');
+    const grants = await listGrants(kv, 'gh:1', 'hiring');
+    expect(grants).toEqual([{ id: expect.any(String), client_name: 'Claude', scope: 'app', app_id: 'hiring', created_at: expect.any(Number), last_used_at: expect.any(Number) }]);
+    const stored = JSON.stringify([...(await kv.list({ prefix: 'grant:' })).keys]) + await kv.get(`grant:gh:1:hiring:${grants[0]!.id}`);
+    expect(stored).not.toContain(issued.access_token);
+    expect(stored).not.toContain(issued.refresh_token);
+    await expect(resolveOAuthToken(issued.access_token, kv)).resolves.toMatchObject({ appId: 'hiring', bound: true, familyId: grants[0]!.id });
+  });
+
+  it('lists only the asked account and endpoint', async () => {
+    const kv = makeKv();
+    await authorize(kv, 'gh:1', 'hiring', 'a');
+    await authorize(kv, 'gh:2', 'hiring', 'b');
+    await authorize(kv, 'gh:1', 'crm', 'c');
+    await authorize(kv, 'gh:1', null, 'd');
+    expect(await listGrants(kv, 'gh:1', 'hiring')).toHaveLength(1);
+    expect(await listGrants(kv, 'gh:2', 'hiring')).toHaveLength(1);
+    expect(await listGrants(kv, 'gh:1', null)).toMatchObject([{ scope: 'shared', app_id: null }]);
+    expect(await listGrants(kv, 'gh:3', 'hiring')).toEqual([]);
+  });
+
+  it('keeps scope and the grant across a refresh, and renews last_used_at', async () => {
+    const kv = makeKv();
+    const issued = await authorize(kv, 'gh:1', 'hiring', 'a');
+    const [before] = await listGrants(kv, 'gh:1', 'hiring');
+    vi.useFakeTimers(); vi.setSystemTime(Date.now() + 3_600_000);
+    try {
+      const res = await refresh(kv, issued.refresh_token);
+      expect(res?.status).toBe(200);
+      const next = await res!.json() as { access_token: string };
+      await expect(resolveOAuthToken(next.access_token, kv)).resolves.toMatchObject({ appId: 'hiring', bound: true, familyId: before!.id });
+      const after = await listGrants(kv, 'gh:1', 'hiring');
+      expect(after).toHaveLength(1);
+      expect(after[0]).toMatchObject({ id: before!.id, created_at: before!.created_at });
+      expect(after[0]!.last_used_at).toBeGreaterThan(before!.last_used_at);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('revoking one grant kills its access and refresh tokens and leaves another account untouched', async () => {
+    const kv = makeKv();
+    const mine = await authorize(kv, 'gh:1', 'hiring', 'a');
+    const theirs = await authorize(kv, 'gh:2', 'hiring', 'b');
+    const [grant] = await listGrants(kv, 'gh:1', 'hiring');
+    expect(await revokeGrant({ kv }, 'gh:2', grant!.id)).toBe(false); // not their grant
+    await expect(resolveOAuthToken(mine.access_token, kv)).resolves.not.toBeNull();
+    expect(await revokeGrant({ kv }, 'gh:1', grant!.id)).toBe(true);
+    await expect(resolveOAuthToken(mine.access_token, kv)).resolves.toBeNull();
+    expect((await refresh(kv, mine.refresh_token))?.status).toBe(400);
+    expect(await listGrants(kv, 'gh:1', 'hiring')).toEqual([]);
+    await expect(resolveOAuthToken(theirs.access_token, kv)).resolves.toMatchObject({ appId: 'hiring' });
+    expect((await refresh(kv, theirs.refresh_token))?.status).toBe(200);
+    expect(await revokeGrant({ kv }, 'gh:1', 'not a grant id!')).toBe(false);
+  });
+});

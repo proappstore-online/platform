@@ -20,6 +20,8 @@ export interface OAuthTokenResolution {
   bound: boolean;
   /** Present only for a credential issued to a remote-auth broker request. */
   brokerRequestId?: string;
+  /** The grant (authorization family) this token descends from; absent on tokens issued before grants were indexed. */
+  familyId?: string;
 }
 
 /**
@@ -195,16 +197,20 @@ export async function resolveOAuthToken(
   const raw = await kv.get(`token:${bearer}`);
   if (!raw) return null;
   try {
-    const data = JSON.parse(raw) as { session?: unknown; appId?: unknown; brokerRequestId?: unknown };
+    const data = JSON.parse(raw) as { session?: unknown; appId?: unknown; brokerRequestId?: unknown; familyId?: unknown };
     if (typeof data.session === "string" && data.session) {
       if (data.appId !== null && (typeof data.appId !== "string" || !APP_ID_RE.test(data.appId))) {
         return null;
       }
+      const familyId = typeof data.familyId === "string" ? data.familyId : undefined;
+      // A revoked grant (#457) kills its live access tokens, not just future refreshes.
+      if (familyId && (await familyRevoked(kv, familyId))) return null;
       return {
         session: data.session,
         appId: data.appId,
         bound: true,
         ...(typeof data.brokerRequestId === "string" ? { brokerRequestId: data.brokerRequestId } : {}),
+        ...(familyId ? { familyId } : {}),
       };
     }
   } catch {
@@ -662,11 +668,7 @@ async function authorizationCodeGrant(body: URLSearchParams, config: OAuthConfig
 
   // Issue opaque access token → maps to session in KV (24h TTL)
   const accessToken = crypto.randomUUID();
-  await config.kv.put(
-    `token:${accessToken}`,
-    JSON.stringify({ session: codeData.session, appId: codeData.appId ?? null }),
-    { expirationTtl: 86_400 },
-  );
+  const familyId = crypto.randomUUID();
 
   // Issue a refresh token (#418) so the client can renew without the browser
   // for up to 90 days. This needs the session's claims (not the JWT itself —
@@ -680,10 +682,17 @@ async function authorizationCodeGrant(body: URLSearchParams, config: OAuthConfig
       claims: sessionSeed(claims),
       clientId,
       appId: codeData.appId ?? null,
-      familyId: crypto.randomUUID(),
+      familyId,
       privilegedUntil: claims.exp,
     })
     : null;
+  // The access token carries its family only when a grant exists to revoke (#457).
+  await config.kv.put(
+    `token:${accessToken}`,
+    JSON.stringify({ session: codeData.session, appId: codeData.appId ?? null, ...(claims ? { familyId } : {}) }),
+    { expirationTtl: 86_400 },
+  );
+  if (claims) await writeGrant(config, claims.uid, codeData.appId ?? null, familyId, clientId);
 
   return json({
     access_token: accessToken,
@@ -772,9 +781,10 @@ async function refreshTokenGrant(body: URLSearchParams, config: OAuthConfig): Pr
   const accessToken = crypto.randomUUID();
   await config.kv.put(
     `token:${accessToken}`,
-    JSON.stringify({ session, appId: record.appId }),
+    JSON.stringify({ session, appId: record.appId, familyId: record.familyId }),
     { expirationTtl: 86_400 },
   );
+  await touchGrant(config, claims.uid, record.appId, record.familyId, record.clientId);
   const nextRefreshToken = await issueRefreshToken(config, {
     claims,
     clientId: record.clientId,
@@ -826,4 +836,120 @@ async function revokeFamily(
 ): Promise<void> {
   const ttlSeconds = config.refreshTokenTtlSeconds ?? DEFAULT_REFRESH_TTL_SECONDS;
   await config.kv.put(`revoked-refresh-family:${familyId}`, "1", { expirationTtl: ttlSeconds });
+}
+
+// ── Grants (#457) ────────────────────────────────────────────────────────────
+// One record per authorization (family), keyed by account and endpoint so one
+// account's grants can be listed and revoked without scanning anyone else's.
+// Holds no token and no session: only what the console shows.
+
+export interface McpGrant {
+  /** The family id: opaque, the handle for revoking. */
+  id: string;
+  client_name: string | null;
+  /** `app` when bound to one /mcp/apps/<id> endpoint, `shared` for the /mcp endpoint. */
+  scope: "app" | "shared";
+  app_id: string | null;
+  created_at: number;
+  /** Epoch seconds of the last token issued from this grant (sign-in or refresh). */
+  last_used_at: number;
+}
+
+const grantKey = (uid: string, appId: string | null, familyId: string) => `grant:${uid}:${appId ?? "_"}:${familyId}`;
+
+async function writeGrant(
+  config: Pick<OAuthConfig, "kv" | "refreshTokenTtlSeconds">,
+  uid: string,
+  appId: string | null,
+  familyId: string,
+  clientId: string,
+  createdAt?: number,
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  let clientName: string | null = null;
+  try {
+    const raw = await config.kv.get(`client:${clientId}`);
+    const name = raw ? (JSON.parse(raw) as { client_name?: unknown }).client_name : null;
+    clientName = typeof name === "string" ? name.slice(0, 120) : null;
+  } catch { /* the label is cosmetic */ }
+  const record = { client_name: clientName, created_at: createdAt ?? now, last_used_at: now };
+  await config.kv.put(grantKey(uid, appId, familyId), JSON.stringify(record), {
+    expirationTtl: config.refreshTokenTtlSeconds ?? DEFAULT_REFRESH_TTL_SECONDS,
+  });
+}
+
+/** A refresh renews the grant's last-used time. A revoked (deleted) grant is not resurrected. */
+async function touchGrant(
+  config: Pick<OAuthConfig, "kv" | "refreshTokenTtlSeconds">,
+  uid: string,
+  appId: string | null,
+  familyId: string,
+  clientId: string,
+): Promise<void> {
+  const raw = await config.kv.get(grantKey(uid, appId, familyId));
+  if (!raw) {
+    // Families issued before grants were indexed gain a record on their next refresh.
+    if (await familyRevoked(config.kv, familyId)) return;
+    await writeGrant(config, uid, appId, familyId, clientId);
+    return;
+  }
+  let createdAt: number | undefined;
+  try { createdAt = (JSON.parse(raw) as { created_at?: number }).created_at; } catch { /* rewritten below */ }
+  await writeGrant(config, uid, appId, familyId, clientId, createdAt);
+}
+
+/** One account's grants on one endpoint (`appId` null = the shared /mcp endpoint). Never holds a credential. */
+export async function listGrants(kv: KVNamespace, uid: string, appId: string | null): Promise<McpGrant[]> {
+  const prefix = `grant:${uid}:${appId ?? "_"}:`;
+  const out: McpGrant[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await kv.list({ prefix, ...(cursor ? { cursor } : {}) });
+    for (const { name } of page.keys) {
+      const id = name.slice(prefix.length);
+      if (!id || id.includes(":")) continue;
+      const raw = await kv.get(name);
+      if (!raw) continue;
+      try {
+        const g = JSON.parse(raw) as { client_name?: unknown; created_at?: unknown; last_used_at?: unknown };
+        out.push({
+          id,
+          client_name: typeof g.client_name === "string" ? g.client_name : null,
+          scope: appId ? "app" : "shared",
+          app_id: appId,
+          created_at: Number(g.created_at) || 0,
+          last_used_at: Number(g.last_used_at) || 0,
+        });
+      } catch { /* skip a malformed record */ }
+    }
+    cursor = page.list_complete ? undefined : (page as { cursor?: string }).cursor;
+  } while (cursor);
+  return out.sort((a, b) => b.last_used_at - a.last_used_at);
+}
+
+/**
+ * Revoke one of an account's grants: its refresh family is flagged (so no refresh
+ * and no already-issued access token resolves again) and the record is removed.
+ * Only the owning account's grants are looked up, so a foreign id is a no-op.
+ * Returns whether a grant was found.
+ */
+export async function revokeGrant(
+  config: Pick<OAuthConfig, "kv" | "refreshTokenTtlSeconds">,
+  uid: string,
+  grantId: string,
+): Promise<boolean> {
+  if (!/^[A-Za-z0-9-]{8,64}$/.test(grantId)) return false;
+  const prefix = `grant:${uid}:`;
+  let cursor: string | undefined;
+  do {
+    const page = await config.kv.list({ prefix, ...(cursor ? { cursor } : {}) });
+    for (const { name } of page.keys) {
+      if (!name.endsWith(`:${grantId}`) || name.slice(prefix.length).split(":").length !== 2) continue;
+      await revokeFamily(config, grantId);
+      await config.kv.delete(name);
+      return true;
+    }
+    cursor = page.list_complete ? undefined : (page as { cursor?: string }).cursor;
+  } while (cursor);
+  return false;
 }

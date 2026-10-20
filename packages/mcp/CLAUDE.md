@@ -157,6 +157,14 @@ from the reference is present:
   refused. Access tokens are opaque, KV-stored, 24h TTL, and bound to the
   requested MCP resource (`/mcp` or `/mcp/apps/<app_id>`). `mcp-remote`
   compatible.
+- **Per-app grants (#457)** — a token authorized from `/mcp/apps/<id>` works only on that endpoint
+  (`index.ts` refuses a bound token on `/mcp` or any other app, which also closes `list_app_tools` /
+  `call_app_tool`). Every authorization writes `grant:<uid>:<appId|_>:<familyId>` (client name and
+  timestamps only; no credential), and access tokens carry their `familyId`, so `revokeGrant` kills
+  live tokens and the refresh chain together. The API worker lists/revokes through
+  `/internal/users/:uid/apps/:appId/grants` and `/internal/users/:uid/grants/:grantId`
+  (`X-Internal-Token`) behind `GET /v1/apps/:appId/mcp` and
+  `DELETE /v1/apps/:appId/mcp/grants/:grantId`. See `docs/mcp-app-tools.md`.
 - **Refresh tokens (#418)** — issued alongside the access token on both the
   `authorization_code` and `refresh_token` grants. Opaque, KV-stored, rotate on
   every use (single-use; a replayed/already-rotated token revokes the whole
@@ -203,8 +211,8 @@ from the reference is present:
   before being interpolated into service-binding subrequest paths.
 
 **Known gaps vs. the PAGS reference** (intentional / deferred, not holes): no scope
-taxonomy (single-admin model); no refresh-token revocation endpoint (expiry +
-reuse-family revocation only — see Refresh tokens above); rate limiting only
+taxonomy (single-admin model); no public refresh-token revocation endpoint (grants are revoked
+through the console API above; otherwise expiry + reuse-family revocation — see Refresh tokens above); rate limiting only
 on `POST /register`, not `/token` or tool calls; audit skips reads and
 subject-less calls. Revisit if PAS ever authorizes third-party/delegated agents.
 
