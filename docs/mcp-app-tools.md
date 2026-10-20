@@ -181,6 +181,12 @@ read-only queries can use `requires_auth: false`, but registration constrains
 them: they must be `query` tools, must not reference `:__user_id`, must not
 declare roles, and must include a literal `LIMIT 500` or lower.
 
+### Permissions (`permissions`)
+
+A top-level `"permissions": [{ "id": "microphone", "reason": "Record voice notes" }]`
+declares the browser permissions the app asks for, shown on its storefront
+listing (#437). Ids, rules and detection: [App permissions](./app-permissions.md).
+
 ### Public actions: rate limit and cache
 
 Any caller can reach a public action, so the platform bounds what one caller can

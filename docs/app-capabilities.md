@@ -39,6 +39,8 @@ still prompts where the feature needs consent.
 | `window-management` | multi-screen window placement | yes |
 | `compute-pressure`, `attribution-reporting` | Compute Pressure, Attribution Reporting | no |
 
+**Tell users up front.** Declare the ones your app asks for in `mcp.json` `permissions` so its storefront listing shows them: see [App permissions](./app-permissions.md).
+
 **Iframes your app embeds** get none of these unless you delegate them, for example
 `<iframe src="https://partner.example" allow="camera; microphone">`.
 
