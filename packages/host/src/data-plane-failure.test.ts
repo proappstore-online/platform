@@ -144,4 +144,12 @@ describe("data-plane failure reporting (#394)", () => {
     );
     expect(dataFetch.mock.calls[0]![0].headers.get("X-PAS-Data-Plane-Failure")).toBeNull();
   });
+
+  // #429: X-PAS-Country is host-asserted (from cf) and trusted by the backend on
+  // HostApi requests; a page's copy passed through and could set any visitor country.
+  it("a page cannot forge the host-only visitor country upstream", async () => {
+    const { env, ctx, dataFetch } = setup(async () => new Response("{}", { status: 200 }));
+    await handlePlatformMediation(dataRequest({ "X-PAS-Country": "KP" }), env, route, ctx);
+    expect(dataFetch.mock.calls[0]![0].headers.get("X-PAS-Country")).toBeNull();
+  });
 });

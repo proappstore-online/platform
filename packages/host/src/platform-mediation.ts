@@ -200,6 +200,9 @@ function forwardedHeaders(source: Headers, token: string, route: Route, hostname
   headers.delete(SESSION_INVALIDATION_EVENT_HEADER);
   headers.delete(SESSION_INVALIDATION_ID_HEADER);
   headers.delete(DATA_PLANE_FAILURE_HEADER);
+  // #429: the visitor's country is host-asserted from `cf` (analytics-mediation.ts);
+  // the backend trusts it on HostApi requests, so a page's own copy never passes.
+  headers.delete("X-PAS-Country");
   // App context, asserted by the host from the resolved route rather than taken
   // from the URL the page chose. Delete-then-set, in that order: page JS can send
   // this header itself, and without the delete a page on app A could claim app B
