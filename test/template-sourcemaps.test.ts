@@ -29,6 +29,8 @@ describe.each(templates)('%s source maps', (template) => {
 
   it("names the build by the deploy's commit, which the canonical build exports", () => {
     expect(api).toMatch(/initPro\(\{[\s\S]*monitoring:\s*\{\s*build:\s*\{\s*sha:\s*import\.meta\.env\.VITE_COMMIT_SHA\s*\}\s*\}/);
-    expect(read(`templates/${template}/.github/workflows/deploy.yml`)).toContain('VITE_COMMIT_SHA: ${{ github.sha }}');
+    // #427: the template's deploy.yml calls the reusable pipeline, whose build exports the commit.
+    expect(read(`templates/${template}/.github/workflows/deploy.yml`)).toContain('uses: proappstore-online/platform/.github/workflows/app-deploy.yml@app-deploy-v1');
+    expect(read('.github/workflows/app-deploy.yml')).toContain('VITE_COMMIT_SHA: ${{ github.sha }}');
   });
 });

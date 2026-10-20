@@ -22,7 +22,7 @@ describe('servablePath (#399, #408)', () => {
   });
 
   it("the canonical deploy step records content types with exactly the platform's map", () => {
-    const golden = readFileSync(new URL('../../../admin/src/__fixtures__/canonical-deploy.yml', import.meta.url), 'utf8');
+    const golden = readFileSync(new URL('../../../../.github/workflows/app-deploy.yml', import.meta.url), 'utf8');
     const literal = /const TYPES = (\{[^\n]*\});/.exec(golden)?.[1];
     expect(literal).toBeTruthy();
     expect(new Function(`return ${literal}`)()).toEqual(MARKETING_CONTENT_TYPES);

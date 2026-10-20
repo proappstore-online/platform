@@ -40,7 +40,8 @@ const CATALOGUE_SRC = readFileSync(join(ROOT, 'packages/build-core/src/template-
 const reqM = /requires:\s*\{\s*sdk:\s*'([^']*)',\s*cli:\s*'([^']*)',\s*node:\s*'([^']*)',\s*pnpm:\s*'([^']*)'/.exec(CATALOGUE_SRC)!;
 const REQUIRES = { sdk: reqM[1]!, cli: reqM[2]!, node: reqM[3]!, pnpm: reqM[4]! };
 const KNOWN_DEVIATIONS = [...(/known_deviations:\s*\[([^\]]*)\]/.exec(CATALOGUE_SRC)![1]!).matchAll(/'(PAS-[A-Z]+-\d{3})'/g)].map((m) => m[1]!);
-const DEPLOY_YML = readFileSync(join(ROOT, 'packages/admin/src/__fixtures__/canonical-deploy.yml'), 'utf8');
+// #427: the steps and log lines live in the reusable pipeline every app's deploy.yml calls.
+const DEPLOY_YML = readFileSync(join(ROOT, '.github/workflows/app-deploy.yml'), 'utf8');
 const STEP_NAMES = [...DEPLOY_YML.matchAll(/^\s+- name: (.+)$/gm)].map((m) => m[1]!);
 const CHECK_IDS = new Set((JSON.parse(readFileSync(join(ROOT, 'docs/standard/compliance-checks.json'), 'utf8')) as { checks: Array<{ id: string }> }).checks.map((c) => c.id));
 const CLI = new Set(

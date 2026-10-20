@@ -37,7 +37,8 @@ const TOOLS = new Set(
     .flatMap((f) => [...readFileSync(join(ROOT, 'packages/mcp/src', f), 'utf8').matchAll(/server\.tool\(\s*["']([a-z_]+)["']/g)].map((m) => m[1]!)),
 );
 /** The canonical deploy workflow every app ships (scripts/sync-template-workflow.mjs keeps template-app equal to it). */
-const DEPLOY_YML = readFileSync(join(ROOT, 'packages/admin/src/__fixtures__/canonical-deploy.yml'), 'utf8');
+// #427: the steps and log lines live in the reusable pipeline every app's deploy.yml calls.
+const DEPLOY_YML = readFileSync(join(ROOT, '.github/workflows/app-deploy.yml'), 'utf8');
 const STEP_NAMES = [...DEPLOY_YML.matchAll(/^\s+- name: (.+)$/gm)].map((m) => m[1]!);
 /** CLI subcommands: `new Command('x')` in packages/cli/src plus the top-level create/publish. */
 const CLI = new Set(
