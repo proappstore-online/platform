@@ -410,7 +410,7 @@ export default {
     // time, over completed intervals only, catching up on late or missed ticks
     // (lib/error-alerts.ts). Failures here must not take the other checks down.
     // #391: stamp the evaluator's health either way, so a stalled or failing evaluator reads unknown/degraded, never healthy.
-    ctx.waitUntil(evaluateErrorSpikes({ env, now: tickAt }).then(
+    ctx.waitUntil(evaluateErrorSpikes({ env, now: tickAt, scheduled: true }).then(
       () => recordHealth(env.DB, 'evaluator', '', true, null),
       (e) => { console.error(`[alert] evaluation failed: ${(e as Error).message}`); return recordHealth(env.DB, 'evaluator', '', false, 'evaluation_failed'); },
     ));

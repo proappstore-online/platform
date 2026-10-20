@@ -14,6 +14,7 @@
  * a count.
  */
 import { dispatchWebhook } from './webhook-dispatch.js';
+import { recordHealth } from './metric-aggregates.js';
 import type { MetricSignal } from './metric-aggregates.js';
 
 export const ALERT_WINDOW_MS = 15 * 60_000;
@@ -84,6 +85,8 @@ export interface AlertReport {
   recorded: number;
   /** Alerts this run claimed and dispatched — new ones, and any a dead run left undelivered. */
   dispatched: number;
+  /** Scheduled runs only: the range that fell out of the catch-up horizon unevaluated since the last run, if any. */
+  gap: { start: number; end: number } | null;
 }
 
 interface Env { DB: D1Database }
@@ -150,7 +153,7 @@ const CLIENT_ERRORS = "level = 'error' AND source != 'server'";
 const ACTION_FAILURES = "source = 'server' AND category = 'action'";
 const SERVER_5XX = "source = 'server' AND level = 'error'";
 
-export async function evaluateErrorSpikes(opts: { env: Env; now?: number; appId?: string; windowMs?: number }): Promise<AlertReport> {
+export async function evaluateErrorSpikes(opts: { env: Env; now?: number; appId?: string; windowMs?: number; scheduled?: boolean }): Promise<AlertReport> {
   const { env } = opts;
   const now = opts.now ?? Date.now();
   const windowMs = opts.windowMs ?? ALERT_WINDOW_MS;
@@ -236,7 +239,36 @@ export async function evaluateErrorSpikes(opts: { env: Env; now?: number; appId?
     }
   }
   const dispatched = await deliverPendingAlerts(db, now, opts.appId);
-  return { checkedAt: new Date(now).toISOString(), windowMs, alerts, recorded, dispatched };
+  // Only the platform-wide scheduled run owns the cursor: an owner's on-demand run
+  // covers one app and says nothing about the others.
+  const gap = opts.scheduled && !opts.appId ? await advanceCursor(db, slices[0]! - ACTION_FAILURE_WINDOW_MS, slices[slices.length - 1]!, now) : null;
+  return { checkedAt: new Date(now).toISOString(), windowMs, alerts, recorded, dispatched, gap };
+}
+
+const CURSOR_ID = 'scheduled';
+
+/**
+ * #389: the recorded gap. The cursor is the end of the latest five-minute slice a
+ * scheduled run evaluated (the finest interval; every 15-minute window ends on
+ * one). When this run's catch-up horizon starts after it, the slices between were
+ * never evaluated: that range is kept on the cursor row, flagged on the
+ * evaluator's telemetry health and logged, never replayed as stale alerts. The
+ * cursor only moves forward, so overlapping or out-of-order runs cannot rewind it.
+ */
+async function advanceCursor(db: D1Database, coveredFrom: number, coveredTo: number, now: number): Promise<{ start: number; end: number } | null> {
+  const prev = await db.prepare('SELECT last_window_end FROM alert_evaluator_cursor WHERE id = ?').bind(CURSOR_ID).first<{ last_window_end: number }>();
+  const gap = prev && prev.last_window_end < coveredFrom ? { start: prev.last_window_end, end: coveredFrom } : null;
+  await db.prepare(
+    `INSERT INTO alert_evaluator_cursor (id, last_window_end, updated_at) VALUES (?1, ?2, ?3)
+     ON CONFLICT(id) DO UPDATE SET last_window_end = MAX(last_window_end, excluded.last_window_end), updated_at = excluded.updated_at`,
+  ).bind(CURSOR_ID, coveredTo, now).run();
+  if (gap) {
+    await db.prepare('UPDATE alert_evaluator_cursor SET gap_start = ?, gap_end = ?, gap_recorded_at = ? WHERE id = ?')
+      .bind(gap.start, gap.end, now, CURSOR_ID).run();
+    console.warn(`[alert] gap: intervals ${new Date(gap.start).toISOString()}..${new Date(gap.end).toISOString()} were not evaluated (more than ${CATCH_UP_MS / 60_000} min without a scheduled run)`);
+    await recordHealth(db, 'evaluator', '', false, 'gap', now);
+  }
+  return gap;
 }
 
 interface AlertRow {

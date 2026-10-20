@@ -151,3 +151,48 @@ describe('alert delivery across ticks, overlaps and restarts (#389)', () => {
     expect(sends).toHaveLength(0);
   });
 });
+
+describe('the recorded gap: scheduled runs keep a cursor (#389)', () => {
+  const sched = (at: number) => evaluateErrorSpikes({ env, now: at, scheduled: true });
+  const cursor = () => sqlite.prepare("SELECT last_window_end, gap_start, gap_end, gap_recorded_at FROM alert_evaluator_cursor WHERE id = 'scheduled'").get() as Record<string, number | null> | undefined;
+  const health = () => sqlite.prepare("SELECT last_failure_at, last_error FROM telemetry_health WHERE component = 'evaluator'").get() as Record<string, unknown> | undefined;
+
+  it('the first run sets it; runs every five minutes, or up to CATCH_UP_MS apart, record no gap', async () => {
+    expect((await sched(Q)).gap).toBeNull();
+    expect(cursor()).toMatchObject({ last_window_end: Q, gap_start: null });
+    expect((await sched(Q + 5 * MIN)).gap).toBeNull();
+    expect((await sched(Q + 5 * MIN + CATCH_UP_MS)).gap).toBeNull();
+    expect(cursor()!.last_window_end).toBe(Q + 5 * MIN + CATCH_UP_MS);
+    expect(health()).toBeUndefined();
+  });
+
+  it('a longer outage records the unevaluated range once, flags the evaluator and replays nothing from it', async () => {
+    await sched(Q);
+    // An error spike inside the outage, in the interval [Q, Q+15m): its evaluation chance passes unseen.
+    spike('shop', Q + ALERT_WINDOW_MS);
+    const late = Q + 60 * MIN;
+    const r = await sched(late);
+    // Covered now: the slices ending in (late - 30m, late], i.e. from late - 30m.
+    expect(r.gap).toEqual({ start: Q, end: late - CATCH_UP_MS });
+    expect(cursor()).toMatchObject({ last_window_end: late, gap_start: Q, gap_end: late - CATCH_UP_MS, gap_recorded_at: late });
+    expect(health()).toMatchObject({ last_error: 'gap', last_failure_at: late });
+    expect(alerts()).toHaveLength(0);
+    expect(sends).toHaveLength(0);
+    // The next on-time run finds no new gap and keeps the last one on record.
+    expect((await sched(late + 5 * MIN)).gap).toBeNull();
+    expect(cursor()).toMatchObject({ gap_start: Q, gap_end: late - CATCH_UP_MS });
+  });
+
+  it('overlapping or out-of-order runs never rewind the cursor or invent a gap', async () => {
+    await sched(Q + 10 * MIN);
+    await Promise.all([sched(Q + 15 * MIN), sched(Q + 5 * MIN)]);
+    expect(cursor()).toMatchObject({ last_window_end: Q + 15 * MIN, gap_start: null });
+  });
+
+  it("an owner's on-demand run does not move the cursor", async () => {
+    await sched(Q);
+    await evaluateErrorSpikes({ env, now: Q + 2 * 60 * MIN, appId: 'shop', scheduled: true });
+    await evaluateErrorSpikes({ env, now: Q + 2 * 60 * MIN, appId: 'shop' });
+    expect(cursor()!.last_window_end).toBe(Q);
+  });
+});
