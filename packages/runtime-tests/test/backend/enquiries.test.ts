@@ -142,6 +142,33 @@ describe('enquiries: owner API (#412)', () => {
 });
 
 describe('migration 0104_app_enquiries (#412)', () => {
+  // #431: two enquiries in the same millisecond had no defined order (this file's
+  // list test failed ~1 run in 3), and a `before` timestamp cursor skipped ties on
+  // the page boundary.
+  it('orders same-millisecond enquiries by arrival and pages across the tie without skipping or repeating', async () => {
+    const insert = (id: string, name: string, at: number) => env.DB.prepare(
+      "INSERT INTO app_enquiries (id, app_id, name, email, message, ip_hash, created_at) VALUES (?, ?, ?, 'a@example.com', 'hi', 'h', ?)",
+    ).bind(id, APP, name, at).run();
+    const ids = Array.from({ length: 5 }, () => crypto.randomUUID());
+    await insert(ids[0]!, 'oldest', 1_000);
+    for (const [i, name] of ['tie-1', 'tie-2', 'tie-3'].entries()) await insert(ids[i + 1]!, name, 2_000);
+    await insert(ids[4]!, 'newest', 3_000);
+    const owner = await session('gh:1');
+    type Page = { enquiries: { id: string; name: string }[]; next: { before_id: string } | null };
+    const page = async (q: string) => (await (await SELF.fetch(`${BASE}/v1/apps/${APP}/enquiries${q}`, json('GET', undefined, owner))).json()) as Page;
+
+    expect((await page('')).enquiries.map((e) => e.name)).toEqual(['newest', 'tie-3', 'tie-2', 'tie-1', 'oldest']);
+    const seen: string[] = [];
+    let p = await page('?limit=2');
+    for (;;) {
+      seen.push(...p.enquiries.map((e) => e.name));
+      if (!p.next) break;
+      p = await page(`?limit=2&before_id=${p.next.before_id}`);
+    }
+    expect(seen).toEqual(['newest', 'tie-3', 'tie-2', 'tie-1', 'oldest']);
+    expect((await SELF.fetch(`${BASE}/v1/apps/${APP}/enquiries?before_id=nope`, json('GET', undefined, owner))).status).toBe(400);
+  });
+
   it('defaults to new, allows only new/handled, requires an app, indexes by app, and goes with its app', async () => {
     const insert = (id: string, appId: string, status?: string) => env.DB.prepare(
       `INSERT INTO app_enquiries (id, app_id, name, email, message, ${status ? 'status, ' : ''}ip_hash, created_at) VALUES (?, ?, 'n', 'e@x.io', 'm', ${status ? '?, ' : ''}'h', 1)`,

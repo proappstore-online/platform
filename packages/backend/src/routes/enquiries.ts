@@ -136,14 +136,25 @@ enquiryRoutes.get('/apps/:appId/enquiries', async (c) => {
   const before = Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER);
   if (!Number.isFinite(before)) throw new HttpError('before must be a timestamp', 400);
   const limit = Math.min(Math.max(Number(c.req.query('limit') ?? 50) || 50, 1), 100);
+  // #431: enquiries that arrive in the same millisecond tie on created_at; rowid
+  // (insertion order) breaks the tie, so the order is stable and newest-first.
+  // `before_id` (the last id of the previous page) pages on (created_at, rowid),
+  // so a tie on the page boundary is neither skipped nor repeated, as a bare
+  // `before` timestamp would be. An unknown before_id yields an empty page.
+  const beforeId = c.req.query('before_id');
+  if (beforeId !== undefined && !ID_RE.test(beforeId)) throw new HttpError('before_id must be an enquiry id', 400);
   const rows = await c.env.DB.prepare(
     `SELECT ${COLUMNS} FROM app_enquiries WHERE app_id = ?1 AND (?2 IS NULL OR status = ?2) AND created_at < ?3
-      ORDER BY created_at DESC LIMIT ?4`,
-  ).bind(appId, status ?? null, before, limit).all<EnquiryRow>();
+        AND (?5 IS NULL OR (created_at, rowid) < (SELECT created_at, rowid FROM app_enquiries WHERE app_id = ?1 AND id = ?5))
+      ORDER BY created_at DESC, rowid DESC LIMIT ?4`,
+  ).bind(appId, status ?? null, before, limit, beforeId ?? null).all<EnquiryRow>();
   const counts = await c.env.DB.prepare(
     "SELECT SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END) AS new_count, COUNT(*) AS total FROM app_enquiries WHERE app_id = ?",
   ).bind(appId).first<{ new_count: number | null; total: number }>();
-  return c.json({ enquiries: rows.results ?? [], counts: { new: counts?.new_count ?? 0, total: counts?.total ?? 0 } });
+  const list = rows.results ?? [];
+  // The next page's cursor, when this one is full.
+  const next = list.length === limit ? { before_id: list[list.length - 1]!.id } : null;
+  return c.json({ enquiries: list, counts: { new: counts?.new_count ?? 0, total: counts?.total ?? 0 }, next });
 });
 
 enquiryRoutes.get('/apps/:appId/enquiries/:id', async (c) => {

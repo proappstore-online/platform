@@ -100,7 +100,7 @@ describe('owner enquiry API (#412)', () => {
 
   it('lists with counts, filters by status, reads one and marks it handled', async () => {
     const list = await app.request('/v1/apps/shop/enquiries?status=new&limit=500', { headers: await owner() }, db().env);
-    expect(await list.json()).toEqual({ enquiries: [{ id: ID, ...good, status: 'new' }], counts: { new: 1, total: 2 } });
+    expect(await list.json()).toEqual({ enquiries: [{ id: ID, ...good, status: 'new' }], counts: { new: 1, total: 2 }, next: null });
     expect((await app.request('/v1/apps/shop/enquiries?status=spam', { headers: await owner() }, db().env)).status).toBe(400);
     expect((await app.request('/v1/apps/shop/enquiries?before=abc', { headers: await owner() }, db().env)).status).toBe(400);
 
