@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "./env.js";
-import { addToRegistry, buildAgentBundle, deployWorkflowYaml, handleAgentDeploy, handlePublish, isPrivateForRegistry, kbWorkflowYaml, reconcileStorefrontPublication } from "./publish.js";
+import { addToRegistry, APP_DEPLOY_TAG, APP_DEPLOY_WORKFLOW, buildAgentBundle, deployWorkflowYaml, handleAgentDeploy, handlePublish, isPrivateForRegistry, kbWorkflowYaml, reconcileStorefrontPublication } from "./publish.js";
 
 /**
  * The two ways an app repo gets provisioned must yield the SAME hosting:
@@ -211,6 +211,13 @@ describe("provisioning: shared core", () => {
   });
 });
 
+/**
+ * #427: the deploy pipeline is the reusable workflow every app's deploy.yml calls
+ * (.github/workflows/app-deploy.yml, released as app-deploy-v1). The tests below that
+ * assert what a deploy does read it; the generator and golden are the thin caller.
+ */
+const pipeline = () => readFileSync(new URL("../../../.github/workflows/app-deploy.yml", import.meta.url), "utf8");
+
 describe("canonical deploy workflow — single source of truth", () => {
   // deployWorkflowYaml() is THE canonical deploy workflow. The committed golden
   // (__fixtures__/canonical-deploy.yml) is what the sync script pushes to the
@@ -229,7 +236,7 @@ describe("canonical deploy workflow — single source of truth", () => {
   describe("no public source maps (#393)", () => {
     /** One step's `run: |` script from the generated workflow, with its expressions filled in. */
     function stepScript(name: string, dir: string): string {
-      const y = deployWorkflowYaml(ENV);
+      const y = pipeline();
       const at = y.indexOf(`- name: ${name}`);
       expect(at, name).toBeGreaterThan(0);
       const body = y.slice(y.indexOf("run: |", at) + "run: |".length, y.indexOf("\n      - ", at + 1));
@@ -320,7 +327,7 @@ describe("canonical deploy workflow — single source of truth", () => {
     });
 
     it("runs strip before the public upload and the probe after it", () => {
-      const y = deployWorkflowYaml(ENV);
+      const y = pipeline();
       const order = ["Upload browser source maps", "Strip source maps from the public build", "Upload to R2", "Verify source maps are not public"].map((n) => y.indexOf(`- name: ${n}`));
       expect(order.every((i) => i > 0)).toBe(true);
       expect([...order].sort((a, b) => a - b)).toEqual(order);
@@ -331,7 +338,7 @@ describe("canonical deploy workflow — single source of truth", () => {
   // the runner-router job and no other job hard-codes a runner. The owner applied
   // it to template-app by hand; the generator must carry it, or every sync reverts it.
   it("routes every job through ProAgentStore/runner-router and hard-codes no runner (#425)", () => {
-    const yaml = deployWorkflowYaml(ENV);
+    const yaml = pipeline();
     const jobs = yaml.slice(yaml.indexOf("\njobs:\n"));
     const names = [...jobs.matchAll(/^ {2}([a-z0-9_-]+):$/gm)].map((m) => m[1]!);
     expect(names[0]).toBe("router");
@@ -356,9 +363,9 @@ describe("canonical deploy workflow — single source of truth", () => {
   // web/tests/e2e) instead of a root e2e/ package; the canonical workflow runs
   // either, so such an app can adopt it without losing its E2E gate.
   describe("E2E suite detection (#264)", () => {
-    const yaml = () => deployWorkflowYaml(ENV);
+    const yaml = () => pipeline();
     /** The e2e-check step's script, run as Actions would, in a scratch repo laid out by `files`. */
-    function detect(files: string[]): Record<string, string> {
+    function detect(files: string[], input?: string): Record<string, string> {
       const y = yaml();
       const start = y.indexOf("id: e2e-check");
       const script = y.slice(y.indexOf("run: |", start) + "run: |".length, y.indexOf("\n      - uses:", start))
@@ -371,8 +378,8 @@ describe("canonical deploy workflow — single source of truth", () => {
         }
         const out = join(dir, "github_output");
         writeFileSync(out, "");
-        const r = spawnSync("bash", ["-e", "-c", script], { cwd: dir, env: { ...process.env, GITHUB_OUTPUT: out } });
-        expect(r.status, String(r.stderr)).toBe(0);
+        const r = spawnSync("bash", ["-e", "-c", script], { cwd: dir, env: { ...process.env, GITHUB_OUTPUT: out, ...(input ? { E2E: input } : {}) } });
+        if (r.status !== 0) return { error: String(r.stdout) };
         return Object.fromEntries(readFileSync(out, "utf8").trim().split("\n").map((l) => l.split("=") as [string, string]));
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -387,6 +394,21 @@ describe("canonical deploy workflow — single source of truth", () => {
       ["no suite", ["web/src/main.ts"], { has_e2e: "false", e2e_dir: "" }],
     ])("%s", (_label, files, expected) => {
       expect(detect(files)).toEqual(expected);
+    });
+
+    // #427: the reusable pipeline's `e2e` input picks the layout, or none; auto is the detection above.
+    it.each<[string, string[], string, Record<string, string>]>([
+      ["auto detects", ["e2e/package.json"], "auto", { has_e2e: "true", e2e_dir: "e2e" }],
+      ["none skips a present suite", ["e2e/package.json"], "none", { has_e2e: "false", e2e_dir: "" }],
+      ["web picks the web suite over a root one", ["e2e/package.json", "web/playwright.config.ts"], "web", { has_e2e: "true", e2e_dir: "web" }],
+      ["e2e picks the root package", ["e2e/package.json", "web/tests/e2e/a.spec.ts", "web/playwright.config.ts"], "e2e", { has_e2e: "true", e2e_dir: "e2e" }],
+    ])("input e2e: %s", (_label, files, input, expected) => {
+      expect(detect(files, input)).toEqual(expected);
+    });
+
+    it("input e2e naming a layout that is not there fails the deploy rather than skipping the gate", () => {
+      expect(detect(["web/src/main.ts"], "e2e").error).toContain("input e2e=e2e but there is no e2e/ directory");
+      expect(detect(["web/tests/e2e/a.spec.ts"], "web").error).toContain("input e2e=web but there is no web/playwright.config.*");
     });
 
     it("runs the suite where it was found: its own install, its own config, results from either reporter path", () => {
@@ -410,7 +432,7 @@ describe("canonical deploy workflow — single source of truth", () => {
   // canonical app workflow never deploys a Cloudflare script and never reads a platform
   // credential: its worker goes through the keyless platform step, nothing else.
   it("never deploys a Cloudflare script or reads a platform credential (#264)", () => {
-    const yaml = deployWorkflowYaml(ENV);
+    const yaml = pipeline();
     expect(yaml).not.toMatch(/wrangler|workers\/scripts|pas-data-|pas-app-/);
     expect(yaml).not.toMatch(/secrets\.(CLOUDFLARE|CF_|SESSION_SIGNING_KEY|INTERNAL_TOKEN|R2_)/);
     expect(yaml).toContain("https://api.proappstore.online/v1/apps/${{ github.event.repository.name }}/worker/oidc");
@@ -419,7 +441,7 @@ describe("canonical deploy workflow — single source of truth", () => {
   // #393: hidden source maps go to the platform's private store (opt-in, keyless) and
   // are always stripped before the public upload, so the public bucket never has a map.
   it("uploads opted-in source maps keyless and always strips maps before the public sync", () => {
-    const yaml = deployWorkflowYaml(ENV);
+    const yaml = pipeline();
     const at = (name: string) => yaml.indexOf(`- name: ${name}`);
     const upload = yaml.slice(at("Upload browser source maps (opt-in, keyless)"), at("Strip source maps from the public build"));
     const strip = yaml.slice(at("Strip source maps from the public build"), at("Mint deploy credentials (keyless — GitHub OIDC → platform)"));
@@ -439,14 +461,14 @@ describe("canonical deploy workflow — single source of truth", () => {
   });
 
   it("the golden never reintroduces the lockfile-coupled cache or CF Pages", () => {
-    const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
+    const golden = pipeline();
     expect(golden).not.toContain("cache: pnpm");
     expect(golden).not.toContain("pages deploy");
     expect(golden).toContain("--no-frozen-lockfile");
   });
 
   it("deploys the app worker between migrations and tools registration, only when worker/ exists (#253)", () => {
-    const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
+    const golden = pipeline();
     const at = (path: string) => golden.indexOf(`/v1/apps/\${{ github.event.repository.name }}/${path}"`);
     expect(at("migrate/oidc")).toBeGreaterThan(0);
     expect(at("worker/oidc")).toBeGreaterThan(at("migrate/oidc"));
@@ -459,13 +481,13 @@ describe("canonical deploy workflow — single source of truth", () => {
   // #408: the app's own deploy builds marketing/ and publishes it to about-<app> through the
   // platform's verified upload + activation, after the app itself is live, never blocking it.
   it("publishes the marketing site after the app is live: keyless, by commit, verified, rolled back on failure", () => {
-    const yaml = deployWorkflowYaml(ENV);
+    const yaml = pipeline();
     const at = (name: string) => yaml.indexOf(`- name: ${name}`);
     const name = "Publish marketing site (marketing/ -> about-<app>, keyless)";
     expect(at(name)).toBeGreaterThan(at("Upload to R2"));
     expect(at(name)).toBeLessThan(at("Trigger post-deploy QA flows (keyless — GitHub OIDC)"));
     const step = yaml.slice(at(name), at("Trigger post-deploy QA flows (keyless — GitHub OIDC)"));
-    expect(step).toContain("if: hashFiles('marketing/package.json') != ''");
+    expect(step).toContain("if: inputs.marketing == 'true' || (inputs.marketing == 'auto' && hashFiles('marketing/package.json') != '')");
     expect(step).toContain("continue-on-error: true");
     expect(step).toContain("pnpm --dir marketing build");
     // #410: a marketing/ outside the pnpm workspace is installed on its own.
@@ -481,7 +503,7 @@ describe("canonical deploy workflow — single source of truth", () => {
   });
 
   it("skips schema/action registration only in the canonical template source repo", () => {
-    const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
+    const golden = pipeline();
     expect(golden).toContain("hashFiles('migrations.json') != '' && github.event.repository.name != 'template-app'");
     expect(golden).toContain("hashFiles('mcp.json') != '' && github.event.repository.name != 'template-app'");
   });
@@ -511,7 +533,7 @@ describe("provisioning hygiene (#195)", () => {
     // `aws s3 sync --delete` mirrors the dist dir onto the live prefix; an empty
     // dir would delete every object of the running app. The guard must sit in
     // the step that resolves the dir, before any upload step can run.
-    const yaml = deployWorkflowYaml(ENV);
+    const yaml = pipeline();
     const locate = yaml.indexOf("- name: Locate build output");
     const upload = yaml.indexOf("- name: Upload to R2");
     const guard = yaml.indexOf('if [ ! -f "$dir/index.html" ]');
@@ -527,7 +549,7 @@ describe("provisioning hygiene (#195)", () => {
   it("registers app tools BEFORE the R2 upload so a rejected manifest blocks the deploy (#120)", () => {
     // Registering after the upload shipped the new frontend with the previous
     // revision's actions for three commits (chess-academy, 2026-08-10/11).
-    const yaml = deployWorkflowYaml(ENV);
+    const yaml = pipeline();
     const migrations = yaml.indexOf("- name: Apply D1 migrations");
     const register = yaml.indexOf("- name: Register app tools");
     const mint = yaml.indexOf("- name: Mint deploy credentials");
@@ -542,7 +564,7 @@ describe("provisioning hygiene (#195)", () => {
   });
 
   it("triggers post-deploy QA after the upload, advisory only", () => {
-    const yaml = deployWorkflowYaml(ENV);
+    const yaml = pipeline();
     const upload = yaml.indexOf("- name: Upload to R2");
     const qa = yaml.indexOf("- name: Trigger post-deploy QA flows");
     expect(qa).toBeGreaterThan(upload);
@@ -553,7 +575,7 @@ describe("provisioning hygiene (#195)", () => {
   });
 
   it("never deploys the template source repo itself, whose own build fails its placeholder check", () => {
-    const yaml = deployWorkflowYaml(ENV);
+    const yaml = pipeline();
     expect(yaml).toContain("  deploy:\n    # The approved templates (template-app, template-marketplace) are never served");
     // #425: the guard sits on the router too, so no runner is even routed for template-app.
     // #393: both approved templates, by exact name (template-marketplace's own
@@ -599,7 +621,7 @@ describe("KB ingest is keyless OIDC, never the shared INTERNAL_TOKEN (#57)", () 
   });
 
   it("the canonical deploy workflow uploads E2E results with OIDC too", () => {
-    const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
+    const golden = pipeline();
     expect(golden).not.toContain("secrets.INTERNAL_TOKEN");
     expect(golden).not.toContain("x-internal-token");
     expect(golden).toContain("audience=proappstore-kb-host");
@@ -608,7 +630,7 @@ describe("KB ingest is keyless OIDC, never the shared INTERNAL_TOKEN (#57)", () 
   it("keeps the E2E results upload non-fatal", () => {
     // Diagnostics, not a deploy gate: a failed mint or a rejected write must not
     // fail a run whose tests actually passed.
-    const golden = readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
+    const golden = pipeline();
     expect(golden).toContain("skipped results upload (could not obtain OIDC token)");
     expect(golden).toContain("skipped results upload (ingest rejected the write)");
   });
@@ -618,18 +640,21 @@ describe("deploy-workflow injection (agent path)", () => {
   it("injects a layout-adaptive deploy.yml when the bundle has none", async () => {
     const rec = install();
     await handleAgentDeploy({ id: "flatapp", name: "Flat", files: { "index.html": "x" } }, ENV);
-    const wf = rec.blobs.find((b) => b.includes("Deploy to R2") && b.includes("aws s3 sync"));
-    expect(wf, "an R2 deploy workflow blob should be pushed").toBeTruthy();
-    expect(wf).toContain("s3://pas-apps/apps/");
-    expect(wf).toContain("if [ -d web/dist ]"); // adaptive: web/dist OR dist
-    expect(wf).toContain("deploy-credentials"); // keyless: OIDC → platform-minted R2 creds
-    expect(wf).toContain("id-token: write"); // OIDC permission for the keyless mint
-    expect(wf).toContain("tools/oidc"); // mcp.json re-registered on every deploy
-    expect(wf).toContain("--no-frozen-lockfile"); // agents commit no lockfile
-    expect(wf).not.toContain("cache: pnpm"); // no lockfile committed → cache:pnpm would hard-fail setup-node
-    expect(wf).toContain("npx playwright test"); // behavioural gate runs after deploy
-    expect(wf).toContain("@vibecodeqa/cli@0.44.0"); // code-health scan (report-only)
-    expect(wf).toContain(".vcqa/report.json"); // written into dist for the Dev Ops tab
+    // #427: the injected deploy.yml is the thin caller of the reusable pipeline...
+    const wf = rec.blobs.find((b) => b.includes("Deploy to R2") && b.includes("app-deploy.yml@app-deploy-v1"));
+    expect(wf, "an R2 deploy workflow blob should be pushed").toBe(deployWorkflowYaml(ENV));
+    expect(wf).toContain("id-token: write"); // OIDC permission for the keyless mint, granted by the caller
+    // ...and the pipeline it calls does the deploy.
+    const pipe = pipeline();
+    expect(pipe).toContain("s3://pas-apps/apps/");
+    expect(pipe).toContain("if [ -d web/dist ]"); // adaptive: web/dist OR dist
+    expect(pipe).toContain("deploy-credentials"); // keyless: OIDC → platform-minted R2 creds
+    expect(pipe).toContain("tools/oidc"); // mcp.json re-registered on every deploy
+    expect(pipe).toContain("--no-frozen-lockfile"); // agents commit no lockfile
+    expect(pipe).not.toContain("cache: pnpm"); // no lockfile committed → cache:pnpm would hard-fail setup-node
+    expect(pipe).toContain("npx playwright test"); // behavioural gate runs after deploy
+    expect(pipe).toContain("@vibecodeqa/cli@0.44.0"); // code-health scan (report-only)
+    expect(pipe).toContain(".vcqa/report.json"); // written into dist for the Dev Ops tab
     // KB publish workflow injected too (Zensical → R2 → kb.proappstore.online).
     expect(
       rec.blobs.some((b) => b.includes("Publish Knowledge Base") && b.includes("zensical build")),
@@ -661,9 +686,8 @@ describe("deploy-workflow injection (agent path)", () => {
     // The agent's broken workflow is NOT pushed...
     expect(rec.blobs.some((b) => b.includes("cache: pnpm"))).toBe(false);
     // ...and our canonical R2 deploy workflow IS injected instead.
-    const wf = rec.blobs.find((b) => b.includes("Deploy to R2") && b.includes("aws s3 sync"));
-    expect(wf, "the canonical deploy workflow should be injected").toBeTruthy();
-    expect(wf).toContain("--no-frozen-lockfile");
+    const wf = rec.blobs.find((b) => b.includes("Deploy to R2") && b.includes("app-deploy.yml@app-deploy-v1"));
+    expect(wf, "the canonical deploy workflow should be injected").toBe(deployWorkflowYaml(ENV));
     // 1 surviving input (ci.yml stripped) + deploy.yml + kb.yml + 4 E2E harness files.
     expect(rec.blobs).toHaveLength(7);
   });
@@ -780,7 +804,7 @@ describe("canonical KB workflow — single source of truth (#57)", () => {
  */
 // Spawns bash per case (~1 s each locally), so allow headroom over the 5 s default.
 describe("deploy workflow build gate fails closed (#204)", { timeout: 30_000 }, () => {
-  const golden = () => readFileSync(new URL("./__fixtures__/canonical-deploy.yml", import.meta.url), "utf8");
+  const golden = () => pipeline();
 
   /** The `run:` script of a named step: a single line, or a `run: |` block. */
   function stepScript(yaml: string, name: string): string {
@@ -1032,5 +1056,67 @@ describe("storefront-publication reconcile (#399)", () => {
     registry(undefined);
     await expect(reconcileStorefrontPublication({ ...ENV, DB: d })).rejects.toThrow(/no apps list/);
     expect(written).toEqual([]);
+  });
+});
+
+describe("reusable deploy pipeline (#427)", () => {
+  const caller = () => deployWorkflowYaml(ENV);
+  /** One step's `run: |` script, unindented. */
+  const script = (y: string, name: string) => {
+    const start = y.indexOf(`- name: ${name}`);
+    const end = y.indexOf("\n      - ", start + 1);
+    return y.slice(y.indexOf("run: |", start) + "run: |".length, end).split("\n").map((l) => l.replace(/^ {10}/, "")).join("\n");
+  };
+
+  it("app deploy.yml is a thin caller: push to main, OIDC permission, the reusable pipeline at its moving tag", () => {
+    const y = caller();
+    expect(y).toMatch(/^name: Deploy to R2\n/); // the Agent Teams deploy gate matches the run name
+    expect(y).toContain("on:\n  push:\n    branches: [main]");
+    expect(y).toContain("permissions:\n  contents: read\n  id-token: write");
+    expect(y).toContain("group: deploy-${{ github.repository }}");
+    expect(y).toContain(`uses: ${APP_DEPLOY_WORKFLOW}@${APP_DEPLOY_TAG}`);
+    expect(APP_DEPLOY_TAG).toBe("app-deploy-v1");
+    expect(y).toContain("secrets: inherit");
+    // Nothing runs in the app repo itself: no steps, no other secrets.
+    expect(y).not.toMatch(/\n\s+(run|steps):/);
+    expect(y).not.toMatch(/secrets\./);
+    expect(y.split("\n").length).toBeLessThan(30);
+  });
+
+  it("the pipeline is callable only: workflow_call with typed inputs, defaults that match today's detection", () => {
+    const y = pipeline();
+    expect(y).toContain("on:\n  workflow_call:");
+    expect(y).not.toMatch(/\n  (push|pull_request|workflow_dispatch):/);
+    for (const [input, type, def] of [["e2e", "string", "auto"], ["marketing", "string", "auto"], ["source-maps", "string", "auto"], ["node-version", "number", "22"]]) {
+      expect(y, input).toMatch(new RegExp(`\\n      ${input}:\\n        description: [^\\n]+\\n        type: ${type}\\n        default: ${def}\\n`));
+    }
+    expect(y).toContain("node-version: ${{ inputs.node-version }}");
+    expect(y).not.toContain("node-version: 22");
+    expect(y).toContain("if: inputs.source-maps != 'false'");
+    expect(y).toContain("if: inputs.marketing == 'true' || (inputs.marketing == 'auto' && hashFiles('marketing/package.json') != '')");
+  });
+
+  it.each<[Record<string, string>, boolean]>([
+    [{ E2E: "auto", MARKETING: "auto", SOURCE_MAPS: "auto" }, true],
+    [{ E2E: "web", MARKETING: "false", SOURCE_MAPS: "false" }, true],
+    [{ E2E: "none", MARKETING: "true", SOURCE_MAPS: "auto" }, true],
+    [{ E2E: "yes", MARKETING: "auto", SOURCE_MAPS: "auto" }, false],
+    [{ E2E: "auto", MARKETING: "maybe", SOURCE_MAPS: "auto" }, false],
+    [{ E2E: "auto", MARKETING: "auto", SOURCE_MAPS: "true" }, false],
+  ])("input check %j passes: %s", (env, ok) => {
+    const r = spawnSync("bash", ["-e", "-c", script(pipeline(), "Check inputs")], { env: { ...process.env, ...env } });
+    expect(r.status === 0, String(r.stdout)).toBe(ok);
+  });
+
+  // #264 guard, on the file every app now runs. `secrets: inherit` hands it every
+  // secret the caller holds, so it may read only the two it declares.
+  it("the pipeline reads only its declared secrets and never a platform credential or Cloudflare script", () => {
+    const y = pipeline();
+    expect(y).not.toMatch(/wrangler|workers\/scripts|pas-data-|pas-app-/);
+    expect(y).not.toMatch(/secrets\.(CLOUDFLARE|CF_|SESSION_SIGNING_KEY|INTERNAL_TOKEN|R2_)/);
+    expect([...new Set(y.match(/secrets\.[A-Z0-9_]+/g))].sort()).toEqual(["secrets.PAS_E2E_SESSION_TOKEN", "secrets.RUNNER_BILLING_TOKEN"]);
+    expect(y).toContain("https://api.proappstore.online/v1/apps/${{ github.event.repository.name }}/worker/oidc");
+    // The templates never deploy: the skip lives in the pipeline, so a template's caller is inert.
+    expect(y.match(/if: github\.event\.repository\.name != 'template-app' && github\.event\.repository\.name != 'template-marketplace'/g)).toHaveLength(2);
   });
 });
