@@ -407,6 +407,25 @@ embeds `<script src="https://api.proappstore.online/v1/analytics.js?app=<id>">`.
 Check: in the browser console of the app, no CSP violation for
 `/.pas/analytics/event`; the Network tab shows the beacon `POST` with 204.
 
+Confirm an event reached the dataset with the Analytics Engine SQL API
+(`POST /client/v4/accounts/<account>/analytics_engine/sql`, a token with
+Account Analytics Read). Each data point is `blob1` app, `blob2` kind
+(`pageview` or the custom event's name), `blob3` path, `blob4` referrer host,
+`blob5` country, `blob6` UA class, `blob7` props:
+
+```sql
+SELECT blob2 AS kind, blob3 AS path, count() AS n, min(timestamp) AS first
+FROM pas_analytics
+WHERE blob1 = '<app>' AND timestamp >= now() - INTERVAL '1' HOUR
+GROUP BY kind, path ORDER BY first
+```
+
+Tests: `packages/host/src/analytics-mediation.test.ts` (forwarded request: no
+cookie, route's app, CSRF, 64 KB cap) and `packages/runtime-tests/test/host/analytics.test.ts`
+(workerd, under a `connect-src 'self'` meta CSP: tag rewrite, signed out and
+signed in, private-app gate, custom apex and tenant subdomain, cross-origin
+refusal).
+
 ## Reliability objectives and burn-rate alerts (#395)
 
 Alongside the per-window #107 alerts above (which are unchanged and keep
