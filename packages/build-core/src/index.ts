@@ -10,6 +10,7 @@ export {
 } from './cloudflare.js';
 export type { CfConfig, Step } from './cloudflare.js';
 export { internalTokenOk } from './internal-auth.js';
+export { _resetJwksCache, verifyGithubOidc, type OidcClaims, type VerifyOptions } from './github-oidc.js';
 export {
   checkProvisionQuota,
   d1ProvisionAdmissionStore,

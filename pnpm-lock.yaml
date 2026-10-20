@@ -187,6 +187,10 @@ importers:
         version: 4.87.0(@cloudflare/workers-types@4.20260505.1)
 
   packages/kb-host:
+    dependencies:
+      '@proappstore/build-core':
+        specifier: workspace:*
+        version: link:../build-core
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^4.20251130.0

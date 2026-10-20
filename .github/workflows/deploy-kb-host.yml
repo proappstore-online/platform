@@ -8,7 +8,9 @@ name: Deploy KB Host Worker
 on:
   push:
     branches: [main]
-    paths: ['packages/kb-host/**']
+    paths:
+      - 'packages/kb-host/**'
+      - 'packages/build-core/**' # kb-host bundles build-core (GitHub OIDC verification, #430) — redeploy when it changes
   workflow_dispatch:
 
 permissions:
@@ -30,6 +32,8 @@ jobs:
           cache: pnpm
       - name: Install
         run: pnpm install --frozen-lockfile
+      - name: Build workspace dependencies
+        run: pnpm --filter @proappstore/build-core build
       - name: Typecheck
         working-directory: packages/kb-host
         run: pnpm exec tsc --noEmit

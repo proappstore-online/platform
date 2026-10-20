@@ -21,7 +21,7 @@ describe('deploy path filters track workspace imports (#322)', () => {
       'kb-host': ['deploy-kb-host.yml'],
       'qa-worker': ['deploy-qa-worker.yml'],
       'agent-teams': ['deploy-agent-teams.yml', 'deploy-mcp.yml'],
-      'build-core': ['deploy-admin.yml', 'deploy-backend.yml', 'deploy-mcp.yml'],
+      'build-core': ['deploy-admin.yml', 'deploy-backend.yml', 'deploy-kb-host.yml', 'deploy-mcp.yml'],
       'qa-spec': ['deploy-backend.yml', 'deploy-host.yml', 'deploy-qa-worker.yml'],
       compliance: ['deploy-backend.yml'],
       'data-worker': ['deploy-backend.yml'],
