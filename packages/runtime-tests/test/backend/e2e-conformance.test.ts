@@ -5,6 +5,8 @@ import { resetBurstState } from '../../../backend/src/lib/log-quota';
 import { utcDayKey } from '../../../backend/src/lib/day-key';
 import { BUCKET_MS, evaluateReliability, evaluationEnd, type OutcomeBucket } from '../../../backend/src/lib/reliability';
 import { retryDueDeliveries } from '../../../backend/src/lib/webhook-dispatch';
+import { evaluateErrorSpikes } from '../../../backend/src/lib/error-alerts';
+import { recordHealth } from '../../../backend/src/lib/metric-aggregates';
 import { BASE, json, mockNetwork, session, viaHostApi } from './helpers';
 import {
   cleanFixtureApp, counters, E2E_APP_ID as APP, E2E_OTHER_APP_ID as OTHER, E2E_OTHER_USER, E2E_USER,
@@ -226,6 +228,37 @@ describe('diagnostics conformance (#396)', () => {
     expect(inc).not.toContain('theirs');
     for (const path of ['logs', `incidents/${trace}`, 'telemetry/health', 'reliability/incidents', 'reliability/deliveries']) {
       expect((await SELF.fetch(`${BASE}/v1/apps/${APP}/${path}`, json('GET', undefined, await session(E2E_OTHER_USER)))).status, path).toBeGreaterThanOrEqual(403);
+    }
+  });
+
+  it('12. evaluator outage: incidents are still counted, and alert coverage for the gap is explicitly incomplete (#389, #391)', async () => {
+    // The evaluator's cursor and health row are platform-wide; this scenario owns them for its duration.
+    await env.DB.prepare('DELETE FROM alert_evaluator_cursor').run();
+    await env.DB.prepare("DELETE FROM telemetry_health WHERE component = 'evaluator' AND app_id = ''").run();
+    try {
+      const FIVE = 5 * 60_000;
+      const before = Math.floor((Date.now() - 3 * 60 * 60_000) / FIVE) * FIVE;
+      const after = Math.floor((Date.now() - 60 * 60_000) / FIVE) * FIVE;
+      await evaluateErrorSpikes({ env, now: before, scheduled: true });
+      // Two hours without a scheduled run, then one: the range it can no longer catch up is recorded.
+      expect((await evaluateErrorSpikes({ env, now: after, scheduled: true })).gap).toEqual({ start: before, end: after - 30 * 60_000 });
+      await recordHealth(env.DB, 'evaluator', '', true, null);
+      // Capture keeps counting whatever the evaluator did.
+      expect((await ingestLog(APP, [{ level: 'error', category: 'runtime', message: 'during-recovery', ts: Date.now() }])).status).toBeLessThan(300);
+      const h = await (await SELF.fetch(`${BASE}/v1/apps/${APP}/telemetry/health`, json('GET', undefined, await owner()))).json() as {
+        countsReliable: boolean;
+        components: { evaluator: { status: string; lastError: string | null } };
+        alertCoverage: { complete: boolean; gap: { start: number; end: number } | null };
+        windows: { lastHour: { signals: Record<string, number> } };
+      };
+      expect(h.components.evaluator).toMatchObject({ status: 'ok', lastError: 'gap' });
+      expect(h.countsReliable).toBe(true);
+      expect(h.windows.lastHour.signals.client_error).toBeGreaterThanOrEqual(1);
+      expect(h.alertCoverage).toMatchObject({ complete: false, gap: { start: before, end: after - 30 * 60_000 } });
+    } finally {
+      // Leave the platform rows as found: later scenarios rely on an evaluator that has not run.
+      await env.DB.prepare('DELETE FROM alert_evaluator_cursor').run();
+      await env.DB.prepare("DELETE FROM telemetry_health WHERE component = 'evaluator' AND app_id = ''").run();
     }
   });
 
