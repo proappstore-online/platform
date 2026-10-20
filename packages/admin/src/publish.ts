@@ -349,7 +349,7 @@ export async function isPrivateForRegistry(
 }
 
 /** Whether an mcp.json text declares `visibility.mode: "private"`. Unparseable reads as undeclared — it cannot register either. */
-export function manifestDeclaresPrivate(text: string | undefined): boolean {
+function manifestDeclaresPrivate(text: string | undefined): boolean {
   try {
     return (JSON.parse(text ?? "null") as { visibility?: { mode?: unknown } } | null)?.visibility?.mode === "private";
   } catch {
@@ -364,7 +364,7 @@ export function manifestDeclaresPrivate(text: string | undefined): boolean {
  * successful listing, and repaired by reconcileStorefrontPublication. An app
  * with no apps row is not recorded (the foreign key), which reads as unlisted.
  */
-export async function setStorefrontListed(db: D1Database, appId: string, listed: boolean): Promise<void> {
+async function setStorefrontListed(db: D1Database, appId: string, listed: boolean): Promise<void> {
   await db.prepare(
     `INSERT INTO app_storefront_publication (app_id, listed, updated_at)
      SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM apps WHERE id = ?1)
@@ -993,7 +993,7 @@ export async function runProvisionSteps(
 // CI poll budget: each tick is one cheap GitHub check, then a durable sleep.
 // 40 × 20s ≈ 13 min of build time before declaring the deploy timed out — well
 // past a normal CI run, and the sleeps cost nothing.
-export const CI_POLL_MAX = 40;
+const CI_POLL_MAX = 40;
 export const CI_POLL_INTERVAL = "20 seconds";
 
 /** Shape `pollCiToVerdict` reads from a CI check — a subset of gh.deployResult. */
