@@ -9,7 +9,8 @@
  */
 
 import { Hono } from 'hono';
-import { evaluateUnscoped, validateApprovals, type UnscopedPolicyTool } from '@proappstore/compliance';
+import { evaluateUnscoped, validateApprovals, validatePermissions, type UnscopedPolicyTool } from '@proappstore/compliance';
+import { declaredPermissionsStatement } from '../lib/app-permissions.js';
 import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { requireAppAccess, requireAppOwner, requireUser } from '../lib/auth.js';
@@ -628,11 +629,13 @@ export interface SiteManifest {
   rooms?: unknown;
   /** Reviewed open unscoped actions (#426): `[{ action, reviewer, date, reason }]` — compliance lib/unscoped-policy.ts. */
   approved_unscoped?: unknown;
+  /** Browser permissions the app asks for (#437): `[{ id, reason? }]` — compliance lib/permissions.ts. */
+  permissions?: unknown;
 }
 
 /** The site-manifest fields of a submitted mcp.json body, for every registration path. */
 export function siteManifestFrom(body: SiteManifest | null | undefined): SiteManifest {
-  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker, hooks: body?.hooks, connectors: body?.connectors, rooms: body?.rooms, approved_unscoped: body?.approved_unscoped };
+  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker, hooks: body?.hooks, connectors: body?.connectors, rooms: body?.rooms, approved_unscoped: body?.approved_unscoped, permissions: body?.permissions };
 }
 
 interface PageMetaRoute { path: string; action: string; param: string }
@@ -1050,6 +1053,8 @@ export async function replaceAppTools(
   if ('error' in connectorsResult) return { status: 400, payload: { error: connectorsResult.error } };
   const roomsResult = validateRooms(site.rooms, tools as ToolManifest[]);
   if ('error' in roomsResult) return { status: 400, payload: { error: roomsResult.error } };
+  const permissionsResult = validatePermissions(site.permissions);
+  if ('error' in permissionsResult) return { status: 400, payload: { error: permissionsResult.error } };
   // `to: "worker"` needs app workers turned on for this app — the flag, not a
   // finished deploy, so registration never depends on the worker step's order.
   if (hooksResult.hooks.some((h) => h.to === 'worker')) {
@@ -1086,6 +1091,8 @@ export async function replaceAppTools(
     // so they can never name an action the app no longer registers.
     db.prepare('DELETE FROM app_page_meta WHERE app_id = ?').bind(appId),
     db.prepare('DELETE FROM app_sitemap WHERE app_id = ?').bind(appId),
+    // #437: what the app declares it asks the browser for, for its storefront listing.
+    declaredPermissionsStatement(db, appId, permissionsResult.permissions, now),
     ...siteResult.routes.map((r, i) =>
       db.prepare(
         'INSERT INTO app_page_meta (app_id, position, path_pattern, action_name, param_name, created_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -1185,7 +1192,7 @@ export async function replaceAppTools(
   }
   return {
     status: 200,
-    payload: { ok: true, registered: tools.length, staged, ...cost, schedules, page_meta: siteResult.routes.length, sitemap: siteResult.sitemap !== null, operator: operatorResult.gate,
+    payload: { ok: true, registered: tools.length, staged, ...cost, schedules, page_meta: siteResult.routes.length, sitemap: siteResult.sitemap !== null, permissions: permissionsResult.permissions.map((p) => p.id), operator: operatorResult.gate,
       operator_view: operatorView.contract
         ? { version: operatorView.contract.version, resources: operatorView.contract.resources.length, actions: operatorView.contract.actions.length }
         : null,

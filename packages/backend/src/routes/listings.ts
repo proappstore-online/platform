@@ -5,6 +5,7 @@ import { wrap } from '../lib/route-wrap.js';
 import { auditModeration, chunkText, moderateChunks, moderateText } from '../lib/moderation.js';
 import { withinModerationRate } from '../lib/ai-budget.js';
 import { getAppVisibility } from '../lib/visibility.js';
+import { listingPermissionIds, listingPermissions } from '../lib/app-permissions.js';
 import type { ListingRow, ListingPatch } from './listing-types.js';
 import { rowToDto, emptyDto } from './listing-types.js';
 import {
@@ -72,10 +73,15 @@ listingsRoutes.get('/storefront/apps/:id', wrap(async (c) => {
   // exposed through supportUrl instead.
   const { supportEmail, ...publicDto } = dto;
   void supportEmail;
+  // #437: what the app will ask the browser for, so the prompt is no surprise.
+  // Empty means "No special permissions".
+  const perms = await c.env.DB.prepare('SELECT declared_json, detected_json FROM app_permissions WHERE app_id = ?')
+    .bind(appId).first<{ declared_json: string; detected_json: string }>();
+  const permissions = listingPermissions(perms?.declared_json, perms?.detected_json);
   // Short cache: lets edits propagate quickly while still absorbing
   // bursts from popular apps.
   c.header('Cache-Control', 'public, max-age=60');
-  return c.json(publicDto);
+  return c.json({ ...publicDto, permissions });
 }));
 
 /**
@@ -95,9 +101,12 @@ listingsRoutes.get('/storefront/apps', wrap(async (c) => {
             l.tagline,
             l.category,
             l.theme_color,
-            l.updated_at
+            l.updated_at,
+            p.declared_json,
+            p.detected_json
        FROM apps a
   LEFT JOIN app_listings l ON l.app_id = a.id
+  LEFT JOIN app_permissions p ON p.app_id = a.id
   LEFT JOIN app_visibility v ON v.app_id = a.id
       WHERE v.mode IS NULL OR v.mode <> 'private'  -- private apps (#259) are never listed
       ORDER BY a.created_at DESC`,
@@ -108,6 +117,8 @@ listingsRoutes.get('/storefront/apps', wrap(async (c) => {
     category: string | null;
     theme_color: string | null;
     updated_at: number | null;
+    declared_json: string | null;
+    detected_json: string | null;
   }>();
   const apps = (results ?? []).map((r) => ({
     appId: r.app_id,
@@ -116,6 +127,8 @@ listingsRoutes.get('/storefront/apps', wrap(async (c) => {
     category: r.category,
     themeColor: r.theme_color,
     updatedAt: r.updated_at ?? 0,
+    // #437: the card's permission icon row (ids; names and icons come with the detail).
+    permissions: listingPermissionIds(r.declared_json, r.detected_json),
   }));
   c.header('Cache-Control', 'public, max-age=60');
   return c.json({ apps });

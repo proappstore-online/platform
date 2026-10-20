@@ -1375,8 +1375,9 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
   it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view/visibility/worker/hooks/connectors/room rules reset)', async () => {
     const { res, db } = await internalPost({ tools: [] }, { 'X-Internal-Token': 'secret' });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false, operator: null, operator_view: null, visibility: { mode: 'public', roles: [] }, worker: null, rooms: [] });
-    expect(db.batch.mock.calls[0]![0]).toHaveLength(12);
+    expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false, operator: null, operator_view: null, visibility: { mode: 'public', roles: [] }, worker: null, rooms: [], permissions: [] });
+    // #437: the declared permissions are replaced with the rest (here: cleared).
+    expect(db.batch.mock.calls[0]![0]).toHaveLength(13);
     expect(db.batch.mock.calls[0]![0][1]!.bind).toHaveBeenCalledWith('test-app');
 
     const missing = await internalPost({}, { 'X-Internal-Token': 'secret' });
@@ -2195,6 +2196,36 @@ describe('stagedStates (#428)', () => {
     expect(stagedStates([tool({ description: 'reworded' })], registered, false).get('list_items')).toBe('staged');
     for (const change of [{ sql: 'SELECT id FROM items WHERE user_id = :__user_id LIMIT 5' }, { requires_auth: false }, { auth: { app_roles: ['admin'] } }, { callers: ['user', 'worker'] }]) {
       expect(stagedStates([tool(change)], registered, false).get('list_items'), JSON.stringify(change)).toBe('live');
+    }
+  });
+});
+
+describe('mcp.json permissions (#437)', () => {
+  const put = async (body: Record<string, unknown>) => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    const res = await app.request('/v1/apps/test-app/tools', {
+      method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }, makeEnv({}, db));
+    return { res, db, body: await res.json() as { error?: string; permissions?: string[] } };
+  };
+
+  it('registers declared permissions with the tools, in the same batch', async () => {
+    const { res, body, db } = await put({ tools: [validTool], permissions: [{ id: 'microphone', reason: 'Record voice notes' }, 'location'] });
+    expect(res.status).toBe(200);
+    expect(body.permissions).toEqual(['microphone', 'location']);
+    const sql = db.prepare.mock.calls.map((c) => String(c[0]));
+    const at = sql.findIndex((q) => q.startsWith('INSERT INTO app_permissions'));
+    expect(at).toBeGreaterThan(-1);
+    const binds = db.prepare.mock.results.flatMap((r) => (r.value as { bind: { mock: { calls: unknown[][] } } }).bind.mock.calls);
+    expect(binds).toContainEqual(['test-app', JSON.stringify([{ id: 'microphone', reason: 'Record voice notes' }, { id: 'location' }]), expect.any(Number)]);
+  });
+
+  it('refuses an unknown id or an unsafe reason, registering nothing', async () => {
+    for (const permissions of [[{ id: 'telepathy' }], [{ id: 'camera', reason: '<script>' }], 'camera']) {
+      const { res, body, db } = await put({ tools: [validTool], permissions });
+      expect(res.status, JSON.stringify(permissions)).toBe(400);
+      expect(body.error).toMatch(/permissions/);
+      expect(db.batch).not.toHaveBeenCalled();
     }
   });
 });
