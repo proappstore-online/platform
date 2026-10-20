@@ -166,3 +166,87 @@ describe('owner routes (#395)', () => {
     expect((await SELF.fetch(`${BASE}/v1/apps/${APP}/reliability/incidents`, json('GET', undefined, await session('gh:2')))).status).toBeGreaterThanOrEqual(403);
   });
 });
+
+// #395, the #389 pattern on real D1: an incident's state change is recorded first
+// and its notification sent from the row afterwards, claimed so overlapping runs
+// never both send. A run that dies in between is simulated by the row it leaves.
+describe('restart-safe incident notifications (#395)', () => {
+  const RULE = 'burn_fast:actions';
+  const row = async () => (await env.DB.prepare('SELECT state, notified_state, notify_claimed_at, notify_attempts FROM app_incidents WHERE app_id = ? AND rule = ?').bind(APP, RULE).first<Record<string, unknown>>())!;
+  /** Collect every app.alert POST to the hook. */
+  function hook(times: number) {
+    const sent: Record<string, unknown>[] = [];
+    fetchMock.get(HOOK).intercept({ path: '/alert', method: 'POST' }).reply(200, (req) => { sent.push(JSON.parse(String(req.body)) as Record<string, unknown>); return 'ok'; }).times(times);
+    return sent;
+  }
+
+  it('two evaluations at once open one incident and send its firing once', async () => {
+    await webhook();
+    const sent = hook(1);
+    const [a, b] = await Promise.all([evaluate(severe), evaluate(severe)]);
+    expect(a.opened + b.opened).toBe(1);
+    expect(a.notified + b.notified).toBe(1);
+    expect(sent).toHaveLength(1);
+    expect(await row()).toMatchObject({ state: 'firing', notified_state: 'firing', notify_claimed_at: null, notify_attempts: 1 });
+  });
+
+  it('a run that died after opening the incident, before sending: the next tick sends the firing, once', async () => {
+    await webhook();
+    await env.DB.prepare("INSERT INTO app_incidents (app_id, rule, state, opened_at, last_seen_at, detail) VALUES (?, ?, 'firing', ?, ?, '{\"burn\":20}')")
+      .bind(APP, RULE, NOW - BUCKET_MS, NOW - BUCKET_MS).run();
+    const sent = hook(1);
+    expect(await evaluate(severe)).toMatchObject({ opened: 0, notified: 1 });
+    // At the transition's own time; detail is the incident's current one (this run refreshed it).
+    expect(sent).toEqual([expect.objectContaining({ state: 'firing', rule: RULE, at: NOW - BUCKET_MS })]);
+    expect(await evaluate(severe, NOW + 60_000)).toMatchObject({ notified: 0 });
+  });
+
+  it('a recovery recorded but not sent is sent once — the firing it followed is not sent again', async () => {
+    await webhook();
+    await env.DB.prepare("INSERT INTO app_incidents (app_id, rule, state, opened_at, last_seen_at, recovered_at, detail, notified_state) VALUES (?, ?, 'recovered', 1, 1, ?, '{}', 'firing')")
+      .bind(APP, RULE, NOW - 60_000).run();
+    const sent = hook(1);
+    expect(await evaluate(clean)).toMatchObject({ notified: 1 });
+    expect(sent).toEqual([expect.objectContaining({ state: 'recovered', at: NOW - 60_000 })]);
+    expect(await row()).toMatchObject({ notified_state: 'recovered' });
+    await evaluate(clean, NOW + 60_000);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('a run that died mid-send: not resent while its claim holds, resent once after the lease', async () => {
+    await webhook();
+    await env.DB.prepare("INSERT INTO app_incidents (app_id, rule, state, opened_at, last_seen_at, detail, notify_claimed_at) VALUES (?, ?, 'firing', ?, ?, '{}', ?)")
+      .bind(APP, RULE, NOW, NOW, NOW).run();
+    const sent = hook(1);
+    expect(await evaluate(severe, NOW + 5 * 60_000)).toMatchObject({ notified: 0 });
+    expect(sent).toHaveLength(0);
+    expect(await evaluate(severe, NOW + 10 * 60_000)).toMatchObject({ notified: 1 });
+    expect(sent).toHaveLength(1);
+  });
+
+  it('acknowledging sends nothing, before or after evaluation', async () => {
+    await webhook();
+    const sent = hook(1);
+    await evaluate(severe);
+    const [inc] = await incidents();
+    expect((await SELF.fetch(`${BASE}/v1/apps/${APP}/reliability/incidents/${inc!.id}/ack`, json('POST', undefined, await session('gh:1')))).status).toBe(200);
+    expect(await evaluate(severe, NOW + 60_000)).toMatchObject({ notified: 0 });
+    expect(sent).toHaveLength(1);
+    expect(await row()).toMatchObject({ state: 'acknowledged', notified_state: 'firing' });
+  });
+
+  it('a notification owed after its objective was removed is still sent', async () => {
+    await webhook();
+    await env.DB.prepare("INSERT INTO app_incidents (app_id, rule, state, opened_at, last_seen_at, detail) VALUES (?, ?, 'firing', ?, ?, '{}')").bind(APP, RULE, NOW, NOW).run();
+    await env.DB.prepare('DELETE FROM app_reliability_objectives').run();
+    const sent = hook(1);
+    expect(await evaluate(clean)).toMatchObject({ evaluated: 0, notified: 1 });
+    expect(sent).toHaveLength(1);
+  });
+
+  it('now may be a Date: it is stored as epoch milliseconds', async () => {
+    const r = await evaluateReliability({ env, now: new Date(NOW), read: async () => severe });
+    expect(r).toMatchObject({ opened: 1 });
+    expect((await env.DB.prepare('SELECT opened_at FROM app_incidents WHERE app_id = ?').bind(APP).first<{ opened_at: number }>())?.opened_at).toBe(NOW);
+  });
+});

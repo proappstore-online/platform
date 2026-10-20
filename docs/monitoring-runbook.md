@@ -506,6 +506,18 @@ every five minutes updates its incident, never opens another. Notifications go
 out on **firing** and **recovered** only — not on re-evaluation, not after an
 acknowledgement. List with `GET …/reliability/incidents?open=1`.
 
+**Sent once, even across restarts** (the #389 pattern). Recording a state change
+and notifying it are separate steps. Every run sends each transition still owed
+(`notified_state` behind the incident's state: `firing` once, `recovered` once),
+at most 50 per run, from the stored row and stamped with the transition's own
+time (`at` = `opened_at` or `recovered_at`).
+- Each send is claimed first with a conditional update (`notify_claimed_at`, a
+  10-minute lease), so two overlapping runs never both send.
+- A run that died after recording, before sending, is completed by the next tick.
+- A run that died mid-send is resent once after the lease: the one at-least-once
+  case. Receivers should treat `(app_id, rule, state, at)` as the idempotency key.
+- A notification owed after its objective was removed is still sent.
+
 **Delivery.** Only to the app's existing opt-in `app.alert` webhooks (the same
 mechanism as #107; nothing is sent when the owner registered none, and no new
 destination exists). Payload: `{ event, kind: "reliability", state, app_id,
