@@ -223,6 +223,59 @@ describe("canonical deploy workflow — single source of truth", () => {
     expect(deployWorkflowYaml(ENV)).toBe(golden);
   });
 
+  // #264: an app may keep its Playwright suite in the web workspace (doordrop's
+  // web/tests/e2e) instead of a root e2e/ package; the canonical workflow runs
+  // either, so such an app can adopt it without losing its E2E gate.
+  describe("E2E suite detection (#264)", () => {
+    const yaml = () => deployWorkflowYaml(ENV);
+    /** The e2e-check step's script, run as Actions would, in a scratch repo laid out by `files`. */
+    function detect(files: string[]): Record<string, string> {
+      const y = yaml();
+      const start = y.indexOf("id: e2e-check");
+      const script = y.slice(y.indexOf("run: |", start) + "run: |".length, y.indexOf("\n      - uses:", start))
+        .split("\n").map((l) => l.replace(/^ {10}/, "")).join("\n");
+      const dir = mkdtempSync(join(tmpdir(), "e2e-check-"));
+      try {
+        for (const f of files) {
+          mkdirSync(join(dir, dirname(f)), { recursive: true });
+          if (!f.endsWith("/")) writeFileSync(join(dir, f), "");
+        }
+        const out = join(dir, "github_output");
+        writeFileSync(out, "");
+        const r = spawnSync("bash", ["-e", "-c", script], { cwd: dir, env: { ...process.env, GITHUB_OUTPUT: out } });
+        expect(r.status, String(r.stderr)).toBe(0);
+        return Object.fromEntries(readFileSync(out, "utf8").trim().split("\n").map((l) => l.split("=") as [string, string]));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    it.each<[string, string[], Record<string, string>]>([
+      ["a root e2e/ package", ["e2e/package.json"], { has_e2e: "true", e2e_dir: "e2e" }],
+      ["a web workspace suite", ["web/tests/e2e/a.spec.ts", "web/playwright.config.ts"], { has_e2e: "true", e2e_dir: "web" }],
+      ["both: the root package wins", ["e2e/package.json", "web/tests/e2e/a.spec.ts", "web/playwright.config.ts"], { has_e2e: "true", e2e_dir: "e2e" }],
+      ["web/tests/e2e without a Playwright config", ["web/tests/e2e/a.spec.ts"], { has_e2e: "false", e2e_dir: "" }],
+      ["no suite", ["web/src/main.ts"], { has_e2e: "false", e2e_dir: "" }],
+    ])("%s", (_label, files, expected) => {
+      expect(detect(files)).toEqual(expected);
+    });
+
+    it("runs the suite where it was found: its own install, its own config, results from either reporter path", () => {
+      const y = yaml();
+      const job = y.slice(y.indexOf("\n  e2e:"));
+      expect(y).toContain("e2e_dir: ${{ steps.e2e-check.outputs.e2e_dir }}");
+      expect(job).toContain("working-directory: ${{ needs.deploy.outputs.e2e_dir }}");
+      expect(job).toContain('if [ "${{ needs.deploy.outputs.e2e_dir }}" = "e2e" ]; then npm install');
+      expect(job).toContain('cd "$GITHUB_WORKSPACE" && pnpm install --frozen-lockfile');
+      expect(job).toContain("uses: pnpm/action-setup@v4");
+      expect(job).toContain('["results.json","test-results/results.json"]');
+      // The job is still skipped without a suite, and still fails the run when the suite fails.
+      expect(job).toContain("if: needs.deploy.outputs.has_e2e == 'true'");
+      expect(job).toContain("if: steps.e2e.outcome != 'success'");
+      expect(job).not.toMatch(/working-directory: e2e\n/);
+    });
+  });
+
   // #264: doordrop's own workflow redeployed a Worker named `pas-data-doordrop` with the
   // account-wide Cloudflare token, and every platform redeploy silently reverted it. The
   // canonical app workflow never deploys a Cloudflare script and never reads a platform

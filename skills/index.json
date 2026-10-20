@@ -596,8 +596,8 @@
         "platform_guide"
       ],
       "mutating": false,
-      "bytes": 49004,
-      "digest": "121318f94ee133ab861f17138aa4e86dd3d3223e54cfe05e9be708ccb02678bd",
+      "bytes": 48983,
+      "digest": "ccc67bf210efe708152c7790f4e21e0535d8c4959e15c99fc1819902eac63b4f",
       "files": [
         {
           "path": "evals/cases.json",
@@ -626,8 +626,8 @@
         },
         {
           "path": "references/decision-tables.md",
-          "bytes": 9777,
-          "sha256": "fc7fe0e37c1861ae29426025670c45047454fed7cd7dd2b261fc459c99422c33"
+          "bytes": 9756,
+          "sha256": "262835fa33e640c16db6a73b8dce278ecb5a0e95e0f77051e0ff50c8a441106b"
         },
         {
           "path": "references/negative-cases.md",
@@ -673,8 +673,8 @@
         },
         "actual": {
           "skill_md_bytes": 11393,
-          "references_bytes": 28659,
-          "bundle_bytes": 49004
+          "references_bytes": 28638,
+          "bundle_bytes": 48983
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",
@@ -710,8 +710,8 @@
         "qa_list_runs"
       ],
       "mutating": false,
-      "bytes": 56212,
-      "digest": "08313bd66ac34a1bfce2469372fe184df2ab4b564cdc8cf1def6efc6c6b82eb1",
+      "bytes": 56191,
+      "digest": "e180a9b43f32677533cc01afa85b27ba528e98268f4f5187b13defb7c9802aec",
       "files": [
         {
           "path": "evals/cases.json",
@@ -740,8 +740,8 @@
         },
         {
           "path": "references/decision-tables.md",
-          "bytes": 10593,
-          "sha256": "f673b3829c683706a4149885ba9c09b3d26cba5daf1a8424abab153c2ba79f18"
+          "bytes": 10572,
+          "sha256": "a70e6bdac056e0fd5bfd5c74dcb31e1a3a0dfaa8edf56662533319fd8645b71f"
         },
         {
           "path": "references/negative-cases.md",
@@ -787,8 +787,8 @@
         },
         "actual": {
           "skill_md_bytes": 10757,
-          "references_bytes": 34908,
-          "bundle_bytes": 56212
+          "references_bytes": 34887,
+          "bundle_bytes": 56191
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",

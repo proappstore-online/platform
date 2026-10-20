@@ -22,11 +22,20 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       has_e2e: ${{ steps.e2e-check.outputs.has_e2e }}
+      e2e_dir: ${{ steps.e2e-check.outputs.e2e_dir }}
     steps:
       - uses: actions/checkout@v4
       - name: Check for an E2E suite
         id: e2e-check
-        run: echo "has_e2e=$([ -d e2e ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        # Two supported layouts (#264): a root e2e/ package run against the live
+        # app, or a Playwright suite inside the web workspace (web/tests/e2e with
+        # web/playwright.config.*), run by its own config.
+        run: |
+          if [ -d e2e ]; then DIR=e2e
+          elif [ -d web/tests/e2e ] && ls web/playwright.config.* >/dev/null 2>&1; then DIR=web
+          else DIR=""; fi
+          echo "e2e_dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "has_e2e=$([ -n "$DIR" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -320,34 +329,37 @@ jobs:
     needs: deploy
     if: needs.deploy.outputs.has_e2e == 'true'
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ needs.deploy.outputs.e2e_dir }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - name: Install E2E deps
-        working-directory: e2e
-        run: npm install
+        # e2e/ is its own package; a web/ suite uses the app's workspace install.
+        run: |
+          if [ "${{ needs.deploy.outputs.e2e_dir }}" = "e2e" ]; then npm install
+          else cd "$GITHUB_WORKSPACE" && pnpm install --frozen-lockfile; fi
       - name: Install Playwright browser
-        working-directory: e2e
         run: npx playwright install --with-deps chromium
-      - name: Run E2E against the live app
+      - name: Run E2E
         id: e2e
         continue-on-error: true
-        working-directory: e2e
         env:
           E2E_BASE_URL: https://${{ github.event.repository.name }}.proappstore.online
           E2E_SESSION_TOKEN: ${{ secrets.PAS_E2E_SESSION_TOKEN }}
         run: npx playwright test
       - name: Publish test results (kb.proappstore.online/<app>/.e2e/summary.json)
         if: always()
-        working-directory: e2e
         env:
           APP: ${{ github.event.repository.name }}
         run: |
           node -e '
             const fs=require("fs");
-            let r={}; try{ r=JSON.parse(fs.readFileSync("results.json","utf8")); }catch{}
+            let r={}; for(const f of ["results.json","test-results/results.json"]){ try{ r=JSON.parse(fs.readFileSync(f,"utf8")); break; }catch{} }
             const s=r.stats||{}, specs=[];
             const walk=(su=[])=>su.forEach(x=>{ (x.specs||[]).forEach(sp=>specs.push({title:[x.title,sp.title].filter(Boolean).join(" > "),ok:sp.ok!==false})); walk(x.suites||[]); });
             walk(r.suites||[]);
