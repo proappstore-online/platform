@@ -27,6 +27,50 @@ type Ctx = Context<{ Bindings: Env }>;
 const HOST_WORKER = 'proappstore-host';
 
 /**
+ * The Cloudflare v4 response envelope. Every field is optional: a failed or
+ * unexpected response may carry any of them, or be null.
+ */
+interface CfEnvelope {
+  success?: boolean;
+  result?: unknown;
+  errors?: { message?: string }[];
+  error?: string;
+  detail?: string;
+}
+interface CfResponse { status: number; body: CfEnvelope | null }
+
+/** The fields read from each Cloudflare resource; the API returns more. */
+interface CfDnsRecord { id?: string; type?: string; name?: string; proxied?: boolean }
+interface CfWorkerRoute { id?: string; pattern?: string; script?: string }
+interface CfWorkerDomain { id?: string; hostname?: string; service?: string }
+interface CfCustomHostname {
+  id?: string;
+  hostname?: string;
+  status?: string;
+  ssl?: { status?: string; validation_records?: { txt_name?: string; txt_value?: string }[] };
+  ownership_verification?: { name?: string; value?: string };
+}
+
+/** A list response's `result`, or [] when it is not a list. */
+function cfList<T>(body: CfEnvelope | null): T[] {
+  return Array.isArray(body?.result) ? (body.result as T[]) : [];
+}
+
+/** What a domain row's `cf_payload` holds, per wiring method (see the attach route). */
+interface StoredDomainPayload {
+  kind?: string;
+  zoneId?: string;
+  routeId?: string | null;
+  dnsRecordId?: string | null;
+  pattern?: string;
+  hostnameId?: string | null;
+  apex?: boolean;
+  cname?: { name: string; value: string } | null;
+  cnameTarget?: string;
+  txt?: unknown;
+}
+
+/**
  * Authenticated call to the Cloudflare API. Centralizes the CF_API_TOKEN check +
  * Bearer header + Content-Type + JSON parse that every domains helper repeated
  * verbatim. `path` is appended to the v4 base; `json` (when set) is sent as the
@@ -36,7 +80,7 @@ async function cfApi(
   c: Ctx,
   path: string,
   init: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; json?: unknown } = {},
-): Promise<{ status: number; body: any }> {
+): Promise<CfResponse> {
   const cfToken = c.env.CF_API_TOKEN;
   if (!cfToken) throw new HttpError('CF credentials not configured', 503);
   const headers: Record<string, string> = { Authorization: `Bearer ${cfToken}` };
@@ -46,7 +90,7 @@ async function cfApi(
     reqInit.body = JSON.stringify(init.json);
   }
   const res = await fetch(`https://api.cloudflare.com/client/v4${path}`, reqInit);
-  const body = await res.json().catch(() => null);
+  const body = (await res.json().catch(() => null)) as CfEnvelope | null;
   return { status: res.status, body };
 }
 
@@ -75,7 +119,7 @@ async function cfExactZoneIdFor(c: Ctx, domain: string): Promise<string | null> 
 async function workerDomain(
   c: Ctx,
   opts: { method: 'PUT' | 'GET' | 'DELETE'; domain: string; zoneId?: string; id?: string },
-): Promise<{ status: number; body: any }> {
+): Promise<CfResponse> {
   if (!c.env.CF_ACCOUNT_ID) throw new HttpError('CF credentials not configured', 503);
   const base = `/accounts/${c.env.CF_ACCOUNT_ID}/workers/domains`;
   if (opts.method === 'PUT') {
@@ -94,7 +138,7 @@ async function wildcardDnsRecord(
   c: Ctx,
   zoneId: string,
   opts: { method: 'GET' | 'POST' | 'DELETE'; domain: string; id?: string },
-): Promise<{ status: number; body: any }> {
+): Promise<CfResponse> {
   const base = `/zones/${zoneId}/dns_records`;
   if (opts.method === 'GET') {
     return cfApi(c, `${base}?type=AAAA&name=${encodeURIComponent(`*.${opts.domain}`)}`);
@@ -109,7 +153,7 @@ async function wildcardWorkerRoute(
   c: Ctx,
   zoneId: string,
   opts: { method: 'GET' | 'POST' | 'DELETE'; pattern: string; id?: string },
-): Promise<{ status: number; body: any }> {
+): Promise<CfResponse> {
   const base = `/zones/${zoneId}/workers/routes`;
   if (opts.method === 'GET') {
     return cfApi(c, `${base}?pattern=${encodeURIComponent(opts.pattern)}`);
@@ -120,23 +164,23 @@ async function wildcardWorkerRoute(
   return cfApi(c, `${base}/${opts.id}`, { method: 'DELETE' });
 }
 
-async function ensureWildcardDnsRecord(c: Ctx, zoneId: string, domain: string): Promise<any> {
+async function ensureWildcardDnsRecord(c: Ctx, zoneId: string, domain: string): Promise<CfDnsRecord | null> {
   const list = await wildcardDnsRecord(c, zoneId, { method: 'GET', domain });
   if (list.status >= 400) throw new HttpError(`CF returned ${list.status}`, list.status < 500 ? list.status : 502);
-  const records = Array.isArray(list.body?.result) ? list.body.result : [];
-  const existing = records.find((r: any) => r?.type === 'AAAA' && r?.name === `*.${domain}`);
+  const records = cfList<CfDnsRecord>(list.body);
+  const existing = records.find((r) => r?.type === 'AAAA' && r?.name === `*.${domain}`);
   if (existing) return existing;
   const create = await wildcardDnsRecord(c, zoneId, { method: 'POST', domain });
-  const { ok, result, error } = extractCfResult(create.body);
+  const { ok, result, error } = extractCfResult<CfDnsRecord>(create.body);
   if (!ok) throw new HttpError(error || `CF returned ${create.status}`, create.status >= 400 && create.status < 500 ? create.status : 502);
   return result;
 }
 
-async function ensureWildcardWorkerRoute(c: Ctx, zoneId: string, pattern: string): Promise<any> {
+async function ensureWildcardWorkerRoute(c: Ctx, zoneId: string, pattern: string): Promise<CfWorkerRoute | null> {
   const list = await wildcardWorkerRoute(c, zoneId, { method: 'GET', pattern });
   if (list.status >= 400) throw new HttpError(`CF returned ${list.status}`, list.status < 500 ? list.status : 502);
-  const routes = Array.isArray(list.body?.result) ? list.body.result : [];
-  const existing = routes.find((r: any) => r?.pattern === pattern);
+  const routes = cfList<CfWorkerRoute>(list.body);
+  const existing = routes.find((r) => r?.pattern === pattern);
   if (existing) {
     if (existing.script && existing.script !== HOST_WORKER) {
       throw new HttpError(`Workers route ${pattern} already points at ${existing.script}`, 409);
@@ -144,7 +188,7 @@ async function ensureWildcardWorkerRoute(c: Ctx, zoneId: string, pattern: string
     return existing;
   }
   const create = await wildcardWorkerRoute(c, zoneId, { method: 'POST', pattern });
-  const { ok, result, error } = extractCfResult(create.body);
+  const { ok, result, error } = extractCfResult<CfWorkerRoute>(create.body);
   if (!ok) throw new HttpError(error || `CF returned ${create.status}`, create.status >= 400 && create.status < 500 ? create.status : 502);
   return result;
 }
@@ -178,7 +222,7 @@ async function customHostname(
   c: Ctx,
   zoneId: string,
   opts: { method: 'POST' | 'GET' | 'DELETE'; hostname?: string; id?: string },
-): Promise<{ status: number; body: any }> {
+): Promise<CfResponse> {
   const base = `/zones/${zoneId}/custom_hostnames`;
   if (opts.method === 'POST') {
     return cfApi(c, base, {
@@ -193,7 +237,7 @@ async function customHostname(
 }
 
 /** From a CF custom-hostname result, build the DNS records the owner must add. */
-function saasPayload(c: Ctx, domain: string, result: any): Record<string, unknown> {
+function saasPayload(c: Ctx, domain: string, result: CfCustomHostname | null): Record<string, unknown> {
   const isApex = domain.split('.').length === 2;
   const txt: { name: string; value: string }[] = [];
   const dcv = result?.ssl?.validation_records?.[0];
@@ -284,7 +328,7 @@ function validateDomain(input: unknown): string {
 }
 
 function dtoFromRow(row: DomainRow): DomainDto {
-  let payload: any = null;
+  let payload: StoredDomainPayload | null = null;
   if (row.cf_payload) {
     try {
       payload = JSON.parse(row.cf_payload);
@@ -301,10 +345,10 @@ function dtoFromRow(row: DomainRow): DomainDto {
   const instructions =
     kind === 'saas'
       ? {
-          apex: !!payload.apex,
-          cname: payload.cname ?? null,
-          cnameTarget: payload.cnameTarget ?? '',
-          txt: Array.isArray(payload.txt) ? payload.txt : [],
+          apex: !!payload!.apex,
+          cname: payload!.cname ?? null,
+          cnameTarget: payload!.cnameTarget ?? '',
+          txt: Array.isArray(payload!.txt) ? (payload!.txt as { name: string; value: string }[]) : [],
         }
       : null;
   return {
@@ -323,10 +367,10 @@ function dtoFromRow(row: DomainRow): DomainDto {
 //   { success: true, result: {...} }       — POST/GET success
 //   { success: true, result: null }        — DELETE success (sometimes)
 //   { success: false, errors: [{code,message}] }
-function extractCfResult(body: unknown): { ok: boolean; result: any; error: string | null } {
+function extractCfResult<T = unknown>(body: unknown): { ok: boolean; result: T | null; error: string | null } {
   if (!body || typeof body !== 'object') return { ok: false, result: null, error: 'invalid response from admin' };
-  const b = body as any;
-  if (b.success === true) return { ok: true, result: b.result ?? null, error: null };
+  const b = body as CfEnvelope;
+  if (b.success === true) return { ok: true, result: (b.result ?? null) as T | null, error: null };
   const msg = b.errors?.[0]?.message || b.error || b.detail || 'CF API call failed';
   return { ok: false, result: null, error: String(msg) };
 }
@@ -433,7 +477,7 @@ domainRoutes.post(
           );
         }
         const cf = await customHostname(c, saasZone, { method: 'POST', hostname: domain });
-        const { ok, result, error } = extractCfResult(cf.body);
+        const { ok, result, error } = extractCfResult<CfCustomHostname>(cf.body);
         if (!ok) {
           // Until Cloudflare for SaaS is enabled (+ the token has SSL:Edit), CF returns
           // an auth/entitlement error. Translate that into a clear message instead of a
@@ -528,18 +572,18 @@ domainRoutes.post(
     let payloadJson: string;
 
     if (kind === 'wildcard-route') {
-      const payload = existing.cf_payload ? JSON.parse(existing.cf_payload) : {};
-      const zoneId = payload.zoneId as string | undefined;
-      const pattern = (payload.pattern as string | undefined) ?? `*.${domain}/*`;
+      const payload = (existing.cf_payload ? JSON.parse(existing.cf_payload) : {}) as StoredDomainPayload;
+      const zoneId = payload.zoneId;
+      const pattern = payload.pattern ?? `*.${domain}/*`;
       if (!zoneId) throw new HttpError('wildcard route payload is missing zoneId', 500);
       const routeCf = await wildcardWorkerRoute(c, zoneId, { method: 'GET', pattern });
       if (routeCf.status >= 400) throw new HttpError(`CF returned ${routeCf.status}`, routeCf.status < 500 ? routeCf.status : 502);
       const dnsCf = await wildcardDnsRecord(c, zoneId, { method: 'GET', domain });
       if (dnsCf.status >= 400) throw new HttpError(`CF returned ${dnsCf.status}`, dnsCf.status < 500 ? dnsCf.status : 502);
-      const routes = Array.isArray(routeCf.body?.result) ? routeCf.body.result : [];
-      const records = Array.isArray(dnsCf.body?.result) ? dnsCf.body.result : [];
-      const route = routes.find((r: any) => r?.pattern === pattern && r?.script === HOST_WORKER) ?? null;
-      const dns = records.find((r: any) => r?.type === 'AAAA' && r?.name === `*.${domain}` && r?.proxied === true) ?? null;
+      const routes = cfList<CfWorkerRoute>(routeCf.body);
+      const records = cfList<CfDnsRecord>(dnsCf.body);
+      const route = routes.find((r) => r?.pattern === pattern && r?.script === HOST_WORKER) ?? null;
+      const dns = records.find((r) => r?.type === 'AAAA' && r?.name === `*.${domain}` && r?.proxied === true) ?? null;
       cfStatus = route && dns ? 'active' : 'pending';
       status = route && dns ? 'active' : 'pending';
       payloadJson = JSON.stringify({
@@ -554,16 +598,16 @@ domainRoutes.post(
       const cf = saasZone
         ? await customHostname(c, saasZone, { method: 'GET', hostname: domain })
         : { status: 503, body: null };
-      const list = Array.isArray(cf.body?.result) ? cf.body.result : [];
-      const ch = list.find((h: any) => h?.hostname === domain) ?? null;
+      const list = cfList<CfCustomHostname>(cf.body);
+      const ch = list.find((h) => h?.hostname === domain) ?? null;
       cfStatus = ch?.ssl?.status ?? 'pending';
       status = ch?.status === 'active' && ch?.ssl?.status === 'active' ? 'active' : 'pending';
       payloadJson = ch ? JSON.stringify(saasPayload(c, domain, ch)) : (existing.cf_payload ?? '{}');
     } else {
       const cf = await workerDomain(c, { method: 'GET', domain });
       if (cf.status >= 400 && cf.status !== 404) throw new HttpError(`CF returned ${cf.status}`, cf.status < 500 ? cf.status : 502);
-      const bindings = Array.isArray(cf.body?.result) ? cf.body.result : [];
-      const found = bindings.find((d: any) => d?.hostname === domain && d?.service === HOST_WORKER) ?? null;
+      const bindings = cfList<CfWorkerDomain>(cf.body);
+      const found = bindings.find((d) => d?.hostname === domain && d?.service === HOST_WORKER) ?? null;
       cfStatus = found ? 'active' : 'pending';
       status = found ? 'active' : 'pending';
       payloadJson = JSON.stringify({ kind: 'worker' });
@@ -606,11 +650,11 @@ domainRoutes.delete(
     const existing = await c.env.DB.prepare(
       `SELECT cf_payload FROM app_custom_domains WHERE app_id = ? AND domain = ?`,
     ).bind(appId, domain).first<{ cf_payload: string | null }>();
-    let payload: any = null;
+    let payload: StoredDomainPayload | null = null;
     try { payload = existing?.cf_payload ? JSON.parse(existing.cf_payload) : null; } catch { payload = null; }
 
     if (payload?.kind === 'wildcard-route') {
-      const zoneId = payload.zoneId as string | undefined;
+      const zoneId = payload.zoneId;
       if (zoneId && payload.routeId) {
         const del = await wildcardWorkerRoute(c, zoneId, { method: 'DELETE', pattern: payload.pattern ?? `*.${domain}/*`, id: payload.routeId });
         if (del.status >= 400 && del.status !== 404) {
@@ -636,8 +680,8 @@ domainRoutes.delete(
       }
     } else {
       const lookup = await workerDomain(c, { method: 'GET', domain });
-      const bindings = Array.isArray(lookup.body?.result) ? lookup.body.result : [];
-      const found = bindings.find((d: any) => d?.hostname === domain && d?.service === HOST_WORKER) ?? null;
+      const bindings = cfList<CfWorkerDomain>(lookup.body);
+      const found = bindings.find((d) => d?.hostname === domain && d?.service === HOST_WORKER) ?? null;
       if (found?.id) {
         const del = await workerDomain(c, { method: 'DELETE', domain, id: found.id });
         if (del.status >= 400 && del.status !== 404) {
