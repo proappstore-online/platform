@@ -102,6 +102,16 @@ describe('enquiries: public POST (#412)', () => {
     await env.DB.batch(Array.from({ length: ENQUIRY_APP_DAILY_LIMIT }, (_, i) => fill.bind(crypto.randomUUID(), APP, `filler-${i}`, now - 60_000)));
     expect((await postJson(good, { ip: '192.0.2.99' })).status).toBe(429);
   });
+
+  // #429: the limit was a count, then a separate insert, so a burst of simultaneous
+  // posts all saw the same count and were all stored.
+  it('a simultaneous burst from one IP stores no more than the per-IP limit', async () => {
+    const res = await Promise.all(Array.from({ length: ENQUIRY_IP_LIMIT * 4 }, () => postJson(good)));
+    const stored = await env.DB.prepare('SELECT COUNT(*) AS n FROM app_enquiries WHERE app_id = ?').bind(APP).first<{ n: number }>();
+    expect(stored!.n).toBe(ENQUIRY_IP_LIMIT);
+    expect(res.filter((r) => r.status === 201)).toHaveLength(ENQUIRY_IP_LIMIT);
+    expect(res.filter((r) => r.status === 429)).toHaveLength(ENQUIRY_IP_LIMIT * 3);
+  });
 });
 
 describe('enquiries: owner API (#412)', () => {
@@ -167,6 +177,10 @@ describe('migration 0104_app_enquiries (#412)', () => {
     }
     expect(seen).toEqual(['newest', 'tie-3', 'tie-2', 'tie-1', 'oldest']);
     expect((await SELF.fetch(`${BASE}/v1/apps/${APP}/enquiries?before_id=nope`, json('GET', undefined, owner))).status).toBe(400);
+    // A fractional limit was bound as-is: SQLite's LIMIT refused it with a 500 (#429).
+    const frac = await SELF.fetch(`${BASE}/v1/apps/${APP}/enquiries?limit=2.5`, json('GET', undefined, owner));
+    expect(frac.status).toBe(200);
+    expect(((await frac.json()) as Page).enquiries).toHaveLength(2);
   });
 
   it('defaults to new, allows only new/handled, requires an app, indexes by app, and goes with its app', async () => {

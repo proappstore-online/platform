@@ -24,7 +24,16 @@ function db(opts: { app?: boolean; counts?: { from_ip: number; today: number }; 
         return null;
       },
       all: async () => ({ results: sql.includes('FROM app_enquiries') ? [{ id: ID, ...good, status: 'new' }] : [] }),
-      run: async () => { runs.push({ sql, args }); return { meta: { changes: opts.changes ?? 1 } }; },
+      run: async () => {
+        // #429: the insert carries its own limits (INSERT … SELECT … WHERE count < limit); it
+        // stores nothing when either count is at its limit, which the bound limits decide here.
+        if (sql.includes('INSERT INTO app_enquiries') && opts.counts) {
+          const [ipLimit, dayLimit] = args.slice(-2) as number[];
+          if (opts.counts.from_ip >= ipLimit! || opts.counts.today >= dayLimit!) return { meta: { changes: 0 } };
+        }
+        runs.push({ sql, args });
+        return { meta: { changes: opts.changes ?? 1 } };
+      },
     };
     return stmt;
   });

@@ -93,21 +93,20 @@ enquiryRoutes.post('/apps/:appId/enquiries', async (c) => {
 
   const now = Date.now();
   const ipHash = await sha256Hex(`${appId}\u0000${c.req.header('CF-Connecting-IP') ?? 'unknown'}`);
-  const counts = await c.env.DB.prepare(
-    `SELECT
-       SUM(CASE WHEN ip_hash = ?2 AND created_at > ?3 THEN 1 ELSE 0 END) AS from_ip,
-       COUNT(*) AS today
-     FROM app_enquiries WHERE app_id = ?1 AND created_at > ?4`,
-  ).bind(appId, ipHash, now - HOUR_MS, now - DAY_MS).first<{ from_ip: number | null; today: number }>();
-  if ((counts?.from_ip ?? 0) >= ENQUIRY_IP_LIMIT || (counts?.today ?? 0) >= ENQUIRY_APP_DAILY_LIMIT) {
+  // #429: the limits and the insert are one statement. A separate count-then-insert
+  // let a burst of simultaneous posts all see the same count and all be stored,
+  // past both the per-IP and the per-app daily limit.
+  const id = crypto.randomUUID();
+  const stored = await c.env.DB.prepare(
+    `INSERT INTO app_enquiries (id, app_id, name, email, message, status, ip_hash, created_at)
+     SELECT ?1, ?2, ?3, ?4, ?5, 'new', ?6, ?7
+      WHERE (SELECT COUNT(*) FROM app_enquiries WHERE app_id = ?2 AND ip_hash = ?6 AND created_at > ?8) < ?10
+        AND (SELECT COUNT(*) FROM app_enquiries WHERE app_id = ?2 AND created_at > ?9) < ?11`,
+  ).bind(id, appId, name, email, message, ipHash, now, now - HOUR_MS, now - DAY_MS, ENQUIRY_IP_LIMIT, ENQUIRY_APP_DAILY_LIMIT).run();
+  if (!stored.meta?.changes) {
     c.header('Retry-After', '3600');
     return answer('rate-limited', 429);
   }
-
-  const id = crypto.randomUUID();
-  await c.env.DB.prepare(
-    "INSERT INTO app_enquiries (id, app_id, name, email, message, status, ip_hash, created_at) VALUES (?, ?, ?, ?, ?, 'new', ?, ?)",
-  ).bind(id, appId, name, email, message, ipHash, now).run();
   return answer('sent', 201, { id });
 });
 
@@ -135,7 +134,8 @@ enquiryRoutes.get('/apps/:appId/enquiries', async (c) => {
   if (status !== undefined && status !== 'new' && status !== 'handled') throw new HttpError("status must be 'new' or 'handled'", 400);
   const before = Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER);
   if (!Number.isFinite(before)) throw new HttpError('before must be a timestamp', 400);
-  const limit = Math.min(Math.max(Number(c.req.query('limit') ?? 50) || 50, 1), 100);
+  // Floored: a fractional LIMIT is a SQLite datatype mismatch (a 500), #429.
+  const limit = Math.min(Math.max(Math.floor(Number(c.req.query('limit') ?? 50)) || 50, 1), 100);
   // #431: enquiries that arrive in the same millisecond tie on created_at; rowid
   // (insertion order) breaks the tie, so the order is stable and newest-first.
   // `before_id` (the last id of the previous page) pages on (created_at, rowid),
