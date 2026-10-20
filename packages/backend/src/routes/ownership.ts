@@ -202,7 +202,7 @@ function auditStmt(db: D1Database, t: Pick<TransferRow, 'id' | 'app_id' | 'from_
     `INSERT INTO app_ownership_audit (app_id, transfer_id, actor, action, from_user, to_user, detail)
      SELECT ?, ?, ?, ?, ?, ?, ?
      WHERE EXISTS (SELECT 1 FROM app_ownership_transfers WHERE id = ?2 AND status = ? AND updated_ms = ?)
-       AND NOT EXISTS (SELECT 1 FROM app_ownership_audit WHERE transfer_id = ?2 AND action = ?4)`,
+       AND NOT EXISTS (SELECT 1 FROM app_ownership_audit WHERE app_id = ?1 AND transfer_id = ?2 AND action = ?4)`,
   ).bind(...values, guard.status, guard.now);
 }
 
@@ -334,6 +334,10 @@ function presentAudit(rows: AuditRow[], viewer: FasUser, admin: boolean) {
   });
 }
 
+/** #429: recovery requests one account may file for one app per rolling day. */
+export const MAX_RECOVERY_REQUESTS_PER_DAY = 3;
+const RECOVERY_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 // ── read-only status ─────────────────────────────────────────
 
 /**
@@ -368,11 +372,13 @@ ownershipRoutes.get('/apps/:appId/ownership', wrap(async (c) => {
     });
   }
 
-  const ids = visible.map((t) => t.id);
-  const { results: audit } = ids.length
+  // #429: a join on the same visibility rule, not one bound parameter per visible
+  // row: D1 allows 100, so an app with 100+ visible rows answered 500.
+  const { results: audit } = visible.length
     ? await c.env.DB.prepare(
-      `SELECT * FROM app_ownership_audit WHERE app_id = ? AND transfer_id IN (${ids.map(() => '?').join(', ')}) ORDER BY id`,
-    ).bind(appId, ...ids).all<AuditRow>()
+      `SELECT au.* FROM app_ownership_audit au JOIN app_ownership_transfers t ON t.id = au.transfer_id AND t.app_id = au.app_id
+        WHERE au.app_id = ?1 AND (?2 = 1 OR t.to_user = ?3 OR t.from_user = ?3) ORDER BY au.id`,
+    ).bind(appId, admin ? 1 : 0, user.id).all<AuditRow>()
     : { results: [] as AuditRow[] };
 
   const open = visible.filter((t) => (t.status === 'pending' && !isExpired(t)) || t.status === 'escalated');
@@ -443,8 +449,11 @@ ownershipRoutes.post('/apps/:appId/ownership/transfer/:transferId/accept', wrap(
   const user = await requireUser(c);
   const appId = c.req.param('appId')!;
   await loadApp(c.env.DB, appId);
-  const t = await settleExpiry(c.env, await loadTransfer(c.env.DB, appId, c.req.param('transferId')));
-  if (t.kind !== 'transfer' || t.to_user !== user.id) throw new HttpError('only the recipient can accept this transfer', 403);
+  // #429: who may act is checked before expiry is settled, so a stranger's call
+  // cannot mark someone else's transfer expired (which then refused its escalation).
+  const loaded = await loadTransfer(c.env.DB, appId, c.req.param('transferId'));
+  if (loaded.kind !== 'transfer' || loaded.to_user !== user.id) throw new HttpError('only the recipient can accept this transfer', 403);
+  const t = await settleExpiry(c.env, loaded);
   if (t.status === 'expired') throw new HttpError('this transfer has expired', 410);
   if (t.status !== 'pending') throw new HttpError(`this transfer is ${t.status}`, 409);
 
@@ -464,8 +473,11 @@ ownershipRoutes.post('/apps/:appId/ownership/transfer/:transferId/decline', wrap
   const user = await requireUser(c);
   const appId = c.req.param('appId')!;
   await loadApp(c.env.DB, appId);
-  const t = await settleExpiry(c.env, await loadTransfer(c.env.DB, appId, c.req.param('transferId')));
-  if (t.kind !== 'transfer' || t.to_user !== user.id) throw new HttpError('only the recipient can decline this transfer', 403);
+  // #429: who may act is checked before expiry is settled, so a stranger's call
+  // cannot mark someone else's transfer expired (which then refused its escalation).
+  const loaded = await loadTransfer(c.env.DB, appId, c.req.param('transferId'));
+  if (loaded.kind !== 'transfer' || loaded.to_user !== user.id) throw new HttpError('only the recipient can decline this transfer', 403);
+  const t = await settleExpiry(c.env, loaded);
   if (t.status === 'expired') throw new HttpError('this transfer has expired', 410);
   if (t.status !== 'pending') throw new HttpError(`this transfer is ${t.status}`, 409);
   if (!(await transition(c.env, t, ['pending'], 'declined', user.id, 'declined'))) throw new HttpError('this transfer changed', 409);
@@ -481,9 +493,10 @@ ownershipRoutes.post('/apps/:appId/ownership/transfer/:transferId/cancel', wrap(
   const user = await requireUser(c);
   const appId = c.req.param('appId')!;
   await loadApp(c.env.DB, appId);
-  const t = await settleExpiry(c.env, await loadTransfer(c.env.DB, appId, c.req.param('transferId')));
-  const canCancel = t.kind === 'transfer' ? t.from_user === user.id : t.to_user === user.id;
-  if (!canCancel) throw new HttpError(t.kind === 'transfer' ? 'only the sender can cancel this transfer' : 'only the requester can withdraw this recovery request', 403);
+  const loaded = await loadTransfer(c.env.DB, appId, c.req.param('transferId'));
+  const canCancel = loaded.kind === 'transfer' ? loaded.from_user === user.id : loaded.to_user === user.id;
+  if (!canCancel) throw new HttpError(loaded.kind === 'transfer' ? 'only the sender can cancel this transfer' : 'only the requester can withdraw this recovery request', 403);
+  const t = await settleExpiry(c.env, loaded);
   if (t.status !== 'pending' && t.status !== 'escalated') throw new HttpError(`this transfer is ${t.status}`, 409);
   if (!(await transition(c.env, t, ['pending', 'escalated'], 'cancelled', user.id, 'cancelled'))) throw new HttpError('this transfer changed', 409);
   if (t.kind === 'transfer') {
@@ -501,10 +514,12 @@ ownershipRoutes.post('/apps/:appId/ownership/transfer/:transferId/escalate', wra
   if (t.kind !== 'transfer' || (t.from_user !== user.id && t.to_user !== user.id)) {
     throw new HttpError('only a party to this transfer can escalate it', 403);
   }
-  // An expired pending transfer may still be escalated: that is the stuck case.
-  if (t.status !== 'pending') throw new HttpError(`this transfer is ${t.status}`, 409);
+  // An expired transfer may still be escalated: that is the stuck case. #429: so
+  // may one already marked expired (by the recipient's 410 on accept, or by the
+  // owner starting another), which this used to refuse.
+  if (t.status !== 'pending' && t.status !== 'expired') throw new HttpError(`this transfer is ${t.status}`, 409);
   const reason = optionalText((await jsonBody<{ reason: string }>(c.req.raw)).reason, 'reason');
-  if (!(await transition(c.env, t, ['pending'], 'escalated', user.id, 'escalated', reason ? { reason } : undefined))) {
+  if (!(await transition(c.env, t, ['pending', 'expired'], 'escalated', user.id, 'escalated', reason ? { reason } : undefined))) {
     throw new HttpError('this transfer changed', 409);
   }
   const other = t.from_user === user.id ? t.to_user : t.from_user;
@@ -535,6 +550,13 @@ ownershipRoutes.post('/apps/:appId/ownership/recovery', wrap(async (c) => {
     "SELECT id FROM app_ownership_transfers WHERE app_id = ? AND kind = 'recovery' AND to_user = ? AND status = 'escalated'",
   ).bind(appId, user.id).first<{ id: number }>();
   if (existing) throw new HttpError('you already have an open recovery request for this app', 409);
+  // #429: file-and-withdraw was unlimited, and each filing emails the owner.
+  const recent = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM app_ownership_transfers WHERE app_id = ? AND kind = 'recovery' AND to_user = ? AND created_ms > ?",
+  ).bind(appId, user.id, Date.now() - RECOVERY_WINDOW_MS).first<{ n: number }>();
+  if ((recent?.n ?? 0) >= MAX_RECOVERY_REQUESTS_PER_DAY) {
+    throw new HttpError(`at most ${MAX_RECOVERY_REQUESTS_PER_DAY} recovery requests for this app per day`, 429);
+  }
 
   const implications = await buildImplications(c.env.DB, appId);
   const now = Date.now();

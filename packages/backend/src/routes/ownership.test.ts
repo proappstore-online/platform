@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
 import { makeEnv, testToken } from '../test-helpers.js';
-import { TRANSFER_TTL_MS } from './ownership.js';
+import { MAX_RECOVERY_REQUESTS_PER_DAY, TRANSFER_TTL_MS } from './ownership.js';
 
 // #423, against real SQLite (node:sqlite) running migration 0105 itself, so the
 // guarded batches, the cascade and the append-only triggers are the real SQL.
@@ -280,6 +280,29 @@ describe('declining, cancelling, escalating', () => {
     expect(owner()).toBe(OWNER);
   });
 
+  // #429: the recipient's natural sequence — accept, get 410, escalate — got 409,
+  // because the 410 had already marked the row expired.
+  it('an expired transfer can be escalated after a 410 on accept', async () => {
+    const { json } = await initiate();
+    sqlite.exec('UPDATE app_ownership_transfers SET expiry_ms = 1');
+    expect((await call(RECIPIENT, 'POST', `/apps/myapp/ownership/transfer/${json.transfer.id}/accept`)).status).toBe(410);
+    expect(transfers()[0].status).toBe('expired');
+    const res = await call(RECIPIENT, 'POST', `/apps/myapp/ownership/transfer/${json.transfer.id}/escalate`, { reason: 'stuck' });
+    expect(res.status).toBe(200);
+    expect(transfers()[0].status).toBe('escalated');
+    expect(audit().map((a) => a.action)).toEqual(['initiated', 'expired', 'escalated']);
+  });
+
+  it("a stranger's call is refused before it settles expiry: it cannot expire someone else's transfer", async () => {
+    const { json } = await initiate();
+    sqlite.exec('UPDATE app_ownership_transfers SET expiry_ms = 1');
+    for (const verb of ['accept', 'decline', 'cancel']) {
+      expect((await call(STRANGER, 'POST', `/apps/myapp/ownership/transfer/${json.transfer.id}/${verb}`)).status, verb).toBe(403);
+    }
+    expect(transfers()[0].status).toBe('pending');
+    expect(audit().map((a) => a.action)).toEqual(['initiated']);
+  });
+
   it('rejects a malformed body and an unknown transfer', async () => {
     const { json } = await initiate();
     const res = await app.request(`/v1/apps/myapp/ownership/transfer/${json.transfer.id}/escalate`, {
@@ -321,10 +344,50 @@ describe('recovery requests', () => {
     expect(JSON.stringify(theirs.json)).not.toMatch(/olivia|my\.example\.com/);
   });
 
+  // #429: file-and-withdraw was unlimited, and each filing emails the owner.
+  it(`at most ${MAX_RECOVERY_REQUESTS_PER_DAY} filings per app per requester per day`, async () => {
+    for (let i = 0; i < MAX_RECOVERY_REQUESTS_PER_DAY; i++) {
+      const { status, json } = await call(STRANGER, 'POST', '/apps/myapp/ownership/recovery', { evidence: `try ${i}` });
+      expect(status).toBe(201);
+      expect((await call(STRANGER, 'POST', `/apps/myapp/ownership/transfer/${json.transfer.id}/cancel`)).status).toBe(200);
+    }
+    expect((await call(STRANGER, 'POST', '/apps/myapp/ownership/recovery', { evidence: 'again' })).status).toBe(429);
+    // A day later the window has passed.
+    sqlite.exec(`UPDATE app_ownership_transfers SET created_ms = created_ms - ${25 * 3600 * 1000}`);
+    expect((await call(STRANGER, 'POST', '/apps/myapp/ownership/recovery', { evidence: 'next day' })).status).toBe(201);
+  });
+
   it('the requester can withdraw it; the owner cannot', async () => {
     const { json } = await call(STRANGER, 'POST', '/apps/myapp/ownership/recovery', { evidence: 'mine' });
     expect((await call(OWNER, 'POST', `/apps/myapp/ownership/transfer/${json.transfer.id}/cancel`)).status).toBe(403);
     expect((await call(STRANGER, 'POST', `/apps/myapp/ownership/transfer/${json.transfer.id}/cancel`)).status).toBe(200);
+  });
+});
+
+describe('ownership audit and status at scale (#429)', () => {
+  it('a reused transfer id still gets its own audit row', async () => {
+    // Transfer ids reuse the highest deleted id (INTEGER PRIMARY KEY): app gone, its rows
+    // cascade away, its audit rows stay. The guard matched transfer id and action only.
+    sqlite.exec("INSERT INTO apps (id, creator_id, created_at) VALUES ('gone', 'gh:1', 1)");
+    sqlite.exec("INSERT INTO app_ownership_transfers (id, app_id, from_user, to_user, kind, status, expiry_ms, created_ms, updated_ms) VALUES (1, 'gone', 'gh:1', 'gh:2', 'transfer', 'accepted', 1, 1, 1)");
+    sqlite.exec("INSERT INTO app_ownership_audit (app_id, transfer_id, actor, action, from_user, to_user) VALUES ('gone', 1, 'gh:2', 'accepted', 'gh:1', 'gh:2')");
+    sqlite.exec("DELETE FROM apps WHERE id = 'gone'");
+    const { json } = await initiate();
+    expect(json.transfer.id).toBe(1);
+    expect((await call(RECIPIENT, 'POST', `/apps/myapp/ownership/transfer/1/accept`)).status).toBe(200);
+    expect(sqlite.prepare("SELECT action FROM app_ownership_audit WHERE app_id = 'myapp' AND transfer_id = 1 ORDER BY id").all().map((r: any) => r.action))
+      .toEqual(['initiated', 'accepted']);
+  });
+
+  it('the owner reads status with 150 rows (one bound parameter per row used to exceed D1\'s 100)', async () => {
+    const ins = sqlite.prepare("INSERT INTO app_ownership_transfers (app_id, from_user, to_user, kind, status, expiry_ms, created_ms, updated_ms) VALUES ('myapp', ?, ?, 'recovery', 'cancelled', NULL, 1, 1)");
+    for (let i = 0; i < 150; i++) ins.run(OWNER, STRANGER);
+    sqlite.exec("INSERT INTO app_ownership_audit (app_id, transfer_id, actor, action, from_user, to_user) SELECT 'myapp', id, 'gh:3', 'recovery_requested', from_user, to_user FROM app_ownership_transfers");
+    const prep = vi.spyOn(db, 'prepare');
+    const res = await call(OWNER, 'GET', '/apps/myapp/ownership');
+    expect(res.status).toBe(200);
+    expect(res.json.audit).toHaveLength(150);
+    for (const [sql] of prep.mock.calls) expect((String(sql).match(/\?/g) ?? []).length, String(sql)).toBeLessThan(100);
   });
 });
 
