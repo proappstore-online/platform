@@ -272,7 +272,7 @@ gh repo create my-org/my-app --private
 
 **Rationale.** The workflow exchanges a GitHub OIDC token for short-lived, prefix-scoped R2 credentials, so a leaked repository cannot deploy anything else. A stored long-lived token is the opposite: one leak, every app. The ordering (schema before code before actions) is what stops an action referencing a column that is not there yet.
 
-**Recommended implementation.** Keep `deploy.yml` as generated; the platform reconciles it (`scripts/sync-template-workflow.mjs`). Add steps *before* the build (tests, lint) rather than replacing the deploy steps. Optional `e2e/` Playwright suite runs after deploy.
+**Recommended implementation.** Keep `deploy.yml` as generated: since #427 it is a thin caller of the platform's reusable pipeline (`uses: proappstore-online/platform/.github/workflows/app-deploy.yml@app-deploy-v1`, `secrets: inherit`), so platform fixes reach the app without an edit. Per-app options are its inputs (`e2e`, `marketing`, `source-maps`, `node-version`); extra checks (tests, lint) are a separate job that `deploy` `needs:`. Optional `e2e/` Playwright suite runs after deploy.
 
 **Conforming example.**
 
@@ -290,7 +290,7 @@ env:
 run: wrangler pages deploy web/dist --project-name my-app
 ```
 
-**Evidence.** Process: `.github/workflows/deploy.yml` matches the template's steps and `id-token: write`; repository secrets contain no `CLOUDFLARE_*`, `R2_*` or `INTERNAL_TOKEN` (Settings → Secrets, or `gh secret list`).
+**Evidence.** Process: `.github/workflows/deploy.yml` calls the platform's reusable pipeline with `id-token: write` (compliance check `deploy-workflow`); repository secrets contain no `CLOUDFLARE_*`, `R2_*` or `INTERNAL_TOKEN` (Settings → Secrets, or `gh secret list`).
 
 **Remediation.** Restore `deploy.yml` from the template (`pas create` into a scratch directory and copy it), delete the stored tokens, rotate them at the provider, and push.
 

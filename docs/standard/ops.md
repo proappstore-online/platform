@@ -198,7 +198,7 @@ flow sign-in-and-create: goto / → click "Sign in with GitHub" → expectVisibl
 
 ### PAS-OPS-005 — Deployment is the keyless workflow, and every deploy leaves the required evidence {#pas-ops-005}
 
-**Severity:** High · **Verification:** Automated (workflow) + Manual (evidence review) · **Enforcement:** automated — `deploy.yml` (schema → build → OIDC credentials → R2 → tool registration); `template-workflow-drift` in the platform's CI keeps the scaffold's copy canonical · **Since:** 1.5
+**Severity:** High · **Verification:** Automated (workflow) + Manual (evidence review) · **Enforcement:** automated — `deploy.yml` (schema → build → OIDC credentials → R2 → tool registration); the app's `deploy.yml` calls the platform's reusable pipeline (`app-deploy.yml@app-deploy-v1`, #427); compliance check `deploy-workflow` warns otherwise; `template-workflow-drift` in the platform's CI keeps the scaffold's caller canonical · **Since:** 1.5
 
 **Rule.** The app MUST deploy only through the scaffold's `deploy.yml` on push to `main`, authenticated by GitHub OIDC (no stored infrastructure secrets), and MUST retain for each production deploy: the workflow run URL, the commit SHA, the `Applied migration(s)` line (or `already`), the `Registered N app tool(s)` line, the `Deployed apps/<app> from <sha>` line, and the post-deploy QA/e2e result. An audit MUST NOT accept a deploy without this evidence.
 
@@ -206,7 +206,7 @@ flow sign-in-and-create: goto / → click "Sign in with GitHub" → expectVisibl
 
 **Rationale.** The workflow's ordering (schema before code before actions) is what keeps the running app coherent; the log lines are the only proof that each step ran. A deploy by any other path is drift ([PAS-STACK-004](./stack.md#pas-stack-004)).
 
-**Recommended implementation.** Never edit the deploy steps; add pre-build steps only. Pass `VITE_COMMIT_SHA` into `initPro({ monitoring: { build } })` so runtime logs carry the deployed SHA.
+**Recommended implementation.** Never copy or edit the deploy steps: call the reusable pipeline and set its inputs; add checks as a job the deploy `needs:`. Pass `VITE_COMMIT_SHA` into `initPro({ monitoring: { build } })` so runtime logs carry the deployed SHA.
 
 **Conforming example.**
 
@@ -223,9 +223,9 @@ QA: 3/3 flows passed (trigger: deploy)
 $ aws s3 sync web/dist s3://pas-apps/apps/my-app/ --endpoint-url …   # from a laptop, with a stored key
 ```
 
-**Evidence.** Process: the run URL and log lines per deploy; `.github/workflows/deploy.yml` matches the canonical generator; `gh secret list` shows no `CLOUDFLARE_*`/`R2_*`.
+**Evidence.** Process: the run URL and log lines per deploy; `.github/workflows/deploy.yml` is the canonical caller of the reusable pipeline; `gh secret list` shows no `CLOUDFLARE_*`/`R2_*`.
 
-**Remediation.** Restore the canonical workflow; delete stored infrastructure secrets; re-deploy and capture the evidence.
+**Remediation.** Replace `deploy.yml` with the canonical caller (from `template-app`); delete stored infrastructure secrets; re-deploy and capture the evidence.
 
 **Tests.** The last production deploy's evidence bundle is complete ([PAS-OPS-020](#pas-ops-020)).
 

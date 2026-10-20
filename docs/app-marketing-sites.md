@@ -50,10 +50,11 @@ page plus Privacy Policy and Terms; `pnpm build:marketing` writes
 
 ## How an app publishes (#408)
 
-The canonical deploy workflow (`packages/admin/src/publish.ts`
-`deployWorkflowYaml`, golden `packages/admin/src/__fixtures__/canonical-deploy.yml`)
-has a **Publish marketing site** step. It runs only when `marketing/package.json`
-exists, after the app itself is live in R2:
+The platform's reusable deploy pipeline (`.github/workflows/app-deploy.yml`,
+which every app's `deploy.yml` calls, #427) has a **Publish marketing site**
+step. With the default input `marketing: auto` it runs only when
+`marketing/package.json` exists (`marketing: false` turns it off), after the
+app itself is live in R2:
 
 1. `pnpm --dir marketing build`;
 2. hashes every file in `marketing/dist/` into an `artifact-manifest.json`
@@ -175,9 +176,10 @@ repository can only write its own app's site; no standing secret is involved.
 reconciled hourly from `registry.json`) is the storefront catalogue's listing
 state; it does not affect the marketing site.
 
-**Rollout.** New apps get the step from the canonical workflow. `template-app`
-receives it through `node scripts/sync-template-workflow.mjs`, and an existing
-app gets it when its `deploy.yml` is regenerated from the golden.
+**Rollout.** Every app whose `deploy.yml` calls the reusable pipeline has the
+step (#427). An app still on a copied workflow gets it by replacing that file
+with the thin caller from `template-app`; the `deploy-workflow` compliance
+check names those apps.
 
 ## Enquiries (#412, epic #411)
 

@@ -44,6 +44,8 @@ goes if we ever centralize. Decision record: [ADR-006](./adr/006-centralized-bui
      owns CI on this path.
    - **CLI / MCP**: the repo is cloned from `template-app`, which carries the
      canonical workflow.
+   - Either way the app's `deploy.yml` is a thin caller (#427): the pipeline
+     itself is the platform's reusable workflow (see below).
 
 ```mermaid
 flowchart LR
@@ -57,17 +59,70 @@ flowchart LR
     Host -->|reserved: www·console·dashboard·data-*| Reserved["redirect / Pages / data workers"]
 ```
 
-### Drift guards (the thing we're watching)
+### The reusable deploy pipeline (#427)
 
-A full workflow in every repo can drift (the `cache: pnpm`-without-lockfile
-landmine that broke ~21 repos). It's contained, not eliminated, by:
-- **One source of truth** — `deployWorkflowYaml()` in `packages/admin/src/publish.ts`.
-- **Golden file** — `packages/admin/src/__fixtures__/canonical-deploy.yml`, pinned
-  byte-for-byte to the generator by a unit test.
-- **Sync script** — `scripts/sync-template-workflow.mjs` pushes the golden to
-  `template-app`; `--check` mode detects drift.
-- **CI drift job** — `template-workflow-drift` in `.github/workflows/ci.yml` fails
-  if `template-app` diverges from the generator.
+A full workflow copied into every repo drifted: the `cache: pnpm`-without-lockfile
+landmine broke ~21 repos, and doordrop missed the #393 source-map steps and the
+marketing publish. The pipeline now lives once, in this repo, and every app calls it:
+
+```yaml
+# the app's .github/workflows/deploy.yml (deployWorkflowYaml(), the golden)
+name: Deploy to R2
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: deploy-${{ github.repository }}
+  cancel-in-progress: true
+jobs:
+  deploy:
+    uses: proappstore-online/platform/.github/workflows/app-deploy.yml@app-deploy-v1
+    secrets: inherit
+```
+
+- **The pipeline:** `.github/workflows/app-deploy.yml` (`on: workflow_call`):
+  - the steps are the router, build, migrations, app worker, tool registration,
+    source maps, keyless R2 upload, marketing site, QA and E2E;
+  - this repo is public, so any repository can call it, including
+    `ChessClubs-online/chess-clubs`.
+- **Releases:** the moving tag **`app-deploy-v1`**.
+  - A compatible change merges to `main`, then moves the tag
+    (`git tag -fa app-deploy-v1 <sha>`, `git push -f origin refs/tags/app-deploy-v1`).
+    The next push of every app runs it, with no per-repo edit.
+  - A breaking change is `app-deploy-v2`, and callers move when they are ready.
+- **What the caller keeps:** what a reusable workflow cannot own.
+  - The trigger.
+  - The run name *Deploy to R2*: the Agent Teams deploy gate matches it.
+  - `id-token: write` for the OIDC steps.
+  - Concurrency.
+  - `secrets: inherit`, so the runner router gets its repo-level `RUNNER_BILLING_TOKEN`.
+  - OIDC claims stay the caller's (`repository`, `ref`), which is what the
+    platform authorizes.
+- **Per-app options are inputs**, not edits. An app adds
+  `with:` under `deploy:`:
+
+  | Input | Values | Default |
+  |---|---|---|
+  | `e2e` | `auto` (root `e2e/`, else `web/tests/e2e` + `web/playwright.config.*`), `e2e`, `web`, `none` | `auto` |
+  | `marketing` | `auto` (when `marketing/package.json` exists), `true`, `false` | `auto` |
+  | `source-maps` | `auto` (upload hidden maps when the build emits them), `false`; maps are always stripped from the public build | `auto` |
+  | `node-version` | Node.js major | `22` |
+
+  `workflow_call` has no choice type, so the pipeline's first step refuses an
+  unknown value. An extra check (lint, tests) is its own job, with
+  `deploy: needs: [that-job]`.
+- **Guards:**
+  - **The pipeline:** `packages/admin/src/publish.test.ts` holds it to the #264
+    rule. It may not run `wrangler`, call the Workers scripts API, name a
+    `pas-data-`/`pas-app-` Worker, or read any secret but the two it declares.
+  - **App repos:** the `deploy-workflow` compliance check warns on a `deploy.yml`
+    that is not a caller, and `[SECURITY]` on any workflow that does those things.
+  - **The scaffold:** `template-workflow-drift` in `ci.yml` and
+    `scripts/sync-template-workflow.mjs --check` keep template-app's caller equal
+    to the golden, which a unit test pins to `deployWorkflowYaml()`.
 
 **What we're watching:** how often workflow drift still surfaces despite these
 guards (e.g. agents inventing new workflow variants, lockfile breakage on new
