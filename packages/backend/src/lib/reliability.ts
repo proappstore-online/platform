@@ -41,6 +41,7 @@ import { cfAnalyticsSql } from '../routes/analytics-shared.js';
 import type { Env } from '../types.js';
 import { REQUEST_METRICS_DATASET } from './telemetry-datasets.js';
 import { dispatchWebhook } from './webhook-dispatch.js';
+import { DISPATCH_LEASE_MS } from './error-alerts.js';
 
 export const BUCKET_MS = 5 * 60_000;
 export const EVAL_LAG_MS = 5 * 60_000;
@@ -193,6 +194,9 @@ export interface ApplyReport { opened: number; recovered: number; notified: numb
  */
 export async function applyResults(db: D1Database, results: RuleResult[], now: number): Promise<ApplyReport> {
   const report: ApplyReport = { opened: 0, recovered: 0, notified: 0 };
+  // #395/#389: record state changes only; the notification each one owes is sent
+  // by deliverPendingIncidents, from the row, so a run that dies in between
+  // leaves it owed rather than lost.
   for (const r of results) {
     const detail = JSON.stringify(r.detail);
     if (r.status === 'firing') {
@@ -202,8 +206,6 @@ export async function applyResults(db: D1Database, results: RuleResult[], now: n
       if (opened.meta?.changes) {
         report.opened += 1;
         console.warn(`[reliability] firing app=${r.app} rule=${r.rule}`);
-        await dispatchWebhook(db, r.app, ALERT_EVENT, { event: ALERT_EVENT, kind: 'reliability', state: 'firing', app_id: r.app, rule: r.rule, detail: r.detail, at: now });
-        report.notified += 1;
       } else {
         await db.prepare("UPDATE app_incidents SET last_seen_at = ?3, detail = ?4 WHERE app_id = ?1 AND rule = ?2 AND state != 'recovered'")
           .bind(r.app, r.rule, now, detail).run();
@@ -215,19 +217,67 @@ export async function applyResults(db: D1Database, results: RuleResult[], now: n
       if (recovered.results?.length) {
         report.recovered += 1;
         console.warn(`[reliability] recovered app=${r.app} rule=${r.rule}`);
-        await dispatchWebhook(db, r.app, ALERT_EVENT, { event: ALERT_EVENT, kind: 'reliability', state: 'recovered', app_id: r.app, rule: r.rule, detail: r.detail, at: now });
-        report.notified += 1;
       }
     }
   }
   return report;
 }
 
+/** At most this many incident notifications per run, like the app.alert retry cap. */
+export const MAX_INCIDENT_NOTIFICATIONS = 50;
+
+interface OwedRow { id: number; app_id: string; rule: string; owed: 'firing' | 'recovered'; at: number; detail: string }
+
+/**
+ * #395, the #389 pattern: send every incident transition that is recorded but not
+ * yet notified — firing once, recovered once; acknowledging owes nothing.
+ * Each is claimed with a conditional UPDATE (a DISPATCH_LEASE_MS lease) so two
+ * overlapping runs never both send, then stamped `notified_state` once
+ * dispatchWebhook returns (a failed HTTP delivery is webhook_deliveries' to retry).
+ * A run that dies before sending leaves it owed; one that dies mid-send is resent
+ * once after the lease. The payload is rebuilt from the row, so a late send
+ * carries the transition's own time.
+ */
+export async function deliverPendingIncidents(db: D1Database, now: number): Promise<number> {
+  const { results } = await db.prepare(
+    `SELECT id, app_id, rule, detail,
+            CASE state WHEN 'recovered' THEN 'recovered' ELSE 'firing' END AS owed,
+            CASE state WHEN 'recovered' THEN recovered_at ELSE opened_at END AS at
+       FROM app_incidents
+      WHERE COALESCE(notified_state, '') != CASE state WHEN 'recovered' THEN 'recovered' ELSE 'firing' END
+      ORDER BY id LIMIT ?1`,
+  ).bind(MAX_INCIDENT_NOTIFICATIONS).all<OwedRow>();
+  let sent = 0;
+  for (const row of results ?? []) {
+    const claim = await db.prepare(
+      `UPDATE app_incidents SET notify_claimed_at = ?1
+        WHERE id = ?2 AND COALESCE(notified_state, '') != ?3
+          AND (notify_claimed_at IS NULL OR notify_claimed_at <= ?1 - ?4)`,
+    ).bind(now, row.id, row.owed, DISPATCH_LEASE_MS).run();
+    if (!claim.meta?.changes) continue;
+    let detail: unknown = {};
+    try { detail = JSON.parse(row.detail); } catch { /* sent without detail */ }
+    await dispatchWebhook(db, row.app_id, ALERT_EVENT, {
+      event: ALERT_EVENT, kind: 'reliability', state: row.owed, app_id: row.app_id, rule: row.rule, detail, at: row.at,
+    });
+    // Stamp only what was claimed; the claim is released so a later recovery can be claimed.
+    await db.prepare(
+      `UPDATE app_incidents SET notified_state = ?3, notify_claimed_at = NULL, notify_attempts = notify_attempts + 1
+        WHERE id = ?1 AND notify_claimed_at = ?2`,
+    ).bind(row.id, now, row.owed).run();
+    sent += 1;
+  }
+  return sent;
+}
+
 /** The cron step: assess every enabled objective and apply the results. Never throws. */
-export async function evaluateReliability(opts: { env: Env; now?: number; read?: OutcomeReader }): Promise<ApplyReport & { evaluated: number }> {
-  const now = opts.now ?? Date.now();
+export async function evaluateReliability(opts: { env: Env; now?: number | Date; read?: OutcomeReader }): Promise<ApplyReport & { evaluated: number }> {
+  // A number however the caller got it (a harness can hand the scheduled time over as a Date): it is bound into D1.
+  const now = Number(opts.now ?? Date.now());
   const objectives = await loadObjectives(opts.env.DB);
-  if (objectives.length === 0) return { opened: 0, recovered: 0, notified: 0, evaluated: 0 };
-  const results = await assessAll(opts.env, objectives, now, opts.read ?? readOutcomesFromAnalytics);
-  return { ...(await applyResults(opts.env.DB, results, now)), evaluated: results.length };
+  const results = objectives.length ? await assessAll(opts.env, objectives, now, opts.read ?? readOutcomesFromAnalytics) : [];
+  const report = await applyResults(opts.env.DB, results, now);
+  // Always: an objective removed after its incident changed state still owes that notification.
+  report.notified = await deliverPendingIncidents(opts.env.DB, now);
+  return { ...report, evaluated: results.length };
 }

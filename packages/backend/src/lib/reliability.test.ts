@@ -132,12 +132,13 @@ describe('incident lifecycle writes (#395)', () => {
     const w = warn();
     const rule = (status: 'firing' | 'ok' | 'low_traffic' | 'degraded') => [{ app: 'demo', rule: 'burn_fast:actions', status, detail: {} }];
     const open = scriptedDb({ inserted: true, recovered: false });
-    expect(await applyResults(open.db, rule('firing'), 1)).toEqual({ opened: 1, recovered: 0, notified: 1 });
+    // #395/#389: applyResults only records; deliverPendingIncidents sends what each change owes.
+    expect(await applyResults(open.db, rule('firing'), 1)).toEqual({ opened: 1, recovered: 0, notified: 0 });
     const again = scriptedDb({ inserted: false, recovered: false });
     expect(await applyResults(again.db, rule('firing'), 2)).toEqual({ opened: 0, recovered: 0, notified: 0 });
     expect(again.calls).toEqual(['insert', 'touch']);
     const rec = scriptedDb({ inserted: false, recovered: true });
-    expect(await applyResults(rec.db, rule('ok'), 3)).toEqual({ opened: 0, recovered: 1, notified: 1 });
+    expect(await applyResults(rec.db, rule('ok'), 3)).toEqual({ opened: 0, recovered: 1, notified: 0 });
     const quiet = scriptedDb({ inserted: true, recovered: true });
     await applyResults(quiet.db, [...rule('low_traffic'), ...rule('degraded')], 4);
     expect(quiet.calls).toEqual([]);
