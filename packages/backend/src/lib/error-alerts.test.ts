@@ -19,6 +19,8 @@ type Scenario = {
 function fakeDb(s: Scenario) {
   const inserts: unknown[][] = [];
   const stored = new Set<string>();
+  // #389: the stored rows, so the delivery claim (dispatched_at / dispatch_claimed_at) behaves as in D1.
+  const rows: Record<string, unknown>[] = [];
   const logQueries: { sliceMs: number; since: number; until: number }[] = [];
   const grouped = (events: LogEvent[] | undefined, [sliceMs, since, until, appId]: unknown[]) => {
     logQueries.push({ sliceMs: sliceMs as number, since: since as number, until: until as number });
@@ -54,6 +56,11 @@ function fakeDb(s: Scenario) {
             .sort((a, b) => a.app_id.localeCompare(b.app_id) || b.finished_at - a.finished_at) };
         }
         if (/FROM app_webhooks/.test(sql)) return { results: s.webhooks ?? [] };
+        if (/FROM app_alerts\s+WHERE dispatched_at IS NULL/.test(sql)) {
+          const [after, ...rest] = args as [number, ...string[]];
+          const appId = rest.length > 4 ? rest[4] : undefined;
+          return { results: rows.filter((r) => r.dispatched_at === null && (r.created_at as number) > after && (!appId || r.app_id === appId)) };
+        }
         return { results: [] };
       },
       first: async () => (/build_meta FROM app_logs/.test(sql) ? (s.build ? { build_meta: s.build } : null) : null),
@@ -63,6 +70,22 @@ function fakeDb(s: Scenario) {
           const key = `${args[0]}|${args[1]}|${args[2]}`;
           if (stored.has(key)) return { meta: { changes: 0 } };
           stored.add(key); inserts.push(args);
+          const [app_id, kind, window_start, window_end, count, affected_users, baseline, top, build_meta, created_at] = args;
+          rows.push({ id: rows.length + 1, app_id, kind, window_start, window_end, count, affected_users, baseline, top, build_meta, created_at, dispatched_at: null, dispatch_claimed_at: null });
+          return { meta: { changes: 1 } };
+        }
+        if (/SET dispatch_claimed_at/.test(sql)) {
+          const [now, id, lease] = args as [number, number, number];
+          const r = rows.find((x) => x.id === id);
+          if (!r || r.dispatched_at !== null || (r.dispatch_claimed_at !== null && (r.dispatch_claimed_at as number) > now - lease)) return { meta: { changes: 0 } };
+          r.dispatch_claimed_at = now;
+          return { meta: { changes: 1 } };
+        }
+        if (/SET dispatched_at/.test(sql)) {
+          const [now, id] = args as [number, number];
+          const r = rows.find((x) => x.id === id && x.dispatch_claimed_at === now);
+          if (!r) return { meta: { changes: 0 } };
+          r.dispatched_at = now;
           return { meta: { changes: 1 } };
         }
         return { meta: { changes: 0 } };

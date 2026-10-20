@@ -37,6 +37,17 @@ export const QA_CONSECUTIVE_FAILURES = 2;
 export const ALERT_EVENT = 'app.alert';
 
 export type AlertKind = 'error_spike' | 'action_failures' | 'server_5xx' | 'qa_failures';
+/** The kinds this evaluator records — and the only ones its redelivery sweep touches;
+ *  other app_alerts writers (scheduled actions, app-worker quota) dispatch their own. */
+export const EVALUATOR_KINDS: readonly AlertKind[] = ['error_spike', 'action_failures', 'server_5xx', 'qa_failures'];
+/**
+ * #389: a delivery is claimed on its app_alerts row for this long. It outlasts a
+ * dispatch (at most MAX_WEBHOOKS_PER_APP attempts of WEBHOOK_TIMEOUT_MS), so
+ * overlapping runs never both send; a run that dies mid-send is retried after it.
+ */
+export const DISPATCH_LEASE_MS = 10 * 60_000;
+/** Undelivered alerts older than this are left alone: past the point of being news. */
+export const REDELIVERY_HORIZON_MS = 24 * 60 * 60_000;
 
 export interface AlertTop {
   categories: { category: string; count: number }[];
@@ -71,6 +82,8 @@ export interface AlertReport {
   alerts: Alert[];
   /** Alerts newly recorded this run (the unique interval index absorbs re-evaluations). */
   recorded: number;
+  /** Alerts this run claimed and dispatched — new ones, and any a dead run left undelivered. */
+  dispatched: number;
 }
 
 interface Env { DB: D1Database }
@@ -210,7 +223,8 @@ export async function evaluateErrorSpikes(opts: { env: Env; now?: number; appId?
     }
   }
 
-  // Persist (idempotent per interval) and deliver to any registered webhook.
+  // Persist, idempotent per interval. Delivery is separate (below), from the stored row,
+  // so an alert recorded by a run that died before sending is still sent once.
   let recorded = 0;
   for (const a of alerts) {
     const res = await db.prepare(
@@ -219,8 +233,53 @@ export async function evaluateErrorSpikes(opts: { env: Env; now?: number; appId?
     if (res.meta?.changes) {
       recorded += 1;
       console.warn(`[alert] ${a.kind} app=${a.app_id} count=${a.count} affected=${a.affected_users} baseline=${a.baseline} window=${new Date(a.window_start).toISOString()}..${new Date(a.window_end).toISOString()}`);
-      await dispatchWebhook(db, a.app_id, ALERT_EVENT, { event: ALERT_EVENT, ...a, detected_at: now });
     }
   }
-  return { checkedAt: new Date(now).toISOString(), windowMs, alerts, recorded };
+  const dispatched = await deliverPendingAlerts(db, now, opts.appId);
+  return { checkedAt: new Date(now).toISOString(), windowMs, alerts, recorded, dispatched };
+}
+
+interface AlertRow {
+  id: number; app_id: string; kind: AlertKind; window_start: number; window_end: number; count: number;
+  affected_users: number; baseline: number; top: string; build_meta: string | null; created_at: number;
+}
+
+/** The app.alert payload, rebuilt from the stored row: the same body on a first send and on a redelivery. */
+export function alertPayload(r: AlertRow) {
+  return {
+    event: ALERT_EVENT, app_id: r.app_id, kind: r.kind, window_start: r.window_start, window_end: r.window_end, count: r.count,
+    affected_users: r.affected_users, baseline: r.baseline, top: JSON.parse(r.top) as AlertTop,
+    build: r.build_meta === null ? null : JSON.parse(r.build_meta) as unknown, detail_basis: DETAIL_BASIS, detected_at: r.created_at,
+  };
+}
+
+/**
+ * #389: dispatch every evaluator alert that is recorded but not yet dispatched.
+ * Each row is claimed with a conditional UPDATE first, so of two overlapping runs
+ * only one sends; it is stamped dispatched once dispatchWebhook returns (a failed
+ * HTTP delivery is webhook_deliveries' to retry, #395). A run that dies after
+ * recording, or mid-send, leaves the row undispatched and its claim expires after
+ * DISPATCH_LEASE_MS — at-least-once in that one case, never a lost alert. The
+ * payload's (app_id, kind, window_start) is the receiver's idempotency key.
+ */
+export async function deliverPendingAlerts(db: D1Database, now: number, appId?: string): Promise<number> {
+  const kinds = EVALUATOR_KINDS.map(() => '?').join(', ');
+  const { results } = await db.prepare(
+    `SELECT id, app_id, kind, window_start, window_end, count, affected_users, baseline, top, build_meta, created_at FROM app_alerts
+      WHERE dispatched_at IS NULL AND created_at > ? AND kind IN (${kinds})${appId ? ' AND app_id = ?' : ''}
+      ORDER BY created_at, id LIMIT 100`,
+  ).bind(now - REDELIVERY_HORIZON_MS, ...EVALUATOR_KINDS, ...(appId ? [appId] : [])).all<AlertRow>();
+  let dispatched = 0;
+  for (const row of results ?? []) {
+    const claim = await db.prepare(
+      `UPDATE app_alerts SET dispatch_claimed_at = ?1
+        WHERE id = ?2 AND dispatched_at IS NULL AND (dispatch_claimed_at IS NULL OR dispatch_claimed_at <= ?1 - ?3)`,
+    ).bind(now, row.id, DISPATCH_LEASE_MS).run();
+    if (!claim.meta?.changes) continue;
+    await dispatchWebhook(db, row.app_id, ALERT_EVENT, alertPayload(row));
+    await db.prepare('UPDATE app_alerts SET dispatched_at = ?1 WHERE id = ?2 AND dispatch_claimed_at = ?1')
+      .bind(now, row.id).run();
+    dispatched += 1;
+  }
+  return dispatched;
 }
