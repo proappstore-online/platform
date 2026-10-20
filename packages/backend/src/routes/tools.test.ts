@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
 import { selectsColumn } from '../lib/action-sql.js';
-import { siteManifestFrom, mainStatementVerb, scheduledCronError, scheduledCronMatches, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_SCHEDULED_ACTIONS_PER_APP, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from './tools.js';
+import { siteManifestFrom, stagedStates, mainStatementVerb, scheduledCronError, scheduledCronMatches, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_SCHEDULED_ACTIONS_PER_APP, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from './tools.js';
 import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 import { PARENTS_CLUBS, STASH } from '../__fixtures__/operator-view.js';
 
@@ -2166,5 +2166,35 @@ describe('caller_unscoped deny-by-default (#426)', () => {
 
   it('siteManifestFrom carries approved_unscoped to every registration path', () => {
     expect(siteManifestFrom({ approved_unscoped: [approval] }).approved_unscoped).toEqual([approval]);
+  });
+});
+
+describe('stagedStates (#428)', () => {
+  const tool = (extra: Record<string, unknown> = {}) => ({ ...validTool, ...extra }) as never;
+  const reg = (state: 'staged' | 'live', extra: Record<string, unknown> = {}) => new Map([['list_items', { manifest: tool(extra), state }]]);
+
+  it('a new app registers staged; a worker-enabled or already-live app registers live', () => {
+    expect(stagedStates([tool()], new Map(), false).get('list_items')).toBe('staged');
+    expect(stagedStates([tool()], new Map(), true).get('list_items')).toBe('live');
+    expect(stagedStates([tool({ name: 'other' })], reg('live'), false).get('other')).toBe('live');
+    expect(stagedStates([tool({ name: 'other' })], reg('staged'), false).get('other')).toBe('staged');
+  });
+
+  it('an unchanged action keeps its state, even a staged one in a live app', () => {
+    expect(stagedStates([tool({ description: 'reworded' })], reg('staged'), true).get('list_items')).toBe('staged');
+    expect(stagedStates([tool()], reg('live'), false).get('list_items')).toBe('live');
+  });
+
+  it('a change to statements or access is a new action', () => {
+    // A live app (it serves `other`) with list_items still staged: unchanged keeps
+    // staged, changed counts as new and registers live.
+    const registered = new Map([
+      ['list_items', { manifest: tool(), state: 'staged' as const }],
+      ['other', { manifest: tool({ name: 'other' }), state: 'live' as const }],
+    ]);
+    expect(stagedStates([tool({ description: 'reworded' })], registered, false).get('list_items')).toBe('staged');
+    for (const change of [{ sql: 'SELECT id FROM items WHERE user_id = :__user_id LIMIT 5' }, { requires_auth: false }, { auth: { app_roles: ['admin'] } }, { callers: ['user', 'worker'] }]) {
+      expect(stagedStates([tool(change)], registered, false).get('list_items'), JSON.stringify(change)).toBe('live');
+    }
   });
 });
