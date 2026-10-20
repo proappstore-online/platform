@@ -32,6 +32,7 @@ pnpm --filter @proappstore/runtime-tests exec vitest run --config vitest.backend
 | 9 | Map mismatch | altered release bytes read `mismatched`, frames stay raw |
 | 10 | Alert delivery failure and recovery | one incident; a failed delivery is visible and retried; one recovery |
 | 11 | Owner query | filters return only this app; another owner is refused on every owner route |
+| 12 | Evaluator outage | a gap longer than the 30-minute catch-up is recorded; incidents still count; health keeps the evaluator `ok` but reports `alertCoverage.complete: false` for that range (#389, #391) |
 | — | Unavailable components | Analytics Engine down opens `monitoring_degraded`; a missing map reads `missing`; health says counts are not reliable |
 
 A passing suite proves the contracts in code. It does not prove a deployed
@@ -39,23 +40,29 @@ environment — see "Manual gates" below and `docs/deployed-acceptance-gates.md`
 
 ## Manual gates
 
-Steps no automated check can close; each stays open on its issue until done:
+Steps no automated check can close. Done ones are kept with their evidence;
+status as of 2026-10-20 (table and evidence: `docs/deployed-acceptance-gates.md`).
 
-1. **Analytics Engine read access** — `CF_ANALYTICS_API_TOKEN` on
-   `proappstore-api` able to read `pas_app_requests` (#391, #395). Without it,
-   request totals read `unknown` and objectives show `monitoring_degraded`.
+1. **Analytics Engine read access** — **done.** `CF_ANALYTICS_API_TOKEN` is set on
+   `proappstore-api`, and the burn-rate query runs against `pas_app_requests`
+   (#391, #395). If it is ever removed, request totals read `unknown` and
+   objectives show `monitoring_degraded`.
 2. **A controlled deployed test app** published through the admin flow, with
-   owner credentials for readback — real source-map upload, a real crash, trace
-   and alert delivery observed in production (#396).
-3. **Console readback** of the same incident in the Logs workspace — pending
-   proappstore-online/console#7.
-4. **template-app sync** — `node scripts/sync-template-workflow.mjs` by someone
-   with push rights to `proappstore-online/template-app` (#393; CI's
-   `template-workflow-drift` is red until then).
+   owner credentials for readback — a real crash, trace and alert delivery
+   observed in production (#396). **Open.** Real source-map upload and lookup are
+   proven on `chess-academy` read-only (#393), not on a dedicated test app.
+3. **Console readback** of the same incident in the Logs workspace — **open**,
+   pending proappstore-online/console#7.
+4. **template-app sync** — **done** (#425): template-app's workflow equals the
+   generator and CI's `template-workflow-drift` is green. When the generator
+   changes, sync it from a session registered for template-app, or commit the
+   golden from template-app's own checkout.
 5. **Data-worker fleet rollout** — `redeploy-data-workers.yml`, so existing data
-   workers send fault verdicts, log trace ids and accept `traceparent` (#394, #390).
+   workers send fault verdicts, log trace ids and accept `traceparent` (#394,
+   #390). **Open:** 5 of 45 workers carry the settings. Until it runs, the others'
+   failures read `unknown` and count as platform 5xx.
 6. **Owner choices** — reliability targets and each `app.alert` destination and
-   responder (#395).
+   responder (#395). **Operator gate:** none configured in production.
 
 ## Signals — where failures show up
 

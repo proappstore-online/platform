@@ -218,8 +218,10 @@ Consequence to accept honestly: console-only means **alerts are pull, not push**
 nobody is notified, someone has to look. That is acceptable pre-launch and is
 *not* acceptable once real users depend on these apps. Revisit at launch.
 
-*Implemented (#107):* the backend cron evaluates `app_logs` + QA runs every 15
-minutes (`lib/error-alerts.ts`) and records spikes in `app_alerts`, read by
+*Implemented (#107, corrected by #389/#396):* the backend cron evaluates on every
+five-minute tick, over completed intervals only (`lib/error-alerts.ts`; the
+first slice gated it to quarter-hours, which is not the evaluator cadence) and records
+spikes in `app_alerts`, read by
 `GET /v1/apps/:id/alerts`. Push exists only as an owner opt-in: the payload is
 delivered on a registered `app.alert` webhook through `dispatchWebhook`, as this
 decision prescribes — no vendor, no egress unless an owner registers a URL.
@@ -301,6 +303,20 @@ dependencies:
   (`packages/runtime-tests/test/backend/e2e-conformance.test.ts`); it found and
   fixed ingest redacting a full commit SHA out of `build`, which had kept #393
   from matching real crashes to their release.
+- **2026-10-20 follow-ups** (deployed acceptance, see each issue):
+  - #389: restart-safe, claim-once alert delivery (`dispatch_claimed_at` /
+    `dispatched_at`, migration 0106) and a forward-only evaluator cursor that
+    records evaluation gaps.
+  - #391: telemetry health reports `alertCoverage`, so a recorded gap is never
+    read as complete coverage.
+  - #392: ingest-side breadcrumb redaction pinned on real D1.
+  - #393: canonical deploys fail on a leftover or precached map and probe that no
+    map is served publicly; every approved and staged template builds hidden
+    maps and stamps `build.sha` by default.
+  - #394: pre-rollout data workers (no fault verdict) are counted and labelled
+    `unknown`, never as a tenant or client fault.
+  - #395: incident notifications are restart-safe and claim-once (migration 0107).
+  - #396: conformance scenario 12, an evaluator outage.
 
 Live and deployed acceptance for these is tracked on each issue and in
 `docs/deployed-acceptance-gates.md`.
