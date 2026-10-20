@@ -1108,6 +1108,20 @@ describe("reusable deploy pipeline (#427)", () => {
     expect(r.status === 0, String(r.stdout)).toBe(ok);
   });
 
+  // #437: the storefront listing shows what the app's code asks the browser for.
+  it("reports detected browser permissions keyless after the build, never blocking the deploy", () => {
+    const y = pipeline();
+    const at = (name: string) => y.indexOf(`- name: ${name}`);
+    const name = "Report detected browser permissions (keyless)";
+    expect(at(name)).toBeGreaterThan(at("Locate build output"));
+    const step = y.slice(at(name), at("Upload browser source maps (opt-in, keyless)"));
+    expect(step).toContain("continue-on-error: true");
+    expect(step).toContain("npx -y @proappstore/cli@latest permissions --json");
+    expect(step).toContain("ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.proappstore.online");
+    expect(step).toContain("/v1/apps/${{ github.event.repository.name }}/permissions/detected");
+    expect(step).not.toMatch(/secrets\./);
+  });
+
   // #264 guard, on the file every app now runs. `secrets: inherit` hands it every
   // secret the caller holds, so it may read only the two it declares.
   it("the pipeline reads only its declared secrets and never a platform credential or Cloudflare script", () => {

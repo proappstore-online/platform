@@ -224,6 +224,23 @@ jobs:
             exit 1
           fi
 
+      - name: Report detected browser permissions (keyless)
+        continue-on-error: true
+        run: |
+          # #437: the browser permissions this app's source uses (camera, microphone,
+          # location, …), detected by the same code as pas check, so its storefront
+          # listing shows them up front. Same verified GitHub OIDC claims as every
+          # keyless step; never blocks a deploy.
+          P=$(npx -y @proappstore/cli@latest permissions --json 2>/dev/null | tail -n 1)
+          if ! echo "$P" | jq -e 'type == "array"' >/dev/null 2>&1; then echo "::warning::permission detection unavailable"; exit 0; fi
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.proappstore.online" | jq -r '.value')
+          if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then echo "::warning::could not obtain an OIDC token; permissions not reported"; exit 0; fi
+          CODE=$(curl -sS -o "$RUNNER_TEMP/permissions-resp.json" -w '%{http_code}' -X POST \
+            "https://api.proappstore.online/v1/apps/${{ github.event.repository.name }}/permissions/detected" \
+            -H "Authorization: Bearer $OIDC" -H "Content-Type: application/json" --data "$(jq -cn --argjson p "$P" '{permissions: $p}')")
+          if [ "$CODE" = "200" ]; then echo "Detected permissions: $P"; else echo "::warning::permission report refused (HTTP $CODE): $(jq -c '.error // .' "$RUNNER_TEMP/permissions-resp.json" 2>/dev/null)"; fi
+
       - name: Upload browser source maps (opt-in, keyless)
         if: inputs.source-maps != 'false'
         continue-on-error: true
