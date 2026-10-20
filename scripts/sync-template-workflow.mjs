@@ -17,6 +17,8 @@
  *   node scripts/sync-template-workflow.mjs           # push the golden to template-app
  *
  * Auth: uses the `gh` CLI (must be authenticated for proappstore-online).
+ *   An agent session may push only to repos registered with it (#425): without
+ *   template-app registered, commit the golden from its own checkout instead.
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
