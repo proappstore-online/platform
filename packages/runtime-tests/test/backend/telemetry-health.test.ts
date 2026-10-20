@@ -2,6 +2,7 @@ import { SELF, env } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { recordHealth } from '../../../backend/src/lib/metric-aggregates';
 import { resetBurstState } from '../../../backend/src/lib/log-quota';
+import { evaluateErrorSpikes } from '../../../backend/src/lib/error-alerts';
 import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
 // #391 on real D1: the health API tells "nothing happened" from "cannot tell",
@@ -24,6 +25,7 @@ beforeEach(async () => {
   await resetTables();
   await env.DB.prepare('DELETE FROM telemetry_health').run();
   await env.DB.prepare('DELETE FROM app_metric_buckets').run();
+  await env.DB.prepare('DELETE FROM alert_evaluator_cursor').run();
   await seedUser('gh:1'); await seedApp(APP, 'gh:1');
   await seedUser('gh:2'); await seedApp('other-app', 'gh:2');
 });
@@ -82,5 +84,41 @@ describe('telemetry health (#391)', () => {
   it("owner-only: another owner cannot read this app's health, a signed-out caller is refused", async () => {
     expect((await health(await session('gh:2'))).status).toBeGreaterThanOrEqual(403);
     expect((await SELF.fetch(`${BASE}/v1/apps/${APP}/telemetry/health`)).status).toBe(401);
+  });
+});
+
+// #391/#389: after a scheduled-evaluator outage longer than its catch-up horizon,
+// status recovers but the alerts for that range were never evaluated; the health
+// API says so beside status, from the evaluator's cursor.
+describe('alert coverage in telemetry health (#391/#389)', () => {
+  const FIVE = 5 * 60_000;
+  const aligned = (t: number) => Math.floor(t / FIVE) * FIVE;
+  type Coverage = { alertCoverage: { complete: boolean; windowMs: number; gap: { start: number; end: number; recordedAt: number } | null } };
+
+  it('a recorded gap reads incomplete beside a recovered evaluator, and complete once it is a day old', async () => {
+    const before = aligned(Date.now() - 3 * 60 * 60_000);
+    const after = aligned(Date.now() - 60 * 60_000);
+    await evaluateErrorSpikes({ env, now: before, scheduled: true });
+    const r = await evaluateErrorSpikes({ env, now: after, scheduled: true });
+    expect(r.gap).toEqual({ start: before, end: after - 30 * 60_000 });
+    // The tick's own success stamp follows, as index.ts does: the evaluator has recovered.
+    await recordHealth(env.DB, 'evaluator', '', true, null);
+
+    const h = await (await health(await session('gh:1'))).json() as Coverage & Health;
+    // Recovered: the gap's failure stamp is older than the success, so it no longer degrades the evaluator.
+    // (The whole reads degraded in this pool only because it has no AE read token; see above.)
+    expect(h.components.evaluator).toMatchObject({ status: 'ok', lastError: 'gap' });
+    expect(h.countsReliable).toBe(true);
+    expect(h.alertCoverage).toEqual({ complete: false, windowMs: 24 * 60 * 60_000, gap: { start: before, end: after - 30 * 60_000, recordedAt: after } });
+
+    await env.DB.prepare("UPDATE alert_evaluator_cursor SET gap_end = ? WHERE id = 'scheduled'").bind(Date.now() - 25 * 60 * 60_000).run();
+    expect((await (await health(await session('gh:1'))).json() as Coverage).alertCoverage).toEqual({ complete: true, windowMs: 24 * 60 * 60_000, gap: null });
+  });
+
+  it('with no scheduled run yet there is no recorded gap; the cursor read is one primary-key lookup', async () => {
+    expect((await read(await session('gh:1')) as unknown as Coverage).alertCoverage.complete).toBe(true);
+    const plan = ((await env.DB.prepare("EXPLAIN QUERY PLAN SELECT gap_start, gap_end, gap_recorded_at FROM alert_evaluator_cursor WHERE id = 'scheduled'").all<{ detail: string }>()).results ?? []).map((x) => x.detail).join(' | ');
+    expect(plan).toMatch(/SEARCH alert_evaluator_cursor USING/);
+    expect(plan).not.toMatch(/SCAN/);
   });
 });

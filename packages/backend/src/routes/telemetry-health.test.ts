@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
 import { testToken, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
-import { componentStatus } from './telemetry-health.js';
+import { ALERT_COVERAGE_WINDOW_MS, alertCoverage, componentStatus } from './telemetry-health.js';
 
 // #391: request denominators come from Analytics Engine, weighted by its sample
 // interval; the real-D1 half of this API is in runtime-tests telemetry-health.test.ts.
@@ -98,5 +98,44 @@ describe('componentStatus (#391)', () => {
     expect(componentStatus(row(null, null), 1500, 1000)).toBe('unknown');
     expect(componentStatus(row(100, null), 1500, 1000)).toBe('unknown');
     expect(componentStatus(undefined, 1500, 1000)).toBe('unknown');
+  });
+});
+
+describe('alertCoverage (#391/#389)', () => {
+  const NOW = 1_800_000_000_000;
+  const gap = (end: number) => ({ gap_start: end - 45 * 60_000, gap_end: end, gap_recorded_at: end + 30 * 60_000 });
+
+  it('is incomplete while the last recorded gap ended within the last day, with the range', () => {
+    expect(alertCoverage(gap(NOW - 60 * 60_000), NOW)).toEqual({
+      complete: false, windowMs: ALERT_COVERAGE_WINDOW_MS,
+      gap: { start: NOW - 105 * 60_000, end: NOW - 60 * 60_000, recordedAt: NOW - 30 * 60_000 },
+    });
+    expect(alertCoverage(gap(NOW - ALERT_COVERAGE_WINDOW_MS + 1), NOW).complete).toBe(false);
+  });
+
+  it('is complete once that gap is a day old, when no gap was ever recorded, or with no cursor at all', () => {
+    expect(alertCoverage(gap(NOW - ALERT_COVERAGE_WINDOW_MS), NOW)).toEqual({ complete: true, windowMs: ALERT_COVERAGE_WINDOW_MS, gap: null });
+    expect(alertCoverage({ gap_start: null, gap_end: null, gap_recorded_at: null }, NOW).complete).toBe(true);
+    expect(alertCoverage(null, NOW).complete).toBe(true);
+    expect(alertCoverage(undefined, NOW).complete).toBe(true);
+  });
+
+  it('the route reports it beside status, not through it: a recovered evaluator is ok and still incomplete', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ data: [] })));
+    const end = Date.now() - 2 * 60 * 60_000;
+    const cursor = mockStmt({ first: { gap_start: end - 45 * 60_000, gap_end: end, gap_recorded_at: end + 30 * 60_000 } });
+    // Prepared in order: the owner check, health, counters, then the cursor.
+    const env = sharedMakeEnv({ CF_ANALYTICS_API_TOKEN: 'tok', CF_ACCOUNT_ID: 'acct' }, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), healthy(), mockStmt(), cursor));
+    const body = await (await app.request('/v1/apps/leads/telemetry/health', { headers: { Authorization: `Bearer ${TOK}` } }, env)).json() as Record<string, any>;
+    expect(body.status).toBe('ok');
+    expect(body.countsReliable).toBe(true);
+    expect(body.alertCoverage).toEqual({ complete: false, windowMs: ALERT_COVERAGE_WINDOW_MS, gap: { start: end - 45 * 60_000, end, recordedAt: end + 30 * 60_000 } });
+  });
+
+  it('the route reports complete coverage when the cursor holds no gap', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ data: [] })));
+    const env = sharedMakeEnv({ CF_ANALYTICS_API_TOKEN: 'tok', CF_ACCOUNT_ID: 'acct' }, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), healthy()));
+    const body = await (await app.request('/v1/apps/leads/telemetry/health', { headers: { Authorization: `Bearer ${TOK}` } }, env)).json() as Record<string, any>;
+    expect(body.alertCoverage).toEqual({ complete: true, windowMs: ALERT_COVERAGE_WINDOW_MS, gap: null });
   });
 });

@@ -10,6 +10,11 @@
  *  - `status: 'unknown'` — the evaluator has not succeeded recently (or ever),
  *    so counts below may be incomplete: `countsReliable` is false.
  *
+ * `alertCoverage` is separate from all three: a scheduled-evaluator outage longer
+ * than its catch-up horizon is recorded as a gap (#389) and then recovers, so
+ * `status` is `ok` again while alerts for that range were never evaluated. Within
+ * the last day it reads `complete: false` with the range, whatever `status` says.
+ *
  * Owner-only and private. Failure counts come from the bounded per-app counters
  * (app_metric_buckets): fixed signal names, no ids, no paths. Request totals and
  * latency (the denominators) come from Analytics Engine, which samples: they are
@@ -33,6 +38,25 @@ export const EVALUATOR_STALE_MS = 15 * 60_000;
 /** The prune runs daily (prune-app-logs.yml); two missed days is stale. */
 export const PRUNE_STALE_MS = 2 * 24 * 60 * 60_000;
 const HOUR = 60 * 60_000;
+/** A recorded evaluation gap is reported while it ended within this window — the counters' `lastDay`. */
+export const ALERT_COVERAGE_WINDOW_MS = 24 * HOUR;
+
+interface CursorRow { gap_start: number | null; gap_end: number | null; gap_recorded_at: number | null }
+
+/**
+ * #391/#389: whether alerts were evaluated for every interval of the last day.
+ * Incomplete while the last recorded gap ended within ALERT_COVERAGE_WINDOW_MS;
+ * no cursor (never evaluated on schedule, or before migration 0106) is no recorded gap.
+ */
+export function alertCoverage(row: CursorRow | null | undefined, now: number) {
+  const gapEnd = row?.gap_end ?? null;
+  const recent = gapEnd !== null && now - gapEnd < ALERT_COVERAGE_WINDOW_MS;
+  return {
+    complete: !recent,
+    windowMs: ALERT_COVERAGE_WINDOW_MS,
+    gap: recent ? { start: row!.gap_start, end: gapEnd, recordedAt: row!.gap_recorded_at } : null,
+  };
+}
 
 type ComponentStatus = 'ok' | 'degraded' | 'unknown' | 'no_data';
 interface HealthRow { component: HealthComponent; app_id: string; last_ok_at: number | null; last_failure_at: number | null; last_error: string | null }
@@ -84,7 +108,7 @@ telemetryHealthRoutes.get('/apps/:appId/telemetry/health', async (c) => {
   if (!/^[a-z][a-z0-9-]{0,57}$/.test(appId)) throw new HttpError('invalid app id', 400);
   const now = Date.now();
 
-  const [health, buckets] = await Promise.all([
+  const [health, buckets, cursor] = await Promise.all([
     c.env.DB.prepare(
       `SELECT component, app_id, last_ok_at, last_failure_at, last_error FROM telemetry_health
         WHERE (app_id = '' AND component IN ('evaluator', 'prune')) OR (app_id = ? AND component = 'aggregates')`,
@@ -94,6 +118,8 @@ telemetryHealthRoutes.get('/apps/:appId/telemetry/health', async (c) => {
       `SELECT signal, SUM(CASE WHEN bucket_start >= ?2 THEN n ELSE 0 END) AS last_hour, SUM(n) AS last_day
          FROM app_metric_buckets WHERE app_id = ?1 AND bucket_start >= ?3 GROUP BY signal`,
     ).bind(appId, now - HOUR, now - 24 * HOUR).all<{ signal: MetricSignal; last_hour: number; last_day: number }>(),
+    // One row by primary key: the scheduled evaluator's cursor (#389).
+    c.env.DB.prepare("SELECT gap_start, gap_end, gap_recorded_at FROM alert_evaluator_cursor WHERE id = 'scheduled'").first<CursorRow>(),
   ]);
 
   const rows = health.results ?? [];
@@ -122,6 +148,8 @@ telemetryHealthRoutes.get('/apps/:appId/telemetry/health', async (c) => {
     status: overall,
     // False when the evaluator has not run recently: a zero below may be "unknown", not "none".
     countsReliable: status !== 'unknown',
+    // Independent of status: a recovered outage can leave intervals whose alerts were never evaluated.
+    alertCoverage: alertCoverage(cursor, now),
     components,
     windows: { lastHour: summarise(hour), lastDay: summarise(day) },
     requests,
