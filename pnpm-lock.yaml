@@ -209,9 +209,6 @@ importers:
       agents:
         specifier: ^0.14.0
         version: 0.14.0(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/workers-types@4.20260505.1)(ai@4.3.19(react@19.2.6)(zod@3.25.76))(react@19.2.6)(rolldown@1.0.3)(vite@5.4.21(@types/node@22.19.17))(zod@3.25.76)
-      hono:
-        specifier: ^4.12.27
-        version: 4.12.27
       zod:
         specifier: ^3.24.3
         version: 3.25.76
