@@ -179,6 +179,20 @@ describe('queueing and flushing', () => {
 describe('auth session diagnostics (#353)', () => {
   const correlationId = 'a'.repeat(32);
 
+  // #429: entries with a correlation id (traceId) but no span were folded like an
+  // error loop, so a second session loss's id never reached the server.
+  it('keeps two session losses with different correlation ids as two entries', async () => {
+    const logs = makeLogs();
+    const event = (id: string) => ({
+      category: 'auth.session_lost', reason: 'api_401', phase: 'api_request', route: 'platform.api',
+      correlationId: id, priorAuthenticated: true, status: 401, elapsedMs: 1, online: true, visibility: 'visible',
+    } as unknown as Parameters<Logs['captureAuthEvent']>[0]);
+    logs.captureAuthEvent(event('b'.repeat(32)));
+    logs.captureAuthEvent(event('c'.repeat(32)));
+    await logs.flushAsync();
+    expect(sent[0].body.entries.map((e: { traceId?: string }) => e.traceId)).toEqual(['b'.repeat(32), 'c'.repeat(32)]);
+  });
+
   it('writes only the reviewed auth fields and uses the correlation id as trace id', async () => {
     const logs = makeLogs();
     logs.captureAuthEvent({

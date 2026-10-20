@@ -515,10 +515,14 @@ export class Logs {
     try {
       const redactedMessage = redactClient(String(message)).slice(0, MESSAGE_MAX);
       // An error loop repeats one fault: fold it into the queued entry. Not for
-      // request-correlated entries — each failed call keeps its own trace.
+      // request-correlated entries — each failed call keeps its own trace — and an
+      // entry with its own correlation id (a session loss's, #353) folds only into
+      // one with the same id, so a second id still reaches the server (#429).
       if (!context?.spanId) {
+        const correlation = typeof context?.traceId === 'string' ? context.traceId.toLowerCase() : null;
         const twin = this.queue.slice(-DEDUPE_WINDOW).find((e) =>
-          !e.spanId && e.level === level && e.category === category && e.message === redactedMessage);
+          !e.spanId && (correlation === null || e.traceId === correlation)
+          && e.level === level && e.category === category && e.message === redactedMessage);
         if (twin && (twin.data === undefined || isPlainObject(twin.data))) {
           const prior = isPlainObject(twin.data) && typeof twin.data.repeats === 'number' ? twin.data.repeats : 1;
           twin.data = { ...(twin.data as Record<string, unknown> | undefined), repeats: prior + 1 };
