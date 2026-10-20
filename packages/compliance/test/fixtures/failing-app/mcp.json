@@ -1,0 +1,16 @@
+{
+  "tools": [
+    {
+      "name": "get_user",
+      "description": "A user's profile",
+      "operation": "query",
+      "sql": "SELECT id, name, email, phone FROM users WHERE id = :id",
+      "params": { "id": { "type": "string" } },
+      "requires_auth": true,
+      "auth": { "caller_unscoped": { "reason": "profile page" } }
+    }
+  ],
+  "approved_unscoped": [
+    { "action": "get_user", "reviewer": "someone", "date": "2026-10-20", "reason": "profiles are public" }
+  ]
+}

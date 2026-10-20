@@ -332,6 +332,21 @@
       "live": false
     },
     {
+      "id": "mcp-unscoped",
+      "name": "Unscoped actions approved",
+      "clauses": [
+        {
+          "clauseId": "PAS-DATA-012",
+          "url": "https://docs.proappstore.online/standard/data/#pas-data-012"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "configuration",
+      "scope": "all",
+      "limits": "Reads mcp.json only: personal data is judged by output column names, and approval proves a review was recorded, not that it was sound. Without the registry it cannot tell a grandfathered action from a new one, so it warns where registration may refuse.",
+      "live": false
+    },
+    {
       "id": "reachable",
       "name": "Reachable",
       "clauses": [

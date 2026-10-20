@@ -46,6 +46,7 @@ const RELEVANT_FILES = [
   'web/vite.config.ts',
   'web/.env.production',
   'web/public/manifest.json',
+  'mcp.json',     // unscoped-action approvals (#426)
 ];
 
 const RELEVANT_PREFIXES = [

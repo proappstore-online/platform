@@ -8,6 +8,7 @@ import { checkHtmlMeta } from './checks/html-meta.js';
 import { checkLicenseMit } from './checks/license-mit.js';
 import { checkManifest } from './checks/manifest.js';
 import { checkMaskableIcon } from './checks/pwa-maskable-icon.js';
+import { checkMcpUnscoped } from './checks/mcp-unscoped.js';
 import { checkNoBrandOverrides } from './checks/no-brand-overrides.js';
 import { checkNoEnvProduction } from './checks/no-env-production.js';
 import { checkNoPlaceholders } from './checks/no-placeholders.js';
@@ -61,6 +62,7 @@ export {
   checkLicenseMit,
   checkManifest,
   checkMaskableIcon,
+  checkMcpUnscoped,
   checkNoBrandOverrides,
   checkNoEnvProduction,
   checkNoPlaceholders,
@@ -117,6 +119,7 @@ const RUNNERS: ReadonlyArray<{ id: string; run: (source: FileSource) => Promise<
   { id: 'dark-mode', run: checkDarkMode },
   { id: 'bundle-size', run: checkBundleSize },
   { id: 'claude-md-slim', run: checkClaudeMdSlim },
+  { id: 'mcp-unscoped', run: checkMcpUnscoped },
 ];
 
 /** Ids of the source-side checks, in output order. */

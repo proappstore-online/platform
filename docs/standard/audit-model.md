@@ -162,6 +162,7 @@ same from the clause side.
 | `dark-mode` | Dark mode support | [PAS-UI-002](ui.md#pas-ui-002) | partial | Warn-only signal detection; the storage-key split (fas:theme vs stores-theme) and dark-scheme contrast are manual. |
 | `bundle-size` | Bundle size | [PAS-UI-021](ui.md#pas-ui-021), [PAS-STACK-024](stack.md#pas-stack-024) | partial | Warns when web/dist is unbuilt; measures the largest JS chunk only. |
 | `claude-md-slim` | CLAUDE.md is slim (no platform boilerplate) | [PAS-STACK-001](stack.md#pas-stack-001) | partial | Documentation hygiene of the scaffold's agent guide; warn-only and not a security signal. |
+| `mcp-unscoped` | Unscoped actions approved | [PAS-DATA-012](data.md#pas-data-012) | partial | Reads mcp.json only: personal data is judged by output column names, and approval proves a review was recorded, not that it was sound. Without the registry it cannot tell a grandfathered action from a new one, so it warns where registration may refuse. |
 | `reachable` | Reachable (live) | [PAS-OPS-010](ops.md#pas-ops-010) | partial | HTTP 200 from the live URL; not that the app works (that is the post-deploy smoke). |
 | `brand-fonts-live` | Brand fonts (live) | [PAS-UI-001](ui.md#pas-ui-001) | partial | The fonts link in the served HTML only. |
 | `bundle-size-live` | Bundle size (live) | [PAS-UI-021](ui.md#pas-ui-021) | partial | HEAD size of the main bundle only. |
