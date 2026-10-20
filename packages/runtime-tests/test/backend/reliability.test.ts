@@ -244,6 +244,34 @@ describe('restart-safe incident notifications (#395)', () => {
     expect(sent).toHaveLength(1);
   });
 
+  // #429: an incident whose objective was deleted was never assessed again: it stayed
+  // firing, and through the partial unique index it blocked the objective's next one.
+  it('deleting the objective recovers its open incident, once; a recreated objective opens a new one', async () => {
+    await webhook();
+    const sent: string[] = [];
+    fetchMock.get(HOOK).intercept({ path: '/alert', method: 'POST' }).reply(200, (req) => { sent.push(String(req.body)); return 'ok'; }).times(3);
+    expect(await evaluate(severe)).toMatchObject({ opened: 1 });
+    const del = await SELF.fetch(`${BASE}/v1/apps/${APP}/reliability/objectives/actions`, json('DELETE', undefined, await session('gh:1')));
+    expect(del.status).toBe(200);
+    expect(await evaluate(severe)).toMatchObject({ evaluated: 0, recovered: 1, notified: 1 });
+    expect((await incidents()).map((r) => [r.rule, r.state])).toEqual([['burn_fast:actions', 'recovered']]);
+    expect(await evaluate(severe)).toMatchObject({ recovered: 0, notified: 0 });
+    expect(sent.map((x) => (JSON.parse(x) as { state: string }).state)).toEqual(['firing', 'recovered']);
+
+    await env.DB.prepare("INSERT INTO app_reliability_objectives (app_id, family, target, enabled, updated_at) VALUES (?, 'actions', 0.99, 1, 2)").bind(APP).run();
+    expect(await evaluate(severe)).toMatchObject({ opened: 1 });
+    expect((await incidents()).filter((r) => r.state === 'firing')).toHaveLength(1);
+    expect(sent).toHaveLength(3);
+  });
+
+  it('disabling the objective, or removing every objective, recovers monitoring_degraded too', async () => {
+    await evaluate('down');
+    expect((await incidents()).map((r) => [r.rule, r.state])).toEqual([['monitoring_degraded', 'firing']]);
+    await env.DB.prepare('UPDATE app_reliability_objectives SET enabled = 0').run();
+    expect(await evaluate('down')).toMatchObject({ recovered: 1 });
+    expect((await incidents()).map((r) => r.state)).toEqual(['recovered']);
+  });
+
   it('now may be a Date: it is stored as epoch milliseconds', async () => {
     const r = await evaluateReliability({ env, now: new Date(NOW), read: async () => severe });
     expect(r).toMatchObject({ opened: 1 });

@@ -270,6 +270,28 @@ export async function deliverPendingIncidents(db: D1Database, now: number): Prom
   return sent;
 }
 
+/**
+ * #429: an open incident whose objective is gone — deleted or disabled — is never
+ * assessed again, so it stayed firing forever, and through the partial unique
+ * index it blocked a new incident for the same rule if the objective came back.
+ * Recover it: a `<kind>:<family>` rule whose family has no enabled objective for
+ * its app, and `monitoring_degraded` for an app with none at all. The recovery is
+ * then notified once, like any other (deliverPendingIncidents).
+ */
+export async function recoverOrphanedIncidents(db: D1Database, now: number): Promise<number> {
+  const res = await db.prepare(
+    `UPDATE app_incidents SET state = 'recovered', recovered_at = ?1, detail = ?2
+      WHERE state != 'recovered' AND (
+        (instr(rule, ':') > 0 AND NOT EXISTS (SELECT 1 FROM app_reliability_objectives o
+           WHERE o.app_id = app_incidents.app_id AND o.enabled = 1 AND o.family = substr(app_incidents.rule, instr(app_incidents.rule, ':') + 1)))
+        OR (rule = 'monitoring_degraded' AND NOT EXISTS (SELECT 1 FROM app_reliability_objectives o
+           WHERE o.app_id = app_incidents.app_id AND o.enabled = 1)))`,
+  ).bind(now, JSON.stringify({ reason: 'objective_removed' })).run();
+  const n = res.meta?.changes ?? 0;
+  if (n) console.warn(`[reliability] recovered ${n} incident(s) whose objective was removed or disabled`);
+  return n;
+}
+
 /** The cron step: assess every enabled objective and apply the results. Never throws. */
 export async function evaluateReliability(opts: { env: Env; now?: number | Date; read?: OutcomeReader }): Promise<ApplyReport & { evaluated: number }> {
   // A number however the caller got it (a harness can hand the scheduled time over as a Date): it is bound into D1.
@@ -277,6 +299,7 @@ export async function evaluateReliability(opts: { env: Env; now?: number | Date;
   const objectives = await loadObjectives(opts.env.DB);
   const results = objectives.length ? await assessAll(opts.env, objectives, now, opts.read ?? readOutcomesFromAnalytics) : [];
   const report = await applyResults(opts.env.DB, results, now);
+  report.recovered += await recoverOrphanedIncidents(opts.env.DB, now);
   // Always: an objective removed after its incident changed state still owes that notification.
   report.notified = await deliverPendingIncidents(opts.env.DB, now);
   return { ...report, evaluated: results.length };
