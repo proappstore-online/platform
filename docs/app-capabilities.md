@@ -72,8 +72,14 @@ blocks mixed content regardless).
 
 | Capability | Why | Status |
 |---|---|---|
-| `SharedArrayBuffer` / cross-origin isolation (COOP + COEP) | `Cross-Origin-Embedder-Policy: require-corp` breaks every cross-origin image, font or script that does not send CORP/CORS headers, which most apps use | opt-in proposed: see the trade-off issue linked from #436 |
-| Being framed by other sites | clickjacking protection for your users | `frame-ancestors` lists PAS surfaces only |
+| `SharedArrayBuffer` / cross-origin isolation (COOP + COEP) | `Cross-Origin-Embedder-Policy: require-corp` breaks every cross-origin image, font or script that does not send CORP/CORS headers, which most apps use | opt-in proposed: #452 |
+| Being framed by other sites | clickjacking protection for your users | `frame-ancestors` lists PAS surfaces only; opt-in for named sites proposed: #453 |
+
+## An app's own `_headers` file
+
+The host sets these headers itself and does not read a `_headers` file in the
+app's build (that was a Cloudflare Pages convention). A `web/public/_headers`
+in an app repo has no effect on PAS: neither loosening nor tightening.
 
 ## Platform limits
 
