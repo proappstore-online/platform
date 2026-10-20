@@ -55,6 +55,8 @@ export interface ToolManifest {
 
 export interface AppTool extends ToolManifest {
   app_id: string;
+  /** #428: 'staged' until the app goes live. Only the app's team is ever shown a staged action. */
+  state?: 'staged' | 'live';
 }
 
 /** Tools every app-scoped session carries besides the app's own; a manifest name that collides
@@ -170,7 +172,25 @@ function publicToolFields(tool: AppTool): AppTool {
     ...(tool.core !== undefined ? { core: tool.core } : {}),
     ...((tool as { step_up?: boolean }).step_up ? { step_up: true } : {}),
     ...(tool.auth ? { auth: { required: tool.auth.required, platform_roles: tool.auth.platform_roles, app_roles: tool.auth.app_roles } } : {}),
+    ...(tool.state === 'staged' ? { state: 'staged' } : {}),
   } as AppTool;
+}
+
+/**
+ * #428: the caller's staged actions for an app, when the caller is on its team.
+ * The listing everyone shares hides staged actions; the backend shows them, with
+ * `state`, only to the app's owner and team, so this asks as the caller and is
+ * never cached. Anyone else, or any failure, gets none.
+ */
+export async function fetchStagedTools(api: Fetcher, apiBase: string, appId: string, token?: string | null): Promise<AppTool[]> {
+  if (!token) return [];
+  try {
+    const res = await api.fetch(`${apiBase}/v1/apps/${encodeURIComponent(appId)}/tools`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return [];
+    return toolsFrom((await res.json()) as ToolsResponse, appId).filter((t) => t.state === 'staged').map(publicToolFields);
+  } catch {
+    return [];
+  }
 }
 
 /** Clear the tool cache (e.g. after a publish) */
@@ -368,7 +388,9 @@ export function registerAppTools(
 function describeTool(t: AppTool, includeParams: boolean): string {
   const kind = t.operation === 'query' ? 'reads' : 'writes';
   const auth = t.requires_auth === false ? 'public' : 'auth';
-  const line = `${t.name} — ${kind} — ${auth} — ${t.description}`;
+  // #428: staged actions are listed only to the app's team, who can call them; its users cannot yet.
+  const staged = t.state === 'staged' ? ' — staged (owner and team only until the app goes live)' : '';
+  const line = `${t.name} — ${kind} — ${auth}${staged} — ${t.description}`;
   if (!includeParams) return line;
   const params = Object.entries(t.params ?? {})
     .map(([name, def]) => `${name}${def.optional || def.default !== undefined ? '?' : ''}: ${def.type}${def.description ? ` — ${def.description}` : ''}`)
@@ -446,7 +468,9 @@ function registerDiscoveryPair(
       const { app_id, include_params, filter } = args as { app_id?: string; include_params?: boolean; filter?: string };
       const id = resolveAppId({ app_id });
       if (!id) return errText(`Error: invalid app_id "${app_id ?? ''}".`);
-      const tools = await fetchTools(api, apiBase, id, getUserContext().token);
+      const listed = await fetchTools(api, apiBase, id, getUserContext().token);
+      const staged = (await fetchStagedTools(api, apiBase, id, getUserContext().token)).filter((t) => !listed.some((l) => l.name === t.name));
+      const tools = [...listed, ...staged];
       if (tools.length === 0) {
         return { content: [{ type: 'text' as const, text: `${id} has no registered tools (or does not exist). Apps register tools by committing an mcp.json; list_apps shows the apps you can see.` }] };
       }

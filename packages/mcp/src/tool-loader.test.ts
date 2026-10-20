@@ -434,7 +434,22 @@ describe('registerAppDiscoveryTools — list_app_tools / call_app_tool on the sh
     const h = setup();
     expect((await h.get('list_app_tools')!({ app_id: 'ghost' })).content[0].text).toContain('ghost has no registered tools (or does not exist)');
     expect((await h.get('list_app_tools')!({ app_id: 'Not Valid!' })).content[0].text).toMatch(/invalid app_id/);
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    // The shared listing, then the caller's own for staged actions (#428); nothing for an invalid id.
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("list_app_tools adds the team's staged actions, marked, from a listing asked as the caller (#428)", async () => {
+    const staged = { name: 'draft_report', description: 'Not live yet', operation: 'query', requires_auth: true, params: {}, sql: 'SELECT 1', state: 'staged' };
+    globalThis.fetch = vi.fn().mockImplementation((req: Request | string, init?: RequestInit) => {
+      const authed = new Headers(init?.headers ?? (req instanceof Request ? req.headers : undefined)).get('Authorization');
+      return Promise.resolve(new Response(JSON.stringify({ tools: authed ? [...crmTools, staged] : crmTools }), { status: 200 }));
+    });
+    const text = (await setup().get('list_app_tools')!({ app_id: 'crm' })).content[0].text;
+    expect(text).toContain(`# crm: ${crmTools.length + 1} tool(s)`);
+    expect(text).toMatch(/draft_report — reads — auth — staged \(owner and team only until the app goes live\)/);
+    expect(text).not.toContain('SELECT 1');
+    // A live tool is never marked.
+    expect(text).not.toMatch(new RegExp(`${crmTools[0]!.name} — [^\\n]*staged`));
   });
 
   it('call_app_tool runs a query through the platform action executor as the connected user', async () => {
