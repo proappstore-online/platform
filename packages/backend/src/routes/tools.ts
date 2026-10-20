@@ -427,11 +427,6 @@ export function isCronSyntaxError(error: string): boolean {
   return CRON_SYNTAX_ERRORS.has(error);
 }
 
-/** Five-field numeric cron the scheduler will actually fire (see {@link scheduledCronError}). */
-export function validScheduledCron(cron: string): boolean {
-  return scheduledCronError(cron) === null;
-}
-
 /** Does this validated five-field cron match a UTC minute? DOM/DOW follow the
  * conventional cron OR rule when both fields are restricted. */
 export function scheduledCronMatches(cron: string, timestamp: number): boolean {
