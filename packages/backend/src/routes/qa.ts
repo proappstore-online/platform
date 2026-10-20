@@ -23,6 +23,7 @@ import { HttpError, requireAppOwner } from '../lib/auth.js';
 import { verifyGithubOidc } from '../lib/github-oidc.js';
 import { isAppRepository } from '../lib/app-deploy-oidc.js';
 import { sha256Hex } from '../lib/app-tokens.js';
+import { queueVerifierJob, type PagsBinding } from '../lib/pags-client.js';
 import { wrap, privateNoStore } from '../lib/route-wrap.js';
 import type { Env } from '../types.js';
 
@@ -191,27 +192,48 @@ qaRoutes.post(
   wrap(async (c) => {
     const appId = c.req.param('appId')!;
     await requireRunAccess(c, appId);
-    const body = (await c.req.json().catch(() => ({}))) as { flowId?: string; trigger?: string };
+    const body = (await c.req.json().catch(() => ({}))) as { flowId?: string; trigger?: string; engine?: string };
     const trigger = body.trigger && RUN_TRIGGERS.has(body.trigger) ? body.trigger : 'manual';
+    // #456: `engine: "pags"` asks the app's ProAgentStore agent (under the subscriber's
+    // subscription) to run the flows in a real browser; anything else, or any failure to
+    // hand it over, runs on the headless executor.
+    if (body.engine !== undefined && body.engine !== 'headless' && body.engine !== 'pags') throw new HttpError('engine must be "headless" or "pags"', 400);
+    const wantPags = body.engine === 'pags';
+    if (wantPags && trigger === 'browser') throw new HttpError('a browser-triggered run is executed by the runner page; engine "pags" does not apply', 400);
 
     const flows = body.flowId
-      ? await c.env.DB.prepare('SELECT flow_id FROM app_test_flows WHERE app_id = ?1 AND flow_id = ?2').bind(appId, body.flowId).all<{ flow_id: string }>()
-      : await c.env.DB.prepare('SELECT flow_id FROM app_test_flows WHERE app_id = ?1').bind(appId).all<{ flow_id: string }>();
+      ? await c.env.DB.prepare('SELECT flow_id, name, spec FROM app_test_flows WHERE app_id = ?1 AND flow_id = ?2').bind(appId, body.flowId).all<{ flow_id: string; name: string; spec: string }>()
+      : await c.env.DB.prepare('SELECT flow_id, name, spec FROM app_test_flows WHERE app_id = ?1').bind(appId).all<{ flow_id: string; name: string; spec: string }>();
     if (flows.results.length === 0) throw new HttpError('no matching flows', 404);
 
-    const runs: { runId: string; flowId: string }[] = [];
+    const binding = wantPags
+      ? await c.env.DB.prepare('SELECT instance_id, repo, enabled FROM app_pags_bindings WHERE app_id = ?1').bind(appId).first<PagsBinding>()
+      : null;
+    const runs: { runId: string; flowId: string; engine: 'headless' | 'pags'; pagsJobId?: string; fallbackReason?: string }[] = [];
     for (const f of flows.results) {
       const runId = crypto.randomUUID();
       await c.env.DB.prepare(
-        `INSERT INTO app_test_runs (run_id, app_id, flow_id, trigger_kind, status, started_at)
-         VALUES (?1, ?2, ?3, ?4, 'queued', ?5)`,
-      ).bind(runId, appId, f.flow_id, trigger, Date.now()).run();
-      runs.push({ runId, flowId: f.flow_id });
+        `INSERT INTO app_test_runs (run_id, app_id, flow_id, trigger_kind, status, started_at, engine)
+         VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6)`,
+      ).bind(runId, appId, f.flow_id, trigger, Date.now(), wantPags ? 'pags' : 'headless').run();
+      if (!wantPags) { runs.push({ runId, flowId: f.flow_id, engine: 'headless' }); continue; }
+      let spec: unknown = null;
+      try { spec = JSON.parse(f.spec); } catch { /* validated on write; an unreadable one runs headlessly */ }
+      const queued = spec === null
+        ? ({ ok: false, reason: 'flow_unreadable' } as const)
+        : await queueVerifierJob(c.env, binding, { appId, runId, flows: [{ flow_id: f.flow_id, name: f.name, spec }] });
+      if (queued.ok) {
+        await c.env.DB.prepare("UPDATE app_test_runs SET pags_job_id = ?2, pags_state = 'queued', last_event_at = ?3 WHERE run_id = ?1").bind(runId, queued.jobId, Date.now()).run();
+        runs.push({ runId, flowId: f.flow_id, engine: 'pags', pagsJobId: queued.jobId });
+      } else {
+        await c.env.DB.prepare("UPDATE app_test_runs SET engine = 'headless', fallback_reason = ?2 WHERE run_id = ?1").bind(runId, queued.reason).run();
+        runs.push({ runId, flowId: f.flow_id, engine: 'headless', fallbackReason: queued.reason });
+      }
     }
 
     // Nudge the headless executor when present (browser-triggered runs are
-    // executed by the runner page itself and reported back).
-    if (trigger !== 'browser' && c.env.QA_WORKER) {
+    // executed by the runner page itself and reported back; pags runs by the agent).
+    if (trigger !== 'browser' && runs.some((r) => r.engine === 'headless') && c.env.QA_WORKER) {
       c.executionCtx.waitUntil(
         c.env.QA_WORKER.fetch(`https://qa-worker.internal/execute?app=${encodeURIComponent(appId)}`, { method: 'POST' }).catch(() => {}),
       );
@@ -234,6 +256,28 @@ qaRoutes.get(
           'SELECT * FROM app_test_runs WHERE app_id = ?1 ORDER BY started_at DESC LIMIT 50',
         ).bind(appId).all();
     return c.json({ runs: rows.results });
+  }),
+);
+
+// One run, in full, with what the ProAgentStore agent last reported (#456): its state
+// (queued | running | needs-you | done | failed), its question when it needs a person, a
+// link to its report, and why a run that asked for the agent ran headlessly instead.
+qaRoutes.get(
+  '/apps/:appId/qa/runs/:runId',
+  wrap(async (c) => {
+    const appId = c.req.param('appId')!;
+    const runId = c.req.param('runId')!;
+    await requireQaAccess(c, appId);
+    const run = await c.env.DB.prepare('SELECT * FROM app_test_runs WHERE app_id = ?1 AND run_id = ?2').bind(appId, runId).first<Record<string, unknown>>();
+    if (!run) throw new HttpError('run not found', 404);
+    let detail: unknown = null;
+    try { detail = typeof run.pags_detail === 'string' ? JSON.parse(run.pags_detail) : null; } catch { detail = null; }
+    return c.json({
+      run: { ...run, pags_detail: undefined },
+      pags: run.engine === 'pags' || run.fallback_reason
+        ? { engine: run.engine, jobId: run.pags_job_id, state: run.pags_state, lastEventAt: run.last_event_at, fallbackReason: run.fallback_reason, detail }
+        : null,
+    });
   }),
 );
 

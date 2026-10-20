@@ -84,6 +84,7 @@ const mainSidebar = [
       { text: "Admin Console Migration", link: "/admin-console-migration" },
       { text: "Agent Onboarding: Admin Console", link: "/agent-onboarding" },
       { text: "App Workers", link: "/app-workers" },
+      { text: "Browser verifier on ProAgentStore (trial)", link: "/pags-verifier" },
       { text: "Agent Customization", link: "/agent-customization" },
       { text: "AI Gateway (Agent Teams)", link: "/ai-gateway" },
       { text: "Agent Skills", link: "/skills/" },

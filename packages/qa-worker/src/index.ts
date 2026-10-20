@@ -66,14 +66,14 @@ export default {
   },
 };
 
-/** Queued, executor-run (not browser-run) rows, oldest first, for one app or any. */
+/** Queued, executor-run (not browser-run, not handed to a ProAgentStore agent, #456) rows, oldest first, for one app or any. */
 async function nextQueued(env: Env, appId: string | null, limit: number): Promise<RunRow[]> {
   const queued = appId
     ? await env.DB.prepare(
-        "SELECT run_id, app_id, flow_id FROM app_test_runs WHERE status = 'queued' AND trigger_kind != 'browser' AND app_id = ?1 ORDER BY started_at LIMIT ?2",
+        "SELECT run_id, app_id, flow_id FROM app_test_runs WHERE status = 'queued' AND trigger_kind != 'browser' AND engine = 'headless' AND app_id = ?1 ORDER BY started_at LIMIT ?2",
       ).bind(appId, limit).all<RunRow>()
     : await env.DB.prepare(
-        "SELECT run_id, app_id, flow_id FROM app_test_runs WHERE status = 'queued' AND trigger_kind != 'browser' ORDER BY started_at LIMIT ?1",
+        "SELECT run_id, app_id, flow_id FROM app_test_runs WHERE status = 'queued' AND trigger_kind != 'browser' AND engine = 'headless' ORDER BY started_at LIMIT ?1",
       ).bind(limit).all<RunRow>();
   return queued.results;
 }
@@ -93,7 +93,7 @@ async function processQueued(env: Env, appId: string | null): Promise<void> {
   // Recover runs abandoned in 'running' by a dead executor invocation.
   await env.DB.prepare(
     `UPDATE app_test_runs SET status = 'error', error = 'executor did not finish (timed out)', finished_at = ?1
-     WHERE status = 'running' AND COALESCE(claimed_at, started_at) < ?2`,
+     WHERE status = 'running' AND engine = 'headless' AND COALESCE(claimed_at, started_at) < ?2`,
   ).bind(Date.now(), Date.now() - STALE_RUN_MS).run();
 
   // One per invocation when this worker can re-nudge itself; a short batch otherwise.

@@ -67,6 +67,28 @@ describe('qa-worker run claiming', () => {
     mocks.launch.mockReset();
   });
 
+  // #456: a run handed to a ProAgentStore agent is the agent's to finish (or the platform's tick
+  // to fall back), never this executor's to claim or to time out as "stuck".
+  it("claims only headless-engine runs, and recovers only headless runs from 'running'", async () => {
+    const stale = stmt();
+    const queued = stmt({ all: { results: [] } });
+    const db = dbWithStatements([stale, queued]);
+    const { ctx, flush } = executionCtx();
+    await worker.fetch(new Request('https://qa-worker.internal/execute?app=chess-academy', { method: 'POST' }), {
+      DB: db as unknown as D1Database, BROWSER: {} as Fetcher, STORAGE: {} as R2Bucket,
+    }, ctx);
+    await flush();
+    expect(stale.sql).toContain("engine = 'headless'");
+    expect(queued.sql).toContain("engine = 'headless'");
+    const all = dbWithStatements([stmt(), stmt({ all: { results: [] } })]);
+    const second = executionCtx();
+    await worker.fetch(new Request('https://qa-worker.internal/execute', { method: 'POST' }), {
+      DB: all as unknown as D1Database, BROWSER: {} as Fetcher, STORAGE: {} as R2Bucket,
+    }, second.ctx);
+    await second.flush();
+    expect(all.prepare.mock.results[1]!.value.sql).toContain("engine = 'headless'");
+  });
+
   it('uses claim time, not queue time, for stale running recovery', async () => {
     const stale = stmt();
     const queued = stmt({ all: { results: [] } });

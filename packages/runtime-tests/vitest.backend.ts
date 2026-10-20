@@ -75,6 +75,10 @@ export default defineWorkersConfig(async () => ({
             APP_SECRET_KEK: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
             // Lets /email/send and notify-user reach their role checks (#272); Resend itself is fetchMock'd.
             RESEND_API_KEY: 're_runtime',
+            // ProAgentStore verifier trial (#456): the PAGS API, its limited token and the callback secret.
+            PAGS_API_URL: 'https://pags.test',
+            PAGS_TOKEN: 'pags-limited-token',
+            PAGS_CALLBACK_SECRET: 'pags-callback-secret',
             TEST_MIGRATIONS: await readD1Migrations(here('../../migrations')),
           },
           workers: [

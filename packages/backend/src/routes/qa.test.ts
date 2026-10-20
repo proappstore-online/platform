@@ -268,8 +268,9 @@ describe('runs', () => {
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as { runs: Array<{ flowId: string }> };
-    expect(body.runs).toEqual([{ runId: expect.any(String), flowId: 'smoke' }]);
-    expect(insert.bind).toHaveBeenCalledWith(expect.any(String), 'chess-academy', 'smoke', 'deploy', expect.any(Number));
+    // #456: a run says which engine runs it; the default stays the headless executor.
+    expect(body.runs).toEqual([{ runId: expect.any(String), flowId: 'smoke', engine: 'headless' }]);
+    expect(insert.bind).toHaveBeenCalledWith(expect.any(String), 'chess-academy', 'smoke', 'deploy', expect.any(Number), 'headless');
   });
 
   it('rejects GitHub OIDC run triggers from the wrong repo or ref', async () => {

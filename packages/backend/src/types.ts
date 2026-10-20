@@ -16,6 +16,16 @@ export interface Env {
   APPS?: R2Bucket;
   /** Optional service binding to the headless QA executor (packages/qa-worker). */
   QA_WORKER?: Fetcher;
+  /**
+   * ProAgentStore verifier trial (#456), all optional: with any of the three unset a
+   * `pags` run falls back to the headless executor, recording `pags_not_configured`.
+   * PAGS_API_URL: the PAGS HTTP API base. PAGS_TOKEN: its LIMITED token (queue work,
+   * read status on chosen instances). PAGS_CALLBACK_SECRET: shared HMAC secret for
+   * POST /v1/pags/callback. Set the two secrets with `wrangler secret put`.
+   */
+  PAGS_API_URL?: string;
+  PAGS_TOKEN?: string;
+  PAGS_CALLBACK_SECRET?: string;
   /** Per-(app, client IP) limit on anonymous registered-action calls (#211):
    *  120 per 60 s, declared as an unsafe `ratelimit` binding in wrangler.toml. */
   PUBLIC_ACTION_RATE_LIMIT: RateLimit;

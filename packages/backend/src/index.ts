@@ -50,6 +50,8 @@ import { tokenRoutes } from './routes/tokens.js';
 import { oidcSessionRoutes } from './routes/oidc-session.js';
 import { alertRoutes } from './routes/alerts.js';
 import { scheduledRunsRoutes } from './routes/scheduled-runs.js';
+import { pagsRoutes } from './routes/pags.js';
+import { fallBackStalePagsRuns } from './lib/pags-runs.js';
 import { operatorView } from './routes/operator-view.js';
 import { evaluateErrorSpikes } from './lib/error-alerts.js';
 import { runScheduledActions } from './lib/scheduled-actions.js';
@@ -343,6 +345,7 @@ v1.route('/', tokenRoutes);
 v1.route('/', oidcSessionRoutes);
 v1.route('/', alertRoutes);
 v1.route('/', scheduledRunsRoutes);
+v1.route('/', pagsRoutes);
 v1.route('/', operatorView);
 v1.route('/', actionRoutes);
 v1.route('/', secretsRoutes);
@@ -420,6 +423,8 @@ export default {
     // #107 alerts above, and the bounded retry of failed app.alert webhook deliveries.
     ctx.waitUntil(evaluateReliability({ env, now: tickAt }).catch((e) => console.error(`[reliability] evaluation failed: ${(e as Error).message}`)));
     ctx.waitUntil(retryDueDeliveries(env.DB, tickAt));
+    // #456: a ProAgentStore verifier run whose agent has gone quiet runs headlessly instead.
+    ctx.waitUntil(fallBackStalePagsRuns(env, tickAt).catch((e) => console.error(`[pags] timeout sweep failed: ${(e as Error).message}`)));
     // The pre-existing checks remain every fifteen minutes even though the
     // Worker now receives a five-minute tick for scheduled app actions.
     if (new Date(tickAt).getUTCMinutes() % 15 !== 0) return;
