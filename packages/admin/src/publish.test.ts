@@ -223,6 +223,31 @@ describe("canonical deploy workflow — single source of truth", () => {
     expect(deployWorkflowYaml(ENV)).toBe(golden);
   });
 
+  // #425: template-app's CLAUDE.md "CI runner rules" — every workflow starts with
+  // the runner-router job and no other job hard-codes a runner. The owner applied
+  // it to template-app by hand; the generator must carry it, or every sync reverts it.
+  it("routes every job through ProAgentStore/runner-router and hard-codes no runner (#425)", () => {
+    const yaml = deployWorkflowYaml(ENV);
+    const jobs = yaml.slice(yaml.indexOf("\njobs:\n"));
+    const names = [...jobs.matchAll(/^ {2}([a-z0-9_-]+):$/gm)].map((m) => m[1]!);
+    expect(names[0]).toBe("router");
+    expect(names.length).toBeGreaterThan(1);
+    const block = (name: string) => {
+      const at = jobs.indexOf(`\n  ${name}:\n`);
+      const next = jobs.slice(at + 1).search(/\n {2}[a-z0-9_-]+:\n/);
+      return next < 0 ? jobs.slice(at) : jobs.slice(at, at + 1 + next);
+    };
+    expect(block("router")).toContain("uses: ProAgentStore/runner-router/.github/workflows/router.yml@v1");
+    expect(block("router")).toContain("billing-token: ${{ secrets.RUNNER_BILLING_TOKEN }}");
+    expect(block("router")).not.toMatch(/runs-on:/);
+    for (const name of names.slice(1)) {
+      expect(block(name), name).toMatch(/\n {4}needs: (router|\[router, [a-z0-9_, -]+\])\n/);
+      expect(block(name), name).toContain("runs-on: ${{ fromJSON(needs.router.outputs.runner) }}");
+    }
+    expect(yaml).not.toMatch(/runs-on: (ubuntu-|self-hosted|\[)/);
+    expect(yaml).not.toContain("serge-ivo/runner-router");
+  });
+
   // #264: an app may keep its Playwright suite in the web workspace (doordrop's
   // web/tests/e2e) instead of a root e2e/ package; the canonical workflow runs
   // either, so such an app can adopt it without losing its E2E gate.
@@ -426,7 +451,9 @@ describe("provisioning hygiene (#195)", () => {
   it("never deploys the template source repo itself, whose own build fails its placeholder check", () => {
     const yaml = deployWorkflowYaml(ENV);
     expect(yaml).toContain("  deploy:\n    # template-app itself is never served");
-    expect(yaml).toContain("    if: github.event.repository.name != 'template-app'\n    runs-on: ubuntu-latest");
+    // #425: the guard sits on the router too, so no runner is even routed for template-app.
+    expect(yaml).toContain("    needs: router\n    if: github.event.repository.name != 'template-app'\n    runs-on: ${{ fromJSON(needs.router.outputs.runner) }}");
+    expect(yaml).toContain("  router:\n    # Same guard as deploy: template-app never deploys, so don't route a runner for it.\n    if: github.event.repository.name != 'template-app'\n");
   });
 
   it("URL-encodes each KB upload path segment, keeping / as the separator", () => {

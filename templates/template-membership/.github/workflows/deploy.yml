@@ -15,11 +15,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Runner routing (see CLAUDE.md "CI runner rules"). Public repo: the router job
+  # and every job below run on ubuntu-latest; no billing check, no secret read.
+  # Private repo: GitHub-hosted while included minutes remain, self-hosted pags
+  # once they are spent, using the repo-level RUNNER_BILLING_TOKEN (never an org
+  # secret). No job sets its own runner label.
+  router:
+    # Same guard as deploy: template-app never deploys, so don't route a runner for it.
+    if: github.event.repository.name != 'template-app'
+    uses: ProAgentStore/runner-router/.github/workflows/router.yml@v1
+    with:
+      included-minutes: 2000
+      self-hosted-labels: self-hosted,pags
+    secrets:
+      billing-token: ${{ secrets.RUNNER_BILLING_TOKEN }}
+
   deploy:
     # template-app itself is never served (no registry entry) and its build
     # fails its own placeholder check by design; the apps copied from it deploy.
+    needs: router
     if: github.event.repository.name != 'template-app'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.router.outputs.runner) }}
     outputs:
       has_e2e: ${{ steps.e2e-check.outputs.has_e2e }}
       e2e_dir: ${{ steps.e2e-check.outputs.e2e_dir }}
@@ -326,9 +342,9 @@ jobs:
   # platform fixture session via the SDK's real sign-in path (no test bypass);
   # auth-gated specs skip when PAS_E2E_SESSION_TOKEN is unset.
   e2e:
-    needs: deploy
+    needs: [router, deploy]
     if: needs.deploy.outputs.has_e2e == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.router.outputs.runner) }}
     defaults:
       run:
         working-directory: ${{ needs.deploy.outputs.e2e_dir }}
