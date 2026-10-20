@@ -47,6 +47,8 @@ const RELEVANT_FILES = [
   'web/.env.production',
   'web/public/manifest.json',
   'mcp.json',     // unscoped-action approvals (#426)
+  '.github/workflows/deploy.yml', // reusable deploy pipeline caller (#427)
+  '.github/workflows/kb.yml',
 ];
 
 const RELEVANT_PREFIXES = [

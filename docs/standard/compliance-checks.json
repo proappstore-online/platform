@@ -347,6 +347,25 @@
       "live": false
     },
     {
+      "id": "deploy-workflow",
+      "name": "Deploy workflow",
+      "clauses": [
+        {
+          "clauseId": "PAS-OPS-005",
+          "url": "https://docs.proappstore.online/standard/ops/#pas-ops-005"
+        },
+        {
+          "clauseId": "PAS-OPS-006",
+          "url": "https://docs.proappstore.online/standard/ops/#pas-ops-006"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "configuration",
+      "scope": "all",
+      "limits": "Warn-only (#427): pattern match on .github/workflows for the reusable-pipeline caller and for wrangler, the Workers scripts API, platform Worker names and platform secrets; not what a workflow does at run time.",
+      "live": false
+    },
+    {
       "id": "reachable",
       "name": "Reachable",
       "clauses": [

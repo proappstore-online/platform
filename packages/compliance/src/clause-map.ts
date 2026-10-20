@@ -89,6 +89,8 @@ export const CHECKS: readonly CheckMeta[] = [
     limits: 'Documentation hygiene of the scaffold\'s agent guide; warn-only and not a security signal.' },
   { id: 'mcp-unscoped', name: 'Unscoped actions approved', clauses: ['PAS-DATA-012'], automation: 'partial', evidenceClass: 'configuration', scope: 'all',
     limits: 'Reads mcp.json only: personal data is judged by output column names, and approval proves a review was recorded, not that it was sound. Without the registry it cannot tell a grandfathered action from a new one, so it warns where registration may refuse.' },
+  { id: 'deploy-workflow', name: 'Deploy workflow', clauses: ['PAS-OPS-005', 'PAS-OPS-006'], automation: 'partial', evidenceClass: 'configuration', scope: 'all',
+    limits: 'Warn-only (#427): pattern match on .github/workflows for the reusable-pipeline caller and for wrangler, the Workers scripts API, platform Worker names and platform secrets; not what a workflow does at run time.' },
   // Live-URL audit (auditLive) — a post-publish subset run against the deployed app.
   { id: 'reachable', name: 'Reachable', clauses: ['PAS-OPS-010'], automation: 'partial', evidenceClass: 'runtime', scope: 'all', live: true,
     limits: 'HTTP 200 from the live URL; not that the app works (that is the post-deploy smoke).' },

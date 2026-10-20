@@ -1,0 +1,25 @@
+name: Deploy to R2
+
+# The PAS deploy pipeline (#427): build, migrations, app worker, tool registration,
+# keyless R2 upload, marketing site, QA and E2E all run in the platform's reusable
+# workflow. Per-app options are its inputs, e.g.
+#   with:
+#     e2e: web          # auto | e2e | web | none
+#     marketing: false  # auto | true | false
+on:
+  push:
+    branches: [main]
+
+# Keyless deploy: the pipeline mints a GitHub OIDC token (no stored secret).
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    uses: proappstore-online/platform/.github/workflows/app-deploy.yml@app-deploy-v1
+    secrets: inherit

@@ -89,6 +89,7 @@ describe('failing-app fixture', () => {
       'Bundle size',
       'CLAUDE.md is slim (no platform boilerplate)',
       'Dark mode support',
+      'Deploy workflow',
       'No unsafe 100vh',
       'PWA meta tags',
     ]);

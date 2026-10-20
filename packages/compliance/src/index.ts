@@ -4,6 +4,7 @@ import { checkBrandTokens } from './checks/brand-tokens.js';
 import { checkBundleSize } from './checks/bundle-size.js';
 import { checkClaudeMdSlim } from './checks/claude-md-slim.js';
 import { checkDarkMode } from './checks/dark-mode.js';
+import { checkDeployWorkflow } from './checks/deploy-workflow.js';
 import { checkHtmlMeta } from './checks/html-meta.js';
 import { checkLicenseMit } from './checks/license-mit.js';
 import { checkManifest } from './checks/manifest.js';
@@ -58,6 +59,7 @@ export {
   checkBundleSize,
   checkClaudeMdSlim,
   checkDarkMode,
+  checkDeployWorkflow,
   checkHtmlMeta,
   checkLicenseMit,
   checkManifest,
@@ -120,6 +122,7 @@ const RUNNERS: ReadonlyArray<{ id: string; run: (source: FileSource) => Promise<
   { id: 'bundle-size', run: checkBundleSize },
   { id: 'claude-md-slim', run: checkClaudeMdSlim },
   { id: 'mcp-unscoped', run: checkMcpUnscoped },
+  { id: 'deploy-workflow', run: checkDeployWorkflow },
 ];
 
 /** Ids of the source-side checks, in output order. */

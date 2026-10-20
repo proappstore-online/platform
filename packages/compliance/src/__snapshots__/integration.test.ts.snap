@@ -135,6 +135,31 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
   },
   {
     "automation": "partial",
+    "checkId": "deploy-workflow",
+    "citations": [
+      {
+        "clauseId": "PAS-OPS-005",
+        "url": "https://docs.proappstore.online/standard/ops/#pas-ops-005",
+      },
+      {
+        "clauseId": "PAS-OPS-006",
+        "url": "https://docs.proappstore.online/standard/ops/#pas-ops-006",
+      },
+    ],
+    "detail": "no .github/workflows/deploy.yml: a push deploys nothing",
+    "evidence": {
+      "class": "configuration",
+      "detail": "no .github/workflows/deploy.yml: a push deploys nothing",
+    },
+    "name": "Deploy workflow",
+    "status": "warn",
+    "suggestions": [
+      "Replace .github/workflows/deploy.yml with the thin caller from proappstore-online/template-app: \`uses: proappstore-online/platform/.github/workflows/app-deploy.yml@app-deploy-v1\` with \`secrets: inherit\`.",
+      "Per-app options are its inputs (e2e, marketing, source-maps, node-version), not edits to a copy.",
+    ],
+  },
+  {
+    "automation": "partial",
     "checkId": "html-meta",
     "citations": [
       {
