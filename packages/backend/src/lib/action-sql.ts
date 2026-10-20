@@ -59,6 +59,9 @@ export interface ToolManifest {
   callers?: ActionCaller[];
 }
 
+/** #428: a staged action is callable only by the app's owner and team and by platform callers; a live one by anyone its auth admits. */
+export type ActionState = 'staged' | 'live';
+
 export const ACTION_CALLERS = ['user', 'worker', 'hook'] as const;
 export type ActionCaller = (typeof ACTION_CALLERS)[number];
 

@@ -1,7 +1,7 @@
 import { SELF, env, fetchMock } from 'cloudflare:test';
 import { mintSession } from '@proappstore/build-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BASE, json, mockNetwork, seedApp, seedUser, session, resetTables } from './helpers';
+import { BASE, goLive, json, mockNetwork, seedApp, seedUser, session, resetTables } from './helpers';
 import { Authenticator } from './webauthn';
 import { PARENTS_CLUBS, STASH } from '../../../backend/src/__fixtures__/operator-view';
 
@@ -69,7 +69,9 @@ describe('operator-view contract (#240)', () => {
       .reply(200, (req) => ({ results: (JSON.parse(String(req.body)) as { statements: { id: string }[] }).statements.map((st) => ({ id: st.id, ok: true })) }));
   const register = async (appId: string, body: unknown, uid = 'gh:1') => {
     validates(appId);
-    return SELF.fetch(`${BASE}/v1/apps/${appId}/tools`, json('PUT', body, await session(uid)));
+    const res = await SELF.fetch(`${BASE}/v1/apps/${appId}/tools`, json('PUT', body, await session(uid)));
+    await goLive(appId); // a live app's discovery (#428 staging is covered elsewhere)
+    return res;
   };
 
   beforeEach(async () => { await seedApp('parents-clubs', 'gh:1'); });

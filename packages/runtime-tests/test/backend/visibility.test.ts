@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { runScheduledActions } from '../../../backend/src/lib/scheduled-actions';
 import { roomObjectName } from '../../../backend/src/routes/rooms';
-import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
+import { BASE, goLive, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
 const env = providedEnv as unknown as Env;
 
@@ -40,7 +40,10 @@ function validates(appId = 'diary'): void {
 }
 async function register(body: Record<string, unknown>, appId = 'diary', validated = true): Promise<Response> {
   if (validated) validates(appId);
-  return SELF.fetch(`${BASE}/v1/apps/${appId}/tools`, json('PUT', body, await session('gh:1')));
+  const res = await SELF.fetch(`${BASE}/v1/apps/${appId}/tools`, json('PUT', body, await session('gh:1')));
+  // These are a live app's rules (#259), not staging's (#428).
+  await goLive(appId);
+  return res;
 }
 async function me(token?: string, appId = 'diary') {
   const res = await SELF.fetch(`${BASE}/v1/apps/${appId}/visibility/me`, json('GET', undefined, token));

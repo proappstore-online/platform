@@ -1,6 +1,6 @@
 import { SELF, env, fetchMock } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BASE, json, mockNetwork, seedApp, seedUser, session, resetTables } from './helpers';
+import { BASE, goLive, json, mockNetwork, seedApp, seedUser, session, resetTables } from './helpers';
 import { STASH } from '../../../backend/src/__fixtures__/operator-view';
 import { fetchTools, invalidateCache, registerAppDiscoveryTools, registerAppTools } from '../../../mcp/src/tool-loader';
 
@@ -31,6 +31,7 @@ beforeEach(async () => {
       .reply(200, (req) => ({ results: (JSON.parse(String(req.body)) as { statements: { id: string }[] }).statements.map((st) => ({ id: st.id, ok: true })) }));
     const put = await SELF.fetch(`${BASE}/v1/apps/${appId}/tools`, json('PUT', body, await session(uid)));
     expect(put.status, await put.clone().text()).toBe(200);
+    await goLive(appId); // discovery of a live app; staged actions are hidden from it (#428)
   }
   // The premise: one app has a stored contract, the other has none.
   const stored = await env.DB.prepare('SELECT app_id FROM app_operator_view ORDER BY app_id').all<{ app_id: string }>();

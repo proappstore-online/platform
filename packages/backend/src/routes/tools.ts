@@ -15,7 +15,7 @@ import type { Env } from '../types.js';
 import { requireAppAccess, requireAppOwner, requireUser } from '../lib/auth.js';
 import { forgetAppVisibility, MAX_VISIBILITY_ROLES, PUBLIC_VISIBILITY, requireVisible, visibilityFromRow, type AppVisibility } from '../lib/visibility.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
-import { ACTION_CALLERS, VERIFY_PARAM_PREFIX, actionCallers, literalLimit, resolveToolParams, selectsColumn, type ToolManifest, type ToolParam } from '../lib/action-sql.js';
+import { ACTION_CALLERS, VERIFY_PARAM_PREFIX, actionCallers, type ActionState, literalLimit, resolveToolParams, selectsColumn, type ToolManifest, type ToolParam } from '../lib/action-sql.js';
 import { ENDPOINT_NAME_PREFIX } from '../lib/endpoint-sql.js';
 import { getVerifier, VERIFIERS } from '../lib/verifiers/index.js';
 import { validateOperatorView } from '../lib/operator-contract.js';
@@ -941,6 +941,57 @@ export function validateRooms(raw: unknown, tools: ToolManifest[]): { error: str
   return { rules };
 }
 
+/** An app's code action as registered now: its manifest and its state (#428). */
+export interface RegisteredTool { manifest: ToolManifest; state: ActionState }
+
+/** The app's registered code actions, by name. An unreadable manifest is left out: it counts as new. */
+async function readRegisteredTools(db: D1Database, appId: string): Promise<Map<string, RegisteredTool>> {
+  const { results } = await db.prepare("SELECT name, manifest, state FROM app_tools WHERE app_id = ? AND source = 'code'")
+    .bind(appId).all<{ name: string; manifest: string; state?: string | null }>();
+  const registered = new Map<string, RegisteredTool>();
+  for (const row of results ?? []) {
+    try {
+      registered.set(row.name, { manifest: JSON.parse(row.manifest) as ToolManifest, state: row.state === 'staged' ? 'staged' : 'live' });
+    } catch { /* unreadable */ }
+  }
+  return registered;
+}
+
+/**
+ * #428: what decides who may call an action — its statements and its access.
+ * A change to any of them is a new action as far as staging is concerned;
+ * descriptions, params docs and the like are not.
+ */
+function actionShape(tool: ToolManifest): string {
+  return JSON.stringify({
+    statements: toolStatements(tool).map((st) => st.trim()),
+    requires_auth: tool.requires_auth,
+    auth: tool.auth ?? null,
+    callers: tool.callers ?? null,
+    schedule: tool.schedule ?? null,
+  });
+}
+
+/**
+ * #428: the state each submitted action registers in. An unchanged action keeps
+ * its state. A new or changed one is live when the app is live — its worker is
+ * enabled, or it already serves a live action — and staged otherwise, so an app's
+ * actions are not callable by its users before it goes live.
+ */
+export function stagedStates(
+  tools: ToolManifest[],
+  registered: Map<string, RegisteredTool>,
+  workerEnabled: boolean,
+): Map<string, ActionState> {
+  const appLive = workerEnabled || [...registered.values()].some((r) => r.state === 'live');
+  const states = new Map<string, ActionState>();
+  for (const tool of tools) {
+    const before = registered.get(tool.name);
+    states.set(tool.name, before && actionShape(before.manifest) === actionShape(tool) ? before.state : appLive ? 'live' : 'staged');
+  }
+  return states;
+}
+
 /**
  * Deny-by-default for open unscoped actions (#426), the policy in
  * `@proappstore/compliance` lib/unscoped-policy.ts. An action any signed-in user can
@@ -948,20 +999,16 @@ export function validateRooms(raw: unknown, tools: ToolManifest[]): { error: str
  * return personal data. What is registered now, unchanged, is grandfathered with a
  * warning, so this lands without breaking the next deploy of every app that has one.
  */
-async function gateUnscoped(
-  db: D1Database,
+function gateUnscoped(
   appId: string,
   tools: ToolManifest[],
   approvedUnscoped: unknown,
-): Promise<{ error: string } | { warnings: string[] }> {
+  registered: Map<string, RegisteredTool>,
+): { error: string } | { warnings: string[] } {
   const approvals = validateApprovals(approvedUnscoped);
   if ('error' in approvals) return { error: approvals.error };
-  const { results } = await db.prepare("SELECT name, manifest FROM app_tools WHERE app_id = ? AND source = 'code'")
-    .bind(appId).all<{ name: string; manifest: string }>();
   const previous = new Map<string, UnscopedPolicyTool>();
-  for (const row of results ?? []) {
-    try { previous.set(row.name, JSON.parse(row.manifest) as UnscopedPolicyTool); } catch { /* unreadable: not grandfathered */ }
-  }
+  for (const [name, row] of registered) previous.set(name, row.manifest as UnscopedPolicyTool);
   const verdict = evaluateUnscoped({ tools: tools as UnscopedPolicyTool[], approvals: approvals.approvals, previous });
   if (verdict.errors.length) return { error: verdict.errors.join('; ') };
   if (verdict.grandfathered.length) console.warn(`[unscoped] grandfathered app=${appId} ${verdict.grandfathered.join(',')}`);
@@ -1014,8 +1061,12 @@ export async function replaceAppTools(
       .catch(() => null);
     if (flag?.enabled !== 1) return { status: 400, payload: { error: 'hooks: to "worker" needs app workers enabled for this app' } };
   }
-  const unscoped = await gateUnscoped(db, appId, tools as ToolManifest[], site.approved_unscoped);
+  const registered = await readRegisteredTools(db, appId);
+  const unscoped = gateUnscoped(appId, tools as ToolManifest[], site.approved_unscoped, registered);
   if ('error' in unscoped) return { status: 400, payload: { error: unscoped.error } };
+  const workerEnabled = await db.prepare('SELECT enabled FROM app_workers WHERE app_id = ?').bind(appId).first<{ enabled: number }>()
+    .then((r) => r?.enabled === 1, () => false);
+  const states = stagedStates(tools as ToolManifest[], registered, workerEnabled);
 
   // A deploy replaces the CODE tools only (#155): console-defined endpoints live
   // in the same table under source = 'console' and are never touched here — a
@@ -1028,8 +1079,8 @@ export async function replaceAppTools(
     db.prepare("DELETE FROM scheduled_action_state WHERE app_id = ? AND source = 'code'").bind(appId),
     ...(tools as ToolManifest[]).map(tool =>
       db.prepare(
-        "INSERT INTO app_tools (app_id, name, manifest, created_at, updated_at, source) VALUES (?, ?, ?, ?, ?, 'code')",
-      ).bind(appId, tool.name, JSON.stringify(tool), now, now),
+        "INSERT INTO app_tools (app_id, name, manifest, created_at, updated_at, source, state) VALUES (?, ?, ?, ?, ?, 'code', ?)",
+      ).bind(appId, tool.name, JSON.stringify(tool), now, now, states.get(tool.name) ?? 'staged'),
     ),
     // Page meta and sitemap are part of the manifest (#210): replaced with it,
     // so they can never name an action the app no longer registers.
@@ -1118,6 +1169,10 @@ export async function replaceAppTools(
     }
   }
   warnings.push(...unscoped.warnings);
+  const staged = [...states].filter(([, st]) => st === 'staged').map(([name]) => name);
+  if (staged.length) {
+    warnings.push(`${staged.length} action(s) are staged: only the app's owner and team, its worker, hooks and the scheduler can call them until the app goes live (enable its worker, or POST /v1/apps/${appId}/tools/promote)`);
+  }
   for (const tool of (tools as ToolManifest[]).filter(openUnscopedWrite)) {
     warnings.push(`action "${tool.name}" is an unscoped write any signed-in user can run; if only the app's worker should, declare "callers": ["worker"]`);
   }
@@ -1130,7 +1185,7 @@ export async function replaceAppTools(
   }
   return {
     status: 200,
-    payload: { ok: true, registered: tools.length, ...cost, schedules, page_meta: siteResult.routes.length, sitemap: siteResult.sitemap !== null, operator: operatorResult.gate,
+    payload: { ok: true, registered: tools.length, staged, ...cost, schedules, page_meta: siteResult.routes.length, sitemap: siteResult.sitemap !== null, operator: operatorResult.gate,
       operator_view: operatorView.contract
         ? { version: operatorView.contract.version, resources: operatorView.contract.resources.length, actions: operatorView.contract.actions.length }
         : null,
@@ -1218,10 +1273,10 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
   // The app's visibility (#259) rides on the same read: an app with no tools has
   // nothing to list, so the join loses nothing.
   const result = await c.env.DB.prepare(
-    `SELECT t.name, t.manifest, t.updated_at, t.source, v.mode AS visibility_mode, v.roles AS visibility_roles
+    `SELECT t.name, t.manifest, t.updated_at, t.source, t.state, v.mode AS visibility_mode, v.roles AS visibility_roles
        FROM app_tools t LEFT JOIN app_visibility v ON v.app_id = t.app_id
       WHERE t.app_id = ? ORDER BY t.name`,
-  ).bind(appId).all<{ name: string; manifest: string; updated_at: number; source: ToolSource | null; visibility_mode?: string | null; visibility_roles?: string | null }>();
+  ).bind(appId).all<{ name: string; manifest: string; updated_at: number; source: ToolSource | null; state?: string | null; visibility_mode?: string | null; visibility_roles?: string | null }>();
 
   // A private app's tool list is part of the app: its team and allowed roles only.
   const first = result.results?.[0];
@@ -1233,6 +1288,7 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
 
   const tools: unknown[] = [];
   for (const r of result.results ?? []) {
+    if (!teamMember && r.state === 'staged') continue;
     let manifest: ToolManifest;
     try {
       manifest = JSON.parse(r.manifest);
@@ -1240,7 +1296,8 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
     const source: ToolSource = r.source === 'console' ? 'console' : 'code';
     tools.push(
       teamMember
-        ? { ...manifest, updated_at: r.updated_at, source }
+        // #428: staged vs live is the team's to see; everyone else is shown live actions only.
+        ? { ...manifest, updated_at: r.updated_at, source, state: r.state === 'staged' ? 'staged' : 'live' }
         : { ...publicToolView(manifest), updated_at: r.updated_at, source },
     );
   }
@@ -1249,6 +1306,34 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
   // no cache layer may hand either to anyone else.
   if (teamMember || visibility.mode === 'private') c.header('Cache-Control', 'private, no-store');
   return c.json({ tools });
+});
+
+// ── POST /v1/apps/:appId/tools/promote — staged actions go live (#428) ──
+// Body `{ names?: string[] }`: those actions, or every staged one. The owner (or
+// a platform admin) decides when the app's users may call what is registered;
+// enabling the app worker does the same for every later deploy.
+toolsRoutes.post('/apps/:appId/tools/promote', async (c) => {
+  const appId = c.req.param('appId')!;
+  await requireAppOwner(c, appId);
+  const body = await c.req.json<{ names?: unknown }>().catch(() => ({} as { names?: unknown }));
+  const names = body?.names;
+  if (names !== undefined && (!Array.isArray(names) || names.length === 0 || names.length > MAX_TOOLS_PER_APP
+    || !names.every((n) => typeof n === 'string' && /^[a-z][a-z0-9_]*$/.test(n)))) {
+    return c.json({ error: 'names must be a non-empty array of action names' }, 400);
+  }
+  const list = names as string[] | undefined;
+  const promoted = list
+    ? await c.env.DB.prepare(
+        `UPDATE app_tools SET state = 'live' WHERE app_id = ? AND source = 'code' AND state = 'staged'
+           AND name IN (SELECT value FROM json_each(?)) RETURNING name`,
+      ).bind(appId, JSON.stringify(list)).all<{ name: string }>()
+    : await c.env.DB.prepare("UPDATE app_tools SET state = 'live' WHERE app_id = ? AND source = 'code' AND state = 'staged' RETURNING name")
+      .bind(appId).all<{ name: string }>();
+  const done = (promoted.results ?? []).map((r) => r.name).sort();
+  const remaining = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM app_tools WHERE app_id = ? AND state = 'staged'")
+    .bind(appId).first<{ n: number }>();
+  console.log(`[tools] promoted app=${appId} ${done.join(',') || '(none)'}`);
+  return c.json({ ok: true, promoted: done, not_staged: (list ?? []).filter((n) => !done.includes(n)).sort(), staged_remaining: remaining?.n ?? 0 });
 });
 
 // ── DELETE /v1/apps/:appId/tools — remove all tools for an app ──

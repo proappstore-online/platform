@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
-import { HttpError, optionalUser, requireRecentAuth, requireUser, type FasUser } from '../lib/auth.js';
+import { HttpError, optionalUser, requireAppAccess, requireRecentAuth, requireUser, type FasUser } from '../lib/auth.js';
 import { roleSubjects } from '../lib/role-subject.js';
 import { DATA_FAULT_HEADER, dataFaultOf, dataWorkerUrl, DataWorkerFailure } from '../lib/data-worker-url.js';
 import { downstreamTraceparent, requestTrace } from '../lib/log-ingest.js';
@@ -10,6 +10,7 @@ import {
   prepareActionQuery,
   prepareVerifyInput,
   prepareVerifyWrites,
+  type ActionState,
   type ToolManifest,
 } from '../lib/action-sql.js';
 import { looksLikeAppToken, rememberTokenUser, sha256Hex, touchLastUsed, verifyAppToken } from '../lib/app-tokens.js';
@@ -65,6 +66,19 @@ export async function recordActionSuccess(
 
 interface ActionBody {
   params?: Record<string, unknown>;
+  /** #428: validate, authorize and bind without running the statement; the app's owner and team only. */
+  dry_run?: boolean;
+}
+
+/**
+ * #428: is the caller the app's owner, a team member or a platform admin, by
+ * session? An app token, a bad bearer or no bearer is not: a staged action and
+ * a dry run are for the people building the app, not for its users.
+ */
+async function callerIsAppTeam(c: Parameters<typeof requireAppAccess>[0], appId: string): Promise<boolean> {
+  const bearer = bearerToken(c.req.header('Authorization'));
+  if (!bearer || looksLikeAppToken(bearer)) return false;
+  return requireAppAccess(c, appId, 'viewer').then(() => true, () => false);
 }
 
 actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
@@ -86,7 +100,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
     return rateLimited();
   }
 
-  const { manifest, visibility } = await loadManifestWithVisibility(c.env.DB, appId, name);
+  const { manifest, visibility, state } = await loadManifestWithVisibility(c.env.DB, appId, name);
   // #203: a scheduled action takes no caller input — its params are the schedule's
   // fixed values — and its caller_unscoped reason holds only for those. The
   // platform scheduler reaches the data worker directly (forwardToDataWorker),
@@ -102,6 +116,14 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   // public console endpoint (#155) and a manifest that predates the declaration.
   // System identities never reach this route (the scheduler forwards directly).
   if (publicAction && visibility.mode === 'private') throw new HttpError('this app is private', 403);
+  // #428: a staged action is not live yet — registered, but the app has not gone
+  // live — so only its owner and team may call it here. Its worker, hooks and the
+  // scheduler do not come through this route and are unaffected.
+  let team: boolean | null = null;
+  if (state === 'staged') {
+    team = await callerIsAppTeam(c, appId);
+    if (!team) throw new HttpError("action is staged: only the app's owner and team can call it until the app goes live", 403);
+  }
   let token: string | null = null;
   let userId = '';
 
@@ -160,6 +182,12 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
         ? body.params
         : null;
   if (!input) throw new HttpError('params must be an object', 400);
+  const dryRun = body.dry_run === true;
+  if (body.dry_run !== undefined && typeof body.dry_run !== 'boolean') throw new HttpError('dry_run must be a boolean', 400);
+  if (dryRun && !(team ?? await callerIsAppTeam(c, appId))) throw new HttpError("dry_run is for the app's owner and team", 403);
+  // A verify action's dry run stops after the auth checks: its input statement
+  // feeds a verifier, so there is nothing to bind without running it.
+  if (dryRun && manifest.operation === 'verify') return dryRunResponse(manifest, state);
   // #394: the data worker receives this request's trace with the API's span as
   // parent, so its Workers Logs line and this API's failure row join one trace.
   const traceparent = downstreamTraceparent(requestTrace(c.req.raw));
@@ -179,6 +207,8 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   } catch (e) {
     throw new HttpError(e instanceof Error ? e.message : String(e), 400);
   }
+  // #428: validated, authorized and bound — and not run.
+  if (dryRun) return dryRunResponse(manifest, state);
   // Forward with the platform internal token so the data-worker trusts this as
   // prepared, role-checked SQL (identity already injected via __user_id) and
   // runs it for the end-user without requiring them to own the app. Public
@@ -189,12 +219,19 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   // when the target data worker is healthy (#153). Reach the provisioned
   // worker's direct Workers URL — built from DATA_WORKER_HOST, never a literal
   // account subdomain — protected by the internal token.
-  if (publicAction && manifest.cache_ttl) {
+  // A staged action's answer is for its team: never into the shared edge cache.
+  if (publicAction && manifest.cache_ttl && state === 'live') {
     return cachedPublicQuery(c.env, c.req.url, appId, name, payload, manifest.cache_ttl, (p) => c.executionCtx.waitUntil(p), traceparent);
   }
   const upstream = await forwardToDataWorker(c.env, appId, endpoint, payload, token, traceparent);
   return passThrough(upstream, await upstream.text());
 });
+
+/** #428: what a dry run answers: the shape of a real answer, with nothing read or written. */
+function dryRunResponse(manifest: ToolManifest, state: ActionState): Response {
+  const result = manifest.operation === 'query' || manifest.operation === 'verify' ? { rows: [] } : { changes: 0 };
+  return Response.json({ dry_run: true, state, ...result }, { headers: { 'Cache-Control': 'no-store' } });
+}
 
 async function withinPublicLimit(env: Env, appId: string, ip: string): Promise<boolean> {
   return (await env.PUBLIC_ACTION_RATE_LIMIT.limit({ key: `${appId}:${ip}` })).success;
@@ -388,17 +425,17 @@ async function loadManifestWithVisibility(
   db: D1Database,
   appId: string,
   name: string,
-): Promise<{ manifest: ToolManifest; visibility: AppVisibility }> {
-  let row: { manifest: string; visibility_mode?: string | null; visibility_roles?: string | null } | null;
+): Promise<{ manifest: ToolManifest; visibility: AppVisibility; state: ActionState }> {
+  let row: { manifest: string; state?: string | null; visibility_mode?: string | null; visibility_roles?: string | null } | null;
   try {
     row = await db.prepare(
-      `SELECT t.manifest, v.mode AS visibility_mode, v.roles AS visibility_roles
+      `SELECT t.manifest, t.state, v.mode AS visibility_mode, v.roles AS visibility_roles
          FROM app_tools t LEFT JOIN app_visibility v ON v.app_id = t.app_id
         WHERE t.app_id = ? AND t.name = ?`,
-    ).bind(appId, name).first<{ manifest: string; visibility_mode: string | null; visibility_roles: string | null }>();
+    ).bind(appId, name).first<{ manifest: string; state: string | null; visibility_mode: string | null; visibility_roles: string | null }>();
   } catch (e) {
     if (!/no such table: app_visibility/i.test(String((e as Error)?.message ?? e))) throw e;
-    return { manifest: await loadManifest(db, appId, name), visibility: PUBLIC_VISIBILITY };
+    return { manifest: await loadManifest(db, appId, name), visibility: PUBLIC_VISIBILITY, state: 'live' };
   }
   if (!row) throw new HttpError('action not found', 404);
   let manifest: ToolManifest;
@@ -407,7 +444,7 @@ async function loadManifestWithVisibility(
   } catch {
     throw new HttpError('action manifest is invalid', 500);
   }
-  return { manifest, visibility: visibilityFromRow(row.visibility_mode ?? null, row.visibility_roles ?? null) };
+  return { manifest, visibility: visibilityFromRow(row.visibility_mode ?? null, row.visibility_roles ?? null), state: row.state === 'staged' ? 'staged' : 'live' };
 }
 
 /** Mark the request for the success audit when an app-role gate granted it. */

@@ -128,7 +128,8 @@ describe('template-workspace: registration (#190)', () => {
     expect(body.error).toBeUndefined();
     expect(res.status).toBe(200);
     expect(body.registered).toBe(MANIFEST.tools.length);
-    expect(body.warnings).toEqual([]);
+    // A new app's actions register staged until it goes live (#428); nothing else is warned about.
+    expect(body.warnings).toEqual([expect.stringMatching(new RegExp(`^${MANIFEST.tools.length} action\\(s\\) are staged`))]);
   });
 
   it('has no public tools, and every write that changes state carries its audit row in the same batch', () => {

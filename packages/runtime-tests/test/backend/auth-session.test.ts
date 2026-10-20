@@ -1,6 +1,6 @@
 import { SELF, env, fetchMock } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BASE, json, seedApp, seedUser, session, mockNetwork, resetTables } from './helpers';
+import { BASE, goLive, json, seedApp, seedUser, session, mockNetwork, resetTables } from './helpers';
 
 afterEach(() => fetchMock.assertNoPendingInterceptors());
 
@@ -35,7 +35,8 @@ describe('sessions and authorization against real D1', () => {
     expect(await ok.json()).toMatchObject({ ok: true, registered: 1 });
     const row = await env.DB.prepare("SELECT name, source FROM app_tools WHERE app_id = 'demo'").first<{ name: string; source: string }>();
     expect(row).toEqual({ name: 'list_mine', source: 'code' });
-    // The public listing (no session) reads the same D1 row, allowlisted.
+    // The public listing (no session) reads the same D1 row, allowlisted, once the action is live (#428).
+    await goLive('demo');
     const listing = await SELF.fetch(`${BASE}/v1/apps/demo/tools`);
     const body = (await listing.json()) as { tools: { name: string; source: string; sql?: string }[] };
     expect(body.tools).toEqual([expect.objectContaining({ name: 'list_mine', source: 'code' })]);

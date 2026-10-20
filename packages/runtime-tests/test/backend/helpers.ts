@@ -35,6 +35,15 @@ export function json(method: string, body?: unknown, token?: string): RequestIni
 }
 
 /** Storage is shared across tests (see vitest.backend.ts); every file empties what it writes. */
+/**
+ * #428: an app's registered actions go live, as enabling its worker or a promote
+ * would. For suites that exercise a live app's behaviour (visibility, roles,
+ * discovery) rather than staging itself, which unscoped/staged tests cover.
+ */
+export async function goLive(appId: string): Promise<void> {
+  await env.DB.prepare("UPDATE app_tools SET state = 'live' WHERE app_id = ?").bind(appId).run();
+}
+
 export async function resetTables(): Promise<void> {
   for (const t of ['app_logs', 'app_log_usage', 'app_roles', 'app_tools', 'app_endpoint_audit', 'user_app_tokens', 'team_members', 'apps', 'users']) {
     await env.DB.prepare(`DELETE FROM ${t}`).run();

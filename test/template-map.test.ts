@@ -107,7 +107,8 @@ describe('template-map: registration and metadata (#180)', () => {
     expect(body.error).toBeUndefined();
     expect(res.status).toBe(200);
     expect(body.registered).toBe(MANIFEST.tools.length);
-    expect(body.warnings).toEqual([]);
+    // A new app's actions register staged until it goes live (#428); nothing else is warned about.
+    expect(body.warnings).toEqual([expect.stringMatching(new RegExp(`^${MANIFEST.tools.length} action\\(s\\) are staged`))]);
   });
 
   it('every management tool is app-role gated; every other statement is scoped on :__user_id; no public tools', () => {

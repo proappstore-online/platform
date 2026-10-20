@@ -1,6 +1,6 @@
 import { SELF, env, fetchMock } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
+import { BASE, goLive, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
 /**
  * #272: app-role checks matched `app_roles.user_id` against the session's
@@ -84,6 +84,7 @@ describe('app-role identity (#272)', () => {
     dw.intercept({ path: '/validate', method: 'POST' }).reply(200, { results: [{ id: 'viewer_notes#0', ok: true }] });
     const reg = await SELF.fetch(`${BASE}/v1/apps/diary/tools`, json('PUT', { tools: [tool] }, await session('gh:1')));
     expect(reg.status).toBe(200);
+    await goLive('diary'); // the role gate of a live action (#428)
 
     for (const name of ['gh:2', 'bob']) {
       const res = await SELF.fetch(`${BASE}/v1/apps/diary/actions/viewer_notes`, json('POST', { params: {} }, await credentialSession(name)));

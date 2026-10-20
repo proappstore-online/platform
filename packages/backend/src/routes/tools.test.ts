@@ -15,6 +15,13 @@ function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
   return { prepare, batch: vi.fn().mockResolvedValue([]) };
 }
 
+/** #428: an owner's D1 for an app that is live (its worker enabled), so new actions register live, not staged. */
+function liveAppDb() {
+  const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+  db.prepare.mockImplementation((sql: string) => (String(sql).startsWith('SELECT enabled FROM app_workers') ? mockStmt({ first: { enabled: 1 } }) : mockStmt()));
+  return db;
+}
+
 function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType<typeof mockD1>) {
   return sharedMakeEnv(overrides, db ?? mockD1());
 }
@@ -1509,7 +1516,7 @@ describe('PUT /v1/apps/:appId/tools — schema validation reaches the data worke
 // softly above the threshold so an author sees the number in the deploy log.
 describe('PUT /v1/apps/:appId/tools — manifest byte cost (#117)', () => {
   const put = (tools: unknown[]) => {
-    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    const db = liveAppDb();
     return app.request(
       '/v1/apps/test-app/tools',
       { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools }) },
@@ -2076,7 +2083,7 @@ describe('caller_unscoped deny-by-default (#426)', () => {
   const dbWith = (registered: Record<string, unknown>[] = []) => {
     const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
     const fallback = db.prepare.getMockImplementation();
-    db.prepare.mockImplementation((sql: string) => (String(sql).startsWith('SELECT name, manifest FROM app_tools')
+    db.prepare.mockImplementation((sql: string) => (String(sql).startsWith('SELECT name, manifest, state FROM app_tools')
       ? mockStmt({ all: { results: registered.map((t) => ({ name: t.name, manifest: JSON.stringify(t) })) } })
       : fallback ? fallback(sql) : mockStmt()));
     return db;

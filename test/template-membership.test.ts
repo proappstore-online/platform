@@ -127,7 +127,8 @@ describe('template-membership: registration (#189)', () => {
     expect(body.error).toBeUndefined();
     expect(res.status).toBe(200);
     expect(body.registered).toBe(MANIFEST.tools.length);
-    expect(body.warnings).toEqual([]);
+    // A new app's actions register staged until it goes live (#428); nothing else is warned about.
+    expect(body.warnings).toEqual([expect.stringMatching(new RegExp(`^${MANIFEST.tools.length} action\\(s\\) are staged`))]);
   });
 
   it('no public tools; the only unscoped statements are the app-admin tools gated by auth.app_roles', () => {
