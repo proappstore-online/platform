@@ -26,6 +26,17 @@ export const MARKETING_TEXT_EXTENSIONS: ReadonlySet<string> = new Set(['.ts', '.
 /** The canonical deploy step that builds and publishes marketing/ (#408); its absence means a push will not publish. */
 export const MARKETING_DEPLOY_STEP = 'Publish marketing site';
 
+/**
+ * Whether an app's `.github/workflows/deploy.yml` publishes marketing/ on push:
+ * a copied workflow that carries the step, or (#427) a caller of the platform's
+ * reusable pipeline that does not switch it off with `marketing: false`.
+ */
+export function deployPublishesMarketing(deployYaml: string): boolean {
+  if (deployYaml.includes(MARKETING_DEPLOY_STEP)) return true;
+  return /uses:\s*proappstore-online\/platform\/\.github\/workflows\/app-deploy\.yml@/.test(deployYaml)
+    && !/^\s*marketing:\s*['"]?false['"]?\s*(#.*)?$/m.test(deployYaml);
+}
+
 function hex(v: unknown): string | null {
   return typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : null;
 }

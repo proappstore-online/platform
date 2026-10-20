@@ -1388,7 +1388,7 @@ describe('add_marketing_site (#421)', () => {
     github({ deploy: DEPLOY_OLD });
     listing({}, 404);
     const out = getText(await run());
-    expect(out).toContain('has no "Publish marketing site" step, so a push will not publish it yet');
+    expect(out).toContain('neither calls the platform\'s reusable deploy pipeline nor has a "Publish marketing site" step (or it sets marketing: false), so a push will not publish it yet');
   });
 
   it('refuses a caller who does not own the app, before reading anything', async () => {

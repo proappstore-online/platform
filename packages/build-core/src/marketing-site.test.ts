@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { prefillSite as cliPrefillSite } from '../../cli/src/marketing.ts';
-import { MARKETING_SCRIPTS, prefillSite, type MarketingListing } from './marketing-site.ts';
+import { deployPublishesMarketing as cliDeployPublishesMarketing, prefillSite as cliPrefillSite } from '../../cli/src/marketing.ts';
+import { deployPublishesMarketing, MARKETING_SCRIPTS, prefillSite, type MarketingListing } from './marketing-site.ts';
 
 // #421: the MCP add_marketing_site tool pre-fills marketing/src/site.ts exactly
 // as `pas marketing add` (#410) does. The CLI keeps its own copy (it is
@@ -59,5 +59,21 @@ describe('prefillSite (#421)', () => {
       'dev:marketing': 'pnpm --dir marketing --ignore-workspace dev',
       'build:marketing': 'pnpm --dir marketing --ignore-workspace build',
     });
+  });
+});
+
+describe('deployPublishesMarketing (#427)', () => {
+  const caller = 'jobs:\n  deploy:\n    uses: proappstore-online/platform/.github/workflows/app-deploy.yml@app-deploy-v1\n    secrets: inherit\n';
+  const cases: [string, boolean][] = [
+    ['      - name: Publish marketing site (marketing/ -> about-<app>, keyless)\n', true],
+    ['      - name: Upload to R2\n', false],
+    [caller, true],
+    [caller.replace('    secrets: inherit', '    with:\n      marketing: false\n    secrets: inherit'), false],
+    [caller.replace('    secrets: inherit', '    with:\n      marketing: auto\n    secrets: inherit'), true],
+    ['', false],
+  ];
+  it.each(cases)('%j → %s, and the CLI copy agrees', (yaml, expected) => {
+    expect(deployPublishesMarketing(yaml)).toBe(expected);
+    expect(cliDeployPublishesMarketing(yaml)).toBe(expected);
   });
 });

@@ -11,7 +11,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { makeGitHub } from "@proappstore/build-core";
 import { selectTemplate, getTemplate, DEFAULT_TEMPLATE_ID } from "@proappstore/build-core";
-import { b64decode, prefillSite, MARKETING_DEPLOY_STEP, MARKETING_SCRIPTS, MARKETING_TEXT_EXTENSIONS, type MarketingListing } from "@proappstore/build-core";
+import { b64decode, deployPublishesMarketing, prefillSite, MARKETING_DEPLOY_STEP, MARKETING_SCRIPTS, MARKETING_TEXT_EXTENSIONS, type MarketingListing } from "@proappstore/build-core";
 import { createProvisioningWorkflow, type ProvisionOperationReceipt } from "./provisioning-workflow.js";
 import { gateMutation, dryRun } from "./safety.js";
 import { BUILD_WITH_PROSHELL } from "./sdk-reference.js";
@@ -649,7 +649,7 @@ export function registerProjectTools(
       try { pkg = pkgFile.ok && pkgFile.content ? JSON.parse(pkgFile.content) : null; } catch { pkg = null; }
       const scripts = pkg ? Object.keys(MARKETING_SCRIPTS).filter((k) => pkg!.scripts?.[k] === undefined) : [];
       const deploy = await gh.getFile(app_id, ".github/workflows/deploy.yml");
-      const deployPublishes = deploy.ok && (deploy.content ?? "").includes(MARKETING_DEPLOY_STEP);
+      const deployPublishes = deploy.ok && deployPublishesMarketing(deploy.content ?? "");
 
       const summary = (prefilled: string[]) => [
         ...toAdd.map((f) => `  + ${f.path}`),
@@ -660,7 +660,7 @@ export function registerProjectTools(
         ...(prefilled.length ? [`Pre-filled in marketing/src/site.ts: ${prefilled.join(", ")}. Review the copy there before you rely on it.`] : []),
         deployPublishes
           ? `The next deploy publishes it to https://about-${app_id}.proappstore.online/`
-          : `Note: .github/workflows/deploy.yml has no "${MARKETING_DEPLOY_STEP}" step, so a push will not publish it yet. Update the workflow to the current canonical one (${template.repo} .github/workflows/deploy.yml).`,
+          : `Note: .github/workflows/deploy.yml neither calls the platform's reusable deploy pipeline nor has a "${MARKETING_DEPLOY_STEP}" step (or it sets marketing: false), so a push will not publish it yet. Update the workflow to the current canonical one (${template.repo} .github/workflows/deploy.yml), which calls the pipeline.`,
       ].join("\n");
 
       const preview = await dry("add_marketing_site", dry_run, `Would commit to ${org}/${app_id} main:\n${summary([])}`, { app_id });

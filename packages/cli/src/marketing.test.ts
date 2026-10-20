@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addMarketing, detectAppId, prefillSite } from './marketing.js';
+import { addMarketing, detectAppId, prefillSite, deployPublishesMarketing } from './marketing.js';
 
 // #410: `pas marketing add` copies template-app's marketing/ into an existing
 // app repo, never overwriting, pre-filled from the app id and public listing.
@@ -130,6 +130,16 @@ describe('pas marketing add (#410)', () => {
     mkdirSync(join(app, '.github', 'workflows'), { recursive: true });
     writeFileSync(join(app, '.github', 'workflows', 'deploy.yml'), '      - name: Publish marketing site (marketing/ -> about-<app>, keyless)\n');
     expect((await addMarketing({ cwd: app, fetchTemplate, fetchListing: noListing })).deployPublishes).toBe(true);
+  });
+
+  // #427: a caller of the reusable pipeline publishes unless it opts out.
+  it('a caller of the reusable deploy pipeline publishes marketing unless it sets marketing: false', () => {
+    const caller = 'jobs:\n  deploy:\n    uses: proappstore-online/platform/.github/workflows/app-deploy.yml@app-deploy-v1\n    secrets: inherit\n';
+    expect(deployPublishesMarketing(caller)).toBe(true);
+    expect(deployPublishesMarketing(`# with:\n#   marketing: false\n${caller}`)).toBe(true); // a comment is not an input
+    expect(deployPublishesMarketing(caller.replace('    secrets: inherit', '    with:\n      marketing: false\n    secrets: inherit'))).toBe(false);
+    expect(deployPublishesMarketing(caller.replace('    secrets: inherit', "    with:\n      marketing: 'false'\n    secrets: inherit"))).toBe(false);
+    expect(deployPublishesMarketing('jobs:\n  deploy:\n    uses: someone-else/x/.github/workflows/app-deploy.yml@v1\n')).toBe(false);
   });
 });
 

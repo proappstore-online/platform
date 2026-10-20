@@ -167,8 +167,20 @@ export async function addMarketing(opts: AddMarketingOptions): Promise<AddMarket
   }
 
   const deploy = await readFile(join(cwd, '.github', 'workflows', 'deploy.yml'), 'utf8').catch(() => '');
-  result.deployPublishes = deploy.includes('Publish marketing site');
+  result.deployPublishes = deployPublishesMarketing(deploy);
   return result;
+}
+
+/**
+ * Whether deploy.yml publishes marketing/ on push: a copied workflow with the
+ * "Publish marketing site" step, or (#427) a caller of the platform's reusable
+ * pipeline that does not set `marketing: false`. Same rule as build-core's
+ * deployPublishesMarketing; vendored, since the CLI ships without build-core.
+ */
+export function deployPublishesMarketing(deployYaml: string): boolean {
+  if (deployYaml.includes('Publish marketing site')) return true;
+  return /uses:\s*proappstore-online\/platform\/\.github\/workflows\/app-deploy\.yml@/.test(deployYaml)
+    && !/^\s*marketing:\s*['"]?false['"]?\s*(#.*)?$/m.test(deployYaml);
 }
 
 export const marketingCommand = new Command('marketing')
@@ -194,7 +206,7 @@ marketingCommand
       if (r.deployPublishes) {
         out(`The deploy then publishes it to https://about-${r.appId}.proappstore.online/`);
       } else {
-        out(`\nNote: .github/workflows/deploy.yml has no "Publish marketing site" step, so a push will not publish it yet.`);
+        out(`\nNote: .github/workflows/deploy.yml neither calls the platform's reusable deploy pipeline nor has a "Publish marketing site" step (or it sets marketing: false), so a push will not publish it yet.`);
         out('Update the workflow to the current canonical one (proappstore-online/template-app .github/workflows/deploy.yml).');
       }
     } catch (e) {
