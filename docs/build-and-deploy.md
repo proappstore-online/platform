@@ -79,6 +79,14 @@ or multi-org demand bites — that's the signal to migrate (below).
 Browser crashes are symbolicated on read from source maps the app's own deploy
 uploads as a **private release artifact**: never the public `pas-apps` bucket.
 
+- **On by default for new apps.** The approved templates (`template-app`,
+  `template-marketplace`) and the staged ones under `templates/` build with
+  `build: { sourcemap: 'hidden' }`, give the service worker no map
+  (`workbox.sourcemap: false`), and pass the deploy's commit as
+  `initPro({ monitoring: { build: { sha: import.meta.env.VITE_COMMIT_SHA } } })`;
+  the canonical build step exports `VITE_COMMIT_SHA`. An existing app opts in
+  with the same three lines, as ChessClubs did (chess-clubs#217).
+
 - **Upload.** `POST /v1/apps/:appId/sourcemaps?commitSha=<sha>`, authenticated
   with the app repository's GitHub OIDC token on `main` (no secret). The commit
   must be the one the workflow runs for. Body: one JSON bundle

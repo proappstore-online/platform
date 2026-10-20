@@ -386,9 +386,11 @@ entries are still *counted* (so spikes stay visible) while detail stops and the
 SDK goes quiet for a minute rather than retrying. Detail rows are pruned after 30
 days. Grouping works on minified stacks, and `build` identifies the deploy.
 
-**Readable stacks (opt-in).** Build with hidden source maps
-(`build: { sourcemap: 'hidden' }` in `vite.config`) and pass the commit as
-`build.sha`: the canonical deploy then uploads the maps to the platform's
+**Readable stacks (on in the templates, opt-in elsewhere).** Apps made from the
+approved templates already do this. Build with hidden source maps
+(`build: { sourcemap: 'hidden' }` in `vite.config`, and `sourcemap: false` in
+its `workbox` options) and pass the commit as `build.sha`
+(`monitoring: { build: { sha: import.meta.env.VITE_COMMIT_SHA } }`): the canonical deploy then uploads the maps to the platform's
 private store for that commit (keyless, no secret) and strips them before the
 public upload, so they are never served. The owner reads mapped frames with
 `GET /v1/apps/:appId/logs?symbolicate=true`; each row resolves only against the
