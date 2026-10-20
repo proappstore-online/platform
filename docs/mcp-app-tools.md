@@ -1132,8 +1132,11 @@ code action is **staged** or **live** (`app_tools.state`).
   - A staged public action is never served from the edge cache.
 - **Live:** callable by anyone the action's own auth admits, as before.
 
-An app is **live** when its worker is enabled or it already serves a live
-action.
+An app is **live** when its worker is enabled, its go-live is recorded
+(`app_go_live`: set by enabling the worker or by a promote, never cleared by a
+deploy), or it already serves a live action. Every app that existed when
+migration 0109 ran is recorded live, so clearing a live app's tools and
+redeploying does not stage them (#429).
 
 **What a deploy registers:**
 - An action whose statements and access (`requires_auth`, `auth`, `callers`,

@@ -18,7 +18,7 @@ function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
 /** #428: an owner's D1 for an app that is live (its worker enabled), so new actions register live, not staged. */
 function liveAppDb() {
   const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
-  db.prepare.mockImplementation((sql: string) => (String(sql).startsWith('SELECT enabled FROM app_workers') ? mockStmt({ first: { enabled: 1 } }) : mockStmt()));
+  db.prepare.mockImplementation((sql: string) => (String(sql).startsWith('SELECT (SELECT enabled FROM app_workers') ? mockStmt({ first: { worker: 1, marked: null } }) : mockStmt()));
   return db;
 }
 

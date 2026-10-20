@@ -974,16 +974,17 @@ function actionShape(tool: ToolManifest): string {
 
 /**
  * #428: the state each submitted action registers in. An unchanged action keeps
- * its state. A new or changed one is live when the app is live — its worker is
- * enabled, or it already serves a live action — and staged otherwise, so an app's
- * actions are not callable by its users before it goes live.
+ * its state. A new or changed one is live when the app is live — `wentLive` (its
+ * worker is enabled, or its go-live is recorded in app_go_live), or it already
+ * serves a live action — and staged otherwise, so an app's actions are not
+ * callable by its users before it goes live.
  */
 export function stagedStates(
   tools: ToolManifest[],
   registered: Map<string, RegisteredTool>,
-  workerEnabled: boolean,
+  wentLive: boolean,
 ): Map<string, ActionState> {
-  const appLive = workerEnabled || [...registered.values()].some((r) => r.state === 'live');
+  const appLive = wentLive || [...registered.values()].some((r) => r.state === 'live');
   const states = new Map<string, ActionState>();
   for (const tool of tools) {
     const before = registered.get(tool.name);
@@ -1064,9 +1065,13 @@ export async function replaceAppTools(
   const registered = await readRegisteredTools(db, appId);
   const unscoped = gateUnscoped(appId, tools as ToolManifest[], site.approved_unscoped, registered);
   if ('error' in unscoped) return { status: 400, payload: { error: unscoped.error } };
-  const workerEnabled = await db.prepare('SELECT enabled FROM app_workers WHERE app_id = ?').bind(appId).first<{ enabled: number }>()
-    .then((r) => r?.enabled === 1, () => false);
-  const states = stagedStates(tools as ToolManifest[], registered, workerEnabled);
+  // Live by its worker, or by a recorded go-live (#429: migration 0109): a deploy that
+  // cleared the app's tools must not make a live app's next actions staged.
+  const appLive = await db.prepare(
+    'SELECT (SELECT enabled FROM app_workers WHERE app_id = ?1) AS worker, (SELECT 1 FROM app_go_live WHERE app_id = ?1) AS marked',
+  ).bind(appId).first<{ worker: number | null; marked: number | null }>()
+    .then((r) => r?.worker === 1 || r?.marked === 1, () => false);
+  const states = stagedStates(tools as ToolManifest[], registered, appLive);
 
   // A deploy replaces the CODE tools only (#155): console-defined endpoints live
   // in the same table under source = 'console' and are never touched here — a
@@ -1314,7 +1319,7 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
 // enabling the app worker does the same for every later deploy.
 toolsRoutes.post('/apps/:appId/tools/promote', async (c) => {
   const appId = c.req.param('appId')!;
-  await requireAppOwner(c, appId);
+  const owner = await requireAppOwner(c, appId);
   const body = await c.req.json<{ names?: unknown }>().catch(() => ({} as { names?: unknown }));
   const names = body?.names;
   if (names !== undefined && (!Array.isArray(names) || names.length === 0 || names.length > MAX_TOOLS_PER_APP
@@ -1330,6 +1335,10 @@ toolsRoutes.post('/apps/:appId/tools/promote', async (c) => {
     : await c.env.DB.prepare("UPDATE app_tools SET state = 'live' WHERE app_id = ? AND source = 'code' AND state = 'staged' RETURNING name")
       .bind(appId).all<{ name: string }>();
   const done = (promoted.results ?? []).map((r) => r.name).sort();
+  // Promoting is the app going live (#429): recorded, so later deploys register live
+  // even after the app's tools were cleared.
+  await c.env.DB.prepare('INSERT OR IGNORE INTO app_go_live (app_id, went_live_at, went_live_by) VALUES (?, ?, ?)')
+    .bind(appId, Date.now(), owner.id).run();
   const remaining = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM app_tools WHERE app_id = ? AND state = 'staged'")
     .bind(appId).first<{ n: number }>();
   console.log(`[tools] promoted app=${appId} ${done.join(',') || '(none)'}`);

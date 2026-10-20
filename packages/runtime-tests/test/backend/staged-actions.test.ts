@@ -45,6 +45,7 @@ beforeEach(async () => {
   await env.DB.prepare('UPDATE app_worker_platform SET open = 1, closed_reason = NULL, closed_at = NULL').run();
   await seedUser('gh:admin', 'admin');
   await seedUser('gh:2', 'someone');
+  await env.DB.prepare('DELETE FROM app_go_live').run();
   await seedApp('club', 'gh:admin');
 });
 
@@ -127,11 +128,25 @@ describe('staged actions (#428)', () => {
     expect(await states()).toEqual({ add_note: 'staged', list_mine: 'live' });
   });
 
+  // #429: "live" was derived from the current rows, so clearing a live app's tools
+  // (DELETE …/tools, or a deploy without mcp.json) made its next deploy all staged.
+  it('a live app stays live after its tools are cleared: the next deploy registers live (migration 0109)', async () => {
+    await register([listMine]);
+    await SELF.fetch(`${BASE}/v1/apps/club/tools/promote`, json('POST', {}, await owner()));
+    expect(await env.DB.prepare("SELECT went_live_by FROM app_go_live WHERE app_id = 'club'").first()).toEqual({ went_live_by: 'gh:admin' });
+    expect((await SELF.fetch(`${BASE}/v1/apps/club/tools`, json('DELETE', undefined, await owner()))).status).toBe(200);
+    expect(await states()).toEqual({});
+    const next = await register([listMine, addNote]);
+    expect(next.body.staged).toEqual([]);
+    expect(await states()).toEqual({ add_note: 'live', list_mine: 'live' });
+  });
+
   it('enabling the app worker is going live: staged actions are promoted, later ones register live', async () => {
     await register([listMine]);
     const enabled = await SELF.fetch(`${BASE}/v1/admin/apps/club/worker-enabled`, json('PUT', { enabled: true }, await owner()));
     expect(enabled.status).toBe(200);
     expect(await enabled.json()).toMatchObject({ enabled: true, promoted: 1 });
+    expect(await env.DB.prepare("SELECT 1 AS live FROM app_go_live WHERE app_id = 'club'").first()).toEqual({ live: 1 });
     expect(await states()).toEqual({ list_mine: 'live' });
     const next = await register([listMine, addNote]);
     expect(next.body.staged).toEqual([]);

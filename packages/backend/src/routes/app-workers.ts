@@ -138,8 +138,12 @@ appWorkerRoutes.put('/admin/apps/:appId/worker-enabled', async (c) => {
   ).bind(appId, admin.id, now, APP_WORKER_CAP).run();
   if (!res.meta.changes) throw new HttpError(`app worker cap reached (${APP_WORKER_CAP})`, 409);
   // #428: enabling the worker is the app going live — what is staged becomes callable.
-  const promoted = await c.env.DB.prepare("UPDATE app_tools SET state = 'live' WHERE app_id = ? AND state = 'staged'").bind(appId).run();
-  return c.json({ ok: true, enabled: true, promoted: promoted.meta?.changes ?? 0 });
+  const [promoted] = await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE app_tools SET state = 'live' WHERE app_id = ? AND state = 'staged'").bind(appId),
+    // Recorded (#429), so a later deploy registers live even if the worker is disabled again.
+    c.env.DB.prepare('INSERT OR IGNORE INTO app_go_live (app_id, went_live_at, went_live_by) VALUES (?, ?, ?)').bind(appId, now, admin.id),
+  ]);
+  return c.json({ ok: true, enabled: true, promoted: promoted?.meta?.changes ?? 0 });
 });
 
 appWorkerRoutes.get('/apps/:appId/worker', async (c) => {
