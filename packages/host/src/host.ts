@@ -3,6 +3,8 @@
  * Vendored from fas/host/src/host.ts with PAS-specific CSP/zones.
  */
 
+import { openPermissionsPolicy } from "./capabilities.js";
+
 const ZONE = ".proappstore.online";
 const PLATFORM_ZONE = "proappstore.online";
 
@@ -441,22 +443,30 @@ export function securityHeaders(isHtml: boolean, updateSensitive = false): Heade
   h.set("X-Content-Type-Options", "nosniff");
   h.set("X-Frame-Options", "SAMEORIGIN");
   h.set("Referrer-Policy", "strict-origin-when-cross-origin");
-  h.set("Permissions-Policy", "geolocation=(self), camera=(), microphone=(), payment=()");
+  // #436: default-open. Every browser feature is allowed on the app's own origin;
+  // the browser asks the user before granting any of them (capabilities.ts).
+  h.set("Permissions-Policy", openPermissionsPolicy("self"));
   h.set(
     "Content-Security-Policy",
     [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' https://api.proappstore.online https://static.cloudflareinsights.com",
-      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-      "font-src 'self' https://fonts.gstatic.com",
+      // #436: default-open for what an app loads and talks to. 'unsafe-inline' was already
+      // allowed, so pinning script hosts protected little and blocked CDN scripts; WebAssembly
+      // needs 'wasm-unsafe-eval', and workers and media built in the page need blob:.
+      "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https:",
+      "style-src 'self' 'unsafe-inline' https:",
+      "font-src 'self' data: https:",
       "img-src 'self' data: blob: https:",
-      "connect-src 'self' https://api.proappstore.online https://*.proappstore.online wss://api.proappstore.online wss://*.proappstore.online https://fonts.googleapis.com https://fonts.gstatic.com https://cloudflareinsights.com",
+      "media-src 'self' data: blob: mediastream: https:",
+      "worker-src 'self' blob:",
+      "frame-src 'self' https:",
+      "connect-src 'self' https: wss: data: blob:",
       // SECURITY: do NOT allow the `*.proappstore.online` wildcard here — it let
       // any published app frame any other app (cross-app clickjacking). Allow
       // only self + first-party surfaces that legitimately embed app previews.
       "frame-ancestors 'self' https://proappstore.online https://console.proappstore.online https://dashboard.proappstore.online https://admin.proappstore.online https://agents.proappstore.online",
       "base-uri 'self'",
-      "form-action 'self'",
+      "form-action 'self' https:",
     ].join("; "),
   );
   h.set(

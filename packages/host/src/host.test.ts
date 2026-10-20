@@ -1,3 +1,4 @@
+import { HOSTED_APP_FEATURES, openPermissionsPolicy, PREVIEW_IFRAME_ALLOW } from "./capabilities.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   contentType,
@@ -327,11 +328,49 @@ describe("isUpdateSensitivePath", () => {
 describe("securityHeaders", () => {
   it("sets CSP, XCTO, XFO, referrer policy for HTML", () => {
     const h = securityHeaders(true);
-    expect(h.get("Content-Security-Policy")).toContain("default-src 'self'");
-    expect(h.get("Content-Security-Policy")).toContain("api.proappstore.online");
     expect(h.get("X-Content-Type-Options")).toBe("nosniff");
     expect(h.get("X-Frame-Options")).toBe("SAMEORIGIN");
     expect(h.get("Referrer-Policy")).toBe("strict-origin-when-cross-origin");
+  });
+
+  // #436: default-open capabilities. Each directive and feature is pinned, so a
+  // tightening is a deliberate, reviewed change, not a silent one.
+  it("CSP is default-open for what an app loads and talks to; only framing stays first-party", () => {
+    const csp = Object.fromEntries((securityHeaders(true).get("Content-Security-Policy") ?? "").split("; ").map((d) => {
+      const [name, ...values] = d.split(" ");
+      return [name, values.join(" ")];
+    }));
+    expect(csp).toEqual({
+      "default-src": "'self'",
+      "script-src": "'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https:",
+      "style-src": "'self' 'unsafe-inline' https:",
+      "font-src": "'self' data: https:",
+      "img-src": "'self' data: blob: https:",
+      "media-src": "'self' data: blob: mediastream: https:",
+      "worker-src": "'self' blob:",
+      "frame-src": "'self' https:",
+      "connect-src": "'self' https: wss: data: blob:",
+      "frame-ancestors": "'self' https://proappstore.online https://console.proappstore.online https://dashboard.proappstore.online https://admin.proappstore.online https://agents.proappstore.online",
+      "base-uri": "'self'",
+      "form-action": "'self' https:",
+    });
+  });
+
+  it("Permissions-Policy allows every browser feature on the app's own origin", () => {
+    const pp = securityHeaders(true).get("Permissions-Policy") ?? "";
+    const entries = pp.split(", ");
+    expect(entries).toEqual(HOSTED_APP_FEATURES.map((f) => `${f}=(self)`));
+    for (const feature of ["camera", "microphone", "geolocation", "accelerometer", "gyroscope", "magnetometer", "midi", "payment",
+      "usb", "serial", "hid", "bluetooth", "clipboard-read", "clipboard-write", "screen-wake-lock", "web-share", "display-capture",
+      "fullscreen", "picture-in-picture", "autoplay", "encrypted-media", "xr-spatial-tracking", "idle-detection", "local-fonts", "storage-access"]) {
+      expect(entries, feature).toContain(`${feature}=(self)`);
+    }
+    expect(pp).not.toMatch(/=\(\)/);
+  });
+
+  it("an app preview iframe delegates every feature to the framed app", () => {
+    expect(PREVIEW_IFRAME_ALLOW.split("; ")).toEqual(HOSTED_APP_FEATURES.map((f) => `${f} 'src'`));
+    expect(openPermissionsPolicy("*").split(", ")).toEqual(HOSTED_APP_FEATURES.map((f) => `${f}=*`));
   });
 
   it("sets short cache for HTML", () => {

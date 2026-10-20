@@ -8,6 +8,7 @@
  * list flows, start runs, or report results. Signed-out / non-owner visitors
  * see the corresponding state, never data.
  */
+import { PREVIEW_IFRAME_ALLOW } from "./capabilities.js";
 import { DOM_RUNNER_BUNDLE } from "@proappstore/qa-spec/browser-bundle";
 import type { ResolvedRoute } from "./host.js";
 
@@ -83,7 +84,7 @@ function runnerHtml(appId: string): string {
   <div id="state">Loading…</div>
   <div id="flows"></div>
 </aside>
-<main><iframe id="app" src="/" title="app under test"></iframe></main>
+<main><iframe id="app" src="/" title="app under test" allow="${PREVIEW_IFRAME_ALLOW}"></iframe></main>
 <script src="${QA_PREFIX}/runner.js"></script>
 </body>
 </html>`;

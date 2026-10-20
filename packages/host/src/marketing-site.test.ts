@@ -1,3 +1,4 @@
+import { openPermissionsPolicy } from "./capabilities.js";
 import { describe, expect, it, vi } from "vitest";
 import type { Env } from "./env.js";
 import worker from "./index.js";
@@ -67,6 +68,8 @@ describe("dedicated marketing hostname", () => {
     expect(res.headers.get("X-Frame-Options")).toBe("DENY");
     expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(res.headers.get("X-PAS-Marketing-Revision")).toBe("rev_123");
+    // #436: default-open, like the app: every feature allowed on the site's own origin.
+    expect(res.headers.get("Permissions-Policy")).toBe(openPermissionsPolicy("self"));
     expect(res.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
     expect(res.headers.get("ETag")).toBe('"abc"');
     const cached = await worker.fetch(new Request("https://about-chess.proappstore.online/", { headers: { "If-None-Match": '"abc"' } }), env, ctx);

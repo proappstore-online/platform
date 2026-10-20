@@ -1,3 +1,4 @@
+import { PREVIEW_IFRAME_ALLOW } from './capabilities.js';
 import { describe, expect, it } from 'vitest';
 import { handleQaRunner, QA_PREFIX } from './qa-runner.js';
 import type { ResolvedRoute } from './host.js';
@@ -30,6 +31,8 @@ describe('handleQaRunner', () => {
       const html = await res.text();
       expect(html).toContain('QA runner — chess-academy');
       expect(html).toContain('<iframe id="app" src="/"');
+      // #436: the framed app keeps every capability it has outside the runner.
+      expect(html).toContain(`allow="${PREVIEW_IFRAME_ALLOW}"`);
       expect(html).toContain(`${QA_PREFIX}/runner.js`);
     }
   });

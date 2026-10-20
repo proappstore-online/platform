@@ -1,3 +1,4 @@
+import { openPermissionsPolicy } from "./capabilities.js";
 import type { Env } from "./env.js";
 import { contentType, etagsMatch } from "./host.js";
 
@@ -38,7 +39,8 @@ function marketingHeaders(path: string, revision: string): Headers {
   h.set("Referrer-Policy", "strict-origin-when-cross-origin");
   h.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   h.set("Cross-Origin-Opener-Policy", "same-origin");
-  h.set("Permissions-Policy", "geolocation=(), camera=(), microphone=(), payment=()");
+  // #436: default-open, like the app itself; the browser prompts before granting any.
+  h.set("Permissions-Policy", openPermissionsPolicy("self"));
   // Which immutable revision answered: the deploy receipt's live observation.
   h.set("X-PAS-Marketing-Revision", revision);
   return h;
