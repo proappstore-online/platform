@@ -197,7 +197,7 @@ const COPY_TREE_ATTEMPTS = 5;
 const COPY_TREE_RETRY_MS = 1_000;
 
 const stepIcon = (status: string) => status === "ok" ? "+" : status === "skip" ? "~" : "!";
-export const formatSteps = (steps: ProvisionStep[] = []) =>
+const formatSteps = (steps: ProvisionStep[] = []) =>
   steps.map((s) => `${stepIcon(s.status)} ${s.name}: ${s.detail}`).join("\n");
 
 /** Only facts a confirmation is bound to. Anything here changing means the reviewed plan is stale. */

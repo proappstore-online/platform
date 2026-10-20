@@ -25,7 +25,7 @@ const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: 
 
 const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 /** The one file apply_admin_update writes. Never anything under .github/ (#280). */
-export const MANIFEST_PATH = "mcp.json";
+const MANIFEST_PATH = "mcp.json";
 const DEFAULT_WAIT_SECONDS = 120;
 const TOOLS_ARG = z.array(z.record(z.unknown())).optional().describe("Optional: the proposed mcp.json tools array, to validate against instead of the registered tools");
 

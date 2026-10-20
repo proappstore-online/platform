@@ -21,7 +21,7 @@ const json = (v: unknown, isError = false): Text => ({ content: [{ type: "text" 
 
 /** At most this many routes are checked per call, the first results first. */
 export const HEALTH_CHECK_MAX = 25;
-export const HEALTH_TIMEOUT_MS = 5_000;
+const HEALTH_TIMEOUT_MS = 5_000;
 export type RouteHealth = "ok" | "down" | "timeout";
 
 const LIST = (values: readonly string[]) =>

@@ -61,7 +61,7 @@ export interface AppTool extends ToolManifest {
 
 /** Tools every app-scoped session carries besides the app's own; a manifest name that collides
  *  with one is skipped (and logged) rather than shadowing it. */
-export const FIXED_APP_SCOPED_TOOLS = ['whoami', 'mcp_audit_log'] as const;
+const FIXED_APP_SCOPED_TOOLS = ['whoami', 'mcp_audit_log'] as const;
 
 const APP_ID_RE = /^[a-z][a-z0-9-]{0,57}$/;
 
@@ -182,7 +182,7 @@ function publicToolFields(tool: AppTool): AppTool {
  * `state`, only to the app's owner and team, so this asks as the caller and is
  * never cached. Anyone else, or any failure, gets none.
  */
-export async function fetchStagedTools(api: Fetcher, apiBase: string, appId: string, token?: string | null): Promise<AppTool[]> {
+async function fetchStagedTools(api: Fetcher, apiBase: string, appId: string, token?: string | null): Promise<AppTool[]> {
   if (!token) return [];
   try {
     const res = await api.fetch(`${apiBase}/v1/apps/${encodeURIComponent(appId)}/tools`, { headers: { Authorization: `Bearer ${token}` } });
