@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
@@ -74,6 +74,20 @@ function computeBadges(row: DevProfileRow): string[] {
 // ?minRating=4 — minimum avg rating (1-5)
 // ?q=keyword — search login and bio
 // ?sort=rate|rating|engagements (default: quality)
+/**
+ * The answer a Stripe-backed route gives for a thrown error (#430): an HttpError
+ * as text with its status, a Stripe failure as a 502 the client can retry, and
+ * anything else rethrown.
+ */
+function stripeRouteError(c: Context, err: unknown): Response {
+  if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
+  if (err instanceof Error && err.message.startsWith('Stripe')) {
+    console.error('Stripe error:', err.message);
+    return c.json({ error: 'Payment provider error. Please try again.' }, 502);
+  }
+  throw err;
+}
+
 servicesRoutes.get('/services/developers', async (c) => {
   const minRate = parseInt(c.req.query('minRate') ?? '') || 0;
   const maxRate = parseInt(c.req.query('maxRate') ?? '') || 999999;
@@ -432,12 +446,7 @@ servicesRoutes.post('/services/balance/deposit', async (c) => {
 
     return c.json({ url: session.url, sessionId: session.id });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    if (err instanceof Error && err.message.startsWith('Stripe')) {
-      console.error('Stripe error:', err.message);
-      return c.json({ error: 'Payment provider error. Please try again.' }, 502);
-    }
-    throw err;
+    return stripeRouteError(c, err);
   }
 });
 
@@ -507,12 +516,7 @@ servicesRoutes.post('/services/balance/confirm', async (c) => {
 
     return c.json({ balanceCents: bal?.balance_cents ?? 0, credited: amountCents });
   } catch (err) {
-    if (err instanceof HttpError) return c.text(err.message, err.status as ContentfulStatusCode);
-    if (err instanceof Error && err.message.startsWith('Stripe')) {
-      console.error('Stripe error:', err.message);
-      return c.json({ error: 'Payment provider error. Please try again.' }, 502);
-    }
-    throw err;
+    return stripeRouteError(c, err);
   }
 });
 

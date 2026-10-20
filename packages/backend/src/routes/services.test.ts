@@ -110,6 +110,26 @@ describe('POST /v1/services/balance/deposit', () => {
     expect(res.status).toBe(400);
   });
 
+  // #430 pins the shared error answer (stripeRouteError): a Stripe failure is a
+  // retryable 502 with a generic message, an HttpError keeps its status as text.
+  it('answers a Stripe failure with a 502 and no provider detail; a signed-out call with its 401', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('card_declined: secret detail', { status: 500 })));
+    try {
+      const res = await app.request('/v1/services/balance/deposit', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amountCents: 1000, successUrl: 'https://proappstore.online/app', cancelUrl: 'https://proappstore.online/app' }),
+      }, env());
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({ error: 'Payment provider error. Please try again.' });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const anon = await app.request('/v1/services/balance/deposit', { method: 'POST', body: '{}' }, env());
+    expect(anon.status).toBe(401);
+    expect(anon.headers.get('Content-Type')).toMatch(/^text\/plain/);
+  });
+
   it('rejects bad redirect URLs', async () => {
     const res = await app.request('/v1/services/balance/deposit', {
       method: 'POST',
