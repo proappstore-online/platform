@@ -91,6 +91,8 @@ export const CHECKS: readonly CheckMeta[] = [
     limits: 'Reads mcp.json only: personal data is judged by output column names, and approval proves a review was recorded, not that it was sound. Without the registry it cannot tell a grandfathered action from a new one, so it warns where registration may refuse.' },
   { id: 'deploy-workflow', name: 'Deploy workflow', clauses: ['PAS-OPS-005', 'PAS-OPS-006'], automation: 'partial', evidenceClass: 'configuration', scope: 'all',
     limits: 'Warn-only (#427): pattern match on .github/workflows for the reusable-pipeline caller and for wrangler, the Workers scripts API, platform Worker names and platform secrets; not what a workflow does at run time.' },
+  { id: 'permissions', name: 'Permissions declared', clauses: ['PAS-OPS-016'], automation: 'partial', evidenceClass: 'source', scope: 'all',
+    limits: 'Warn-only (#437): static pattern detection of browser permission APIs in app source, compared with mcp.json permissions; dynamic or minified-away calls are not seen.' },
   // Live-URL audit (auditLive) — a post-publish subset run against the deployed app.
   { id: 'reachable', name: 'Reachable', clauses: ['PAS-OPS-010'], automation: 'partial', evidenceClass: 'runtime', scope: 'all', live: true,
     limits: 'HTTP 200 from the live URL; not that the app works (that is the post-deploy smoke).' },

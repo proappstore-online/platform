@@ -15,6 +15,7 @@ import { checkNoEnvProduction } from './checks/no-env-production.js';
 import { checkNoPlaceholders } from './checks/no-placeholders.js';
 import { checkNoScroll } from './checks/no-scroll.js';
 import { checkNoTracking } from './checks/no-tracking.js';
+import { checkPermissions } from './checks/permissions.js';
 import { checkPwaMeta } from './checks/pwa-meta.js';
 import { checkPwaOffline } from './checks/pwa-offline.js';
 import { checkUnsafeVh } from './checks/unsafe-vh.js';
@@ -25,6 +26,18 @@ import { CHECKS, annotate, annotateByName, getCheckMeta, getCheckMetaForName, ci
 import type { CheckResult } from './types.js';
 
 export type { FileSource } from './lib/file-source.js';
+// #437: the permission catalogue and detector, shared with the platform and the deploy pipeline.
+export {
+  detectPermissions,
+  detectPermissionsInSource,
+  isAppSourcePath,
+  MAX_PERMISSION_REASON,
+  PERMISSION_CATALOGUE,
+  PERMISSION_IDS,
+  permissionInfo,
+  validatePermissions,
+} from './lib/permissions.js';
+export type { DeclaredPermission, PermissionInfo } from './lib/permissions.js';
 // #426: the caller_unscoped policy, shared with the platform's registration gate.
 export {
   actionPersonalData,
@@ -70,6 +83,7 @@ export {
   checkNoPlaceholders,
   checkNoScroll,
   checkNoTracking,
+  checkPermissions,
   checkPwaMeta,
   checkPwaOffline,
   checkUnsafeVh,
@@ -123,6 +137,7 @@ const RUNNERS: ReadonlyArray<{ id: string; run: (source: FileSource) => Promise<
   { id: 'claude-md-slim', run: checkClaudeMdSlim },
   { id: 'mcp-unscoped', run: checkMcpUnscoped },
   { id: 'deploy-workflow', run: checkDeployWorkflow },
+  { id: 'permissions', run: checkPermissions },
 ];
 
 /** Ids of the source-side checks, in output order. */

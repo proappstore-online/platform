@@ -433,6 +433,23 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
   },
   {
     "automation": "partial",
+    "checkId": "permissions",
+    "citations": [
+      {
+        "clauseId": "PAS-OPS-016",
+        "url": "https://docs.proappstore.online/standard/ops/#pas-ops-016",
+      },
+    ],
+    "detail": "uses no special browser permissions",
+    "evidence": {
+      "class": "source",
+      "detail": "uses no special browser permissions",
+    },
+    "name": "Permissions declared",
+    "status": "pass",
+  },
+  {
+    "automation": "partial",
     "checkId": "mcp-unscoped",
     "citations": [
       {

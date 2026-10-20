@@ -366,6 +366,21 @@
       "live": false
     },
     {
+      "id": "permissions",
+      "name": "Permissions declared",
+      "clauses": [
+        {
+          "clauseId": "PAS-OPS-016",
+          "url": "https://docs.proappstore.online/standard/ops/#pas-ops-016"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "source",
+      "scope": "all",
+      "limits": "Warn-only (#437): static pattern detection of browser permission APIs in app source, compared with mcp.json permissions; dynamic or minified-away calls are not seen.",
+      "live": false
+    },
+    {
       "id": "reachable",
       "name": "Reachable",
       "clauses": [
