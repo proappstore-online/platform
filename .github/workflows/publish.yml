@@ -56,7 +56,11 @@ jobs:
           FAILED=""
           BEFORE="${{ github.event.before }}"
 
-          for PKG in cli sdk compliance; do
+          # Dependencies first (#437): pnpm publish pins a workspace:* dependency to that
+          # package's version at pack time, so a dependent packed before its dependency's
+          # bump points at the old release (cli 2.6.47 → compliance 0.2.20, without the
+          # API it imports). test/publish-order.test.ts keeps this order.
+          for PKG in compliance sdk cli; do
             PKG_NAME=$(node -p "require('./packages/$PKG/package.json').name")
             LOCAL_VER=$(node -p "require('./packages/$PKG/package.json').version")
             NPM_VER=$(npm view "$PKG_NAME" version 2>/dev/null || echo "0.0.0")
