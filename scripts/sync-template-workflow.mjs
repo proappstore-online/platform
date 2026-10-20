@@ -3,6 +3,11 @@
  * Keep the template-app repo's deploy workflow in lockstep with the platform's
  * single canonical source.
  *
+ * Since #427 that workflow is a thin caller of the reusable pipeline
+ * (.github/workflows/app-deploy.yml@app-deploy-v1): a pipeline change reaches
+ * every app by moving the tag, not through this script. The script only keeps
+ * the caller itself (trigger, permissions, the `uses:` line) canonical.
+ *
  * Source of truth:  packages/admin/src/publish.ts → deployWorkflowYaml()
  * Reviewed golden:   packages/admin/src/__fixtures__/canonical-deploy.yml
  *   (a unit test asserts the golden is byte-identical to the generator, so the
