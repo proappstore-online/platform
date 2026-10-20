@@ -6,10 +6,10 @@
 import type { RoleConfig } from './types.ts';
 import { RUNTIME_KEY_PROVIDERS } from './byo-key.ts';
 
-export const VALID_ROLES = new Set(['Architect', 'BA', 'Dev', 'QA']);
-export const VALID_RUNTIMES = new Set(['cf-native', 'openai-responses']);
+const VALID_ROLES = new Set(['Architect', 'BA', 'Dev', 'QA']);
+const VALID_RUNTIMES = new Set(['cf-native', 'openai-responses']);
 /** Spine tools a role may be granted. Keep in sync with spine.ts dispatch. */
-export const VALID_SPINE_TOOLS = new Set([
+const VALID_SPINE_TOOLS = new Set([
   'write_file', 'read_file', 'list_files', 'delete_file',
   'search_files', 'batch_write_files', 'read_docs',
 ]);

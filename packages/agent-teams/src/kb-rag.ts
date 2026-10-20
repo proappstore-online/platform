@@ -17,10 +17,10 @@
 
 import type { Ai, VectorizeIndex } from '@cloudflare/workers-types';
 
-export const KB_EMBED_MODEL = '@cf/baai/bge-base-en-v1.5';
+const KB_EMBED_MODEL = '@cf/baai/bge-base-en-v1.5';
 /** ~1.2k chars ≈ a few paragraphs — small enough to retrieve precisely, big
  *  enough to keep a self-contained idea. */
-export const KB_MAX_CHUNK_CHARS = 1200;
+const KB_MAX_CHUNK_CHARS = 1200;
 /** A path is part of the KB if it's the root overview or a markdown doc. */
 export function isKbPath(path: string): boolean {
   return path === 'KNOWLEDGE.md' || /^docs\/.+\.(md|markdown)$/i.test(path);
@@ -111,7 +111,7 @@ export function buildKbContext(overview: string, retrieved: KbRetrieval[]): stri
 
 /** Hard cap on chunks indexed per KB file. Bounds re-index delete cost and keeps
  *  a single runaway doc from dominating retrieval. 64 × ~1.2k ≈ 75KB of markdown. */
-export const KB_MAX_CHUNKS_PER_FILE = 64;
+const KB_MAX_CHUNKS_PER_FILE = 64;
 
 /** Deterministic, ≤64-byte Vectorize id for a (slug, path, ord) chunk. */
 export async function kbChunkId(slug: string, path: string, ord: number): Promise<string> {

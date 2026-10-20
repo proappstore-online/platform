@@ -12,12 +12,12 @@ import { buildAppSummary } from './context-summary.ts';
 
 /** How long to wait for CI to register a run for a freshly pushed commit before
  *  declaring the deploy dead (repo missing a push-triggered workflow, Actions off). */
-export const DEPLOY_CI_START_TIMEOUT_MS = 4 * 60_000;
+const DEPLOY_CI_START_TIMEOUT_MS = 4 * 60_000;
 
 /** How long to wait for the provisioning Workflow to reach a terminal state
  *  before declaring the deploy dead (canary path). The workflow's own CI gate
  *  caps at ~13 min, so give it a little more headroom. */
-export const WORKFLOW_DEPLOY_TIMEOUT_MS = 15 * 60_000;
+const WORKFLOW_DEPLOY_TIMEOUT_MS = 15 * 60_000;
 
 /** Self-healing recovery budget for infra-blocked deploys. An infra failure is
  *  often transient or fixed out-of-band (CDN warmup, a race, a just-provisioned

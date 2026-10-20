@@ -50,7 +50,7 @@ export function extractJsonObject(text: string, startToken: string): string | nu
  * priority order) — extractJsonObject only finds the first, so multi-ticket
  * backlogs were silently truncated to a single ticket.
  */
-export function extractAllJsonObjects(text: string, startToken: string, cap = 25): string[] {
+function extractAllJsonObjects(text: string, startToken: string, cap = 25): string[] {
   const out: string[] = [];
   let from = 0;
   while (out.length < cap) {
