@@ -103,6 +103,21 @@ describe('Actions', () => {
   });
 
   // #344: `forbidden` means a missing role, not every 403.
+  it('dryRun sends dry_run: true and returns the dry-run answer (#428)', async () => {
+    const a = auth(Response.json({ dry_run: true, state: 'staged', rows: [] }));
+    const result = await new Actions('interns', 'https://api.proappstore.online', a).call('list_orgs', { limit: 5 }, { dryRun: true });
+    expect(result).toEqual({ dry_run: true, state: 'staged', rows: [] });
+    expect(a.authenticatedFetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ body: JSON.stringify({ params: { limit: 5 }, dry_run: true }) }), expect.anything());
+  });
+
+  it('staged is true only for the staged-action refusal (#428)', () => {
+    const err = (status: number, body: unknown) => new ActionError('x', status, JSON.stringify(body));
+    const staged = err(403, { error: "action is staged: only the app's owner and team can call it until the app goes live" });
+    expect(staged.staged).toBe(true);
+    expect(staged.forbidden).toBe(false);
+    expect(err(403, { error: 'requires app role' }).staged).toBe(false);
+  });
+
   it('forbidden is true only for role refusals, not for other 403s', () => {
     const err = (status: number, body: unknown) => new ActionError('x', status, JSON.stringify(body));
     expect(err(403, { error: 'requires app role' }).forbidden).toBe(true);

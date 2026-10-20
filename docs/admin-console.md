@@ -262,7 +262,7 @@ function Dashboard() {
 | `<AdminConsole app? renderError?>` | Provides the app and the admin context. Catches a render error in the panel, records it through `app.logs` and shows a fallback. |
 | `useAdminContext()` | Returns `{ app: { id }, user, roles, session: { status, rolesLoaded, refreshRoles } }`. `roles` comes from `GET /v1/apps/:appId/roles/me`. It throws if used outside `<AdminConsole>`. |
 | `useAction(name, { onStepUp? })` | Returns an invoker for a declared action, with `pending`, `error` and `reset()`. On `step_up_required` it calls `onStepUp(error)`. If that resolves `true`, it retries once. Each outcome is logged as `admin.action`, never with params. |
-| `ActionError` | `status`, `code` (the server's `error`), `body`, plus `forbidden` (a 403 role refusal), `stepUpRequired` and `needsPasskey`. |
+| `ActionError` | `status`, `code` (the server's `error`), `body`, plus `forbidden` (a 403 role refusal), `staged` (the action is not live yet, #428), `stepUpRequired` and `needsPasskey`. |
 | `<AdminErrorBoundary>` | The same error boundary, for one part of a panel. |
 
 `roles` is for rendering only. Never treat it as the check: the action executor is the

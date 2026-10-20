@@ -123,6 +123,12 @@ statement to the app data worker. Apps should migrate user-specific and
 role-specific reads/writes to actions instead of sending raw SQL from browser
 code.
 
+Until the app goes live, a newly registered action is **staged** (#428): it
+answers 403 with `ActionError.staged` to everyone but the app's owner and team.
+An owner or team member can exercise any action without running it with
+`app.actions.call(name, params, { dryRun: true })`, which validates, authorizes
+and binds, then returns `{ dry_run: true, state, rows: [] }` (or `changes: 0`).
+
 A refused call rejects with an `ActionError` (`status`, `code` — the server's
 `error`, e.g. `requires app role` or `step_up_required` — and `body`). Its
 message is the same `actions.<name> failed: <status> <body>` as before.
@@ -683,7 +689,7 @@ function Moderation() {
 ```
 
 - `useAdminContext()` → `{ app: { id }, user, roles, session: { status, rolesLoaded, rolesError, refreshRoles } }`. `roles` come from the server and are for rendering only; never a session token. `rolesLoaded` is false while signed out and while loading; a failed fetch sets `rolesError` (an empty `roles` without it means the caller holds none) and `refreshRoles()` retries.
-- `useAction(name, { onStepUp })` returns a function that calls the action, plus `pending`, `error` (the latest call's failure; an older call settling later never overwrites it) and `reset()`. A refusal rejects with an `ActionError`: `forbidden` only when the caller's roles do not allow it (`requires app role` / `requires platform role`; other 403s such as a private app or a worker-only action keep their own `code`), `stepUpRequired` and `needsPasskey` when it needs a passkey check. An app's `step_up` action is bound to the app's own relying party (#331), so only a passkey step-up there passes: run `/.pas/auth/passkey/step-up/options` then `/.pas/auth/passkey/step-up` (on 404 `no_passkey`, register one first through `/.pas/auth/passkey/register/options` and `/register` within 10 minutes of signing in), then retry (#337). Every outcome is recorded in `app.logs` under `admin.action` (action, outcome, status — never params).
+- `useAction(name, { onStepUp })` returns a function that calls the action, plus `pending`, `error` (the latest call's failure; an older call settling later never overwrites it) and `reset()`. A refusal rejects with an `ActionError`: `forbidden` only when the caller's roles do not allow it (`requires app role` / `requires platform role`; other 403s such as a private app or a worker-only action keep their own `code`), `stepUpRequired` and `needsPasskey` when it needs a passkey check, `staged` when the action is not live yet (#428). An app's `step_up` action is bound to the app's own relying party (#331), so only a passkey step-up there passes: run `/.pas/auth/passkey/step-up/options` then `/.pas/auth/passkey/step-up` (on 404 `no_passkey`, register one first through `/.pas/auth/passkey/register/options` and `/register` within 10 minutes of signing in), then retry (#337). Every outcome is recorded in `app.logs` under `admin.action` (action, outcome, status — never params).
 - `AdminConsole` catches a render error in the panel and records it; `AdminErrorBoundary` does the same for one part of a panel.
 
 A full sample is `templates/template-membership/web/src/pages/Moderation.tsx`.

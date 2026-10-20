@@ -16,6 +16,12 @@ interface LoggerLike {
 export interface ActionCallOptions {
   /** Cancels the call. A cancellation you asked for is recorded as a breadcrumb, not an error; `AbortSignal.timeout(ms)` counts as a timeout. */
   signal?: AbortSignal;
+  /**
+   * Validate, authorize and bind without running (#428). The app's owner and team
+   * only, by session; it answers `{ dry_run: true, state, rows: [] }` for a query or
+   * `{ …, changes: 0 }` for a write and never touches data. `call` only.
+   */
+  dryRun?: boolean;
 }
 
 const ERROR_CODE_RE = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -84,6 +90,11 @@ export class ActionError extends Error {
    * worker- or hook-only action, a read-only token or a scheduled action is a
    * 403 too, with its own `code`, and is not a missing role.
    */
+  /** The action is registered but the app has not gone live: only its owner and team may call it yet (#428). */
+  get staged(): boolean {
+    return this.status === 403 && (this.code?.startsWith('action is staged') ?? false);
+  }
+
   get forbidden(): boolean {
     return this.status === 403 && (this.code === 'requires app role' || this.code === 'requires platform role');
   }
@@ -107,7 +118,7 @@ export class Actions {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ params }),
+          body: JSON.stringify(options.dryRun ? { params, dry_run: true } : { params }),
           ...(options.signal ? { signal: options.signal } : {}),
         },
         ctx,
