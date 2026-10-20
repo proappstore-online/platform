@@ -45,15 +45,15 @@ import { DISPATCH_LEASE_MS } from './error-alerts.js';
 
 export const BUCKET_MS = 5 * 60_000;
 export const EVAL_LAG_MS = 5 * 60_000;
-export const FAST = { longMs: 60 * 60_000, shortMs: 5 * 60_000, factor: 14.4 } as const;
-export const SLOW = { longMs: 6 * 60 * 60_000, shortMs: 30 * 60_000, factor: 6 } as const;
+const FAST = { longMs: 60 * 60_000, shortMs: 5 * 60_000, factor: 14.4 } as const;
+const SLOW = { longMs: 6 * 60 * 60_000, shortMs: 30 * 60_000, factor: 6 } as const;
 /** Requests in a burn rule's long window below which it is `low_traffic`. */
-export const MIN_REQUESTS = 50;
-export const OUTAGE = { buckets: 3, minPerBucket: 3, ratio: 0.9 } as const;
+const MIN_REQUESTS = 50;
+const OUTAGE = { buckets: 3, minPerBucket: 3, ratio: 0.9 } as const;
 /** Fixture objective for tests and dry-run examples — not a production target. */
 export const FIXTURE_TARGET = 0.99;
 /** Apps with objectives read per Analytics Engine query, bounding each query. */
-export const APPS_PER_QUERY = 50;
+const APPS_PER_QUERY = 50;
 export const ALERT_EVENT = 'app.alert';
 
 /** Requests of one app and family in one 5-minute bucket starting at `start` (ms). */
@@ -224,7 +224,7 @@ export async function applyResults(db: D1Database, results: RuleResult[], now: n
 }
 
 /** At most this many incident notifications per run, like the app.alert retry cap. */
-export const MAX_INCIDENT_NOTIFICATIONS = 50;
+const MAX_INCIDENT_NOTIFICATIONS = 50;
 
 interface OwedRow { id: number; app_id: string; rule: string; owed: 'firing' | 'recovered'; at: number; detail: string }
 
@@ -278,7 +278,7 @@ export async function deliverPendingIncidents(db: D1Database, now: number): Prom
  * its app, and `monitoring_degraded` for an app with none at all. The recovery is
  * then notified once, like any other (deliverPendingIncidents).
  */
-export async function recoverOrphanedIncidents(db: D1Database, now: number): Promise<number> {
+async function recoverOrphanedIncidents(db: D1Database, now: number): Promise<number> {
   const res = await db.prepare(
     `UPDATE app_incidents SET state = 'recovered', recovered_at = ?1, detail = ?2
       WHERE state != 'recovered' AND (

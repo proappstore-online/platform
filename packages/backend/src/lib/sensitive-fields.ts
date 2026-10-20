@@ -29,7 +29,7 @@ export const SENSITIVE_FIELD_TERMS = [
 ] as const;
 
 /** Endings that mark a one-word compound (`clientsecret`, `sessiontoken`, `idtokens`) (#335). */
-export const SENSITIVE_FIELD_SUFFIXES = ['secret', 'secrets', 'token', 'tokens'] as const;
+const SENSITIVE_FIELD_SUFFIXES = ['secret', 'secrets', 'token', 'tokens'] as const;
 
 /** Compounds caught even when written as one word (`apikey`, `authtoken`, `passwordhash`). */
 export const SENSITIVE_FIELD_COMPOUNDS = [

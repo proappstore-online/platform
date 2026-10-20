@@ -21,7 +21,7 @@ const ORG = 'proappstore-online';
 const AUDIENCE = 'https://api.proappstore.online';
 /** Hours, not days: long enough for a nightly suite, short enough that a leaked session is stale by morning. */
 export const OIDC_SESSION_TTL_SECONDS = 4 * 60 * 60;
-export const OIDC_SESSION_VIA = 'oidc-e2e';
+const OIDC_SESSION_VIA = 'oidc-e2e';
 const REPO_RE = /^proappstore-online\/[A-Za-z0-9._-]+$/;
 const WORKFLOW_RE = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/;
 const REF_RE = /^refs\/(heads|tags)\/[A-Za-z0-9._\/-]+$/;

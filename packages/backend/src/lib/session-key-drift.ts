@@ -34,9 +34,9 @@ import { dataWorkerUrl } from './data-worker-url.js';
 
 export const DRIFT_PROBE_SUBJECT = 'probe:session-key-drift';
 /** Short-lived on purpose: the probe only has to survive one round trip. */
-export const DRIFT_PROBE_TTL_SECONDS = 300;
-export const DRIFT_SAMPLE_SIZE = 8;
-export const DRIFT_PROBE_TIMEOUT_MS = 8_000;
+const DRIFT_PROBE_TTL_SECONDS = 300;
+const DRIFT_SAMPLE_SIZE = 8;
+const DRIFT_PROBE_TIMEOUT_MS = 8_000;
 
 export const REDEPLOY_WORKFLOW = { owner: 'proappstore-online', repo: 'platform', file: 'redeploy-data-workers.yml', ref: 'main' } as const;
 

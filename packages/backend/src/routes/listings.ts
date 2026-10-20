@@ -232,7 +232,7 @@ listingsRoutes.put('/apps/:id/listing', wrap(async (c) => {
 }));
 
 /** Versions of one listing-asset kind kept on every upload, besides referenced ones (#221). */
-export const LISTING_ASSET_VERSIONS_KEPT = 3;
+const LISTING_ASSET_VERSIONS_KEPT = 3;
 
 /** The R2 key a stored listing URL points at (`…/public/listing/<file>`), or null. */
 function listingKeyFromUrl(appId: string, url: string | null | undefined): string | null {

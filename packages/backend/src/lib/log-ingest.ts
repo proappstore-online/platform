@@ -129,7 +129,7 @@ export function newTraceId(): string {
 }
 
 /** A fresh 16-hex span id: the server's own span for a request. */
-export function newSpanId(): string {
+function newSpanId(): string {
   return randomHex(8);
 }
 
@@ -169,7 +169,7 @@ const SDK_VERSION_RE = /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[0-9A-Za-z.]{1,24})?$/;
 const MAX_DURATION_MS = 60 * 60 * 1000;
 
 /** The allowlisted {@link LogContext} of a client entry; null when it has none of it. */
-export function normalizeContext(raw: RawLogEntry): LogContext | null {
+function normalizeContext(raw: RawLogEntry): LogContext | null {
   if (raw.v !== 1) return null;
   const ctx: LogContext = { v: 1 };
   if (typeof raw.sdkVersion === 'string' && SDK_VERSION_RE.test(raw.sdkVersion)) ctx.sdkVersion = raw.sdkVersion;

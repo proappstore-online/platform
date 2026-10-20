@@ -758,7 +758,7 @@ authRoutes.post('/auth/credentials/provision', async (c) => {
 //    proof (0042) and is not verified.
 export const REGISTER_RATE_LIMIT_PREFIX = 'register-ip:';
 /** The widget's `data-action` on sign-up forms; a token minted elsewhere is refused (#26). */
-export const TURNSTILE_REGISTER_ACTION = 'register';
+const TURNSTILE_REGISTER_ACTION = 'register';
 
 // ── GET /v1/auth/turnstile — public Turnstile config for sign-up forms (#26) ──
 // `siteKey` is null when the check is not enforced (either half unset), so a

@@ -37,9 +37,9 @@ import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { AppWorkerQuotaError, appWorkersOpen, appWorkerUsage, setAppWorkersOpen, validateQuotaOverrides } from '../lib/app-worker-usage.js';
 
 /** One manual run per schedule per minute (#255). */
-export const RUN_NOW_INTERVAL_MS = 60_000;
+const RUN_NOW_INTERVAL_MS = 60_000;
 
-export const APP_WORKER_CAP = 5;
+const APP_WORKER_CAP = 5;
 
 export const appWorkerRoutes = new Hono<{ Bindings: Env }>();
 
@@ -293,7 +293,7 @@ appWorkerRoutes.post('/apps/:appId/worker/schedules/:name/run', async (c) => {
 export const WORKER_HTTP_MAX_REQUEST_BYTES = MAX_WORKER_OBJECT_BYTES + 1024 * 1024;
 export const WORKER_HTTP_MAX_RESPONSE_BYTES = WORKER_HTTP_MAX_REQUEST_BYTES;
 /** ADR-009 §4: http events get 30 s. They are never retried. */
-export const WORKER_HTTP_TIMEOUT_MS = 30_000;
+const WORKER_HTTP_TIMEOUT_MS = 30_000;
 const WORKER_HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const REQUEST_HEADERS = ['content-type', 'accept', 'accept-language', 'if-none-match', 'if-modified-since'];
 /** All a worker response may carry back; Cache-Control is forced, Set-Cookie and the rest never pass. */

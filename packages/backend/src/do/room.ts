@@ -6,7 +6,7 @@ import type { Env } from '../types.js';
 const MAX_PEERS = 32;
 const MAX_MESSAGE_BYTES = 4 * 1024;
 /** The `from` of an event an app worker published (#351); no peer can send one. */
-export const SERVER_PEER = { uid: 'system:worker', login: 'system:worker' } as const;
+const SERVER_PEER = { uid: 'system:worker', login: 'system:worker' } as const;
 const MAX_MSGS_PER_SEC = 100;
 const IDLE_EVICT_MS = 24 * 60 * 60 * 1000;
 /**

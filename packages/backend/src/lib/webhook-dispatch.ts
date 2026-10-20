@@ -42,12 +42,12 @@ export const MAX_WEBHOOKS_PER_APP = 10;
  * that is lost is the failure the owner opted in to hear about. Every other
  * event keeps its single attempt, as before.
  */
-export const RETRIED_EVENTS = new Set(['app.alert']);
+const RETRIED_EVENTS = new Set(['app.alert']);
 /** At most this many attempts per delivery, with this backoff (seconds) after attempts 1, 2 and 3. */
 export const MAX_DELIVERY_ATTEMPTS = 4;
-export const RETRY_BACKOFF_S = [60, 300, 1800] as const;
+const RETRY_BACKOFF_S = [60, 300, 1800] as const;
 /** Due retries sent per cron tick, so a backlog drains at a bounded rate. */
-export const RETRY_BATCH = 50;
+const RETRY_BATCH = 50;
 
 /** One POST of `body` to `hook`: the HTTP status, or null with a short reason. Never throws. */
 async function attemptDelivery(hook: { url: string; secret: string }, event: string, body: string): Promise<{ status: number | null; reason?: string }> {

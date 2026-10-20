@@ -7,7 +7,7 @@
  */
 
 export const MODERATION_MODEL = '@cf/meta/llama-guard-3-8b';
-export const MODERATION_TIMEOUT_MS = 5_000;
+const MODERATION_TIMEOUT_MS = 5_000;
 
 export type ModerationResult =
   | { verdict: 'safe' }

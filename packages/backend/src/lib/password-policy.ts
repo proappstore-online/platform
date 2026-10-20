@@ -13,11 +13,11 @@
  * lands. The length floor and the denylist are the compensating controls.
  */
 export const SELF_REGISTRATION_MIN_PASSWORD = 12;
-export const MAX_PASSWORD_LENGTH = 256;
+const MAX_PASSWORD_LENGTH = 256;
 
 // The heads of the usual breach-frequency lists, lowercased. Compared after
 // lowercasing and stripping non-alphanumerics, so "P@ssword123!" is caught too.
-export const COMMON_PASSWORDS: ReadonlySet<string> = new Set([
+const COMMON_PASSWORDS: ReadonlySet<string> = new Set([
   '123456', '123456789', '12345678', '1234567890', '12345', '1234567', '123123', '111111', '000000', '654321',
   'password', 'password1', 'password123', 'passw0rd', 'pass1234', 'qwerty', 'qwerty123', 'qwertyuiop', 'abc123', 'abcdef',
   'letmein', 'welcome', 'welcome1', 'admin', 'admin123', 'administrator', 'login', 'monkey', 'dragon', 'master',

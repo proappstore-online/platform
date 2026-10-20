@@ -1,9 +1,9 @@
 /** Durable, owner-bound, lease-protected receipts for MCP app provisioning (#358). */
 
 export type ProvisionOperationStatus = 'pending' | 'completed' | 'failed';
-export const PROVISION_OPERATION_LEASE_MS = 30 * 60 * 1_000;
-export const MAX_PROVISION_OPERATION_ATTEMPTS = 5;
-export const MAX_PROVISION_OPERATION_STEPS = 48;
+const PROVISION_OPERATION_LEASE_MS = 30 * 60 * 1_000;
+const MAX_PROVISION_OPERATION_ATTEMPTS = 5;
+const MAX_PROVISION_OPERATION_STEPS = 48;
 
 /**
  * #369: server-established failure classifications (migration 0093). Only these
@@ -18,7 +18,7 @@ export const MAX_PROVISION_OPERATION_STEPS = 48;
  *     adopts the repo at that commit.
  * Set only with INTERNAL_TOKEN (routes/provision.ts).
  */
-export const REVISION_RECOVERY_FAILURE_CODES = ['template_copy_mismatch', 'template_copy_unverified', 'provision_incomplete'] as const;
+const REVISION_RECOVERY_FAILURE_CODES = ['template_copy_mismatch', 'template_copy_unverified', 'provision_incomplete'] as const;
 export type ProvisionFailureCode = typeof REVISION_RECOVERY_FAILURE_CODES[number];
 export function isProvisionFailureCode(value: unknown): value is ProvisionFailureCode {
   return typeof value === 'string' && (REVISION_RECOVERY_FAILURE_CODES as readonly string[]).includes(value);
@@ -188,7 +188,7 @@ export function hashProvisionAdmissionOperation(args: {
   });
 }
 
-export function operationNeedsLease(operation: ProvisionOperation | null, now = Date.now()): boolean {
+function operationNeedsLease(operation: ProvisionOperation | null, now = Date.now()): boolean {
   if (!operation) return true;
   if (operationIsExhausted(operation, now)) return false;
   if (operation.status === 'failed') return operation.attemptCount < MAX_PROVISION_OPERATION_ATTEMPTS;

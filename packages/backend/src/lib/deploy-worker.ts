@@ -53,7 +53,7 @@ export interface DeployDataWorkerOptions {
  * Applied on upload, so it reaches a NEW worker at provision and an EXISTING one
  * only when it is re-uploaded — the `redeploy-data-workers.yml` fleet rollout.
  */
-export const DATA_WORKER_OBSERVABILITY = {
+const DATA_WORKER_OBSERVABILITY = {
   enabled: true,
   redact_query_string: true,
   logs: { enabled: true, invocation_logs: true, head_sampling_rate: 1 },

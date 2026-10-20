@@ -132,7 +132,7 @@ const toolNamed = (tools: ToolManifest[], name: string) => tools.find((t) => t.n
 const rolesOf = (tools: ToolManifest[], name: string) => toolNamed(tools, name)?.auth?.app_roles ?? [];
 
 /** Tabs, columns, actions and the role access matrix of a contract. Blocked fields are named, never valued. */
-export function renderAdminConsole(contract: OperatorViewContract, tools: ToolManifest[]) {
+function renderAdminConsole(contract: OperatorViewContract, tools: ToolManifest[]) {
   const shown = (cols: { key: string; label: string; format: string }[]) => cols.filter((c) => !isSensitiveField(c.key));
   const blocked = (cols: { key: string }[]) => cols.filter((c) => isSensitiveField(c.key)).map((c) => c.key);
   const adminRoles = contract.admin_access?.roles ?? [];
@@ -331,7 +331,7 @@ export function writeKind(sql: string): WriteKind | null {
  * in that status); a REPLACE or upsert must use a keyed param, since the key it
  * inserts picks the row it replaces. A plain INSERT changes no existing row.
  */
-export function scopedWrite(sql: string, kind: WriteKind, keyed: string[]): boolean {
+function scopedWrite(sql: string, kind: WriteKind, keyed: string[]): boolean {
   if (kind === 'insert') return true;
   // Equality only (`=`, `==`, `IN (:p)`): `!=`, `<=` and `>=` select other rows too.
   const uses = (text: string, p: string) => new RegExp(`(?:(?<![!<>=])==?|\\bIN)\\s*\\(?\\s*:${p}\\b|:${p}\\s*==?(?!=)`, 'i').test(text);

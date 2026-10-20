@@ -34,9 +34,9 @@ export const telemetryHealthRoutes = new Hono<{ Bindings: Env }>();
 telemetryHealthRoutes.use('/apps/:appId/telemetry/*', privateNoStore);
 
 /** The evaluator runs every five minutes; three missed ticks is stale. */
-export const EVALUATOR_STALE_MS = 15 * 60_000;
+const EVALUATOR_STALE_MS = 15 * 60_000;
 /** The prune runs daily (prune-app-logs.yml); two missed days is stale. */
-export const PRUNE_STALE_MS = 2 * 24 * 60 * 60_000;
+const PRUNE_STALE_MS = 2 * 24 * 60 * 60_000;
 const HOUR = 60 * 60_000;
 /** A recorded evaluation gap is reported while it ended within this window — the counters' `lastDay`. */
 export const ALERT_COVERAGE_WINDOW_MS = 24 * HOUR;

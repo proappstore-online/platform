@@ -51,7 +51,7 @@ export const HOST_DATA_PLANE_FAILURE_HEADER = 'X-PAS-Data-Plane-Failure';
 export const HOST_COUNTRY_HEADER = 'X-PAS-Country';
 
 /** The headers only the host may assert. */
-export const HOST_CONTEXT_HEADERS = [
+const HOST_CONTEXT_HEADERS = [
   APP_CONTEXT_HEADER,
   APP_HOST_HEADER,
   HOST_SESSION_INVALIDATION_HEADER,

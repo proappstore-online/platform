@@ -99,7 +99,7 @@ async function loadTransfer(db: D1Database, appId: string, rawId: string | undef
  * or a GitHub login — to a verified user id. Every failure is the same message,
  * so the endpoint cannot be used to learn which emails have PAS accounts.
  */
-export async function resolveVerifiedRecipient(db: D1Database, ref: string): Promise<string> {
+async function resolveVerifiedRecipient(db: D1Database, ref: string): Promise<string> {
   const value = ref.trim();
   if (!value) throw new HttpError('to is required', 400);
   const placeholders = VERIFIED_PROVIDERS.map(() => '?').join(', ');
@@ -123,7 +123,7 @@ export async function resolveVerifiedRecipient(db: D1Database, ref: string): Pro
 }
 
 /** What changes hands, shown before anyone confirms and stored on the transfer row. */
-export async function buildImplications(db: D1Database, appId: string): Promise<Record<string, unknown>> {
+async function buildImplications(db: D1Database, appId: string): Promise<Record<string, unknown>> {
   const count = async (sql: string, ...args: unknown[]) =>
     (await db.prepare(sql).bind(...args).first<{ n: number }>())?.n ?? 0;
   const repository = `${APP_ORG}/${appId}`;

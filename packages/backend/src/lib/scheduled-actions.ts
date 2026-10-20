@@ -16,7 +16,7 @@ import { STALE_RECEIVED_SQL } from '../routes/hooks.js';
 import { AppWorkerQuotaError } from './app-worker-usage.js';
 
 const SYSTEM_SCHEDULE_USER = 'system:schedule';
-export const SCHEDULE_TICK_MS = SCHEDULER_TICK_MINUTES * 60_000;
+const SCHEDULE_TICK_MS = SCHEDULER_TICK_MINUTES * 60_000;
 export const STALE_SCHEDULE_CLAIM_MS = 10 * 60_000;
 /** A queued worker run (#257) is mid-retry for up to ~40 min (620 s of backoff plus 6 invocations of 5 min); 60 min is past that. */
 export const STALE_QUEUED_RUN_MS = 60 * 60_000;
@@ -57,7 +57,7 @@ export interface ScheduledActionReport {
  * - An invocation still `running` after STALE_INVOCATION_MS becomes `timeout`. Its
  *   PAS calls and caller grant stop working, because both need it `running`.
  */
-export async function recoverStaleAppWorkerState(env: Env, now: number): Promise<{ hook_deliveries: number; invocations: number }> {
+async function recoverStaleAppWorkerState(env: Env, now: number): Promise<{ hook_deliveries: number; invocations: number }> {
   const hooks = await env.DB.prepare(
     `UPDATE app_hook_deliveries SET status = 'failed', finished_at = ?,
             error = 'processing was cut off and never finished (lease expired); redeliver it from the sender'

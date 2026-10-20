@@ -10,7 +10,7 @@
 
 const GH_API = 'https://api.github.com';
 /** Max bytes of any single repo file fetched for compliance scanning (DoS guard). */
-export const MAX_COMPLIANCE_FILE_BYTES = 256 * 1024;
+const MAX_COMPLIANCE_FILE_BYTES = 256 * 1024;
 
 interface TreeNode {
   path: string;

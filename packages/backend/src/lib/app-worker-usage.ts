@@ -45,13 +45,13 @@ const QUOTA_NAMES: QuotaName[] = ['invocations', 'cpu_ms', 'hook_deliveries'];
  * invocations a day; three of them, 864.
  */
 export const DEFAULT_APP_WORKER_QUOTAS: AppWorkerQuotas = { invocations: 5_000, cpu_ms: 3_600_000, hook_deliveries: 2_000 };
-export const QUOTA_ALERT_RATIO = 0.8;
+const QUOTA_ALERT_RATIO = 0.8;
 /** How `cpu_ms` is measured: wall-clock, a proxy. Real CPU per invocation is `child_cpu_ms` (#308), arriving after the invocation. */
-export const CPU_MS_SOURCE = 'wall';
-export const QUOTA_ALERT_KIND = 'app_worker_quota';
-export const ACCOUNT_CEILING_ALERT_KIND = 'app_worker_account_ceiling';
+const CPU_MS_SOURCE = 'wall';
+const QUOTA_ALERT_KIND = 'app_worker_quota';
+const ACCOUNT_CEILING_ALERT_KIND = 'app_worker_account_ceiling';
 /** app_alerts.app_id of platform-wide alerts; `_` is never a legal app id. */
-export const PLATFORM_ALERT_APP = '_platform';
+const PLATFORM_ALERT_APP = '_platform';
 const DAY_MS = 86_400_000;
 
 /** #316: worker log lines kept per app per UTC day. Separate from the app's log quota (DAILY_ENTRY_LIMIT). */
@@ -75,7 +75,7 @@ export class AppWorkerQuotaError extends HttpError {
   }
 }
 
-export const quotaCheckUnavailable = () => new HttpError('quota check unavailable', 503);
+const quotaCheckUnavailable = () => new HttpError('quota check unavailable', 503);
 
 /** The defaults, with an admin's per-app overrides (positive integers only) applied. */
 export function quotasFrom(overrides: string | null | undefined): AppWorkerQuotas {

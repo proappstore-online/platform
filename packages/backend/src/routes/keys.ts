@@ -183,7 +183,7 @@ keysRoutes.get('/keys/resolve/:provider', async (c) => {
 
 // ── Resolve a user's key (internal, also used by the proxy) ────────────
 
-export async function resolveUserKey(
+async function resolveUserKey(
   db: D1Database,
   userId: string,
   provider: string,

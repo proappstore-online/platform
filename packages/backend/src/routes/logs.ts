@@ -509,8 +509,8 @@ logsRoutes.get('/apps/:appId/incidents/:traceId', async (c) => {
 });
 
 /** #393: per logs request, at most this many rows symbolicated across this many releases. */
-export const MAX_SYMBOLICATED_ROWS = 20;
-export const MAX_SYMBOLICATED_RELEASES = 3;
+const MAX_SYMBOLICATED_ROWS = 20;
+const MAX_SYMBOLICATED_RELEASES = 3;
 
 /**
  * Attach `symbolication` to each row that has a stack (`data.stack`): its frames

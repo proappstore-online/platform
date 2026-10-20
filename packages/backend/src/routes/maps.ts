@@ -17,7 +17,7 @@ const MAPS_RATE_LIMIT = 100; // per user per hour
 const MAPS_RATE_WINDOW = 3600; // seconds
 
 /** Edge-cache TTLs (#222). Places and addresses change slowly; roads a little faster. */
-export const MAPS_CACHE_TTL = { geocode: 7 * 24 * 3600, reverse: 7 * 24 * 3600, route: 24 * 3600 } as const;
+const MAPS_CACHE_TTL = { geocode: 7 * 24 * 3600, reverse: 7 * 24 * 3600, route: 24 * 3600 } as const;
 
 export const mapsRoutes = new Hono<{ Bindings: Env }>();
 

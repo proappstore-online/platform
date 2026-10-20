@@ -389,8 +389,8 @@ function cronFieldValues(raw: string, min: number, max: number): number[] | null
   return [...values].sort((a, b) => a - b);
 }
 
-export const CRON_MINUTES_NOT_ON_TICK = `minutes must be multiples of ${SCHEDULER_TICK_MINUTES} (the platform ticks every ${SCHEDULER_TICK_MINUTES} minutes)`;
-export const CRON_DATE_NEVER_OCCURS = 'never fires: no listed day-of-month occurs in any listed month';
+const CRON_MINUTES_NOT_ON_TICK = `minutes must be multiples of ${SCHEDULER_TICK_MINUTES} (the platform ticks every ${SCHEDULER_TICK_MINUTES} minutes)`;
+const CRON_DATE_NEVER_OCCURS = 'never fires: no listed day-of-month occurs in any listed month';
 
 /** Longest each month (1-12) can be; February counts its leap-year 29th. */
 const MONTH_MAX_DAYS = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31] as const;
@@ -423,7 +423,7 @@ export function scheduledCronError(cron: string): string | null {
 }
 
 /** Is this a malformed cron (as opposed to a well-formed one that would never fire)? */
-export function isCronSyntaxError(error: string): boolean {
+function isCronSyntaxError(error: string): boolean {
   return CRON_SYNTAX_ERRORS.has(error);
 }
 
@@ -449,7 +449,7 @@ export function scheduledCronMatches(cron: string, timestamp: number): boolean {
 }
 
 /** Every SQL statement a tool runs, in order: batch members; a verify tool's input SELECT then its writes; else the one `sql`. */
-export function toolStatements(tool: ToolManifest): string[] {
+function toolStatements(tool: ToolManifest): string[] {
   if (tool.operation === 'batch') return tool.statements ?? [];
   if (tool.operation === 'verify') return [tool.sql ?? '', ...(tool.statements ?? [])];
   return [tool.sql ?? ''];
@@ -637,7 +637,7 @@ export function siteManifestFrom(body: SiteManifest | null | undefined): SiteMan
 
 interface PageMetaRoute { path: string; action: string; param: string }
 
-export const MAX_PAGE_META_ROUTES = 20;
+const MAX_PAGE_META_ROUTES = 20;
 const PATH_LITERAL = /^[A-Za-z0-9._~-]+$/;
 const PATH_PARAM = /^:([a-z_][a-z0-9_]*)$/;
 
@@ -743,8 +743,8 @@ function validateVisibility(visibility: unknown, tools: ToolManifest[]): { error
 
 /** The `worker` section (#254): `{ secrets?: string[] }` naming app secrets (app_secrets.name). */
 /** ADR-009 §4: worker schedules per app, separate from (and fewer than) action schedules — worker runs are heavier. */
-export const MAX_WORKER_SCHEDULES_PER_APP = 3;
-export const MAX_WORKER_SCHEDULE_PARAMS_BYTES = 4096;
+const MAX_WORKER_SCHEDULES_PER_APP = 3;
+const MAX_WORKER_SCHEDULE_PARAMS_BYTES = 4096;
 const WORKER_SCHEDULE_NAME = /^[a-z][a-z0-9_]{0,49}$/;
 
 export interface WorkerSchedule { name: string; cron: string; params: Record<string, unknown> }
@@ -755,7 +755,7 @@ export interface WorkerManifest { secrets: string[]; schedules: WorkerSchedule[]
  * Secrets name app secrets (#254); schedules run the app worker on the platform
  * tick (#255) — same cron rules as scheduled actions, minutes on the 5-minute tick.
  */
-export function validateWorkerManifest(worker: unknown): { error: string } | { worker: WorkerManifest | null } {
+function validateWorkerManifest(worker: unknown): { error: string } | { worker: WorkerManifest | null } {
   if (worker === undefined || worker === null) return { worker: null };
   if (typeof worker !== 'object' || Array.isArray(worker)) return { error: 'worker must be an object' };
   const extra = Object.keys(worker).find((k) => k !== 'secrets' && k !== 'schedules');
@@ -793,10 +793,10 @@ export function validateWorkerManifest(worker: unknown): { error: string } | { w
 
 // ── Inbound webhooks (#256) ──────────────────────────────────────────────────
 
-export const MAX_HOOKS_PER_APP = 10;
+const MAX_HOOKS_PER_APP = 10;
 const HOOK_NAME = /^[a-z][a-z0-9_-]{0,49}$/;
 /** `$`, `$.a.b`, `$.a[0]` — a path into the verified JSON body. No expressions. */
-export const HOOK_PARAM_PATH = /^\$(\.[A-Za-z_][A-Za-z0-9_]*|\[\d{1,4}\])*$/;
+const HOOK_PARAM_PATH = /^\$(\.[A-Za-z_][A-Za-z0-9_]*|\[\d{1,4}\])*$/;
 
 export type HookTarget = 'worker' | { action: string; params: Record<string, unknown> };
 export interface HookDef { name: string; verify: HookVerify; to: HookTarget }
@@ -809,7 +809,7 @@ export interface HookDef { name: string; verify: HookVerify; to: HookTarget }
  * rules as a scheduled action, which a signed-in user cannot run unless it also
  * lists "user".
  */
-export function validateHooks(raw: unknown, tools: ToolManifest[]): { error: string } | { hooks: HookDef[] } {
+function validateHooks(raw: unknown, tools: ToolManifest[]): { error: string } | { hooks: HookDef[] } {
   if (raw === undefined || raw === null) return { hooks: [] };
   if (!Array.isArray(raw) || raw.length > MAX_HOOKS_PER_APP) return { error: `hooks must be an array of at most ${MAX_HOOKS_PER_APP} hooks` };
   const hooks: HookDef[] = [];
@@ -854,7 +854,7 @@ export function validateHooks(raw: unknown, tools: ToolManifest[]): { error: str
 
 // ── Connectors (#258) ────────────────────────────────────────────────────────
 
-export const MAX_CONNECTORS_PER_APP = 3;
+const MAX_CONNECTORS_PER_APP = 3;
 const CONNECTOR_MODES = ['app', 'pat'] as const;
 const CONNECTOR_EVENT = /^[a-z][a-z_]{0,49}$/;
 export interface ConnectorDef { name: string; kind: 'github'; modes: string[]; pat_secret: string | null; events: string[]; hook: string | null }
@@ -865,7 +865,7 @@ export interface ConnectorDef { name: string; kind: 'github'; modes: string[]; p
  * this manifest whose verifier is `github-app`, which is where the connector's events
  * are delivered (required when `events` is non-empty).
  */
-export function validateConnectors(raw: unknown, hooks: HookDef[]): { error: string } | { connectors: ConnectorDef[] } {
+function validateConnectors(raw: unknown, hooks: HookDef[]): { error: string } | { connectors: ConnectorDef[] } {
   if (raw === undefined || raw === null) return { connectors: [] };
   if (!Array.isArray(raw) || raw.length > MAX_CONNECTORS_PER_APP) return { error: `connectors must be an array of at most ${MAX_CONNECTORS_PER_APP} connectors` };
   const out: ConnectorDef[] = [];

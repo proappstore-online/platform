@@ -35,7 +35,7 @@ export const SHIM_MODULE = '__pas_entry.js';
 export const APP_MODULE = 'app.js';
 /** ADR-009: ≤ 3 MB compressed. Checked on the uncompressed size, which is stricter. */
 export const MAX_BUNDLE_BYTES = 3 * 1024 * 1024;
-export const MAX_BUNDLE_MODULES = 50;
+const MAX_BUNDLE_MODULES = 50;
 /** Bundles kept in R2 per app: the deployed one and the two before it. */
 export const KEPT_BUNDLES = 3;
 export const ROTATION_OVERLAP_MS = 10 * 60 * 1000;

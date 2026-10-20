@@ -14,12 +14,12 @@
 
 import { originalPositionFor, TraceMap } from '@jridgewell/trace-mapping';
 
-export const SOURCEMAP_PREFIX = '_sourcemaps';
+const SOURCEMAP_PREFIX = '_sourcemaps';
 /** Retention of a release's maps: the log-detail window (logs-prune RETENTION_DAYS). */
 export const SOURCEMAP_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /** One release's bundle. Parsed whole on read, so bounded well inside a Worker's memory. */
 export const MAX_BUNDLE_BYTES = 20 * 1024 * 1024;
-export const MAX_BUNDLE_FILES = 500;
+const MAX_BUNDLE_FILES = 500;
 export const MAX_FRAMES = 50;
 export const COMMIT_SHA_RE = /^[0-9a-f]{40}$/;
 /** A relative asset path: no scheme, no leading slash, no `..`, no backslash. */
@@ -166,8 +166,8 @@ export function parseStack(stack: string): RawFrame[] {
 }
 
 /** Releases kept as `expired` tombstones (so they read `unavailable`, not `missing`) until a year after upload. */
-export const SOURCEMAP_TOMBSTONE_MS = 365 * 24 * 60 * 60 * 1000;
-export const SWEEP_BATCH = 100;
+const SOURCEMAP_TOMBSTONE_MS = 365 * 24 * 60 * 60 * 1000;
+const SWEEP_BATCH = 100;
 
 /**
  * Daily retention sweep (ADR-008 decision 7). Bounded at SWEEP_BATCH per step:

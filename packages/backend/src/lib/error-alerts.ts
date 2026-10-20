@@ -27,7 +27,7 @@ export const ALERT_WINDOW_MS = 15 * 60_000;
 export const CATCH_UP_MS = 30 * 60_000;
 /** Client `error` rows in the window: at least this many, and at least SPIKE_FACTOR × the previous window. */
 export const ERROR_SPIKE_MIN = 20;
-export const SPIKE_FACTOR = 3;
+const SPIKE_FACTOR = 3;
 /** Server-side action failures (category 'action', any status) in a completed 5-minute slice — the runbook's "> 20 / 5 min". */
 export const ACTION_FAILURE_WINDOW_MS = 5 * 60_000;
 export const ACTION_FAILURE_MIN = 20;
@@ -40,7 +40,7 @@ export const ALERT_EVENT = 'app.alert';
 export type AlertKind = 'error_spike' | 'action_failures' | 'server_5xx' | 'qa_failures';
 /** The kinds this evaluator records — and the only ones its redelivery sweep touches;
  *  other app_alerts writers (scheduled actions, app-worker quota) dispatch their own. */
-export const EVALUATOR_KINDS: readonly AlertKind[] = ['error_spike', 'action_failures', 'server_5xx', 'qa_failures'];
+const EVALUATOR_KINDS: readonly AlertKind[] = ['error_spike', 'action_failures', 'server_5xx', 'qa_failures'];
 /**
  * #389: a delivery is claimed on its app_alerts row for this long. It outlasts a
  * dispatch (at most MAX_WEBHOOKS_PER_APP attempts of WEBHOOK_TIMEOUT_MS), so
@@ -48,7 +48,7 @@ export const EVALUATOR_KINDS: readonly AlertKind[] = ['error_spike', 'action_fai
  */
 export const DISPATCH_LEASE_MS = 10 * 60_000;
 /** Undelivered alerts older than this are left alone: past the point of being news. */
-export const REDELIVERY_HORIZON_MS = 24 * 60 * 60_000;
+const REDELIVERY_HORIZON_MS = 24 * 60 * 60_000;
 
 export interface AlertTop {
   categories: { category: string; count: number }[];
@@ -278,7 +278,7 @@ interface AlertRow {
 }
 
 /** The app.alert payload, rebuilt from the stored row: the same body on a first send and on a redelivery. */
-export function alertPayload(r: AlertRow) {
+function alertPayload(r: AlertRow) {
   return {
     event: ALERT_EVENT, app_id: r.app_id, kind: r.kind, window_start: r.window_start, window_end: r.window_end, count: r.count,
     affected_users: r.affected_users, baseline: r.baseline, top: JSON.parse(r.top) as AlertTop,
@@ -295,7 +295,7 @@ export function alertPayload(r: AlertRow) {
  * DISPATCH_LEASE_MS — at-least-once in that one case, never a lost alert. The
  * payload's (app_id, kind, window_start) is the receiver's idempotency key.
  */
-export async function deliverPendingAlerts(db: D1Database, now: number, appId?: string): Promise<number> {
+async function deliverPendingAlerts(db: D1Database, now: number, appId?: string): Promise<number> {
   const kinds = EVALUATOR_KINDS.map(() => '?').join(', ');
   const { results } = await db.prepare(
     `SELECT id, app_id, kind, window_start, window_end, count, affected_users, baseline, top, build_meta, created_at FROM app_alerts

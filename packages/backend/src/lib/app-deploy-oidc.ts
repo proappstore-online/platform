@@ -26,8 +26,8 @@ export function isAppRepository(claims: OidcClaims, appId: string): boolean {
 }
 
 /** Audience the canonical deploy workflow requests its OIDC token for. */
-export const APP_DEPLOY_AUDIENCE = 'https://api.proappstore.online';
-export const APP_DEPLOY_REF = 'refs/heads/main';
+const APP_DEPLOY_AUDIENCE = 'https://api.proappstore.online';
+const APP_DEPLOY_REF = 'refs/heads/main';
 export const APP_ID_PATTERN = /^[a-z][a-z0-9-]*$/;
 
 /** The verified claims, or an HttpError: 400 bad app id, 401 missing/invalid token, 403 wrong repo or ref. */

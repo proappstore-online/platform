@@ -19,7 +19,7 @@
 
 import { utcDayKey } from './day-key.js';
 
-export const PROBABILISTIC_WRITE_DENOMINATOR = 10;
+const PROBABILISTIC_WRITE_DENOMINATOR = 10;
 
 export interface ProxyUsageStore {
   /** Returns the current count for (appId, day), or 0 if no row exists. */

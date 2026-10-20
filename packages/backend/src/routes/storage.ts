@@ -22,7 +22,7 @@ import { DEFAULT_REVIEW_RETENTION_DAYS, MAX_REVIEW_RETENTION_DAYS, reviewRetenti
  *   _review (enforced since #219; owner-curated _public is not counted)
  */
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
-export const MAX_FILES_PER_NAMESPACE = 1000;
+const MAX_FILES_PER_NAMESPACE = 1000;
 
 /**
  * #219: refuse a NEW file once the caller's namespace holds MAX_FILES_PER_NAMESPACE.

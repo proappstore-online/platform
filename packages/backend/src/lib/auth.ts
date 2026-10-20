@@ -52,7 +52,7 @@ export async function requireUser(c: Context<{ Bindings: Env }>): Promise<FasUse
   };
 }
 
-export const DEFAULT_STEP_UP_MAX_AGE_SECONDS = 300;
+const DEFAULT_STEP_UP_MAX_AGE_SECONDS = 300;
 
 /** The step-up window: STEP_UP_MAX_AGE_SECONDS when a positive integer, else 300. */
 export function stepUpMaxAgeSeconds(env: Pick<Env, 'STEP_UP_MAX_AGE_SECONDS'>): number {
@@ -137,7 +137,7 @@ export async function optionalUser(c: Context<{ Bindings: Env }>): Promise<FasUs
 // ---------------------------------------------------------------------------
 
 /** Platform-level roles from the session token, ordered by privilege. */
-export const PLATFORM_ROLES = ['user', 'creator', 'admin'] as const;
+const PLATFORM_ROLES = ['user', 'creator', 'admin'] as const;
 export type PlatformRole = (typeof PLATFORM_ROLES)[number];
 
 /** Team roles ordered by privilege level (higher index = more access). */

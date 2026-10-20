@@ -11,7 +11,7 @@
  * host's HostApi report, so public ingestion can neither raise nor suppress them.
  */
 
-export const METRIC_BUCKET_MS = 5 * 60_000;
+const METRIC_BUCKET_MS = 5 * 60_000;
 
 export const METRIC_SIGNALS = [
   /** Client-reported `error` entries (untrusted, public ingestion). */
@@ -32,7 +32,7 @@ export const METRIC_SIGNALS = [
 
 export type MetricSignal = (typeof METRIC_SIGNALS)[number];
 
-export function metricBucket(nowMs: number): number {
+function metricBucket(nowMs: number): number {
   return Math.floor(nowMs / METRIC_BUCKET_MS) * METRIC_BUCKET_MS;
 }
 

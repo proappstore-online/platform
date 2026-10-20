@@ -24,7 +24,7 @@
 import { timingSafeEqual } from './bytes.js';
 import { verifyWebhookSignature } from './stripe.js';
 
-export const HOOK_VERIFY_KINDS = ['github-hmac-sha256', 'stripe', 'hmac-sha256', 'secret-token', 'github-app'] as const;
+const HOOK_VERIFY_KINDS = ['github-hmac-sha256', 'stripe', 'hmac-sha256', 'secret-token', 'github-app'] as const;
 export type HookVerifyKind = (typeof HOOK_VERIFY_KINDS)[number];
 
 export interface HookVerify {
@@ -40,7 +40,7 @@ export interface HookVerify {
 }
 
 /** Headers the worker sees. Signature and token headers are never passed: they have done their job. */
-export const HOOK_HEADER_ALLOWLIST = ['x-github-event', 'x-github-delivery', 'x-github-hook-installation-target-id', 'content-type', 'user-agent'] as const;
+const HOOK_HEADER_ALLOWLIST = ['x-github-event', 'x-github-delivery', 'x-github-hook-installation-target-id', 'content-type', 'user-agent'] as const;
 
 const HEADER_NAME = /^[A-Za-z0-9-]{1,64}$/;
 const SECRET_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;

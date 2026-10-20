@@ -31,7 +31,7 @@ const INVOCATION_RE = /^.{1,300}:\d{1,9}$/;
 const LEVEL_OF: Record<string, Level> = { debug: 'debug', log: 'info', info: 'info', warn: 'warn', error: 'error' };
 
 /** The invocation a trace belongs to, from the request `invoke()` sent; null for anything else. */
-export function invocationOf(item: TraceItem): string | null {
+function invocationOf(item: TraceItem): string | null {
   const event = item.event as TraceItemFetchEventInfo | null;
   if (!event || !('request' in event) || !event.request) return null;
   const id = event.request.headers?.[INVOCATION_HEADER] ?? event.request.getUnredacted?.().headers?.[INVOCATION_HEADER];
@@ -46,7 +46,7 @@ function lineOf(message: unknown): string {
 
 interface Line { level: Level; message: string; ts: number }
 
-export function linesOf(item: TraceItem): Line[] {
+function linesOf(item: TraceItem): Line[] {
   const lines: Line[] = [
     ...(item.logs ?? []).map((l) => ({ level: LEVEL_OF[l.level] ?? 'info', message: lineOf(l.message), ts: l.timestamp })),
     ...(item.exceptions ?? []).map((e) => ({ level: 'error' as const, message: `${e.name}: ${e.message}`, ts: e.timestamp })),

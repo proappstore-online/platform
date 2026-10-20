@@ -11,7 +11,7 @@ import { utcDayKey } from './day-key.js';
 /** Weighted units a user may spend per UTC day on /v1/ai/*. */
 export const AI_DAILY_UNITS = 200;
 /** Units per request: the 70B model costs more; embeddings are charged per 10 items. */
-export const AI_UNITS = { smart: 5, fast: 1, embedPerTenItems: 1 } as const;
+const AI_UNITS = { smart: 5, fast: 1, embedPerTenItems: 1 } as const;
 
 export function generateUnits(alias: string): number {
   return alias === 'smart' ? AI_UNITS.smart : AI_UNITS.fast;

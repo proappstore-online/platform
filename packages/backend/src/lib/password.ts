@@ -28,7 +28,7 @@ const enc = new TextEncoder();
 // "pbkdf2$<iter>$…" format lets rows migrate when it lands. Until then the
 // compensating controls are the 12-character floor and the common-password
 // denylist in lib/password-policy.ts.
-export const PBKDF2_ITERATIONS = 100_000;
+const PBKDF2_ITERATIONS = 100_000;
 const SALT_BYTES = 16;
 const HASH_BYTES = 32; // 256-bit derived key
 

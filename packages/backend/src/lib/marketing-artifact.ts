@@ -11,8 +11,8 @@
 
 export const MARKETING_REVISION_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const MANIFEST_FILE = 'artifact-manifest.json';
-export const MAX_ARTIFACT_FILES = 200;
-export const MAX_ARTIFACT_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_ARTIFACT_FILES = 200;
+const MAX_ARTIFACT_FILE_BYTES = 10 * 1024 * 1024;
 export const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 256 * 1024;
 /** The one file a site must have. robots.txt and sitemap.xml are optional (#408). */

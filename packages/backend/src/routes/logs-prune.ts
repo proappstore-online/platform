@@ -28,7 +28,7 @@ export const logsPruneRoutes = new Hono<{ Bindings: Env }>();
  *  keeps 90 days, so trends outlive the rows they came from. */
 export const RETENTION_DAYS = 30;
 /** Usage counters are tiny but unbounded; keep a little history for the console. */
-export const USAGE_RETENTION_DAYS = 90;
+const USAGE_RETENTION_DAYS = 90;
 /** Bound each run so one call cannot exceed D1 statement limits on a large table. */
 export const PRUNE_BATCH_LIMIT = 10_000;
 
@@ -74,7 +74,7 @@ export const WEBHOOK_DELIVERY_RETENTION_DAYS = 7;
  */
 export const SCHEDULED_RUN_RETENTION_DAYS = 30;
 /** #256: inbound-hook delivery rows (the de-dupe record). */
-export const HOOK_DELIVERY_RETENTION_DAYS = 14;
+const HOOK_DELIVERY_RETENTION_DAYS = 14;
 const RETENTION_PRUNES = [
   {
     // #391: incident counters keep the app-log retention; the evaluator reads

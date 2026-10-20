@@ -2,8 +2,8 @@ import { HttpError } from '../lib/auth.js';
 
 export const HEX = /^#[0-9a-fA-F]{3,8}$/;
 export const URL_LIKE = /^https?:\/\/.+/i;
-export const EMAIL_LIKE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-export const HANDLE = /^[a-zA-Z0-9._-]{1,64}$/;
+const EMAIL_LIKE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const HANDLE = /^[a-zA-Z0-9._-]{1,64}$/;
 // Bluesky handles look like "alice.bsky.social" or "alice.example.com" —
 // dot-separated DNS-ish identifier, conservative ASCII subset.
 export const BLUESKY_HANDLE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)+$/;

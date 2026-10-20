@@ -31,9 +31,9 @@ import { requireClaims } from './auth.js';
 export const passkeyRoutes = new Hono<{ Bindings: Env }>();
 
 /** Life of the session a passkey step-up issues. */
-export const STEP_UP_SESSION_TTL_SECONDS = 60 * 60;
+const STEP_UP_SESSION_TTL_SECONDS = 60 * 60;
 /** How recent a sign-in must be to register a passkey. */
-export const FRESH_AUTH_SECONDS = 10 * 60;
+const FRESH_AUTH_SECONDS = 10 * 60;
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const TIMEOUT_MS = 5 * 60 * 1000;
 

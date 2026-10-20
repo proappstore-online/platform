@@ -70,7 +70,7 @@ export async function appJwt(env: Pick<Env, 'GH_APP_ID' | 'GH_APP_PRIVATE_KEY'>,
 }
 
 /** A fresh installation token (valid ~1 h). With `repo` GitHub itself scopes it: any other repo is refused at the credential. */
-export async function mintInstallationToken(
+async function mintInstallationToken(
   env: Pick<Env, 'GH_APP_ID' | 'GH_APP_PRIVATE_KEY'>, installationId: number, repo?: string,
 ): Promise<{ token: string; expiresAt: number } | null> {
   const jwt = await appJwt(env);
