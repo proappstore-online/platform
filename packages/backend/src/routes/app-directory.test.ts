@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
 import { makeEnv, testToken } from '../test-helpers.js';
 import { classifyLifecycle, exactIdFrom, isReservedId, type DirectorySignals } from './app-directory.js';
@@ -251,6 +251,21 @@ describe('GET /v1/apps/directory', () => {
     it.each(['status=down', 'access=everyone', 'limit=0', 'limit=500', 'limit=x', `q=${'a'.repeat(201)}`])('rejects %s', async (query) => {
       expect((await dir(query)).status).toBe(400);
     });
+  });
+
+  // #429: the custom-domain lookup bound one parameter per reachable app; D1 allows
+  // 100, so a caller reaching more than 100 apps got a 500 on any search.
+  it('searches by custom domain for a caller who reaches more than 100 apps', async () => {
+    const BIG = 'gh:big';
+    const add = sqlite.prepare('INSERT INTO apps (id, creator_id, created_at) VALUES (?, ?, ?)');
+    for (let i = 0; i < 150; i++) add.run(`bulk-${String(i).padStart(3, '0')}`, BIG, NOW);
+    sqlite.prepare("INSERT INTO app_custom_domains (app_id, domain, status, added_at) VALUES ('bulk-140', 'shop.example.org', 'active', 1)").run();
+    const prep = vi.spyOn(db, 'prepare');
+    const r = await dir('q=shop.example.org', BIG);
+    expect(r.status).toBe(200);
+    expect(r.json.items.map((i: { id: string }) => i.id)).toContain('bulk-140');
+    for (const [sql] of prep.mock.calls) expect((String(sql).match(/\?/g) ?? []).length).toBeLessThan(100);
+    prep.mockRestore();
   });
 
   it('GET /v1/apps names a team app too (the same bug, fixed at its source)', async () => {

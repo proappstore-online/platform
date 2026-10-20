@@ -19,6 +19,8 @@ import { APP_ID_PATTERN, APP_ORG } from '../lib/app-deploy-oidc.js';
  */
 export const appDirectoryRoutes = new Hono<{ Bindings: Env }>();
 
+/** Bound parameters per custom-domain lookup: under D1's limit of 100. */
+const DOMAIN_LOOKUP_CHUNK = 90;
 const DOMAIN = 'proappstore.online';
 const CONSOLE = 'https://console.proappstore.online';
 /** Hostnames the platform serves itself (packages/host/src/index.ts). */
@@ -298,11 +300,16 @@ appDirectoryRoutes.get('/apps/directory', wrap(async (c) => {
   // Custom domains are searchable too, for the apps the caller already reaches.
   const domainsById = new Map<string, string[]>();
   if (q && rows.length) {
+    // #429: in chunks, since D1 binds at most 100 parameters: a caller who reaches
+    // more than 100 apps got a 500 on any search.
     const ids = rows.map((r) => r.id);
-    const { results } = await db.prepare(
-      `SELECT app_id, domain FROM app_custom_domains WHERE app_id IN (${ids.map(() => '?').join(', ')})`,
-    ).bind(...ids).all<{ app_id: string; domain: string }>();
-    for (const r of results ?? []) domainsById.set(r.app_id, [...(domainsById.get(r.app_id) ?? []), r.domain.toLowerCase()]);
+    for (let i = 0; i < ids.length; i += DOMAIN_LOOKUP_CHUNK) {
+      const chunk = ids.slice(i, i + DOMAIN_LOOKUP_CHUNK);
+      const { results } = await db.prepare(
+        `SELECT app_id, domain FROM app_custom_domains WHERE app_id IN (${chunk.map(() => '?').join(', ')})`,
+      ).bind(...chunk).all<{ app_id: string; domain: string }>();
+      for (const r of results ?? []) domainsById.set(r.app_id, [...(domainsById.get(r.app_id) ?? []), r.domain.toLowerCase()]);
+    }
   }
 
   const exact = q ? exactIdFrom(q) : null;
