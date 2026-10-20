@@ -165,7 +165,8 @@ export function personalDataExposure(sql: string): PersonalDataExposure {
   const columns = new Set<string>();
   for (const list of outputLists(sql)) {
     const top = topLevel(list);
-    if (/(^|[\s,])\*(\s|,|$)/.test(top) || /\b[a-z_][a-z0-9_]*\s*\.\s*\*/.test(top)) star = true;
+    // A whole item `*` or `t.*` (after an optional DISTINCT/ALL); `a * 2` is arithmetic.
+    if (top.split(',').some((item) => /^\s*(?:(?:distinct|all)\s+)?(?:[a-z_][a-z0-9_]*\s*\.\s*)?\*\s*$/.test(item))) star = true;
     for (const id of list.match(/[a-z_][a-z0-9_]*/g) ?? []) if (personalColumn(id)) columns.add(id);
   }
   return { star, columns: [...columns].sort() };

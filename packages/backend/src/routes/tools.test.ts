@@ -2070,3 +2070,94 @@ describe('connectors (#258)', () => {
     expect(body.error).toMatch(/verify.kind "github-app"/);
   });
 });
+
+describe('caller_unscoped deny-by-default (#426)', () => {
+  /** A D1 whose app_tools read returns `registered` as the app's current code tools. */
+  const dbWith = (registered: Record<string, unknown>[] = []) => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    const fallback = db.prepare.getMockImplementation();
+    db.prepare.mockImplementation((sql: string) => (String(sql).startsWith('SELECT name, manifest FROM app_tools')
+      ? mockStmt({ all: { results: registered.map((t) => ({ name: t.name, manifest: JSON.stringify(t) })) } })
+      : fallback ? fallback(sql) : mockStmt()));
+    return db;
+  };
+  const put = async (body: Record<string, unknown>, registered: Record<string, unknown>[] = []) => {
+    const db = dbWith(registered);
+    const res = await app.request('/v1/apps/test-app/tools', {
+      method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }, makeEnv({}, db));
+    return { res, db, body: await res.json() as { error?: string; warnings?: string[] } };
+  };
+  const listTags = (extra: Record<string, unknown> = {}) => ({
+    name: 'list_tags', description: 'Every tag', operation: 'query', requires_auth: true,
+    sql: 'SELECT id, label FROM tags ORDER BY label LIMIT 200', params: {},
+    auth: { caller_unscoped: { reason: 'tags are shared by every user' } }, ...extra,
+  });
+  const approval = { action: 'list_tags', reviewer: 'serge-ivo', date: '2026-10-20', reason: 'shared tag list, no personal data' };
+  const inserted = (db: ReturnType<typeof dbWith>) => db.prepare.mock.calls.some((c) => String(c[0]).startsWith('INSERT INTO app_tools'));
+
+  it('refuses a new unapproved unscoped action, and writes nothing', async () => {
+    const { res, body, db } = await put({ tools: [listTags()] });
+    expect(res.status).toBe(400);
+    expect(body.error).toMatch(/"list_tags" is caller_unscoped .*no approved_unscoped entry/);
+    expect(inserted(db)).toBe(false);
+  });
+
+  it('accepts it once approved', async () => {
+    const { res, db } = await put({ tools: [listTags()], approved_unscoped: [approval] });
+    expect(res.status).toBe(200);
+    expect(inserted(db)).toBe(true);
+  });
+
+  it('refuses personal-data columns even when approved', async () => {
+    const { res, body } = await put({
+      tools: [listTags({ sql: 'SELECT u.id, u.email, u.phone FROM users u LIMIT 50' })], approved_unscoped: [approval],
+    });
+    expect(res.status).toBe(400);
+    expect(body.error).toMatch(/personal-data column\(s\) email, phone/);
+  });
+
+  it('refuses SELECT * and t.* even when approved', async () => {
+    for (const sql of ['SELECT * FROM tags LIMIT 50', 'SELECT t.* FROM tags t LIMIT 50']) {
+      const { res, body } = await put({ tools: [listTags({ sql })], approved_unscoped: [approval] });
+      expect(res.status, sql).toBe(400);
+      expect(body.error, sql).toMatch(/`\*`/);
+    }
+  });
+
+  it('grandfathers an unchanged registered action with a warning; [SECURITY] when it returns personal data', async () => {
+    const getUser = listTags({ name: 'get_user', sql: 'SELECT id, email, phone FROM users WHERE id = :id', params: { id: { type: 'string' } } });
+    const { res, body } = await put({ tools: [listTags(), getUser] }, [listTags(), getUser]);
+    expect(res.status).toBe(200);
+    expect(body.warnings).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^\[SECURITY\] tool "get_user" .*email, phone/),
+      '2 action(s) are caller_unscoped and require approval before next registration change: list_tags, get_user',
+    ]));
+  });
+
+  it('refuses a grandfathered action once its statements change', async () => {
+    const { res } = await put({ tools: [listTags({ sql: 'SELECT id, label, colour FROM tags LIMIT 200' })] }, [listTags()]);
+    expect(res.status).toBe(400);
+  });
+
+  it('still accepts scheduled, worker-only and public unscoped actions without approval', async () => {
+    const sweep = { name: 'sweep', description: 'Expire', operation: 'execute', requires_auth: true, sql: 'DELETE FROM sessions WHERE expires_at < :__now', params: {},
+      auth: { caller_unscoped: { reason: 'maintenance' } }, schedule: { cron: '*/15 * * * *', params: {} } };
+    expect((await put({ tools: [sweep] })).res.status).toBe(200);
+    expect((await put({ tools: [listTags({ callers: ['worker'] })] })).res.status).toBe(200);
+    expect((await put({ tools: [listTags({ requires_auth: false, auth: undefined })] })).res.status).toBe(200);
+  });
+
+  it('refuses a malformed approval list; warns about a stale entry', async () => {
+    const bad = await put({ tools: [listTags()], approved_unscoped: [{ ...approval, date: 'yesterday' }] });
+    expect(bad.res.status).toBe(400);
+    expect(bad.body.error).toMatch(/approved_unscoped\[0\]\.date must be an ISO date/);
+    const stale = await put({ tools: [listTags({ callers: ['worker'] })], approved_unscoped: [approval] });
+    expect(stale.res.status).toBe(200);
+    expect(stale.body.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/"list_tags" is not an open caller_unscoped action/)]));
+  });
+
+  it('siteManifestFrom carries approved_unscoped to every registration path', () => {
+    expect(siteManifestFrom({ approved_unscoped: [approval] }).approved_unscoped).toEqual([approval]);
+  });
+});
