@@ -478,5 +478,9 @@
         }
       }
     }
+  ],
+  "approved_unscoped": [
+    { "action": "list_categories", "reviewer": "serge-ivo", "date": "2026-10-20", "reason": "Shared category list (name, colour, icon); no personal data. platform#426" },
+    { "action": "category_stats", "reviewer": "serge-ivo", "date": "2026-10-20", "reason": "Per-category counts of active places; aggregate only, no personal data. platform#426" }
   ]
 }

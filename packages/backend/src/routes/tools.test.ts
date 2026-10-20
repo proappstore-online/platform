@@ -1084,12 +1084,12 @@ describe('PUT /v1/apps/:appId/tools — step_up (#231)', () => {
 });
 
 describe('PUT /v1/apps/:appId/tools — unscoped statement rejection (#150)', () => {
-  const put = (tool: Record<string, unknown>) => app.request(
+  const put = (tool: Record<string, unknown>, extra: Record<string, unknown> = {}) => app.request(
     '/v1/apps/test-app/tools',
     {
       method: 'PUT',
       headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tools: [tool] }),
+      body: JSON.stringify({ tools: [tool], ...extra }),
     },
     makeEnv({}, mockD1(mockStmt({ first: { creator_id: 'gh:1' } }))),
   );
@@ -1147,11 +1147,12 @@ describe('PUT /v1/apps/:appId/tools — unscoped statement rejection (#150)', ()
     ]);
   });
 
-  it('accepts an unscoped write that declares auth.caller_unscoped with a reason', async () => {
+  // #426: the reason alone no longer opens an action to every signed-in user; it needs a reviewed approval.
+  it('accepts an unscoped write that declares auth.caller_unscoped with a reason and is approved', async () => {
     const res = await put({
       ...reapStale,
       auth: { caller_unscoped: { reason: 'housekeeping: rows are selected by expiry, not identity' } },
-    });
+    }, { approved_unscoped: [{ action: 'reap_stale', reviewer: 'serge-ivo', date: '2026-10-20', reason: 'expiry sweep, no personal data' }] });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, registered: 1 });
   });
@@ -1857,9 +1858,12 @@ describe('callers and the worker section (#254)', () => {
     auth: { caller_unscoped: { reason: 'the reconcile writes every repo' } }, ...extra,
   });
 
+  // #426: a user-callable unscoped action needs a reviewed approval to register.
+  const approved = [{ action: 'upsert_repo', reviewer: 'serge-ivo', date: '2026-10-20', reason: 'repo rows are shared' }];
+
   it('accepts worker-only and mixed callers; refuses malformed ones', async () => {
     expect((await put({ tools: [write({ callers: ['worker'] })] })).res.status).toBe(200);
-    expect((await put({ tools: [write({ callers: ['user', 'worker', 'hook'] })] })).res.status).toBe(200);
+    expect((await put({ tools: [write({ callers: ['user', 'worker', 'hook'] })], approved_unscoped: approved })).res.status).toBe(200);
     for (const callers of [[], ['admin'], 'worker', ['worker', 'worker']]) {
       const { res, body } = await put({ tools: [write({ callers })] });
       expect(res.status, JSON.stringify(callers)).toBe(400);
@@ -1875,7 +1879,7 @@ describe('callers and the worker section (#254)', () => {
   });
 
   it('warns about an unscoped write any signed-in user can run, not about a worker-only one', async () => {
-    expect((await put({ tools: [write()] })).body.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/"upsert_repo" is an unscoped write/)]));
+    expect((await put({ tools: [write()], approved_unscoped: approved })).body.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/"upsert_repo" is an unscoped write/)]));
     expect((await put({ tools: [write({ callers: ['worker'] })] })).body.warnings ?? []).not.toEqual(expect.arrayContaining([expect.stringMatching(/unscoped write/)]));
   });
 
@@ -1889,7 +1893,7 @@ describe('callers and the worker section (#254)', () => {
       expect((await put({ tools: [write()], worker })).res.status, JSON.stringify(worker)).toBe(400);
     }
     // No worker section: the stored one is cleared and nothing is inserted.
-    const none = await put({ tools: [write()] });
+    const none = await put({ tools: [write()], approved_unscoped: approved });
     const noneSqls = none.db.prepare.mock.calls.map((c) => String(c[0]));
     expect(noneSqls).toContain('DELETE FROM app_worker_manifest WHERE app_id = ?');
     expect(noneSqls.some((q) => q.startsWith('INSERT INTO app_worker_manifest'))).toBe(false);

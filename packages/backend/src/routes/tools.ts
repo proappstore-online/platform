@@ -9,6 +9,7 @@
  */
 
 import { Hono } from 'hono';
+import { evaluateUnscoped, validateApprovals, type UnscopedPolicyTool } from '@proappstore/compliance';
 import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { requireAppAccess, requireAppOwner, requireUser } from '../lib/auth.js';
@@ -630,11 +631,13 @@ export interface SiteManifest {
   connectors?: unknown;
   /** Room authorization (#351): `[{ pattern: "chat:*", authorize }]` — lib/room-access.ts. */
   rooms?: unknown;
+  /** Reviewed open unscoped actions (#426): `[{ action, reviewer, date, reason }]` — compliance lib/unscoped-policy.ts. */
+  approved_unscoped?: unknown;
 }
 
 /** The site-manifest fields of a submitted mcp.json body, for every registration path. */
 export function siteManifestFrom(body: SiteManifest | null | undefined): SiteManifest {
-  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker, hooks: body?.hooks, connectors: body?.connectors, rooms: body?.rooms };
+  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker, hooks: body?.hooks, connectors: body?.connectors, rooms: body?.rooms, approved_unscoped: body?.approved_unscoped };
 }
 
 interface PageMetaRoute { path: string; action: string; param: string }
@@ -938,6 +941,33 @@ export function validateRooms(raw: unknown, tools: ToolManifest[]): { error: str
   return { rules };
 }
 
+/**
+ * Deny-by-default for open unscoped actions (#426), the policy in
+ * `@proappstore/compliance` lib/unscoped-policy.ts. An action any signed-in user can
+ * run without `:__user_id` needs a reviewed `approved_unscoped` entry and may not
+ * return personal data. What is registered now, unchanged, is grandfathered with a
+ * warning, so this lands without breaking the next deploy of every app that has one.
+ */
+async function gateUnscoped(
+  db: D1Database,
+  appId: string,
+  tools: ToolManifest[],
+  approvedUnscoped: unknown,
+): Promise<{ error: string } | { warnings: string[] }> {
+  const approvals = validateApprovals(approvedUnscoped);
+  if ('error' in approvals) return { error: approvals.error };
+  const { results } = await db.prepare("SELECT name, manifest FROM app_tools WHERE app_id = ? AND source = 'code'")
+    .bind(appId).all<{ name: string; manifest: string }>();
+  const previous = new Map<string, UnscopedPolicyTool>();
+  for (const row of results ?? []) {
+    try { previous.set(row.name, JSON.parse(row.manifest) as UnscopedPolicyTool); } catch { /* unreadable: not grandfathered */ }
+  }
+  const verdict = evaluateUnscoped({ tools: tools as UnscopedPolicyTool[], approvals: approvals.approvals, previous });
+  if (verdict.errors.length) return { error: verdict.errors.join('; ') };
+  if (verdict.grandfathered.length) console.warn(`[unscoped] grandfathered app=${appId} ${verdict.grandfathered.join(',')}`);
+  return { warnings: verdict.warnings };
+}
+
 export async function replaceAppTools(
   db: D1Database,
   appId: string,
@@ -984,6 +1014,8 @@ export async function replaceAppTools(
       .catch(() => null);
     if (flag?.enabled !== 1) return { status: 400, payload: { error: 'hooks: to "worker" needs app workers enabled for this app' } };
   }
+  const unscoped = await gateUnscoped(db, appId, tools as ToolManifest[], site.approved_unscoped);
+  if ('error' in unscoped) return { status: 400, payload: { error: unscoped.error } };
 
   // A deploy replaces the CODE tools only (#155): console-defined endpoints live
   // in the same table under source = 'console' and are never touched here — a
@@ -1085,6 +1117,7 @@ export async function replaceAppTools(
       if (present && !present.has(name)) warnings.push(`hooks: secret ${name} is not set yet; deliveries to the hooks that use it are refused (401) until it is`);
     }
   }
+  warnings.push(...unscoped.warnings);
   for (const tool of (tools as ToolManifest[]).filter(openUnscopedWrite)) {
     warnings.push(`action "${tool.name}" is an unscoped write any signed-in user can run; if only the app's worker should, declare "callers": ["worker"]`);
   }

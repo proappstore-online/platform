@@ -23,6 +23,18 @@ import { CHECKS, annotate, annotateByName, getCheckMeta, getCheckMetaForName, ci
 import type { CheckResult } from './types.js';
 
 export type { FileSource } from './lib/file-source.js';
+// #426: the caller_unscoped policy, shared with the platform's registration gate.
+export {
+  actionPersonalData,
+  describeExposure,
+  evaluateUnscoped,
+  isOpenUnscoped,
+  MAX_UNSCOPED_APPROVALS,
+  PERSONAL_DATA_COLUMN_PARTS,
+  personalDataExposure,
+  validateApprovals,
+} from './lib/unscoped-policy.js';
+export type { PersonalDataExposure, UnscopedApproval, UnscopedEvaluation, UnscopedPolicyTool } from './lib/unscoped-policy.js';
 export type { LiveAuditInput, LiveAuditReport } from './live/index.js';
 // Live-URL audit (used by the compliance audit Worker; runs in
 // browser/Workers env, no filesystem). Separate export path so callers
