@@ -224,6 +224,28 @@ These are injected by the platform — **do not** declare them in `params`:
   tool must declare `"auth": { "caller_unscoped": { "reason": "..." } }` with a
   non-empty reason (shared catalog data, one-time codes). Never accept the
   caller's id as a client param.
+- **Open unscoped actions are denied by default (#426).** A `caller_unscoped`
+  action that any signed-in user can run (it lists `"user"` in `callers`, the
+  default, has no `app_roles`/`platform_roles`, and is not scheduled) must also
+  be approved in the manifest's top-level `approved_unscoped` list, and must not
+  return personal data:
+  ```json
+  "approved_unscoped": [
+    { "action": "list_categories", "reviewer": "jane", "date": "2026-10-20", "reason": "Shared category list; no personal data." }
+  ]
+  ```
+  - All four fields are required; `date` is `YYYY-MM-DD`; one entry per action.
+    An entry for an action that is not open unscoped is a warning (stale).
+  - An output column whose name has a part `email`, `phone`, `mobile`,
+    `address`, `street`, `postcode`, `location`, `lat`, `lng`, `latitude`,
+    `longitude`, `dob`, `birth`, `birthdate` or `birthday`, or a `*` / `t.*`, is
+    refused even when approved. Keys and counts (`location_id`, `email_count`)
+    are fine.
+  - An action already registered open unscoped with the same statements is
+    grandfathered: it registers with a warning (`[SECURITY]` if it returns
+    personal data). Changing its SQL makes it new.
+  - `pas check` runs the same policy as the `mcp-unscoped` compliance check.
+    See [PAS-DATA-012](./standard/data.md#pas-data-012).
 - Max 500 tools per app (the rejection names both counts: `received 537, max 500`).
   From 400 tools registration still succeeds but warns with the count, the cap
   and the headroom left (see [Budgeting for larger apps](#budgeting-for-larger-apps)).

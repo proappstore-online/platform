@@ -263,6 +263,13 @@ on an app with no user behind them. They run with platform identities that are
   - An authenticated statement without `:__user_id` must declare
     `auth.caller_unscoped` with a reason. For these identities `:__user_id`
     binds to the literal system id, never a person.
+  - **Unscoped is denied by default for users (#426).** An unscoped action a
+    signed-in user can reach (`callers` includes `"user"`, no app or platform
+    role, not scheduled) needs a reviewed `approved_unscoped` entry in mcp.json
+    and may never return personal-data columns or `*`. A worker-only or
+    hook-only unscoped action is unreachable for users, so it needs neither;
+    `callers` is the way to keep a system write unscoped without approval.
+    See [PAS-DATA-012](./standard/data.md#pas-data-012).
 - **`callers`** on each action is who may invoke it at all: `"user"`,
   `"worker"`, `"hook"`. The default is `["user"]`. An action that lacks
   `"user"` is refused on the HTTP actions route and hidden from MCP, so a

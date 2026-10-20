@@ -117,6 +117,12 @@ worker; files through `PAS.storage.*`; logs through `PAS.log`.
   An action whose `callers` lacks `"user"` is refused on the HTTP actions route,
   as scheduled actions already are, so a write meant only for the worker or a hook
   can never be called by a signed-in user.
+  - **This is what keeps a system action unscoped without review (#426).** An
+    unscoped action that lists `"user"` (the default) and has no role gate is
+    open to every signed-in user, so registration requires an `approved_unscoped`
+    entry for it and refuses it if it returns personal data. Declaring
+    `callers: ["worker"]` or `["hook"]` takes it out of that rule, because no user
+    can reach it.
 - **Worker storage is its own namespace.** `PAS.storage.*` reads and writes
   `${appId}/_worker/<key>` — never a user's prefix `${appId}/${userId}/…` — so
   worker files never appear in, count against, or can be overwritten from a

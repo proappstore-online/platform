@@ -2456,7 +2456,7 @@ Supporting links: [App actions security — request flow](../app-actions-securit
 
 ### PAS-DATA-007 — Every statement scopes rows to the caller, the project, the organisation or the tenant in SQL
 URL: https://docs.proappstore.online/standard/data/#pas-data-007
-Severity: critical · Verification: manual (Manual) · Enforcement: automated — registration rejects any statement of an authenticated tool that does not reference `:__user_id`, unless the tool declares `auth.caller_unscoped` with a reason · Since: 1.3
+Severity: critical · Verification: manual (Manual) · Enforcement: automated — registration rejects any statement of an authenticated tool that does not reference `:__user_id`, unless the tool declares `auth.caller_unscoped` with a reason; an exemption any signed-in user can reach also needs approval ([PAS-DATA-012](#pas-data-012)) · Since: 1.3
 
 Rule: Every statement of an authenticated action — reads included — MUST restrict rows to what the caller may see or change, using one of: self-scoping (`user_id = :__user_id`), a membership sub-query (`org_id IN (SELECT org_id FROM org_members WHERE user_id = :__user_id …)`), or a row-derived guard (`EXISTS (… WHERE m.user_id = :__user_id AND m.org_id = t.org_id)`). A client-supplied `org_id`/`tenant_id`/`project_id` MUST NOT be the only filter.
 
@@ -2701,9 +2701,18 @@ Supporting links: [App actions security — auth rules](../app-actions-security.
 
 ### PAS-DATA-012 — Exports, search and statistics are scoped like everything else; `caller_unscoped` is for aggregates only
 URL: https://docs.proappstore.online/standard/data/#pas-data-012
-Severity: high · Verification: manual (Manual) · Enforcement: automated — registration requires a non-empty `auth.caller_unscoped.reason` on any authenticated statement without `:__user_id` · Since: 1.3
+Severity: high · Verification: manual (Manual) · Enforcement: automated — registration requires a non-empty `auth.caller_unscoped.reason` on any authenticated statement without `:__user_id`; an open unscoped action also needs an `approved_unscoped` entry and may not return personal data (#426); compliance check `mcp-unscoped` · Since: 1.3
 
 Rule: Search, export and statistics actions MUST apply the same scoping predicate as the list actions over the same tables, MUST be bounded ([PAS-DATA-010](#pas-data-010)), and MUST NOT return private columns of other users. `auth.caller_unscoped` MAY be declared only for statements that return an aggregate or a shared catalogue with no per-user or per-tenant row data, and its `reason` MUST say which.
+
+An action is **open unscoped** when any signed-in user can run it unscoped: it requires auth, declares `caller_unscoped`, is not scheduled, lists `"user"` in `callers` (the default), and has no `app_roles` or `platform_roles`. Such an action is denied by default:
+
+- It MUST have an entry in the manifest's top-level `approved_unscoped` list: `{ "action", "reviewer", "date": "YYYY-MM-DD", "reason" }`, all four non-empty. The entry records who reviewed the exemption and when; the `caller_unscoped.reason` alone no longer admits it.
+- It MUST NOT return personal data, approved or not: no output column (name or alias, in a `SELECT` list or `RETURNING`) with a name part `email`, `phone`, `mobile`, `address`, `street`, `postcode`, `location`, `lat`, `lng`, `latitude`, `longitude`, `dob`, `birth`, `birthdate` or `birthday`, and no `*` or `t.*`, whose columns cannot be checked. Keys and counts (`location_id`, `email_count`, `email_verified`) are not personal data.
+
+Scheduled, worker-only (`callers` without `"user"`), hook-only, role-gated (console endpoints included) and public actions are not open unscoped: no user can reach them, or a role already decides who can.
+
+**Transition.** An open unscoped action registered before this rule, with unchanged statements, is grandfathered: it still registers, with a warning — `N action(s) are caller_unscoped and require approval before next registration change` — and a `[SECURITY]` warning if it returns personal data. Changing its statements, or newly opening an action to users, makes it new and subject to the rule.
 
 *
 
@@ -2731,13 +2740,27 @@ Non-conforming example: ```json
   "sql": "SELECT org_id, COUNT(*) AS n FROM tasks GROUP BY org_id LIMIT 500", "params": {} }     // per-tenant rows, vague reason
 ```
 
+```json
+{ "name": "get_user", "operation": "query", "requires_auth": true, "auth": { "caller_unscoped": { "reason": "profile page" } },
+  "sql": "SELECT id, name, email, phone FROM users WHERE id = :id", "params": { "id": { "type": "string" } } }     // any user reads anyone's email and phone (doordrop#85)
+```
+
+**Conforming approval** (a shared catalogue, no personal data):
+
+```json
+{ "tools": [ { "name": "list_categories", "operation": "query", "requires_auth": true,
+               "auth": { "caller_unscoped": { "reason": "shared category list" } },
+               "sql": "SELECT id, name, color FROM categories ORDER BY name LIMIT 200", "params": {} } ],
+  "approved_unscoped": [ { "action": "list_categories", "reviewer": "jane", "date": "2026-10-20", "reason": "Shared category list; no personal data." } ] }
+```
+
 *
 
-Evidence: Configuration: every `caller_unscoped` reason and the shape of its statement (aggregate vs rows); `search_*`/`export_*`/`stats_*` predicates.
+Evidence: Configuration: every `caller_unscoped` reason and the shape of its statement (aggregate vs rows); the `approved_unscoped` entry for each open unscoped action; `search_*`/`export_*`/`stats_*` predicates. The `mcp-unscoped` compliance check and the registration response's `warnings[]`.
 
 *
 
-Remediation: Scope the statement or reduce it to a caller-scoped aggregate; rewrite vague reasons; remove the exemption.
+Remediation: Scope the statement or reduce it to a caller-scoped aggregate; gate it with `auth.app_roles`, or narrow `callers` to `["worker"]` when only the app's worker needs it; drop personal-data columns; rewrite vague reasons; remove the exemption. Once a shared, non-personal read is reviewed, record it in `approved_unscoped`.
 
 *
 
