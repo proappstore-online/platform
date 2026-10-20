@@ -4,12 +4,18 @@ import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  // #393: hidden source maps — no sourceMappingURL in the bundle. The canonical
+  // deploy uploads them privately for this commit and strips them before the
+  // public upload, so they are never served (docs/build-and-deploy.md).
+  build: { sourcemap: 'hidden' },
   plugins: [
     react(),
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
       workbox: {
+        // No map for the service worker either, and none in the precache (#393).
+        sourcemap: false,
         globPatterns: ['**/*.{js,css,html,png,svg,ico,woff2,wasm,json}'],
         maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
         navigateFallbackDenylist: [/^\/\.pas\//],

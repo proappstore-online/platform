@@ -1,7 +1,13 @@
 import { initPro } from '@proappstore/sdk'
 
 // platform-cookie is the current auth mode (PAS-AUTH-001).
-export const app = initPro({ appId: 'APPNAME', authMode: 'platform-cookie' })
+export const app = initPro({
+  appId: 'APPNAME',
+  authMode: 'platform-cookie',
+  // #393: the deploy's commit names this build in every crash report, so the owner
+  // can read its stack against the private source maps uploaded for that commit.
+  monitoring: { build: { sha: import.meta.env.VITE_COMMIT_SHA } },
+})
 
 /**
  * Extension points. The spine — groups, members with a role, consumable join codes, events
