@@ -119,6 +119,26 @@ describe('data-worker failures in incident traces (#394)', () => {
     const [row] = await eventually(() => rowsFor(TRACE), (r) => r.length === 1);
     expect(row).toMatchObject({ level: 'error' });
     expect(JSON.parse(row!.data!)).toMatchObject({ fault: 'unknown', status: 503 });
+    // Counted as a platform 5xx — never as the app's own (tenant) or the caller's (client) fault.
+    expect(await eventually(counters, (v) => v.server_5xx === 1)).toEqual({ action_failure: 1, server_5xx: 1 });
+    // And the owner's lookup says so: unverdicted, not some other verdict.
+    const inc = await (await incident(APP, TRACE, token)).json() as Incident;
+    expect(inc.hops).toEqual({ api: 1 });
+    expect(inc.records[0]).toMatchObject({ hop: 'api', level: 'error', data: { fault: 'unknown', status: 503 } });
+  });
+
+  it('a host-observed failure with no verdict (an edge 522, or a pre-#394 worker) reads unknown in the lookup and counts as a platform 5xx', async () => {
+    const token = await session('gh:1');
+    const res = await viaHostApi(`${BASE}/v1/internal/data-plane-failures`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-PAS-App': APP, 'X-PAS-Data-Plane-Failure': '1', traceparent: TRACEPARENT },
+      body: JSON.stringify({ status: 522, endpoint: 'query' }),
+    });
+    expect(res.status).toBe(204);
+    const inc = await (await incident(APP, TRACE, token)).json() as Incident;
+    expect(inc.hops).toEqual({ 'data-worker': 1 });
+    expect(inc.records[0]).toMatchObject({ hop: 'data-worker', level: 'error', data: { status: 522, fault: 'unknown', observedBy: 'host' } });
+    expect(await counters()).toEqual({ server_5xx: 1 });
   });
 
   it('without a caller traceparent the API mints one trace and uses it for the hop, the row and the response', async () => {

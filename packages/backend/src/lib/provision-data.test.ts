@@ -82,6 +82,12 @@ describe('provisionData', () => {
 
     expect(result.steps[0]!.status).toBe('skip');
     expect(result.dbId).toBe('existing-db');
+    // #394: an existing app is still redeployed, bound to its existing database —
+    // the path redeploy-data-workers.yml takes, so a fleet rollout gives every
+    // existing worker the same upload (and observability policy) as a new one.
+    expect(deployDataWorker).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deployDataWorker).mock.calls[0]![1]).toBe('existing-db');
+    expect(result.steps.find((s) => s.name === 'deploy_worker')?.status).toBe('ok');
   });
 
   it('skips worker deploy and app record when D1 creation fails', async () => {
