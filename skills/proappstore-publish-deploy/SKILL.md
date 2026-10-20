@@ -129,6 +129,13 @@ and read the run log for the three lines that must be present —
 
 - `schema_status`: latest migration applied, no failed rows.
 - `list_app_tools`: the registered actions equal the committed `mcp.json`.
+- Staged actions (#428): a new app's actions register **staged**. Only its
+  owner and team, its worker, hooks and the scheduler can call them, and
+  `list_app_tools` marks them for the team. Exercise them with
+  `app.actions.call(name, params, { dryRun: true })` (validates, authorizes and
+  binds, runs nothing). Go live by enabling the app worker or
+  `POST /v1/apps/<app>/tools/promote`. A user getting 403 `action is staged`
+  means the app has not gone live, not that the deploy failed.
 - Smoke: `qa_list_runs` shows the deploy-triggered run for this SHA passing;
   if the app has no automatic run, `qa_run`, then `qa_list_runs` and
   `qa_run_artifacts` for the screenshots. A failed step is a failed deploy.
