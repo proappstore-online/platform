@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { evaluateErrorSpikes } from '../../../backend/src/lib/error-alerts';
 import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
-beforeEach(async () => { mockNetwork(); await resetTables(); await env.DB.prepare('DELETE FROM app_alerts').run(); await env.DB.prepare('DELETE FROM app_test_runs').run(); await env.DB.prepare('DELETE FROM app_metric_buckets').run(); });
+beforeEach(async () => { mockNetwork(); await resetTables(); await env.DB.prepare('DELETE FROM app_alerts').run(); await env.DB.prepare('DELETE FROM app_test_runs').run(); await env.DB.prepare('DELETE FROM app_metric_buckets').run(); await env.DB.prepare('DELETE FROM alert_evaluator_cursor').run(); await env.DB.prepare('DELETE FROM telemetry_health').run(); });
 
 // A quarter-hour boundary (1_800_000_000_000 is a multiple of 15 minutes).
 const B = 1_800_000_000_000;
@@ -138,5 +138,56 @@ describe('error-spike alerts against real D1', () => {
     await seedUser('gh:1'); await seedApp('tenant', 'gh:1');
     await env.DB.batch([counter('tenant', B + 1000, 'tenant_fault', 50), counter('tenant', B + 1000, 'client_fault', 50)]);
     expect((await evaluateErrorSpikes({ env, now: B + 15 * 60_000, appId: 'tenant' })).alerts).toEqual([]);
+  });
+});
+
+// #389 on real D1 (migration 0106): delivery is claimed on the row, so a run that
+// died before sending is completed by the next one, two runs at once send once,
+// and scheduled runs keep a forward-only cursor that records an unevaluated gap.
+describe('alert delivery and the evaluation cursor against real D1 (#389)', () => {
+  async function withHook(app: string): Promise<() => number> {
+    await seedUser('gh:1'); await seedApp(app, 'gh:1');
+    await env.DB.prepare('DELETE FROM app_webhooks').run();
+    // Its own path: an earlier test's persistent interceptor on /alert would answer first.
+    await env.DB.prepare("INSERT INTO app_webhooks (id, app_id, event, url, secret, created_at) VALUES ('wh1', ?, 'app.alert', ?, 's', ?)").bind(app, `https://hooks.example/alert-${app}`, B).run();
+    let deliveries = 0;
+    fetchMock.get('https://hooks.example').intercept({ path: `/alert-${app}`, method: 'POST' }).reply(200, () => { deliveries += 1; return 'ok'; }).persist();
+    return () => deliveries;
+  }
+  const row = (app: string) => env.DB.prepare('SELECT dispatched_at, dispatch_claimed_at FROM app_alerts WHERE app_id = ?').bind(app).first<{ dispatched_at: number | null; dispatch_claimed_at: number | null }>();
+
+  it('an alert a dead run recorded but never sent is delivered by the next run, once', async () => {
+    const deliveries = await withHook('restart');
+    const now = B + 15 * 60_000;
+    // What a run killed between INSERT and dispatch leaves behind.
+    await env.DB.prepare("INSERT INTO app_alerts (app_id, kind, window_start, window_end, count, affected_users, baseline, top, build_meta, created_at) VALUES ('restart', 'error_spike', ?, ?, 25, 3, 0, '{\"categories\":[],\"operations\":[],\"fingerprints\":[]}', NULL, ?)")
+      .bind(B, now, now).run();
+    const r = await evaluateErrorSpikes({ env, now: now + 5 * 60_000 });
+    expect(r).toMatchObject({ recorded: 0, dispatched: 1 });
+    expect(deliveries()).toBe(1);
+    expect((await row('restart'))?.dispatched_at).toBe(now + 5 * 60_000);
+    await evaluateErrorSpikes({ env, now: now + 10 * 60_000 });
+    expect(deliveries()).toBe(1);
+  });
+
+  it('two evaluations of the same interval at once record one row and deliver once', async () => {
+    const deliveries = await withHook('overlap');
+    await env.DB.batch(Array.from({ length: 25 }, () => log('overlap', B + 1000, 'mediated', 'runtime')).flat());
+    const now = B + 15 * 60_000;
+    const [a, b] = await Promise.all([evaluateErrorSpikes({ env, now, scheduled: true }), evaluateErrorSpikes({ env, now: now + 1, appId: 'overlap' })]);
+    expect(a.recorded + b.recorded).toBe(1);
+    expect(a.dispatched + b.dispatched).toBe(1);
+    expect(deliveries()).toBe(1);
+  });
+
+  it('scheduled runs: no gap within CATCH_UP_MS, a recorded one after a longer outage', async () => {
+    const now = B + 15 * 60_000;
+    expect((await evaluateErrorSpikes({ env, now, scheduled: true })).gap).toBeNull();
+    expect((await evaluateErrorSpikes({ env, now: now + 30 * 60_000, scheduled: true })).gap).toBeNull();
+    const late = now + 30 * 60_000 + 45 * 60_000;
+    expect((await evaluateErrorSpikes({ env, now: late, scheduled: true })).gap).toEqual({ start: now + 30 * 60_000, end: late - 30 * 60_000 });
+    const cursor = await env.DB.prepare("SELECT last_window_end, gap_start, gap_end FROM alert_evaluator_cursor WHERE id = 'scheduled'").first();
+    expect(cursor).toEqual({ last_window_end: late, gap_start: now + 30 * 60_000, gap_end: late - 30 * 60_000 });
+    expect(await env.DB.prepare("SELECT last_error FROM telemetry_health WHERE component = 'evaluator'").first()).toEqual({ last_error: 'gap' });
   });
 });

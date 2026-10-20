@@ -189,11 +189,35 @@ windows for error spikes, 5xx and QA, 5-minute slices for action failures.
 
 - **Idempotent.** Each tick re-evaluates every interval that ended in the last
   30 minutes (`CATCH_UP_MS`). The unique `(app_id, kind, window_start)` index
-  turns the repeats into one row and one webhook delivery per interval.
+  turns the repeats into one row per interval.
+- **Delivered once, even across restarts (#389).** Recording and delivery are
+  separate. Each run dispatches every alert of these four kinds that is recorded
+  but not yet dispatched (within 24 h), from the stored row. Each send is claimed
+  first with a conditional update on the row (`dispatch_claimed_at`, a 10-minute
+  lease, `DISPATCH_LEASE_MS`), so two overlapping runs never both send; the row is
+  stamped `dispatched_at` when the dispatch returns. A failed HTTP delivery is
+  retried by `webhook_deliveries` (#395).
+  - A run that died **after recording, before sending** leaves the row
+    undispatched; the next tick sends it.
+  - A run that died **mid-send** is resent once after the lease expires. That is
+    the one at-least-once case; receivers should treat
+    `(app_id, kind, window_start)` as the idempotency key.
+  - Alerts from other writers (scheduled actions, app-worker quota) keep their
+    own dispatch.
 - **Late or missed ticks** are caught up within those 30 minutes. An interval
   that ended more than 30 minutes before the next tick that runs is not
   evaluated: an outage of the cron is a gap in alerting, not a burst of stale
-  alerts. Check the period by hand (`GET /v1/apps/:appId/logs`) after one.
+  alerts.
+- **Gaps are recorded.** Scheduled runs keep `alert_evaluator_cursor` (id
+  `scheduled`): the end of the latest five-minute slice evaluated, which only
+  moves forward. When a run's horizon starts after it, the skipped range is stored
+  as `gap_start` / `gap_end` / `gap_recorded_at`, the evaluator's
+  `telemetry_health` row gets `last_error = 'gap'`, and `[alert] gap: …` is
+  logged. Check that period by hand (`GET /v1/apps/:appId/logs`):
+
+  ```sql
+  SELECT last_window_end, gap_start, gap_end, gap_recorded_at FROM alert_evaluator_cursor WHERE id = 'scheduled';
+  ```
 - **On demand** (`POST /v1/apps/:appId/alerts/evaluate`) evaluates the same
   completed intervals for one app; the interval in progress is not included.
 

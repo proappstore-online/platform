@@ -155,7 +155,8 @@ const SERVER_5XX = "source = 'server' AND level = 'error'";
 
 export async function evaluateErrorSpikes(opts: { env: Env; now?: number; appId?: string; windowMs?: number; scheduled?: boolean }): Promise<AlertReport> {
   const { env } = opts;
-  const now = opts.now ?? Date.now();
+  // A number however the caller got it (a test harness can hand a scheduled time over as a Date): it is bound into D1.
+  const now = Number(opts.now ?? Date.now());
   const windowMs = opts.windowMs ?? ALERT_WINDOW_MS;
   const db = env.DB;
   const alerts: Alert[] = [];
