@@ -2,6 +2,7 @@ import { SELF, env, fetchMock } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { _resetJwksCache } from '../../../backend/src/lib/github-oidc';
 import { sweepSourceMaps } from '../../../backend/src/lib/sourcemap';
+import { STALE_RESERVATION_MS } from '../../../backend/src/routes/sourcemaps';
 import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
 // #393 on workerd with real D1 + R2: keyless upload of a release's private maps
@@ -78,6 +79,24 @@ describe('browser source maps (#393)', () => {
     expect(again.status).toBe(409);
     const row = await env.DB.prepare('SELECT asset_digest FROM release_sourcemap_manifests WHERE app_id = ? AND commit_sha = ?').bind(APP, SHA_A).first<{ asset_digest: string }>();
     expect(row!.asset_digest).toBe(first.assetDigest);
+    const r = await (await symbolicate(SHA_A, await session('gh:1'))).json() as { frames: Record<string, unknown>[] };
+    expect(r.frames[0]!.originalLine).toBe(10);
+  });
+
+  // #429: a reservation whose upload never finished (request cancelled, Worker killed)
+  // has no digest; it used to answer every retry 409 "already uploaded", with no bytes.
+  it('an abandoned reservation is taken over by a retry once stale; a fresh one still answers 409', async () => {
+    const reserve = (at: number) => env.DB.prepare(
+      "INSERT INTO release_sourcemap_manifests (app_id, commit_sha, asset_digest, storage_key, uploaded_at, expires_at) VALUES (?, ?, '', 'k', ?, ?)",
+    ).bind(APP, SHA_A, at, at + 86_400_000).run();
+    await reserve(Date.now() - 60_000);
+    expect((await upload(SHA_A, bundle('AASI'))).status).toBe(409);
+    await env.DB.prepare('UPDATE release_sourcemap_manifests SET uploaded_at = ? WHERE app_id = ? AND commit_sha = ?')
+      .bind(Date.now() - STALE_RESERVATION_MS - 1, APP, SHA_A).run();
+    const retried = await upload(SHA_A, bundle('AASI'));
+    expect(retried.status).toBe(201);
+    const row = await env.DB.prepare('SELECT COUNT(*) AS n, MAX(asset_digest) AS digest FROM release_sourcemap_manifests WHERE app_id = ? AND commit_sha = ?').bind(APP, SHA_A).first<{ n: number; digest: string }>();
+    expect(row).toEqual({ n: 1, digest: ((await retried.json()) as { assetDigest: string }).assetDigest });
     const r = await (await symbolicate(SHA_A, await session('gh:1'))).json() as { frames: Record<string, unknown>[] };
     expect(r.frames[0]!.originalLine).toBe(10);
   });

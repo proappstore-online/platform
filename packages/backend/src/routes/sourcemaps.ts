@@ -30,6 +30,9 @@ import {
 import type { Env } from '../types.js';
 
 export const sourcemapRoutes = new Hono<{ Bindings: Env }>();
+/** #429: an unfinished upload reservation older than this is abandoned, and a retry may take it over. */
+export const STALE_RESERVATION_MS = 10 * 60_000;
+
 sourcemapRoutes.use('/apps/:appId/sourcemaps', privateNoStore);
 sourcemapRoutes.use('/apps/:appId/sourcemaps/*', privateNoStore);
 
@@ -52,11 +55,20 @@ sourcemapRoutes.post('/apps/:appId/sourcemaps', async (c) => {
   const now = Date.now();
   const expiresAt = now + SOURCEMAP_RETENTION_MS;
   const storageKey = sourcemapStorageKey(appId, commitSha);
-  const reserved = await c.env.DB.prepare(
+  let reserved = await c.env.DB.prepare(
     `INSERT INTO release_sourcemap_manifests (app_id, commit_sha, asset_digest, storage_key, uploaded_at, expires_at)
      SELECT ?1, ?2, '', ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM apps WHERE id = ?1)
      ON CONFLICT(app_id, commit_sha) DO NOTHING RETURNING id`,
   ).bind(appId, commitSha, storageKey, now, expiresAt).first<{ id: number }>();
+  // #429: a reservation whose upload never finished — the request was cancelled or
+  // the Worker killed between reserve and write, so the catch below never ran —
+  // has no digest. Left alone it answered every retry 409 "already uploaded" (which
+  // the deploy treats as success) with no bytes behind it. Once stale, a retry takes
+  // it over; the conditional UPDATE lets only one do so.
+  reserved ??= await c.env.DB.prepare(
+    `UPDATE release_sourcemap_manifests SET uploaded_at = ?3, expires_at = ?4, storage_key = ?6
+      WHERE app_id = ?1 AND commit_sha = ?2 AND asset_digest = '' AND uploaded_at < ?5 RETURNING id`,
+  ).bind(appId, commitSha, now, expiresAt, now - STALE_RESERVATION_MS, storageKey).first<{ id: number }>();
   if (!reserved) {
     const exists = await c.env.DB.prepare('SELECT 1 FROM release_sourcemap_manifests WHERE app_id = ? AND commit_sha = ?').bind(appId, commitSha).first();
     throw new HttpError(exists ? 'source maps for this commit were already uploaded' : 'app not found', exists ? 409 : 404);
