@@ -554,10 +554,15 @@ describe("provisioning hygiene (#195)", () => {
 
   it("never deploys the template source repo itself, whose own build fails its placeholder check", () => {
     const yaml = deployWorkflowYaml(ENV);
-    expect(yaml).toContain("  deploy:\n    # template-app itself is never served");
+    expect(yaml).toContain("  deploy:\n    # The approved templates (template-app, template-marketplace) are never served");
     // #425: the guard sits on the router too, so no runner is even routed for template-app.
-    expect(yaml).toContain("    needs: router\n    if: github.event.repository.name != 'template-app'\n    runs-on: ${{ fromJSON(needs.router.outputs.runner) }}");
-    expect(yaml).toContain("  router:\n    # Same guard as deploy: template-app never deploys, so don't route a runner for it.\n    if: github.event.repository.name != 'template-app'\n");
+    // #393: both approved templates, by exact name (template-marketplace's own
+    // qa/deploy-workflow-regression.mjs rule): a generated app whose name merely
+    // contains "template" still deploys.
+    const guard = "if: github.event.repository.name != 'template-app' && github.event.repository.name != 'template-marketplace'";
+    expect(yaml).toContain(`    needs: router\n    ${guard}\n    runs-on: \${{ fromJSON(needs.router.outputs.runner) }}`);
+    expect(yaml).toContain(`  router:\n    # Same guard as deploy: the canonical templates never deploy, so don't route a runner for them.\n    ${guard}\n`);
+    expect(yaml).not.toMatch(/startsWith\(github\.event\.repository\.name|contains\(github\.event\.repository\.name/);
   });
 
   it("URL-encodes each KB upload path segment, keeping / as the separator", () => {

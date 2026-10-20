@@ -75,8 +75,8 @@ jobs:
   # once they are spent, using the repo-level RUNNER_BILLING_TOKEN (never an org
   # secret). No job sets its own runner label.
   router:
-    # Same guard as deploy: template-app never deploys, so don't route a runner for it.
-    if: github.event.repository.name != 'template-app'
+    # Same guard as deploy: the canonical templates never deploy, so don't route a runner for them.
+    if: github.event.repository.name != 'template-app' && github.event.repository.name != 'template-marketplace'
     uses: ProAgentStore/runner-router/.github/workflows/router.yml@v1
     with:
       included-minutes: 2000
@@ -85,10 +85,12 @@ jobs:
       billing-token: \${{ secrets.RUNNER_BILLING_TOKEN }}
 
   deploy:
-    # template-app itself is never served (no registry entry) and its build
-    # fails its own placeholder check by design; the apps copied from it deploy.
+    # The approved templates (template-app, template-marketplace) are never served
+    # (no registry entry) and keep APPNAME placeholders by design; the apps copied
+    # from them deploy. Exact repository names: a generated app must not be skipped
+    # merely because its name contains "template".
     needs: router
-    if: github.event.repository.name != 'template-app'
+    if: github.event.repository.name != 'template-app' && github.event.repository.name != 'template-marketplace'
     runs-on: \${{ fromJSON(needs.router.outputs.runner) }}
     outputs:
       has_e2e: \${{ steps.e2e-check.outputs.has_e2e }}
