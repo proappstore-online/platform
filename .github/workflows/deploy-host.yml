@@ -103,3 +103,5 @@ jobs:
             ' "$payload" "$domain")
             pnpm exec wrangler d1 execute pas --remote --command "$sql"
           done
+      - name: Smoke default-open capability headers on a live app (#436)
+        run: node scripts/smoke-capability-headers.mjs https://chess-academy.proappstore.online/
