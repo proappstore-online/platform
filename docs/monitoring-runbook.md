@@ -391,6 +391,13 @@ clears `degraded`.
   component is degraded or AE request data cannot be read; else `ok`.
 - `countsReliable`: false when the evaluator is unknown — a zero then means
   "cannot tell", not "none". With `status: ok`, zero is zero.
+- `alertCoverage`: whether alerts were evaluated for every interval of the last
+  day, independent of `status`. A scheduled-evaluator outage longer than its
+  30-minute catch-up horizon is recorded as a gap (#389, `alert_evaluator_cursor`)
+  and then recovers, so `status` reads `ok` again while that range was never
+  evaluated. While the last gap ended within 24 hours this is `complete: false`
+  with `gap: { start, end, recordedAt }`: the counters for that range are still
+  right, but no alert was raised from them — read them, or the logs, by hand.
 - `windows.lastHour` / `lastDay`: per-signal counter sums and detail-dropped
   counts (the current 5-minute bucket is partial).
 - `requests`: weighted AE totals, 5xx rate and latency histogram for the last
