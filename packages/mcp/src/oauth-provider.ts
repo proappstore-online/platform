@@ -681,6 +681,7 @@ async function authorizationCodeGrant(body: URLSearchParams, config: OAuthConfig
       clientId,
       appId: codeData.appId ?? null,
       familyId: crypto.randomUUID(),
+      privilegedUntil: claims.exp,
     })
     : null;
 
@@ -704,6 +705,25 @@ interface RefreshTokenRecord {
   usedAt: number | null;
   /** Epoch seconds. Reset to +refreshTokenTtlSeconds on every rotation (sliding window). */
   expiresAt: number;
+  /**
+   * Epoch seconds: the authorizing session's own `exp`. Roles beyond
+   * {@link UNPRIVILEGED_ROLES} are granted at sign-in (the backend's rolesFor) and
+   * never re-checked, so a refresh after this mints without them (#429): an admin
+   * removed from ADMIN_GITHUB_IDS loses admin over MCP when the session they
+   * signed in with would have expired, as before refresh tokens. Absent on
+   * records issued before this field: treated as already past.
+   */
+  privilegedUntil?: number;
+}
+
+/** Roles every signed-in account holds (backend rolesFor); anything else is a grant that must be re-checked by signing in. */
+const UNPRIVILEGED_ROLES = new Set(["user", "creator"]);
+
+/** The claims a refresh mints from: privileged roles dropped once the authorizing session would have expired. */
+function refreshClaims(record: RefreshTokenRecord, now: number): NewSession {
+  if ((record.privilegedUntil ?? 0) > now) return record.claims;
+  const roles = (record.claims.roles ?? []).filter((r) => UNPRIVILEGED_ROLES.has(r));
+  return { ...record.claims, roles };
 }
 
 /** grant_type=refresh_token — rotates on every use; reuse revokes the family. */
@@ -747,7 +767,8 @@ async function refreshTokenGrant(body: URLSearchParams, config: OAuthConfig): Pr
   // Re-mint the session fresh (#418): this is what makes the refresh work for
   // the full 90 days even though the underlying session JWT's own TTL is 30
   // days — we never read its exp, only the claims it was minted with.
-  const session = await mintSession(record.claims, config.sessionSigningKey);
+  const claims = refreshClaims(record, now);
+  const session = await mintSession(claims, config.sessionSigningKey);
   const accessToken = crypto.randomUUID();
   await config.kv.put(
     `token:${accessToken}`,
@@ -755,10 +776,11 @@ async function refreshTokenGrant(body: URLSearchParams, config: OAuthConfig): Pr
     { expirationTtl: 86_400 },
   );
   const nextRefreshToken = await issueRefreshToken(config, {
-    claims: record.claims,
+    claims,
     clientId: record.clientId,
     appId: record.appId,
     familyId: record.familyId,
+    privilegedUntil: record.privilegedUntil,
   });
 
   return json({
@@ -776,7 +798,7 @@ function sessionSeed(claims: { iat: number; exp: number } & NewSession): NewSess
 
 async function issueRefreshToken(
   config: Pick<OAuthConfig, "kv" | "refreshTokenTtlSeconds">,
-  input: { claims: NewSession; clientId: string; appId: string | null; familyId: string },
+  input: { claims: NewSession; clientId: string; appId: string | null; familyId: string; privilegedUntil?: number },
 ): Promise<string> {
   const ttlSeconds = config.refreshTokenTtlSeconds ?? DEFAULT_REFRESH_TTL_SECONDS;
   const token = crypto.randomUUID();
@@ -788,6 +810,7 @@ async function issueRefreshToken(
     familyId: input.familyId,
     usedAt: null,
     expiresAt,
+    ...(input.privilegedUntil !== undefined ? { privilegedUntil: input.privilegedUntil } : {}),
   };
   await config.kv.put(`refresh:${token}`, JSON.stringify(record), { expirationTtl: ttlSeconds });
   return token;

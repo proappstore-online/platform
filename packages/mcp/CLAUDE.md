@@ -166,6 +166,10 @@ from the reference is present:
   never needs the browser again. Each refresh re-mints the underlying PAS
   session from its original claims, so it keeps working for the full 90 days
   even though a session JWT's own TTL is 30 days.
+  Privileged roles (anything beyond `user`/`creator`, i.e. `admin`) are
+  granted at sign-in and never re-checked, so they last only as long as the
+  session the user signed in with (its 30-day `exp`); later refreshes mint
+  without them, and admin over MCP needs a fresh sign-in (#429).
 - **Session tokens** — the alternative to browser OAuth: pass a PAS session JWT as
   `Authorization: Bearer` (connection-level) or a per-call `token` arg on the loop
   tools. Verified locally via `verifySession` (`@proappstore/build-core`,

@@ -541,6 +541,56 @@ describe('refresh tokens (#418)', () => {
     });
   }
 
+  // #429: refresh re-minted the original claims, roles included, forever (the window
+  // slides), so an admin removed from ADMIN_GITHUB_IDS kept admin over MCP. A
+  // privileged role now lasts no longer than the session it was signed in with.
+  describe('privileged roles do not outlive the authorizing session (#429)', () => {
+    async function adminFamily(kv: KVNamespace) {
+      const verifier = 'verifier-admin';
+      await kv.put('code:code-1', JSON.stringify({
+        session: await mintSession({ uid: 'gh:9', login: 'ada', roles: ['user', 'creator', 'admin'] }, 'test-key'),
+        codeChallenge: await pkceChallenge(verifier),
+        redirectUri: 'https://client.example/cb',
+        clientId: 'client-1',
+        appId: null,
+      }));
+      return exchangeAuthCode(kv, verifier, config(kv));
+    }
+    async function rolesAfterRefresh(kv: KVNamespace, refreshToken: string) {
+      const res = await handleOAuthRoute(refreshRequest(refreshToken), config(kv));
+      expect(res?.status).toBe(200);
+      const body = (await res!.json()) as { access_token: string; refresh_token: string };
+      const { session } = JSON.parse((await kv.get(`token:${body.access_token}`))!) as { session: string };
+      return { roles: (await verifySession(session, 'test-key'))!.roles, next: body.refresh_token };
+    }
+    afterEach(() => vi.useRealTimers());
+
+    it('keeps admin while the authorizing session would still be valid', async () => {
+      const kv = makeKv();
+      const issued = await adminFamily(kv);
+      expect((await rolesAfterRefresh(kv, issued.refresh_token!)).roles).toEqual(['user', 'creator', 'admin']);
+    });
+
+    it('drops admin, keeping user and creator, once that session would have expired; and keeps it dropped', async () => {
+      const kv = makeKv();
+      const issued = await adminFamily(kv);
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + 31 * 86_400_000);
+      const first = await rolesAfterRefresh(kv, issued.refresh_token!);
+      expect(first.roles).toEqual(['user', 'creator']);
+      expect((await rolesAfterRefresh(kv, first.next)).roles).toEqual(['user', 'creator']);
+    });
+
+    it('a refresh token issued before this field drops admin at once', async () => {
+      const kv = makeKv();
+      const issued = await adminFamily(kv);
+      const key = `refresh:${issued.refresh_token}`;
+      const { privilegedUntil: _gone, ...legacy } = JSON.parse((await kv.get(key))!) as Record<string, unknown>;
+      await kv.put(key, JSON.stringify(legacy));
+      expect((await rolesAfterRefresh(kv, issued.refresh_token!)).roles).toEqual(['user', 'creator']);
+    });
+  });
+
   it('issues a refresh token alongside the access token on the authorization_code grant', async () => {
     const verifier = 'verifier-1';
     const kv = makeKv();
