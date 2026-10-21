@@ -2,7 +2,7 @@
 
 The PAS control plane: Cloudflare Workers, the SDK, the CLI, and the D1 registry behind
 `proappstore.online`. Product strategy is in `STRATEGY.md`; architecture and subsystem docs are in
-`docs/` (published with VitePress).
+`docs/` (published with Zensical through `publish-docs.yml`).
 
 ## Delivery mode
 

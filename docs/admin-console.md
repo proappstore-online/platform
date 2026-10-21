@@ -11,7 +11,7 @@ own registered actions, so the platform enforces their roles, `step_up` and audi
 
 This page covers the overview, the agent workflow, a worked example and the API reference.
 The full contract reference (every field and limit) is
-[MCP app tools → Console operator view](./mcp-app-tools.md#console-operator-view-operator-view).
+[MCP app tools → Console operator view](./mcp-app-tools.md#console-operator-view-operator_view).
 Existing apps should read the [migration guide](./admin-console-migration.md), and agents
 should read [Agent onboarding](./agent-onboarding.md).
 

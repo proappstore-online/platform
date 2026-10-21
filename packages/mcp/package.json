@@ -1,7 +1,7 @@
 {
   "name": "proappstore-mcp",
-  "version": "0.1.0",
-  "description": "ProAppStore MCP Worker (mcp.proappstore.online): platform-info tools over the Cloudflare Agents SDK. Moved into the platform monorepo 2026-06-02.",
+  "version": "0.3.0",
+  "description": "General PAS MCP Worker: authenticated platform and app tools over the official MCP SDK.",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,14 +10,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.10.2",
+    "@cfworker/json-schema": "^4.1.1",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@proappstore/build-core": "workspace:*",
-    "agents": "^0.14.0",
-    "zod": "^3.24.3"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20251130.0",
     "typescript": "^5.7.0",
-    "wrangler": "^4.0.0"
+    "wrangler": "4.87.0"
   }
 }

@@ -182,7 +182,7 @@ describe('executeToolCall', () => {
       'https://api.proappstore.online',
       );
 
-    expect(result).toContain('org-1');
+    expect(result.content[0].text).toContain('org-1');
     expect(globalThis.fetch).toHaveBeenCalledWith(
       'https://api.proappstore.online/v1/apps/interns/actions/list_orgs',
       expect.objectContaining({
@@ -198,7 +198,8 @@ describe('executeToolCall', () => {
 
     const result = await executeToolCall(tool, {}, null, api, 'https://api.proappstore.online');
 
-    expect(result).toContain('requires authentication');
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Authentication required');
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
@@ -227,7 +228,7 @@ describe('executeToolCall', () => {
       'https://api.proappstore.online',
     );
 
-    expect(result).toContain('results');
+    expect(result.content[0].text).toContain('results');
     expect(globalThis.fetch).toHaveBeenCalledWith(
       'https://api.proappstore.online/v1/apps/interns/actions/create_org_with_member',
       expect.objectContaining({

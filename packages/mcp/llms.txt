@@ -1,9 +1,9 @@
 # ProAppStore MCP server
 
-> Remote MCP server (streamable HTTP) for ProAppStore, the Pro app marketplace. Build Pro apps yourself or through an autonomous Agent Team, provision and deploy them, inspect deploys and D1 schema, author and run browser e2e flows, read the platform guide and SDK reference, and call any published app's registered data tools. 53 shared tools plus per-app tools on app endpoints.
+> Remote MCP server (streamable HTTP) for ProAppStore, the Pro app marketplace. Build Pro apps yourself or through an autonomous Agent Team, provision and deploy them, inspect deploys and D1 schema, author and run browser e2e flows, read the platform guide and SDK reference, and call any published app's registered data tools. 68 shared tools plus per-app tools on app endpoints.
 
 Endpoint: https://mcp.proappstore.online/mcp — per app: https://mcp.proappstore.online/mcp/apps/<app_id>
-Auth: OAuth 2.1 + PKCE (dynamic client registration at /register), or a PAS session JWT as the bearer.
+Auth: OAuth 2.1 + PKCE (trusted client metadata or /register). All tools use the connection identity, never token arguments. Codex: add the server, then `codex mcp login proappstore`. Raw platform session JWTs are not MCP credentials. Stateless Streamable HTTP; strongly consistent OAuth state; rotating refresh with a 30-second idempotent retry; RFC 7009 /revoke. MCP configuration and plugin mentions are separate installations.
 Safety: read-only mode, per-user audit log (mcp_audit_log), confirm gates on destructive tools, dry_run previews, structured isError failures.
 
 ## Docs

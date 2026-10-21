@@ -14,7 +14,7 @@ Per app:  https://mcp.proappstore.online/mcp/apps/<app_id>
 - Prefer read-only tools (`app_info`, `list_files`, `read_file`, `deploy_status`, `schema_status`, `list_tickets`, `qa_list_runs`) unless the task requires a change.
 - Preview before committing: every expensive or irreversible tool accepts `dry_run: true` and returns the plan. Then call it for real.
 - Destructive, public-facing or infrastructure tools need `confirm: true` — `provision_pas_app`, `scaffold_app`, `provision_app`, `publish_app`, `delete_file`. Ask the user before passing it.
-- Never paste tokens, secrets or API keys into tool arguments other than the `token` argument the loop tools define. Vaulted keys stay on the platform.
+- Never paste tokens, secrets or API keys into tool arguments. Every tool uses the authenticated connection; vaulted keys stay on the platform.
 - A failure comes back with `isError: true`; treat it as a failure even if the text looks informative.
 - You act as the authenticated account. If `whoami` is not the person you expect, stop.
 - Build every app's UI on ProShell. Wrap the whole app in `<ProShell app={app} nav={[…]}>` first, with every screen in `nav`: the shell renders the `<nav aria-label="Main">`. Build the screens from the SDK components; don't hand-roll a header, navbar or profile menu. `sdk_reference` with feature `shell` gives a complete minimal app; feature `components` lists every component.
@@ -24,13 +24,14 @@ Per app:  https://mcp.proappstore.online/mcp/apps/<app_id>
 Claude Code:
 
 ```bash
-claude mcp add proappstore -- npx mcp-remote https://mcp.proappstore.online/mcp
+claude mcp add --transport http --scope user proappstore https://mcp.proappstore.online/mcp
 ```
 
 Codex:
 
 ```bash
 codex mcp add proappstore --url https://mcp.proappstore.online/mcp
+codex mcp login proappstore
 ```
 
 Project-local `.mcp.json`:
@@ -93,7 +94,7 @@ Project-local `.mcp.json`:
 ## Not supported
 
 - **No per-app tools on `/mcp`.** The shared endpoint has a fixed tool set; app tools live on `/mcp/apps/<app_id>` or behind `call_app_tool`.
-- **OAuth access tokens expire after 24 hours** but auto-renew via the `refresh_token` issued alongside them (90-day sliding window by default; rotates on every use) — a well-behaved MCP client never needs to reconnect through the browser. There is no refresh-token revocation endpoint yet: a compromised token is cut off only by expiry or by its family being revoked on reuse detection.
+- **OAuth access tokens expire within 24 hours** but auto-renew via the `refresh_token` issued alongside them (90-day sliding window by default; rotates on every use) ; a 30-second retry returns the same rotation. Reuse after that window revokes the family. Clients can revoke through `/revoke` (RFC 7009); app grants are also revocable through app settings. A lost or revoked grant needs a new browser sign-in.
 - **No delegated or third-party scopes** — every caller is the owner/operator of what they touch (single-admin model); there is no read/write/destructive scope taxonomy. Ownership is enforced per call instead.
 - **No raw SQL, no secrets, no billing.** Data goes through registered actions; keys stay in the platform vault; the platform subscription is the only billing.
 - **Rate limiting** applies to `POST /register` only, not to tool calls.

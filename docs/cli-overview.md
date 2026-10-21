@@ -186,6 +186,8 @@ The ProAppStore MCP server exposes the same first-time provisioning path for
 operator agents:
 
 ```text
+provision_pas_app(app_id, name, description, dry_run: true)
+# Review the plan and authorize its concrete effects, then:
 provision_pas_app(app_id, name, description, confirm: true)
 ```
 

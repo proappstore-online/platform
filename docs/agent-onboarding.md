@@ -106,7 +106,7 @@ The result of step 7:
 
 - [Admin console](./admin-console.md): overview, worked example, API reference
 - [Migrating an operator view](./admin-console-migration.md)
-- [MCP app tools → Console operator view](./mcp-app-tools.md#console-operator-view-operator-view):
+- [MCP app tools → Console operator view](./mcp-app-tools.md#console-operator-view-operator_view):
   the full contract reference
 - [App Actions and Data Access Security](./app-actions-security.md)
 - [Agent Skills](./skills/index.md)

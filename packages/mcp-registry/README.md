@@ -6,24 +6,29 @@ MCP server for [ProAppStore](https://proappstore.online) — AI agent tools for 
 
 ### Claude Code (recommended)
 
-Add to `~/.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "proappstore": {
-      "command": "npx",
-      "args": ["mcp-remote", "https://mcp.proappstore.online/mcp"]
-    }
-  }
-}
+```bash
+claude mcp add --transport http --scope user proappstore https://mcp.proappstore.online/mcp
 ```
+
+### Codex
+
+```bash
+codex mcp add proappstore --url https://mcp.proappstore.online/mcp
+codex mcp login proappstore
+```
+
+Complete browser sign-in and verify `whoami`. All tools use connection auth;
+never copy session tokens into prompts or tool arguments. MCP setup does not
+create a plugin mention: install/enable the ProAppStore plugin separately.
 
 ### Any MCP client
 
 ```
 npx @proappstore/mcp
 ```
+
+The npm launcher uses its installed, pinned `mcp-remote` dependency. It does not
+start a nested package download or installation prompt on the MCP input stream.
 
 Or connect directly to the remote endpoint:
 
@@ -41,7 +46,7 @@ https://mcp.proappstore.online/mcp
 
 **Introspection** — `agent_project_status`, `agent_board`, `agent_activity`, `agent_ticket_detail`, `agent_cost`
 
-**App data** — dynamic per-app tools from `mcp.json` manifests
+**App data** — registered `mcp.json` actions on `/mcp/apps/<app_id>`, or through `list_app_tools` / `call_app_tool` on `/mcp`. The shared endpoint exposes 68 annotated platform tools.
 
 ## Agent Skills
 

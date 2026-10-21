@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from './env.js';
 
@@ -10,14 +11,6 @@ import type { Env } from './env.js';
  * with `McpServer` replaced by a recorder and the API binding stubbed.
  */
 const registered = vi.hoisted(() => ({ names: [] as string[] }));
-
-vi.mock('agents/mcp', () => ({
-  McpAgent: class {
-    env!: Env;
-    props: Record<string, unknown> = {};
-    static serve() { return { fetch: async () => new Response('mock') }; }
-  },
-}));
 
 vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => ({
   McpServer: class {
@@ -65,6 +58,8 @@ describe('the shared /mcp surface (#157)', () => {
     expect(empty.names).toHaveLength(MCP_SHARED_TOOL_COUNT);
     expect(many.names).toHaveLength(MCP_SHARED_TOOL_COUNT);
     expect(new Set(many.names).size).toBe(many.names.length);
+    const manifest = JSON.parse(readFileSync(new URL('../server.json', import.meta.url), 'utf8'));
+    expect(manifest.tools.map((tool: { name: string }) => tool.name).sort()).toEqual([...empty.names].sort());
   });
 
   it('never fetches app tools for the shared session, and never the retired /v1/tools', async () => {

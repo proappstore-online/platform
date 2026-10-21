@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.proappstore-online/proappstore",
   "title": "ProAppStore",
-  "description": "AI agent tools for building, provisioning, managing, and querying Pro web apps. Create apps, provision repos and infrastructure, manage Agent Teams projects, chat with PO/Architect agents, read SDK docs, get code recipes, run tests, and query app databases.",
+  "description": "Build, deploy, test and operate PAS apps, with authenticated platform and per-app tools.",
   "version": "1.0.0",
   "packages": [
     {
@@ -14,26 +14,284 @@
       }
     }
   ],
-  "remoteEndpoints": [
+  "tools": [
     {
-      "transportType": "streamable-http",
-      "url": "https://mcp.proappstore.online/mcp"
+      "name": "whoami",
+      "description": "The account this connection is authenticated as \u2014 uid, login, email, provider, platform roles, token expiry."
+    },
+    {
+      "name": "mcp_audit_log",
+      "description": "Your recent MCP audit events (mutating calls, dry-runs, read-only denials), redacted, 90-day retention."
+    },
+    {
+      "name": "list_apps",
+      "description": "List apps you own or belong to, using connection authentication."
+    },
+    {
+      "name": "deploy_status",
+      "description": "Check the deploy status of a Pro app (last 5 GitHub Actions runs)."
+    },
+    {
+      "name": "schema_status",
+      "description": "Show an app's D1 migration status (#33) \u2014 recent deploy-time migration attempts and whether the latest one applied or FAILED."
+    },
+    {
+      "name": "list_scheduled_runs",
+      "description": "List recent platform-scheduled registered-action runs for one app, including failures and the change count. Owner-only."
+    },
+    {
+      "name": "list_templates",
+      "description": "List the approved ProAppStore app templates and the selection contract: id, purpose, supported categories, required SDK/CLI/Node, capabilities, sec\u2026"
+    },
+    {
+      "name": "app_info",
+      "description": "Get info about any app on ProAppStore \u2014 live URL, repo, data worker, store listing."
+    },
+    {
+      "name": "platform_guide",
+      "description": "Get the ProAppStore platform guide (skills.md) for AI-assisted development, with current instructions for building the UI on ProShell with nav."
+    },
+    {
+      "name": "sdk_reference",
+      "description": "Quick reference for @proappstore/sdk. Start with feature 'shell' (wrap the app in <ProShell app={app} nav={\u2026}>, how to add navigation, a complete minimal app) and 'components' (every UI component), then auth, db, storage, maps, AI and hooks."
+    },
+    {
+      "name": "recipe",
+      "description": "Get a pre-built code recipe for common PAS app patterns (CRUD list, forms, modals, maps, AI chat, notifications, etc.)."
+    },
+    {
+      "name": "list_app_tools",
+      "description": "One app's registered tools (names, reads/writes, descriptions; params on request)."
+    },
+    {
+      "name": "call_app_tool",
+      "description": "Call one app's registered tool through the platform action executor (mutations audited; refused in read-only mode)."
+    },
+    {
+      "name": "provision_pas_app",
+      "description": "Operator workflow: create or reuse a PAS app GitHub repo from template-app, configure deploy credentials/placeholders, provision platform infrastru\u2026"
+    },
+    {
+      "name": "provisioning_status",
+      "description": "Read the durable provisioning receipt, current state, and completed step evidence for one PAS app."
+    },
+    {
+      "name": "scaffold_app",
+      "description": "Create a new PAS app."
+    },
+    {
+      "name": "write_file",
+      "description": "Create or overwrite a file in a PAS app's GitHub repo."
+    },
+    {
+      "name": "read_file",
+      "description": "Read a file from a PAS app's GitHub repo."
+    },
+    {
+      "name": "list_files",
+      "description": "List all files in a PAS app's GitHub repo."
+    },
+    {
+      "name": "delete_file",
+      "description": "Delete a file from a PAS app's GitHub repo."
+    },
+    {
+      "name": "search_files",
+      "description": "Search for text across all files in a PAS app's GitHub repo."
+    },
+    {
+      "name": "get_deploy_status",
+      "description": "Check the latest deploy status for a PAS app (GitHub Actions workflow runs)."
+    },
+    {
+      "name": "provision_app",
+      "description": "Provision platform resources for a PAS app (R2 route, D1 database, data worker)."
+    },
+    {
+      "name": "publish_app",
+      "description": "Publish a PAS app to the storefront."
+    },
+    {
+      "name": "batch_write_files",
+      "description": "Write multiple files in a single commit to a PAS app's GitHub repo."
+    },
+    {
+      "name": "add_marketing_site",
+      "description": "Add template-app's Astro marketing site (home, Privacy, Terms, contact form) to an existing app repo in one commit, never overwriting; equivalent to `pas marketing add`."
+    },
+    {
+      "name": "create_app",
+      "description": "Create a new Agent Teams project (an app the AI team builds)."
+    },
+    {
+      "name": "list_projects",
+      "description": "List your Agent Teams projects (apps in progress)."
+    },
+    {
+      "name": "get_project",
+      "description": "Get one project's status (play state, cost, repo, etc.)."
+    },
+    {
+      "name": "build_knowledge_base",
+      "description": "Trigger the Architect to research the app (it has live web access) and write/refresh its Knowledge Base (KNOWLEDGE.md + docs/)."
+    },
+    {
+      "name": "chat_agent",
+      "description": "Send a message to a conversational agent."
+    },
+    {
+      "name": "list_tickets",
+      "description": "List the project's tickets (the kanban) with status + assignee \u2014 use to watch the build loop progress."
+    },
+    {
+      "name": "list_agents",
+      "description": "Show the project's agent team \u2014 each agent's identity, system prompt source, skills, and model (the resolved catalog)."
+    },
+    {
+      "name": "get_project_files",
+      "description": "List the project's working-tree files (and optionally read one)."
+    },
+    {
+      "name": "set_project_budget",
+      "description": "Set the project's monthly cost cap in USD (1\u20131000)."
+    },
+    {
+      "name": "set_project_running",
+      "description": "Play (start) or pause the autonomous build loop."
+    },
+    {
+      "name": "run_tests",
+      "description": "Trigger a Playwright E2E test run for a project."
+    },
+    {
+      "name": "set_model",
+      "description": "Set the AI model for a specific agent role (BA, Dev, or QA)."
+    },
+    {
+      "name": "add_ticket",
+      "description": "Add a ticket to the project's backlog directly (bypasses the PO chat)."
+    },
+    {
+      "name": "update_ticket",
+      "description": "Edit an existing backlog ticket's wording: its title and/or its description and reasoning (`rawIdea` \u2014 the full statement of what to build/fix and\u2026"
+    },
+    {
+      "name": "write_project_files",
+      "description": "Directly write files into an Agent Teams project's working tree \u2014 agent-free build, for when YOUR client writes the code instead of the BYO-key age\u2026"
+    },
+    {
+      "name": "delete_project_files",
+      "description": "Delete files from an Agent Teams project's working tree (agent-free)."
+    },
+    {
+      "name": "deploy_project",
+      "description": "Deploy the project's current working tree with NO agent/LLM \u2014 pushes to GitHub and runs CI."
+    },
+    {
+      "name": "agent_project_status",
+      "description": "Get the agent team's project status for an app \u2014 running/paused, monthly cost, budget cap."
+    },
+    {
+      "name": "agent_board",
+      "description": "Full Kanban board \u2014 all tickets with status, assignee, iteration count, cost."
+    },
+    {
+      "name": "agent_activity",
+      "description": "Activity log (audit trail) for an app's agent team."
+    },
+    {
+      "name": "agent_ticket_detail",
+      "description": "One ticket's full conversation \u2014 all agent messages."
+    },
+    {
+      "name": "agent_cost",
+      "description": "Cost breakdown for an app's agent team \u2014 per-role spend, token counts."
+    },
+    {
+      "name": "qa_list_flows",
+      "description": "List an app's browser e2e test flows."
+    },
+    {
+      "name": "qa_save_flow",
+      "description": "Create or update ONE browser e2e test flow (owner only)."
+    },
+    {
+      "name": "qa_delete_flow",
+      "description": "Delete a browser e2e test flow (owner only)."
+    },
+    {
+      "name": "qa_run",
+      "description": "Queue headless browser test run(s) for an app on the platform (Cloudflare Browser Rendering)."
+    },
+    {
+      "name": "qa_list_runs",
+      "description": "List an app's recent test runs (status, steps passed/total, failed step + error, trigger)."
+    },
+    {
+      "name": "qa_run_artifacts",
+      "description": "List a run's screenshot artifacts (name, size)."
+    },
+    {
+      "name": "qa_flow_playwright",
+      "description": "Get a flow transpiled to a Playwright .spec.ts (for CI parity \u2014 run the same flow under Playwright)."
+    },
+    {
+      "name": "qa_mint_key",
+      "description": "Mint a scoped QA API key for an app (owner only)."
+    },
+    {
+      "name": "inspect_admin_console",
+      "description": "An app's admin console contract (operator_view) against its current tools: referenced actions, gaps (action_missing, wrong_operation, \u2026), what renders. Owner only, read-only."
+    },
+    {
+      "name": "list_admin_capabilities",
+      "description": "What an operator_view may contain: resource kinds, column formats, action operations, limits, features, sensitive fields and its JSON Schema (incl. admin_access)."
+    },
+    {
+      "name": "preview_admin_console",
+      "description": "Dry-run an operator_view proposal through the platform validator: tabs, columns, actions, role access matrix, blocked fields. Owner only, stores nothing."
+    },
+    {
+      "name": "propose_admin_update",
+      "description": "Validate an operator_view proposal without applying it: the platform validator's verdict plus errors, warnings, missing requirements and security issues, each with a path. Owner only."
+    },
+    {
+      "name": "validate_admin_security",
+      "description": "Security checks on an operator_view proposal: secret exposure, missing actions, destructive without step_up, role errors, row-scoping smells. Returns passesSecurityGates. Owner only."
+    },
+    {
+      "name": "apply_admin_update",
+      "description": "Commit a validated operator_view to the app repo's mcp.json (one file, never .github/), then report the registration after deploy. Owner only; confirm: true; dry_run."
+    },
+    {
+      "name": "ownership_status",
+      "description": "Read-only: your relationship to an app's ownership, open transfer/recovery requests you are party to, and the immutable audit record \u2014 other parties by login only, never the owner's identity to a non-party."
+    },
+    {
+      "name": "request_ownership_transfer",
+      "description": "Owner offers an app to a verified PAS account; shows repo/route/data worker/deploy/billing implications first; confirm: true creates a 7-day pending request the recipient must accept."
+    },
+    {
+      "name": "respond_ownership_transfer",
+      "description": "Accept (confirm: true) or decline a transfer offered to you; cancel one you sent or a recovery request you filed; escalate a stuck transfer to a platform admin."
+    },
+    {
+      "name": "request_ownership_recovery",
+      "description": "Non-owner with a verified sign-in asks a platform admin to recover an app created under another sign-in; needs evidence; never moves ownership by itself."
+    },
+    {
+      "name": "resolve_ownership_request",
+      "description": "Platform admins: approve (confirm: true) or reject an escalated ownership request, with a required reason recorded in the audit record."
+    },
+    {
+      "name": "find_apps",
+      "description": "Read-only: search the app directory you can reach (and your drafts) by id, name, live/store/repo URL or custom domain; filter by lifecycle and access; an exact id reports yours/accessible/unclaimed/reserved/exists_inaccessible; optional live route health."
     }
   ],
-  "tools": [
-    {"name": "sdk_reference", "description": "SDK reference for auth, db, storage, maps, AI, rooms, hooks, UI, recipes, design system"},
-    {"name": "recipe", "description": "19 pre-built code recipes (CRUD, forms, modals, maps, AI chat, notifications)"},
-    {"name": "provision_pas_app", "description": "Create or reuse a PAS app repo from template, provision platform infrastructure, and verify status"},
-    {"name": "provisioning_status", "description": "Read the durable receipt and step evidence for an app provisioning operation"},
-    {"name": "list_templates", "description": "Approved-template catalogue and selection contract for provisioning (read-only)"},
-    {"name": "scaffold_app", "description": "Create a new Pro app from the default approved template"},
-    {"name": "create_app", "description": "Create an Agent Teams project (AI-powered build)"},
-    {"name": "chat_agent", "description": "Chat with PO or Architect agent"},
-    {"name": "add_ticket", "description": "Add a ticket to the project backlog"},
-    {"name": "run_tests", "description": "Trigger Playwright E2E test run"},
-    {"name": "list_apps", "description": "List published Pro apps"},
-    {"name": "deploy_status", "description": "Check deploy status"},
-    {"name": "list_app_tools", "description": "List one app's registered data tools (never SQL)"},
-    {"name": "call_app_tool", "description": "Call one app's data tool through the platform action executor"}
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.proappstore.online/mcp"
+    }
   ]
 }

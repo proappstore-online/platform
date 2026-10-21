@@ -26,7 +26,8 @@ const APP_ID = z.string().regex(/^[a-z][a-z0-9-]*$/);
 const FLOW_ID = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/, "flowId must be a slug: lowercase letters, digits and hyphens, max 64 chars");
 const RUN_ID = z.string().uuid("runId must be the UUID returned by qa_run / qa_list_runs");
 
-const json = (v: unknown): Text => text(typeof v === "string" ? v : JSON.stringify(v, null, 2));
+const json = (v: unknown): Text => text(typeof v === "string" ? v : JSON.stringify(v, null, 2),
+  !!v && typeof v === "object" && "error" in v && !!v.error);
 
 async function qaCall(
   env: Env,
@@ -34,7 +35,7 @@ async function qaCall(
   path: string,
   init?: { method?: string; body?: unknown },
 ): Promise<unknown> {
-  if (!token) return { error: "Not authenticated: connect with your PAS session token (owner) to use QA tools." };
+  if (!token) return { error: "Not authenticated: reconnect the PAS MCP connection as the app owner." };
   const res = await env.API.fetch(`${env.API_BASE}${path}`, {
     method: init?.method ?? "GET",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },

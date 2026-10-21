@@ -18,14 +18,14 @@ stop and report it. See `platform/CLAUDE.md` § Delivery mode.
 
 ## Tools (68 shared + dynamic per-app)
 
-### Platform tools (no auth required unless noted)
+### Platform tools (authenticated connection required)
 
 | Tool | Auth | Description |
 |------|------|-------------|
 | `whoami` | Connection | Show the authenticated PAS account — uid, login, email, sign-in provider, platform roles, token expiry. Confirms which identity owner-scoped tools run as, and answers which email the account is tied to (#136). Email/provider come from `GET /v1/auth/me/account`, which requires INTERNAL_TOKEN as well as the session; without that secret whoami still prints the token-derived identity |
-| `list_apps` | Session token | List your published Pro apps |
+| `list_apps` | Connection | List apps you own or belong to |
 | `deploy_status` | None | Check GitHub Actions deploy status |
-| `schema_status` | Session token | Show an app's D1 migration status (#33) — recent migrate attempts + whether the latest applied or FAILED (surfaces schema drift). Owner-only |
+| `schema_status` | Connection | Show an app's D1 migration status (#33) — recent migrate attempts + whether the latest applied or FAILED (surfaces schema drift). Owner-only |
 | `app_info` | None | Get app URLs, repo, data worker, status |
 | `find_apps` | Connection | Read-only app directory (#424): every app you reach plus your drafts, searchable by id, name, live/store/repo URL or custom domain, filtered by lifecycle (`status`) and access; an exact id reports `yours` / `accessible` / `unclaimed` / `reserved` / `exists_inaccessible` (never the holder). `check_health` adds live `routeHealth` for the first 25 |
 | `list_templates` | None | Approved-template catalogue + selection contract (#178) — read-only; the same data as https://docs.proappstore.online/templates/catalogue.json. Pass an id as `template_repo` to `provision_pas_app`; unknown/withdrawn ids are refused, deprecated ones warn, and the copied source commit is recorded on the app |
@@ -59,7 +59,7 @@ Tools marked **confirm** need `confirm: true` to execute; **dry_run** tools acce
 
 ### Agent Teams loop (drive the autonomous build over MCP)
 
-Each takes an explicit `token` (PAS session token) argument. The token's user must
+Every tool uses the OAuth-authenticated connection. No tool takes a credential argument. The user must
 own the project and have a BYO Anthropic key in the vault for agents to run.
 
 | Tool | Description |
@@ -144,17 +144,17 @@ gets registered:
 
 ## Security & safety model
 
-The safety layer (`src/safety.ts`) is vendored from the PAGS MCP server (the
-best-in-class reference) and adapted to PAS's **single-admin trust model**: the
-caller is always the owner/operator of what they touch, so PAS deliberately omits
-PAGS's per-tool scope taxonomy (read/write/runtime/destructive). Everything else
-from the reference is present:
+The safety layer (`src/safety.ts`) gates consequential operations, records mutations
+and enforces read-only mode. Authorization comes from the verified connection plus
+the platform's ownership, membership and app-action checks. The shared endpoint
+grants broad platform capabilities, disclosed at consent; app endpoints are bound
+to one app. Tool annotations describe behavior and are not authorization controls.
 
 - **OAuth 2.1 + PKCE (S256)** — `src/oauth-provider.ts`. Discovery docs
   (`/.well-known/oauth-authorization-server`, `.../oauth-protected-resource`),
   dynamic client registration (`POST /register`, rate-limited 20/hr/IP), authorize
   + token endpoints. Plaintext PKCE is rejected; non-S256 challenge methods are
-  refused. Access tokens are opaque, KV-stored, 24h TTL, and bound to the
+  refused. Access tokens are opaque, stored in the SQLite OAuthState authority, up to 24h TTL, and bound to the
   requested MCP resource (`/mcp` or `/mcp/apps/<app_id>`). `mcp-remote`
   compatible.
 - **Per-app grants (#457)** — a token authorized from `/mcp/apps/<id>` works only on that endpoint
@@ -166,22 +166,17 @@ from the reference is present:
   (`X-Internal-Token`) behind `GET /v1/apps/:appId/mcp` and
   `DELETE /v1/apps/:appId/mcp/grants/:grantId`. See `docs/mcp-app-tools.md`.
 - **Refresh tokens (#418)** — issued alongside the access token on both the
-  `authorization_code` and `refresh_token` grants. Opaque, KV-stored, rotate on
-  every use (single-use; a replayed/already-rotated token revokes the whole
-  family), bound to `client_id` and to the appId/resource they were issued for.
+  `authorization_code` and `refresh_token` grants. Opaque, durably stored, rotate on
+  every use (retries within 30 seconds return the same successor; reuse after the window revokes the family), bound to `client_id` and to the appId/resource they were issued for.
   Lifetime is a sliding 90-day window by default (`OAUTH_REFRESH_TTL_SECONDS` to
-  override), reset on every successful rotation — a client that keeps renewing
-  never needs the browser again. Each refresh re-mints the underlying PAS
+  override), reset on every successful rotation — a client that keeps renewing retains its grant unless it is revoked or its credentials are lost. Each refresh re-mints the underlying PAS
   session from its original claims, so it keeps working for the full 90 days
   even though a session JWT's own TTL is 30 days.
   Privileged roles (anything beyond `user`/`creator`, i.e. `admin`) are
   granted at sign-in and never re-checked, so they last only as long as the
   session the user signed in with (its 30-day `exp`); later refreshes mint
   without them, and admin over MCP needs a fresh sign-in (#429).
-- **Session tokens** — the alternative to browser OAuth: pass a PAS session JWT as
-  `Authorization: Bearer` (connection-level) or a per-call `token` arg on the loop
-  tools. Verified locally via `verifySession` (`@proappstore/build-core`,
-  timing-safe, `exp` enforced). Sessions are 30-day.
+- **Connection credentials** — only endpoint-bound MCP OAuth/broker credentials are accepted by the transport. Raw PAS session JWTs and personal app tokens are rejected. The resolved internal PAS session is verified through the canonical build-core verifier. All tool calls use it without model-visible credentials.
 - **Audit log** — every mutating tool call (and read-only denials + dry-runs) is
   recorded to `OAUTH_KV` keyed by the verified `uid`, 90-day TTL, secrets redacted.
   Read your own trail with the `mcp_audit_log` tool. Best-effort: no-ops without a
@@ -210,11 +205,11 @@ from the reference is present:
 - **Input validation** — `app_id`/slug are regex-validated (`^[a-z][a-z0-9-]*$`)
   before being interpolated into service-binding subrequest paths.
 
-**Known gaps vs. the PAGS reference** (intentional / deferred, not holes): no scope
-taxonomy (single-admin model); no public refresh-token revocation endpoint (grants are revoked
-through the console API above; otherwise expiry + reuse-family revocation — see Refresh tokens above); rate limiting only
-on `POST /register`, not `/token` or tool calls; audit skips reads and
-subject-less calls. Revisit if PAS ever authorizes third-party/delegated agents.
+**Operational limits:** shared grants are broad rather than per-tool scopes. Only
+registration is rate-limited at this layer; service authorization, quotas and budgets
+still apply to calls. Audit records mutations, previews and read-only denials, not
+every read. See [the operations runbook](../../docs/mcp-operations.md) for deployment,
+legacy credential migration, verification and incident handling.
 
 ## Connect from Claude Code
 
@@ -243,3 +238,12 @@ Single-app endpoint:
   }
 }
 ```
+
+## Current transport and OAuth authority
+
+`src/transport.ts` uses the official MCP SDK stateless HTTP transport. Every request
+builds its own tool handlers from its verified connection identity and app scope.
+`PasMcpAgent` is retained only for compatibility with the existing DO binding and
+is not used to serve HTTP. `OAuthState` serializes OAuth transitions in SQLite;
+KV is only the bounded read-only legacy migration source and the audit store.
+See README for retry/revocation semantics and deployment binding requirements.

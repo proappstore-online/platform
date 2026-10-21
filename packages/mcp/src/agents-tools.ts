@@ -1,3 +1,4 @@
+import { errText } from "./errors.js";
 /**
  * Agent-team introspection tools — project status, board, activity, cost.
  * Ported from the standalone PAS MCP (proappstore-online/mcp).
@@ -54,7 +55,7 @@ export function registerAgentsTools(
       const r = await agentsApi(agents, agentsBase, `/v1/projects/${app_id}`, token, internalToken);
       if (!r.ok) {
         if (r.status === 404) return txt(`No agent team found for "${app_id}".`);
-        return txt(`Error: ${r.status} ${JSON.stringify(r.data)}`);
+        return errText(`Error: ${r.status} ${JSON.stringify(r.data)}`);
       }
       const p = r.data as {
         id: string; name: string; slug: string; status: string;
@@ -79,8 +80,8 @@ export function registerAgentsTools(
         agentsApi(agents, agentsBase, `/v1/projects/${app_id}`, token, internalToken),
         agentsApi(agents, agentsBase, `/v1/projects/${app_id}/tickets`, token, internalToken),
       ]);
-      if (!projR.ok) return txt(`Error fetching project: ${projR.status}`);
-      if (!ticketsR.ok) return txt(`Error fetching tickets: ${ticketsR.status}`);
+      if (!projR.ok) return errText(`Error fetching project: ${projR.status}`);
+      if (!ticketsR.ok) return errText(`Error fetching tickets: ${ticketsR.status}`);
 
       const p = projR.data as { status: string; costSpentMonthlyUsd: number; costCapMonthlyUsd: number };
       const tickets = ((ticketsR.data as { tickets: unknown[] }).tickets ?? []) as Array<{
@@ -132,7 +133,7 @@ export function registerAgentsTools(
     async ({ app_id, last }) => {
       const { token } = getUserContext();
       const r = await agentsApi(agents, agentsBase, `/v1/projects/${app_id}/activity`, token, internalToken);
-      if (!r.ok) return txt(`Error: ${r.status}`);
+      if (!r.ok) return errText(`Error: ${r.status}`);
 
       let entries = ((r.data as { activity: unknown[] }).activity ?? []) as Array<{
         id: string; type: string; detail: string; createdAt: number;
@@ -158,21 +159,21 @@ export function registerAgentsTools(
     async ({ app_id, ticket_seq }) => {
       const { token } = getUserContext();
       const ticketsR = await agentsApi(agents, agentsBase, `/v1/projects/${app_id}/tickets`, token, internalToken);
-      if (!ticketsR.ok) return txt(`Error: ${ticketsR.status}`);
+      if (!ticketsR.ok) return errText(`Error: ${ticketsR.status}`);
       const tickets = ((ticketsR.data as { tickets: unknown[] }).tickets ?? []) as Array<{
         id: string; seq: number; title: string; status: string;
         assigneeRole: string | null; iterations: number;
         costSpentUsd: number; stuckReason: string | null; rawIdea?: string;
       }>;
       const ticket = tickets.find((t) => t.seq === ticket_seq);
-      if (!ticket) return txt(`Ticket #${ticket_seq} not found.`);
+      if (!ticket) return errText(`Ticket #${ticket_seq} not found.`);
 
       const msgsR = await agentsApi(agents, agentsBase, `/v1/projects/${app_id}/tickets/${ticket.id}/messages`, token, internalToken);
       // A failed messages read used to fall through to `[]` and print
       // "Messages (0)" — an outage or a 403 became a valid-looking empty
       // conversation (#152). Surface it like the ticket read above does.
       if (!msgsR.ok) {
-        return txt(`Error: ${msgsR.status} reading messages for #${ticket.seq}: ${JSON.stringify(msgsR.data)}`);
+        return errText(`Error: ${msgsR.status} reading messages for #${ticket.seq}: ${JSON.stringify(msgsR.data)}`);
       }
       const messages = ((msgsR.data as { messages: unknown[] }).messages ?? []) as Array<{
         id: string; author: string; body: string; createdAt: number;
@@ -202,7 +203,7 @@ export function registerAgentsTools(
     async ({ app_id }) => {
       const { token } = getUserContext();
       const r = await agentsApi(agents, agentsBase, `/v1/projects/${app_id}/cost`, token, internalToken);
-      if (!r.ok) return txt(`Error: ${r.status}`);
+      if (!r.ok) return errText(`Error: ${r.status}`);
       return txt(JSON.stringify(r.data, null, 2));
     },
   );

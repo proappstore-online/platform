@@ -80,6 +80,10 @@ jobs:
           site_name: ProAppStore Platform Docs
           site_url: https://docs.proappstore.online/
           docs_dir: zensical-src
+          # Zensical excludes a top-level templates/ directory by default. This
+          # directory contains the public PAS catalogue, not theme templates.
+          exclude_docs: |
+            !/templates/
           copyright: Built on ProAppStore · proappstore.online
           theme:
             name: material
@@ -137,6 +141,7 @@ jobs:
             - Publishing: publishing-flow.md
             - Approved templates: templates/index.md
             - MCP App Tools: mcp-app-tools.md
+            - MCP Operations: mcp-operations.md
             - App Workers: app-workers.md
             - Agent Customization: agent-customization.md
             - Architecture: architecture.md
@@ -160,6 +165,11 @@ jobs:
                 - App Workers: adr/009-app-workers.md
           YAML
           python -m zensical build
+          # A green build must include the provisioning catalogue and MCP guides.
+          test -f site/templates/index.html
+          test -f site/mcp-app-tools/index.html
+          test -f site/mcp-operations/index.html
+          python -m json.tool site/templates/catalogue.json >/dev/null
       - name: Publish to kb-host
         run: |
           # Keyless: mint a GitHub OIDC token; kb-host authorizes the reserved

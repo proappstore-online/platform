@@ -448,7 +448,7 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
       if (!res.ok && !data.error) data.error = `HTTP ${res.status}`;
       const body = formatSteps(data.steps);
       return {
-        ok: res.ok && data.success !== false,
+        ok: res.ok && !data.error && data.success !== false,
         status: res.status,
         data,
         text: [

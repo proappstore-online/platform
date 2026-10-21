@@ -1,6 +1,8 @@
-import { McpAgent } from "agents/mcp";
+import { DurableObject } from "cloudflare:workers";
+import { serveMcp } from "./transport.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker-provider.js";
 import type { Env } from "./env.js";
 import { extractToken, fetchAccount, verifyToken } from "./api-helpers.js";
 import { verifySession } from "./session.js";
@@ -15,217 +17,211 @@ import { registerQaTools } from "./qa-tools.js";
 import { registerAdminConsoleTools } from "./admin-console-tools.js";
 import { registerOwnershipTools } from "./ownership-tools.js";
 import { registerDirectoryTools } from "./directory-tools.js";
-import { brokerMcpReadSeen, createAuthChallenge, handleOAuthRoute, issueBrokerCredential, listGrants, recordBrokerMcpRead, resolveOAuthToken, revokeGrant } from "./oauth-provider.js";
+import { installToolMetadata } from "./tool-metadata.js";
+import { createAuthChallenge } from "./oauth-provider.js";
+export { OAuthState } from "./oauth-state.js";
 
-const AUTH_PROVIDERS = ["github", "google"] as const;
+/** Build a fresh server for each authenticated HTTP request. No identity or app scope
+ * is retained in a transport session after a token refresh or account change. */
+export async function createPasMcpServer(env: Env, props: Record<string, unknown>) {
+  const server = new McpServer({ name: "ProAppStore", version: "0.3.0" }, { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() });
+  installToolMetadata(server);
+  let userId: string | null = null;
+  let userLogin: string | null = null;
+  let userToken: string | null = null;
+  let userRoles: string[] = [];
+  let appScope: string | null = null;
 
-function configuredAuthProviders(raw: string | undefined): Array<typeof AUTH_PROVIDERS[number]> | undefined {
-  const providers = (raw ?? "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter((value): value is typeof AUTH_PROVIDERS[number] => AUTH_PROVIDERS.includes(value as typeof AUTH_PROVIDERS[number]));
-  return providers.length ? providers : undefined;
+  // The transport verifies every request, then supplies only that request's
+  // connection identity. A reused session id cannot select another account.
+  const token = extractToken(props as Record<string, unknown>);
+  appScope = extractAppScope(props as Record<string, unknown>);
+  if (token && env.SESSION_SIGNING_KEY) {
+    const user = await verifyToken(env.SESSION_SIGNING_KEY, token);
+    if (user) {
+      userId = user.id;
+      userLogin = user.login;
+      userToken = token;
+      // Platform roles from this request's verified session claims power the
+      // app-tool pre-flight role check in tool-loader.
+      const claims = await verifySession(token, env.SESSION_SIGNING_KEY);
+      userRoles = claims?.roles ?? [];
+    }
+  }
+
+  if (!appScope) {
+    // ── Platform-info tools (list_apps, deploy_status, app_info, ─
+    //    platform_guide, sdk_reference, recipe) ─────────────────
+    registerPlatformTools(server, env, () => userToken);
+
+    // ── App-tool discovery for the shared endpoint (#157) ───────
+    //    list_app_tools(app_id) → call_app_tool(app_id, tool, params).
+    //    The shared session registers NO app tools (see below), so its
+    //    size is fixed (src/tool-count.ts) however many apps exist.
+    registerAppDiscoveryTools(
+      server,
+      () => ({ userId: userId, token: userToken, roles: userRoles }),
+      env.API,
+      env.API_BASE,
+      env,
+    );
+
+    // ── Project-building tools (for AI agent app creation) ─────
+    registerProjectTools(server, env, () => ({
+      userId: userId,
+      login: userLogin,
+      token: userToken,
+      roles: userRoles,
+    }));
+
+    // ── Agent Teams loop tools (create app, KB, chat PO/Architect, ─
+    //    tickets, agents, play/pause) — drive the whole build over MCP ─
+    //    Every tool uses this request's authenticated connection identity.
+    registerLoopTools(server, env, () => userToken);
+
+    // ── Agent-team introspection tools ──────────────────────────
+    registerAgentsTools(
+      server,
+      () => ({ userId: userId, token: userToken }),
+      env.INTERNAL_TOKEN ?? null,
+      env.AGENTS_BASE,
+      env.AGENTS,
+    );
+
+    // ── QA automation tools (connect + write/run browser e2e tests) ─
+    registerQaTools(server, env, () => ({
+      userId: userId,
+      token: userToken,
+    }));
+
+    // ── Admin-console authoring, read-only (#295): inspect, capabilities, preview ─
+    registerAdminConsoleTools(server, env, () => ({
+      userId: userId,
+      token: userToken,
+    }));
+
+    // ── App ownership transfer and recovery (#423) ──────────────
+    registerOwnershipTools(server, env, () => ({
+      userId: userId,
+      token: userToken,
+    }));
+
+    // ── App directory discovery, read-only (#424) ───────────────
+    registerDirectoryTools(server, env, () => ({
+      userId: userId,
+      token: userToken,
+    }));
+  }
+
+  // ── App tools: ONLY on an app-scoped session (#157) ─────────
+  //    /mcp/apps/<app_id> registers that app's tools under their manifest
+  //    names. The shared /mcp never fetches or registers app tools — it
+  //    used to load every app's tools for every connection (824 tools,
+  //    485 KB of tools/list), and that is what list_app_tools replaces.
+  //    Large manifests (#117): above PROGRESSIVE_DISCLOSURE_THRESHOLD_BYTES only
+  //    a resident core is registered, plus list_app_tools / call_app_tool fixed to
+  //    this app — the rest is one discovery call away and callable by name.
+  if (appScope) {
+    const appTools = await fetchVisibleTools(env.API, env.API_BASE, appScope, userToken);
+    const result = registerAppToolsProgressive(
+      server,
+      appTools,
+      appScope,
+      () => ({ userId: userId, token: userToken, roles: userRoles }),
+      env.API,
+      env.API_BASE,
+      env,
+    );
+    if (result.registered.length > 0) {
+      console.log(`Registered ${result.registered.length} app tool(s) for ${appScope} (${result.mode}, ${result.total} in manifest): ${result.registered.join(', ')}`);
+    } else {
+      console.log(`No app tools registered for scoped MCP app: ${appScope}`);
+    }
+  }
+
+  // ── Identity: whoami ───────────────────────────────────────
+  server.tool(
+    "whoami",
+    "Show the account this MCP connection is authenticated as — PAS user id, login, email address, sign-in provider, platform roles, and token expiry. Use to confirm which account you're acting as before running owner-scoped tools, or to answer which email the account is tied to.",
+    {},
+    async () => {
+      if (!userToken || !env.SESSION_SIGNING_KEY) {
+        return { content: [{ type: "text" as const, text: "Not authenticated: this MCP connection has no valid PAS session. Owner-scoped tools will be denied." }] };
+      }
+      const payload = await verifySession(userToken, env.SESSION_SIGNING_KEY);
+      if (!payload) {
+        return { content: [{ type: "text" as const, text: "Session token present but invalid or expired. Re-authenticate the MCP connection." }] };
+      }
+      const login = (payload as { login?: string }).login;
+      // #121: the per-app roles line is gone with the `appRoles` claim. It
+      // always printed "(no per-app roles)" — nothing ever populated it — and
+      // app roles now live only in the `app_roles` table, read at the point of
+      // use so a revocation takes effect immediately. tool-loader.ts already
+      // declined to enforce them here for the same staleness reason.
+      //
+      // #136: email and provider are NOT in the session token — SessionClaims
+      // is uid/login/avatarUrl/roles by design — so they need the API. The
+      // call is best-effort: a failure costs the two extra lines, not whoami.
+      const account = await fetchAccount(
+        env.API,
+        env.API_BASE,
+        userToken,
+        env.INTERNAL_TOKEN,
+      );
+
+      const lines = [
+        appScope ? `Authenticated for app-scoped MCP: ${appScope}` : "Authenticated as:",
+        `  uid:       ${payload.uid}`,
+        ...(login ? [`  login:     ${login}`] : []),
+      ];
+      if (account) {
+        lines.push(`  provider:  ${account.providerLabel}`);
+        if (account.email) {
+          // A credential_email is a sign-in identifier we never send to, so it
+          // must not be presented as a confirmed contact address (0042).
+          lines.push(`  email:     ${account.email}${account.emailVerified ? "" : "  (unverified — a sign-in identifier, not a confirmed address)"}`);
+        } else if (account.accountType === "child") {
+          lines.push("  email:     (none — child accounts never store an address)");
+        } else {
+          lines.push("  email:     (none on file)");
+        }
+      }
+      lines.push(
+        `  roles:     ${(payload.roles ?? []).join(", ") || "(none)"}`,
+        `  expires:   ${new Date(payload.exp * 1000).toISOString()}`,
+      );
+      if (!account) {
+        lines.push(
+          "",
+          "Email and sign-in provider are unavailable — the connector could not reach the account endpoint. The identity above is read from the session token itself.",
+        );
+      }
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    },
+  );
+
+  // ── Safety: audit-log reader ───────────────────────────────
+  server.tool(
+    "mcp_audit_log",
+    "Read recent MCP audit events (mutating tool invocations + read-only denials) attributed to your authenticated account. Newest first.",
+    { limit: z.number().optional().describe("Max events to return (1-200, default 50).") },
+    async ({ limit }) => {
+      const events = await listAuditEvents({ env: env, subject: userId }, limit ?? 50);
+      if (events.length === 0) {
+        return { content: [{ type: "text" as const, text: "No audit events recorded for your account." }] };
+      }
+      return { content: [{ type: "text" as const, text: `${events.length} event(s):\n\n${JSON.stringify(events, null, 2)}` }] };
+    },
+  );
+  return server;
 }
 
-export class PasMcpAgent extends McpAgent<Env> {
-  server = new McpServer({
-    name: "ProAppStore",
-    version: "0.2.0",
-  });
-
-  // User context — set during init if a token is provided
-  private userId: string | null = null;
-  private userLogin: string | null = null;
-  private userToken: string | null = null;
-  private userRoles: string[] = [];
-  private appScope: string | null = null;
-
+/** Retained for the existing Durable Object binding; new HTTP traffic is stateless. */
+export class PasMcpAgent extends DurableObject<Env> {
+  props: Record<string, unknown> = {};
+  server = new McpServer({ name: "ProAppStore", version: "0.3.0" }, { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() });
   async init() {
-    // Connection-level auth: the `fetch` handler below copies the request's
-    // `Authorization` token into `ctx.props.authToken`, which agents@0.0.74's
-    // serve() persists and replays into `this.props` here. So write_file etc.
-    // now see the user. (The agent-teams loop tools also accept an explicit
-    // `token` arg, so they work even without this.)
-    const token = extractToken(this.props as Record<string, unknown>);
-    this.appScope = extractAppScope(this.props as Record<string, unknown>);
-    if (token && this.env.SESSION_SIGNING_KEY) {
-      const user = await verifyToken(this.env.SESSION_SIGNING_KEY, token);
-      if (user) {
-        this.userId = user.id;
-        this.userLogin = user.login;
-        this.userToken = token;
-        // Platform roles (global, always current in the session) power the
-        // app-tool pre-flight role check in tool-loader.
-        const claims = await verifySession(token, this.env.SESSION_SIGNING_KEY);
-        this.userRoles = claims?.roles ?? [];
-      }
-    }
-
-    if (!this.appScope) {
-      // ── Platform-info tools (list_apps, deploy_status, app_info, ─
-      //    platform_guide, sdk_reference, recipe) ─────────────────
-      registerPlatformTools(this.server, this.env);
-
-      // ── App-tool discovery for the shared endpoint (#157) ───────
-      //    list_app_tools(app_id) → call_app_tool(app_id, tool, params).
-      //    The shared session registers NO app tools (see below), so its
-      //    size is fixed (src/tool-count.ts) however many apps exist.
-      registerAppDiscoveryTools(
-        this.server,
-        () => ({ userId: this.userId, token: this.userToken, roles: this.userRoles }),
-        this.env.API,
-        this.env.API_BASE,
-        this.env,
-      );
-
-      // ── Project-building tools (for AI agent app creation) ─────
-      registerProjectTools(this.server, this.env, () => ({
-        userId: this.userId,
-        login: this.userLogin,
-        token: this.userToken,
-        roles: this.userRoles,
-      }));
-
-      // ── Agent Teams loop tools (create app, KB, chat PO/Architect, ─
-      //    tickets, agents, play/pause) — drive the whole build over MCP ─
-      //    The explicit `token` arg is optional; falls back to the authenticated
-      //    connection identity so an owner-authed MCP session can drive everything.
-      registerLoopTools(this.server, this.env, () => this.userToken);
-
-      // ── Agent-team introspection tools ──────────────────────────
-      registerAgentsTools(
-        this.server,
-        () => ({ userId: this.userId, token: this.userToken }),
-        this.env.INTERNAL_TOKEN ?? null,
-        this.env.AGENTS_BASE,
-        this.env.AGENTS,
-      );
-
-      // ── QA automation tools (connect + write/run browser e2e tests) ─
-      registerQaTools(this.server, this.env, () => ({
-        userId: this.userId,
-        token: this.userToken,
-      }));
-
-      // ── Admin-console authoring, read-only (#295): inspect, capabilities, preview ─
-      registerAdminConsoleTools(this.server, this.env, () => ({
-        userId: this.userId,
-        token: this.userToken,
-      }));
-
-      // ── App ownership transfer and recovery (#423) ──────────────
-      registerOwnershipTools(this.server, this.env, () => ({
-        userId: this.userId,
-        token: this.userToken,
-      }));
-
-      // ── App directory discovery, read-only (#424) ───────────────
-      registerDirectoryTools(this.server, this.env, () => ({
-        userId: this.userId,
-        token: this.userToken,
-      }));
-    }
-
-    // ── App tools: ONLY on an app-scoped session (#157) ─────────
-    //    /mcp/apps/<app_id> registers that app's tools under their manifest
-    //    names. The shared /mcp never fetches or registers app tools — it
-    //    used to load every app's tools for every connection (824 tools,
-    //    485 KB of tools/list), and that is what list_app_tools replaces.
-    //    Large manifests (#117): above PROGRESSIVE_DISCLOSURE_THRESHOLD_BYTES only
-    //    a resident core is registered, plus list_app_tools / call_app_tool fixed to
-    //    this app — the rest is one discovery call away and callable by name.
-    if (this.appScope) {
-      const appTools = await fetchVisibleTools(this.env.API, this.env.API_BASE, this.appScope, this.userToken);
-      const result = registerAppToolsProgressive(
-        this.server,
-        appTools,
-        this.appScope,
-        () => ({ userId: this.userId, token: this.userToken, roles: this.userRoles }),
-        this.env.API,
-        this.env.API_BASE,
-        this.env,
-      );
-      if (result.registered.length > 0) {
-        console.log(`Registered ${result.registered.length} app tool(s) for ${this.appScope} (${result.mode}, ${result.total} in manifest): ${result.registered.join(', ')}`);
-      } else {
-        console.log(`No app tools registered for scoped MCP app: ${this.appScope}`);
-      }
-    }
-
-    // ── Identity: whoami ───────────────────────────────────────
-    this.server.tool(
-      "whoami",
-      "Show the account this MCP connection is authenticated as — PAS user id, login, email address, sign-in provider, platform roles, and token expiry. Use to confirm which account you're acting as before running owner-scoped tools, or to answer which email the account is tied to.",
-      {},
-      async () => {
-        if (!this.userToken || !this.env.SESSION_SIGNING_KEY) {
-          return { content: [{ type: "text" as const, text: "Not authenticated: this MCP connection has no valid PAS session. Owner-scoped tools will be denied." }] };
-        }
-        const payload = await verifySession(this.userToken, this.env.SESSION_SIGNING_KEY);
-        if (!payload) {
-          return { content: [{ type: "text" as const, text: "Session token present but invalid or expired. Re-authenticate the MCP connection." }] };
-        }
-        const login = (payload as { login?: string }).login;
-        // #121: the per-app roles line is gone with the `appRoles` claim. It
-        // always printed "(no per-app roles)" — nothing ever populated it — and
-        // app roles now live only in the `app_roles` table, read at the point of
-        // use so a revocation takes effect immediately. tool-loader.ts already
-        // declined to enforce them here for the same staleness reason.
-        //
-        // #136: email and provider are NOT in the session token — SessionClaims
-        // is uid/login/avatarUrl/roles by design — so they need the API. The
-        // call is best-effort: a failure costs the two extra lines, not whoami.
-        const account = await fetchAccount(
-          this.env.API,
-          this.env.API_BASE,
-          this.userToken,
-          this.env.INTERNAL_TOKEN,
-        );
-
-        const lines = [
-          this.appScope ? `Authenticated for app-scoped MCP: ${this.appScope}` : "Authenticated as:",
-          `  uid:       ${payload.uid}`,
-          ...(login ? [`  login:     ${login}`] : []),
-        ];
-        if (account) {
-          lines.push(`  provider:  ${account.providerLabel}`);
-          if (account.email) {
-            // A credential_email is a sign-in identifier we never send to, so it
-            // must not be presented as a confirmed contact address (0042).
-            lines.push(`  email:     ${account.email}${account.emailVerified ? "" : "  (unverified — a sign-in identifier, not a confirmed address)"}`);
-          } else if (account.accountType === "child") {
-            lines.push("  email:     (none — child accounts never store an address)");
-          } else {
-            lines.push("  email:     (none on file)");
-          }
-        }
-        lines.push(
-          `  roles:     ${(payload.roles ?? []).join(", ") || "(none)"}`,
-          `  expires:   ${new Date(payload.exp * 1000).toISOString()}`,
-        );
-        if (!account) {
-          lines.push(
-            "",
-            "Email and sign-in provider are unavailable — the connector could not reach the account endpoint. The identity above is read from the session token itself.",
-          );
-        }
-        return { content: [{ type: "text" as const, text: lines.join("\n") }] };
-      },
-    );
-
-    // ── Safety: audit-log reader ───────────────────────────────
-    this.server.tool(
-      "mcp_audit_log",
-      "Read recent MCP audit events (mutating tool invocations + read-only denials) attributed to your authenticated account. Newest first.",
-      { limit: z.number().optional().describe("Max events to return (1-200, default 50).") },
-      async ({ limit }) => {
-        const events = await listAuditEvents({ env: this.env, subject: this.userId }, limit ?? 50);
-        if (events.length === 0) {
-          return { content: [{ type: "text" as const, text: "No audit events recorded for your account." }] };
-        }
-        return { content: [{ type: "text" as const, text: `${events.length} event(s):\n\n${JSON.stringify(events, null, 2)}` }] };
-      },
-    );
+    this.server = await createPasMcpServer(this.env, this.props as Record<string, unknown>);
   }
 }
 
@@ -233,6 +229,12 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
     const issuer = `${url.protocol}//${url.host}`;
+    const authority = env.OAUTH_STATE?.get(env.OAUTH_STATE.idFromName("authority"));
+    const origin = request.headers.get("Origin");
+    if (resolveMcpRoute(url.pathname).isTransport && origin &&
+        origin !== issuer && !(env.MCP_ALLOWED_ORIGINS ?? "").split(",").map((v) => v.trim()).includes(origin)) {
+      return new Response("Forbidden origin", { status: 403, headers: { "Cache-Control": "no-store" } });
+    }
 
     // API-worker-only credential issuance for the remote approval broker.
     // This is before public OAuth routing and is unavailable without the
@@ -246,7 +248,8 @@ export default {
       if (typeof input.session !== "string" || typeof input.owner_id !== "string" || typeof input.resource !== "string" || typeof input.request_id !== "string") {
         return new Response("invalid request", { status: 400 });
       }
-      const token = await issueBrokerCredential({ issuer, kv: env.OAUTH_KV!, sessionSigningKey: env.SESSION_SIGNING_KEY! }, {
+      if (!authority || !env.SESSION_SIGNING_KEY) return new Response("OAuth unavailable", { status: 503 });
+      const token = await authority.issueBroker(issuer, {
         session: input.session, ownerId: input.owner_id, resource: input.resource, requestId: input.request_id,
       });
       if (!token) return new Response("forbidden", { status: 403 });
@@ -263,7 +266,8 @@ export default {
       }
       const requestId = decodeURIComponent(url.pathname.slice("/internal/broker/read-receipt/".length));
       if (!/^req_[A-Za-z0-9_-]{43}$/.test(requestId)) return new Response("not found", { status: 404 });
-      return Response.json({ seen: await brokerMcpReadSeen(env.OAUTH_KV!, requestId) }, { headers: { "Cache-Control": "no-store" } });
+      if (!authority) return new Response("OAuth unavailable", { status: 503 });
+      return Response.json({ seen: await authority.readSeen(requestId) }, { headers: { "Cache-Control": "no-store" } });
     }
 
     // #457: an account's OAuth grants for one app endpoint, listed and revoked by
@@ -272,19 +276,14 @@ export default {
     const grantsList = url.pathname.match(/^\/internal\/users\/([^/]+)\/apps\/([a-z][a-z0-9-]{0,57})\/grants$/);
     const grantsOne = url.pathname.match(/^\/internal\/users\/([^/]+)\/grants\/([A-Za-z0-9-]{8,64})$/);
     if ((grantsList && request.method === "GET") || (grantsOne && request.method === "DELETE")) {
-      if (!env.INTERNAL_TOKEN || request.headers.get("X-Internal-Token") !== env.INTERNAL_TOKEN || !env.OAUTH_KV) {
+      if (!env.INTERNAL_TOKEN || request.headers.get("X-Internal-Token") !== env.INTERNAL_TOKEN || !authority) {
         return new Response("not found", { status: 404 });
       }
-      const refreshTtl = env.OAUTH_REFRESH_TTL_SECONDS ? parseInt(env.OAUTH_REFRESH_TTL_SECONDS, 10) : undefined;
       const headers = { "Cache-Control": "no-store" };
       let uid: string;
       try { uid = decodeURIComponent((grantsList ?? grantsOne)![1]!); } catch { return new Response("not found", { status: 404 }); }
-      if (grantsList) return Response.json({ grants: await listGrants(env.OAUTH_KV, uid, grantsList[2]!) }, { headers });
-      const revoked = await revokeGrant(
-        { kv: env.OAUTH_KV, ...(refreshTtl && !Number.isNaN(refreshTtl) ? { refreshTokenTtlSeconds: refreshTtl } : {}) },
-        uid,
-        grantsOne![2]!,
-      );
+      if (grantsList) return Response.json({ grants: await authority.grants(uid, grantsList[2]!) }, { headers });
+      const revoked = await authority.revoke(uid, grantsOne![2]!);
       return revoked ? Response.json({ revoked: true }, { headers }) : new Response("not found", { status: 404, headers });
     }
 
@@ -294,19 +293,11 @@ export default {
     const provisioning = await handleInternalProvisioning(request, env);
     if (provisioning) return provisioning;
 
-    // OAuth 2.1 routes (discovery, registration, authorize, token)
-    if (env.OAUTH_KV && env.SESSION_SIGNING_KEY) {
-      const refreshTtl = env.OAUTH_REFRESH_TTL_SECONDS ? parseInt(env.OAUTH_REFRESH_TTL_SECONDS, 10) : undefined;
-      const oauthRes = await handleOAuthRoute(request, {
-        issuer,
-        authStart: env.AUTH_START ?? `${env.API_BASE}/v1/auth/github/start`,
-        api: env.API,
-        authProviders: configuredAuthProviders(env.AUTH_PROVIDERS),
-        kv: env.OAUTH_KV,
-        sessionSigningKey: env.SESSION_SIGNING_KEY,
-        ...(refreshTtl && !Number.isNaN(refreshTtl) ? { refreshTokenTtlSeconds: refreshTtl } : {}),
-      });
-      if (oauthRes) return oauthRes;
+    // All OAuth state transitions run in a strongly consistent authority. Do
+    // not silently fall back to eventually consistent KV when a binding is missing.
+    if (/^\/(?:\.well-known\/oauth-|register$|authorize(?:\/continue)?$|oauth\/callback$|token$|revoke$)/.test(url.pathname)) {
+      if (!authority || !env.SESSION_SIGNING_KEY) return new Response("OAuth unavailable", { status: 503 });
+      return authority.fetch(request);
     }
 
     if (url.pathname === "/" || url.pathname === "") {
@@ -323,19 +314,20 @@ export default {
     let oauthToken:
       | { appId: string | null; bound: boolean; brokerRequestId: string | null }
       | null = null;
-    if (bearer && env.OAUTH_KV) {
+    if (bearer && authority) {
       try {
-        const resolved = await resolveOAuthToken(bearer, env.OAUTH_KV);
+        const resolved = await authority.resolveToken(bearer);
         if (resolved) {
           bearer = resolved.session;
           oauthToken = { appId: resolved.appId, bound: resolved.bound, brokerRequestId: resolved.brokerRequestId ?? null };
         }
       } catch (e) {
-        console.warn(`MCP OAuth token resolution failed: ${e instanceof Error ? e.message : String(e)}`);
+        console.warn("MCP OAuth authority unavailable");
+        return new Response("OAuth unavailable", { status: 503, headers: { "Retry-After": "5", "Cache-Control": "no-store" } });
       }
     }
     let user: { id: string; login: string } | null = null;
-    if (bearer && env.SESSION_SIGNING_KEY) {
+    if (bearer && oauthToken && env.SESSION_SIGNING_KEY) {
       try {
         user = await verifyToken(env.SESSION_SIGNING_KEY, bearer);
       } catch (e) {
@@ -356,7 +348,10 @@ export default {
     ) {
       return createAuthChallenge({ issuer, appId: mcpRoute.appScope }, "invalid_token");
     }
-    if (mcpRoute.isTransport && request.method !== "OPTIONS" && env.OAUTH_KV && env.SESSION_SIGNING_KEY && !user) {
+    if (mcpRoute.isTransport && request.method !== "OPTIONS" && (!env.SESSION_SIGNING_KEY || !authority)) {
+      return new Response("MCP authentication unavailable", { status: 503 });
+    }
+    if (mcpRoute.isTransport && request.method !== "OPTIONS" && !user) {
       return createAuthChallenge({ issuer, appId: mcpRoute.appScope }, bearer ? "invalid_token" : undefined);
     }
 
@@ -377,18 +372,18 @@ export default {
       if (refusal) return refusal;
     }
 
-    (ctx as unknown as { props?: Record<string, unknown> }).props = {
-      ...((ctx as unknown as { props?: Record<string, unknown> }).props ?? {}),
+    const props: Record<string, unknown> = {
       ...(bearer && user ? { authToken: bearer } : {}),
       ...(mcpRoute.appScope ? { appScope: mcpRoute.appScope } : {}),
     };
-
-    const response = await PasMcpAgent.serve("/mcp").fetch(rewriteToSharedMcpPath(request), env, ctx);
-    if (response.ok && oauthToken?.brokerRequestId && env.OAUTH_KV) {
+    (ctx as unknown as { props: Record<string, unknown> }).props = props;
+    const server = await createPasMcpServer(env, props);
+    const response = await serveMcp(server, rewriteToSharedMcpPath(request));
+    if (response.ok && oauthToken?.brokerRequestId && authority) {
       // Best effort only: a marker failure must never turn a working MCP call
       // into an error. The broker will remain unconnected until a later read is
       // successfully observed.
-      await recordBrokerMcpRead(env.OAUTH_KV, oauthToken.brokerRequestId).catch(() => undefined);
+      await authority.recordRead(oauthToken.brokerRequestId).catch(() => undefined);
     }
     return response;
   },

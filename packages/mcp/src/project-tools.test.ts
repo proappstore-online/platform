@@ -431,7 +431,9 @@ describe('provision_pas_app', () => {
       provisionOk();
       fakeRepo(TEMPLATE_FILES, { dropWrites: true });
 
-      const out = getText(await runProvisionPas());
+      const result = await runProvisionPas();
+      expect(result.isError).toBe(true);
+      const out = getText(result);
 
       expect(out).toContain('! Template placeholders: APPNAME is still present in .github/workflows/compliance.yml');
       expect(out).toContain('PAS app provisioning finished with issues');

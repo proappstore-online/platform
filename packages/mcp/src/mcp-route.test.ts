@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 
-// index.ts pulls in the agents/mcp transport (workerd-only modules); stub it
-// the same way index-auth.test.ts does so the pure route helpers can load.
-vi.mock('agents/mcp', () => ({ McpAgent: class { static serve() { return { fetch: () => new Response('') }; } } }));
 vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => ({ McpServer: class {} }));
 
 // #149 acceptance: "tests cover app-scope parsing". index-auth.test.ts covers

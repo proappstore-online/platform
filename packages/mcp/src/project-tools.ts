@@ -83,7 +83,7 @@ export function registerProjectTools(
   const { GITHUB_ORG: org, GITHUB_TOKEN: ghToken, API_BASE: apiBase } = env;
   const gh = makeGitHub(ghToken, org);
   const workflow = createProvisioningWorkflow(env, gh);
-  const { operationRequest, formatProvisionOperation, provision, templateCommit, copiedTree, patchTemplatePlaceholders } = workflow;
+  const { operationRequest, formatProvisionOperation, provisionDetailed, templateCommit, copiedTree, patchTemplatePlaceholders } = workflow;
 
   /** Gate a mutating tool: read-only block (throws) + audit, attributed to the connection user. */
   const gate = (tool: string, input?: Record<string, unknown>) =>
@@ -96,7 +96,7 @@ export function registerProjectTools(
   /** Require a valid session token; return it or the error response. */
   function requireAuth(): { token: string; login: string | null; roles: string[] } | Text {
     const { token, login, roles } = getUserContext();
-    if (!token) return text("Error: authentication required. Authenticate the MCP connection or send a PAS session token.");
+    if (!token) return errText("Error: authentication required. Reconnect and authenticate the PAS MCP connection.");
     return { token, login: login ?? null, roles: roles ?? [] };
   }
 
@@ -106,7 +106,7 @@ export function registerProjectTools(
     if ('content' in auth) return auth;
     const ok = await workflow.ownsApp(appId, { userId: getUserContext().userId, token: auth.token });
     if (!ok) {
-      return text(`Error: you don't own app "${appId}". Only the app owner can use project tools on it.`);
+      return errText(`Error: you don't own app "${appId}". Only the app owner can use project tools on it.`);
     }
     return auth;
   }
@@ -138,7 +138,7 @@ export function registerProjectTools(
       const isAdmin = auth.roles.includes("admin");
       const selection = selectTemplate(template_repo, { allowUnapproved: allow_unapproved_template === true && isAdmin });
       if (!selection.ok) {
-        return text(`Refused: ${selection.reason} Call list_templates to see the catalogue.${allow_unapproved_template && !isAdmin ? " allow_unapproved_template requires a platform admin session." : ""}`);
+        return errText(`Refused: ${selection.reason} Call list_templates to see the catalogue.${allow_unapproved_template && !isAdmin ? " allow_unapproved_template requires a platform admin session." : ""}`);
       }
       const templateId = selection.template?.id ?? template_repo ?? DEFAULT_TEMPLATE_ID;
       const templateRepoName = selection.template ? selection.template.repo.split("/")[1]! : (template_repo ?? DEFAULT_TEMPLATE_ID);
@@ -161,7 +161,7 @@ export function registerProjectTools(
       );
       if (preview) return text(preview);
       if (confirm !== true) {
-        return text(`Refused: provision_pas_app creates/reuses ${org}/${app_id} and provisions live PAS infrastructure. Re-call with confirm: true to proceed.`);
+        return errText(`Refused: provision_pas_app creates/reuses ${org}/${app_id} and provisions live PAS infrastructure. Re-call with confirm: true to proceed.`);
       }
       await gate("provision_pas_app", { app_id, name, template: templateId, template_repo: templateRepoName });
 
@@ -181,9 +181,9 @@ export function registerProjectTools(
         privateRepo: private_repo !== false,
         skipCompliance: skip_compliance === true,
       });
-      if (!planned.ok) return text(`Refused: ${planned.error}`);
+      if (!planned.ok) return errText(`Refused: ${planned.error}`);
       const blocker = planned.plan.blockers[0];
-      if (blocker) return text(mcpRefusal(blocker.code, app_id) ?? `Error: ${blocker.message}`);
+      if (blocker) return errText(mcpRefusal(blocker.code, app_id) ?? `Error: ${blocker.message}`);
 
       const outcome = await workflow.executePlan(user, planned.plan, {
         privateRepo: private_repo !== false,
@@ -192,7 +192,7 @@ export function registerProjectTools(
         verify: verify !== false,
         allowUnapprovedTemplate: allow_unapproved_template === true,
       });
-      if (outcome.kind === "error") return text(outcome.error);
+      if (outcome.kind === "error") return errText(outcome.error);
       if (outcome.kind === "joined") {
         const receipt = outcome.receipt;
         return text([
@@ -217,7 +217,7 @@ export function registerProjectTools(
         ...outcome.lines,
         "",
         BUILD_WITH_PROSHELL,
-      ].join("\n"));
+      ].join("\n"), !outcome.succeeded);
     },
   );
 
@@ -249,7 +249,7 @@ export function registerProjectTools(
       if ('content' in auth) return auth;
       const response = await operationRequest(`/${encodeURIComponent(app_id)}`, auth.token);
       if (!response.ok || typeof response.data.receipt !== "string" || response.data.status === undefined || !Array.isArray(response.data.steps)) {
-        return text(`Error reading provisioning status for ${app_id}: ${response.data.error ?? `HTTP ${response.status}`}`);
+        return errText(`Error reading provisioning status for ${app_id}: ${response.data.error ?? `HTTP ${response.status}`}`);
       }
       return text(formatProvisionOperation(response.data as ProvisionOperationReceipt));
     },
@@ -275,7 +275,7 @@ export function registerProjectTools(
         { app_id, name });
       if (preview) return text(preview);
       if (confirm !== true)
-        return text(`Refused: scaffold_app creates a GitHub repo + deploy secrets + infra for "${app_id}". Re-call with confirm: true to proceed.`);
+        return errText(`Refused: scaffold_app creates a GitHub repo + deploy secrets + infra for "${app_id}". Re-call with confirm: true to proceed.`);
       await gate("scaffold_app", { app_id, name });
 
       // #178/#369: scaffold_app always copies the default approved template. Read
@@ -292,18 +292,18 @@ export function registerProjectTools(
         repoCreated = true;
       } else if (createRes.status === 422) {
         if (!(await gh.repoExists(app_id))) {
-          return text(`Error creating repo: ${JSON.stringify(createRes.data)}`);
+          return errText(`Error creating repo: ${JSON.stringify(createRes.data)}`);
         }
       } else if (createRes.status === 404) {
         // GitHub's template-generate API 404s when the SOURCE repo isn't flagged
         // as a template — a config drift that otherwise reads as a generic error.
-        return text(
+        return errText(
           `Error creating repo: GitHub returned 404 from the template-generate API. The source ` +
           `template repo "${org}/template-app" must be marked as a GitHub template ` +
           `(repo Settings → "Template repository", or PATCH /repos/${org}/template-app with is_template=true).`,
         );
       } else {
-        return text(`Error creating repo: ${JSON.stringify(createRes.data)}`);
+        return errText(`Error creating repo: ${JSON.stringify(createRes.data)}`);
       }
 
       const steps: string[] = [];
@@ -328,8 +328,8 @@ export function registerProjectTools(
 
       // 4. Provision (route + D1 + data worker). An existing repo's revision is
       //    unknown: today's head is not what it was copied from.
-      const provResult = await provision(app_id, auth.token, { template: scaffoldTemplate.id, ...(scaffoldRev ? { templateRev: scaffoldRev } : {}) });
-      if (provResult) steps.push(provResult);
+      const provResult = await provisionDetailed(app_id, auth.token, { template: scaffoldTemplate.id, ...(scaffoldRev ? { templateRev: scaffoldRev } : {}) });
+      if (provResult.text) steps.push(provResult.text);
 
       return text([
         `App scaffolded: **${name}** (${app_id})`,
@@ -340,7 +340,7 @@ export function registerProjectTools(
         ...steps,
         "",
         BUILD_WITH_PROSHELL,
-      ].join("\n"));
+      ].join("\n"), !provResult.ok);
     },
   );
 
@@ -363,7 +363,7 @@ export function registerProjectTools(
       const existing = await gh.getFile(app_id, path);
       const sha = existing.ok ? existing.sha : undefined;
       const put = await gh.putFile(app_id, path, content, message ?? `${sha ? "update" : "create"}: ${path}`, sha);
-      if (!put.ok) return text(`Error writing ${path}: ${JSON.stringify(put.data)}`);
+      if (!put.ok) return errText(`Error writing ${path}: ${JSON.stringify(put.data)}`);
       return text(`${sha ? "Updated" : "Created"} ${path}`);
     },
   );
@@ -377,7 +377,7 @@ export function registerProjectTools(
       const auth = await requireOwner(app_id);
       if ('content' in auth) return auth;
       const file = await gh.getFile(app_id, path);
-      if (!file.ok || file.content === undefined) return text(`File not found: ${path} (${file.status})`);
+      if (!file.ok || file.content === undefined) return errText(`File not found: ${path} (${file.status})`);
       return text(file.content);
     },
   );
@@ -391,7 +391,7 @@ export function registerProjectTools(
       const auth = await requireOwner(app_id);
       if ('content' in auth) return auth;
       const res = await gh.listFiles(app_id, path);
-      if (!res.ok) return text(`Error listing files: ${res.status}`);
+      if (!res.ok) return errText(`Error listing files: ${res.status}`);
       const raw = res.data as { path: string; type: string; size?: number } | { path: string; type: string; size?: number }[];
       const files = Array.isArray(raw) ? raw : [raw];
       return text(files.map((f) => `${f.type === "dir" ? "d" : "f"} ${f.path}${f.size ? ` (${f.size}B)` : ""}`).join("\n") || "Empty directory");
@@ -411,12 +411,12 @@ export function registerProjectTools(
       const preview = await dry("delete_file", dry_run, `- delete "${path}" from ${org}/${app_id} (commit to main)`, { app_id, path });
       if (preview) return text(preview);
       if (confirm !== true)
-        return text(`Refused: delete_file permanently removes "${path}" from ${app_id}. Re-call with confirm: true to proceed.`);
+        return errText(`Refused: delete_file permanently removes "${path}" from ${app_id}. Re-call with confirm: true to proceed.`);
       await gate("delete_file", { app_id, path });
       const existing = await gh.getFile(app_id, path);
-      if (!existing.ok || !existing.sha) return text(`File not found: ${path}`);
+      if (!existing.ok || !existing.sha) return errText(`File not found: ${path}`);
       const del = await gh.deleteFile(app_id, path, message ?? `delete: ${path}`, existing.sha);
-      if (!del.ok) return text(`Error deleting ${path}: ${JSON.stringify(del.data)}`);
+      if (!del.ok) return errText(`Error deleting ${path}: ${JSON.stringify(del.data)}`);
       return text(`Deleted ${path}`);
     },
   );
@@ -430,7 +430,7 @@ export function registerProjectTools(
       const auth = await requireOwner(app_id);
       if ('content' in auth) return auth;
       const res = await gh.searchCode(app_id, query);
-      if (!res.ok) return text(`Search error: ${res.status}`);
+      if (!res.ok) return errText(`Search error: ${res.status}`);
       const items = (res.data as { items?: { path: string; text_matches?: { fragment: string }[] }[] }).items ?? [];
       if (items.length === 0) return text(`No results for "${query}"`);
       return text(`${items.length} result(s):\n\n${items.slice(0, 20).map((item) => {
@@ -449,7 +449,7 @@ export function registerProjectTools(
       const auth = await requireOwner(app_id);
       if ('content' in auth) return auth;
       const res = await gh.getDeployStatus(app_id);
-      if (!res.ok) return text(`Error: ${res.status}`);
+      if (!res.ok) return errText(`Error: ${res.status}`);
       const runs = (res.data as { workflow_runs?: { name: string; conclusion: string | null; status: string; updated_at: string }[] }).workflow_runs ?? [];
       if (runs.length === 0) return text("No workflow runs found. Push to main to trigger deploy.");
       return text(runs.map((r) => `${r.conclusion === "success" ? "+" : r.conclusion === "failure" ? "!" : "~"} ${r.name}: ${r.conclusion ?? r.status} (${r.updated_at})`).join("\n"));
@@ -471,10 +471,10 @@ export function registerProjectTools(
       // #132: a live re-provision is approved explicitly, like provision_pas_app
       // and scaffold_app — an operator agent must not retry it unprompted.
       if (confirm !== true)
-        return text(`Refused: provision_app changes production infrastructure (route, D1, data worker) for "${app_id}". Preview with dry_run: true, then re-call with confirm: true to proceed.`);
+        return errText(`Refused: provision_app changes production infrastructure (route, D1, data worker) for "${app_id}". Preview with dry_run: true, then re-call with confirm: true to proceed.`);
       await gate("provision_app", { app_id });
-      const result = await provision(app_id, auth.token);
-      return text(result || "Provisioning complete (no steps reported).");
+      const result = await provisionDetailed(app_id, auth.token);
+      return text(result.text || "Provisioning complete (no steps reported).", !result.ok);
     },
   );
 
@@ -507,7 +507,7 @@ export function registerProjectTools(
         { app_id, name, category });
       if (preview) return text(preview);
       if (confirm !== true)
-        return text(`Refused: publish_app lists "${app_id}" publicly on proappstore.online. Re-call with confirm: true to proceed.`);
+        return errText(`Refused: publish_app lists "${app_id}" publicly on proappstore.online. Re-call with confirm: true to proceed.`);
       await gate("publish_app", { app_id, name, category });
 
       // Call the admin Worker's publish endpoint. MCP has already authenticated
@@ -561,14 +561,14 @@ export function registerProjectTools(
         });
         if (!res.ok) {
           const body = await res.text().catch(() => "");
-          return text(`Error: admin API returned ${res.status}${body ? `: ${body.slice(0, 200)}` : ""}`);
+          return errText(`Error: admin API returned ${res.status}${body ? `: ${body.slice(0, 200)}` : ""}`);
         }
         data = await res.json();
       } catch (e) {
-        return text(`Error: publish failed — ${e instanceof Error ? e.message : "unknown"}`);
+        return errText(`Error: publish failed — ${e instanceof Error ? e.message : "unknown"}`);
       }
 
-      if (data.error) return text(`Error: ${data.error}`);
+      if (data.error) return errText(`Error: ${data.error}`);
 
       const steps = (data.steps ?? [])
         .map((s) => `${s.status === "ok" ? "+" : s.status === "skip" ? "~" : "!"} ${s.name}: ${s.detail}`)
@@ -580,7 +580,7 @@ export function registerProjectTools(
         visibility === "private" ? "Listing: none (private app)" : `Listing: https://proappstore.online/app/${app_id}`,
         "",
         steps,
-      ].join("\n"));
+      ].join("\n"), data.success !== true);
     },
   );
 
@@ -606,7 +606,7 @@ export function registerProjectTools(
       }
       await gate("batch_write_files", { app_id, count: files.length });
       const res = await gh.pushFiles(app_id, files, message, { initIfEmpty: true });
-      if (!res.ok) return text(`Error committing files: ${res.error ?? "unknown"}`);
+      if (!res.ok) return errText(`Error committing files: ${res.error ?? "unknown"}`);
       return text(`Committed ${files.length} file(s): ${message}\n${files.map((f) => `  + ${f.path}`).join("\n")}`);
     },
   );

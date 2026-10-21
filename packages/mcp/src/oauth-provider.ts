@@ -1,7 +1,7 @@
 /**
  * OAuth 2.1 provider for MCP servers — vendorable, self-contained.
  * Vendor this + session.ts into each MCP worker.
- * Needs: OAUTH_KV binding, SESSION_SIGNING_KEY, AUTH_START var.
+ * State is supplied by the serialized SQLite OAuthState authority.
  */
 
 import { mintSession, verifySession } from "./session.js";
@@ -12,6 +12,10 @@ const AUTH_PROVIDERS = ["github", "google"] as const;
 const APP_ID_RE = /^[a-z][a-z0-9-]{0,57}$/;
 /** Refresh-token lifetime default (#418): "sign-ins should last 90 days". */
 const DEFAULT_REFRESH_TTL_SECONDS = 90 * 86_400;
+/** Return the same rotation for a brief lost-response/concurrent-refresh retry.
+ * A retry never creates a second successor. Reuse after this window revokes the family. */
+export const REFRESH_RETRY_SECONDS = 30;
+interface RotationResponse { access_token: string; token_type: string; expires_in: number; refresh_token: string }
 type AuthProvider = typeof AUTH_PROVIDERS[number];
 
 export interface OAuthTokenResolution {
@@ -89,7 +93,9 @@ export interface OAuthConfig {
   api?: Fetcher;
   /** OAuth providers exposed by this MCP server. Defaults to GitHub + Google. */
   authProviders?: readonly AuthProvider[];
-  /** Workers KV namespace for OAuth state */
+  /** Trusted CIMD hosts. Other clients can use dynamic registration. */
+  clientMetadataHosts?: readonly string[];
+  /** String/TTL store supplied by OAuthState (KV-compatible adapter). */
   kv: KVNamespace;
   /** HMAC signing key for session verification */
   sessionSigningKey: string;
@@ -117,6 +123,8 @@ export function createAuthChallenge(
     headers: {
       "WWW-Authenticate": `Bearer ${params.join(", ")}`,
       "Access-Control-Allow-Origin": "*",
+      "Access-Control-Expose-Headers": "WWW-Authenticate",
+      "Cache-Control": "no-store",
     },
   });
 }
@@ -137,7 +145,8 @@ export async function handleOAuthRoute(
       path === "/authorize" ||
       path === "/authorize/continue" ||
       path === "/oauth/callback" ||
-      path === "/token"
+      path === "/token" ||
+      path === "/revoke"
     ) {
       return new Response(null, {
         headers: {
@@ -161,11 +170,14 @@ export async function handleOAuthRoute(
       issuer: config.issuer,
       authorization_endpoint: `${config.issuer}/authorize`,
       token_endpoint: `${config.issuer}/token`,
+      revocation_endpoint: `${config.issuer}/revoke`,
       registration_endpoint: `${config.issuer}/register`,
       response_types_supported: ["code"],
       grant_types_supported: ["authorization_code", "refresh_token"],
       code_challenge_methods_supported: ["S256"],
       token_endpoint_auth_methods_supported: ["none"],
+      authorization_response_iss_parameter_supported: true,
+      client_id_metadata_document_supported: true,
     });
   }
   if (path === "/register" && request.method === "POST") {
@@ -183,6 +195,7 @@ export async function handleOAuthRoute(
   if (path === "/token" && request.method === "POST") {
     return tokenExchange(request, config);
   }
+  if (path === "/revoke" && request.method === "POST") return revokeToken(request, config);
   return null;
 }
 
@@ -238,6 +251,9 @@ function json(data: unknown, status = 200): Response {
     headers: {
       "Content-Type": "application/json",
       "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-store",
+      "Pragma": "no-cache",
+      "X-Content-Type-Options": "nosniff",
     },
   });
 }
@@ -361,7 +377,11 @@ function authConfirmPage(config: OAuthConfig, nonce: string, clientName: string 
 <body>
   <main>
     <h1>Connect ${escapeHtml(productName)}</h1>
-    <p>${name} wants to use ${escapeHtml(toolScope)} as your ProAppStore account. Choose how to sign in.</p>
+    <p>${name} wants to use ${escapeHtml(toolScope)} as your ProAppStore account.</p>
+    <p>${appName
+      ? "This authorizes the app's registered read and write actions, subject to your app permissions."
+      : "This authorizes platform tools for your PAS apps: app data, source changes, provisioning, deployment, QA, ownership and Agent Teams. Starting agents can incur usage charges."}</p>
+    <p>Access remains subject to PAS permissions. Refresh access lasts up to 90 days of inactivity. Revoke the connection through your MCP client; app-scoped grants can also be revoked from the app's MCP settings. Choose the account you intend to authorize.</p>
     <div class="actions">
       ${providerLinks}
     </div>
@@ -373,9 +393,58 @@ function authConfirmPage(config: OAuthConfig, nonce: string, clientName: string 
       headers: {
         "Content-Type": "text/html; charset=utf-8",
         "Set-Cookie": `${AUTH_NONCE_COOKIE}=${nonce}; Max-Age=600; Path=/; Secure; HttpOnly; SameSite=Lax`,
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+        "X-Content-Type-Options": "nosniff",
       },
     },
   );
+}
+
+/** Native apps use loopback HTTP; all remote redirect URIs require HTTPS. */
+function validRedirectUri(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 2048) return false;
+  try {
+    const u = new URL(value);
+    if (u.hash || u.username || u.password) return false;
+    if (u.protocol === "https:") return true;
+    if (u.protocol === "http:") return ["127.0.0.1", "[::1]", "localhost"].includes(u.hostname);
+    // RFC 8252 private-use schemes are based on a reverse domain name.
+    return /^[a-z][a-z0-9+.-]*\.[a-z0-9+.-]+:$/.test(u.protocol) && !u.host;
+  } catch { return false; }
+}
+
+function redirectMatches(registered: string, supplied: string): boolean {
+  if (registered === supplied) return true;
+  if (!validRedirectUri(registered) || !validRedirectUri(supplied)) return false;
+  const a = new URL(registered), b = new URL(supplied);
+  if (a.protocol !== "http:" || b.protocol !== "http:" || a.hostname !== b.hostname) return false;
+  // Loopback native clients select an available port at login (RFC 8252).
+  a.port = ""; b.port = "";
+  return a.href === b.href;
+}
+
+/** Fetch only trusted HTTPS client metadata, without credentials or redirects.
+ * A domain policy avoids turning a public authorize URL into an SSRF proxy. */
+async function clientMetadata(clientId: string, config: OAuthConfig): Promise<string | null> {
+  try {
+    const url = new URL(clientId);
+    const hosts = config.clientMetadataHosts ?? ["chatgpt.com", "claude.ai"];
+    if (url.protocol !== "https:" || url.username || url.password || url.hash || url.port || !hosts.includes(url.hostname)) return null;
+    const response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(5_000), headers: { Accept: "application/json" } });
+    if (!response.ok) return null;
+    const raw = await response.text();
+    if (raw.length > 65_536) return null;
+    const data = JSON.parse(raw) as Record<string, unknown>;
+    if (data.client_id !== clientId || !Array.isArray(data.redirect_uris) || !data.redirect_uris.length ||
+        data.redirect_uris.length > 20 || !data.redirect_uris.every(validRedirectUri) ||
+        (data.client_name !== undefined && (typeof data.client_name !== "string" || data.client_name.length > 120)) ||
+        (data.token_endpoint_auth_method !== undefined && data.token_endpoint_auth_method !== "none")) return null;
+    const record = JSON.stringify({ client_id: clientId, redirect_uris: data.redirect_uris, client_name: data.client_name ?? null, token_endpoint_auth_method: "none" });
+    await config.kv.put(`client:${clientId}`, record, { expirationTtl: 3600 });
+    return record;
+  } catch { return null; }
 }
 
 /** POST /register — dynamic client registration (required by mcp-remote) */
@@ -392,16 +461,24 @@ async function register(request: Request, config: OAuthConfig): Promise<Response
 
   let body: Record<string, unknown>;
   try {
-    body = (await request.json()) as Record<string, unknown>;
+    const raw = await request.text();
+    if (raw.length > 16_384) return json({ error: "invalid_request" }, 413);
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return json({ error: "invalid_request" }, 400);
+    body = parsed as Record<string, unknown>;
   } catch {
     return json({ error: "invalid_request" }, 400);
   }
 
   const redirectUris = body.redirect_uris;
-  if (!Array.isArray(redirectUris) || redirectUris.length === 0) {
+  if (!Array.isArray(redirectUris) || redirectUris.length === 0 || redirectUris.length > 20 || !redirectUris.every(validRedirectUri)) {
     return json({ error: "invalid_redirect_uri" }, 400);
   }
 
+  if ((body.client_name !== undefined && (typeof body.client_name !== "string" || body.client_name.length > 120)) ||
+      (body.token_endpoint_auth_method !== undefined && body.token_endpoint_auth_method !== "none")) {
+    return json({ error: "invalid_client_metadata" }, 400);
+  }
   const clientId = crypto.randomUUID();
   const client = {
     client_id: clientId,
@@ -438,16 +515,17 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
   if (!clientId || !redirectUri || !codeChallenge) {
     return new Response("missing client_id, redirect_uri, or code_challenge", { status: 400 });
   }
-  if (codeChallengeMethod && codeChallengeMethod !== "S256") {
+  if (clientId.length > 2048) return new Response("invalid client_id", { status: 400 });
+  if (codeChallengeMethod !== "S256" || !/^[A-Za-z0-9_-]{43}$/.test(codeChallenge)) {
     return new Response("only S256 is supported", { status: 400 });
   }
   // Verify client registration
-  const clientRaw = await config.kv.get(`client:${clientId}`);
+  const clientRaw = await config.kv.get(`client:${clientId}`) ?? await clientMetadata(clientId, config);
   if (!clientRaw) {
     return new Response("invalid client_id", { status: 400 });
   }
   const client = JSON.parse(clientRaw) as { redirect_uris: string[]; client_name?: string | null };
-  if (!client.redirect_uris.includes(redirectUri)) {
+  if (!client.redirect_uris.some((registered) => redirectMatches(registered, redirectUri))) {
     return new Response("redirect_uri not registered", { status: 400 });
   }
 
@@ -503,6 +581,7 @@ async function exchangeLoginCode(config: OAuthConfig, code: string): Promise<str
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code }),
+      signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) return null;
     const body = (await response.json()) as {
@@ -594,6 +673,7 @@ async function oauthCallback(request: Request, config: OAuthConfig): Promise<Res
   // Redirect to client's redirect_uri with auth code
   const redirect = new URL(authReq.redirectUri);
   redirect.searchParams.set("code", code);
+  redirect.searchParams.set("iss", config.issuer);
   if (authReq.state) {
     redirect.searchParams.set("state", authReq.state);
   }
@@ -601,6 +681,8 @@ async function oauthCallback(request: Request, config: OAuthConfig): Promise<Res
     status: 302,
     headers: {
       Location: redirect.toString(),
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer",
       "Set-Cookie": `${AUTH_NONCE_COOKIE}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax`,
     },
   });
@@ -610,7 +692,10 @@ async function oauthCallback(request: Request, config: OAuthConfig): Promise<Res
 async function tokenExchange(request: Request, config: OAuthConfig): Promise<Response> {
   let body: URLSearchParams;
   try {
-    body = new URLSearchParams(await request.text());
+    if (!request.headers.get("Content-Type")?.toLowerCase().startsWith("application/x-www-form-urlencoded")) return json({ error: "invalid_request" }, 415);
+    const raw = await request.text();
+    if (raw.length > 16_384) return json({ error: "invalid_request" }, 413);
+    body = new URLSearchParams(raw);
   } catch {
     return json({ error: "invalid_request" }, 400);
   }
@@ -632,7 +717,7 @@ async function authorizationCodeGrant(body: URLSearchParams, config: OAuthConfig
   const clientId = body.get("client_id");
   const codeVerifier = body.get("code_verifier");
 
-  if (!code || !redirectUri || !clientId || !codeVerifier) {
+  if (!code || !redirectUri || !clientId || !codeVerifier || !/^[A-Za-z0-9._~-]{43,128}$/.test(codeVerifier)) {
     return json({ error: "invalid_request" }, 400);
   }
 
@@ -651,6 +736,11 @@ async function authorizationCodeGrant(body: URLSearchParams, config: OAuthConfig
     appId?: string | null;
   };
 
+  const requested = body.get("resource");
+  if (requested) {
+    const target = resourceTarget(requested, config.issuer);
+    if (!target.ok || target.appId !== (codeData.appId ?? null)) return json({ error: "invalid_target" }, 400);
+  }
   if (codeData.redirectUri !== redirectUri || codeData.clientId !== clientId) {
     return json({ error: "invalid_grant" }, 400);
   }
@@ -666,39 +756,32 @@ async function authorizationCodeGrant(body: URLSearchParams, config: OAuthConfig
     return json({ error: "invalid_grant", error_description: "PKCE verification failed" }, 400);
   }
 
-  // Issue opaque access token → maps to session in KV (24h TTL)
+  // Issue an opaque endpoint-bound access credential.
   const accessToken = crypto.randomUUID();
   const familyId = crypto.randomUUID();
 
-  // Issue a refresh token (#418) so the client can renew without the browser
-  // for up to 90 days. This needs the session's claims (not the JWT itself —
-  // that may be only days from its own 30-day exp) so every later refresh can
-  // re-mint a fresh session regardless of how stale this one gets. Best
-  // effort: a session that doesn't verify (e.g. a legacy/raw value) still
-  // gets its access token, just no refresh_token.
+  // Only a valid signed session can authorize a refresh family. Future refreshes
+  // re-mint unprivileged claims; elevated roles remain bounded by this expiry.
   const claims = await verifySession(codeData.session, config.sessionSigningKey);
-  const refreshToken = claims
-    ? await issueRefreshToken(config, {
-      claims: sessionSeed(claims),
-      clientId,
-      appId: codeData.appId ?? null,
-      familyId,
-      privilegedUntil: claims.exp,
-    })
-    : null;
+  if (!claims) return json({ error: "invalid_grant" }, 400);
+  const refreshToken = await issueRefreshToken(config, {
+    claims: sessionSeed(claims), clientId, appId: codeData.appId ?? null,
+    familyId, privilegedUntil: claims.exp,
+  });
+  const expiresIn = Math.min(86_400, claims.exp - Math.floor(Date.now() / 1000));
   // The access token carries its family only when a grant exists to revoke (#457).
   await config.kv.put(
     `token:${accessToken}`,
-    JSON.stringify({ session: codeData.session, appId: codeData.appId ?? null, ...(claims ? { familyId } : {}) }),
-    { expirationTtl: 86_400 },
+    JSON.stringify({ session: codeData.session, appId: codeData.appId ?? null, familyId, clientId }),
+    { expirationTtl: expiresIn },
   );
-  if (claims) await writeGrant(config, claims.uid, codeData.appId ?? null, familyId, clientId);
+  await writeGrant(config, claims.uid, codeData.appId ?? null, familyId, clientId);
 
   return json({
     access_token: accessToken,
     token_type: "bearer",
-    expires_in: 86_400,
-    ...(refreshToken ? { refresh_token: refreshToken } : {}),
+    expires_in: expiresIn,
+    refresh_token: refreshToken,
   });
 }
 
@@ -723,6 +806,8 @@ interface RefreshTokenRecord {
    * records issued before this field: treated as already past.
    */
   privilegedUntil?: number;
+  /** Stored only after a successful rotation, for bounded idempotent retries. */
+  rotation?: RotationResponse;
 }
 
 /** Roles every signed-in account holds (backend rolesFor); anything else is a grant that must be re-checked by signing in. */
@@ -754,35 +839,38 @@ async function refreshTokenGrant(body: URLSearchParams, config: OAuthConfig): Pr
   if (record.clientId !== clientId) {
     return json({ error: "invalid_grant" }, 400);
   }
-  if (record.expiresAt < now) {
+  if (record.expiresAt <= now) {
     return json({ error: "invalid_grant" }, 400);
   }
   if (await familyRevoked(config.kv, record.familyId)) {
     return json({ error: "invalid_grant" }, 400);
   }
+  const resource = body.get("resource");
+  if (resource) {
+    const target = resourceTarget(resource, config.issuer);
+    if (!target.ok || target.appId !== record.appId) return json({ error: "invalid_target" }, 400);
+  }
   if (record.usedAt !== null) {
+    if (record.rotation && record.usedAt + REFRESH_RETRY_SECONDS >= now) return json({ ...record.rotation, expires_in: Math.max(0, record.rotation.expires_in - (now - record.usedAt)) });
     // This token was already rotated away. Someone is replaying an old one —
     // kill the whole family, including whatever token it was rotated into.
     await revokeFamily(config, record.familyId);
     return json({ error: "invalid_grant" }, 400);
   }
 
-  // Single-use: mark this one spent but keep the record (not delete it) until
-  // its own expiry, so a later replay is still caught by the check above.
-  await config.kv.put(key, JSON.stringify({ ...record, usedAt: now }), {
-    expirationTtl: Math.max(60, record.expiresAt - now),
-  });
-
   // Re-mint the session fresh (#418): this is what makes the refresh work for
   // the full 90 days even though the underlying session JWT's own TTL is 30
   // days — we never read its exp, only the claims it was minted with.
   const claims = refreshClaims(record, now);
-  const session = await mintSession(claims, config.sessionSigningKey);
+  const privileged = (claims.roles ?? []).some((role) => !UNPRIVILEGED_ROLES.has(role));
+  const sessionTtl = privileged ? Math.max(1, Math.min(30 * 86_400, (record.privilegedUntil ?? now) - now)) : 30 * 86_400;
+  const expiresIn = Math.min(86_400, sessionTtl);
+  const session = await mintSession(claims, config.sessionSigningKey, sessionTtl);
   const accessToken = crypto.randomUUID();
   await config.kv.put(
     `token:${accessToken}`,
-    JSON.stringify({ session, appId: record.appId, familyId: record.familyId }),
-    { expirationTtl: 86_400 },
+    JSON.stringify({ session, appId: record.appId, familyId: record.familyId, clientId: record.clientId }),
+    { expirationTtl: expiresIn },
   );
   await touchGrant(config, claims.uid, record.appId, record.familyId, record.clientId);
   const nextRefreshToken = await issueRefreshToken(config, {
@@ -793,12 +881,15 @@ async function refreshTokenGrant(body: URLSearchParams, config: OAuthConfig): Pr
     privilegedUntil: record.privilegedUntil,
   });
 
-  return json({
-    access_token: accessToken,
-    token_type: "bearer",
-    expires_in: 86_400,
-    refresh_token: nextRefreshToken,
+  const rotation: RotationResponse = {
+    access_token: accessToken, token_type: "bearer", expires_in: expiresIn, refresh_token: nextRefreshToken,
+  };
+  // Publish the successor before spending its parent. A failed mint/write never
+  // strands the client, and a lost response can recover the SAME pair briefly.
+  await config.kv.put(key, JSON.stringify({ ...record, usedAt: now, rotation }), {
+    expirationTtl: Math.max(60, record.expiresAt - now),
   });
+  return json(rotation);
 }
 
 function sessionSeed(claims: { iat: number; exp: number } & NewSession): NewSession {
@@ -836,6 +927,29 @@ async function revokeFamily(
 ): Promise<void> {
   const ttlSeconds = config.refreshTokenTtlSeconds ?? DEFAULT_REFRESH_TTL_SECONDS;
   await config.kv.put(`revoked-refresh-family:${familyId}`, "1", { expirationTtl: ttlSeconds });
+}
+
+/** RFC 7009: a public client can revoke only credentials issued to that client.
+ * Unknown tokens and tokens belonging to another client have the same response. */
+async function revokeToken(request: Request, config: OAuthConfig): Promise<Response> {
+  if (!request.headers.get("Content-Type")?.toLowerCase().startsWith("application/x-www-form-urlencoded")) return json({ error: "invalid_request" }, 415);
+  const raw = await request.text();
+  if (raw.length > 16_384) return json({ error: "invalid_request" }, 413);
+  const body = new URLSearchParams(raw);
+  const token = body.get("token"), clientId = body.get("client_id");
+  if (!token || !clientId) return json({ error: "invalid_request" }, 400);
+  const refresh = await config.kv.get(`refresh:${token}`);
+  const access = refresh ? null : await config.kv.get(`token:${token}`);
+  let record: (RefreshTokenRecord & { session?: string }) | null;
+  try { record = JSON.parse(refresh ?? access ?? "null"); }
+  catch { record = null; }
+  if (record?.clientId === clientId && typeof record.familyId === "string") {
+    // Storage failures propagate; they must not masquerade as successful revocation.
+    await revokeFamily(config, record.familyId);
+    const uid = record.claims?.uid ?? (record.session ? (await verifySession(record.session, config.sessionSigningKey))?.uid : undefined);
+    if (uid) await config.kv.delete(grantKey(uid, record.appId, record.familyId));
+  }
+  return new Response(null, { status: 200, headers: { "Cache-Control": "no-store", "Pragma": "no-cache", "Access-Control-Allow-Origin": "*" } });
 }
 
 // ── Grants (#457) ────────────────────────────────────────────────────────────

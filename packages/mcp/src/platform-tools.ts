@@ -16,13 +16,18 @@ import { getRecipe } from "../../agent-teams/src/recipes.js";
 import { TEMPLATE_CATALOGUE, DEFAULT_TEMPLATE_ID, TEMPLATE_CATALOGUE_VERSION } from "@proappstore/build-core";
 import { errText } from "./errors.js";
 
-export function registerPlatformTools(server: McpServer, env: Env) {
+const APP_ID = z.string().max(58).regex(/^[a-z][a-z0-9-]*$/);
+
+export function registerPlatformTools(server: McpServer, env: Env, getConnectionToken: () => string | null = () => null) {
+  const requireToken = () => getConnectionToken();
   // ── list_apps ──────────────────────────────────────────────
   server.tool(
     "list_apps",
-    "List your published apps on ProAppStore. Requires a session token.",
-    { token: z.string().describe("PAS session token") },
-    async ({ token }) => {
+    "List apps owned by or shared with the authenticated PAS account. Uses connection authentication; never supply credentials.",
+    {},
+    async () => {
+      const token = requireToken();
+      if (!token) return errText("Authentication required: reconnect the PAS MCP server.");
       const data = (await pasApi(env.API, env.API_BASE, "/v1/apps", token)) as {
         apps?: Array<{ id: string; name: string; category: string | null; description: string | null }>;
         error?: string;
@@ -41,7 +46,7 @@ export function registerPlatformTools(server: McpServer, env: Env) {
   server.tool(
     "deploy_status",
     "Check the deploy status of a Pro app (last 5 GitHub Actions runs).",
-    { app_id: z.string().describe("App ID (e.g. 'meetup', 'kanban')") },
+    { app_id: APP_ID.describe("App ID (e.g. 'meetup', 'kanban')") },
     async ({ app_id }) => {
       const runs = await getDeployStatus(env.GITHUB_ORG, app_id, env.GITHUB_TOKEN);
       if ("error" in runs) return errText(`Error: ${(runs as { error: string }).error}`);
@@ -57,9 +62,11 @@ export function registerPlatformTools(server: McpServer, env: Env) {
   // ── schema_status ──────────────────────────────────────────
   server.tool(
     "schema_status",
-    "Show an app's D1 migration status (#33) — recent deploy-time migration attempts and whether the latest one applied or FAILED. Surfaces schema drift instead of it being silent. Owner-only (requires a session token).",
-    { app_id: z.string().describe("App ID (e.g. 'chess-academy')"), token: z.string().describe("PAS session token") },
-    async ({ app_id, token }) => {
+    "Show an app's D1 migration status (#33) — recent deploy-time migration attempts and whether the latest one applied or FAILED. Surfaces schema drift instead of it being silent. Owner-only; uses connection authentication.",
+    { app_id: APP_ID.describe("App ID (e.g. 'chess-academy')") },
+    async ({ app_id }) => {
+      const token = requireToken();
+      if (!token) return errText("Authentication required: reconnect the PAS MCP server.");
       const data = (await pasApi(env.API, env.API_BASE, `/v1/apps/${app_id}/schema-status`, token)) as {
         hasUnresolvedFailure?: boolean;
         last?: { source: string; status: string; applied: string[]; already: string[]; detail: string | null; ranAt: number } | null;
@@ -90,12 +97,13 @@ export function registerPlatformTools(server: McpServer, env: Env) {
     "list_scheduled_runs",
     "List recent platform-scheduled registered-action runs for one app, including failures and the change count. Owner-only.",
     {
-      app_id: z.string().describe("App ID (e.g. 'chess-academy')"),
-      token: z.string().describe("PAS session token"),
+      app_id: APP_ID.describe("App ID (e.g. 'chess-academy')"),
       limit: z.number().int().min(1).max(200).optional().describe("Maximum history rows (default 50)"),
       status: z.enum(["due", "claimed", "succeeded", "failed"]).optional().describe("Optional run status filter"),
     },
-    async ({ app_id, token, limit, status }) => {
+    async ({ app_id, limit, status }) => {
+      const token = requireToken();
+      if (!token) return errText("Authentication required: reconnect the PAS MCP server.");
       const query = new URLSearchParams();
       if (limit !== undefined) query.set('limit', String(limit));
       if (status) query.set('status', status);
@@ -154,7 +162,7 @@ export function registerPlatformTools(server: McpServer, env: Env) {
   server.tool(
     "app_info",
     "Get info about any app on ProAppStore — live URL, repo, data worker, store listing.",
-    { app_id: z.string().describe("App ID (e.g. 'meetup', 'kanban')") },
+    { app_id: APP_ID.describe("App ID (e.g. 'meetup', 'kanban')") },
     async ({ app_id }) => {
       const domain = "proappstore.online";
       const org = env.GITHUB_ORG;

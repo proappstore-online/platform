@@ -30,6 +30,8 @@ AUTH_START = "https://api.proappstore.online/v1/auth/github/start"
 # always had its own GitHub OAuth app (#61) — the id is restored in
 # packages/backend/wrangler.toml, so the button works again. See #141.
 AUTH_PROVIDERS = "github,google"
+MCP_ALLOWED_ORIGINS = "https://chatgpt.com,https://chat.openai.com,https://claude.ai,https://claude.com"
+OAUTH_CIMD_HOSTS = "chatgpt.com,claude.ai"
 
 # Secrets set via `wrangler secret put`:
 #   SESSION_SIGNING_KEY
@@ -75,9 +77,14 @@ id = "125418919bd640dcb3c45a7687b27162"
 
 [durable_objects]
 bindings = [
-  { name = "MCP_OBJECT", class_name = "PasMcpAgent" }
+  { name = "MCP_OBJECT", class_name = "PasMcpAgent" },
+  { name = "OAUTH_STATE", class_name = "OAuthState" }
 ]
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["PasMcpAgent"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["OAuthState"]

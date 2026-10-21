@@ -1,3 +1,5 @@
+import { text, type Text } from "./text-result.js";
+import { appToolAnnotations } from "./tool-metadata.js";
 /**
  * Load app tools from the platform API and register them on the MCP server.
  *
@@ -74,8 +76,8 @@ const APP_ID_RE = /^[a-z][a-z0-9-]{0,57}$/;
  * app_roles are deliberately NOT enforced here: the session token's per-app
  * roles are minted at login and can lag a just-granted role in the app_roles D1
  * table, so pre-rejecting on them would risk a false denial. The backend checks
- * those live against D1. Platform roles are global and always current in the
- * session claims, so they're safe to short-circuit on.
+ * those live against D1. Platform roles use the verified session claims; the backend remains the
+ * final authority.
  */
 export function checkPlatformRoles(tool: AppTool, roles: string[]): string | null {
   const required = tool.auth?.platform_roles ?? [];
@@ -239,7 +241,10 @@ function inputSchemaFor(params: Record<string, ToolParam> | undefined): Record<s
   const required: string[] = [];
   for (const [name, def] of Object.entries(params ?? {})) {
     const type = def.type === 'integer' ? 'integer' : def.type === 'number' ? 'number' : def.type === 'boolean' ? 'boolean' : 'string';
-    properties[name] = { type, description: def.description ?? name };
+    properties[name] = { type, description: def.description ?? name,
+      ...(def.default !== undefined ? { default: def.default } : {}),
+      ...(def.max !== undefined && (type === 'integer' || type === 'number') ? { maximum: def.max } : {}),
+    };
     if (!def.optional && def.default === undefined) required.push(name);
   }
   return { type: 'object', properties, ...(required.length ? { required } : {}) };
@@ -254,7 +259,7 @@ export function measureToolsListBytes(tools: AppTool[]): number {
   const enc = new TextEncoder();
   let bytes = 2; // the surrounding `[]`
   for (const tool of tools) {
-    bytes += enc.encode(JSON.stringify({ name: tool.name, description: `[${tool.app_id}] ${tool.description}`, inputSchema: inputSchemaFor(tool.params) })).byteLength + 1;
+    bytes += enc.encode(JSON.stringify({ name: tool.name, description: `[${tool.app_id}] ${tool.description}`, inputSchema: inputSchemaFor(tool.params), annotations: appToolAnnotations(tool.operation) })).byteLength + 1;
   }
   return bytes;
 }
@@ -276,9 +281,9 @@ export async function executeToolCall(
   userToken: string | null,
   api: Fetcher,
   apiBase: string,
-): Promise<string> {
+): Promise<Text> {
   if (!userToken) {
-    return 'Error: This tool requires authentication. Authenticate the MCP connection or send a PAS session token.';
+    return errText('Authentication required: reconnect the PAS MCP server.');
   }
 
   let res: Response;
@@ -292,12 +297,12 @@ export async function executeToolCall(
       body: JSON.stringify({ params: args }),
     });
   } catch (err) {
-    return `Error: platform action executor unreachable (${err instanceof Error ? err.message : String(err)})`;
+    return errText(`Error: platform action executor unreachable (${err instanceof Error ? err.message : String(err)})`);
   }
 
   if (!res.ok) {
     const text = await res.text();
-    return `Error from platform action executor (${res.status}): ${text}`;
+    return errText(`Error from platform action executor (${res.status}): ${text}`);
   }
 
   const result = await res.json();
@@ -306,12 +311,12 @@ export async function executeToolCall(
     // Data worker returns { rows: [...], meta: {...} }
     const data = result as { rows?: unknown[] };
     const rows = data.rows ?? [];
-    if (rows.length === 0) return 'No results found.';
-    return JSON.stringify(rows, null, 2);
+    if (rows.length === 0) return text('No results found.');
+    return text(JSON.stringify(rows, null, 2));
   }
 
   // execute/batch: return metadata from the data worker.
-  return JSON.stringify(result, null, 2);
+  return text(JSON.stringify(result, null, 2));
 }
 
 /**
@@ -326,7 +331,8 @@ function buildZodSchema(params: Record<string, { type: string; description?: str
     switch (def.type) {
       case 'integer':
       case 'number':
-        field = z.number().describe(def.description ?? name);
+        field = (def.type === 'integer' ? z.number().int() : z.number()).describe(def.description ?? name);
+        if (def.max !== undefined) field = (field as z.ZodNumber).max(def.max);
         break;
       case 'boolean':
         field = z.boolean().describe(def.description ?? name);
@@ -335,9 +341,8 @@ function buildZodSchema(params: Record<string, { type: string; description?: str
         field = z.string().describe(def.description ?? name);
     }
 
-    if (def.optional || def.default !== undefined) {
-      field = field.optional();
-    }
+    if (def.default !== undefined) field = field.default(def.default);
+    else if (def.optional) field = field.optional();
 
     schema[name] = field;
   }
@@ -372,7 +377,7 @@ export function registerAppTools(
     }
     const zodSchema = buildZodSchema(tool.params);
 
-    server.tool(
+    const registration = server.tool(
       tool.name,
       `[${tool.app_id}] ${tool.description}`,
       zodSchema,
@@ -382,18 +387,18 @@ export function registerAppTools(
         // manifest requires a platform role this session lacks. Backend
         // enforceActionAuth remains the authority (esp. for app_roles).
         const roleErr = checkPlatformRoles(tool, roles);
-        if (roleErr) return { content: [{ type: 'text' as const, text: roleErr }] };
+        if (roleErr) return errText(roleErr);
         // `execute` and `batch` actions mutate app data; `query` actions are read-only.
         // Gate + audit the mutating ones (read-only mode throws here). `scope: "app"`
         // lets the audit log tell this path from `call_app_tool` on the shared endpoint.
         if (tool.operation !== 'query') {
           await gateMutation({ env, subject: userId }, tool.name, { app_id: tool.app_id, scope: 'app' });
         }
-        const result = await executeToolCall(tool, args as Record<string, unknown>, token, api, apiBase);
-        return { content: [{ type: 'text' as const, text: result }] };
+        return executeToolCall(tool, args as Record<string, unknown>, token, api, apiBase);
       },
     );
 
+    if (registration && typeof registration.update === "function") registration.update({ annotations: appToolAnnotations(tool.operation) });
     registered.push(tool.name);
   }
 
@@ -519,19 +524,18 @@ function registerDiscoveryPair(
       const manifest = tools.find((t) => t.name === tool);
       if (!manifest) {
         const hint = scope ? 'call list_app_tools({}) for the names it exposes' : `call list_app_tools({ app_id: "${app_idResolved}" }) for the names it exposes`;
-        return { content: [{ type: 'text' as const, text: `Unknown tool ${tool} for ${app_idResolved}; ${hint}.` }] };
+        return errText(`Unknown tool ${tool} for ${app_idResolved}; ${hint}.`);
       }
       const { userId, token, roles } = getUserContext();
       const roleErr = checkPlatformRoles(manifest, roles);
-      if (roleErr) return { content: [{ type: 'text' as const, text: roleErr }] };
+      if (roleErr) return errText(roleErr);
       // Query tools must keep working under MCP_READ_ONLY; only the mutating operations are
       // gated and audited. PAGS gates its invoker unconditionally because it cannot know the
       // side effect; PAS knows `operation`.
       if (manifest.operation !== 'query') {
         await gateMutation({ env, subject: userId }, 'call_app_tool', { app_id: app_idResolved, tool, scope: scope ? 'app' : 'shared' });
       }
-      const result = await executeToolCall(manifest, params ?? {}, token, api, apiBase);
-      return { content: [{ type: 'text' as const, text: result }] };
+      return executeToolCall(manifest, params ?? {}, token, api, apiBase);
     },
   );
 }

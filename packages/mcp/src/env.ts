@@ -1,3 +1,5 @@
+import type { OAuthState } from "./oauth-state.js";
+
 export interface Env {
   API_BASE: string;
   /** Agent Teams API base (the autonomous build loop). e.g. https://agents.proappstore.online */
@@ -15,14 +17,19 @@ export interface Env {
   INTERNAL_TOKEN?: string;
   /** HMAC key for session verification + OAuth. */
   SESSION_SIGNING_KEY?: string;
-  /** Workers KV namespace for OAuth 2.1 state + MCP audit log. */
+  /** Strongly consistent authority for OAuth state and token rotation. */
+  OAUTH_STATE?: DurableObjectNamespace<OAuthState>;
+  /** Legacy OAuth migration source and MCP audit log. */
   OAUTH_KV?: KVNamespace;
   /** Set to "1" to block all mutating MCP tools (server-wide read-only mode). */
   MCP_READ_ONLY?: string;
+  /** Additional browser origins allowed to access the MCP transport, comma-separated. */
+  MCP_ALLOWED_ORIGINS?: string;
   /** Auth start URL for OAuth flow (PAS-owned). */
   AUTH_START?: string;
   /** Comma-separated OAuth providers exposed on the MCP login page. */
   AUTH_PROVIDERS?: string;
+  OAUTH_CIMD_HOSTS?: string;
   /** Refresh-token lifetime override, in seconds (#418). Defaults to 90 days. */
   OAUTH_REFRESH_TTL_SECONDS?: string;
 }

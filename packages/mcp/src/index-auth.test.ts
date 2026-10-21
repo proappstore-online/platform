@@ -1,26 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from './env.js';
+import { brokerMcpReadSeen, handleOAuthRoute, issueBrokerCredential, listGrants, recordBrokerMcpRead, resolveOAuthToken, revokeGrant } from './oauth-provider.js';
 
+let currentProps: Record<string, unknown> | undefined;
 const verifyTokenMock = vi.hoisted(() => vi.fn());
 const servedMock = vi.hoisted(() => ({
   calls: [] as Array<{ path: string; url: string; props: Record<string, unknown> | undefined }>,
 }));
 
-vi.mock('agents/mcp', () => ({
-  McpAgent: class {
-    static serve(path: string) {
-      return {
-        fetch: (request: Request, _env: Env, ctx: ExecutionContext & { props?: Record<string, unknown> }) => {
-          servedMock.calls.push({ path, url: request.url, props: ctx.props });
-          return new Response('mock mcp transport');
-        },
-      };
-    }
+vi.mock('./transport.js', () => ({
+  serveMcp: async (_server: unknown, request: Request) => {
+    servedMock.calls.push({ path: '/mcp', url: request.url, props: currentProps });
+    return new Response('mock mcp transport');
   },
 }));
 
 vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => ({
-  McpServer: class {},
+  McpServer: class { tool() {} },
 }));
 
 vi.mock('./api-helpers.js', () => ({
@@ -28,9 +24,32 @@ vi.mock('./api-helpers.js', () => ({
   verifyToken: verifyTokenMock,
 }));
 
-const { default: worker, clearVisibilityCache, PUBLIC_APP_TTL_MS } = await import('./index.js');
+const { default: realWorker, clearVisibilityCache, PUBLIC_APP_TTL_MS } = await import('./index.js');
 
 // GET /v1/apps/:id/visibility/me (#259): public unless a test says otherwise.
+
+const worker = {
+  fetch(request: Request, e: Env, ctx: ExecutionContext) {
+    const kv = e.OAUTH_KV ?? makeKv();
+    const cfg = { issuer: 'https://mcp.proappstore.online', authStart: e.AUTH_START ?? `${e.API_BASE}/v1/auth/github/start`, api: e.API, kv, sessionSigningKey: e.SESSION_SIGNING_KEY!, authProviders: e.AUTH_PROVIDERS?.split(',') as ('github' | 'google')[] | undefined };
+    const stub = {
+      fetch: (r: Request) => handleOAuthRoute(r, cfg),
+      resolveToken: async (t: string) => (await resolveOAuthToken(t, kv)) ??
+        (t === 'good-token' || t === 'expired-or-bad-token' ? { session: t, appId: request.url.match(/\/mcp\/apps\/([^/?]+)/)?.[1] ?? null, bound: true } : null),
+      issueBroker: (_issuer: string, input: Parameters<typeof issueBrokerCredential>[1]) => issueBrokerCredential(cfg, input),
+      grants: (uid: string, app: string | null) => listGrants(kv, uid, app),
+      revoke: (uid: string, id: string) => revokeGrant(cfg, uid, id),
+      readSeen: (id: string) => brokerMcpReadSeen(kv, id),
+      recordRead: (id: string) => recordBrokerMcpRead(kv, id),
+    };
+    currentProps = (ctx as ExecutionContext & { props?: Record<string, unknown> }).props;
+    const result = realWorker.fetch(request, { ...e, OAUTH_STATE: { idFromName: () => 'authority', get: () => stub }  } as unknown as Env, ctx);
+    // The request props are assigned immediately before the transport runs.
+    Object.defineProperty(ctx, 'props', { configurable: true, get: () => currentProps, set: (v) => { currentProps = v; } });
+    return result;
+  },
+};
+
 const visibilityMe = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ mode: 'public', allowed: true }));
 
 const env = {
@@ -319,7 +338,7 @@ describe('MCP app-scoped sessions on private apps (#259)', () => {
     visibilityMe.mockImplementation(async () => Response.json({ mode: 'private', allowed: true }));
     expect((await open()).status).toBe(200);
     expect((await open()).status).toBe(200);
-    expect(visibilityMe).toHaveBeenCalledTimes(2);
+    expect(visibilityMe.mock.calls.filter(([url]) => url.endsWith('/visibility/me'))).toHaveLength(2);
   });
 
   it('fails closed with 503 when the lookup fails, never an allow', async () => {

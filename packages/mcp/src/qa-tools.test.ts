@@ -7,7 +7,7 @@ import { z } from 'zod';
  * (method + path + body) each tool makes, plus auth + read-only gating.
  */
 
-type Handler = (args: Record<string, unknown>) => Promise<{ content: { type: string; text: string }[] }>;
+type Handler = (args: Record<string, unknown>) => Promise<{ content: { type: string; text: string }[]; isError?: boolean }>;
 const tools = new Map<string, Handler>();
 const schemas = new Map<string, z.ZodRawShape>();
 const fakeServer = {
@@ -109,6 +109,7 @@ describe('QA MCP tools', () => {
   it('surfaces backend errors instead of throwing', async () => {
     apiFetch.mockResolvedValueOnce(new Response('not owner', { status: 403 }));
     const res = await call('qa_list_flows', { appId: 'chess-academy' });
+    expect(res.isError).toBe(true);
     expect(textOf(res)).toContain('403');
   });
 
@@ -116,6 +117,7 @@ describe('QA MCP tools', () => {
     userCtx = { userId: null, token: null };
     const res = await call('qa_list_flows', { appId: 'chess-academy' });
     expect(apiFetch).not.toHaveBeenCalled();
+    expect(res.isError).toBe(true);
     expect(textOf(res)).toContain('Not authenticated');
   });
 

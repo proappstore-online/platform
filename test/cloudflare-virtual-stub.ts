@@ -33,3 +33,8 @@ export class NonRetryableError extends Error {
 
 // Type-only exports (WorkflowEvent, WorkflowStep) are erased at compile time, so
 // they need no runtime stub.
+
+/** Durable Object storage is supplied by workerd in runtime tests. */
+export class DurableObject<Env = unknown> {
+  constructor(protected ctx: DurableObjectState, protected env: Env) {}
+}

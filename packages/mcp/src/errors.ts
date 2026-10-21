@@ -4,8 +4,8 @@
  * text is indistinguishable from success to a caller that does not parse the
  * text. Every explicit failure return goes through here instead.
  */
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { Text } from './text-result.js';
 
-export function errText(text: string): CallToolResult {
+export function errText(text: string): Text {
   return { content: [{ type: 'text', text }], isError: true };
 }

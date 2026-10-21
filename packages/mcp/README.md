@@ -10,7 +10,7 @@ reference, and reach any published app's registered data tools.
 |---|---|
 | Endpoint | `https://mcp.proappstore.online/mcp` (streamable HTTP) |
 | Per-app endpoint | `https://mcp.proappstore.online/mcp/apps/<app_id>` — that app's own tools |
-| Auth | OAuth 2.1 + PKCE (S256) with dynamic client registration, or `Authorization: Bearer <PAS session JWT>` |
+| Auth | OAuth 2.1 + PKCE (S256); trusted HTTPS client metadata or dynamic client registration |
 | Discovery | [`server.json`](./server.json) (MCP registry manifest) · [`AGENTS.md`](./AGENTS.md) (rules for agents) · [`llms.txt`](./llms.txt) · [`CLAUDE.md`](./CLAUDE.md) (maintainer notes) · [`.well-known/oauth-authorization-server`](https://mcp.proappstore.online/.well-known/oauth-authorization-server) |
 | Source | `packages/mcp` in [proappstore-online/platform](https://github.com/proappstore-online/platform); deploys on push to `main` |
 
@@ -26,6 +26,7 @@ Codex:
 
 ```bash
 codex mcp add proappstore --url https://mcp.proappstore.online/mcp
+codex mcp login proappstore
 ```
 
 Project-local `.mcp.json`:
@@ -39,14 +40,50 @@ Project-local `.mcp.json`:
 }
 ```
 
-The first connection opens the browser for OAuth (GitHub or Google, via the
-platform). Scripts can skip the browser by sending a PAS session JWT as the
-bearer instead. Tokens are bound to the endpoint they were issued for: a token
+Complete the browser OAuth flow (GitHub or Google, via PAS), then use `whoami`
+to verify the intended account. All tools use connection authentication; never
+copy credentials into a prompt or tool argument. Raw PAS session JWTs and personal
+app tokens are not MCP credentials. Headless clients use
+[`pas mcp-auth`](../../docs/mcp-remote-auth-client.md). Tokens are bound to the endpoint they were issued for: a token
 for `/mcp/apps/crm` does not open `/mcp`.
+
+### Connection versus plugin mention
+
+Adding an MCP server enables tools; it does not create an `@proappstore` plugin
+entry. Install and enable the general ProAppStore plugin separately to select it
+in the plugin picker. A user-level MCP entry in `~/.codex/config.toml` works across
+projects; a project-scoped config affects only that project. Restart the host or
+open a fresh session after installation or a tool-catalogue update.
+
+If tools are missing, check `codex mcp list`, run `codex mcp login proappstore` if
+sign-in is required, and confirm `whoami`, `list_apps` and `list_templates`. An
+app-scoped connection intentionally exposes only that app's actions and identity
+helpers; connect to `/mcp` for the general platform tools.
+
+### Protocol and token lifecycle
+
+The official MCP SDK serves stateless Streamable HTTP. Every request rechecks its
+OAuth access token, endpoint binding and current session; an old transport session
+id never selects a previous identity. Browser origins are checked against the
+server origin and `MCP_ALLOWED_ORIGINS`; standalone GET streams return 405.
+
+OAuth state is held in the SQLite `OAuthState` Durable Object. Authorization-code
+redemption, refresh rotation and revocation are serialized and strongly consistent.
+Existing KV records remain a read-only migration source for at most 90 days;
+consumed/deleted records are shadowed by durable tombstones without extending
+legacy TTLs. KV still stores the redacted audit log.
+
+Access tokens last up to 24 hours (shorter near a privileged sign-in expiry). Refresh tokens rotate with a 90-day inactivity window.
+A retry within 30 seconds returns the same successor pair; reuse after that window
+revokes the family. `/revoke` implements client-bound RFC 7009 revocation, and
+app-scoped grants can also be revoked from the app's MCP settings. Privileged roles
+still expire with the original sign-in session. OAuth responses are not cached.
+CIMD is supported for `OAUTH_CIMD_HOSTS` (default ChatGPT and Claude); metadata is
+fetched over HTTPS without credentials or redirects. Other clients use `/register`.
 
 ## Tools
 
-53 tools on the shared endpoint (the count is pinned in `src/tool-count.ts` and
+68 tools on the shared endpoint (the count is pinned in `src/tool-count.ts` and
 checked against `server.json` by `src/server-json.test.ts`). Tools marked
 **confirm** refuse unless called with `confirm: true`; **dry_run** tools accept
 `dry_run: true` to return the plan without changing anything.

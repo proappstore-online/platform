@@ -20,7 +20,8 @@ const newer = (a: string, b: string) => {
 };
 
 const templates = readdirSync(TEMPLATES, { withFileTypes: true })
-  .filter((d) => d.isDirectory() && d.name.startsWith('template-'))
+  // Published independently (#199); a leftover local directory is not a staged template.
+  .filter((d) => d.isDirectory() && d.name.startsWith('template-') && d.name !== 'template-marketplace')
   .map((d) => d.name);
 
 describe('staged templates inherit the pending auth status (#241)', () => {

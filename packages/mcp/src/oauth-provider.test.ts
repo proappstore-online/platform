@@ -87,7 +87,7 @@ describe('handleOAuthRoute', () => {
     });
 
     const res = await handleOAuthRoute(
-      new Request('https://mcp.proappstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=abc&code_challenge_method=S256'),
+      new Request('https://mcp.proappstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&code_challenge_method=S256'),
       {
         issuer: 'https://mcp.proappstore.online',
         authStart: 'https://api.proappstore.online/v1/auth/github/start',
@@ -116,7 +116,7 @@ describe('handleOAuthRoute', () => {
     });
 
     const res = await handleOAuthRoute(
-      new Request('https://mcp.proappstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=abc&code_challenge_method=S256&resource=https%3A%2F%2Fmcp.proappstore.online%2Fmcp%2Fapps%2Fcrm'),
+      new Request('https://mcp.proappstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&code_challenge_method=S256&resource=https%3A%2F%2Fmcp.proappstore.online%2Fmcp%2Fapps%2Fcrm'),
       {
         issuer: 'https://mcp.proappstore.online',
         authStart: 'https://api.proappstore.online/v1/auth/github/start',
@@ -141,7 +141,7 @@ describe('handleOAuthRoute', () => {
     });
 
     const res = await handleOAuthRoute(
-      new Request('https://mcp.proappstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=abc&code_challenge_method=S256&resource=https%3A%2F%2Fmcp.proappstore.online%2Fmcp%2Fapps%2FCRM!'),
+      new Request('https://mcp.proappstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&code_challenge_method=S256&resource=https%3A%2F%2Fmcp.proappstore.online%2Fmcp%2Fapps%2FCRM!'),
       {
         issuer: 'https://mcp.proappstore.online',
         authStart: 'https://api.proappstore.online/v1/auth/github/start',
@@ -220,7 +220,7 @@ describe('handleOAuthRoute', () => {
     };
 
     const page = await handleOAuthRoute(
-      new Request('https://mcp.proappstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=abc&code_challenge_method=S256'),
+      new Request('https://mcp.proappstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&code_challenge_method=S256'),
       config,
     );
     const html = await page!.text();
@@ -242,7 +242,7 @@ describe('handleOAuthRoute', () => {
     });
 
     const res = await handleOAuthRoute(
-      new Request('https://mcp.proappstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=abc&code_challenge_method=S256', {
+      new Request('https://mcp.proappstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&code_challenge_method=S256', {
         headers: { Cookie: 'pas_mcp_oauth_nonce=older-flow' },
       }),
       {
@@ -447,11 +447,12 @@ describe('oauth callback — one-time code (#110)', () => {
 
 describe('token exchange resource binding', () => {
   it('persists the auth code app binding on the issued access token', async () => {
-    const verifier = 'verifier-1';
+    const verifier = 'verifier-1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
     const codeChallenge = await pkceChallenge(verifier);
+    const signed = await mintSession({ uid: 'gh:1', login: 'alice', roles: ['user'] }, 'test-key');
     const kv = makeKv({
       'code:code-1': JSON.stringify({
-        session: 'pas-session',
+        session: signed,
         codeChallenge,
         redirectUri: 'https://client.example/cb',
         clientId: 'client-1',
@@ -481,8 +482,8 @@ describe('token exchange resource binding', () => {
 
     expect(res?.status).toBe(200);
     const body = await res!.json() as { access_token: string };
-    await expect(resolveOAuthToken(body.access_token, kv)).resolves.toEqual({
-      session: 'pas-session',
+    await expect(resolveOAuthToken(body.access_token, kv)).resolves.toMatchObject({
+      session: signed,
       appId: 'crm',
       bound: true,
     });
@@ -550,7 +551,7 @@ describe('refresh tokens (#418)', () => {
   // privileged role now lasts no longer than the session it was signed in with.
   describe('privileged roles do not outlive the authorizing session (#429)', () => {
     async function adminFamily(kv: KVNamespace) {
-      const verifier = 'verifier-admin';
+      const verifier = 'verifier-adminxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
       await kv.put('code:code-1', JSON.stringify({
         session: await mintSession({ uid: 'gh:9', login: 'ada', roles: ['user', 'creator', 'admin'] }, 'test-key'),
         codeChallenge: await pkceChallenge(verifier),
@@ -585,6 +586,22 @@ describe('refresh tokens (#418)', () => {
       expect((await rolesAfterRefresh(kv, first.next)).roles).toEqual(['user', 'creator']);
     });
 
+    it('caps a refreshed privileged session and access token at the original sign-in expiry', async () => {
+      const kv = makeKv();
+      const issued = await adminFamily(kv);
+      const record = JSON.parse((await kv.get(`refresh:${issued.refresh_token}`))!);
+      vi.useFakeTimers();
+      vi.setSystemTime((record.privilegedUntil - 10) * 1000);
+      const response = await handleOAuthRoute(refreshRequest(issued.refresh_token!), config(kv));
+      const body = await response!.json() as { access_token: string; refresh_token: string; expires_in: number };
+      expect(body.expires_in).toBe(10);
+      const access = JSON.parse((await kv.get(`token:${body.access_token}`))!);
+      expect((await verifySession(access.session, 'test-key'))!.exp).toBe(record.privilegedUntil);
+      vi.advanceTimersByTime(11_000);
+      expect(await verifySession(access.session, 'test-key')).toBeNull();
+      expect((await rolesAfterRefresh(kv, body.refresh_token)).roles).toEqual(['user', 'creator']);
+    });
+
     it('a refresh token issued before this field drops admin at once', async () => {
       const kv = makeKv();
       const issued = await adminFamily(kv);
@@ -596,7 +613,7 @@ describe('refresh tokens (#418)', () => {
   });
 
   it('issues a refresh token alongside the access token on the authorization_code grant', async () => {
-    const verifier = 'verifier-1';
+    const verifier = 'verifier-1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
     const kv = makeKv();
     await seedAuthCode(kv, await pkceChallenge(verifier));
 
@@ -607,7 +624,7 @@ describe('refresh tokens (#418)', () => {
   });
 
   it('happy path: refreshing rotates to a new access + refresh token, same client and appId binding', async () => {
-    const verifier = 'verifier-1';
+    const verifier = 'verifier-1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
     const kv = makeKv();
     await seedAuthCode(kv, await pkceChallenge(verifier));
     const issued = await exchangeAuthCode(kv, verifier, config(kv));
@@ -622,21 +639,23 @@ describe('refresh tokens (#418)', () => {
     await expect(resolveOAuthToken(refreshed.access_token, kv)).resolves.toMatchObject({ appId: 'crm', bound: true });
   });
 
-  it('rotation: the old refresh token no longer works once a new one has been issued', async () => {
-    const verifier = 'verifier-1';
+  it('a lost rotation response is retried idempotently within the bounded grace period', async () => {
+    const verifier = 'verifier-1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
     const kv = makeKv();
     await seedAuthCode(kv, await pkceChallenge(verifier));
     const issued = await exchangeAuthCode(kv, verifier, config(kv));
 
-    await handleOAuthRoute(refreshRequest(issued.refresh_token!), config(kv));
-
+    const first = await handleOAuthRoute(refreshRequest(issued.refresh_token!), config(kv));
+    const rotation = await first!.json() as { access_token: string; refresh_token: string; expires_in: number };
     const reused = await handleOAuthRoute(refreshRequest(issued.refresh_token!), config(kv));
-    expect(reused?.status).toBe(400);
-    await expect(reused?.json()).resolves.toEqual({ error: 'invalid_grant' });
+    expect(reused?.status).toBe(200);
+    const retry = await reused!.json() as { access_token: string; refresh_token: string; expires_in: number };
+    expect(retry).toMatchObject({ access_token: rotation.access_token, refresh_token: rotation.refresh_token });
+    expect(retry.expires_in).toBeLessThanOrEqual(rotation.expires_in);
   });
 
   it('reuse detection: replaying a rotated-away token revokes the whole family, including its successor', async () => {
-    const verifier = 'verifier-1';
+    const verifier = 'verifier-1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
     const kv = makeKv();
     await seedAuthCode(kv, await pkceChallenge(verifier));
     const issued = await exchangeAuthCode(kv, verifier, config(kv));
@@ -644,7 +663,8 @@ describe('refresh tokens (#418)', () => {
     const firstRefresh = await handleOAuthRoute(refreshRequest(issued.refresh_token!), config(kv));
     const { refresh_token: rotatedToken } = await firstRefresh!.json() as { refresh_token: string };
 
-    // Replay the token that was already rotated away.
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000);
+    // Replay after the bounded retry grace period.
     const replay = await handleOAuthRoute(refreshRequest(issued.refresh_token!), config(kv));
     expect(replay?.status).toBe(400);
     await expect(replay?.json()).resolves.toEqual({ error: 'invalid_grant' });
@@ -656,7 +676,7 @@ describe('refresh tokens (#418)', () => {
   });
 
   it('wrong client_id: refuses a refresh token presented by a different client', async () => {
-    const verifier = 'verifier-1';
+    const verifier = 'verifier-1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
     const kv = makeKv();
     await seedAuthCode(kv, await pkceChallenge(verifier));
     const issued = await exchangeAuthCode(kv, verifier, config(kv));
@@ -684,7 +704,7 @@ describe('refresh tokens (#418)', () => {
   });
 
   it('defaults the refresh token deadline to 90 days out', async () => {
-    const verifier = 'verifier-1';
+    const verifier = 'verifier-1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
     const kv = makeKv();
     await seedAuthCode(kv, await pkceChallenge(verifier));
     const issued = await exchangeAuthCode(kv, verifier, config(kv));
@@ -697,7 +717,7 @@ describe('refresh tokens (#418)', () => {
   });
 
   it('honours a configured refresh-token TTL instead of the 90-day default', async () => {
-    const verifier = 'verifier-1';
+    const verifier = 'verifier-1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
     const kv = makeKv();
     await seedAuthCode(kv, await pkceChallenge(verifier));
     const issued = await exchangeAuthCode(kv, verifier, config(kv, { refreshTokenTtlSeconds: 10 }));
@@ -793,7 +813,7 @@ describe('grants (#457)', () => {
   });
 
   async function authorize(kv: KVNamespace, uid: string, appId: string | null, n: string) {
-    const verifier = `verifier-${n}`;
+    const verifier = `verifier-${n}`.padEnd(43, "x");
     await kv.put(`code:code-${n}`, JSON.stringify({
       session: await mintSession({ uid, login: uid.replace('gh:', ''), roles: ['user'] }, 'test-key'),
       codeChallenge: await pkceChallenge(verifier),
@@ -868,5 +888,52 @@ describe('grants (#457)', () => {
     await expect(resolveOAuthToken(theirs.access_token, kv)).resolves.toMatchObject({ appId: 'hiring' });
     expect((await refresh(kv, theirs.refresh_token))?.status).toBe(200);
     expect(await revokeGrant({ kv }, 'gh:1', 'not a grant id!')).toBe(false);
+  });
+});
+
+// Protocol-facing behavior beyond the legacy happy-path fixtures.
+describe('OAuth client interoperability and validation', () => {
+  const cfg = (kv = makeKv()) => ({ issuer: 'https://mcp.proappstore.online', authStart: 'https://api.proappstore.online/v1/auth/github/start', kv, sessionSigningKey: 'test-key' });
+  const registerRequest = (value: unknown) => new Request('https://mcp.proappstore.online/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+
+  it.each([null, [], { redirect_uris: [1] }, { redirect_uris: ['javascript:alert(1)'] }, { redirect_uris: ['http://remote.example/callback'] }, { redirect_uris: ['https://client.example/cb#fragment'] }, { redirect_uris: ['https://user:password@client.example/cb'] }, { redirect_uris: ['https://client.example/cb'], client_name: [] }])('rejects malformed or unsafe registration metadata: %j', async (value) => {
+    expect((await handleOAuthRoute(registerRequest(value), cfg()))?.status).toBe(400);
+  });
+
+  it('advertises issuer-bound callbacks, CIMD, refresh and revocation', async () => {
+    const response = await handleOAuthRoute(new Request('https://mcp.proappstore.online/.well-known/oauth-authorization-server'), cfg());
+    expect(await response!.json()).toMatchObject({ authorization_response_iss_parameter_supported: true, client_id_metadata_document_supported: true, revocation_endpoint: 'https://mcp.proappstore.online/revoke', grant_types_supported: ['authorization_code', 'refresh_token'] });
+  });
+
+  it('accepts a trusted HTTPS client metadata document without DCR and caches it', async () => {
+    const id = 'https://chatgpt.com/oauth/codex/client.json';
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ client_id: id, client_name: 'Codex', redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none' }));
+    const config = cfg();
+    const query = new URLSearchParams({ client_id: id, response_type: 'code', redirect_uri: 'http://127.0.0.1:49152/callback', code_challenge: 'a'.repeat(43), code_challenge_method: 'S256' });
+    for (let i = 0; i < 2; i++) expect((await handleOAuthRoute(new Request(`https://mcp.proappstore.online/authorize?${query}`), config))?.status).toBe(200);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]![1]).toMatchObject({ redirect: 'error', headers: { Accept: 'application/json' } });
+  });
+
+  it('does not fetch client metadata from an untrusted host', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch');
+    const query = new URLSearchParams({ client_id: 'https://internal.example/client.json', response_type: 'code', redirect_uri: 'https://client.example/cb', code_challenge: 'a'.repeat(43), code_challenge_method: 'S256' });
+    expect((await handleOAuthRoute(new Request(`https://mcp.proappstore.online/authorize?${query}`), cfg()))?.status).toBe(400);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('RFC 7009 revocation is client-bound and immediately invalidates access and refresh', async () => {
+    const kv = makeKv({
+      'refresh:refresh-1': JSON.stringify({ claims: { uid: 'gh:1' }, clientId: 'client-1', appId: null, familyId: 'family-1', usedAt: null, expiresAt: Math.floor(Date.now() / 1000) + 300 }),
+      'token:access-1': JSON.stringify({ session: 'session', clientId: 'client-1', appId: null, familyId: 'family-1' }),
+    });
+    const revoke = (client_id: string) => handleOAuthRoute(new Request('https://mcp.proappstore.online/revoke', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: 'refresh-1', client_id }) }), cfg(kv));
+    expect((await revoke('different-client'))?.status).toBe(200);
+    expect(await resolveOAuthToken('access-1', kv)).not.toBeNull();
+    const response = await revoke('client-1');
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get('Cache-Control')).toBe('no-store');
+    expect(await resolveOAuthToken('access-1', kv)).toBeNull();
+    expect(await kv.get('revoked-refresh-family:family-1')).toBe('1');
   });
 });

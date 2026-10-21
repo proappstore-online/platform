@@ -4,9 +4,8 @@
  * team, and inspect tickets/agents/files. A thin MCP frontend over the Agent
  * Teams REST API (AGENTS_BASE, e.g. agents.proappstore.online).
  *
- * Auth: each tool accepts an OPTIONAL `token` argument (a PAS session token); when
- * omitted, the authenticated MCP connection's identity is used — so an owner-authed
- * session drives the whole loop with no per-call token. The user must own the
+ * Auth: every tool uses the authenticated MCP connection. Credentials are never
+ * accepted as model-visible tool arguments. The user must own the
  * project, and must have a BYO Anthropic key in the vault for the agents to run.
  */
 
@@ -35,17 +34,15 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
    * (attributed to the token's user). Read-only mode throws so a tool can't
    * report success on a blocked write.
    *
-   * The explicit `tokenArg` is optional — when omitted, the authenticated MCP
-   * connection's session token is used, so an owner-authed session drives the
-   * loop with no per-call token.
+   * The token comes only from this request's authenticated connection, never
+   * from a model-visible argument.
    */
   async function call(
     path: string,
-    tokenArg: string | undefined,
     init?: { method?: string; body?: unknown },
   ): Promise<{ ok: boolean; data: unknown }> {
-    const token = (tokenArg && tokenArg.length > 0 ? tokenArg : getConnToken()) ?? "";
-    if (!token) return { ok: false, data: "Not authenticated: authenticate the MCP connection as the owner, or pass a `token`." };
+    const token = getConnToken() ?? "";
+    if (!token) return { ok: false, data: "Not authenticated: authenticate the MCP connection as the owner, and try again." };
     const method = init?.method ?? "GET";
     const mutating = method !== "GET";
 
@@ -77,8 +74,8 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
    * audit a `dry_run` row, and return the plan. The tool returns this and makes
    * no API call. A preview changes nothing, so it's allowed in read-only mode.
    */
-  async function dryPreview(tokenArg: string | undefined, tool: string, plan: string): Promise<string> {
-    const token = (tokenArg && tokenArg.length > 0 ? tokenArg : getConnToken()) ?? "";
+  async function dryPreview(tool: string, plan: string): Promise<string> {
+    const token = getConnToken() ?? "";
     const subject = token && env.SESSION_SIGNING_KEY
       ? (await verifyToken(env.SESSION_SIGNING_KEY, token))?.id ?? null
       : null;
@@ -88,7 +85,6 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
 
   const DRY_RUN = z.boolean().optional().describe("Preview what this tool would do without making any changes. Omit or set false to execute.");
 
-  const TOKEN = z.string().optional().describe("PAS session token (the owner's). Optional — the authenticated MCP connection is used when omitted. The user must have a BYO Anthropic key in the vault for agents to run.");
   // Validated: this value is interpolated into internal API subrequest paths
   // (/v1/projects/${slug}/…) that run over a service binding, so an unvalidated
   // value containing '/', '?', '#' or '..' could reach an unintended endpoint.
@@ -99,14 +95,13 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
     "create_app",
     "Create a new Agent Teams project (an app the AI team builds). Idempotent on slug — reusing a slug returns the existing project without creating a new repo. Returns the project.",
     {
-      token: TOKEN,
       name: z.string().describe("Display name, e.g. 'Habit Tracker'"),
       slug: z.string().regex(/^[a-z][a-z0-9-]*$/).describe("App id (lowercase, e.g. 'habit-tracker')"),
       idea: z.string().describe("One-paragraph description of what the app is — grounds the PO + Architect."),
     },
-    async ({ token, name, slug, idea }) => {
-      const r = await call(`/v1/projects`, token, { method: "POST", body: { name, slug, idea } });
-      return text(r.ok ? `Project ready: ${slug}\n${JSON.stringify(r.data, null, 2)}` : String(r.data));
+    async ({ name, slug, idea }) => {
+      const r = await call(`/v1/projects`, { method: "POST", body: { name, slug, idea } });
+      return text(r.ok ? `Project ready: ${slug}\n${JSON.stringify(r.data, null, 2)}` : String(r.data), !r.ok);
     },
   );
 
@@ -114,10 +109,10 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
   server.tool(
     "list_projects",
     "List your Agent Teams projects (apps in progress).",
-    { token: TOKEN },
-    async ({ token }) => {
-      const r = await call(`/v1/projects`, token);
-      if (!r.ok) return text(String(r.data));
+    {},
+    async () => {
+      const r = await call(`/v1/projects`);
+      if (!r.ok) return text(String(r.data), true);
       const projects = (r.data as { projects?: { slug: string; name: string }[] }).projects ?? [];
       if (projects.length === 0) return text("No projects yet. Use create_app to start one.");
       return text(projects.map((p) => `- ${p.slug} — ${p.name}`).join("\n"));
@@ -128,10 +123,10 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
   server.tool(
     "get_project",
     "Get one project's status (play state, cost, repo, etc.).",
-    { token: TOKEN, slug: SLUG },
-    async ({ token, slug }) => {
-      const r = await call(`/v1/projects/${slug}`, token);
-      return text(r.ok ? JSON.stringify(r.data, null, 2) : String(r.data));
+    { slug: SLUG },
+    async ({ slug }) => {
+      const r = await call(`/v1/projects/${slug}`);
+      return text(r.ok ? JSON.stringify(r.data, null, 2) : String(r.data), !r.ok);
     },
   );
 
@@ -139,10 +134,10 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
   server.tool(
     "build_knowledge_base",
     "Trigger the Architect to research the app (it has live web access) and write/refresh its Knowledge Base (KNOWLEDGE.md + docs/). The KB is a conversation, not a ticket — this is a shortcut for chat_agent(thread='research'); running it again refreshes the KB. Returns once started (409 if a build is already in flight); poll get_project_files for KNOWLEDGE.md.",
-    { token: TOKEN, slug: SLUG },
-    async ({ token, slug }) => {
-      const r = await call(`/v1/projects/${slug}/research`, token, { method: "POST" });
-      return text(r.ok ? `KB build started for ${slug}. Poll get_project_files for KNOWLEDGE.md.\n${JSON.stringify(r.data)}` : String(r.data));
+    { slug: SLUG },
+    async ({ slug }) => {
+      const r = await call(`/v1/projects/${slug}/research`, { method: "POST" });
+      return text(r.ok ? `KB build started for ${slug}. Poll get_project_files for KNOWLEDGE.md.\n${JSON.stringify(r.data)}` : String(r.data), !r.ok);
     },
   );
 
@@ -151,14 +146,13 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
     "chat_agent",
     "Send a message to a conversational agent. thread='build' talks to the PO (it answers and files build tickets); thread='research' talks to the Architect (it revises the Knowledge Base). Returns the agent's reply. Note: the agent runs async — for the PO, follow up with list_tickets to see filed tickets.",
     {
-      token: TOKEN,
       slug: SLUG,
       thread: z.enum(["build", "research"]).describe("'build' = PO (tickets), 'research' = Architect (KB)"),
       message: z.string().describe("What to tell the agent (e.g. 'Build the counter app: scaffold + UI + persistence. Break into tickets.')"),
     },
-    async ({ token, slug, thread, message }) => {
-      const r = await call(`/v1/projects/${slug}/chat`, token, { method: "POST", body: { thread, message } });
-      if (!r.ok) return text(String(r.data));
+    async ({ slug, thread, message }) => {
+      const r = await call(`/v1/projects/${slug}/chat`, { method: "POST", body: { thread, message } });
+      if (!r.ok) return text(String(r.data), true);
       const d = r.data as { role?: string; body?: string };
       return text(`${d.role ?? "agent"}: ${d.body ?? JSON.stringify(r.data)}`);
     },
@@ -168,10 +162,10 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
   server.tool(
     "list_tickets",
     "List the project's tickets (the kanban) with status + assignee — use to watch the build loop progress.",
-    { token: TOKEN, slug: SLUG },
-    async ({ token, slug }) => {
-      const r = await call(`/v1/projects/${slug}/tickets`, token);
-      if (!r.ok) return text(String(r.data));
+    { slug: SLUG },
+    async ({ slug }) => {
+      const r = await call(`/v1/projects/${slug}/tickets`);
+      if (!r.ok) return text(String(r.data), true);
       const tickets = (r.data as { tickets?: { seq: number; title: string; status: string; assigneeRole?: string | null; iterations?: number }[] }).tickets ?? [];
       if (tickets.length === 0) return text("No tickets yet.");
       return text(tickets
@@ -185,10 +179,10 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
   server.tool(
     "list_agents",
     "Show the project's agent team — each agent's identity, system prompt source, skills, and model (the resolved catalog).",
-    { token: TOKEN, slug: SLUG },
-    async ({ token, slug }) => {
-      const r = await call(`/v1/projects/${slug}/agents`, token);
-      if (!r.ok) return text(String(r.data));
+    { slug: SLUG },
+    async ({ slug }) => {
+      const r = await call(`/v1/projects/${slug}/agents`);
+      if (!r.ok) return text(String(r.data), true);
       const agents = (r.data as { agents?: { id: string; surface: string; identitySource: string; tools: string[]; model: string }[] }).agents ?? [];
       return text(agents.map((a) => `${a.id} (${a.surface}) · model ${a.model} · identity ${a.identitySource} · tools: ${a.tools.join(", ") || "—"}`).join("\n"));
     },
@@ -198,18 +192,18 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
   server.tool(
     "get_project_files",
     "List the project's working-tree files (and optionally read one). Use to verify the KB (KNOWLEDGE.md, docs/*.md) or app source the team wrote.",
-    { token: TOKEN, slug: SLUG, path: z.string().optional().describe("If set, return this file's content instead of the list.") },
-    async ({ token, slug, path }) => {
+    { slug: SLUG, path: z.string().optional().describe("If set, return this file's content instead of the list.") },
+    async ({ slug, path }) => {
       // Reading a file: the list endpoint returns paths only (no content) — the
       // content lives behind a separate endpoint.
       if (path) {
-        const r = await call(`/v1/projects/${slug}/files/content?path=${encodeURIComponent(path)}`, token);
-        if (!r.ok) return text(String(r.data));
+        const r = await call(`/v1/projects/${slug}/files/content?path=${encodeURIComponent(path)}`);
+        if (!r.ok) return text(String(r.data), true);
         const d = r.data as { content?: string };
         return text(d.content ?? "(empty)");
       }
-      const r = await call(`/v1/projects/${slug}/files`, token);
-      if (!r.ok) return text(String(r.data));
+      const r = await call(`/v1/projects/${slug}/files`);
+      if (!r.ok) return text(String(r.data), true);
       const files = (r.data as { files?: { path: string }[] }).files ?? [];
       if (files.length === 0) return text("No files yet — nothing built.");
       return text(files.map((f) => f.path).sort().join("\n"));
@@ -220,10 +214,10 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
   server.tool(
     "set_project_budget",
     "Set the project's monthly cost cap in USD (1–1000). The loop auto-pauses when the team's spend for the month reaches this cap.",
-    { token: TOKEN, slug: SLUG, monthly_usd: z.number().min(1).max(1000).describe("Monthly budget cap in USD") },
-    async ({ token, slug, monthly_usd }) => {
-      const r = await call(`/v1/projects/${slug}/budget`, token, { method: "PUT", body: { costCapMonthlyUsd: monthly_usd } });
-      return text(r.ok ? `Budget for ${slug} set to $${monthly_usd}/mo.` : String(r.data));
+    { slug: SLUG, monthly_usd: z.number().min(1).max(1000).describe("Monthly budget cap in USD") },
+    async ({ slug, monthly_usd }) => {
+      const r = await call(`/v1/projects/${slug}/budget`, { method: "PUT", body: { costCapMonthlyUsd: monthly_usd } });
+      return text(r.ok ? `Budget for ${slug} set to $${monthly_usd}/mo.` : String(r.data), !r.ok);
     },
   );
 
@@ -231,10 +225,10 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
   server.tool(
     "set_project_running",
     "Play (start) or pause the autonomous build loop. Play lets the team pick up ready tickets and build them through to deploy.",
-    { token: TOKEN, slug: SLUG, running: z.boolean().describe("true = play, false = pause") },
-    async ({ token, slug, running }) => {
-      const r = await call(`/v1/projects/${slug}/${running ? "play" : "pause"}`, token, { method: "POST" });
-      return text(r.ok ? `Project ${slug} ${running ? "running" : "paused"}.` : String(r.data));
+    { slug: SLUG, running: z.boolean().describe("true = play, false = pause") },
+    async ({ slug, running }) => {
+      const r = await call(`/v1/projects/${slug}/${running ? "play" : "pause"}`, { method: "POST" });
+      return text(r.ok ? `Project ${slug} ${running ? "running" : "paused"}.` : String(r.data), !r.ok);
     },
   );
 
@@ -242,12 +236,12 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
   server.tool(
     "run_tests",
     "Trigger a Playwright E2E test run for a project. The tests run via GitHub Actions and results appear in the Test tab.",
-    { token: TOKEN, slug: SLUG },
-    async ({ token, slug }) => {
-      const r = await call(`/v1/projects/${slug}/run-tests`, token, { method: "POST" });
-      if (!r.ok) return text(String(r.data));
+    { slug: SLUG },
+    async ({ slug }) => {
+      const r = await call(`/v1/projects/${slug}/run-tests`, { method: "POST" });
+      if (!r.ok) return text(String(r.data), true);
       const d = r.data as { ok?: boolean; specs?: number; runUrl?: string; error?: string };
-      return text(d.error ? `Error: ${d.error}` : `Test run started (${d.specs ?? '?'} spec file(s)). ${d.runUrl ?? ''}`);
+      return text(d.error ? `Error: ${d.error}` : `Test run started (${d.specs ?? '?'} spec file(s)). ${d.runUrl ?? ''}`, !!d.error);
     },
   );
 
@@ -256,16 +250,15 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
     "set_model",
     "Set the AI model for a specific agent role (BA, Dev, or QA). Example models: 'claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'gpt-4o'.",
     {
-      token: TOKEN,
       slug: SLUG,
       roles: z.array(z.object({
         role: z.enum(["BA", "Dev", "QA"]).describe("Agent role"),
         model: z.string().describe("Model ID"),
       })).describe("Array of {role, model} pairs to update"),
     },
-    async ({ token, slug, roles }) => {
-      const r = await call(`/v1/projects/${slug}/roles`, token, { method: "PUT", body: { roles } });
-      return text(r.ok ? `Models updated for ${slug}: ${roles.map(rc => `${rc.role}=${rc.model}`).join(', ')}` : String(r.data));
+    async ({ slug, roles }) => {
+      const r = await call(`/v1/projects/${slug}/roles`, { method: "PUT", body: { roles } });
+      return text(r.ok ? `Models updated for ${slug}: ${roles.map(rc => `${rc.role}=${rc.model}`).join(', ')}` : String(r.data), !r.ok);
     },
   );
 
@@ -274,14 +267,13 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
     "add_ticket",
     "Add a ticket to the project's backlog directly (bypasses the PO chat). The ticket enters 'inbox' status and the BA agent refines it when the loop is running.",
     {
-      token: TOKEN,
       slug: SLUG,
       title: z.string().describe("Short ticket title"),
       rawIdea: z.string().describe("Full description of what to build/fix"),
     },
-    async ({ token, slug, title, rawIdea }) => {
-      const r = await call(`/v1/projects/${slug}/tickets`, token, { method: "POST", body: { title, rawIdea } });
-      if (!r.ok) return text(String(r.data));
+    async ({ slug, title, rawIdea }) => {
+      const r = await call(`/v1/projects/${slug}/tickets`, { method: "POST", body: { title, rawIdea } });
+      if (!r.ok) return text(String(r.data), true);
       const d = r.data as { ticket?: { id?: string; seq?: number } };
       return text(`Ticket created: #${d.ticket?.seq ?? '?'} "${title}"`);
     },
@@ -295,7 +287,6 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
     "update_ticket",
     "Edit an existing backlog ticket's wording: its title and/or its description and reasoning (`rawIdea` — the full statement of what to build/fix and why). Only the fields you pass change; omit one and it is left alone. Get the ticket's `id` from list_tickets or agent_board — it is the UUID, not the `#seq` shown on the card. This tool does NOT move a ticket between statuses: the pipeline owns that, and a status change has to go through the transition it validates.",
     {
-      token: TOKEN,
       slug: SLUG,
       // Validated for the same reason as SLUG: this is interpolated into an
       // internal API subrequest path. It also matches the DO's own route regex,
@@ -305,7 +296,7 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
       title: z.string().optional().describe("Replacement short title. Omit to leave the current one alone."),
       rawIdea: z.string().optional().describe("Replacement description and reasoning — the full statement of what to build/fix and why. Omit to leave the current one alone."),
     },
-    async ({ token, slug, id, title, rawIdea }) => {
+    async ({ slug, id, title, rawIdea }) => {
       // Built from what was PASSED, not from what is non-empty: the DO patches
       // on `!== undefined`, so an omitted field must not appear in the body at
       // all or it would overwrite the stored value.
@@ -316,8 +307,8 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
         return text("Nothing to update: pass `title`, `rawIdea`, or both. An empty edit would only move the ticket's updated_at.");
       }
 
-      const r = await call(`/v1/projects/${slug}/tickets/${id}`, token, { method: "PATCH", body: patch });
-      if (!r.ok) return text(String(r.data));
+      const r = await call(`/v1/projects/${slug}/tickets/${id}`, { method: "PATCH", body: patch });
+      if (!r.ok) return text(String(r.data), true);
       // The PATCH answers with the ticket itself (the DO returns getTicket), not
       // a `{ ticket }` envelope like create does.
       const d = r.data as { seq?: number; title?: string };
@@ -334,16 +325,15 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
     "write_project_files",
     "Directly write files into an Agent Teams project's working tree — agent-free build, for when YOUR client writes the code instead of the BYO-key agents (no repo clone needed). PAUSE the project first (set_project_running running:false). Read context with get_project_files (esp. KNOWLEDGE.md). Then deploy_project. NOTE: this is the agent-teams working tree; for a standalone scaffolded app use batch_write_files (commits to the repo) instead.",
     {
-      token: TOKEN,
       slug: SLUG,
       files: z.array(z.object({
         path: z.string().describe("repo-relative path, e.g. src/App.tsx"),
         content: z.string().describe("full file contents"),
       })).describe("Files to create/overwrite (max 200 per call)"),
     },
-    async ({ token, slug, files }) => {
-      const r = await call(`/v1/projects/${slug}/files`, token, { method: "POST", body: { files } });
-      if (!r.ok) return text(String(r.data));
+    async ({ slug, files }) => {
+      const r = await call(`/v1/projects/${slug}/files`, { method: "POST", body: { files } });
+      if (!r.ok) return text(String(r.data), true);
       const d = r.data as { written?: number; totalFiles?: number };
       return text(`Wrote ${d.written ?? files.length} file(s); working tree now has ${d.totalFiles ?? "?"} files. Call deploy_project to ship.`);
     },
@@ -352,11 +342,11 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
   server.tool(
     "delete_project_files",
     "Delete files from an Agent Teams project's working tree (agent-free). The project must be paused.",
-    { token: TOKEN, slug: SLUG, paths: z.array(z.string()).describe("repo-relative paths to remove"), dry_run: DRY_RUN },
-    async ({ token, slug, paths, dry_run }) => {
-      if (dry_run) return text(await dryPreview(token, "delete_project_files", `- delete ${paths.length} file(s) from ${slug}'s working tree: ${paths.join(", ")}`));
-      const r = await call(`/v1/projects/${slug}/files`, token, { method: "DELETE", body: { paths } });
-      if (!r.ok) return text(String(r.data));
+    { slug: SLUG, paths: z.array(z.string()).describe("repo-relative paths to remove"), dry_run: DRY_RUN },
+    async ({ slug, paths, dry_run }) => {
+      if (dry_run) return text(await dryPreview("delete_project_files", `- delete ${paths.length} file(s) from ${slug}'s working tree: ${paths.join(", ")}`));
+      const r = await call(`/v1/projects/${slug}/files`, { method: "DELETE", body: { paths } });
+      if (!r.ok) return text(String(r.data), true);
       const d = r.data as { deleted?: number };
       return text(`Deleted ${d.deleted ?? 0} file(s) from the working tree.`);
     },
@@ -365,11 +355,11 @@ export function registerLoopTools(server: McpServer, env: LoopEnv, getConnToken:
   server.tool(
     "deploy_project",
     "Deploy the project's current working tree with NO agent/LLM — pushes to GitHub and runs CI. Use after write_project_files for a direct build. Requires a provisioned repo (provision the app first). Poll list_tickets / get_project for status.",
-    { token: TOKEN, slug: SLUG, dry_run: DRY_RUN },
-    async ({ token, slug, dry_run }) => {
-      if (dry_run) return text(await dryPreview(token, "deploy_project", `- push ${slug}'s current working tree to GitHub and run CI (deploy)`));
-      const r = await call(`/v1/projects/${slug}/deploy`, token, { method: "POST" });
-      if (!r.ok) return text(String(r.data));
+    { slug: SLUG, dry_run: DRY_RUN },
+    async ({ slug, dry_run }) => {
+      if (dry_run) return text(await dryPreview("deploy_project", `- push ${slug}'s current working tree to GitHub and run CI (deploy)`));
+      const r = await call(`/v1/projects/${slug}/deploy`, { method: "POST" });
+      if (!r.ok) return text(String(r.data), true);
       const d = r.data as { ticketId?: string };
       return text(`Deploy started (ticket ${d.ticketId ?? "?"}). Poll list_tickets / get_project for status.`);
     },

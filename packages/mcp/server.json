@@ -1,13 +1,13 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.proappstore-online/platform",
-  "description": "AI agent tools for ProAppStore (PAS), the Pro app marketplace: create and build Pro apps (direct file writes or the autonomous Agent Teams loop), provision and deploy, inspect deploys and D1 schema, author and run browser e2e flows, read the platform guide and SDK reference, and reach any published app's registered data tools. Per-app endpoints at https://mcp.proappstore.online/mcp/apps/<app_id> expose that app's own tools.",
+  "description": "Build, deploy, test and operate PAS apps, with authenticated platform and per-app tools.",
   "repository": {
     "url": "https://github.com/proappstore-online/platform",
     "source": "github",
     "subfolder": "packages/mcp"
   },
-  "version": "0.2.0",
+  "version": "0.3.0",
   "remotes": [
     {
       "type": "streamable-http",
@@ -17,7 +17,7 @@
   "tools": [
     {
       "name": "whoami",
-      "description": "The account this connection is authenticated as — uid, login, email, provider, platform roles, token expiry."
+      "description": "The account this connection is authenticated as \u2014 uid, login, email, provider, platform roles, token expiry."
     },
     {
       "name": "mcp_audit_log",
@@ -25,7 +25,7 @@
     },
     {
       "name": "list_apps",
-      "description": "List your published apps on ProAppStore."
+      "description": "List apps you own or belong to, using connection authentication."
     },
     {
       "name": "deploy_status",
@@ -33,7 +33,7 @@
     },
     {
       "name": "schema_status",
-      "description": "Show an app's D1 migration status (#33) — recent deploy-time migration attempts and whether the latest one applied or FAILED."
+      "description": "Show an app's D1 migration status (#33) \u2014 recent deploy-time migration attempts and whether the latest one applied or FAILED."
     },
     {
       "name": "list_scheduled_runs",
@@ -41,11 +41,11 @@
     },
     {
       "name": "list_templates",
-      "description": "List the approved ProAppStore app templates and the selection contract: id, purpose, supported categories, required SDK/CLI/Node, capabilities, sec…"
+      "description": "List the approved ProAppStore app templates and the selection contract: id, purpose, supported categories, required SDK/CLI/Node, capabilities, sec\u2026"
     },
     {
       "name": "app_info",
-      "description": "Get info about any app on ProAppStore — live URL, repo, data worker, store listing."
+      "description": "Get info about any app on ProAppStore \u2014 live URL, repo, data worker, store listing."
     },
     {
       "name": "platform_guide",
@@ -53,7 +53,7 @@
     },
     {
       "name": "sdk_reference",
-      "description": "Quick reference for @proappstore/sdk. Start with feature 'shell' (wrap the app in <ProShell app={app} nav={…}>, how to add navigation, a complete minimal app) and 'components' (every UI component), then auth, db, storage, maps, AI and hooks."
+      "description": "Quick reference for @proappstore/sdk. Start with feature 'shell' (wrap the app in <ProShell app={app} nav={\u2026}>, how to add navigation, a complete minimal app) and 'components' (every UI component), then auth, db, storage, maps, AI and hooks."
     },
     {
       "name": "recipe",
@@ -69,7 +69,7 @@
     },
     {
       "name": "provision_pas_app",
-      "description": "Operator workflow: create or reuse a PAS app GitHub repo from template-app, configure deploy credentials/placeholders, provision platform infrastru…"
+      "description": "Operator workflow: create or reuse a PAS app GitHub repo from template-app, configure deploy credentials/placeholders, provision platform infrastru\u2026"
     },
     {
       "name": "provisioning_status",
@@ -141,11 +141,11 @@
     },
     {
       "name": "list_tickets",
-      "description": "List the project's tickets (the kanban) with status + assignee — use to watch the build loop progress."
+      "description": "List the project's tickets (the kanban) with status + assignee \u2014 use to watch the build loop progress."
     },
     {
       "name": "list_agents",
-      "description": "Show the project's agent team — each agent's identity, system prompt source, skills, and model (the resolved catalog)."
+      "description": "Show the project's agent team \u2014 each agent's identity, system prompt source, skills, and model (the resolved catalog)."
     },
     {
       "name": "get_project_files",
@@ -153,7 +153,7 @@
     },
     {
       "name": "set_project_budget",
-      "description": "Set the project's monthly cost cap in USD (1–1000)."
+      "description": "Set the project's monthly cost cap in USD (1\u20131000)."
     },
     {
       "name": "set_project_running",
@@ -173,11 +173,11 @@
     },
     {
       "name": "update_ticket",
-      "description": "Edit an existing backlog ticket's wording: its title and/or its description and reasoning (`rawIdea` — the full statement of what to build/fix and…"
+      "description": "Edit an existing backlog ticket's wording: its title and/or its description and reasoning (`rawIdea` \u2014 the full statement of what to build/fix and\u2026"
     },
     {
       "name": "write_project_files",
-      "description": "Directly write files into an Agent Teams project's working tree — agent-free build, for when YOUR client writes the code instead of the BYO-key age…"
+      "description": "Directly write files into an Agent Teams project's working tree \u2014 agent-free build, for when YOUR client writes the code instead of the BYO-key age\u2026"
     },
     {
       "name": "delete_project_files",
@@ -185,15 +185,15 @@
     },
     {
       "name": "deploy_project",
-      "description": "Deploy the project's current working tree with NO agent/LLM — pushes to GitHub and runs CI."
+      "description": "Deploy the project's current working tree with NO agent/LLM \u2014 pushes to GitHub and runs CI."
     },
     {
       "name": "agent_project_status",
-      "description": "Get the agent team's project status for an app — running/paused, monthly cost, budget cap."
+      "description": "Get the agent team's project status for an app \u2014 running/paused, monthly cost, budget cap."
     },
     {
       "name": "agent_board",
-      "description": "Full Kanban board — all tickets with status, assignee, iteration count, cost."
+      "description": "Full Kanban board \u2014 all tickets with status, assignee, iteration count, cost."
     },
     {
       "name": "agent_activity",
@@ -201,11 +201,11 @@
     },
     {
       "name": "agent_ticket_detail",
-      "description": "One ticket's full conversation — all agent messages."
+      "description": "One ticket's full conversation \u2014 all agent messages."
     },
     {
       "name": "agent_cost",
-      "description": "Cost breakdown for an app's agent team — per-role spend, token counts."
+      "description": "Cost breakdown for an app's agent team \u2014 per-role spend, token counts."
     },
     {
       "name": "qa_list_flows",
@@ -233,7 +233,7 @@
     },
     {
       "name": "qa_flow_playwright",
-      "description": "Get a flow transpiled to a Playwright .spec.ts (for CI parity — run the same flow under Playwright)."
+      "description": "Get a flow transpiled to a Playwright .spec.ts (for CI parity \u2014 run the same flow under Playwright)."
     },
     {
       "name": "qa_mint_key",
@@ -241,7 +241,7 @@
     },
     {
       "name": "inspect_admin_console",
-      "description": "An app's admin console contract (operator_view) against its current tools: referenced actions, gaps (action_missing, wrong_operation, …), what renders. Owner only, read-only."
+      "description": "An app's admin console contract (operator_view) against its current tools: referenced actions, gaps (action_missing, wrong_operation, \u2026), what renders. Owner only, read-only."
     },
     {
       "name": "list_admin_capabilities",
@@ -265,7 +265,7 @@
     },
     {
       "name": "ownership_status",
-      "description": "Read-only: your relationship to an app's ownership, open transfer/recovery requests you are party to, and the immutable audit record — other parties by login only, never the owner's identity to a non-party."
+      "description": "Read-only: your relationship to an app's ownership, open transfer/recovery requests you are party to, and the immutable audit record \u2014 other parties by login only, never the owner's identity to a non-party."
     },
     {
       "name": "request_ownership_transfer",

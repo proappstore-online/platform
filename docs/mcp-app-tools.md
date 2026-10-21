@@ -10,6 +10,51 @@ create records, run a query — the same way the UI does.
 This is the per-app counterpart to the [agent-customization](./agent-customization)
 story: agents *build* your app, and MCP makes the finished app *callable*.
 
+## Connect a general PAS client
+
+The general endpoint is `https://mcp.proappstore.online/mcp`, with 68 platform tools
+for app discovery, source editing, provisioning, deployment, QA, ownership, admin
+authoring and Agent Teams. It is not limited to provisioning. For one app's data
+actions, use `/mcp/apps/<app_id>` or the shared discovery/call pair below.
+
+```bash
+codex mcp add proappstore --url https://mcp.proappstore.online/mcp
+codex mcp login proappstore
+```
+
+Complete OAuth in the browser, choosing the intended GitHub or Google account.
+Verify `whoami`, then `list_apps` and `list_templates`. Every tool uses the
+connection's identity. Never copy session tokens into chat or tool arguments.
+
+An MCP connection does not itself add a plugin to the `@` picker. Install and
+enable the general ProAppStore plugin separately for a plugin mention. User-level
+Codex configuration works across projects; project configuration is folder-scoped.
+Restart the host/open a new session after installing a plugin or refreshing tools.
+If the server reports sign-in required, run `codex mcp login proappstore` again.
+
+### OAuth and HTTP guarantees
+
+The official SDK serves stateless Streamable HTTP: each request verifies its
+OAuth credential and resource binding; transport session IDs never select an
+account. Browser origins are allowlisted with `MCP_ALLOWED_ORIGINS`. GET on the
+transport returns 405 because there is no standalone server event stream.
+
+OAuth discovery advertises PKCE S256, issuer-bound callbacks, trusted HTTPS client
+metadata (CIMD), dynamic registration, refresh and RFC 7009 `/revoke`. CIMD hosts
+are controlled by `OAUTH_CIMD_HOSTS`; other clients use dynamic registration.
+Redirects are validated, with HTTP allowed only for native loopback callbacks.
+
+SQLite-backed `OAuthState` serializes code redemption, rotation and revocation.
+Legacy KV entries are read without extending their TTLs; durable tombstones stop
+spent records from reappearing. Migration fallback ends after 90 days. Access
+credentials last 24 hours; rotating refresh uses a 90-day inactivity window.
+Retries within 30 seconds receive the same successor pair, while later reuse
+revokes the family. App-scoped grants remain revocable through app MCP settings;
+clients can use `/revoke`. OAuth responses use `Cache-Control: no-store`.
+
+Read/write/destructive annotations are published on every tool. App actions use
+their manifest operation, not their name. Tool failures carry `isError: true`.
+
 ## Current implementation
 
 ```
@@ -1118,8 +1163,7 @@ An OAuth sign-in that starts from `/mcp/apps/<app_id>` is bound to that endpoint
 The refusal happens at the transport, before any tool runs, so an app-scoped token cannot reach
 `list_app_tools` or `call_app_tool` (they only exist inside a transport), nor another app's tools.
 A refresh keeps the binding, with the 90-day sliding window unchanged. Tokens issued before
-resource binding existed are refused on app endpoints. A raw PAS session JWT is not an OAuth token
-and is not scoped.
+resource binding existed are refused on app endpoints. Raw PAS session JWTs are rejected by the MCP transport.
 
 Each authorization is its own **grant**. Several accounts, or several clients of one account, can
 authorize the same app endpoint at once; each gets separate tokens and runs as its own user, and one
@@ -1367,9 +1411,7 @@ OAuth access tokens are bound to their requested MCP resource. A token minted
 for `/mcp/apps/crm` is rejected on `/mcp` and on other app endpoints, forcing a
 separate consent flow for each app or for platform-level operation.
 
-Clients that cannot run the browser OAuth flow can still send an existing PAS
-session token as `Authorization: Bearer <token>`; `pas login` stores that token
-at `~/.proappstore/config.json` (`session.token`).
+Clients without a local browser use the approved [remote sign-in client](./mcp-remote-auth-client.md). Raw PAS session JWTs and personal app tokens are not accepted as MCP transport credentials. Tools use connection authentication; no credential is passed as a tool argument.
 
 ## What is allowed without auth
 
