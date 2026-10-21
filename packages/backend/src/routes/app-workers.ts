@@ -8,7 +8,7 @@
  * closed (ADR-009, "Trust assumptions").
  *
  *   PUT    /v1/apps/:appId/worker/oidc            the app's main-branch workflow uploads its bundle
- *   PUT    /v1/apps/:appId/worker?sha=&ref=       owner: uploads the bundle from a session, same gate and checks (#406)
+ *   PUT    /v1/apps/:appId/worker?sha=&ref=       owner: uploads the bundle from a session, same gate and checks, needs a recent sign-in (#406, #440)
  *   PUT    /v1/admin/apps/:appId/worker-enabled   admin: { enabled } — off runs remove()
  *   GET    /v1/apps/:appId/worker                 owner: status, last deploy, last 20 deploys and invocations, schedules
  *   DELETE /v1/apps/:appId/worker                 owner: disable + remove()
@@ -23,7 +23,7 @@
  */
 import { Hono, type Context } from 'hono';
 import type { Env } from '../types.js';
-import { HttpError, isAdminId, requireAdmin, requireAppOwner } from '../lib/auth.js';
+import { HttpError, isAdminId, requireAdmin, requireAppOwner, requireRecentAuth } from '../lib/auth.js';
 import { requireAppDeployOidc } from '../lib/app-deploy-oidc.js';
 import { activeAppWorker, appWorkerHost, disableAppWorker, parseBundle, rotateAppWorkerCredentials } from '../lib/app-worker-host.js';
 import { paramsOf, queueWorkerRun, runNowDueAt, WORKER_RUN_PREFIX } from '../lib/scheduled-actions.js';
@@ -93,14 +93,24 @@ appWorkerRoutes.put('/apps/:appId/worker/oidc', async (c) => {
 const UPLOAD_SHA = /^[0-9a-f]{7,40}$/;
 const UPLOAD_REF = /^[\w./-]{1,200}$/;
 
+/** A deploy's `repository` claim identifies it as an owner-session upload, not CI. */
+export const SESSION_UPLOAD_PREFIX = 'session:';
+
 /**
  * The owner's own upload (#406): the same flag gate and bundle checks as the
  * workflow's keyless deploy, for when GitHub Actions cannot run. Recorded with
  * repository `session:<user id>` so the deploy history shows who uploaded it.
+ *
+ * ADR-009 §1 names GitHub Actions OIDC as the authenticated deploy path; this
+ * fallback bypasses it, so a leaked 30-day owner session could otherwise ship
+ * server code labelled like a clean commit with no extra friction (#440). A
+ * recent sign-in closes that gap without removing the fallback, and the sha/ref
+ * it records are marked unverified (never OIDC-attested) wherever status is read.
  */
 appWorkerRoutes.put('/apps/:appId/worker', async (c) => {
   const appId = c.req.param('appId');
   const user = await requireAppOwner(c, appId);
+  requireRecentAuth(user, c.env);
   const sha = c.req.query('sha') || undefined;
   const ref = c.req.query('ref') || undefined;
   if (sha !== undefined && !UPLOAD_SHA.test(sha)) throw new HttpError('sha must be a 7-40 character lowercase hex commit sha', 400);
@@ -175,10 +185,15 @@ appWorkerRoutes.get('/apps/:appId/worker', async (c) => {
     ).bind(WORKER_RUN_PREFIX, appId).all(),
   ]);
   c.header('Cache-Control', 'private, no-store');
-  const history = deploys.results ?? [];
-  // `last_deploy` keeps its original shape (no id) for existing readers.
+  // #440: a `session:<uid>` repository is the owner-upload fallback, never
+  // OIDC-attested — `verified` says so wherever a deploy is shown.
+  const history = (deploys.results ?? []).map((d) => ({ ...d, verified: !d.repository.startsWith(SESSION_UPLOAD_PREFIX) }));
+  // `last_deploy` keeps its original shape (plus `verified`, no id) for existing readers.
   const lastDeploy = history[0] ? (({ id: _id, ...rest }) => rest)(history[0]) : null;
-  return c.json({ app_id: appId, worker: worker ?? { enabled: 0 }, last_deploy: lastDeploy, deploys: history, invocations: invocations.results ?? [], schedules: schedules.results ?? [] });
+  // The currently live code is whatever the most recent successful deploy shipped.
+  const liveDeploy = history.find((d) => d.status === 'deployed') ?? null;
+  const workerOut = worker ? { ...worker, deployed_verified: liveDeploy ? liveDeploy.verified : null } : { enabled: 0 };
+  return c.json({ app_id: appId, worker: workerOut, last_deploy: lastDeploy, deploys: history, invocations: invocations.results ?? [], schedules: schedules.results ?? [] });
 });
 
 appWorkerRoutes.get('/apps/:appId/worker/usage', async (c) => {

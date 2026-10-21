@@ -29,8 +29,11 @@ interface WorkerStatus {
     deployed_ref?: string | null;
     deployed_at?: number | null;
     rotation_overlap_until?: number | null;
+    /** False for a live deploy uploaded from an owner session, not GitHub Actions OIDC (#440). Null with no deploy yet. */
+    deployed_verified?: boolean | null;
   };
-  last_deploy: { sha: string | null; ref: string | null; status: string; detail: string | null; created_at: number } | null;
+  /** `verified` is false for the owner-session upload fallback (#406), never OIDC-attested (#440). */
+  last_deploy: { sha: string | null; ref: string | null; status: string; detail: string | null; created_at: number; verified: boolean } | null;
   invocations: Invocation[];
   schedules: { name: string; cron: string; consecutive_failures: number | null; schedule_disabled_at: number | null }[];
 }
@@ -197,8 +200,8 @@ export const workerCommand = new Command('worker')
         const w = s.worker;
         const out: string[] = [`${appId}: app worker ${w.enabled ? 'enabled' : 'not enabled (a platform admin enables it)'}`];
         if (w.backend) out.push(`  backend   ${w.backend}`);
-        if (w.deployed_at) out.push(`  deployed  ${w.deployed_sha?.slice(0, 12) ?? '?'} (${w.deployed_ref ?? '?'}) at ${iso(w.deployed_at)}`);
-        if (s.last_deploy) out.push(`  last deploy ${s.last_deploy.status} at ${iso(s.last_deploy.created_at)}${s.last_deploy.detail ? ` — ${s.last_deploy.detail}` : ''}`);
+        if (w.deployed_at) out.push(`  deployed  ${w.deployed_sha?.slice(0, 12) ?? '?'} (${w.deployed_ref ?? '?'}) at ${iso(w.deployed_at)}${w.deployed_verified === false ? ' — UNVERIFIED (owner-session upload, not CI)' : ''}`);
+        if (s.last_deploy) out.push(`  last deploy ${s.last_deploy.status} at ${iso(s.last_deploy.created_at)}${s.last_deploy.verified === false ? ' — unverified' : ''}${s.last_deploy.detail ? ` — ${s.last_deploy.detail}` : ''}`);
         if (w.rotation_overlap_until && w.rotation_overlap_until > Date.now()) out.push(`  key rotation overlap until ${iso(w.rotation_overlap_until)}`);
         const t = usage.today;
         const q = usage.quotas;

@@ -1,4 +1,5 @@
 import { SELF, env as providedEnv, fetchMock } from 'cloudflare:test';
+import { mintSession } from '@proappstore/build-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { _resetJwksCache } from '../../../backend/src/lib/github-oidc';
@@ -166,10 +167,17 @@ describe('keyless deploy (#253)', () => {
 });
 
 describe('owner upload from a session (#406)', () => {
-  const upload = async (appId: string, uid: string | null, modules: Record<string, string> = { 'app.js': APP_OK }, query = '') =>
+  // A fresh auth_time by default: `requireRecentAuth` (#440) must not break the
+  // keyless-upload fallback for a caller who just signed in.
+  const sessionAged = (uid: string, ageSeconds: number | null = 30) =>
+    mintSession(
+      { uid, login: uid.replace(/^gh:/, ''), avatarUrl: null, roles: ['user', 'creator'], ...(ageSeconds === null ? {} : { auth_time: Math.floor(Date.now() / 1000) - ageSeconds }) },
+      env.SESSION_SIGNING_KEY,
+    );
+  const upload = async (appId: string, uid: string | null, modules: Record<string, string> = { 'app.js': APP_OK }, query = '', ageSeconds: number | null = 30) =>
     SELF.fetch(`${BASE}/v1/apps/${appId}/worker${query}`, {
       method: 'PUT',
-      headers: uid ? { Authorization: `Bearer ${await session(uid)}` } : {},
+      headers: uid ? { Authorization: `Bearer ${await sessionAged(uid, ageSeconds)}` } : {},
       body: bundle(modules),
     });
   const deploys = async (appId: string) =>
@@ -180,6 +188,25 @@ describe('owner upload from a session (#406)', () => {
     expect((await upload('first', null)).status).toBe(401);
     expect((await upload('first', 'gh:7')).status).toBe(403);
     expect(await stored('first')).toEqual([]);
+    expect(await deploys('first')).toEqual([]);
+  });
+
+  // #440: ADR-009 §1 names GitHub Actions OIDC as the authenticated deploy path;
+  // this fallback bypasses it, so a stale (or missing) auth_time is refused
+  // before the flag or bundle are read — a leaked 30-day session alone cannot
+  // ship server code.
+  it('a stale auth_time is refused step_up_required, nothing read or recorded', async () => {
+    await enable('first');
+    const res = await upload('first', 'gh:admin', undefined, '', 301);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: 'step_up_required', message: 'Recent authentication required', max_age: 300 });
+    expect(await stored('first')).toEqual([]);
+    expect(await deploys('first')).toEqual([]);
+  });
+
+  it('a session with no auth_time at all (minted before #230) is refused the same way', async () => {
+    await enable('first');
+    expect((await upload('first', 'gh:admin', undefined, '', null)).status).toBe(403);
     expect(await deploys('first')).toEqual([]);
   });
 
@@ -214,6 +241,23 @@ describe('owner upload from a session (#406)', () => {
     expect(w.token_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(w.bundle_sha256).toBe(body.bundle_sha256);
     expect(await deploys('first')).toEqual([{ repository: 'session:gh:admin', sha: '785913d', ref: 'refs/heads/main', status: 'deployed' }]);
+
+    // #440: a session upload is never OIDC-attested — `pas worker status` (and
+    // the console) must show it as unverified, both as the live deploy and in
+    // the deploy history, even once a later deploy supersedes it.
+    const status = await SELF.fetch(`${BASE}/v1/apps/first/worker`, json('GET', undefined, await session('gh:admin')));
+    const body2 = await status.json() as { worker: { deployed_verified: boolean | null }; last_deploy: { verified: boolean } | null; deploys: { verified: boolean }[] };
+    expect(body2.worker.deployed_verified).toBe(false);
+    expect(body2.last_deploy?.verified).toBe(false);
+    expect(body2.deploys.every((d) => d.verified === false)).toBe(true);
+
+    // An OIDC deploy afterwards is verified, and the earlier session upload in
+    // history stays marked unverified.
+    expect((await deploy('first')).status).toBe(200);
+    const status2 = await SELF.fetch(`${BASE}/v1/apps/first/worker`, json('GET', undefined, await session('gh:admin')));
+    const body3 = await status2.json() as { worker: { deployed_verified: boolean | null }; deploys: { repository: string; verified: boolean }[] };
+    expect(body3.worker.deployed_verified).toBe(true);
+    expect(body3.deploys.find((d) => d.repository.startsWith('session:'))?.verified).toBe(false);
   });
 });
 

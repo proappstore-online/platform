@@ -42,13 +42,13 @@ describe('GET /v1/apps/:appId/worker — deploy history (#261)', () => {
     expect(body.deploys.map((d) => d.id)).toEqual(Array.from({ length: 20 }, (_, k) => `d${String(24 - k).padStart(2, '0')}`));
     expect(body.deploys[0]).toEqual({
       id: 'd24', repository: 'proappstore-online/w-app', ref: 'refs/heads/main', sha: 'sha24', bundle_sha256: 'bundle24',
-      status: 'deployed', detail: 'redeploy', created_at: T0 + 24_000,
+      status: 'deployed', detail: 'redeploy', created_at: T0 + 24_000, verified: true,
     });
     expect(body.deploys.find((d) => d.id === 'd20')).toMatchObject({ status: 'refused', detail: 'app workers are not enabled for this app' });
-    // last_deploy keeps its original shape.
+    // last_deploy keeps its original shape (plus `verified`, #440).
     expect(body.last_deploy).toEqual({
       repository: 'proappstore-online/w-app', ref: 'refs/heads/main', sha: 'sha24', bundle_sha256: 'bundle24',
-      status: 'deployed', detail: 'redeploy', created_at: T0 + 24_000,
+      status: 'deployed', detail: 'redeploy', created_at: T0 + 24_000, verified: true,
     });
     // Only this app's deploys, and no credential anywhere in the answer.
     expect(body.deploys.some((d) => d.id === 'x1')).toBe(false);

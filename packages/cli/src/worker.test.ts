@@ -229,6 +229,22 @@ describe('owner commands (#261)', () => {
     await expect(run(scheduleCommand, ['run', 'nope'])).rejects.toThrow('exit 1');
     expect(err.join('')).toContain('run nope failed (404): not found');
   });
+
+  it('pas worker status flags a session-upload deploy as unverified (#440)', async () => {
+    routes['GET /v1/apps/demo/worker'] = {
+      worker: { enabled: 1, backend: 'loader', deployed_sha: 'abcdef1234567890', deployed_ref: 'refs/heads/main', deployed_at: 1_700_000_000_000, deployed_verified: false },
+      last_deploy: { sha: 'abcdef1234567890', ref: 'refs/heads/main', status: 'deployed', detail: 'redeploy', created_at: 1_700_000_000_000, verified: false },
+      invocations: [],
+      schedules: [],
+    };
+    routes['GET /v1/apps/demo/worker/usage'] = {
+      quotas: { invocations: 5000, cpu_ms: 3600000, hook_deliveries: 2000 }, cpu_ms_source: 'wall',
+      today: { day: '2026-10-06', invocations: 0, cpu_ms: 0, hook_deliveries: 0, pas_calls: 0 },
+    };
+    await run(workerCommand, ['status']);
+    expect(out.join('')).toContain('UNVERIFIED (owner-session upload, not CI)');
+    expect(out.join('')).toContain(`last deploy deployed at ${new Date(1_700_000_000_000).toISOString()} — unverified — redeploy`);
+  });
 });
 
 describe('pas worker deploy (#406)', () => {
