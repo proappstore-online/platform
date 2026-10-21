@@ -193,6 +193,22 @@ async function fetchStagedTools(api: Fetcher, apiBase: string, appId: string, to
   }
 }
 
+/**
+ * The tools visible to this connected caller. Live/public actions come from
+ * {@link fetchTools}; an app owner or teammate may additionally see staged
+ * actions. Keep the latter out of the shared cache: team membership can change
+ * between calls, and staging is specifically private until go-live.
+ *
+ * This must be used for execution as well as discovery. Otherwise an owner can
+ * be told that a staged tool exists but receives an "Unknown tool" error when
+ * invoking it — contrary to the staged-action contract (#428).
+ */
+export async function fetchVisibleTools(api: Fetcher, apiBase: string, appId: string, token?: string | null): Promise<AppTool[]> {
+  const listed = await fetchTools(api, apiBase, appId, token);
+  const staged = await fetchStagedTools(api, apiBase, appId, token);
+  return [...listed, ...staged.filter((tool) => !listed.some((live) => live.name === tool.name))];
+}
+
 /** Clear the tool cache (e.g. after a publish) */
 export function invalidateCache(): void {
   cachedTools.clear();
@@ -468,9 +484,7 @@ function registerDiscoveryPair(
       const { app_id, include_params, filter } = args as { app_id?: string; include_params?: boolean; filter?: string };
       const id = resolveAppId({ app_id });
       if (!id) return errText(`Error: invalid app_id "${app_id ?? ''}".`);
-      const listed = await fetchTools(api, apiBase, id, getUserContext().token);
-      const staged = (await fetchStagedTools(api, apiBase, id, getUserContext().token)).filter((t) => !listed.some((l) => l.name === t.name));
-      const tools = [...listed, ...staged];
+      const tools = await fetchVisibleTools(api, apiBase, id, getUserContext().token);
       if (tools.length === 0) {
         return { content: [{ type: 'text' as const, text: `${id} has no registered tools (or does not exist). Apps register tools by committing an mcp.json; list_apps shows the apps you can see.` }] };
       }
@@ -501,7 +515,7 @@ function registerDiscoveryPair(
       const id = resolveAppId({ app_id });
       if (!id) return errText(`Error: invalid app_id "${app_id ?? ''}".`);
       const app_idResolved = id;
-      const tools = await fetchTools(api, apiBase, app_idResolved, getUserContext().token);
+      const tools = await fetchVisibleTools(api, apiBase, app_idResolved, getUserContext().token);
       const manifest = tools.find((t) => t.name === tool);
       if (!manifest) {
         const hint = scope ? 'call list_app_tools({}) for the names it exposes' : `call list_app_tools({ app_id: "${app_idResolved}" }) for the names it exposes`;

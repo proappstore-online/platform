@@ -5,7 +5,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 // Focus on fetchTools caching and the executeToolCall flow.
 
 // Re-export internals for testing by importing the module and inspecting behavior.
-import { CORE_TOOL_MAX, checkPlatformRoles, executeToolCall, fetchTools, invalidateCache, measureToolsListBytes, PROGRESSIVE_DISCLOSURE_THRESHOLD_BYTES, registerAppDiscoveryTools, registerAppTools, registerAppToolsProgressive, selectCoreTools, type AppTool } from './tool-loader.js';
+import { CORE_TOOL_MAX, checkPlatformRoles, executeToolCall, fetchTools, fetchVisibleTools, invalidateCache, measureToolsListBytes, PROGRESSIVE_DISCLOSURE_THRESHOLD_BYTES, registerAppDiscoveryTools, registerAppTools, registerAppToolsProgressive, selectCoreTools, type AppTool } from './tool-loader.js';
 
 // The loader now calls the API over a service binding (Fetcher). Delegate to
 // globalThis.fetch so each test's stub keeps working unchanged.
@@ -452,14 +452,43 @@ describe('registerAppDiscoveryTools — list_app_tools / call_app_tool on the sh
     expect(text).not.toMatch(new RegExp(`${crmTools[0]!.name} — [^\\n]*staged`));
   });
 
+  it('fetchVisibleTools includes staged actions only for the authenticated owner or team member', async () => {
+    const staged = { name: 'draft_report', description: 'Not live yet', operation: 'query', requires_auth: true, params: {}, state: 'staged' };
+    globalThis.fetch = vi.fn().mockImplementation((_req: Request | string, init?: RequestInit) => {
+      const authed = new Headers(init?.headers ?? (_req instanceof Request ? _req.headers : undefined)).get('Authorization');
+      return Promise.resolve(new Response(JSON.stringify({ tools: authed ? [...crmTools, staged] : crmTools }), { status: 200 }));
+    });
+    const ownerTools = await fetchVisibleTools(api, 'https://api.test', 'crm', 'tok-1');
+    expect(ownerTools.map((tool) => tool.name)).toContain('draft_report');
+    invalidateCache();
+    const publicTools = await fetchVisibleTools(api, 'https://api.test', 'crm');
+    expect(publicTools.map((tool) => tool.name)).not.toContain('draft_report');
+  });
+
+  it('call_app_tool invokes a staged tool for its owner through the action executor (#428)', async () => {
+    const staged = { name: 'draft_report', description: 'Not live yet', operation: 'query', requires_auth: true, params: {}, state: 'staged' };
+    globalThis.fetch = vi.fn().mockImplementation((request: Request | string, init?: RequestInit) => {
+      if (String(request).endsWith('/actions/draft_report')) return Promise.resolve(Response.json({ rows: [{ id: 'draft-1' }] }));
+      const authed = new Headers(init?.headers ?? (request instanceof Request ? request.headers : undefined)).get('Authorization');
+      return Promise.resolve(new Response(JSON.stringify({ tools: authed ? [...crmTools, staged] : crmTools }), { status: 200 }));
+    });
+    const res = await setup().get('call_app_tool')!({ app_id: 'crm', tool: 'draft_report' });
+    expect(res.content[0].text).toContain('draft-1');
+    expect(globalThis.fetch).toHaveBeenLastCalledWith(
+      'https://api.test/v1/apps/crm/actions/draft_report',
+      expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ Authorization: 'Bearer tok-1' }) }),
+    );
+  });
+
   it('call_app_tool runs a query through the platform action executor as the connected user', async () => {
     globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(listing())
       .mockResolvedValueOnce(listing())
       .mockResolvedValueOnce(Response.json({ rows: [{ id: 'c1', name: 'Acme' }] }));
     const h = setup();
     const res = await h.get('call_app_tool')!({ app_id: 'crm', tool: 'list_companies', params: { limit: 5 } });
     expect(res.content[0].text).toContain('Acme');
-    expect(globalThis.fetch).toHaveBeenNthCalledWith(2,
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(3,
       'https://api.test/v1/apps/crm/actions/list_companies',
       expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ Authorization: 'Bearer tok-1' }), body: JSON.stringify({ params: { limit: 5 } }) }),
     );
@@ -470,7 +499,7 @@ describe('registerAppDiscoveryTools — list_app_tools / call_app_tool on the sh
     const h = setup();
     const res = await h.get('call_app_tool')!({ app_id: 'crm', tool: 'drop_everything' });
     expect(res.content[0].text).toBe('Unknown tool drop_everything for crm; call list_app_tools({ app_id: "crm" }) for the names it exposes.');
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 
   it('fetchTools drops worker/hook-only actions a session cannot call, keeps mixed ones (#254)', async () => {
@@ -505,19 +534,20 @@ describe('registerAppDiscoveryTools — list_app_tools / call_app_tool on the sh
       globalThis.fetch = vi.fn().mockResolvedValue(withScheduled());
       const res = await setup().get('call_app_tool')!({ app_id: 'crm', tool: 'reap_stale_games_all', params: { idle_ms: 0 } });
       expect(res.content[0].text).toContain('Unknown tool reap_stale_games_all for crm');
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1); // the listing only — no /actions/ call
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2); // public + caller listing — no /actions/ call
     });
   });
 
   it('call_app_tool: under MCP_READ_ONLY a query still runs and an execute is refused before the executor', async () => {
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce(listing())
+      .mockResolvedValueOnce(listing())
       .mockResolvedValueOnce(Response.json({ rows: [] }));
     const h = setup({ MCP_READ_ONLY: '1' });
     expect((await h.get('call_app_tool')!({ app_id: 'crm', tool: 'list_companies' })).content[0].text).toBe('No results found.');
     await expect(h.get('call_app_tool')!({ app_id: 'crm', tool: 'update_company', params: { id: 'c1', name: 'X' } })).rejects.toThrow(/read-only/i);
-    // listing (cached) + the one query execution; the execute never reached the executor
-    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    // query: public + caller listing + execution; execute: fresh caller listing, then it is gated.
+    expect(globalThis.fetch).toHaveBeenCalledTimes(4);
   });
 
   it('call_app_tool pre-flights platform roles like a registered tool', async () => {
@@ -525,7 +555,7 @@ describe('registerAppDiscoveryTools — list_app_tools / call_app_tool on the sh
     const h = setup({}, ['user']);
     const res = await h.get('call_app_tool')!({ app_id: 'crm', tool: 'admin_purge' });
     expect(res.content[0].text).toMatch(/requires platform role/);
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 });
 

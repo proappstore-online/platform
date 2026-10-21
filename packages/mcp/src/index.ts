@@ -6,7 +6,7 @@ import { extractToken, fetchAccount, verifyToken } from "./api-helpers.js";
 import { verifySession } from "./session.js";
 import { listAuditEvents } from "./safety.js";
 import { registerPlatformTools } from "./platform-tools.js";
-import { fetchTools, registerAppDiscoveryTools, registerAppToolsProgressive } from "./tool-loader.js";
+import { fetchVisibleTools, registerAppDiscoveryTools, registerAppToolsProgressive } from "./tool-loader.js";
 import { registerProjectTools } from "./project-tools.js";
 import { handleInternalProvisioning } from "./provisioning-workflow.js";
 import { registerLoopTools } from "./loop-tools.js";
@@ -135,7 +135,7 @@ export class PasMcpAgent extends McpAgent<Env> {
     //    a resident core is registered, plus list_app_tools / call_app_tool fixed to
     //    this app — the rest is one discovery call away and callable by name.
     if (this.appScope) {
-      const appTools = await fetchTools(this.env.API, this.env.API_BASE, this.appScope, this.userToken);
+      const appTools = await fetchVisibleTools(this.env.API, this.env.API_BASE, this.appScope, this.userToken);
       const result = registerAppToolsProgressive(
         this.server,
         appTools,
