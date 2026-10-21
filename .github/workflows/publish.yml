@@ -7,8 +7,8 @@ name: Publish to npm
 #
 # Auth: OIDC trusted publishing — no stored NPM_TOKEN needed.
 # Each published @proappstore/* package is linked to this repo on npmjs.com.
-# packages/mcp-registry (@proappstore/mcp) is intentionally excluded until its
-# npm trusted-publishing settings are configured for this workflow.
+# packages/mcp-registry (@proappstore/mcp) has a separate manual release workflow,
+# publish-mcp-registry.yml, which requires its own npm trusted publisher setup.
 
 on:
   push:

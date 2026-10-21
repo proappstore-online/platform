@@ -12,26 +12,26 @@ BANNED_VARS='var\(--bg\)|--bg\s*:|var\(--surface\b|--surface\s*:|var\(--border\b
 # strings in *.ts (#63): a theme a scaffold emits or a snippet the MCP serves is
 # what apps end up shipping. Test files may quote banned names as fixtures.
 # The top-level apps/ folder contains independent local repositories, not platform code.
-if grep -rn --exclude-dir=apps --include="*.css" --include="*.tsx" --include="*.jsx" --include="*.ts" -E "$BANNED_VARS" "${1:-.}" 2>/dev/null | grep -v node_modules | grep -v '.min.css' | grep -v 'prism' | grep -v 'test/fixtures' | grep -v '/dist/' | grep -v '\.test\.tsx\?:' ; then
+if grep -rn --exclude-dir=apps --exclude-dir=node_modules --exclude-dir=dist --include="*.css" --include="*.tsx" --include="*.jsx" --include="*.ts" -E "$BANNED_VARS" "${1:-.}" 2>/dev/null | grep -v node_modules | grep -v '.min.css' | grep -v 'prism' | grep -v 'test/fixtures' | grep -v '/dist/' | grep -v '\.test\.tsx\?:' ; then
   echo "FAIL: Found banned CSS variable names. Use standard tokens from DESIGN-SYSTEM.md"
   echo "  --bg → --paper, --surface → --panel, --border → --line, --glass → --panel"
   FAIL=1
 fi
 
 # 2. Dark mode must use [data-theme], not .dark class
-if grep -rn --exclude-dir=apps --include="*.css" 'html\.dark\b' "${1:-.}" 2>/dev/null | grep -v node_modules | grep -v '.min.css' | grep -v 'prism' | grep -v 'test/fixtures' | grep -v '/dist/'; then
+if grep -rn --exclude-dir=apps --exclude-dir=node_modules --exclude-dir=dist --include="*.css" 'html\.dark\b' "${1:-.}" 2>/dev/null | grep -v node_modules | grep -v '.min.css' | grep -v 'prism' | grep -v 'test/fixtures' | grep -v '/dist/'; then
   echo "FAIL: Found html.dark selector. Use :root[data-theme='dark'] instead"
   FAIL=1
 fi
 
 # 3. Theme storage key must be 'stores-theme'
-if grep -rn --exclude-dir=apps --include="*.js" --include="*.ts" --include="*.tsx" "localStorage.*theme" "${1:-.}" 2>/dev/null | grep -v node_modules | grep -v 'stores-theme' | grep -v '.min.js' | grep -v 'prism' | grep -v 'test/fixtures' | grep -v '/dist/'; then
+if grep -rn --exclude-dir=apps --exclude-dir=node_modules --exclude-dir=dist --include="*.js" --include="*.ts" --include="*.tsx" "localStorage.*theme" "${1:-.}" 2>/dev/null | grep -v node_modules | grep -v 'stores-theme' | grep -v '.min.js' | grep -v 'prism' | grep -v 'test/fixtures' | grep -v '/dist/'; then
   echo "FAIL: Theme localStorage key must be 'stores-theme'"
   FAIL=1
 fi
 
 # 4. classList.add('dark') or classList.remove('dark') — old dark mode toggle
-if grep -rn --exclude-dir=apps --include="*.js" --include="*.ts" --include="*.tsx" "classList.*['\"]dark['\"]" "${1:-.}" 2>/dev/null | grep -v node_modules | grep -v '.min.js' | grep -v 'test/fixtures' | grep -v '/dist/'; then
+if grep -rn --exclude-dir=apps --exclude-dir=node_modules --exclude-dir=dist --include="*.js" --include="*.ts" --include="*.tsx" "classList.*['\"]dark['\"]" "${1:-.}" 2>/dev/null | grep -v node_modules | grep -v '.min.js' | grep -v 'test/fixtures' | grep -v '/dist/'; then
   echo "FAIL: Found classList dark toggle. Use dataset.theme='dark' instead"
   FAIL=1
 fi

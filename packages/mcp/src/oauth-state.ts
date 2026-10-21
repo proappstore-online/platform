@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env.js";
+import { mcpIssuer } from "./env.js";
 import {
   brokerMcpReadSeen, handleOAuthRoute, issueBrokerCredential, listGrants,
   recordBrokerMcpRead, resolveOAuthToken, revokeGrant, type OAuthConfig,
@@ -94,7 +95,7 @@ export class OAuthState extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     return this.ctx.blockConcurrencyWhile(async () =>
-      await handleOAuthRoute(request, this.config(new URL(request.url).origin)) ?? new Response("Not found", { status: 404 }),
+      await handleOAuthRoute(request, this.config(mcpIssuer(this.env))) ?? new Response("Not found", { status: 404 }),
     );
   }
 

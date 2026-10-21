@@ -15,10 +15,13 @@ Workers or publish npm packages from a local machine.
 
 The optional `@proappstore/mcp` npm launcher is a stdio compatibility bridge;
 native remote clients should use the HTTPS URL directly. Its release is excluded
-from `publish.yml` until the npm package owner configures a trusted publisher for
-`proappstore-online/platform`, workflow `publish.yml`. Do not substitute a local
-publish or long-lived npm token. Source metadata updates do not update an already
-published npm README until that separate package is released.
+from the general `publish.yml`. Its dedicated manual release workflow is
+`publish-mcp-registry.yml`: the npm package owner must configure a GitHub trusted
+publisher for `proappstore-online/platform` and that workflow filename, then
+dispatch **Publish PAS MCP npm bridge** from `main`. It validates both manifests
+and the launcher, synchronizes their version, and publishes with OIDC provenance.
+Do not substitute a local publish or long-lived npm token. Source metadata updates
+do not update an already published npm README until that package is released.
 
 The Worker uses the official MCP SDK's stateless HTTP transport. Each request
 resolves its OAuth credential, verifies its underlying PAS session and resource
@@ -29,6 +32,9 @@ identity. Standalone GET event streams are unsupported (405); clients use POST.
 resolutions use the named `authority` instance and are serialized. Code redemption,
 refresh rotation and revocation must never fall back to eventually consistent KV.
 Missing authority/signing-key configuration fails closed with 503.
+`MCP_ISSUER` names the canonical public origin. Internal service requests use
+hosts such as `https://mcp`; those hosts must never become an OAuth issuer or
+replace the public resource binding during broker credential issuance.
 
 Migration `v2` adds `OAuthState` and retains the historical `PasMcpAgent` binding.
 For 90 days after first initialization, the authority can read existing OAuth

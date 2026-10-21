@@ -1,0 +1,71 @@
+name: Publish PAS MCP npm bridge
+
+# The package owner must first trust this repository and this workflow on npm.
+# Dispatch only after that setup; native remote MCP clients do not need this bridge.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: publish-mcp-registry
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - name: Choose the next patch and synchronize registry metadata
+        env:
+          NPM_REGISTRY_URL: https://registry.npmjs.org
+        run: |
+          export PAS_MCP_PUBLISHED_VERSION="$(npm view @proappstore/mcp version --registry "$NPM_REGISTRY_URL")"
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const pkgPath = 'packages/mcp-registry/package.json';
+          const serverPath = 'packages/mcp-registry/server.json';
+          const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+          const remote = process.env.PAS_MCP_PUBLISHED_VERSION;
+          const parse = (value) => {
+            if (!/^\d+\.\d+\.\d+$/.test(value)) throw new Error('Expected a stable semver');
+            return value.split('.').map(Number);
+          };
+          const a = parse(pkg.version), b = parse(remote);
+          const newer = a.findIndex((part, i) => part !== b[i]);
+          const base = newer === -1 || a[newer] < b[newer] ? b : a;
+          pkg.version = `${base[0]}.${base[1]}.${base[2] + 1}`;
+          const server = JSON.parse(readFileSync(serverPath, 'utf8'));
+          server.version = pkg.version;
+          for (const entry of server.packages) entry.version = pkg.version;
+          writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+          writeFileSync(serverPath, JSON.stringify(server, null, 2) + '\n');
+          JS
+      - name: Validate manifests and stdio launcher
+        run: pnpm exec vitest run packages/mcp/src/registry.test.ts packages/mcp/src/registry-wrapper.test.ts
+      - name: Review package contents
+        working-directory: packages/mcp-registry
+        run: npm pack --dry-run
+      - name: Publish using npm trusted publishing
+        working-directory: packages/mcp-registry
+        run: npm publish --access public --provenance
+      - name: Commit released metadata
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/mcp-registry/package.json packages/mcp-registry/server.json
+          git commit -m "chore(mcp): record published bridge version [skip ci]"
+          git pull --rebase --autostash origin main
+          git push origin main

@@ -1,6 +1,8 @@
 import type { OAuthState } from "./oauth-state.js";
 
 export interface Env {
+  /** Canonical public OAuth issuer, independent of a service-binding request's host. */
+  MCP_ISSUER?: string;
   API_BASE: string;
   /** Agent Teams API base (the autonomous build loop). e.g. https://agents.proappstore.online */
   AGENTS_BASE: string;
@@ -32,4 +34,8 @@ export interface Env {
   OAUTH_CIMD_HOSTS?: string;
   /** Refresh-token lifetime override, in seconds (#418). Defaults to 90 days. */
   OAUTH_REFRESH_TTL_SECONDS?: string;
+}
+
+export function mcpIssuer(env: Pick<Env, "MCP_ISSUER">): string {
+  return env.MCP_ISSUER ?? "https://mcp.proappstore.online";
 }

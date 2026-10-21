@@ -16,6 +16,7 @@ upload_source_maps = true
 enabled = true
 
 [vars]
+MCP_ISSUER = "https://mcp.proappstore.online"
 API_BASE = "https://api.proappstore.online"
 AGENTS_BASE = "https://agents.proappstore.online"
 GITHUB_ORG = "proappstore-online"

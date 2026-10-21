@@ -2,7 +2,7 @@ import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { mintSession } from "@proappstore/build-core";
 import type { OAuthState } from "../../../mcp/src/oauth-state";
-import { SESSION_SIGNING_KEY } from "../../config/shared";
+import { SESSION_SIGNING_KEY, INTERNAL_TOKEN } from "../../config/shared";
 
 const bindings = env as unknown as { OAUTH_KV: KVNamespace; OAUTH_STATE: DurableObjectNamespace<OAuthState> };
 const origin = "https://mcp.proappstore.online";
@@ -52,6 +52,24 @@ const exchange = ({ code, verifier }: { code: string; verifier: string }) => tok
 const refresh = (value: string) => token({ grant_type: "refresh_token", refresh_token: value, client_id: "runtime-client" });
 
 describe("PAS MCP with real HTTP transport and durable OAuth storage", () => {
+  it("issues broker credentials through the internal service host using the public issuer", async () => {
+    const requestId = `req_${'a'.repeat(43)}`;
+    const ownerSession = await session('gh:1');
+    const issue = (resource: string) => SELF.fetch('https://mcp/internal/broker/issue', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Internal-Token': INTERNAL_TOKEN },
+      body: JSON.stringify({ session: ownerSession, owner_id: 'gh:1', resource, request_id: requestId }),
+    });
+    const invalid = await issue('https://untrusted.example/mcp');
+    expect(invalid.status).toBe(403);
+    await invalid.text();
+    const response = await issue(`${origin}/mcp`);
+    expect(response.status).toBe(200);
+    const body = await response.json() as { access_token: string };
+    const identity = await rpc(body.access_token, 'tools/call', { name: 'whoami', arguments: {} });
+    expect(identity.body.result.content[0].text).toContain('uid:       gh:1');
+    expect(await authority().readSeen(requestId)).toBe(true);
+  });
+
   it("publishes 68 annotated tools and no required token arguments on platform reads", async () => {
     const { response, body } = await rpc(await access("gh:1"), "tools/list", {});
     expect(response.status).toBe(200);

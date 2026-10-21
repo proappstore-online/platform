@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker-provider.js";
 import type { Env } from "./env.js";
+import { mcpIssuer } from "./env.js";
 import { extractToken, fetchAccount, verifyToken } from "./api-helpers.js";
 import { verifySession } from "./session.js";
 import { listAuditEvents } from "./safety.js";
@@ -228,7 +229,7 @@ export class PasMcpAgent extends DurableObject<Env> {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
-    const issuer = `${url.protocol}//${url.host}`;
+    const issuer = mcpIssuer(env);
     const authority = env.OAUTH_STATE?.get(env.OAUTH_STATE.idFromName("authority"));
     const origin = request.headers.get("Origin");
     if (resolveMcpRoute(url.pathname).isTransport && origin &&
