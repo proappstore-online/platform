@@ -64,3 +64,54 @@ describe('pas publish forwards the whole manifest (#254)', () => {
     expect(registered[1]!.worker).toEqual({ secrets: ['GITHUB_TOKEN'] });
   });
 });
+
+// #459: a fresh `pas create` + `pas publish` has no intervening `git push`, so
+// the deploy workflow's migrate-then-register step never runs. `pas publish`
+// must apply migrations.json itself, and BEFORE it registers mcp.json, or tool
+// SQL is checked for schema coherence against a still-empty D1.
+describe('pas publish applies migrations.json before registering tools (#459)', () => {
+  const MIGRATIONS = { migrations: [{ name: '0001_init', sql: 'CREATE TABLE items (id TEXT PRIMARY KEY)' }] };
+  let calls: string[];
+
+  beforeEach(() => {
+    writeFileSync(join(dir, 'migrations.json'), JSON.stringify(MIGRATIONS));
+    calls = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/v1/provision')) return Response.json({ appId: 'repos', steps: [], dataWorkerUrl: '', appUrl: '', success: true });
+      if (url.endsWith('/v1/apps/repos/migrate')) {
+        calls.push('migrate');
+        expect(JSON.parse(String(init.body))).toEqual(MIGRATIONS);
+        return Response.json({ applied: ['0001_init'], already: [] });
+      }
+      if (url.endsWith('/v1/apps/repos/tools')) {
+        calls.push('tools');
+        registered.push(JSON.parse(String(init.body)));
+        return Response.json({ registered: 1 });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+  });
+
+  it('migrates before registering tools', async () => {
+    await publishApp({ token: 'tok' } as never);
+    expect(calls).toEqual(['migrate', 'tools']);
+  });
+
+  it('still registers tools when the migrate call fails (publish stays idempotent)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/v1/provision')) return Response.json({ appId: 'repos', steps: [], dataWorkerUrl: '', appUrl: '', success: true });
+      if (url.endsWith('/v1/apps/repos/migrate')) {
+        calls.push('migrate');
+        return new Response('migration failed', { status: 502 });
+      }
+      if (url.endsWith('/v1/apps/repos/tools')) {
+        calls.push('tools');
+        registered.push(JSON.parse(String(init.body)));
+        return Response.json({ registered: 1 });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+    await publishApp({ token: 'tok' } as never);
+    expect(calls).toEqual(['migrate', 'tools']);
+  });
+});

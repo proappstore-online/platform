@@ -210,7 +210,7 @@ async function applyMigrations(
   env: Env,
   appId: string,
   migrations: unknown,
-  source: 'oidc' | 'internal' | 'admin',
+  source: 'oidc' | 'internal' | 'admin' | 'owner',
 ): Promise<{ status: 200 | 400 | 422 | 502; body: Record<string, unknown> }> {
   if (!Array.isArray(migrations)) {
     return { status: 400, body: { error: 'migrations must be an array of {name, sql}' } };
@@ -271,7 +271,7 @@ async function applyMigrations(
 async function recordMigrationAudit(
   env: Env,
   appId: string,
-  source: 'oidc' | 'internal' | 'admin',
+  source: 'oidc' | 'internal' | 'admin' | 'owner',
   status: 'applied' | 'failed',
   applied: string[] | null,
   already: string[] | null,
@@ -300,6 +300,33 @@ deployRoutes.post('/apps/:appId/migrate/oidc', async (c) => {
 
   const body = await c.req.json<{ migrations?: unknown }>().catch(() => null);
   const { status, body: payload } = await applyMigrations(c.env, appId, body?.migrations, 'oidc');
+  return c.json(payload, status);
+});
+
+/**
+ * Owner-session migrate path (#459): `pas publish` has no GitHub OIDC token —
+ * it authenticates with the owner's session Bearer token, same as the
+ * owner-session `PUT /apps/:appId/tools` it already calls. Without this route,
+ * `pas create` + `pas publish` (no intervening `git push`, so CI's migrate/oidc
+ * step never runs) registered mcp.json straight after /v1/provision against a
+ * still-empty D1, so the default template's own list_items/get_item/create_item
+ * failed schema coherence on a fresh app. `pas publish` now calls this BEFORE
+ * registering tools, mirroring the deploy workflow's migrate-then-register order.
+ * Same additive-only guard as the OIDC/internal/admin paths.
+ */
+deployRoutes.post('/apps/:appId/migrate', async (c) => {
+  const appId = c.req.param('appId');
+  if (!/^[a-z][a-z0-9-]*$/.test(appId) || appId.length > 58) {
+    return c.json({ error: 'invalid app id' }, 400);
+  }
+  try {
+    await requireAppOwner(c, appId);
+  } catch (e) {
+    if (e instanceof HttpError) return c.json({ error: e.message }, e.status as 401 | 403);
+    throw e;
+  }
+  const body = await c.req.json<{ migrations?: unknown }>().catch(() => null);
+  const { status, body: payload } = await applyMigrations(c.env, appId, body?.migrations, 'owner');
   return c.json(payload, status);
 });
 

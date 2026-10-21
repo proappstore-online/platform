@@ -609,6 +609,62 @@ describe('POST /apps/:appId/migrate/admin', () => {
   });
 });
 
+// #459: `pas publish` has no GitHub OIDC token (the CLI isn't running in the
+// app's own repo's CI) — it authenticates with the owner's session Bearer
+// token, same as the owner-session `PUT /apps/:appId/tools` it already calls.
+// Without this route, a fresh `pas create` + `pas publish` registered the
+// default template's mcp.json against a still-empty D1, since CI's own
+// migrate-then-register step hadn't run yet (no `git push` between the two).
+describe('POST /apps/:appId/migrate (owner session)', () => {
+  const SK = TEST_SK;
+  const OWNER_ENV = { DB: mockDB, SESSION_SIGNING_KEY: SK, INTERNAL_TOKEN: 'internal-secret', DATA_WORKER_HOST: 'serge-the-dev.workers.dev' } as never;
+  const init = { name: '0001_init', sql: 'CREATE TABLE IF NOT EXISTS items (id TEXT PRIMARY KEY)' };
+
+  beforeEach(() => {
+    migrationRows = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, reqInit?: RequestInit) => {
+      if (String(input).includes('/migrate')) {
+        return new Response(JSON.stringify({ applied: ['0001_init'], already: [] }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${String(input)}`);
+    }));
+  });
+  afterEach(() => { vi.unstubAllGlobals(); selectResults = () => ({}); });
+
+  const call = (headers: Record<string, string>, migrations: unknown = [init]) =>
+    deployRoutes.request(
+      '/apps/aiuniversity/migrate',
+      { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ migrations }) },
+      OWNER_ENV,
+    );
+
+  it('lets the app owner apply its own migrations', async () => {
+    selectResults = (sql) => (sql.includes('FROM apps') ? { first: { creator_id: 'gh:5' } } : {});
+    const res = await call({ Authorization: `Bearer ${await testToken('gh:5')}` });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { applied: string[] };
+    expect(body.applied).toEqual(['0001_init']);
+    expect(migrationRows[0]!.slice(0, 3)).toEqual(['aiuniversity', 'owner', 'applied']);
+  });
+
+  it('rejects a user who does not own the app', async () => {
+    selectResults = (sql) => (sql.includes('FROM apps') ? { first: { creator_id: 'gh:999' } } : {});
+    const res = await call({ Authorization: `Bearer ${await testToken('gh:5')}` });
+    expect(res.status).toBe(403);
+    expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+  });
+
+  it('keeps owner-session migrations under the additive-only guard', async () => {
+    selectResults = (sql) => (sql.includes('FROM apps') ? { first: { creator_id: 'gh:5' } } : {});
+    const res = await call(
+      { Authorization: `Bearer ${await testToken('gh:5')}` },
+      [{ name: 'bad', sql: 'DROP TABLE items' }],
+    );
+    expect(res.status).toBe(422);
+    expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+  });
+});
+
 // #206: the additive-only lint reads SQL the way the data worker executes it —
 // statements split on top-level semicolons, keywords checked in code, never in
 // string literals — and admits FTS5 virtual tables only.

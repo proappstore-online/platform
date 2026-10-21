@@ -136,6 +136,34 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
   }
 
   if (data.success) {
+    // ── Apply D1 migrations from migrations.json (if present) ──
+    // Must run BEFORE tools registration below: schema coherence checks tool
+    // SQL against the live schema, and a fresh app's D1 is empty until this
+    // runs (#459 — `pas publish` has no intervening `git push`, so the deploy
+    // workflow's own migrate-then-register step hasn't happened yet).
+    const migrationsManifestPath = resolve(cwd, 'migrations.json');
+    const migrationsManifest = readJsonIfExists<{ migrations?: unknown[] }>(migrationsManifestPath);
+    const migrations = Array.isArray(migrationsManifest?.migrations) ? migrationsManifest.migrations : [];
+    if (migrations.length > 0) {
+      process.stdout.write(`\n  Applying ${migrations.length} migration(s)...\n`);
+      try {
+        const migrateRes = await fetch(`${PAS_API}/v1/apps/${appId}/migrate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ migrations }),
+        });
+        if (migrateRes.ok) {
+          const migrateData = (await migrateRes.json()) as { applied?: string[]; already?: string[] };
+          process.stdout.write(`  [+] Migrations: applied ${(migrateData.applied ?? []).length}, already up to date ${(migrateData.already ?? []).length}\n`);
+        } else {
+          const errText = await migrateRes.text();
+          process.stdout.write(`  [!] Migrations: ${errText}\n`);
+        }
+      } catch (e) {
+        process.stdout.write(`  [!] Migrations: ${e}\n`);
+      }
+    }
+
     // ── Register MCP tools from mcp.json (if present) ──────────
     const mcpManifestPath = resolve(cwd, 'mcp.json');
     const mcpManifest = readJsonIfExists<{ tools?: unknown[]; visibility?: unknown } & Record<string, unknown>>(mcpManifestPath);
