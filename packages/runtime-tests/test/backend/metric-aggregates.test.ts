@@ -20,7 +20,10 @@ async function eventually<T>(read: () => Promise<T>, ok: (v: T) => boolean): Pro
 }
 const spend = (column: 'count' | 'server_count', n: number) =>
   env.DB.prepare(`INSERT INTO app_log_usage (app_id, day, ${column}) VALUES (?, ?, ?)`).bind(APP, utcDayKey(Date.now()), n).run();
-const ingest = (entries: object[]) => SELF.fetch(`${BASE}/v1/apps/${APP}/logs`, json('POST', { entries, clientId: 'c'.repeat(16) }));
+// A fresh client per call: the client_error counter admits one add per (app, client) per minute (#438),
+// and that limiter's state outlives a test.
+let clientSeq = 0;
+const ingest = (entries: object[]) => SELF.fetch(`${BASE}/v1/apps/${APP}/logs`, json('POST', { entries, clientId: `client-${Date.now()}-${clientSeq++}-xxxx` }));
 const errorEntry = { level: 'error', category: 'runtime', message: 'boom', ts: Date.now() };
 const actionTool = { name: 'list_cases', description: 'l', operation: 'query', sql: 'SELECT 1 WHERE :__user_id IS NOT NULL', params: {}, requires_auth: true };
 
@@ -42,7 +45,8 @@ describe('incident aggregates (#391 stage a)', () => {
     const res = await ingest([errorEntry, errorEntry, { ...errorEntry, level: 'warn' }]);
     expect(res.status).toBe(202);
     expect(await rows('direct')).toBe(0);
-    expect(await metrics()).toEqual({ client_error: 2, detail_dropped_client: 3 });
+    // One request adds 1 to client_error however many errors it carries (#438); the drop counts every entry.
+    expect(await metrics()).toEqual({ client_error: 1, detail_dropped_client: 3 });
   });
 
   it('server detail budget exhausted: no server row, but the action failure and 5xx are counted', async () => {

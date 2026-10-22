@@ -243,6 +243,24 @@ type = "ratelimit"
 namespace_id = "1003"
 simple = { limit = 60, period = 60 }
 
+# Anonymous log ingest (#438). POST /v1/apps/:id/logs is unauthenticated and writes to
+# the shared D1, so it is limited per (app, client IP) before any D1 work: 30 requests
+# per 60 s. PUBLIC_LOG_ERROR_COUNT_LIMIT gates how often one (app, IP) may add to the
+# `client_error` incident counter that drives error-spike alerts: 1 per 60 s, so a single
+# source contributes at most a handful per alert window and cannot raise a spike alone.
+# namespace_id is account-unique; PWS holds 0, 2 and 1001; PAS holds 1000-1005.
+[[unsafe.bindings]]
+name = "PUBLIC_LOG_RATE_LIMIT"
+type = "ratelimit"
+namespace_id = "1004"
+simple = { limit = 30, period = 60 }
+
+[[unsafe.bindings]]
+name = "PUBLIC_LOG_ERROR_COUNT_LIMIT"
+type = "ratelimit"
+namespace_id = "1005"
+simple = { limit = 1, period = 60 }
+
 [[routes]]
 pattern = "api.proappstore.online/*"
 zone_name = "proappstore.online"

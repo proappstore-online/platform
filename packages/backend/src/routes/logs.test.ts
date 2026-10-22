@@ -605,3 +605,59 @@ describe('GET /v1/apps/:appId/logs/build', () => {
     expect(await res.json()).toEqual({ build: { sha: 'abc' }, ts: 42 });
   });
 });
+
+// #438: the public route is limited per (app, IP) before any D1 work, and the client_error
+// counter behind error-spike alerts takes at most one add per (app, client) per window.
+describe('POST /v1/apps/:appId/logs — public flood bounds (#438)', () => {
+  const limiter = (success: boolean) => ({ limit: vi.fn(async () => ({ success })) });
+  const IP = { 'cf-connecting-ip': '203.0.113.7' };
+  const errorMetricAdds = (db: ReturnType<typeof mockD1>) =>
+    (db.prepare as unknown as { mock: { calls: string[][] } }).mock.calls.filter(([sql]) => /app_metric_buckets/.test(sql!)).length;
+
+  it('over the limit: 429 + Retry-After, keyed on app and IP, with no D1 work at all', async () => {
+    const db = ingestDb();
+    const rate = limiter(false);
+    const res = await post({ entries: [entry()] }, { headers: IP, env: makeEnv({ PUBLIC_LOG_RATE_LIMIT: rate }, db) });
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe('60');
+    expect(rate.limit).toHaveBeenCalledWith({ key: 'myapp:203.0.113.7' });
+    expect(db.prepare).not.toHaveBeenCalled();
+    expect(db.batch).not.toHaveBeenCalled();
+  });
+
+  it('a service-binding call without cf-connecting-ip is exempt (as in routes/actions.ts)', async () => {
+    const rate = limiter(false);
+    const res = await post({ entries: [entry()] }, { env: makeEnv({ PUBLIC_LOG_RATE_LIMIT: rate }) });
+    expect(res.status).toBe(200);
+    expect(rate.limit).not.toHaveBeenCalled();
+  });
+
+  it('a batch of errors adds 1 to client_error, not one per entry', async () => {
+    const db = ingestDb();
+    const res = await post({ entries: [entry(), entry(), entry()], clientId: 'client-aaaaaaaa' }, { headers: IP, env: makeEnv({}, db) });
+    expect(res.status).toBe(200);
+    const batches = (db.batch as unknown as { mock: { calls: unknown[][][] } }).mock.calls;
+    expect(batches.length).toBeGreaterThan(0);
+    expect(errorMetricAdds(db)).toBe(1);
+    const metricStmt = (db.prepare as unknown as { mock: { results: { value: { bind: { mock: { calls: unknown[][] } } } }[]; calls: string[][] } })
+      .mock.results.filter((_, i) => /app_metric_buckets/.test((db.prepare as unknown as { mock: { calls: string[][] } }).mock.calls[i]![0]!))[0]!.value;
+    // bind(appId, bucket, 'client_error', n)
+    expect(metricStmt.bind.mock.calls.find((a) => a[2] === 'client_error')?.[3]).toBe(1);
+  });
+
+  it('a client already counted this window adds nothing to client_error, but its entries are still stored', async () => {
+    const db = ingestDb();
+    const count = limiter(false);
+    const res = await post({ entries: [entry()], clientId: 'client-bbbbbbbb' }, { headers: IP, env: makeEnv({ PUBLIC_LOG_ERROR_COUNT_LIMIT: count }, db) });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, ingested: 1 });
+    expect(count.limit).toHaveBeenCalledWith({ key: 'myapp:203.0.113.7' });
+    expect(errorMetricAdds(db)).toBe(0);
+  });
+
+  it('a batch with no errors never spends the counter allowance', async () => {
+    const count = limiter(true);
+    await post({ entries: [entry({ level: 'warn' })] }, { headers: IP, env: makeEnv({ PUBLIC_LOG_ERROR_COUNT_LIMIT: count }) });
+    expect(count.limit).not.toHaveBeenCalled();
+  });
+});

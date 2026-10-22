@@ -162,6 +162,17 @@ logsRoutes.post('/apps/:appId/logs', async (c) => {
   }
   const source = mediatedApp ? 'mediated' : 'direct';
 
+  // #438: this route is unauthenticated and every request writes to the shared D1
+  // (the metric bucket and telemetry_health, plus detail rows), so it is limited per
+  // (app, client IP) BEFORE any D1 work, the app lookup included. Service-binding
+  // calls arrive without cf-connecting-ip, which the edge sets on every public
+  // request, and are exempt (as in routes/actions.ts). 429 + Retry-After: the SDK
+  // goes quiet on it rather than retrying into a flood.
+  const clientIp = c.req.header('cf-connecting-ip');
+  if (clientIp && !(await c.env.PUBLIC_LOG_RATE_LIMIT.limit({ key: `${appId}:${clientIp}` })).success) {
+    return c.json({ error: 'too many log requests — slow down' }, 429, { 'Retry-After': '60' });
+  }
+
   // The app must exist. Without this, rows pile up against never-provisioned ids
   // that no owner can read and no pruning pass attributes to anyone.
   const app = await c.env.DB.prepare('SELECT id FROM apps WHERE id = ?')
@@ -227,7 +238,16 @@ logsRoutes.post('/apps/:appId/logs', async (c) => {
 
   // #391: the incident counters, regardless of the detail verdict. Public
   // ingestion is untrusted, so it can only ever add client_* signals.
-  const clientErrors = entries.filter((e) => e.level === 'error').length;
+  // #438: the error-spike alert reads client_error, so an anonymous caller must not
+  // be able to mint alerts by rotating clientIds. One (app, client) adds to the
+  // counter at most once per minute, and by 1 per request however many errors the
+  // batch carries; the batch's detail still lands in AE and, quota permitting, D1.
+  // A real incident is many clients, so it still crosses the threshold.
+  const wantsErrorCount = entries.some((e) => e.level === 'error');
+  const clientErrors = wantsErrorCount
+    && (await c.env.PUBLIC_LOG_ERROR_COUNT_LIMIT.limit({ key: `${appId}:${clientIp ?? clientKey}` })).success
+    ? 1
+    : 0;
   await incrementMetrics(c.env.DB, appId, {
     client_error: clientErrors,
     ...(verdict.persist ? {} : { detail_dropped_client: entries.length }),
