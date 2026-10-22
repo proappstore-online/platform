@@ -48,14 +48,24 @@ const pair = await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulu
 const priv = pair.privateKey;
 const jwk = { ...(await crypto.subtle.exportKey('jwk', pair.publicKey) as JsonWebKey), kid: 'k1', alg: 'RS256', use: 'sig' };
 
+// #438: the client_error counter admits one add per (app, client) per minute, keyed on the edge IP, and that
+// limiter outlives a test. Each sdk() is therefore its own client: a distinct IP on its log posts, as separate
+// browsers would have.
+let clientSeq = 0;
+
 /** The real SDK, signed in as the fixture owner, its platform calls answered by this worker. */
 async function sdk(opts: { failTelemetry?: boolean } = {}) {
   const token = await session(E2E_USER);
   const real = globalThis.fetch;
+  const ip = `198.51.100.${++clientSeq}`;
   vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     if (opts.failTelemetry && url.includes('/logs')) return Promise.reject(new TypeError('Failed to fetch'));
-    return url.startsWith(BASE) ? SELF.fetch(input, init) : real(input, init);
+    if (!url.startsWith(BASE)) return real(input, init);
+    const withIp = url.includes('/logs') && init?.method === 'POST'
+      ? { ...init, headers: { ...(init.headers as Record<string, string> | undefined), 'cf-connecting-ip': ip } }
+      : init;
+    return SELF.fetch(input, withIp);
   });
   const auth = new Auth(APP, BASE, 'legacy-bearer');
   (auth as unknown as { session: unknown }).session = { token, user: { id: E2E_USER, login: 'diag-synthetic' } };
