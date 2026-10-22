@@ -35,8 +35,12 @@ export async function cleanFixtureApp(): Promise<void> {
   }
 }
 
+// #438: the client_error counter admits one add per (app, client) per minute and that limiter outlives a
+// test, so by default every call is a client of its own, like separate browsers.
+let clientSeq = 0;
+
 /** POST log entries to the public ingest route, as a direct (non-mediated) client would. */
-export function ingestLog(appId: string, entries: object[], clientId = 'c'.repeat(16)): Promise<Response> {
+export function ingestLog(appId: string, entries: object[], clientId = `client-${Date.now()}-${clientSeq++}-xxxx`): Promise<Response> {
   return SELF.fetch(`${BASE}/v1/apps/${appId}/logs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
