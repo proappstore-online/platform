@@ -82,6 +82,18 @@ From the configured MCP connection call `whoami`, `list_apps` and `list_template
 Verify the expected account and read behavior before consequential operations.
 Use a fresh client session to reload tool schemas after deployment.
 
+For provisioning, use `provisioning_status` to read the durable receipt. Replaying
+`provision_pas_app` against a failed, exhausted or unreconciled receipt returns
+`isError: true`; pending and completed receipts remain successful status results.
+The legacy `scaffold_app` stops before infrastructure provisioning if template
+configuration fails. Its repository may already exist: inspect the reported repo
+and configuration error before retrying, rather than creating another app.
+
+`mcp_audit_log` selects the newest events across all pages of the account's
+90-day KV trail, then fetches at most the requested number of values (maximum
+200). Large histories require more key-list requests. Audit storage remains
+best-effort and eventually consistent; it is not the provisioning state authority.
+
 If a client reports authorization required or cannot refresh, run
 `codex mcp login proappstore` (or the client's reconnect/sign-in action), complete
 the browser flow and verify `whoami`. Do not extract credentials from local files.

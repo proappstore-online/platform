@@ -203,7 +203,7 @@ export function registerProjectTools(
             : receipt.status === "exhausted"
               ? "This operation exhausted its retry budget and is terminal; no worker is still making progress. Inspect the receipt and use a different app id or contact platform support."
               : "This operation is terminal; inspect its receipt before starting a new request.",
-        ].join("\n"));
+        ].join("\n"), receipt.status !== "pending" && receipt.status !== "completed");
       }
 
       return text([
@@ -316,7 +316,13 @@ export function registerProjectTools(
         await new Promise((r) => setTimeout(r, 4000));
         if (scaffoldHead?.tree && (await copiedTree(app_id)) === scaffoldHead.tree) scaffoldRev = scaffoldHead.sha;
         else steps.push(`~ Template revision: the copy is not provably ${scaffoldTemplate.id}@${scaffoldHead?.sha.slice(0, 12) ?? "(unresolved)"} — recorded as unknown`);
-        steps.push(...(await patchTemplatePlaceholders(app_id)).lines);
+        const configured = await patchTemplatePlaceholders(app_id);
+        steps.push(...configured.lines);
+        if (!configured.ok) return errText([
+          `Template configuration failed for ${app_id}. The repository was created; PAS infrastructure was not provisioned. Inspect and repair the scaffold before retrying.`,
+          `Repo: https://github.com/${org}/${app_id}`,
+          ...steps,
+        ].join("\n"));
       } else {
         steps.push("~ Repo already existed");
         // The repo already existed and wasn't created by this call — require the

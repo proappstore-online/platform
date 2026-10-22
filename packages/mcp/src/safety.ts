@@ -98,23 +98,34 @@ export async function listAuditEvents(
 ): Promise<unknown[]> {
   if (!ctx.env.OAUTH_KV || !ctx.subject) return [];
   const safeLimit = Math.max(1, Math.min(200, limit));
-  const listed = await ctx.env.OAUTH_KV.list({
-    prefix: `audit:${ctx.subject}:`,
-    limit: safeLimit,
-  });
+  // KV lists keys ascending: timestamp-prefixed audit keys put the OLDEST
+  // events first. Select across every page before fetching any values. Keep
+  // only the requested newest keys in memory, and read at most safeLimit rows.
+  let newest: { name: string }[] = [];
+  let cursor: string | undefined;
+  do {
+    const listed = await ctx.env.OAUTH_KV.list({
+      prefix: `audit:${ctx.subject}:`,
+      limit: 1000,
+      ...(cursor ? { cursor } : {}),
+    });
+    newest = [...newest, ...listed.keys]
+      .sort((a, b) => b.name.localeCompare(a.name))
+      .slice(0, safeLimit);
+    if (listed.list_complete !== false) break;
+    if (!listed.cursor || listed.cursor === cursor) throw new Error("Audit pagination did not advance; retry the request.");
+    cursor = listed.cursor;
+  } while (cursor);
   const rows = await Promise.all(
-    listed.keys
-      .sort((a, b) => b.name.localeCompare(a.name)) // newest first
-      .slice(0, safeLimit)
-      .map(async (key) => {
-        const raw = await ctx.env.OAUTH_KV?.get(key.name);
-        if (!raw) return null;
-        try {
-          return JSON.parse(raw) as unknown;
-        } catch {
-          return { raw };
-        }
-      }),
+    newest.map(async (key) => {
+      const raw = await ctx.env.OAUTH_KV?.get(key.name);
+      if (!raw) return null;
+      try {
+        return JSON.parse(raw) as unknown;
+      } catch {
+        return { raw };
+      }
+    }),
   );
   return rows.filter((row) => row !== null);
 }

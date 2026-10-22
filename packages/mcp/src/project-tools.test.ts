@@ -395,12 +395,26 @@ describe('provision_pas_app', () => {
       joined: true,
     });
 
-    const out = getText(await tools.get('provision_pas_app')!({ confirm: true, verify: false, ...args }));
+    const result = await tools.get('provision_pas_app')!({ confirm: true, verify: false, ...args });
+    const out = getText(result);
 
     expect(out).toContain('Provisioning status: exhausted');
+    expect(result.isError).toBe(true);
     expect(out).toContain('exhausted its retry budget');
     expect(out).toContain('no worker is still making progress');
     expect(mockGh.createRepoFromTemplate).not.toHaveBeenCalled();
+  });
+
+  it.each(['failed', 'completed', 'pending'] as const)('marks a joined %s receipt according to its outcome', async (status) => {
+    operations.set('school-clubs', {
+      receipt: 'receipt-existing', appId: 'school-clubs', status,
+      steps: [], attemptId: 'attempt-existing', joined: true,
+    });
+    const result = await tools.get('provision_pas_app')!({ confirm: true, verify: false, ...args });
+    expect(getText(result)).toContain(`Provisioning status: ${status}`);
+    expect(result.isError === true).toBe(status === 'failed');
+    expect(mockGh.createRepoFromTemplate).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   describe('template placeholders (#205)', () => {
@@ -652,6 +666,21 @@ describe('scaffold_app', () => {
     await vi.advanceTimersByTimeAsync(5000);
     return p;
   }
+
+  it.each(['unreadable', 'commit_failed', 'unreplaced'] as const)('stops before infrastructure when template configuration is %s', async (failure) => {
+    mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 201, data: {} });
+    templateCopy('a'.repeat(40));
+    const repo = fakeRepo({ 'package.json': '{"name":"APPNAME"}' }, { dropWrites: failure === 'unreplaced' });
+    if (failure === 'unreadable') mockGh.pullText.mockResolvedValue({ ok: false, error: 'GitHub unavailable' });
+    if (failure === 'commit_failed') mockGh.pushFiles.mockResolvedValue({ ok: false, error: 'Commit rejected' });
+    const result = await runScaffold({ app_id: 'broken', name: 'Broken', description: 'test' });
+    expect(result.isError).toBe(true);
+    expect(getText(result)).toContain('Template configuration failed');
+    expect(getText(result)).toContain('Repo: https://github.com/test-org/broken');
+    expect(getText(result)).not.toContain('App scaffolded:');
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(repo['package.json']).toContain('APPNAME');
+  });
 
   it('creates repo and provisions', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
