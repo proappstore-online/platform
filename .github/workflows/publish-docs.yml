@@ -180,7 +180,15 @@ jobs:
           out=site
           [ -d "$out" ] || out=public
           cd "$out"
-          find . -type f | while read -r f; do
-            curl -fsS -X PUT "https://kb.proappstore.online/_ingest/platform/${f#./}" -H "Authorization: Bearer $OIDC" --data-binary "@$f" >/dev/null
+          find . -type f -print0 | while IFS= read -r -d '' f; do
+            # PUT is idempotent. Retry transient edge/transport failures, including
+            # HTTP/2 stream resets; use HTTP/1.1 for these individual uploads.
+            if ! curl --http1.1 --retry 4 --retry-all-errors --retry-delay 1 \
+              --retry-max-time 120 --connect-timeout 10 --max-time 60 \
+              -fsS -X PUT "https://kb.proappstore.online/_ingest/platform/${f#./}" \
+              -H "Authorization: Bearer $OIDC" --data-binary "@$f" >/dev/null; then
+              echo "::error::Failed to upload public documentation: ${f#./}"
+              exit 1
+            fi
           done
           echo "Platform docs published → https://docs.proappstore.online/"
