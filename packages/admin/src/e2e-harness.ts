@@ -4,12 +4,13 @@
  * browser — the behavioural gate that `tsc`/build cannot be: it catches apps
  * that compile but white-screen, crash on boot, or don't actually work.
  *
- * Auth re-uses the SDK's own `#pas_session=<token>` callback path with a
- * platform FIXTURE session (the `PAS_E2E_SESSION_TOKEN` Actions secret), so
- * there is NO test-bypass code in apps or the SDK — E2E exercises the exact
- * production sign-in path. Without a token, auth-gated specs skip and only the
- * unauthenticated smoke runs, so a deploy is never blocked just because the
- * fixture isn't provisioned yet.
+ * Auth re-uses the SDK's own `#pas_session=<token>` callback path with a session
+ * minted at test time by exchanging the CI job's GitHub OIDC token
+ * (`POST /v1/auth/exchange/oidc`, #146) — no stored credential, and NO
+ * test-bypass code in apps or the SDK. E2E exercises the exact production
+ * sign-in path. When no session can be minted (no grant yet, or a laptop run),
+ * signed-in specs skip and the anonymous smoke still runs, so a deploy is never
+ * blocked just because the grant isn't provisioned yet.
  *
  * Convention: apps mount to `#root`. QA agents add per-feature specs under
  * `e2e/specs/`; this harness's config + fixtures + baseline smoke are injected
@@ -56,22 +57,76 @@ export default defineConfig({
 
 const FIXTURES = `import { test as base, expect, type Page } from '@playwright/test';
 
-// A fixture session token for a throwaway E2E user, injected by the CI e2e job
-// (PAS_E2E_SESSION_TOKEN). It is a normal, revocable platform session — NOT a
-// bypass: the app signs in via the SDK's real OAuth-callback path below.
-const SESSION_TOKEN = process.env.E2E_SESSION_TOKEN || '';
-export const hasSession = SESSION_TOKEN.length > 0;
+// ── How signed-in testing works on PAS ───────────────────────────────────────
+// There are NO stored credentials here: no password, no pasted token, no CI
+// secret. A signed-in test needs a session for a throwaway E2E account, and the
+// platform mints one on demand by exchanging the CI job's GitHub OIDC token:
+//
+//   POST https://api.proappstore.online/v1/auth/exchange/oidc
+//   Authorization: Bearer <GitHub Actions OIDC token, audience = the API origin>
+//   -> { sessionToken }          a real, revocable, 4-hour platform session
+//
+// A platform admin allows this once per repository by creating an OIDC session
+// grant (docs/publishing-flow.md); revoke the grant and the next run is refused.
+// The e2e job runs with 'id-token: write', so GitHub exposes
+// ACTIONS_ID_TOKEN_REQUEST_URL / _TOKEN to this process and we can mint below.
+//
+// For a laptop run, set E2E_SESSION_TOKEN yourself (a session from 'pas login');
+// it wins over the OIDC exchange. With neither, signed-in specs skip and the
+// anonymous checks still run.
+//
+// The token is never a bypass: the app is handed it through the SDK's ordinary
+// '#pas_session=' callback, exactly as after a real GitHub/Google sign-in.
+const API_ORIGIN = process.env.E2E_API_BASE || 'https://api.proappstore.online';
+const OIDC_AVAILABLE = !!(process.env.ACTIONS_ID_TOKEN_REQUEST_URL && process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN);
+
+/** True when a signed-in session is obtainable (it may still be refused at mint time). */
+export const hasSession = !!process.env.E2E_SESSION_TOKEN || OIDC_AVAILABLE;
+
+export interface TestSession { token: string | null; reason: string }
+
+let sessionOnce: Promise<TestSession> | undefined;
+
+/** Mint (once per worker) the test session. Never throws, never logs the token. */
+export function testSession(): Promise<TestSession> {
+  sessionOnce ??= mintSession();
+  return sessionOnce;
+}
+
+async function mintSession(): Promise<TestSession> {
+  if (process.env.E2E_SESSION_TOKEN) return { token: process.env.E2E_SESSION_TOKEN, reason: 'E2E_SESSION_TOKEN' };
+  if (!OIDC_AVAILABLE) return { token: null, reason: 'no E2E_SESSION_TOKEN and not running in GitHub Actions with id-token: write' };
+  try {
+    // 1. Ask GitHub for an OIDC token whose audience is the platform API.
+    const idRes = await fetch(process.env.ACTIONS_ID_TOKEN_REQUEST_URL + '&audience=' + encodeURIComponent(API_ORIGIN), {
+      headers: { Authorization: 'bearer ' + process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN },
+    });
+    if (!idRes.ok) return { token: null, reason: 'GitHub OIDC token request failed (HTTP ' + idRes.status + ')' };
+    const { value } = (await idRes.json()) as { value?: string };
+    // 2. Trade it for a platform session for the repository's granted E2E account.
+    const exRes = await fetch(API_ORIGIN + '/v1/auth/exchange/oidc', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + value },
+    });
+    if (!exRes.ok) return { token: null, reason: 'OIDC session exchange refused (HTTP ' + exRes.status + ') - has an admin granted this repository an OIDC session grant?' };
+    const { sessionToken } = (await exRes.json()) as { sessionToken?: string };
+    return sessionToken ? { token: sessionToken, reason: 'OIDC exchange' } : { token: null, reason: 'OIDC exchange returned no sessionToken' };
+  } catch (e) {
+    return { token: null, reason: 'OIDC exchange error: ' + String(e) };
+  }
+}
 
 // Navigate with a few retries so a just-provisioned custom domain that is still
 // warming up (Cloudflare first-deploy propagation) does not read as a failure.
-async function gotoWithRetry(page: Page, path: string) {
+// Returns the final HTTP status so the caller can assert it is 2xx.
+async function gotoWithRetry(page: Page, path: string): Promise<number> {
   let lastErr: unknown;
   // ~60s budget: a brand-new app's custom domain can still be warming up
   // (Cloudflare first-deploy DNS/route propagation) for the first deploy.
   for (let i = 0; i < 10; i++) {
     try {
       const res = await page.goto(path, { waitUntil: 'domcontentloaded', timeout: 20000 });
-      if (res && res.status() < 500) return;
+      if (res && res.status() < 500) return res.status();
       lastErr = new Error('HTTP ' + (res ? res.status() : 'no response'));
     } catch (e) {
       lastErr = e;
@@ -81,25 +136,53 @@ async function gotoWithRetry(page: Page, path: string) {
   throw lastErr;
 }
 
-// 'app' fixture: a Page already past the sign-in wall when a fixture session is
-// configured. The SDK's auth.init() reads the session from the URL hash, calls
-// /v1/auth/me, persists the session, and clears the hash — the SAME path a real
-// GitHub/Google OAuth callback uses. Without a token, returns an un-authed page
-// (the sign-in screen) so unauthenticated smokes still run.
-export const test = base.extend<{ app: Page; pageErrors: string[] }>({
+// Wait for the SPA to actually mount (#root gets content), NOT for the network to
+// go idle: a PWA service worker or a long-lived connection can keep the network
+// busy past the test timeout even when the app booted fine.
+async function waitForMount(page: Page) {
+  await page.locator('#root > *').first().waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+}
+
+interface Fixtures {
+  /** Anonymous page - never carries a token. Records the HTTP status and console errors. */
+  anonApp: Page;
+  /** Page already signed in via the test session; the test skips when none can be minted. */
+  signedInApp: Page;
+  /** Signed in when a session is obtainable, anonymous otherwise (kept for existing specs). */
+  app: Page;
+  pageErrors: string[];
+  consoleErrors: string[];
+  status: { value: number };
+}
+
+export const test = base.extend<Fixtures>({
   pageErrors: async ({}, use) => { await use([]); },
+  consoleErrors: async ({}, use) => { await use([]); },
+  status: async ({}, use) => { await use({ value: 0 }); },
+  anonApp: async ({ page, pageErrors, consoleErrors, status }, use) => {
+    page.on('pageerror', (e) => pageErrors.push(String(e)));
+    page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
+    status.value = await gotoWithRetry(page, '/');
+    await waitForMount(page);
+    await use(page);
+  },
+  signedInApp: async ({ page, pageErrors, consoleErrors }, use, testInfo) => {
+    const session = await testSession();
+    testInfo.skip(!session.token, 'no test session: ' + session.reason);
+    page.on('pageerror', (e) => pageErrors.push(String(e)));
+    page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
+    // The SDK's auth.init() reads the session from the URL hash, verifies it with
+    // /v1/auth/me, persists it and clears the hash - the SAME path a real OAuth
+    // callback uses.
+    await gotoWithRetry(page, '/#pas_session=' + encodeURIComponent(session.token!));
+    await waitForMount(page);
+    await use(page);
+  },
   app: async ({ page, pageErrors }, use) => {
     page.on('pageerror', (e) => pageErrors.push(String(e)));
-    const target = hasSession ? '/#pas_session=' + encodeURIComponent(SESSION_TOKEN) : '/';
-    await gotoWithRetry(page, target);
-    // Wait for the SPA to actually mount (#root gets content), NOT for the
-    // network to go idle. A PWA service worker precaching its asset manifest —
-    // or any long-lived connection (rooms WS, analytics, web push) — can keep
-    // the network busy past the 45s test timeout, so a bare
-    // waitForLoadState('networkidle') hangs setup and aborts with "timeout while
-    // setting up app" even when the app booted fine. Bounded + best-effort: the
-    // specs assert real readiness (#root non-empty, no page errors).
-    await page.locator('#root > *').first().waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+    const session = await testSession();
+    await gotoWithRetry(page, session.token ? '/#pas_session=' + encodeURIComponent(session.token) : '/');
+    await waitForMount(page);
     await use(page);
   },
 });
@@ -107,23 +190,33 @@ export const test = base.extend<{ app: Page; pageErrors: string[] }>({
 export { expect };
 `;
 
-const SMOKE_SPEC = `import { test, expect, hasSession } from '../fixtures';
+const SMOKE_SPEC = `import { test, expect } from '../fixtures';
 
-// Baseline behavioural smoke. tsc + a green build can't tell you the app boots —
-// this opens it in a real browser and checks it mounts and doesn't crash. QA
-// agents add per-feature specs alongside this file; they run against the same
-// live deploy with the same signed-in fixture.
-test('app boots and mounts without crashing', async ({ app, pageErrors }) => {
-  await expect(app.locator('#root')).not.toBeEmpty();
+// Baseline behavioural smoke, and the worked example of PAS signed-in testing.
+// tsc + a green build cannot tell you the app boots - this opens it in a real
+// browser. QA agents add per-feature specs alongside this file; they can use the
+// same two fixtures: 'anonApp' (no token) and 'signedInApp' (test session).
+
+// (a) Unauthenticated: no token anywhere. A healthy response and a clean console.
+test('anonymous: loads with a 2xx, renders, and logs no console errors', async ({ anonApp, status, pageErrors, consoleErrors }) => {
+  expect(status.value, 'HTTP status of the app URL').toBeGreaterThanOrEqual(200);
+  expect(status.value, 'HTTP status of the app URL').toBeLessThan(300);
+  await expect(anonApp.locator('#root')).not.toBeEmpty();
   expect(pageErrors).toEqual([]);
+  // A missing favicon is a browser fetch, not an app fault.
+  expect(consoleErrors.filter((m) => !/favicon/i.test(m))).toEqual([]);
 });
 
-test('signed-in: lands past the sign-in wall', async ({ app }) => {
-  test.skip(!hasSession, 'no E2E fixture session configured (set PAS_E2E_SESSION_TOKEN)');
-  // The app cleared the auth hash on init; a signed-in app should not present a
-  // sign-in call-to-action as its primary content.
-  await expect(app.locator('#root')).not.toBeEmpty();
-  await expect(app.getByRole('button', { name: /sign in/i })).toHaveCount(0);
+// (b) Signed in: the fixture minted a test session (see fixtures.ts) and handed it
+// to the app through the SDK's normal callback, so the app boots already signed in.
+test('signed in: lands past the sign-in wall and renders without errors', async ({ signedInApp, pageErrors, consoleErrors }) => {
+  await expect(signedInApp.locator('#root')).not.toBeEmpty();
+  // A signed-in app should not present a sign-in call-to-action as its primary content.
+  await expect(signedInApp.getByRole('button', { name: /sign in/i })).toHaveCount(0);
+  // The SDK clears the one-time session hash after consuming it.
+  expect(new URL(signedInApp.url()).hash).not.toContain('pas_session');
+  expect(pageErrors).toEqual([]);
+  expect(consoleErrors.filter((m) => !/favicon/i.test(m))).toEqual([]);
 });
 `;
 

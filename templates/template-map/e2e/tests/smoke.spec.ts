@@ -1,17 +1,24 @@
-import { test, expect, hasSession } from '../fixtures'
+import { test, expect } from '../fixtures';
 
-// Deployment smoke: the live app serves, boots without page errors, and shows
-// either the sign-in gate or the map.
-test('the deployed app boots without page errors', async ({ app, pageErrors }) => {
-  await expect(app.locator('#root')).not.toBeEmpty()
-  expect(pageErrors).toEqual([])
-})
+// Deployment smoke, and the worked example of PAS signed-in testing (see the
+// comment at the top of ../fixtures.ts: the signed-in session is minted from the
+// CI job's OIDC token - no stored credentials).
 
-test('signed in: the map, its controls and the list alternative are present', async ({ app }) => {
-  test.skip(!hasSession, 'needs an e2e session')
-  const map = app.getByRole('application', { name: /map/i })
-  await expect(map).toBeVisible()
-  await expect(app.getByRole('button', { name: 'Zoom in' })).toBeVisible()
-  await expect(app.getByRole('search')).toBeVisible()
-  await expect(app.getByRole('link', { name: 'Full list' })).toBeVisible()
-})
+// (a) Unauthenticated: no token. A healthy response and a clean console.
+test('anonymous: loads with a 2xx, renders, and logs no console errors', async ({ anonApp, status, pageErrors, consoleErrors }) => {
+  expect(status.value, 'HTTP status of the app URL').toBeGreaterThanOrEqual(200);
+  expect(status.value, 'HTTP status of the app URL').toBeLessThan(300);
+  await expect(anonApp.locator('#root')).not.toBeEmpty();
+  expect(pageErrors).toEqual([]);
+  expect(consoleErrors.filter((m) => !/favicon/i.test(m))).toEqual([]);
+});
+
+// (b) Signed in: the authenticated pages work - here, the map and its controls.
+test('signed in: the map, its controls and the list alternative are present', async ({ signedInApp, pageErrors }) => {
+  const map = signedInApp.getByRole('application', { name: /map/i });
+  await expect(map).toBeVisible();
+  await expect(signedInApp.getByRole('button', { name: 'Zoom in' })).toBeVisible();
+  await expect(signedInApp.getByRole('search')).toBeVisible();
+  await expect(signedInApp.getByRole('link', { name: 'Full list' })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});

@@ -438,8 +438,10 @@ jobs:
   # Behavioural gate: drive the LIVE app in a real browser (the thing tsc/build
   # can't check). Runs after deploy; a failure fails the run, so the deploy
   # gate routes the ticket back to Dev with the Playwright output. Auth uses a
-  # platform fixture session via the SDK's real sign-in path (no test bypass);
-  # auth-gated specs skip when PAS_E2E_SESSION_TOKEN is unset.
+  # test session via the SDK's real sign-in path (no test bypass). The harness
+  # mints it itself by exchanging this job's OIDC token (id-token: write, no
+  # stored credential); PAS_E2E_SESSION_TOKEN is an optional override. Signed-in
+  # specs skip when no session can be minted.
   e2e:
     needs: [router, deploy]
     if: needs.deploy.outputs.has_e2e == 'true'
