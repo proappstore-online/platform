@@ -53,3 +53,13 @@ it("canonical injection is explicit, private pages are noindex and existing cano
   expect(privateHtml).not.toContain('rel="canonical"');
   expect(privateHtml).toContain('name="robots" content="noindex, nofollow"');
 });
+
+it("uses approved fallback descriptions when listing copy is only a repeated placeholder", () => {
+  const html = new MetaTagTracker(
+    { tagline: "x".repeat(60), icon_url: null, fallbackDescription: "Organize community events." },
+    "https://meetup.proappstore.online/",
+  ).missingTagsHtml();
+  expect(html).toContain('name="description" content="Organize community events."');
+  expect(html).toContain('property="og:description" content="Organize community events."');
+  expect(html).not.toContain("x".repeat(60));
+});

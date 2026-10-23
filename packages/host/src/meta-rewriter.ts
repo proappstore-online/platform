@@ -17,6 +17,12 @@ export interface SocialMeta extends ListingMeta {
   private?: boolean;
 }
 
+/** Legacy rows can contain test copy from before listing moderation existed. */
+function usableTagline(value: string | null | undefined): string | null {
+  const text = value?.trim();
+  return text && !/^(.)\1{11,}$/u.test(text) ? text : null;
+}
+
 /**
  * Marker the host stamps on every HTML page it serves (#20). The SDK reads it
  * to default `authMode` to `platform-cookie`: the `/.pas/*` token-handler
@@ -47,7 +53,7 @@ export class MetaTagTracker {
   private canonicalUrl: string;
   appCanonical?: string;
   constructor(meta: SocialMeta, canonicalUrl: string) {
-    this.meta = meta;
+    this.meta = { ...meta, tagline: usableTagline(meta.tagline) };
     this.canonicalUrl = canonicalUrl;
   }
 
@@ -169,6 +175,29 @@ class FoundTagMarker implements HTMLRewriterElementContentHandlers {
   }
 }
 
+/** Preserve app copy, except the exact starter text on an approved PAS root. */
+class DescriptionMarker implements HTMLRewriterElementContentHandlers {
+  constructor(
+    private key: string,
+    private tracker: MetaTagTracker,
+    private fallback: string | null | undefined,
+    private canonicalUrl: string,
+  ) {}
+  element(el: Element) {
+    const url = new URL(this.canonicalUrl);
+    const slug = url.hostname.split(".")[0];
+    const content = el.getAttribute("content")?.trim();
+    if (
+      this.fallback &&
+      url.hostname.endsWith(".proappstore.online") &&
+      (content === `Explore ${slug}.` || content === `${slug} on ProAppStore`)
+    ) {
+      el.setAttribute("content", this.fallback);
+    }
+    this.tracker.found.add(this.key);
+  }
+}
+
 /** Rewrite/normalize image URL meta tags without forcing a new value. */
 class MetaUrlRewriter implements HTMLRewriterElementContentHandlers {
   #key: string;
@@ -234,6 +263,7 @@ export function rewriteMetaTags(
   meta: SocialMeta,
   canonicalUrl: string,
 ): Response {
+  meta = { ...meta, tagline: usableTagline(meta.tagline) };
   const tracker = new MetaTagTracker(meta, canonicalUrl);
   let rewriter = new HTMLRewriter()
     .on(`meta[name="${AUTH_MODE_META_NAME}"]`, new FoundTagMarker(AUTH_MODE_META_NAME, tracker))
@@ -289,9 +319,18 @@ export function rewriteMetaTags(
       );
   } else {
     rewriter = rewriter
-      .on('meta[property="og:description"]', new FoundTagMarker("og:description", tracker))
-      .on('meta[name="description"]', new FoundTagMarker("description", tracker))
-      .on('meta[name="twitter:description"]', new FoundTagMarker("twitter:description", tracker));
+      .on(
+        'meta[property="og:description"]',
+        new DescriptionMarker("og:description", tracker, meta.fallbackDescription, canonicalUrl),
+      )
+      .on(
+        'meta[name="description"]',
+        new DescriptionMarker("description", tracker, meta.fallbackDescription, canonicalUrl),
+      )
+      .on(
+        'meta[name="twitter:description"]',
+        new DescriptionMarker("twitter:description", tracker, meta.fallbackDescription, canonicalUrl),
+      );
   }
 
   const icon = meta.icon_url ? absoluteUrl(meta.icon_url, canonicalUrl) : null;

@@ -249,6 +249,24 @@ it('preserves explicit app canonical and noindex instructions without advertisin
   await sitemap.text();
 });
 
+it('replaces legacy repeated listing placeholders and starter descriptions with approved public copy', async () => {
+  await seedRoute('seo-public');
+  await seedApp('seo-public');
+  await env.APPS.put('apps/seo-public/index.html', '<html><head><title>App</title><meta name="description" content="Explore seo-public."><meta property="og:description" content="seo-public on ProAppStore"><meta name="twitter:description" content="App-owned social description"></head><body></body></html>');
+  const cols = await env.DB.prepare('PRAGMA table_info(app_listings)').all<{ name: string; notnull: number; dflt_value: string | null }>();
+  const required = (cols.results ?? []).filter((c) => c.notnull && c.dflt_value === null && !['app_id', 'tagline', 'icon_url'].includes(c.name)).map((c) => c.name);
+  const names = ['app_id', 'tagline', 'icon_url', ...required];
+  const values = ['seo-public', 'x'.repeat(60), null, ...required.map((c) => (/_at$/.test(c) ? Date.now() : `x-${c}`))];
+  await env.DB.prepare(`INSERT INTO app_listings (${names.join(', ')}) VALUES (${names.map(() => '?').join(', ')})`).bind(...values).run();
+  const response = await SELF.fetch('https://seo-public.proappstore.online/?source=legacy-copy-test');
+  const html = await response.text();
+  expect(response.status).toBe(200);
+  expect(html).toContain('name="description" content="Approved public description"');
+  expect(html).toContain('property="og:description" content="Approved public description"');
+  expect(html).toContain('name="twitter:description" content="App-owned social description"');
+  expect(html).not.toContain('x'.repeat(60));
+});
+
 
 it('does not advertise a secondary host when an approved app selects its custom domain', async () => {
   await seedRoute('seo-public');
